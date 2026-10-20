@@ -7,6 +7,8 @@ public struct ScanConfiguration: Codable, Equatable {
     public var rate = 100
     public var seed: UInt64 = UInt64.random(in: 1...UInt64(UInt32.max))
     public var resumeIndex: UInt64?
+    // Optional for backward compatibility with v0.1 history and profiles.
+    public var resolveHostnames: Bool? = true
     public init() {}
     public func arguments() throws -> [String] {
         let hosts = Self.tokens(targets)

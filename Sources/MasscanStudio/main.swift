@@ -28,11 +28,11 @@ struct MasscanStudioApp: App {
         Window("Masscan Studio", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 1000, minHeight: 680)
+                .frame(minWidth: 1120, minHeight: 680)
                 .tint(.teal)
                 .onAppear { delegate.store = store }
         }
-        .defaultSize(width: 1180, height: 780)
+        .defaultSize(width: 1360, height: 780)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Scan…") { NotificationCenter.default.post(name: .newScan, object: nil) }

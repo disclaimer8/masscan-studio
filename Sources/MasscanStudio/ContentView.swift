@@ -14,7 +14,7 @@ struct ContentView: View {
 
     private var rows: [PortResult] {
         (store.selected?.results ?? []).filter {
-            search.isEmpty || "\($0.ip) \($0.port) \($0.proto) \($0.service)"
+            search.isEmpty || "\($0.ip) \($0.port) \($0.proto) \($0.service) \($0.hostname ?? "") \($0.deviceHint ?? "")"
                 .localizedCaseInsensitiveContains(search)
         }.sorted(using: sortOrder)
     }
@@ -75,11 +75,24 @@ struct ContentView: View {
                     }
                 }.listStyle(.sidebar)
                 Divider()
-                HStack(spacing: 7) {
-                    Circle().fill(store.installed ? .green : .orange).frame(width: 6, height: 6)
-                    Text(store.installed ? "masscan installed" : "masscan not found").font(.caption)
-                    Spacer()
-                    Text("0.1").font(.caption).foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 7) {
+                        Circle().fill(store.installed ? .green : .orange).frame(width: 6, height: 6)
+                        Text(store.installed ? "masscan installed" : "masscan not found").font(.caption)
+                        Spacer()
+                        Text("0.2").font(.caption).foregroundStyle(.tertiary)
+                    }
+                    HStack {
+                        Label(store.authorized ? "Unlocked for this session" : "Authorization on first scan",
+                              systemImage: store.authorized ? "lock.open" : "lock")
+                            .font(.caption2)
+                        Spacer()
+                        if store.authorized {
+                            Button { store.lockAuthorization() } label: { Image(systemName: "lock.fill") }
+                                .buttonStyle(.borderless).disabled(store.busy)
+                                .help("End authorization. The next scan will ask again.")
+                        }
+                    }
                 }.foregroundStyle(.secondary).padding(16)
             }
             .navigationSplitViewColumnWidth(min: 210, ideal: 245, max: 300)
@@ -92,6 +105,11 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: newScan) { Label("New Scan", systemImage: "plus") }.disabled(store.busy)
+                }
+                ToolbarItem {
+                    Button { store.refreshHostnames() } label: { Label("Look Up Names", systemImage: "network.badge.shield.half.filled") }
+                        .help("Refresh hostnames for up to 512 hosts using system DNS / mDNS.")
+                        .disabled(store.selected?.results.isEmpty != false)
                 }
                 ToolbarItem {
                     Menu {
@@ -179,7 +197,7 @@ struct ContentView: View {
             Divider()
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Filter by IP, port or service hint", text: $search).textFieldStyle(.plain)
+                TextField("Filter by IP, hostname, port or device", text: $search).textFieldStyle(.plain)
                 Text("\(rows.count) results").font(.caption).foregroundStyle(.secondary)
                 Button { showLog.toggle() } label: { Image(systemName: "terminal") }
                     .help("Show scan log").buttonStyle(.borderless)
@@ -188,12 +206,23 @@ struct ContentView: View {
                 TableColumn("IP address", value: \.ipSort) { row in
                     Text(row.ip).font(.system(.body, design: .monospaced))
                 }.width(min: 145, ideal: 180)
+                TableColumn("Hostname", value: \.hostnameText) { row in
+                    Text(row.hostnameText).lineLimit(1)
+                        .foregroundStyle(row.hostname == nil ? .secondary : .primary)
+                        .help(row.hostname.map { "Reported by system DNS / mDNS: \($0)" } ??
+                              (row.hostnameStatus == "pending" ? "Lookup in progress" : "No hostname returned. Use Look Up Names to retry."))
+                }.width(min: 140, ideal: 190)
                 TableColumn("Port", value: \.port) { row in
                     Text(String(row.port)).font(.system(.body, design: .monospaced))
                 }.width(min: 60, ideal: 80)
                 TableColumn("Protocol", value: \.proto) { row in Text(row.proto.uppercased()).foregroundStyle(.secondary) }
                     .width(min: 65, ideal: 85)
                 TableColumn("Service hint", value: \.service) { row in Text(row.service) }
+                TableColumn("Device hint", value: \.deviceText) { row in
+                    Text(row.deviceText).font(.callout)
+                        .foregroundStyle(row.deviceHint == nil ? .secondary : .primary)
+                        .help(row.deviceEvidence ?? "Not enough evidence to identify a device.")
+                }.width(min: 140, ideal: 180)
                 TableColumn("Discovered", value: \.discoveredAt) { row in
                     Text(row.discoveredAt, format: .dateTime.hour().minute().second()).foregroundStyle(.secondary)
                 }.width(min: 100, ideal: 120)
@@ -225,8 +254,9 @@ struct ContentView: View {
             }
             Divider()
             HStack {
-                Text("Service names are port-based hints, not verified identification.")
+                Text("Device hints are estimates. Hover for evidence.")
                 Spacer()
+                if store.pendingHostnames > 0 { Text("Looking up \(store.pendingHostnames) hostnames…") }
                 if !search.isEmpty { Text("Export uses filtered results") }
             }.font(.caption2).foregroundStyle(.secondary).padding(10)
         }
@@ -245,7 +275,7 @@ struct ContentView: View {
         switch status {
         case "Completed": return .green
         case "Failed", "Interrupted": return .orange
-        case "Scanning", "Authorizing", "Stopping": return .teal
+        case "Scanning", "Starting", "Authorizing", "Stopping": return .teal
         default: return .secondary
         }
     }

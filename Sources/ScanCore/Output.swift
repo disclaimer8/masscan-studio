@@ -5,8 +5,14 @@ public struct PortResult: Codable, Identifiable, Hashable {
     public var port: Int
     public var proto: String
     public var discoveredAt: Date
+    public var hostname: String?
+    public var hostnameStatus: String?
+    public var deviceHint: String?
+    public var deviceEvidence: String?
     public var id: String { "\(ip):\(port)/\(proto)" }
     public var ipSort: UInt32 { ScanConfiguration.ipNumber(ip) ?? 0 }
+    public var hostnameText: String { hostname ?? (hostnameStatus == "pending" ? "Looking up…" : "—") }
+    public var deviceText: String { deviceHint ?? "Unknown" }
     public var service: String {
         [21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP",
          110: "POP3", 143: "IMAP", 443: "HTTPS", 445: "SMB", 993: "IMAPS",
@@ -71,14 +77,17 @@ public struct LineFramer {
 public enum Export {
     public static func csv(_ rows: [PortResult]) -> String {
         let formatter = ISO8601DateFormatter()
-        return "ip,port,protocol,service_hint,discovered_at\r\n" + rows.map {
-            [$0.ip, String($0.port), $0.proto, $0.service, formatter.string(from: $0.discoveredAt)]
+        return "ip,port,protocol,service_hint,discovered_at,hostname,device_hint,device_evidence\r\n" + rows.map {
+            [$0.ip, String($0.port), $0.proto, $0.service, formatter.string(from: $0.discoveredAt),
+             $0.hostname ?? "", $0.deviceHint ?? "", $0.deviceEvidence ?? ""]
                 .map(escape).joined(separator: ",")
         }.joined(separator: "\r\n") + (rows.isEmpty ? "" : "\r\n")
     }
     private static func escape(_ value: String) -> String {
-        value.contains(where: { ",\"\r\n".contains($0) }) ?
-            "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : value
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safe = trimmed.first.map { "=+-@".contains($0) } == true ? "'" + value : value
+        return safe.contains(where: { ",\"\r\n".contains($0) }) ?
+            "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : safe
     }
 }
 public struct WireEvent: Codable {

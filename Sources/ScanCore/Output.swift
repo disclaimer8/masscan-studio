@@ -9,10 +9,18 @@ public struct PortResult: Codable, Identifiable, Hashable {
     public var hostnameStatus: String?
     public var deviceHint: String?
     public var deviceEvidence: String?
+    public var inspection: HostInspection?
     public var id: String { "\(ip):\(port)/\(proto)" }
     public var ipSort: UInt32 { ScanConfiguration.ipNumber(ip) ?? 0 }
     public var hostnameText: String { hostname ?? (hostnameStatus == "pending" ? "Looking up…" : "—") }
     public var deviceText: String { deviceHint ?? "Unknown" }
+    public var inspectedService: InspectedService? {
+        inspection?.services.first { $0.port == port }
+    }
+    public var serviceText: String {
+        guard let detected = inspectedService, detected.state == "open", detected.method == "probed" else { return service }
+        return detected.summary.isEmpty ? detected.name : detected.name + " · " + detected.summary
+    }
     public var service: String {
         [21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP",
          110: "POP3", 143: "IMAP", 443: "HTTPS", 445: "SMB", 993: "IMAPS",

@@ -28,6 +28,24 @@ Not all devices publish a reverse name. The **Device hint** column uses hostname
 words and open ports; hover for evidence. These are guesses, not verified device
 models or operating systems. Names and evidence are included in CSV/JSON.
 
+Version 0.3 makes hostnames clickable. Web port rows open their HTTP/HTTPS URL;
+other rows prefer a discovered web port on the same host, falling back to HTTPS
+when a hostname exists. Web endpoints without a hostname have an IP link.
+
+Click a **Device hint**, or select a host and choose **Inspect Device**. The detail
+sheet runs the separately installed Nmap (`brew install nmap`) with TCP connect
+and light service detection on that single host's discovered ports. No extra
+administrator prompt is needed. It reports service product/version, reported
+names, OS/device hints and CPE identifiers with their evidence. A service name
+from the port table is distinguished from a matched response.
+
+Checks are manual, one host at a time, at most 64 discovered ports, with a
+55-second deadline and cancellation. Raw printing port 9100 is excluded.
+No OS fingerprint scan or vulnerability scripts are requested. Reports are
+saved in history and included in JSON export; CSV retains the device summary
+and evidence. Service replies can be incomplete or misleading, so a hardware
+model is not guaranteed.
+
 **Pause** sends SIGINT and waits for final replies and a checkpoint. **Resume**
 reuses the original scope, seed and resume index. Quitting during a scan stops
 the child; wait for Pause to finish before quitting if you need a resume point.
@@ -58,5 +76,5 @@ this is not a notarized public release. masscan is not bundled.
 - `MasscanStudio`: native UI and unprivileged history/export storage.
 
 No firewall changes, persistent privileged daemon, arbitrary CLI field, or
-automatic network scan. IPv6, UDP, banner collection, huge result-set database
-storage, remote scanners and public distribution packaging are outside v0.2.
+automatic network scan. IPv6, UDP, huge result-set database
+storage, remote scanners and public distribution packaging are outside v0.3.

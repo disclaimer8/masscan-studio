@@ -32,6 +32,10 @@ final class SessionStore: ObservableObject {
     @Published var validating = false
     @Published var authorized = false
     @Published var pendingHostnames = 0
+    @Published var inspectingHost: String?
+    @Published var inspectionErrors: [String: String] = [:]
+    private var inspector: ServiceInspector?
+    private var inspectionToken: UUID?
     private var transport: ScanTransport?
     private var validationTransport: ScanTransport?
     private var stdout = LineFramer()
@@ -211,6 +215,7 @@ final class SessionStore: ObservableObject {
     }
     func deleteSession(_ id: UUID) {
         guard id != activeID else { return }
+        if inspectingHost?.hasPrefix(id.uuidString + "/") == true { cancelInspection() }
         sessions.removeAll { $0.id == id }
         queriedHosts.removeValue(forKey: id)
         lookupTokens = lookupTokens.filter { !$0.key.hasPrefix(id.uuidString + "/") }
@@ -250,6 +255,7 @@ final class SessionStore: ObservableObject {
         } catch { self.error = "Export failed: \(error.localizedDescription)" }
     }
     func shutdown() {
+        cancelInspection()
         transport?.stop()
         transport?.close()
         validationTransport?.close()
@@ -305,13 +311,41 @@ final class SessionStore: ObservableObject {
     private func updateIdentity(ip: String, index: Int) {
         let matches = sessions[index].results.indices.filter { sessions[index].results[$0].ip == ip }
         let existing = matches.map { sessions[index].results[$0] }.first { $0.hostnameStatus != nil }
+        let report = matches.compactMap { sessions[index].results[$0].inspection }.first
         let ports = Set(matches.map { sessions[index].results[$0].port })
-        let guess = DeviceHints.infer(hostname: existing?.hostname, ports: ports)
+        let guess = report?.deviceGuess ?? DeviceHints.infer(hostname: existing?.hostname, ports: ports)
         for row in matches {
             sessions[index].results[row].hostname = existing?.hostname
             sessions[index].results[row].hostnameStatus = existing?.hostnameStatus
             sessions[index].results[row].deviceHint = guess?.label
             sessions[index].results[row].deviceEvidence = guess?.evidence
+            sessions[index].results[row].inspection = report
         }
     }
+    func inspectDevice(sessionID: UUID, ip: String) {
+        guard inspectingHost == nil,
+              let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        let request = InspectionRequest(ip: ip, ports: session.results.filter { $0.ip == ip && $0.proto == "tcp" }.map(\.port))
+        let key = sessionID.uuidString + "/" + ip
+        do { _ = try request.arguments() }
+        catch { inspectionErrors[key] = error.localizedDescription; return }
+        let token = UUID(), worker = ServiceInspector()
+        inspectingHost = key; inspector = worker; inspectionToken = token
+        inspectionErrors[key] = nil
+        worker.inspect(request) { [weak self] result in
+            guard let self, self.inspectionToken == token else { return }
+            self.inspectingHost = nil; self.inspector = nil; self.inspectionToken = nil
+            guard let index = self.sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+            switch result {
+            case .success(let report):
+                for row in self.sessions[index].results.indices where self.sessions[index].results[row].ip == ip {
+                    self.sessions[index].results[row].inspection = report
+                }
+                self.updateIdentity(ip: ip, index: index)
+                self.save()
+            case .failure(let error): self.inspectionErrors[key] = error.localizedDescription
+            }
+        }
+    }
+    func cancelInspection() { inspector?.cancel() }
 }

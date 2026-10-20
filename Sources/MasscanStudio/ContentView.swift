@@ -11,10 +11,11 @@ struct ContentView: View {
     @State private var showLog = false
     @State private var sortOrder = [KeyPathComparator(\PortResult.ipSort), KeyPathComparator(\PortResult.port)]
     @State private var selectedRows = Set<PortResult.ID>()
+    @State private var deviceTarget: DeviceTarget?
 
     private var rows: [PortResult] {
         (store.selected?.results ?? []).filter {
-            search.isEmpty || "\($0.ip) \($0.port) \($0.proto) \($0.service) \($0.hostname ?? "") \($0.deviceHint ?? "")"
+            search.isEmpty || "\($0.ip) \($0.port) \($0.proto) \($0.serviceText) \($0.hostname ?? "") \($0.deviceHint ?? "")"
                 .localizedCaseInsensitiveContains(search)
         }.sorted(using: sortOrder)
     }
@@ -80,7 +81,7 @@ struct ContentView: View {
                         Circle().fill(store.installed ? .green : .orange).frame(width: 6, height: 6)
                         Text(store.installed ? "masscan installed" : "masscan not found").font(.caption)
                         Spacer()
-                        Text("0.2").font(.caption).foregroundStyle(.tertiary)
+                        Text("0.3").font(.caption).foregroundStyle(.tertiary)
                     }
                     HStack {
                         Label(store.authorized ? "Unlocked for this session" : "Authorization on first scan",
@@ -112,6 +113,15 @@ struct ContentView: View {
                         .disabled(store.selected?.results.isEmpty != false)
                 }
                 ToolbarItem {
+                    Button {
+                        if let session = store.selected, let row = rows.first(where: { selectedRows.contains($0.id) }) {
+                            deviceTarget = DeviceTarget(sessionID: session.id, ip: row.ip)
+                        }
+                    } label: { Label("Inspect Device", systemImage: "info.circle") }
+                        .help("Select a host to inspect its service responses.")
+                        .disabled(Set(rows.filter { selectedRows.contains($0.id) }.map(\.ip)).count != 1)
+                }
+                ToolbarItem {
                     Menu {
                         Button("Export CSV…") { store.export(json: false, rows: rows) }
                         Button("Export JSON…") { store.export(json: true, rows: rows) }
@@ -122,6 +132,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $sheet) {
             ConfigurationView(config: draft, name: draftName).environmentObject(store)
+        }
+        .sheet(item: $deviceTarget) { target in
+            DeviceDetailView(target: target).environmentObject(store)
         }
         .onReceive(NotificationCenter.default.publisher(for: .newScan)) { _ in newScan() }
         .alert("Masscan Studio", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
@@ -207,27 +220,54 @@ struct ContentView: View {
                     Text(row.ip).font(.system(.body, design: .monospaced))
                 }.width(min: 145, ideal: 180)
                 TableColumn("Hostname", value: \.hostnameText) { row in
-                    Text(row.hostnameText).lineLimit(1)
-                        .foregroundStyle(row.hostname == nil ? .secondary : .primary)
-                        .help(row.hostname.map { "Reported by system DNS / mDNS: \($0)" } ??
-                              (row.hostnameStatus == "pending" ? "Lookup in progress" : "No hostname returned. Use Look Up Names to retry."))
+                    if row.hostname != nil, let url = WebsiteLink.url(for: row, hostRows: session.results) {
+                        Link(row.hostnameText, destination: url).lineLimit(1)
+                            .help("Open \(url.absoluteString)\nHostname reported by DNS / mDNS.")
+                    } else {
+                        HStack(spacing: 5) {
+                            Text(row.hostnameText).foregroundStyle(.secondary).lineLimit(1)
+                            if let url = WebsiteLink.url(for: row, hostRows: session.results) {
+                                Link(destination: url) { Image(systemName: "arrow.up.right.square") }
+                                    .help("Open \(url.absoluteString)")
+                            }
+                        }
+                    }
                 }.width(min: 140, ideal: 190)
                 TableColumn("Port", value: \.port) { row in
                     Text(String(row.port)).font(.system(.body, design: .monospaced))
                 }.width(min: 60, ideal: 80)
                 TableColumn("Protocol", value: \.proto) { row in Text(row.proto.uppercased()).foregroundStyle(.secondary) }
                     .width(min: 65, ideal: 85)
-                TableColumn("Service hint", value: \.service) { row in Text(row.service) }
+                TableColumn("Service", value: \.serviceText) { row in
+                    Text(row.serviceText).lineLimit(1).help(row.inspectedService?.method == "probed" ?
+                        "From service response: \(row.serviceText)" : "Port-based hint: \(row.service)")
+                }
                 TableColumn("Device hint", value: \.deviceText) { row in
-                    Text(row.deviceText).font(.callout)
-                        .foregroundStyle(row.deviceHint == nil ? .secondary : .primary)
-                        .help(row.deviceEvidence ?? "Not enough evidence to identify a device.")
+                    Button {
+                        deviceTarget = DeviceTarget(sessionID: session.id, ip: row.ip)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(row.deviceText).lineLimit(1)
+                            Image(systemName: "info.circle").font(.caption)
+                        }.font(.callout)
+                    }.buttonStyle(.borderless)
+                        .help((row.deviceEvidence ?? "Not enough evidence to identify a device.") + "\nClick for a detailed service check.")
                 }.width(min: 140, ideal: 180)
                 TableColumn("Discovered", value: \.discoveredAt) { row in
                     Text(row.discoveredAt, format: .dateTime.hour().minute().second()).foregroundStyle(.secondary)
                 }.width(min: 100, ideal: 120)
             }
             .contextMenu {
+                Button("Inspect Device…") {
+                    if let row = rows.first(where: { selectedRows.contains($0.id) }) {
+                        deviceTarget = DeviceTarget(sessionID: session.id, ip: row.ip)
+                    }
+                }.disabled(Set(rows.filter { selectedRows.contains($0.id) }.map(\.ip)).count != 1)
+                Button("Open Website") {
+                    if let row = rows.first(where: { selectedRows.contains($0.id) }),
+                       let url = WebsiteLink.url(for: row, hostRows: session.results) { NSWorkspace.shared.open(url) }
+                }.disabled(selectedRows.count != 1 || rows.first(where: { selectedRows.contains($0.id) })
+                    .flatMap { WebsiteLink.url(for: $0, hostRows: session.results) } == nil)
                 Button("Copy IP Addresses") {
                     let addresses = Array(Set(rows.filter { selectedRows.contains($0.id) }.map(\.ip))).sorted()
                     NSPasteboard.general.clearContents()
@@ -254,7 +294,7 @@ struct ContentView: View {
             }
             Divider()
             HStack {
-                Text("Device hints are estimates. Hover for evidence.")
+                Text("Click a hostname to open its website. Click a device hint to inspect.")
                 Spacer()
                 if store.pendingHostnames > 0 { Text("Looking up \(store.pendingHostnames) hostnames…") }
                 if !search.isEmpty { Text("Export uses filtered results") }

@@ -43,3 +43,22 @@ The core and process integration tests send no scan packets.
   prompt and two live privileged scans were not exercised by the agent.
 - Hostname resolution is best effort, limited to 512 hosts per action/scan.
   Port/name device hints do not verify a model, OS, or service implementation.
+
+## v0.3 verification — 2026-10-20
+
+- 30 Swift tests and 6 Python helper integration tests passed.
+- Link tests cover HTTPS and alternate ports, a sibling web port for non-web
+  rows, absent names, fallback HTTPS, and unsafe hostname syntax.
+- Nmap request tests restrict targets to one IPv4 address and discovered TCP
+  ports; port 9100 is excluded. XML tests distinguish table guesses from probed
+  responses, retain product/version/CPE/name evidence, reject wrong hosts,
+  incomplete XML and entity declarations.
+- Actual Nmap 7.992 identified an ephemeral loopback HTTP server as HTTP without
+  administrator authorization. Owned-process deadline and cancellation tests passed.
+- Native Inspect Device sheet ran against a temporary local fixture and displayed
+  BaseHTTPServer 0.6 / Python with response matching evidence. The website link
+  updated to the detected HTTP endpoint and correct ephemeral port. The main
+  table displayed detected service details. Link destinations were inspected;
+  browser navigation was not exercised.
+- The local test fixture was removed after validation. The user's sessions,
+  results and paused resume checkpoint were retained.

@@ -24,3 +24,22 @@ Not verified in this session:
 
 The packaged app is a local first version, not a notarized public release.
 The core and process integration tests send no scan packets.
+
+## v0.2 verification — 2026-10-20
+
+- 24 Swift tests and 6 Python integration tests passed.
+- Persistent runner handles two --echo jobs with the same PID, rejects injected
+  targets, survives a rejected configuration, exits on idle disconnect, and
+  rejects oversized commands and invalid/fragmented handshakes appropriately.
+- Transport cancellation before authorization, old JSON schema compatibility,
+  hostname inference evidence, malformed PTR decoding, resolver deadline, and
+  enriched CSV escaping/formula neutralization are covered.
+- Release built, installed and passed strict recursive signature verification.
+- Native Validate Setup accepted 192.0.2.1:22,80,443 without sending scan packets.
+- Existing user history retained all 971 endpoints and resume index 59171.
+  Look Up Names returned actual PTR names; filtering by an observed hostname
+  displayed exactly its three port rows. No synthetic history was added.
+- Authorization reuse was tested in validation mode; the macOS administrator
+  prompt and two live privileged scans were not exercised by the agent.
+- Hostname resolution is best effort, limited to 512 hosts per action/scan.
+  Port/name device hints do not verify a model, OS, or service implementation.

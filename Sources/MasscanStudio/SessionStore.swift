@@ -30,12 +30,18 @@ final class SessionStore: ObservableObject {
     @Published var remaining = ""
     @Published var validationOutput = ""
     @Published var validating = false
+    @Published var authorized = false
+    @Published var pendingHostnames = 0
     private var transport: ScanTransport?
     private var validationTransport: ScanTransport?
     private var stdout = LineFramer()
     private var stderr = LineFramer()
     private var ids = Set<String>()
     private var saveTask: Task<Void, Never>?
+    private let resolver = HostnameResolver()
+    private var queriedHosts: [UUID: Set<String>] = [:]
+    private var lookupTokens: [String: UUID] = [:]
+    private var hostnameCache: [String: (name: String?, date: Date)] = [:]
     private let directory: URL
     var selected: ScanSession? { sessions.first { $0.id == selection } }
     var helperURL: URL { Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("ScanHelper") }
@@ -53,8 +59,13 @@ final class SessionStore: ObservableObject {
             if FileManager.default.fileExists(atPath: directory.appendingPathComponent("profiles.json").path) {
                 profiles = try JSONDecoder().decode([ScanProfile].self, from: Data(contentsOf: directory.appendingPathComponent("profiles.json")))
             }
-            for i in sessions.indices where ["Scanning", "Authorizing", "Stopping"].contains(sessions[i].status) {
-                sessions[i].status = "Interrupted"
+            for i in sessions.indices {
+                if ["Scanning", "Starting", "Authorizing", "Stopping"].contains(sessions[i].status) {
+                    sessions[i].status = "Interrupted"
+                }
+                for row in sessions[i].results.indices where sessions[i].results[row].hostnameStatus == "pending" {
+                    sessions[i].results[row].hostnameStatus = "not-checked"
+                }
             }
             selection = sessions.first?.id
         } catch { self.error = "Could not load local history: \(error.localizedDescription)" }
@@ -67,18 +78,18 @@ final class SessionStore: ObservableObject {
             let id: UUID
             if let resume, let index = sessions.firstIndex(where: { $0.id == resume }) {
                 id = resume
-                sessions[index].status = "Authorizing"
+                sessions[index].status = authorized ? "Starting" : "Authorizing"
                 sessions[index].log += "\nResuming scan…\n"
             } else {
-                let session = ScanSession(name: name.trimmingCharacters(in: .whitespaces).isEmpty ? config.targets : name, config: config, status: "Authorizing")
+                let session = ScanSession(name: name.trimmingCharacters(in: .whitespaces).isEmpty ? config.targets : name, config: config, status: authorized ? "Starting" : "Authorizing")
                 sessions.insert(session, at: 0)
                 id = session.id
             }
             activeID = id; selection = id
             ids = Set(sessions.first { $0.id == id }!.results.map(\.id))
             stdout = LineFramer(); stderr = LineFramer()
-            rate = 0; remaining = "Waiting for authorization"
-            let transport = ScanTransport()
+            rate = 0; remaining = authorized ? "Starting scan" : "Waiting for authorization"
+            let transport = self.transport?.isReady == true ? self.transport! : ScanTransport()
             self.transport = transport
             transport.onEvent = { [weak self] event in self?.handle(event, id: id) }
             try transport.start(config, helper: helperURL, validate: false)
@@ -103,6 +114,12 @@ final class SessionStore: ObservableObject {
         start(name: session.name, config: session.config, resume: session.id)
     }
     private func handle(_ event: WireEvent, id: UUID) {
+        if event.kind == "ready" { authorized = true; return }
+        if event.kind == "locked" || event.kind == "session-ended" {
+            authorized = false
+            transport = nil
+            return
+        }
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         switch event.kind {
         case "started":
@@ -133,7 +150,6 @@ final class SessionStore: ObservableObject {
                 sessions[index].percent = 100
             }
             activeID = nil
-            transport = nil
             remaining = ""
             save()
         default: break
@@ -154,6 +170,13 @@ final class SessionStore: ObservableObject {
             }
         }
         sessions[index].results.append(contentsOf: additions)
+        let touched = Set(additions.map(\.ip))
+        for ip in touched {
+            updateIdentity(ip: ip, index: index)
+            if sessions[index].config.resolveHostnames != false {
+                requestHostname(ip: ip, sessionID: sessions[index].id)
+            }
+        }
         if sessions[index].log.count > 60_000 { sessions[index].log = String(sessions[index].log.suffix(60_000)) }
     }
     func validate(_ config: ScanConfiguration) {
@@ -171,6 +194,7 @@ final class SessionStore: ObservableObject {
                 if event.kind == "error" { self.validationOutput += event.text ?? "" }
                 if event.kind == "exit" {
                     self.validating = false
+                    self.validationTransport?.close()
                     self.validationTransport = nil
                     self.validationOutput = (event.code == 0 ? "Configuration accepted. No packets sent.\n\n" : "Validation failed.\n\n") + self.validationOutput
                 }
@@ -188,6 +212,9 @@ final class SessionStore: ObservableObject {
     func deleteSession(_ id: UUID) {
         guard id != activeID else { return }
         sessions.removeAll { $0.id == id }
+        queriedHosts.removeValue(forKey: id)
+        lookupTokens = lookupTokens.filter { !$0.key.hasPrefix(id.uuidString + "/") }
+        pendingHostnames = lookupTokens.count
         if selection == id { selection = sessions.first?.id }
         save()
     }
@@ -227,5 +254,64 @@ final class SessionStore: ObservableObject {
         transport?.close()
         validationTransport?.close()
         save()
+    }
+    func lockAuthorization() {
+        guard !busy else { return }
+        transport?.close()
+        transport = nil
+        authorized = false
+    }
+    func refreshHostnames() {
+        guard let selected else { return }
+        for ip in Array(Set(selected.results.map(\.ip))).sorted().prefix(512) {
+            requestHostname(ip: ip, sessionID: selected.id, force: true)
+        }
+    }
+    private func requestHostname(ip: String, sessionID: UUID, force: Bool = false) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        let key = sessionID.uuidString + "/" + ip
+        guard lookupTokens[key] == nil else { return }
+        if !force {
+            guard !(queriedHosts[sessionID] ?? []).contains(ip), (queriedHosts[sessionID]?.count ?? 0) < 512 else { return }
+        }
+        queriedHosts[sessionID, default: []].insert(ip)
+        if !force, let cached = hostnameCache[ip], Date().timeIntervalSince(cached.date) < 300 {
+            applyHostname(cached.name, ip: ip, index: index)
+            return
+        }
+        let token = UUID()
+        lookupTokens[key] = token
+        pendingHostnames = lookupTokens.count
+        for row in sessions[index].results.indices where sessions[index].results[row].ip == ip {
+            sessions[index].results[row].hostnameStatus = "pending"
+        }
+        resolver.resolve(ip) { [weak self] hostname in
+            guard let self, self.lookupTokens[key] == token else { return }
+            self.lookupTokens.removeValue(forKey: key)
+            self.pendingHostnames = self.lookupTokens.count
+            self.hostnameCache[ip] = (hostname, Date())
+            guard let index = self.sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+            self.applyHostname(hostname, ip: ip, index: index)
+            self.scheduleSave()
+        }
+    }
+    private func applyHostname(_ hostname: String?, ip: String, index: Int) {
+        for row in sessions[index].results.indices where sessions[index].results[row].ip == ip {
+            sessions[index].results[row].hostname = hostname
+            sessions[index].results[row].hostnameStatus = hostname == nil ? "not-found" : "resolved"
+        }
+        updateIdentity(ip: ip, index: index)
+    }
+    private func updateIdentity(ip: String, index: Int) {
+        let matches = sessions[index].results.indices.filter { sessions[index].results[$0].ip == ip }
+        let existing = matches.map { sessions[index].results[$0] }.first { $0.hostnameStatus != nil }
+        let ports = Set(matches.map { sessions[index].results[$0].port })
+        let guess = DeviceHints.infer(hostname: existing?.hostname, ports: ports)
+        for row in matches {
+            sessions[index].results[row].hostname = existing?.hostname
+            sessions[index].results[row].hostnameStatus = existing?.hostnameStatus
+            sessions[index].results[row].deviceHint = guess?.label
+            sessions[index].results[row].deviceEvidence = guess?.evidence
+        }
     }
 }

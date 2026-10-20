@@ -46,10 +46,15 @@ struct ConfigurationView: View {
                         TextField("Interface", text: $config.interface, prompt: Text("Automatic, or en0"))
                         TextField("Excluded targets", text: $config.exclusions, prompt: Text("Optional IPv4 addresses or ranges"), axis: .vertical)
                             .lineLimit(1...3)
-                        Text("Start at 100 packets/s. macOS will ask for administrator authorization when you start.")
+                        Text("Start at 100 packets/s. Administrator authorization is requested once per app session.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
+                        Toggle("Look up hostnames", isOn: Binding(
+                            get: { config.resolveHostnames != false },
+                            set: { config.resolveHostnames = $0 }))
+                        Text("Uses system DNS / mDNS in the background, up to 512 hosts per scan. Device hints are estimates based on names and ports.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Toggle("Save as a reusable profile", isOn: $saveProfile)
                         DisclosureGroup("Command preview", isExpanded: $showCommand) {
                             Text(config.preview).font(.system(size: 11, design: .monospaced))

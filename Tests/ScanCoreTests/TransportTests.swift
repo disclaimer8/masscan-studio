@@ -3,6 +3,35 @@ import XCTest
 
 final class TransportTests: XCTestCase {
     @MainActor
+    func testSameAuthorizedSessionCanRunTwoJobs() async throws {
+        guard MasscanBinary.path != nil else { throw XCTSkip("masscan not installed") }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let helper = root.appendingPathComponent(".build/debug/ScanHelper")
+        let transport = ScanTransport()
+        defer { transport.close() }
+        var failures: [String] = []
+        var pids: [Int32] = []
+        for target in ["192.0.2.1", "192.0.2.2"] {
+            let complete = expectation(description: "completed \(target)")
+            var output = ""
+            transport.onEvent = { event in
+                if event.kind == "error" { failures.append(event.text ?? "") }
+                if event.kind == "stdout", let text = event.text, let data = Data(base64Encoded: text) {
+                    output += String(decoding: data, as: UTF8.self)
+                }
+                if event.kind == "exit" { complete.fulfill() }
+            }
+            var config = ScanConfiguration(); config.targets = target
+            try transport.start(config, helper: helper, validate: true)
+            await fulfillment(of: [complete], timeout: 4)
+            XCTAssertTrue(output.contains(target))
+            if let pid = transport.sessionPID { pids.append(pid) }
+        }
+        XCTAssertEqual(pids.count, 2)
+        XCTAssertEqual(pids.first, pids.last, "Jobs must use the same helper, not reauthorize.")
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+    }
+    @MainActor
     func testRealHelperStreamsValidationAndTerminates() async throws {
         guard MasscanBinary.path != nil else { throw XCTSkip("masscan not installed") }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -37,10 +66,12 @@ final class TransportTests: XCTestCase {
         XCTAssertThrowsError(try transport.start(config, helper: URL(fileURLWithPath: "/usr/bin/false"), validate: true))
     }
     @MainActor
-    func testCancelBeforeAuthorizationIsTerminal() {
+    func testCancelBeforeAuthorizationIsTerminal() throws {
         let transport = ScanTransport()
         var events: [WireEvent] = []
         transport.onEvent = { events.append($0) }
+        var config = ScanConfiguration(); config.targets = "192.0.2.1"
+        try transport.start(config, helper: URL(fileURLWithPath: "/usr/bin/false"), validate: true)
         transport.stop()
         transport.stop()
         XCTAssertEqual(events.filter { $0.kind == "exit" }.count, 1)

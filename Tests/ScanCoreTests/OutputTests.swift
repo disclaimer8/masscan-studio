@@ -30,7 +30,7 @@ final class OutputTests: XCTestCase {
     func testCSVAndIPSort() {
         let rows = [PortResult(ip: "192.0.2.10", port: 443, discoveredAt: Date(timeIntervalSince1970: 0))]
         let csv = Export.csv(rows)
-        XCTAssertTrue(csv.hasPrefix("ip,port,protocol,service_hint,discovered_at\r\n"))
+        XCTAssertTrue(csv.hasPrefix("ip,port,protocol,service_hint,discovered_at,hostname,device_hint,device_evidence\r\n"))
         XCTAssertTrue(csv.contains("192.0.2.10,443,tcp,HTTPS,1970-01-01T00:00:00Z"))
         XCTAssertLessThan(PortResult(ip: "192.0.2.2", port: 80).ipSort, rows[0].ipSort)
     }
@@ -73,5 +73,20 @@ final class OutputTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
         XCTAssertEqual(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines), input)
+    }
+    func testEnrichedCSVQuotesEvidenceAndNeutralizesFormulas() {
+        var row = PortResult(ip: "192.0.2.3", port: 9100)
+        row.hostname = "=1+1"
+        row.deviceHint = "Possible printer"
+        row.deviceEvidence = "Ports 631, 9100"
+        let csv = Export.csv([row])
+        XCTAssertTrue(csv.contains(",'=1+1,Possible printer,\"Ports 631, 9100\""))
+    }
+    func testOldResultsAndProfilesDecodeWithoutIdentityFields() throws {
+        let row = try JSONDecoder().decode(PortResult.self, from: Data(#"{"ip":"192.0.2.1","port":80,"proto":"tcp","discoveredAt":0}"#.utf8))
+        XCTAssertNil(row.hostname)
+        let config = try JSONDecoder().decode(ScanConfiguration.self, from: Data(#"{"targets":"192.0.2.1","ports":"80","exclusions":"","interface":"","rate":100,"seed":42}"#.utf8))
+        XCTAssertNotEqual(config.resolveHostnames, false)
+        XCTAssertTrue(try config.arguments().contains("192.0.2.1"))
     }
 }

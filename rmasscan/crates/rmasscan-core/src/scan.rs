@@ -399,6 +399,8 @@ mod tests {
     fn format_line_single_vs_multi_port() {
         assert_eq!(format_list_line(0x0a000001, 80, true), "10.0.0.1");
         assert_eq!(format_list_line(0x0a000001, 80, false), "10.0.0.1:80");
+        // ipv4address_selftest vector, massip-addr.c:313-317.
+        assert_eq!(format_list_line(0x01FF00A3, 80, true), "1.255.0.163");
     }
 
     fn massip(targets: &str, ports: &str) -> MassIp {

@@ -11,6 +11,13 @@ pub const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/g
 #[derive(Deserialize)]
 pub struct Manifest {
     pub cases: Vec<Case>,
+    pub offline_gen_pps: Option<f64>,
+    pub offline_gen_bench: Option<GenBench>,
+}
+
+#[derive(Deserialize)]
+pub struct GenBench {
+    pub cpu_model: Option<String>,
 }
 
 #[derive(Deserialize)]

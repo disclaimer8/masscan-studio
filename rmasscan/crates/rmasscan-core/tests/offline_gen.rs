@@ -11,26 +11,49 @@ mod offline_gen;
 
 use std::time::Instant;
 
-fn oracle_pps() -> f64 {
-    let text = std::fs::read_to_string(format!("{}/manifest.json", common::GOLDEN_DIR)).unwrap();
-    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-    v["offline_gen_pps"]
-        .as_f64()
-        .expect("offline_gen_pps in manifest")
+/// Модель CPU из /proc/cpuinfo (None вне Linux).
+fn cpu_model() -> Option<String> {
+    let t = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    let l = t.lines().find(|l| l.starts_with("model name"))?;
+    Some(l.split_once(':')?.1.trim().to_string())
 }
 
 #[test]
 fn small_workload_generates_every_target() {
     // Быстрая проверка конвейера (идёт в обычном `cargo test`): /24 x 1 порт.
     let m = offline_gen::build_massip("10.1.2.0/24", "80");
-    let (n, _) = offline_gen::generate(&m);
-    assert_eq!(n, 256);
+    let mut seen = std::collections::BTreeSet::new();
+    let n = offline_gen::generate_with(&m, |ip, port| {
+        seen.insert((ip, port));
+    });
+    assert_eq!(n.0, 256);
+    let want: std::collections::BTreeSet<(u32, u32)> =
+        (0..256u32).map(|k| (0x0a01_0200 + k, 80)).collect();
+    assert_eq!(seen, want);
 }
 
 #[test]
 #[ignore = "release-only, minipc: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture"]
 fn offline_generation_meets_80pct_of_oracle() {
-    let oracle = oracle_pps();
+    if cfg!(debug_assertions) {
+        panic!("debug build: the 80% comparison is only meaningful with --release");
+    }
+    let manifest = common::load_manifest();
+    let oracle = manifest
+        .offline_gen_pps
+        .expect("offline_gen_pps in manifest");
+    // Сравнение только на железе оракула (если /proc/cpuinfo есть).
+    if let (Some(ours), Some(want)) = (
+        cpu_model(),
+        manifest
+            .offline_gen_bench
+            .as_ref()
+            .and_then(|b| b.cpu_model.clone()),
+    ) && ours != want
+    {
+        eprintln!("SKIP: CPU '{ours}' differs from oracle CPU '{want}'; not comparable");
+        return;
+    }
     let m = offline_gen::build_massip("0.0.0.0/4", "80");
     let start = Instant::now();
     let (n, sink) = offline_gen::generate(&m);

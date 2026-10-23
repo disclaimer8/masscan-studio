@@ -2,7 +2,7 @@
 //! Graham). Общий для `tests/offline_gen.rs` и `benches/offline_gen.rs`.
 //!
 //! Аналог `transmit_thread` (main.c:203-448) в режиме `--offline` без I/O:
-//! `throttler_next_batch` (:292) -> индекс -> BlackRock shuffle -> pick
+//! `throttler_next_batch` (:289) -> индекс -> BlackRock shuffle -> pick
 //! (`transmit_scan`) -> SYN-cookie (:389) -> `template_set_target_ipv4`
 //! (`build_syn` в повторно используемый `Vec`). `rawsock_send_packet` в
 //! офлайне ничего не делает, поэтому здесь его нет.
@@ -33,8 +33,15 @@ pub fn build_massip(targets: &str, ports: &str) -> MassIp {
 /// Генерирует все пакеты и возвращает их число (плюс «приёмник», чтобы
 /// оптимизатор не выбросил работу).
 pub fn generate(massip: &MassIp) -> (u64, u64) {
+    generate_with(massip, |_, _| {})
+}
+
+/// То же, но `on_target(ip, port)` видит каждую цель (для проверки полноты;
+/// пустой замыкание в бенчмарке инлайнится).
+#[inline(always)]
+pub fn generate_with(massip: &MassIp, mut on_target: impl FnMut(u32, u32)) -> (u64, u64) {
     let clock = SystemClock::new();
-    let mut throttler = Throttler::start(ORACLE_RATE, &clock); // main.c:260
+    let mut throttler = Throttler::start(ORACLE_RATE, &clock); // main.c:249
     let tmpl = TcpSynTemplate::new(
         [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
         [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
@@ -56,7 +63,8 @@ pub fn generate(massip: &MassIp) -> (u64, u64) {
         0,
         ORACLE_RATE,
         |_i, _repeats, _xxx, ip_them, port_them| {
-            // main.c:292: новая пачка, когда прежняя исчерпана (`while (batch_size && ...)`).
+            on_target(ip_them, port_them);
+            // main.c:289: новая пачка, когда прежняя исчерпана (`while (batch_size && ...)`).
             while batch == 0 {
                 batch = throttler.next_batch(packets_sent, &clock);
             }
@@ -64,9 +72,11 @@ pub fn generate(massip: &MassIp) -> (u64, u64) {
             let seqno =
                 syn_cookie_ipv4(ip_them, port_them, IP_ME, u32::from(PORT_ME), ORACLE_SEED) as u32;
             tmpl.build_syn(ip_them, port_them as u16, IP_ME, PORT_ME, seqno, &mut frame);
+            // Не даёт LTO выбросить запись кадра (чтение двух байтов этого не гарантирует).
+            std::hint::black_box(&frame);
             sink = sink.wrapping_add(u64::from(frame[53]) + u64::from(frame[24]));
-            batch -= 1; // :412
-            packets_sent += 1; // :413
+            batch -= 1; // :408
+            packets_sent += 1; // :409
         },
     )
     .unwrap();

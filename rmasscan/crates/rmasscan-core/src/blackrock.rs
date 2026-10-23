@@ -221,6 +221,30 @@ mod tests {
     }
 
     #[test]
+    fn c_selftest_ranges_are_permutations() {
+        // blackrock_selftest, crypto-blackrock.c:401-408: range = 3015*3, then
+        // `range += 10 + i; range *= 2` five times, 4 rounds, blackrock_verify
+        // (:298). C seeds with time(0); a fixed seed keeps the test deterministic.
+        let mut range = 3015u64 * 3;
+        let mut seen_ranges = Vec::new();
+        for i in 0..5u64 {
+            range += 10 + i;
+            range *= 2;
+            seen_ranges.push(range);
+            let br = BlackRock::new(range, 1, 4);
+            let mut seen = vec![0u8; range as usize];
+            for j in 0..range {
+                let x = br.shuffle(j);
+                assert!(x < range);
+                seen[x as usize] += 1;
+                assert_eq!(br.unshuffle(x), j);
+            }
+            assert!(seen.iter().all(|&c| c == 1), "range {range}");
+        }
+        assert_eq!(seen_ranges, [18110, 36242, 72508, 145042, 290112]);
+    }
+
+    #[test]
     fn range_one_maps_zero_to_zero() {
         assert_eq!(BlackRock::new(1, 1, 4).shuffle(0), 0);
     }

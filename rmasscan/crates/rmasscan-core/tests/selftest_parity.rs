@@ -6,8 +6,8 @@
 //! Rust-тест его переносит, либо что он отложен на этап 2 или не переносится,
 //! с причиной. Тест `every_named_rust_test_exists` читает исходники через
 //! `include_str!` и проверяет, что каждое названное имя это реальная
-//! `fn имя(` с атрибутом `#[test]` рядом, так что переименование теста без
-//! обновления карты роняет сборку тестов.
+//! `fn имя(` с атрибутом `#[test]` у этой функции, так что переименование теста без
+//! обновления карты роняет этот тест при его запуске (не сборку).
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Status {
@@ -42,7 +42,7 @@ const PARITY: &[Entry] = &[
         c_test: "massip_selftest",
         main_c_line: 1821,
         c_def: "massip.c:112",
-        status: Partial,
+        status: NotPorted,
         rust: &[
             (
                 "src/massip.rs",
@@ -54,8 +54,9 @@ const PARITY: &[Entry] = &[
                 "list_scan_matches_c_oracle_fixtures",
             ),
         ],
-        reason: "C-тест целиком на IPv6 (2607:f8b0:4002:801::2004/124, excludes, range); \
-                 IPv6 вне v1. IPv4-аналог: excludes -> optimize -> count/pick, плюс golden -sL.",
+        reason: "C-тест целиком на IPv6 (massip.c:112-150: 2607:f8b0:4002:801::2004/124, excludes, \
+                 range), поэтому не портирован (IPv6 вне v1). Перечисленные тесты это IPv4-аналоги, \
+                 а не порт: excludes -> optimize -> count/pick, пустой range, golden -sL.",
     },
     Entry {
         c_test: "ranges6_selftest",
@@ -83,7 +84,7 @@ const PARITY: &[Entry] = &[
             ("src/checksum.rs", "fold_u64_overflowing_incremental_sum"),
             ("src/checksum.rs", "tcp_ipv4_partial_matches_c"),
         ],
-        reason: "Векторы IPv4 TCP/UDP/ICMP перенесены дословно; IPv6-векторы (checksum_ipv6) вне v1.",
+        reason: "Векторы IPv4 IGMP/UDP/TCP перенесены дословно; IPv6-векторы (checksum_ipv6) вне v1.",
     },
     Entry {
         c_test: "ipv4address_selftest",
@@ -202,6 +203,7 @@ const PARITY: &[Entry] = &[
         rust: &[
             ("src/blackrock.rs", "shuffle_unshuffle_round_trip"),
             ("src/blackrock.rs", "shuffle_is_a_permutation"),
+            ("src/blackrock.rs", "c_selftest_ranges_are_permutations"),
             (
                 "src/blackrock.rs",
                 "tiny_ranges_are_permutations_and_round_trip",
@@ -211,8 +213,9 @@ const PARITY: &[Entry] = &[
                 "listscan_order_matches_oracle_for_single_range_single_port",
             ),
         ],
-        reason: "Round-trip (range 1000, 4 раунда) и перестановка; сверх C: golden-порядок оракула. \
-                 Диапазоны перестановки отличаются от C (:401-408), см. прогресс T3.",
+        reason: "Round-trip (range 1000, 4 раунда) и перестановка на собственных диапазонах C \
+                 18110/36242/72508/145042/290112 (:401-408) с фиксированным seed вместо time(0); \
+                 сверх C: golden-порядок оракула.",
     },
     Entry {
         c_test: "rawsock_selftest",
@@ -258,6 +261,7 @@ const PARITY: &[Entry] = &[
             ("src/ranges.rs", "range_is_cidr_cases"),
             ("src/ranges.rs", "exclude_matches_reference_algorithm"),
             ("src/targets.rs", "parse_ipv4_single_cidr_dash"),
+            ("src/targets.rs", "parse_ipv4_rejects_bad_octets"),
         ],
         reason: "Включает exclude_selftest (massip-rangesv4.c:1154, вызов :1242): \
                  exclude_matches_reference_algorithm. Парсинг диапазонов из C-теста — в targets.rs.",
@@ -361,12 +365,30 @@ const SOURCES: &[(&str, &str)] = &[
     ),
 ];
 
+/// `fn name(` с атрибутом `#[test]` именно у этой функции: поднимаемся по
+/// строкам-атрибутам (`#[ignore]`, `#[should_panic]`), пропуская комментарии;
+/// закомментированные `fn` не считаются.
 fn is_test_fn(src: &str, name: &str) -> bool {
+    let lines: Vec<&str> = src.lines().map(str::trim).collect();
     let needle = format!("fn {name}(");
-    src.match_indices(&needle).any(|(pos, _)| {
-        // `#[test]` в пределах трёх строк выше (допускаем #[ignore], #[should_panic]).
-        let head = &src[..pos];
-        head.lines().rev().take(4).any(|l| l.trim() == "#[test]")
+    lines.iter().enumerate().any(|(k, l)| {
+        if l.starts_with("//")
+            || !(l.starts_with(&needle) || l.starts_with(&format!("pub {needle}")))
+        {
+            return false;
+        }
+        let mut found = false;
+        for prev in lines[..k].iter().rev() {
+            if prev.starts_with("//") {
+                continue;
+            }
+            if *prev == "#[test]" {
+                found = true;
+            } else if !prev.starts_with("#[") {
+                break;
+            }
+        }
+        found
     })
 }
 
@@ -406,7 +428,9 @@ fn statuses_are_consistent_with_mappings_and_reasons() {
         assert!(e.c_def.contains(".c:"), "{}", e.c_test);
         match e.status {
             Ported | Partial => assert!(!e.rust.is_empty(), "{}: нет Rust-тестов", e.c_test),
-            Stage2 | NotPorted => assert!(e.rust.is_empty(), "{}: есть тесты", e.c_test),
+            // У NotPorted `rust` может перечислять IPv4-аналоги (не порт).
+            NotPorted => {}
+            Stage2 => assert!(e.rust.is_empty(), "{}: есть тесты", e.c_test),
         }
     }
 }

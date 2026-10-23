@@ -18,8 +18,9 @@ Layout
   `line_count`, `sha256`, `truncated`, ...). `args` are the exact masscan arguments.
 - `listscan/`: `-sL` stdout. Each case was run twice and the output hashes matched. Includes edge cases
   for tiny ranges (blackrock_init special-cases ranges 0-8): `single_ip_p80_seed1` (1 target),
-  `slash31_p80_seed1` (2), `range3_p80_seed1` (3), `slash30_allports_seed1` (262,144 lines, truncated)
-  and `ipv6_slash126_p80-443_seed1` (`[addr]:port` format).
+  `slash31_p80_seed1` (2), `range3_p80_seed1` (3), and `ipv6_slash126_p80-443_seed1`
+  (`[addr]:port` format). The 65,536-port edge case is `slash30_allports_seed1`
+  (262,144 lines, truncated).
 - `echo/`: `--echo` and `--echo-all` stdout (`<case>.conf`, `<case>.all.conf`). Every case
   pins `--seed`: without it masscan prints a random seed.
 - `paused/`: real `paused.conf` files written on SIGINT from `--offline` runs.

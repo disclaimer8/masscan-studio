@@ -12,7 +12,9 @@ github.com/robertdavidgraham/masscan, ветка master, HEAD `8e6b3b0`
 Лицензия AGPL-3.0 (`LICENSE`). Все ссылки `файл:строка` ниже относятся к этому
 клону; утверждения о поведении masscan проверены по коду, а не по памяти.
 
-Сопутствующие документы studio: действующая спека переноса
+Сопутствующие документы studio (в этой ветке их нет: они лежат
+неотслеживаемыми в основной копии studio и не входят в ветку `feat/rmasscan-port`):
+действующая спека переноса
 [2026-10-23-cross-platform-qt-rust-design.md](2026-10-23-cross-platform-qt-rust-design.md)
 (далее «спека studio», ссылки вида «§5.2, стр. 204» означают раздел и строку
 того файла), ранняя спека
@@ -711,3 +713,34 @@ Handle::pause(), Handle::stop(), Handle::join()
 - Npcap: https://npcap.com/oem/ , https://npcap.com/oem/redist , https://npcap.com/guide/
 - NPSL: https://nmap.org/npsl/npsl-annotated.html
 - AGPL-3.0: текст в `LICENSE` клона masscan (разделы 4–6, 13).
+
+## Исправления после этапов 0–1
+
+Поправки к тексту выше, найденные при реализации и ревью этапов 0–1. Где они
+противоречат разделам выше, верны эти.
+
+- **(a) criterion не чистый Rust.** Цепочка criterion → alloca → cc тянет C-компилятор,
+  поэтому criterion удалён, а бенчмарк это обычный замер времени в цикле
+  (`cargo bench -p rmasscan-core`, см. `rmasscan/BENCHMARKS.md`). Неверны строка таблицы в
+  §5.2 (стр. ~382, «`criterion` (pure Rust)») и строка в §6.2 (стр. ~438, где
+  `criterion` значится без C).
+- **(b) C `--offline` на Linux не работает.** На 8e6b3b0 он падает с «bad packet template»:
+  proto-preprocess.c:516-531 отвергает AF_INET6=10 (offline-адаптер имеет link type 0, шаблон
+  IPv6 пишет 10, а разбор принимает только 24/28/30). Фикстуры `paused/` и замер
+  `offline_gen_pps` сняты с копии с правкой в одну строку (link type = Ethernet), хеш в
+  `offline_binary_sha256`. Это исправляет §4.8.
+- **(c) Диапазон 0 в BlackRock.** В C это бесконечный цикл, а не деление на ноль:
+  crypto-blackrock.c:117-120 задаёт `a = b = 0`, после чего `while (a*b <= range) b++` на
+  :151-152 не завершается. Исправляет §4.2. В Rust это ошибка `EmptyRange`.
+- **(d) `-sL` с retries > 0 может зависнуть** и в C, и в Rust:
+  main-listscan.c:35 удлиняет конец до `range + retries*max_rate`, так что в
+  `blackrock_shuffle` попадают индексы `m >= range`, вне области перестановки, и цикл
+  `while (c >= range)` (crypto-blackrock.c:268-276) может не завершиться. Передача
+  (transmit) безопасна: её конец `range + retries*range` (main.c:273).
+- **(e) Осознанные отличия от C.** Порт отвергает: перевёрнутые диапазоны (`10.0.0.5-10.0.0.1`),
+  завершающую точку, пустой CIDR, пустой октет и мусор в списке портов (C принимает часть из
+  этого молча). Для `range_is_cidr` при `begin == 0` повторено поведение x86 (подтверждено
+  оракулом). Вывод `rate` в `--echo` смоделирован по x86 `cvttsd2si` (усечение
+  `(unsigned)(max_rate*100000)` по модулю 2^32, main-conf.c:1868).
+- **(f) Запись pcap-файла.** §3 относит pcap-writer к этапу 1. Он не планировался и не
+  делался в этапе 1; переносится в этап 2.

@@ -283,28 +283,34 @@ impl RangeList {
     }
 }
 
-/// massip-rangesv4.c:124 `range_is_cidr`: `Some(prefix_bits)` если диапазон
-/// ровно один CIDR-блок (в C: `range_first_cidr` вернул тот же диапазон).
+/// massip-rangesv4.c:124 `range_is_cidr` (через `range_first_cidr`, :84):
+/// `Some(prefix_bits)` если диапазон ровно один CIDR-блок.
 ///
-/// Отличие от C (намеренное): при `begin == 0` цикл подсчёта нулевых
-/// младших бит в C доходит до `1 << 32` и `0xFFFFFFFF << 33` (UB в C, на
-/// x86 счётчик сдвига берётся по модулю 32), и `0.0.0.0/8` не признаётся
-/// CIDR, а `0.0.0.0-0.0.0.1` даёт префикс 4294967295. Здесь `begin == 0`
-/// считается как 32 нулевых бита, поэтому `0.0.0.0/N` печатается как CIDR.
+/// Намеренно повторяет gcc x86-64, включая UB при `begin == 0`: цикл
+/// подсчёта нулевых бит (:98-101) не прерывается, `zbits` становится 33, а
+/// сдвиг `0xFFFFFFFF << 33` аппаратно берёт счётчик по модулю 32 (`<< 1`).
+/// Итог: диапазон с `begin == 0` признаётся CIDR только при `end == 1`, и
+/// тогда префикс равен `32 - 33` по модулю 2^32 = 4294967295; остальные
+/// (`0.0.0.0/8`, `0.0.0.0/1`, `0.0.0.0/31`...) печатаются через дефис.
+/// Проверено на оракуле: `0.0.0.0/4` -> `0.0.0.0-15.255.255.255`,
+/// `0.0.0.0/31` -> `0.0.0.0/4294967295`. Особый случай `0.0.0.0/0` (:90)
+/// сохранён.
 pub fn range_is_cidr(range: Range) -> Option<u32> {
-    if range.begin > range.end {
-        return None;
+    if range.begin == 0 && range.end == u32::MAX {
+        return Some(0); // :90
     }
-    // Число нулевых младших бит begin (0..=32).
-    let mut zbits = range.begin.trailing_zeros();
-    // massip-rangesv4.c:114-120: наибольший блок, не выходящий за end.
-    // Размер блока считаем в u64, чтобы 2^32 не переполнялся.
-    while zbits > 0 && u64::from(range.begin) + ((1u64 << zbits) - 1) > u64::from(range.end) {
-        zbits -= 1;
+    let mut z: u32 = if range.begin == 0 {
+        33
+    } else {
+        range.begin.trailing_zeros()
+    };
+    let mask = |z: u32| !(u32::MAX << (z & 31)); // x86: счётчик сдвига mod 32
+    while z > 0 && range.begin.wrapping_add(mask(z)) > range.end {
+        z -= 1;
     }
-    let last = u64::from(range.begin) + ((1u64 << zbits) - 1);
-    if last == u64::from(range.end) {
-        Some(32 - zbits)
+    let out_end = range.begin.wrapping_add(mask(z));
+    if out_end == range.end {
+        Some(32u32.wrapping_sub(z))
     } else {
         None
     }
@@ -328,11 +334,13 @@ mod tests {
         assert_eq!(range_is_cidr(r(0x0A00_0000, 0x0A00_007F)), Some(25));
         // Не выровнен по размеру: 10.0.0.128-10.0.1.127 не CIDR.
         assert_eq!(range_is_cidr(r(0x0A00_0080, 0x0A00_017F)), None);
-        // begin == 0 (UB в C, см. doc).
-        assert_eq!(range_is_cidr(r(0, 0x00FF_FFFF)), Some(8));
-        assert_eq!(range_is_cidr(r(0, 1)), Some(31));
+        // begin == 0: поведение gcc x86-64 (см. doc), подтверждено оракулом.
+        assert_eq!(range_is_cidr(r(0, 0x00FF_FFFF)), None); // 0.0.0.0/8
+        assert_eq!(range_is_cidr(r(0, 0x0FFF_FFFF)), None); // 0.0.0.0/4
+        assert_eq!(range_is_cidr(r(0, 0x7FFF_FFFF)), None); // 0.0.0.0/1
+        assert_eq!(range_is_cidr(r(0, 1)), Some(u32::MAX)); // 0.0.0.0/31
         assert_eq!(range_is_cidr(r(0, 2)), None);
-        assert_eq!(range_is_cidr(r(0, 0)), Some(32));
+        assert_eq!(range_is_cidr(r(0, 0)), Some(0));
     }
 
     const fn r(begin: u32, end: u32) -> Range {

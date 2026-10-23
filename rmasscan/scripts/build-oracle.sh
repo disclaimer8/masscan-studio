@@ -152,6 +152,10 @@ ec shard_rounds               10.0.0.0/24 -p80 --shard 2/3 --blackrock-rounds 7 
 ec adapter_opts               10.0.0.0/24 -p80 --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --router-mac 66-55-44-33-22-11 --source-port 40000 --seed 6
 ec wait_and_ports             10.0.0.0/30 --ports 22,80,443,8080-8090 --wait 5 --seed 4294967295
 ec everything                 10.0.0.0/22 -p1-1024 --exclude 10.0.1.0/24 --seed 77 --rate 250000 --retries 1 --shard 1/2 --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --router-mac 66-55-44-33-22-11 --source-port 50000 --blackrock-rounds 14 --wait 3
+# begin==0 ranges hit UB in range_first_cidr (massip-rangesv4.c:98-124); gcc x86-64 prints them dashed
+# (or as /4294967295 for 0.0.0.0/31). --echo only: the .all form is identical (main.c:1803-1805).
+run_capture echo zero_slash4  conf "--echo" --echo 0.0.0.0/4  -p80 --seed 1
+run_capture echo zero_slash31 conf "--echo" --echo 0.0.0.0/31 -p80 --seed 1
 
 # ---- paused.conf captures (offline, SIGINT after 2s; outer SIGKILL guard after 40s: `timeout -k` kills masscan before it saves) -------------------------
 ADAPT=(--interface lo --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --router-mac 66-55-44-33-22-11 --source-port 40000)
@@ -169,6 +173,8 @@ paused() { local name=$1; shift
 paused seed1_p80_slash16       10.0.0.0/16 -p80 --seed 1
 paused seed424242_multi        192.168.0.0/20 -p22,80,443 --seed 424242 --retries 2
 paused seed9_resume_index      172.16.0.0/16 -p0-9 --seed 9 --resume-index 5000
+# the flags studio always passes: C then also writes `output-format = interactive`
+paused studio_flags            192.168.0.0/16 -p80 --seed 3 --interactive --output-format interactive -e lo
 
 # ---- offline benchmark -----------------------------------------------------
 BENCH_ARGS=(0.0.0.0/4 -p80 --rate 100000000 --offline "${ADAPT[@]}" --seed 1 --wait 0)

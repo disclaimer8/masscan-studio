@@ -938,6 +938,80 @@
       "deterministic": null,
       "note": "resume index is time dependent (SIGINT after ~2s at --rate 1000); parse-compare, do not hash-compare",
       "signal": "timeout -s KILL 40 timeout -s INT 2"
+    },
+    {
+      "file": "echo/zero_slash4.conf",
+      "mode": "--echo",
+      "args": [
+        "--echo",
+        "0.0.0.0/4",
+        "-p80",
+        "--seed",
+        "1"
+      ],
+      "binary": "pinned",
+      "line_count": 10,
+      "sha256": "5b1813cef0916378bf88f3f5c5bb5e266c6b406c3ec9c40b93b4af7bc257a2ff",
+      "truncated": false,
+      "size_bytes": 170,
+      "deterministic": true,
+      "note": null,
+      "signal": null
+    },
+    {
+      "file": "echo/zero_slash31.conf",
+      "mode": "--echo",
+      "args": [
+        "--echo",
+        "0.0.0.0/31",
+        "-p80",
+        "--seed",
+        "1"
+      ],
+      "binary": "pinned",
+      "line_count": 10,
+      "sha256": "f2c8a685689d83c91d49ce4cbda6da0b0fa1d9ea6e7f04450d759c5ef172f1d7",
+      "truncated": false,
+      "size_bytes": 166,
+      "deterministic": true,
+      "note": null,
+      "signal": null
+    },
+    {
+      "file": "paused/studio_flags.conf",
+      "mode": "paused",
+      "args": [
+        "192.168.0.0/16",
+        "-p80",
+        "--seed",
+        "3",
+        "--interactive",
+        "--output-format",
+        "interactive",
+        "-e",
+        "lo",
+        "--offline",
+        "--adapter-ip",
+        "10.255.0.1",
+        "--adapter-mac",
+        "00-11-22-33-44-55",
+        "--router-mac",
+        "66-55-44-33-22-11",
+        "--source-port",
+        "40000",
+        "--rate",
+        "1000",
+        "--wait",
+        "0"
+      ],
+      "binary": "offline-patched",
+      "line_count": 21,
+      "sha256": "5beb621b8d24ffb7d28fdeee58e4e7b23924a42580a77c1ab04066d1b75862e2",
+      "truncated": false,
+      "size_bytes": null,
+      "deterministic": null,
+      "note": "resume index is time dependent (SIGINT after ~2s at --rate 1000); parse-compare, do not hash-compare",
+      "signal": "timeout -s KILL 40 timeout -s INT 2"
     }
   ]
 }

@@ -28,6 +28,10 @@ use crate::targets::{
 /// Операция, для которой готовится конфигурация (`masscan->op`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
+    /// `--echo` / `--echo-all`: C доходит до `masscan_echo` только через
+    /// `apply_excludes`, `optimize` и 63-битную проверку (main.c:1673-1704,
+    /// :1799-1805); пустые цели и порты не ошибка.
+    Echo,
     /// `-sL` (`Operation_ListScan`, main-listscan.c).
     List,
     /// Обычный скан (`Operation_Scan`, main.c:1715-1735, `main_scan`).
@@ -291,11 +295,16 @@ pub fn parse_source_port(value: &str) -> Result<(u16, u16), ConfigError> {
 /// 9. только для скана: больше 1e9 адресов требует `--exclude`
 ///    (main.c:1232-1237, это `main_scan`; `-sL` этого не проверяет).
 ///
+/// `Operation::Echo` выполняет только шаги 1 (без `blackrock_rounds`, их
+/// C не проверяет), 3, 5 и 6: `--echo 10.0.0.0/24` (без портов),
+/// `--echo -p80` (без целей), `--echo 0.0.0.0/0 -p80` и случай "всё
+/// исключено" в C завершаются кодом 0. Возвращаемый `range` может быть 0.
+///
 /// Пустая цель при `-sL` в C — деление на ноль в `blackrock_init`
 /// (crypto-blackrock.c:117), здесь `EmptyTargets`.
 pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, ConfigError> {
     check_shard(cfg.shard)?;
-    if cfg.blackrock_rounds >= 64 {
+    if op != Operation::Echo && cfg.blackrock_rounds >= 64 {
         return Err(ConfigError::BadBlackrockRounds(cfg.blackrock_rounds));
     }
     if cfg.retries >= 1000 {
@@ -316,6 +325,10 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
     massip.optimize();
 
     massip.try_range()?;
+
+    if op == Operation::Echo {
+        return Ok(effective(cfg, op, massip));
+    }
 
     if op == Operation::List && massip.ports().is_empty() {
         massip.ports_mut().add_range(80, 80);
@@ -343,11 +356,14 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
         return Err(ConfigError::ExcludeRequired);
     }
 
-    let range = massip.try_range()?;
-    Ok(EffectiveConfig {
+    Ok(effective(cfg, op, massip))
+}
+
+fn effective(cfg: &ScanConfig, op: Operation, massip: MassIp) -> EffectiveConfig {
+    EffectiveConfig {
         operation: op,
+        range: massip.range(),
         massip,
-        range,
         seed: cfg.seed,
         max_rate: cfg.max_rate,
         retries: cfg.retries,
@@ -357,12 +373,13 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
         blackrock_rounds: cfg.blackrock_rounds,
         wait_secs: cfg.wait_secs,
         adapter_ip: cfg.adapter_ip,
-        adapter_mac: cfg.adapter_mac,
+        // main-conf.c:2552: C никогда не хранит нулевой MAC.
+        adapter_mac: cfg.adapter_mac.filter(|m| *m != [0u8; 6]),
         router_mac: cfg.router_mac,
         source_port: cfg.source_port,
         adapter_name: cfg.adapter_name.clone(),
         offline: cfg.offline,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -373,12 +390,20 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
 ///
 /// C считает `(unsigned)(max_rate * 100000) % 100000`. Для `max_rate`
 /// больше ~42949 это UB (результат не помещается в `unsigned`); gcc на
-/// x86-64 берёт младшие 32 бита 64-битного преобразования. Мы делаем то же
-/// намеренно: `f64 -> u64 -> u32` (усечение). Из-за этого `250000` печатается
-/// как `250000.000000` (так в golden `echo/everything.conf`), а `5000` как
-/// `5000      ` (`%-10.0f`).
+/// x86-64 делает `cvttsd2si` в 64 бита и берёт младшие 32. Модель:
+/// значение вне `i64` даёт "неопределённое целое" 0x8000...0 (младшие 32
+/// бита 0), остальное `as i64 as u32` (усечение, не насыщение). Из-за этого
+/// `250000` печатается как `250000.000000` (golden `echo/everything.conf`),
+/// `5000` как `5000      ` (`%-10.0f`), а `134217728` (произведение кратно
+/// 2^32) снова как целое.
 fn format_rate(max_rate: f64) -> String {
-    let scaled = (max_rate * 100000.0) as u64 as u32;
+    let s = max_rate * 100000.0;
+    // NaN и значения >= 2^63 попадают в `else` (0x8000...0, младшие 32 бита 0).
+    let scaled: u32 = if s < 9_223_372_036_854_775_808.0 {
+        s as i64 as u32
+    } else {
+        0
+    };
     if !scaled.is_multiple_of(100000) {
         format!("rate = {max_rate:.6}\n")
     } else {
@@ -464,7 +489,14 @@ fn echo_range(out: &mut String, r: crate::ranges::Range) {
 /// печатает (main-conf.c:2763, :3028), поэтому здесь тоже. 63-битную
 /// проверку (main.c:1698) делает [`validate`], `echo` её не повторяет.
 ///
-/// `echo_all`: см. документацию модуля.
+/// `echo_all`: C никогда не вызывает `masscan_echo` с `is_echo_all != 0`
+/// (main-conf.c:413 `masscan_save_state`, main.c:1799 и :1804), поэтому эту
+/// ветку нельзя сверить с оракулом; она печатает ключи, которыми владеет
+/// `ScanConfig`, безусловно (см. документацию модуля).
+///
+/// Ключи вывода (`output-format = ...`) мы не храним и не печатаем: C пишет
+/// их между двумя пустыми строками, поэтому `paused.conf` от студии не
+/// совпадает с нашим `echo` байт в байт (читается он нормально).
 pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
     // resume-index / resume-count (main-conf.c:1913-1934).
     if cfg.resume_index != 0 || echo_all {
@@ -510,7 +542,7 @@ pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
     if let Some(ip) = cfg.adapter_ip.filter(|&ip| ip != 0) {
         let _ = writeln!(out, "adapter-ip = {}", Ipv4Addr::from(ip));
     }
-    if let Some(mac) = cfg.adapter_mac {
+    if let Some(mac) = cfg.adapter_mac.filter(|m| *m != [0u8; 6]) {
         let _ = writeln!(out, "adapter-mac = {}", fmt_mac(mac));
     }
     if let Some(mac) = cfg.router_mac.filter(|m| *m != [0u8; 6]) {
@@ -545,6 +577,48 @@ pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
 /// C `isspace` для ASCII.
 fn is_c_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+}
+
+/// main-conf.c:833 `EQUALS`: регистр и символы `-`, `.`, `_` не важны, суффикс
+/// `[N]` (массив адаптеров) отбрасывается.
+fn normalize_key(name: &str) -> String {
+    name.split('[')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !matches!(c, '-' | '.' | '_'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// C `strtoul(s, 0, 0)`: `0x..` — hex, ведущий `0` — восьмеричное, иначе
+/// десятичное; читается ведущая последовательность цифр, переполнение
+/// насыщает. `None`, если цифр нет вовсе (C вернул бы 0).
+fn strtoul0(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    let (radix, start) = if b.len() > 2
+        && b[0] == b'0'
+        && (b[1] | 0x20) == b'x'
+        && (b[2] as char).is_ascii_hexdigit()
+    {
+        (16, 2)
+    } else if b.first() == Some(&b'0') {
+        (8, 0)
+    } else {
+        (10, 0)
+    };
+    let mut v: u64 = 0;
+    let mut any = false;
+    for &c in &b[start..] {
+        let Some(d) = (c as char).to_digit(radix) else {
+            break;
+        };
+        v = v
+            .saturating_mul(u64::from(radix))
+            .saturating_add(u64::from(d));
+        any = true;
+    }
+    any.then_some(v)
 }
 
 /// main-conf.c:2000 `parseInt`, но строже: нужна хотя бы одна цифра, а
@@ -616,25 +690,28 @@ pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
             key: name.into(),
             value: value.into(),
         };
-        match name.to_ascii_lowercase().as_str() {
-            "resume-index" => cfg.resume_index = parse_int(name, value)?,
-            "resume-count" => {
+        match normalize_key(name).as_str() {
+            "resumeindex" => cfg.resume_index = parse_int(name, value)?,
+            "resumecount" => {
                 cfg.resume_count = Some(parse_int(name, value)?).filter(|&c| c != 0);
             }
             "seed" => cfg.seed = parse_int(name, value)?,
-            "rate" | "max-rate" => cfg.max_rate = parse_rate(value)?,
+            "rate" | "maxrate" => cfg.max_rate = parse_rate(value)?,
             "shard" | "shards" => cfg.shard = parse_shard(value)?,
-            "retries" | "retry" | "max-retries" | "max-retry" => {
-                let n = parse_u32(name, value)?;
+            "retries" | "retry" | "maxretries" | "maxretry" => {
+                // main-conf.c:1943: strtoul(value, 0, 0), затем x >= 1000.
+                let n = strtoul0(value).ok_or_else(bad)?;
                 if n >= 1000 {
-                    return Err(ConfigError::TooManyRetries(n));
+                    return Err(ConfigError::TooManyRetries(
+                        u32::try_from(n).unwrap_or(u32::MAX),
+                    ));
                 }
-                cfg.retries = n;
+                cfg.retries = n as u32;
             }
-            "offline" | "notransmit" | "nosend" | "dry-run" => cfg.offline = parse_bool(value),
-            "blackrock-rounds" => cfg.blackrock_rounds = parse_u32(name, value)?,
+            "offline" | "notransmit" | "nosend" | "dryrun" => cfg.offline = parse_bool(value),
+            "blackrockrounds" => cfg.blackrock_rounds = parse_u32(name, value)?,
             "wait" => cfg.wait_secs = parse_u32(name, value)?,
-            "capture" | "nocapture" | "no-capture" => {
+            "capture" | "nocapture" => {
                 if !["cert", "servername", "html", "heartbleed", "ticketbleed"]
                     .iter()
                     .any(|k| k.eq_ignore_ascii_case(value))
@@ -642,19 +719,56 @@ pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
                     return Err(bad());
                 }
             }
+            // Ключи вывода (pure-output), которые C пишет в paused.conf, если
+            // заданы: на порядок и содержимое скана не влияют, значения
+            // не проверяются (студия всегда пишет `output-format = interactive`).
+            "outputformat"
+            | "outputfilename"
+            | "outputfile"
+            | "outputappend"
+            | "appendoutput"
+            | "outputshow"
+            | "outputstatus"
+            | "show"
+            | "outputnoshow"
+            | "noshow"
+            | "outputshowopen"
+            | "open"
+            | "openonly"
+            | "outputflush"
+            | "rotate"
+            | "outputrotate"
+            | "rotateoutput"
+            | "rotatetime"
+            | "rotatedir"
+            | "outputrotatedir"
+            | "rotatedirectory"
+            | "rotateoffset"
+            | "outputrotateoffset"
+            | "rotatesize"
+            | "outputrotatefilesize"
+            | "rotatefilesize"
+            | "stylesheet"
+            | "ndjsonstatus"
+            | "statusndjson"
+            | "jsonstatus"
+            | "statusjson" => {}
             "adapter" | "if" | "interface" => cfg.adapter_name = Some(value.to_string()),
-            "adapter-ip" | "source-ip" => {
+            "adapterip" | "sourceip" => {
                 let ip: Ipv4Addr = value.parse().map_err(|_| bad())?;
                 cfg.adapter_ip = Some(ip.into());
             }
-            "adapter-mac" | "source-mac" => cfg.adapter_mac = Some(parse_mac(value)?),
-            "router-mac" => {
+            "adaptermac" | "sourcemac" => {
+                // main-conf.c:2552: нулевой MAC C не сохраняет.
+                cfg.adapter_mac = Some(parse_mac(value)?).filter(|m| *m != [0u8; 6]);
+            }
+            "routermac" => {
                 let m = parse_mac(value)?;
                 (mac4, mac6) = (Some(m), Some(m));
             }
-            "router-mac-ipv4" => mac4 = Some(parse_mac(value)?),
-            "router-mac-ipv6" => mac6 = Some(parse_mac(value)?),
-            "adapter-port" | "source-port" => cfg.source_port = Some(parse_source_port(value)?),
+            "routermacipv4" => mac4 = Some(parse_mac(value)?),
+            "routermacipv6" => mac6 = Some(parse_mac(value)?),
+            "adapterport" | "sourceport" => cfg.source_port = Some(parse_source_port(value)?),
             "ports" | "port" => targets::parse_ports(cfg.targets.ports_mut(), value)?,
             "range" => targets::add_target_string(cfg.targets.ipv4_mut(), value)?,
             "exclude" => targets::add_target_string(cfg.excludes.ipv4_mut(), value)?,
@@ -763,8 +877,8 @@ mod tests {
         assert_eq!(format_rate(250000.0), "rate = 250000.000000\n");
         // 42949 * 100000 = 4294900000 < 2^32: ещё целое.
         assert_eq!(format_rate(42949.0), "rate = 42949     \n");
-        // 2^32 / 100000 = 42949.67..., 100000.0 * 100000 = 1e10 = 2*2^32 + 1410065408
-        // -> 1410065408 % 100000 = 8 != 0.
+        // 1e10 = 2*2^32 + 1410065408; 1410065408 % 100000 = 65408 != 0.
+        assert_eq!(format_rate(134217728.0), "rate = 134217728 \n");
         assert_eq!(format_rate(100000.0), "rate = 100000.000000\n");
     }
 
@@ -1040,7 +1154,8 @@ mod tests {
         let mut s = String::new();
         echo(&cfg, false, &mut s);
         assert!(s.contains("ports = 1-3,80\n"), "{s}");
-        assert!(s.contains("range = 0.0.0.0/8\n"));
+        // begin == 0: поведение gcc x86-64 (оракул), см. ranges::range_is_cidr.
+        assert!(s.contains("range = 0.0.0.0-0.255.255.255\n"));
         assert!(s.contains("range = 10.0.0.0/24\nrange = 10.0.2.5\nrange = 10.0.3.1-10.0.3.5\n"));
     }
 
@@ -1176,5 +1291,108 @@ mod tests {
             (3, 7, false)
         );
         assert_eq!(cfg.excludes.ipv4().len(), 1);
+    }
+
+    #[test]
+    fn echo_zero_based_ranges_like_c_oracle() {
+        let dump = |t: &str| {
+            let mut s = String::new();
+            echo(&cfg_with(t, "80"), false, &mut s);
+            s.lines().last().unwrap().to_string()
+        };
+        assert_eq!(dump("0.0.0.0/8"), "range = 0.0.0.0-0.255.255.255");
+        assert_eq!(dump("0.0.0.0/1"), "range = 0.0.0.0-127.255.255.255");
+        assert_eq!(dump("0.0.0.0/31"), "range = 0.0.0.0/4294967295");
+        assert_eq!(dump("0.0.0.0/0"), "range = 0.0.0.0/0");
+        assert_eq!(dump("0.0.0.0"), "range = 0.0.0.0");
+    }
+
+    #[test]
+    fn validate_echo_accepts_what_c_echo_accepts() {
+        // no ports
+        let eff = validate(&cfg_with("10.0.0.0/24", ""), Operation::Echo).unwrap();
+        assert_eq!(eff.range, 0);
+        // no targets
+        assert!(validate(&cfg_with("", "80"), Operation::Echo).is_ok());
+        // /0 without --exclude (no 1e9 check)
+        let eff = validate(&cfg_with("0.0.0.0/0", "80"), Operation::Echo).unwrap();
+        assert_eq!(eff.range, 1 << 32);
+        // everything excluded
+        let mut cfg = cfg_with("10.0.0.0/24", "80");
+        exclude(&mut cfg, "10.0.0.0/24");
+        assert!(validate(&cfg, Operation::Echo).is_ok());
+        // the 63-bit check still applies
+        let mut cfg = ScanConfig::default();
+        cfg.targets.ipv4_mut().add_range(0, u32::MAX);
+        cfg.targets.ports_mut().add_range(0, 0x7fff_ffff);
+        assert_eq!(
+            err(&cfg, Operation::Echo),
+            ConfigError::RangeOverflow(RangeOverflow)
+        );
+        // rounds are not checked by --echo
+        let mut cfg = cfg_with("10.0.0.0/24", "80");
+        cfg.blackrock_rounds = 64;
+        assert!(validate(&cfg, Operation::Echo).is_ok());
+    }
+
+    #[test]
+    fn zero_adapter_mac_is_normalized_to_none() {
+        let mut cfg = cfg_with("10.0.0.0/24", "80");
+        cfg.adapter_mac = Some([0; 6]);
+        assert_eq!(validate(&cfg, Operation::Scan).unwrap().adapter_mac, None);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(!s.contains("adapter-mac"));
+        let back = read_paused_conf("adapter-mac = 00-00-00-00-00-00\n").unwrap();
+        assert_eq!(back.adapter_mac, None);
+    }
+
+    #[test]
+    fn read_ignores_display_only_keys_but_not_semantic_ones() {
+        let cfg = read_paused_conf(
+            "output-format = interactive\nOutput_Filename = x.txt\nndjson-status = true\n\
+             rotate = 3600\noutput-show = open\nseed = 8\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.seed, 8);
+        for key in ["banners", "router-ip", "min-packet", "top-ports"] {
+            assert_eq!(
+                read_paused_conf(&format!("{key} = 1\n")).unwrap_err(),
+                ConfigError::UnknownKey(key.into())
+            );
+        }
+    }
+
+    #[test]
+    fn read_matches_names_like_c_equals() {
+        let cfg = read_paused_conf("Resume_Index = 9\nADAPTER.PORT = 40000\nmax-rate = 7\nrouter-mac_ipv4 = 00-00-00-00-00-01\nadapter-ip[0] = 1.2.3.4\n").unwrap();
+        assert_eq!(cfg.resume_index, 9);
+        assert_eq!(cfg.source_port, Some((40000, 40000)));
+        assert_eq!(cfg.max_rate, 7.0);
+        assert_eq!(cfg.router_mac, Some([0, 0, 0, 0, 0, 1]));
+        assert_eq!(cfg.adapter_ip, Some(0x0102_0304));
+    }
+
+    #[test]
+    fn read_retries_uses_strtoul_base_0() {
+        let r = |v: &str| read_paused_conf(&format!("retries = {v}\n")).map(|c| c.retries);
+        assert_eq!(r("010"), Ok(8));
+        assert_eq!(r("0x10"), Ok(16));
+        assert_eq!(r("7"), Ok(7));
+        assert_eq!(r("0"), Ok(0));
+        assert_eq!(r("08"), Ok(0)); // strtoul: "0" then stops at '8'
+        assert_eq!(r("0x3e8"), Err(ConfigError::TooManyRetries(1000)));
+        assert_eq!(
+            r("99999999999999999999"),
+            Err(ConfigError::TooManyRetries(u32::MAX))
+        );
+        assert!(matches!(r("x"), Err(ConfigError::BadValue { .. })));
+    }
+
+    #[test]
+    fn rate_cast_models_cvttsd2si() {
+        assert_eq!(format_rate(134217728.0), "rate = 134217728 \n");
+        // beyond i64: indefinite integer, low 32 bits zero -> integer branch
+        assert_eq!(format_rate(1e300), format!("rate = {:<10.0}\n", 1e300));
     }
 }

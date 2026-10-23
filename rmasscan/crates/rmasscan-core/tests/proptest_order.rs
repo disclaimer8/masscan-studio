@@ -5,7 +5,7 @@
 //! (цели), massip-rangesv4.c (диапазоны), main-conf.c (порты, rate, paused.conf).
 //!
 //! Failure persistence: регрессии пишутся в
-//! `tests/proptest-regressions/proptest_order.txt` (относительно крейта).
+//! `tests/proptest-regressions/proptest_order.txt` (абсолютный путь через CARGO_MANIFEST_DIR).
 //! Решение: файл, если появится, КОММИТИТЬ (рекомендация proptest): он
 //! воспроизводит найденные минимизированные входы на каждом прогоне. Сейчас
 //! файла нет, потому что ни одно свойство не падало.
@@ -32,9 +32,10 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 fn cfg(cases: u32) -> ProptestConfig {
     ProptestConfig {
         cases,
-        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
-            "tests/proptest-regressions/proptest_order.txt",
-        ))),
+        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/proptest-regressions/proptest_order.txt"
+        )))),
         ..ProptestConfig::default()
     }
 }
@@ -60,17 +61,17 @@ fn ipv4() -> impl Strategy<Value = String> {
 
 fn target_tok() -> impl Strategy<Value = String> {
     let dash = prop_oneof![
-        Just("-"),
-        Just("\u{2010}"),
-        Just("\u{2013}"),
-        Just("\u{2015}"),
-        Just("\u{2016}"),
-        Just(" - ")
+        6 => Just("-"),
+        1 => Just("\u{2010}"),
+        1 => Just("\u{2013}"),
+        1 => Just("\u{2015}"),
+        1 => Just("\u{2016}"),
+        1 => Just(" - ")
     ];
     prop_oneof![
         4 => ipv4(),
         3 => (ipv4(), "[0-9]{0,3}").prop_map(|(a, n)| format!("{a}/{n}")),
-        3 => (ipv4(), dash, ipv4()).prop_map(|(a, d, b)| format!("{a}{d}{b}")),
+        4 => (ipv4(), dash, ipv4()).prop_map(|(a, d, b)| format!("{a}{d}{b}")),
         1 => "[0-9a-fA-F:\\[\\]]{1,12}",
         1 => "[#;/\\-][^\n]{0,8}\n?",
     ]
@@ -167,16 +168,48 @@ static PP_PREFIX: AtomicU64 = AtomicU64::new(0);
 static PR_DEC: AtomicU64 = AtomicU64::new(0);
 static PR_OK: AtomicU64 = AtomicU64::new(0);
 static PC_TARGETS: AtomicU64 = AtomicU64::new(0);
+static AT_N: AtomicU64 = AtomicU64::new(0);
+static PP_N: AtomicU64 = AtomicU64::new(0);
+static PR_N: AtomicU64 = AtomicU64::new(0);
+static PC_N: AtomicU64 = AtomicU64::new(0);
 static PC_VALID: AtomicU64 = AtomicU64::new(0);
 
 const PARSER_CASES: u32 = 2000;
 
-/// Измерено (2000 прогонов; paused: 1000): targets ~190-200 непустых, ports ~270,
-/// rate ~1800 (дробных ~900), paused ~400 с targets и ~1470 успешных validate.
-/// Пороги в 2-4 раза ниже, чтобы свойства не деградировали до отказа на первом символе.
+/// `PROPTEST_CASES` переопределяет число прогонов (proptest 1.12 sugar.rs:226-244),
+/// поэтому пороги относительные: доля от реально выполненных прогонов N
+/// (счётчики `*_N`). Доли проверяются при N >= RATIO_MIN, строгие "> 0" при N >= DEEP_MIN.
+/// Измерено (N=2000; paused N=1000), доля принятых непустых: targets ~10%
+/// (порог 2.5%), ports ~13% (2.5%), rate ~90% (50%), дробных rate ~45% (12.5%),
+/// paused с targets ~40% (10%), успешные validate(Scan) ~26% (12.5%).
+fn ratio(count: &AtomicU64, n: &AtomicU64, per: u64, what: &str) {
+    let (c, n) = (count.load(Relaxed), n.load(Relaxed));
+    if n < RATIO_MIN {
+        return; // слишком мало прогонов для статистики
+    }
+    assert!(
+        c * per >= n,
+        "{what} degraded: {c} of {n} cases (min 1/{per})"
+    );
+}
+
+fn deep(count: &AtomicU64, n: &AtomicU64, what: &str) {
+    let n = n.load(Relaxed);
+    if n >= DEEP_MIN {
+        assert!(count.load(Relaxed) > 0, "no {what} reached in {n} cases");
+    }
+}
+
+/// Ниже этого числа прогонов доли не проверяются.
+const RATIO_MIN: u64 = 500;
+
+/// Ниже этого числа прогонов "хотя бы один" не гарантирован.
+const DEEP_MIN: u64 = 1000;
+
 #[test]
 fn add_target_string_never_panics_and_reaches_deep_states() {
     proptest!(cfg(PARSER_CASES), |(s in prop_oneof![9 => target_str(), 1 => any::<String>()])| {
+        AT_N.fetch_add(1, Relaxed);
         let mut rl = RangeList::new();
         if add_target_string(&mut rl, &s).is_ok() && !rl.is_empty() {
             AT_OK.fetch_add(1, Relaxed);
@@ -193,20 +226,16 @@ fn add_target_string_never_panics_and_reaches_deep_states() {
         AT_DASH.load(Relaxed),
         AT_UNI.load(Relaxed)
     );
-    assert!(
-        AT_OK.load(Relaxed) >= PARSER_CASES as u64 / 40,
-        "targets accepts degraded"
-    );
-    assert!(
-        AT_CIDR.load(Relaxed) > 0 && AT_DASH.load(Relaxed) > 0,
-        "no CIDR/dash accepts"
-    );
-    assert!(AT_UNI.load(Relaxed) > 0, "no unicode-dash accepts");
+    ratio(&AT_OK, &AT_N, 40, "targets accepts");
+    deep(&AT_CIDR, &AT_N, "CIDR accept");
+    deep(&AT_DASH, &AT_N, "ASCII-dash accept");
+    deep(&AT_UNI, &AT_N, "unicode-dash accept");
 }
 
 #[test]
 fn parse_ports_never_panics_and_reaches_deep_states() {
     proptest!(cfg(PARSER_CASES), |(s in prop_oneof![9 => port_str(), 1 => any::<String>()])| {
+        PP_N.fetch_add(1, Relaxed);
         let mut rl = RangeList::new();
         if parse_ports(&mut rl, &s).is_ok() && !rl.is_empty() {
             PP_OK.fetch_add(1, Relaxed);
@@ -220,17 +249,15 @@ fn parse_ports_never_panics_and_reaches_deep_states() {
         PP_RANGE.load(Relaxed),
         PP_PREFIX.load(Relaxed)
     );
-    assert!(
-        PP_OK.load(Relaxed) >= PARSER_CASES as u64 / 40,
-        "ports accepts degraded"
-    );
-    assert!(PP_RANGE.load(Relaxed) > 0, "no a-b range accepted");
-    assert!(PP_PREFIX.load(Relaxed) > 0, "no T: prefix accepted");
+    ratio(&PP_OK, &PP_N, 40, "ports accepts");
+    deep(&PP_RANGE, &PP_N, "a-b range accept");
+    deep(&PP_PREFIX, &PP_N, "T: prefix accept");
 }
 
 #[test]
 fn parse_rate_never_panics_and_reaches_deep_states() {
     proptest!(cfg(PARSER_CASES), |(s in prop_oneof![9 => "[0-9]{0,30}(\\.[0-9]{0,30})?", 1 => any::<String>()])| {
+        PR_N.fetch_add(1, Relaxed);
         if let Ok(v) = parse_rate(&s) {
             prop_assert!(v >= 0.0 || v.is_nan());
             PR_OK.fetch_add(1, Relaxed);
@@ -242,14 +269,8 @@ fn parse_rate_never_panics_and_reaches_deep_states() {
         PR_OK.load(Relaxed),
         PR_DEC.load(Relaxed)
     );
-    assert!(
-        PR_OK.load(Relaxed) >= PARSER_CASES as u64 / 2,
-        "rate accepts degraded"
-    );
-    assert!(
-        PR_DEC.load(Relaxed) >= PARSER_CASES as u64 / 4,
-        "rate decimals degraded"
-    );
+    ratio(&PR_OK, &PR_N, 2, "rate accepts");
+    ratio(&PR_DEC, &PR_N, 8, "rate decimals");
 }
 
 #[test]
@@ -258,6 +279,7 @@ fn read_paused_conf_never_panics_and_roundtrips_echo() {
             2 => prop::collection::vec(good_conf_line(), 0..8),
             1 => prop::collection::vec(conf_line(), 0..8),
         ], junk in prop::option::weighted(0.1, any::<String>()))| {
+        PC_N.fetch_add(1, Relaxed);
         let mut s = lines.join("\n");
         if let Some(j) = junk { s = j; }
         if let Ok(conf) = read_paused_conf(&s) {
@@ -271,23 +293,19 @@ fn read_paused_conf_never_panics_and_roundtrips_echo() {
             echo(&back.unwrap(), false, &mut out2);
             prop_assert_eq!(&out1, &out2);
             for op in [Operation::Scan, Operation::List, Operation::Echo] {
-                if validate(&conf, op).is_ok() { PC_VALID.fetch_add(1, Relaxed); }
+                if validate(&conf, op).is_ok() && op == Operation::Scan {
+                    PC_VALID.fetch_add(1, Relaxed);
+                }
             }
         }
     });
     eprintln!(
-        "paused with_targets={} validate_ok={}",
+        "paused with_targets={} validate_scan_ok={}",
         PC_TARGETS.load(Relaxed),
         PC_VALID.load(Relaxed)
     );
-    assert!(
-        PC_TARGETS.load(Relaxed) >= 20,
-        "paused confs with targets degraded"
-    );
-    assert!(
-        PC_VALID.load(Relaxed) >= 50,
-        "successful validates degraded"
-    );
+    ratio(&PC_TARGETS, &PC_N, 10, "paused confs with targets");
+    ratio(&PC_VALID, &PC_N, 8, "successful validate(Scan)");
 }
 
 // ---------------------------------------------------------------------
@@ -455,10 +473,16 @@ proptest! {
         let mut all = Vec::new();
         for one in 1..=of {
             for nic in 0..nics {
-                all.extend(
+                let v: Vec<u64> =
                     transmit_index_stream(range, Shard { one, of }, nics, nic, 0, None, 0, 0.0)
-                        .map(|(i, _)| i),
-                );
+                        .map(|(i, _)| i)
+                        .collect();
+                // main.c:269 старт, :223 шаг: формула C, а не просто разбиение.
+                let start = u64::from((one - 1) * nics + nic);
+                let step = u64::from(of * nics);
+                let want: Vec<u64> = (start..range).step_by(step as usize).collect();
+                prop_assert_eq!(&v, &want);
+                all.extend(v);
             }
         }
         let set: BTreeSet<u64> = all.iter().copied().collect();

@@ -78,6 +78,10 @@ impl Iterator for ListIndices {
 ///
 /// Паникует при `shard.of == 0` (в C бесконечный цикл); [`list_scan`]
 /// проверяет это заранее и возвращает ошибку.
+///
+/// Осторожно: при `retries > 0` `-sL` может зациклиться в cycle-walk BlackRock,
+/// как и в C (main-listscan.c:35 -> crypto-blackrock.c:268-276). Путь transmit
+/// безопасен: xXx сначала приводится по модулю range.
 pub fn list_scan_indices(
     range: u64,
     shard: Shard,
@@ -194,6 +198,10 @@ pub fn transmit_index_stream(
 /// оптимизирован. Для каждого индекса вызывает `emit(ip, port)`.
 /// Форматирование строки: [`format_list_line`] (одиночный порт:
 /// `massip.count_ports() == 1`).
+///
+/// Осторожно: при `retries > 0` `-sL` может зациклиться в cycle-walk BlackRock,
+/// как и в C (main-listscan.c:35 -> crypto-blackrock.c:268-276). Путь transmit
+/// безопасен: xXx сначала приводится по модулю range.
 #[allow(clippy::too_many_arguments)]
 pub fn list_scan<F: FnMut(u32, u32)>(
     massip: &MassIp,

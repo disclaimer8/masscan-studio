@@ -11,7 +11,9 @@
 
 use std::collections::BTreeSet;
 
-const BANNED: [&str; 10] = [
+// Авторитетный барьер это `cargo deny` (rmasscan/deny.toml); этот список
+// быстрая вторичная проверка и должен совпадать с bans.deny в deny.toml.
+const BANNED: [&str; 16] = [
     "cc",
     "cmake",
     "bindgen",
@@ -22,6 +24,12 @@ const BANNED: [&str; 10] = [
     "libpcap-sys",
     "pnet",
     "libfuzzer-sys",
+    "pnet_datalink",
+    "pnet_sys",
+    "openssl",
+    "openssl-sys",
+    "ring",
+    "aws-lc-rs",
 ];
 
 /// Имена пакетов из вывода `cargo tree --prefix none`: первый токен строки.
@@ -76,7 +84,7 @@ fn build_graph_has_no_c_toolchain_crates() {
     );
     let text = String::from_utf8_lossy(&out.stdout);
     let names = package_names(&text);
-    for own in ["rmasscan-core", "rmasscan-cli"] {
+    for own in ["rmasscan-core", "rmasscan-cli", "rmasscan-engine"] {
         assert!(
             names.contains(own),
             "в выводе cargo tree нет {own}:\n{text}"

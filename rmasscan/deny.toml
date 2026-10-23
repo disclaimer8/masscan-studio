@@ -11,6 +11,8 @@ multiple-versions = "warn"
 wildcards = "deny"
 # path-зависимости внутри workspace не считаются wildcard (publish = false).
 allow-wildcard-paths = true
+# Быстрая вторичная копия списка: crates/rmasscan-core/tests/no_c_in_build.rs (BANNED).
+# Авторитетный барьер здесь; при правке синхронизировать оба места.
 deny = [
     { crate = "cc", reason = "компилирует C в сборке (спека §6.1)" },
     { crate = "cmake", reason = "вызывает C/C++ тулчейн" },

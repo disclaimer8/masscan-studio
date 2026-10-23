@@ -204,7 +204,7 @@ fn deep(count: &AtomicU64, n: &AtomicU64, what: &str) {
 const RATIO_MIN: u64 = 500;
 
 /// Ниже этого числа прогонов "хотя бы один" не гарантирован.
-const DEEP_MIN: u64 = 1000;
+const DEEP_MIN: u64 = 2000;
 
 #[test]
 fn add_target_string_never_panics_and_reaches_deep_states() {
@@ -398,7 +398,11 @@ proptest! {
         ips in spans(0x0A00_0000, 256, 40, 3),
         ports in spans(1, 60, 6, 3),
         ex_ips in prop::option::of(spans(0x0A00_0000, 256, 40, 2)),
-        ex_ports in prop::option::of(spans(1, 60, 6, 2)),
+        // Исключения портов начинаются с >= 2: исключение с begin 0 или 1,
+        // накрывающее цель целиком, не применяется к следующим целям
+        // (сознательная причуда C rangelist_exclude, ranges.rs:262-271,
+        // massip-rangesv4.c:766). Она закреплена тестом ниже.
+        ex_ports in prop::option::of(spans(2, 59, 6, 2)),
         seed in any::<u64>(),
     ) {
         let (t, expected) = build(
@@ -528,4 +532,21 @@ proptest! {
             prop_assert_eq!((ports.count(), ports.get(0).begin), (1, port));
         }
     }
+}
+
+/// Закрепляет причуду C rangelist_exclude (massip-rangesv4.c:766, ranges.rs:262):
+/// порты {1, 3}, исключение 1-3: исключение с begin 1 не применяется ко второй
+/// цели, поэтому порт 3 остаётся (паритет с C, не ошибка).
+#[test]
+fn port_exclude_quirk_is_pinned_through_massip() {
+    let mut t = MassIp::new();
+    t.ipv4_mut().add_range(0x0A00_0000, 0x0A00_0000);
+    t.ports_mut().add_range(1, 1);
+    t.ports_mut().add_range(3, 3);
+    let mut ex = MassIp::new();
+    ex.ports_mut().add_range(1, 3);
+    t.apply_excludes(&mut ex);
+    t.optimize();
+    assert_eq!(t.range(), 1);
+    assert_eq!(t.pick(0), (0x0A00_0000, 3));
 }

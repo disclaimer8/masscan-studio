@@ -4,6 +4,7 @@
 
 pub mod blackrock;
 pub mod checksum;
+pub mod config;
 pub mod cookie;
 pub mod massip;
 pub mod packet;

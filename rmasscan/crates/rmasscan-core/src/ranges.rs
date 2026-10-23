@@ -283,9 +283,57 @@ impl RangeList {
     }
 }
 
+/// massip-rangesv4.c:124 `range_is_cidr`: `Some(prefix_bits)` если диапазон
+/// ровно один CIDR-блок (в C: `range_first_cidr` вернул тот же диапазон).
+///
+/// Отличие от C (намеренное): при `begin == 0` цикл подсчёта нулевых
+/// младших бит в C доходит до `1 << 32` и `0xFFFFFFFF << 33` (UB в C, на
+/// x86 счётчик сдвига берётся по модулю 32), и `0.0.0.0/8` не признаётся
+/// CIDR, а `0.0.0.0-0.0.0.1` даёт префикс 4294967295. Здесь `begin == 0`
+/// считается как 32 нулевых бита, поэтому `0.0.0.0/N` печатается как CIDR.
+pub fn range_is_cidr(range: Range) -> Option<u32> {
+    if range.begin > range.end {
+        return None;
+    }
+    // Число нулевых младших бит begin (0..=32).
+    let mut zbits = range.begin.trailing_zeros();
+    // massip-rangesv4.c:114-120: наибольший блок, не выходящий за end.
+    // Размер блока считаем в u64, чтобы 2^32 не переполнялся.
+    while zbits > 0 && u64::from(range.begin) + ((1u64 << zbits) - 1) > u64::from(range.end) {
+        zbits -= 1;
+    }
+    let last = u64::from(range.begin) + ((1u64 << zbits) - 1);
+    if last == u64::from(range.end) {
+        Some(32 - zbits)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn range_is_cidr_cases() {
+        // Таблица selftest_range_first_cidr (massip-rangesv4.c:136-150),
+        // пересчитанная на "диапазон целиком CIDR?".
+        assert_eq!(range_is_cidr(r(0, u32::MAX)), Some(0));
+        assert_eq!(range_is_cidr(r(1, u32::MAX)), None);
+        assert_eq!(range_is_cidr(r(u32::MAX, u32::MAX)), Some(32));
+        assert_eq!(range_is_cidr(r(0x0A00_0000, 0x0A00_00FF)), Some(24));
+        assert_eq!(range_is_cidr(r(0x0A00_0001, 0x0A00_00FE)), None);
+        assert_eq!(range_is_cidr(r(0x0A00_0008, 0x0A00_000F)), Some(29));
+        assert_eq!(range_is_cidr(r(0x0A00_0008, 0x0A00_00FE)), None);
+        assert_eq!(range_is_cidr(r(0x0A00_0000, 0x0A00_007F)), Some(25));
+        // Не выровнен по размеру: 10.0.0.128-10.0.1.127 не CIDR.
+        assert_eq!(range_is_cidr(r(0x0A00_0080, 0x0A00_017F)), None);
+        // begin == 0 (UB в C, см. doc).
+        assert_eq!(range_is_cidr(r(0, 0x00FF_FFFF)), Some(8));
+        assert_eq!(range_is_cidr(r(0, 1)), Some(31));
+        assert_eq!(range_is_cidr(r(0, 2)), None);
+        assert_eq!(range_is_cidr(r(0, 0)), Some(32));
+    }
 
     const fn r(begin: u32, end: u32) -> Range {
         Range { begin, end }

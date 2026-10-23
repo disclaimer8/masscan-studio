@@ -10,6 +10,7 @@ pub mod packet;
 pub mod ranges;
 pub mod scan;
 pub mod targets;
+pub mod throttle;
 
 /// Версия masscan, с которой сверяется порт.
 pub const ORACLE_MASSCAN_VERSION: &str = "1.3.9-integration";

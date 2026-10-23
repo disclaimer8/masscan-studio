@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+siphasher.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

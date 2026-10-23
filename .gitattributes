@@ -1,0 +1,5 @@
+# Later lines win over earlier ones, so the golden rule must stay last.
+*.sh text eol=lf
+rmasscan/** text=auto eol=lf
+# Byte-exact oracle fixtures: never normalise line endings.
+rmasscan/tests/golden/** -text

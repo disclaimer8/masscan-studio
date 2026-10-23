@@ -1,0 +1,86 @@
+# rmasscan
+
+Порт ядра сканера [masscan](https://github.com/robertdavidgraham/masscan) на
+чистый Rust. Лицензия: AGPL-3.0-only. Оригинал © Robert David Graham; сверка
+ведётся с HEAD `8e6b3b0` (версия `1.3.9-integration`).
+
+Документы:
+
+- спека: `docs/superpowers/specs/2026-10-23-masscan-rust-port-design.md`
+- планы этапов 0–1: `docs/superpowers/plans/`
+- замеры скорости: [BENCHMARKS.md](BENCHMARKS.md)
+- golden-фикстуры оракула: [tests/golden/README.md](tests/golden/README.md)
+
+## Команды
+
+```bash
+cd rmasscan
+cargo test
+cargo run -p rmasscan-cli -- -sL 10.0.0.0/30 -p80,443 --seed 1
+cargo run -p rmasscan-cli -- --echo 10.0.0.0/24 -p80 --seed 1
+cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \
+  --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 \
+  --router-mac 66-55-44-33-22-11 --source-port 40000-40003
+```
+
+Этап 1 поддерживает `-sL`, `--echo`/`--echo-all` и `--offline --packet-trace`.
+`-sL` и `--echo` побайтно совпадают с golden-фикстурами C.
+
+### Отличия от masscan
+
+- `--seed` обязателен и не может быть 0 (в C 0 означает случайную энтропию).
+- Ошибки целей, портов и значений фатальны (в C ошибка `--range` не фатальна).
+- Операции `-sL`, `--echo`, `--echo-all`, `--packet-trace` взаимоисключающие;
+  обычный скан без `--offline --packet-trace` не поддержан.
+- `--offline --packet-trace` требует `--adapter-ip`, `--adapter-mac`,
+  `--router-mac` и `--source-port` (обнаружения адаптера нет; C берёт
+  `40000 + time % 20000`). Трасса печатается осознанно, в C она пуста.
+- Любая другая опция masscan (например `--banners`) - ошибка.
+- Закрытый stdout (`| head`) завершает процесс сразу с кодом 0.
+- `--adapter-ip` принимает один адрес (в C это диапазон).
+- Грамматика `--excludefile` уже, чем у `massip_parse_file`: по одной записи на строку
+  (IPv4, CIDR, диапазон), без остальных форм C.
+- Осознанные отказы парсера там, где C молча принимает ввод: перевёрнутый диапазон,
+  завершающая точка, пустой CIDR, пустой октет, мусор в списке портов.
+- `-sL` с `--retries` > 0 может зависнуть (так же в C: main-listscan.c:35,
+  crypto-blackrock.c:268-276); передача от этого свободна.
+
+## Проверка «без C в сборке»
+
+Граф сборки не должен содержать C-тулчейн (`cc`, `cmake`, `bindgen`,
+`pkg-config`, libpcap). Проверяют два механизма: интеграционный тест
+`crates/rmasscan-core/tests/no_c_in_build.rs` (`cargo tree -e normal,build,dev`) и
+`cargo deny`. Точные команды для CI:
+
+```bash
+cargo install --locked cargo-deny@0.20.2
+cargo deny check bans licenses sources
+cargo test -p rmasscan-core --test no_c_in_build
+```
+
+## Ограничения
+
+Raw-сокеты и сеть не используются на этапах 0–1. Повышенные привилегии не
+нужны.
+
+## Статус
+
+Этап 1 закрыт. Критерии выхода выполнены: `-sL` и `--echo` побайтно совпадают с C,
+self-тесты C отображены на Rust (`tests/selftest_parity.rs`), передача и SYN покрыты
+тестами и дифференциалами с C, генерация offline около 0.96–0.99 от C на minipc
+(см. BENCHMARKS.md), C в графе сборки нет.
+
+Не закрыто: зелёный CI на трёх ОС, для него нужен push.
+
+Первые задачи этапа 2:
+
+- API сканирования: ранний выход (`ControlFlow`) и колбэк со структурой `Probe`, принимающий
+  `&EffectiveConfig`; перенос шага source-port/cookie/frame из CLI в core; приватные поля
+  `EffectiveConfig`; отказ от seed 0 внутри `validate`.
+- Усиление защиты «без C»: allowlist `[bans.build] allow-build-scripts`, запрет
+  pcap-sys/libpcap-sys, `executables = "deny"`, `include-archives = true`; `no_c_in_build`
+  с `--workspace --target all` и точным сравнением первого токена.
+- Контракт вызывающего для throttle: один `Throttler` на поток передачи, запускаемый с
+  `max_rate/nic_count` после 1-секундного ожидания; одни и те же часы для `start` и
+  `next_batch`; возврат 0 означает «вызвать снова»; `current_rate` публикуется через
+  `AtomicU64`.

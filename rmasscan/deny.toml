@@ -1,0 +1,37 @@
+[graph]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+all-features = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# path-зависимости внутри workspace не считаются wildcard (publish = false).
+allow-wildcard-paths = true
+deny = [
+    { crate = "cc", reason = "компилирует C в сборке (спека §6.1)" },
+    { crate = "cmake", reason = "вызывает C/C++ тулчейн" },
+    { crate = "bindgen", reason = "генерация во время сборки через libclang" },
+    { crate = "pkg-config", reason = "линковка системных C-библиотек" },
+    { crate = "pcap", reason = "линкует libpcap (спека §5.2, отклонён)" },
+    { crate = "pnet", reason = "Windows-бэкенд линкует Packet.lib (спека §5.2)" },
+    { crate = "pnet_datalink", reason = "Windows-бэкенд линкует Packet.lib (спека §5.2)" },
+    { crate = "pnet_sys", reason = "Windows-бэкенд линкует Packet.lib (спека §5.2)" },
+    { crate = "openssl", reason = "нет TLS-крипто в v1 (спека §6.2)" },
+    { crate = "openssl-sys" },
+    { crate = "ring", reason = "C/asm крипто не нужны (спека §6.2)" },
+    { crate = "aws-lc-rs", reason = "C/asm крипто не нужны (спека §6.2)" },
+    { crate = "libfuzzer-sys", reason = "libFuzzer C++; fuzzing не на этапах 0–1 (спека §12 вопрос 3)" },
+]
+
+[licenses]
+confidence-threshold = 0.93
+unused-allowed-license = "allow"
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "ISC", "BSD-3-Clause", "Zlib", "AGPL-3.0-only"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

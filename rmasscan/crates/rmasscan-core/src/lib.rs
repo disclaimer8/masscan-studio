@@ -3,6 +3,7 @@
 //! github.com/robertdavidgraham/masscan, HEAD 8e6b3b0.
 
 pub mod blackrock;
+pub mod checksum;
 pub mod ranges;
 pub mod targets;
 

@@ -29,6 +29,7 @@ deny = [
 
 [licenses]
 confidence-threshold = 0.93
+unused-allowed-license = "allow"
 allow = ["Apache-2.0", "MIT", "Unicode-3.0", "ISC", "BSD-3-Clause", "Zlib", "AGPL-3.0-only"]
 
 [sources]

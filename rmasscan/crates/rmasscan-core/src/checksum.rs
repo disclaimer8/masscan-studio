@@ -1,6 +1,9 @@
 //! Контрольные суммы RFC 1071 (AGPL-3.0). Порт `src/util-checksum.c` и
 //! `ip_header_checksum` из `src/templ-pkt.c:184`, masscan © Robert David
 //! Graham (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
+//!
+//! `util-checksum.c` распространяется под MIT (util-checksum.c:6):
+//! Author: Robert David Graham, Copyright: 2020, License: The MIT License (MIT).
 
 /// Байт или 0 за границей буфера (C читает за границей без проверки).
 fn byte(buf: &[u8], i: usize) -> u32 {
@@ -46,6 +49,36 @@ pub fn ip_header_checksum(px: &[u8], offset_ip: usize, max: usize) -> u16 {
     xsum as u16
 }
 
+/// Три свёртки `u64` без инверсии, как templ-pkt.c:200-202, :266-268 и
+/// :1015-1017. C суммирует `checksum_tcp + ip_me + ip_them + port_me +
+/// port_them + seqno` в `uint64_t` (templ-pkt.c:1009-1018, до ~3*2^32), поэтому
+/// свёртка через `u32` дала бы другой результат.
+pub fn fold(sum: u64) -> u16 {
+    let mut x = sum;
+    for _ in 0..3 {
+        x = (x >> 16) + (x & 0xFFFF);
+    }
+    x as u16
+}
+
+/// Частичная сумма TCP-сегмента с псевдозаголовком, без инверсии,
+/// templ-pkt.c:243-271 (`tcp_ipv4_checksum`). Берутся адреса из IP-заголовка
+/// (`offset_ip+12..20`) и слова `offset_tcp..offset_app` (для нечётной длины
+/// C читает байт сразу за концом; здесь за границей буфера - 0).
+pub fn tcp_ipv4_partial(px: &[u8], offset_ip: usize, offset_tcp: usize, offset_app: usize) -> u16 {
+    let mut xsum = 6u32;
+    xsum = xsum.wrapping_add(offset_app.wrapping_sub(offset_tcp) as u32);
+    for k in [12, 14, 16, 18] {
+        xsum = xsum.wrapping_add(be16(px, offset_ip + k));
+    }
+    let mut i = offset_tcp;
+    while i < offset_app {
+        xsum = xsum.wrapping_add(be16(px, i));
+        i += 2;
+    }
+    fold(u64::from(xsum))
+}
+
 /// Складывает и инвертирует, util-checksum.c:62.
 pub fn fold_and_invert(sum: u32) -> u16 {
     let sum = (sum >> 16) + (sum & 0xFFFF);
@@ -56,8 +89,9 @@ pub fn fold_and_invert(sum: u32) -> u16 {
 /// util-checksum.c:74. Псевдозаголовок плюс полезная нагрузка; текущее поле
 /// checksum вычитается по `ip_proto`. Для протоколов 0 и 2 псевдозаголовка нет
 /// (сумма пересчитывается без него); для 1 он остаётся, как в C.
-/// Неизвестный протокол: C возвращает `0xFFFFFFFF`, здесь это `0xFFFF`
-/// (усечение до u16; вызывающие сравнивают только младшие 16 бит).
+/// Неизвестный протокол: C возвращает `0xFFFFFFFF`, здесь `0xFFFF`. Эта ветка
+/// недостижима (нет C-вызывающих кроме selftest, util-checksum.c:249), а `0xFFFF`
+/// неотличимо от настоящего результата.
 /// C читает поля checksum без проверки длины; за границей буфера - 0.
 pub fn checksum_ipv4(ip_src: u32, ip_dst: u32, ip_proto: u8, payload: &[u8]) -> u16 {
     let mut sum = (ip_src >> 16) & 0xFFFF;
@@ -149,5 +183,39 @@ mod tests {
         p.extend([0xFF; 8]); // payload beyond IHL must be ignored
         let max = p.len();
         assert_eq!(ip_header_checksum(&p, 2, max), !0xb861u16);
+    }
+
+    #[test]
+    fn fold_u64_overflowing_incremental_sum() {
+        // C-значение (harness h2.c): sum = 0x1234ABCD + 0xC0A80101 + 0xFFFFFFFE
+        // + 80 + 0xFFFFF + 0xFFFFFFFF = 12128660762 -> 32777.
+        let sum = 0x1234_ABCDu64 + 0xC0A8_0101 + 0xFFFF_FFFE + 80 + 0xF_FFFF + 0xFFFF_FFFF;
+        assert_eq!(sum, 12_128_660_762);
+        assert_eq!(fold(sum), 32777);
+        // Свёртка через u32 дала бы другое значение.
+        assert_ne!(fold(u64::from(sum as u32)), 32777);
+    }
+
+    fn tcp_buf() -> Vec<u8> {
+        let mut v: Vec<u8> = (0..60u32).map(|i| (i * 7 + 3) as u8).collect();
+        v[0] = 0x45;
+        v
+    }
+
+    #[test]
+    fn tcp_ipv4_partial_matches_c() {
+        let p = tcp_buf();
+        assert_eq!(tcp_ipv4_partial(&p, 0, 20, 40), 50240);
+        assert_eq!(tcp_ipv4_partial(&p, 0, 34, 54), 38161);
+    }
+
+    #[test]
+    fn ip_header_checksum_truncated_and_odd_max() {
+        let h = hex("4500 0073 0000 4000 4011 0000 c0a8 0001 c0a8 00c7");
+        assert_eq!(ip_header_checksum(&h, 0, 20), 18334);
+        // max < offset+IHL*4 (C harness values).
+        assert_eq!(ip_header_checksum(&h, 0, 12), 50564);
+        // odd max: last word still reads px[max]
+        assert_eq!(ip_header_checksum(&h, 0, 13), 34349);
     }
 }

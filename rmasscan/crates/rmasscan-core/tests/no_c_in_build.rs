@@ -1,8 +1,10 @@
 //! Страж правила «без C в сборке» (спека §6.1): любая будущая зависимость,
 //! тянущая `cc`, `cmake`, `bindgen` и подобные, роняет этот тест.
 //!
-//! Рёбра `normal,build`: одного `-e build` мало, он не видит обычных
-//! зависимостей (например, прямой зависимости от `pcap`).
+//! Рёбра `normal,build,dev`: одного `-e build` мало, он не видит обычных
+//! зависимостей (например, `pcap`), а dev-рёбра нужны из-за criterion ->
+//! alloca -> cc. Суффикс `-sys` не запрещён: linux-raw-sys и windows-sys
+//! написаны на чистом Rust.
 
 #[test]
 fn build_graph_has_no_c_toolchain_crates() {
@@ -10,7 +12,7 @@ fn build_graph_has_no_c_toolchain_crates() {
         .args([
             "tree",
             "-e",
-            "normal,build",
+            "normal,build,dev",
             "--prefix",
             "none",
             "-p",

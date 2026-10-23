@@ -1,0 +1,121 @@
+[parity] PASS rust.c01_one_addr_port_synack.run1 SYN stream vs C oracle fixture PASS: 1 SYN frames identical and in order
+[parity] PASS rust.c01_one_addr_port_synack.run1 replies == C reply set rust=1 c=1 open=1 closed=0
+[parity] PASS rust.c01_one_addr_port_synack.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=1 unique=1 wire_replies=3 suppressed_duplicates=1 discarded=0
+[parity] PASS rust.c01_one_addr_port_synack.run1 counts (syn/open/closed) as expected sent=1 want 1/1/0
+[parity] PASS rust.c01_one_addr_port_synack.run1 nothing sent beyond Sent net.tx_sent=1 would_block=0
+[parity] PASS rust.c01_one_addr_port_synack.run2 SYN stream vs C oracle fixture PASS: 1 SYN frames identical and in order
+[parity] PASS rust.c01_one_addr_port_synack.run2 replies == C reply set rust=1 c=1 open=1 closed=0
+[parity] PASS rust.c01_one_addr_port_synack.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=1 unique=1 wire_replies=3 suppressed_duplicates=1 discarded=0
+[parity] PASS rust.c01_one_addr_port_synack.run2 counts (syn/open/closed) as expected sent=1 want 1/1/0
+[parity] PASS rust.c01_one_addr_port_synack.run2 nothing sent beyond Sent net.tx_sent=1 would_block=0
+[parity] PASS rust.c02_one_addr_port_rst.run1 SYN stream vs C oracle fixture PASS: 1 SYN frames identical and in order
+[parity] PASS rust.c02_one_addr_port_rst.run1 replies == C reply set rust=1 c=1 open=0 closed=1
+[parity] PASS rust.c02_one_addr_port_rst.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=1 unique=1 wire_replies=1 suppressed_duplicates=0 discarded=0
+[parity] PASS rust.c02_one_addr_port_rst.run1 counts (syn/open/closed) as expected sent=1 want 1/0/1
+[parity] PASS rust.c02_one_addr_port_rst.run1 nothing sent beyond Sent net.tx_sent=1 would_block=0
+[parity] PASS rust.c02_one_addr_port_rst.run2 SYN stream vs C oracle fixture PASS: 1 SYN frames identical and in order
+[parity] PASS rust.c02_one_addr_port_rst.run2 replies == C reply set rust=1 c=1 open=0 closed=1
+[parity] PASS rust.c02_one_addr_port_rst.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=1 unique=1 wire_replies=1 suppressed_duplicates=0 discarded=0
+[parity] PASS rust.c02_one_addr_port_rst.run2 counts (syn/open/closed) as expected sent=1 want 1/0/1
+[parity] PASS rust.c02_one_addr_port_rst.run2 nothing sent beyond Sent net.tx_sent=1 would_block=0
+[parity] PASS rust.c03_multi_addr_ports.run1 SYN stream vs C oracle fixture PASS: 16 SYN frames identical and in order
+[parity] PASS rust.c03_multi_addr_ports.run1 replies == C reply set rust=16 c=16 open=8 closed=8
+[parity] PASS rust.c03_multi_addr_ports.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=16 unique=16 wire_replies=32 suppressed_duplicates=9 discarded=0
+[parity] PASS rust.c03_multi_addr_ports.run1 counts (syn/open/closed) as expected sent=16 want 16/8/8
+[parity] PASS rust.c03_multi_addr_ports.run1 nothing sent beyond Sent net.tx_sent=16 would_block=0
+[parity] PASS rust.c03_multi_addr_ports.run2 SYN stream vs C oracle fixture PASS: 16 SYN frames identical and in order
+[parity] PASS rust.c03_multi_addr_ports.run2 replies == C reply set rust=16 c=16 open=8 closed=8
+[parity] PASS rust.c03_multi_addr_ports.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=16 unique=16 wire_replies=32 suppressed_duplicates=8 discarded=0
+[parity] PASS rust.c03_multi_addr_ports.run2 counts (syn/open/closed) as expected sent=16 want 16/8/8
+[parity] PASS rust.c03_multi_addr_ports.run2 nothing sent beyond Sent net.tx_sent=16 would_block=0
+[parity] PASS rust.c04_exclude.run1 SYN stream vs C oracle fixture PASS: 6 SYN frames identical and in order
+[parity] PASS rust.c04_exclude.run1 replies == C reply set rust=6 c=6 open=3 closed=3
+[parity] PASS rust.c04_exclude.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=6 unique=6 wire_replies=12 suppressed_duplicates=3 discarded=0
+[parity] PASS rust.c04_exclude.run1 counts (syn/open/closed) as expected sent=6 want 6/3/3
+[parity] PASS rust.c04_exclude.run1 nothing sent beyond Sent net.tx_sent=6 would_block=0
+[parity] PASS rust.c04_exclude.run2 SYN stream vs C oracle fixture PASS: 6 SYN frames identical and in order
+[parity] PASS rust.c04_exclude.run2 replies == C reply set rust=6 c=6 open=3 closed=3
+[parity] PASS rust.c04_exclude.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=6 unique=6 wire_replies=12 suppressed_duplicates=3 discarded=0
+[parity] PASS rust.c04_exclude.run2 counts (syn/open/closed) as expected sent=6 want 6/3/3
+[parity] PASS rust.c04_exclude.run2 nothing sent beyond Sent net.tx_sent=6 would_block=0
+[parity] PASS rust.c05_srcport_single.run1 SYN stream vs C oracle fixture PASS: 4 SYN frames identical and in order
+[parity] PASS rust.c05_srcport_single.run1 replies == C reply set rust=4 c=4 open=2 closed=2
+[parity] PASS rust.c05_srcport_single.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0
+[parity] PASS rust.c05_srcport_single.run1 counts (syn/open/closed) as expected sent=4 want 4/2/2
+[parity] PASS rust.c05_srcport_single.run1 nothing sent beyond Sent net.tx_sent=4 would_block=0
+[parity] PASS rust.c05_srcport_single.run2 SYN stream vs C oracle fixture PASS: 4 SYN frames identical and in order
+[parity] PASS rust.c05_srcport_single.run2 replies == C reply set rust=4 c=4 open=2 closed=2
+[parity] PASS rust.c05_srcport_single.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0
+[parity] PASS rust.c05_srcport_single.run2 counts (syn/open/closed) as expected sent=4 want 4/2/2
+[parity] PASS rust.c05_srcport_single.run2 nothing sent beyond Sent net.tx_sent=4 would_block=0
+[parity] PASS rust.c06_srcport_range.run1 SYN stream vs C oracle fixture PASS: 4 SYN frames identical and in order
+[parity] PASS rust.c06_srcport_range.run1 replies == C reply set rust=4 c=4 open=2 closed=2
+[parity] PASS rust.c06_srcport_range.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0
+[parity] PASS rust.c06_srcport_range.run1 counts (syn/open/closed) as expected sent=4 want 4/2/2
+[parity] PASS rust.c06_srcport_range.run1 nothing sent beyond Sent net.tx_sent=4 would_block=0
+[parity] PASS rust.c06_srcport_range.run2 SYN stream vs C oracle fixture PASS: 4 SYN frames identical and in order
+[parity] PASS rust.c06_srcport_range.run2 replies == C reply set rust=4 c=4 open=2 closed=2
+[parity] PASS rust.c06_srcport_range.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0
+[parity] PASS rust.c06_srcport_range.run2 counts (syn/open/closed) as expected sent=4 want 4/2/2
+[parity] PASS rust.c06_srcport_range.run2 nothing sent beyond Sent net.tx_sent=4 would_block=0
+[pause] PASS N=0 pause leg: Paused, sent=0, checkpoint next_index=0 rc=0 reason=Paused sent=0 next=0 cp=True
+[pause] PASS N=0 resume leg: Completed, sent=16 rc=0 reason=Completed sent=16
+[pause] PASS N=0 pcap(pause)+pcap(resume) == continuous Rust trace PASS: 16 SYN frames identical and in order
+[pause] PASS N=0 pcap(pause)+pcap(resume) == C oracle fixture PASS: 16 SYN frames identical and in order
+[pause] PASS N=0 scan_id preserved, attempt_id changed, origin recorded scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..
+[pause] PASS N=0 replies of both legs == continuous set, no duplicates legs=0+16 union=16 continuous=16
+[pause] PASS N=0 no probe lost or added across the seam (SYN counts) pause=0 resume=16 total=16
+[pause] PASS N=1 pause leg: Paused, sent=1, checkpoint next_index=1 rc=0 reason=Paused sent=1 next=1 cp=True
+[pause] PASS N=1 resume leg: Completed, sent=15 rc=0 reason=Completed sent=15
+[pause] PASS N=1 pcap(pause)+pcap(resume) == continuous Rust trace PASS: 16 SYN frames identical and in order
+[pause] PASS N=1 pcap(pause)+pcap(resume) == C oracle fixture PASS: 16 SYN frames identical and in order
+[pause] PASS N=1 scan_id preserved, attempt_id changed, origin recorded scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..
+[pause] PASS N=1 replies of both legs == continuous set, no duplicates legs=1+15 union=16 continuous=16
+[pause] PASS N=1 no probe lost or added across the seam (SYN counts) pause=1 resume=15 total=16
+[pause] PASS N=8 pause leg: Paused, sent=8, checkpoint next_index=8 rc=0 reason=Paused sent=8 next=8 cp=True
+[pause] PASS N=8 resume leg: Completed, sent=8 rc=0 reason=Completed sent=8
+[pause] PASS N=8 pcap(pause)+pcap(resume) == continuous Rust trace PASS: 16 SYN frames identical and in order
+[pause] PASS N=8 pcap(pause)+pcap(resume) == C oracle fixture PASS: 16 SYN frames identical and in order
+[pause] PASS N=8 scan_id preserved, attempt_id changed, origin recorded scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..
+[pause] PASS N=8 replies of both legs == continuous set, no duplicates legs=8+8 union=16 continuous=16
+[pause] PASS N=8 no probe lost or added across the seam (SYN counts) pause=8 resume=8 total=16
+[pause] PASS N=15 pause leg: Paused, sent=15, checkpoint next_index=15 rc=0 reason=Paused sent=15 next=15 cp=True
+[pause] PASS N=15 resume leg: Completed, sent=1 rc=0 reason=Completed sent=1
+[pause] PASS N=15 pcap(pause)+pcap(resume) == continuous Rust trace PASS: 16 SYN frames identical and in order
+[pause] PASS N=15 pcap(pause)+pcap(resume) == C oracle fixture PASS: 16 SYN frames identical and in order
+[pause] PASS N=15 scan_id preserved, attempt_id changed, origin recorded scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..
+[pause] PASS N=15 replies of both legs == continuous set, no duplicates legs=15+1 union=16 continuous=16
+[pause] PASS N=15 no probe lost or added across the seam (SYN counts) pause=15 resume=1 total=16
+[pause] PASS completed job: pause-after=range ends Completed with NO checkpoint reason=Completed checkpoint=False
+[reject] PASS completed job (next_index == range) rejected before the adapter opens (AlreadyCompleted) rc=4 error=AlreadyCompleted opened=False wire_syns=0
+[reject] PASS changed rate rejected before the adapter opens (JobMismatch) rc=4 error=JobMismatch opened=False wire_syns=0
+[reject] PASS changed binding (source MAC) rejected before the adapter opens (JobMismatch) rc=4 error=JobMismatch opened=False wire_syns=0
+[reject] PASS changed binding (interface name) rejected before the adapter opens (JobMismatch) rc=4 error=JobMismatch opened=False wire_syns=0
+[reject] PASS changed targets rejected before the adapter opens (JobMismatch) rc=4 error=JobMismatch opened=False wire_syns=0
+[reject] PASS changed ports rejected before the adapter opens (JobMismatch) rc=4 error=JobMismatch opened=False wire_syns=0
+[reject] PASS changed seed rejected before the adapter opens (JobMismatch) rc=4 error=JobMismatch opened=False wire_syns=0
+[reject] PASS different scan_id rejected before the adapter opens (ScanIdMismatch) rc=4 error=ScanIdMismatch opened=False wire_syns=0
+[reject] PASS attempt_id reused rejected before the adapter opens (AttemptIdReused) rc=4 error=AttemptIdReused opened=False wire_syns=0
+[reject] PASS corrupt checkpoint (1 bit flipped in next_index) rejected before the adapter opens (BadChecksum) rc=4 error=BadChecksum opened=False wire_syns=0
+[reject] PASS corrupt checkpoint (bad checksum byte) rejected before the adapter opens (BadChecksum) rc=4 error=BadChecksum opened=False wire_syns=0
+[reject] PASS truncated checkpoint rejected before the adapter opens (Malformed) rc=4 error=Malformed("wrong length") opened=False wire_syns=0
+[reject] PASS empty checkpoint rejected before the adapter opens (Malformed) rc=4 error=Malformed("wrong length") opened=False wire_syns=0
+[stop] PASS rate=1 silence: Stopped, no checkpoint, stop->outcome < 1 s, join < 1 s reason=Stopped stop_to_outcome=21.842ms join=0.052ms
+[stop] PASS rate=1 silence: no TX after Stop (stats frozen over 1500 ms, wire SYN count == tx_sent) tx_sent=3 at_join=3 after_observe=3 wire_syns=3
+[stop] PASS rate=1 silence: no live workers, no leaked fds after join threads 1->1 (immediately 1, settled in 0.0ms) fds 4->(open 6)->4
+[stop] PASS rate=1 silence: really silent (no replies) and Stop hit mid-TX sent=3 range=100 replies=0
+[stop] PASS rate=1 during RX drain: Stopped, no checkpoint, stop->outcome < 1 s, join < 1 s reason=Stopped stop_to_outcome=38.325ms join=0.056ms
+[stop] PASS rate=1 during RX drain: no TX after Stop (stats frozen over 1500 ms, wire SYN count == tx_sent) tx_sent=2 at_join=2 after_observe=2 wire_syns=2
+[stop] PASS rate=1 during RX drain: no live workers, no leaked fds after join threads 1->1 (immediately 1, settled in 0.0ms) fds 4->(open 6)->4
+[stop] PASS rate=1 during RX drain: Stop skipped the 10 s wait total=2.539446s sent=2
+[stop] PASS rate=1 with a FULL result queue: Stopped, no checkpoint, stop->outcome < 1 s, join < 1 s reason=Stopped stop_to_outcome=40.942ms join=0.017ms
+[stop] PASS rate=1 with a FULL result queue: no TX after Stop (stats frozen over 1500 ms, wire SYN count == tx_sent) tx_sent=2 at_join=2 after_observe=2 wire_syns=2
+[stop] PASS rate=1 with a FULL result queue: no live workers, no leaked fds after join threads 1->1 (immediately 1, settled in 0.0ms) fds 4->(open 6)->4
+[stop] PASS full queue: both replies sit unread in the queue (capacity 2) and nothing was lost replies=2 reason=Stopped
+[stop] PASS queue overflow: Failed(ConsumerTooSlow), no checkpoint, TX stopped, no leaks reason=Failed ConsumerTooSlow sent=2/6
+[stop] PASS rate=1 external Pause: Paused with a checkpoint at the confirmed boundary, tx_sent == next_index reason=Paused sent=2 next=2
+[veth] PASS veth removed mid-scan -> Failed with a diagnosable TX/RX error, exit code 3 reason=Failed detail=RxError("poll(POLLIN): socket error")
+[veth] PASS veth removed: NO checkpoint (summary says none, no file, no CheckpointReady) checkpoint=False file=False
+[veth] PASS veth removed: partial scan, no TX after failure, no live workers, no leaked fds sent=52/400 threads 1->1 fds 4->4 exit 0.51s after removal
+[veth] PASS veth removed: process ended promptly (< 5 s incl. 3 s wait skipped by Failed) 0.51s
+suite rust: 120 PASS, 0 FAIL, 0 NOT RUN

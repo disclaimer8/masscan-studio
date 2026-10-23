@@ -71,6 +71,27 @@ impl PacketFd {
             // `fd` закрывается Drop'ом на выходе.
             return Err(last_errno());
         }
+        if protocol_be == ETH_P_ALL_BE {
+            // Только RX-сокет (ETH_P_ALL); TX-сокет открыт с протоколом 0 и ничего не принимает.
+            // RX-сокет не должен получать в очередь копии НАШИХ ЖЕ исходящих кадров: при 100k pps
+            // user-space фильтр PACKET_OUTGOING не успевает их вычитывать, очередь сокета
+            // переполняется и ядро роняет настоящие ответы. PACKET_IGNORE_OUTGOING
+            // (SOL_PACKET, 23, Linux 4.20+) отбрасывает их в ядре. На старых ядрах setsockopt
+            // безвредно падает, и запасным остаётся user-space фильтр PACKET_OUTGOING.
+            const PACKET_IGNORE_OUTGOING: libc::c_int = 23;
+            let one: libc::c_int = 1;
+            // SAFETY: указатель и длина описывают живой `one`; fd валиден (владеет OwnedFd).
+            // Результат намеренно игнорируется (см. выше).
+            let _ = unsafe {
+                libc::setsockopt(
+                    fd.as_raw_fd(),
+                    libc::SOL_PACKET,
+                    PACKET_IGNORE_OUTGOING,
+                    (&raw const one).cast::<libc::c_void>(),
+                    mem::size_of::<libc::c_int>() as libc::socklen_t,
+                )
+            };
+        }
         Ok(PacketFd { fd })
     }
 }

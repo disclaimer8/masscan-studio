@@ -2,14 +2,15 @@
 
 ## Stage 1 exit criterion: offline generation >= 80% of C
 
-Result: **met**. Rust median 2,894,249 pps vs C oracle 2,843,897 pps, ratio **1.018**
-(threshold 0.80).
+Result: **parity, about 0.96-0.99 loop for loop; the >= 80% criterion is met.**
+Against the manifest figure (C wall clock, 2,843,897 pps) the Rust median of the
+latest measurement is 2,882,526 pps (1.014), but that compares a bare loop with a
+whole process, so the loop-for-loop ratio is the honest one (see below).
 
 ### Oracle (C masscan)
 
 `tests/golden/manifest.json` -> `offline_gen_pps` = 2,843,897, from
-`offline_gen_bench`: 2^28 targets in 94.39 s wall clock (includes process start,
-exit and the 1 s receive-thread wait at `transmit_thread` start, main.c:224).
+`offline_gen_bench`: 2^28 targets in 94.39 s wall clock (whole process: start, exit and fixed sleeps).
 
 ```
 masscan 0.0.0.0/4 -p80 --rate 100000000 --offline --interface lo \
@@ -29,30 +30,51 @@ Method: `tests/offline_gen.rs::offline_generation_meets_80pct_of_oracle`
 (`#[ignore]`, release only). It builds `0.0.0.0/4`, port 80 (2^28 packets), then
 times `generate()` from `tests/common/offline_gen.rs`:
 
-- `Throttler` (`SystemClock`, rate 1e8) driven like main.c:292: `next_batch` when
+- `Throttler` (`SystemClock`, rate 1e8) driven like main.c:289: `next_batch` when
   the batch is exhausted, one decrement per packet;
 - `transmit_scan` (index, BlackRock shuffle with seed 1 / 14 rounds, pick);
 - `syn_cookie_ipv4` per packet, then `TcpSynTemplate::build_syn` into a reused `Vec`;
 - no send step (offline `rawsock_send_packet` is a no-op).
 
-Timing covers only the generation loop (not process start or target setup), so it
-is slightly favourable to Rust (about 1 s of startup in the C figure, about 1%);
-the 80% threshold is far from that effect.
+Timing covers only the generation loop (not process start or target setup).
+The C wall clock carries fixed overhead that the Rust figure does not: the 1 s
+sleep at `transmit_thread` start (main.c:231), a 100 ms sleep (:1395), the 750 ms
+end-of-scan poll (:1440), the 250 ms wait-loop sleep (:1513) and the post-loop
+drain of 1000 x `usleep(100)` (:470-492). A two-point fit by the reviewer (2^28
+vs 2^24 targets) puts the fixed overhead at 2.3-3.1 s, i.e. 2.4-3.3% of 94 s.
+Removing it makes C about 2.92-2.94 M pps loop-only, so Rust is at parity,
+roughly 0.96-0.99 loop for loop.
 
-Commands (from the repo root):
+Commands (from the repo root; the tree is shipped with `git archive`, not
+copied from a working tree):
 
 ```
-rsync -a --delete --exclude target rmasscan/ minipc:rmasscan-bench/
+git archive HEAD:rmasscan | ssh minipc 'rm -rf ~/rmasscan-bench && mkdir ~/rmasscan-bench && tar -x -C ~/rmasscan-bench'
 ssh minipc 'cd ~/rmasscan-bench && ~/.cargo/bin/cargo test --release \
   -p rmasscan-core --test offline_gen -- --ignored --nocapture'
 ```
 
-| Run | Seconds | pps | Ratio vs oracle |
-|-----|---------|-----------|-----|
-| 1 | 93.544 | 2,869,619 | 1.009 |
-| 2 | 92.734 | 2,894,668 | 1.018 |
-| 3 | 92.748 | 2,894,249 | 1.018 |
-| median | 92.748 | 2,894,249 | 1.018 |
+The test refuses to run in debug and skips with a message if `/proc/cpuinfo`
+reports a CPU different from the manifest's `offline_gen_bench.cpu_model`.
+
+All runs (2^28 packets, minipc):
+
+| Run | Measured code | Seconds | pps | vs manifest |
+|-----|---------------|---------|-----|-------------|
+| implementer 1 | c398f75 (rsync of working tree) | 93.544 | 2,869,619 | 1.009 |
+| implementer 2 | c398f75 | 92.734 | 2,894,668 | 1.018 |
+| implementer 3 | c398f75 | 92.748 | 2,894,249 | 1.018 |
+| fix round 1 | 4dd24c8 (git archive), load 0.3-1.2 | 94.053 | 2,854,083 | 1.004 |
+| fix round 2 | 4dd24c8 | 93.125 | 2,882,526 | 1.014 |
+| fix round 3 | 4dd24c8 | 93.053 | 2,884,761 | 1.014 |
+| reviewer, Rust | c398f75 (load 1.35-1.79) | 96.409 | 2,784,336 | 0.979 |
+| reviewer, C | oracle binary, same window | 95.14 wall (92.26 user) | 2,821,478 | 0.987 Rust/C |
+
+Median of the three 4dd24c8 runs: 2,882,526 pps. 4dd24c8 adds a per-packet
+`black_box(&frame)` (the previous two-byte read did not keep stores alive under
+LTO) and a no-op `on_target` hook; throughput did not drop. Runs vary by a few
+percent with machine load, so the reviewer's loaded-window ratios (0.98-0.99) are
+the conservative reading.
 
 ### Other
 

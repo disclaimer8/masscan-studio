@@ -1,0 +1,71 @@
+# CI порта masscan на Rust (этап 0): fmt, clippy, тесты, правило «без C».
+# Raw-сокеты, сеть и повышение прав не используются.
+name: rmasscan
+
+on:
+  push:
+    paths:
+      - "rmasscan/**"
+      - ".github/workflows/rmasscan.yml"
+  pull_request:
+    paths:
+      - "rmasscan/**"
+      - ".github/workflows/rmasscan.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.99.1"
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    defaults:
+      run:
+        working-directory: rmasscan
+    steps:
+      - uses: actions/checkout@v4
+
+      # Все шаги ниже — однострочные команды без bash-измов: одинаково
+      # работают в bash (Linux/macOS) и pwsh (Windows).
+      - name: Установить toolchain
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --component rustfmt --component clippy
+          rustup default ${{ env.RUST_TOOLCHAIN }}
+          rustc --version
+          cargo --version
+
+      - name: Кеш cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rmasscan/target
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('rmasscan/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Формат
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Включает no_c_in_build: проверка «без C» одинакова на трёх ОС.
+      - name: Тесты
+        run: cargo test --all
+
+      - name: Установить cargo-deny
+        run: cargo install --locked cargo-deny@0.20.2
+
+      - name: cargo deny
+        run: cargo deny check bans licenses sources

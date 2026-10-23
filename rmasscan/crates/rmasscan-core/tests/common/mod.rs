@@ -42,8 +42,8 @@ pub struct ListSpec {
     /// `resume.count`, `None` = не задан (C: 0 = без ограничения).
     pub resume_count: Option<u64>,
     pub retries: u32,
-    /// `(uint64_t)max_rate`; по умолчанию 100 (main.c:1599), задаётся `--rate`.
-    pub max_rate: u64,
+    /// `max_rate` (double); по умолчанию 100 (main.c:1599), задаётся `--rate`.
+    pub max_rate: f64,
 }
 
 /// `Err(reason)` когда кейс вне области v1 (неизвестные опции).
@@ -54,7 +54,7 @@ pub fn parse_listscan_args(args: &[String]) -> Result<ListSpec, String> {
     let (mut seed, mut rounds) = (None, 14u32); // main.c:1595
     let (mut shard_one, mut shard_of) = (1u32, 1u32);
     let (mut resume_index, mut resume_count) = (0u64, None);
-    let (mut retries, mut max_rate) = (0u32, 100u64); // main.c:1599
+    let (mut retries, mut max_rate) = (0u32, 100.0f64); // main.c:1599
     let mut it = args.iter().skip(1); // -sL
     while let Some(a) = it.next() {
         let mut val = |name: &str| it.next().cloned().ok_or(format!("missing {name} value"));
@@ -64,7 +64,10 @@ pub fn parse_listscan_args(args: &[String]) -> Result<ListSpec, String> {
             "--blackrock-rounds" => rounds = num(val("rounds")?)? as u32,
             "--exclude" => excludes.push(val("exclude")?),
             "--retries" => retries = num(val("retries")?)? as u32,
-            "--rate" => max_rate = num(val("rate")?)?,
+            "--rate" => {
+                let v = val("rate")?;
+                max_rate = v.parse::<f64>().map_err(|e| format!("{v}: {e}"))?;
+            }
             "--shard" => {
                 let v = val("shard")?;
                 let (o, f) = v.split_once('/').ok_or("bad shard")?;

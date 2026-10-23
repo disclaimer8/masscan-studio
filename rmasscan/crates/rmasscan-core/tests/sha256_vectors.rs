@@ -1,4 +1,4 @@
-//! Вспомогательная проверка golden-поддержки (AGPL-3.0, masscan © Robert David
+//! Проверка test-only SHA-256 из `common` (AGPL-3.0, masscan © Robert David
 //! Graham). Единственный golden-тест `-sL` на production-коде живёт в
 //! `scan_golden.rs`; здесь остаётся только проверка test-only SHA-256.
 

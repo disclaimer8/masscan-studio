@@ -4,7 +4,10 @@
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
 //! Все `uint64_t`-операции C, где возможно переполнение, выражены через
-//! `wrapping_*`; `unsigned` (32 бита) в C остаётся `u32`.
+//! `wrapping_*`; `unsigned` (32 бита) в C остаётся `u32`. `max_rate` в C —
+//! `double` (masscan.h:178); приведения к `uint64_t` сделаны там же, где в C.
+//! Rust `as` из `f64` в `u64` насыщается, где в C неопределённое поведение
+//! (значения >= 2^64 или NaN); для реальных скоростей результаты совпадают.
 
 use std::net::Ipv4Addr;
 
@@ -24,7 +27,7 @@ impl Default for Shard {
     }
 }
 
-/// Ошибки `list_scan`.
+/// Ошибки `list_scan` и `transmit_scan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ScanError {
     /// `range == 0`: в C деление на ноль в `blackrock_init` (crypto-blackrock.c:117).
@@ -33,7 +36,8 @@ pub enum ScanError {
     /// Диапазон не помещается в 63 бита (main.c:1698-1704).
     #[error(transparent)]
     RangeOverflow(#[from] RangeOverflow),
-    /// `shard.of == 0`: шаг 0, в C бесконечный цикл (main-listscan.c:14,65).
+    /// Нулевой шаг (`shard.of == 0`, либо `shard.of * nic_count == 0` в u32):
+    /// в C бесконечный цикл (main-listscan.c:14,68; main.c:223,422).
     #[error("shard divisor must be non-zero")]
     ZeroShard,
     #[error(transparent)]
@@ -65,12 +69,12 @@ impl Iterator for ListIndices {
             return None;
         }
         let cur = self.i;
-        self.i = self.i.wrapping_add(self.increment); // main-listscan.c:65
+        self.i = self.i.wrapping_add(self.increment); // main-listscan.c:68
         Some(cur)
     }
 }
 
-/// Пред-shuffle индексы `i` для `-sL` (main-listscan.c:29-35,42,65).
+/// Пред-shuffle индексы `i` для `-sL` (main-listscan.c:31-35,45,68).
 ///
 /// Паникует при `shard.of == 0` (в C бесконечный цикл); [`list_scan`]
 /// проверяет это заранее и возвращает ошибку.
@@ -80,21 +84,22 @@ pub fn list_scan_indices(
     resume_index: u64,
     resume_count: Option<u64>,
     retries: u32,
-    max_rate: u64,
+    max_rate: f64,
 ) -> impl Iterator<Item = u64> {
     assert!(shard.of != 0, "shard.of must be non-zero");
-    // :29 `resume.index + (shard.one-1)`: `shard.one-1` — unsigned (32 бита).
+    // :31 `resume.index + (shard.one-1)`: `shard.one-1` — unsigned (32 бита).
     let start = resume_index.wrapping_add(u64::from(shard.one.wrapping_sub(1)));
-    let mut end = range; // :30
-    // :31 `resume.count` равный 0 означает "без ограничения".
+    let mut end = range; // :32
+    // :33-34 `resume.count` равный 0 означает "без ограничения".
     if let Some(count) = resume_count.filter(|&c| c != 0) {
         let limit = start.wrapping_add(count);
         if end > limit {
-            end = limit; // :32
+            end = limit;
         }
     }
-    // :35 `end += (uint64_t)(retries * max_rate)` — max_rate, не range.
-    end = end.wrapping_add(u64::from(retries).wrapping_mul(max_rate));
+    // :35 `end += (uint64_t)(retries * max_rate)`: умножение в double
+    // (unsigned * double), затем усечение; max_rate, не range.
+    end = end.wrapping_add((f64::from(retries) * max_rate) as u64);
     ListIndices {
         i: start,
         end,
@@ -102,79 +107,74 @@ pub fn list_scan_indices(
     }
 }
 
-/// Итератор transmit (main.c:269-334, :421-428).
+/// Итератор transmit (main.c:280-333, :421-424).
 struct TransmitIndices {
     i: u64,
     end: u64,
     range: u64,
     rate: u64,
     retries: u32,
-    /// `unsigned r` (main.c:211).
+    /// `unsigned r` (main.c:213).
     r: u32,
     increment: u64,
 }
 
 impl Iterator for TransmitIndices {
-    type Item = u64;
-    fn next(&mut self) -> Option<u64> {
+    type Item = (u64, u64);
+    fn next(&mut self) -> Option<(u64, u64)> {
         if self.i >= self.end {
-            return None; // main.c:269 `i < end`
+            return None; // main.c:280 `i < end`
         }
-        // main.c:322 `xXx = (i + (r--) * rate)`: r — unsigned, повышается до u64.
-        let (prod, o1) = u64::from(self.r).overflowing_mul(self.rate);
-        let (mut x, o2) = self.i.overflowing_add(prod);
+        let cur = self.i;
+        // main.c:328 `xXx = (i + (r--) * rate)`: r — unsigned, повышается до u64.
+        let mut x = self
+            .i
+            .wrapping_add(u64::from(self.r).wrapping_mul(self.rate));
         self.r = self.r.wrapping_sub(1);
-        // main.c:323-333: понижение по модулю range.
-        if self.rate > self.range {
-            x %= self.range;
-        } else if !(o1 || o2) {
-            x %= self.range; // то же, что цикл вычитания, когда сумма не переполнилась
-        } else {
-            while x >= self.range {
-                x -= self.range;
-            }
-        }
-        // main.c:424-427
+        // main.c:329-333: ветка `%` и цикл вычитания дают одно и то же —
+        // остаток от деления значения x (уже свёрнутого по 2^64) на range
+        // (range > 0, иначе цикл не входит: end == 0). Поэтому один `%`.
+        x %= self.range;
+        // main.c:421-424
         if self.r == 0 {
             self.i = self.i.wrapping_add(self.increment);
             self.r = self.retries.wrapping_add(1);
         }
-        Some(x)
+        Some((cur, x))
     }
 }
 
-/// Пред-shuffle значения `xXx` transmit-потока (main.c:203-448).
+/// Пред-shuffle поток transmit (main.c:203-448): пары `(i, xXx)`, где `i` —
+/// текущий индекс цикла (нужен для SYN-cookie источника, main.c:379), а `xXx` —
+/// `(i + r*rate) mod range` до `blackrock_shuffle`.
 ///
-/// `nic_count` и `nic_index` в C — `unsigned`; здесь берутся как `u32`
-/// (усечение), арифметика `shard.of * nic_count` и `(shard.one-1) * nic_count`
-/// идёт в 32 битах с переполнением, как в C (:219, :266). Паникует, если
-/// шаг (`shard.of * nic_count`) равен нулю: в C это бесконечный цикл.
+/// `nic_count`/`nic_index` — `unsigned` в C; произведения `shard.of * nic_count`
+/// и `(shard.one-1) * nic_count` идут в 32 битах с переполнением (:223, :269).
+/// Паникует, если шаг равен нулю: в C это бесконечный цикл.
 #[allow(clippy::too_many_arguments)]
 pub fn transmit_index_stream(
     range: u64,
     shard: Shard,
-    nic_count: u64,
-    nic_index: u64,
+    nic_count: u32,
+    nic_index: u32,
     resume_index: u64,
     resume_count: Option<u64>,
     retries: u32,
-    max_rate: u64,
-) -> impl Iterator<Item = u64> {
-    let nic_count = nic_count as u32;
-    let nic_index = nic_index as u32;
-    // :219 `unsigned increment = shard.of * nic_count`
+    max_rate: f64,
+) -> impl Iterator<Item = (u64, u64)> {
+    // :223 `unsigned increment = shard.of * nic_count`
     let increment = shard.of.wrapping_mul(nic_count);
     assert!(increment != 0, "shard.of * nic_count must be non-zero");
-    // :266 `resume.index + (shard.one-1) * nic_count + nic_index`;
+    // :269 `resume.index + (shard.one-1) * nic_count + nic_index`;
     // произведение — unsigned (32 бита), сумма с u64 — в u64.
     let start = resume_index
         .wrapping_add(u64::from(shard.one.wrapping_sub(1).wrapping_mul(nic_count)))
         .wrapping_add(u64::from(nic_index));
-    let mut end = range; // :267
+    let mut end = range; // :270
     if let Some(count) = resume_count.filter(|&c| c != 0) {
         let limit = start.wrapping_add(count);
         if end > limit {
-            end = limit; // :269-270
+            end = limit; // :271-272
         }
     }
     // :273 `end += retries * range` (в отличие от -sL, где max_rate)
@@ -183,14 +183,14 @@ pub fn transmit_index_stream(
         i: start,
         end,
         range,
-        rate: max_rate, // :208 `(uint64_t)max_rate`
+        rate: max_rate as u64, // :212 `(uint64_t)masscan->max_rate`
         retries,
-        r: retries.wrapping_add(1), // :209 `(unsigned)retries + 1`
+        r: retries.wrapping_add(1), // :213 `(unsigned)retries + 1`
         increment: u64::from(increment),
     }
 }
 
-/// `main_listscan` (main-listscan.c:8-67), IPv4. `massip` должен быть
+/// `main_listscan` (main-listscan.c:6-72), IPv4. `massip` должен быть
 /// оптимизирован. Для каждого индекса вызывает `emit(ip, port)`.
 /// Форматирование строки: [`format_list_line`] (одиночный порт:
 /// `massip.count_ports() == 1`).
@@ -203,7 +203,7 @@ pub fn list_scan<F: FnMut(u32, u32)>(
     resume_index: u64,
     resume_count: Option<u64>,
     retries: u32,
-    max_rate: u64,
+    max_rate: f64,
     mut emit: F,
 ) -> Result<(), ScanError> {
     let range = massip.try_range()?; // main.c:1698-1704
@@ -213,11 +213,59 @@ pub fn list_scan<F: FnMut(u32, u32)>(
     if shard.of == 0 {
         return Err(ScanError::ZeroShard);
     }
-    let blackrock = BlackRock::try_new(range, seed, rounds)?; // :24
+    let blackrock = BlackRock::try_new(range, seed, rounds)?; // :29
     for i in list_scan_indices(range, shard, resume_index, resume_count, retries, max_rate) {
-        let x = blackrock.shuffle(i); // :42
-        let (ip, port) = massip.pick(x); // :44
+        let x = blackrock.shuffle(i); // :45
+        let (ip, port) = massip.pick(x); // :47
         emit(ip, port);
+    }
+    Ok(())
+}
+
+/// Индексная часть `transmit_thread` (main.c:203-448), IPv4, без отправки.
+/// `emit(i, repeats, xXx, ip, port)` вызывается на каждую отправку:
+/// - `i` — индекс цикла, `repeats` — счётчик `--infinite` (всегда 0: `--infinite`
+///   вне области v1); вместе они дают `(unsigned)(i+repeats)` для источника
+///   SYN-cookie (main.c:379-384);
+/// - `xXx` — результат `blackrock_shuffle` (main.c:334; `range_ipv6 == 0`, поэтому
+///   вычитание на :369 тождественно), нужен для `(unsigned)xXx` в :381;
+/// - `(ip, port)` — `massip.pick(xXx)` (:371-372).
+#[allow(clippy::too_many_arguments)]
+pub fn transmit_scan<F: FnMut(u64, u64, u64, u32, u32)>(
+    massip: &MassIp,
+    seed: u64,
+    rounds: u32,
+    shard: Shard,
+    nic_count: u32,
+    nic_index: u32,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+    max_rate: f64,
+    mut emit: F,
+) -> Result<(), ScanError> {
+    let range = massip.try_range()?;
+    if range == 0 {
+        return Err(ScanError::EmptyRange);
+    }
+    if shard.of.wrapping_mul(nic_count) == 0 {
+        return Err(ScanError::ZeroShard);
+    }
+    let blackrock = BlackRock::try_new(range, seed, rounds)?; // main.c:261
+    let repeats = 0u64; // main.c:226
+    for (i, x) in transmit_index_stream(
+        range,
+        shard,
+        nic_count,
+        nic_index,
+        resume_index,
+        resume_count,
+        retries,
+        max_rate,
+    ) {
+        let xxx = blackrock.shuffle(x); // main.c:334
+        let (ip, port) = massip.pick(xxx);
+        emit(i, repeats, xxx, ip, port);
     }
     Ok(())
 }
@@ -229,34 +277,59 @@ mod tests {
 
     const ONE: Shard = Shard { one: 1, of: 1 };
 
+    fn xs(it: impl Iterator<Item = (u64, u64)>) -> Vec<u64> {
+        it.map(|(_, x)| x).collect()
+    }
+
     #[test]
     fn transmit_stream_retries0_offsets_by_rate() {
-        let got: Vec<u64> = transmit_index_stream(10, ONE, 1, 0, 0, None, 0, 3).collect();
+        let got = xs(transmit_index_stream(10, ONE, 1, 0, 0, None, 0, 3.0));
         assert_eq!(got, vec![3, 4, 5, 6, 7, 8, 9, 0, 1, 2]);
     }
 
     #[test]
     fn transmit_stream_retries2_three_offsets_per_index() {
-        let got: Vec<u64> = transmit_index_stream(10, ONE, 1, 0, 0, None, 2, 1).collect();
+        let all: Vec<(u64, u64)> = transmit_index_stream(10, ONE, 1, 0, 0, None, 2, 1.0).collect();
+        let got: Vec<u64> = all.iter().map(|p| p.1).collect();
         assert_eq!(&got[0..3], &[3u64, 2, 1]);
         assert_eq!(&got[3..6], &[4u64, 3, 2]);
         assert_eq!(&got[87..90], &[2u64, 1, 0]);
         assert_eq!(got.len(), 90);
+        // i is the loop index: constant across the r group, then advances.
+        assert_eq!(
+            all.iter().map(|p| p.0).take(7).collect::<Vec<_>>(),
+            vec![0, 0, 0, 1, 1, 1, 2]
+        );
+        assert_eq!(all[89].0, 29);
     }
 
     #[test]
     fn transmit_rate_above_range_uses_modulo() {
-        // rate 25 > range 10: (i + 25) % 10
-        let got: Vec<u64> = transmit_index_stream(10, ONE, 1, 0, 0, None, 0, 25).collect();
+        let got = xs(transmit_index_stream(10, ONE, 1, 0, 0, None, 0, 25.0));
         assert_eq!(got, vec![5, 6, 7, 8, 9, 0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn transmit_fractional_rate_truncates() {
+        // main.c:212 `(uint64_t)max_rate`: 3.9 -> 3
+        let got = xs(transmit_index_stream(10, ONE, 1, 0, 0, None, 0, 3.9));
+        assert_eq!(got[0], 3);
     }
 
     #[test]
     fn transmit_start_with_nic_shard_and_resume() {
         // start = 5 + (2-1)*3 + 1 = 9; increment = 3*3 = 9; i = 9, 18 (< end 20)
         let mk = |count| {
-            transmit_index_stream(20, Shard { one: 2, of: 3 }, 3, 1, 5, count, 0, 0)
-                .collect::<Vec<u64>>()
+            xs(transmit_index_stream(
+                20,
+                Shard { one: 2, of: 3 },
+                3,
+                1,
+                5,
+                count,
+                0,
+                0.0,
+            ))
         };
         assert_eq!(mk(Some(15)), vec![9, 18]); // 9+15 > 20: no clamp
         assert_eq!(mk(Some(4)), vec![9]); // end clamped to 9+4 = 13
@@ -264,32 +337,62 @@ mod tests {
     }
 
     #[test]
+    fn transmit_end_wraps_when_retries_times_range_overflows() {
+        // range = 2^62, retries 4: retries*range = 2^64 wraps to 0 (main.c:273),
+        // so end = start+3 = 3 stays; 3 positions x 5 sends.
+        let range = 1u64 << 62;
+        let all: Vec<(u64, u64)> =
+            transmit_index_stream(range, ONE, 1, 0, 0, Some(3), 4, 1.0).collect();
+        assert_eq!(all.len(), 15);
+        assert_eq!(
+            all.iter().take(6).map(|p| p.1).collect::<Vec<_>>(),
+            vec![5, 4, 3, 2, 1, 6]
+        );
+        assert_eq!(all[14], (2, 3));
+    }
+
+    #[test]
     fn transmit_empty_range_yields_nothing() {
         assert_eq!(
-            transmit_index_stream(0, ONE, 1, 0, 0, None, 3, 7).count(),
+            transmit_index_stream(0, ONE, 1, 0, 0, None, 3, 7.0).count(),
             0
         );
     }
 
     #[test]
     fn list_scan_indices_retries_use_max_rate_not_range() {
-        let n = list_scan_indices(10, ONE, 0, None, 2, 5).count();
+        let n = list_scan_indices(10, ONE, 0, None, 2, 5.0).count();
         assert_eq!(n, 10 + 2 * 5);
+    }
+
+    #[test]
+    fn list_scan_fractional_rate_matches_c_double_cast() {
+        // Counts measured with the real C binary (-sL 10.0.0.0/24 -p80 --seed 1).
+        let n = |retries, rate| list_scan_indices(256, ONE, 0, None, retries, rate).count();
+        assert_eq!(n(2, 100.5), 457);
+        assert_eq!(n(3, 0.5), 257);
+        assert_eq!(n(2, 1000.999), 2257);
+    }
+
+    #[test]
+    fn list_scan_resume_index_past_range_with_retries() {
+        // C-verified: start 256 >= range, end = 256 + 1*10 -> 10 indices.
+        assert_eq!(list_scan_indices(256, ONE, 256, None, 1, 10.0).count(), 10);
     }
 
     #[test]
     fn shard_2_of_3_steps_by_three() {
         let got: Vec<u64> =
-            list_scan_indices(9, Shard { one: 2, of: 3 }, 0, None, 0, 100).collect();
+            list_scan_indices(9, Shard { one: 2, of: 3 }, 0, None, 0, 100.0).collect();
         assert_eq!(got, vec![1, 4, 7]);
     }
 
     #[test]
     fn list_scan_resume_count_clamps_end() {
-        let got: Vec<u64> = list_scan_indices(256, ONE, 100, Some(50), 0, 100).collect();
+        let got: Vec<u64> = list_scan_indices(256, ONE, 100, Some(50), 0, 100.0).collect();
         assert_eq!(got, (100..150).collect::<Vec<_>>());
-        // count 0 = без ограничения (main-listscan.c:31)
-        assert_eq!(list_scan_indices(8, ONE, 2, Some(0), 0, 1).count(), 6);
+        // count 0 = без ограничения (main-listscan.c:33)
+        assert_eq!(list_scan_indices(8, ONE, 2, Some(0), 0, 1.0).count(), 6);
     }
 
     #[test]
@@ -310,7 +413,7 @@ mod tests {
     fn list_scan_empty_range_is_error_before_blackrock() {
         let mut t = MassIp::new();
         t.optimize();
-        let r = list_scan(&t, 1, 14, ONE, 0, None, 0, 100, |_, _| panic!("no emit"));
+        let r = list_scan(&t, 1, 14, ONE, 0, None, 0, 100.0, |_, _| panic!("no emit"));
         assert_eq!(r, Err(ScanError::EmptyRange));
     }
 
@@ -319,11 +422,11 @@ mod tests {
         let t = massip("10.0.0.0/30", "80");
         let z = Shard { one: 1, of: 0 };
         assert_eq!(
-            list_scan(&t, 1, 14, z, 0, None, 0, 100, |_, _| ()),
+            list_scan(&t, 1, 14, z, 0, None, 0, 100.0, |_, _| ()),
             Err(ScanError::ZeroShard)
         );
         assert_eq!(
-            list_scan(&t, 1, 64, ONE, 0, None, 0, 100, |_, _| ()),
+            list_scan(&t, 1, 64, ONE, 0, None, 0, 100.0, |_, _| ()),
             Err(ScanError::BlackRock(BlackRockError::TooManyRounds))
         );
     }
@@ -332,10 +435,42 @@ mod tests {
     fn list_scan_emits_every_target_once() {
         let t = massip("10.0.0.0/30", "80,443");
         let mut seen = Vec::new();
-        list_scan(&t, 1, 14, ONE, 0, None, 0, 100, |ip, p| seen.push((ip, p))).unwrap();
+        list_scan(&t, 1, 14, ONE, 0, None, 0, 100.0, |ip, p| {
+            seen.push((ip, p))
+        })
+        .unwrap();
         seen.sort();
         assert_eq!(seen.len(), 8);
         seen.dedup();
         assert_eq!(seen.len(), 8);
+    }
+
+    #[test]
+    fn transmit_scan_validates_and_matches_list_scan_order() {
+        let t = massip("10.0.0.0/30", "80,443");
+        let mut e = MassIp::new();
+        e.optimize();
+        assert_eq!(
+            transmit_scan(&e, 1, 14, ONE, 1, 0, 0, None, 0, 100.0, |_, _, _, _, _| ()),
+            Err(ScanError::EmptyRange)
+        );
+        let z = Shard { one: 1, of: 0 };
+        assert_eq!(
+            transmit_scan(&t, 1, 14, z, 1, 0, 0, None, 0, 100.0, |_, _, _, _, _| ()),
+            Err(ScanError::ZeroShard)
+        );
+        assert_eq!(
+            transmit_scan(&t, 1, 14, ONE, 0, 0, 0, None, 0, 100.0, |_, _, _, _, _| ()),
+            Err(ScanError::ZeroShard)
+        );
+        // retries 0, rate 0: xXx == i, so the order equals -sL.
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        list_scan(&t, 1, 14, ONE, 0, None, 0, 0.0, |ip, p| a.push((ip, p))).unwrap();
+        transmit_scan(&t, 1, 14, ONE, 1, 0, 0, None, 0, 0.0, |i, rep, _, ip, p| {
+            assert_eq!((rep, i), (0, b.len() as u64));
+            b.push((ip, p));
+        })
+        .unwrap();
+        assert_eq!(a, b);
     }
 }

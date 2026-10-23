@@ -10,6 +10,7 @@
 //! (значения >= 2^64 или NaN); для реальных скоростей результаты совпадают.
 
 use std::net::Ipv4Addr;
+use std::ops::ControlFlow;
 
 use crate::blackrock::{BlackRock, BlackRockError};
 use crate::massip::{MassIp, RangeOverflow};
@@ -291,6 +292,42 @@ pub fn transmit_scan<F: FnMut(u64, u64, u64, u32, u32)>(
     max_rate: f64,
     mut emit: F,
 ) -> Result<(), ScanError> {
+    transmit_scan_flow(
+        massip,
+        seed,
+        rounds,
+        shard,
+        nic_count,
+        nic_index,
+        resume_index,
+        resume_count,
+        retries,
+        max_rate,
+        |i, repeats, xxx, ip, port| {
+            emit(i, repeats, xxx, ip, port);
+            ControlFlow::<()>::Continue(())
+        },
+    )
+    .map(|_| ())
+}
+
+/// [`transmit_scan`] с досрочной остановкой: как только `emit` вернул
+/// `ControlFlow::Break(b)`, обход прекращается немедленно (без прохода до
+/// конца диапазона) и возвращается `Ok(Break(b))`. Порядок и значения те же.
+#[allow(clippy::too_many_arguments)]
+pub fn transmit_scan_flow<B, F: FnMut(u64, u64, u64, u32, u32) -> ControlFlow<B>>(
+    massip: &MassIp,
+    seed: u64,
+    rounds: u32,
+    shard: Shard,
+    nic_count: u32,
+    nic_index: u32,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+    max_rate: f64,
+    mut emit: F,
+) -> Result<ControlFlow<B>, ScanError> {
     let range = massip.try_range()?;
     if range == 0 {
         return Err(ScanError::EmptyRange);
@@ -312,9 +349,11 @@ pub fn transmit_scan<F: FnMut(u64, u64, u64, u32, u32)>(
     ) {
         let xxx = blackrock.shuffle(x); // main.c:334
         let (ip, port) = massip.pick(xxx);
-        emit(i, repeats, xxx, ip, port);
+        if let ControlFlow::Break(b) = emit(i, repeats, xxx, ip, port) {
+            return Ok(ControlFlow::Break(b));
+        }
     }
-    Ok(())
+    Ok(ControlFlow::Continue(()))
 }
 
 #[cfg(test)]

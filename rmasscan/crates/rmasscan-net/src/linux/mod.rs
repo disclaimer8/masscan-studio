@@ -57,8 +57,6 @@ pub(crate) trait IfaceInfo {
     fn ifindex(&self, name: &str) -> Result<Option<u32>, Errno>;
     /// (sa_family, MAC).
     fn hw_addr(&self, name: &str) -> Result<(u16, [u8; 6]), Errno>;
-    /// IPv4-адреса интерфейса в хостовом порядке.
-    fn ipv4_addrs(&self, name: &str) -> Result<Vec<u32>, Errno>;
 }
 
 const EAGAIN: Errno = libc::EAGAIN;
@@ -143,6 +141,8 @@ impl<I: PacketIo> TxHalf<I> {
                     }
                 }
                 Err(EINTR) => {
+                    // POSIX: send(), прерванный до передачи первого байта, ничего не
+                    // отправил, поэтому WouldBlockUnsent (не Uncertain) безопасен.
                     if deadline.expired() {
                         return TxStep::Done(SendStatus::WouldBlockUnsent);
                     }
@@ -205,13 +205,13 @@ impl<I: PacketIo> RxHalf<I> {
     /// Забирает счётчики ядра (чтение сбрасывает их в ядре) и накапливает.
     fn flush_kernel_stats(&mut self) {
         use std::sync::atomic::Ordering::{Relaxed, Release};
-        if let Some(io) = self.io.as_mut() {
-            if let Ok(s) = io.packet_stats() {
-                self.counters
-                    .kernel_drops
-                    .fetch_add(u64::from(s.drops), Relaxed);
-                self.counters.kernel_drops_known.store(true, Release);
-            }
+        if let Some(io) = self.io.as_mut()
+            && let Ok(s) = io.packet_stats()
+        {
+            self.counters
+                .kernel_drops
+                .fetch_add(u64::from(s.drops), Relaxed);
+            self.counters.kernel_drops_known.store(true, Release);
         }
         self.since_stats = 0;
     }
@@ -331,7 +331,7 @@ pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Res
         .ifindex(name)
         .map_err(|e| sys("if_nametoindex", e))?
         .ok_or_else(|| NetError::InterfaceMismatch(format!("no such interface {name:?}")))?;
-    let (family, mac) = match q.hw_addr(name) {
+    let (family, _nic_mac) = match q.hw_addr(name) {
         Ok(v) => v,
         Err(libc::ENODEV) => {
             return Err(NetError::InterfaceMismatch(format!(
@@ -345,19 +345,9 @@ pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Res
             "interface {name:?} has ARPHRD type {family}, not Ethernet"
         )));
     }
-    if mac != binding.source_mac {
-        return Err(NetError::InterfaceMismatch(format!(
-            "interface {name:?} MAC {mac:02x?} differs from binding {:02x?}",
-            binding.source_mac
-        )));
-    }
-    let addrs = q.ipv4_addrs(name).map_err(|e| sys("getifaddrs", e))?;
-    if !addrs.contains(&binding.source_ipv4) {
-        return Err(NetError::InterfaceMismatch(format!(
-            "interface {name:?} has no IPv4 address {}",
-            std::net::Ipv4Addr::from(binding.source_ipv4)
-        )));
-    }
+    // source_ipv4 и source_mac это явные значения источника сканирования
+    // (как --adapter-ip/--adapter-mac): используются в кадрах как есть и с ОС
+    // не сверяются. InterfaceMismatch охраняет только разрешение имени.
     Ok(ifindex)
 }
 

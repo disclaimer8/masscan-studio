@@ -9,12 +9,14 @@ use crate::NetStats;
 
 const IFINDEX: u32 = 7;
 
+type ScriptedFrame = Result<(Vec<u8>, u8, i32), Errno>;
+
 #[derive(Default)]
 struct Script {
     sends: VecDeque<Result<usize, Errno>>,
     /// Если очередь пуста: повторять эту ошибку вечно.
     send_forever: Option<Errno>,
-    recvs: VecDeque<Result<(Vec<u8>, u8, i32), Errno>>,
+    recvs: VecDeque<ScriptedFrame>,
     recv_forever: Option<Errno>,
     polls: VecDeque<Result<Readiness, Errno>>,
     /// Если очередь пуста: спать запрошенный таймаут и вернуть Timeout.
@@ -285,7 +287,7 @@ fn tx_poll_failure_is_fatal() {
 
 // ---------------------------------------------------------------- RX
 
-fn frame(data: &[u8]) -> Result<(Vec<u8>, u8, i32), Errno> {
+fn frame(data: &[u8]) -> ScriptedFrame {
     Ok((data.to_vec(), 0, IFINDEX as i32))
 }
 
@@ -527,7 +529,6 @@ fn stats_handle_survives_the_close_and_final_drops_are_collected() {
 struct FakeIface {
     index: Option<u32>,
     hw: (u16, [u8; 6]),
-    ips: Vec<u32>,
     queried: Mutex<Vec<&'static str>>,
 }
 
@@ -536,7 +537,6 @@ impl FakeIface {
         FakeIface {
             index: Some(IFINDEX),
             hw: (ARPHRD_ETHER, MAC),
-            ips: vec![0x0A00_0001, IP],
             queried: Mutex::new(Vec::new()),
         }
     }
@@ -550,10 +550,6 @@ impl IfaceInfo for FakeIface {
     fn hw_addr(&self, _: &str) -> Result<(u16, [u8; 6]), Errno> {
         self.queried.lock().unwrap().push("hw");
         Ok(self.hw)
-    }
-    fn ipv4_addrs(&self, _: &str) -> Result<Vec<u32>, Errno> {
-        self.queried.lock().unwrap().push("ip");
-        Ok(self.ips.clone())
     }
 }
 
@@ -611,19 +607,12 @@ fn missing_interface_is_a_mismatch() {
 }
 
 #[test]
-fn wrong_mac_or_ip_is_a_mismatch() {
-    let mut q = FakeIface::ok();
-    q.hw.1[5] = 9;
-    assert!(matches!(
-        verify_binding(&q, &binding()),
-        Err(NetError::InterfaceMismatch(_))
-    ));
-    let mut q = FakeIface::ok();
-    q.ips = vec![0x0A00_0001];
-    assert!(matches!(
-        verify_binding(&q, &binding()),
-        Err(NetError::InterfaceMismatch(_))
-    ));
+fn source_ip_and_mac_are_not_validated_against_the_os() {
+    let q = FakeIface::ok();
+    let mut b = binding();
+    b.source_ipv4 = 0x0AC8_0064 ^ 0xff;
+    b.source_mac = [2, 0xee, 0, 0, 0, 9];
+    assert_eq!(verify_binding(&q, &b), Ok(IFINDEX));
 }
 
 #[test]

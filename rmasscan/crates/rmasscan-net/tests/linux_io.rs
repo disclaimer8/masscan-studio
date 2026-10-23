@@ -239,16 +239,32 @@ fn lab_open_without_privilege_is_permission_denied() {
 
 #[test]
 #[ignore = "opens real AF_PACKET sockets: sealed lab only"]
-fn lab_wrong_mac_or_ip_binding_is_a_mismatch() {
+fn lab_unassigned_source_ip_and_custom_mac_open_and_send() {
+    let l = lab();
+    // Как --adapter-ip/--adapter-mac: адрес не назначен интерфейсу, MAC чужой.
+    let mut b = lab_binding(&l);
+    b.source_ipv4 = u32::from(std::net::Ipv4Addr::new(10, 200, 0, 100));
+    b.source_mac = [2, 0xaa, 0, 0, 0, 0x77];
+    let mut a = open_explicit(&b).expect("unassigned source IP must open");
+    let mut frame = vec![0u8; 60];
+    frame[0..6].copy_from_slice(&l.peer_mac);
+    frame[6..12].copy_from_slice(&b.source_mac);
+    frame[12..14].copy_from_slice(&0x88b5u16.to_be_bytes());
+    assert_eq!(
+        a.io.tx
+            .send(&frame, Duration::from_millis(50))
+            .expect("send"),
+        SendStatus::Sent
+    );
+    assert_eq!(a.stats.snapshot().tx_sent, 1);
+}
+
+#[test]
+#[ignore = "opens real AF_PACKET sockets: sealed lab only"]
+fn lab_missing_interface_still_mismatches_with_privileges() {
     let l = lab();
     let mut b = lab_binding(&l);
-    b.source_mac[5] ^= 0xff;
-    assert!(matches!(
-        open_explicit(&b),
-        Err(NetError::InterfaceMismatch(_))
-    ));
-    let mut b = lab_binding(&l);
-    b.source_ipv4 ^= 0xff;
+    b.interface_id = "no-such-if0".into();
     assert!(matches!(
         open_explicit(&b),
         Err(NetError::InterfaceMismatch(_))

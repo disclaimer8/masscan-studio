@@ -6,7 +6,7 @@
 //! * все буферы это срезы Rust, длина берётся из самого среза;
 //! * C-структуры инициализируются нулями (`mem::zeroed`) только для типов,
 //!   состоящих из целых и массивов целых, для которых нулевой образ корректен;
-//! * единственный ресурс libc (`getifaddrs`) освобождается RAII-guard'ом.
+//! * других ресурсов libc, требующих освобождения, нет.
 
 use std::ffi::CString;
 use std::mem;
@@ -167,7 +167,7 @@ impl PacketIo for PacketFd {
     }
 }
 
-/// Проверка интерфейса через ОС (if_nametoindex, SIOCGIFHWADDR, getifaddrs).
+/// Проверка интерфейса через ОС (if_nametoindex, SIOCGIFHWADDR).
 /// Не требует привилегий.
 pub(super) struct OsIface;
 
@@ -221,48 +221,5 @@ impl IfaceInfo for OsIface {
             *dst = *src as u8;
         }
         Ok((sa.sa_family, mac))
-    }
-
-    fn ipv4_addrs(&self, name: &str) -> Result<Vec<u32>, Errno> {
-        struct IfAddrs(*mut libc::ifaddrs);
-        impl Drop for IfAddrs {
-            fn drop(&mut self) {
-                // SAFETY: указатель получен успешным getifaddrs (или null,
-                // что freeifaddrs допускает) и освобождается ровно один раз.
-                unsafe { libc::freeifaddrs(self.0) };
-            }
-        }
-        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
-        // SAFETY: `head` живая локальная переменная под выходной указатель.
-        if unsafe { libc::getifaddrs(&raw mut head) } < 0 {
-            return Err(last_errno());
-        }
-        let list = IfAddrs(head);
-        let mut out = Vec::new();
-        let mut cur = list.0;
-        while !cur.is_null() {
-            // SAFETY: `cur` это узел связного списка, принадлежащего `list`,
-            // которая жива весь цикл; узлы не изменяются.
-            let ifa = unsafe { &*cur };
-            cur = ifa.ifa_next;
-            if ifa.ifa_name.is_null() || ifa.ifa_addr.is_null() {
-                continue;
-            }
-            // SAFETY: ifa_name это NUL-терминированная строка внутри списка.
-            let ifname = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
-            if ifname.to_bytes() != name.as_bytes() {
-                continue;
-            }
-            // SAFETY: ifa_addr не null, читается только общий заголовок.
-            let family = unsafe { (*ifa.ifa_addr).sa_family };
-            if i32::from(family) != libc::AF_INET {
-                continue;
-            }
-            // SAFETY: для AF_INET ядро/libc выделяют sockaddr_in целиком;
-            // read_unaligned не требует выравнивания.
-            let sin = unsafe { std::ptr::read_unaligned(ifa.ifa_addr.cast::<libc::sockaddr_in>()) };
-            out.push(u32::from_be(sin.sin_addr.s_addr));
-        }
-        Ok(out)
     }
 }

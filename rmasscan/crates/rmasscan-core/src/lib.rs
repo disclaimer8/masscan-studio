@@ -2,6 +2,7 @@
 //! Порт ядра masscan (AGPL-3.0). Источник: masscan © Robert David Graham,
 //! github.com/robertdavidgraham/masscan, HEAD 8e6b3b0.
 
+pub mod blackrock;
 pub mod ranges;
 pub mod targets;
 

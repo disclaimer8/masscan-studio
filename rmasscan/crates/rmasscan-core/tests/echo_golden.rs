@@ -54,7 +54,7 @@ fn map_args(args: &[String]) -> ScanConfig {
     cfg
 }
 
-const CHECKED: [&str; 14] = [
+const CHECKED: [&str; 16] = [
     "echo/adapter_opts.all.conf",
     "echo/adapter_opts.conf",
     "echo/everything.all.conf",
@@ -69,6 +69,8 @@ const CHECKED: [&str; 14] = [
     "echo/shard_rounds.conf",
     "echo/wait_and_ports.all.conf",
     "echo/wait_and_ports.conf",
+    "echo/zero_slash31.conf",
+    "echo/zero_slash4.conf",
 ];
 
 #[test]
@@ -146,16 +148,55 @@ fn reads_c_oracle_paused_conf_fixtures() {
     assert_eq!(ports(&c), vec![(0, 9)]);
 }
 
+const PAUSED: [&str; 4] = [
+    "paused/seed1_p80_slash16.conf",
+    "paused/seed424242_multi.conf",
+    "paused/seed9_resume_index.conf",
+    "paused/studio_flags.conf",
+];
+
+#[test]
+fn paused_fixtures_are_exactly_the_manifest_paused_records() {
+    let mut files: Vec<String> = load_manifest()
+        .cases
+        .iter()
+        .filter(|c| c.mode.as_deref() == Some("paused"))
+        .map(|c| c.file.clone().expect("file"))
+        .collect();
+    files.sort();
+    assert_eq!(files, PAUSED);
+}
+
+#[test]
+fn reads_studio_flags_paused_conf() {
+    // Captured with `--interactive --output-format interactive -e lo`: C
+    // writes `output-format = interactive`, which the reader must tolerate.
+    let (text, c) = read_fixture("studio_flags.conf");
+    assert!(text.contains("output-format = interactive"));
+    assert_eq!((c.seed, c.resume_index, c.max_rate), (3, 602, 1000.0));
+    assert_eq!(ranges(&c), vec![(0xC0A8_0000, 0xC0A8_FFFF)]);
+    assert_eq!(ports(&c), vec![(80, 80)]);
+    assert!(c.offline);
+    assert_eq!(c.adapter_name.as_deref(), Some("lo"));
+    assert_eq!(c.source_port, Some((40000, 40000)));
+}
+
 #[test]
 fn paused_conf_fixtures_round_trip_byte_exact() {
-    for name in [
-        "seed1_p80_slash16.conf",
-        "seed424242_multi.conf",
-        "seed9_resume_index.conf",
-    ] {
-        let (text, cfg) = read_fixture(name);
+    for case in load_manifest()
+        .cases
+        .iter()
+        .filter(|c| c.mode.as_deref() == Some("paused"))
+    {
+        let file = case.file.as_deref().expect("file");
+        let text = std::fs::read_to_string(format!("{GOLDEN_DIR}/{file}")).unwrap();
+        let cfg = read_paused_conf(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
+        if text.contains("output-format") {
+            // We do not store output keys, so echo cannot reproduce them.
+            continue;
+        }
         let mut out = String::new();
         echo(&cfg, false, &mut out);
-        assert_eq!(out, text, "{name}");
+        assert_eq!(out, text, "{file}");
     }
 }

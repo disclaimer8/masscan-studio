@@ -28,7 +28,9 @@ use rmasscan_core::probe::{PlanError, ProbeCursor, ReadyPlan};
 use rmasscan_core::receive::{Reply, parse_reply};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
+use crate::checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 use crate::events::{Event, FailReason, Outcome, Progress, Reason};
+use crate::identity::{ENGINE_ALGORITHM_VERSION, job_digest};
 use crate::io::{AdapterPair, Rx, SendStatus, Tx};
 
 /// Верхняя граница таймаута одного вызова адаптера.
@@ -88,6 +90,8 @@ pub enum StartError {
     InvalidOptions(&'static str),
     #[error(transparent)]
     Plan(#[from] PlanError),
+    #[error(transparent)]
+    Checkpoint(#[from] CheckpointError),
     #[error("cannot spawn worker thread: {0}")]
     Spawn(String),
 }
@@ -396,11 +400,13 @@ fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f
     let mut throttler = Throttler::start(rate, clock);
 
     let end = 'run: loop {
-        if halted() {
-            break END_HALTED;
-        }
+        // Конец последовательности сильнее паузы: next_index == range это
+        // завершение, а не checkpoint с пустым остатком.
         if cursor.current().is_none() {
             break END_NATURAL;
+        }
+        if halted() {
+            break END_HALTED;
         }
         let batch = match throttler.next_batch_interruptible(
             shared.sent.load(Ordering::Acquire),
@@ -416,6 +422,9 @@ fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f
         // batch == 0 означает "вызвать снова".
         let mut left = batch;
         while left > 0 {
+            if cursor.current().is_none() {
+                break 'run END_NATURAL;
+            }
             // Отмена перед КАЖДОЙ отправкой.
             if halted() {
                 break 'run END_HALTED;
@@ -546,8 +555,60 @@ impl Engine {
         Self::launch(plan, io, options, clock, 0)
     }
 
-    /// Общий запуск. `start_index` это шов для `Engine::resume` (задача 5):
-    /// resume проверит checkpoint и вызовет это с его `next_index`.
+    /// Продолжает ту же последовательность с `checkpoint.next_index`.
+    ///
+    /// Всё проверяется ДО запуска потоков и первой отправки: версия формата и
+    /// алгоритма, идентичность задания (цели/порты/исключения/seed/rate/
+    /// retries/shard/rounds/wait/binding), `scan_id` (сохраняется) и свежий
+    /// `attempt_id` (отличается от checkpoint). `next_index == range` это
+    /// завершённый скан ([`CheckpointError::AlreadyCompleted`]).
+    pub fn resume(
+        plan: ReadyPlan,
+        checkpoint: Checkpoint,
+        io: AdapterPair,
+        options: EngineOptions,
+    ) -> Result<EngineHandle, StartError> {
+        Self::resume_with_clock(plan, checkpoint, io, options, Arc::new(SystemClock::new()))
+    }
+
+    /// [`Self::resume`] с внедрёнными часами (внутренний test runtime).
+    #[doc(hidden)]
+    pub fn resume_with_clock(
+        plan: ReadyPlan,
+        checkpoint: Checkpoint,
+        io: AdapterPair,
+        options: EngineOptions,
+        clock: Arc<dyn Clock + Send + Sync>,
+    ) -> Result<EngineHandle, StartError> {
+        if checkpoint.format_version != CHECKPOINT_FORMAT_VERSION {
+            return Err(CheckpointError::UnsupportedFormat(checkpoint.format_version).into());
+        }
+        if checkpoint.engine_version != ENGINE_ALGORITHM_VERSION {
+            return Err(CheckpointError::EngineVersionMismatch(
+                checkpoint.engine_version,
+                ENGINE_ALGORITHM_VERSION,
+            )
+            .into());
+        }
+        if checkpoint.job_digest != job_digest(&plan) {
+            return Err(CheckpointError::JobMismatch.into());
+        }
+        if checkpoint.scan_id != options.scan_id {
+            return Err(CheckpointError::ScanIdMismatch.into());
+        }
+        if checkpoint.attempt_id == options.attempt_id {
+            return Err(CheckpointError::AttemptIdReused.into());
+        }
+        if checkpoint.next_index == plan.range() {
+            return Err(CheckpointError::AlreadyCompleted(checkpoint.next_index).into());
+        }
+        // next_index > range отвергает ProbeCursor::new (NextIndexBeyondRange).
+        let mut h = Self::launch(plan, io, options, clock, checkpoint.next_index)?;
+        h.resumed_from = Some(checkpoint.attempt_id);
+        Ok(h)
+    }
+
+    /// Общий запуск; `start_index` приходит только из проверенного checkpoint.
     pub(crate) fn launch(
         plan: ReadyPlan,
         io: AdapterPair,
@@ -615,9 +676,12 @@ impl Engine {
                 return Err(StartError::Spawn(e.to_string()));
             }
         };
+        let digest = job_digest(&plan);
         Ok(EngineHandle {
             shared,
             options,
+            digest,
+            resumed_from: None,
             tx_thread: Some(tx_thread),
             rx_thread: Some(rx_thread),
         })
@@ -628,6 +692,8 @@ impl Engine {
 pub struct EngineHandle {
     shared: Arc<Shared>,
     options: EngineOptions,
+    digest: [u8; 32],
+    resumed_from: Option<[u8; 16]>,
     tx_thread: Option<JoinHandle<()>>,
     rx_thread: Option<JoinHandle<()>>,
 }
@@ -662,6 +728,27 @@ impl EngineHandle {
 
     pub fn attempt_id(&self) -> [u8; 16] {
         self.options.attempt_id
+    }
+
+    /// attempt_id checkpoint, из которого запущен этот прогон (происхождение).
+    /// `None` для нового скана. Это не текущая попытка: она в [`Self::attempt_id`].
+    pub fn resumed_from_attempt(&self) -> Option<[u8; 16]> {
+        self.resumed_from
+    }
+
+    /// Checkpoint чистой паузы: `Some` только если итог `Paused`. Его
+    /// `attempt_id` это текущая попытка (она создала checkpoint). Не
+    /// сохранённая пауза: durable Paused подтверждает Studio.
+    pub fn checkpoint(&self) -> Option<Checkpoint> {
+        let o = self.outcome()?;
+        (o.reason == Reason::Paused).then_some(Checkpoint {
+            format_version: CHECKPOINT_FORMAT_VERSION,
+            engine_version: ENGINE_ALGORITHM_VERSION,
+            scan_id: self.options.scan_id,
+            attempt_id: self.options.attempt_id,
+            job_digest: self.digest,
+            next_index: o.progress.next_index,
+        })
     }
 
     /// Остановить TX на границе подтверждённой отправки; RX примет финальные

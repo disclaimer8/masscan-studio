@@ -556,3 +556,170 @@ fn dedup_never_exceeds_100k_entries() {
     assert_eq!(d.len(), MAX_DEDUP_ENTRIES);
     assert!(d.insert(&reply(0, 80)), "oldest was evicted");
 }
+
+// ------------------------------------------------- worker panic (2B-2) ---
+
+/// Rx-обёртка: второй вызов `recv` ждёт барьер (тест уже убедился, что первый
+/// кадр принят) и паникует.
+struct PanicRx {
+    inner: Box<dyn rmasscan_engine::Rx>,
+    calls: usize,
+    gate: std::sync::Arc<std::sync::Barrier>,
+}
+
+impl rmasscan_engine::Rx for PanicRx {
+    fn recv(
+        &mut self,
+        buffer: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Option<usize>, rmasscan_engine::IoError> {
+        self.calls += 1;
+        if self.calls == 2 {
+            self.gate.wait();
+            panic!("injected rx panic");
+        }
+        self.inner.recv(buffer, timeout)
+    }
+}
+
+/// Tx-обёртка: вторая отправка ждёт барьер (тест уже убедился, что первый кадр
+/// подтверждён и его ответ принят) и паникует до передачи кадра.
+struct PanicTx {
+    inner: Box<dyn rmasscan_engine::Tx>,
+    calls: usize,
+    gate: std::sync::Arc<std::sync::Barrier>,
+}
+
+impl rmasscan_engine::Tx for PanicTx {
+    fn send(
+        &mut self,
+        frame: &[u8],
+        timeout: Duration,
+    ) -> Result<rmasscan_engine::SendStatus, rmasscan_engine::IoError> {
+        self.calls += 1;
+        if self.calls == 2 {
+            self.gate.wait();
+            panic!("injected tx panic");
+        }
+        self.inner.send(frame, timeout)
+    }
+}
+
+fn replies_in(events: &[Event]) -> usize {
+    all_replies(events).len()
+}
+
+#[test]
+fn rx_panic_preserves_accepted_results_on_join_drain() {
+    let p = plan(1_000_000.0, 3);
+    let clock = ManualClock::new();
+    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(clock.clone());
+    fake.push_frame(good_synack(&p));
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let rmasscan_engine::AdapterPair { tx, rx } = fake.pair();
+    let rx = Box::new(PanicRx {
+        inner: rx,
+        calls: 0,
+        gate: gate.clone(),
+    });
+    let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
+    let h = rmasscan_engine::Engine::start_with_clock(
+        p.clone(),
+        rmasscan_engine::AdapterPair { tx, rx },
+        opts(),
+        c,
+    )
+    .unwrap();
+
+    // Первый кадр принят раньше, чем RX дойдёт до барьера и упадёт.
+    wait_for("reply accepted", || h.progress().received == 1);
+    gate.wait();
+    wait_for("outcome", || h.outcome().is_some());
+    assert!(h.checkpoint().is_none(), "a panic yields no checkpoint");
+
+    let (o, events) = h.join_drain().expect("outcome exists: Ok, not Err");
+    assert_eq!(o.reason, Reason::Failed(FailReason::WorkerPanicked));
+    assert_eq!(o.progress.received, 1);
+    assert_eq!(replies_in(&events), 1, "exactly one accepted reply");
+    assert!(!events.iter().any(|e| matches!(e, Event::Finished { .. })));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::CheckpointReady { .. }))
+    );
+    assert_eq!(fake.alive_handles(), 0, "both handles released");
+}
+
+#[test]
+fn tx_panic_after_confirmed_send_preserves_results_on_join_drain() {
+    let p = plan(1_000_000.0, 3);
+    let clock = ManualClock::new();
+    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(clock.clone());
+    synack_responder(&fake);
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let rmasscan_engine::AdapterPair { tx, rx } = fake.pair();
+    let tx = Box::new(PanicTx {
+        inner: tx,
+        calls: 0,
+        gate: gate.clone(),
+    });
+    let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
+    let h = rmasscan_engine::Engine::start_with_clock(
+        p.clone(),
+        rmasscan_engine::AdapterPair { tx, rx },
+        opts(),
+        c,
+    )
+    .unwrap();
+
+    // Первая отправка подтверждена и её ответ принят RX до паники TX.
+    wait_for("first reply accepted", || {
+        h.progress().sent == 1 && h.progress().received == 1
+    });
+    gate.wait();
+    wait_for("outcome", || h.outcome().is_some());
+    assert!(h.checkpoint().is_none(), "a panic yields no checkpoint");
+
+    let (o, events) = h.join_drain().expect("outcome exists: Ok, not Err");
+    assert_eq!(o.reason, Reason::Failed(FailReason::WorkerPanicked));
+    assert_eq!(o.progress.sent, 1);
+    assert_eq!(o.progress.received, 1);
+    assert_eq!(replies_in(&events), 1, "exactly one accepted reply");
+    assert_eq!(fake.sent_count(), 1, "the panicking send never went out");
+    assert_eq!(fake.alive_handles(), 0, "both handles released");
+}
+
+#[test]
+fn panic_does_not_duplicate_events_already_read() {
+    let p = plan(1_000_000.0, 3);
+    let clock = ManualClock::new();
+    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(clock.clone());
+    fake.push_frame(good_synack(&p));
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let rmasscan_engine::AdapterPair { tx, rx } = fake.pair();
+    let rx = Box::new(PanicRx {
+        inner: rx,
+        calls: 0,
+        gate: gate.clone(),
+    });
+    let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
+    let h = rmasscan_engine::Engine::start_with_clock(
+        p.clone(),
+        rmasscan_engine::AdapterPair { tx, rx },
+        opts(),
+        c,
+    )
+    .unwrap();
+    wait_for("reply accepted", || h.progress().received == 1);
+    // Потребитель уже прочитал результат до паники.
+    let mut read = Vec::new();
+    while replies_in(&read) == 0 {
+        read.push(h.recv_event_timeout(Duration::from_secs(5)).unwrap());
+    }
+    gate.wait();
+    wait_for("outcome", || h.outcome().is_some());
+    let (o, rest) = h.join_drain().unwrap();
+    assert_eq!(o.reason, Reason::Failed(FailReason::WorkerPanicked));
+    assert_eq!(replies_in(&read), 1);
+    assert_eq!(replies_in(&rest), 0, "already-read events are not repeated");
+}

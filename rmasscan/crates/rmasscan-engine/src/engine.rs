@@ -98,6 +98,8 @@ pub enum StartError {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EngineError {
+    /// Больше не возвращается из `join`/`join_drain`: паника отражается в
+    /// итоге как `Failed(WorkerPanicked)`. Вариант оставлен для совместимости.
     #[error("a worker thread panicked")]
     WorkerPanicked,
     #[error("engine finished without an outcome")]
@@ -783,36 +785,49 @@ impl EngineHandle {
 
     /// Блокируется до завершения запуска (вызовите `stop`/`pause`, если не
     /// хотите ждать), joins оба потока.
+    ///
+    /// Паника рабочего потока НЕ даёт `Err`: если итог существует, возвращается
+    /// `Ok(Outcome { reason: Failed(WorkerPanicked), .. })` (checkpoint нет).
+    /// `Err(NoOutcome)` только когда итога нет совсем. Непрочитанные события
+    /// `join` отбрасывает; чтобы их сохранить, используйте
+    /// [`Self::join_drain`].
     pub fn join(self) -> Result<Outcome, EngineError> {
         self.join_drain().map(|(o, _)| o)
     }
 
     /// Как [`Self::join`], но возвращает ещё не прочитанные события (без
-    /// `Finished`): итог не отбрасывает принятые результаты.
+    /// `Finished`): итог не отбрасывает принятые результаты. Уже прочитанные
+    /// через `try_event`/`recv_event_timeout` события не повторяются.
+    ///
+    /// При панике рабочего потока принятые до неё результаты сохраняются, а
+    /// итог это `Ok(Failed(WorkerPanicked))` с последним слепком счётчиков.
     pub fn join_drain(mut self) -> Result<(Outcome, Vec<Event>), EngineError> {
-        let panicked = self.join_threads();
+        self.join_threads();
         let mut events = Vec::new();
         while let Ok(ev) = self.shared.queue.try_pop() {
             if !matches!(ev, Event::Finished { .. }) {
                 events.push(ev);
             }
         }
-        let outcome = self.outcome().ok_or(EngineError::NoOutcome)?;
-        if panicked {
-            return Err(EngineError::WorkerPanicked);
+        // Паника уже отражена в итоге (`ExitGuard` -> `Failed(WorkerPanicked)`),
+        // поэтому при наличии итога возвращаем его вместе с событиями.
+        match self.outcome() {
+            Some(outcome) => Ok((outcome, events)),
+            // Итога нет совсем (не должно случаться: второй выходящий поток
+            // всегда финализирует).
+            None => Err(EngineError::NoOutcome),
         }
-        Ok((outcome, events))
     }
 
-    fn join_threads(&mut self) -> bool {
-        let mut panicked = false;
+    fn join_threads(&mut self) {
         for t in [self.tx_thread.take(), self.rx_thread.take()]
             .into_iter()
             .flatten()
         {
-            panicked |= t.join().is_err();
+            // Паника потока уже учтена в итоге через `ExitGuard`; здесь важен
+            // сам join (handles освобождены).
+            let _ = t.join();
         }
-        panicked
     }
 }
 

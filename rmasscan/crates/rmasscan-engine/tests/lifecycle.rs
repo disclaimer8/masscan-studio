@@ -297,6 +297,101 @@ fn would_block_unsent_retries_same_frame_without_advancing() {
     assert_eq!(fake.sent_frames(), reference_frames(&p, PROBES as usize));
 }
 
+/// Часы-обёртка: считает сны ровно по 1 мс (backoff после WouldBlockUnsent).
+struct BackoffClock {
+    inner: std::sync::Arc<ManualClock>,
+    backoffs: std::sync::atomic::AtomicU64,
+}
+
+impl rmasscan_core::throttle::Clock for BackoffClock {
+    fn now_micros(&self) -> u64 {
+        self.inner.now_micros()
+    }
+    fn sleep_micros(&self, us: u64) {
+        if us == 1_000 {
+            self.backoffs
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+        self.inner.sleep_micros(us);
+    }
+}
+
+#[test]
+fn would_block_unsent_backs_off_1ms_on_the_injected_clock() {
+    let p = plan(1_000_000.0, 1);
+    let manual = ManualClock::new();
+    let clock = std::sync::Arc::new(BackoffClock {
+        inner: manual.clone(),
+        backoffs: Default::default(),
+    });
+    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(manual);
+    fake.script_tx(std::iter::repeat_n(TxStep::WouldBlockUnsent, 30));
+    let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
+    let h = rmasscan_engine::Engine::start_with_clock(p.clone(), fake.pair(), opts(), c).unwrap();
+    let o = join_within(h, Duration::from_secs(5));
+    assert_eq!(o.reason, Reason::Completed);
+    assert_eq!(fake.would_block_count(), 30);
+    // Каждый отказ сопровождается ожиданием 1 мс по ИНЖЕКТИРОВАННЫМ часам.
+    assert!(
+        clock.backoffs.load(std::sync::atomic::Ordering::Acquire) >= 30,
+        "no backoff after WouldBlockUnsent"
+    );
+    assert_eq!(fake.sent_frames(), reference_frames(&p, PROBES as usize));
+}
+
+fn persistent_would_block() -> (
+    rmasscan_core::probe::ReadyPlan,
+    rmasscan_engine::fake::FakeAdapter,
+    rmasscan_engine::EngineHandle,
+) {
+    let p = plan(1_000_000.0, 1);
+    let fake = rmasscan_engine::fake::FakeAdapter::new();
+    fake.script_tx(std::iter::repeat_n(TxStep::WouldBlockUnsent, 100_000));
+    let h = start_real(&p, &fake);
+    wait_for("tx retrying", || fake.would_block_count() >= 3);
+    std::thread::sleep(Duration::from_millis(150));
+    // Ограниченное ожидание: без backoff 100_000 попыток кончились бы
+    // за миллисекунды (CPU spin) и пошли бы отправки.
+    assert!(
+        fake.would_block_count() < 2_000,
+        "busy retry loop: {} attempts in ~150ms",
+        fake.would_block_count()
+    );
+    assert_eq!(fake.sent_count(), 0, "cursor must not advance");
+    (p, fake, h)
+}
+
+#[test]
+fn persistent_would_block_waits_between_attempts_and_pause_completes() {
+    let (_p, fake, h) = persistent_would_block();
+    let t = Instant::now();
+    h.pause();
+    wait_for("tx quiet after pause", || {
+        let c = fake.send_calls();
+        std::thread::sleep(Duration::from_millis(20));
+        c == fake.send_calls()
+    });
+    assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    let o = join_within(h, Duration::from_secs(5));
+    assert_eq!(o.reason, Reason::Paused);
+    assert_eq!(o.progress.sent, 0);
+    assert_eq!(o.progress.next_index, 0);
+    assert_eq!(fake.sent_count(), 0);
+}
+
+#[test]
+fn persistent_would_block_waits_between_attempts_and_stop_completes() {
+    let (_p, fake, h) = persistent_would_block();
+    let t = Instant::now();
+    h.stop();
+    let o = h.join().unwrap();
+    assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    assert_eq!(o.reason, Reason::Stopped);
+    assert_eq!(o.progress.next_index, 0);
+    assert_eq!(fake.sent_count(), 0);
+    assert_eq!(fake.alive_handles(), 0);
+}
+
 #[test]
 fn uncertain_send_fails_without_checkpoint_or_retry() {
     let p = plan(1_000_000.0, 1);

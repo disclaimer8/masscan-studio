@@ -20,6 +20,19 @@ cargo run -p rmasscan-cli -- --echo
 На этапе 0 CLI является заглушкой: поддерживается только `--version`. Опция
 `--echo` появится на этапе 1.
 
+## Проверка «без C в сборке»
+
+Граф сборки не должен содержать C-тулчейн (`cc`, `cmake`, `bindgen`,
+`pkg-config`, libpcap). Проверяют два механизма: интеграционный тест
+`crates/rmasscan-core/tests/no_c_in_build.rs` (`cargo tree -e normal,build`) и
+`cargo deny`. Точные команды для CI:
+
+```bash
+cargo install --locked cargo-deny@0.20.2
+cargo deny check bans licenses sources
+cargo test -p rmasscan-core --test no_c_in_build
+```
+
 ## Ограничения
 
 Raw-сокеты и сеть не используются на этапах 0–1. Повышенные привилегии не

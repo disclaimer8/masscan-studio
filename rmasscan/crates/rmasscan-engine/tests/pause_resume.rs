@@ -261,6 +261,9 @@ fn full_result_queue_fails_and_never_offers_a_checkpoint() {
     let mut o = opts();
     o.result_capacity = 2;
     let h = start_manual(&p, &fake, &clock, o);
+    // Не читаем до terminal outcome: ранний drain может освободить место
+    // и превратить сценарий переполнения в успешное завершение.
+    wait_for("overflow outcome", || h.outcome().is_some());
     let events = drain_to_finished(&h);
     // Очередь на 2 ответа переполнена: Failed, а не успешная пауза/checkpoint.
     assert!(matches!(
@@ -269,6 +272,7 @@ fn full_result_queue_fails_and_never_offers_a_checkpoint() {
             reason: Reason::Failed(FailReason::ConsumerTooSlow)
         })
     ));
+    assert_eq!(all_replies(&events).len(), 2);
     assert!(!has_checkpoint_event(&events));
     assert!(h.checkpoint().is_none());
     h.join().unwrap();

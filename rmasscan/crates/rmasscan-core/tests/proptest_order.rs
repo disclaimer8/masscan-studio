@@ -292,6 +292,12 @@ fn read_paused_conf_never_panics_and_roundtrips_echo() {
             let mut out2 = String::new();
             echo(&back.unwrap(), false, &mut out2);
             prop_assert_eq!(&out1, &out2);
+            // Scan/List reject seed 0 (ConfigError::ZeroSeed); the generator omits
+            // `seed` often, so validate with a non-zero seed to keep the ratio.
+            let mut conf = conf;
+            if conf.seed == 0 {
+                conf.seed = 1;
+            }
             for op in [Operation::Scan, Operation::List, Operation::Echo] {
                 if validate(&conf, op).is_ok() && op == Operation::Scan {
                     PC_VALID.fetch_add(1, Relaxed);

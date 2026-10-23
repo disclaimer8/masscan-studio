@@ -71,6 +71,10 @@ pub enum ConfigError {
     TooManyRetries(u32),
     /// Нечисловая или недопустимая скорость (main-conf.c:1880-1897; плюс
     /// отрицательные и нечисловые `f64` в `ScanConfig`).
+    /// Seed 0 для List/Scan: в C он значит "взять энтропию" (main.c:1658),
+    /// порт этого не делает, а runtime требует явный ненулевой seed.
+    #[error("seed must be non-zero for -sL and scans (0 would mean entropy in C; not ported)")]
+    ZeroSeed,
     #[error("bad rate: {0:?}")]
     BadRate(String),
     #[error("bad MAC address: {0:?}")]
@@ -142,24 +146,91 @@ impl Default for ScanConfig {
 /// `optimize`, готовые для `scan::list_scan` / `scan::transmit_scan`.
 #[derive(Debug, Clone)]
 pub struct EffectiveConfig {
-    pub operation: Operation,
-    pub massip: MassIp,
+    operation: Operation,
+    massip: MassIp,
     /// Число комбинаций IP/порт, 1..2^63.
-    pub range: u64,
-    pub seed: u64,
-    pub max_rate: f64,
-    pub retries: u32,
-    pub shard: Shard,
-    pub resume_index: u64,
-    pub resume_count: Option<u64>,
-    pub blackrock_rounds: u32,
-    pub wait_secs: u32,
-    pub adapter_ip: Option<u32>,
-    pub adapter_mac: Option<[u8; 6]>,
-    pub router_mac: Option<[u8; 6]>,
-    pub source_port: Option<(u16, u16)>,
-    pub adapter_name: Option<String>,
-    pub offline: bool,
+    /// Нормализованные (optimize) исходные цели и исключения до
+    /// `apply_excludes`: нужны для идентичности скана, в отличие от `massip`.
+    source_targets: MassIp,
+    source_excludes: MassIp,
+    range: u64,
+    seed: u64,
+    max_rate: f64,
+    retries: u32,
+    shard: Shard,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    blackrock_rounds: u32,
+    wait_secs: u32,
+    adapter_ip: Option<u32>,
+    adapter_mac: Option<[u8; 6]>,
+    router_mac: Option<[u8; 6]>,
+    source_port: Option<(u16, u16)>,
+    adapter_name: Option<String>,
+    offline: bool,
+}
+
+impl EffectiveConfig {
+    pub fn operation(&self) -> Operation {
+        self.operation
+    }
+    pub fn range(&self) -> u64 {
+        self.range
+    }
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+    pub fn max_rate(&self) -> f64 {
+        self.max_rate
+    }
+    pub fn retries(&self) -> u32 {
+        self.retries
+    }
+    pub fn shard(&self) -> Shard {
+        self.shard
+    }
+    pub fn resume_index(&self) -> u64 {
+        self.resume_index
+    }
+    pub fn resume_count(&self) -> Option<u64> {
+        self.resume_count
+    }
+    pub fn blackrock_rounds(&self) -> u32 {
+        self.blackrock_rounds
+    }
+    pub fn wait_secs(&self) -> u32 {
+        self.wait_secs
+    }
+    pub fn adapter_ip(&self) -> Option<u32> {
+        self.adapter_ip
+    }
+    pub fn adapter_mac(&self) -> Option<[u8; 6]> {
+        self.adapter_mac
+    }
+    pub fn router_mac(&self) -> Option<[u8; 6]> {
+        self.router_mac
+    }
+    pub fn source_port(&self) -> Option<(u16, u16)> {
+        self.source_port
+    }
+    pub fn offline(&self) -> bool {
+        self.offline
+    }
+    pub fn adapter_name(&self) -> Option<&str> {
+        self.adapter_name.as_deref()
+    }
+    /// Итоговый набор (исключения применены, optimize).
+    pub fn massip(&self) -> &MassIp {
+        &self.massip
+    }
+    /// Исходные цели, нормализованные, без исключений.
+    pub fn source_targets(&self) -> &MassIp {
+        &self.source_targets
+    }
+    /// Исходные исключения, нормализованные.
+    pub fn source_excludes(&self) -> &MassIp {
+        &self.source_excludes
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -300,6 +371,9 @@ pub fn parse_source_port(value: &str) -> Result<(u16, u16), ConfigError> {
 /// `--echo -p80` (без целей), `--echo 0.0.0.0/0 -p80` и случай "всё
 /// исключено" в C завершаются кодом 0. Возвращаемый `range` может быть 0.
 ///
+/// `seed == 0` отвергается для List и Scan ([`ConfigError::ZeroSeed`], после
+/// остальных проверок); Echo его принимает, как раньше.
+///
 /// Пустая цель при `-sL` в C — бесконечный цикл в `blackrock_init`
 /// (crypto-blackrock.c:117-120, :151-152), здесь `EmptyTargets`.
 pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, ConfigError> {
@@ -316,6 +390,10 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
 
     let mut massip = cfg.targets.clone();
     let mut excludes = cfg.excludes.clone();
+    let mut source_targets = massip.clone();
+    source_targets.optimize();
+    let mut source_excludes = excludes.clone();
+    source_excludes.optimize();
     let has_addresses = !massip.ipv4().is_empty(); // main.c:1671
     let has_ports = !massip.ports().is_empty(); // main.c:1672
     massip.apply_excludes(&mut excludes);
@@ -327,7 +405,7 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
     massip.try_range()?;
 
     if op == Operation::Echo {
-        return Ok(effective(cfg, op, massip));
+        return Ok(effective(cfg, op, massip, source_targets, source_excludes));
     }
 
     if op == Operation::List && massip.ports().is_empty() {
@@ -356,13 +434,27 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
         return Err(ConfigError::ExcludeRequired);
     }
 
-    Ok(effective(cfg, op, massip))
+    // Только runtime-операции (List, Scan); Echo вернулся выше и seed 0 держит.
+    // Проверка после остальных, чтобы порядок прежних ошибок не менялся.
+    if cfg.seed == 0 {
+        return Err(ConfigError::ZeroSeed);
+    }
+
+    Ok(effective(cfg, op, massip, source_targets, source_excludes))
 }
 
-fn effective(cfg: &ScanConfig, op: Operation, massip: MassIp) -> EffectiveConfig {
+fn effective(
+    cfg: &ScanConfig,
+    op: Operation,
+    massip: MassIp,
+    source_targets: MassIp,
+    source_excludes: MassIp,
+) -> EffectiveConfig {
     EffectiveConfig {
         operation: op,
         range: massip.range(),
+        source_targets,
+        source_excludes,
         massip,
         seed: cfg.seed,
         max_rate: cfg.max_rate,
@@ -793,7 +885,10 @@ mod tests {
     use crate::scan::list_scan_indices;
 
     fn cfg_with(targets_s: &str, ports_s: &str) -> ScanConfig {
-        let mut cfg = ScanConfig::default();
+        let mut cfg = ScanConfig {
+            seed: 1, // List/Scan require a non-zero seed
+            ..ScanConfig::default()
+        };
         if !targets_s.is_empty() {
             targets::add_target_string(cfg.targets.ipv4_mut(), targets_s).unwrap();
         }
@@ -801,6 +896,43 @@ mod tests {
             targets::parse_ports(cfg.targets.ports_mut(), ports_s).unwrap();
         }
         cfg
+    }
+
+    #[test]
+    fn zero_seed_rejected_for_runtime_ops_but_not_echo() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.seed = 0;
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ZeroSeed);
+        assert_eq!(err(&cfg, Operation::List), ConfigError::ZeroSeed);
+        assert!(validate(&cfg, Operation::Echo).is_ok());
+        // Earlier errors keep their order over ZeroSeed.
+        assert_eq!(
+            err(
+                &{
+                    let mut c = cfg_with("", "80");
+                    c.seed = 0;
+                    c
+                },
+                Operation::Scan
+            ),
+            ConfigError::EmptyTargets
+        );
+        cfg.seed = 1;
+        assert!(validate(&cfg, Operation::Scan).is_ok());
+        assert!(validate(&cfg, Operation::List).is_ok());
+    }
+
+    #[test]
+    fn effective_keeps_normalized_source_ranges_apart_from_final_set() {
+        let mut cfg = cfg_with("10.0.0.0/30,10.0.0.2", "80");
+        cfg.seed = 1;
+        exclude(&mut cfg, "10.0.0.0/31");
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        assert_eq!(eff.massip().count_ipv4s(), 2);
+        assert_eq!(eff.source_targets().count_ipv4s(), 4);
+        assert_eq!(eff.source_targets().ipv4().len(), 1); // optimized: merged
+        assert_eq!(eff.source_excludes().count_ipv4s(), 2);
+        assert_eq!(eff.range(), 2);
     }
 
     fn exclude(cfg: &mut ScanConfig, s: &str) {
@@ -1010,7 +1142,10 @@ mod tests {
 
     #[test]
     fn validate_accepts_largest_63_bit_range() {
-        let mut cfg = ScanConfig::default();
+        let mut cfg = ScanConfig {
+            seed: 1,
+            ..ScanConfig::default()
+        };
         cfg.targets.ipv4_mut().add_range(0, u32::MAX);
         cfg.targets.ports_mut().add_range(0, 0x7fff_fffe);
         exclude(&mut cfg, "255.255.255.255");

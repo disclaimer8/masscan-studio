@@ -8,6 +8,7 @@ pub mod config;
 pub mod cookie;
 pub mod massip;
 pub mod packet;
+pub mod probe;
 pub mod ranges;
 pub mod scan;
 pub mod targets;

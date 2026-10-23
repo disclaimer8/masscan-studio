@@ -19,11 +19,6 @@ MAX_FULL=$((1024*1024))   # commit full output only if <= 1 MiB
 HEAD_LINES=2000
 mkdir -p "$ORACLE_DIR"
 
-# masscan reads /etc/masscan/masscan.conf before argv (main.c ~1627) for every operation.
-if [ -e /etc/masscan/masscan.conf ]; then
-  echo "FATAL: /etc/masscan/masscan.conf exists; it would silently alter every fixture" >&2; exit 2
-fi
-
 # ---- network isolation -----------------------------------------------------
 if unshare -rn true 2>/dev/null; then
   NS=(unshare -rn); NS_KIND="unshare -rn"
@@ -40,6 +35,12 @@ ns_links=$("${NS[@]}" ip -o link) || { echo "FATAL: 'ip -o link' failed inside n
 echo "$ns_links" | grep -q ': lo:' || { echo "FATAL: namespace has no lo" >&2; exit 2; }
 [ "$(echo "$ns_links" | grep -vc ': lo:' || true)" = "0" ] || { echo "FATAL: namespace has interfaces besides lo" >&2; exit 2; }
 echo "[*] isolation: $NS_KIND"
+
+# masscan reads /etc/masscan/masscan.conf before argv (main.c ~1627) for every operation.
+# Checked inside the namespace wrapper because masscan runs as root there.
+if "${NS[@]}" test -e /etc/masscan/masscan.conf; then
+  echo "FATAL: /etc/masscan/masscan.conf exists; it would silently alter every fixture" >&2; exit 2
+fi
 
 # ---- clone / verify / build ------------------------------------------------
 if [ ! -d "$SRC/.git" ]; then
@@ -132,14 +133,13 @@ sL slash24_p80_seed1_retries2_rate1000 10.0.0.0/24 -p80 --seed 1 --retries 2 --r
 sL multirange_ports_seed7   10.0.0.0/30,172.16.5.0-172.16.5.9 -p22,80,443,8000-8003 --seed 7
 sL exclude_list_seed3       10.1.0.0/28 -p80,443 --exclude 10.1.0.4/30 --seed 3
 sL ipv6_slash126_p80_seed1  2001:db8::/126 -p80 --seed 1
-# edge cases: blackrock_init special-cases ranges 0-5 (crypto-blackrock.c:116-133)
+# edge cases: blackrock_init special-cases ranges 0-8 (table at crypto-blackrock.c:116-148)
 sL single_ip_p80_seed1      10.0.0.1 -p80 --seed 1
 sL slash31_p80_seed1        10.0.0.0/31 -p80 --seed 1
 sL range3_p80_seed1         10.0.0.0-10.0.0.2 -p80 --seed 1
 sL slash30_allports_seed1   10.0.0.0/30 -p0-65535 --seed 1
 sL ipv6_slash126_p80-443_seed1 2001:db8::/126 -p80,443 --seed 1
 
-# ---- --echo matrix ----
 # ---- --echo matrix ---------------------------------------------------------
 # NOTE: without --seed, masscan picks a random seed and --echo prints it, so every case pins --seed.
 ec() { local name=$1; shift
@@ -160,6 +160,7 @@ paused() { local name=$1; shift
   # shellcheck disable=SC2016
   "${NS[@]}" bash -c 'cd "$1"; shift; timeout -s KILL 40 timeout -s INT 2 "$@" >/dev/null 2>&1 || true' _ "$d" "$BIN_OFF" "$@" --offline "${ADAPT[@]}" --rate 1000 --wait 0
   [ "$(id -u)" = 0 ] || sudo -n chown -R "$(id -u):$(id -g)" "$d" 2>/dev/null || true
+  sudo -n pkill -KILL -x masscan 2>/dev/null || true   # leftover from the KILL guard
   [ -f "$d/paused.conf" ] || { echo "FATAL: no paused.conf for $name" >&2; exit 4; }
   cp "$d/paused.conf" "$OUT/paused/$name.conf"; rm -rf "$d"
   local sha; sha=$(sha256sum <"$OUT/paused/$name.conf"|cut -d' ' -f1)
@@ -182,7 +183,7 @@ CPU_MODEL=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -1)
 
 # ---- manifest --------------------------------------------------------------
 BIN_OFF_SHA="$BIN_OFF_SHA" python3 - "$OUT" "$PIN" "$VERSION" "$BIN_SHA" "$NS_KIND" "$WALL" "$BENCH_TOTAL" "$CPU_MODEL" "$(printf '%q ' "${BENCH_CMD[@]}")" <<'PY'
-import sys, json, subprocess, datetime, os, shlex
+import sys, json, subprocess, datetime, os
 out, pin, version, binsha, nskind, wall, total, cpu = sys.argv[1:9]
 bench_cmd = sys.argv[9]
 def sh(c): return subprocess.check_output(c, shell=True, text=True).strip()
@@ -195,7 +196,12 @@ KEYS = ["file","mode","args","binary","line_count","sha256","truncated","size_by
 cases = [{k: c.get(k) for k in KEYS} for c in cases]
 for c in cases:
     assert os.path.isfile(os.path.join(out, c["file"])), c["file"]
-    assert {"line_count","sha256","truncated"} <= set(c), c["file"]
+    if c["mode"] == "paused":
+        need = ("line_count", "sha256")
+    else:
+        need = ("line_count", "sha256", "truncated")
+    for k in need:
+        assert c[k] is not None, (c["file"], k)
 m = {
   "masscan_git_head": pin,
   "masscan_version": version,

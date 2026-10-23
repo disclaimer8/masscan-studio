@@ -42,10 +42,10 @@ fn for_each_probe(
 ) -> Result<(), String> {
     let missing =
         |o: &str| format!("--offline --packet-trace needs {o} (stage 1 has no adapter discovery)");
-    let ip_me0 = eff.adapter_ip.ok_or_else(|| missing("--adapter-ip"))?;
-    let adapter_mac = eff.adapter_mac.ok_or_else(|| missing("--adapter-mac"))?;
-    let router_mac = eff.router_mac.ok_or_else(|| missing("--router-mac"))?;
-    let (first, last) = eff.source_port.ok_or_else(|| {
+    let ip_me0 = eff.adapter_ip().ok_or_else(|| missing("--adapter-ip"))?;
+    let adapter_mac = eff.adapter_mac().ok_or_else(|| missing("--adapter-mac"))?;
+    let router_mac = eff.router_mac().ok_or_else(|| missing("--router-mac"))?;
+    let (first, last) = eff.source_port().ok_or_else(|| {
         "--offline --packet-trace needs --source-port (C picks 40000 + time(0) % 20000, \
          which is not deterministic)"
             .to_string()
@@ -55,20 +55,20 @@ fn for_each_probe(
     let port_mask = u32::from(last - first);
     let ipv4_mask = 0u32;
     let tmpl = TcpSynTemplate::new(adapter_mac, router_mac, LinkType::Ethernet);
-    let entropy = eff.seed;
+    let entropy = eff.seed();
     let mut frame = Vec::new();
     let mut err: Option<String> = None;
     transmit_scan(
-        &eff.massip,
-        eff.seed,
-        eff.blackrock_rounds,
-        eff.shard,
+        eff.massip(),
+        eff.seed(),
+        eff.blackrock_rounds(),
+        eff.shard(),
         1,
         0,
-        eff.resume_index,
-        eff.resume_count,
-        eff.retries,
-        eff.max_rate,
+        eff.resume_index(),
+        eff.resume_count(),
+        eff.retries(),
+        eff.max_rate(),
         |i, repeats, xxx, ip_them, port_them| {
             if err.is_some() {
                 return;
@@ -176,17 +176,17 @@ fn run(cli: &Cli, out: &mut dyn Write) -> Result<(), String> {
     }
     if cli.list {
         let eff = validate(&cfg, Operation::List).map_err(|e| e.to_string())?;
-        let single_port = eff.massip.count_ports() == 1;
+        let single_port = eff.massip().count_ports() == 1;
         let mut res = Ok(());
         list_scan(
-            &eff.massip,
-            eff.seed,
-            eff.blackrock_rounds,
-            eff.shard,
-            eff.resume_index,
-            eff.resume_count,
-            eff.retries,
-            eff.max_rate,
+            eff.massip(),
+            eff.seed(),
+            eff.blackrock_rounds(),
+            eff.shard(),
+            eff.resume_index(),
+            eff.resume_count(),
+            eff.retries(),
+            eff.max_rate(),
             |ip, port| {
                 if res.is_ok() {
                     let mut line = format_list_line(ip, port, single_port);
@@ -250,6 +250,38 @@ mod tests {
         let out = run_args(&["rmasscan", "-sL", "10.0.0.0/30", "-p80", "--seed", "1"]).unwrap();
         assert!(out.lines().all(|l| !l.contains(':')));
         assert_eq!(out.lines().count(), 4);
+    }
+
+    #[test]
+    fn list_scan_with_non_terminating_retries_is_an_error_not_a_hang() {
+        let e = run_args(&[
+            "rmasscan",
+            "-sL",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            "--retries",
+            "1",
+        ])
+        .unwrap_err();
+        assert!(
+            e.contains("never terminate") && e.contains("--retries"),
+            "{e}"
+        );
+        // Golden-backed retries cases keep working (456 lines, see differential.rs).
+        let out = run_args(&[
+            "rmasscan",
+            "-sL",
+            "10.0.0.0/24",
+            "-p80",
+            "--seed",
+            "1",
+            "--retries",
+            "2",
+        ])
+        .unwrap();
+        assert_eq!(out.lines().count(), 456);
     }
 
     #[test]
@@ -417,16 +449,16 @@ mod tests {
         // Independent recomputation of main.c:373-393 from transmit_scan's own indices.
         let mut expected = Vec::new();
         transmit_scan(
-            &eff.massip,
-            eff.seed,
-            eff.blackrock_rounds,
-            eff.shard,
+            eff.massip(),
+            eff.seed(),
+            eff.blackrock_rounds(),
+            eff.shard(),
             1,
             0,
-            eff.resume_index,
-            eff.resume_count,
-            eff.retries,
-            eff.max_rate,
+            eff.resume_index(),
+            eff.resume_count(),
+            eff.retries(),
+            eff.max_rate(),
             |i, repeats, xxx, ip, port| {
                 let n = i.wrapping_add(repeats);
                 let ck = syn_cookie_ipv4(

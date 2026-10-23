@@ -100,6 +100,36 @@ impl BlackRock {
         c
     }
 
+    /// Размер области перестановки `a*b` (всегда больше `range`).
+    pub fn domain(&self) -> u64 {
+        self.a.wrapping_mul(self.b)
+    }
+
+    /// Как [`BlackRock::shuffle`], но возвращает `None` там, где C зациклился
+    /// бы навсегда (cycle-walk :268-276 не доходит до значения `< range`).
+    ///
+    /// Точное условие. После первого `ENCRYPT` значение лежит в области
+    /// `[0, a*b)` (для `rounds >= 2` даже при `m >= a*b`), а на области `ENCRYPT`
+    /// есть перестановка Фейстеля. Значений `>= range` в области ровно
+    /// `h = a*b - range`; если подряд больше `h` шагов остаются `>= range`,
+    /// значение повторилось, т.е. цикл целиком лежит выше `range` и выхода
+    /// нет. При `rounds < 2` и `m >= a*b` значение никогда не возвращается в
+    /// область (`rounds == 0` — тождество, `rounds == 1` даёт `>= a*b`); те же
+    /// `h + 2` шагов это ловят. Индексы `m < range` всегда завершаются.
+    pub fn shuffle_bounded(&self, m: u64) -> Option<u64> {
+        let h = self.domain().saturating_sub(self.range);
+        let mut c = encrypt(self.rounds, self.a, self.b, m, self.seed);
+        let mut steps = 0u64;
+        while c >= self.range {
+            if steps > h.saturating_add(1) {
+                return None;
+            }
+            c = encrypt(self.rounds, self.a, self.b, c, self.seed);
+            steps += 1;
+        }
+        Some(c)
+    }
+
     /// `blackrock_unshuffle`, :282.
     pub fn unshuffle(&self, m: u64) -> u64 {
         let mut c = unencrypt(self.rounds, self.a, self.b, m, self.seed);
@@ -175,6 +205,33 @@ fn unencrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shuffle_bounded_is_exact_for_small_ranges() {
+        let mut stuck = 0;
+        for range in 1..60u64 {
+            for rounds in 0..5u32 {
+                for seed in [1u64, 7] {
+                    let br = BlackRock::new(range, seed, rounds);
+                    for m in 0..400u64 {
+                        match br.shuffle_bounded(m) {
+                            Some(c) => assert_eq!(c, br.shuffle(m)),
+                            None => {
+                                stuck += 1;
+                                // Really stuck: far more steps than the domain never escape.
+                                let mut c = m;
+                                for _ in 0..1_000 {
+                                    c = encrypt(rounds, br.a, br.b, c, seed);
+                                    assert!(c >= range, "range {range} rounds {rounds} m {m}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(stuck > 0);
+    }
 
     #[test]
     fn shuffle_unshuffle_round_trip() {

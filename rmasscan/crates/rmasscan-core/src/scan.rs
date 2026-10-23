@@ -42,6 +42,13 @@ pub enum ScanError {
     ZeroShard,
     #[error(transparent)]
     BlackRock(#[from] BlackRockError),
+    /// `-sL` с `retries > 0`: индекс `index >= range` не выходит из cycle-walk
+    /// BlackRock (в C бесконечный цикл, crypto-blackrock.c:268-276).
+    #[error(
+        "-sL with retries would never terminate: index {index} does not shuffle into the \
+         target range (use --retries 0, or a different --rate/--seed/--blackrock-rounds)"
+    )]
+    NonTerminating { index: u64 },
 }
 
 /// Строка `-sL` (main-listscan.c:53-62, только IPv4): при ровно одном порте
@@ -90,6 +97,19 @@ pub fn list_scan_indices(
     retries: u32,
     max_rate: f64,
 ) -> impl Iterator<Item = u64> {
+    let (i, end, increment) =
+        list_bounds(range, shard, resume_index, resume_count, retries, max_rate);
+    ListIndices { i, end, increment }
+}
+
+fn list_bounds(
+    range: u64,
+    shard: Shard,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+    max_rate: f64,
+) -> (u64, u64, u64) {
     assert!(shard.of != 0, "shard.of must be non-zero");
     // :31 `resume.index + (shard.one-1)`: `shard.one-1` — unsigned (32 бита).
     let start = resume_index.wrapping_add(u64::from(shard.one.wrapping_sub(1)));
@@ -104,11 +124,7 @@ pub fn list_scan_indices(
     // :35 `end += (uint64_t)(retries * max_rate)`: умножение в double
     // (unsigned * double), затем усечение; max_rate, не range.
     end = end.wrapping_add((f64::from(retries) * max_rate) as u64);
-    ListIndices {
-        i: start,
-        end,
-        increment: u64::from(shard.of), // :14
-    }
+    (start, end, u64::from(shard.of)) // :14
 }
 
 /// Итератор transmit (main.c:280-333, :421-424).
@@ -222,6 +238,26 @@ pub fn list_scan<F: FnMut(u32, u32)>(
         return Err(ScanError::ZeroShard);
     }
     let blackrock = BlackRock::try_new(range, seed, rounds)?; // :29
+    // Индексы `>= range` бывают только из-за `retries * max_rate` (:35). Их
+    // cycle-walk может не завершиться; проверяем ДО первого вывода.
+    let (start, end, inc) =
+        list_bounds(range, shard, resume_index, resume_count, retries, max_rate);
+    if end > range {
+        let mut i = start;
+        if i < range {
+            // первый индекс шага не меньше `range`
+            i = i.saturating_add((range - i).div_ceil(inc).saturating_mul(inc));
+        }
+        while i < end {
+            if blackrock.shuffle_bounded(i).is_none() {
+                return Err(ScanError::NonTerminating { index: i });
+            }
+            i = i.wrapping_add(inc);
+            if i < inc {
+                break;
+            }
+        }
+    }
     for i in list_scan_indices(range, shard, resume_index, resume_count, retries, max_rate) {
         let x = blackrock.shuffle(i); // :42
         let (ip, port) = massip.pick(x); // :44
@@ -439,6 +475,32 @@ mod tests {
             list_scan(&t, 1, 64, ONE, 0, None, 0, 100.0, |_, _| ()),
             Err(ScanError::BlackRock(BlackRockError::TooManyRounds))
         );
+    }
+
+    #[test]
+    fn list_scan_with_retries_that_cannot_terminate_errors_before_any_emit() {
+        // Range 4, retries 1, rate 100: extra indices 4..104 contain one whose
+        // cycle-walk never returns below range (C hangs; the CLI used to hang).
+        let t = massip("10.0.0.0/30", "80");
+        let r = list_scan(&t, 1, 14, ONE, 0, None, 1, 100.0, |_, _| panic!("no emit"));
+        assert!(
+            matches!(r, Err(ScanError::NonTerminating { index }) if index >= 4),
+            "{r:?}"
+        );
+        // rounds 0 is the identity: any index >= range is stuck.
+        let r = list_scan(&t, 1, 0, ONE, 0, None, 1, 100.0, |_, _| panic!("no emit"));
+        assert!(matches!(r, Err(ScanError::NonTerminating { .. })), "{r:?}");
+    }
+
+    #[test]
+    fn list_scan_retries_golden_cases_still_terminate() {
+        // listscan/slash24_p80_seed1_retries2*.txt: 456 and 2256 lines.
+        let t = massip("10.0.0.0/24", "80");
+        for (rate, lines) in [(100.0, 456usize), (1000.0, 2256)] {
+            let mut n = 0;
+            list_scan(&t, 1, 14, ONE, 0, None, 2, rate, |_, _| n += 1).unwrap();
+            assert_eq!(n, lines);
+        }
     }
 
     #[test]

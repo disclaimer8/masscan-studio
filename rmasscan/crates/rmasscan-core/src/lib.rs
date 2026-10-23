@@ -5,6 +5,7 @@
 pub mod blackrock;
 pub mod checksum;
 pub mod cookie;
+pub mod massip;
 pub mod ranges;
 pub mod targets;
 

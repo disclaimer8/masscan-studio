@@ -8,6 +8,7 @@ pub mod cookie;
 pub mod massip;
 pub mod packet;
 pub mod ranges;
+pub mod scan;
 pub mod targets;
 
 /// Версия masscan, с которой сверяется порт.

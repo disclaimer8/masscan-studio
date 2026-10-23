@@ -1,6 +1,8 @@
-//! SipHash-2-4 и SYN-cookie (AGPL-3.0). Порт `src/crypto-siphash24.c` и
-//! `syn_cookie_ipv4` из `src/syn-cookie.c:135`, masscan © Robert David Graham
-//! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
+//! SYN-cookie (AGPL-3.0). Порт `syn_cookie_ipv4` из `src/syn-cookie.c:135`,
+//! masscan © Robert David Graham (github.com/robertdavidgraham/masscan,
+//! HEAD 8e6b3b0). SipHash-2-4 берётся из крейта `siphasher`; C-референс
+//! `crypto-siphash24.c` (Aumasson/Bernstein, CC0) использован только как
+//! источник тестовых векторов.
 
 use siphasher::sip::SipHasher24;
 use std::hash::Hasher;
@@ -15,18 +17,20 @@ pub fn siphash24(data: &[u8], k0: u64, k1: u64) -> u64 {
 /// syn-cookie.c:135-151.
 pub fn syn_cookie_ipv4(
     ip_them: u32,
-    port_them: u16,
+    port_them: u32,
     ip_me: u32,
-    port_me: u16,
+    port_me: u32,
     entropy: u64,
 ) -> u64 {
+    // Порты - `unsigned` (syn-cookie.c:135-136): передающий путь подаёт
+    // `(unsigned)(i>>32)` (main.c:379-381), значения бывают >= 0x10000.
     // `unsigned data[4]` в C хэшируется как есть, в порядке байтов хоста;
     // все целевые платформы - LE, поэтому пишем `to_le_bytes` явно.
     let mut data = [0u8; 16];
     data[0..4].copy_from_slice(&ip_them.to_le_bytes());
-    data[4..8].copy_from_slice(&u32::from(port_them).to_le_bytes());
+    data[4..8].copy_from_slice(&port_them.to_le_bytes());
     data[8..12].copy_from_slice(&ip_me.to_le_bytes());
-    data[12..16].copy_from_slice(&u32::from(port_me).to_le_bytes());
+    data[12..16].copy_from_slice(&port_me.to_le_bytes());
     // x[0] = x[1] = entropy (syn-cookie.c:142-143).
     siphash24(&data, entropy, entropy)
 }
@@ -123,15 +127,29 @@ mod tests {
     #[test]
     fn syn_cookie_assembles_four_u32_le() {
         let (ip_them, port_them, ip_me, port_me, e) =
-            (0x0102_0304u32, 80u16, 0x0a00_0001u32, 40000u16, 42u64);
+            (0x0102_0304u32, 80u32, 0x0a00_0001u32, 40000u32, 42u64);
         let mut buf = Vec::new();
         buf.extend_from_slice(&ip_them.to_le_bytes());
-        buf.extend_from_slice(&u32::from(port_them).to_le_bytes());
+        buf.extend_from_slice(&port_them.to_le_bytes());
         buf.extend_from_slice(&ip_me.to_le_bytes());
-        buf.extend_from_slice(&u32::from(port_me).to_le_bytes());
+        buf.extend_from_slice(&port_me.to_le_bytes());
         assert_eq!(
             syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, e),
             siphash24(&buf, e, e)
+        );
+    }
+
+    #[test]
+    fn syn_cookie_matches_c_values() {
+        // C-значения (harness h2.c, syn-cookie.c:135).
+        assert_eq!(
+            syn_cookie_ipv4(0x3f90be80, 16381, 0xc865b4c2, 3883, 0xfecee737556609f5),
+            0xc848fad24e7fea49
+        );
+        // Порты > 0xFFFF не усекаются.
+        assert_eq!(
+            syn_cookie_ipv4(0x0a000001, 0x12345, 0x0a000002, 0x1ffff, 42),
+            0xd6a80d10620028da
         );
     }
 }

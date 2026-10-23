@@ -11,6 +11,8 @@ multiple-versions = "warn"
 wildcards = "deny"
 # path-зависимости внутри workspace не считаются wildcard (publish = false).
 allow-wildcard-paths = true
+# Быстрая вторичная копия списка: crates/rmasscan-core/tests/no_c_in_build.rs (BANNED).
+# Авторитетный барьер здесь; при правке синхронизировать оба места.
 deny = [
     { crate = "cc", reason = "компилирует C в сборке (спека §6.1)" },
     { crate = "cmake", reason = "вызывает C/C++ тулчейн" },
@@ -19,6 +21,8 @@ deny = [
     { crate = "pcap", reason = "линкует libpcap (спека §5.2, отклонён)" },
     { crate = "pnet", reason = "Windows-бэкенд линкует Packet.lib (спека §5.2)" },
     { crate = "pnet_datalink", reason = "Windows-бэкенд линкует Packet.lib (спека §5.2)" },
+    { crate = "pcap-sys", reason = "линкует libpcap (спека §5.2, отклонён)" },
+    { crate = "libpcap-sys", reason = "линкует libpcap (спека §5.2, отклонён)" },
     { crate = "pnet_sys", reason = "Windows-бэкенд линкует Packet.lib (спека §5.2)" },
     { crate = "openssl", reason = "нет TLS-крипто в v1 (спека §6.2)" },
     { crate = "openssl-sys" },
@@ -26,6 +30,34 @@ deny = [
     { crate = "aws-lc-rs", reason = "C/asm крипто не нужны (спека §6.2)" },
     { crate = "libfuzzer-sys", reason = "libFuzzer C++; fuzzing не на этапах 0–1 (спека §12 вопрос 3)" },
 ]
+
+# Build-скрипты и бинарные артефакты в графе. Любой новый crate с build.rs,
+# исполняемым файлом или архивом ломает проверку, пока его не рассмотрят вручную.
+[bans.build]
+allow-build-scripts = [
+    # Только версионно-детекторы/генераторы cfg, C-кода не компилируют.
+    { name = "proc-macro2", version = "=1.0.107" },
+    { name = "quote", version = "=1.0.47" },
+    { name = "serde", version = "=1.0.229" },
+    { name = "serde_core", version = "=1.0.229" },
+    { name = "serde_json", version = "=1.0.154" },
+    { name = "thiserror", version = "=2.0.21" },
+    { name = "num-traits", version = "=0.2.19" },
+    { name = "zmij", version = "=1.0.23" },
+    # sha2 -> digest -> generic-array: build.rs только вызывает version_check и
+    # выставляет cfg relaxed_coherence; C не компилируется (проверено чтением build.rs).
+    { name = "generic-array", version = "=0.14.7" },
+    # Выбор cfg под платформу (линковка с ОС, а не компиляция C).
+    { name = "libc", version = "=0.2.191" },
+    { name = "rustix", version = "=1.1.5" },
+    { name = "getrandom", version = "=0.4.3" },
+]
+# windows-sys 0.61.2 и windows-link 0.2.1 (системные import-библиотеки, Rust
+# raw-dylib) не имеют build.rs, исполняемых файлов и архивов, поэтому
+# исключений для windows-* нет. Если версия начнёт поставлять .lib, проверка
+# упадёт, и исключение надо добавить адресно (name + version).
+executables = "deny"
+include-archives = true
 
 [licenses]
 confidence-threshold = 0.93

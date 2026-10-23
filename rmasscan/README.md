@@ -7,7 +7,8 @@
 Документы:
 
 - спека: `docs/superpowers/specs/2026-10-23-masscan-rust-port-design.md`
-- планы этапов 0–1: `docs/superpowers/plans/`
+- планы этапов 0–2A: `docs/superpowers/plans/`
+- статус этапа 2A: `docs/experiments/2026-10-23-rmasscan-stage2a.md`
 - замеры скорости: [BENCHMARKS.md](BENCHMARKS.md)
 - golden-фикстуры оракула: [tests/golden/README.md](tests/golden/README.md)
 
@@ -42,8 +43,10 @@ cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 
   (IPv4, CIDR, диапазон), без остальных форм C.
 - Осознанные отказы парсера там, где C молча принимает ввод: перевёрнутый диапазон,
   завершающая точка, пустой CIDR, пустой октет, мусор в списке портов.
-- `-sL` с `--retries` > 0 может зависнуть (так же в C: main-listscan.c:35,
-  crypto-blackrock.c:268-276); передача от этого свободна.
+- `-sL` с `--retries` > 0 в C может зависнуть (main-listscan.c:35,
+  crypto-blackrock.c:268-276); `list_scan` и CLI это обнаруживают и завершаются ошибкой
+  `ScanError::NonTerminating` до любого вывода, зациклиться может только сырой
+  `list_scan_indices` с ручным shuffle-циклом. Передача от этого свободна.
 
 ## Проверка «без C в сборке»
 
@@ -55,31 +58,39 @@ cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 
 ```bash
 cargo install --locked cargo-deny@0.20.2
 cargo deny check bans licenses sources
-cargo test -p rmasscan-core --test no_c_in_build
+cargo test -p rmasscan-core --test no_c_in_build   # граф --workspace: включает engine и sha2
 ```
 
 ## Ограничения
 
-Raw-сокеты и сеть не используются на этапах 0–1. Повышенные привилегии не
-нужны.
+Raw-сокеты и сеть не используются на этапах 0–2A. Повышенные привилегии не
+нужны. Живое сканирование не работает: обычный скан без `--offline --packet-trace`
+по-прежнему не поддержан.
 
 ## Статус
+
+Этап 2A (офлайн, без сети): crate `crates/rmasscan-engine` с отменяемым runtime
+(один TX и один RX поток, Pause/Stop, ограниченные очереди), разбором недоверенных
+RX-кадров, checkpoint/resume и fake-адаптером в памяти. Тесты проверяют побайтный
+resume, остановку в пределах 1 с и ограниченную память на пространстве /0 (см.
+`docs/experiments/2026-10-23-rmasscan-stage2a.md`). Настоящий сетевой I/O
+(AF_PACKET, BPF, Npcap), golden pcap и привилегированный runner это этап 2B и
+позже; зелёный CI на трёх ОС для 2A ждёт push. BENCHMARKS.md по-прежнему
+описывает только офлайн-генерацию, не скорость передачи.
 
 Этап 1 закрыт. Критерии выхода выполнены: `-sL` и `--echo` побайтно совпадают с C,
 self-тесты C отображены на Rust (`tests/selftest_parity.rs`), передача и SYN покрыты
 тестами и дифференциалами с C, генерация offline около 0.96–0.99 от C на minipc
 (см. BENCHMARKS.md), C в графе сборки нет.
 
-Не закрыто: зелёный CI на трёх ОС, для него нужен push.
+CI зелёный на трёх ОС.
 
 Первые задачи этапа 2:
 
 - API сканирования: ранний выход (`ControlFlow`) и колбэк со структурой `Probe`, принимающий
-  `&EffectiveConfig`; перенос шага source-port/cookie/frame из CLI в core; приватные поля
-  `EffectiveConfig`; отказ от seed 0 внутри `validate`.
-- Усиление защиты «без C»: allowlist `[bans.build] allow-build-scripts`, запрет
-  pcap-sys/libpcap-sys, `executables = "deny"`, `include-archives = true`; `no_c_in_build`
-  с `--workspace --target all` и точным сравнением первого токена.
+  `&EffectiveConfig`; перенос шага source-port/cookie/frame из CLI в core.
+  (Уже сделано в ветке: приватные поля `EffectiveConfig`, отказ от seed 0 в `validate`,
+  усиленная защита «без C».)
 - Контракт вызывающего для throttle: один `Throttler` на поток передачи, запускаемый с
   `max_rate/nic_count` после 1-секундного ожидания; одни и те же часы для `start` и
   `next_batch`; возврат 0 означает «вызвать снова»; `current_rate` публикуется через

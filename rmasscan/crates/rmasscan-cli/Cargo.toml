@@ -9,6 +9,9 @@ license.workspace = true
 name = "rmasscan"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 rmasscan-core = { path = "../rmasscan-core" }
 clap.workspace = true

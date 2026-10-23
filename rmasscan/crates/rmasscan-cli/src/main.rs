@@ -10,111 +10,55 @@ mod args;
 
 use std::io::{self, BufWriter, Write};
 use std::net::Ipv4Addr;
+use std::ops::ControlFlow;
 use std::process::ExitCode;
 use std::time::Instant;
 
 use args::Cli;
 use rmasscan_core::config::{EffectiveConfig, Operation, echo, validate};
-use rmasscan_core::cookie::syn_cookie_ipv4;
-use rmasscan_core::packet::{LinkType, TcpSynTemplate};
-use rmasscan_core::scan::{format_list_line, list_scan, transmit_scan};
+use rmasscan_core::packet::LinkType;
+use rmasscan_core::probe::{AdapterBinding, Probe, for_each_probe as core_for_each_probe};
+use rmasscan_core::scan::{format_list_line, list_scan};
 
-/// Одна отправка SYN в режиме `--offline` (main.c:371-402).
-#[cfg_attr(not(test), allow(dead_code))] // поля читают только тесты
-struct Probe<'a> {
-    ip_them: u32,
-    port_them: u16,
-    ip_me: u32,
-    port_me: u16,
-    seqno: u32,
-    frame: &'a [u8],
-}
-
-/// Поток кадров `transmit_thread` без сети: те же индексы, что в C
-/// (`transmit_scan`), SYN-cookie и порт источника как main.c:373-393.
+/// Поток кадров `transmit_thread` без сети: генерация живёт в
+/// `rmasscan_core::probe` (индексы `transmit_scan`, SYN-cookie и порт источника
+/// как main.c:373-393); здесь только разбор параметров адаптера.
 ///
 /// Требует `--adapter-ip`, `--adapter-mac`, `--router-mac` и `--source-port`:
 /// в этапе 1 нет обнаружения адаптера, а C без `--source-port` берёт
 /// `40000 + time(0) % 20000` (main.c:1316-1321), что недетерминированно.
+/// Ошибка callback останавливает генератор сразу (`ControlFlow::Break`).
 fn for_each_probe(
     eff: &EffectiveConfig,
     mut f: impl FnMut(&Probe) -> Result<(), String>,
 ) -> Result<(), String> {
     let missing =
         |o: &str| format!("--offline --packet-trace needs {o} (stage 1 has no adapter discovery)");
-    let ip_me0 = eff.adapter_ip.ok_or_else(|| missing("--adapter-ip"))?;
-    let adapter_mac = eff.adapter_mac.ok_or_else(|| missing("--adapter-mac"))?;
-    let router_mac = eff.router_mac.ok_or_else(|| missing("--router-mac"))?;
-    let (first, last) = eff.source_port.ok_or_else(|| {
+    let source_ipv4 = eff.adapter_ip().ok_or_else(|| missing("--adapter-ip"))?;
+    let source_mac = eff.adapter_mac().ok_or_else(|| missing("--adapter-mac"))?;
+    let next_hop_mac = eff.router_mac().ok_or_else(|| missing("--router-mac"))?;
+    let source_ports = eff.source_port().ok_or_else(|| {
         "--offline --packet-trace needs --source-port (C picks 40000 + time(0) % 20000, \
          which is not deterministic)"
             .to_string()
     })?;
-    // main.c:183-186: port_mask = last - first; ipv4_mask = 0, потому что
-    // --adapter-ip принимает один адрес.
-    let port_mask = u32::from(last - first);
-    let ipv4_mask = 0u32;
-    let tmpl = TcpSynTemplate::new(adapter_mac, router_mac, LinkType::Ethernet);
-    let entropy = eff.seed;
-    let mut frame = Vec::new();
-    let mut err: Option<String> = None;
-    transmit_scan(
-        &eff.massip,
-        eff.seed,
-        eff.blackrock_rounds,
-        eff.shard,
-        1,
-        0,
-        eff.resume_index,
-        eff.resume_count,
-        eff.retries,
-        eff.max_rate,
-        |i, repeats, xxx, ip_them, port_them| {
-            if err.is_some() {
-                return;
-            }
-            let (ip_me, port_me) = if ipv4_mask != 0 || port_mask != 0 {
-                let n = i.wrapping_add(repeats);
-                // main.c:379-384.
-                let ck = syn_cookie_ipv4(
-                    n as u32,
-                    (n >> 32) as u32,
-                    xxx as u32,
-                    (xxx >> 32) as u32,
-                    entropy,
-                );
-                (
-                    ip_me0.wrapping_add(((ck >> 16) as u32) & ipv4_mask),
-                    u32::from(first).wrapping_add(ck as u32 & port_mask),
-                )
-            } else {
-                (ip_me0, u32::from(first))
-            };
-            let (Ok(port_them16), Ok(port_me16)) =
-                (u16::try_from(port_them), u16::try_from(port_me))
-            else {
-                err = Some(format!(
-                    "port {port_them}/{port_me} does not fit TCP (v1 is TCP only)"
-                ));
-                return;
-            };
-            // main.c:389/:402: seqno = (unsigned)cookie.
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, entropy) as u32;
-            tmpl.build_syn(ip_them, port_them16, ip_me, port_me16, seqno, &mut frame);
-            if let Err(e) = f(&Probe {
-                ip_them,
-                port_them: port_them16,
-                ip_me,
-                port_me: port_me16,
-                seqno,
-                frame: &frame,
-            }) {
-                err = Some(e);
-            }
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    err.map_or(Ok(()), Err)
+    let binding = AdapterBinding {
+        interface_id: eff.adapter_name().unwrap_or("offline").to_string(),
+        link_type: LinkType::Ethernet,
+        source_ipv4,
+        source_mac,
+        next_hop_mac,
+        source_ports,
+    };
+    match core_for_each_probe(eff, &binding, |p| match f(p) {
+        Ok(()) => ControlFlow::Continue(()),
+        Err(e) => ControlFlow::Break(e),
+    })
+    .map_err(|e| e.to_string())?
+    {
+        ControlFlow::Continue(()) => Ok(()),
+        ControlFlow::Break(e) => Err(e),
+    }
 }
 
 /// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s`. Адреса и флаги
@@ -176,17 +120,17 @@ fn run(cli: &Cli, out: &mut dyn Write) -> Result<(), String> {
     }
     if cli.list {
         let eff = validate(&cfg, Operation::List).map_err(|e| e.to_string())?;
-        let single_port = eff.massip.count_ports() == 1;
+        let single_port = eff.massip().count_ports() == 1;
         let mut res = Ok(());
         list_scan(
-            &eff.massip,
-            eff.seed,
-            eff.blackrock_rounds,
-            eff.shard,
-            eff.resume_index,
-            eff.resume_count,
-            eff.retries,
-            eff.max_rate,
+            eff.massip(),
+            eff.seed(),
+            eff.blackrock_rounds(),
+            eff.shard(),
+            eff.resume_index(),
+            eff.resume_count(),
+            eff.retries(),
+            eff.max_rate(),
             |ip, port| {
                 if res.is_ok() {
                     let mut line = format_list_line(ip, port, single_port);
@@ -203,7 +147,7 @@ fn run(cli: &Cli, out: &mut dyn Write) -> Result<(), String> {
         let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
         let start = Instant::now();
         for_each_probe(&eff, |p| {
-            write_out(out, &trace_line(start.elapsed().as_secs_f64(), p.frame))
+            write_out(out, &trace_line(start.elapsed().as_secs_f64(), &p.frame))
         })?;
         return finish(out);
     }
@@ -230,6 +174,8 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmasscan_core::cookie::syn_cookie_ipv4;
+    use rmasscan_core::scan::transmit_scan;
 
     fn run_args(args: &[&str]) -> Result<String, String> {
         let cli = Cli::try_parse_masscan(args.iter().copied()).map_err(|e| e.to_string())?;
@@ -250,6 +196,38 @@ mod tests {
         let out = run_args(&["rmasscan", "-sL", "10.0.0.0/30", "-p80", "--seed", "1"]).unwrap();
         assert!(out.lines().all(|l| !l.contains(':')));
         assert_eq!(out.lines().count(), 4);
+    }
+
+    #[test]
+    fn list_scan_with_non_terminating_retries_is_an_error_not_a_hang() {
+        let e = run_args(&[
+            "rmasscan",
+            "-sL",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            "--retries",
+            "1",
+        ])
+        .unwrap_err();
+        assert!(
+            e.contains("never terminate") && e.contains("--retries"),
+            "{e}"
+        );
+        // Golden-backed retries cases keep working (456 lines, see differential.rs).
+        let out = run_args(&[
+            "rmasscan",
+            "-sL",
+            "10.0.0.0/24",
+            "-p80",
+            "--seed",
+            "1",
+            "--retries",
+            "2",
+        ])
+        .unwrap();
+        assert_eq!(out.lines().count(), 456);
     }
 
     #[test]
@@ -417,16 +395,16 @@ mod tests {
         // Independent recomputation of main.c:373-393 from transmit_scan's own indices.
         let mut expected = Vec::new();
         transmit_scan(
-            &eff.massip,
-            eff.seed,
-            eff.blackrock_rounds,
-            eff.shard,
+            eff.massip(),
+            eff.seed(),
+            eff.blackrock_rounds(),
+            eff.shard(),
             1,
             0,
-            eff.resume_index,
-            eff.resume_count,
-            eff.retries,
-            eff.max_rate,
+            eff.resume_index(),
+            eff.resume_count(),
+            eff.retries(),
+            eff.max_rate(),
             |i, repeats, xxx, ip, port| {
                 let n = i.wrapping_add(repeats);
                 let ck = syn_cookie_ipv4(

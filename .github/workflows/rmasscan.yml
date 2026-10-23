@@ -1,4 +1,4 @@
-# CI порта masscan на Rust (этап 0): fmt, clippy, тесты, правило «без C».
+# CI порта masscan на Rust (этапы 0-2A: core, cli, engine): fmt, clippy, тесты, правило «без C».
 # Raw-сокеты, сеть и повышение прав не используются.
 name: rmasscan
 
@@ -56,14 +56,15 @@ jobs:
             cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
 
       - name: Формат
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      # Включает no_c_in_build: проверка «без C» одинакова на трёх ОС.
+      # --workspace покрывает core, cli и engine (будущие члены тоже). Включает
+      # no_c_in_build: граф всего workspace, включая sha2 движка, на трёх ОС.
       - name: Тесты
-        run: cargo test --all --locked
+        run: cargo test --locked --workspace
 
       - name: Установить cargo-deny
         run: cargo install --locked cargo-deny@0.20.2

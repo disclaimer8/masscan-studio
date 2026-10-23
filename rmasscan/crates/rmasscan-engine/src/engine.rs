@@ -37,7 +37,7 @@ use crate::io::{AdapterPair, Rx, SendStatus, Tx};
 pub const MAX_IO_TIMEOUT: Duration = Duration::from_millis(50);
 /// Верхняя граница dedup-кэша.
 pub const MAX_DEDUP_ENTRIES: usize = 100_000;
-/// 1514 + запас: кадр длиннее виден парсеру и отбрасывается как FrameTooLong.
+/// 1514 + запас: кадр длиннее отбрасывается RX-слоем сети (MSG_TRUNC), в парсер сверхдлинным не попадает.
 const RX_BUFFER_LEN: usize = 2048;
 
 const RUN: u8 = 0;

@@ -29,12 +29,13 @@ jobs:
         os: [ubuntu-24.04, macos-14, windows-2022]
     defaults:
       run:
+        shell: bash
         working-directory: rmasscan
     steps:
       - uses: actions/checkout@v4
 
-      # Все шаги ниже — однострочные команды без bash-измов: одинаково
-      # работают в bash (Linux/macOS) и pwsh (Windows).
+      # Все шаги идут в bash на всех ОС (`defaults.run.shell: bash`; на Windows
+      # это Git Bash), так что поведение команд одинаково на трёх ОС.
       - name: Установить toolchain
         run: |
           rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --component rustfmt --component clippy
@@ -58,11 +59,11 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       # Включает no_c_in_build: проверка «без C» одинакова на трёх ОС.
       - name: Тесты
-        run: cargo test --all
+        run: cargo test --all --locked
 
       - name: Установить cargo-deny
         run: cargo install --locked cargo-deny@0.20.2

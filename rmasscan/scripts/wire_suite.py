@@ -834,6 +834,13 @@ def run_perf_suite():
     EXTRA["perf_summary"] = summ
     chk("perf", "perf matrix complete: every cell VALID (incomplete captures are INVALID, not normalised)",
         all(c.get("valid") for c in cells), "%d/%d cells valid" % (sum(1 for c in cells if c.get("valid")), len(cells)))
+    # Scanner-side reply completeness is asserted SEPARATELY from capture validity: a reintroduced reply loss
+    # (e.g. the RX socket queuing our own outgoing frames at 100k pps) must fail here even if every capture is VALID.
+    bad = [(r["rate"], r["rust_rx_incomplete_runs"], r["rust_kernel_drops_per_run"]) for r in summ
+           if r["rust_rx_incomplete_runs"] != 0 or any(d != 0 for d in r["rust_kernel_drops_per_run"])]
+    chk("perf", "all rates: Rust received every in-job reply (0 rx-incomplete runs, 0 kernel drops)", not bad,
+        "per rate (rx_incomplete_runs, kernel_drops_per_run): " + "; ".join(
+            "%d: %d, %s" % (r["rate"], r["rust_rx_incomplete_runs"], r["rust_kernel_drops_per_run"]) for r in summ))
     for row in summ:
         chk("perf", "%d pps: Rust steady-state pps within +-20%% of C" % row["rate"], row["within_20pct"],
             "rust/c=%s (rust %s vs c %s)" % ("%.3f" % row["rust_over_c"] if row["rust_over_c"] else "n/a",

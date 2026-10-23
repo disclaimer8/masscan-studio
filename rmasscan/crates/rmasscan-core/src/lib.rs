@@ -3,6 +3,7 @@
 //! github.com/robertdavidgraham/masscan, HEAD 8e6b3b0.
 
 pub mod ranges;
+pub mod targets;
 
 /// Версия masscan, с которой сверяется порт.
 pub const ORACLE_MASSCAN_VERSION: &str = "1.3.9-integration";

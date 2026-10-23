@@ -12,7 +12,10 @@
 //! 2. порт назначения лежит в `source_ports` плана (`is_my_port`);
 //! 3. флаги: `(flags & 0x12) == 0x12` даёт Open, `flags & 0x04` даёт Closed
 //!    (RST перекрывает SYN-ACK, как в C: статус сначала Open, затем Closed);
-//! 4. `cookie == ackno - 1` (беззнаковая арифметика `unsigned`), где
+//! 4. удалённые IP и порт входят в ИТОГОВЫЙ набор целей задания
+//!    (`effective().massip()`, после исключений; не `source_targets`); поиск
+//!    двоичный, проверка идёт до cookie и контрольных сумм;
+//! 5. `cookie == ackno - 1` (беззнаковая арифметика `unsigned`), где
 //!    `cookie = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, seed) as u32`.
 //!
 //! Всё остальное это `Ok(None)` (в C `continue`), не ошибка и не Open.
@@ -30,6 +33,7 @@ use crate::checksum::{checksum_ipv4, ip_header_checksum};
 use crate::cookie::syn_cookie_ipv4;
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
+use crate::ranges::RangeList;
 
 /// main.c:773 `if (length > 1514) continue;`.
 pub const MAX_FRAME_LEN: usize = 1514;
@@ -191,6 +195,15 @@ fn locate_ipv4(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError
     }
 }
 
+/// Двоичный поиск в отсортированных непересекающихся диапазонах: O(log n).
+fn in_sorted_ranges(list: &RangeList, value: u32) -> bool {
+    let ranges = list.as_slice();
+    let idx = ranges.partition_point(|r| r.begin <= value);
+    idx.checked_sub(1)
+        .and_then(|i| ranges.get(i))
+        .is_some_and(|r| value <= r.end)
+}
+
 fn parse_ipv4_tcp(
     ip: &[u8],
     plan: &ReadyPlan,
@@ -265,6 +278,15 @@ fn parse_ipv4_tcp(
     // main.c:935: is_my_port.
     let (first, last) = binding.source_ports;
     if port_me < first || port_me > last {
+        return Ok(None);
+    }
+    // Ответ должен относиться к текущему заданию: отбрасывает поздние ответы
+    // прошлого скана с тем же seed и исключённые адреса/порты. Диапазоны
+    // итогового набора отсортированы и слиты (`validate` вызывает optimize).
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges(targets.ipv4(), ip_them)
+        || !in_sorted_ranges(targets.ports(), u32::from(port_them))
+    {
         return Ok(None);
     }
     // main.c:1048-1057.

@@ -377,5 +377,28 @@ fn lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised() {
     assert_eq!(cells_rust, 20, "Rust cells");
     // INVALID-ячейка помечена valid=false и несёт причину; медианы считает только по valid.
     assert!(all.contains("\"perf_summary\""));
+    // Полнота приёма ответов сканером: ОТДЕЛЬНО от валидности захвата (INVALID-захват это не потеря ответов).
+    let incomplete: Vec<&str> = all
+        .split("\"rust_rx_incomplete_runs\":")
+        .skip(1)
+        .map(|t| t.split(',').next().unwrap())
+        .collect();
+    assert_eq!(incomplete.len(), 4, "rust_rx_incomplete_runs per rate");
+    assert!(
+        incomplete.iter().all(|v| *v == "0"),
+        "Rust lost in-job replies: rx_incomplete_runs {incomplete:?}"
+    );
+    let drops: Vec<&str> = all
+        .split("\"rust_kernel_drops_per_run\":[")
+        .skip(1)
+        .map(|t| t.split(']').next().unwrap())
+        .collect();
+    assert_eq!(drops.len(), 4, "rust_kernel_drops_per_run per rate");
+    for d in &drops {
+        assert!(
+            d.split(',').all(|v| v == "0"),
+            "RX socket kernel drops {d}: replies may have been lost"
+        );
+    }
     // ±20% — открытый gate: этот тест НЕ утверждает паритет скорости.
 }

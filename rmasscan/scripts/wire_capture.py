@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import signal
 import socket
 import struct
@@ -25,6 +26,23 @@ MARKER_PAYLOAD = b"WIRELAB-READY"
 PACKET_OUTGOING = 4
 SOL_PACKET, PACKET_STATISTICS = 263, 6
 SNAPLEN = 65535
+
+
+_HOME_RE = re.compile(r"/(?:home|Users)/[^/\s\"']+|/root(?=/)")
+_NS_RE = re.compile(r"wl-(scan|peer)-[0-9]+-[0-9]+")
+
+
+def scrub(obj):
+    """Remove the host user name and raw per-run namespace names from a JSON-able
+    object: absolute home paths become $HOME, namespaces become wl-scan-RUNID /
+    wl-peer-RUNID. Hashes and every other value are left untouched."""
+    if isinstance(obj, str):
+        return _NS_RE.sub(lambda m: "wl-%s-RUNID" % m.group(1), _HOME_RE.sub("$HOME", obj))
+    if isinstance(obj, list):
+        return [scrub(x) for x in obj]
+    if isinstance(obj, dict):
+        return {scrub(k): scrub(v) for k, v in obj.items()}
+    return obj
 
 
 def sha256_file(path):
@@ -192,7 +210,8 @@ def cmd_env(a):
             "variant": "original pinned binary (NOT the --offline-patched copy)",
             "version_line": next((l for l in run_out([a.oracle, "--version"]).splitlines() if "version" in l.lower()), ""),
         },
-        "harness": {n: sha256_file(os.path.join(here, n)) for n in ("wire-lab.sh", "wire_capture.py", "verify-wire.py")},
+        "harness": {n: sha256_file(os.path.join(here, n)) for n in ("wire-lab.sh", "wire_capture.py", "verify-wire.py", "wire_suite.py")
+                    if os.path.exists(os.path.join(here, n))},
         "host": {
             "os_pretty": osr.get("PRETTY_NAME", ""),
             "kernel": platform.release(),
@@ -317,6 +336,7 @@ def cmd_manifest(a):
         "cases": cases,
         "created_utc": env["created_utc"],
     }
+    manifest = scrub(manifest)  # no host user name / raw namespace names in a committed file
     with open(os.path.join(d, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
         f.write("\n")

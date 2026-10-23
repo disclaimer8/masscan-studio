@@ -45,7 +45,10 @@ regression-тестами на ветке 2B-Linux:
 
 ## Свидетельства критериев выхода
 
-`cargo test --locked --workspace`: **282 passed, 0 failed, 1 ignored** (длительный
+*Исторический снимок на коммите `6ce7a5d` (база ревью 2A); текущая ветка 2B-Linux даёт
+больше тестов, актуальные цифры см. в `2026-10-23-rmasscan-stage2b-linux.md`.*
+
+`cargo test --locked --workspace` на `6ce7a5d`: **282 passed, 0 failed, 1 ignored** (длительный
 release-бенчмарк генерации, как на этапе 1). Из них engine 50 (backpressure 6,
 bounded_memory 1, identity 9, lifecycle 24, pause_resume 10), core: 135 unit,
 `probe_cursor` 11, `receive` 35, `no_c_in_build` 2; golden/property этапа 1 прежние

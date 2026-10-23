@@ -3,9 +3,13 @@
 
 Independent test tool (stdlib only), not product code.
 
-  verify-wire.py --expected EXP.pcap --actual ACT.pcap
-                 [--expected-meta EXP.json] [--actual-meta ACT.json]
+  verify-wire.py --expected EXP.pcap --actual ACT.pcap [--actual ACT2.pcap ...]
+                 [--expected-meta EXP.json] [--actual-meta ACT.json ...]
   verify-wire.py --self-test
+
+--actual may be repeated: the SYN streams of the given pcaps are CONCATENATED
+in the given order (pause leg + resume leg) and compared with the expected
+(continuous) stream. Every --actual-meta is checked for drops/truncation.
 
 Only frames that are IPv4/TCP with exactly the SYN flag (no ACK/RST/FIN) are
 compared, byte for byte, in capture order. Timestamps, ARP, RST, SYN-ACK and
@@ -28,9 +32,18 @@ class PcapError(Exception):
 
 def read_pcap(data):
     """Parse classic pcap bytes -> (linktype, [frame bytes]). Strict."""
+    linktype, recs = read_pcap_records(data)
+    return linktype, [f for _t, f in recs]
+
+
+def read_pcap_records(data):
+    """Parse classic pcap bytes -> (linktype, [(timestamp_seconds, frame)]). Strict.
+
+    Handles microsecond (0xa1b2c3d4) and nanosecond (0xa1b23c4d) captures."""
     if len(data) < 24:
         raise PcapError("pcap global header truncated (%d bytes)" % len(data))
     magic = data[:4]
+    nano = magic in (b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d")
     if magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
         end = "<"
     elif magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
@@ -42,13 +55,13 @@ def read_pcap(data):
     while off < len(data):
         if off + 16 > len(data):
             raise PcapError("pcap record header truncated at offset %d" % off)
-        _s, _u, caplen, origlen = struct.unpack(end + "IIII", data[off:off + 16])
+        ts_s, ts_f, caplen, origlen = struct.unpack(end + "IIII", data[off:off + 16])
         off += 16
         if caplen != origlen:
             raise PcapError("frame %d snapped (caplen %d != len %d)" % (len(frames), caplen, origlen))
         if off + caplen > len(data):
             raise PcapError("pcap record body truncated at offset %d" % off)
-        frames.append(bytes(data[off:off + caplen]))
+        frames.append((ts_s + ts_f / (1e9 if nano else 1e6), bytes(data[off:off + caplen])))
         off += caplen
     return linktype, frames
 
@@ -99,7 +112,11 @@ def compare_streams(exp, act):
 
 
 def compare_bytes(exp_bytes, act_bytes, exp_meta=None, act_meta=None):
-    for name, meta in (("expected", exp_meta), ("actual", act_meta)):
+    """act_bytes / act_meta may be lists: the legs are concatenated in order."""
+    acts = act_bytes if isinstance(act_bytes, (list, tuple)) else [act_bytes]
+    metas = act_meta if isinstance(act_meta, (list, tuple)) else [act_meta] * len(acts)
+    checks = [("expected", exp_meta)] + [("actual[%d]" % i, m) for i, m in enumerate(metas)]
+    for name, meta in checks:
         why = meta_problem(meta)
         if why:
             return INVALID, "%s: %s" % (name, why)
@@ -107,14 +124,33 @@ def compare_bytes(exp_bytes, act_bytes, exp_meta=None, act_meta=None):
         _, ef = read_pcap(exp_bytes)
     except PcapError as e:
         return INVALID, "expected pcap: %s" % e
-    try:
-        _, af = read_pcap(act_bytes)
-    except PcapError as e:
-        return INVALID, "actual pcap: %s" % e
-    es, as_ = syn_stream(ef), syn_stream(af)
+    as_ = []
+    for i, ab in enumerate(acts):
+        try:
+            _, af = read_pcap(ab)
+        except PcapError as e:
+            return INVALID, "actual[%d] pcap: %s" % (i, e)
+        as_.extend(syn_stream(af))
+    es = syn_stream(ef)
     if not es:
         return INVALID, "expected pcap contains no SYN frames"
     return compare_streams(es, as_)
+
+
+def steady_state_rate(timestamps, skip_fraction=0.10):
+    """Packets per second over the steady-state part of a send trace.
+
+    The first `skip_fraction` of the packets (startup / throttle ramp) is
+    excluded from the numerator AND the time window; nothing after the last
+    packet (the `wait` drain) is in the denominator. Returns None if too few."""
+    n = len(timestamps)
+    k = max(1, int(n * skip_fraction))
+    if n - k < 2:
+        return None
+    dt = timestamps[-1] - timestamps[k]
+    if dt <= 0:
+        return None
+    return (n - 1 - k) / dt
 
 
 # ---------------------------------------------------------------- self test
@@ -181,6 +217,26 @@ def self_test():
     check("capture truncation INVALID", compare_bytes(good, good, exp_meta={"truncated_frames": 1})[0], INVALID)
     check("rx counter mismatch INVALID", compare_bytes(good, good, act_meta={"rx_counter_mismatch": True})[0], INVALID)
     check("clean meta still PASS", compare_bytes(good, good, exp_meta={"drops": 0}, act_meta={"drops": 0, "truncated_frames": 0})[0], PASS)
+    # pause + resume legs are concatenated and must equal the continuous trace
+    leg1, leg2 = _pcap([a, b, _arp()]), _pcap([_rst(80), c, d])
+    check("concat legs == continuous", compare_bytes(good, [leg1, leg2])[0], PASS)
+    check("concat with empty first leg", compare_bytes(good, [_pcap([]), good])[0], PASS)
+    check("concat missing the last SYN", compare_bytes(good, [_pcap([a, b]), _pcap([c])])[0], FAIL)
+    check("concat resent SYN (dup at the seam)", compare_bytes(good, [_pcap([a, b, c]), _pcap([c, d])])[0], FAIL)
+    check("concat skipped SYN at the seam", compare_bytes(good, [_pcap([a, b]), _pcap([d])])[0], FAIL)
+    check("concat reordered legs", compare_bytes(good, [_pcap([c, d]), _pcap([a, b])])[0], FAIL)
+    check("concat leg with drops INVALID", compare_bytes(good, [leg1, leg2], act_meta=[{}, {"drops": 1}])[0], INVALID)
+    check("concat truncated leg INVALID", compare_bytes(good, [leg1, leg2[:-5]])[0], INVALID)
+    ts = [i * 0.001 for i in range(1000)]  # 1000 pps
+    r = steady_state_rate(ts)
+    check("steady rate ~1000 pps", r is not None and abs(r - 1000) < 1, True)
+    ts2 = [0.0 + i * 0.01 for i in range(10)] + [1.0 + i * 0.001 for i in range(900)]  # slow startup
+    r2 = steady_state_rate(ts2)
+    check("slow startup excluded from steady rate", r2 is not None and 900 < r2 < 1100, True)
+    check("too few packets -> None", steady_state_rate([0.0, 1.0]), None)
+    nano = bytearray(_pcap([a]))
+    nano[0:4] = b"\x4d\x3c\xb2\xa1"
+    check("nanosecond pcap magic accepted", compare_bytes(_pcap([a]), bytes(nano))[0], PASS)
     n_ok = sum(results)
     print("self-test: %d/%d checks passed" % (n_ok, len(results)))
     return 0 if n_ok == len(results) else 1
@@ -189,9 +245,9 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--expected")
-    ap.add_argument("--actual")
+    ap.add_argument("--actual", action="append", help="repeatable: legs are concatenated in order")
     ap.add_argument("--expected-meta")
-    ap.add_argument("--actual-meta")
+    ap.add_argument("--actual-meta", action="append")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     if a.self_test:
@@ -209,7 +265,10 @@ def main():
         with open(p) as f:
             return json.load(f)
 
-    code, msg = compare_bytes(load(a.expected), load(a.actual), jload(a.expected_meta), jload(a.actual_meta))
+    if a.actual_meta and len(a.actual_meta) != len(a.actual):
+        ap.error("give one --actual-meta per --actual (or none)")
+    code, msg = compare_bytes(load(a.expected), [load(p) for p in a.actual], jload(a.expected_meta),
+                              [jload(p) for p in a.actual_meta] if a.actual_meta else None)
     print("%s: %s" % ({PASS: "PASS", FAIL: "FAIL", INVALID: "INVALID"}[code], msg))
     return code
 

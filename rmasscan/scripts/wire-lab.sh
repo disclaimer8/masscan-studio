@@ -2,7 +2,12 @@
 # Sealed Linux wire lab: runs the ORIGINAL pinned C masscan between two network
 # namespaces joined by a veth pair and records the peer-side wire as classic pcap.
 #
-#   wire-lab.sh --oracle /path/to/masscan --out DIR
+#   wire-lab.sh --oracle /path/to/masscan --out DIR                       # C oracle capture (default suite)
+#   wire-lab.sh --oracle BIN --out DIR --suite rust --rust-bin WIRE_SCAN --fixtures tests/golden/wire
+#   wire-lab.sh --oracle BIN --out DIR --suite perf --rust-bin WIRE_SCAN [--reps 5] [--rates 100,1000,10000,100000]
+#
+# Suites rust/perf run scripts/wire_suite.py inside the same sealed lab (same seal assertions,
+# same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
 #
 # SEALED: no uplink, no bridge, no NAT, no default route, ip_forward=0, IPv6 off.
 # The veth pair is created INSIDE the scanner namespace (peer moved straight
@@ -13,20 +18,30 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-ORACLE=""; OUT=""
+ORACLE=""; OUT=""; SUITE=oracle; RUST_BIN=""; FIXTURES=""; REPS=5; RATES=100,1000,10000,100000
 while [ $# -gt 0 ]; do
   case "$1" in
     --oracle) ORACLE=$2; shift 2 ;;
     --out) OUT=$2; shift 2 ;;
-    -h|--help) sed -n 2,12p "$0"; exit 0 ;;
+    --suite) SUITE=$2; shift 2 ;;
+    --rust-bin) RUST_BIN=$2; shift 2 ;;
+    --fixtures) FIXTURES=$2; shift 2 ;;
+    --reps) REPS=$2; shift 2 ;;
+    --rates) RATES=$2; shift 2 ;;
+    -h|--help) sed -n 2,16p "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 [ -n "$ORACLE" ] && [ -n "$OUT" ] || { echo "usage: wire-lab.sh --oracle BIN --out DIR" >&2; exit 64; }
+case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
+[ "$SUITE" != rust ] || [ -n "$FIXTURES" ] || { echo "--suite rust needs --fixtures" >&2; exit 64; }
 [ "$(uname -s)" = Linux ] || { echo "FATAL: Linux only" >&2; exit 2; }
 if [ "$(id -u)" != 0 ]; then
   mkdir -p "$OUT"
-  exec sudo -n env "WIRELAB_INJECT=${WIRELAB_INJECT:-}" "$0" --oracle "$(readlink -f "$ORACLE")" --out "$(readlink -f "$OUT")"
+  REEXEC=(--oracle "$(readlink -f "$ORACLE")" --out "$(readlink -f "$OUT")" --suite "$SUITE" --reps "$REPS" --rates "$RATES")
+  [ -z "$RUST_BIN" ] || REEXEC+=(--rust-bin "$(readlink -f "$RUST_BIN")")
+  [ -z "$FIXTURES" ] || REEXEC+=(--fixtures "$(readlink -f "$FIXTURES")")
+  exec sudo -n env "WIRELAB_INJECT=${WIRELAB_INJECT:-}" "$0" "${REEXEC[@]}"
 fi
 [ -x "$ORACLE" ] || { echo "FATAL: oracle not executable: $ORACLE" >&2; exit 2; }
 for t in ip python3 timeout unshare; do command -v "$t" >/dev/null || { echo "FATAL: missing $t" >&2; exit 2; }; done
@@ -117,6 +132,15 @@ ip -n "$NS_B" neigh add "$IP_ADAPTER" lladdr "$MAC_A" dev "$IF_B" nud permanent 
 for ns in "$NS_A" "$NS_B"; do ip -n "$ns" link set lo up; done
 ip -n "$NS_A" link set "$IF_A" up
 ip -n "$NS_B" link set "$IF_B" up
+if [ "$SUITE" != oracle ]; then
+  # veth hands CHECKSUM_PARTIAL frames to AF_PACKET readers: the peer kernel's SYN-ACK arrives with
+  # an unfinished TCP checksum, which a verifying receiver (the Rust engine, unlike C) must reject.
+  # A real NIC delivers valid checksums. Offload is disabled on this run's two veth ends only.
+  command -v ethtool >/dev/null || { echo "FATAL: missing ethtool" >&2; exit 2; }
+  ip netns exec "$NS_A" ethtool -K "$IF_A" tx off >/dev/null
+  ip netns exec "$NS_B" ethtool -K "$IF_B" tx off >/dev/null
+  note_cmd "ip netns exec \$NS_A ethtool -K $IF_A tx off; ip netns exec \$NS_B ethtool -K $IF_B tx off   # veth tx-checksum offload off, this run's veth only"
+fi
 
 # ---- seal assertions (fail closed) ------------------------------------------
 fail() { echo "FATAL: $*" >&2; exit 3; }
@@ -158,14 +182,23 @@ topo() {  # topo FILE : save topology + routes of both namespaces
       echo "## ip rule"; ip -n "$ns" rule show
       echo "## ip neigh"; ip -n "$ns" neigh show
       echo "## ip_forward"; ip netns exec "$ns" cat /proc/sys/net/ipv4/ip_forward
+      echo "## tx checksum offload"; ip netns exec "$ns" ethtool -k "$( [ "$ns" = "$NS_A" ] && echo $IF_A || echo $IF_B )" 2>/dev/null | grep -E '^tx-checksumming' || true
     done; } | sed -E "s/wl-(scan|peer)-[0-9]+-[0-9]+/wl-\1-RUNID/g" >"$1"
 }
 
 # ---- responder in the peer namespace (open: $OPEN_PORTS; the rest get kernel RST)
-start_bg "$WORK/responder.log" ip netns exec "$NS_B" python3 "$HERE/wire_capture.py" responder --ports "$OPEN_PORTS" --ready "$WORK/responder.ready"
-RESP_PID=$BGPID
-note_cmd "ip netns exec \$NS_B python3 wire_capture.py responder --ports $OPEN_PORTS --ready READY"
-wait_file "$WORK/responder.ready" 10 || fail "responder not ready"
+RESP_PID=""
+if [ "$SUITE" = oracle ]; then
+  start_bg "$WORK/responder.log" ip netns exec "$NS_B" python3 "$HERE/wire_capture.py" responder --ports "$OPEN_PORTS" --ready "$WORK/responder.ready"
+  RESP_PID=$BGPID
+  note_cmd "ip netns exec \$NS_B python3 wire_capture.py responder --ports $OPEN_PORTS --ready READY"
+  wait_file "$WORK/responder.ready" 10 || fail "responder not ready"
+else
+  # rust/perf suites: wire_suite.py restarts its own responder before EVERY run, because the peer kernel
+  # keeps retransmitting SYN-ACKs of half-open sockets for ~1 minute (the Rust scanner never RSTs them)
+  # and those would bleed into the next run's capture.
+  note_cmd "(wire_suite.py) ip netns exec \$NS_B python3 wire_capture.py responder --ports $OPEN_PORTS ...   # restarted before every run"
+fi
 
 python3 "$HERE/wire_capture.py" env --out "$OUT/env.json" --oracle "$ORACLE" --ns-a "$NS_A" --ns-b "$NS_B" \
   --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" --ip-a "$IP_ADAPTER" --peer-ips "$PEER_IPS" \
@@ -178,6 +211,7 @@ case "${WIRELAB_INJECT:-}" in
   hang) log "injected hang"; sleep 600 & PIDS+=($!); wait $! ;;
 esac
 
+if [ "$SUITE" = oracle ]; then
 # ---- cases: name | expected SYN | expected SYN-ACK | expected RST | masscan targets/options
 COMMON=(--interface "$IF_A" --adapter-ip "$IP_ADAPTER" --adapter-mac "$MAC_A" --router-mac "$MAC_B"
         --seed "$SEED" --rate "$RATE" --blackrock-rounds 14 --retries 0 --wait 3)
@@ -220,7 +254,26 @@ for row in "${CASES[@]}"; do
   done
 done
 
+fi
+
+if [ "$SUITE" != oracle ]; then
+  # ---- Rust suites: driver runs inside this sealed lab; its own children die with it
+  note_cmd "python3 wire_suite.py --suite $SUITE ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_bg "$OUT/suite.log" python3 "$HERE/wire_suite.py" --suite "$SUITE" --out "$OUT" --work "$WORK" \
+    --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
+    --ip-a "$IP_ADAPTER" --rust-bin "$RUST_BIN" --oracle "$ORACLE" --fixtures "$FIXTURES" \
+    --conf-masked "$CONF_MASKED" --empty-dir "$EMPTY" --reps "$REPS" --rates "$RATES"
+  SUITE_PID=$BGPID
+  SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log, results.json)"
+fi
+
 topo "$OUT/topology-after.txt"
-stop_bg "$RESP_PID"
-python3 "$HERE/wire_capture.py" manifest --dir "$OUT"
-log "done: $OUT/manifest.json"
+[ -z "$RESP_PID" ] || stop_bg "$RESP_PID"
+if [ "$SUITE" = oracle ]; then
+  python3 "$HERE/wire_capture.py" manifest --dir "$OUT"
+  log "done: $OUT/manifest.json"
+else
+  log "done: $OUT/results.json"
+  exit "${SUITE_RC:-0}"
+fi

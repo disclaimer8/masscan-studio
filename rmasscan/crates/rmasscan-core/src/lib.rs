@@ -2,6 +2,7 @@
 //! Порт ядра masscan (AGPL-3.0). Источник: masscan © Robert David Graham,
 //! github.com/robertdavidgraham/masscan, HEAD 8e6b3b0.
 
+pub mod arp;
 pub mod blackrock;
 pub mod checksum;
 pub mod config;
@@ -10,6 +11,7 @@ pub mod massip;
 pub mod packet;
 pub mod probe;
 pub mod ranges;
+pub mod receive;
 pub mod scan;
 pub mod targets;
 pub mod throttle;

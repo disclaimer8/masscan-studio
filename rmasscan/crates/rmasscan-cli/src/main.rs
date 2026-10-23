@@ -48,7 +48,8 @@ fn for_each_probe(
          which is not deterministic)"
             .to_string()
     })?;
-    // main.c:183-186: маска = last - first; адаптер один, поэтому ipv4_mask = 0.
+    // main.c:183-186: port_mask = last - first; ipv4_mask = 0, потому что
+    // --adapter-ip принимает один адрес.
     let port_mask = u32::from(last - first);
     let ipv4_mask = 0u32;
     let tmpl = TcpSynTemplate::new(adapter_mac, router_mac, LinkType::Ethernet);
@@ -95,7 +96,7 @@ fn for_each_probe(
                 ));
                 return;
             };
-            // main.c:386: seqno = (unsigned)cookie.
+            // main.c:389/:402: seqno = (unsigned)cookie.
             let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, entropy) as u32;
             tmpl.build_syn(ip_them, port_them16, ip_me, port_me16, seqno, &mut frame);
             if let Err(e) = f(&Probe {
@@ -114,7 +115,7 @@ fn for_each_probe(
     err.map_or(Ok(()), Err)
 }
 
-/// main-ptrace.c:94: `SENT (%5.4f) TCP  %-21s > %-21s %s`. Адреса и флаги
+/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s`. Адреса и флаги
 /// разбираются из самого кадра, как `preprocess_frame` в C.
 fn trace_line(secs: f64, frame: &[u8]) -> String {
     let (ip, tcp) = (14, 34);
@@ -143,12 +144,22 @@ fn trace_line(secs: f64, frame: &[u8]) -> String {
     )
 }
 
-/// Запись в stdout: закрытый канал (`| head`) не ошибка.
-fn write_out(out: &mut dyn Write, s: &str) -> Result<(), String> {
-    match out.write_all(s.as_bytes()) {
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        r => r.map_err(|e| format!("write failed: {e}")),
+/// Ошибка записи в stdout. Закрытый канал (`| head`) в C убивает SIGPIPE, поэтому
+/// выходим сразу и тихо, не доделывая работу.
+fn io_fail(e: io::Error) -> String {
+    if e.kind() == io::ErrorKind::BrokenPipe {
+        std::process::exit(0);
     }
+    format!("write failed: {e}")
+}
+
+fn write_out(out: &mut dyn Write, s: &str) -> Result<(), String> {
+    out.write_all(s.as_bytes()).map_err(io_fail)
+}
+
+/// Явный flush на успешном пути: ошибка последнего блока не теряется в drop.
+fn finish(out: &mut dyn Write) -> Result<(), String> {
+    out.flush().map_err(io_fail)
 }
 
 fn run(cli: &Cli, out: &mut dyn Write) -> Result<(), String> {
@@ -158,7 +169,8 @@ fn run(cli: &Cli, out: &mut dyn Write) -> Result<(), String> {
         validate(&cfg, Operation::Echo).map_err(|e| e.to_string())?;
         let mut s = String::new();
         echo(&cfg, false, &mut s);
-        return write_out(out, &s);
+        write_out(out, &s)?;
+        return finish(out);
     }
     if cli.list {
         let eff = validate(&cfg, Operation::List).map_err(|e| e.to_string())?;
@@ -182,14 +194,16 @@ fn run(cli: &Cli, out: &mut dyn Write) -> Result<(), String> {
             },
         )
         .map_err(|e| e.to_string())?;
-        return res;
+        res?;
+        return finish(out);
     }
     if cli.offline && cli.packet_trace {
         let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
         let start = Instant::now();
-        return for_each_probe(&eff, |p| {
+        for_each_probe(&eff, |p| {
             write_out(out, &trace_line(start.elapsed().as_secs_f64(), p.frame))
-        });
+        })?;
+        return finish(out);
     }
     Err("stage 1 supports only -sL, --echo/--echo-all and --offline --packet-trace".into())
 }
@@ -372,7 +386,7 @@ mod tests {
     fn packet_trace_line_format() {
         let out = run_args(&trace_args(&[])).unwrap();
         for l in out.lines() {
-            // SENT (t) TCP  [src]:port > [dst]:port SYN (main-ptrace.c:94)
+            // SENT (t) TCP  [src]:port > [dst]:port SYN (main-ptrace.c:97)
             assert!(l.starts_with("SENT ("), "{l}");
             let (_, rest) = l.split_once(") TCP  [10.255.0.1]:").unwrap();
             let sport: u16 = rest.split_once(' ').unwrap().0.parse().unwrap();

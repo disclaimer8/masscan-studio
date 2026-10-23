@@ -1,6 +1,6 @@
 //! Разбор командной строки (AGPL-3.0). Порт подмножества опций masscan
-//! `src/main-conf.c` (`masscan_command_line` :2840, `masscan_set_parameter`
-//! :2400) из masscan © Robert David Graham
+//! `src/main-conf.c` (`masscan_command_line` :3211, `masscan_set_parameter`
+//! :2434) из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
 //! Любая опция вне подмножества v1 (например `--banners`) - ошибка clap,
@@ -12,84 +12,155 @@ use clap::Parser;
 use rmasscan_core::config::{ScanConfig, parse_mac, parse_rate, parse_shard, parse_source_port};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 
-/// Опции v1. Значения, у которых в C своя грамматика (`--rate`, `--shard`,
-/// MAC, `--source-port`), хранятся строками и разбираются функциями ядра.
+// Опции v1. Значения, у которых в C своя грамматика (`--rate`, `--shard`,
+// MAC, `--source-port`), хранятся строками и разбираются функциями ядра.
 #[derive(Parser, Debug, Clone, Default)]
 #[command(
     name = "rmasscan",
     version,
-    about = "Rust port of masscan: -sL, --echo and --offline --packet-trace (stage 1)",
-    disable_help_subcommand = true
+    about = "Rust port of masscan (stage 1): -sL, --echo and --offline --packet-trace",
+    disable_help_subcommand = true,
+    after_help = "Examples:\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 \\\n    --router-mac 66-55-44-33-22-11 --source-port 40000-40003\n\nOperations: -sL, --echo, --echo-all, --offline --packet-trace (mutually exclusive).\n--seed is required. Any other masscan option is an error."
 )]
 pub struct Cli {
-    /// Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
-    #[arg(value_name = "TARGET")]
+    // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
+    #[arg(
+        value_name = "TARGET",
+        help = "Targets: IPv4 address, CIDR, a.b.c.d-e.f.g.h, or comma-separated list"
+    )]
     pub targets: Vec<String>,
-    /// `--range` (main-conf.c:2729): то же, что позиционная цель.
-    #[arg(long = "range", value_name = "RANGE")]
+    // `--range` (main-conf.c:2729): то же, что позиционная цель.
+    #[arg(
+        long = "range",
+        value_name = "RANGE",
+        help = "Target range (same as a positional target)"
+    )]
     pub range: Vec<String>,
-    /// `-p80,443`, `-p0-65535`, `--ports 22,80`.
-    #[arg(short = 'p', long = "ports", value_name = "PORTS")]
+    // `-p80,443`, `-p0-65535`, `--ports 22,80`.
+    #[arg(
+        short = 'p',
+        long = "ports",
+        value_name = "PORTS",
+        help = "Ports to scan, e.g. -p80,443 or -p0-65535 (TCP only)"
+    )]
     pub ports: Vec<String>,
-    #[arg(long, value_name = "RANGE")]
+    #[arg(
+        long,
+        value_name = "RANGE",
+        help = "Address range to exclude (repeatable)"
+    )]
     pub exclude: Vec<String>,
-    #[arg(long, value_name = "FILE")]
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "File with ranges to exclude, one per line, # starts a comment"
+    )]
     pub excludefile: Vec<String>,
-    #[arg(long, value_name = "N")]
+    #[arg(
+        long,
+        value_name = "N",
+        help = "Randomization seed (REQUIRED, must be non-zero)"
+    )]
     pub seed: Option<u64>,
-    #[arg(long, value_name = "PPS")]
+    #[arg(long, value_name = "PPS", help = "Packets per second (default 100)")]
     pub rate: Option<String>,
-    #[arg(long, value_name = "SECONDS")]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        help = "Seconds to wait after the scan (default 10)"
+    )]
     pub wait: Option<u32>,
-    #[arg(long, value_name = "N")]
+    #[arg(
+        long,
+        value_name = "N",
+        help = "Number of retries (default 0, below 1000)"
+    )]
     pub retries: Option<u32>,
-    #[arg(long, value_name = "ONE/OF")]
+    #[arg(
+        long,
+        value_name = "ONE/OF",
+        help = "Scan only shard ONE of OF, e.g. 2/3"
+    )]
     pub shard: Option<String>,
-    #[arg(long = "blackrock-rounds", value_name = "N")]
+    #[arg(
+        long = "blackrock-rounds",
+        value_name = "N",
+        help = "Blackrock shuffle rounds (default 14)"
+    )]
     pub blackrock_rounds: Option<u32>,
-    #[arg(long = "resume-index", value_name = "N")]
+    #[arg(
+        long = "resume-index",
+        value_name = "N",
+        help = "Start at this index of the shuffled order"
+    )]
     pub resume_index: Option<u64>,
-    #[arg(long = "resume-count", value_name = "N")]
+    #[arg(
+        long = "resume-count",
+        value_name = "N",
+        help = "Stop after this many indexes"
+    )]
     pub resume_count: Option<u64>,
-    #[arg(long = "adapter-ip", value_name = "IP")]
+    #[arg(
+        long = "adapter-ip",
+        value_name = "IP",
+        help = "Source IPv4 address (single address)"
+    )]
     pub adapter_ip: Option<String>,
-    #[arg(long = "adapter-mac", value_name = "MAC")]
+    #[arg(long = "adapter-mac", value_name = "MAC", help = "Source MAC address")]
     pub adapter_mac: Option<String>,
-    #[arg(long = "router-mac", value_name = "MAC")]
+    #[arg(long = "router-mac", value_name = "MAC", help = "Router MAC address")]
     pub router_mac: Option<String>,
-    /// Одиночный порт или диапазон степени двойки (main-conf.c:2523).
-    #[arg(long = "source-port", alias = "adapter-port", value_name = "PORT")]
+    // Одиночный порт или диапазон степени двойки (main-conf.c:2523).
+    #[arg(
+        long = "source-port",
+        alias = "adapter-port",
+        value_name = "PORT",
+        help = "Source port, or a range whose size is a power of two"
+    )]
     pub source_port: Option<String>,
     #[arg(
         short = 'e',
         long = "interface",
         alias = "adapter",
-        value_name = "IFACE"
+        value_name = "IFACE",
+        help = "Network interface name (recorded only; no adapter is opened in stage 1)"
     )]
     pub interface: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Do not transmit (stage 1 supports only --offline --packet-trace)"
+    )]
     pub offline: bool,
-    #[arg(long = "packet-trace", requires = "offline")]
+    #[arg(
+        long = "packet-trace",
+        requires = "offline",
+        help = "With --offline: print one SENT line per SYN. Needs --adapter-ip, --adapter-mac, --router-mac and --source-port"
+    )]
     pub packet_trace: bool,
-    /// `-sL` (см. [`preprocess_args`]).
+    // `-sL` (см. [`preprocess_args`]).
     #[arg(
         long = "list",
-        conflicts_with_all = ["echo", "echo_all", "packet_trace"]
+        conflicts_with_all = ["echo", "echo_all", "packet_trace"],
+        help = "List the targets in scan order (alias: -sL)"
     )]
     pub list: bool,
-    #[arg(long, conflicts_with_all = ["echo_all", "packet_trace"])]
+    #[arg(long, conflicts_with_all = ["echo_all", "packet_trace"], help = "Print the configuration and exit")]
     pub echo: bool,
-    #[arg(long = "echo-all", conflicts_with = "packet_trace")]
+    #[arg(
+        long = "echo-all",
+        conflicts_with = "packet_trace",
+        help = "Same as --echo (C prints the same for both)"
+    )]
     pub echo_all: bool,
 }
 
-/// Причуды masscan, которые clap не выражает.
-///
-/// 1. `-sL` (nmap-стиль) - это один флаг, а
-///    clap прочёл бы его как `-s L`. Заменяется на `--list`.
-///
-/// Остальное clap обрабатывает как C: `-p80`, `-p0-65535` (короткая опция с
-/// приклеенным значением), `-e lo`, `--opt=value`.
+// Причуды masscan, которые clap не выражает.
+//
+// 1. `-sL` (nmap-стиль) - это один флаг, а
+//    clap прочёл бы его как `-s L`. Заменяется на `--list`.
+//
+// Остальное clap обрабатывает как C: `-p80`, `-p0-65535` (короткая опция с
+// приклеенным значением), `-e lo`, `--opt=value`.
 pub fn preprocess_args<I, S>(args: I) -> Vec<String>
 where
     I: IntoIterator<Item = S>,
@@ -102,7 +173,7 @@ where
 }
 
 impl Cli {
-    /// `try_parse_from` с предобработкой [`preprocess_args`].
+    // `try_parse_from` с предобработкой [`preprocess_args`].
     pub fn try_parse_masscan<I, S>(args: I) -> Result<Cli, clap::Error>
     where
         I: IntoIterator<Item = S>,
@@ -111,8 +182,8 @@ impl Cli {
         Cli::try_parse_from(preprocess_args(args))
     }
 
-    /// Строит `ScanConfig`. В отличие от C (main-conf.c:2736-2741, ошибка
-    /// `--range` не фатальна) любая ошибка цели, порта или значения фатальна.
+    // Строит `ScanConfig`. В отличие от C (main-conf.c:2736-2741, ошибка
+    // `--range` не фатальна) любая ошибка цели, порта или значения фатальна.
     pub fn to_config(&self) -> Result<ScanConfig, String> {
         let mut cfg = ScanConfig::default();
         for t in self.targets.iter().chain(&self.range) {
@@ -129,10 +200,10 @@ impl Cli {
         for f in &self.excludefile {
             read_exclude_file(&mut cfg, f)?;
         }
-        // seed == 0 в C значит "взять энтропию" (main.c:1658); порт этого не делает.
-        cfg.seed = self
-            .seed
-            .ok_or("--seed is required (the entropy-based default is not ported)")?;
+        // seed == 0 в C значит "взять энтропию" (main.c:1640-1641); порт этого не делает.
+        cfg.seed = self.seed.filter(|&s| s != 0).ok_or(
+            "--seed is required and must be non-zero (the entropy-based default is not ported)",
+        )?;
         if let Some(r) = &self.rate {
             cfg.max_rate = parse_rate(r).map_err(|e| e.to_string())?;
         }
@@ -173,9 +244,9 @@ impl Cli {
     }
 }
 
-/// `--excludefile` (main-conf.c:2791, `massip_parse_file`): по одной записи
-/// на строку, `#` начинает комментарий. Порт построчный, а не побайтовый
-/// автомат C; ошибка в строке фатальна (в C тоже `exit(1)`).
+// `--excludefile` (main-conf.c:2791, `massip_parse_file`): по одной записи
+// на строку, `#` начинает комментарий. Порт построчный, а не побайтовый
+// автомат C; ошибка в строке фатальна (в C тоже `exit(1)`).
 fn read_exclude_file(cfg: &mut ScanConfig, path: &str) -> Result<(), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     for (n, line) in text.lines().enumerate() {

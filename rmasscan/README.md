@@ -14,11 +14,27 @@
 ```bash
 cd rmasscan
 cargo test
-cargo run -p rmasscan-cli -- --echo
+cargo run -p rmasscan-cli -- -sL 10.0.0.0/30 -p80,443 --seed 1
+cargo run -p rmasscan-cli -- --echo 10.0.0.0/24 -p80 --seed 1
+cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \
+  --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 \
+  --router-mac 66-55-44-33-22-11 --source-port 40000-40003
 ```
 
-На этапе 0 CLI является заглушкой: поддерживается только `--version`. Опция
-`--echo` появится на этапе 1.
+Этап 1 поддерживает `-sL`, `--echo`/`--echo-all` и `--offline --packet-trace`.
+`-sL` и `--echo` побайтно совпадают с golden-фикстурами C.
+
+### Отличия от masscan
+
+- `--seed` обязателен и не может быть 0 (в C 0 означает случайную энтропию).
+- Ошибки целей, портов и значений фатальны (в C ошибка `--range` не фатальна).
+- Операции `-sL`, `--echo`, `--echo-all`, `--packet-trace` взаимоисключающие;
+  обычный скан без `--offline --packet-trace` не поддержан.
+- `--offline --packet-trace` требует `--adapter-ip`, `--adapter-mac`,
+  `--router-mac` и `--source-port` (обнаружения адаптера нет; C берёт
+  `40000 + time % 20000`). Трасса печатается осознанно, в C она пуста.
+- Любая другая опция masscan (например `--banners`) - ошибка.
+- Закрытый stdout (`| head`) завершает процесс сразу с кодом 0.
 
 ## Проверка «без C в сборке»
 

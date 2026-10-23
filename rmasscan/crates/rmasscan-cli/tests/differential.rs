@@ -3,6 +3,8 @@
 //! `--echo`/`--echo-all` (main-conf.c:3636). Бинарник запускается с теми
 //! же аргументами, что в манифесте; stdout сверяется побайтно.
 
+// Shared with rmasscan-core: manifest, golden dir, SHA-256.
+#[path = "../../rmasscan-core/tests/common/mod.rs"]
 mod common;
 
 use std::process::Command;
@@ -122,7 +124,7 @@ fn list_scan_binary_matches_c_oracle_fixtures() {
 }
 
 #[test]
-fn echo_binary_matches_c_oracle_fixtures() {
+fn echo_matches_oracle_as_set() {
     let mut checked = Vec::new();
     for case in load_manifest()
         .cases
@@ -132,11 +134,7 @@ fn echo_binary_matches_c_oracle_fixtures() {
         let file = case.file.as_deref().expect("file");
         let got = run_bin(case.args.as_deref().expect("args"));
         let expected = std::fs::read(format!("{GOLDEN_DIR}/{file}")).unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&got),
-            String::from_utf8_lossy(&expected),
-            "{file}"
-        );
+        assert!(got == expected, "{file}: echo bytes differ");
         checked.push(file.to_string());
     }
     checked.sort();
@@ -157,4 +155,56 @@ fn errors_exit_nonzero_with_message_on_stderr() {
         assert!(out.stdout.is_empty(), "{args:?}");
         assert!(!out.stderr.is_empty(), "{args:?}");
     }
+}
+
+#[test]
+fn broken_pipe_stops_work_quickly() {
+    use std::io::{BufRead, BufReader};
+    use std::time::{Duration, Instant};
+    // 2^32 targets: finishing the listing would take minutes.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
+        .args(["-sL", "0.0.0.0/0", "-p80", "--seed", "1"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = String::new();
+    {
+        let mut r = BufReader::new(child.stdout.take().unwrap());
+        r.read_line(&mut first).unwrap();
+    } // stdout dropped: pipe closed
+    assert!(first.ends_with('\n') && !first.is_empty());
+    let start = Instant::now();
+    loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            assert_eq!(st.code(), Some(0));
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(2) {
+            let _ = child.kill();
+            panic!("process still running 2s after stdout was closed");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn seed_zero_is_rejected() {
+    let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
+        .args(["-sL", "10.0.0.0/30", "-p80", "--seed", "0"])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--seed"));
+}
+
+#[test]
+fn help_is_plain_english() {
+    let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    let t = String::from_utf8(out.stdout).unwrap();
+    assert!(t.is_ascii(), "{t}");
+    assert!(t.contains("--list") && t.contains("-sL") && t.contains("--seed"));
+    assert!(!t.contains(".c:") && !t.contains("preprocess"), "{t}");
 }

@@ -37,7 +37,7 @@ pub enum ScanError {
     #[error(transparent)]
     RangeOverflow(#[from] RangeOverflow),
     /// Нулевой шаг (`shard.of == 0`, либо `shard.of * nic_count == 0` в u32):
-    /// в C бесконечный цикл (main-listscan.c:14,68; main.c:223,422).
+    /// в C бесконечный цикл (main-listscan.c:14,65; main.c:223,422).
     #[error("shard divisor must be non-zero")]
     ZeroShard,
     #[error(transparent)]
@@ -69,12 +69,12 @@ impl Iterator for ListIndices {
             return None;
         }
         let cur = self.i;
-        self.i = self.i.wrapping_add(self.increment); // main-listscan.c:68
+        self.i = self.i.wrapping_add(self.increment); // main-listscan.c:65
         Some(cur)
     }
 }
 
-/// Пред-shuffle индексы `i` для `-sL` (main-listscan.c:31-35,45,68).
+/// Пред-shuffle индексы `i` для `-sL` (main-listscan.c:31-35,42,65).
 ///
 /// Паникует при `shard.of == 0` (в C бесконечный цикл); [`list_scan`]
 /// проверяет это заранее и возвращает ошибку.
@@ -215,8 +215,8 @@ pub fn list_scan<F: FnMut(u32, u32)>(
     }
     let blackrock = BlackRock::try_new(range, seed, rounds)?; // :29
     for i in list_scan_indices(range, shard, resume_index, resume_count, retries, max_rate) {
-        let x = blackrock.shuffle(i); // :45
-        let (ip, port) = massip.pick(x); // :47
+        let x = blackrock.shuffle(i); // :42
+        let (ip, port) = massip.pick(x); // :44
         emit(ip, port);
     }
     Ok(())

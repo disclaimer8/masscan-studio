@@ -279,7 +279,7 @@ fn parse_range_at(buf: &[u8], offset: &mut usize) -> Result<Range, ParseError> {
                         }
                     }
                     b'-' | 0x96 => {
-                        if first && k == 3 {
+                        if first && k == 3 && digits > 0 {
                             begin = (addr << 8) | tmp;
                             tmp = 0;
                             digits = 0;
@@ -290,7 +290,7 @@ fn parse_range_at(buf: &[u8], offset: &mut usize) -> Result<Range, ParseError> {
                         }
                     }
                     b'/' => {
-                        if first && k == 3 {
+                        if first && k == 3 && digits > 0 {
                             begin = (addr << 8) | tmp;
                             tmp = 0;
                             digits = 0;
@@ -302,7 +302,9 @@ fn parse_range_at(buf: &[u8], offset: &mut usize) -> Result<Range, ParseError> {
                     }
                     b':' if first && k == 0 => return Err(not_ipv4(buf, tok_start)),
                     c if sep(c) => {
-                        if k != 3 {
+                        // C принимает "1.2.3." как 1.2.3.0 (massip-parse.c:658-703:
+                        // NUMBER3 без проверки digit_count); malformed, отвергаем (ruling).
+                        if k != 3 || digits == 0 {
                             return Err(ParseError::BadIpv4);
                         }
                         let value = (addr << 8) | tmp;
@@ -337,9 +339,13 @@ fn parse_range_at(buf: &[u8], offset: &mut usize) -> Result<Range, ParseError> {
                         return Err(ParseError::BadIpv4);
                     }
                 }
-                // Как в C, "a.b.c.d/" без цифр даёт /0 (digit_count == 0 не
-                // проверяется, massip-parse.c:IPV4_CIDR_NUM).
+                // C принимает "a.b.c.d/" без цифр как /0, т.е. всё пространство IPv4
+                // (massip-parse.c:538 IPV4_CIDR_NUM не проверяет digit_count).
+                // Это опечатка, а не намерение: отвергаем (ruling).
                 b':' | b',' | b' ' | b'\t' | b'\r' | b'\n' => {
+                    if digits == 0 {
+                        return Err(ParseError::BadIpv4);
+                    }
                     *offset = consumed;
                     return Ok(apply_cidr(begin, tmp));
                 }
@@ -633,29 +639,17 @@ mod tests {
             }]
         );
         assert!(one("1.2.3.4/33").is_err());
-        // Недописанные адреса C принимает с нулями (проверено на харнессе).
-        assert_eq!(
-            one("1.2.3.").unwrap(),
-            vec![Range {
-                begin: 0x0102_0300,
-                end: 0x0102_0300
-            }]
-        );
-        assert_eq!(
-            one("0.0.0./0").unwrap(),
-            vec![Range {
-                begin: 0,
-                end: u32::MAX
-            }]
-        );
-        // "a.b.c.d/" без цифр — это /0, как в C.
-        assert_eq!(
-            one("1.2.3.4/").unwrap(),
-            vec![Range {
-                begin: 0,
-                end: u32::MAX
-            }]
-        );
+        // C принимает эти формы (проверено на харнессе), мы отвергаем (ruling).
+        for bad in [
+            "1.2.3.",
+            "0.0.0./0",
+            "1.2.3.4/",
+            "1.2.3.4/,5.6.7.8",
+            "1.2.3.-1.2.3.4",
+            "1.2.3.4-1.2.3.",
+        ] {
+            assert_eq!(one(bad), Err(ParseError::BadIpv4), "{bad}");
+        }
         // Unicode-дефис U+2013
         assert_eq!(
             one("1.1.1.1\u{2013}1.1.1.3").unwrap(),

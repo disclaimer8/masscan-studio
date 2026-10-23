@@ -1,0 +1,11 @@
+rmasscan
+A Rust port of the masscan scanner core.
+
+This work is derived from masscan:
+  Copyright (C) Robert David Graham
+  https://github.com/robertdavidgraham/masscan (reference commit 8e6b3b0)
+  Licensed under the GNU Affero General Public License v3.0 (see LICENSE).
+
+The portion ported from src/util-checksum.c (rmasscan-core checksum module) is
+licensed upstream under the MIT License (Copyright 2020 Robert David Graham).
+It is distributed here as part of an AGPL-3.0-only work.

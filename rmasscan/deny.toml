@@ -42,6 +42,9 @@ allow-build-scripts = [
     { name = "thiserror", version = "=2.0.21" },
     { name = "num-traits", version = "=0.2.19" },
     { name = "zmij", version = "=1.0.23" },
+    # sha2 -> digest -> generic-array: build.rs только вызывает version_check и
+    # выставляет cfg relaxed_coherence; C не компилируется (проверено чтением build.rs).
+    { name = "generic-array", version = "=0.14.7" },
     # Выбор cfg под платформу (линковка с ОС, а не компиляция C).
     { name = "libc", version = "=0.2.191" },
     { name = "rustix", version = "=1.1.5" },

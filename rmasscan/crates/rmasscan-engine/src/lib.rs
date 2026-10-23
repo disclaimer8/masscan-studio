@@ -18,14 +18,18 @@
 //! вычисляется тем из двух потоков, который завершается вторым, то есть уже
 //! после остановки обоих; он хранится отдельно от очереди результатов.
 
+pub mod checkpoint;
 pub mod engine;
 pub mod events;
 pub mod fake;
+pub mod identity;
 pub mod io;
 
+pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 pub use engine::{
     CancelHandle, DedupCache, Engine, EngineError, EngineHandle, EngineOptions, MAX_DEDUP_ENTRIES,
     MAX_IO_TIMEOUT, StartError,
 };
 pub use events::{Event, FailReason, Outcome, Progress, Reason};
+pub use identity::{ENGINE_ALGORITHM_VERSION, job_digest};
 pub use io::{AdapterPair, IoError, Rx, SendStatus, Tx};

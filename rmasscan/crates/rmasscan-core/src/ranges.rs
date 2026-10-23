@@ -169,8 +169,12 @@ impl RangeList {
     pub fn count(&self) -> u64 {
         self.list
             .iter()
-            .map(|r| u64::from(r.end) - u64::from(r.begin) + 1)
-            .sum()
+            .map(|r| {
+                u64::from(r.end)
+                    .wrapping_sub(u64::from(r.begin))
+                    .wrapping_add(1)
+            })
+            .fold(0, u64::wrapping_add)
     }
 
     /// massip-rangesv4.c:884 `rangelist_optimize`: префиксные суммы для
@@ -196,11 +200,13 @@ impl RangeList {
     /// massip-rangesv4.c:820 `rangelist_pick_linearsearch`.
     fn pick_linear(&self, mut index: u64) -> u32 {
         for r in &self.list {
-            let size = u64::from(r.end) - u64::from(r.begin) + 1;
+            let size = u64::from(r.end)
+                .wrapping_sub(u64::from(r.begin))
+                .wrapping_add(1);
             if index < size {
                 return r.begin.wrapping_add(index as u32);
             }
-            index -= size;
+            index = index.wrapping_sub(size);
         }
         panic!("rangelist pick: index out of range (C: assert \"end of list\")");
     }
@@ -253,6 +259,13 @@ impl RangeList {
                     newlist.add_range(range.begin, range.end);
                     range = split;
                 }
+                // QUIRK, kept deliberately for oracle parity (C :766). After
+                // case 2 of apply_exclude the target is INVALID_RANGE {2,1},
+                // so `range.end == 1`. An exclude with begin 0 or 1 that fully
+                // covers this target and extends into the next one does not
+                // satisfy `begin > 1`, so it falls through to `x += 1` and is
+                // never applied to later targets. With begin >= 2 it breaks
+                // here and is retried on the next target.
                 if excludes.list[x].begin > range.end {
                     break;
                 }
@@ -265,9 +278,8 @@ impl RangeList {
 
         self.list = newlist.list;
         self.picker = None;
-        self.is_sorted = newlist.is_sorted;
-        // Разбиение могло нарушить порядок: пересортировать (C :788).
-        self.sort_and_merge();
+        // C :787 rangelist_sort is a no-op here: is_sorted stays 1 from :738.
+        self.is_sorted = true;
     }
 }
 
@@ -295,25 +307,25 @@ mod tests {
     /// для `exclude_selftest`. Арифметика `end+1`/`begin-1` с оборачиванием.
     fn remove_range(t: &mut RangeList, begin: u32, end: u32) {
         let x = r(begin, end);
-        let mut i: i64 = 0;
-        while (i as usize) < t.list.len() {
-            let cur = t.list[i as usize];
+        let mut i: usize = 0;
+        while i < t.list.len() {
+            let cur = t.list[i];
             if !Range::is_overlap(cur, x) {
                 i += 1;
                 continue;
             }
             if begin <= cur.begin && end >= cur.end {
-                t.list.remove(i as usize);
+                t.list.remove(i);
                 continue;
             }
             if begin > cur.begin && end < cur.end {
                 let (nb, ne) = (end.wrapping_add(1), cur.end);
-                t.list[i as usize].end = begin.wrapping_sub(1);
+                t.list[i].end = begin.wrapping_sub(1);
                 t.add_range(nb, ne);
                 // C: i-- затем i++ из цикла for, то есть тот же индекс.
                 continue;
             }
-            let cur = &mut t.list[i as usize];
+            let cur = &mut t.list[i];
             if end >= cur.begin && end < cur.end {
                 cur.begin = end.wrapping_add(1);
             }
@@ -417,7 +429,7 @@ mod tests {
 
     #[test]
     fn removal_reference_selftest() {
-        // ranges_selftest :1300-1380 (Test removal), числа захардкожены.
+        // ranges_selftest :1306-1360 (Test removal), числа захардкожены.
         let mut t = list(&[(0x0a00_0000, 0x0aff_ffff)]);
         t.sort_and_merge();
         remove_range(&mut t, 0x09ff_ffff, 0x09ff_ffff);
@@ -445,11 +457,33 @@ mod tests {
 
     #[test]
     fn ports_selftest() {
-        // ranges_selftest :1383 "80,1000-2000,1234,4444" (парсер — Задача 2).
+        // ranges_selftest :1363-1381 "80,1000-2000,1234,4444" (парсер — Задача 2).
         let mut t = list(&[(80, 80), (1000, 2000), (1234, 1234), (4444, 4444)]);
         t.sort_and_merge();
         assert_eq!(t.as_slice(), &[r(80, 80), r(1000, 2000), r(4444, 4444)]);
         assert!(t.is_contains(1500) && t.is_contains(80) && !t.is_contains(81));
+    }
+
+    #[test]
+    fn exclude_quirk_invalid_range_end_is_1() {
+        // C :766 quirk, oracle-confirmed values.
+        let run = |inc: &[(u32, u32)], ex: (u32, u32)| {
+            let mut t = list(inc);
+            t.exclude(&mut list(&[ex]));
+            t.as_slice().to_vec()
+        };
+        assert_eq!(run(&[(0, 10), (20, 30)], (0, 25)), [r(20, 30)]);
+        assert_eq!(run(&[(1, 10), (20, 30)], (1, 25)), [r(20, 30)]);
+        // control: begin >= 2 behaves "correctly"
+        assert_eq!(run(&[(2, 10), (20, 30)], (2, 25)), [r(26, 30)]);
+    }
+
+    #[test]
+    fn reversed_range_does_not_panic() {
+        let mut t = list(&[(0x0a00_0005, 0x0a00_0003)]);
+        assert_eq!(t.count(), 0xffff_ffff_ffff_ffff);
+        t.optimize();
+        let _ = t.pick(0);
     }
 
     #[test]

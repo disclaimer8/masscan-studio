@@ -389,6 +389,14 @@ impl Drop for ExitGuard {
 
 // ------------------------------------------------------------------ tx ----
 
+/// Ожидание после `WouldBlockUnsent` перед повтором того же кадра.
+///
+/// 1 мс это НОВОЕ РЕШЕНИЕ плана 2B-Linux, а не результат измерения
+/// производительности: оно лишь убирает busy-spin и укладывается в контракт
+/// "Stop/Pause <= 1 с" (один сон короче любого лимита отмены). Значение можно
+/// пересмотреть после замеров на реальном адаптере.
+const WOULD_BLOCK_BACKOFF_MICROS: u64 = 1_000;
+
 fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f64) {
     let _guard = ExitGuard {
         shared: shared.clone(),
@@ -442,7 +450,17 @@ fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f
                     left -= 1;
                 }
                 // Кадр точно не ушёл: курсор стоит, предложим тот же кадр.
-                Ok(SendStatus::WouldBlockUnsent) => {}
+                Ok(SendStatus::WouldBlockUnsent) => {
+                    // Не крутимся вхолостую: короткое ожидание по тем же
+                    // инжектируемым часам, отмена проверяется до и после.
+                    if halted() {
+                        break 'run END_HALTED;
+                    }
+                    clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
+                    if halted() {
+                        break 'run END_HALTED;
+                    }
+                }
                 Ok(SendStatus::Uncertain) => {
                     shared.fail(FailReason::TxUncertain);
                     break 'run END_HALTED;

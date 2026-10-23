@@ -176,6 +176,10 @@ impl Throttler {
                 self.batch_size *= 0.999;
                 let mut remaining = (waittime * 1_000_000.0) as u64;
                 loop {
+                    // Отмена, обнаруженная прямо перед сном, не начинает новый сон.
+                    if cancelled() {
+                        return Err(ThrottleCancelled);
+                    }
                     let part = remaining.min(chunk);
                     clock.sleep_micros(part);
                     remaining -= part;
@@ -412,6 +416,21 @@ mod tests {
         });
         assert_eq!(res, Err(ThrottleCancelled));
         assert_eq!(c.sleeps.get(), 0);
+    }
+
+    #[test]
+    fn cancel_detected_right_before_a_sleep_starts_no_new_sleep() {
+        let c = FakeClock::with_tick(1);
+        let mut t = Throttler::start(1.0, &c); // rate=1: требуется сон
+        c.advance_micros(10);
+        let checks = Cell::new(0u32);
+        // 1-я проверка (верх цикла) пуста; 2-я, прямо перед сном, срабатывает.
+        let res = t.next_batch_interruptible(1000, &c, || {
+            checks.set(checks.get() + 1);
+            checks.get() >= 2
+        });
+        assert_eq!(res, Err(ThrottleCancelled));
+        assert_eq!(c.sleeps.get(), 0, "a sleep started after cancellation");
     }
 
     #[test]

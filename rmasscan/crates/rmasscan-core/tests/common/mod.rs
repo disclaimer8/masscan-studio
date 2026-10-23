@@ -28,29 +28,33 @@ pub fn load_manifest() -> Manifest {
     serde_json::from_str(&text).unwrap()
 }
 
-/// Параметры `-sL` кейса.
+/// Параметры `-sL` кейса (то, что `main_listscan` берёт из Masscan).
 pub struct ListSpec {
     pub targets: String,
     pub ports: String,
     pub excludes: Vec<String>,
     pub seed: u64,
     pub rounds: u32,
-    /// `resume.index + (shard.one - 1)` (main-listscan.c:29).
-    pub start: u64,
-    /// `shard.of` (main-listscan.c:14).
-    pub step: u64,
-    /// `resume.count`, 0 = без ограничения (main-listscan.c:31).
-    pub resume_count: u64,
+    /// `shard.one`, `shard.of` (по умолчанию 1/1).
+    pub shard_one: u32,
+    pub shard_of: u32,
+    pub resume_index: u64,
+    /// `resume.count`, `None` = не задан (C: 0 = без ограничения).
+    pub resume_count: Option<u64>,
+    pub retries: u32,
+    /// `(uint64_t)max_rate`; по умолчанию 100 (main.c:1599), задаётся `--rate`.
+    pub max_rate: u64,
 }
 
-/// `Err(reason)` когда кейс вне области v1 (retries != 0, неизвестные опции).
+/// `Err(reason)` когда кейс вне области v1 (неизвестные опции).
 /// IPv6 определяется вызывающим по `targets`.
 pub fn parse_listscan_args(args: &[String]) -> Result<ListSpec, String> {
     let (mut targets, mut ports) = (None, None);
     let mut excludes = Vec::new();
     let (mut seed, mut rounds) = (None, 14u32); // main.c:1595
-    let (mut shard_one, mut shard_of) = (1u64, 1u64);
-    let (mut resume_index, mut resume_count) = (0u64, 0u64);
+    let (mut shard_one, mut shard_of) = (1u32, 1u32);
+    let (mut resume_index, mut resume_count) = (0u64, None);
+    let (mut retries, mut max_rate) = (0u32, 100u64); // main.c:1599
     let mut it = args.iter().skip(1); // -sL
     while let Some(a) = it.next() {
         let mut val = |name: &str| it.next().cloned().ok_or(format!("missing {name} value"));
@@ -59,21 +63,18 @@ pub fn parse_listscan_args(args: &[String]) -> Result<ListSpec, String> {
             "--seed" => seed = Some(num(val("seed")?)?),
             "--blackrock-rounds" => rounds = num(val("rounds")?)? as u32,
             "--exclude" => excludes.push(val("exclude")?),
-            "--retries" => {
-                if val("retries")? != "0" {
-                    return Err("retries != 0".into());
-                }
-            }
+            "--retries" => retries = num(val("retries")?)? as u32,
+            "--rate" => max_rate = num(val("rate")?)?,
             "--shard" => {
                 let v = val("shard")?;
                 let (o, f) = v.split_once('/').ok_or("bad shard")?;
-                (shard_one, shard_of) = (num(o.into())?, num(f.into())?);
+                (shard_one, shard_of) = (num(o.into())? as u32, num(f.into())? as u32);
                 if shard_one == 0 || shard_one > shard_of {
                     return Err("bad shard".into());
                 }
             }
             "--resume-index" => resume_index = num(val("resume-index")?)?,
-            "--resume-count" => resume_count = num(val("resume-count")?)?,
+            "--resume-count" => resume_count = Some(num(val("resume-count")?)?),
             o if o.starts_with("--") => return Err(format!("unsupported option {o}")),
             p if p.starts_with("-p") => {
                 if ports.replace(p[2..].to_string()).is_some() {
@@ -93,9 +94,12 @@ pub fn parse_listscan_args(args: &[String]) -> Result<ListSpec, String> {
         excludes,
         seed: seed.ok_or("no --seed")?,
         rounds,
-        start: resume_index + (shard_one - 1),
-        step: shard_of,
+        shard_one,
+        shard_of,
+        resume_index,
         resume_count,
+        retries,
+        max_rate,
     })
 }
 

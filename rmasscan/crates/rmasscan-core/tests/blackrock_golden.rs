@@ -43,8 +43,13 @@ fn parse_range(s: &str) -> Result<(u32, u32), String> {
 /// `Err(reason)` когда кейс нельзя выразить одним BlackRock.
 fn spec_for(args: &[String]) -> Result<Spec, String> {
     let l = parse_listscan_args(args)?;
-    if !l.excludes.is_empty() || l.start != 0 || l.step != 1 || l.resume_count != 0 {
-        return Err("exclude/shard/resume".into());
+    if !l.excludes.is_empty()
+        || l.resume_index != 0
+        || (l.shard_one, l.shard_of) != (1, 1)
+        || l.resume_count.is_some()
+        || l.retries != 0
+    {
+        return Err("exclude/shard/resume/retries".into());
     }
     if l.targets.contains(',') || l.targets.contains(':') {
         return Err(format!("not a single IPv4 range: {}", l.targets));

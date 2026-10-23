@@ -84,7 +84,12 @@ fn build_graph_has_no_c_toolchain_crates() {
     );
     let text = String::from_utf8_lossy(&out.stdout);
     let names = package_names(&text);
-    for own in ["rmasscan-core", "rmasscan-cli", "rmasscan-engine"] {
+    for own in [
+        "rmasscan-core",
+        "rmasscan-cli",
+        "rmasscan-engine",
+        "rmasscan-net",
+    ] {
         assert!(
             names.contains(own),
             "в выводе cargo tree нет {own}:\n{text}"

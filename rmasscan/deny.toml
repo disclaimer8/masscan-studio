@@ -48,6 +48,7 @@ allow-build-scripts = [
     # выставляет cfg relaxed_coherence; C не компилируется (проверено чтением build.rs).
     { name = "generic-array", version = "=0.14.7" },
     # Выбор cfg под платформу (линковка с ОС, а не компиляция C).
+    # Также нужен rmasscan-net (FFI-объявления AF_PACKET; build.rs libc C не компилирует).
     { name = "libc", version = "=0.2.191" },
     { name = "rustix", version = "=1.1.5" },
     { name = "getrandom", version = "=0.4.3" },

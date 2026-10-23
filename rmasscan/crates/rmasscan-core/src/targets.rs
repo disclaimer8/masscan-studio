@@ -120,7 +120,7 @@ pub fn range_parse_ipv4(line: &str) -> Result<Range, ParseError> {
     } else if offset < max && line[offset] == b'-' {
         let (ip, off) = parse_ipv4(line, offset + 1).ok_or(ParseError::BadIpv4)?;
         offset = off;
-        // C (massip-rangesv4.c:596) тоже отвергает обратный диапазон.
+        // C (massip-rangesv4.c:621-627) тоже отвергает обратный диапазон.
         if ip < begin {
             return Err(ParseError::ReversedRange);
         }
@@ -240,6 +240,12 @@ fn parse_range_at(buf: &[u8], offset: &mut usize) -> Result<Range, ParseError> {
                 let sep = |c: u8| matches!(c, b',' | b' ' | b'\t' | b'\r' | b'\n' | b':');
                 match c {
                     b'.' => {
+                        // Пустой октет ("1..2.3" C читает как 1.0.2.3, "x-.1.2.3"
+                        // аналогично) — опечатка, отвергаем (ruling), как и
+                        // хвостовую точку; C: massip-parse.c:608-620 не смотрит digit_count.
+                        if digits == 0 {
+                            return Err(ParseError::BadIpv4);
+                        }
                         addr = (addr << 8) | tmp;
                         tmp = 0;
                         digits = 0;
@@ -440,6 +446,9 @@ pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
         let port: u64 = match b.get(p) {
             Some(b'-') => 1,
             Some(c) if c.is_ascii_digit() => strtoul0(b, &mut p),
+            // C (massip-rangesv4.c:1048-1050) молча обрывает разбор: "80 443",
+            // "80,,81", "80;443", "08" дают {80}/{80}/{80}/{0}, ",80" и "T: 80"
+            // — пусто. Спека §4.1: ошибка, а не тихая потеря (ruling).
             _ => return Err(ParseError::BadPort),
         };
 
@@ -470,10 +479,13 @@ pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
         if p >= b.len() {
             break;
         }
-        // C (:1090) просто выходит, если дальше не запятая; `#` там — комментарий.
+        // C (:1084-1085) просто выходит, если дальше не запятая; `#` там — комментарий.
         if b[p] == b'#' {
             break;
         }
+        // Здесь C (:1084-1085) тоже просто выходит и теряет остаток
+        // ("80- 90" -> 80-65535, "80 - 90" -> {80}, "80-90-100" -> 80-90); мы
+        // возвращаем ошибку (ruling).
         if b[p] != b',' {
             return Err(ParseError::BadPort);
         }
@@ -524,13 +536,14 @@ mod tests {
 
     #[test]
     fn parse_ipv4_rejects_bad_octets() {
+        // massip-rangesv4.c:1250-1285
         for bad in ["75.748.86.91", "23.75.345.200", "192.1083.0.1", "0.0.0./0"] {
             assert!(range_parse_ipv4(bad).is_err(), "{bad}");
         }
-        // Автомат `massip_parse_range` (путь --range) строже по октетам, но
-        // принимает "0.0.0./0" как /0 (проверено на C-харнессе), поэтому
-        // тот случай здесь не проверяется.
-        for bad in ["75.748.86.91", "23.75.345.200", "192.1083.0.1"] {
+        // Путь --range (автомат massip_parse_range). Селфтесты C:
+        // massip-rangesv4.c:1250-1285; "0.0.0./0" C-автомат принимает как /0,
+        // мы отвергаем (ruling).
+        for bad in ["75.748.86.91", "23.75.345.200", "192.1083.0.1", "0.0.0./0"] {
             let mut l = RangeList::new();
             assert!(add_target_string(&mut l, bad).is_err(), "{bad}");
         }
@@ -674,6 +687,14 @@ mod tests {
                 end: 2000
             }
         );
+        // massip-rangesv4.c:1378-1381
+        assert_eq!(
+            p.get(2),
+            Range {
+                begin: 4444,
+                end: 4444
+            }
+        );
         // Review Focus №5: не-TCP префиксы отклоняются
         assert_eq!(
             parse_ports(&mut RangeList::new(), "U:53"),
@@ -754,6 +775,55 @@ mod tests {
         let mut l = RangeList::new();
         assert!(parse_ports(&mut l, "80,U:53").is_err());
         assert!(l.is_empty());
+    }
+
+    #[test]
+    fn port_garbage_rejected_where_c_truncates() {
+        // C: {80}, {80}, 80-65535, {0}. Мы: ошибка (спека §4.1).
+        for bad in ["80 443", "80,,81", "80- 90", "08"] {
+            assert_eq!(
+                parse_ports(&mut RangeList::new(), bad),
+                Err(ParseError::BadPort),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_octets_rejected() {
+        for bad in [
+            "1..2.3",
+            "1.2..3",
+            "1.1.1.1-.1.2.3",
+            "1.1.1.1-1..2.3",
+            ".1.2.3",
+        ] {
+            let mut l = RangeList::new();
+            assert!(add_target_string(&mut l, bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn target_separators_and_host_bits() {
+        for s in [
+            "1.1.1.1\t2.2.2.2",
+            "1.1.1.1\n2.2.2.2",
+            "1.1.1.1\r2.2.2.2",
+            "1.1.1.1\r\n2.2.2.2",
+        ] {
+            let mut l = RangeList::new();
+            add_target_string(&mut l, s).unwrap();
+            assert_eq!(l.len(), 2, "{s:?}");
+        }
+        let mut l = RangeList::new();
+        add_target_string(&mut l, "10.0.1.2/16").unwrap();
+        assert_eq!(
+            l.as_slice(),
+            &[Range {
+                begin: 0x0a00_0000,
+                end: 0x0a00_ffff
+            }]
+        );
     }
 
     #[test]

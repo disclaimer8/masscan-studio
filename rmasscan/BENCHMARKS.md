@@ -42,8 +42,8 @@ sleep at `transmit_thread` start (main.c:231), a 100 ms sleep (:1395), the 750 m
 end-of-scan poll (:1440), the 250 ms wait-loop sleep (:1513) and the post-loop
 drain of 1000 x `usleep(100)` (:470-492). A two-point fit by the reviewer (2^28
 vs 2^24 targets) puts the fixed overhead at 2.3-3.1 s, i.e. 2.4-3.3% of 94 s.
-Removing it makes C about 2.92-2.94 M pps loop-only, so Rust is at parity,
-roughly 0.96-0.99 loop for loop.
+Removing it makes C about 2.91-2.94 M pps loop-only (2^28/(94.39-2.3) = 2,914,925
+at the low end), so Rust is at parity.
 
 Commands (from the repo root; the tree is shipped with `git archive`, not
 copied from a working tree):
@@ -73,8 +73,11 @@ All runs (2^28 packets, minipc):
 Median of the three 4dd24c8 runs: 2,882,526 pps. 4dd24c8 adds a per-packet
 `black_box(&frame)` (the previous two-byte read did not keep stores alive under
 LTO) and a no-op `on_target` hook; throughput did not drop. Runs vary by a few
-percent with machine load, so the reviewer's loaded-window ratios (0.98-0.99) are
-the conservative reading.
+percent with machine load. Wall clock against wall clock the ratios are 0.98-0.99
+(reviewer, loaded window) and 1.01 (manifest). The conservative loop-for-loop
+reading compares the reviewer's C user time (92.26 s) with the Rust loop time
+(96.409 s) and gives about 0.955-0.963, which is consistent with the headline
+"about 0.96-0.99".
 
 ### Other
 

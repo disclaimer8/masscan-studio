@@ -3,7 +3,7 @@
 //!
 //! `masscan --selftest` вызывает 31 тест подряд (src/main.c:1821-1851,
 //! `Operation_Selftest`). Таблица `PARITY` фиксирует для каждого из них, какой
-//! Rust-тест его переносит, либо что он отложен на этап 2 или не переносится,
+//! Rust-тест его переносит, либо что он отложен (`Stage2`: этап 2; `Later`: вне v1) или не переносится,
 //! с причиной. Тест `every_named_rust_test_exists` читает исходники через
 //! `include_str!` и проверяет, что каждое названное имя это реальная
 //! `fn имя(` с атрибутом `#[test]` у этой функции, так что переименование теста без
@@ -17,7 +17,10 @@ enum Status {
     Partial,
     /// Относится к I/O и приёмной части: этап 2.
     Stage2,
-    /// Не переносится вообще (нет аналога в порте).
+    /// Вне v1: UDP/ICMP-нагрузки, баннеры и тесты стадии 4; позже этапа 2.
+    Later,
+    /// Не переносится в v1 (IPv6, SCTP, лицензия NPSL и т.п.). Список `rust` может
+    /// содержать ближайшие IPv4-аналоги; это не порт C-теста.
     NotPorted,
 }
 use Status::*;
@@ -107,7 +110,7 @@ const PARITY: &[Entry] = &[
         c_test: "proto_coap_selftest",
         main_c_line: 1827,
         c_def: "proto-coap.c:646",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Разбор баннеров CoAP: приём/баннеры, этап 2+.",
     },
@@ -115,7 +118,7 @@ const PARITY: &[Entry] = &[
         c_test: "smack_selftest",
         main_c_line: 1828,
         c_def: "smack1.c:1690",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Автомат поиска шаблонов для баннеров (SMACK): этап 2+.",
     },
@@ -131,7 +134,7 @@ const PARITY: &[Entry] = &[
         c_test: "base64_selftest",
         main_c_line: 1830,
         c_def: "crypto-base64.c:180",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Нужен для баннеров/вывода; в этапе 1 нет.",
     },
@@ -139,7 +142,7 @@ const PARITY: &[Entry] = &[
         c_test: "banner1_selftest",
         main_c_line: 1831,
         c_def: "proto-banner1.c:706",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Баннеры вне этапа 1.",
     },
@@ -147,7 +150,7 @@ const PARITY: &[Entry] = &[
         c_test: "output_selftest",
         main_c_line: 1832,
         c_def: "output.c:995",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Форматы вывода результатов (XML/JSON/grep): этап 2+; \
                  -sL и --echo покрыты golden-тестами.",
@@ -167,7 +170,7 @@ const PARITY: &[Entry] = &[
         c_test: "ntp_selftest",
         main_c_line: 1834,
         c_def: "proto-ntp.c:289",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "UDP-протокол NTP: вне v1.",
     },
@@ -175,7 +178,7 @@ const PARITY: &[Entry] = &[
         c_test: "snmp_selftest",
         main_c_line: 1835,
         c_def: "proto-snmp.c:675",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "UDP-протокол SNMP: вне v1.",
     },
@@ -183,7 +186,7 @@ const PARITY: &[Entry] = &[
         c_test: "proto_isakmp_selftest",
         main_c_line: 1836,
         c_def: "proto-isakmp.c:547",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "UDP-протокол ISAKMP: вне v1.",
     },
@@ -191,7 +194,7 @@ const PARITY: &[Entry] = &[
         c_test: "templ_payloads_selftest",
         main_c_line: 1837,
         c_def: "templ-payloads.c:903",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "UDP-нагрузки: вне v1.",
     },
@@ -308,7 +311,7 @@ const PARITY: &[Entry] = &[
         c_test: "zeroaccess_selftest",
         main_c_line: 1847,
         c_def: "proto-zeroaccess.c:274",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "UDP-протокол ZeroAccess: вне v1.",
     },
@@ -316,15 +319,16 @@ const PARITY: &[Entry] = &[
         c_test: "nmapserviceprobes_selftest",
         main_c_line: 1848,
         c_def: "read-service-probes.c:1131",
-        status: Stage2,
+        status: NotPorted,
         rust: &[],
-        reason: "Файл nmap-service-probes для баннеров: этап 2+.",
+        reason: "Файл nmap-service-probes (read-service-probes.c) под лицензией NPSL, \
+                 несовместимой с AGPL-портом (спека §8.3): не переносится.",
     },
     Entry {
         c_test: "rstfilter_selftest",
         main_c_line: 1849,
         c_def: "misc-rstfilter.c:138",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Фильтр RST на приёмной стороне: этап 2.",
     },
@@ -332,7 +336,7 @@ const PARITY: &[Entry] = &[
         c_test: "masscan_app_selftest",
         main_c_line: 1850,
         c_def: "masscan-app.c:115",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Имена протоколов приложений для вывода баннеров: этап 2+.",
     },
@@ -340,7 +344,7 @@ const PARITY: &[Entry] = &[
         c_test: "icmp_selftest",
         main_c_line: 1851,
         c_def: "proto-icmp.c:57",
-        status: Stage2,
+        status: Later,
         rust: &[],
         reason: "Разбор ICMP-ответов: приёмная часть, этап 2.",
     },
@@ -430,7 +434,7 @@ fn statuses_are_consistent_with_mappings_and_reasons() {
             Ported | Partial => assert!(!e.rust.is_empty(), "{}: нет Rust-тестов", e.c_test),
             // У NotPorted `rust` может перечислять IPv4-аналоги (не порт).
             NotPorted => {}
-            Stage2 => assert!(e.rust.is_empty(), "{}: есть тесты", e.c_test),
+            Stage2 | Later => assert!(e.rust.is_empty(), "{}: есть тесты", e.c_test),
         }
     }
 }
@@ -440,10 +444,11 @@ fn print_parity_summary() {
     // Видно с `--nocapture`: сводка по статусам.
     let count = |s| PARITY.iter().filter(|e| e.status == s).count();
     println!(
-        "selftest parity: ported={} partial={} stage2={} not_ported={}",
+        "selftest parity: ported={} partial={} stage2={} later={} not_ported={}",
         count(Ported),
         count(Partial),
         count(Stage2),
+        count(Later),
         count(NotPorted)
     );
 }

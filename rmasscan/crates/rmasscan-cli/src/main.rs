@@ -4,6 +4,8 @@
 //! `src/main-ptrace.c` из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 
+#![forbid(unsafe_code)]
+
 mod args;
 
 use std::io::{self, BufWriter, Write};

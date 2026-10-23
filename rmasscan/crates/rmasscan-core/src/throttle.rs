@@ -8,6 +8,16 @@
 
 use std::time::{Duration, Instant};
 
+/// Максимальный отрезок сна внутри [`Throttler::next_batch_interruptible`]:
+/// между отрезками проверяется флаг отмены (требование runtime: Stop/Pause
+/// обрабатываются за доли секунды даже на rate=1).
+pub const MAX_SLEEP_CHUNK_MICROS: u64 = 50_000;
+
+/// Ожидание throttle прервано флагом отмены.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("throttle wait cancelled")]
+pub struct ThrottleCancelled;
+
 /// Источник времени и сна. Подменяется в тестах.
 pub trait Clock {
     /// Монотонное время в МИКРОСЕКУНДАХ (как `pixie_gettime()`,
@@ -64,7 +74,7 @@ pub struct Throttler {
 
 impl Throttler {
     /// `throttler_start`, main-throttle.c:28: все корзины = now, batch_size = 1.
-    pub fn start(max_rate: f64, clock: &impl Clock) -> Self {
+    pub fn start(max_rate: f64, clock: &(impl Clock + ?Sized)) -> Self {
         let mut buckets = [(0u64, 0u64); 256];
         for b in buckets.iter_mut() {
             *b = (clock.now_micros(), 0);
@@ -94,9 +104,45 @@ impl Throttler {
     /// число отправленных пакетов (накопительное). Возвращает размер пачки;
     /// как в C это `(uint64_t)batch_size`, поэтому при batch_size < 1 вернётся 0
     /// (приведение double -> uint64 усекает к нулю).
-    pub fn next_batch(&mut self, packet_count: u64, clock: &impl Clock) -> u64 {
+    ///
+    /// Совместимая обёртка над [`Self::next_batch_interruptible`] без отмены и
+    /// без дробления сна: последовательность вызовов часов и сна такая же, как
+    /// в C (stage-1 golden и benchmark не меняются).
+    ///
+    /// Контракт вызывающего: один `Throttler` на TX-поток, запущенный с
+    /// плановой скоростью; `start` и `next_batch` получают одни и те же часы;
+    /// результат 0 означает "вызвать снова".
+    pub fn next_batch(&mut self, packet_count: u64, clock: &(impl Clock + ?Sized)) -> u64 {
+        self.next_batch_impl(packet_count, clock, &|| false, u64::MAX)
+            .unwrap_or(0)
+    }
+
+    /// То же, что [`Self::next_batch`], но отменяемо: `cancelled` проверяется
+    /// в начале каждого повтора цикла, до и после каждого сна, а длинный сон
+    /// режется на отрезки не длиннее [`MAX_SLEEP_CHUNK_MICROS`]. Проверки
+    /// только снаружи `next_batch` недостаточны (один вызов может спать
+    /// секунды на малой скорости).
+    pub fn next_batch_interruptible(
+        &mut self,
+        packet_count: u64,
+        clock: &(impl Clock + ?Sized),
+        cancelled: impl Fn() -> bool,
+    ) -> Result<u64, ThrottleCancelled> {
+        self.next_batch_impl(packet_count, clock, &cancelled, MAX_SLEEP_CHUNK_MICROS)
+    }
+
+    fn next_batch_impl(
+        &mut self,
+        packet_count: u64,
+        clock: &(impl Clock + ?Sized),
+        cancelled: &dyn Fn() -> bool,
+        chunk: u64,
+    ) -> Result<u64, ThrottleCancelled> {
         let max_rate = self.max_rate;
         loop {
+            if cancelled() {
+                return Err(ThrottleCancelled);
+            }
             // :69
             let timestamp = clock.now_micros();
 
@@ -128,7 +174,18 @@ impl Throttler {
                     waittime = 0.1;
                 }
                 self.batch_size *= 0.999;
-                clock.sleep_micros((waittime * 1_000_000.0) as u64);
+                let mut remaining = (waittime * 1_000_000.0) as u64;
+                loop {
+                    let part = remaining.min(chunk);
+                    clock.sleep_micros(part);
+                    remaining -= part;
+                    if cancelled() {
+                        return Err(ThrottleCancelled);
+                    }
+                    if remaining == 0 {
+                        break;
+                    }
+                }
                 continue;
             }
 
@@ -138,7 +195,7 @@ impl Throttler {
                 self.batch_size = 10000.0;
             }
             self.current_rate = current_rate;
-            return self.batch_size as u64;
+            return Ok(self.batch_size as u64);
         }
     }
 }
@@ -280,5 +337,104 @@ mod tests {
         let a = c.now_micros();
         c.sleep_micros(2000);
         assert!(c.now_micros() >= a + 2000);
+    }
+
+    // ---- отмена внутри throttle ----
+
+    #[test]
+    fn cancelled_before_any_clock_read_returns_err() {
+        let c = FakeClock::new();
+        let mut t = Throttler::start(100.0, &c);
+        let before = c.now.get();
+        assert_eq!(
+            t.next_batch_interruptible(0, &c, || true),
+            Err(ThrottleCancelled)
+        );
+        assert_eq!(c.now.get(), before);
+        assert_eq!(c.sleeps.get(), 0);
+    }
+
+    #[test]
+    fn interruptible_without_cancel_matches_next_batch() {
+        let a = FakeClock::with_tick(1);
+        let b = FakeClock::with_tick(1);
+        let mut ta = Throttler::start(20_000.0, &a);
+        let mut tb = Throttler::start(20_000.0, &b);
+        let mut pc = 0;
+        for _ in 0..200 {
+            a.advance_micros(7);
+            b.advance_micros(7);
+            pc += 3;
+            let x = ta.next_batch(pc, &a);
+            let y = tb.next_batch_interruptible(pc, &b, || false).unwrap();
+            assert_eq!(x, y);
+            assert_eq!(ta.current_rate().to_bits(), tb.current_rate().to_bits());
+        }
+    }
+
+    #[test]
+    fn long_sleep_is_split_into_chunks_of_at_most_50ms() {
+        // Тот же сценарий, что over_rate_sleeps_with_capped_wait: один сон в
+        // 100 мс. Обёртка спит одним вызовом, интерруптибл: двумя по 50 мс.
+        let c = FakeClock::with_tick(1);
+        let mut t = Throttler::start(20_000.0, &c);
+        t.batch_size = 100.0;
+        c.advance_micros(10);
+        let r = t.next_batch_interruptible(1000, &c, || false).unwrap();
+        assert_eq!(c.sleeps.get(), 2);
+        assert!(c.now.get() >= 1_000_000 + 100_000);
+        assert_eq!(r, 100);
+    }
+
+    #[test]
+    fn cancel_during_long_sleep_stops_after_one_chunk() {
+        let c = FakeClock::with_tick(1);
+        let mut t = Throttler::start(1.0, &c); // rate=1: сон капится 100 мс
+        c.advance_micros(10);
+        let sleeps = &c.sleeps;
+        let res = t.next_batch_interruptible(1000, &c, || sleeps.get() >= 1);
+        assert_eq!(res, Err(ThrottleCancelled));
+        // Один отрезок <= 50 мс, а не весь сон и не повтор цикла.
+        assert_eq!(c.sleeps.get(), 1);
+        assert!(c.now.get() < 1_000_000 + 60_000);
+    }
+
+    #[test]
+    fn cancel_is_checked_inside_the_retry_loop_without_sleeps() {
+        // Часы прыгают на 2 с при каждом чтении: ветка ":88 разрыв > 1 с" ->
+        // `continue` повторяется бесконечно, сна нет. Отмена обязана её прервать.
+        let c = FakeClock::with_tick(2_000_000);
+        let mut t = Throttler::start(100.0, &c);
+        let checks = Cell::new(0u32);
+        let res = t.next_batch_interruptible(1, &c, || {
+            checks.set(checks.get() + 1);
+            checks.get() > 5
+        });
+        assert_eq!(res, Err(ThrottleCancelled));
+        assert_eq!(c.sleeps.get(), 0);
+    }
+
+    #[test]
+    fn cancel_after_sleep_is_noticed_before_next_clock_read() {
+        let c = FakeClock::with_tick(1);
+        let mut t = Throttler::start(20_000.0, &c);
+        t.batch_size = 100.0;
+        c.advance_micros(10);
+        let flag = Cell::new(false);
+        // Отмена выставляется внутри сна (после первого отрезка).
+        struct Hook<'a>(&'a FakeClock, &'a Cell<bool>);
+        impl Clock for Hook<'_> {
+            fn now_micros(&self) -> u64 {
+                self.0.now_micros()
+            }
+            fn sleep_micros(&self, us: u64) {
+                self.0.sleep_micros(us);
+                self.1.set(true);
+            }
+        }
+        let h = Hook(&c, &flag);
+        let res = t.next_batch_interruptible(1000, &h, || flag.get());
+        assert_eq!(res, Err(ThrottleCancelled));
+        assert_eq!(c.sleeps.get(), 1);
     }
 }

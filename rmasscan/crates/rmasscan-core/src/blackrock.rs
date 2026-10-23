@@ -28,7 +28,8 @@ pub const SBOX: [u8; 256] = [
 /// Ошибки конструктора.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BlackRockError {
-    /// `range == 0`: в C `a = b = 0` и деление на ноль (crypto-blackrock.c:117).
+    /// `range == 0`: в C `a = b = 0` (crypto-blackrock.c:117-120) и цикл
+    /// `while (a*b <= range) b++` (:151-152) не завершается.
     #[error("blackrock range must be non-zero")]
     EmptyRange,
     /// `seed >> (64 - r)` в C определён только для `r < 64`.
@@ -68,7 +69,7 @@ impl BlackRock {
             // `(uint64_t)(root - 2)`; для range >= 9 root >= 3, значит >= 1.
             _ => ((root - 2.0) as u64, (root + 3.0) as u64),
         };
-        // :150
+        // :151
         while a.wrapping_mul(b) <= range {
             b = b.wrapping_add(1);
         }
@@ -119,11 +120,10 @@ fn read(r: u64, big_r: u64, seed: u64) -> u64 {
     // `& 0x0ffffFFFF`, т.е. результат равен вычислению в u32/u64 с маской.
     let s = |n: u32| -> u32 { SBOX[byte(n)] as u32 };
     let r0 = (s(0) as u64) | ((s(1) as u64) << 8);
-    // `16UL`/`24UL`: сдвиг в unsigned long (64 бита), без знаковых эффектов.
     let r1 = (((s(2) as u64) << 16) | ((s(3) as u64) << 24)) & 0xffff_ffff;
     let r2 = (s(4) as u64) | ((s(5) as u64) << 8);
     let r3 = (((s(6) as u64) << 16) | ((s(7) as u64) << 24)) & 0xffff_ffff;
-    // :181. `r2<<23UL ^ r3<<33UL`: старшие биты отбрасываются, как в C.
+    // :178. `r2<<23UL ^ r3<<33UL`: старшие биты отбрасываются, как в C.
     r0 ^ r1 ^ r2.wrapping_shl(23) ^ r3.wrapping_shl(33)
 }
 

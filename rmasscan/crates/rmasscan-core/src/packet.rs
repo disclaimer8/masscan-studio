@@ -253,9 +253,9 @@ mod tests {
         assert_eq!(&n[0..4], &[2, 0, 0, 0]);
     }
 
-    /// Кадры из настоящего C (templ-pkt.c:1290-1352, :942-1021 дословно), см.
-    /// харнес /private/tmp/claude-501/-Users-denyskolomiiets-masscan/
-    /// db8417b2-853e-45c6-bc9c-f3bcc0978668/scratchpad/task7/h7.c.
+    /// Кадры из настоящего C (templ-pkt.c:1290-1352, :942-1021 дословно):
+    /// кадры посчитаны харнесом ревьюера (не закоммичен); воспроизводятся
+    /// линковкой немодифицированного templ-pkt.c (8e6b3b0).
     /// seqno = (unsigned)syn_cookie_ipv4 (main.c:402), энтропия 0x1122334455667788.
     /// (link, ip_them, port_them, ip_me, port_me, seqno, кадр). Первые три строки:
     /// принудительный seqno 0xFFFFFFFF и сумма u64 > 2^32.

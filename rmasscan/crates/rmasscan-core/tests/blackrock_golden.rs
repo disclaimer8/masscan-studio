@@ -89,9 +89,10 @@ fn listscan_order_matches_oracle_for_single_range_single_port() {
             }
         };
         if case.truncated.unwrap_or(false) {
-            // sha256 полного вывода требует крейта, которого нет в зависимостях;
-            // однопортовых усечённых кейсов в манифесте нет.
-            println!("SKIP {file}: truncated, sha256 unavailable");
+            // Усечённый `*.head.txt` хранит только первые 2000 строк, а порядок
+            // сверяется по всем строкам; sha256 полного вывода проверяет
+            // scan_golden.rs. Однопортовых усечённых кейсов в манифесте нет.
+            println!("SKIP {file}: truncated, full output not stored");
             continue;
         }
         let br = BlackRock::new(spec.count, spec.seed, spec.rounds);

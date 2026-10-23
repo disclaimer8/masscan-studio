@@ -2,17 +2,17 @@
   "masscan_git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
   "masscan_version": "1.3.9-integration",
   "binary_sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
-  "offline_binary_sha256": "a7b2db599453449f84a024484414f18253a59d5f3302a12c0a75535d6e43553b",
+  "offline_binary_sha256": "77bb715b197b8207a9b179d72c8d8158e0d999256f184389d08ff4cfee59e8c8",
   "offline_binary_note": "pinned commit + one-line patch in src/rawsock.c (offline adapter link_type = DLT_EN10MB) because --offline fails on Linux upstream ('bad packet template': AF_INET6=10 is not accepted by preprocess_frame). Used only for paused/ captures and the offline benchmark.",
   "built_on": "Ubuntu 26.04.1 LTS",
   "kernel": "7.0.0-38-generic",
   "compiler": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
   "arch": "x86_64",
   "isolation": "sudo unshare -n (new network namespace; only a DOWN lo exists; no packets can leave)",
-  "built_at": "2026-10-23T11:09:53Z",
+  "built_at": "2026-10-23T11:24:04Z",
   "offline_gen_pps": 2843897,
   "offline_gen_bench": {
-    "command": "sudo unshare -n /usr/bin/time -v bin/masscan 0.0.0.0/4 -p80 --rate 100000000 --offline --interface lo --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --router-mac 66-55-44-33-22-11 --source-port 40000 --seed 1 --wait 0",
+    "command": "sudo -n unshare -n /usr/bin/time -v -o /home/a1/rmasscan-oracle/bench.time timeout 120 /home/a1/rmasscan-oracle/masscan-offline/bin/masscan 0.0.0.0/4 -p80 --rate 100000000 --offline --interface lo --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --router-mac 66-55-44-33-22-11 --source-port 40000 --seed 1 --wait 0",
     "targets_total": 268435456,
     "wall_seconds": 94.39,
     "method": "total targets (2^28 for /4 x 1 port) divided by wall clock from /usr/bin/time -v (includes process start and exit)",
@@ -31,11 +31,14 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 4,
       "sha256": "de7f86ea283986edcc460774431bdedd0498dc911504d4bc7df2c3938fd0426b",
       "truncated": false,
       "size_bytes": 36,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80-443_seed1.txt",
@@ -47,11 +50,14 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 512,
       "sha256": "572a8cbeb9d5ff9e1ea477aed4103f18e87fe63fc98b6c685443dbe99e8ef44f",
       "truncated": false,
       "size_bytes": 7204,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash22_p0-1023_seed1.head.txt",
@@ -63,11 +69,14 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 1048576,
       "sha256": "96beb848714a284d7ad51024a4ddacbaee7986bf1ad0cb37070080fe04defdab",
       "truncated": true,
       "size_bytes": 18335744,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash8_excl_slash9_p80_seed1.head.txt",
@@ -81,11 +90,14 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 8388608,
       "sha256": "7e573174325442f0136edc6fc34d4b116029759e02cdc25ef863295b14b9dea3",
       "truncated": true,
       "size_bytes": 118620160,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1.txt",
@@ -97,11 +109,14 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 256,
       "sha256": "2ed625aef8ca38fad438bd5c029eb89926cb88c2174be499d13eb4125c93b1c2",
       "truncated": false,
       "size_bytes": 2706,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed2.txt",
@@ -113,11 +128,14 @@
         "--seed",
         "2"
       ],
+      "binary": "pinned",
       "line_count": 256,
       "sha256": "54419255bee65bf4aa68cfca6d26fded08a3ffa42b7321f57c276aac370c120c",
       "truncated": false,
       "size_bytes": 2706,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed4294967295.txt",
@@ -129,11 +147,14 @@
         "--seed",
         "4294967295"
       ],
+      "binary": "pinned",
       "line_count": 256,
       "sha256": "9c0da3b6490d916b17407e5e7fb91b73584ac51391cf3bff662d035896328337",
       "truncated": false,
       "size_bytes": 2706,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_rounds14.txt",
@@ -147,11 +168,14 @@
         "--blackrock-rounds",
         "14"
       ],
+      "binary": "pinned",
       "line_count": 256,
       "sha256": "2ed625aef8ca38fad438bd5c029eb89926cb88c2174be499d13eb4125c93b1c2",
       "truncated": false,
       "size_bytes": 2706,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_rounds4.txt",
@@ -165,11 +189,14 @@
         "--blackrock-rounds",
         "4"
       ],
+      "binary": "pinned",
       "line_count": 256,
       "sha256": "263fbdf66758890587cd0fe336a690fecb0d0289db5da6b283bf166540556354",
       "truncated": false,
       "size_bytes": 2706,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_shard1of1.txt",
@@ -183,11 +210,14 @@
         "--shard",
         "1/1"
       ],
+      "binary": "pinned",
       "line_count": 256,
       "sha256": "2ed625aef8ca38fad438bd5c029eb89926cb88c2174be499d13eb4125c93b1c2",
       "truncated": false,
       "size_bytes": 2706,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_shard2of3.txt",
@@ -201,11 +231,14 @@
         "--shard",
         "2/3"
       ],
+      "binary": "pinned",
       "line_count": 85,
       "sha256": "a2333a38cd1836bda1928bdac53f4ee5ad1c36cbb65e516c843a27f5d358af85",
       "truncated": false,
       "size_bytes": 910,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_resume100_count50.txt",
@@ -221,11 +254,14 @@
         "--resume-count",
         "50"
       ],
+      "binary": "pinned",
       "line_count": 50,
       "sha256": "6f5c00143f28b46c31d02671a3676b1048857b74b673424483313757e7a1c02b",
       "truncated": false,
       "size_bytes": 529,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_retries0.txt",
@@ -239,11 +275,14 @@
         "--retries",
         "0"
       ],
+      "binary": "pinned",
       "line_count": 256,
       "sha256": "2ed625aef8ca38fad438bd5c029eb89926cb88c2174be499d13eb4125c93b1c2",
       "truncated": false,
       "size_bytes": 2706,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_retries2.txt",
@@ -257,11 +296,14 @@
         "--retries",
         "2"
       ],
+      "binary": "pinned",
       "line_count": 456,
       "sha256": "6307ae5398f25e8c62bbc79ea65ad993a017119567dee58dfe4bb66bedc7484e",
       "truncated": false,
       "size_bytes": 4823,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/slash24_p80_seed1_retries2_rate1000.txt",
@@ -277,11 +319,14 @@
         "--rate",
         "1000"
       ],
+      "binary": "pinned",
       "line_count": 2256,
       "sha256": "1172efd9faa36f2c1f96154353a242c25fdc6842497dc469dd90f7d9ee442a54",
       "truncated": false,
       "size_bytes": 23871,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/multirange_ports_seed7.txt",
@@ -293,11 +338,14 @@
         "--seed",
         "7"
       ],
+      "binary": "pinned",
       "line_count": 98,
       "sha256": "1e9efd84680c19000e2dff316156559e57653e1496460041d44dd7922522953f",
       "truncated": false,
       "size_bytes": 1442,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/exclude_list_seed3.txt",
@@ -311,11 +359,14 @@
         "--seed",
         "3"
       ],
+      "binary": "pinned",
       "line_count": 24,
       "sha256": "7c5d304d2ff94336aac20a1862b93ba079650fae96c08c0181a1bebb4db6777b",
       "truncated": false,
       "size_bytes": 312,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "listscan/ipv6_slash126_p80_seed1.txt",
@@ -327,11 +378,109 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 4,
       "sha256": "38603d4cbdf5ea94be1109192ca49528c6e9c6746b1d201129d48559483819a7",
       "truncated": false,
       "size_bytes": 47,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
+    },
+    {
+      "file": "listscan/single_ip_p80_seed1.txt",
+      "mode": "-sL",
+      "args": [
+        "-sL",
+        "10.0.0.1",
+        "-p80",
+        "--seed",
+        "1"
+      ],
+      "binary": "pinned",
+      "line_count": 1,
+      "sha256": "810ab5df760625acb92978e2fe43639876784ac2ed32752d881eb87b7708566e",
+      "truncated": false,
+      "size_bytes": 9,
+      "deterministic": true,
+      "note": null,
+      "signal": null
+    },
+    {
+      "file": "listscan/slash31_p80_seed1.txt",
+      "mode": "-sL",
+      "args": [
+        "-sL",
+        "10.0.0.0/31",
+        "-p80",
+        "--seed",
+        "1"
+      ],
+      "binary": "pinned",
+      "line_count": 2,
+      "sha256": "f6a6e9e96262247d3b289c405aa9d6c75faabdaffe1b7f18258229ac1870abd4",
+      "truncated": false,
+      "size_bytes": 18,
+      "deterministic": true,
+      "note": null,
+      "signal": null
+    },
+    {
+      "file": "listscan/range3_p80_seed1.txt",
+      "mode": "-sL",
+      "args": [
+        "-sL",
+        "10.0.0.0-10.0.0.2",
+        "-p80",
+        "--seed",
+        "1"
+      ],
+      "binary": "pinned",
+      "line_count": 3,
+      "sha256": "51fe50ddb7da1ab0bb4d28254b7285ee8a3fd65b6a0e2a101b13f686ea7b246a",
+      "truncated": false,
+      "size_bytes": 27,
+      "deterministic": true,
+      "note": null,
+      "signal": null
+    },
+    {
+      "file": "listscan/slash30_allports_seed1.head.txt",
+      "mode": "-sL",
+      "args": [
+        "-sL",
+        "10.0.0.0/30",
+        "-p0-65535",
+        "--seed",
+        "1"
+      ],
+      "binary": "pinned",
+      "line_count": 262144,
+      "sha256": "fc6cf4ebe310b0aae9ad49e22fe156f6f62d30ea3f6201f0f23d1153a2d6ba04",
+      "truncated": true,
+      "size_bytes": 3887720,
+      "deterministic": true,
+      "note": null,
+      "signal": null
+    },
+    {
+      "file": "listscan/ipv6_slash126_p80-443_seed1.txt",
+      "mode": "-sL",
+      "args": [
+        "-sL",
+        "2001:db8::/126",
+        "-p80,443",
+        "--seed",
+        "1"
+      ],
+      "binary": "pinned",
+      "line_count": 8,
+      "sha256": "cfe55b28a468d9fe9e4e093b98abad61dfcc8be6ebba19c6587a97ea2689482b",
+      "truncated": false,
+      "size_bytes": 138,
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/minimal_p80.conf",
@@ -343,11 +492,14 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 10,
       "sha256": "4585886c6ff3d75483602016bab6933c880c9b3fa756019dda623563e262099d",
       "truncated": false,
       "size_bytes": 159,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/minimal_p80.all.conf",
@@ -359,11 +511,14 @@
         "--seed",
         "1"
       ],
+      "binary": "pinned",
       "line_count": 10,
       "sha256": "4585886c6ff3d75483602016bab6933c880c9b3fa756019dda623563e262099d",
       "truncated": false,
       "size_bytes": 159,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/seed_rate_retries.conf",
@@ -379,11 +534,14 @@
         "--retries",
         "3"
       ],
+      "binary": "pinned",
       "line_count": 11,
       "sha256": "54a44e7ad1a1ec316c268c33565ce6d7d434a2aa9bf23cdac596c13d94e5f5bf",
       "truncated": false,
       "size_bytes": 179,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/seed_rate_retries.all.conf",
@@ -399,11 +557,14 @@
         "--retries",
         "3"
       ],
+      "binary": "pinned",
       "line_count": 11,
       "sha256": "54a44e7ad1a1ec316c268c33565ce6d7d434a2aa9bf23cdac596c13d94e5f5bf",
       "truncated": false,
       "size_bytes": 179,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/ranges_exclude.conf",
@@ -420,11 +581,14 @@
         "--seed",
         "5"
       ],
+      "binary": "pinned",
       "line_count": 11,
       "sha256": "4d8ccc260b112645c263fed8007368d98a526be36c366a456cff448a92dbc346",
       "truncated": false,
       "size_bytes": 195,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/ranges_exclude.all.conf",
@@ -441,11 +605,14 @@
         "--seed",
         "5"
       ],
+      "binary": "pinned",
       "line_count": 11,
       "sha256": "4d8ccc260b112645c263fed8007368d98a526be36c366a456cff448a92dbc346",
       "truncated": false,
       "size_bytes": 195,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/shard_rounds.conf",
@@ -461,11 +628,14 @@
         "--seed",
         "9"
       ],
+      "binary": "pinned",
       "line_count": 10,
       "sha256": "de97e71a097ebd30398d08de29dca06a20a50009e9ad663feaae06e278594a41",
       "truncated": false,
       "size_bytes": 159,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/shard_rounds.all.conf",
@@ -481,11 +651,14 @@
         "--seed",
         "9"
       ],
+      "binary": "pinned",
       "line_count": 10,
       "sha256": "de97e71a097ebd30398d08de29dca06a20a50009e9ad663feaae06e278594a41",
       "truncated": false,
       "size_bytes": 159,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/adapter_opts.conf",
@@ -505,11 +678,14 @@
         "--seed",
         "6"
       ],
+      "binary": "pinned",
       "line_count": 15,
       "sha256": "06679943caea1d5ea225fd2f9c95ee51294c69c0b23bc283b6c02de7ef9610b6",
       "truncated": false,
       "size_bytes": 308,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/adapter_opts.all.conf",
@@ -529,11 +705,14 @@
         "--seed",
         "6"
       ],
+      "binary": "pinned",
       "line_count": 15,
       "sha256": "06679943caea1d5ea225fd2f9c95ee51294c69c0b23bc283b6c02de7ef9610b6",
       "truncated": false,
       "size_bytes": 308,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/wait_and_ports.conf",
@@ -548,11 +727,14 @@
         "--seed",
         "4294967295"
       ],
+      "binary": "pinned",
       "line_count": 10,
       "sha256": "9fb02c1b7a3c6a92fe32152b891fb08426d84b93cee031b1f5ce6ee95dca0e98",
       "truncated": false,
       "size_bytes": 185,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/wait_and_ports.all.conf",
@@ -567,11 +749,14 @@
         "--seed",
         "4294967295"
       ],
+      "binary": "pinned",
       "line_count": 10,
       "sha256": "9fb02c1b7a3c6a92fe32152b891fb08426d84b93cee031b1f5ce6ee95dca0e98",
       "truncated": false,
       "size_bytes": 185,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/everything.conf",
@@ -603,11 +788,14 @@
         "--wait",
         "3"
       ],
+      "binary": "pinned",
       "line_count": 17,
       "sha256": "4d9970727fc81a7c53f252211f348c0fd8bc73520d1742d6c82cc91b0b43bc74",
       "truncated": false,
       "size_bytes": 348,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "echo/everything.all.conf",
@@ -639,11 +827,14 @@
         "--wait",
         "3"
       ],
+      "binary": "pinned",
       "line_count": 17,
       "sha256": "4d9970727fc81a7c53f252211f348c0fd8bc73520d1742d6c82cc91b0b43bc74",
       "truncated": false,
       "size_bytes": 348,
-      "runs_identical": 2
+      "deterministic": true,
+      "note": null,
+      "signal": null
     },
     {
       "file": "paused/seed1_p80_slash16.conf",
@@ -669,11 +860,14 @@
         "--wait",
         "0"
       ],
-      "sha256": "eee7fc44837483f679ce0757ee646b09b0a2b8ee72160057d420378f438532fb",
+      "binary": "offline-patched",
       "line_count": 20,
+      "sha256": "eee7fc44837483f679ce0757ee646b09b0a2b8ee72160057d420378f438532fb",
       "truncated": false,
+      "size_bytes": null,
+      "deterministic": null,
       "note": "resume index is time dependent (SIGINT after ~2s at --rate 1000); parse-compare, do not hash-compare",
-      "signal": "timeout -s INT 2"
+      "signal": "timeout -s KILL 40 timeout -s INT 2"
     },
     {
       "file": "paused/seed424242_multi.conf",
@@ -701,11 +895,14 @@
         "--wait",
         "0"
       ],
-      "sha256": "8eb44bc0fbd850b6eebb00ef01a965f12f5d33f5e9847df21d84f7369b1181fc",
+      "binary": "offline-patched",
       "line_count": 21,
+      "sha256": "8eb44bc0fbd850b6eebb00ef01a965f12f5d33f5e9847df21d84f7369b1181fc",
       "truncated": false,
+      "size_bytes": null,
+      "deterministic": null,
       "note": "resume index is time dependent (SIGINT after ~2s at --rate 1000); parse-compare, do not hash-compare",
-      "signal": "timeout -s INT 2"
+      "signal": "timeout -s KILL 40 timeout -s INT 2"
     },
     {
       "file": "paused/seed9_resume_index.conf",
@@ -733,11 +930,14 @@
         "--wait",
         "0"
       ],
-      "sha256": "c07ac7ea603191054146b7ec7985ba3f3c854d2bc773a08cb324baf847bf832d",
+      "binary": "offline-patched",
       "line_count": 20,
+      "sha256": "c07ac7ea603191054146b7ec7985ba3f3c854d2bc773a08cb324baf847bf832d",
       "truncated": false,
+      "size_bytes": null,
+      "deterministic": null,
       "note": "resume index is time dependent (SIGINT after ~2s at --rate 1000); parse-compare, do not hash-compare",
-      "signal": "timeout -s INT 2"
+      "signal": "timeout -s KILL 40 timeout -s INT 2"
     }
   ]
 }

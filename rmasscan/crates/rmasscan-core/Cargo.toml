@@ -13,3 +13,7 @@ thiserror.workspace = true
 proptest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[[bench]]
+name = "offline_gen"
+harness = false

@@ -7,7 +7,8 @@
 Документы:
 
 - спека: `docs/superpowers/specs/2026-10-23-masscan-rust-port-design.md`
-- планы этапов 0–1: `docs/superpowers/plans/`
+- планы этапов 0–2A: `docs/superpowers/plans/`
+- статус этапа 2A: `docs/experiments/2026-10-23-rmasscan-stage2a.md`
 - замеры скорости: [BENCHMARKS.md](BENCHMARKS.md)
 - golden-фикстуры оракула: [tests/golden/README.md](tests/golden/README.md)
 
@@ -57,15 +58,25 @@ cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 
 ```bash
 cargo install --locked cargo-deny@0.20.2
 cargo deny check bans licenses sources
-cargo test -p rmasscan-core --test no_c_in_build
+cargo test -p rmasscan-core --test no_c_in_build   # граф --workspace: включает engine и sha2
 ```
 
 ## Ограничения
 
-Raw-сокеты и сеть не используются на этапах 0–1. Повышенные привилегии не
-нужны.
+Raw-сокеты и сеть не используются на этапах 0–2A. Повышенные привилегии не
+нужны. Живое сканирование не работает: обычный скан без `--offline --packet-trace`
+по-прежнему не поддержан.
 
 ## Статус
+
+Этап 2A (офлайн, без сети): crate `crates/rmasscan-engine` с отменяемым runtime
+(один TX и один RX поток, Pause/Stop, ограниченные очереди), разбором недоверенных
+RX-кадров, checkpoint/resume и fake-адаптером в памяти. Тесты проверяют побайтный
+resume, остановку в пределах 1 с и ограниченную память на пространстве /0 (см.
+`docs/experiments/2026-10-23-rmasscan-stage2a.md`). Настоящий сетевой I/O
+(AF_PACKET, BPF, Npcap), golden pcap и привилегированный runner это этап 2B и
+позже; зелёный CI на трёх ОС для 2A ждёт push. BENCHMARKS.md по-прежнему
+описывает только офлайн-генерацию, не скорость передачи.
 
 Этап 1 закрыт. Критерии выхода выполнены: `-sL` и `--echo` побайтно совпадают с C,
 self-тесты C отображены на Rust (`tests/selftest_parity.rs`), передача и SYN покрыты

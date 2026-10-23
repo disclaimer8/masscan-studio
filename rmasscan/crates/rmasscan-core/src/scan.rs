@@ -30,7 +30,7 @@ impl Default for Shard {
 /// Ошибки `list_scan` и `transmit_scan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ScanError {
-    /// `range == 0`: в C деление на ноль в `blackrock_init` (crypto-blackrock.c:117).
+    /// `range == 0`: в C бесконечный цикл в `blackrock_init` (crypto-blackrock.c:117-120, :151-152).
     #[error("nothing to scan: the target range is empty")]
     EmptyRange,
     /// Диапазон не помещается в 63 бита (main.c:1698-1704).

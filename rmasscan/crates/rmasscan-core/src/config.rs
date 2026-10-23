@@ -300,8 +300,8 @@ pub fn parse_source_port(value: &str) -> Result<(u16, u16), ConfigError> {
 /// `--echo -p80` (без целей), `--echo 0.0.0.0/0 -p80` и случай "всё
 /// исключено" в C завершаются кодом 0. Возвращаемый `range` может быть 0.
 ///
-/// Пустая цель при `-sL` в C — деление на ноль в `blackrock_init`
-/// (crypto-blackrock.c:117), здесь `EmptyTargets`.
+/// Пустая цель при `-sL` в C — бесконечный цикл в `blackrock_init`
+/// (crypto-blackrock.c:117-120, :151-152), здесь `EmptyTargets`.
 pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, ConfigError> {
     check_shard(cfg.shard)?;
     if op != Operation::Echo && cfg.blackrock_rounds >= 64 {

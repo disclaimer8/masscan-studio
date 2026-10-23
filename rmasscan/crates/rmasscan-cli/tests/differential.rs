@@ -188,6 +188,28 @@ fn broken_pipe_stops_work_quickly() {
 }
 
 #[test]
+fn list_scan_retries_that_cannot_terminate_fails_fast() {
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
+        .args([
+            "-sL",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            "--retries",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(start.elapsed() < Duration::from_secs(5));
+    assert_ne!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--retries"));
+}
+
+#[test]
 fn seed_zero_is_rejected() {
     let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
         .args(["-sL", "10.0.0.0/30", "-p80", "--seed", "0"])

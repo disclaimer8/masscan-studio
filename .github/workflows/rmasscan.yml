@@ -1,5 +1,7 @@
-# CI порта masscan на Rust (этапы 0-2A: core, cli, engine): fmt, clippy, тесты, правило «без C».
-# Raw-сокеты, сеть и повышение прав не используются.
+# CI порта masscan на Rust (этапы 0-2B: core, cli, engine, net): fmt, clippy, тесты, правило «без C».
+# Raw-сокеты, сеть и повышение прав не используются: тесты, открывающие AF_PACKET, помечены #[ignore]
+# и идут только в замкнутом стенде (wire-lab.sh). На macOS и Windows crate net проверяется как
+# сборка (open_explicit возвращает UnsupportedPlatform), а не как сырой ввод-вывод.
 name: rmasscan
 
 on:
@@ -61,10 +63,17 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      # --workspace покрывает core, cli и engine (будущие члены тоже). Включает
-      # no_c_in_build: граф всего workspace, включая sha2 движка, на трёх ОС.
+      # --workspace покрывает core, cli, engine и net (будущие члены тоже). Включает
+      # no_c_in_build: граф всего workspace, включая sha2 движка и libc net, на трёх ОС.
       - name: Тесты
         run: cargo test --locked --workspace
+
+      # Crate net отдельно: офлайн-тесты Linux-шва и независимого pcap-сравнения, example
+      # лабораторного harness собирается на всех ОС. Ignored-тесты стенда НЕ запускаются.
+      - name: Net crate (офлайн) и сборка лабораторного harness
+        run: |
+          cargo test --locked -p rmasscan-net
+          cargo build --locked -p rmasscan-net --example wire_scan
 
       - name: Установить cargo-deny
         run: cargo install --locked cargo-deny@0.20.2

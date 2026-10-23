@@ -9,6 +9,7 @@
 - спека: `docs/superpowers/specs/2026-10-23-masscan-rust-port-design.md`
 - планы этапов 0–2A: `docs/superpowers/plans/`
 - статус этапа 2A: `docs/experiments/2026-10-23-rmasscan-stage2a.md`
+- приёмка Linux 2B (wire parity, pause/resume, Stop, скорость): `docs/experiments/2026-10-23-rmasscan-stage2b-linux.md`
 - замеры скорости: [BENCHMARKS.md](BENCHMARKS.md)
 - golden-фикстуры оракула: [tests/golden/README.md](tests/golden/README.md)
 
@@ -61,11 +62,34 @@ cargo deny check bans licenses sources
 cargo test -p rmasscan-core --test no_c_in_build   # граф --workspace: включает engine и sha2
 ```
 
+## Лабораторная приёмка Linux (2B)
+
+Crate `rmasscan-net` (единственный, где допущен `unsafe`) открывает AF_PACKET по явному
+binding. Это НЕ пользовательское сканирование: CLI по-прежнему не умеет живой скан.
+Проверка идёт только в замкнутом стенде (две netns + veth, без uplink/bridge/NAT):
+
+```bash
+# на Linux-хосте со sudo -n, ip, ethtool, tcpdump, python3 и закреплённым C-oracle
+cargo build --locked --release -p rmasscan-net --example wire_scan
+scripts/wire-lab.sh --oracle /path/to/oracle/masscan --out OUT --suite rust \
+  --rust-bin target/release/examples/wire_scan --fixtures tests/golden/wire
+scripts/wire-lab.sh --oracle /path/to/oracle/masscan --out OUT-perf --suite perf \
+  --rust-bin target/release/examples/wire_scan --reps 5
+RMASSCAN_WIRE_RESULTS=OUT RMASSCAN_WIRE_PERF_RESULTS=OUT-perf \
+  cargo test --locked -p rmasscan-net --test linux_wire -- --ignored
+python3 scripts/verify-wire.py --self-test
+```
+
+`examples/wire_scan.rs` это лабораторный harness (`ReadyPlan` + `Engine` + `open_explicit`,
+`--pause-after N`, `--resume-checkpoint FILE`), а не CLI. Тесты `linux_wire.rs` с `--ignored`
+без каталога результатов падают с «NOT RUN», пропуск никогда не PASS.
+
 ## Ограничения
 
-Raw-сокеты и сеть не используются на этапах 0–2A. Повышенные привилегии не
-нужны. Живое сканирование не работает: обычный скан без `--offline --packet-trace`
-по-прежнему не поддержан.
+Raw-сокеты и сеть используются только в лабораторных тестах `rmasscan-net` (нужны
+CAP_NET_RAW и замкнутый стенд); обычные `cargo test` и CI их не запускают. Живое
+сканирование не работает: обычный скан без `--offline --packet-trace` по-прежнему не
+поддержан.
 
 ## Статус
 

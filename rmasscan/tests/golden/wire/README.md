@@ -63,3 +63,13 @@ On the oracle host (needs root via `sudo -n`, ip, python3):
 oracle commit and sha256, harness hashes, commands, OS versions, binding, expected counts,
 capture drops/truncation and pcap hashes. Not captured here: replies as comparison material,
 timestamps, large captures.
+
+`manifest.json` is scrubbed on generation (`wire_capture.py::scrub`): host home paths become
+`$HOME/...` and raw per-run namespace names become `wl-scan-RUNID` / `wl-peer-RUNID`, like the
+topology files. Oracle provenance (commit, sha256, version line) and every pcap hash are left
+untouched. The `harness` hashes describe the scripts of the run that produced the fixtures
+(stage 2B task 4); `wire-lab.sh`, `wire_capture.py` and `verify-wire.py` were extended afterwards for
+the Rust suites (task 6), so they no longer match those hashes by design.
+
+The Rust side of this wire lab (`--suite rust|perf`, `scripts/wire_suite.py`) is described in
+`docs/experiments/2026-10-23-rmasscan-stage2b-linux.md`.

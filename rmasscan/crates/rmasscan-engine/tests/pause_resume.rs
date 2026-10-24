@@ -261,17 +261,27 @@ fn full_result_queue_fails_and_never_offers_a_checkpoint() {
     let mut o = opts();
     o.result_capacity = 2;
     let h = start_manual(&p, &fake, &clock, o);
-    let events = drain_to_finished(&h);
-    // Очередь на 2 ответа переполнена: Failed, а не успешная пауза/checkpoint.
+    // Потребитель намеренно НЕ вычитывает результаты: RX наполняет очередь из 2
+    // ответов и на следующем пуше детерминированно падает Failed(ConsumerTooSlow).
+    // Раньше тест вычитывал события конкурентно (`drain_to_finished`) и зависел
+    // от того, успеет ли RX опередить потребителя, — на части раннеров (ubuntu,
+    // windows) потребитель успевал опустошать очередь, скан завершался Completed,
+    // и тест флапал. Итог выставляется независимо от чтения событий.
+    wait_for("overflow -> ConsumerTooSlow", || {
+        matches!(
+            h.outcome().map(|o| o.reason),
+            Some(Reason::Failed(FailReason::ConsumerTooSlow))
+        )
+    });
+    // На провале checkpoint не предлагается.
+    assert!(h.checkpoint().is_none());
+    // Принятые до переполнения результаты сохраняются; Finished сюда не входит.
+    let (outcome, events) = h.join_drain().unwrap();
     assert!(matches!(
-        events.last(),
-        Some(Event::Finished {
-            reason: Reason::Failed(FailReason::ConsumerTooSlow)
-        })
+        outcome.reason,
+        Reason::Failed(FailReason::ConsumerTooSlow)
     ));
     assert!(!has_checkpoint_event(&events));
-    assert!(h.checkpoint().is_none());
-    h.join().unwrap();
 }
 
 #[test]

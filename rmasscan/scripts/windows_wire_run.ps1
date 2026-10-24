@@ -1,4 +1,4 @@
-# Guest side of windows-wire-suite.py (stage 2B-Windows, task 4A). pwsh 7:
+# Guest side of rmasscan-lab windows-suite (stage 2B-Windows, task 4A). pwsh 7:
 #   pwsh -NoProfile -File windows_wire_run.ps1 -ArgvFile in\TAG.argv.json -OutDir out\TAG
 # Reads {"exe": "...", "argv": ["--iface", ...]} and runs the EXE with the argv ARRAY: no shell quoting, no
 # Invoke-Expression. Writes stdout.txt, stderr.txt, exit.txt and runner.json (exe sha256, UTC times) into OutDir.
@@ -13,7 +13,8 @@ $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $spec = Get-Content -Raw -LiteralPath $ArgvFile | ConvertFrom-Json
 $exe = [string]$spec.exe
 $argv = @($spec.argv | ForEach-Object { [string]$_ })
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+if (Test-Path -LiteralPath $OutDir) { throw 'Refusing to reuse a previous run output directory' }
+New-Item -ItemType Directory -Path $OutDir | Out-Null
 # Receive statistics of the lab NIC before and after: an independent count (NIC driver level, not Npcap) used to
 # cross-check the measured Npcap drops of the RX overflow run. A failure to read them is recorded, never hidden.
 function Get-NicSample {

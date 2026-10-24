@@ -6,7 +6,7 @@
 #   wire-lab.sh --oracle BIN --out DIR --suite rust --rust-bin WIRE_SCAN --fixtures tests/golden/wire
 #   wire-lab.sh --oracle BIN --out DIR --suite perf --rust-bin WIRE_SCAN [--reps 5] [--rates 100,1000,10000,100000]
 #
-# Suites rust/perf run scripts/wire_suite.py inside the same sealed lab (same seal assertions,
+# Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
 #
 # SEALED: no uplink, no bridge, no NAT, no default route, ip_forward=0, IPv6 off.
@@ -18,6 +18,9 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$HERE/lab-process-group.sh"
+LAB_BIN="${RMASSCAN_LAB_BIN:-$HERE/../target/release/rmasscan-lab}"
+[ -x "$LAB_BIN" ] || { echo "Build rmasscan-lab or set RMASSCAN_LAB_BIN" >&2; exit 2; }
 ORACLE=""; OUT=""; SUITE=oracle; RUST_BIN=""; FIXTURES=""; REPS=5; RATES=100,1000,10000,100000
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -41,7 +44,7 @@ if [ "$(id -u)" != 0 ]; then
   REEXEC=(--oracle "$(readlink -f "$ORACLE")" --out "$(readlink -f "$OUT")" --suite "$SUITE" --reps "$REPS" --rates "$RATES")
   [ -z "$RUST_BIN" ] || REEXEC+=(--rust-bin "$(readlink -f "$RUST_BIN")")
   [ -z "$FIXTURES" ] || REEXEC+=(--fixtures "$(readlink -f "$FIXTURES")")
-  exec sudo -n env "WIRELAB_INJECT=${WIRELAB_INJECT:-}" \
+  exec sudo -n env "RMASSCAN_LAB_BIN=$LAB_BIN" "WIRELAB_INJECT=${WIRELAB_INJECT:-}" \
     ${WIRELAB_MAC_A+"WIRELAB_MAC_A=$WIRELAB_MAC_A"} ${WIRELAB_MAC_B+"WIRELAB_MAC_B=$WIRELAB_MAC_B"} \
     ${WIRELAB_IP_A_LINK+"WIRELAB_IP_A_LINK=$WIRELAB_IP_A_LINK"} ${WIRELAB_IP_ADAPTER+"WIRELAB_IP_ADAPTER=$WIRELAB_IP_ADAPTER"} \
     ${WIRELAB_PEER_IPS+"WIRELAB_PEER_IPS=$WIRELAB_PEER_IPS"} ${WIRELAB_PEER_PREFIX+"WIRELAB_PEER_PREFIX=$WIRELAB_PEER_PREFIX"} \
@@ -49,7 +52,7 @@ if [ "$(id -u)" != 0 ]; then
     "$0" "${REEXEC[@]}"
 fi
 [ -x "$ORACLE" ] || { echo "FATAL: oracle not executable: $ORACLE" >&2; exit 2; }
-for t in ip python3 timeout unshare; do command -v "$t" >/dev/null || { echo "FATAL: missing $t" >&2; exit 2; }; done
+for t in ip timeout unshare setsid; do command -v "$t" >/dev/null || { echo "FATAL: missing $t" >&2; exit 2; }; done
 
 # ---- binding (explicit; identical for every case) ----------------------------
 RUN_ID="$$-$RANDOM"
@@ -77,6 +80,7 @@ cleanup() {
   local rc=$?
   trap - EXIT INT TERM
   set +e
+  stop_suite_group
   local pid
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; done
   sleep 0.3
@@ -125,6 +129,7 @@ oracle_in() {  # oracle_in NS args... : run the oracle in namespace NS, host con
 
 # ---- topology: two namespaces, one veth, no host-side link --------------------
 host_links_before=$(ip -o link | awk -F': ' '{print $2}' | sort)
+printf '%s\n' "$host_links_before" > "$WORK/host-links-before.txt"
 ip netns add "$NS_A"; CREATED_A=1
 ip netns add "$NS_B"; CREATED_B=1
 note_cmd "ip netns add $NS_A; ip netns add $NS_B"
@@ -167,19 +172,7 @@ for ns in "$NS_A" "$NS_B"; do
 done
 [ "$(ip -o link | awk -F': ' '{print $2}' | sort)" = "$host_links_before" ] || fail "host link list changed"
 note_cmd "ip -n \$NS route show default (empty); ip -n \$NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces"
-python3 - "$OUT/isolation.json" "$NS_A" "$NS_B" <<'PY'
-import json, subprocess, sys
-out, a, b = sys.argv[1:4]
-def sh(c): return subprocess.run(c, shell=True, capture_output=True, text=True).stdout.strip()
-d = {"uplink": False, "bridge": False, "nat": False, "default_route": False, "ip_forward": 0, "ipv6": "disabled",
-     "veth_created_inside_scanner_ns_peer_moved_to_peer_ns": True, "host_link_list_unchanged": True,
-     "verified_by": "wire-lab.sh seal assertions (fail closed) before any traffic"}
-for k, ns in (("scanner", a), ("peer", b)):
-    d[k + "_route_get_8_8_8_8"] = sh("ip netns exec %s ip route get 8.8.8.8 2>&1" % ns)
-    d[k + "_routes"] = sh("ip -n %s route show" % ns).splitlines()
-    d[k + "_links"] = sh("ip -n %s -o link" % ns).splitlines()
-json.dump(d, open(out, "w"), indent=2, sort_keys=True); open(out, "a").write("\n")
-PY
+"$LAB_BIN" capture isolation --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
 
 topo() {  # topo FILE : save topology + routes of both namespaces
   { echo "# host namespace links (must not contain veth-a/veth-b)"; ip -o link | awk -F': ' '{print $2}'
@@ -199,18 +192,18 @@ topo() {  # topo FILE : save topology + routes of both namespaces
 # ---- responder in the peer namespace (open: $OPEN_PORTS; the rest get kernel RST)
 RESP_PID=""
 if [ "$SUITE" = oracle ]; then
-  start_bg "$WORK/responder.log" ip netns exec "$NS_B" python3 "$HERE/wire_capture.py" responder --ports "$OPEN_PORTS" --ready "$WORK/responder.ready"
+  start_bg "$WORK/responder.log" ip netns exec "$NS_B" "$LAB_BIN" capture responder --ports "$OPEN_PORTS" --ready "$WORK/responder.ready"
   RESP_PID=$BGPID
-  note_cmd "ip netns exec \$NS_B python3 wire_capture.py responder --ports $OPEN_PORTS --ready READY"
+  note_cmd "ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS --ready READY"
   wait_file "$WORK/responder.ready" 10 || fail "responder not ready"
 else
-  # rust/perf suites: wire_suite.py restarts its own responder before EVERY run, because the peer kernel
+  # rust/perf suites: rmasscan-lab wire-suite restarts its own responder before EVERY run, because the peer kernel
   # keeps retransmitting SYN-ACKs of half-open sockets for ~1 minute (the Rust scanner never RSTs them)
   # and those would bleed into the next run's capture.
-  note_cmd "(wire_suite.py) ip netns exec \$NS_B python3 wire_capture.py responder --ports $OPEN_PORTS ...   # restarted before every run"
+  note_cmd "(rmasscan-lab wire-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # restarted before every run"
 fi
 
-python3 "$HERE/wire_capture.py" env --out "$OUT/env.json" --oracle "$ORACLE" --ns-a "$NS_A" --ns-b "$NS_B" \
+"$LAB_BIN" capture env --out "$OUT/env.json" --oracle "$ORACLE" --ns-a "$NS_A" --ns-b "$NS_B" \
   --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" --ip-a "$IP_ADAPTER" --peer-ips "$PEER_IPS" \
   --seed "$SEED" --rate "$RATE" --open-ports "$OPEN_PORTS" --conf-masked "$CONF_MASKED"
 sed -i -E "s/wl-(scan|peer)-[0-9]+-[0-9]+/wl-\1-RUNID/g" "$OUT/env.json"
@@ -247,11 +240,11 @@ for row in "${CASES[@]}"; do
   for run in 1 2; do
     pfx="$name.run$run"
     rm -f "$WORK/rec.ready" "$WORK/rec.ack"
-    start_bg "$WORK/rec.log" ip netns exec "$NS_B" python3 "$HERE/wire_capture.py" record --iface "$IF_B" \
+    start_bg "$WORK/rec.log" ip netns exec "$NS_B" "$LAB_BIN" capture record --iface "$IF_B" \
       --pcap "$OUT/$pfx.pcap" --meta "$OUT/$pfx.capture.json" --ready "$WORK/rec.ready" --ack "$WORK/rec.ack"
     REC_PID=$BGPID
     wait_file "$WORK/rec.ready" 10 || fail "recorder not ready ($pfx)"
-    nsa python3 "$HERE/wire_capture.py" marker --iface "$IF_A" --src "$MAC_A" --dst "$MAC_B"
+    nsa "$LAB_BIN" capture marker --iface "$IF_A" --src "$MAC_A" --dst "$MAC_B"
     wait_file "$WORK/rec.ack" 10 || fail "recorder never acknowledged the marker frame ($pfx)"
     # capture is live and acknowledged; only now does the scanner start
     if [ "$CONF_MASKED" = 1 ]; then  # host conf masked inside a private mount namespace
@@ -264,7 +257,7 @@ for row in "${CASES[@]}"; do
     sleep 0.5
     stop_bg "$REC_PID"
     cp "$WORK/scan.log" "$OUT/$pfx.oracle-stderr.txt"
-    log "$pfx done: $(python3 -c 'import json,sys;m=json.load(open(sys.argv[1]));print("valid=%s in=%d out=%d drops=%s" % (m["valid"],m["frames_in"],m["frames_out"],m["drops"]))' "$OUT/$pfx.capture.json")"
+    log "$pfx done: $("$LAB_BIN" capture summary --meta "$OUT/$pfx.capture.json")"
   done
 done
 
@@ -272,20 +265,21 @@ fi
 
 if [ "$SUITE" != oracle ]; then
   # ---- Rust suites: driver runs inside this sealed lab; its own children die with it
-  note_cmd "python3 wire_suite.py --suite $SUITE ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
-  start_bg "$OUT/suite.log" python3 "$HERE/wire_suite.py" --suite "$SUITE" --out "$OUT" --work "$WORK" \
+  note_cmd "rmasscan-lab wire-suite --suite $SUITE ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_suite_group "$OUT/suite.log" "$LAB_BIN" wire-suite --suite "$SUITE" --out "$OUT" --work "$WORK" \
     --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
     --ip-a "$IP_ADAPTER" --rust-bin "$RUST_BIN" --oracle "$ORACLE" --fixtures "$FIXTURES" \
     --conf-masked "$CONF_MASKED" --empty-dir "$EMPTY" --reps "$REPS" --rates "$RATES"
-  SUITE_PID=$BGPID
+  SUITE_PID=$SUITE_PGID
   SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  stop_suite_group
   log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log, results.json)"
 fi
 
 topo "$OUT/topology-after.txt"
 [ -z "$RESP_PID" ] || stop_bg "$RESP_PID"
 if [ "$SUITE" = oracle ]; then
-  python3 "$HERE/wire_capture.py" manifest --dir "$OUT"
+  "$LAB_BIN" capture manifest --dir "$OUT"
   log "done: $OUT/manifest.json"
 else
   log "done: $OUT/results.json"

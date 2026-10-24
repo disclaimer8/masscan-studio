@@ -1,5 +1,9 @@
 # rmasscan: следующий этап на Windows VM — Implementation Plan
 
+> Update: пользователь потребовал Rust-only tooling. Python-инструменты из этого
+> исторического плана заменяются crate `rmasscan-lab`; актуальная миграция:
+> [Rust-only lab](2026-10-24-rust-only-lab.md). Числовые контракты приёмки сохраняются.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** получить Windows/Npcap-адаптер с доказанными TX/RX, RX health,

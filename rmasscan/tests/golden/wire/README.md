@@ -47,9 +47,9 @@ config.
 
 ## Comparing
 
-    python3 scripts/verify-wire.py --expected EXPECTED.pcap --actual ACTUAL.pcap \
+    target/release/rmasscan-lab verify-wire --expected EXPECTED.pcap --actual ACTUAL.pcap \
         [--expected-meta M.json --actual-meta M.json]
-    python3 scripts/verify-wire.py --self-test
+    target/release/rmasscan-lab verify-wire --self-test
 
 Compares the ordered list of IPv4/TCP frames with only SYN set, byte for byte. Timestamps, ARP,
 RST, SYN-ACK and other frames are ignored. Exit 0 PASS, 1 FAIL, 2 INVALID (truncated or malformed
@@ -57,7 +57,7 @@ pcap, no SYN in the reference, or capture meta with drops/truncation).
 
 ## Regenerating
 
-On the oracle host (needs root via `sudo -n`, ip, python3):
+On the oracle host (needs root via `sudo -n`, ip, rmasscan-lab):
 `scripts/wire-lab.sh --oracle ~/rmasscan-oracle/masscan/bin/masscan --out DIR`, then copy the
 `*.pcap`, `*.echo`, `manifest.json` and `topology-*.txt` files here. `manifest.json` records the
 oracle commit and sha256, harness hashes, commands, OS versions, binding, expected counts,

@@ -9,7 +9,7 @@
 //!   RMASSCAN_WIRE_PERF_RESULTS=<dir>   результаты `--suite perf` (по желанию)
 //!   RMASSCAN_WIRE_FIXTURES=<dir>       эталоны C (по умолчанию tests/golden/wire)
 //!
-//! Сравнение здесь написано независимо от Python-сравнивателя (`verify-wire.py`):
+//! Сравнение здесь написано независимо от лабораторного `rmasscan-lab verify-wire`:
 //! второй независимый путь к тому же вердикту. Если окружение не задано, тест
 //! ПАДАЕТ с «NOT RUN», а не проходит молча: пропуск никогда не PASS.
 //! Рабочий запуск (привилегии, команды, сырые результаты) описан в
@@ -66,7 +66,7 @@ fn read_pcap(data: &[u8]) -> Result<Vec<Vec<u8>>, PcapError> {
     Ok(frames)
 }
 
-/// IPv4/TCP с ровно флагом SYN (как `verify-wire.py::is_syn`).
+/// IPv4/TCP с ровно флагом SYN (контракт лабораторного сравнивателя).
 fn is_syn(f: &[u8]) -> bool {
     if f.len() < 54 || f[12..14] != [0x08, 0x00] {
         return false;

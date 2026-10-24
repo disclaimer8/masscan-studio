@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rmasscan-core", "crates/rmasscan-cli", "crates/rmasscan-engine", "crates/rmasscan-net"]
+members = ["crates/rmasscan-core", "crates/rmasscan-cli", "crates/rmasscan-engine", "crates/rmasscan-net", "crates/rmasscan-lab"]
 
 [workspace.package]
 edition = "2024"

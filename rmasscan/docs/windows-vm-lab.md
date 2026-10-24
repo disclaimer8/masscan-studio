@@ -27,11 +27,11 @@ leftover manifest unless its state is `down`, and refuses a `lab.env` of another
 leaves state `down`. A second `down` is a no-op (exit 0). Creation failures never delete anything: if `ip link add` itself fails (name taken in the plan-to-create window) nothing is removed; only a device this call created is removed when a later step fails. up/down/status/record-guest are serialized per run-id with `flock` on `/run/rmasscan-wvl/<run-id>.lock`.
 
 ```
-python3 rmasscan/scripts/windows-vm-lab.py plan   --run-id ID --manifest FILE          # read-only
-python3 rmasscan/scripts/windows-vm-lab.py up     --run-id ID --manifest FILE [--tap-user U] [--lab-env ~/winvm/lab.env]
-python3 rmasscan/scripts/windows-vm-lab.py status --run-id ID --manifest FILE [--host-only]
-python3 rmasscan/scripts/windows-vm-lab.py down   --run-id ID --manifest FILE
-python3 rmasscan/scripts/windows-vm-lab.py record-guest --run-id ID --manifest FILE [--guest-json F] [--verify-json F]
+target/release/rmasscan-lab vm-lab plan   --run-id ID --manifest FILE          # read-only
+target/release/rmasscan-lab vm-lab up     --run-id ID --manifest FILE [--tap-user U] [--lab-env ~/winvm/lab.env]
+target/release/rmasscan-lab vm-lab status --run-id ID --manifest FILE [--host-only]
+target/release/rmasscan-lab vm-lab down   --run-id ID --manifest FILE
+target/release/rmasscan-lab vm-lab record-guest --run-id ID --manifest FILE [--guest-json F] [--verify-json F --nonce UNIQUE_NONCE]
 ```
 
 Runs as root (re-execs through `sudo -n`; the TAP is owned by `--tap-user`, default `$SUDO_USER`).
@@ -39,8 +39,11 @@ Exit codes: 0 ok, 1 status not ok, 2 no manifest/Linux only, 3 refused, 4 up fai
 
 `status` (without `--host-only`) is `ok` / `raw_run_allowed` only when: the host invariants hold, the running qemu has
 `-netdev tap,id=lab0,ifname=<TAP>` and `e1000e,netdev=lab0,mac=<MAC>` on its command line, holds `/dev/net/tun` with
-`iff: <TAP>` in `/proc/<pid>/fdinfo`, the TAP has carrier (LOWER_UP), and `record-guest --verify-json` stored a guest
-Verify (adapter Status `Up`, same MAC and GUID) recorded after that qemu started. It rewrites `vm` in the manifest from
+`iff: <TAP>` in `/proc/<pid>/fdinfo`, the TAP has carrier (LOWER_UP), and `record-guest --verify-json --nonce` stored a guest
+Verify (adapter Status `Up`, same MAC and GUID) actually produced after that qemu started. Import requires an unused
+matching nonce and an actual verification timestamp at most 60 seconds old, not the time of copying the file.
+The PowerShell Verify command takes `-VerificationNonce` and a fresh `-ReportPath` and refuses to overwrite a report.
+It rewrites `vm` in the manifest from
 these facts. `--host-only` never allows raw-run. Manifests from the first revision (no token) must be removed with that
 revision's `down`.
 
@@ -66,6 +69,6 @@ records `vm.attached=false` with a note.
 
 ## Tests
 
-`python3 -m unittest discover -s rmasscan/scripts/tests` (offline, in-memory fake host): busy bridge/TAP/netns
+`cargo test -p rmasscan-lab` (offline, in-memory fake host): busy bridge/TAP/netns
 names, address conflict, foreign ownership kept by `down`, physical uplink rejected and rolled back, ambiguous
 NIC, repeated `down`, incomplete `up`. This is VM correctness, not physical NIC or throughput evidence.

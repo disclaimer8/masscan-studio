@@ -1,0 +1,18 @@
+[package]
+name = "rmasscan-lab"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rmasscan-core = { path = "../rmasscan-core" }
+rmasscan-net = { path = "../rmasscan-net" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+clap.workspace = true
+

@@ -324,3 +324,6 @@ pub fn lab_thread_ids() -> Option<Vec<u64>> {
 pub fn lab_thread_ids() -> Option<Vec<u64>> {
     None
 }
+
+/// Laboratory sockets, separated from the scanner adapter contract.
+pub mod lab_io;

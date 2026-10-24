@@ -1,0 +1,17 @@
+[
+  {
+    "source_sha256": "874ea8daa5a6f34ea6d80c737e3dfb281389fc6bdc2abd4461701636c84f36c0",
+    "name": "tests",
+    "exit_code": 0
+  },
+  {
+    "source_sha256": "874ea8daa5a6f34ea6d80c737e3dfb281389fc6bdc2abd4461701636c84f36c0",
+    "name": "clippy",
+    "exit_code": 0
+  },
+  {
+    "source_sha256": "874ea8daa5a6f34ea6d80c737e3dfb281389fc6bdc2abd4461701636c84f36c0",
+    "name": "comparator",
+    "exit_code": 0
+  }
+]

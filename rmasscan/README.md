@@ -70,7 +70,8 @@ binding. Это НЕ пользовательское сканирование: 
 Проверка идёт только в замкнутом стенде (две netns + veth, без uplink/bridge/NAT):
 
 ```bash
-# на Linux-хосте со sudo -n, ip, ethtool, tcpdump, python3 и закреплённым C-oracle
+# на Linux-хосте со sudo -n, ip, ethtool, tcpdump и закреплённым C-oracle
+cargo build --locked --release -p rmasscan-lab
 cargo build --locked --release -p rmasscan-net --example wire_scan
 scripts/wire-lab.sh --oracle /path/to/oracle/masscan --out OUT --suite rust \
   --rust-bin target/release/examples/wire_scan --fixtures tests/golden/wire
@@ -78,8 +79,11 @@ scripts/wire-lab.sh --oracle /path/to/oracle/masscan --out OUT-perf --suite perf
   --rust-bin target/release/examples/wire_scan --reps 5
 RMASSCAN_WIRE_RESULTS=OUT RMASSCAN_WIRE_PERF_RESULTS=OUT-perf \
   cargo test --locked -p rmasscan-net --test linux_wire -- --ignored
-python3 scripts/verify-wire.py --self-test
+target/release/rmasscan-lab verify-wire --self-test
 ```
+
+Все активные лабораторные инструменты и проверки перенесены в Rust crate
+`rmasscan-lab`; Python не требуется. [Команды и границы проверки](docs/rust-lab.md).
 
 `examples/wire_scan.rs` это лабораторный harness (`ReadyPlan` + `Engine` + `open_explicit`,
 `--pause-after N`, `--resume-checkpoint FILE`), а не CLI. Тесты `linux_wire.rs` с `--ignored`

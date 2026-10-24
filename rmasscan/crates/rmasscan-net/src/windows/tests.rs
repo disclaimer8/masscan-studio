@@ -179,6 +179,12 @@ unsafe extern "C" fn f_datalink(_p: *mut PcapT) -> c_int {
 unsafe extern "C" fn f_geterr(_p: *mut PcapT) -> *mut c_char {
     c"fake driver says no".as_ptr() as *mut c_char
 }
+unsafe extern "C" fn f_setnonblock(_p: *mut PcapT, _n: c_int, _e: *mut c_char) -> c_int {
+    0
+}
+unsafe extern "C" fn f_getnonblock(_p: *mut PcapT, _e: *mut c_char) -> c_int {
+    0
+}
 unsafe extern "C" fn f_stats(_p: *mut PcapT, _s: *mut PcapStat) -> c_int {
     0
 }
@@ -203,6 +209,8 @@ fn symbol_addr(name: &str) -> Option<*const c_void> {
         "pcap_sendpacket" => f_sendpacket as *const c_void,
         "pcap_datalink" => f_datalink as *const c_void,
         "pcap_geterr" => f_geterr as *const c_void,
+        "pcap_setnonblock" => f_setnonblock as *const c_void,
+        "pcap_getnonblock" => f_getnonblock as *const c_void,
         "pcap_stats" => f_stats as *const c_void,
         "pcap_close" => f_close as *const c_void,
         _ => return None,
@@ -729,4 +737,39 @@ fn diagnostic_paths_compare_case_insensitively() {
         ..FakeLoader::ok()
     };
     assert!(NpcapApi::load_with(&l, GOOD_PATH).is_ok());
+}
+
+// ---------- DropCounter ----------
+
+#[test]
+fn drop_counter_is_cumulative_and_idempotent_on_repeated_reads() {
+    let mut c = DropCounter::new(0);
+    assert_eq!(c.update(0), 0);
+    assert_eq!(c.update(5), 5);
+    assert_eq!(c.update(5), 5);
+    assert_eq!(c.update(9), 9);
+}
+
+#[test]
+fn drop_counter_baseline_is_subtracted() {
+    let mut c = DropCounter::new(1000);
+    assert_eq!(c.update(1000), 0);
+    assert_eq!(c.update(1007), 7);
+}
+
+#[test]
+fn drop_counter_survives_u32_wraparound() {
+    let mut c = DropCounter::new(u32::MAX - 2);
+    assert_eq!(c.update(u32::MAX), 2);
+    // 0 это следующее значение после u32::MAX: ещё одна потеря
+    assert_eq!(c.update(0), 3);
+    assert_eq!(c.update(4), 7);
+}
+
+#[test]
+fn drop_counter_reset_looks_like_a_wrap_and_fails_safe() {
+    let mut c = DropCounter::new(0);
+    assert_eq!(c.update(10), 10);
+    // сброс на 0: огромная дельта (RxLoss), но не 0 и не уменьшение
+    assert!(c.update(0) > 10);
 }

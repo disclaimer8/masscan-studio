@@ -16,3 +16,6 @@ pub(crate) mod sys;
 
 #[cfg(test)]
 mod tests;
+// Opt-in live spike (task 2): все тесты `#[ignore]`, пакеты уходят только при явном env.
+#[cfg(all(windows, test))]
+mod live;

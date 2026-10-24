@@ -23,6 +23,13 @@ uses; the only `unsafe` the lab needs is in `rmasscan-net`'s non-default `lab` f
 `sigaction` stop flag and one backlog-0 listener). There is no CLI self-test: the comparator and
 suite cases are `cargo test -p rmasscan-lab`.
 
+Perf caveat (not yet measured live): `-U --immediate-mode` makes tcpdump flush per packet. At
+100k pps (307,200 probes per cell) that may cost kernel drops, which marks the cell INVALID (it
+fails closed and blocks the perf gate; nothing is relaxed). Every perf row in `results.json`
+records `<impl>_capture_kernel_drops_per_run` and `<impl>_capture_invalid_reasons`, so an
+INVALID 100k cell shows whether the witness (capture) or the scanner lost frames. Run
+`wire-lab.sh --suite perf --reps 1` once on the Linux host before the 5-rep run to see this.
+
 ```sh
 cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (no CLI self-test)
 target/release/rmasscan-lab windows-verify --dir PATH_TO_EVIDENCE

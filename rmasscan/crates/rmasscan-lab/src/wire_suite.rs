@@ -1673,6 +1673,21 @@ impl Driver {
                         .filter(|c| c["capture"].is_object() && c["capture"]["valid"] != true)
                         .count()
                 );
+                // LR N4: the witness uses tcpdump -U --immediate-mode, which can drop frames in the kernel at
+                // 100k pps and make a cell INVALID for capture reasons. Show the drops of every cell and the
+                // reasons; INVALID cells stay out of the medians and the matrix check, never normalised.
+                row[format!("{implementation}_capture_kernel_drops_per_run")] = json!(
+                    cs.iter()
+                        .map(|c| c["capture"]["kernel_drops"].clone())
+                        .collect::<Vec<_>>()
+                );
+                row[format!("{implementation}_capture_invalid_reasons")] = json!(
+                    cs.iter()
+                        .filter_map(|c| c["capture"]["invalid_reasons"].as_array())
+                        .flatten()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                );
                 row[format!("{implementation}_stop_s_median")] = json!(median(
                     cs.iter()
                         .filter_map(|c| c["stop"]["stop_to_exit_s"].as_f64())

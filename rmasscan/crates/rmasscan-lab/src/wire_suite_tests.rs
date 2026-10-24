@@ -37,7 +37,7 @@ fn driver_in(out: &Path) -> Driver {
 fn valid_cell(implementation: &str, rate: u64, rep: u64) -> Value {
     let mut c = json!({
         "impl":implementation,"rate":rate,"rep":rep,"rc":0,"valid":true,
-        "capture":{"valid":true},"rx_complete":true,
+        "capture":{"valid":true,"kernel_drops":0,"interface_drop_delta":0,"invalid_reasons":[]},"rx_complete":true,
         "transmitted_wire":512,"steady_pps_wire":rate as f64,
         "cpu_user_s":0.1,"cpu_sys_s":0.1,"max_rss_kb":1000,
         "stop":{"stop_to_exit_s":0.01}
@@ -577,5 +577,53 @@ fn a_witness_that_dies_before_it_is_ready_fails_fast_with_its_own_message() {
     ));
     assert!(wait_ready(&mut alive, &dir.join("ok.ready"), 5, &dir.join("a.err")).is_ok());
     alive.stop("TERM").unwrap();
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn perf_rows_record_the_capture_kernel_drops_of_every_cell_and_never_normalise_an_invalid_one() {
+    // LR N4: the witness runs tcpdump with -U --immediate-mode; at 100k pps that may drop frames
+    // in the kernel and make cells INVALID. The drops must be visible per cell, not hidden.
+    let mut cells = full_matrix();
+    let at = cells
+        .iter()
+        .position(|c| c["impl"] == "rust" && c["rate"] == 100000 && c["rep"] == 3)
+        .unwrap();
+    cells[at]["capture"] = json!({"valid":false,"kernel_drops":7,"interface_drop_delta":0,
+        "invalid_reasons":["tcpdump dropped 7 packets by kernel"]});
+    cells[at]["valid"] = json!(false);
+    let dir = scratch("perf-drops");
+    let mut d = driver_in(&dir);
+    d.perf_summarize(&cells, &[100, 1000, 10000, 100000]);
+    let rows = d.extra["perf_summary"].as_array().unwrap().clone();
+    let hot = rows.iter().find(|r| r["rate"] == 100000).unwrap();
+    assert_eq!(
+        hot["rust_capture_kernel_drops_per_run"],
+        json!([0, 0, 7, 0, 0])
+    );
+    assert_eq!(
+        hot["c_capture_kernel_drops_per_run"],
+        json!([0, 0, 0, 0, 0])
+    );
+    assert_eq!(hot["rust_capture_invalid_runs"], 1);
+    assert_eq!(hot["rust_valid"], 4);
+    assert_eq!(hot["rust_invalid"], 1);
+    assert_eq!(
+        hot["rust_capture_invalid_reasons"],
+        json!(["tcpdump dropped 7 packets by kernel"])
+    );
+    let cold = rows.iter().find(|r| r["rate"] == 100).unwrap();
+    assert_eq!(
+        cold["rust_capture_kernel_drops_per_run"],
+        json!([0, 0, 0, 0, 0])
+    );
+    assert_eq!(cold["rust_capture_invalid_runs"], 0);
+    // The matrix check fails: an invalid cell is never counted as valid.
+    let matrix = d
+        .checks
+        .iter()
+        .find(|c| c["name"] == "matrix complete: every cell VALID")
+        .expect("matrix check");
+    assert_eq!(matrix["result"], "FAIL");
     let _ = fs::remove_dir_all(dir);
 }

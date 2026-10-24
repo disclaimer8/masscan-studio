@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -40,7 +40,26 @@ fn persistent_would_block_fails_with_tx_stalled_after_ten_seconds() {
     synack_responder(&fake);
     fake.script_tx([TxStep::Sent, TxStep::Sent]);
     fake.set_would_block_forever(true);
+    // Шлюз: 10 с окна по ManualClock проходят за миллисекунды реального
+    // времени, и отказ (halt = FAIL) не ждёт RX. Если RX не успел вызвать
+    // recv, он законно выходит, не читая адаптер: ответы НЕ приняты, и
+    // проверять было бы нечего. Поэтому TX держится внутри второй отправки
+    // (часы стоят, окно ещё не открыто), пока движок не примет оба ответа.
+    // Отпускает тест; если тест упал раньше, `release` уничтожается при
+    // раскрутке стека и TX не зависает.
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    fake.set_send_hook(move |n| {
+        if n == 2 {
+            let _ = released
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10));
+        }
+    });
     let h = start_manual(&p, &fake, &clock, opts());
+    wait_for("both replies accepted", || h.progress().received == 2);
+    release.send(()).unwrap();
     wait_for("outcome", || h.outcome().is_some());
     let cp = h.checkpoint();
     let (out, events) = h.join_drain().unwrap();
@@ -60,6 +79,7 @@ fn persistent_would_block_fails_with_tx_stalled_after_ten_seconds() {
     assert!(cp.is_none());
     assert!(no_checkpoint(&events));
     // Принятые до отказа результаты доступны.
+    assert_eq!(out.progress.received, 2);
     assert_eq!(all_replies(&events).len(), 2);
     assert_eq!(fake.alive_handles(), 0);
 }

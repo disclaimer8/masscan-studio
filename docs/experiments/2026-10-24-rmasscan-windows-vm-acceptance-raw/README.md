@@ -11,7 +11,7 @@
 * Эталон C: оригинальный pinned masscan (ревизия `8e6b3b0c07a81e8ea61d557c06134a21a6881614`, дерево чистое, не `--offline`-копия),
   sha256 бинарника `8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e`; снят на `minipc` в запечатанных netns+veth (`scripts/wire-lab.sh` с `WIRELAB_*`), `fixtures/`.
   Каждый случай снят дважды, оба прогона C побайтно равны. Пространства `minipc` убраны (`fixtures/cleanup.txt`).
-* Слушатели пира заданы явно (`scripts/windows_wire_peer.py listen`): открыты 80, 443, 8000-8007; порт 8099 «немой» (очередь accept заполнена, SYN отбрасывается);
+* Слушатели пира заданы явно (тогда скриптом пира, сейчас `rmasscan-lab peer listen`): открыты 80, 443, 8000-8007; порт 8099 «немой» (очередь accept заполнена, SYN отбрасывается);
   остальные получают RST ядра. Порты 8080/8081 не используются: на них висит чужой слушатель более ранней задачи (pid 4038625), я его не трогал.
 
 ## Состав
@@ -20,11 +20,11 @@
   `capture.json` (фильтры, статистика tcpdump, счётчики lab0, sha256/размер/число кадров, снятые на home-pc ДО копирования), `status-pre/post.json`,
   `guest-verify.json`, `listeners.json`, `meta.json`, `pcap-hashes-on-home-pc.txt`, при подмене ответов `injector.json`; для pause-ноги `checkpoint.bin`.
 * `functional/runs_discarded/`: прогон, признанный INVALID и перезапущенный (сохранён).
-* `functional/verdict.json`: вывод офлайн-проверяльщика `python3 scripts/windows_wire_verify.py --dir functional` (29 вердиктов).
+* `functional/verdict.json`: вывод офлайн-проверяльщика (тогда скриптовая версия, сейчас `rmasscan-lab windows-verify --dir functional --out functional/verdict.json`) (29 вердиктов).
 * `functional/logs/`: журналы оркестратора. `verification/`: clippy и `cargo test --workspace` на VM для этого коммита.
 
 ## Проверка
-`shasum -a 256 -c MANIFEST.sha256` из этого каталога; `python3 -I rmasscan/scripts/windows_wire_verify.py --dir functional` (Mac/Linux/Windows, без Npcap).
+`shasum -a 256 -c MANIFEST.sha256` из этого каталога; `rmasscan-lab windows-verify --dir functional` (Mac/Linux/Windows, без Npcap; скрипт, которым это проверялось раньше, удалён из репозитория, поведение перенесено в Rust-проверяльщик).
 Из текстовых файлов убраны имена домашних каталогов (`/home/a1` -> `$HOME`, путь рабочей копии -> `$REPO`); pcap не менялись.
 
 ## Что было INVALID
@@ -41,3 +41,9 @@
 
 ## Fix round 3
 Verdicts regenerated with the round 3 verifier (argv.json check, strays incl. broadcast, NOT RUN for missing continuous captures). Unchanged: `functional` 29 PASS / overall PASS; `functional-r1-smoke` run INVALID (no per-run capture_schema). No raw evidence file was edited.
+
+## Rust harness and reruns (F4)
+* Каталоги `functional-r2/` (часть A) и `failure-r1/` (часть B) создаёт `rmasscan-lab windows-suite` (план `functional` — 24 прогона, `failure` — 18). Каждый содержит `manifest.json`, `fixtures/`, `runs/`, `runs_discarded/`, `deploy/` (копия deploy-манифеста, байты гостевых скриптов, `preflight-<run>.json` с хэшами бинаря home-pc, скриптов и измеренным расхождением часов), `verdict.json`, свой `README.md` и `MANIFEST.sha256`. Процедура сборки и развёртывания: `rmasscan/docs/rust-lab.md`, раздел «Deployment for the live Windows rerun».
+* Эталоны C переиспользуются: `functional/fixtures` передаётся в `--fixtures` и для части A, и для части B (binding одинаков); заново эталоны не снимаются.
+* Оговорка по части A (`functional/`): её прогоны сняты до цепочки nonce (X1), поэтому нога «гостевой Verify» шлюза raw-run для них не доказана по каждому прогону (проверяльщик читает их как capture_schema 1, без этого требования). Доказательство даёт только `functional-r2/` и `failure-r1/` (capture_schema 3: nonce, хэши, код выхода Verify обязательны).
+* Скрипты, которыми велись первые прогоны (оркестратор, проверяльщик, пир), удалены из репозитория; их история остаётся в git (до коммита `123fe76`). Исторические инструменты в других каталогах сырых данных удалены вместе с записью пути, последнего коммита и sha256 в их README.

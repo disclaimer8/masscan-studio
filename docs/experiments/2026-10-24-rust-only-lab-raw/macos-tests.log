@@ -1,5 +1,5 @@
-   Compiling rmasscan-lab v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b-win/rmasscan/crates/rmasscan-lab)
-   Compiling rmasscan-net v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b-win/rmasscan/crates/rmasscan-net)
+   Compiling rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
+   Compiling rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
     Finished `test` profile [optimized + debuginfo] target(s) in 1.91s
      Running unittests src/main.rs (target/debug/deps/rmasscan-35a0fc6db7f1870b)
 

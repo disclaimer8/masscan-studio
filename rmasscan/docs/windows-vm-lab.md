@@ -41,10 +41,10 @@ Exit codes: 0 ok, 1 status not ok, 2 no manifest/Linux only, 3 refused, 4 up fai
 `-netdev tap,id=lab0,ifname=<TAP>` and `e1000e,netdev=lab0,mac=<MAC>` on its command line, holds `/dev/net/tun` with
 `iff: <TAP>` in `/proc/<pid>/fdinfo`, the TAP has carrier (LOWER_UP), and `record-guest --verify-json --nonce` stored a guest
 Verify (adapter Status `Up`, same MAC and GUID) actually produced after that qemu started. Import requires an unused
-matching nonce and an actual verification timestamp at most 60 seconds old, not the time of copying the file.
+matching nonce and an actual verification timestamp at most 60 seconds old and at most 5 seconds in the future on the home-pc clock (the guest clock is therefore a hard gate; `windows-suite` checks it before any raw run), not the time of copying the file.
 The PowerShell Verify command takes `-VerificationNonce` and a fresh `-ReportPath` and refuses to overwrite a report.
 It rewrites `vm` in the manifest from
-these facts. `--host-only` never allows raw-run. Manifests from the first revision (no token) must be removed with that
+these facts. `--host-only` reports `ok` and the exit code from the host invariants alone and does not rewrite `vm` in the manifest; the printed `raw_run_allowed` field still carries the full facts, so a host-only `ok` is never permission for a raw run (the suite gate reads the full status). Manifests from the first revision (no token) must be removed with that
 revision's `down`.
 
 ## Guest side
@@ -53,8 +53,12 @@ revision's `down`.
 The lab NIC is found by the manifest MAC (`52:54:00:xx:xx:xx`, derived from the run-id); zero or several
 matches abort. `Configure` assigns only `198.18.0.1/30` (no gateway, DNS reset, no registration), refuses an
 adapter that holds the management address or a default route, and writes `<Manifest>.guest.json` with GUID and
-`\Device\NPF_{GUID}`; `record-guest` merges that into the manifest. `Verify` also requires the adapter Status `Up` and the recorded GUID, writes `<Manifest>.verify.json`, and re-checks that the management NIC
+`\Device\NPF_{GUID}`; `record-guest` merges that into the manifest. `Verify` also requires the adapter Status `Up` and the recorded GUID, writes the report to the unique `-ReportPath` it was given (it refuses to overwrite one), and re-checks that the management NIC
 (10.0.2.x) still owns exactly one default route and the lab NIC has none.
+
+## Deployment for a live Windows rerun
+
+See [rust-lab.md](rust-lab.md), section "Deployment for the live Windows rerun". The suite, not the operator, copies `windows-vm-lab.ps1` to `C:\Users\lab\` from the tree of `--commit` and records its sha256; an older guest copy would make every gate fail.
 
 ## Why run.sh was changed instead of QMP hotplug
 

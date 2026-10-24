@@ -34,10 +34,10 @@
    Compiling clap_derive v4.6.7
    Compiling serde_derive v1.0.229
    Compiling clap v4.6.7
-   Compiling rmasscan-core v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b-win/rmasscan/crates/rmasscan-core)
-   Compiling rmasscan-engine v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b-win/rmasscan/crates/rmasscan-engine)
-   Compiling rmasscan-net v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b-win/rmasscan/crates/rmasscan-net)
-   Compiling rmasscan-lab v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b-win/rmasscan/crates/rmasscan-lab)
+   Compiling rmasscan-core v0.1.0 ($REPO/rmasscan/crates/rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 ($REPO/rmasscan/crates/rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
+   Compiling rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
     Finished `release` profile [optimized] target(s) in 5.12s
      Running unittests src/lib.rs (target/release/deps/rmasscan_lab-5132d4d5c0932434)
 

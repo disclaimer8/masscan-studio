@@ -292,7 +292,7 @@ impl Exec for Real {
     }
 }
 /// A suite failure with the exit code that operator scripts key off. NOT RUN (2) is a refusal
-/// before any remote action; the others happen once a run has begun or on an unusable directory.
+/// before any remote change (read-only preflights excepted); the others happen once a run has begun or on an unusable directory.
 #[derive(Debug, PartialEq)]
 pub(crate) enum SuiteError {
     NotRun(String),
@@ -1234,7 +1234,7 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     let o = options(args)?;
     if o.contains_key("help") {
         println!(
-            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote action), 10 aborted, 11 rerun refused, 12 directory capture schema too old"
+            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old"
         );
         return Ok(0);
     }

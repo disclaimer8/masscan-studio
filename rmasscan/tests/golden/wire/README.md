@@ -21,11 +21,7 @@ The peer namespace runs a responder: ports 80 and 8080 listen (kernel SYN-ACK), 
 answers RST. A host `/etc/masscan/masscan.conf`, if present, is masked inside a private mount
 namespace for the oracle (the host file is never edited); its presence and sha are in the manifest.
 
-Capture: `scripts/wire_capture.py record` (stdlib AF_PACKET) runs in the peer namespace, started
-before the scanner. Readiness is an explicit ACK: the lab sends a marker frame and waits until the
-recorder acknowledges having captured it. Each run records `PACKET_STATISTICS` drops, truncated frames
-and the interface `rx_packets` delta against the frames captured. Any drop, truncation or counter
-mismatch marks the run `valid: false`, and the comparator then reports INVALID, never PASS.
+Capture: the fixtures in this directory were recorded by the first (script) harness, an AF_PACKET recorder in the peer namespace, started before the scanner, with an explicit marker ACK, `PACKET_STATISTICS` drops, truncated frames and the interface `rx_packets` delta. That recorder no longer exists. Current captures (`scripts/wire-lab.sh`, `rmasscan-lab capture dump`) are witnessed by the independent `tcpdump` run in the peer namespace with `-U --immediate-mode`: the start marker must be in the pcap before the scanner starts, the veth counters must go quiet, three end markers follow, tcpdump must report no kernel or interface drops, and captured == received == pcap frames == the rx+tx counter window. Any failed proof marks the run `valid: false`, and the comparator then reports INVALID, never PASS.
 
 Cleanup only touches this run's namespaces, tracked child PIDs and `.work` files (no global kill,
 no firewall/route/bridge changes). Verified on success, on error and on SIGINT/SIGTERM.
@@ -64,12 +60,10 @@ oracle commit and sha256, harness hashes, commands, OS versions, binding, expect
 capture drops/truncation and pcap hashes. Not captured here: replies as comparison material,
 timestamps, large captures.
 
-`manifest.json` is scrubbed on generation (`wire_capture.py::scrub`): host home paths become
+`manifest.json` is scrubbed on generation (`rmasscan-lab capture`, function `scrub`): host home paths become
 `$HOME/...` and raw per-run namespace names become `wl-scan-RUNID` / `wl-peer-RUNID`, like the
 topology files. Oracle provenance (commit, sha256, version line) and every pcap hash are left
-untouched. The `harness` hashes describe the scripts of the run that produced the fixtures
-(stage 2B task 4); `wire-lab.sh`, `wire_capture.py` and `verify-wire.py` were extended afterwards for
-the Rust suites (task 6), so they no longer match those hashes by design.
+untouched. The `harness` hashes in `manifest.json` describe the scripts of the run that produced the fixtures (stage 2B task 4), including the two retired script tools (their provenance is the git history); `wire-lab.sh` was changed afterwards, and `capture env` now hashes the scripts actually executing (`wire-lab.sh`, `lab-process-group.sh`) and, with `RMASSCAN_DEPLOY_MANIFEST`, binds the running `rmasscan-lab` to a recorded commit. The recorded hashes therefore no longer match the current scripts by design.
 
-The Rust side of this wire lab (`--suite rust|perf`, `scripts/wire_suite.py`) is described in
+The Rust side of this wire lab (`--suite rust|perf`, `rmasscan-lab wire-suite`) is described in
 `docs/experiments/2026-10-23-rmasscan-stage2b-linux.md`.

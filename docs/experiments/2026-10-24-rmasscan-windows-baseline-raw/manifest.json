@@ -1,0 +1,48 @@
+{
+  "commit": "31a729f",
+  "source_tar": "rmasscan-31a729f.tar",
+  "source_tar_sha256": "68b92e3e377005a8b09d5199e6b9dc1c7b4638fff450ca37cfc68bbb0eedabbd",
+  "os": "Windows 11 Pro 10.0.26300",
+  "toolchain": {
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1",
+    "rustfmt": "1.10.0-stable",
+    "clippy": "0.1.99",
+    "cargo-deny": "0.20.2",
+    "pwsh": "7.6.8",
+    "git": "2.56.0.windows.3",
+    "python": "3.13.15",
+    "vs_buildtools": "17.14.37806.7 (installationVersion)",
+    "msvc": "14.44.35207",
+    "windows_sdk": "10.0.26100.0"
+  },
+  "npcap": {
+    "version": "1.90",
+    "installer_sha256": "682b57e1c05ef375931975c9d6ded40888f4bfdf9f4b11571e654f962f1199b6",
+    "signer": "Nmap Software LLC (Authenticode Valid)",
+    "AdminOnly": 1,
+    "WinPcapCompatible": 0,
+    "Dot11Support": 0,
+    "LoopbackSupport_reg": 1,
+    "npcap_loopback_adapter_installed": false,
+    "service": "Running",
+    "wpcap_dll": "1.10.7 sha256 332F81CC1671A6D12AB4D20264A00EE16D12F6883745E05C92EE4030B3896A9F",
+    "packet_dll": "1.90 sha256 6F9116D9747DD356DB97F6DFAF02FE1B9B0859EA3214856F17CED84D790658C2",
+    "pcap_findalldevs_elevated": "rc=0, 5 devices (4 + NPF_Loopback)"
+  },
+  "exit_codes": {
+    "fmt": 0,
+    "clippy": 0,
+    "test": 101,
+    "no_c_guard": 0,
+    "verify_wire_selftest": 0,
+    "wire_suite_selftest": 0,
+    "wire_scan_build": 0,
+    "deny": 0,
+    "cli_echo": 0
+  },
+  "test_notes": {
+    "test": "first run exit 101: tx_stall::persistent_would_block_fails_with_tx_stalled_after_ten_seconds assertion left 0 right 2 (flaky: passed 3/3 reruns and in --no-fail-fast run)",
+    "test_nofailfast": "320 passed 0 failed 7 ignored, exit 0"
+  }
+}

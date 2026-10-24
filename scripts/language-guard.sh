@@ -5,10 +5,15 @@
 #
 # Fails when
 #   1. a tracked file has a banned source extension (any letter case): Swift (.swift),
-#      the banned interpreter scripts (.py .pyw .pyc .pyz), C, C++ and Objective-C (.c .h .cc .cpp .cxx .hpp .hh .m .mm),
+#      the banned interpreter scripts and notebooks (.py .pyi .pyw .pyc .pyz .ipynb), C, C++ and Objective-C
+#      (.c .h .cc .cpp .cxx .c++ .hpp .hh .hxx .h++ .cppm .ixx .m .mm), or is a banned build file (the interpreter's
+#      project files: its pyproject, setup.cfg, Pipfile),
+#   1b. a tracked SYMLINK has such a name, points at a path with such a name, or points at a file whose first line is a
+#      shebang naming the banned interpreter (the link name and every hop of the chain are checked; a target outside
+#      the repository is read for its first line only),
 #   2. a tracked file starts with a shebang that names the banned interpreter,
-#   3. a tracked script or source file (.sh .bash .ps1 .cmd .bat .rs .yml
-#      .yaml, Makefile*, GNUmakefile*, *.mk, or any other file that starts with a shebang)
+#   3. a tracked script or source file (.sh .bash .zsh .ksh .fish .ps1 .cmd .bat .rs .yml
+#      .yaml, Makefile*, GNUmakefile*, *.mk, CMakeLists.txt, *.cmake, justfile/Justfile/*.just, or any other file that starts with a shebang)
 #      mentions the interpreter as a word at all (comments included), or calls the Windows
 #      launcher (two letters, then a dash and a version digit; assembled below).
 # Prose (.md) and recorded evidence data (.json, .txt, .log, ...) are not scanned.
@@ -40,13 +45,49 @@ report() { printf 'FAIL %s\n' "$1"; fail=1; }
 
 tracked=$(git ls-files -z | tr '\0' '\n')
 
-# 1. banned extensions
+# a path (tracked name or symlink target) with a banned extension or a banned build-file name
+banned_name() {
+  local base=${1##*/}
+  case "$1" in
+    *.swift | *.py | *.pyi | *.pyw | *.pyc | *.pyz | *.ipynb | *.c | *.h | *.cc | *.cpp | *.cxx | *.c++ | *.hpp | *.hh | *.hxx | *.h++ | *.cppm | *.ixx | *.m | *.mm) return 0 ;;
+  esac
+  case "$base" in
+    pyproject.toml | setup.cfg | pipfile) return 0 ;;
+  esac
+  return 1
+}
+
+# 1. banned extensions and build files
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  case "$f" in
-    *.swift | *.py | *.pyw | *.pyc | *.pyz | *.c | *.h | *.cc | *.cpp | *.cxx | *.hpp | *.hh | *.m | *.mm)
-      report "$f: banned source file" ;;
-  esac
+  if banned_name "$f"; then report "$f: banned source file"; fi
+done <<<"$tracked"
+
+# 1b. tracked symlinks: follow the chain by name, read only the first line of the final target
+check_link() {
+  local f=$1 cur=$1 t hop=0 first
+  while [ -L "$cur" ] && [ "$hop" -lt 16 ]; do
+    t=$(readlink -- "$cur") || return 0
+    if banned_name "$t"; then report "$f: symlink to a banned source file ($t)"; fi
+    case "$t" in
+      /*) cur=$t ;;
+      *) cur=$(dirname -- "$cur")/$t ;;
+    esac
+    hop=$((hop + 1))
+  done
+  if [ -f "$cur" ] && [ ! -L "$cur" ]; then
+    first=$(head -n 1 -- "$cur" 2>/dev/null | LC_ALL=C tr -d '\0' | head -c 512 || true)
+    case "$first" in
+      '#!'*)
+        if printf '%s\n' "$first" | grep -a -i -E -q -- "$shebang"; then
+          report "$f: symlink to a file whose shebang names the banned interpreter ($cur)"
+        fi ;;
+    esac
+  fi
+}
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if [ -L "$f" ]; then check_link "$f"; fi
 done <<<"$tracked"
 
 # 2 and 3. shebangs and word scan
@@ -63,11 +104,11 @@ while IFS= read -r f; do
   fi
   scan=$has_shebang
   case "$f" in
-    *.sh | *.bash | *.ps1 | *.cmd | *.bat | *.rs | *.yml | *.yaml | *.mk) scan=1 ;;
+    *.sh | *.bash | *.zsh | *.ksh | *.fish | *.ps1 | *.cmd | *.bat | *.rs | *.yml | *.yaml | *.mk | *.cmake | *.just) scan=1 ;;
   esac
   base=${f##*/}
   case "$base" in
-    makefile* | gnumakefile*) scan=1 ;;
+    makefile* | gnumakefile* | cmakelists.txt | justfile | .justfile) scan=1 ;;
   esac
   if [ "$scan" = 1 ]; then
     hits=$(grep -a -n -i -E -- "$pattern|$launcher" "$f" 2>/dev/null || true)

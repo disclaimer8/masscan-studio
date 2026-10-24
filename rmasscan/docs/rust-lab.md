@@ -15,7 +15,7 @@ The Windows PowerShell files remain system-integration wrappers. Bash entry
 points invoke the Rust tools and OS utilities; they contain no embedded Python.
 
 ```sh
-target/release/rmasscan-lab verify-wire --self-test
+cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (no CLI self-test)
 target/release/rmasscan-lab windows-verify --dir PATH_TO_EVIDENCE
 target/release/rmasscan-lab windows-suite --list --plan failure
 target/release/rmasscan-lab vm-lab plan --run-id n2 --manifest lab.json

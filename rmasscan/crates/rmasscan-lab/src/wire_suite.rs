@@ -147,6 +147,34 @@ impl Drop for OwnedChild {
         }
     }
 }
+/// Wait for `ready` to appear, but fail at once if the process exits first (a missing tcpdump or a
+/// permission error would otherwise cost the whole timeout), reporting its stderr.
+fn wait_ready(p: &mut OwnedChild, ready: &Path, secs: u64, err: &Path) -> Result<(), String> {
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_secs(secs) {
+        if ready.exists() {
+            return Ok(());
+        }
+        if let Some(c) = &mut p.0
+            && let Some(st) = c.try_wait().map_err(|e| e.to_string())?
+        {
+            p.0 = None;
+            return Err(format!(
+                "capture witness exited ({st}) before it was ready: {}",
+                fs::read_to_string(err)
+                    .unwrap_or_default()
+                    .chars()
+                    .take(300)
+                    .collect::<String>()
+            ));
+        }
+        if rmasscan_net::lab_io::stop_requested() {
+            return Err("suite interrupted".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err("capture witness (tcpdump) not ready".into())
+}
 fn wait_file(p: &Path, secs: u64) -> bool {
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(secs) {
@@ -273,6 +301,12 @@ struct Run {
     meta: Value,
     pcap: Option<PathBuf>,
     wall: f64,
+}
+/// Where a capture's pcap lives: the rust suite keeps it as evidence, perf deletes it per cell.
+#[derive(Clone, Copy)]
+enum Evidence {
+    Keep,
+    Scratch,
 }
 struct Recorder {
     tag: String,
@@ -401,16 +435,17 @@ impl Driver {
             .push(rec.clone());
         Ok(rec)
     }
-    /// Start the tcpdump witness in the peer namespace (`capture dump`), prove it is live with a
-    /// scanner-side start marker, and return the handle. `keep`: the pcap goes to the evidence
-    /// directory instead of the scratch directory.
-    fn recorder(&self, tag: &str, keep: bool) -> Result<Recorder, String> {
-        let pcap = if keep {
-            self.c.out.join(format!("{tag}.pcap"))
-        } else {
-            self.c.work.join(format!("{tag}.pcap"))
+    fn capture_paths(&self, tag: &str, evidence: Evidence) -> (PathBuf, PathBuf) {
+        let pcap = match evidence {
+            Evidence::Keep => self.c.out.join(format!("{tag}.pcap")),
+            Evidence::Scratch => self.c.work.join(format!("{tag}.pcap")),
         };
-        let meta = self.c.out.join(format!("{tag}.capture.json"));
+        (pcap, self.c.out.join(format!("{tag}.capture.json")))
+    }
+    /// Start the tcpdump witness in the peer namespace (`capture dump`), prove it is live with a
+    /// scanner-side start marker, and return the handle.
+    fn recorder(&self, tag: &str, evidence: Evidence) -> Result<Recorder, String> {
+        let (pcap, meta) = self.capture_paths(tag, evidence);
         let ready = self
             .c
             .work
@@ -437,14 +472,13 @@ impl Driver {
                 ],
             ),
         );
-        let process = OwnedChild(Some(spawn(
+        let rec_err = self.c.work.join(format!("{tag}.rec.err"));
+        let mut process = OwnedChild(Some(spawn(
             &a,
             &self.c.work.join(format!("{tag}.rec.out")),
-            &self.c.work.join(format!("{tag}.rec.err")),
+            &rec_err,
         )?));
-        if !wait_file(&ready, 30) {
-            return Err("capture witness (tcpdump) not ready".into());
-        }
+        wait_ready(&mut process, &ready, 30, &rec_err)?;
         command(
             &self.ns(
                 false,
@@ -543,7 +577,7 @@ impl Driver {
     ) -> Result<Run, String> {
         self.fresh()?;
         let mut rec = if record {
-            Some(self.recorder(tag, false)?)
+            Some(self.recorder(tag, Evidence::Keep)?)
         } else {
             None
         };
@@ -1460,7 +1494,7 @@ impl Driver {
         let (exp_open, exp_closed) = expected_replies(ports)?;
         let tag = format!("perf.{implementation}.{rate}.r{rep}");
         self.fresh()?;
-        let mut rec = self.recorder(&tag, true)?;
+        let mut rec = self.recorder(&tag, Evidence::Scratch)?;
         let txt = self.c.work.join(format!("{tag}.scan.txt"));
         let argv = if implementation == "c" {
             self.c_args(targets, ports, rate, &txt)
@@ -1542,7 +1576,7 @@ impl Driver {
         fs::remove_file(&rec.pcap).map_err(|e| e.to_string())?;
         self.fresh()?;
         let sttag = format!("{tag}.stop");
-        let mut rec = self.recorder(&sttag, true)?;
+        let mut rec = self.recorder(&sttag, Evidence::Scratch)?;
         let sf = self
             .c
             .work

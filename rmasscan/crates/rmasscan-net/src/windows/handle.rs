@@ -13,8 +13,9 @@ use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
 use super::ffi::{
-    DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, NEXT_EX_EOF, NEXT_EX_ERROR, NEXT_EX_OK,
-    NEXT_EX_TIMEOUT, PCAP_ERRBUF_SIZE, PcapIf, PcapPkthdr, PcapStat, PcapT,
+    BPF_RET_K, BpfInsn, BpfProgram, DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, NEXT_EX_EOF,
+    NEXT_EX_OK, NEXT_EX_TIMEOUT, PCAP_ERRBUF_SIZE, PCAP_IF_LOOPBACK, PCAP_NETMASK_UNKNOWN, PcapIf,
+    PcapPkthdr, PcapStat, PcapT,
 };
 use super::loader::NpcapApi;
 use crate::NetError;
@@ -46,6 +47,8 @@ pub(crate) struct OpenParams {
 /// Владеемый активированный `pcap_t`.
 pub(crate) struct PcapHandle {
     raw: NonNull<PcapT>,
+    /// Заданный `snaplen`: `caplen` больше него это нарушение контракта.
+    snaplen: usize,
     // Последним: выгрузка библиотеки после `pcap_close` в Drop.
     api: Arc<NpcapApi>,
 }
@@ -56,7 +59,7 @@ unsafe impl Send for PcapHandle {}
 
 impl Drop for PcapHandle {
     fn drop(&mut self) {
-        // SAFETY: raw получен из pcap_create/pcap_open_live этой же
+        // SAFETY: raw получен из pcap_create этой же
         // библиотеки, ещё не закрыт (Drop выполняется один раз), api держит
         // DLL загруженной.
         unsafe { (self.api.fns.close)(self.raw.as_ptr()) };
@@ -82,6 +85,7 @@ impl PcapHandle {
         };
         let h = PcapHandle {
             raw,
+            snaplen: usize::try_from(p.snaplen).unwrap_or(0),
             api: Arc::clone(api),
         };
         h.set("pcap_set_snaplen", h.api.fns.set_snaplen, p.snaplen)?;
@@ -148,20 +152,41 @@ impl PcapHandle {
     }
 }
 
-/// Результат одного `pcap_next_ex`. Данные кадра живут до следующего вызова
-/// на этом же handle (заимствование это обеспечивает).
-#[derive(Debug)]
-pub(crate) enum NextEx<'a> {
-    Frame {
-        hdr: PcapPkthdr,
-        data: &'a [u8],
-    },
+/// Результат одного чтения с копированием кадра в буфер вызывающего.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Polled {
+    /// Кадр целиком (`caplen == len`) скопирован в начало буфера.
+    Frame(usize),
+    /// Кадр усечён (`caplen != len`) или не помещается в буфер: отброшен.
+    Truncated,
     /// rc 0: нет кадра (в nonblocking режиме это «пусто»).
-    Timeout,
+    Empty,
     /// rc -1 или неизвестный код: текст через `last_error`.
     Error(c_int),
     /// rc -2.
     Eof,
+    /// Библиотека нарушила контракт (rc 1 с NULL-указателем или `caplen`
+    /// больше `snaplen`): handle ненадёжен, кадр не читался.
+    Malformed(&'static str),
+}
+
+/// Заимствующий результат для живого спайка (только тесты на Windows).
+#[cfg(all(test, windows))]
+#[derive(Debug)]
+pub(crate) enum NextEx<'a> {
+    Frame { hdr: PcapPkthdr, data: &'a [u8] },
+    Timeout,
+    Error(c_int),
+    Eof,
+}
+
+/// Сырой результат `pcap_next_ex` после проверки указателей и `caplen`.
+enum RawNext {
+    Frame { hdr: PcapPkthdr, data: *const u8 },
+    Empty,
+    Error(c_int),
+    Eof,
+    Malformed(&'static str),
 }
 
 impl PcapHandle {
@@ -187,8 +212,10 @@ impl PcapHandle {
         unsafe { (self.api.fns.getnonblock)(self.raw.as_ptr(), err.as_mut_ptr()) }
     }
 
-    /// Один `pcap_next_ex`. Заголовок копируется, данные заимствуются.
-    pub(crate) fn next_ex(&mut self) -> NextEx<'_> {
+    /// Один `pcap_next_ex`. Указатель кадра действителен до следующего вызова
+    /// на этом handle; `&mut self` не даёт сделать такой вызов, пока жив
+    /// результат вызывающей функции.
+    fn raw_next(&mut self) -> RawNext {
         let mut hdr: *mut PcapPkthdr = ptr::null_mut();
         let mut data: *const u8 = ptr::null();
         // SAFETY: raw валиден; hdr/data выходные указатели.
@@ -196,20 +223,62 @@ impl PcapHandle {
         match rc {
             NEXT_EX_OK => {
                 if hdr.is_null() || data.is_null() {
-                    return NextEx::Error(NEXT_EX_ERROR);
+                    return RawNext::Malformed("pcap_next_ex returned a frame with a NULL pointer");
                 }
-                // SAFETY: при rc == 1 hdr и data указывают на буфер pcap_t,
-                // действительный до следующего вызова на этом handle; &mut
-                // self запрещает такой вызов, пока жив результат.
-                let (h, d) = unsafe {
-                    let h = *hdr;
-                    (h, std::slice::from_raw_parts(data, h.caplen as usize))
-                };
-                NextEx::Frame { hdr: h, data: d }
+                // SAFETY: при rc == 1 hdr указывает на действительный
+                // pcap_pkthdr внутри pcap_t (до следующего вызова); читаем
+                // копию без предположений о выравнивании.
+                let h = unsafe { ptr::read_unaligned(hdr) };
+                if h.caplen as usize > self.snaplen {
+                    return RawNext::Malformed("pcap_next_ex returned caplen above the snaplen");
+                }
+                RawNext::Frame { hdr: h, data }
             }
-            NEXT_EX_TIMEOUT => NextEx::Timeout,
-            NEXT_EX_EOF => NextEx::Eof,
-            other => NextEx::Error(other),
+            NEXT_EX_TIMEOUT => RawNext::Empty,
+            NEXT_EX_EOF => RawNext::Eof,
+            other => RawNext::Error(other),
+        }
+    }
+
+    /// Читает один кадр и НЕМЕДЛЕННО копирует его в `buf`: указатели pcap не
+    /// покидают эту функцию. Длины проверяются до копирования: усечённый
+    /// (`caplen != len`) и не помещающийся в `buf` кадр не копируется.
+    pub(crate) fn poll_into(&mut self, buf: &mut [u8]) -> Polled {
+        match self.raw_next() {
+            RawNext::Frame { hdr, data } => {
+                let caplen = hdr.caplen as usize;
+                if caplen != hdr.len as usize || caplen > buf.len() {
+                    return Polled::Truncated;
+                }
+                // SAFETY: data не NULL и по контракту pcap_next_ex указывает
+                // на caplen читаемых байт до следующего вызова на этом handle
+                // (`&mut self` не даёт его сделать); caplen <= snaplen и
+                // caplen <= buf.len() проверены выше; буфер вызывающего не
+                // пересекается с памятью pcap_t.
+                unsafe { ptr::copy_nonoverlapping(data, buf.as_mut_ptr(), caplen) };
+                Polled::Frame(caplen)
+            }
+            RawNext::Empty => Polled::Empty,
+            RawNext::Error(rc) => Polled::Error(rc),
+            RawNext::Eof => Polled::Eof,
+            RawNext::Malformed(why) => Polled::Malformed(why),
+        }
+    }
+
+    /// Заимствующее чтение для живого спайка (измеряет сам `pcap_next_ex`).
+    #[cfg(all(test, windows))]
+    pub(crate) fn next_ex(&mut self) -> NextEx<'_> {
+        match self.raw_next() {
+            RawNext::Frame { hdr, data } => {
+                // SAFETY: data не NULL, caplen <= snaplen проверен в raw_next;
+                // срез живёт не дольше заимствования `&mut self`.
+                let d = unsafe { std::slice::from_raw_parts(data, hdr.caplen as usize) };
+                NextEx::Frame { hdr, data: d }
+            }
+            RawNext::Empty => NextEx::Timeout,
+            RawNext::Error(rc) => NextEx::Error(rc),
+            RawNext::Eof => NextEx::Eof,
+            RawNext::Malformed(_) => NextEx::Error(-1),
         }
     }
 
@@ -233,11 +302,99 @@ impl PcapHandle {
     }
 }
 
+/// Скомпилированная программа BPF; `pcap_freecode` в Drop. Держит `Arc`
+/// библиотеки, поэтому не переживает её.
+pub(crate) struct CompiledFilter {
+    prog: BpfProgram,
+    api: Arc<NpcapApi>,
+}
+
+impl Drop for CompiledFilter {
+    fn drop(&mut self) {
+        // SAFETY: prog заполнена успешным pcap_compile этой же библиотеки и
+        // освобождается ровно один раз; api держит DLL загруженной.
+        unsafe { (self.api.fns.freecode)(&mut self.prog) };
+    }
+}
+
+impl PcapHandle {
+    /// `pcap_compile` выражения (ASCII без NUL). Маска сети не нужна.
+    pub(crate) fn compile(&mut self, expr: &str) -> Result<CompiledFilter, NetError> {
+        let c = CString::new(expr)
+            .map_err(|_| NetError::System("capture filter contains NUL".into()))?;
+        let mut prog = BpfProgram {
+            bf_len: 0,
+            bf_insns: ptr::null_mut(),
+        };
+        // SAFETY: raw валиден и активирован; c NUL-терминирован; prog это
+        // выходная структура полного размера (ABI проверен в ffi).
+        let rc = unsafe {
+            (self.api.fns.compile)(
+                self.raw.as_ptr(),
+                &mut prog,
+                c.as_ptr(),
+                1,
+                PCAP_NETMASK_UNKNOWN,
+            )
+        };
+        if rc != 0 {
+            return Err(NetError::System(format!(
+                "pcap_compile({expr:?}) failed (code {rc}): {}",
+                self.last_error()
+            )));
+        }
+        Ok(CompiledFilter {
+            prog,
+            api: Arc::clone(&self.api),
+        })
+    }
+
+    /// `pcap_setfilter` для скомпилированной программы (библиотека копирует её).
+    pub(crate) fn set_filter(&mut self, f: &mut CompiledFilter) -> Result<(), NetError> {
+        // SAFETY: raw валиден; f.prog заполнена pcap_compile и жива.
+        let rc = unsafe { (self.api.fns.setfilter)(self.raw.as_ptr(), &mut f.prog) };
+        if rc != 0 {
+            return Err(NetError::System(format!(
+                "pcap_setfilter failed (code {rc}): {}",
+                self.last_error()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Фильтр «не пропускать ничего» (`ret #0`): кадры отбрасываются в драйвере
+    /// и не копятся в буфере. Программа из одной инструкции, без pcap_compile.
+    pub(crate) fn set_drop_all_filter(&mut self) -> Result<(), NetError> {
+        let mut insns = [BpfInsn {
+            code: BPF_RET_K,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        }];
+        let mut prog = BpfProgram {
+            bf_len: 1,
+            bf_insns: insns.as_mut_ptr(),
+        };
+        // SAFETY: raw валиден; prog описывает массив insns из одной валидной
+        // инструкции, живущий дольше вызова; setfilter копирует программу.
+        let rc = unsafe { (self.api.fns.setfilter)(self.raw.as_ptr(), &mut prog) };
+        if rc != 0 {
+            return Err(NetError::System(format!(
+                "pcap_setfilter(drop-all) failed (code {rc}): {}",
+                self.last_error()
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Кумулятивный счётчик потерь из 32-битного `ps_drop` (`u_int`). Npcap не
 /// сбрасывает счётчик при чтении, но он оборачивается через 2^32; сумма
 /// дельт по `wrapping_sub` честна, пока между двумя чтениями происходит
-/// меньше 2^32 потерь. Сброс счётчика назад неотличим от оборота и даёт
-/// огромную дельту (отказ безопасен: RxLoss), а не молчаливый ноль.
+/// меньше 2^32 потерь. Сброс счётчика назад даёт огромную дельту (отказ
+/// безопасен: RxLoss), кроме случая, когда новое значение уже превысило
+/// прежнее: тогда потери недосчитаны, но результат всё равно ненулевой, а не
+/// молчаливый ноль.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DropCounter {
     last: u32,
@@ -376,6 +533,11 @@ pub(crate) fn resolve_device(api: &NpcapApi, interface_id: &str) -> Result<CStri
         .iter()
         .find(|d| d.name.eq_ignore_ascii_case(interface_id));
     match found {
+        // Loopback-адаптер Npcap это не Ethernet: отказ до открытия.
+        Some(d) if d.flags & PCAP_IF_LOOPBACK != 0 => Err(NetError::UnsupportedLink(format!(
+            "{:?} is the Npcap loopback adapter, not Ethernet",
+            d.name
+        ))),
         // Имя из перечня не содержит NUL (получено из CStr).
         Some(d) => CString::new(d.name.as_bytes())
             .map_err(|_| NetError::InterfaceMismatch("device name contains NUL".into())),

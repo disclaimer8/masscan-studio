@@ -36,6 +36,10 @@ const MS50: Duration = Duration::from_millis(50);
 
 // ---------- окружение ----------
 
+// Общий с интеграционными тестами код: сверка MAC устройства из окружения.
+#[path = "../../tests/support/lab_nic.rs"]
+mod lab_nic;
+
 fn need(name: &str) -> String {
     std::env::var(name)
         .unwrap_or_else(|_| panic!("NOT RUN: environment variable {name} is not set"))
@@ -64,14 +68,18 @@ struct Lab {
     cond: String,
 }
 
+/// Читает окружение и ДО любой отправки проверяет, что устройство из
+/// переменной действительно имеет MAC лабораторной привязки.
 fn lab() -> Lab {
-    Lab {
+    let l = Lab {
         device: need("RMASSCAN_NPCAP_LAB_DEVICE"),
         src_mac: parse_mac(&need("RMASSCAN_NPCAP_LAB_SRC_MAC")),
         peer_mac: parse_mac(&need("RMASSCAN_NPCAP_LAB_PEER_MAC")),
         out_dir: need("RMASSCAN_NPCAP_OUT_DIR"),
         cond: std::env::var("RMASSCAN_NPCAP_COND").unwrap_or_else(|_| "unlabelled".into()),
-    }
+    };
+    lab_nic::verify_device_mac(&l.device, l.src_mac);
+    l
 }
 
 fn now_ms() -> u64 {
@@ -202,7 +210,10 @@ fn open_rx(api: &Arc<NpcapApi>, lab: &Lab, buf: i32) -> PcapHandle {
     h
 }
 
-/// TX handle: минимальный буфер ядра, чтобы непрочитанный захват не копился.
+/// TX handle конфигурации СПАЙКА: малые snaplen и буфер. Уменьшение буфера
+/// НЕ мешает непрочитанному TX handle копить и терять кадры (спайк r03: 37 264
+/// потерь из 38 094); продуктовый адаптер дополнительно ставит фильтр `ret #0`
+/// (`live_tx_filter_keeps_the_tx_handle_empty`).
 fn open_tx(api: &Arc<NpcapApi>, lab: &Lab) -> PcapHandle {
     let mut h = open(
         api,
@@ -423,7 +434,8 @@ fn live_open_close() {
     drop(rx);
     drop(tx);
 
-    // Ошибки открытия: несуществующее устройство (create успешен, activate нет).
+    // Ошибки открытия: несуществующее устройство. Спайк (r01): `pcap_create`
+    // возвращает NULL с текстом errbuf, `pcap_activate` не достигается.
     let bogus =
         std::ffi::CString::new("\\Device\\NPF_{00000000-0000-0000-0000-000000000000}").unwrap();
     let t0 = Instant::now();
@@ -588,9 +600,11 @@ fn live_io_matrix() {
     let (mut tx_slow, mut rx_slow) = (Samples::default(), Samples::default());
     let rounds = env_u64("RMASSCAN_NPCAP_STOP_ROUNDS", 60);
     let mut total_bad_rc = 0u64;
+    let mut total_rx_errors = 0u64;
     for round in 0..rounds {
         let stop = AtomicBool::new(false);
         let bad_rc = std::sync::atomic::AtomicU64::new(0);
+        let rx_errors = std::sync::atomic::AtomicU64::new(0);
         let (t_stop, tx_seen, rx_seen, joined, tx_slowest, rx_slowest) = std::thread::scope(|sc| {
             let txj = sc.spawn(|| {
                 let mut f = Vec::new();
@@ -613,7 +627,10 @@ fn live_io_matrix() {
                 let mut slowest = Duration::ZERO;
                 while !stop.load(Ordering::Acquire) {
                     let t0 = Instant::now();
-                    let _ = recv_deadline(&mut rx, &mut b, MS50, Wait::Hybrid);
+                    // Ошибка чтения не теряется: считается и проверяется ниже.
+                    if recv_deadline(&mut rx, &mut b, MS50, Wait::Hybrid).is_err() {
+                        rx_errors.fetch_add(1, Ordering::Relaxed);
+                    }
                     slowest = slowest.max(t0.elapsed());
                 }
                 (Instant::now(), slowest)
@@ -634,6 +651,7 @@ fn live_io_matrix() {
         });
         let t = now_ms();
         total_bad_rc += bad_rc.load(Ordering::Relaxed);
+        total_rx_errors += rx_errors.load(Ordering::Relaxed);
         tx_lat.push(t, tx_seen.duration_since(t_stop), 0);
         rx_lat.push(t, rx_seen.duration_since(t_stop), 0);
         tx_slow.push(t, tx_slowest, 0);
@@ -645,6 +663,12 @@ fn live_io_matrix() {
         "stop_rounds_send_nonzero_rc",
         &total_bad_rc.to_string(),
     );
+    kv(
+        &lab,
+        "stop_rounds_recv_errors",
+        &total_rx_errors.to_string(),
+    );
+    assert_eq!(total_rx_errors, 0, "an RX read failed during a Stop round");
     // самый долгий отдельный вызов в каждом раунде
     tx_slow.report(&lab, "stop_rounds_slowest_send_per_round");
     rx_slow.report(&lab, "stop_rounds_slowest_recv_per_round");
@@ -955,4 +979,31 @@ fn live_health_error() {
     // SAFETY: p валиден, закрывается один раз.
     unsafe { (f.close)(p) };
     assert!(rc < 0, "an unactivated handle must not report statistics");
+}
+
+/// Продуктовая настройка TX handle (малые snaplen/буфер + фильтр `ret #0`)
+/// не копит кадры: после серии отправок `ps_recv`/`ps_drop` этого handle не
+/// растут, тогда как спайк без фильтра терял десятки тысяч.
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs)"]
+fn live_tx_filter_keeps_the_tx_handle_empty() {
+    let lab = lab();
+    let api = load();
+    let tpl = syn_frames(&lab);
+    let mut tx = open_tx(&api, &lab);
+    let before = tx.stats_raw().expect("stats");
+    tx.set_drop_all_filter().expect("drop-all filter");
+    let mut f = Vec::new();
+    for i in 0..5000u32 {
+        syn(&lab, &tpl, 20_000 + i, &mut f);
+        assert_eq!(send_checked(&lab, &mut tx, &f), 0);
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let after = tx.stats_raw().expect("stats");
+    kv(&lab, "tx_filter_before", &stat_line(&before));
+    kv(&lab, "tx_filter_after", &stat_line(&after));
+    assert_eq!(
+        after.ps_drop, before.ps_drop,
+        "the filtered TX handle still dropped captured frames"
+    );
 }

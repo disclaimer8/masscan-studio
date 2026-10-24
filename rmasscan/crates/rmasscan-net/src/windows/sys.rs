@@ -28,7 +28,9 @@ use windows_sys::Win32::System::LibraryLoader::{
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
-use super::loader::{DllInfo, LoadFailure, Loader, Module, NpcapApi, npcap_dll_path, sha256_hex};
+use super::loader::{
+    ApiSlot, DllInfo, LoadFailure, Loader, Module, NpcapApi, npcap_dll_path, sha256_hex,
+};
 use crate::NetError;
 
 const SEARCH_FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
@@ -179,11 +181,16 @@ impl Loader for OsLoader {
     }
 }
 
+static API: ApiSlot = ApiSlot::new();
+
 impl NpcapApi {
-    /// Загружает `<System32>\Npcap\wpcap.dll`.
+    /// Загружает `<System32>\Npcap\wpcap.dll` один раз на процесс (пока жив
+    /// хотя бы один владелец), без гонки на общем кэше версии.
     pub(crate) fn load() -> Result<Arc<NpcapApi>, NetError> {
-        let path = npcap_dll_path(&system_directory()?)?;
-        NpcapApi::load_with(&OsLoader, &path)
+        API.get_or_load(|| {
+            let path = npcap_dll_path(&system_directory()?)?;
+            NpcapApi::load_with(&OsLoader, &path)
+        })
     }
 }
 

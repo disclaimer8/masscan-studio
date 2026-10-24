@@ -1,13 +1,15 @@
-//! Сетевые адаптеры (AGPL-3.0). Этап 2B-Linux: AF_PACKET с ограниченным по
-//! времени вводом-выводом. Это единственный crate, где допускается `unsafe`:
-//! весь FFI находится в private-модуле `linux::socket`, остальной код
-//! безопасный и тестируется через синтетический syscall-шов
-//! (`linux::PacketIo`, `linux::IfaceInfo`).
+//! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; Windows: Npcap. Это
+//! единственный crate, где допускается `unsafe`: весь FFI находится в
+//! private-модулях (`linux::socket`; `windows::{ffi, handle, loader, sys}`),
+//! остальной код безопасный и тестируется через синтетические швы
+//! (`linux::PacketIo`, `linux::IfaceInfo`; подставная таблица функций wpcap).
 //!
-//! Контракт: каждый вызов `send`/`recv` возвращается не позже
-//! `min(timeout, 50 мс)` (абсолютный дедлайн; повтор после EINTR его не
-//! продлевает). Другие платформы и типы канала дают явную ошибку ДО любой
-//! отправки.
+//! Контракт: каждый вызов `recv`/`health` возвращается не позже
+//! `min(timeout, 50 мс)` (абсолютный дедлайн; на Windows внутренний бюджет
+//! 42 мс). `send` на Linux ограничен тем же дедлайном; на Windows
+//! `pcap_sendpacket` синхронный и не отменяемый (граница измерена, см.
+//! `windows::adapter`). Другие платформы и типы канала дают явную ошибку ДО
+//! любой отправки.
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
@@ -22,9 +24,9 @@ use rmasscan_engine::AdapterPair;
 mod linux;
 
 // Windows/Npcap: на Windows это рабочий backend; в тестах других платформ
-// собираются портабельные части (ABI, подставной загрузчик).
+// собираются портабельные части (ABI, подставная таблица функций). `unsafe`
+// разрешён только в FFI-подмодулях (см. `windows/mod.rs`).
 #[cfg(any(windows, test))]
-#[allow(unsafe_code, dead_code)]
 mod windows;
 
 /// Ошибка открытия адаптера.
@@ -81,7 +83,7 @@ pub(crate) struct Counters {
     pub kernel_drops_known: AtomicBool,
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 impl Counters {
     pub(crate) fn bump(c: &AtomicU64) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -96,7 +98,7 @@ pub struct NetStatsHandle {
 }
 
 impl NetStatsHandle {
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
     pub(crate) fn new(counters: Arc<Counters>) -> Self {
         Self { counters }
     }
@@ -143,8 +145,14 @@ pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError
     linux::open(binding)
 }
 
+/// Windows: Npcap (`wpcap.dll` из `System32\Npcap`, загрузка по полному пути).
+#[cfg(windows)]
+pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+    windows::open(binding)
+}
+
 /// Остальные платформы: явная ошибка до любой отправки.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn open_explicit(_binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
     Err(NetError::UnsupportedPlatform)
 }

@@ -118,6 +118,8 @@ struct State {
     /// Постоянный ответ health (по умолчанию успешный ноль).
     health: Option<HealthStep>,
     health_calls: u64,
+    /// Когда сценарий отправки исчерпан, отвечать `WouldBlockUnsent` вместо `Sent`.
+    would_block_forever: bool,
 }
 
 /// Фиктивный адаптер. Клонирование даёт второй вид на то же состояние (для
@@ -153,6 +155,12 @@ impl FakeAdapter {
 
     pub fn script_tx(&self, steps: impl IntoIterator<Item = TxStep>) {
         lock(&self.st).tx_script.extend(steps);
+    }
+
+    /// После исчерпания сценария `send` постоянно отвечает `WouldBlockUnsent`
+    /// (моделирует бесконечный backpressure).
+    pub fn set_would_block_forever(&self, on: bool) {
+        lock(&self.st).would_block_forever = on;
     }
 
     pub fn push_rx(&self, step: RxStep) {
@@ -259,7 +267,12 @@ impl Tx for FakeTx {
         let step = {
             let mut st = lock(&self.a.st);
             st.send_calls += 1;
-            st.tx_script.pop_front().unwrap_or(TxStep::Sent)
+            let default = if st.would_block_forever {
+                TxStep::WouldBlockUnsent
+            } else {
+                TxStep::Sent
+            };
+            st.tx_script.pop_front().unwrap_or(default)
         };
         match step {
             TxStep::Sent => {}

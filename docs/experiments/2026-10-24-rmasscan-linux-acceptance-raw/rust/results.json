@@ -1,0 +1,932 @@
+{
+  "checks": [
+    {
+      "detail": "git_commit=8e6b3b0c07a81e8ea61d557c06134a21a6881614 pin=8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+      "group": "oracle",
+      "name": "oracle built from the pinned revision",
+      "result": "PASS"
+    },
+    {
+      "detail": "git_tree_clean=True",
+      "group": "oracle",
+      "name": "oracle source tree clean (no modified or untracked files)",
+      "result": "PASS"
+    },
+    {
+      "detail": "original pinned binary (NOT the --offline-patched copy)",
+      "group": "oracle",
+      "name": "oracle is the original pinned binary (not the --offline-patched copy)",
+      "result": "PASS"
+    },
+    {
+      "detail": "lab=8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e fixtures=8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+      "group": "oracle",
+      "name": "lab oracle binary sha256 == the binary recorded in the fixture manifest",
+      "result": "PASS"
+    },
+    {
+      "detail": "fixture git_commit=8e6b3b0c07a81e8ea61d557c06134a21a6881614 all_valid=True",
+      "group": "oracle",
+      "name": "fixture manifest pins the same revision, all fixture captures valid",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 1 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run1 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=1 c=1 open=1 closed=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run1 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=1 unique=1 wire_replies=3 suppressed_duplicates=1 discarded=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=1 want 1/1/0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run1 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run1 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=1 would_block=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run1 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 1 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run2 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=1 c=1 open=1 closed=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run2 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=1 unique=1 wire_replies=3 suppressed_duplicates=1 discarded=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=1 want 1/1/0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run2 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run2 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=1 would_block=0",
+      "group": "parity",
+      "name": "rust.c01_one_addr_port_synack.run2 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 1 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run1 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=1 c=1 open=0 closed=1",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run1 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=1 unique=1 wire_replies=1 suppressed_duplicates=0 discarded=0",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=1 want 1/0/1",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run1 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run1 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=1 would_block=0",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run1 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 1 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run2 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=1 c=1 open=0 closed=1",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run2 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=1 unique=1 wire_replies=1 suppressed_duplicates=0 discarded=0",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=1 want 1/0/1",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run2 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run2 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=1 would_block=0",
+      "group": "parity",
+      "name": "rust.c02_one_addr_port_rst.run2 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run1 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=16 c=16 open=8 closed=8",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run1 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=16 unique=16 wire_replies=32 suppressed_duplicates=9 discarded=0",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=16 want 16/8/8",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run1 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run1 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=16 would_block=0",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run1 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run2 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=16 c=16 open=8 closed=8",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run2 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=16 unique=16 wire_replies=32 suppressed_duplicates=8 discarded=0",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=16 want 16/8/8",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run2 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run2 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=16 would_block=0",
+      "group": "parity",
+      "name": "rust.c03_multi_addr_ports.run2 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 6 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c04_exclude.run1 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=6 c=6 open=3 closed=3",
+      "group": "parity",
+      "name": "rust.c04_exclude.run1 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=6 unique=6 wire_replies=12 suppressed_duplicates=3 discarded=0",
+      "group": "parity",
+      "name": "rust.c04_exclude.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=6 want 6/3/3",
+      "group": "parity",
+      "name": "rust.c04_exclude.run1 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c04_exclude.run1 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=6 would_block=0",
+      "group": "parity",
+      "name": "rust.c04_exclude.run1 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 6 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c04_exclude.run2 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=6 c=6 open=3 closed=3",
+      "group": "parity",
+      "name": "rust.c04_exclude.run2 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=6 unique=6 wire_replies=12 suppressed_duplicates=3 discarded=0",
+      "group": "parity",
+      "name": "rust.c04_exclude.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=6 want 6/3/3",
+      "group": "parity",
+      "name": "rust.c04_exclude.run2 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c04_exclude.run2 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=6 would_block=0",
+      "group": "parity",
+      "name": "rust.c04_exclude.run2 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 4 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run1 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=4 c=4 open=2 closed=2",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run1 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=4 want 4/2/2",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run1 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run1 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=4 would_block=0",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run1 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 4 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run2 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=4 c=4 open=2 closed=2",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run2 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=4 want 4/2/2",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run2 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run2 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=4 would_block=0",
+      "group": "parity",
+      "name": "rust.c05_srcport_single.run2 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 4 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run1 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=4 c=4 open=2 closed=2",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run1 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run1 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=4 want 4/2/2",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run1 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run1 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=4 would_block=0",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run1 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 4 SYN frames identical and in order",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run2 SYN stream vs C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "rust=4 c=4 open=2 closed=2",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run2 replies == C reply set",
+      "result": "PASS"
+    },
+    {
+      "detail": "results=4 unique=4 wire_replies=8 suppressed_duplicates=3 discarded=0",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run2 no duplicate results; wire replies == results, extra wire copies are suppressed dups",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=4 want 4/2/2",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run2 counts (syn/open/closed) as expected",
+      "result": "PASS"
+    },
+    {
+      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run2 rx_health.kernel_drops is a measured 0 (Completed, not null)",
+      "result": "PASS"
+    },
+    {
+      "detail": "net.tx_sent=4 would_block=0",
+      "group": "parity",
+      "name": "rust.c06_srcport_range.run2 nothing sent beyond Sent",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Paused sent=0 next=0 cp=True",
+      "group": "pause",
+      "name": "N=0 pause leg: Paused, sent=0, checkpoint next_index=0",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Completed sent=16",
+      "group": "pause",
+      "name": "N=0 resume leg: Completed, sent=16",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=0 pcap(pause)+pcap(resume) == continuous Rust trace",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=0 pcap(pause)+pcap(resume) == C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+      "group": "pause",
+      "name": "N=0 scan_id preserved, attempt_id changed, origin recorded",
+      "result": "PASS"
+    },
+    {
+      "detail": "legs=0+16 union=16 continuous=16",
+      "group": "pause",
+      "name": "N=0 replies of both legs == continuous set, no duplicates",
+      "result": "PASS"
+    },
+    {
+      "detail": "pause=0 resume=16 total=16",
+      "group": "pause",
+      "name": "N=0 no probe lost or added across the seam (SYN counts)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Paused sent=1 next=1 cp=True",
+      "group": "pause",
+      "name": "N=1 pause leg: Paused, sent=1, checkpoint next_index=1",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Completed sent=15",
+      "group": "pause",
+      "name": "N=1 resume leg: Completed, sent=15",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=1 pcap(pause)+pcap(resume) == continuous Rust trace",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=1 pcap(pause)+pcap(resume) == C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+      "group": "pause",
+      "name": "N=1 scan_id preserved, attempt_id changed, origin recorded",
+      "result": "PASS"
+    },
+    {
+      "detail": "legs=1+15 union=16 continuous=16",
+      "group": "pause",
+      "name": "N=1 replies of both legs == continuous set, no duplicates",
+      "result": "PASS"
+    },
+    {
+      "detail": "pause=1 resume=15 total=16",
+      "group": "pause",
+      "name": "N=1 no probe lost or added across the seam (SYN counts)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Paused sent=8 next=8 cp=True",
+      "group": "pause",
+      "name": "N=8 pause leg: Paused, sent=8, checkpoint next_index=8",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Completed sent=8",
+      "group": "pause",
+      "name": "N=8 resume leg: Completed, sent=8",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=8 pcap(pause)+pcap(resume) == continuous Rust trace",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=8 pcap(pause)+pcap(resume) == C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+      "group": "pause",
+      "name": "N=8 scan_id preserved, attempt_id changed, origin recorded",
+      "result": "PASS"
+    },
+    {
+      "detail": "legs=8+8 union=16 continuous=16",
+      "group": "pause",
+      "name": "N=8 replies of both legs == continuous set, no duplicates",
+      "result": "PASS"
+    },
+    {
+      "detail": "pause=8 resume=8 total=16",
+      "group": "pause",
+      "name": "N=8 no probe lost or added across the seam (SYN counts)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Paused sent=15 next=15 cp=True",
+      "group": "pause",
+      "name": "N=15 pause leg: Paused, sent=15, checkpoint next_index=15",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=0 reason=Completed sent=1",
+      "group": "pause",
+      "name": "N=15 resume leg: Completed, sent=1",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=15 pcap(pause)+pcap(resume) == continuous Rust trace",
+      "result": "PASS"
+    },
+    {
+      "detail": "PASS: 16 SYN frames identical and in order",
+      "group": "pause",
+      "name": "N=15 pcap(pause)+pcap(resume) == C oracle fixture",
+      "result": "PASS"
+    },
+    {
+      "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+      "group": "pause",
+      "name": "N=15 scan_id preserved, attempt_id changed, origin recorded",
+      "result": "PASS"
+    },
+    {
+      "detail": "legs=15+1 union=16 continuous=16",
+      "group": "pause",
+      "name": "N=15 replies of both legs == continuous set, no duplicates",
+      "result": "PASS"
+    },
+    {
+      "detail": "pause=15 resume=1 total=16",
+      "group": "pause",
+      "name": "N=15 no probe lost or added across the seam (SYN counts)",
+      "result": "PASS"
+    },
+    {
+      "detail": "reason=Completed checkpoint=False",
+      "group": "pause",
+      "name": "completed job: pause-after=range ends Completed with NO checkpoint",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=AlreadyCompleted opened=False wire_syns=0",
+      "group": "reject",
+      "name": "completed job (next_index == range) rejected before the adapter opens (AlreadyCompleted)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=JobMismatch opened=False wire_syns=0",
+      "group": "reject",
+      "name": "changed rate rejected before the adapter opens (JobMismatch)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=JobMismatch opened=False wire_syns=0",
+      "group": "reject",
+      "name": "changed binding (source MAC) rejected before the adapter opens (JobMismatch)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=JobMismatch opened=False wire_syns=0",
+      "group": "reject",
+      "name": "changed binding (interface name) rejected before the adapter opens (JobMismatch)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=JobMismatch opened=False wire_syns=0",
+      "group": "reject",
+      "name": "changed targets rejected before the adapter opens (JobMismatch)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=JobMismatch opened=False wire_syns=0",
+      "group": "reject",
+      "name": "changed ports rejected before the adapter opens (JobMismatch)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=JobMismatch opened=False wire_syns=0",
+      "group": "reject",
+      "name": "changed seed rejected before the adapter opens (JobMismatch)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=ScanIdMismatch opened=False wire_syns=0",
+      "group": "reject",
+      "name": "different scan_id rejected before the adapter opens (ScanIdMismatch)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=AttemptIdReused opened=False wire_syns=0",
+      "group": "reject",
+      "name": "attempt_id reused rejected before the adapter opens (AttemptIdReused)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=BadChecksum opened=False wire_syns=0",
+      "group": "reject",
+      "name": "corrupt checkpoint (1 bit flipped in next_index) rejected before the adapter opens (BadChecksum)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=BadChecksum opened=False wire_syns=0",
+      "group": "reject",
+      "name": "corrupt checkpoint (bad checksum byte) rejected before the adapter opens (BadChecksum)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=Malformed(\"wrong length\") opened=False wire_syns=0",
+      "group": "reject",
+      "name": "truncated checkpoint rejected before the adapter opens (Malformed)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=4 error=Malformed(\"wrong length\") opened=False wire_syns=0",
+      "group": "reject",
+      "name": "empty checkpoint rejected before the adapter opens (Malformed)",
+      "result": "PASS"
+    },
+    {
+      "detail": "reason=Stopped stop_to_outcome=22.591ms join=0.07ms",
+      "group": "stop",
+      "name": "rate=1 silence: Stopped, no checkpoint, stop->outcome < 1 s, join < 1 s",
+      "result": "PASS"
+    },
+    {
+      "detail": "tx_sent=3 at_join=3 after_observe=3 wire_syns=3",
+      "group": "stop",
+      "name": "rate=1 silence: no TX after Stop (stats frozen over 1500 ms, wire SYN count == tx_sent)",
+      "result": "PASS"
+    },
+    {
+      "detail": "threads 1->1 (immediately 1, settled in 0.0ms) fds 4->(open 6)->4",
+      "group": "stop",
+      "name": "rate=1 silence: no live workers, no leaked fds after join",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=3 range=100 replies=0",
+      "group": "stop",
+      "name": "rate=1 silence: really silent (no replies) and Stop hit mid-TX",
+      "result": "PASS"
+    },
+    {
+      "detail": "reason=Stopped stop_to_outcome=53.989ms join=0.066ms",
+      "group": "stop",
+      "name": "rate=1 during RX drain: Stopped, no checkpoint, stop->outcome < 1 s, join < 1 s",
+      "result": "PASS"
+    },
+    {
+      "detail": "tx_sent=2 at_join=2 after_observe=2 wire_syns=2",
+      "group": "stop",
+      "name": "rate=1 during RX drain: no TX after Stop (stats frozen over 1500 ms, wire SYN count == tx_sent)",
+      "result": "PASS"
+    },
+    {
+      "detail": "threads 1->1 (immediately 2, settled in 1.115ms) fds 4->(open 6)->4",
+      "group": "stop",
+      "name": "rate=1 during RX drain: no live workers, no leaked fds after join",
+      "result": "PASS"
+    },
+    {
+      "detail": "total=2.556175s sent=2",
+      "group": "stop",
+      "name": "rate=1 during RX drain: Stop skipped the 10 s wait",
+      "result": "PASS"
+    },
+    {
+      "detail": "reason=Stopped stop_to_outcome=20.825ms join=0.095ms",
+      "group": "stop",
+      "name": "rate=1 with a FULL result queue: Stopped, no checkpoint, stop->outcome < 1 s, join < 1 s",
+      "result": "PASS"
+    },
+    {
+      "detail": "tx_sent=2 at_join=2 after_observe=2 wire_syns=2",
+      "group": "stop",
+      "name": "rate=1 with a FULL result queue: no TX after Stop (stats frozen over 1500 ms, wire SYN count == tx_sent)",
+      "result": "PASS"
+    },
+    {
+      "detail": "threads 1->1 (immediately 1, settled in 0.0ms) fds 4->(open 6)->4",
+      "group": "stop",
+      "name": "rate=1 with a FULL result queue: no live workers, no leaked fds after join",
+      "result": "PASS"
+    },
+    {
+      "detail": "replies=2 reason=Stopped",
+      "group": "stop",
+      "name": "full queue: both replies sit unread in the queue (capacity 2) and nothing was lost",
+      "result": "PASS"
+    },
+    {
+      "detail": "reason=Failed ConsumerTooSlow sent=2/6",
+      "group": "stop",
+      "name": "queue overflow: Failed(ConsumerTooSlow), no checkpoint, TX stopped, no leaks",
+      "result": "PASS"
+    },
+    {
+      "detail": "reason=Paused sent=2 next=2",
+      "group": "stop",
+      "name": "rate=1 external Pause: Paused with a checkpoint at the confirmed boundary, tx_sent == next_index",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=3 reason=Failed RxLoss { kernel_drops: 155 } rx_health={'kernel_drops': 155} net.kernel_drops=155 sent=23672/25600",
+      "group": "rxloss",
+      "name": "RX overflow reproduced (measured kernel_drops > 0)",
+      "result": "PASS"
+    },
+    {
+      "detail": "rc=3 reason=Failed RxLoss { kernel_drops: 155 } rx_health={'kernel_drops': 155} net.kernel_drops=155 sent=23672/25600",
+      "group": "rxloss",
+      "name": "overflow -> Failed(RxLoss{kernel_drops}) with the measured count, non-zero exit",
+      "result": "PASS"
+    },
+    {
+      "detail": "checkpoint=False file=False",
+      "group": "rxloss",
+      "name": "overflow -> no checkpoint (summary says none, no file, no checkpoint hex)",
+      "result": "PASS"
+    },
+    {
+      "detail": "tx_sent_at_join=23672 after_observe=23672",
+      "group": "rxloss",
+      "name": "overflow -> TX halted, no live workers, no leaked fds",
+      "result": "PASS"
+    },
+    {
+      "detail": "reason=Failed detail=RxError(\"poll(POLLIN): socket error\")",
+      "group": "veth",
+      "name": "veth removed mid-scan -> Failed with a diagnosable TX/RX error, exit code 3",
+      "result": "PASS"
+    },
+    {
+      "detail": "checkpoint=False file=False",
+      "group": "veth",
+      "name": "veth removed: NO checkpoint (summary says none, no file, no CheckpointReady)",
+      "result": "PASS"
+    },
+    {
+      "detail": "sent=52/400 threads 1->1 fds 4->4 exit 0.52s after removal",
+      "group": "veth",
+      "name": "veth removed: partial scan, no TX after failure, no live workers, no leaked fds",
+      "result": "PASS"
+    },
+    {
+      "detail": "0.52s",
+      "group": "veth",
+      "name": "veth removed: process ended promptly (< 5 s incl. 3 s wait skipped by Failed)",
+      "result": "PASS"
+    }
+  ],
+  "elapsed_s": 140.6,
+  "oracle": {
+    "git_commit": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "git_tree_clean": true,
+    "path": "/home/a1/rmasscan-oracle/masscan/bin/masscan",
+    "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "variant": "original pinned binary (NOT the --offline-patched copy)",
+    "version_line": "Masscan version 1.3.9-integration ( https://github.com/robertdavidgraham/masscan )"
+  },
+  "partial": false,
+  "pause_resume": [
+    {
+      "checkpoint_sha256": "acdc46facaa134ed99fd794831af2438dcb24c449616647177304ec860ccecc8",
+      "n": 0,
+      "pause_pcap": "pr_N0.pause.pcap",
+      "resume_pcap": "pr_N0.resume.pcap"
+    },
+    {
+      "checkpoint_sha256": "ff4e6e4e6f5331c667528795bf9ba9599c815f0465382b6bdb78da4cd1eaa329",
+      "n": 1,
+      "pause_pcap": "pr_N1.pause.pcap",
+      "resume_pcap": "pr_N1.resume.pcap"
+    },
+    {
+      "checkpoint_sha256": "4578aa2a26e179dea8fdf73d8732f8f0f8b6e7febddccae72138b5c2dc9c0f2c",
+      "n": 8,
+      "pause_pcap": "pr_N8.pause.pcap",
+      "resume_pcap": "pr_N8.resume.pcap"
+    },
+    {
+      "checkpoint_sha256": "c8f79ef84d2ccd8099eb765f97e5bc14abe910c0ca8210ce2a7e998906c06ea3",
+      "n": 15,
+      "pause_pcap": "pr_N15.pause.pcap",
+      "resume_pcap": "pr_N15.resume.pcap"
+    }
+  ],
+  "rx_overflow": {
+    "checkpoint": false,
+    "checkpoint_file": false,
+    "fail_detail": "RxLoss { kernel_drops: 155 }",
+    "net": {
+      "kernel_drops": 155,
+      "rx_errors": 0,
+      "rx_outgoing": 0,
+      "rx_packets": 1,
+      "rx_truncated": 0,
+      "rx_wrong_interface": 0,
+      "tx_errors": 0,
+      "tx_sent": 23672,
+      "tx_uncertain": 0,
+      "tx_would_block": 0
+    },
+    "range": 25600,
+    "rc": 3,
+    "reason": "Failed",
+    "rx_health": {
+      "kernel_drops": 155
+    },
+    "sent": 23672
+  },
+  "suite": "rust",
+  "totals": {
+    "FAIL": 0,
+    "NOT RUN": 0,
+    "PASS": 141
+  },
+  "veth_removal": {
+    "exit_after_removal_s": 0.5197180371033028,
+    "fail_detail": "RxError(\"poll(POLLIN): socket error\")",
+    "net": {
+      "kernel_drops": 0,
+      "rx_errors": 1,
+      "rx_outgoing": 0,
+      "rx_packets": 52,
+      "rx_truncated": 0,
+      "rx_wrong_interface": 0,
+      "tx_errors": 0,
+      "tx_sent": 52,
+      "tx_uncertain": 0,
+      "tx_would_block": 0
+    }
+  }
+}

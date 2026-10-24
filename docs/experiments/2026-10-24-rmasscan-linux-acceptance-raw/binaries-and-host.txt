@@ -1,0 +1,12 @@
+1565974a8bb6c3da0f84927ab0aaad77b54c1d4bf1b5aea952cbedda1217eaf3  target/release/examples/wire_scan
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  /home/a1/rmasscan-oracle/masscan/bin/masscan
+fcb06cbdc917cba187bec5633a04f2e0b3360ed1b8900fc9fa309c0b2b64dcef  scripts/verify-wire.py
+62ef56f53a9ffd385a9f7cd34ace851716dad7bb62bc1923e3d631ef983a41c3  scripts/wire_capture.py
+c263382fc5b67e9c5570a5193eb5933198c1068fc41673590a34be887ff80c7a  scripts/wire_suite.py
+c59d6bdf51f41aa3de89351a38fb58d3518d78f8aa9926900dff0a04aab0eb7c  scripts/wire-lab.sh
+Ubuntu 26.04.1 LTS
+Linux a1-To-be-filled-by-O-E-M 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026 x86_64 GNU/Linux
+Python 3.14.4
+tcpdump version 4.99.6
+libpcap version 1.10.6 (64-bit time_t, with TPACKET_V3)
+cat: /etc/masscan/masscan.conf: No such file or directory

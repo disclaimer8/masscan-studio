@@ -320,6 +320,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -327,12 +333,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {

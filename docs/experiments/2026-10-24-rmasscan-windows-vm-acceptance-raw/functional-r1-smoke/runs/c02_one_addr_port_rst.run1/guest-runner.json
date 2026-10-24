@@ -1,0 +1,9 @@
+{
+  "exe": "C:\\Users\\lab\\src\\rmasscan-3126206\\rmasscan\\target\\release\\examples\\wire_scan.exe",
+  "exe_sha256": "6586f536dfbba87e068fd2d1333a13b8fa4f3ea1fe32431df973b88f38a9497d",
+  "argc": 20,
+  "times": {
+    "started_utc": 1792854754.42,
+    "finished_utc": 1792854758.182
+  }
+}

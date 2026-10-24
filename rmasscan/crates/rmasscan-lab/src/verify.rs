@@ -2232,7 +2232,7 @@ mod tests {
 }
 #[cfg(test)]
 #[path = "verify_fixture.rs"]
-mod fixture;
+pub(crate) mod fixture;
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod regression_tests;

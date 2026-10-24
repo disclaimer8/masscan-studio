@@ -94,7 +94,7 @@ CAP_NET_RAW и замкнутый стенд); обычные `cargo test` и CI
 
 ## Статус
 
-Состояние на commit `c31ae16` (2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
+Состояние на commit `27e3042` (код; evidence `8479ff2`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
 полная таблица (capability / слой / реализовано / проверка / ограничение / следующий этап)
 находится в §0.2 спеки Studio. Кратко: raw I/O есть только для Linux AF_PACKET
 (замкнутый стенд); Windows и macOS не реализованы. Дедупликация живёт в engine

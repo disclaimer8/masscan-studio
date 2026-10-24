@@ -576,12 +576,25 @@ fn load_pcap(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
 fn ether(f: &[u8], typ: [u8; 2]) -> bool {
     f.get(12..14) == Some(typ.as_slice())
 }
-fn capture_command(c: &Value, who: &str, b: &Binding) -> bool {
-    let av: Vec<_> = array(&c["cmd"]).iter().filter_map(Value::as_str).collect();
-    let Some(t) = av.iter().position(|x| *x == "tcpdump") else {
+fn capture_command(c: &Value, who: &str, b: &Binding, netns: &str) -> bool {
+    let all: Vec<_> = array(&c["cmd"]).iter().filter_map(Value::as_str).collect();
+    // The only accepted prefix is an optional `sudo -n`. The peer capture must run inside
+    // the manifest namespace; the eno1 capture must run in the host namespace.
+    let mut rest = all.as_slice();
+    if let ["sudo", "-n", tail @ ..] = rest {
+        rest = tail;
+    }
+    let rest = if who == "peer" {
+        match rest {
+            ["ip", "netns", "exec", ns, tail @ ..] if !netns.is_empty() && *ns == netns => tail,
+            _ => return false,
+        }
+    } else {
+        rest
+    };
+    let ["tcpdump", av @ ..] = rest else {
         return false;
     };
-    let av = &av[t + 1..];
     let iface = if who == "peer" { "lab0" } else { "eno1" };
     let mut i = 0;
     let mut found = false;
@@ -638,7 +651,7 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
         let c = &cap[who];
         r.inv(
             &format!("{who} capture interface and filter are exact"),
-            capture_command(c, who, b),
+            capture_command(c, who, b, s(&man["stand"]["netns"])),
             c["cmd"].to_string(),
         );
         if let Some((fr, data)) = p {
@@ -2122,14 +2135,14 @@ mod tests {
         let man = read_json(root.join("manifest.json")).unwrap();
         let b = Binding::new(&man["binding"]);
         let cap = read_json(root.join("runs/pause_N8/capture.json")).unwrap();
-        assert!(capture_command(&cap["peer"], "peer", &b));
-        assert!(capture_command(&cap["eno1"], "eno1", &b));
+        assert!(capture_command(&cap["peer"], "peer", &b, "wvp-n2"));
+        assert!(capture_command(&cap["eno1"], "eno1", &b, "wvp-n2"));
         let mut p = cap["peer"].clone();
         p["cmd"][6] = json!("eno1");
-        assert!(!capture_command(&p, "peer", &b));
+        assert!(!capture_command(&p, "peer", &b, "wvp-n2"));
         let mut p = cap["eno1"].clone();
         p["filter"] = json!("tcp port 1");
-        assert!(!capture_command(&p, "eno1", &b));
+        assert!(!capture_command(&p, "eno1", &b, "wvp-n2"));
     }
     #[test]
     fn duplicate_arguments_rejected() {

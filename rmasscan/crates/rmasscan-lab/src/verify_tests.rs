@@ -996,3 +996,88 @@ fn drain_and_fullqueue_stop_contracts() {
         mutate("failure", tag, "run.json", path, value, FAIL, true);
     }
 }
+// ---- X4: the recorded capture argv is validated in full ----
+fn set_cmd(d: &Scratch, tag: &str, who: &str, change: impl FnOnce(&mut Vec<Value>)) {
+    d.edit(&format!("runs/{tag}/capture.json"), |v| {
+        change(v[who]["cmd"].as_array_mut().unwrap())
+    });
+}
+#[test]
+fn peer_capture_must_run_in_the_manifest_namespace() {
+    let tag = "stop_silent";
+    type Edit = fn(&mut Vec<Value>);
+    let bad: [(&str, Edit); 7] = [
+        ("wvp-other", |c| c[3] = json!("wvp-other")),
+        ("host namespace", |c| {
+            c.drain(0..4);
+        }),
+        ("lo", |c| c[6] = json!("lo")),
+        ("sudo without -n", |c| {
+            c.insert(0, json!("sudo"));
+        }),
+        ("foreign prefix", |c| c.insert(0, json!("env"))),
+        ("netns exec with -i eno1", |c| c[6] = json!("eno1")),
+        ("extra tail filter", |c| c.push(json!("tcp"))),
+    ];
+    for (name, change) in bad {
+        let d = Scratch::new("failure", Some(tag));
+        set_cmd(&d, tag, "peer", change);
+        assert_eq!(d.status(tag), (INVALID.into(), false), "{name}");
+    }
+    // `sudo -n` in front is the one allowed prefix.
+    let d = Scratch::new("failure", Some(tag));
+    set_cmd(&d, tag, "peer", |c| {
+        c.splice(0..0, [json!("sudo"), json!("-n")]);
+    });
+    assert_eq!(d.status(tag), (PASS.into(), false));
+    // The manifest, not the recorded command, decides which namespace is right.
+    let d = Scratch::new("failure", Some(tag));
+    d.edit("manifest.json", |v| {
+        v["stand"]["netns"] = json!("wvp-other")
+    });
+    assert_eq!(d.status(tag), (INVALID.into(), false));
+    d.edit("manifest.json", |v| {
+        v["stand"].as_object_mut().unwrap().remove("netns");
+    });
+    assert_eq!(
+        d.status(tag),
+        (INVALID.into(), false),
+        "no manifest namespace"
+    );
+}
+#[test]
+fn eno1_capture_must_run_in_the_host_namespace_with_the_derived_filter() {
+    let tag = "stop_silent";
+    type Edit = fn(&mut Vec<Value>);
+    let bad: [(&str, Edit); 4] = [
+        ("inside a namespace", |c| {
+            c.splice(0..0, ["ip", "netns", "exec", "wvp-n2"].map(|s| json!(s)));
+        }),
+        ("foreign prefix", |c| c.insert(0, json!("env"))),
+        ("sudo without -n", |c| c.insert(0, json!("sudo"))),
+        ("lab0 instead of eno1", |c| c[2] = json!("lab0")),
+    ];
+    for (name, change) in bad {
+        let d = Scratch::new("failure", Some(tag));
+        set_cmd(&d, tag, "eno1", change);
+        assert_eq!(d.status(tag), (INVALID.into(), false), "{name}");
+    }
+    let d = Scratch::new("failure", Some(tag));
+    set_cmd(&d, tag, "eno1", |c| {
+        c.splice(0..0, [json!("sudo"), json!("-n")]);
+    });
+    assert_eq!(d.status(tag), (PASS.into(), false));
+    // A filter that differs from the one derived from the binding is not accepted
+    // even when the recorded command and the recorded filter agree with each other.
+    let d = Scratch::new("failure", Some(tag));
+    d.edit("runs/stop_silent/capture.json", |v| {
+        let n = v["eno1"]["cmd"].as_array().unwrap().len();
+        let cmd = v["eno1"]["cmd"].as_array_mut().unwrap();
+        cmd.truncate(n - 26);
+        cmd.push(json!("'tcp"));
+        cmd.push(json!("port"));
+        cmd.push(json!("1'"));
+        v["eno1"]["filter"] = json!("tcp port 1");
+    });
+    assert_eq!(d.status(tag), (INVALID.into(), false));
+}

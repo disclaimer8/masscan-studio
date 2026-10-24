@@ -1,0 +1,21 @@
+[2026-10-24T11:42:06.773Z] tag=r06-overflow-a test=live_overflow cond=overflow sha=53fe366
+raw_run_allowed True violations []
+[2026-10-24T11:42:11.550Z] guest run begins
+[2026-10-24T11:42:36.430Z] guest run ended rc=0
+peer.pcap frames=0
+eno1.pcap frames=0
+==> /home/a1/winvm/spike-ev/r06-overflow-a/peer.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r06-overflow-a/peerjunk.err <==
+200000 packets captured
+200000 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r06-overflow-a/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

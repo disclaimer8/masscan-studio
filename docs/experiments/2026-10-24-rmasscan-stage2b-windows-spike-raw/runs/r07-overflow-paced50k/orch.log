@@ -1,0 +1,21 @@
+[2026-10-24T11:43:07.487Z] tag=r07-overflow-paced50k test=live_overflow cond=overflow sha=53fe366
+raw_run_allowed True violations []
+[2026-10-24T11:43:11.744Z] guest run begins
+[2026-10-24T11:43:37.588Z] guest run ended rc=0
+peer.pcap frames=0
+eno1.pcap frames=0
+==> /home/a1/winvm/spike-ev/r07-overflow-paced50k/peer.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r07-overflow-paced50k/peerjunk.err <==
+200000 packets captured
+200000 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r07-overflow-paced50k/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

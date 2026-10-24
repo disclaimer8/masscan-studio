@@ -35,6 +35,9 @@ COMMIT = "c" * 40
 EXE = "e" * 64
 
 
+ITEMS = {i["tag"]: i for i in V.planned(None)}
+
+
 def mac(s):
     return bytes(int(x, 16) for x in s.split(":"))
 
@@ -140,12 +143,16 @@ def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_
     rj = {"identity": {"source_commit": COMMIT, "binary_sha256": EXE, "os": {"family": "windows"}}}
     rj.update(rj_extra)
     wj(os.path.join(d, "run.json"), rj)
-    job = rj.get("job")
-    if job:
-        argv = ["--iface", job["iface"], "--src-ip", job["src_ip"], "--src-mac", job["src_mac"], "--router-mac", job["router_mac"],
-                "--targets", job["targets"], "--ports", job["ports"], "--seed", str(job["seed"]), "--rate", str(job["rate"]),
-                "--wait", str(job["wait"]), "--source-port", job["source_port"]] + (["--exclude", job["exclude"]] if job["exclude"] else [])
-        wj(os.path.join(d, "argv.json"), {"exe": "x", "argv": argv})
+    item = ITEMS.get(tag) or ITEMS.get(tag.rsplit(".", 1)[0])
+    if item:
+        man = {"binding": {"iface": "\\Device\\NPF_{X}"}}
+        bind = V.Binding({"src_ip": SRC_IP, "src_mac": GUEST, "router_mac": PEER})
+        for fname, kd in [("argv.json", V.KIND_ARGV.get(item["kind"]) or V.KIND_ARGV_B.get(item["kind"]))] + (
+                [V.KIND_SIDE_ARGV[item["kind"]]] if item["kind"] in V.KIND_SIDE_ARGV else []):
+            cname, extra = kd(item)
+            want = dict(V.base_argv(V.case_by_name(cname), man, bind), **extra)
+            argv = [x for k, v in want.items() for x in (k, "x.bin" if v == V.ANY else v)]
+            wj(os.path.join(d, fname), {"exe": "x", "argv": argv})
     wj(os.path.join(d, "status-pre.json"), {"raw_run_allowed": True, "isolation_violations": []})
     wj(os.path.join(d, "status-post.json"), {"raw_run_allowed": True, "isolation_violations": []})
     wj(os.path.join(d, "guest-verify.json"), {"ok": True, "errors": []})
@@ -582,15 +589,52 @@ class VerifierTests(unittest.TestCase):
         g = {x["tag"]: x["verdict"] for x in self.verdict()["groups"]}
         self.assertEqual(g["group_pause_resume_N8"], "NOT RUN")
 
-    def test_stray_equality_is_invalid_not_fail_when_the_capture_is_incomplete(self):
+    def test_stray_upper_bound_is_invalid_not_fail_when_the_capture_is_incomplete(self):
         t = "x01_foreign_replies.run1"
-        self.add_stray(t, 0.5)  # discarded stays 4: expected 5
+        self.edit_json("runs/%s/run.json" % t, lambda d: d.update(discarded=6))  # 2 unexplained discards, no stray in the pcap
         self.edit_json("runs/%s/capture.json" % t, lambda d: d["quiet"].__setitem__("reached", False))
-        v = self.verdict()
-        r = [x for x in v["runs"] if x["tag"] == t][0]
+        r = [x for x in self.verdict()["runs"] if x["tag"] == t][0]
         self.assertEqual(r["verdict"], "INVALID")
         self.assertFalse(r["behaviour_fail"])
         self.assertEqual(S.rerun_verdict(self.root, t), ("INVALID", False))
+
+    def test_r3_1_discards_below_injected_plus_seen_strays_fail_even_with_a_bad_capture(self):
+        # a stray is visible in the pcap, discarded == injected (a foreign duplicate was absorbed), capture incomplete
+        t = "x01_foreign_replies.run1"
+        self.add_stray(t, 0.5)
+        self.edit_json("runs/%s/capture.json" % t, lambda d: d["quiet"].__setitem__("reached", False))
+        r = [x for x in self.verdict()["runs"] if x["tag"] == t][0]
+        self.assertTrue(r["behaviour_fail"])
+        self.assertEqual(self.verdict()["overall"], "FAIL")
+        self.assertFalse(S.may_discard(*S.rerun_verdict(self.root, t)))
+
+    def test_nb3b_consistently_wrong_argv_and_run_is_invalid_and_rerunnable(self):
+        # harness bug: argv.json asks for ports 80,81 and the run, its echo and its results agree with that wrong job
+        t = "c05_srcport_single.run1"
+        self.edit_json("runs/%s/argv.json" % t, lambda d: d["argv"].__setitem__(d["argv"].index("--ports") + 1, "80,81"))
+
+        def wrong(d):
+            d["job"]["ports"] = "80,81"
+            d.update(sent=2, next_index=2, range=2, expected_total=2, replies=["198.18.0.2:80:open", "198.18.0.2:81:closed"],
+                     reply_total=2, reply_unique=2)
+            d["net"]["tx_sent"] = 2
+        self.edit_json("runs/%s/run.json" % t, wrong)
+        v, bf = S.rerun_verdict(self.root, t)
+        self.assertEqual((v, bf), ("INVALID", False))
+        self.assertTrue(S.may_discard(v, bf))
+        self.assertNotEqual(self.verdict()["overall"], "FAIL")
+
+    def test_every_part_a_kind_has_an_argument_definition_with_its_extra_flags(self):
+        man = {"binding": {"iface": "i"}}
+        self.assertEqual(V.KIND_ARGV["pause"](ITEMS["pause_N8"])[1]["--pause-after"], "8")
+        self.assertEqual(V.KIND_ARGV["complete_nopause"](ITEMS["complete_nopause"])[1]["--pause-after"], "16")
+        self.assertIn("refuse_completed", V.KIND_SIDE_ARGV)
+        for it in V.planned(None):
+            self.assertIn(it["kind"], V.KIND_ARGV, man)
+
+    def test_pause_after_argument_must_match_n(self):
+        self.edit_json("runs/pause_N8/argv.json", lambda d: d["argv"].__setitem__(d["argv"].index("--pause-after") + 1, "7"))
+        self.assertEqual(V.run_status(self.root, "pause_N8"), ("INVALID", False))
 
     def test_broadcast_frame_in_the_window_is_a_stray(self):
         t = "x01_foreign_replies.run1"

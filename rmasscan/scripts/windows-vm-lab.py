@@ -4,7 +4,7 @@
 Runs on the Ubuntu VM host (home-pc), as root (re-execs through `sudo -n`).
 
   windows-vm-lab.py plan   --run-id ID --manifest FILE       read-only: checks + what `up` would create
-  windows-vm-lab.py up     --run-id ID --manifest FILE [--tap-user U] [--lab-env FILE] [--qmp SOCK]
+  windows-vm-lab.py up     --run-id ID --manifest FILE [--tap-user U] [--lab-env FILE]
   windows-vm-lab.py status --run-id ID --manifest FILE
   windows-vm-lab.py down   --run-id ID --manifest FILE [--lab-env FILE]
   windows-vm-lab.py record-guest --run-id ID --manifest FILE --guest-json FILE
@@ -24,7 +24,6 @@ import ipaddress
 import json
 import os
 import re
-import socket
 import subprocess
 import sys
 
@@ -170,7 +169,7 @@ def plan(host, d, manifest):
             problems.append("name busy: link %s (%s)" % (d[key], "own mark" if owned(links[d[key]], d) else "FOREIGN"))
     if d["netns"] in nss:
         problems.append("name busy: netns %s" % d["netns"])
-    if manifest is not None:
+    if manifest is not None and manifest.get("state") != "down":
         problems.append("manifest exists with state=%s: run `down` first" % manifest.get("state"))
     for n, l in links.items():
         if norm_mac(l.get("mac")) in (d["windows_mac"], d["peer_mac"]):
@@ -232,34 +231,6 @@ def select_adapter(adapters, mac):
     return hits[0]
 
 
-# ---------------------------------------------------------------- QMP
-def qmp_cmds(d):
-    return [
-        {"execute": "netdev_del", "arguments": {"id": "lab0"}},
-        {"execute": "netdev_add", "arguments": {"type": "tap", "id": "lab0", "ifname": d["tap"],
-                                               "script": "no", "downscript": "no"}},
-    ]
-
-
-def qmp_run(sock_path, cmds):
-    s = socket.socket(socket.AF_UNIX)
-    s.settimeout(5)
-    s.connect(sock_path)
-    f = s.makefile("rw")
-    f.readline()
-    out = []
-    for c in [{"execute": "qmp_capabilities"}] + cmds:
-        f.write(json.dumps(c) + "\n")
-        f.flush()
-        while True:
-            r = json.loads(f.readline())
-            if "return" in r or "error" in r:
-                out.append(r)
-                break
-    s.close()
-    return out
-
-
 # ---------------------------------------------------------------- commands
 def cmd_plan(host, a):
     d = derive(a.run_id)
@@ -269,7 +240,7 @@ def cmd_plan(host, a):
     return 0 if not problems else 3
 
 
-def cmd_up(host, a, qmp=qmp_run):
+def cmd_up(host, a):
     d = derive(a.run_id)
     problems, _ = plan(host, d, read_manifest(a.manifest))
     if problems:
@@ -302,12 +273,9 @@ def cmd_up(host, a, qmp=qmp_run):
         print("up failed: %s; rolling back own objects" % e, file=sys.stderr)
         _teardown(host, a.manifest, m, d)
         return 4
-    if a.qmp and os.path.exists(a.qmp):
-        try:
-            r = qmp(a.qmp, qmp_cmds(d))
-            m["vm"] = {"attached": all("return" in x for x in r[1:]), "qmp": r[1:]}
-        except Exception as e:
-            m["vm"] = {"attached": False, "error": str(e)}
+    # QMP netdev_del/netdev_add on a cold-plugged e1000e does NOT re-peer the NIC (verified live):
+    # after any down+up the VM must be restarted with run.sh to attach to the new TAP.
+    m["vm"] = {"attached": False, "note": "restart the VM via ~/winvm/run.sh to bind the new TAP"}
     if a.lab_env:
         with open(a.lab_env, "w") as f:
             f.write("LAB_RUN_ID=%s\nLAB_TAP=%s\nLAB_MAC=%s\n" % (a.run_id, d["tap"], d["windows_mac"]))
@@ -402,7 +370,6 @@ def main(argv=None, host=None):
     p.add_argument("--manifest", required=True)
     p.add_argument("--tap-user", default=os.environ.get("SUDO_USER") or "root")
     p.add_argument("--lab-env")
-    p.add_argument("--qmp")
     p.add_argument("--guest-json")
     a = p.parse_args(argv)
     a.manifest = os.path.abspath(a.manifest)

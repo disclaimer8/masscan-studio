@@ -47,7 +47,7 @@ switch ($Action) {
         if (@($inv.default_routes | Where-Object { $_.ifIndex -eq $lab.ifIndex }).Count -gt 0) { throw "refusing: lab NIC owns a default route" }
         $before = $inv
         Get-NetIPAddress -InterfaceIndex $lab.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object { $_.IPAddress -ne $labIp -and $_.PrefixOrigin -ne 'WellKnown' } | Remove-NetIPAddress -Confirm:$false
+            Where-Object { $_.IPAddress -ne $labIp } | Remove-NetIPAddress -Confirm:$false
         if (-not (Get-NetIPAddress -InterfaceIndex $lab.ifIndex -IPAddress $labIp -ErrorAction SilentlyContinue)) {
             New-NetIPAddress -InterfaceIndex $lab.ifIndex -IPAddress $labIp -PrefixLength $prefix | Out-Null   # no -DefaultGateway
         }
@@ -62,7 +62,8 @@ switch ($Action) {
         $lab = Select-Lab $inv
         $errs = @()
         if ($lab.IPv4 -notcontains "$labIp/$prefix") { $errs += "lab IP $labIp/$prefix missing" }
-        if (@($lab.IPv4).Count -ne 1) { $errs += "lab NIC has extra IPv4 addresses: $($lab.IPv4 -join ',')" }
+        $extra = @($lab.IPv4 | Where-Object { $_ -ne "$labIp/$prefix" -and $_ -notlike '169.254.*' })   # APIPA link-local is not routable off-link
+        if ($extra.Count -gt 0) { $errs += "lab NIC has extra IPv4 addresses: $($extra -join ',')" }
         if (@($inv.default_routes | Where-Object { $_.ifIndex -eq $lab.ifIndex }).Count -gt 0) { $errs += 'lab NIC has a default route/gateway' }
         $dns = @((Get-DnsClientServerAddress -InterfaceIndex $lab.ifIndex -AddressFamily IPv4).ServerAddresses)
         if ($dns.Count -gt 0) { $errs += "lab NIC has DNS servers: $($dns -join ',')" }

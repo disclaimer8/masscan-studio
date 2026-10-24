@@ -1,3 +1,5 @@
+> Retired document: this is the verification record of the Swift macOS app (v0.1/v0.3), removed on 2026-10-24. Kept as history only.
+
 # v0.1 verification — 2026-10-20
 
 Environment: Apple Silicon, macOS 27.0.1, Swift 6.4, installed masscan 1.3.2.

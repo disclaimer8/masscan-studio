@@ -1,0 +1,6 @@
+---
+---
+lo               UNKNOWN        00:00:00:00:00:00 <LOOPBACK,UP,LOWER_UP> 
+enp2s0           UP             ac:82:26:25:95:cc <BROADCAST,MULTICAST,UP,LOWER_UP> 
+wlp1s0           DOWN           00:1c:a3:21:7d:e3 <NO-CARRIER,BROADCAST,MULTICAST,UP> 
+wg0              UNKNOWN        <POINTOPOINT,NOARP,UP,LOWER_UP> 

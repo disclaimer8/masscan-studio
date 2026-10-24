@@ -1,0 +1,38 @@
+   Compiling rmasscan-net v0.1.0 ($HOME/rl-live/rmasscan/crates/rmasscan-net)
+    Finished `release` profile [optimized] target(s) in 1.15s
+     Running tests/linux_wire.rs (target/release/deps/linux_wire-d3680f6b8040eee0)
+
+running 12 tests
+
+thread 'lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised' (1469497) panicked at crates/rmasscan-net/tests/linux_wire.rs:382:5:
+assertion `left == right` failed: C cells
+  left: 4
+ right: 20
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised ... FAILED
+test lab_rejected_resumes_never_open_the_adapter_or_touch_the_wire ... ok
+test lab_pause_resume_pcap_concat_equals_continuous_trace ... ok
+test lab_all_recorded_checks_pass_none_failed_none_not_run ... ok
+test lab_veth_removal_fails_diagnosably_without_a_checkpoint ... ok
+test lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run ... ok
+test pause_plus_resume_must_equal_continuous_and_detects_seam_defects ... ok
+
+thread 'test rust_suite_acceptance_accepts_tcpdump_witness_metas ... rust_suite_acceptance_rejects_a_witness_meta_with_kernel_dropsok' (
+1469504) panicked at crates/rmasscan-net/tests/linux_wire.rs:237:13:
+rust.c01_one_addr_port_synack.run1: INVALID capture (Some("kernel_drops=Some(\"2\")")) {"end_marker_frames":3,"iface_rxtx_delta_hi":10,"iface_rxtx_delta_lo":10,"interface_drop_delta":0,"interface_drops":0,"invalid_reasons":[],"kernel_drops":2,"pcap_frames":10,"pcap_sha256":"3914af3dc16215bde48e5aa2603f6ada7511284914e9e8006b9ac784b47660ee","pcap_size_bytes":780,"quiesced_before_stop":true,"received_by_filter":10,"start_marker_frames":1,"tcpdump_argv":["tcpdump","-i","lab0","-U","--immediate-mode"],"tcpdump_captured":10,"valid":true}
+test rust_suite_acceptance_rejects_a_witness_meta_with_kernel_drops - should panic ... ok
+
+thread 'rust_suite_acceptance_rejects_an_interface_drop' (1469505) panicked at crates/rmasscan-net/tests/linux_wire.rs:237:13:
+rust.c01_one_addr_port_synack.run1: INVALID capture (Some("interface_drop_delta=Some(\"1\")")) {"end_marker_frames":3,"iface_rxtx_delta_hi":10,"iface_rxtx_delta_lo":10,"interface_drop_delta":1,"interface_drops":0,"invalid_reasons":[],"kernel_drops":0,"pcap_frames":10,"pcap_sha256":"3914af3dc16215bde48e5aa2603f6ada7511284914e9e8006b9ac784b47660ee","pcap_size_bytes":780,"quiesced_before_stop":true,"received_by_filter":10,"start_marker_frames":1,"tcpdump_argv":["tcpdump","-i","lab0","-U","--immediate-mode"],"tcpdump_captured":10,"valid":true}
+test syn_filter_ignores_other_frames ... ok
+test rust_suite_acceptance_rejects_an_interface_drop - should panic ... ok
+test pcap_parser_is_strict ... ok
+
+failures:
+
+failures:
+    lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p rmasscan-net --test linux_wire`

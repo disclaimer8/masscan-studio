@@ -1,0 +1,18 @@
+[oracle] PASS oracle built from pinned revision
+[oracle] PASS oracle source tree clean
+[oracle] PASS original binary, not offline patched
+[perf] c 100 rep1 valid=true steady=98.95161885083424
+[perf] rust 100 rep1 valid=true steady=100.02090953414933
+[perf] c 1000 rep1 valid=true steady=995.3263123661031
+[perf] rust 1000 rep1 valid=true steady=999.0648198865417
+[perf] c 10000 rep1 valid=true steady=10049.485924427227
+[perf] rust 10000 rep1 valid=true steady=10088.854599984827
+[perf] c 100000 rep1 valid=true steady=100068.33317205207
+[perf] rust 100000 rep1 valid=true steady=100522.78465032388
+[perf] PASS matrix complete: every cell VALID
+[perf] PASS every Rust run Completed with measured zero RX drops
+[perf] PASS every in-job Rust reply received and zero kernel drops
+[perf] PASS 100 pps Rust steady rate within 20% of C
+[perf] PASS 1000 pps Rust steady rate within 20% of C
+[perf] PASS 10000 pps Rust steady rate within 20% of C
+[perf] PASS 100000 pps Rust steady rate within 20% of C

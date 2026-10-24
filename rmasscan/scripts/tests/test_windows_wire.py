@@ -125,6 +125,7 @@ def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_
     n_tx += sum(1 for _t, f in pf if f[12:14] == b"\x88\xb5" and f[6:12] != mac(PEER))
     n_rx = n - n_tx
     cap = {
+        "capture_schema": 2,
         "peer": {"filter": "", "cmd": ["tcpdump", "-i", "lab0", "--immediate-mode"], "listening": True, "tcpdump": tcpd(n),
                  "pcap": {"sha256": sha(peer), "size": len(peer), "frames": n},
                  "counters": {"rx_before": 10, "tx_before": 20, "rx_ready": 10, "tx_ready": 20,
@@ -512,10 +513,77 @@ class VerifierTests(unittest.TestCase):
         self.edit_json("runs/c02_one_addr_port_rst.run1/capture.json", lambda d: d["eno1"].__setitem__("cmd", ["tcpdump"]))
         self.assertEqual(self.run_verdict("c02_one_addr_port_rst.run1"), "INVALID")
 
-    def test_older_capture_schema_does_not_require_the_end_marker(self):
+    def test_older_schema_directory_and_run_do_not_require_the_end_marker(self):
         self.edit_json("manifest.json", lambda d: d.pop("capture_schema"))
+        self.edit_json("runs/c01_one_addr_port_synack.run1/capture.json", lambda d: d.pop("capture_schema"))
         self.rewrite_peer("c01_one_addr_port_synack.run1", lambda fr: [x for x in fr if x[1][14:25] != V.END_PAYLOAD])
         self.assertEqual(self.run_verdict("c01_one_addr_port_synack.run1"), "PASS")
+
+    def test_schema2_run_in_a_schema1_directory_cannot_skip_the_end_marker(self):
+        # reviewer's attack: drop the END markers and delete capture_schema from the directory manifest
+        self.edit_json("manifest.json", lambda d: d.pop("capture_schema"))
+        self.rewrite_peer("c01_one_addr_port_synack.run1", lambda fr: [x for x in fr if x[1][14:25] != V.END_PAYLOAD])
+        self.assertEqual(self.run_verdict("c01_one_addr_port_synack.run1"), "INVALID")
+
+    def test_run_older_than_its_directory_is_invalid(self):
+        self.edit_json("runs/c02_one_addr_port_rst.run1/capture.json", lambda d: d.pop("capture_schema"))
+        self.assertEqual(self.run_verdict("c02_one_addr_port_rst.run1"), "INVALID")
+
+    # ------------------------------------------------------------ I1b: behaviour FAIL beats INVALID
+    def truncate_peer(self, base, tag):
+        p = self.path(base, tag, "peer.pcap")
+        bw(p, open(p, "rb").read()[:-7])
+
+    def test_invalid_run_with_failed_outcome_is_overall_fail(self):
+        t = "c03_multi_ports.run1"
+        self.truncate_peer("runs", t)
+        self.edit_json("runs/%s/run.json" % t, lambda d: d.update(reason="Failed"))
+        v = self.verdict()
+        self.assertEqual([r["verdict"] for r in v["runs"] if r["tag"] == t], ["INVALID"])
+        self.assertEqual(v["overall"], "FAIL")
+        self.assertIn(t, v["behaviour_fail"])
+        self.assertEqual(V.run_status(self.root, t), ("INVALID", True))
+        self.assertFalse(S.may_discard(*S.rerun_verdict(self.root, t)))
+
+    def test_discarded_invalid_run_with_accepted_foreign_result_is_overall_fail(self):
+        t = "x01_foreign_replies.run1"
+        self.edit_json("runs/%s/capture.json" % t, lambda d: d["quiet"].__setitem__("reached", False))
+        self.edit_json("runs/%s/run.json" % t, lambda d: d.update(replies=sorted(d["replies"] + ["198.18.0.2:8099:open"])))
+        self.discard(t)
+        c = V.FOREIGN_CASE
+        write_run(self.path(), t, case_syns(c), case_replies(c, silent_answers=False), full_json(c, V.expected_replies(c), discarded=4),
+                  extra_files={"injector.json": {"sent_total": 4, "kinds": {"other_ip": 1, "unscanned_port": 1, "wrong_cookie": 1,
+                                                                            "wrong_dst_port": 1}}})
+        v = self.verdict()
+        self.assertEqual(v["discarded"][0]["verdict"], "INVALID")
+        self.assertTrue(v["discarded"][0]["behaviour_fail"])
+        self.assertEqual(v["overall"], "FAIL")
+
+    def test_may_discard_needs_invalid_and_no_behaviour_failure(self):
+        self.assertTrue(S.may_discard("INVALID", False))
+        self.assertFalse(S.may_discard("INVALID", True))
+        self.assertFalse(S.may_discard("NOT RUN", True))
+
+    # ------------------------------------------------------------ M3b: strays
+    def add_stray(self, tag, t_off):
+        arp = mac(GUEST) + mac(PEER) + b"\x08\x06" + b"\x00" * 28
+        self.rewrite_peer(tag, lambda fr: sorted(fr + [(min(t for t, f in fr if V.vw.is_syn(f)) + t_off, arp)], key=lambda x: x[0]))
+
+    def test_stray_frame_in_rx_window_is_counted_and_required(self):
+        t = "x01_foreign_replies.run1"
+        self.add_stray(t, 0.5)
+        self.assertEqual(self.run_verdict(t), "FAIL")  # discarded is still 4, now 5 expected
+        self.edit_json("runs/%s/run.json" % t, lambda d: d.update(discarded=5))
+        v = self.verdict()
+        r = [x for x in v["runs"] if x["tag"] == t][0]
+        self.assertEqual(r["verdict"], "PASS")
+        self.assertEqual(r["notes"]["strays_in_rx_window"], 1)
+
+    def test_stray_after_the_rx_window_is_not_counted(self):
+        t = "x01_foreign_replies.run1"
+        self.add_stray(t, -0.5)
+        self.assertEqual(self.run_verdict(t), "PASS")
+
 
     # ------------------------------------------------------------ M3: discarded == injected
     def test_foreign_frames_not_all_discarded_is_fail(self):
@@ -574,8 +642,8 @@ class VerifierTests(unittest.TestCase):
         self.assertFalse(S.may_discard("FAIL"))
         self.assertFalse(S.may_discard("PASS"))
         self.edit_json("runs/c01_one_addr_port_synack.run1/run.json", lambda d: d.update(reason="Failed"))
-        self.assertFalse(S.may_discard(S.rerun_verdict(self.root, "c01_one_addr_port_synack.run1")))
-        self.assertFalse(S.may_discard(S.rerun_verdict(self.root, "c02_one_addr_port_rst.run1")))  # PASS
+        self.assertFalse(S.may_discard(*S.rerun_verdict(self.root, "c01_one_addr_port_synack.run1")))
+        self.assertFalse(S.may_discard(*S.rerun_verdict(self.root, "c02_one_addr_port_rst.run1")))  # PASS
 
     def test_cases_psv_lists_six_classes_plus_the_foreign_case(self):
         lines = V.cases_psv().strip().splitlines()

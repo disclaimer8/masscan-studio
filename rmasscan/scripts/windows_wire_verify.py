@@ -123,13 +123,20 @@ class Run:
     def __init__(self, tag):
         self.tag = tag
         self.checks = []
+        self.notes = {}
 
-    def add(self, name, result, detail=""):
-        self.checks.append({"name": name, "result": result, "detail": str(detail)})
+    def add(self, name, result, detail="", beh=False):
+        # beh: a capture-independent BEHAVIOUR check (outcome, results, health, counters, job echo). A FAIL there
+        # is a failure of the scanner, whatever the state of the capture, and can never be rerun away.
+        self.checks.append({"name": name, "result": result, "detail": str(detail), "behaviour": bool(beh)})
 
-    def check(self, name, cond, detail="", bad=FAIL):
-        self.add(name, PASS if cond else bad, detail)
+    def check(self, name, cond, detail="", bad=FAIL, beh=False):
+        self.add(name, PASS if cond else bad, detail, beh)
         return bool(cond)
+
+    @property
+    def behaviour_fail(self):
+        return any(c["behaviour"] and c["result"] == FAIL for c in self.checks)
 
     @property
     def verdict(self):
@@ -139,7 +146,8 @@ class Run:
         return NOT_RUN  # no check at all is never PASS
 
     def summary(self):
-        return {"tag": self.tag, "verdict": self.verdict, "checks": self.checks}
+        return {"tag": self.tag, "verdict": self.verdict, "behaviour_fail": self.behaviour_fail, "notes": self.notes,
+                "checks": self.checks}
 
 
 def sha256_bytes(b):
@@ -268,7 +276,10 @@ def verify_capture(run, man, d, cap, peer_frames, peer_bytes, eno_frames, eno_by
         markers = [t for t, f in peer_frames if f[12:14] == MARKER_ETHERTYPE]
         inv("readiness marker is in the peer pcap (capture proven live before the guest ran)", len(markers) >= 1,
             "markers=%d" % len(markers))
-        if (man.get("capture_schema") or 1) >= 2:
+        schema = cap.get("capture_schema") or 1
+        inv("run capture_schema is not older than the directory's (%s)" % (man.get("capture_schema") or 1),
+            schema >= (man.get("capture_schema") or 1), "run=%s dir=%s" % (schema, man.get("capture_schema") or 1))
+        if schema >= 2:
             ends = [t for t, f in peer_frames if f[12:14] == MARKER_ETHERTYPE and f[14:14 + len(END_PAYLOAD)] == END_PAYLOAD]
             late = [t for t, f in peer_frames if f[12:14] != MARKER_ETHERTYPE and ends and t > max(ends)]
             inv("end marker is in the peer pcap and nothing else follows it (the capture tail was flushed)",
@@ -276,7 +287,7 @@ def verify_capture(run, man, d, cap, peer_frames, peer_bytes, eno_frames, eno_by
             inv("capture ran with --immediate-mode", "--immediate-mode" in (peer.get("cmd") or []) and
                 "--immediate-mode" in (eno.get("cmd") or []), peer.get("cmd"))
         else:
-            run.add("end marker not required: capture_schema 1 (older capture, tail protection absent)", PASS)
+            run.add("end marker not required: this run's capture_schema is 1 (older capture, tail protection absent)", PASS)
         q = cap.get("quiet") or {}
         inv("capture reached quiescence before it was stopped (peer counters unchanged)",
             q.get("reached") is True and isinstance(q.get("quiet_s"), (int, float)) and q["quiet_s"] >= 1.0, q)
@@ -331,7 +342,7 @@ def job_matches(run, rj, case, bind, man):
             "ports": case["ports"], "seed": SEED, "rate": RATE, "wait": WAIT, "retries": 0, "shard": "1/1",
             "blackrock_rounds": 14}
     bad = {k: (job.get(k), v) for k, v in want.items() if job.get(k) != v}
-    run.check("run.json job echo == the case and the binding", not bad, bad or "ok", bad=INVALID)
+    run.check("run.json job echo == the case and the binding", not bad, bad or "ok", beh=True)
 
 
 def health_measured_zero(rj):
@@ -393,19 +404,21 @@ def verify_continuous(run, root, man, fx, d, case, peer_frames, peer_bytes, rj, 
     exp = expected_replies(case)
     n_open = sum(x.endswith(":open") for x in exp)
     job_matches(run, rj, case, bind, man)
-    run.check("guest exit code 0", rc == 0, "rc=%s" % rc)
+    run.check("guest exit code 0", rc == 0, "rc=%s" % rc, beh=True)
     run.check("outcome Completed", (rj or {}).get("status") == "ok" and rj.get("reason") == "Completed",
-              "status=%s reason=%s detail=%s" % ((rj or {}).get("status"), (rj or {}).get("reason"), (rj or {}).get("fail_detail")))
+              "status=%s reason=%s detail=%s" % ((rj or {}).get("status"), (rj or {}).get("reason"), (rj or {}).get("fail_detail")), beh=True)
     run.check("sent == next_index == range == expected SYN count (%d)" % case["syn"],
               rj.get("sent") == rj.get("next_index") == rj.get("range") == rj.get("expected_total") == case["syn"],
-              {k: rj.get(k) for k in ("sent", "next_index", "range", "expected_total")})
+              {k: rj.get(k) for k in ("sent", "next_index", "range", "expected_total")}, beh=True)
     run.check("rx_health.kernel_drops is a MEASURED 0 (not null)", health_measured_zero(rj),
-              "rx_health=%s net.kernel_drops=%s" % (rj.get("rx_health"), (rj.get("net") or {}).get("kernel_drops")))
+              "rx_health=%s net.kernel_drops=%s" % (rj.get("rx_health"), (rj.get("net") or {}).get("kernel_drops")), beh=True)
     run.check("net.tx_sent == sent, no uncertain/error TX, no RX errors",
-              (rj.get("net") or {}).get("tx_sent") == rj.get("sent") and net_clean(rj), rj.get("net"))
+              (rj.get("net") or {}).get("tx_sent") == rj.get("sent") and net_clean(rj), rj.get("net"), beh=True)
     run.check("results == expected Open/Closed from the peer's listeners (%d open, %d closed)" % (n_open, len(exp) - n_open),
               rj.get("replies") == exp and rj.get("reply_total") == rj.get("reply_unique") == len(exp),
-              "got=%s want=%s total=%s unique=%s" % (rj.get("replies"), exp, rj.get("reply_total"), rj.get("reply_unique")))
+              "got=%s want=%s total=%s unique=%s" % (rj.get("replies"), exp, rj.get("reply_total"), rj.get("reply_unique")), beh=True)
+    if peer_frames is None:
+        return
     fdata, fframes = load_fixture(run, root, man, fx, case["name"])
     if fframes is not None:
         fixture_frames_match_binding(run, fframes, bind, sports)
@@ -426,11 +439,46 @@ def verify_continuous(run, root, man, fx, d, case, peer_frames, peer_bytes, rj, 
               "wire=%d unique=%s received=%s duplicates=%s" % (len(wire), sorted(set(wire)), rj.get("received"), rj.get("duplicates")))
 
 
+def stray_frames(peer_frames, bind, sports):
+    """Frames addressed to the guest that are neither injected, genuine scan replies nor the lab markers, inside the
+    scan's receive window (first SYN .. last SYN + wait). The engine counts every non-reply frame it receives as
+    discarded, e.g. the peer kernel's unicast ARP probe, so they are part of the expected `discarded`."""
+    syns = scanner_syns(peer_frames, bind, sports)
+    if not syns:
+        return []
+    t0, t1 = syns[0][0], syns[-1][0] + WAIT
+    out = []
+    for t, f in peer_frames:
+        if not (t0 <= t <= t1) or f[0:6] != mac_b(bind.src_mac) or f[12:14] == MARKER_ETHERTYPE:
+            continue
+        i = tcp_info(f)
+        if i and i[7] == FOREIGN_IP_ID:
+            continue
+        if i and i[0] == bind.peer_mac and i[3] == bind.src_ip and sports[0] <= i[5] <= sports[1] and (i[6] & 0x12 == 0x12 or i[6] & 0x04):
+            continue
+        out.append((t, f))
+    return out
+
+
+def mac_b(m):
+    return bytes(int(x, 16) for x in m.split(":"))
+
+
 def verify_foreign(run, peer_frames, rj, case, bind, inj):
     """Replies with another IP / port / cookie are on the wire and must not have become results."""
     sports = sport_range(case["source_port"])
+    exp = expected_replies(case)
+    run.check("no foreign reply became a result (results == listener truth exactly)", rj.get("replies") == exp,
+              "got=%s want=%s" % (rj.get("replies"), exp), beh=True)
     if inj is None:
         run.add("injector.json present", NOT_RUN, "missing")
+        return
+    sent = inj.get("sent_total")
+    d = rj.get("discarded")
+    # capture-independent floor: every injected frame is discarded by the engine
+    run.check("engine discarded >= injected foreign frames (nothing absorbed as a result or duplicate)",
+              isinstance(d, int) and isinstance(sent, int) and d >= sent, "discarded=%s injected=%s" % (d, sent), beh=True)
+    if peer_frames is None:
         return
     foreign = [(t, f) for t, f in peer_frames if (tcp_info(f) or (0,) * 9)[7] == FOREIGN_IP_ID]
     kinds = inj.get("kinds") or {}
@@ -444,13 +492,11 @@ def verify_foreign(run, peer_frames, rj, case, bind, inj):
         inside = [t for t, _f in foreign if t0 <= t <= t1]
         run.check("foreign frames arrived inside the scan's receive window", len(inside) >= 1,
                   "inside=%d of %d" % (len(inside), len(foreign)), bad=INVALID)
-    exp = expected_replies(case)
-    run.check("no foreign reply became a result (results == listener truth exactly)", rj.get("replies") == exp,
-              "got=%s want=%s" % (rj.get("replies"), exp))
-    # Every injected frame must have been DISCARDED by the engine: a wrong-destination-port frame from :80 would,
-    # if accepted, hide as a duplicate of the genuine :80 result and leave the results unchanged.
-    run.check("engine discarded == injected foreign frames (none absorbed as a result or duplicate)",
-              rj.get("discarded") == inj.get("sent_total"), "discarded=%s injected=%s" % (rj.get("discarded"), inj.get("sent_total")))
+    strays = stray_frames(peer_frames, bind, sports)
+    run.notes["strays_in_rx_window"] = len(strays)
+    run.notes["injected"] = sent
+    run.check("engine discarded == injected + strays (each injected frame discarded one for one)",
+              d == sent + len(strays), "discarded=%s injected=%s strays=%d" % (d, sent, len(strays)), beh=True)
     genuine = len(peer_replies(peer_frames, bind, sports))
     run.check("duplicates are genuine peer retransmits only (received + duplicates <= genuine replies on the wire)",
               isinstance(rj.get("duplicates"), int) and rj.get("received", 0) + rj["duplicates"] <= genuine,
@@ -475,7 +521,7 @@ def load_run(man, root, item, rel=None):
             run.add("%s present" % name, NOT_RUN, "missing or not JSON")
     peer_frames, peer_bytes = load_pcap(run, os.path.join(d, "peer.pcap"), "peer.pcap")
     eno_frames, eno_bytes = load_pcap(run, os.path.join(d, "eno1.pcap"), "eno1.pcap")
-    if rj is None or meta is None or cap is None or peer_frames is None:
+    if rj is None or meta is None or cap is None:
         return run, None
     verify_identity(run, man, rj, meta)
     verify_capture(run, man, d, cap, peer_frames, peer_bytes, eno_frames, eno_bytes, meta)
@@ -497,6 +543,8 @@ def verify_item(man, fx, root, item, ctxs, rel=None):
         case = case_by_name(item["case"])
         if fx:
             verify_continuous(run, root, man, fx, ctx["d"], case, ctx["peer_frames"], ctx["peer_bytes"], rj, rc, bind)
+        else:
+            run.add("fixtures/manifest.json present", NOT_RUN, "missing")
         if kind == "foreign":
             verify_foreign(run, ctx["peer_frames"], rj, case, bind, try_json(os.path.join(ctx["d"], "injector.json")))
     elif kind == "pause":
@@ -507,16 +555,18 @@ def verify_item(man, fx, root, item, ctxs, rel=None):
         case = case_by_name(PAUSE_CASE)
         run.check("pause-after == range ends Completed with NO checkpoint",
                   rc == 0 and rj.get("reason") == "Completed" and rj.get("checkpoint") is False and rj.get("sent") == case["syn"],
-                  {k: rj.get(k) for k in ("reason", "checkpoint", "sent")})
-        run.check("rx_health measured 0", health_measured_zero(rj), rj.get("rx_health"))
+                  {k: rj.get(k) for k in ("reason", "checkpoint", "sent")}, beh=True)
+        run.check("rx_health measured 0", health_measured_zero(rj), rj.get("rx_health"), beh=True)
     elif kind == "refuse_completed":
         sports = sport_range(case_by_name(PAUSE_CASE)["source_port"])
+        frames = ctx["peer_frames"]
         run.check("completed job is refused (AlreadyCompleted) before the adapter opens",
                   rc == 4 and rj.get("status") == "error" and str(rj.get("error", "")).startswith("AlreadyCompleted")
                   and rj.get("opened_adapter") is False and rj.get("tx_sent") == 0,
-                  {k: rj.get(k) for k in ("status", "error", "opened_adapter", "tx_sent")} | {"rc": rc})
-        run.check("no scanner SYN reached the wire", len(scanner_syns(ctx["peer_frames"], bind, sports)) == 0,
-                  "syns=%d" % len(scanner_syns(ctx["peer_frames"], bind, sports)))
+                  {k: rj.get(k) for k in ("status", "error", "opened_adapter", "tx_sent")} | {"rc": rc}, beh=True)
+        if frames is not None:
+            run.check("no scanner SYN reached the wire", len(scanner_syns(frames, bind, sports)) == 0,
+                      "syns=%d" % len(scanner_syns(frames, bind, sports)))
     else:
         run.add("known run kind", FAIL, kind)
     return run
@@ -529,9 +579,9 @@ def verify_pause_leg(run, root, man, fx, item, ctx):
     run.check("N=%d pause leg: rc 0, Paused, sent=%d, next_index=%d, checkpoint written" % (n, n, n),
               rc == 0 and rj.get("reason") == "Paused" and rj.get("sent") == n and rj.get("next_index") == n
               and rj.get("checkpoint") is True and rj.get("checkpoint_next_index") == n,
-              {k: rj.get(k) for k in ("reason", "sent", "next_index", "checkpoint", "checkpoint_next_index")} | {"rc": rc})
+              {k: rj.get(k) for k in ("reason", "sent", "next_index", "checkpoint", "checkpoint_next_index")} | {"rc": rc}, beh=True)
     run.check("N=%d pause leg: rx_health measured 0, net.tx_sent == %d" % (n, n),
-              health_measured_zero(rj) and (rj.get("net") or {}).get("tx_sent") == n and net_clean(rj), rj.get("net"))
+              health_measured_zero(rj) and (rj.get("net") or {}).get("tx_sent") == n and net_clean(rj), rj.get("net"), beh=True)
     cp = os.path.join(ctx["d"], "checkpoint.bin")
     run.check("checkpoint file recorded", os.path.isfile(cp), cp, bad=NOT_RUN)
 
@@ -543,8 +593,8 @@ def verify_resume_leg(run, root, man, fx, item, ctx):
     run.check("N=%d resume leg: rc 0, Completed, sent=%d" % (n, case["syn"] - n),
               rc == 0 and rj.get("reason") == "Completed" and rj.get("sent") == case["syn"] - n
               and rj.get("start_index") == n and rj.get("next_index") == case["syn"],
-              {k: rj.get(k) for k in ("reason", "sent", "start_index", "next_index")} | {"rc": rc})
-    run.check("N=%d resume leg: rx_health measured 0" % n, health_measured_zero(rj) and net_clean(rj), rj.get("rx_health"))
+              {k: rj.get(k) for k in ("reason", "sent", "start_index", "next_index")} | {"rc": rc}, beh=True)
+    run.check("N=%d resume leg: rx_health measured 0" % n, health_measured_zero(rj) and net_clean(rj), rj.get("rx_health"), beh=True)
 
 
 def verify_pause_groups(man, fx, root, runs_by_tag, ctxs):
@@ -671,21 +721,30 @@ def finish(result):
     result["discarded_totals"] = {v: disc.count(v) for v in ORDER}
     result["overall"] = PASS if verdicts and all(v == PASS for v in verdicts) else (
         NOT_RUN if NOT_RUN in verdicts else INVALID if INVALID in verdicts else FAIL)
-    if FAIL in disc:  # a behaviour failure can never be rerun away
+    beh = [r["tag"] for r in result["runs"] + result["groups"] + result.get("discarded", []) if r.get("behaviour_fail")]
+    result["behaviour_fail"] = beh
+    if beh:  # a behaviour failure wins over INVALID/NOT RUN, in a kept or a discarded run
+        result["overall"] = FAIL
+    elif FAIL in disc:  # a behaviour failure can never be rerun away
         result["overall"] = FAIL
     elif PASS in disc and result["overall"] == PASS:  # a PASS must not be discarded either
         result["overall"] = INVALID
     return result
 
 
-def run_verdict(root, tag):
-    """Verdict of runs/<tag> alone (used by the orchestrator before it discards a run)."""
+def run_status(root, tag):
+    """(verdict, behaviour_fail) of runs/<tag> alone (used by the orchestrator before it discards a run)."""
     man = try_json(os.path.join(root, "manifest.json"))
     fx = try_json(os.path.join(root, "fixtures", "manifest.json"))
     item = {i["tag"]: i for i in planned(man or {})}.get(tag)
     if man is None or item is None:
-        return NOT_RUN
-    return verify_item(man, fx, root, item, {}).verdict
+        return NOT_RUN, False
+    r = verify_item(man, fx, root, item, {})
+    return r.verdict, r.behaviour_fail
+
+
+def run_verdict(root, tag):
+    return run_status(root, tag)[0]
 
 
 def main():
@@ -707,7 +766,8 @@ def main():
     for r in res["runs"] + res["groups"] + res.get("discarded", []):
         bad = [c for c in r["checks"] if c["result"] != PASS]
         print("%-8s %s%s" % (r["verdict"], r["tag"], "" if not bad else "  <- " + "; ".join("%s: %s [%s]" % (c["result"], c["name"], c["detail"][:160]) for c in bad[:3])))
-    print("overall: %s  %s" % (res["overall"], res["totals"]))
+    print("overall: %s  %s  discarded: %s  behaviour_fail: %s" % (res["overall"], res["totals"], res.get("discarded_totals"),
+                                                                 res.get("behaviour_fail")))
     return 0 if res["overall"] == PASS else (1 if res["overall"] == FAIL else 2)
 
 

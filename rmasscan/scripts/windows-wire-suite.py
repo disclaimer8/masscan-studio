@@ -56,6 +56,7 @@ GUEST_HOME = "C:\\Users\\lab\\"
 GUEST_DIR = GUEST_HOME + "t4"
 SCAN_ID, ATTEMPT_1, ATTEMPT_2 = "11" * 16, "aa" * 16, "bb" * 16
 QUIET_S = 1.5
+CAPTURE_SCHEMA = 2  # 2: --immediate-mode + end marker before SIGINT (recorded per run in capture.json)
 CTL = os.path.expanduser("~/.ssh/wws-%C")
 SSH_BASE = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ControlMaster=auto", "-o", "ControlPersist=300",
             "-o", "ControlPath=" + CTL]
@@ -347,6 +348,7 @@ def _do_run(item, argv, args, pm, injector, pre_guest, tag, ev, rev):
     meta.update(guest_exit=rc, exe_sha256=runner.get("exe_sha256"), guest_times=runner.get("times"))
     pe, ee = (open(os.path.join(ev, n + ".err")).read() if os.path.exists(os.path.join(ev, n + ".err")) else "" for n in ("peer", "eno1"))
     cap = {
+        "capture_schema": CAPTURE_SCHEMA,
         "peer": dict(filter=peer_filter or "(none: every frame on lab0)", cmd=peer_cmd.split(), exited=ok_p,
                      tcpdump={k: v for k, v in parse_tcpdump(pe).items() if k != "listening"}, listening=parse_tcpdump(pe)["listening"],
                      pcap=dict(sums.get("peer.pcap", {}), frames=count_frames(os.path.join(ev, "peer.pcap"))),
@@ -411,14 +413,15 @@ def run_plan(args, pm):
                    pre_guest=lambda ev, f=forge: forge_checkpoint(args, ev, f))
 
 
-def may_discard(verdict):
-    """Only a run that is INVALID (or never completed: NOT RUN) may be set aside and rerun."""
-    return verdict in (V.INVALID, V.NOT_RUN)
+def may_discard(verdict, behaviour_fail=False):
+    """Only a run that is INVALID (or never completed: NOT RUN) AND whose behaviour checks did not fail may be set
+    aside and rerun. A scanner failure is never rerun away, even when the capture was also bad."""
+    return verdict in (V.INVALID, V.NOT_RUN) and not behaviour_fail
 
 
 def rerun_verdict(out, tag):
-    """What the offline verifier says about runs/<tag> now. PASS and FAIL runs are evidence and are never moved."""
-    return V.run_verdict(out, tag)
+    """(verdict, behaviour_fail) the offline verifier gives runs/<tag> now. PASS and FAIL runs are evidence."""
+    return V.run_status(out, tag)
 
 
 def len_syn(c):
@@ -449,7 +452,7 @@ def write_manifest(args, pm):
     fx = json.load(open(fx_src))
     exe = guest("pwsh -NoProfile -File %s\\windows_wire_hash.ps1 -Path %s" % (GUEST_DIR, args.guest_exe)).stdout.split()
     man = {
-        "schema": 1, "capture_schema": 2, "suite": args.suite, "code_commit": args.commit,
+        "schema": 1, "capture_schema": CAPTURE_SCHEMA, "suite": args.suite, "code_commit": args.commit,
         "exe": {"sha256": exe[0], "size": int(exe[1]), "guest_path": args.guest_exe,
                 "build": "git archive of code_commit -> ~/winvm/sync-and-test.sh; RMASSCAN_SOURCE_COMMIT=code_commit; "
                          "RUSTFLAGS='-C target-feature=+crt-static'; cargo build --locked --release -p rmasscan-net --example wire_scan"},
@@ -497,19 +500,29 @@ def main():
             print(it["tag"], it["kind"])
         return 0
     os.makedirs(args.out, exist_ok=True)
-    prepare(args)
-    pm = peer_mac()
+    # offline policy checks first: nothing touches the stand and no run is moved unless EVERY requested tag may be
+    old = V.try_json(os.path.join(args.out, "manifest.json"))
+    if old is not None and (old.get("capture_schema") or 1) < CAPTURE_SCHEMA:
+        log("STOP: %s is capture_schema %s; this orchestrator writes schema %d. Use a new directory." % (
+            args.out, old.get("capture_schema") or 1, CAPTURE_SCHEMA))
+        return 12
+    moves = []
     if args.rerun:
         for t in args.only:
             src = os.path.join(args.out, "runs", t)
             if os.path.exists(src):
-                v = rerun_verdict(args.out, t)
-                if not may_discard(v):
-                    log("STOP: runs/%s is %s; only an INVALID (or incomplete) run may be discarded and rerun" % (t, v))
+                v, bf = rerun_verdict(args.out, t)
+                if not may_discard(v, bf):
+                    log("STOP: runs/%s is %s%s; only an INVALID (or incomplete) run without a failed behaviour check "
+                        "may be discarded and rerun" % (t, v, " with a failed behaviour check" if bf else ""))
                     return 11
-                dst = os.path.join(args.out, "runs_discarded")
-                os.makedirs(dst, exist_ok=True)
-                os.rename(src, os.path.join(dst, "%s.%d" % (t, int(time.time()))))
+                moves.append((t, src))
+    prepare(args)
+    pm = peer_mac()
+    for t, src in moves:
+        dst = os.path.join(args.out, "runs_discarded")
+        os.makedirs(dst, exist_ok=True)
+        os.rename(src, os.path.join(dst, "%s.%d" % (t, int(time.time()))))
     if not os.path.exists(os.path.join(args.out, "manifest.json")):
         write_manifest(args, pm)
     try:

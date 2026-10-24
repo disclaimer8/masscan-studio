@@ -3,7 +3,7 @@
 # Inventory: list adapters (MAC, GUID, NPF name, IPs, default route) -> <Manifest>.inventory.json
 # Configure: find the lab NIC by the manifest MAC (must be unique), assign ONLY lab IP /30,
 #            no gateway, no DNS; refuse when the match is the management NIC. -> <Manifest>.guest.json
-# Verify:    lab IP present, no gateway/DNS on lab NIC, management NIC + default route unchanged.
+# Verify:    lab NIC Status Up (same GUID/MAC), lab IP present, no gateway/DNS on lab NIC, management NIC + default route unchanged.
 # Never touches firewall, other adapters, default routes or DNS of the management NIC. No secrets.
 param(
     [Parameter(Mandatory)][string]$Manifest,
@@ -15,6 +15,7 @@ $labMac = ($m.names.windows_mac -replace ':', '-').ToUpper()
 $labIp = $m.lab.windows_ip
 $prefix = [int]$m.lab.prefix
 $mgmtPrefix = '10.0.2.'
+$mgmtMac = '52-54-00-12-34-56'   # QEMU default MAC of the management NIC
 
 function Get-Inventory {
     $adapters = @(Get-NetAdapter -Physical:$false -IncludeHidden:$false | ForEach-Object {
@@ -32,6 +33,7 @@ function Select-Lab($inv) {
     $hits = @($inv.adapters | Where-Object { $_.MacAddress -eq $labMac })
     if ($hits.Count -gt 1) { throw "lab NIC ambiguous: $($hits.Count) adapters match MAC $labMac" }
     if ($hits.Count -eq 0) { throw "lab NIC not found by MAC $labMac" }
+    if ($labMac -eq $mgmtMac) { throw 'refusing: manifest MAC is the management NIC' }
     $hits[0]
 }
 
@@ -61,6 +63,8 @@ switch ($Action) {
     'Verify' {
         $lab = Select-Lab $inv
         $errs = @()
+        if ($lab.Status -ne 'Up') { $errs += "lab NIC Status is '$($lab.Status)', expected 'Up'" }
+        if ($m.guest.guid -and $lab.InterfaceGuid -ne $m.guest.guid) { $errs += "lab NIC GUID $($lab.InterfaceGuid) differs from recorded $($m.guest.guid)" }
         if ($lab.IPv4 -notcontains "$labIp/$prefix") { $errs += "lab IP $labIp/$prefix missing" }
         $extra = @($lab.IPv4 | Where-Object { $_ -ne "$labIp/$prefix" -and $_ -notlike '169.254.*' })   # APIPA link-local is not routable off-link
         if ($extra.Count -gt 0) { $errs += "lab NIC has extra IPv4 addresses: $($extra -join ',')" }
@@ -70,7 +74,9 @@ switch ($Action) {
         $mgmt = @($inv.adapters | Where-Object { $_.IPv4 | Where-Object { $_ -like "$mgmtPrefix*" } })
         if ($mgmt.Count -ne 1) { $errs += "management NIC (10.0.2.x) count = $($mgmt.Count)" }
         if (@($inv.default_routes | Where-Object { $mgmt.Count -eq 1 -and $_.ifIndex -eq $mgmt[0].ifIndex }).Count -ne 1) { $errs += 'default route is not exactly via the management NIC' }
-        [pscustomobject]@{ ok = ($errs.Count -eq 0); errors = $errs; lab = $lab; npf = $lab.Npf } | ConvertTo-Json -Depth 4
+        $res = [pscustomobject]@{ ok = ($errs.Count -eq 0); errors = $errs; lab = $lab; npf = $lab.Npf }
+        $res | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$Manifest.verify.json" -Encoding utf8
+        $res | ConvertTo-Json -Depth 4
         if ($errs.Count) { exit 1 }
     }
 }

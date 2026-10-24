@@ -122,6 +122,7 @@ stop_bg() {  # stop_bg PID : stop one tracked child (leader first, bounded), swe
   local i
   stop_session "$1" "$STOP_GRACE" || true
   for i in "${!PIDS[@]}"; do [ "${PIDS[$i]}" = "$1" ] && PIDS[$i]=""; done   # a stopped session id is never signalled again
+  return 0  # the loop's last test is usually false; under set -e that status would abort the caller
 }
 wait_file() {  # wait_file PATH SECONDS
   local i; for i in $(seq 1 $(( $2 * 20 ))); do [ -e "$1" ] && return 0; sleep 0.05; done

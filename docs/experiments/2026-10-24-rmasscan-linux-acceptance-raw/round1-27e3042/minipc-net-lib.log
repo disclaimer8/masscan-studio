@@ -1,0 +1,56 @@
+   Compiling syn v3.0.9
+   Compiling thiserror-impl v2.0.21
+   Compiling thiserror v2.0.21
+   Compiling rmasscan-core v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-net)
+    Finished `test` profile [optimized + debuginfo] target(s) in 7.82s
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_net-7a5ca65fcea4bba9)
+
+running 42 tests
+test linux::tests::binding_matching_the_os_yields_the_ifindex ... ok
+test linux::tests::drop_after_health_with_failing_read_keeps_the_total ... ok
+test linux::tests::health_error_never_returns_a_cached_zero ... ok
+test linux::tests::health_after_fatal_error_reports_the_closed_adapter ... ok
+test linux::tests::health_reports_cumulative_drops_from_resetting_deltas ... ok
+test linux::tests::hostile_interface_names_never_reach_the_os ... ok
+test linux::tests::backoff_is_capped_by_the_remaining_deadline ... ok
+test linux::tests::missing_interface_is_a_mismatch ... ok
+test linux::tests::non_ethernet_link_type_is_rejected_before_any_os_query ... ok
+test linux::tests::health_error_after_a_good_periodic_flush_is_still_an_error ... ok
+test linux::tests::rx_drops_frames_of_another_interface ... ok
+test linux::tests::rx_drops_outgoing_frames ... ok
+test linux::tests::kernel_drops_stay_none_when_statistics_are_unavailable ... ok
+test linux::tests::rx_drops_truncated_frames_and_never_exceeds_the_buffer ... ok
+test linux::tests::periodic_flush_health_and_drop_have_one_owner_without_double_counting ... ok
+test linux::tests::rx_fatal_error_closes_fd_and_later_calls_fail ... ok
+test linux::tests::kernel_drops_accumulate_and_reading_does_not_reset ... ok
+test linux::tests::rx_only_truncated_frame_yields_none_not_a_length ... ok
+test linux::tests::rx_flood_of_dropped_frames_cannot_extend_the_deadline ... ok
+test linux::tests::rx_eintr_flood_does_not_restart_the_deadline ... ok
+test linux::tests::rx_readiness_then_packet_is_delivered ... ok
+test linux::tests::rx_empty_times_out_within_the_deadline ... ok
+test linux::tests::rx_poll_eintr_flood_does_not_restart_the_deadline ... ok
+test linux::tests::rx_returns_frame_and_counts_it ... ok
+test linux::tests::rx_poll_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::source_ip_and_mac_are_not_validated_against_the_os ... ok
+test linux::tests::stats_handle_survives_the_close_and_final_drops_are_collected ... ok
+test linux::tests::rx_readiness_without_packet_keeps_waiting_until_deadline ... ok
+test linux::tests::tx_eagain_then_writable_then_sent ... ok
+test linux::tests::rx_recv_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::tx_fatal_error_closes_the_fd_and_later_calls_fail_without_syscalls ... ok
+test linux::tests::tx_full_send_is_sent ... ok
+test linux::tests::tx_partial_send_is_uncertain_and_keeps_fd_open ... ok
+test linux::tests::tx_eintr_flood_does_not_extend_the_deadline ... ok
+test linux::tests::tx_confirmed_eagain_until_deadline_is_would_block_unsent ... ok
+test linux::tests::tx_poll_failure_is_fatal ... ok
+test linux::tests::tx_poll_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::tx_poll_eintr_flood_does_not_restart_the_deadline ... ok
+test linux::tests::wrong_interface_link_type_is_unsupported_link ... ok
+test linux::tests::tx_send_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::rx_timeout_is_capped_at_50ms ... ok
+test linux::tests::tx_timeout_is_capped_at_50ms ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+rc=0

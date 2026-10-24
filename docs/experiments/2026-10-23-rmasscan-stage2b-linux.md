@@ -402,6 +402,10 @@ namespace): `rust-run1/2.results.json` + `.suite.log` (по строке на п
 
 ## Повторная приёмка Linux 2026-10-24 (после контрактов RX integrity и TX stall)
 
+> **Superseded by «Fix round 1» ниже (код-коммит `27e3042`).** Прогон на `ee51a19` ниже сохранён как есть: в нём не
+> были записаны sha256 перфоманс-pcap и не было логов нестендовых проверок. Актуальные числа и привязка к коммиту — в разделе
+> «Fix round 1».
+
 Заменяет результаты `98ae43e` (они остаются выше как историческая запись). Сырые данные:
 [`2026-10-24-rmasscan-linux-acceptance-raw/`](2026-10-24-rmasscan-linux-acceptance-raw/) (JSON-вердикты,
 логи, topology, isolation, env, команды, sha256 бинарей и 40 pcap набора `rust`; pcap perf-матрицы по
@@ -518,3 +522,56 @@ Fake backpressure/panic тесты не являются проверкой фи
   `~/t4-iolab.sh` удалены после копирования данных.
 - Время C-остановки по SIGINT 11-12 с (C дожидается `wait`); к контракту Stop <= 1 с для Rust отношения не имеет
   (Rust: 0,02-0,06 с).
+
+### Fix round 1: повторный прогон на `27e3042` (актуальный)
+
+Причина: ревью нашло, что драйвер удалял perf-pcap без sha256+size (I1), а проверки Mac/minipc не имели логов (I2).
+`27e3042 fix(scripts): hash every capture before cleanup` записывает sha256, размер и число кадров каждого pcap
+(functional, perf и stop-probe) в `results.json` ДО удаления; для perf ещё в `capture.pcap_sha256/pcap_size_bytes`
+каждой ячейки. Хэш скрипта изменился, поэтому обе suite и вся матрица прогнаны заново на одном чистом коммите.
+Сырые данные и логи: `2026-10-24-rmasscan-linux-acceptance-raw/round1-27e3042/` (все файлы в `MANIFEST.sha256`).
+Файлы прогона `ee51a19` рядом не удалены и считаются superseded.
+
+- Код-коммит: **`27e3042a6173d8a4c3a5848d3904cc9c122ffc78`**, дерево `rmasscan/` на нём совпадает с `ee51a19:rmasscan`
+  кроме `scripts/wire_suite.py`. Dirty diff пуст (кроме неотслеживаемых `supertool` и планов/ревью-файлов).
+- Воспроизводимая привязка источника вместо прежнего «хэша списка файлов»: на minipc развёрнут ровно
+  `git archive --format=tar 27e3042 rmasscan`; sha256 tar =
+  `dd8a6bebb27d5b839f917b7198c82d6de82a844c3597e1d655d2b2cedd0b6875` (`source-archive.sha256`; команда
+  `git archive --format=tar 27e3042a6173d8a4c3a5848d3904cc9c122ffc78 rmasscan | shasum -a 256`; на minipc `sha256sum` того же файла дал то же значение).
+  Прежний хэш `feec6c24…` из раздела `ee51a19` не используйте.
+- Бинари/хосты: `minipc-build-and-hashes.log` (wire_scan `1565974a…eaf3` без изменений, oracle `8afc8ec8…`, `wire_suite.py`
+  `de52e28d…34c4`, Ubuntu 26.04.1, 7.0.0-38, rustc 1.99.1).
+
+| Проверка (логи в `round1-27e3042/`) | Результат |
+| --- | --- |
+| Mac fmt, clippy `-D warnings`, deny, no-C guard (`mac-*.log`) | rc=0 / rc=0 / «bans ok, licenses ok, sources ok» / rc=0 |
+| Mac `cargo test --locked --workspace` | 320 passed, 0 failed, 7 ignored, rc=0 |
+| Python self-test (`selftest-*.log`) | `verify-wire.py` 31/31, `wire_suite.py` 45/45 |
+| minipc clippy workspace, `--workspace` tests, `rmasscan-net --lib` | rc=0; 366 passed, 0 failed, 13 ignored; `--lib` rc=0 |
+| Functional suite `--suite rust` | **141 PASS, 0 FAIL, 0 NOT RUN**; 40 pcap, все 40 sha256 записаны и совпадают с файлами на диске |
+| Perf matrix 4x5xC/Rust | **40/40 VALID**, capture не INVALID, `quiesced_before_stop` 40/40; 80 pcap (40 основных + 40 stop-probe) с sha256+size в `perf/pcap-sha256-size.txt`; rx-incomplete 0; rx_health drops 0 (измерено) в 20/20; 12 PASS |
+| `linux_wire --include-ignored` (`minipc-linux_wire.log`) | 9/9 ok, rc=0 |
+| `linux_io` lab (`minipc-linux_io-lab.log`, свои netns, seal-вывод внутри) | параллельно: 4 ok, **1 FAILED** (`lab_drop_closes_every_fd...`); `--test-threads=1`: 5/5 ok; unprivileged uid: 1/1 ok; `namespaces_left=0` |
+| CI на точном HEAD | **NOT RUN (no push authorized)** |
+
+Медианы steady-state pps по проводу (5 валидных повторов), критерий +-20%:
+
+| rate | C | Rust | Rust/C | в пределах +-20% |
+| --- | --- | --- | --- | --- |
+| 100 | 98.7 | 100.2 | 1.016 | да |
+| 1000 | 999.9 | 1000.0 | 1.000 | да |
+| 10000 | 10078.4 | 10075.3 | 1.000 | да |
+| 100000 | 100244.6 | 100658.3 | 1.004 | да |
+
+Все 40 ячеек с префиксом sha256 их capture: `round1-27e3042/perf/cells-table.md`.
+
+RX overflow (тот же путь `wire_scan --rx-stall-ms 2500`, через изменённый драйвер): `kernel_drops = 173`,
+`Failed(RxLoss { kernel_drops: 173 })`, rc 3, без checkpoint, TX заморожен на 24969 из 25600 — PASS
+(`rust/rx_overflow.summary.json`; число дропов от запуска к запуску разное: 155 на `ee51a19`, 173 здесь).
+
+RED для теста dedup (`dedup-mutation-red.log`): мутация «повтор переносит ключ в конец очереди» (LRU) даёт
+`FAILED ... left: 3 right: 4`; на восстановленном исходнике тест зелёный.
+
+Ограничение остаётся: `lab_drop_closes_every_fd_and_stats_outlive_them` падает при параллельном запуске (наблюдение
+записано в логе), проходит последовательно. Физический NIC, CI exact HEAD, Windows, UI не проверялись.
+Очистка: `~/t4r1*` на minipc удалены, `namespaces_left=0` после каждого запуска, процессов `wire_scan|tcpdump|masscan` нет.

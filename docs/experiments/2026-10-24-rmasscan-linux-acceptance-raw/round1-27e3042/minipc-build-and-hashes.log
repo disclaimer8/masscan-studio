@@ -1,0 +1,30 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling typenum v1.20.0
+   Compiling thiserror v2.0.21
+   Compiling siphasher v1.0.4
+   Compiling cfg-if v1.0.5
+   Compiling cpufeatures v0.3.1
+   Compiling libc v0.2.191
+   Compiling hybrid-array v0.4.15
+   Compiling syn v3.0.9
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
+   Compiling thiserror-impl v2.0.21
+   Compiling rmasscan-core v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-net)
+    Finished `release` profile [optimized] target(s) in 12.10s
+rc=0
+1565974a8bb6c3da0f84927ab0aaad77b54c1d4bf1b5aea952cbedda1217eaf3  target/release/examples/wire_scan
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  /home/a1/rmasscan-oracle/masscan/bin/masscan
+fcb06cbdc917cba187bec5633a04f2e0b3360ed1b8900fc9fa309c0b2b64dcef  scripts/verify-wire.py
+62ef56f53a9ffd385a9f7cd34ace851716dad7bb62bc1923e3d631ef983a41c3  scripts/wire_capture.py
+de52e28dbd1a6725f7fe6d90e024988499d8ea35ee62b1476b03ee4ab19634c4  scripts/wire_suite.py
+c59d6bdf51f41aa3de89351a38fb58d3518d78f8aa9926900dff0a04aab0eb7c  scripts/wire-lab.sh
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+Linux a1-To-be-filled-by-O-E-M 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026 x86_64 GNU/Linux
+Ubuntu 26.04.1 LTS

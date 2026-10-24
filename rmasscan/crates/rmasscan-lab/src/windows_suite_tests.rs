@@ -9,6 +9,7 @@ use std::cell::{Cell, RefCell};
 struct Knobs {
     verify_rc: i32,
     report_nonce: Option<String>,
+    status_nonce: Option<String>,
     report_npf: Option<String>,
     status: Option<Value>,
     record_rc: i32,
@@ -26,6 +27,7 @@ struct Stand {
     tag: RefCell<String>,
     counter_calls: Cell<usize>,
     nonce: RefCell<String>,
+    recorded_nonce: RefCell<String>,
     commit_reads: RefCell<Vec<(String, String)>>,
 }
 /// The "installed" Linux binary of the fake stand; the default deploy manifest vouches for it.
@@ -53,6 +55,7 @@ impl Stand {
             tag: RefCell::default(),
             counter_calls: Cell::new(0),
             nonce: RefCell::default(),
+            recorded_nonce: RefCell::default(),
             commit_reads: RefCell::default(),
         }
     }
@@ -117,13 +120,20 @@ impl Stand {
             return out(0, &format!("{:.3}\n", epoch()));
         }
         if cmd.contains("record-guest") {
+            let recorded = cmd
+                .split("--nonce '")
+                .nth(1)
+                .and_then(|s| s.split('\'').next())
+                .unwrap_or("");
+            *self.recorded_nonce.borrow_mut() = recorded.to_string();
             return out(k.record_rc, "{}");
         }
         if cmd.contains("vm-lab status") {
-            let v = k
-                .status
-                .clone()
-                .unwrap_or(json!({"raw_run_allowed":true,"isolation_violations":[],"ok":true}));
+            // The real status reports the nonce of the guest Verify it relied on (host-only: null).
+            let v = k.status.clone().unwrap_or(json!({
+                "raw_run_allowed":true,"isolation_violations":[],"ok":true,
+                "guest_verify_nonce":k.status_nonce.clone().unwrap_or(self.recorded_nonce.borrow().clone())
+            }));
             return out(0, &v.to_string());
         }
         if cmd.contains("counters --iface lab0") {
@@ -1452,4 +1462,17 @@ fn a_new_evidence_directory_records_the_orchestrator_build_in_manifest_and_prefl
         *orch,
         "every start records the build that ran it"
     );
+}
+
+#[test]
+fn the_gate_refuses_a_status_that_relied_on_another_guest_verify() {
+    // WR I3 residual: the status must name the nonce of THIS invocation's Verify, not a stale one.
+    let w = World::new("gate-status-nonce");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().status_nonce = Some("a-stale-verify".into());
+    let s = suite(&stand, &w.root);
+    let ev = w.root.join("runs").join(TAG);
+    fs::create_dir_all(&ev).unwrap();
+    let e = s.gate(&ev, "/r", TAG).unwrap_err();
+    assert!(e.contains("another guest Verify"), "{e}");
 }

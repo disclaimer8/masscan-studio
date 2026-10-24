@@ -465,7 +465,12 @@ fn write_run(root: &Path, man: &Value, it: &Value, schema: u64) {
         );
     }
     let status = json!({"raw_run_allowed":true,"isolation_violations":[],"ok":true});
-    put(&dir, "status-pre.json", pretty(&status));
+    let mut pre = status.clone();
+    if schema >= 3 {
+        // vm-lab status reports the nonce of the guest Verify the gate relied on.
+        pre["guest_verify_nonce"] = json!(nonce);
+    }
+    put(&dir, "status-pre.json", pretty(&pre));
     put(&dir, "status-post.json", pretty(&status));
     put(
         &dir,

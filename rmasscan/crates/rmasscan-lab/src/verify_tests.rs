@@ -1910,3 +1910,34 @@ fn schema_below_3_keeps_its_exemption_and_says_so() {
     assert!(text.contains("not recorded"), "{text}");
     assert_ne!(v["overall"], "INVALID");
 }
+
+#[test]
+fn status_pre_must_carry_the_nonce_of_this_invocations_guest_verify() {
+    // WR I3 residual: schema 3 binds the gate decision (status-pre) to the invocation, not only
+    // guest-verify.json and meta.json.
+    let tag = "perm_elevated_control";
+    for (label, change) in [
+        ("another run's nonce", Some(json!("nonce-other-run"))),
+        ("null", Some(Value::Null)),
+        ("absent", None),
+    ] {
+        let d = Scratch::new("failure", Some(tag));
+        let path = d.0.join(format!("runs/{tag}/status-pre.json"));
+        let mut v = read_json(&path).unwrap();
+        match change {
+            Some(x) => v["guest_verify_nonce"] = x,
+            None => {
+                v.as_object_mut().unwrap().remove("guest_verify_nonce");
+            }
+        }
+        fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        let failed = failed_checks(&d, tag);
+        assert!(
+            failed.contains(&"status-pre carries this invocation's guest Verify nonce".into()),
+            "{label}: {failed:?}"
+        );
+    }
+    // The untouched fixture passes it.
+    let d = Scratch::new("failure", Some(tag));
+    assert!(failed_checks(&d, tag).is_empty());
+}

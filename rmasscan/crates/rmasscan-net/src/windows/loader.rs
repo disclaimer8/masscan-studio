@@ -17,12 +17,14 @@
 //! потокобезопасны только для РАЗНЫХ `pcap_t`; единственный изменяемый
 //! объект, `pcap_t`, принадлежит одному владельцу (см. `handle`).
 
-use std::ffi::{CStr, c_void};
-use std::sync::Arc;
+use std::ffi::{CStr, c_char, c_void};
+use std::sync::{Arc, Mutex, Weak};
 
 use sha2::{Digest, Sha256};
 
-use super::ffi::{PcapFns, REQUIRED_SYMBOLS};
+use super::ffi::{
+    InitFn, PCAP_CHAR_ENC_UTF_8, PCAP_ERRBUF_SIZE, PcapFns, REQUIRED_SYMBOLS, SYM_PCAP_INIT,
+};
 use crate::NetError;
 
 /// Причина неудачной загрузки DLL (классифицирует `sys`/фейк).
@@ -72,6 +74,10 @@ pub(crate) struct NpcapApi {
     pub(crate) fns: PcapFns,
     version: String,
     diagnostics: Vec<DllInfo>,
+    /// `pcap_init(PCAP_CHAR_ENC_UTF_8)` выполнен: описания и ошибки адаптеров
+    /// приходят в UTF-8. Иначе (старый wpcap без символа или отказ) это
+    /// ANSI-кодировка, и нелатинский текст может искажаться; на работу не влияет.
+    utf8_text: bool,
     // Последним: выгрузка библиотеки после всего остального.
     _module: Box<dyn Module>,
 }
@@ -81,6 +87,7 @@ impl std::fmt::Debug for NpcapApi {
         f.debug_struct("NpcapApi")
             .field("version", &self.version)
             .field("diagnostics", &self.diagnostics)
+            .field("utf8_text", &self.utf8_text)
             .finish()
     }
 }
@@ -177,6 +184,20 @@ impl NpcapApi {
                 REQUIRED_SYMBOLS.len()
             ))
         })?;
+        // `pcap_init` обязан идти раньше остальных вызовов библиотеки. Символ
+        // необязателен; отказ не фатален (текст останется в ANSI).
+        let utf8_text = match lookup(SYM_PCAP_INIT) {
+            None => false,
+            Some(p) => {
+                // SAFETY: по контракту `unsafe trait Module` p это реальный
+                // экспорт `pcap_init` с сигнатурой `InitFn`, живой, пока жив
+                // module; указатель данных и fn-указатель одного размера.
+                let init = unsafe { std::mem::transmute::<*const c_void, InitFn>(p) };
+                let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+                // SAFETY: err имеет PCAP_ERRBUF_SIZE байт (требование API).
+                unsafe { init(PCAP_CHAR_ENC_UTF_8, err.as_mut_ptr()) == 0 }
+            }
+        };
         // SAFETY: lib_version разрешён из wpcap.dll, не принимает аргументов и
         // возвращает указатель на статическую строку библиотеки или NULL.
         let p = unsafe { (fns.lib_version)() };
@@ -194,16 +215,54 @@ impl NpcapApi {
             fns,
             version,
             diagnostics,
+            utf8_text,
             _module: module,
         }))
     }
 
+    // Три аксессора ниже читают живые тесты и отчёты; в продуктовом пути они
+    // пока не нужны (узкое исключение вместо allow(dead_code) на весь модуль).
+
     /// Строка `pcap_lib_version` (например «Npcap version 1.90, based on libpcap 1.10.7»).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn lib_version(&self) -> &str {
         &self.version
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn diagnostics(&self) -> &[DllInfo] {
         &self.diagnostics
+    }
+
+    /// Текст библиотеки в UTF-8 (см. поле `utf8_text`).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn utf8_text(&self) -> bool {
+        self.utf8_text
+    }
+}
+
+/// Одна общая загруженная библиотека на процесс, пока жив хотя бы один
+/// владелец. Слот держит `Weak`: DLL выгружается после последнего handle, а
+/// повторная загрузка возможна. Замок охватывает и загрузку, поэтому два
+/// потока не загружают и не инициализируют библиотеку одновременно, а
+/// неудачная загрузка не кэшируется (Npcap могли поставить позже).
+pub(crate) struct ApiSlot(Mutex<Weak<NpcapApi>>);
+
+impl ApiSlot {
+    pub(crate) const fn new() -> Self {
+        ApiSlot(Mutex::new(Weak::new()))
+    }
+
+    pub(crate) fn get_or_load(
+        &self,
+        load: impl FnOnce() -> Result<Arc<NpcapApi>, NetError>,
+    ) -> Result<Arc<NpcapApi>, NetError> {
+        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(api) = slot.upgrade() {
+            return Ok(api);
+        }
+        let api = load()?;
+        *slot = Arc::downgrade(&api);
+        Ok(api)
     }
 }

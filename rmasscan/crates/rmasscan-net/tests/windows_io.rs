@@ -19,9 +19,9 @@ fn binding(name: &str) -> AdapterBinding {
     }
 }
 
-/// Пока Windows-адаптер не подключён к `open_explicit` (задача 3), любое
-/// имя даёт ошибку, а не открытый адаптер. Тест остаётся верным и после
-/// подключения: несуществующее устройство тоже не открывается.
+/// Несуществующее устройство не даёт открытого адаптера: без Npcap это
+/// `DriverUnavailable`, с Npcap `InterfaceMismatch` (имя вне перечня). Пакетов
+/// тест не отправляет.
 #[test]
 fn a_bogus_device_never_opens_an_adapter() {
     let r = open_explicit(&binding(

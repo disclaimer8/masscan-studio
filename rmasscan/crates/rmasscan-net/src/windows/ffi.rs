@@ -12,6 +12,11 @@
 //!   127; документация: npcap.com/guide/wpcap/pcap.html;
 //! - `winsock2.h`: `struct sockaddr { u_short sa_family; char sa_data[14]; }`.
 //!
+//! - `pcap/bpf.h`: `struct bpf_insn { u_short code; u_char jt; u_char jf;
+//!   bpf_u_int32 k; }` и `struct bpf_program { u_int bf_len; struct bpf_insn
+//!   *bf_insns; }`; `pcap_compile`/`pcap_setfilter`/`pcap_freecode`/`pcap_init`
+//!   объявлены в `pcap/pcap.h` (PCAP_API, cdecl).
+//!
 //! Размеры, выравнивания и смещения проверяются `const _: () = assert!(..)`:
 //! расхождение ломает сборку. Утверждения не зависят от хоста, пока он
 //! 64-битный, поэтому те же проверки выполняются и на Mac/Linux. На Windows
@@ -85,7 +90,31 @@ pub(crate) struct PcapIf {
     pub flags: u32,
 }
 
+/// `struct bpf_insn` (классический BPF, 8 байт).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BpfInsn {
+    pub code: u16,
+    pub jt: u8,
+    pub jf: u8,
+    pub k: u32,
+}
+
+/// `struct bpf_program`.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct BpfProgram {
+    pub bf_len: c_uint,
+    pub bf_insns: *mut BpfInsn,
+}
+
 pub(crate) const PCAP_ERRBUF_SIZE: usize = 256;
+/// `BPF_RET | BPF_K`: «вернуть k байт»; при k = 0 кадр отбрасывается.
+pub(crate) const BPF_RET_K: u16 = 0x06;
+/// `PCAP_NETMASK_UNKNOWN` для `pcap_compile` (маска нам не нужна).
+pub(crate) const PCAP_NETMASK_UNKNOWN: u32 = 0xffff_ffff;
+/// `PCAP_CHAR_ENC_UTF_8` для `pcap_init`.
+pub(crate) const PCAP_CHAR_ENC_UTF_8: c_uint = 1;
 pub(crate) const PCAP_IF_LOOPBACK: u32 = 0x1;
 pub(crate) const DLT_NULL: c_int = 0;
 pub(crate) const DLT_EN10MB: c_int = 1;
@@ -93,7 +122,6 @@ pub(crate) const DLT_IEEE802_11_RADIO: c_int = 127;
 /// Возврат `pcap_next_ex`: кадр прочитан / таймаут / ошибка / EOF.
 pub(crate) const NEXT_EX_OK: c_int = 1;
 pub(crate) const NEXT_EX_TIMEOUT: c_int = 0;
-pub(crate) const NEXT_EX_ERROR: c_int = -1;
 pub(crate) const NEXT_EX_EOF: c_int = -2;
 
 // Раскладка. Эти утверждения верны для любого 64-битного хоста с 4-байтным
@@ -111,6 +139,9 @@ const _: () = assert!(offset_of!(PcapStat, ps_ifdrop) == 8);
 const _: () = assert!(offset_of!(PcapStat, ps_capt) == 12);
 const _: () = assert!(offset_of!(PcapStat, ps_sent) == 16);
 const _: () = assert!(offset_of!(PcapStat, ps_netdrop) == 20);
+const _: () = assert!(size_of::<BpfInsn>() == 8 && align_of::<BpfInsn>() == 4);
+const _: () = assert!(offset_of!(BpfInsn, code) == 0 && offset_of!(BpfInsn, jt) == 2);
+const _: () = assert!(offset_of!(BpfInsn, jf) == 3 && offset_of!(BpfInsn, k) == 4);
 const _: () = assert!(size_of::<SockAddr>() == 16 && align_of::<SockAddr>() == 2);
 const _: () = assert!(offset_of!(SockAddr, sa_data) == 2);
 #[cfg(target_pointer_width = "64")]
@@ -121,6 +152,8 @@ const _: () = {
     assert!(offset_of!(PcapAddr, netmask) == 16);
     assert!(offset_of!(PcapAddr, broadaddr) == 24);
     assert!(offset_of!(PcapAddr, dstaddr) == 32);
+    assert!(size_of::<BpfProgram>() == 16 && align_of::<BpfProgram>() == 8);
+    assert!(offset_of!(BpfProgram, bf_len) == 0 && offset_of!(BpfProgram, bf_insns) == 8);
     assert!(size_of::<PcapIf>() == 40 && align_of::<PcapIf>() == 8);
     assert!(offset_of!(PcapIf, next) == 0);
     assert!(offset_of!(PcapIf, name) == 8);
@@ -146,8 +179,6 @@ pub(crate) type FreeAllDevsFn = unsafe extern "C" fn(*mut PcapIf);
 pub(crate) type CreateFn = unsafe extern "C" fn(*const c_char, *mut c_char) -> *mut PcapT;
 pub(crate) type SetIntFn = unsafe extern "C" fn(*mut PcapT, c_int) -> c_int;
 pub(crate) type ActivateFn = unsafe extern "C" fn(*mut PcapT) -> c_int;
-pub(crate) type OpenLiveFn =
-    unsafe extern "C" fn(*const c_char, c_int, c_int, c_int, *mut c_char) -> *mut PcapT;
 pub(crate) type NextExFn =
     unsafe extern "C" fn(*mut PcapT, *mut *mut PcapPkthdr, *mut *const u8) -> c_int;
 pub(crate) type SendPacketFn = unsafe extern "C" fn(*mut PcapT, *const u8, c_int) -> c_int;
@@ -159,6 +190,17 @@ pub(crate) type SetNonblockFn = unsafe extern "C" fn(*mut PcapT, c_int, *mut c_c
 pub(crate) type GetNonblockFn = unsafe extern "C" fn(*mut PcapT, *mut c_char) -> c_int;
 pub(crate) type StatsFn = unsafe extern "C" fn(*mut PcapT, *mut PcapStat) -> c_int;
 pub(crate) type CloseFn = unsafe extern "C" fn(*mut PcapT);
+/// `pcap_compile(p, prog, expr, optimize, netmask)`: 0 или -1.
+pub(crate) type CompileFn =
+    unsafe extern "C" fn(*mut PcapT, *mut BpfProgram, *const c_char, c_int, u32) -> c_int;
+/// `pcap_setfilter(p, prog)`: 0 или -1 (программа копируется библиотекой).
+pub(crate) type SetFilterFn = unsafe extern "C" fn(*mut PcapT, *mut BpfProgram) -> c_int;
+pub(crate) type FreeCodeFn = unsafe extern "C" fn(*mut BpfProgram);
+/// `pcap_init(opts, errbuf)`: 0 или PCAP_ERROR. Необязательный символ.
+pub(crate) type InitFn = unsafe extern "C" fn(c_uint, *mut c_char) -> c_int;
+
+/// Имя необязательного символа (его отсутствие не ошибка).
+pub(crate) const SYM_PCAP_INIT: &str = "pcap_init";
 
 /// Одно место, где перечислены все символы wpcap: имя, тип, поле таблицы.
 macro_rules! pcap_api {
@@ -221,7 +263,6 @@ pcap_api! {
     set_immediate_mode: SetIntFn = "pcap_set_immediate_mode",
     set_buffer_size: SetIntFn = "pcap_set_buffer_size",
     activate: ActivateFn = "pcap_activate",
-    open_live: OpenLiveFn = "pcap_open_live",
     next_ex: NextExFn = "pcap_next_ex",
     sendpacket: SendPacketFn = "pcap_sendpacket",
     datalink: DatalinkFn = "pcap_datalink",
@@ -230,4 +271,7 @@ pcap_api! {
     getnonblock: GetNonblockFn = "pcap_getnonblock",
     stats: StatsFn = "pcap_stats",
     close: CloseFn = "pcap_close",
+    compile: CompileFn = "pcap_compile",
+    setfilter: SetFilterFn = "pcap_setfilter",
+    freecode: FreeCodeFn = "pcap_freecode",
 }

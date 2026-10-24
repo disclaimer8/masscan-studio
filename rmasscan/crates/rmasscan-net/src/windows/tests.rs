@@ -1,225 +1,23 @@
 //! Подставной загрузчик и таблица функций: Npcap не нужен, порядок
-//! create/close/unload фиксируется в журнале потока.
+//! create/close/unload фиксируется в журнале сценария (см. `fake`).
 
-use std::cell::RefCell;
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::mem::{align_of, offset_of, size_of};
 use std::sync::Arc;
+
+mod adapter_tests;
+mod fake;
 
 use super::ffi::*;
 use super::handle::*;
 use super::loader::*;
 use crate::NetError;
-
-const GOOD_PATH: &str = "C:\\Windows\\System32\\Npcap\\wpcap.dll";
-const DEV1: &str = "\\Device\\NPF_{11111111-2222-3333-4444-555555555555}";
-const DEV2: &str = "\\Device\\NPF_{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}";
-const LOOP: &str = "\\Device\\NPF_Loopback";
-
-// ---------- журнал и сценарий (на поток теста) ----------
-
-#[derive(Default)]
-struct Scenario {
-    log: Vec<String>,
-    version_null: bool,
-    activate_rc: c_int,
-    dlt: c_int,
-    devices: Vec<(String, Option<String>, u32)>,
-    findalldevs_rc: c_int,
-    create_null: bool,
-    /// Узлы списка устройств, выданные findalldevs (освобождает freealldevs).
-    #[allow(clippy::vec_box)] // узлы обязаны иметь стабильные адреса
-    lists: Vec<Vec<Box<PcapIf>>>,
-}
-
-thread_local! {
-    static S: RefCell<Scenario> = RefCell::new(Scenario::default());
-}
-
-fn log(s: &str) {
-    S.with(|x| x.borrow_mut().log.push(s.to_string()));
-}
-fn events() -> Vec<String> {
-    S.with(|x| x.borrow().log.clone())
-}
-fn reset(f: impl FnOnce(&mut Scenario)) {
-    S.with(|x| {
-        let mut s = x.borrow_mut();
-        *s = Scenario {
-            dlt: DLT_EN10MB,
-            devices: vec![
-                (DEV1.into(), Some("Intel(R) Ethernet".into()), 0),
-                (DEV2.into(), None, 0),
-                (
-                    LOOP.into(),
-                    Some("Adapter for loopback".into()),
-                    PCAP_IF_LOOPBACK,
-                ),
-            ],
-            ..Scenario::default()
-        };
-        f(&mut s);
-    });
-}
-fn pos(ev: &[String], what: &str) -> usize {
-    ev.iter()
-        .position(|e| e == what)
-        .unwrap_or_else(|| panic!("{what} missing in {ev:?}"))
-}
-
-// ---------- подставные функции wpcap ----------
-
-static VERSION: &[u8] = b"Npcap version 1.90, based on libpcap 1.10.7\0";
-const FAKE_T: usize = 0x1000;
-
-unsafe extern "C" fn f_lib_version() -> *const c_char {
-    log("lib_version");
-    if S.with(|x| x.borrow().version_null) {
-        std::ptr::null()
-    } else {
-        VERSION.as_ptr().cast()
-    }
-}
-unsafe extern "C" fn f_findalldevs(out: *mut *mut PcapIf, err: *mut c_char) -> c_int {
-    log("findalldevs");
-    S.with(|x| {
-        let mut s = x.borrow_mut();
-        if s.findalldevs_rc != 0 {
-            let msg = b"enum failed\0";
-            // SAFETY: тестовый буфер имеет PCAP_ERRBUF_SIZE байт.
-            unsafe { std::ptr::copy_nonoverlapping(msg.as_ptr().cast(), err, msg.len()) };
-            return s.findalldevs_rc;
-        }
-        let mut nodes: Vec<Box<PcapIf>> = Vec::new();
-        for (name, desc, flags) in s.devices.clone() {
-            nodes.push(Box::new(PcapIf {
-                next: std::ptr::null_mut(),
-                name: CString::new(name).unwrap().into_raw(),
-                description: desc
-                    .map(|d| CString::new(d).unwrap().into_raw())
-                    .unwrap_or(std::ptr::null_mut()),
-                addresses: std::ptr::null_mut(),
-                flags,
-            }));
-        }
-        for i in (0..nodes.len().saturating_sub(1)).rev() {
-            let next: *mut PcapIf = &mut *nodes[i + 1];
-            nodes[i].next = next;
-        }
-        let head: *mut PcapIf = nodes
-            .first_mut()
-            .map(|b| &mut **b as *mut PcapIf)
-            .unwrap_or(std::ptr::null_mut());
-        s.lists.push(nodes);
-        // SAFETY: out валидный выходной указатель вызывающего.
-        unsafe { *out = head };
-        0
-    })
-}
-unsafe extern "C" fn f_freealldevs(_head: *mut PcapIf) {
-    log("freealldevs");
-}
-unsafe extern "C" fn f_create(_d: *const c_char, err: *mut c_char) -> *mut PcapT {
-    log("create");
-    if S.with(|x| x.borrow().create_null) {
-        let msg = b"no such device\0";
-        // SAFETY: тестовый буфер имеет PCAP_ERRBUF_SIZE байт.
-        unsafe { std::ptr::copy_nonoverlapping(msg.as_ptr().cast(), err, msg.len()) };
-        return std::ptr::null_mut();
-    }
-    FAKE_T as *mut PcapT
-}
-unsafe extern "C" fn f_set_snaplen(_p: *mut PcapT, _v: c_int) -> c_int {
-    log("set_snaplen");
-    0
-}
-unsafe extern "C" fn f_set_promisc(_p: *mut PcapT, _v: c_int) -> c_int {
-    log("set_promisc");
-    0
-}
-unsafe extern "C" fn f_set_timeout(_p: *mut PcapT, _v: c_int) -> c_int {
-    log("set_timeout");
-    0
-}
-unsafe extern "C" fn f_set_immediate(_p: *mut PcapT, _v: c_int) -> c_int {
-    log("set_immediate_mode");
-    0
-}
-unsafe extern "C" fn f_set_buffer(_p: *mut PcapT, _v: c_int) -> c_int {
-    log("set_buffer_size");
-    0
-}
-unsafe extern "C" fn f_activate(_p: *mut PcapT) -> c_int {
-    log("activate");
-    S.with(|x| x.borrow().activate_rc)
-}
-unsafe extern "C" fn f_open_live(
-    _d: *const c_char,
-    _s: c_int,
-    _p: c_int,
-    _t: c_int,
-    _e: *mut c_char,
-) -> *mut PcapT {
-    log("open_live");
-    FAKE_T as *mut PcapT
-}
-unsafe extern "C" fn f_next_ex(
-    _p: *mut PcapT,
-    _h: *mut *mut PcapPkthdr,
-    _d: *mut *const u8,
-) -> c_int {
-    0
-}
-unsafe extern "C" fn f_sendpacket(_p: *mut PcapT, _b: *const u8, _n: c_int) -> c_int {
-    0
-}
-unsafe extern "C" fn f_datalink(_p: *mut PcapT) -> c_int {
-    S.with(|x| x.borrow().dlt)
-}
-unsafe extern "C" fn f_geterr(_p: *mut PcapT) -> *mut c_char {
-    c"fake driver says no".as_ptr() as *mut c_char
-}
-unsafe extern "C" fn f_setnonblock(_p: *mut PcapT, _n: c_int, _e: *mut c_char) -> c_int {
-    0
-}
-unsafe extern "C" fn f_getnonblock(_p: *mut PcapT, _e: *mut c_char) -> c_int {
-    0
-}
-unsafe extern "C" fn f_stats(_p: *mut PcapT, _s: *mut PcapStat) -> c_int {
-    0
-}
-unsafe extern "C" fn f_close(_p: *mut PcapT) {
-    log("close");
-}
-
-fn symbol_addr(name: &str) -> Option<*const c_void> {
-    Some(match name {
-        "pcap_lib_version" => f_lib_version as *const c_void,
-        "pcap_findalldevs" => f_findalldevs as *const c_void,
-        "pcap_freealldevs" => f_freealldevs as *const c_void,
-        "pcap_create" => f_create as *const c_void,
-        "pcap_set_snaplen" => f_set_snaplen as *const c_void,
-        "pcap_set_promisc" => f_set_promisc as *const c_void,
-        "pcap_set_timeout" => f_set_timeout as *const c_void,
-        "pcap_set_immediate_mode" => f_set_immediate as *const c_void,
-        "pcap_set_buffer_size" => f_set_buffer as *const c_void,
-        "pcap_activate" => f_activate as *const c_void,
-        "pcap_open_live" => f_open_live as *const c_void,
-        "pcap_next_ex" => f_next_ex as *const c_void,
-        "pcap_sendpacket" => f_sendpacket as *const c_void,
-        "pcap_datalink" => f_datalink as *const c_void,
-        "pcap_geterr" => f_geterr as *const c_void,
-        "pcap_setnonblock" => f_setnonblock as *const c_void,
-        "pcap_getnonblock" => f_getnonblock as *const c_void,
-        "pcap_stats" => f_stats as *const c_void,
-        "pcap_close" => f_close as *const c_void,
-        _ => return None,
-    })
-}
+use fake::*;
 
 // ---------- подставные Module/Loader ----------
 
 struct FakeModule {
+    no_init: bool,
     missing: Vec<&'static str>,
     null_syms: Vec<&'static str>,
     diag: Vec<DllInfo>,
@@ -241,6 +39,9 @@ fn good_diag() -> Vec<DllInfo> {
 unsafe impl Module for FakeModule {
     fn symbol(&self, name: &CStr) -> Option<*const c_void> {
         let n = name.to_str().ok()?;
+        if n == "pcap_init" && self.no_init {
+            return None;
+        }
         if self.missing.contains(&n) {
             return None;
         }
@@ -260,6 +61,7 @@ impl Drop for FakeModule {
 }
 
 struct FakeLoader {
+    no_init: bool,
     result: Result<Vec<&'static str>, LoadFailure>,
     null_syms: Vec<&'static str>,
     diag: Option<Vec<DllInfo>>,
@@ -267,6 +69,7 @@ struct FakeLoader {
 impl FakeLoader {
     fn ok() -> Self {
         FakeLoader {
+            no_init: false,
             result: Ok(vec![]),
             null_syms: vec![],
             diag: None,
@@ -278,6 +81,7 @@ impl Loader for FakeLoader {
         log(&format!("load {full_path}"));
         match &self.result {
             Ok(missing) => Ok(Box::new(FakeModule {
+                no_init: self.no_init,
                 missing: missing.clone(),
                 null_syms: self.null_syms.clone(),
                 diag: self.diag.clone().unwrap_or_else(good_diag),
@@ -552,6 +356,15 @@ fn findalldevs_failure_is_reported() {
 }
 
 #[test]
+fn resolve_refuses_the_loopback_adapter_before_any_open() {
+    reset(|_| {});
+    let api = good_api();
+    let e = resolve_device(&api, LOOP).unwrap_err();
+    assert!(matches!(e, NetError::UnsupportedLink(_)), "{e:?}");
+    assert_eq!(count("create"), 0);
+}
+
+#[test]
 fn resolve_accepts_backslash_name_any_case_and_returns_canonical() {
     reset(|_| {});
     let api = good_api();
@@ -654,6 +467,11 @@ fn required_symbols_are_unique_and_prefixed() {
     for s in REQUIRED_SYMBOLS {
         assert!(symbol_addr(s).is_some(), "fake lacks {s}");
     }
+    assert!(
+        !REQUIRED_SYMBOLS.contains(&SYM_PCAP_INIT),
+        "pcap_init is optional"
+    );
+    assert!(symbol_addr(SYM_PCAP_INIT).is_some());
 }
 
 // ---------- инварианты символов и модуля ----------

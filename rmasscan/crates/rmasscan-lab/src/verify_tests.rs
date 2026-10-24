@@ -871,6 +871,8 @@ fn linkloss_harness_events_must_prove_down_then_restore_around_the_failure() {
         ("/first_syn_seen", json!(false)),
         ("/events/1/reply", json!({"error":"x"})),
         ("/events/1/t", json!(1_800_000_001.0)),
+        // Restored after the down event but before the scanner outcome: only the ordering rule objects.
+        ("/events/1/t", json!(1_800_000_000.0 + 3.0 + 1.8 - 0.2)),
         ("/events/0/t", json!(1_800_000_000.0 + 3.0 + 1.8 - 3.5)),
         ("/events/0/t", json!(1_800_000_000.0 + 3.0 + 1.8 + 0.5)),
     ] {
@@ -1252,4 +1254,18 @@ fn schema_1_and_2_directories_keep_their_exemption_and_say_so() {
             "exemption must be stated in the verdict: {run}"
         );
     }
+}
+#[test]
+fn guest_verify_nonce_is_checked_even_when_the_hash_proof_is_consistent() {
+    // Only the nonce binding can object: the proof is re-sealed over the altered report.
+    let d = Scratch::new("failure", Some(SCHEMA3_TAG));
+    d.edit_sealed("runs/stop_silent/guest-verify.json", |v| {
+        v["verification_nonce"] = json!("another-invocation")
+    });
+    assert_eq!(d.status(SCHEMA3_TAG), (INVALID.into(), false));
+    let d = Scratch::new("failure", Some(SCHEMA3_TAG));
+    d.edit_sealed("runs/stop_silent/guest-verify.json", |v| {
+        v.as_object_mut().unwrap().remove("verification_nonce");
+    });
+    assert_eq!(d.status(SCHEMA3_TAG), (INVALID.into(), false));
 }

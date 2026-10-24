@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Repo-wide language guard: the tracked tree must contain no interpreted-language
-# programs of the banned kind. Runs on any git work tree (default: the one containing
-# this script), in plain shell so it needs no toolchain.
+# Repo-wide language guard: the repository is Rust-only. The tracked tree must contain no
+# Swift, C, C++ or Objective-C, or interpreter-script sources, and no use of the banned interpreter.
+# Runs on any git work tree (default: the one containing this script), in plain shell so it needs no toolchain.
 #
 # Fails when
-#   1. a tracked file has a banned source extension (*.py, *.pyw, *.pyc, *.pyz; any letter case),
+#   1. a tracked file has a banned source extension (any letter case): Swift (.swift),
+#      the banned interpreter scripts (.py .pyw .pyc .pyz), C, C++ and Objective-C (.c .h .cc .cpp .cxx .hpp .hh .m .mm),
 #   2. a tracked file starts with a shebang that names the banned interpreter,
-#   3. a tracked script or source file (.sh .bash .ps1 .cmd .bat .swift .rs .yml
+#   3. a tracked script or source file (.sh .bash .ps1 .cmd .bat .rs .yml
 #      .yaml, Makefile*, GNUmakefile*, *.mk, or any other file that starts with a shebang)
 #      mentions the interpreter as a word at all (comments included), or calls the Windows
 #      launcher (two letters, then a dash and a version digit; assembled below).
@@ -43,7 +44,8 @@ tracked=$(git ls-files -z | tr '\0' '\n')
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in
-    *.py | *.pyw | *.pyc | *.pyz) report "$f: banned source file" ;;
+    *.swift | *.py | *.pyw | *.pyc | *.pyz | *.c | *.h | *.cc | *.cpp | *.cxx | *.hpp | *.hh | *.m | *.mm)
+      report "$f: banned source file" ;;
   esac
 done <<<"$tracked"
 
@@ -61,7 +63,7 @@ while IFS= read -r f; do
   fi
   scan=$has_shebang
   case "$f" in
-    *.sh | *.bash | *.ps1 | *.cmd | *.bat | *.swift | *.rs | *.yml | *.yaml | *.mk) scan=1 ;;
+    *.sh | *.bash | *.ps1 | *.cmd | *.bat | *.rs | *.yml | *.yaml | *.mk) scan=1 ;;
   esac
   base=${f##*/}
   case "$base" in

@@ -6,10 +6,11 @@
 
 Документы:
 
-- спека: `docs/superpowers/specs/2026-10-23-masscan-rust-port-design.md`
-- планы этапов 0–2A: `docs/superpowers/plans/`
-- статус этапа 2A: `docs/experiments/2026-10-23-rmasscan-stage2a.md`
-- приёмка Linux 2B (wire parity, pause/resume, Stop, скорость): `docs/experiments/2026-10-23-rmasscan-stage2b-linux.md`
+- спека порта (исторический проект): `../docs/superpowers/specs/2026-10-23-masscan-rust-port-design.md`
+- спека Studio, **§0 это текущий перечень возможностей и контракты engine** (привязан к commit): `../docs/superpowers/specs/2026-10-23-cross-platform-qt-rust-design.md`
+- планы этапов 0–2A: `../docs/superpowers/plans/`
+- статус этапа 2A: `../docs/experiments/2026-10-23-rmasscan-stage2a.md` (исторический)
+- приёмка Linux 2B (wire parity, pause/resume, Stop, скорость): `../docs/experiments/2026-10-23-rmasscan-stage2b-linux.md` (исторический)
 - замеры скорости: [BENCHMARKS.md](BENCHMARKS.md)
 - golden-фикстуры оракула: [tests/golden/README.md](tests/golden/README.md)
 
@@ -93,13 +94,25 @@ CAP_NET_RAW и замкнутый стенд); обычные `cargo test` и CI
 
 ## Статус
 
+Состояние на commit `c31ae16` (2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
+полная таблица (capability / слой / реализовано / проверка / ограничение / следующий этап)
+находится в §0.2 спеки Studio. Кратко: raw I/O есть только для Linux AF_PACKET
+(замкнутый стенд); Windows и macOS не реализованы. Дедупликация живёт в engine
+(ограниченный FIFO), не в core. VLAN не поддержан (`Unsupported`). ARP: только кодек,
+resolver нет. Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
+контроль достоверности приёма (`Rx::health`, `RxLoss`/`RxStatsUnavailable`/`RxError`,
+`Outcome.rx_health`) и watchdog TX (`EngineOptions::tx_stall_timeout`, 10 с,
+`TxStalled`); `Completed` означает завершение с доступной статистикой без kernel drops,
+а не обнаружение всех открытых портов. Дальнейшие абзацы этого раздела описывают
+моменты 2A и этапа 1 (исторически).
+
 Этап 2A (офлайн, без сети): crate `crates/rmasscan-engine` с отменяемым runtime
 (один TX и один RX поток, Pause/Stop, ограниченные очереди), разбором недоверенных
 RX-кадров, checkpoint/resume и fake-адаптером в памяти. Тесты проверяют побайтный
 resume, остановку в пределах 1 с и ограниченную память на пространстве /0 (см.
-`docs/experiments/2026-10-23-rmasscan-stage2a.md`). Настоящий сетевой I/O
+`../docs/experiments/2026-10-23-rmasscan-stage2a.md`). Настоящий сетевой I/O
 (AF_PACKET, BPF, Npcap), golden pcap и привилегированный runner это этап 2B и
-позже; зелёный CI на трёх ОС для 2A ждёт push. BENCHMARKS.md по-прежнему
+позже; статус CI смотреть для конкретного HEAD. BENCHMARKS.md по-прежнему
 описывает только офлайн-генерацию, не скорость передачи.
 
 Этап 1 закрыт. Критерии выхода выполнены: `-sL` и `--echo` побайтно совпадают с C,
@@ -107,7 +120,7 @@ self-тесты C отображены на Rust (`tests/selftest_parity.rs`), �
 тестами и дифференциалами с C, генерация offline около 0.96–0.99 от C на minipc
 (см. BENCHMARKS.md), C в графе сборки нет.
 
-CI зелёный на трёх ОС.
+Статус CI относится к конкретному commit и в этом файле не фиксируется; CI собирает и гоняет offline-тесты, но не Windows/macOS raw I/O.
 
 Первые задачи этапа 2:
 

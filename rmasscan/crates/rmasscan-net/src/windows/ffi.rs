@@ -93,6 +93,8 @@ pub(crate) const DLT_IEEE802_11_RADIO: c_int = 127;
 /// Возврат `pcap_next_ex`: кадр прочитан / таймаут / ошибка / EOF.
 pub(crate) const NEXT_EX_OK: c_int = 1;
 pub(crate) const NEXT_EX_TIMEOUT: c_int = 0;
+pub(crate) const NEXT_EX_ERROR: c_int = -1;
+pub(crate) const NEXT_EX_EOF: c_int = -2;
 
 // Раскладка. Эти утверждения верны для любого 64-битного хоста с 4-байтным
 // `u_int` (указатели 8 байт, как на Windows x64).
@@ -151,6 +153,10 @@ pub(crate) type NextExFn =
 pub(crate) type SendPacketFn = unsafe extern "C" fn(*mut PcapT, *const u8, c_int) -> c_int;
 pub(crate) type DatalinkFn = unsafe extern "C" fn(*mut PcapT) -> c_int;
 pub(crate) type GetErrFn = unsafe extern "C" fn(*mut PcapT) -> *mut c_char;
+/// `pcap_setnonblock(p, nonblock, errbuf)`: 0 при успехе, -1 при ошибке.
+pub(crate) type SetNonblockFn = unsafe extern "C" fn(*mut PcapT, c_int, *mut c_char) -> c_int;
+/// `pcap_getnonblock(p, errbuf)`: 0/1, -1 при ошибке.
+pub(crate) type GetNonblockFn = unsafe extern "C" fn(*mut PcapT, *mut c_char) -> c_int;
 pub(crate) type StatsFn = unsafe extern "C" fn(*mut PcapT, *mut PcapStat) -> c_int;
 pub(crate) type CloseFn = unsafe extern "C" fn(*mut PcapT);
 
@@ -220,6 +226,8 @@ pcap_api! {
     sendpacket: SendPacketFn = "pcap_sendpacket",
     datalink: DatalinkFn = "pcap_datalink",
     geterr: GetErrFn = "pcap_geterr",
+    setnonblock: SetNonblockFn = "pcap_setnonblock",
+    getnonblock: GetNonblockFn = "pcap_getnonblock",
     stats: StatsFn = "pcap_stats",
     close: CloseFn = "pcap_close",
 }

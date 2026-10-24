@@ -12,7 +12,10 @@ use std::ffi::{CStr, CString, c_char, c_int};
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
-use super::ffi::{DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, PCAP_ERRBUF_SIZE, PcapIf, PcapT};
+use super::ffi::{
+    DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, NEXT_EX_EOF, NEXT_EX_ERROR, NEXT_EX_OK,
+    NEXT_EX_TIMEOUT, PCAP_ERRBUF_SIZE, PcapIf, PcapPkthdr, PcapStat, PcapT,
+};
 use super::loader::NpcapApi;
 use crate::NetError;
 
@@ -142,6 +145,120 @@ impl PcapHandle {
         let h = PcapHandle::open(api, device, p)?;
         check_link(h.datalink())?;
         Ok(h)
+    }
+}
+
+/// Результат одного `pcap_next_ex`. Данные кадра живут до следующего вызова
+/// на этом же handle (заимствование это обеспечивает).
+#[derive(Debug)]
+pub(crate) enum NextEx<'a> {
+    Frame {
+        hdr: PcapPkthdr,
+        data: &'a [u8],
+    },
+    /// rc 0: нет кадра (в nonblocking режиме это «пусто»).
+    Timeout,
+    /// rc -1 или неизвестный код: текст через `last_error`.
+    Error(c_int),
+    /// rc -2.
+    Eof,
+}
+
+impl PcapHandle {
+    /// `pcap_setnonblock`; при ошибке возвращает текст errbuf.
+    pub(crate) fn set_nonblock(&mut self, on: bool) -> Result<(), NetError> {
+        let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+        // SAFETY: raw валиден и активирован; err имеет PCAP_ERRBUF_SIZE байт.
+        let rc =
+            unsafe { (self.api.fns.setnonblock)(self.raw.as_ptr(), on as c_int, err.as_mut_ptr()) };
+        if rc != 0 {
+            return Err(NetError::System(format!(
+                "pcap_setnonblock failed (code {rc}): {}",
+                errbuf_text(&err)
+            )));
+        }
+        Ok(())
+    }
+
+    /// `pcap_getnonblock`: 0/1, либо отрицательный код ошибки.
+    pub(crate) fn get_nonblock(&mut self) -> c_int {
+        let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+        // SAFETY: raw валиден и активирован; err имеет PCAP_ERRBUF_SIZE байт.
+        unsafe { (self.api.fns.getnonblock)(self.raw.as_ptr(), err.as_mut_ptr()) }
+    }
+
+    /// Один `pcap_next_ex`. Заголовок копируется, данные заимствуются.
+    pub(crate) fn next_ex(&mut self) -> NextEx<'_> {
+        let mut hdr: *mut PcapPkthdr = ptr::null_mut();
+        let mut data: *const u8 = ptr::null();
+        // SAFETY: raw валиден; hdr/data выходные указатели.
+        let rc = unsafe { (self.api.fns.next_ex)(self.raw.as_ptr(), &mut hdr, &mut data) };
+        match rc {
+            NEXT_EX_OK => {
+                if hdr.is_null() || data.is_null() {
+                    return NextEx::Error(NEXT_EX_ERROR);
+                }
+                // SAFETY: при rc == 1 hdr и data указывают на буфер pcap_t,
+                // действительный до следующего вызова на этом handle; &mut
+                // self запрещает такой вызов, пока жив результат.
+                let (h, d) = unsafe {
+                    let h = *hdr;
+                    (h, std::slice::from_raw_parts(data, h.caplen as usize))
+                };
+                NextEx::Frame { hdr: h, data: d }
+            }
+            NEXT_EX_TIMEOUT => NextEx::Timeout,
+            NEXT_EX_EOF => NextEx::Eof,
+            other => NextEx::Error(other),
+        }
+    }
+
+    /// Синхронный `pcap_sendpacket`: сырой код (0 успех, иначе ошибка). Кадр
+    /// длиннее `i32::MAX` отвергается без вызова (-1).
+    pub(crate) fn send_raw(&mut self, frame: &[u8]) -> c_int {
+        let Ok(n) = c_int::try_from(frame.len()) else {
+            return -1;
+        };
+        // SAFETY: raw валиден; frame валиден на n байт на время вызова.
+        unsafe { (self.api.fns.sendpacket)(self.raw.as_ptr(), frame.as_ptr(), n) }
+    }
+
+    /// `pcap_stats`: структура при rc 0, иначе сырой код ошибки.
+    pub(crate) fn stats_raw(&mut self) -> Result<PcapStat, c_int> {
+        let mut st = PcapStat::default();
+        // SAFETY: raw валиден и активирован; st это структура полного
+        // размера libpcap для Windows (ABI проверен в ffi).
+        let rc = unsafe { (self.api.fns.stats)(self.raw.as_ptr(), &mut st) };
+        if rc == 0 { Ok(st) } else { Err(rc) }
+    }
+}
+
+/// Кумулятивный счётчик потерь из 32-битного `ps_drop` (`u_int`). Npcap не
+/// сбрасывает счётчик при чтении, но он оборачивается через 2^32; сумма
+/// дельт по `wrapping_sub` честна, пока между двумя чтениями происходит
+/// меньше 2^32 потерь. Сброс счётчика назад неотличим от оборота и даёт
+/// огромную дельту (отказ безопасен: RxLoss), а не молчаливый ноль.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DropCounter {
+    last: u32,
+    total: u64,
+}
+
+impl DropCounter {
+    /// `baseline` это значение `ps_drop`, прочитанное в начале попытки.
+    pub(crate) fn new(baseline: u32) -> Self {
+        Self {
+            last: baseline,
+            total: 0,
+        }
+    }
+
+    /// Учитывает новое сырое значение и возвращает кумулятивные потери с
+    /// начала попытки.
+    pub(crate) fn update(&mut self, raw: u32) -> u64 {
+        self.total += u64::from(raw.wrapping_sub(self.last));
+        self.last = raw;
+        self.total
     }
 }
 

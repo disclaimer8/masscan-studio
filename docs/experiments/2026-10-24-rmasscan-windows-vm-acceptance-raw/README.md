@@ -30,3 +30,7 @@
 ## Что было INVALID
 `runs_discarded/x01_foreign_replies.run1.*`: tcpdump получил 96 кадров, записал 94 (счётчики lab0: 96). Неполный захват -> INVALID, прогон повторён без правок кода (PASS).
 Причина: хвостовые кадры, не выданные из кольца TPACKET_V3 к моменту SIGINT. Оркестратор не ждёт после «тишины» таймаута блока libpcap; запись в замечаниях отчёта.
+
+## Fix round 1
+* `functional/verdict.json` is regenerated with the fixed verifier (commit `3126206`): it now also verifies `runs_discarded/` (listed under `discarded`, the INVALID x01 run) and asserts discarded == injected for the foreign runs (80 == 80, duplicates are genuine retransmits). Result unchanged: 29 PASS, overall PASS. The part A captures predate the end marker, so the verifier treats them as `capture_schema` 1 (no end-marker check; completeness still rests on stats, counter window and hash).
+* `functional-r1-smoke/`: ONE live smoke run (`c02_one_addr_port_rst.run1`) of the new orchestrator under the full raw-run rules, exe built from `3126206` (capture_schema 2: `--immediate-mode`, end marker before SIGINT). Its run verdict is PASS; the other planned runs are NOT RUN by design, so its overall verdict is not PASS.

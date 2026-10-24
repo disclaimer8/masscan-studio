@@ -1,0 +1,14 @@
+{
+  "drops": 0,
+  "frames_in": 11,
+  "frames_out": 4,
+  "iface": "veth-b",
+  "iface_rx_delta": 11,
+  "kernel_tp_packets": 15,
+  "marker_acked": true,
+  "pcap": "c06_srcport_range.run2.pcap",
+  "rx_counter_mismatch": false,
+  "snaplen": 65535,
+  "truncated_frames": 0,
+  "valid": true
+}

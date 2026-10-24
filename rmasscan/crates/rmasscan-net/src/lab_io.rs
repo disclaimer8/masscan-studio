@@ -1,347 +1,196 @@
-//! Safe, laboratory-only socket primitives. All OS operations stay in this crate.
+//! Laboratory-only process primitives, behind the non-default `lab` feature that only
+//! `rmasscan-lab` enables. Everything the lab harness can do with the standard library lives
+//! in `rmasscan-lab` (which forbids `unsafe`); what remains here needs a libc call:
+//!
+//! * a flag-only SIGINT/SIGTERM handler installed with `sigaction` (graceful Ctrl-C for the
+//!   orchestrator and cooperative stop for the peer helpers);
+//! * the backlog-0 "silent" listener the VM lab uses to prove a port that accepts one
+//!   connection and then lets further SYNs go unanswered.
+//!
+//! Raw frames are NOT sent or received here: the lab uses `open_explicit` like the product, and
+//! captures with the independent `tcpdump`.
 use std::{
     io,
     net::{Ipv4Addr, TcpListener},
-    time::Duration,
 };
-#[derive(Debug, Clone, Copy)]
-pub struct Received {
-    pub len: usize,
-    pub original_len: usize,
-    pub truncated: bool,
-    pub outgoing: bool,
-}
-#[derive(Debug, Clone, Copy)]
-pub struct PacketStats {
-    pub packets: u32,
-    pub drops: u32,
+
+/// Install a flag-only handler for SIGINT and SIGTERM (unix) and clear the flag. Off unix there
+/// is nothing to install and [`stop_requested`] stays false.
+pub fn install_signal_handlers() -> io::Result<()> {
+    imp::install()
 }
 
-/// Cryptographically random ownership nonce, from the operating system RNG.
+/// Whether a handled signal arrived since [`install_signal_handlers`].
+pub fn stop_requested() -> bool {
+    imp::stop_requested()
+}
+
+/// A TCP listener on `ip:port` whose accept queue holds at most one completed connection
+/// (listen backlog 0). The first connection is accepted by the kernel and kept; later SYNs are
+/// dropped silently, so a second connect times out instead of being refused.
+pub fn silent_listener(ip: Ipv4Addr, port: u16) -> io::Result<TcpListener> {
+    let listener = TcpListener::bind((ip, port))?;
+    imp::set_backlog(&listener, 0)?;
+    Ok(listener)
+}
+
 #[cfg(unix)]
-pub fn random_bytes_16() -> io::Result<[u8; 16]> {
-    use std::io::Read;
-    let mut bytes = [0; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(bytes)
-}
-#[cfg(windows)]
 #[allow(unsafe_code)]
-mod windows_rng {
-    use super::*;
-    #[link(name = "bcrypt", kind = "raw-dylib")]
-    unsafe extern "system" {
-        fn BCryptGenRandom(
-            algorithm: *mut core::ffi::c_void,
-            output: *mut u8,
-            length: u32,
-            flags: u32,
-        ) -> i32;
-    }
-    pub fn random_bytes_16() -> io::Result<[u8; 16]> {
-        let mut bytes = [0; 16];
-        // SAFETY: the system-preferred RNG accepts a null algorithm handle with
-        // flag 2; output points to a live, writable 16-byte array for this call.
-        let status = unsafe { BCryptGenRandom(core::ptr::null_mut(), bytes.as_mut_ptr(), 16, 2) };
-        if status < 0 {
-            return Err(io::Error::other(format!(
-                "BCryptGenRandom failed: {status:#x}"
-            )));
-        }
-        Ok(bytes)
-    }
-}
-#[cfg(windows)]
-pub use windows_rng::random_bytes_16;
-#[cfg(not(any(unix, windows)))]
-pub fn random_bytes_16() -> io::Result<[u8; 16]> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "OS random source unavailable",
-    ))
-}
-
-/// Preserve ownership when sudo atomically replaces an unprivileged user's report.
-/// Uses the already-open descriptor, so a pathname race cannot redirect chown.
-#[cfg(target_os = "linux")]
-#[allow(unsafe_code)]
-pub fn restore_sudo_owner(file: &std::fs::File) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    // SAFETY: geteuid has no arguments or memory preconditions.
-    if unsafe { libc::geteuid() } != 0 {
-        return Ok(());
-    }
-    let Some(uid) = std::env::var_os("SUDO_UID") else {
-        return Ok(());
-    };
-    let gid = std::env::var_os("SUDO_GID").unwrap_or_else(|| uid.clone());
-    let parse = |s: &std::ffi::OsStr| -> io::Result<u32> {
-        s.to_str()
-            .and_then(|s| s.parse::<u32>().ok())
-            .filter(|id| *id != u32::MAX)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid SUDO_UID/SUDO_GID"))
-    };
-    let uid = parse(&uid)?;
-    let gid = parse(&gid)?;
-    // SAFETY: the borrowed File owns a live descriptor; numeric IDs were validated.
-    if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-#[cfg(not(target_os = "linux"))]
-pub fn restore_sudo_owner(_file: &std::fs::File) -> io::Result<()> {
-    Ok(())
-}
-#[cfg(target_os = "linux")]
-#[allow(unsafe_code)]
-mod platform {
-    use super::*;
+mod imp {
     use std::{
-        ffi::CString,
-        mem,
-        os::fd::{AsRawFd, FromRawFd, OwnedFd},
+        io, mem,
+        net::TcpListener,
+        os::fd::AsRawFd,
         sync::atomic::{AtomicBool, Ordering},
     };
+
     static STOP: AtomicBool = AtomicBool::new(false);
-    extern "C" fn signal_handler(_: libc::c_int) {
+
+    /// Async-signal-safe: a single store to a lock-free atomic.
+    extern "C" fn on_signal(_: libc::c_int) {
         STOP.store(true, Ordering::Relaxed);
     }
-    pub fn install_signal_handlers() -> io::Result<()> {
+
+    pub fn install() -> io::Result<()> {
         STOP.store(false, Ordering::Relaxed);
-        // SAFETY: handler is an extern C function performing only an atomic store.
-        unsafe {
-            if libc::signal(
-                libc::SIGINT,
-                signal_handler as *const () as libc::sighandler_t,
-            ) == libc::SIG_ERR
-                || libc::signal(
-                    libc::SIGTERM,
-                    signal_handler as *const () as libc::sighandler_t,
-                ) == libc::SIG_ERR
-            {
+        for signal in [libc::SIGINT, libc::SIGTERM] {
+            // SAFETY: an all-zero `sigaction` is a valid starting value; `sa_mask` is then
+            // initialised by `sigemptyset` on that same live local, `on_signal` is an
+            // `extern "C"` function that only stores to a static atomic, and the pointer
+            // passed to `sigaction` refers to the live, fully initialised local. The old
+            // action pointer is null, which `sigaction` permits.
+            let rc = unsafe {
+                let mut action: libc::sigaction = mem::zeroed();
+                action.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+                action.sa_flags = libc::SA_RESTART;
+                libc::sigemptyset(&mut action.sa_mask);
+                libc::sigaction(signal, &action, std::ptr::null_mut())
+            };
+            if rc != 0 {
                 return Err(io::Error::last_os_error());
             }
         }
         Ok(())
     }
+
     pub fn stop_requested() -> bool {
         STOP.load(Ordering::Relaxed)
     }
-    pub struct RawSocket(OwnedFd);
-    impl RawSocket {
-        pub fn open(iface: &str) -> io::Result<Self> {
-            let name = CString::new(iface).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "interface contains NUL")
-            })?;
-            // SAFETY: name is a terminated CString.
-            let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
-            if index == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: socket has no pointer arguments and creates a fresh descriptor.
-            let raw = unsafe {
-                libc::socket(
-                    libc::AF_PACKET,
-                    libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-                    i32::from(3_u16.to_be()),
-                )
-            };
-            if raw < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: successful socket returned a unique owned descriptor.
-            let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-            // SAFETY: zero is valid for sockaddr_ll fields before assigning family/index/protocol.
-            let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
-            addr.sll_family = libc::AF_PACKET as u16;
-            addr.sll_protocol = 3_u16.to_be();
-            addr.sll_ifindex = index as i32;
-            // SAFETY: pointer refers to a fully initialized sockaddr_ll with its exact size.
-            if unsafe {
-                libc::bind(
-                    fd.as_raw_fd(),
-                    (&addr as *const libc::sockaddr_ll).cast(),
-                    mem::size_of_val(&addr) as _,
-                )
-            } < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            let size: libc::c_int = 64 * 1024 * 1024;
-            // SAFETY: option pointer/length reference a live integer; failure is reported.
-            if unsafe {
-                libc::setsockopt(
-                    fd.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_RCVBUF,
-                    (&size as *const libc::c_int).cast(),
-                    mem::size_of_val(&size) as _,
-                )
-            } < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(Self(fd))
-        }
-        pub fn send(&self, data: &[u8]) -> io::Result<usize> {
-            // SAFETY: data pointer remains valid for data.len bytes during send.
-            let n = unsafe { libc::send(self.0.as_raw_fd(), data.as_ptr().cast(), data.len(), 0) };
-            if n < 0 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(n as usize)
-            }
-        }
-        pub fn recv(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<Received>> {
-            let mut p = libc::pollfd {
-                fd: self.0.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: poll gets a valid single pollfd and a bounded millisecond timeout.
-            let ready =
-                unsafe { libc::poll(&mut p, 1, timeout.as_millis().min(i32::MAX as u128) as i32) };
-            if ready < 0 {
-                let e = io::Error::last_os_error();
-                return if e.kind() == io::ErrorKind::Interrupted {
-                    Ok(None)
-                } else {
-                    Err(e)
-                };
-            }
-            if ready == 0 {
-                return Ok(None);
-            }
-            // SAFETY: zero is valid initialization for the output sockaddr_ll.
-            let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
-            let mut len = mem::size_of_val(&addr) as libc::socklen_t;
-            // SAFETY: writable buffer and output address have their declared lengths. MSG_TRUNC returns wire length.
-            let n = unsafe {
-                libc::recvfrom(
-                    self.0.as_raw_fd(),
-                    buf.as_mut_ptr().cast(),
-                    buf.len(),
-                    libc::MSG_TRUNC,
-                    (&mut addr as *mut libc::sockaddr_ll).cast(),
-                    &mut len,
-                )
-            };
-            if n < 0 {
-                let e = io::Error::last_os_error();
-                return if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                ) {
-                    Ok(None)
-                } else {
-                    Err(e)
-                };
-            }
-            Ok(Some(Received {
-                len: (n as usize).min(buf.len()),
-                original_len: n as usize,
-                truncated: n as usize > buf.len(),
-                outgoing: addr.sll_pkttype == libc::PACKET_OUTGOING,
-            }))
-        }
-        pub fn stats(&self) -> io::Result<PacketStats> {
-            // SAFETY: zero is valid initialization for packet statistics output.
-            let mut s: libc::tpacket_stats = unsafe { mem::zeroed() };
-            let mut len = mem::size_of_val(&s) as libc::socklen_t;
-            // SAFETY: output pointer and length refer to a live tpacket_stats.
-            if unsafe {
-                libc::getsockopt(
-                    self.0.as_raw_fd(),
-                    libc::SOL_PACKET,
-                    libc::PACKET_STATISTICS,
-                    (&mut s as *mut libc::tpacket_stats).cast(),
-                    &mut len,
-                )
-            } < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(PacketStats {
-                packets: s.tp_packets,
-                drops: s.tp_drops,
-            })
-        }
-    }
-    pub fn listen(ip: Ipv4Addr, port: u16, backlog: i32) -> io::Result<TcpListener> {
-        // SAFETY: creates a fresh IPv4 TCP descriptor.
-        let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
-        if raw < 0 {
+
+    /// `listen` on an already-listening socket only updates its backlog.
+    pub fn set_backlog(listener: &TcpListener, backlog: i32) -> io::Result<()> {
+        // SAFETY: the descriptor belongs to the borrowed live listener; `listen` takes no
+        // pointers.
+        if unsafe { libc::listen(listener.as_raw_fd(), backlog) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: raw is fresh and exclusively owned.
-        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-        let one: libc::c_int = 1;
-        // SAFETY: option pointer references a valid integer.
-        if unsafe {
-            libc::setsockopt(
-                fd.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_REUSEADDR,
-                (&one as *const libc::c_int).cast(),
-                mem::size_of_val(&one) as _,
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: all-zero sockaddr_in is a valid initialized representation.
-        let mut addr: libc::sockaddr_in = unsafe { mem::zeroed() };
-        addr.sin_family = libc::AF_INET as u16;
-        addr.sin_port = port.to_be();
-        addr.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
-        // SAFETY: initialized sockaddr and exact length; descriptor is a live TCP socket.
-        if unsafe {
-            libc::bind(
-                fd.as_raw_fd(),
-                (&addr as *const libc::sockaddr_in).cast(),
-                mem::size_of_val(&addr) as _,
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: listen operates on our successfully bound socket.
-        if unsafe { libc::listen(fd.as_raw_fd(), backlog) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(TcpListener::from(fd))
+        Ok(())
     }
 }
-#[cfg(not(target_os = "linux"))]
-mod platform {
-    use super::*;
-    fn unsupported() -> io::Error {
-        io::Error::new(io::ErrorKind::Unsupported, "Linux laboratory sockets only")
-    }
-    pub struct RawSocket;
-    impl RawSocket {
-        pub fn open(_iface: &str) -> io::Result<Self> {
-            Err(unsupported())
-        }
-        pub fn send(&self, _data: &[u8]) -> io::Result<usize> {
-            Err(unsupported())
-        }
-        pub fn recv(&self, _buf: &mut [u8], _timeout: Duration) -> io::Result<Option<Received>> {
-            Err(unsupported())
-        }
-        pub fn stats(&self) -> io::Result<PacketStats> {
-            Err(unsupported())
-        }
-    }
-    pub fn listen(_ip: Ipv4Addr, _port: u16, _backlog: i32) -> io::Result<TcpListener> {
-        Err(unsupported())
-    }
-    pub fn install_signal_handlers() -> io::Result<()> {
-        Err(unsupported())
+
+#[cfg(not(unix))]
+mod imp {
+    use std::{io, net::TcpListener};
+    pub fn install() -> io::Result<()> {
+        Ok(())
     }
     pub fn stop_requested() -> bool {
         false
     }
+    pub fn set_backlog(_: &TcpListener, _: i32) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "silent listener needs a unix host",
+        ))
+    }
 }
-pub use platform::{RawSocket, install_signal_handlers, listen, stop_requested};
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::{
+        net::{SocketAddr, TcpStream},
+        time::Duration,
+    };
+
+    /// No root, no packets, no namespaces: loopback only. Linux accept-queue semantics (queue
+    /// length must exceed the backlog to drop): this test cannot assert silence on macOS, whose
+    /// kernel keeps completing connections, so it is Linux-only and runs in the Linux CI job.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn silent_listener_accepts_one_connection_then_goes_quiet() {
+        let l = silent_listener(Ipv4Addr::LOCALHOST, 0).unwrap();
+        let addr = l.local_addr().unwrap();
+        // The kernel completes the first handshake into the accept queue.
+        let first = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap();
+        // Backlog 0 holds one connection; the next SYN is dropped, not refused. Linux and
+        // macOS differ in how long the queue overflow takes to show, so allow a few tries.
+        let mut silent = false;
+        for _ in 0..6 {
+            match TcpStream::connect_timeout(&addr, Duration::from_millis(300)) {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    silent = true;
+                    break;
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        drop(first);
+        assert!(
+            silent,
+            "a connection beyond the backlog must time out silently"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_silent_listener_binds_and_completes_the_first_handshake_on_any_unix() {
+        let l = silent_listener(Ipv4Addr::LOCALHOST, 0).unwrap();
+        let addr = l.local_addr().unwrap();
+        assert!(TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok());
+        // A port already in use is an error, not a silent success.
+        assert!(silent_listener(Ipv4Addr::LOCALHOST, addr.port()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_listener_semantics_are_those_of_the_standard_library() {
+        // The open ports of the lab peer use std::net::TcpListener::bind (SO_REUSEADDR,
+        // backlog 128): many connections complete.
+        let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr: SocketAddr = l.local_addr().unwrap();
+        let clients: Vec<_> = (0..8)
+            .map(|_| TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap())
+            .collect();
+        assert_eq!(clients.len(), 8);
+    }
+
+    /// The only test in this crate that touches the process-wide flag, so no race.
+    #[cfg(unix)]
+    #[test]
+    fn sigterm_and_sigint_set_the_flag_and_install_clears_it() {
+        for signal in ["-TERM", "-INT"] {
+            install_signal_handlers().unwrap();
+            assert!(!stop_requested(), "installing clears the flag");
+            // `kill` runs as a child process so the test needs no unsafe code; the handler
+            // is installed, so the signal only sets the flag.
+            let status = std::process::Command::new("kill")
+                .args([signal, &std::process::id().to_string()])
+                .status()
+                .unwrap();
+            assert!(status.success());
+            for _ in 0..300 {
+                if stop_requested() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(stop_requested(), "{signal} must set the stop flag");
+        }
+    }
+}

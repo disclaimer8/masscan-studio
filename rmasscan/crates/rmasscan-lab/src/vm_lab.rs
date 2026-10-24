@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
-    io::Write,
+    io::{self, Write},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::Command,
@@ -365,6 +365,45 @@ fn read_manifest(p: &Path) -> Result<Option<Value>, String> {
 fn write_manifest(p: &Path, m: &Value) -> Result<(), String> {
     atomic_write(p, &serde_json::to_vec_pretty(m).map_err(|e| e.to_string())?)
 }
+/// The owner to give a report back when sudo atomically replaced an unprivileged user's file:
+/// only when the file we just created is root-owned (we are root) and SUDO_UID is set. The
+/// group falls back to the uid. Invalid ids are an error.
+fn sudo_target(
+    owner_uid: u32,
+    sudo_uid: Option<&str>,
+    sudo_gid: Option<&str>,
+) -> io::Result<Option<(u32, u32)>> {
+    if owner_uid != 0 {
+        return Ok(None);
+    }
+    let Some(uid) = sudo_uid else {
+        return Ok(None);
+    };
+    let parse = |s: &str| -> io::Result<u32> {
+        s.parse::<u32>()
+            .ok()
+            .filter(|id| *id != u32::MAX)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid SUDO_UID/SUDO_GID"))
+    };
+    let gid = sudo_gid.unwrap_or(uid);
+    Ok(Some((parse(uid)?, parse(gid)?)))
+}
+/// Preserve ownership when sudo replaces an unprivileged user's report. Uses the already-open
+/// descriptor (std `fchown`), so a pathname race cannot redirect it.
+#[cfg(unix)]
+fn restore_sudo_owner(file: &fs::File) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, fchown};
+    let uid = std::env::var("SUDO_UID").ok();
+    let gid = std::env::var("SUDO_GID").ok();
+    if let Some((u, g)) = sudo_target(file.metadata()?.uid(), uid.as_deref(), gid.as_deref())? {
+        fchown(file, Some(u), Some(g))?;
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn restore_sudo_owner(_file: &fs::File) -> io::Result<()> {
+    Ok(())
+}
 fn atomic_write(p: &Path, b: &[u8]) -> Result<(), String> {
     let mut name = p.as_os_str().to_os_string();
     name.push(format!(".{}.tmp", std::process::id()));
@@ -376,7 +415,7 @@ fn atomic_write(p: &Path, b: &[u8]) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let result = f
         .write_all(b)
-        .and_then(|_| rmasscan_net::lab_io::restore_sudo_owner(&f))
+        .and_then(|_| restore_sudo_owner(&f))
         .and_then(|_| f.sync_all())
         .and_then(|_| fs::rename(&tmp, p));
     if result.is_err() {
@@ -655,7 +694,8 @@ fn validate_manifest(m: &Value, d: &Names) -> Result<(), String> {
     Ok(())
 }
 fn random_token() -> Result<String, String> {
-    let b = rmasscan_net::lab_io::random_bytes_16().map_err(|e| e.to_string())?;
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).map_err(|e| format!("operating system RNG unavailable: {e}"))?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
@@ -2268,5 +2308,60 @@ mod ownership_tests {
         ] {
             assert!(ps1.contains(needle), "{needle}");
         }
+    }
+}
+
+/// The std-only replacements for the former unsafe `lab_io::{restore_sudo_owner, random_bytes_16}`.
+#[cfg(test)]
+mod std_helper_tests {
+    use super::*;
+
+    #[test]
+    fn sudo_target_applies_only_to_root_owned_files_with_valid_ids() {
+        // Not root-owned: nothing to restore, whatever the environment says.
+        assert_eq!(sudo_target(1000, Some("1000"), Some("1000")).unwrap(), None);
+        // Root-owned (we are root, e.g. under sudo) and SUDO_UID set: restore to the caller.
+        assert_eq!(
+            sudo_target(0, Some("1000"), Some("1001")).unwrap(),
+            Some((1000, 1001))
+        );
+        // SUDO_GID absent: the group falls back to the uid, as before.
+        assert_eq!(
+            sudo_target(0, Some("1000"), None).unwrap(),
+            Some((1000, 1000))
+        );
+        // Running as real root with no sudo: nothing to restore.
+        assert_eq!(sudo_target(0, None, None).unwrap(), None);
+        // Invalid ids are an error, never silently ignored.
+        for bad in ["", "x", "-1", "4294967295", "1 ", "99999999999"] {
+            assert!(sudo_target(0, Some(bad), Some("1")).is_err(), "uid {bad:?}");
+            assert!(sudo_target(0, Some("1"), Some(bad)).is_err(), "gid {bad:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restoring_the_owner_of_a_file_we_own_as_a_normal_user_is_a_no_op() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("rmasscan-owner-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = fs::File::create(dir.join("report.json")).unwrap();
+        if f.metadata().unwrap().uid() == 0 {
+            // Real root runs this suite only inside the lab; chown would then be live.
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        restore_sudo_owner(&f).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn random_token_is_sixteen_random_bytes_as_hex() {
+        let a = random_token().unwrap();
+        let b = random_token().unwrap();
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
     }
 }

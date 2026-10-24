@@ -2,6 +2,8 @@
 #![forbid(unsafe_code)]
 
 pub mod capture;
+pub mod dump;
+pub mod link;
 pub mod oracle;
 pub mod oracle_util;
 pub mod pcap;

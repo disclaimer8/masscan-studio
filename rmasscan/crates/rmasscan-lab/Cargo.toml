@@ -10,7 +10,8 @@ workspace = true
 
 [dependencies]
 rmasscan-core = { path = "../rmasscan-core" }
-rmasscan-net = { path = "../rmasscan-net" }
+rmasscan-net = { path = "../rmasscan-net", features = ["lab"] }
+rmasscan-engine = { path = "../rmasscan-engine" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

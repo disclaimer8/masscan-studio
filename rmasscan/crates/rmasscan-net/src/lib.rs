@@ -1,7 +1,8 @@
 //! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; Windows: Npcap. Это
 //! единственный crate, где допускается `unsafe`: весь FFI находится в
-//! private-модулях (`linux::socket`; `windows::{ffi, handle, loader, sys}`),
-//! остальной код безопасный и тестируется через синтетические швы
+//! private-модулях (`linux::socket`; `windows::{ffi, handle, loader, sys}`) и,
+//! только с feature `lab` (включает один rmasscan-lab), в `lab_io::imp`
+//! (sigaction-флаг остановки и listener с backlog 0); остальной код безопасный и тестируется через синтетические швы
 //! (`linux::PacketIo`, `linux::IfaceInfo`; подставная таблица функций wpcap).
 //!
 //! Контракт: каждый вызов `recv`/`health` возвращается не позже
@@ -325,5 +326,7 @@ pub fn lab_thread_ids() -> Option<Vec<u64>> {
     None
 }
 
-/// Laboratory sockets, separated from the scanner adapter contract.
+/// Laboratory process primitives (stop-flag signal handler, backlog-0 listener): feature `lab`,
+/// enabled only by `rmasscan-lab`, never by a product consumer.
+#[cfg(feature = "lab")]
 pub mod lab_io;

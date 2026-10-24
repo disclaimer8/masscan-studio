@@ -1064,16 +1064,36 @@ pub(crate) trait Clock {
     fn sleep(&self, secs: f64);
     fn stopped(&self) -> bool;
 }
-struct RealClock(Instant);
+/// Wall-clock [`Clock`]. `interruptible` clocks report the process stop flag; a witness that is
+/// already finalising after a stop request must not abort its own quiescence wait, so it uses
+/// an uninterruptible one.
+pub(crate) struct RealClock {
+    start: Instant,
+    interruptible: bool,
+}
+impl RealClock {
+    pub(crate) fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            interruptible: true,
+        }
+    }
+    pub(crate) fn uninterruptible() -> Self {
+        Self {
+            start: Instant::now(),
+            interruptible: false,
+        }
+    }
+}
 impl Clock for RealClock {
     fn now(&self) -> f64 {
-        self.0.elapsed().as_secs_f64()
+        self.start.elapsed().as_secs_f64()
     }
     fn sleep(&self, secs: f64) {
         thread::sleep(Duration::from_secs_f64(secs));
     }
     fn stopped(&self) -> bool {
-        rmasscan_net::lab_io::stop_requested()
+        self.interruptible && rmasscan_net::lab_io::stop_requested()
     }
 }
 pub(crate) fn wait_quiet<T: PartialEq>(
@@ -1082,7 +1102,7 @@ pub(crate) fn wait_quiet<T: PartialEq>(
     poll: f64,
     timeout: f64,
 ) -> Result<bool, String> {
-    wait_quiet_with(read, quiet, poll, timeout, &RealClock(Instant::now()))
+    wait_quiet_with(read, quiet, poll, timeout, &RealClock::new())
 }
 /// Block until `read()` was unchanged for `quiet` seconds: true once quiet, false at `timeout`.
 /// The quiet period starts at the first sample, so the elapsed-quiet arithmetic needs no `None`.

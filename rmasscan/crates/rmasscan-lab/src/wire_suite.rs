@@ -1,7 +1,4 @@
-use crate::windows_suite::{
-    command, hash, opt, options, parse_tcpdump, read_json, required, strings, wait_quiet,
-    write_json,
-};
+use crate::windows_suite::{command, hash, opt, options, read_json, required, strings, write_json};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -111,6 +108,10 @@ fn spawn(a: &[String], out: &Path, err: &Path) -> Result<Child, String> {
 struct OwnedChild(Option<Child>);
 impl OwnedChild {
     fn stop(&mut self, sig: &str) -> Result<(), String> {
+        self.stop_within(sig, 20)
+    }
+    /// Signal the child and wait up to `secs` for it to exit, then kill it and fail.
+    fn stop_within(&mut self, sig: &str, secs: u64) -> Result<(), String> {
         if let Some(p) = &mut self.0
             && p.try_wait().map_err(|e| e.to_string())?.is_none()
         {
@@ -126,7 +127,7 @@ impl OwnedChild {
                     p.wait().map_err(|e| e.to_string())?;
                     return Err("suite interrupted during child cleanup".into());
                 }
-                if t.elapsed() > Duration::from_secs(20) {
+                if t.elapsed() > Duration::from_secs(secs) {
                     p.kill().map_err(|e| e.to_string())?;
                     p.wait().map_err(|e| e.to_string())?;
                     return Err("child failed to stop".into());
@@ -246,10 +247,19 @@ struct Config {
     ipa: String,
     rust: String,
     oracle: String,
-    fixtures: PathBuf,
+    fixtures: Option<PathBuf>,
     masked: bool,
     empty: String,
     lab: String,
+}
+/// `--fixtures` as a directory; empty means none (never the working directory).
+fn fixtures_arg(v: &str) -> Option<PathBuf> {
+    (!v.is_empty()).then(|| PathBuf::from(v))
+}
+impl Config {
+    fn fixture(&self, name: &str) -> Option<PathBuf> {
+        self.fixtures.as_ref().map(|d| d.join(name))
+    }
 }
 struct Driver {
     c: Config,
@@ -268,12 +278,7 @@ struct Recorder {
     tag: String,
     pcap: PathBuf,
     meta: PathBuf,
-    err: PathBuf,
     process: OwnedChild,
-    tcpdump: bool,
-    c0: u64,
-    c1: u64,
-    drops_before: u64,
 }
 #[derive(Default)]
 struct Action {
@@ -396,185 +401,92 @@ impl Driver {
             .push(rec.clone());
         Ok(rec)
     }
-    fn counters(&self) -> Result<u64, String> {
-        let mut t = 0;
-        for n in ["rx_packets", "tx_packets"] {
-            let r = command(
-                &self.ns(
-                    true,
-                    &strings(&[
-                        "cat",
-                        &format!("/sys/class/net/{}/statistics/{n}", self.c.ifb),
-                    ]),
-                ),
-                10,
-                true,
-            )?;
-            t += r.stdout.trim().parse::<u64>().map_err(|e| e.to_string())?;
-        }
-        Ok(t)
-    }
-    fn interface_drops(&self) -> Result<u64, String> {
-        command(
-            &self.ns(
-                true,
-                &strings(&[
-                    "cat",
-                    &format!("/sys/class/net/{}/statistics/rx_dropped", self.c.ifb),
-                ]),
-            ),
-            10,
-            true,
-        )?
-        .stdout
-        .trim()
-        .parse::<u64>()
-        .map_err(|e| e.to_string())
-    }
-    fn recorder(&self, tag: &str, tcpdump: bool) -> Result<Recorder, String> {
-        let pcap = if tcpdump {
-            self.c.work.join(format!("{tag}.pcap"))
-        } else {
+    /// Start the tcpdump witness in the peer namespace (`capture dump`), prove it is live with a
+    /// scanner-side start marker, and return the handle. `keep`: the pcap goes to the evidence
+    /// directory instead of the scratch directory.
+    fn recorder(&self, tag: &str, keep: bool) -> Result<Recorder, String> {
+        let pcap = if keep {
             self.c.out.join(format!("{tag}.pcap"))
+        } else {
+            self.c.work.join(format!("{tag}.pcap"))
         };
         let meta = self.c.out.join(format!("{tag}.capture.json"));
-        let err = self.c.work.join(format!("{tag}.rec.err"));
         let ready = self
             .c
             .work
             .join(format!("{tag}.{}.ready", crate::windows_suite::nonce()));
         let ack = ready.with_extension("ack");
-        let c0 = if tcpdump { self.counters()? } else { 0 };
-        let drops_before = if tcpdump { self.interface_drops()? } else { 0 };
-        let a = if tcpdump {
-            self.ns(
-                true,
-                &strings(&[
-                    "tcpdump",
-                    "-i",
+        let a = self.ns(
+            true,
+            &self.lab(
+                "capture",
+                &[
+                    "dump",
+                    "--iface",
                     &self.c.ifb,
-                    "-n",
-                    "-s",
-                    "0",
-                    "-B",
-                    "262144",
-                    "--time-stamp-precision=nano",
-                    "-Z",
-                    "root",
-                    "-w",
+                    "--pcap",
                     &pcap.to_string_lossy(),
-                ]),
-            )
-        } else {
-            self.ns(
-                true,
+                    "--meta",
+                    &meta.to_string_lossy(),
+                    "--ready",
+                    &ready.to_string_lossy(),
+                    "--ack",
+                    &ack.to_string_lossy(),
+                    "--end-dst",
+                    &self.c.maca,
+                ],
+            ),
+        );
+        let process = OwnedChild(Some(spawn(
+            &a,
+            &self.c.work.join(format!("{tag}.rec.out")),
+            &self.c.work.join(format!("{tag}.rec.err")),
+        )?));
+        if !wait_file(&ready, 30) {
+            return Err("capture witness (tcpdump) not ready".into());
+        }
+        command(
+            &self.ns(
+                false,
                 &self.lab(
                     "capture",
                     &[
-                        "record",
+                        "marker",
                         "--iface",
-                        &self.c.ifb,
-                        "--pcap",
-                        &pcap.to_string_lossy(),
-                        "--meta",
-                        &meta.to_string_lossy(),
-                        "--ready",
-                        &ready.to_string_lossy(),
-                        "--ack",
-                        &ack.to_string_lossy(),
+                        &self.c.ifa,
+                        "--src",
+                        &self.c.maca,
+                        "--dst",
+                        &self.c.macb,
                     ],
                 ),
-            )
-        };
-        let p = OwnedChild(Some(spawn(
-            &a,
-            &self.c.work.join(format!("{tag}.rec.out")),
-            &err,
-        )?));
-        if tcpdump {
-            let t = Instant::now();
-            while !fs::read_to_string(&err)
-                .unwrap_or_default()
-                .contains("listening on")
-            {
-                if rmasscan_net::lab_io::stop_requested() {
-                    return Err("suite interrupted during recorder startup".into());
-                }
-                if t.elapsed() > Duration::from_secs(15) {
-                    return Err("tcpdump did not start".into());
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            thread::sleep(Duration::from_millis(300));
-        } else {
-            if !wait_file(&ready, 10) {
-                return Err("recorder not ready".into());
-            }
-            command(
-                &self.ns(
-                    false,
-                    &self.lab(
-                        "capture",
-                        &[
-                            "marker",
-                            "--iface",
-                            &self.c.ifa,
-                            "--src",
-                            &self.c.maca,
-                            "--dst",
-                            &self.c.macb,
-                        ],
-                    ),
-                ),
-                20,
-                true,
-            )?;
-            if !wait_file(&ack, 10) {
-                return Err("capture marker not acknowledged".into());
-            }
+            ),
+            20,
+            true,
+        )?;
+        if !wait_file(&ack, 15) {
+            return Err("capture start marker not captured by tcpdump".into());
         }
-        let c1 = if tcpdump { self.counters()? } else { 0 };
         Ok(Recorder {
             tag: tag.into(),
             pcap,
             meta,
-            err,
-            process: p,
-            tcpdump,
-            c0,
-            c1,
-            drops_before,
+            process,
         })
     }
+    /// Finalise the witness (quiescence, end markers, tcpdump stop) and return its verdict meta,
+    /// completed with the evidence hash and the scanner-SYN count.
     fn stop_recorder(&mut self, r: &mut Recorder) -> Result<Value, String> {
-        let meta = if r.tcpdump {
-            let quiet = wait_quiet(|| self.counters(), 1.5, 0.25, 20.0)?;
-            let c2 = self.counters()?;
-            r.process.stop("INT")?;
-            let c3 = self.counters()?;
-            let interface_drop_delta = self.interface_drops()?.checked_sub(r.drops_before);
-            let stats = parse_tcpdump(&fs::read_to_string(&r.err).map_err(|e| e.to_string())?);
-            let frames = self.frames(&r.pcap)?;
-            let rec = self.record_hash(&r.tag, &r.pcap)?;
-            let lo = c2.checked_sub(r.c1).ok_or("interface counters decreased")?;
-            let hi = c3.checked_sub(r.c0).ok_or("interface counters decreased")?;
-            let valid = interface_drop_delta == Some(0)
-                && capture_complete(
-                    stats["captured"].as_u64(),
-                    stats["received"].as_u64(),
-                    stats["dropped_kernel"].as_u64(),
-                    stats["dropped_if"].as_u64().or(interface_drop_delta),
-                    frames.len() as u64,
-                    lo,
-                    hi,
-                );
-            json!({"tcpdump_captured":stats["captured"],"received_by_filter":stats["received"],"kernel_drops":stats["dropped_kernel"],"interface_drops":stats["dropped_if"],"interface_drop_delta":interface_drop_delta,"pcap_frames":frames.len(),"scanner_syn_frames":self.syns(&frames,None).len(),"iface_rxtx_delta_lo":lo,"iface_rxtx_delta_hi":hi,"quiesced_before_stop":quiet,"pcap_sha256":rec["sha256"],"pcap_size_bytes":rec["size_bytes"],"valid":valid})
-        } else {
-            thread::sleep(Duration::from_millis(500));
-            r.process.stop("TERM")?;
-            self.record_hash(&r.tag, &r.pcap)?;
-            read_json(&r.meta)?
-        };
+        // quiescence (<= 20 s) + end markers (<= 15 s) + tcpdump stop (<= 30 s)
+        r.process.stop_within("TERM", 90)?;
+        let mut meta = read_json(&r.meta)?;
+        let frames = self.frames(&r.pcap)?;
+        let rec = self.record_hash(&r.tag, &r.pcap)?;
+        meta["scanner_syn_frames"] = json!(self.syns(&frames, None).len());
+        if meta["pcap_sha256"] != rec["sha256"] {
+            meta["valid"] = json!(false);
+            meta["invalid_reasons"] = json!(["pcap changed after the witness hashed it"]);
+        }
         write_json(&r.meta, &meta)?;
         Ok(meta)
     }
@@ -729,8 +641,8 @@ impl Driver {
             ),
             env.clone(),
         );
-        if self.c.fixtures.join("manifest.json").exists() {
-            let fx = read_json(self.c.fixtures.join("manifest.json"))?;
+        if let Some(manifest) = self.c.fixture("manifest.json").filter(|p| p.exists()) {
+            let fx = read_json(manifest)?;
             self.check(
                 "oracle",
                 "lab oracle binary hash equals fixture oracle",
@@ -749,7 +661,10 @@ impl Driver {
     }
     fn parity(&mut self) -> Result<(), String> {
         for c in cases() {
-            let fx = self.c.fixtures.join(format!("{}.run1.pcap", c.name));
+            let fx = self
+                .c
+                .fixture(&format!("{}.run1.pcap", c.name))
+                .ok_or("the rust suite needs --fixtures")?;
             let mut cr = self.replies(&self.frames(&fx)?, None);
             cr.sort();
             for rep in 1..=2 {
@@ -881,7 +796,10 @@ impl Driver {
         if range != 16 {
             return Err("continuous pause case range differs from oracle 16".into());
         }
-        let fixture = self.c.fixtures.join(format!("{}.run1.pcap", c.name));
+        let fixture = self
+            .c
+            .fixture(&format!("{}.run1.pcap", c.name))
+            .ok_or("the rust suite needs --fixtures")?;
         const SCAN: &str = "11111111111111111111111111111111";
         const A1: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         const A2: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -1454,7 +1372,7 @@ impl Driver {
         let so = self.c.work.join(format!("{tag}.stdout"));
         let se = self.c.work.join(format!("{tag}.stderr"));
         let usage = self.c.work.join(format!("{tag}.rusage"));
-        let mut wrapped = strings(&["/usr/bin/time", "-v", "-o", &usage.to_string_lossy()]);
+        let mut wrapped = strings(&[GNU_TIME, "-v", "-o", &usage.to_string_lossy()]);
         wrapped.extend_from_slice(argv);
         let mut p = OwnedChild(Some(
             Command::new(&wrapped[0])
@@ -1526,10 +1444,7 @@ impl Driver {
         let wall = t.elapsed().as_secs_f64();
         p.0 = None;
         let raw = fs::read_to_string(&usage).unwrap_or_default();
-        let metric = |name: &str| {
-            raw.lines()
-                .find_map(|l| l.trim().strip_prefix(name)?.trim().parse::<f64>().ok())
-        };
+        let metric = |name: &str| gnu_time_metric(&raw, name);
         let ru = json!({"cpu_user_s":metric("User time (seconds):"),"cpu_sys_s":metric("System time (seconds):"),"max_rss_kb":if hwm>0{Some(hwm)}else{None},"rusage_max_rss_kb":metric("Maximum resident set size (kbytes):"),"cpu_method":"GNU time wait4, child /proc VmHWM sampled"});
         Ok((
             rc,
@@ -1794,6 +1709,40 @@ impl Driver {
         self.extra["perf_summary"] = json!(rows);
     }
 }
+/// The perf cells read CPU and RSS from GNU `/usr/bin/time -v`.
+const GNU_TIME: &str = "/usr/bin/time";
+fn gnu_time_metric(report: &str, name: &str) -> Option<f64> {
+    report
+        .lines()
+        .find_map(|l| l.trim().strip_prefix(name)?.trim().parse::<f64>().ok())
+}
+/// A `time -v` report from GNU time: it prints the peak RSS line; BSD and busybox time do not.
+fn gnu_time_report_ok(report: &str) -> bool {
+    gnu_time_metric(report, "Maximum resident set size (kbytes):").is_some()
+        && gnu_time_metric(report, "User time (seconds):").is_some()
+}
+/// Refuse a perf run on a host without GNU time before any scanner starts.
+fn preflight_gnu_time(work: &Path) -> Result<(), String> {
+    let report = work.join("gnu-time-preflight.txt");
+    let ok = Command::new(GNU_TIME)
+        .args(["-v", "-o"])
+        .arg(&report)
+        .arg("true")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("{GNU_TIME}: {e}"))?
+        .success();
+    let text = fs::read_to_string(&report).unwrap_or_default();
+    let _ = fs::remove_file(&report);
+    if ok && gnu_time_report_ok(&text) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the perf suite needs GNU time at {GNU_TIME} (apt install time): CPU and RSS come from `time -v`"
+        ))
+    }
+}
 fn wait_child(p: &mut OwnedChild, timeout: u64) -> Result<i32, String> {
     let t = Instant::now();
     loop {
@@ -1972,7 +1921,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         ipa: required(&o, "ip-a")?,
         rust: required(&o, "rust-bin")?,
         oracle: required(&o, "oracle")?,
-        fixtures: PathBuf::from(opt(&o, "fixtures", "")),
+        fixtures: fixtures_arg(&opt(&o, "fixtures", "")),
         masked: required(&o, "conf-masked")? == "1",
         empty: opt(&o, "empty-dir", ""),
         lab: std::env::current_exe()
@@ -1994,11 +1943,14 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     if !crate::windows_suite::valid_mac(&c.maca) || !crate::windows_suite::valid_mac(&c.macb) {
         return Err("invalid lab MAC".into());
     }
-    if suite == "rust" && !c.fixtures.join("manifest.json").exists() {
+    if suite == "rust" && !c.fixture("manifest.json").is_some_and(|p| p.exists()) {
         return Err("Rust suite requires oracle fixtures manifest".into());
     }
     fs::create_dir_all(&c.out).map_err(|e| e.to_string())?;
     fs::create_dir_all(&c.work).map_err(|e| e.to_string())?;
+    if suite == "perf" {
+        preflight_gnu_time(&c.work)?;
+    }
     let isolation = read_json(c.out.join("isolation.json"))?;
     if !isolation_permits(&isolation) {
         return Err(format!(
@@ -2061,7 +2013,7 @@ mod tests {
                 ipa: "10.200.0.100".into(),
                 rust: "/tmp/wire_scan".into(),
                 oracle: "/tmp/oracle".into(),
-                fixtures: PathBuf::new(),
+                fixtures: None,
                 masked: false,
                 empty: String::new(),
                 lab: "/tmp/rmasscan-lab".into(),

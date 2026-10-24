@@ -474,7 +474,9 @@ dependencies = [
  "libc",
  "rmasscan-core",
  "rmasscan-engine",
+ "sha2",
  "thiserror",
+ "windows-sys",
 ]
 
 [[package]]

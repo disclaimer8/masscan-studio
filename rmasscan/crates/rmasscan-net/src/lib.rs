@@ -21,6 +21,12 @@ use rmasscan_engine::AdapterPair;
 #[cfg(target_os = "linux")]
 mod linux;
 
+// Windows/Npcap: на Windows это рабочий backend; в тестах других платформ
+// собираются портабельные части (ABI, подставной загрузчик).
+#[cfg(any(windows, test))]
+#[allow(unsafe_code, dead_code)]
+mod windows;
+
 /// Ошибка открытия адаптера.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NetError {
@@ -28,10 +34,16 @@ pub enum NetError {
     UnsupportedPlatform,
     #[error("unsupported link type: {0}")]
     UnsupportedLink(String),
-    #[error("permission denied (raw packet access needs CAP_NET_RAW): {0}")]
+    #[error("permission denied (raw packet access needs elevated privileges): {0}")]
     PermissionDenied(String),
     #[error("interface does not match the binding: {0}")]
     InterfaceMismatch(String),
+    #[error("packet driver unavailable: {0}")]
+    DriverUnavailable(String),
+    #[error("required packet driver capability is missing: {0}")]
+    MissingCapability(String),
+    #[error("packet driver ABI mismatch: {0}")]
+    AbiMismatch(String),
     #[error("system error: {0}")]
     System(String),
 }

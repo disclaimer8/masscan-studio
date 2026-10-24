@@ -15,8 +15,21 @@ unsafe_op_in_unsafe_fn = "deny"
 rmasscan-core = { path = "../rmasscan-core" }
 rmasscan-engine = { path = "../rmasscan-engine" }
 thiserror.workspace = true
+sha2.workspace = true
 
 # Только объявления FFI системной libc; C не компилируется (build.rs libc лишь
 # выбирает cfg). Версия уже закреплена в Cargo.lock.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
+
+# Windows: точечные объявления LoadLibraryExW/GetProcAddress и т.п. без
+# build.rs и без import-библиотек Npcap (системные DLL, Rust raw-dylib). Это
+# решение плана вместо libloading. Версия уже в Cargo.lock через другие crates.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+] }

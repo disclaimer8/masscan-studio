@@ -1,0 +1,16 @@
+{
+ "argv_file": "argv.json",
+ "capture_started_utc": 1792852682.514443,
+ "capture_stopped_utc": 1792852694.7312121,
+ "exe_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+ "guest_exit": 0,
+ "guest_finished_utc": 1792852689.199593,
+ "guest_ssh_rc": 0,
+ "guest_started_utc": 1792852685.312665,
+ "guest_times": {
+  "finished_utc": 1792852689.046,
+  "started_utc": 1792852685.825
+ },
+ "kind": "case",
+ "tag": "c04_exclude.run1"
+}

@@ -1,0 +1,16 @@
+{
+ "argv_file": "argv.json",
+ "capture_started_utc": 1792853009.832984,
+ "capture_stopped_utc": 1792853022.1311622,
+ "exe_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+ "guest_exit": 0,
+ "guest_finished_utc": 1792853016.580852,
+ "guest_ssh_rc": 0,
+ "guest_started_utc": 1792853012.651723,
+ "guest_times": {
+  "finished_utc": 1792853016.427,
+  "started_utc": 1792853013.167
+ },
+ "kind": "resume",
+ "tag": "resume_N0"
+}

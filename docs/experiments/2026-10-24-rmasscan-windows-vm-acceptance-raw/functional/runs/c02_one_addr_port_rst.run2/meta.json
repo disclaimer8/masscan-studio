@@ -1,0 +1,16 @@
+{
+ "argv_file": "argv.json",
+ "capture_started_utc": 1792852573.6649852,
+ "capture_stopped_utc": 1792852585.841374,
+ "exe_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+ "guest_exit": 0,
+ "guest_finished_utc": 1792852580.286307,
+ "guest_ssh_rc": 0,
+ "guest_started_utc": 1792852576.4766579,
+ "guest_times": {
+  "finished_utc": 1792852580.129,
+  "started_utc": 1792852576.997
+ },
+ "kind": "case",
+ "tag": "c02_one_addr_port_rst.run2"
+}

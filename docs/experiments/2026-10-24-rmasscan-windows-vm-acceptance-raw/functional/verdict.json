@@ -1,0 +1,5034 @@
+{
+ "dir": "functional",
+ "groups": [
+  {
+   "checks": [
+    {
+     "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+     "name": "scan_id constant, attempt_id new, resume origin recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "894aa3d977f6 vs 894aa3d977f6",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=0 pause SYNs + resume SYNs == C oracle (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=0 pause SYNs + resume SYNs == continuous Rust run (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "pause=0 resume=16",
+     "name": "no probe lost or added across the seam (SYN counts 0 + 16)",
+     "result": "PASS"
+    },
+    {
+     "detail": "legs=0+16 union=16",
+     "name": "replies of both legs == expected, no duplicates",
+     "result": "PASS"
+    }
+   ],
+   "tag": "group_pause_resume_N0",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+     "name": "scan_id constant, attempt_id new, resume origin recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "894aa3d977f6 vs 894aa3d977f6",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=1 pause SYNs + resume SYNs == C oracle (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=1 pause SYNs + resume SYNs == continuous Rust run (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "pause=1 resume=15",
+     "name": "no probe lost or added across the seam (SYN counts 1 + 15)",
+     "result": "PASS"
+    },
+    {
+     "detail": "legs=1+15 union=16",
+     "name": "replies of both legs == expected, no duplicates",
+     "result": "PASS"
+    }
+   ],
+   "tag": "group_pause_resume_N1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+     "name": "scan_id constant, attempt_id new, resume origin recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "894aa3d977f6 vs 894aa3d977f6",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=8 pause SYNs + resume SYNs == C oracle (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=8 pause SYNs + resume SYNs == continuous Rust run (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "pause=8 resume=8",
+     "name": "no probe lost or added across the seam (SYN counts 8 + 8)",
+     "result": "PASS"
+    },
+    {
+     "detail": "legs=8+8 union=16",
+     "name": "replies of both legs == expected, no duplicates",
+     "result": "PASS"
+    }
+   ],
+   "tag": "group_pause_resume_N8",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "scan=111111.. a1=aaaaaa.. a2=bbbbbb.. from=aaaaaa..",
+     "name": "scan_id constant, attempt_id new, resume origin recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "894aa3d977f6 vs 894aa3d977f6",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=15 pause SYNs + resume SYNs == C oracle (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "N=15 pause SYNs + resume SYNs == continuous Rust run (bytes and order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "pause=15 resume=1",
+     "name": "no probe lost or added across the seam (SYN counts 15 + 1)",
+     "result": "PASS"
+    },
+    {
+     "detail": "legs=15+1 union=16",
+     "name": "replies of both legs == expected, no duplicates",
+     "result": "PASS"
+    }
+   ],
+   "tag": "group_pause_resume_N15",
+   "verdict": "PASS"
+  }
+ ],
+ "overall": "PASS",
+ "runs": [
+  {
+   "checks": [
+    {
+     "detail": "",
+     "name": "manifest.code_commit present",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "manifest.exe present",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "manifest.binding present",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "manifest.exe.sha256 present",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "fixtures/manifest.json present",
+     "result": "PASS"
+    }
+   ],
+   "tag": "manifest",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "9 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 9, 'sha256': '7e947cc7891b05c6469a55638a455b8ebb515887c3f65aff197417ac10daa159', 'size': 664} actual=7e947cc7891b/664/9",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 9, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 9}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 9, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 9}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 9, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 9} vs pcap 9",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92494, 'rx_end': 92496, 'rx_ready': 92494, 'tx_before': 2876281, 'tx_end': 2876288, 'tx_ready': 2876281}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=9",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [9, 9]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852463.350868, 1792852466.178715, 1792852470.566758, 1792852476.1204102]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4086891}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 1, 'next_index': 1, 'range': 1, 'expected_total': 1}",
+     "name": "sent == next_index == range == expected SYN count (1)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 2, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 1, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:80:open'] want=['198.18.0.2:80:open'] total=1 unique=1",
+     "name": "results == expected Open/Closed from the peer's listeners (1 open, 0 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "beeb030cb774 vs beeb030cb774",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=1 all=1",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "1 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=1 scanner=1 want=1",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:80:open'] want=['198.18.0.2:80:open']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=3 unique=['198.18.0.2:80:open'] received=1 duplicates=1",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c01_one_addr_port_synack.run1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "9 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 9, 'sha256': 'fa6316273ca93e32ab0d83bb848693b928c3099a12f2cad3b29a962721907f82', 'size': 664} actual=fa6316273ca9/664/9",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 9, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 9}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 9, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 9}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 9, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 9} vs pcap 9",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92496, 'rx_end': 92498, 'rx_ready': 92496, 'tx_before': 2876288, 'tx_end': 2876295, 'tx_ready': 2876288}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=9",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [9, 9]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852500.6390579, 1792852503.452481, 1792852507.262593, 1792852512.8307068]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4087130}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 1, 'next_index': 1, 'range': 1, 'expected_total': 1}",
+     "name": "sent == next_index == range == expected SYN count (1)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 2, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 1, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:80:open'] want=['198.18.0.2:80:open'] total=1 unique=1",
+     "name": "results == expected Open/Closed from the peer's listeners (1 open, 0 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "beeb030cb774 vs beeb030cb774",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=1 all=1",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "1 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=1 scanner=1 want=1",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:80:open'] want=['198.18.0.2:80:open']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=3 unique=['198.18.0.2:80:open'] received=1 duplicates=1",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c01_one_addr_port_synack.run2",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "7 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 7, 'sha256': '6ed477f04a053d48e2e4b351835f84df6d28cfbbcb580ee23e3037dba6de7187', 'size': 512} actual=6ed477f04a05/512/7",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7} vs pcap 7",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92498, 'rx_end': 92500, 'rx_ready': 92498, 'tx_before': 2876295, 'tx_end': 2876300, 'tx_ready': 2876295}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=7",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [7, 7]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852537.186764, 1792852540.002652, 1792852543.8080509, 1792852549.3559701]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4087352}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 1, 'next_index': 1, 'range': 1, 'expected_total': 1}",
+     "name": "sent == next_index == range == expected SYN count (1)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 1, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 1, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:81:closed'] want=['198.18.0.2:81:closed'] total=1 unique=1",
+     "name": "results == expected Open/Closed from the peer's listeners (0 open, 1 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "9cfa912acfe0 vs 9cfa912acfe0",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=1 all=1",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "1 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=1 scanner=1 want=1",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:81:closed'] want=['198.18.0.2:81:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=1 unique=['198.18.0.2:81:closed'] received=1 duplicates=0",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c02_one_addr_port_rst.run1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "7 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 7, 'sha256': '59fd8a10c4e4d495323c338a0ea0f6c9180f92e69ac7ae1a37dc090a3a551815', 'size': 512} actual=59fd8a10c4e4/512/7",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7} vs pcap 7",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92500, 'rx_end': 92502, 'rx_ready': 92500, 'tx_before': 2876300, 'tx_end': 2876305, 'tx_ready': 2876300}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=7",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [7, 7]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852573.6649852, 1792852576.4766579, 1792852580.286307, 1792852585.841374]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4087578}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 1, 'next_index': 1, 'range': 1, 'expected_total': 1}",
+     "name": "sent == next_index == range == expected SYN count (1)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 1, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 1, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:81:closed'] want=['198.18.0.2:81:closed'] total=1 unique=1",
+     "name": "results == expected Open/Closed from the peer's listeners (0 open, 1 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "9cfa912acfe0 vs 9cfa912acfe0",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=1 all=1",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "1 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=1 scanner=1 want=1",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:81:closed'] want=['198.18.0.2:81:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=1 unique=['198.18.0.2:81:closed'] received=1 duplicates=0",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c02_one_addr_port_rst.run2",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "53 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 53, 'sha256': 'a5cca67559b5f290eadb5d267d12150630322b45a3a11973c7a8f06bfe014add', 'size': 3888} actual=a5cca67559b5/3888/53",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53} vs pcap 53",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92502, 'rx_end': 92519, 'rx_ready': 92502, 'tx_before': 2876305, 'tx_end': 2876341, 'tx_ready': 2876305}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=53",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [53, 53]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852610.191721, 1792852613.005877, 1792852616.96893, 1792852621.7358]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4087802}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 16, 'next_index': 16, 'range': 16, 'expected_total': 16}",
+     "name": "sent == next_index == range == expected SYN count (16)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 25, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 16, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] want=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] total=16 unique=16",
+     "name": "results == expected Open/Closed from the peer's listeners (8 open, 8 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "894aa3d977f6 vs 894aa3d977f6",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=16 all=16",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=16 scanner=16 want=16",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] want=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=32 unique=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] received=16 duplicates=9",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c03_multi_ports.run1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "53 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 53, 'sha256': '1b8c5b5e0591c5502daba990396ba64ba31819f1b4600d0a3f7bb37129e89e35', 'size': 3888} actual=1b8c5b5e0591/3888/53",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53} vs pcap 53",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92519, 'rx_end': 92536, 'rx_ready': 92519, 'tx_before': 2876341, 'tx_end': 2876377, 'tx_ready': 2876341}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=53",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [53, 53]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852646.53432, 1792852649.3573189, 1792852653.3161569, 1792852658.092848]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4088025}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 16, 'next_index': 16, 'range': 16, 'expected_total': 16}",
+     "name": "sent == next_index == range == expected SYN count (16)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 26, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 16, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] want=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] total=16 unique=16",
+     "name": "results == expected Open/Closed from the peer's listeners (8 open, 8 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "894aa3d977f6 vs 894aa3d977f6",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=16 all=16",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "16 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=16 scanner=16 want=16",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] want=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=32 unique=['198.18.0.2:8000:open', '198.18.0.2:8001:open', '198.18.0.2:8002:open', '198.18.0.2:8003:open', '198.18.0.2:8004:open', '198.18.0.2:8005:open', '198.18.0.2:8006:open', '198.18.0.2:8007:open', '198.18.0.2:8008:closed', '198.18.0.2:8009:closed', '198.18.0.2:8010:closed', '198.18.0.2:8011:closed', '198.18.0.2:8012:closed', '198.18.0.2:8013:closed', '198.18.0.2:8014:closed', '198.18.0.2:8015:closed'] received=16 duplicates=10",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c03_multi_ports.run2",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "17 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 17, 'sha256': 'c6d67076aa8780fce70977008a1a765d0e0c841fecb9fa13113b151a53041053', 'size': 1248} actual=c6d67076aa87/1248/17",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17} vs pcap 17",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92536, 'rx_end': 92541, 'rx_ready': 92536, 'tx_before': 2876377, 'tx_end': 2876389, 'tx_ready': 2876377}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=17",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [17, 17]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852682.514443, 1792852685.312665, 1792852689.199593, 1792852694.7312121]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4088248}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 7, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] total=4 unique=4",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 2 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "31d8ac0659be vs 31d8ac0659be",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=8 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] received=4 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c04_exclude.run1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "17 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 17, 'sha256': '7165229a49b502e5ab7891aae0de6935d60f6c024c5e4979fa5ca6a125000d56', 'size': 1248} actual=7165229a49b5/1248/17",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17} vs pcap 17",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92541, 'rx_end': 92546, 'rx_ready': 92541, 'tx_before': 2876389, 'tx_end': 2876401, 'tx_ready': 2876389}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=17",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [17, 17]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852719.028803, 1792852721.864745, 1792852725.800349, 1792852731.350512]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4088470}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 7, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] total=4 unique=4",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 2 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "31d8ac0659be vs 31d8ac0659be",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=8 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] received=4 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c04_exclude.run2",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "17 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 17, 'sha256': '57f885104d4f16c2f82250aaf2145e054fb89d76f332ec5ffa7239a785d53287', 'size': 1248} actual=57f885104d4f/1248/17",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17} vs pcap 17",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92546, 'rx_end': 92551, 'rx_ready': 92546, 'tx_before': 2876401, 'tx_end': 2876413, 'tx_ready': 2876401}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=17",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [17, 17]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852755.818491, 1792852758.6650019, 1792852762.589046, 1792852768.1441762]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4088697}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 7, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] total=4 unique=4",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 2 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "242d74ac6567 vs 242d74ac6567",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=8 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] received=4 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c05_srcport_single.run1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "15 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 15, 'sha256': '77d307e2c0a69ecbb394306cd71f94892d107264f5f309c2910ad90ed060bd1f', 'size': 1132} actual=77d307e2c0a6/1132/15",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 15, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 15}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 15, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 15}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 15, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 15} vs pcap 15",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92551, 'rx_end': 92555, 'rx_ready': 92551, 'tx_before': 2876413, 'tx_end': 2876424, 'tx_ready': 2876413}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=15",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [15, 15]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852792.6248698, 1792852795.476175, 1792852799.37281, 1792852803.3466492]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4088924}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 7, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] total=4 unique=4",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 2 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "242d74ac6567 vs 242d74ac6567",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=8 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] received=4 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c05_srcport_single.run2",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "15 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 15, 'sha256': '1e7403dfad812382bd2d06420102504012bbbd78a933f65a5f0740635d047164', 'size': 1132} actual=1e7403dfad81/1132/15",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 15, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 15}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 15, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 15}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 15, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 15} vs pcap 15",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92556, 'rx_end': 92560, 'rx_ready': 92556, 'tx_before': 2876425, 'tx_end': 2876436, 'tx_ready': 2876425}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=15",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [15, 15]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852827.84059, 1792852830.638742, 1792852834.539188, 1792852838.517815]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4089139}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 7, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] total=4 unique=4",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 2 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "935c76c968df vs 935c76c968df",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=8 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] received=4 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c06_srcport_range.run1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "17 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 17, 'sha256': 'a8e9f5425f6a750c108a986a6ba2cc14c934edc99f8df1e29a1143712fa783f8', 'size': 1248} actual=a8e9f5425f6a/1248/17",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 17, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 17} vs pcap 17",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92560, 'rx_end': 92565, 'rx_ready': 92560, 'tx_before': 2876436, 'tx_end': 2876448, 'tx_ready': 2876436}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=17",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [17, 17]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852862.917964, 1792852865.730829, 1792852869.617341, 1792852875.1825101]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4089358}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 7, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] total=4 unique=4",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 2 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "935c76c968df vs 935c76c968df",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=8 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed', '198.18.0.2:82:closed'] received=4 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "c06_srcport_range.run2",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "96 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 96, 'sha256': '14c8a8292582ece3d49e5a5d94e200a8b0b42c970be7d8a3c1a4101a338e84aa', 'size': 6778} actual=14c8a8292582/6778/96",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 96, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 96}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 96, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 96}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 96, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 96} vs pcap 96",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92662, 'rx_end': 92667, 'rx_ready': 92662, 'tx_before': 2876827, 'tx_end': 2876918, 'tx_ready': 2876827}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=96",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [96, 96]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853366.5939178, 1792853370.167562, 1792853374.090862, 1792853379.121755]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4092446}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 86, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] total=3 unique=3",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 1 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "2ccc1de64fef vs 2ccc1de64fef",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:8099:closed', '198.18.0.2:80:open', '198.18.0.2:81:closed'] want=['198.18.0.2:443:open', '198.18.0.2:8099:closed', '198.18.0.2:80:open', '198.18.0.2:81:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=7 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] received=3 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    },
+    {
+     "detail": "injected=80 on_wire=80 kinds={'other_ip': 20, 'unscanned_port': 20, 'wrong_cookie': 20, 'wrong_dst_port': 20}",
+     "name": "every injected foreign frame is in the peer pcap (they really reached the wire)",
+     "result": "PASS"
+    },
+    {
+     "detail": "inside=80 of 80",
+     "name": "foreign frames arrived inside the scan's receive window",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed']",
+     "name": "no foreign reply became a result (results == listener truth exactly)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "x01_foreign_replies.run1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "94 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 94, 'sha256': '759e10ce899d9d3fcf73798af92f9b635ec9d3d4da1afa2947457a6a687aaad6', 'size': 6662} actual=759e10ce899d/6662/94",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 94, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 94}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 94, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 94}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 94, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 94} vs pcap 94",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92570, 'rx_end': 92574, 'rx_ready': 92570, 'tx_before': 2876539, 'tx_end': 2876629, 'tx_ready': 2876539}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=94",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [94, 94]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852936.429617, 1792852940.004529, 1792852943.925296, 1792852948.1510231]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4089813}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "rc=0",
+     "name": "guest exit code 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "status=ok reason=Completed detail=",
+     "name": "outcome Completed",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sent': 4, 'next_index': 4, 'range': 4, 'expected_total': 4}",
+     "name": "sent == next_index == range == expected SYN count (4)",
+     "result": "PASS"
+    },
+    {
+     "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
+     "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 86, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 4, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] total=3 unique=3",
+     "name": "results == expected Open/Closed from the peer's listeners (2 open, 1 closed)",
+     "result": "PASS"
+    },
+    {
+     "detail": "2ccc1de64fef vs 2ccc1de64fef",
+     "name": "fixture sha256 == fixtures/manifest.json",
+     "result": "PASS"
+    },
+    {
+     "detail": "binding-matching=4 all=4",
+     "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
+     "result": "PASS"
+    },
+    {
+     "detail": "4 SYN frames identical and in order",
+     "name": "SYN bytes and order == C oracle fixture (byte-exact)",
+     "result": "PASS"
+    },
+    {
+     "detail": "all=4 scanner=4 want=4",
+     "name": "no SYN on the wire other than the scanner's",
+     "result": "PASS"
+    },
+    {
+     "detail": "c=['198.18.0.2:443:open', '198.18.0.2:8099:closed', '198.18.0.2:80:open', '198.18.0.2:81:closed'] want=['198.18.0.2:443:open', '198.18.0.2:8099:closed', '198.18.0.2:80:open', '198.18.0.2:81:closed']",
+     "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
+     "result": "PASS"
+    },
+    {
+     "detail": "wire=7 unique=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] received=3 duplicates=3",
+     "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
+     "result": "PASS"
+    },
+    {
+     "detail": "injected=80 on_wire=80 kinds={'other_ip': 20, 'unscanned_port': 20, 'wrong_cookie': 20, 'wrong_dst_port': 20}",
+     "name": "every injected foreign frame is in the peer pcap (they really reached the wire)",
+     "result": "PASS"
+    },
+    {
+     "detail": "inside=80 of 80",
+     "name": "foreign frames arrived inside the scan's receive window",
+     "result": "PASS"
+    },
+    {
+     "detail": "got=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed'] want=['198.18.0.2:443:open', '198.18.0.2:80:open', '198.18.0.2:81:closed']",
+     "name": "no foreign reply became a result (results == listener truth exactly)",
+     "result": "PASS"
+    }
+   ],
+   "tag": "x01_foreign_replies.run2",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "3 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 3, 'sha256': '65937f0bb82b2e788ccfa6a22e8b9e5b0ad329ecde0afc046c365582ca9fff3e', 'size': 252} actual=65937f0bb82b/252/3",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 3, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 3}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 3, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 3}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 3, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 3} vs pcap 3",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92574, 'rx_end': 92574, 'rx_ready': 92574, 'tx_before': 2876629, 'tx_end': 2876632, 'tx_ready': 2876629}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=3",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [3, 3]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792852973.2680478, 1792852976.1002638, 1792852979.966141, 1792852983.921914]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4090048}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Paused', 'sent': 0, 'next_index': 0, 'checkpoint': True, 'checkpoint_next_index': 0, 'rc': 0}",
+     "name": "N=0 pause leg: rc 0, Paused, sent=0, next_index=0, checkpoint written",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 0, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 0, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "N=0 pause leg: rx_health measured 0, net.tx_sent == 0",
+     "result": "PASS"
+    },
+    {
+     "detail": "functional/runs/pause_N0/checkpoint.bin",
+     "name": "checkpoint file recorded",
+     "result": "PASS"
+    }
+   ],
+   "tag": "pause_N0",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "53 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 53, 'sha256': '560cbd6def22116159d0336131e96d53d0a8c3fe3d3c317d684885e709cad508', 'size': 3888} actual=560cbd6def22/3888/53",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53} vs pcap 53",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92574, 'rx_end': 92591, 'rx_ready': 92574, 'tx_before': 2876632, 'tx_end': 2876668, 'tx_ready': 2876632}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=53",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [53, 53]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853009.832984, 1792853012.651723, 1792853016.580852, 1792853022.1311622]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4090269}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Completed', 'sent': 16, 'start_index': 0, 'next_index': 16, 'rc': 0}",
+     "name": "N=0 resume leg: rc 0, Completed, sent=16",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0}",
+     "name": "N=0 resume leg: rx_health measured 0",
+     "result": "PASS"
+    }
+   ],
+   "tag": "resume_N0",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "7 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 7, 'sha256': '1a4acea2d5ac99bf54ab67f113826c12d5fb081713e0917bbf814f77a1ac82ae', 'size': 548} actual=1a4acea2d5ac/548/7",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7} vs pcap 7",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92591, 'rx_end': 92592, 'rx_ready': 92591, 'tx_before': 2876668, 'tx_end': 2876674, 'tx_ready': 2876668}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=7",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [7, 7]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853046.690668, 1792853049.5122502, 1792853053.4234161, 1792853057.357038]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4090501}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Paused', 'sent': 1, 'next_index': 1, 'checkpoint': True, 'checkpoint_next_index': 1, 'rc': 0}",
+     "name": "N=1 pause leg: rc 0, Paused, sent=1, next_index=1, checkpoint written",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 3, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 1, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "N=1 pause leg: rx_health measured 0, net.tx_sent == 1",
+     "result": "PASS"
+    },
+    {
+     "detail": "functional/runs/pause_N1/checkpoint.bin",
+     "name": "checkpoint file recorded",
+     "result": "PASS"
+    }
+   ],
+   "tag": "pause_N1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "49 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 49, 'sha256': '7b85a70232690701affba87f33b7821c9d8bb1d2fe03b572893897a46e142922', 'size': 3592} actual=7b85a7023269/3592/49",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 49, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 49}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 49, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 49}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 49, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 49} vs pcap 49",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92593, 'rx_end': 92609, 'rx_ready': 92593, 'tx_before': 2876675, 'tx_end': 2876708, 'tx_ready': 2876675}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=49",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [49, 49]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853083.082512, 1792853085.9111629, 1792853089.858173, 1792853095.4037938]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4090719}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Completed', 'sent': 15, 'start_index': 1, 'next_index': 16, 'rc': 0}",
+     "name": "N=1 resume leg: rc 0, Completed, sent=15",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0}",
+     "name": "N=1 resume leg: rx_health measured 0",
+     "result": "PASS"
+    }
+   ],
+   "tag": "resume_N1",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "29 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 29, 'sha256': 'be2561f347076e0c0c405d8b32421d4f247cf2abfe493494d84f6b1991205955', 'size': 2128} actual=be2561f34707/2128/29",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 29, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 29}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 29, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 29}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 29, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 29} vs pcap 29",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92609, 'rx_end': 92618, 'rx_ready': 92609, 'tx_before': 2876708, 'tx_end': 2876728, 'tx_ready': 2876708}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=29",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [29, 29]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853119.765395, 1792853122.6059048, 1792853126.516706, 1792853132.0432472]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4090951}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Paused', 'sent': 8, 'next_index': 8, 'checkpoint': True, 'checkpoint_next_index': 8, 'rc': 0}",
+     "name": "N=8 pause leg: rc 0, Paused, sent=8, next_index=8, checkpoint written",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 13, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 8, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "N=8 pause leg: rx_health measured 0, net.tx_sent == 8",
+     "result": "PASS"
+    },
+    {
+     "detail": "functional/runs/pause_N8/checkpoint.bin",
+     "name": "checkpoint file recorded",
+     "result": "PASS"
+    }
+   ],
+   "tag": "pause_N8",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "29 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 29, 'sha256': '1757df3eefae9c1de38cc4275c683269a5e1fffac470542b0759358d25b86d48', 'size': 2128} actual=1757df3eefae/2128/29",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 29, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 29}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 29, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 29}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 29, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 29} vs pcap 29",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92618, 'rx_end': 92627, 'rx_ready': 92618, 'tx_before': 2876728, 'tx_end': 2876748, 'tx_ready': 2876728}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=29",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [29, 29]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853157.8220842, 1792853160.701678, 1792853164.6083891, 1792853170.1724339]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4091176}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Completed', 'sent': 8, 'start_index': 8, 'next_index': 16, 'rc': 0}",
+     "name": "N=8 resume leg: rc 0, Completed, sent=8",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0}",
+     "name": "N=8 resume leg: rx_health measured 0",
+     "result": "PASS"
+    }
+   ],
+   "tag": "resume_N8",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "51 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 51, 'sha256': '8d80ac1d05b141080eb7f496c471d0c56d78da03d0feaf1714bdf0525bedc88d', 'size': 3744} actual=8d80ac1d05b1/3744/51",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 51, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 51}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 51, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 51}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 51, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 51} vs pcap 51",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92627, 'rx_end': 92643, 'rx_ready': 92627, 'tx_before': 2876748, 'tx_end': 2876783, 'tx_ready': 2876748}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=51",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [51, 51]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853194.777843, 1792853197.590772, 1792853201.5823958, 1792853206.3301911]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4091410}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Paused', 'sent': 15, 'next_index': 15, 'checkpoint': True, 'checkpoint_next_index': 15, 'rc': 0}",
+     "name": "N=15 pause leg: rc 0, Paused, sent=15, next_index=15, checkpoint written",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 30, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 15, 'tx_uncertain': 0, 'tx_would_block': 0}",
+     "name": "N=15 pause leg: rx_health measured 0, net.tx_sent == 15",
+     "result": "PASS"
+    },
+    {
+     "detail": "functional/runs/pause_N15/checkpoint.bin",
+     "name": "checkpoint file recorded",
+     "result": "PASS"
+    }
+   ],
+   "tag": "pause_N15",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "7 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 7, 'sha256': 'b7fed67ca53db99d80d8632748dc2c2611a0a0095e3f294e9ca47528ec336646', 'size': 512} actual=b7fed67ca53d/512/7",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 7, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 7} vs pcap 7",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92643, 'rx_end': 92645, 'rx_ready': 92643, 'tx_before': 2876783, 'tx_end': 2876788, 'tx_ready': 2876783}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=7",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [7, 7]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853232.0201778, 1792853234.81776, 1792853238.614572, 1792853244.1768289]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4091630}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "run.json job echo == the case and the binding",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Completed', 'sent': 1, 'start_index': 15, 'next_index': 16, 'rc': 0}",
+     "name": "N=15 resume leg: rc 0, Completed, sent=1",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0}",
+     "name": "N=15 resume leg: rx_health measured 0",
+     "result": "PASS"
+    }
+   ],
+   "tag": "resume_N15",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "53 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 53, 'sha256': 'e3744084fbf63dac2d8fbfab737c7fc30faa30ee754b3d666376952fc4314a63', 'size': 3888} actual=e3744084fbf6/3888/53",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 53, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 53} vs pcap 53",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92645, 'rx_end': 92662, 'rx_ready': 92645, 'tx_before': 2876788, 'tx_end': 2876824, 'tx_ready': 2876788}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=53",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [53, 53]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853268.561593, 1792853271.379002, 1792853275.332993, 1792853280.1129758]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4091857}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'reason': 'Completed', 'checkpoint': False, 'sent': 16}",
+     "name": "pause-after == range ends Completed with NO checkpoint",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'kernel_drops': 0}",
+     "name": "rx_health measured 0",
+     "result": "PASS"
+    }
+   ],
+   "tag": "complete_nopause",
+   "verdict": "PASS"
+  },
+  {
+   "checks": [
+    {
+     "detail": "3 frames",
+     "name": "peer.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "0 frames",
+     "name": "eno1.pcap is a complete pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=1a446c594d86db52fbfa9a07962dc8cc1b662ca9 manifest=1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
+     "name": "run.json comes from the manifest's commit (not another build)",
+     "result": "PASS"
+    },
+    {
+     "detail": "run=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c manifest=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
+     "result": "PASS"
+    },
+    {
+     "detail": "meta=08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+     "name": "guest hashed the same exe before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
+     "name": "the run was a Windows process",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 3, 'sha256': '10cce4a47c4ea90035c9a2c80ec9dfd7599c5325017521fd864e591d398d1fd7', 'size': 252} actual=10cce4a47c4e/252/3",
+     "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 3, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 3}",
+     "name": "peer tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 3, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 3}",
+     "name": "peer capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 3, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 3} vs pcap 3",
+     "name": "peer captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "peer filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
+     "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 tcpdump statistics recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
+     "name": "eno1 capture has no kernel or interface drops",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
+     "name": "eno1 captured == received by filter == frames in the pcap",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 tcpdump confirmed listening before the guest started",
+     "result": "PASS"
+    },
+    {
+     "detail": "",
+     "name": "eno1 filter recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'rx_before': 92662, 'rx_end': 92662, 'rx_ready': 92662, 'tx_before': 2876824, 'tx_end': 2876827, 'tx_ready': 2876824}",
+     "name": "peer interface counters recorded",
+     "result": "PASS"
+    },
+    {
+     "detail": "frames=3",
+     "name": "peer pcap frames lie in the lab0 rx+tx counter window [3, 3]",
+     "result": "PASS"
+    },
+    {
+     "detail": "markers=3",
+     "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'quiet_s': 1.5, 'reached': True}",
+     "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
+     "result": "PASS"
+    },
+    {
+     "detail": "[1792853307.841802, 1792853310.666137, 1792853311.427101, 1792853315.399911]",
+     "name": "capture started before the guest and stopped after it (UTC order)",
+     "result": "PASS"
+    },
+    {
+     "detail": "eno1 frames=0",
+     "name": "eno1 saw 0 lab packets (isolation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-pre: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "raw_run_allowed=True violations=[]",
+     "name": "status-post: raw_run_allowed true, no isolation violations",
+     "result": "PASS"
+    },
+    {
+     "detail": "[]",
+     "name": "guest Verify ok before the run",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4092083}",
+     "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "detail": "ok",
+     "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
+     "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "detail": "{'status': 'error', 'error': 'AlreadyCompleted', 'opened_adapter': False, 'tx_sent': 0, 'rc': 4}",
+     "name": "completed job is refused (AlreadyCompleted) before the adapter opens",
+     "result": "PASS"
+    },
+    {
+     "detail": "syns=0",
+     "name": "no scanner SYN reached the wire",
+     "result": "PASS"
+    }
+   ],
+   "tag": "refuse_completed",
+   "verdict": "PASS"
+  }
+ ],
+ "schema": 1,
+ "totals": {
+  "FAIL": 0,
+  "INVALID": 0,
+  "NOT RUN": 0,
+  "PASS": 29
+ }
+}

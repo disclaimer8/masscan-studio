@@ -1,0 +1,10 @@
+1a446c594d86db52fbfa9a07962dc8cc1b662ca9
+-rw-r--r--@ 1 user  wheel  1761280 Oct 24 15:30 /tmp/t4a-1a446c594d86db52fbfa9a07962dc8cc1b662ca9.tar
+    Checking clap v4.6.7
+    Checking rmasscan-core v0.1.0 (C:\Users\lab\src\rmasscan-1a446c5\rmasscan\crates\rmasscan-core)
+    Checking rmasscan-engine v0.1.0 (C:\Users\lab\src\rmasscan-1a446c5\rmasscan\crates\rmasscan-engine)
+    Checking rmasscan-cli v0.1.0 (C:\Users\lab\src\rmasscan-1a446c5\rmasscan\crates\rmasscan-cli)
+    Checking rmasscan-net v0.1.0 (C:\Users\lab\src\rmasscan-1a446c5\rmasscan\crates\rmasscan-net)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.48s
+
+[exited with code 0]

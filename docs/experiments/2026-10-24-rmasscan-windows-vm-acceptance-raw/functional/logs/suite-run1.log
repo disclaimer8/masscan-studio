@@ -1,0 +1,25 @@
+[15:34:50] c01_one_addr_port_synack.run1: done guest_rc=0 peer_frames=9 eno1_frames=0 quiet=True
+[15:35:26] c01_one_addr_port_synack.run2: done guest_rc=0 peer_frames=9 eno1_frames=0 quiet=True
+[15:36:03] c02_one_addr_port_rst.run1: done guest_rc=0 peer_frames=7 eno1_frames=0 quiet=True
+[15:36:39] c02_one_addr_port_rst.run2: done guest_rc=0 peer_frames=7 eno1_frames=0 quiet=True
+[15:37:16] c03_multi_ports.run1: done guest_rc=0 peer_frames=53 eno1_frames=0 quiet=True
+[15:37:52] c03_multi_ports.run2: done guest_rc=0 peer_frames=53 eno1_frames=0 quiet=True
+[15:38:28] c04_exclude.run1: done guest_rc=0 peer_frames=17 eno1_frames=0 quiet=True
+[15:39:05] c04_exclude.run2: done guest_rc=0 peer_frames=17 eno1_frames=0 quiet=True
+[15:39:42] c05_srcport_single.run1: done guest_rc=0 peer_frames=17 eno1_frames=0 quiet=True
+[15:40:17] c05_srcport_single.run2: done guest_rc=0 peer_frames=15 eno1_frames=0 quiet=True
+[15:40:52] c06_srcport_range.run1: done guest_rc=0 peer_frames=15 eno1_frames=0 quiet=True
+[15:41:29] c06_srcport_range.run2: done guest_rc=0 peer_frames=17 eno1_frames=0 quiet=True
+[15:42:06] x01_foreign_replies.run1: done guest_rc=0 peer_frames=94 eno1_frames=0 quiet=True
+[15:42:42] x01_foreign_replies.run2: done guest_rc=0 peer_frames=94 eno1_frames=0 quiet=True
+[15:43:18] pause_N0: done guest_rc=0 peer_frames=3 eno1_frames=0 quiet=True
+[15:43:56] resume_N0: done guest_rc=0 peer_frames=53 eno1_frames=0 quiet=True
+[15:44:31] pause_N1: done guest_rc=0 peer_frames=7 eno1_frames=0 quiet=True
+[15:45:09] resume_N1: done guest_rc=0 peer_frames=49 eno1_frames=0 quiet=True
+[15:45:46] pause_N8: done guest_rc=0 peer_frames=29 eno1_frames=0 quiet=True
+[15:46:24] resume_N8: done guest_rc=0 peer_frames=29 eno1_frames=0 quiet=True
+[15:47:00] pause_N15: done guest_rc=0 peer_frames=51 eno1_frames=0 quiet=True
+[15:47:38] resume_N15: done guest_rc=0 peer_frames=7 eno1_frames=0 quiet=True
+[15:48:14] complete_nopause: done guest_rc=0 peer_frames=53 eno1_frames=0 quiet=True
+[15:48:49] refuse_completed: done guest_rc=4 peer_frames=3 eno1_frames=0 quiet=True
+[15:48:50] all planned runs executed; verify offline with windows_wire_verify.py --dir $REPO/docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional

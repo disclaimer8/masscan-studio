@@ -2040,6 +2040,17 @@ fn provenance_report(man: &Value) -> Value {
                 orch["git_commit"], man["code_commit"]
             ));
         }
+        match orch["build_commit"].as_str() {
+            Some("unknown") => warnings.push(
+                "orchestrator build commit is unknown (RMASSCAN_LAB_BUILD_COMMIT was not set at build time); the binary sha256 is the only build identity"
+                    .to_owned(),
+            ),
+            Some(b) if b != man["code_commit"].as_str().unwrap_or("") => warnings.push(format!(
+                "orchestrator binary was built from commit {b}, which differs from the commit under test {}",
+                man["code_commit"]
+            )),
+            _ => {}
+        }
     }
     if verifier["git_dirty"] == true {
         warnings.push("verifier was built from uncommitted changes to tracked files".to_owned());
@@ -2205,10 +2216,12 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let p = &res["provenance"];
     let short = |v: &Value| s(v).chars().take(12).collect::<String>();
     println!(
-        "provenance: orchestrator {} dirty={} binary {}; verifier {} dirty={} binary {}",
+        "provenance: orchestrator built from {} (checkout head {}) dirty={} binary sha256 {} (authoritative); verifier built from {} (checkout head {}) dirty={} binary sha256 {}",
+        short(&p["orchestrator"]["build_commit"]),
         short(&p["orchestrator"]["git_commit"]),
         p["orchestrator"]["git_dirty"],
         short(&p["orchestrator"]["binary_sha256"]),
+        short(&p["verifier"]["build_commit"]),
         short(&p["verifier"]["git_commit"]),
         p["verifier"]["git_dirty"],
         short(&p["verifier"]["binary_sha256"]),

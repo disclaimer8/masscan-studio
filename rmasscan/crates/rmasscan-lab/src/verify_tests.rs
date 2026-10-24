@@ -1941,3 +1941,41 @@ fn status_pre_must_carry_the_nonce_of_this_invocations_guest_verify() {
     let d = Scratch::new("failure", Some(tag));
     assert!(failed_checks(&d, tag).is_empty());
 }
+
+#[test]
+fn the_verdict_reports_the_build_commit_apart_from_the_checkout_head() {
+    let d = Scratch::new("failure", None);
+    let path = d.0.join("manifest.json");
+    let mut m = read_json(&path).unwrap();
+    let warn = |m: &Value| {
+        fs::write(&path, serde_json::to_vec(m).unwrap()).unwrap();
+        let v = verify_dir(&d.0);
+        (
+            v["provenance"]["orchestrator"]["build_commit"].clone(),
+            serde_json::to_string(&v["provenance"]["warnings"]).unwrap(),
+            v["overall"].clone(),
+        )
+    };
+    // Built from the commit under test: no warning about the build.
+    m["orchestrator"]["build_commit"] = m["code_commit"].clone();
+    let (b, w, _) = warn(&m);
+    assert_eq!(b, m["code_commit"]);
+    assert!(!w.contains("orchestrator binary"), "{w}");
+    // Built from another commit than the one under test (the checkout HEAD may still say otherwise).
+    m["orchestrator"]["build_commit"] = json!("2".repeat(40));
+    let (_, w, overall) = warn(&m);
+    assert!(
+        w.contains("binary was built from commit")
+            && w.contains("differs from the commit under test"),
+        "{w}"
+    );
+    assert_eq!(overall, PASS, "reported, not refused");
+    // Not embedded: said plainly, the binary hash is the identity.
+    m["orchestrator"]["build_commit"] = json!("unknown");
+    let (_, w, _) = warn(&m);
+    assert!(w.contains("build commit is unknown"), "{w}");
+    // Malformed: the build record is not acceptable evidence.
+    m["orchestrator"]["build_commit"] = json!("abc");
+    fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+    assert_eq!(verify_dir(&d.0)["overall"], "INVALID");
+}

@@ -25,3 +25,14 @@ eno1 везде 0 кадров). Пакеты шли только с `\Device\NP
 отдаёт `Uncertain` (159 из 160; одна первая отправка ещё `Sent`), recv пустой за 42 мс, health остаётся `Some(0)`, ошибок нет. После up ещё 8 отправок `Uncertain` (линк
 поднимается с задержкой), затем `Sent`. Зависаний нет, максимум любого вызова 45.7 мс. Движок на Uncertain падает сразу (e11) и не повторяет отправку.
 Ограничение: rc 0 при выключенном TAP на хосте (спайк) и потеря линка у пира-ноды по-прежнему не видны; здесь измерена именно потеря линка гостевого NIC.
+
+## Removed interpreter-dependent tools
+
+The repository allows no Python (CI guard `.github/workflows/no-python.yml`, `scripts/no-python.sh`). The files below invoked an interpreter and were deleted; the evidence data in this directory is unchanged. Each file is recoverable from git: `git show 5bcf8d5:docs/experiments/<path> | shasum -a 256` must print the recorded sha256. The corresponding lines were removed from `MANIFEST.sha256` (their hashes are recorded here instead).
+
+| Path (under `docs/experiments/`) | Last commit containing it | Last changed in | sha256 |
+|---|---|---|---|
+| `2026-10-24-rmasscan-windows-adapter-live/tools/flood.py` | `5bcf8d5` | `3089832` | `38baeb338e8ef69a1580e05a30fd91a9c2e99c4b515219d25fb21dec2a0bb00f` |
+| `2026-10-24-rmasscan-windows-adapter-live/tools/listener.py` | `5bcf8d5` | `3089832` | `1de47b7c9da8c221911544fb6c8c0d25d277226b8d5f253feee026f8864dbe4c` |
+| `2026-10-24-rmasscan-windows-adapter-live/tools/qmp_link.py` | `5bcf8d5` | `3089832` | `af3ecbe1c8d14376952832cbdfdeac5faf79586e4c6c9ae81624e0adfebdbf6a` |
+| `2026-10-24-rmasscan-windows-adapter-live/tools/orch.sh` | `5bcf8d5` | `3089832` | `c0c946f6e11cfa81fc8790b02d020d6c0d376dc916fc959aa6e7cc45d93a2cfd` |

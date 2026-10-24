@@ -488,3 +488,37 @@ fn only_gnu_time_with_verbose_output_satisfies_the_perf_preflight() {
     assert_eq!(gnu_time_metric(gnu, "User time (seconds):"), Some(0.0));
     assert_eq!(gnu_time_metric(gnu, "Elapsed (wall clock) time:"), None);
 }
+
+#[test]
+fn the_suite_comparison_carries_every_run_capture_meta_into_the_verdict() {
+    let dir = scratch("compare");
+    let d = driver_in(&dir);
+    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/wire");
+    let exp = golden.join("c03_multi_addr_ports.run1.pcap");
+    let act = golden.join("c03_multi_addr_ports.run2.pcap");
+    let run = |meta: Value, pcap: Option<PathBuf>| Run {
+        rc: 0,
+        s: json!({}),
+        meta,
+        pcap,
+        wall: 0.0,
+    };
+    let clean = json!({"valid":true,"kernel_drops":0});
+    // A clean capture of an identical stream passes.
+    let ok = run(clean.clone(), Some(act.clone()));
+    assert_eq!(d.compare(&exp, &[&ok]).unwrap().0, 0);
+    // INVALID in the run's meta wins over an identical stream, for any of the legs.
+    for bad in [
+        json!({"valid":false}),
+        json!({"valid":true,"kernel_drops":1}),
+        json!({"valid":true,"kernel_drops":null}),
+    ] {
+        let leg = run(bad.clone(), Some(act.clone()));
+        assert_eq!(d.compare(&exp, &[&ok, &leg]).unwrap().0, 2, "{bad}");
+        assert_eq!(d.compare(&exp, &[&leg]).unwrap().0, 2, "{bad}");
+    }
+    // A run without a capture is an error, never a pass.
+    let none = run(Value::Null, None);
+    assert!(d.compare(&exp, &[&none]).is_err());
+    let _ = fs::remove_dir_all(dir);
+}

@@ -222,43 +222,90 @@ fn manifest(a: &BTreeMap<String, String>) -> Result<i32, String> {
     println!("manifest: all_valid={}", m["all_valid"]);
     Ok(if m["all_valid"] == true { 0 } else { 3 })
 }
-/// Remove personal paths and run-specific namespace names from published JSON.
+/// Remove personal paths and run-specific namespace names from published JSON, in values and in
+/// object keys (the semantics of the regexes
+/// `/(?:home|Users)/[^/\s"']+|/root(?=/)` -> `$HOME` and `wl-(scan|peer)-[0-9]+-[0-9]+` ->
+/// `wl-\1-RUNID`). Hashes and every other value are left untouched.
 pub fn scrub(v: &mut Value) {
     match v {
-        Value::String(s) => {
-            for prefix in ["/Users/", "/home/"] {
-                let mut from = 0;
-                while let Some(i) = s[from..].find(prefix) {
-                    let start = from + i;
-                    let after = start + prefix.len();
-                    let end = s[after..]
-                        .find(|c: char| c == '/' || c.is_whitespace() || c == '\"' || c == '\'')
-                        .map_or(s.len(), |n| after + n);
-                    s.replace_range(start..end, "$HOME");
-                    from = start + 5;
-                }
-            }
-            *s = s.replace("/root/", "$HOME/");
-            for prefix in ["wl-scan-", "wl-peer-"] {
-                let mut from = 0;
-                while let Some(i) = s[from..].find(prefix) {
-                    let start = from + i + prefix.len();
-                    let end = s[start..]
-                        .find(|c: char| !c.is_ascii_digit() && c != '-')
-                        .map_or(s.len(), |n| start + n);
-                    if end > start {
-                        s.replace_range(start..end, "RUNID");
-                        from = start + 5;
-                    } else {
-                        from = start;
-                    }
-                }
+        Value::String(s) => *s = scrub_str(s),
+        Value::Array(a) => a.iter_mut().for_each(scrub),
+        Value::Object(m) => {
+            let old = std::mem::take(m);
+            for (k, mut val) in old {
+                scrub(&mut val);
+                m.insert(scrub_str(&k), val);
             }
         }
-        Value::Array(a) => a.iter_mut().for_each(scrub),
-        Value::Object(m) => m.values_mut().for_each(scrub),
         _ => {}
     }
+}
+fn scrub_str(s: &str) -> String {
+    let home = scrub_home(s);
+    scrub_namespaces(&home)
+}
+fn scrub_home(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        let rest = &s[i..];
+        if let Some(tail) = rest
+            .strip_prefix("/home/")
+            .or_else(|| rest.strip_prefix("/Users/"))
+        {
+            // At least one character that is not '/', whitespace or a quote.
+            let user = tail
+                .find(|c: char| c == '/' || c.is_whitespace() || c == '"' || c == '\'')
+                .unwrap_or(tail.len());
+            if user > 0 {
+                out.push_str("$HOME");
+                i += rest.len() - tail.len() + user;
+                continue;
+            }
+        }
+        if rest.starts_with("/root/") {
+            out.push_str("$HOME");
+            i += "/root".len();
+            continue;
+        }
+        let ch = rest.chars().next().unwrap_or_default();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+fn scrub_namespaces(s: &str) -> String {
+    let digits = |t: &str| t.bytes().take_while(u8::is_ascii_digit).count();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        let rest = &s[i..];
+        for kind in ["scan", "peer"] {
+            let Some(tail) = rest.strip_prefix(&format!("wl-{kind}-")) else {
+                continue;
+            };
+            let a = digits(tail);
+            if a == 0 || tail.as_bytes().get(a) != Some(&b'-') {
+                continue;
+            }
+            let b = digits(&tail[a + 1..]);
+            if b == 0 {
+                continue;
+            }
+            out.push_str(&format!("wl-{kind}-RUNID"));
+            i += rest.len() - tail.len() + a + 1 + b;
+            // resume scanning after the match
+            return scrub_namespaces_tail(out, &s[i..]);
+        }
+        let ch = rest.chars().next().unwrap_or_default();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+fn scrub_namespaces_tail(mut head: String, tail: &str) -> String {
+    head.push_str(&scrub_namespaces(tail));
+    head
 }
 fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     fn checked(args: &[&str]) -> Result<String, String> {
@@ -428,5 +475,58 @@ mod tests {
         assert_eq!(c["syn_from_scanner"], 1);
         assert_eq!(c["synack_from_peer"], 1);
         assert_eq!(c["other"], 1);
+    }
+
+    #[test]
+    fn scrub_removes_home_paths_and_run_namespaces_in_values_and_keys() {
+        let mut v = json!({
+            "/home/alice/work/x": ["/Users/den.k/repo/a b", "ns wl-scan-123-456 and wl-peer-7-89 done"],
+            "k": {"p": "/root/lab", "q": "/home/bob", "r": "path='/Users/c' \"/home/d\""},
+            "n": 5, "t": true, "z": null, "h": "00ff/home/"
+        });
+        scrub(&mut v);
+        assert_eq!(
+            v["$HOME/work/x"][0], "$HOME/repo/a b",
+            "keys are scrubbed too"
+        );
+        assert_eq!(
+            v["$HOME/work/x"][1],
+            "ns wl-scan-RUNID and wl-peer-RUNID done"
+        );
+        assert_eq!(v["k"]["p"], "$HOME/lab");
+        assert_eq!(v["k"]["q"], "$HOME", "ends at the end of the string");
+        assert_eq!(
+            v["k"]["r"], "path='$HOME' \"$HOME\"",
+            "quotes end the user name"
+        );
+        assert_eq!(
+            (v["n"].clone(), v["t"].clone(), v["z"].clone()),
+            (json!(5), json!(true), Value::Null)
+        );
+        assert_eq!(
+            v["h"], "00ff/home/",
+            "an empty user name is not a home path"
+        );
+    }
+
+    #[test]
+    fn scrub_namespace_pattern_is_exactly_wl_kind_digits_dash_digits() {
+        for (input, want) in [
+            ("wl-scan-12-34", "wl-scan-RUNID"),
+            ("wl-scan-12-34-extra", "wl-scan-RUNID-extra"),
+            (
+                "a wl-peer-1-2, wl-peer-3-4",
+                "a wl-peer-RUNID, wl-peer-RUNID",
+            ),
+            ("wl-scan-12", "wl-scan-12"),
+            ("wl-scan-12-", "wl-scan-12-"),
+            ("wl-scan-x-1", "wl-scan-x-1"),
+            ("wl-other-1-2", "wl-other-1-2"),
+            ("/rootkit/x /roots", "/rootkit/x /roots"),
+        ] {
+            let mut v = json!(input);
+            scrub(&mut v);
+            assert_eq!(v, want, "{input}");
+        }
     }
 }

@@ -35,6 +35,8 @@ use crate::io::{AdapterPair, Rx, RxHealth, SendStatus, Tx};
 
 /// Верхняя граница таймаута одного вызова адаптера.
 pub const MAX_IO_TIMEOUT: Duration = Duration::from_millis(50);
+/// Окно TX-stall по умолчанию (решение плана ремедиации, задача 3).
+pub const DEFAULT_TX_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Верхняя граница dedup-кэша.
 pub const MAX_DEDUP_ENTRIES: usize = 100_000;
 /// Как часто RX-поток (по часам engine) проверяет достоверность приёма.
@@ -70,6 +72,10 @@ pub struct EngineOptions {
     pub io_timeout: Duration,
     /// Размер dedup-кэша; обрезается до [`MAX_DEDUP_ENTRIES`].
     pub dedup_capacity: usize,
+    /// Максимум непрерывного `WouldBlockUnsent` для одного кадра по часам
+    /// engine (по умолчанию 10 с, ноль запрещён). Политика времени выполнения:
+    /// не влияет на порядок probe, checkpoint и job digest.
+    pub tx_stall_timeout: Duration,
 }
 
 impl EngineOptions {
@@ -82,6 +88,7 @@ impl EngineOptions {
             progress_interval: Duration::from_millis(250),
             io_timeout: MAX_IO_TIMEOUT,
             dedup_capacity: MAX_DEDUP_ENTRIES,
+            tx_stall_timeout: DEFAULT_TX_STALL_TIMEOUT,
         }
     }
 }
@@ -446,7 +453,13 @@ impl Drop for ExitGuard {
 /// пересмотреть после замеров на реальном адаптере.
 const WOULD_BLOCK_BACKOFF_MICROS: u64 = 1_000;
 
-fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f64) {
+fn run_tx(
+    shared: Arc<Shared>,
+    tx: Box<dyn Tx>,
+    mut cursor: ProbeCursor,
+    rate: f64,
+    stall_micros: u64,
+) {
     let _guard = ExitGuard {
         shared: shared.clone(),
         end: |s| &s.tx_end,
@@ -457,6 +470,10 @@ fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f
     // Один Throttler на TX-поток, плановая скорость, те же часы для start и
     // next_batch.
     let mut throttler = Throttler::start(rate, clock);
+    // Окно TX-stall: начало первой неудачной попытки текущего кадра (по тем же
+    // часам, что и throttle). Сбрасывается только после `Sent`; сон throttle
+    // между кадрами в него не входит, потому что к нему окно уже закрыто.
+    let mut stall_since: Option<u64> = None;
 
     let end = 'run: loop {
         // Конец последовательности сильнее паузы: next_index == range это
@@ -491,8 +508,19 @@ fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f
             let Some(probe) = cursor.current() else {
                 break 'run END_NATURAL;
             };
+            // Граница окна: новая попытка после дедлайна не начинается.
+            let attempt_start = clock.now_micros();
+            if let Some(since) = stall_since
+                && attempt_start.saturating_sub(since) >= stall_micros
+            {
+                stall_fail(&shared, attempt_start.saturating_sub(since));
+                break 'run END_HALTED;
+            }
             match tx.send(&probe.frame, shared.io_timeout) {
                 Ok(SendStatus::Sent) => {
+                    // Sent из уже начатого вызова засчитывается даже после
+                    // границы окна.
+                    stall_since = None;
                     cursor.advance_sent();
                     shared.sent.fetch_add(1, Ordering::AcqRel);
                     shared.position.store(cursor.position(), Ordering::Release);
@@ -500,6 +528,15 @@ fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f
                 }
                 // Кадр точно не ушёл: курсор стоит, предложим тот же кадр.
                 Ok(SendStatus::WouldBlockUnsent) => {
+                    let since = *stall_since.get_or_insert(attempt_start);
+                    let idle = clock.now_micros().saturating_sub(since);
+                    if idle >= stall_micros {
+                        if halted() {
+                            break 'run END_HALTED;
+                        }
+                        stall_fail(&shared, idle);
+                        break 'run END_HALTED;
+                    }
                     // Не крутимся вхолостую: короткое ожидание по тем же
                     // инжектируемым часам, отмена проверяется до и после.
                     if halted() {
@@ -522,6 +559,12 @@ fn run_tx(shared: Arc<Shared>, tx: Box<dyn Tx>, mut cursor: ProbeCursor, rate: f
         }
     };
     shared.tx_end.store(end, Ordering::Release);
+}
+
+fn stall_fail(shared: &Shared, idle_micros: u64) {
+    shared.fail(FailReason::TxStalled {
+        idle_millis: idle_micros / 1_000,
+    });
 }
 
 // ------------------------------------------------------------------ rx ----
@@ -711,6 +754,10 @@ impl Engine {
         if options.io_timeout.is_zero() {
             return Err(StartError::InvalidOptions("io_timeout must be > 0"));
         }
+        if options.tx_stall_timeout.is_zero() {
+            return Err(StartError::InvalidOptions("tx_stall_timeout must be > 0"));
+        }
+        let stall_micros = u64::try_from(options.tx_stall_timeout.as_micros()).unwrap_or(u64::MAX);
         let cursor = ProbeCursor::new(&plan, start_index)?;
         let rate = plan.effective().max_rate();
         let io_timeout = options.io_timeout.min(MAX_IO_TIMEOUT);
@@ -753,7 +800,7 @@ impl Engine {
             let s = shared.clone();
             std::thread::Builder::new()
                 .name("rmasscan-tx".into())
-                .spawn(move || run_tx(s, tx, cursor, rate))
+                .spawn(move || run_tx(s, tx, cursor, rate, stall_micros))
         };
         let tx_thread = match tx_thread {
             Ok(t) => t,

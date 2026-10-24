@@ -1,0 +1,10 @@
+fde090dee228b2113ec2f5edc4df51905fb0739252b66ef196a6610b62db4dfd  rmasscan/target/release/rmasscan-lab
+ef92f6dc663927bcdfebc590ebfc4d8f009c176450395baf96cf05e86d3e423f  rmasscan/target/release/examples/wire_scan
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  $HOME/rmasscan-oracle/masscan/bin/masscan
+bash: line 1: rustc: command not found
+tcpdump version 4.99.6
+libpcap version 1.10.6 (64-bit time_t, with TPACKET_V3)
+OpenSSL 3.5.5 27 Jan 2026
+64-bit build, 64-bit time_t
+Linux a1-To-be-filled-by-O-E-M 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026 x86_64 GNU/Linux
+Ubuntu 26.04.1 LTS

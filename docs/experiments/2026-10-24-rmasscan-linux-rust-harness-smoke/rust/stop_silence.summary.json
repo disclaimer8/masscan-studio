@@ -1,0 +1,113 @@
+{
+  "attempt_id": "02020202020202020202020202020202",
+  "checkpoint": false,
+  "checkpoint_hex": null,
+  "checkpoint_next_index": null,
+  "discarded": 0,
+  "duplicates": 0,
+  "expected_total": 100,
+  "fail_detail": "",
+  "identity": {
+    "binary_path": "$HOME/rl-live/rmasscan/target/release/examples/wire_scan",
+    "binary_sha256": "ef92f6dc663927bcdfebc590ebfc4d8f009c176450395baf96cf05e86d3e423f",
+    "elevated": null,
+    "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "os": {
+      "arch": "x86_64",
+      "family": "linux",
+      "version": null
+    },
+    "restricted_token": null,
+    "source_commit": "unknown"
+  },
+  "job": {
+    "blackrock_rounds": 14,
+    "exclude": null,
+    "iface": "veth-a",
+    "job_digest": "daf14c103c4e42108ed0b730cabee7c7d43631c3c51305953859c0ef720ecc94",
+    "ports": "1-100",
+    "rate": 1,
+    "retries": 0,
+    "router_mac": "02:aa:00:00:00:02",
+    "seed": 1,
+    "shard": "1/1",
+    "source_port": "40000",
+    "src_ip": "10.200.0.100",
+    "src_mac": "02:aa:00:00:00:01",
+    "targets": "10.200.0.77",
+    "wait": 10
+  },
+  "net": {
+    "kernel_drops": 0,
+    "rx_errors": 0,
+    "rx_outgoing": 0,
+    "rx_packets": 0,
+    "rx_truncated": 0,
+    "rx_wrong_interface": 0,
+    "tx_errors": 0,
+    "tx_sent": 3,
+    "tx_uncertain": 0,
+    "tx_would_block": 0
+  },
+  "next_index": 3,
+  "npcap": {
+    "unavailable": "raw packet I/O is not implemented on this platform"
+  },
+  "observe_ms": 1500,
+  "opened_adapter": true,
+  "range": 100,
+  "reason": "Stopped",
+  "received": 0,
+  "replies": [],
+  "reply_total": 0,
+  "reply_unique": 0,
+  "resources": {
+    "cpu_kernel_ms": null,
+    "cpu_user_ms": null,
+    "fds_after_join": 4,
+    "fds_before_open": 4,
+    "fds_open": 6,
+    "peak_working_set_bytes": 2981888,
+    "threads_after_join": 1,
+    "threads_after_join_immediate": 1,
+    "threads_before": 1,
+    "threads_settle_ms": 0.0,
+    "working_set_bytes_after_join": 2981888
+  },
+  "resumed_from_attempt": null,
+  "rx_health": {
+    "kernel_drops": 0
+  },
+  "scan_id": "01010101010101010101010101010101",
+  "sent": 3,
+  "src_mac": "02:aa:00:00:00:01",
+  "src_mac_check": "unverified",
+  "start_index": 0,
+  "status": "ok",
+  "timing": {
+    "first_send_s": 0.000236,
+    "join_ms": 0.147,
+    "last_idx": 3,
+    "last_send_s": 2.000343,
+    "mark_idx": 10,
+    "steady_pps": 0.0,
+    "stop_requested": true,
+    "stop_to_outcome_ms": 21.738,
+    "total_s": 4.025433
+  },
+  "tx_sent_after_observe": 3,
+  "tx_sent_at_join": 3,
+  "wall": {
+    "join_done_utc_ms": 1792880723166,
+    "outcome_utc_ms": 1792880721665,
+    "started_utc_ms": 1792880719141,
+    "t0_utc_ms": 1792880719141
+  },
+  "workers": {
+    "rx_alive_after_join": false,
+    "rx_tid": 1439194,
+    "settle_ms": 0.026,
+    "tx_alive_after_join": false,
+    "tx_tid": 1439195
+  }
+}

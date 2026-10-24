@@ -1,0 +1,4 @@
+tcpdump: listening on veth-b, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+24944 packets captured
+24944 packets received by filter
+0 packets dropped by kernel

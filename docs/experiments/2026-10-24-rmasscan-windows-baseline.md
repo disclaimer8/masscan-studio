@@ -10,7 +10,7 @@ NIC e1000e). Это не проверка физического NIC и не thr
 | --- | --- |
 | Commit | `31a729f` (ветка `feat/rmasscan-stage2b-windows`) |
 | Локальный main | `43ebe35` (merge commit, не отправлен в origin); дерево идентично `31a729f` |
-| Источник в VM | `git archive` tar дерева `31a729f`, sha256 `68b92e3e377005a8b09d5199e6b9dc1c7b4638fff450ca37cfc68bbb0eedabbd` |
+| Источник в VM | `git archive --format=tar 31a729f4a19e733457c88cc6d50030e70b7c899a rmasscan`, sha256 `68b92e3e377005a8b09d5199e6b9dc1c7b4638fff450ca37cfc68bbb0eedabbd` |
 | Каталог в VM | `C:\Users\lab\src\rmasscan-31a729f\rmasscan` |
 | Ревью Linux-базы | remediation final review: APPROVED на `31a729f` |
 | CI на точном HEAD | NOT RUN: push не разрешён. Условие плана «проверить CI exact HEAD перед кодом адаптера» остаётся ОТКРЫТЫМ |
@@ -45,11 +45,31 @@ Windows 11 Pro 10.0.26300. Baseline выполнен на сборке 26300.945
 | Версия | 1.90 (libpcap 1.10.7) |
 | Установщик | официальный `npcap-1.90.exe`, sha256 `682b57e1c05ef375931975c9d6ded40888f4bfdf9f4b11571e654f962f1199b6`, Authenticode Valid, Nmap Software LLC |
 | Способ | обычный GUI-мастер (бесплатная сборка не имеет тихого режима; OEM-ограничение не обходилось); переустановка поверх предыдущей установки с AdminOnly=0 |
-| Параметры | AdminOnly=1, WinPcapCompatible=0, Dot11Support=0, LoopbackSupport=1 (значение по умолчанию установщика; встроен NPF_Loopback, legacy loopback adapter не установлен) |
+| Параметры (реестр) | AdminOnly=1, WinPcapCompatible=0, Dot11Support=0, LoopbackSupport=1 (значение по умолчанию установщика; встроен NPF_Loopback, legacy loopback adapter не установлен) |
 | Служба | `npcap` Running |
-| `C:\Windows\System32\Npcap\wpcap.dll` | 1.10.7, sha256 `332F81CC1671A6D12AB4D20264A00EE16D12F6883745E05C92EE4030B3896A9F` |
-| `C:\Windows\System32\Npcap\Packet.dll` | 1.90, sha256 `6F9116D9747DD356DB97F6DFAF02FE1B9B0859EA3214856F17CED84D790658C2` |
-| Перечисление | elevated `pcap_findalldevs` rc 0, 5 устройств (4 NPF-адаптера + NPF_Loopback, среди них Intel 82574L) |
+| `Npcap\wpcap.dll` | 1.10.7, sha256 `332F81CC1671A6D12AB4D20264A00EE16D12F6883745E05C92EE4030B3896A9F`, подпись Valid (Nmap Software LLC) |
+| `Npcap\Packet.dll` | 1.90, sha256 `6F9116D9747DD356DB97F6DFAF02FE1B9B0859EA3214856F17CED84D790658C2`, подпись Valid (Nmap Software LLC) |
+| `drivers\npcap.sys` | 1.90, sha256 `FC31A31243FF0DC2427EBE6B429ADE2AED33A336CD767D6F403D2ED96738A07B`, подпись Valid (Microsoft Windows Hardware Compatibility Publisher) |
+| Совместимые копии в System32 | `System32\wpcap.dll` и `System32\Packet.dll` отсутствуют |
+
+Происхождение этих значений: установка и первичные значения (service, DLL, 5 устройств) записаны
+агентом на момент установки без сырого вывода; значения в таблице выше подтверждены свежим
+read-only снимком **после обновления 26300.9711**, 2026-10-24T18:15Z (Npcap после обновления не менялся):
+[after-update-npcap.log](2026-10-24-rmasscan-windows-baseline-raw/after-update-npcap.log) (скрипт [after-update-npcap.ps1](2026-10-24-rmasscan-windows-baseline-raw/after-update-npcap.ps1)),
+build: [after-update-os-build.log](2026-10-24-rmasscan-windows-baseline-raw/after-update-os-build.log) (UBR 9711).
+
+Проверка перечисления адаптеров (`pcap_findalldevs`, 2026-10-24T18:15Z, после обновления и после
+добавления лабораторного NIC в Task 2):
+
+- elevated (SSH-сессия администратора): rc 0, 3 устройства: NPF-адаптер `Intel(R) 82574L ... #2`
+  (лабораторный NIC), NPF-адаптер `Intel(R) 82574L` (управляющий NAT) и `NPF_Loopback`
+  ([log](2026-10-24-rmasscan-windows-baseline-raw/after-update-findalldevs-elevated.log)). Во время установки было 5 устройств
+  (4 NPF + NPF_Loopback); текущий набор другой, причина не исследовалась.
+- не-elevated (`runas /trustlevel:0x20000`, без пароля): rc 0, только `NPF_Loopback`; физических
+  адаптеров нет, что согласуется с AdminOnly=1 ([log](2026-10-24-rmasscan-windows-baseline-raw/after-update-findalldevs-nonelevated.log),
+  [скрипт](2026-10-24-rmasscan-windows-baseline-raw/after-update-findalldevs-nonelevated.ps1)). Замечание: строка `whoami /groups` в этом
+  логе показывает метку High Mandatory Level, хотя `IsInRole(Administrators)` = False (отфильтрованный
+  токен); метка в этом выводе не интерпретируется, доказательством служит различие в наборе устройств.
 
 Перезагрузка для Npcap не потребовалась. Драйвер продуктом/ZIP не поставляется.
 
@@ -93,15 +113,20 @@ Windows 11 Pro 10.0.26300. Baseline выполнен на сборке 26300.945
 
 Дополнительный прогон, подписанный `head-a298196-extra`, в действительности выполнен на дереве
 предшествующего amend коммита `f2b035b` (неверное дерево), поэтому недействителен и в evidence не
-включён; из него не делается никаких выводов о `a298196`. Скрипты установки и проверки лежат в
-`C:\Users\lab\masscan-lab` и `C:\Users\lab\base` на VM, не в коде продукта.
+включён; из него не делается никаких выводов о `a298196`. Расположение скриптов в VM (read-only листинг
+[guest-script-locations.log](2026-10-24-rmasscan-windows-baseline-raw/guest-script-locations.log)): отдельные `.ps1` (включая `base.ps1`,
+`np.ps1`, `fd.ps1`, `masscan-winvm-inventory.ps1`) лежат прямо в `C:\Users\lab`; `C:\Users\lab\base`
+содержит только логи (`base.ps1` пересоздаёт его при каждом запуске); `C:\Users\lab\masscan-lab`
+содержит `bootstrap.log`, загруженные установщики `npcap-1.90.exe` и `rustup-init.exe` и каталоги
+`31a729f`, `evidence-31a729f` (не использовался как место для скриптов). Скрипты не входят в код продукта.
 
 ## Evidence
 
 Каталог [2026-10-24-rmasscan-windows-baseline-raw/](2026-10-24-rmasscan-windows-baseline-raw/):
 логи проверок, `manifest.json`, `codes.json`, `inventory.txt`, скрипты `base.ps1`, `np.ps1`,
-`fd.ps1`, контрольные суммы в `MANIFEST.sha256`. Исходный tar (1.2 МБ) не копировался;
-воспроизводится `git archive` дерева `31a729f`, хэш указан выше.
+`fd.ps1` (их вывод на момент установки не сохранялся), свежие снимки `after-update-*` и
+`guest-script-locations.*` (после обновления 26300.9711), контрольные суммы в `MANIFEST.sha256`. Исходный tar (1.2 МБ) не копировался;
+воспроизводится командой `git archive` из таблицы выше, хэш указан там же.
 
 Связанные документы: [windows-vm-access.md](2026-10-24-windows-vm-access.md),
 [windows-vm-inventory.json](2026-10-24-windows-vm-inventory.json).

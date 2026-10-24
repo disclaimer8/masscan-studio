@@ -40,6 +40,7 @@ PASS, FAIL, INVALID, NOT_RUN = "PASS", "FAIL", "INVALID", "NOT RUN"
 ORDER = [NOT_RUN, INVALID, FAIL, PASS]  # worst first
 
 MARKER_ETHERTYPE = b"\x88\xb5"
+END_PAYLOAD = b"WIRELAB-END"
 FOREIGN_IP_ID = 0xF0E1  # IPv4 identification of every injected foreign reply (peer tool + verifier agree)
 
 # ------------------------------------------------------------------ the spec
@@ -267,6 +268,15 @@ def verify_capture(run, man, d, cap, peer_frames, peer_bytes, eno_frames, eno_by
         markers = [t for t, f in peer_frames if f[12:14] == MARKER_ETHERTYPE]
         inv("readiness marker is in the peer pcap (capture proven live before the guest ran)", len(markers) >= 1,
             "markers=%d" % len(markers))
+        if (man.get("capture_schema") or 1) >= 2:
+            ends = [t for t, f in peer_frames if f[12:14] == MARKER_ETHERTYPE and f[14:14 + len(END_PAYLOAD)] == END_PAYLOAD]
+            late = [t for t, f in peer_frames if f[12:14] != MARKER_ETHERTYPE and ends and t > max(ends)]
+            inv("end marker is in the peer pcap and nothing else follows it (the capture tail was flushed)",
+                len(ends) >= 1 and not late, "end_markers=%d frames_after=%d" % (len(ends), len(late)))
+            inv("capture ran with --immediate-mode", "--immediate-mode" in (peer.get("cmd") or []) and
+                "--immediate-mode" in (eno.get("cmd") or []), peer.get("cmd"))
+        else:
+            run.add("end marker not required: capture_schema 1 (older capture, tail protection absent)", PASS)
         q = cap.get("quiet") or {}
         inv("capture reached quiescence before it was stopped (peer counters unchanged)",
             q.get("reached") is True and isinstance(q.get("quiet_s"), (int, float)) and q["quiet_s"] >= 1.0, q)
@@ -437,15 +447,24 @@ def verify_foreign(run, peer_frames, rj, case, bind, inj):
     exp = expected_replies(case)
     run.check("no foreign reply became a result (results == listener truth exactly)", rj.get("replies") == exp,
               "got=%s want=%s" % (rj.get("replies"), exp))
+    # Every injected frame must have been DISCARDED by the engine: a wrong-destination-port frame from :80 would,
+    # if accepted, hide as a duplicate of the genuine :80 result and leave the results unchanged.
+    run.check("engine discarded == injected foreign frames (none absorbed as a result or duplicate)",
+              rj.get("discarded") == inj.get("sent_total"), "discarded=%s injected=%s" % (rj.get("discarded"), inj.get("sent_total")))
+    genuine = len(peer_replies(peer_frames, bind, sports))
+    run.check("duplicates are genuine peer retransmits only (received + duplicates <= genuine replies on the wire)",
+              isinstance(rj.get("duplicates"), int) and rj.get("received", 0) + rj["duplicates"] <= genuine,
+              "received=%s duplicates=%s genuine_on_wire=%d" % (rj.get("received"), rj.get("duplicates"), genuine))
 
 
 # ------------------------------------------------------------------ run dispatch
-def load_run(man, root, item):
-    """Common loading + validity for one planned run. -> (Run, ctx|None)."""
+def load_run(man, root, item, rel=None):
+    """Common loading + validity for one planned run. -> (Run, ctx|None). rel: directory relative to root."""
     run = Run(item["tag"])
-    d = os.path.join(root, "runs", item["tag"])
+    rel = rel or os.path.join("runs", item["tag"])
+    d = os.path.join(root, rel)
     if not os.path.isdir(d):
-        run.add("run directory present", NOT_RUN, "missing runs/%s" % item["tag"])
+        run.add("run directory present", NOT_RUN, "missing %s" % rel)
         return run, None
     bind = Binding(man["binding"])
     rj = try_json(os.path.join(d, "run.json"))
@@ -463,8 +482,8 @@ def load_run(man, root, item):
     return run, dict(d=d, rj=rj, meta=meta, cap=cap, peer_frames=peer_frames, peer_bytes=peer_bytes, bind=bind)
 
 
-def verify_item(man, fx, root, item, ctxs):
-    run, ctx = load_run(man, root, item)
+def verify_item(man, fx, root, item, ctxs, rel=None):
+    run, ctx = load_run(man, root, item, rel)
     ctxs[item["tag"]] = ctx
     if ctx is None:
         return run
@@ -617,15 +636,56 @@ def verify_dir(root):
         result["runs"].append(r.summary())
     for g in verify_pause_groups(man, fx, root, by_tag, ctxs):
         result["groups"].append(g.summary())
+    result["discarded"] = verify_discarded(man, fx, root)
     return finish(result)
+
+
+def verify_discarded(man, fx, root):
+    """Every run moved to runs_discarded/ is verified and listed. INVALID/NOT RUN may be superseded by a rerun;
+    a PASS or FAIL may not (finish() makes overall FAIL for a FAIL, INVALID for a PASS that was discarded)."""
+    out = []
+    base = os.path.join(root, "runs_discarded")
+    if not os.path.isdir(base):
+        return out
+    by_tag = {i["tag"]: i for i in planned(man)}
+    for name in sorted(os.listdir(base)):
+        if not os.path.isdir(os.path.join(base, name)):
+            continue
+        tag = name.rsplit(".", 1)[0]
+        item = by_tag.get(tag)
+        if item is None:
+            r = Run(name)
+            r.add("discarded run belongs to a planned tag", FAIL, "unknown tag %s" % tag)
+        else:
+            r = verify_item(man, fx, root, dict(item, tag=name), {}, rel=os.path.join("runs_discarded", name))
+        s = r.summary()
+        s["tag"] = name
+        out.append(s)
+    return out
 
 
 def finish(result):
     verdicts = [r["verdict"] for r in result["runs"]] + [g["verdict"] for g in result["groups"]]
+    disc = [r["verdict"] for r in result.get("discarded", [])]
     result["totals"] = {v: verdicts.count(v) for v in ORDER}
+    result["discarded_totals"] = {v: disc.count(v) for v in ORDER}
     result["overall"] = PASS if verdicts and all(v == PASS for v in verdicts) else (
         NOT_RUN if NOT_RUN in verdicts else INVALID if INVALID in verdicts else FAIL)
+    if FAIL in disc:  # a behaviour failure can never be rerun away
+        result["overall"] = FAIL
+    elif PASS in disc and result["overall"] == PASS:  # a PASS must not be discarded either
+        result["overall"] = INVALID
     return result
+
+
+def run_verdict(root, tag):
+    """Verdict of runs/<tag> alone (used by the orchestrator before it discards a run)."""
+    man = try_json(os.path.join(root, "manifest.json"))
+    fx = try_json(os.path.join(root, "fixtures", "manifest.json"))
+    item = {i["tag"]: i for i in planned(man or {})}.get(tag)
+    if man is None or item is None:
+        return NOT_RUN
+    return verify_item(man, fx, root, item, {}).verdict
 
 
 def main():
@@ -644,7 +704,7 @@ def main():
         with open(a.out, "w") as f:
             json.dump(res, f, indent=1, sort_keys=True)
             f.write("\n")
-    for r in res["runs"] + res["groups"]:
+    for r in res["runs"] + res["groups"] + res.get("discarded", []):
         bad = [c for c in r["checks"] if c["result"] != PASS]
         print("%-8s %s%s" % (r["verdict"], r["tag"], "" if not bad else "  <- " + "; ".join("%s: %s [%s]" % (c["result"], c["name"], c["detail"][:160]) for c in bad[:3])))
     print("overall: %s  %s" % (res["overall"], res["totals"]))

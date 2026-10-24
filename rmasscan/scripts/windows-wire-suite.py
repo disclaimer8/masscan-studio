@@ -258,8 +258,8 @@ def _do_run(item, argv, args, pm, injector, pre_guest, tag, ev, rev):
     peer_filter = ""
     eno_filter = ("net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host %s or ether host %s "
                   "or ether proto 0x88b5" % (GUEST_MAC, pm))
-    peer_cmd = peer_ns("tcpdump -i lab0 -n -U -B 16384 -s 0 -Z root -w %s/peer.pcap %s" % (rev, peer_filter), sudo=False).strip()
-    eno_cmd = "tcpdump -i eno1 -n -U -B 4096 -s 0 -Z root -w %s/eno1.pcap %s" % (rev, shlex.quote(eno_filter))
+    peer_cmd = peer_ns("tcpdump -i lab0 -n -U --immediate-mode -B 16384 -s 0 -Z root -w %s/peer.pcap %s" % (rev, peer_filter), sudo=False).strip()
+    eno_cmd = "tcpdump -i eno1 -n -U --immediate-mode -B 4096 -s 0 -Z root -w %s/eno1.pcap %s" % (rev, shlex.quote(eno_filter))
     rx0, tx0 = counters()
     remote_bg(peer_cmd, rev + "/peer.pid", rev + "/peer.err")
     remote_bg(eno_cmd, rev + "/eno1.pid", rev + "/eno1.err")
@@ -291,6 +291,16 @@ def _do_run(item, argv, args, pm, injector, pre_guest, tag, ev, rev):
     if inj_pid:
         remote_wait_exit(inj_pid, 15)
     quiet = wait_quiet(counters, QUIET_S, 0.5, 40)
+    # end marker: a distinctive lab-only frame that must reach the pcap BEFORE SIGINT, so that frames still
+    # buffered inside tcpdump (they are older than the marker) are flushed or the run is INVALID
+    home(peer_ns("python3 %s/windows_wire_peer.py marker --iface lab0 --src %s --dst %s --payload WIRELAB-END" % (REMOTE, pm, GUEST_MAC)))
+    end_seen = False
+    try:
+        remote_wait("[ $(tcpdump -nr %s/peer.pcap -A ether proto 0x88b5 2>/dev/null | grep -c WIRELAB-END) -ge 3 ]" % rev, 15, "end marker in the peer capture")
+        end_seen = True
+    except SuiteAbort:
+        pass
+    meta["end_marker_seen"] = end_seen
     rx2, tx2 = counters()
     remote_stop(rev + "/peer.pid")
     remote_stop(rev + "/eno1.pid")
@@ -401,6 +411,16 @@ def run_plan(args, pm):
                    pre_guest=lambda ev, f=forge: forge_checkpoint(args, ev, f))
 
 
+def may_discard(verdict):
+    """Only a run that is INVALID (or never completed: NOT RUN) may be set aside and rerun."""
+    return verdict in (V.INVALID, V.NOT_RUN)
+
+
+def rerun_verdict(out, tag):
+    """What the offline verifier says about runs/<tag> now. PASS and FAIL runs are evidence and are never moved."""
+    return V.run_verdict(out, tag)
+
+
 def len_syn(c):
     return c["syn"]
 
@@ -427,9 +447,9 @@ def fetch_checkpoint(args, it):
 def write_manifest(args, pm):
     fx_src = os.path.join(args.fixtures, "manifest.json")
     fx = json.load(open(fx_src))
-    exe = guest("pwsh -NoProfile -Command \"(Get-FileHash '%s' -Algorithm SHA256).Hash.ToLower(); (Get-Item '%s').Length\"" % (args.guest_exe, args.guest_exe)).stdout.split()
+    exe = guest("pwsh -NoProfile -File %s\\windows_wire_hash.ps1 -Path %s" % (GUEST_DIR, args.guest_exe)).stdout.split()
     man = {
-        "schema": 1, "suite": args.suite, "code_commit": args.commit,
+        "schema": 1, "capture_schema": 2, "suite": args.suite, "code_commit": args.commit,
         "exe": {"sha256": exe[0], "size": int(exe[1]), "guest_path": args.guest_exe,
                 "build": "git archive of code_commit -> ~/winvm/sync-and-test.sh; RMASSCAN_SOURCE_COMMIT=code_commit; "
                          "RUSTFLAGS='-C target-feature=+crt-static'; cargo build --locked --release -p rmasscan-net --example wire_scan"},
@@ -457,6 +477,7 @@ def prepare(args):
     guest("cmd /c if not exist %s\\in mkdir %s\\in" % (GUEST_DIR, GUEST_DIR))
     guest("cmd /c if not exist %s\\cp\\%s mkdir %s\\cp\\%s" % (GUEST_DIR, args.suite, GUEST_DIR, args.suite))
     to_guest(os.path.join(HERE, "windows_wire_run.ps1"), "t4/windows_wire_run.ps1")
+    to_guest(os.path.join(HERE, "windows_wire_hash.ps1"), "t4/windows_wire_hash.ps1")
 
 
 def main():
@@ -482,6 +503,10 @@ def main():
         for t in args.only:
             src = os.path.join(args.out, "runs", t)
             if os.path.exists(src):
+                v = rerun_verdict(args.out, t)
+                if not may_discard(v):
+                    log("STOP: runs/%s is %s; only an INVALID (or incomplete) run may be discarded and rerun" % (t, v))
+                    return 11
                 dst = os.path.join(args.out, "runs_discarded")
                 os.makedirs(dst, exist_ok=True)
                 os.rename(src, os.path.join(dst, "%s.%d" % (t, int(time.time()))))

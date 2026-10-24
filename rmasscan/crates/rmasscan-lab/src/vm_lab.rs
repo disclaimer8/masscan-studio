@@ -1820,6 +1820,23 @@ mod ownership_tests {
         fs::remove_dir_all(p).unwrap();
     }
     #[test]
+    fn an_unexpected_non_physical_port_on_the_bridge_is_named_as_a_violation() {
+        // WR N3: a virtual port (not the TAP, not the host-side veth) enslaved to the lab bridge.
+        break_and_expect(
+            |h| {
+                h.links.borrow_mut().insert(
+                    "dummy9".into(),
+                    Link {
+                        master: Some("wvb-t1".into()),
+                        noarp: true,
+                        ..Default::default()
+                    },
+                );
+            },
+            "unexpected port dummy9 on bridge",
+        );
+    }
+    #[test]
     fn bridge_self_vlan_is_a_violation() {
         break_and_expect(
             |h| {

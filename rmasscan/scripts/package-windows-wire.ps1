@@ -23,7 +23,7 @@
 
 .PARAMETER SkipBuild
   Package an already built target\release\examples\wire_scan.exe (it must have been built
-  with RMASSCAN_SOURCE_COMMIT equal to -Commit).
+  with RMASSCAN_SOURCE_COMMIT equal to -Commit and RUSTFLAGS='-C target-feature=+crt-static').
 #>
 [CmdletBinding()]
 param(
@@ -48,8 +48,16 @@ $Name = "rmasscan-wire-windows-x64-$short"
 
 if (-not $SkipBuild) {
     $env:RMASSCAN_SOURCE_COMMIT = $Commit
-    & cargo build --locked --release -p rmasscan-net --example wire_scan
-    if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
+    # Static MSVC CRT: the EXE then needs neither VCRUNTIME140.dll nor the Visual C++
+    # Redistributable on a stock Windows 11 (no C/C++ code of ours is added; this only
+    # selects how the Rust runtime links Microsoft's own CRT).
+    $prevFlags = $env:RUSTFLAGS
+    $env:RUSTFLAGS = '-C target-feature=+crt-static'
+    try {
+        & cargo build --locked --release -p rmasscan-net --example wire_scan
+        if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
+    }
+    finally { $env:RUSTFLAGS = $prevFlags }
 }
 $exe = Join-Path $Root 'target\release\examples\wire_scan.exe'
 if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }

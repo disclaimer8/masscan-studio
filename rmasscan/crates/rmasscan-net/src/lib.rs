@@ -219,8 +219,8 @@ pub fn nic_mac(_interface_id: &str) -> Option<[u8; 6]> {
     None
 }
 
-/// Версия ОС (`major.minor.build.revision` файла kernel32.dll) для привязки
-/// доказательств к сборке Windows; `None` вне Windows.
+/// Версия ОС (`RtlGetVersion`, ревизия из kernel32.dll при совпадении сборки)
+/// для привязки доказательств к сборке Windows; `None` вне Windows.
 #[cfg(windows)]
 pub fn os_version() -> Option<String> {
     windows::inventory::os_version()
@@ -229,4 +229,50 @@ pub fn os_version() -> Option<String> {
 #[cfg(not(windows))]
 pub fn os_version() -> Option<String> {
     None
+}
+
+/// Снимок собственного процесса для harness. `None` значит «не измерено».
+/// Служебный API лабораторного harness (не часть продуктового контракта).
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProcessSample {
+    pub handles: Option<u64>,
+    pub threads: Option<u64>,
+    pub working_set_bytes: Option<u64>,
+    pub peak_working_set_bytes: Option<u64>,
+    pub cpu_user_ms: Option<u64>,
+    pub cpu_kernel_ms: Option<u64>,
+}
+
+/// Флаги токена процесса (только Windows).
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenFlags {
+    pub elevated: Option<bool>,
+    pub restricted: Option<bool>,
+}
+
+/// Измерения процесса через поддерживаемые API Windows; вне Windows пусто.
+#[doc(hidden)]
+#[cfg(windows)]
+pub fn process_sample() -> ProcessSample {
+    windows::process::process_sample()
+}
+
+#[doc(hidden)]
+#[cfg(not(windows))]
+pub fn process_sample() -> ProcessSample {
+    ProcessSample::default()
+}
+
+#[doc(hidden)]
+#[cfg(windows)]
+pub fn token_flags() -> TokenFlags {
+    windows::process::token_flags()
+}
+
+#[doc(hidden)]
+#[cfg(not(windows))]
+pub fn token_flags() -> TokenFlags {
+    TokenFlags::default()
 }

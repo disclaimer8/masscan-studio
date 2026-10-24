@@ -20,6 +20,9 @@ pub(crate) mod inventory;
 pub(crate) mod loader;
 #[cfg(windows)]
 #[allow(unsafe_code)]
+pub(crate) mod process;
+#[cfg(windows)]
+#[allow(unsafe_code)]
 pub(crate) mod sys;
 
 #[cfg(windows)]

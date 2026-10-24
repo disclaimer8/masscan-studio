@@ -13,6 +13,8 @@
 //! --resume-checkpoint FILE --checkpoint-out FILE --ready-file FILE
 //! --stop-after-ms MS --stop-file FILE --pause-file FILE --stop-in-drain
 //! --no-consume --result-capacity N --observe-ms MS
+//! --rx-stall-ms MS (только стенд: RX-поток спит MS перед первым чтением, сокет
+//! переполняется, ядро считает drops; так воспроизводится RxLoss)
 //! --forge-checkpoint-next-index N (записать checkpoint и выйти, без сети).
 //!
 //! Коды выхода: 0 Completed/Paused/Stopped; 2 ошибка аргументов/плана/
@@ -31,7 +33,7 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{AdapterBinding, ReadyPlan};
 use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::targets::{add_target_string, parse_ports};
-use rmasscan_engine::io::{AdapterPair, IoError, SendStatus, Tx};
+use rmasscan_engine::io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx};
 use rmasscan_engine::{
     CancelHandle, Checkpoint, ENGINE_ALGORITHM_VERSION, Engine, EngineOptions, Event, Reason,
     job_digest,
@@ -64,6 +66,7 @@ struct Args {
     no_consume: bool,
     result_capacity: Option<usize>,
     observe_ms: u64,
+    rx_stall_ms: u64,
     forge_next_index: Option<u64>,
 }
 
@@ -83,6 +86,26 @@ fn hex(b: &[u8]) -> String {
         let _ = write!(s, "{x:02x}");
         s
     })
+}
+
+/// RX-декоратор стенда: один раз спит перед первым чтением, пока TX и ядро
+/// заполняют буфер сокета. Только harness; продуктовый API не меняется.
+struct StallRx {
+    inner: Box<dyn Rx>,
+    stall: Option<Duration>,
+}
+
+impl Rx for StallRx {
+    fn recv(&mut self, buffer: &mut [u8], timeout: Duration) -> Result<Option<usize>, IoError> {
+        if let Some(d) = self.stall.take() {
+            std::thread::sleep(d);
+        }
+        self.inner.recv(buffer, timeout)
+    }
+
+    fn health(&mut self, timeout: Duration) -> Result<RxHealth, IoError> {
+        self.inner.health(timeout)
+    }
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -128,6 +151,7 @@ fn parse_args() -> Result<Args, String> {
             "--result-capacity" => {
                 a.result_capacity = Some(val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?);
             }
+            "--rx-stall-ms" => a.rx_stall_ms = val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?,
             "--observe-ms" => a.observe_ms = val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?,
             "--forge-checkpoint-next-index" => {
                 a.forge_next_index = Some(val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?);
@@ -404,7 +428,14 @@ fn run(a: &Args) -> i32 {
             cancel: cancel.clone(),
             timing: timing.clone(),
         }),
-        rx,
+        rx: if a.rx_stall_ms > 0 {
+            Box::new(StallRx {
+                inner: rx,
+                stall: Some(Duration::from_millis(a.rx_stall_ms)),
+            })
+        } else {
+            rx
+        },
     };
     let mut opts = EngineOptions::new(a.scan_id, a.attempt_id);
     if let Some(c) = a.result_capacity {

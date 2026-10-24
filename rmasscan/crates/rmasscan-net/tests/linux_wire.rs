@@ -351,7 +351,9 @@ fn lab_all_recorded_checks_pass_none_failed_none_not_run() {
         "a lab check FAILED: see results.json"
     );
     assert!(!all.contains("\"result\":\"NOTRUN\"") && !all.contains("\"result\":\"NOT RUN\""));
-    for group in ["parity", "pause", "reject", "stop", "veth"] {
+    for group in [
+        "oracle", "parity", "pause", "reject", "stop", "rxloss", "veth",
+    ] {
         assert!(
             all.contains(&format!("\"group\":\"{group}\"")),
             "group {group} missing"
@@ -400,5 +402,29 @@ fn lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised() {
             "RX socket kernel drops {d}: replies may have been lost"
         );
     }
+    // Достоверность приёма по вердикту engine: измеренный ноль, не null, во всех 20 запусках Rust.
+    let health: Vec<&str> = all
+        .split("\"rust_rx_health_drops_per_run\":[")
+        .skip(1)
+        .map(|t| t.split(']').next().unwrap())
+        .collect();
+    assert_eq!(health.len(), 4, "rust_rx_health_drops_per_run per rate");
+    for d in &health {
+        assert!(
+            d.split(',').count() == 5 && d.split(',').all(|v| v == "0"),
+            "rx_health.kernel_drops must be a measured 0 in every run, got [{d}]"
+        );
+    }
+    let bad: Vec<&str> = all
+        .split("\"rust_rx_health_bad_runs\":")
+        .skip(1)
+        .map(|t| t.split(',').next().unwrap())
+        .collect();
+    assert_eq!(bad.len(), 4);
+    assert!(bad.iter().all(|v| *v == "0"), "rx_health bad runs {bad:?}");
+    assert!(
+        !all.contains("\"valid\":false"),
+        "an INVALID cell: the 40-cell gate stays open (INVALID is never normalised)"
+    );
     // ±20% — открытый gate: этот тест НЕ утверждает паритет скорости.
 }

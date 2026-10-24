@@ -2,6 +2,8 @@
 
 use rmasscan_core::receive::Reply;
 
+use crate::io::RxHealth;
+
 /// Причина отказа.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
@@ -12,6 +14,14 @@ pub enum FailReason {
     TxUncertain,
     TxError(String),
     RxError(String),
+    /// Адаптер сообщил потерю приёма (`kernel_drops` > 0): полнота локального
+    /// приёма не доказана. Это не доказательство потери именно ответа цели
+    /// (счётчик может включать посторонние кадры). Принятые результаты остаются.
+    RxLoss {
+        kernel_drops: u64,
+    },
+    /// Достоверной статистики приёма нет: неизвестное не считается нулём.
+    RxStatsUnavailable,
     /// Паника рабочего потока.
     WorkerPanicked,
     /// Нарушение внутреннего инварианта (не должно случаться).
@@ -51,6 +61,9 @@ pub struct Progress {
 pub struct Outcome {
     pub reason: Reason,
     pub progress: Progress,
+    /// Последнее УСПЕШНО измеренное состояние приёма; `kernel_drops: None`,
+    /// если измерить не удалось (ошибка, нет статистики, измерения не было).
+    pub rx_health: RxHealth,
 }
 
 /// События для потребителя.

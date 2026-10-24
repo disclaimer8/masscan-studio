@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rmasscan_core::throttle::Clock;
 
-use crate::io::{AdapterPair, IoError, Rx, SendStatus, Tx};
+use crate::io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -89,6 +89,17 @@ pub enum RxStep {
     Idle(u32),
 }
 
+/// Ответ фиктивного `Rx::health`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HealthStep {
+    /// Успешное измерение: кумулятивное число потерь.
+    Drops(u64),
+    /// Измерить нельзя (`kernel_drops: None`).
+    Unavailable,
+    /// Ошибка запроса статистики.
+    Fail(String),
+}
+
 type Responder = Box<dyn FnMut(&[u8]) -> Vec<Vec<u8>> + Send>;
 type SendHook = Arc<dyn Fn(usize) + Send + Sync>;
 
@@ -102,6 +113,11 @@ struct State {
     send_calls: u64,
     responder: Option<Responder>,
     hook: Option<SendHook>,
+    /// Разовые ответы health; после их исчерпания действует `health`.
+    health_script: VecDeque<HealthStep>,
+    /// Постоянный ответ health (по умолчанию успешный ноль).
+    health: Option<HealthStep>,
+    health_calls: u64,
 }
 
 /// Фиктивный адаптер. Клонирование даёт второй вид на то же состояние (для
@@ -165,6 +181,21 @@ impl FakeAdapter {
     /// Вызывается в потоке TX вне блокировок адаптера, внутри `send`.
     pub fn set_send_hook(&self, f: impl Fn(usize) + Send + Sync + 'static) {
         lock(&self.st).hook = Some(Arc::new(f));
+    }
+
+    /// Постоянный ответ `Rx::health` (по умолчанию: успешный `Drops(0)`).
+    pub fn set_health(&self, step: HealthStep) {
+        lock(&self.st).health = Some(step);
+    }
+
+    /// Разовые ответы `Rx::health`; после них действует [`Self::set_health`].
+    pub fn script_health(&self, steps: impl IntoIterator<Item = HealthStep>) {
+        lock(&self.st).health_script.extend(steps);
+    }
+
+    /// Сколько раз вызывали `Rx::health`.
+    pub fn health_calls(&self) -> u64 {
+        lock(&self.st).health_calls
     }
 
     /// Кадры со статусом `Sent`, по порядку.
@@ -298,6 +329,25 @@ impl Rx for FakeRx {
                 self.idle(timeout);
                 Ok(None)
             }
+        }
+    }
+
+    fn health(&mut self, _timeout: Duration) -> Result<RxHealth, IoError> {
+        let step = {
+            let mut st = lock(&self.a.st);
+            st.health_calls += 1;
+            st.health_script
+                .pop_front()
+                .or_else(|| st.health.clone())
+                // Явное решение фейка: без сценария приём считается чистым.
+                .unwrap_or(HealthStep::Drops(0))
+        };
+        match step {
+            HealthStep::Drops(n) => Ok(RxHealth {
+                kernel_drops: Some(n),
+            }),
+            HealthStep::Unavailable => Ok(RxHealth { kernel_drops: None }),
+            HealthStep::Fail(m) => Err(IoError::new(m)),
         }
     }
 }

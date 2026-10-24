@@ -675,6 +675,12 @@ impl rmasscan_engine::Rx for PanicRx {
         }
         self.inner.recv(buffer, timeout)
     }
+    fn health(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<rmasscan_engine::RxHealth, rmasscan_engine::IoError> {
+        self.inner.health(timeout)
+    }
 }
 
 /// Tx-обёртка: вторая отправка ждёт барьер (тест уже убедился, что первый кадр

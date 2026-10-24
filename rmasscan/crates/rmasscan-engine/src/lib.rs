@@ -32,4 +32,4 @@ pub use engine::{
 };
 pub use events::{Event, FailReason, Outcome, Progress, Reason};
 pub use identity::{ENGINE_ALGORITHM_VERSION, job_digest};
-pub use io::{AdapterPair, IoError, Rx, SendStatus, Tx};
+pub use io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx};

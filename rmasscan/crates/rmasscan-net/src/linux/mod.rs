@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
-use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, SendStatus, Tx};
+use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
 
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
@@ -216,18 +216,30 @@ impl<I: PacketIo> RxHalf<I> {
         }
     }
 
-    /// Забирает счётчики ядра (чтение сбрасывает их в ядре) и накапливает.
-    fn flush_kernel_stats(&mut self) {
+    /// ЕДИНСТВЕННОЕ место, читающее PACKET_STATISTICS. Чтение сбрасывает
+    /// счётчик ядра, поэтому дельта сразу прибавляется к накопленному итогу
+    /// (`Counters::kernel_drops`) и больше нигде не учитывается: периодический
+    /// сброс в `recv`, `health` и `Drop` лишь разные вызывающие одной функции.
+    /// Неудачное чтение ядро не сбрасывает, значит при ошибке ничего не теряется.
+    /// Возвращает накопленный итог.
+    fn collect_kernel_stats(&mut self) -> Result<u64, Errno> {
         use std::sync::atomic::Ordering::{Relaxed, Release};
-        if let Some(io) = self.io.as_mut()
-            && let Ok(s) = io.packet_stats()
-        {
-            self.counters
-                .kernel_drops
-                .fetch_add(u64::from(s.drops), Relaxed);
-            self.counters.kernel_drops_known.store(true, Release);
-        }
         self.since_stats = 0;
+        let Some(io) = self.io.as_mut() else {
+            return Err(libc::EBADF);
+        };
+        let s = io.packet_stats()?;
+        let delta = u64::from(s.drops);
+        let total = self.counters.kernel_drops.fetch_add(delta, Relaxed) + delta;
+        self.counters.kernel_drops_known.store(true, Release);
+        Ok(total)
+    }
+
+    /// Фоновая сборка для актуальности снимка. Ошибку не скрывает навсегда:
+    /// достоверность проверяет `health`, который делает свежее чтение и
+    /// возвращает ошибку вызывающему.
+    fn flush_kernel_stats(&mut self) {
+        let _ = self.collect_kernel_stats();
     }
 
     fn step(
@@ -306,6 +318,20 @@ impl<I: PacketIo> Rx for RxHalf<I> {
                 self.io = None;
                 Err(IoError::new(msg))
             }
+        }
+    }
+
+    fn health(&mut self, _timeout: Duration) -> Result<RxHealth, IoError> {
+        if self.io.is_none() {
+            return Err(closed_error());
+        }
+        // Свежее чтение: ошибка отдаётся вызывающему, кэшированный итог не
+        // подменяет её.
+        match self.collect_kernel_stats() {
+            Ok(total) => Ok(RxHealth {
+                kernel_drops: Some(total),
+            }),
+            Err(e) => Err(IoError::new(errno_msg("getsockopt(PACKET_STATISTICS)", e))),
         }
     }
 }

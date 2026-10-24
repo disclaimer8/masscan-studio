@@ -31,12 +31,14 @@ use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 use crate::checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 use crate::events::{Event, FailReason, Outcome, Progress, Reason};
 use crate::identity::{ENGINE_ALGORITHM_VERSION, job_digest};
-use crate::io::{AdapterPair, Rx, SendStatus, Tx};
+use crate::io::{AdapterPair, Rx, RxHealth, SendStatus, Tx};
 
 /// Верхняя граница таймаута одного вызова адаптера.
 pub const MAX_IO_TIMEOUT: Duration = Duration::from_millis(50);
 /// Верхняя граница dedup-кэша.
 pub const MAX_DEDUP_ENTRIES: usize = 100_000;
+/// Как часто RX-поток (по часам engine) проверяет достоверность приёма.
+const RX_HEALTH_INTERVAL_MICROS: u64 = 250_000;
 /// 1514 + запас: кадр длиннее отбрасывается RX-слоем сети (MSG_TRUNC), в парсер сверхдлинным не попадает.
 const RX_BUFFER_LEN: usize = 2048;
 
@@ -295,6 +297,8 @@ impl Queue {
 struct Shared {
     halt: AtomicU8,
     fail: Mutex<Option<FailReason>>,
+    /// Последнее успешно измеренное состояние приёма (пишет только RX-поток).
+    rx_health: Mutex<RxHealth>,
     sent: AtomicU64,
     position: AtomicU64,
     received: AtomicU64,
@@ -331,6 +335,35 @@ impl Shared {
         self.command(FAIL);
     }
 
+    /// Измеряет достоверность приёма и применяет итог. Вызывает только RX-поток
+    /// (ему принадлежит handle). Первый отказ сохраняется (`fail` не
+    /// перезаписывает); в `rx_health` попадает только УСПЕШНОЕ измерение,
+    /// иначе неизвестное значение (`None`): ранее увиденный ноль не подменяет
+    /// ошибку. Возвращает `false`, если исход уже нельзя считать чистым.
+    fn check_rx_health(&self, rx: &mut dyn Rx) -> bool {
+        match rx.health(self.io_timeout) {
+            Ok(h) => {
+                *lock(&self.rx_health) = h;
+                match h.kernel_drops {
+                    Some(0) => true,
+                    Some(n) => {
+                        self.fail(FailReason::RxLoss { kernel_drops: n });
+                        false
+                    }
+                    None => {
+                        self.fail(FailReason::RxStatsUnavailable);
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                *lock(&self.rx_health) = RxHealth { kernel_drops: None };
+                self.fail(FailReason::RxError(e.message));
+                false
+            }
+        }
+    }
+
     fn snapshot(&self) -> Progress {
         let rate = f64::from_bits(self.rate_bits.load(Ordering::Relaxed));
         Progress {
@@ -349,8 +382,16 @@ impl Shared {
         let tx_end = self.tx_end.load(Ordering::Acquire);
         let rx_end = self.rx_end.load(Ordering::Acquire);
         let halt = self.halted();
+        let health = *lock(&self.rx_health);
         let reason = if let Some(f) = fail {
             Reason::Failed(f)
+        } else if health.kernel_drops != Some(0) {
+            // Страховка: успешный исход (Completed/Stopped/Paused) без
+            // подтверждённого нуля потерь недопустим, как бы ни завершился RX.
+            Reason::Failed(match health.kernel_drops {
+                Some(n) => FailReason::RxLoss { kernel_drops: n },
+                None => FailReason::RxStatsUnavailable,
+            })
         } else if tx_end == END_NATURAL && rx_end == END_NATURAL {
             Reason::Completed
         } else if halt >= STOP {
@@ -362,7 +403,15 @@ impl Shared {
         };
         let progress = self.snapshot();
         let checkpoint = (reason == Reason::Paused).then_some(progress.next_index);
-        self.queue.finish(Outcome { reason, progress }, checkpoint);
+        let rx_health = health;
+        self.queue.finish(
+            Outcome {
+                reason,
+                progress,
+                rx_health,
+            },
+            checkpoint,
+        );
     }
 }
 
@@ -497,6 +546,7 @@ fn run_rx(shared: Arc<Shared>, rx: Box<dyn Rx>, plan: ReadyPlan, dedup_capacity:
     let mut buf = vec![0u8; RX_BUFFER_LEN];
     let mut deadline: Option<u64> = None;
     let mut last_progress = clock.now_micros();
+    let mut last_health = last_progress;
 
     let end = loop {
         if shared.halted() >= STOP {
@@ -538,12 +588,28 @@ fn run_rx(shared: Arc<Shared>, rx: Box<dyn Rx>, plan: ReadyPlan, dedup_capacity:
             last_progress = now;
             shared.queue.set_progress(shared.snapshot());
         }
+        // Проверка достоверности по часам engine, а не по числу кадров.
+        if now.wrapping_sub(last_health) >= RX_HEALTH_INTERVAL_MICROS {
+            last_health = now;
+            if !shared.check_rx_health(&mut *rx) {
+                break END_HALTED;
+            }
+        }
         if shared.tx_end.load(Ordering::Acquire) != END_RUNNING {
             let d = *deadline.get_or_insert(now.saturating_add(shared.wait_micros));
             if now >= d {
                 break END_NATURAL;
             }
         }
+    };
+    // Обязательная финальная проверка: её снимок закрывает окно наблюдения и
+    // делается ДО публикации rx_end (а значит, до терминального исхода). Handle
+    // закрывается позже, в ExitGuard, то есть до Finished.
+    let clean = shared.check_rx_health(&mut *rx);
+    let end = if clean || end == END_HALTED {
+        end
+    } else {
+        END_HALTED
     };
     shared.rx_end.store(end, Ordering::Release);
 }
@@ -654,6 +720,7 @@ impl Engine {
         let shared = Arc::new(Shared {
             halt: AtomicU8::new(RUN),
             fail: Mutex::new(None),
+            rx_health: Mutex::new(RxHealth { kernel_drops: None }),
             sent: AtomicU64::new(0),
             position: AtomicU64::new(cursor.position()),
             received: AtomicU64::new(0),

@@ -53,6 +53,11 @@ impl Rx for IdleRx {
         std::thread::sleep(t.min(Duration::from_millis(1)));
         Ok(None)
     }
+    fn health(&mut self, _t: Duration) -> Result<rmasscan_engine::RxHealth, IoError> {
+        Ok(rmasscan_engine::RxHealth {
+            kernel_drops: Some(0),
+        })
+    }
 }
 
 /// 0.0.0.0/0 минус 240.0.0.0/4 (без исключения config отвергает >1e9

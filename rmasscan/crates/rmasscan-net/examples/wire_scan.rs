@@ -550,6 +550,7 @@ fn run(a: &Args) -> i32 {
         "{{\"status\":\"ok\",\"reason\":{},\"fail_detail\":{},\"opened_adapter\":true,\
 \"range\":{},\"start_index\":{start_index},\"expected_total\":{expected_total},\
 \"sent\":{},\"next_index\":{},\"received\":{},\"discarded\":{},\"duplicates\":{},\
+\"rx_health\":{{\"kernel_drops\":{}}},\
 \"scan_id\":{},\"attempt_id\":{},\"resumed_from_attempt\":{},",
         js(reason),
         js(&fail_detail),
@@ -559,6 +560,11 @@ fn run(a: &Args) -> i32 {
         p.received,
         p.discarded,
         p.duplicates,
+        // Неизвестное качество приёма это null, а не 0.
+        outcome_j
+            .rx_health
+            .kernel_drops
+            .map_or("null".to_string(), |d| d.to_string()),
         js(&hex(&scan_id)),
         js(&hex(&attempt_id)),
         resumed_from.map_or("null".to_string(), |r| js(&hex(&r))),

@@ -9,6 +9,7 @@ pub mod oracle;
 pub mod oracle_util;
 pub mod pcap;
 pub mod peer;
+pub mod provenance;
 pub mod verify;
 pub mod vm_lab;
 pub mod windows_suite;

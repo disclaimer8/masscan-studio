@@ -2012,6 +2012,33 @@ fn finish(mut result: Value) -> Value {
     result["behaviour_fail"] = json!(beh);
     result
 }
+/// The `provenance` block of a verdict: the build recorded at run time, this verifier's own build, and
+/// warnings (never refusals) for a dirty tree or a build from another commit than the one under test.
+fn provenance_report(man: &Value) -> Value {
+    let verifier = crate::provenance::collect(Path::new("."));
+    let orch = man["orchestrator"].clone();
+    let mut warnings = Vec::new();
+    if orch.is_null() {
+        warnings
+            .push("orchestrator build not recorded (capture_schema below 3: exempt)".to_owned());
+    } else {
+        if orch["git_dirty"] == true {
+            warnings.push(
+                "orchestrator was built from uncommitted changes to tracked files".to_owned(),
+            );
+        }
+        if orch["git_commit"].is_string() && orch["git_commit"] != man["code_commit"] {
+            warnings.push(format!(
+                "orchestrator commit {} differs from the commit under test {}",
+                orch["git_commit"], man["code_commit"]
+            ));
+        }
+    }
+    if verifier["git_dirty"] == true {
+        warnings.push("verifier was built from uncommitted changes to tracked files".to_owned());
+    }
+    json!({"orchestrator":orch,"verifier":verifier,"warnings":warnings})
+}
 pub fn verify_dir(root: &Path) -> Value {
     let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[]});
     let Some(man) = read_json(root.join("manifest.json")) else {
@@ -2038,6 +2065,18 @@ pub fn verify_dir(root: &Path) -> Value {
         NOT_RUN,
         false,
     );
+    // Which build of this tool produced the evidence (schema >= 3: mandatory; older evidence is exempt).
+    result["provenance"] = provenance_report(&man);
+    if man["capture_schema"].as_u64().unwrap_or(1) >= 3 {
+        let why = crate::provenance::problem(&man["orchestrator"]);
+        r.check(
+            "orchestrator build recorded (commit, dirty flag, binary sha256)",
+            why.is_none(),
+            why.unwrap_or_default(),
+            INVALID,
+            false,
+        );
+    }
     r.check(
         "fixtures manifest present",
         fx.is_some(),
@@ -2155,6 +2194,20 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             s(&r["tag"]),
             bad.join("; ")
         );
+    }
+    let p = &res["provenance"];
+    let short = |v: &Value| s(v).chars().take(12).collect::<String>();
+    println!(
+        "provenance: orchestrator {} dirty={} binary {}; verifier {} dirty={} binary {}",
+        short(&p["orchestrator"]["git_commit"]),
+        p["orchestrator"]["git_dirty"],
+        short(&p["orchestrator"]["binary_sha256"]),
+        short(&p["verifier"]["git_commit"]),
+        p["verifier"]["git_dirty"],
+        short(&p["verifier"]["binary_sha256"]),
+    );
+    for w in array(&p["warnings"]) {
+        println!("provenance warning: {}", s(w));
     }
     println!("overall: {} {}", s(&res["overall"]), res["totals"]);
     Ok(match s(&res["overall"]) {

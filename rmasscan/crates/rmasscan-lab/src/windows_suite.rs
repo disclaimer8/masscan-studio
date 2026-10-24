@@ -1327,6 +1327,13 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     // Local, before any remote action: the guest scripts of the commit under test, kept as
     // evidence next to the deploy manifest that vouches for the remote binary.
     let repo = PathBuf::from(opt(&o, "repo", "."));
+    // Which build of this tool orchestrates the run (it is also the verifier of its evidence).
+    let orchestrator = crate::provenance::collect(&repo);
+    if let Some(why) = crate::provenance::problem(&orchestrator) {
+        return Err(SuiteError::NotRun(format!(
+            "cannot establish the orchestrator build provenance ({why}); run from the work tree of the commit under test or pass --repo: {orchestrator}"
+        )));
+    }
     let staged = crate::deploy::StagedScripts::load(|p| exec.file_at_commit(&repo, &commit, p))?;
     let deploy_dir = out.join("deploy");
     staged.write_to(&deploy_dir.join("guest-scripts"))?;
@@ -1427,6 +1434,7 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
             "deploy_manifest_sha256": hash(&deploy_path)?,
             "remote_lab": {"path": s.remote, "sha256": remote_sha},
             "guest_scripts": staged.record(),
+            "orchestrator": orchestrator,
             "clock": {"guest_minus_home_s": clock.offset, "uncertainty_s": clock.uncertainty,
                       "limits": {"guest_ahead_s": crate::vm_lab::VERIFY_FUTURE_SKEW_S, "guest_behind_s": crate::vm_lab::VERIFY_MAX_AGE_S}},
             "checked_utc": epoch(),
@@ -1465,7 +1473,7 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
         if eh.len() != 2 {
             return Err("invalid executable hash response".to_string().into());
         }
-        let man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"created_utc":epoch()});
+        let man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"orchestrator":orchestrator,"created_utc":epoch()});
         write_json(s.out.join("manifest.json"), &man)?;
         copy_tree(&fixtures, &s.out.join("fixtures"))?;
         man

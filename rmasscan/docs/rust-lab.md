@@ -4,6 +4,15 @@ Build once on each host architecture:
 
 ```sh
 cargo build --locked --release -p rmasscan-lab
+```
+
+For evidence runs, build with the commit embedded: `RMASSCAN_LAB_BUILD_COMMIT=$(git rev-parse HEAD) cargo build --locked --release -p rmasscan-lab`.
+The manifest and preflight records then carry `build_commit` (the commit the binary was compiled from, or `unknown` when the
+variable was not set) apart from `git_commit` and `git_dirty`, which describe the `--repo` checkout the binary is run against
+and may differ from it. The binary sha256 is the authoritative identity; `windows-verify` prints all three and warns when
+`build_commit` is `unknown` or differs from the commit under test.
+
+```sh
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
@@ -82,7 +91,7 @@ the last two items.
    COMMIT=$(git rev-parse HEAD)
    git archive --format=tar "$COMMIT" rmasscan \
      | ssh home-pc "rm -rf ~/winvm/build/$COMMIT && mkdir -p ~/winvm/build/$COMMIT && tar -x -C ~/winvm/build/$COMMIT"
-   ssh home-pc ". ~/.cargo/env && cd ~/winvm/build/$COMMIT/rmasscan && cargo build --locked --release -p rmasscan-lab"
+   ssh home-pc ". ~/.cargo/env && cd ~/winvm/build/$COMMIT/rmasscan && RMASSCAN_LAB_BUILD_COMMIT=$COMMIT cargo build --locked --release -p rmasscan-lab"
    ```
 
 3. **Install it and record the deploy manifest.** The old `~/winvm/lab/windows-vm-lab.py` is
@@ -111,7 +120,7 @@ the last two items.
 5. **Run the suite.** Run it from the REPOSITORY ROOT of a clean checkout of `$COMMIT` (not from
    `rmasscan/`): every relative path below, including `--out`, `--fixtures`, `--repo .` and
    `./deploy-manifest.json` from step 3, is relative to that directory. Build the Mac binary from the
-   same checkout first, `(cd rmasscan && cargo build --locked --release -p rmasscan-lab)`, which puts it
+   same checkout first, `(cd rmasscan && RMASSCAN_LAB_BUILD_COMMIT=$(git rev-parse HEAD) cargo build --locked --release -p rmasscan-lab)`, which puts it
    at `rmasscan/target/release/rmasscan-lab`. The suite records that binary's sha256, the commit and a
    dirty flag of `--repo` (the orchestrator build) in the manifest and each preflight record, and
    `windows-verify` reports it; it refuses to start when it cannot establish them. `--repo` is a

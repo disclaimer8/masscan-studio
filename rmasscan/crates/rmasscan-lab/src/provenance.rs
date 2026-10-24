@@ -3,9 +3,13 @@
 //! running. Recorded in the evidence manifest and in every preflight record by `windows-suite`, and
 //! reported by `windows-verify`, so a verdict can be tied to the exact tool that produced it.
 //!
-//! Read at run time from the work tree the binary is run from (`git rev-parse HEAD`,
-//! `git status --porcelain --untracked-files=no`) and from `current_exe()`; nothing is embedded at
-//! build time. A value that cannot be read is recorded as null with a reason, never guessed.
+//! `git_commit` and `git_dirty` are read at run time from the work tree given as `--repo`
+//! (`git rev-parse HEAD`, `git status --porcelain --untracked-files=no`) and `binary_sha256` from
+//! `current_exe()`. They describe the checkout, not the compiler input: an old binary run from an updated
+//! checkout records the new HEAD. `build_commit` is the commit the binary was BUILT from, embedded at build time
+//! from `RMASSCAN_LAB_BUILD_COMMIT` (set by the documented build command; `unknown` otherwise). The binary
+//! sha256 is the authoritative identity. A value that cannot be read is recorded as null with a reason, never
+//! guessed.
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -30,6 +34,12 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
+
+/// The commit this binary was built from (build-time environment), or `unknown`.
+pub const BUILD_COMMIT: &str = match option_env!("RMASSCAN_LAB_BUILD_COMMIT") {
+    Some(c) => c,
+    None => "unknown",
+};
 
 /// Provenance of the running binary and of the work tree at `repo`.
 pub fn collect(repo: &Path) -> Value {
@@ -65,6 +75,7 @@ pub fn collect(repo: &Path) -> Value {
     json!({
         "git_commit": commit,
         "git_dirty": dirty,
+        "build_commit": BUILD_COMMIT,
         "binary_sha256": sha.ok(),
         "binary_name": exe.ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())),
         "errors": errors,
@@ -82,6 +93,14 @@ pub fn problem(p: &Value) -> Option<String> {
     }
     if !p["git_dirty"].is_boolean() {
         return Some("git_dirty is not recorded".into());
+    }
+    // Absent in records from before the build commit was embedded; when present it must be well formed.
+    if let Some(b) = p.get("build_commit")
+        && !b
+            .as_str()
+            .is_some_and(|b| b == "unknown" || crate::deploy::full_commit(b))
+    {
+        return Some("build_commit is neither a full commit id nor unknown".into());
     }
     let sha = p["binary_sha256"].as_str().unwrap_or("");
     if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -159,6 +178,44 @@ mod tests {
         assert!(!p["errors"].as_array().unwrap().is_empty());
         assert!(problem(&p).is_some());
         let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn the_build_commit_is_embedded_apart_from_the_checkout_head() {
+        let d = temp("build");
+        g(&d, &["init", "-q"]);
+        fs::write(d.join("a.txt"), "one").unwrap();
+        g(&d, &["add", "-A"]);
+        g(&d, &["commit", "-q", "-m", "x"]);
+        let p = collect(&d);
+        // This test binary was not built by the documented command: the build commit is `unknown`, and it
+        // is never taken from the checkout it is pointed at.
+        assert_eq!(p["build_commit"], BUILD_COMMIT);
+        assert_eq!(
+            BUILD_COMMIT,
+            option_env!("RMASSCAN_LAB_BUILD_COMMIT").unwrap_or("unknown")
+        );
+        if option_env!("RMASSCAN_LAB_BUILD_COMMIT").is_none() {
+            assert_eq!(p["build_commit"], "unknown");
+            assert_ne!(p["build_commit"], p["git_commit"]);
+        }
+        assert_eq!(problem(&p), None);
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn problem_checks_the_build_commit_when_present() {
+        let mut ok =
+            json!({"git_commit":"a".repeat(40),"git_dirty":false,"binary_sha256":"b".repeat(64)});
+        assert_eq!(problem(&ok), None, "older records have no build_commit");
+        for good in [json!("unknown"), json!("c".repeat(40))] {
+            ok["build_commit"] = good;
+            assert_eq!(problem(&ok), None, "{ok}");
+        }
+        for bad in [json!("abc"), Value::Null, json!(7)] {
+            ok["build_commit"] = bad;
+            assert!(problem(&ok).is_some(), "{ok}");
+        }
     }
 
     #[test]

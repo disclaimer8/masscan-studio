@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_budgeted_calls
+nic_before: {"utc_ms":1792846254034,"stats":{"ReceivedBytes":123638186,"ReceivedUnicastPackets":1931857,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7950296,"SentUnicastPackets":127147,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 18234
+nic_after: {"utc_ms":1792846272340,"stats":{"ReceivedBytes":123649066,"ReceivedUnicastPackets":1932027,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7959596,"SentUnicastPackets":127297,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

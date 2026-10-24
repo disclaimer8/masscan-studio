@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_uncertain_send_fails_without_checkpoint_or_further_sends
+nic_before: {"utc_ms":1792846218555,"stats":{"ReceivedBytes":123631082,"ReceivedUnicastPackets":1931746,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7947150,"SentUnicastPackets":127096,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 650
+nic_after: {"utc_ms":1792846219271,"stats":{"ReceivedBytes":123631274,"ReceivedUnicastPackets":1931749,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7947336,"SentUnicastPackets":127099,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

@@ -1,0 +1,8 @@
+
+running 1 test
+test live_uncertain_send_fails_without_checkpoint_or_further_sends ... KV plain/uncertain reason=Failed(TxUncertain) sent=3 next_index=3 received=2 discarded=0 duplicates=0 rx_health=Some(0) net.tx_sent=3 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=2 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) command_to_outcome_ms=None checkpoint=false
+KV plain/uncertain_silence tx_sent_before=3 tx_sent_after=3 window_ms=500
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.64s
+

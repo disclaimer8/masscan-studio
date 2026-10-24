@@ -13,7 +13,7 @@ Cargo license-поля, релизы и spikes-дерево этой задач�
 
 | Направление | Статус | Доказательство | Точный блокирующий gate |
 | --- | --- | --- | --- |
-| Linux merge readiness | **OPEN** | Код и контракты: `364ee49`, `c31ae16`; приёмка Linux, измерено на `ee51a19`, review pending на момент записи; evidence `eb8812a`, [раздел отчёта](2026-10-23-rmasscan-stage2b-linux.md) | (1) независимое review Задачи 4 пройдено и замечания закрыты; (2) CI на точном запушенном HEAD зелёный; (3) решение о merge принимает пользователь отдельно |
+| Linux merge readiness | **OPEN** | Код и контракты: `364ee49`, `c31ae16`; приёмка Linux измерена на коммите кода `27e3042`, evidence `8479ff2`, [раздел отчёта](2026-10-23-rmasscan-stage2b-linux.md); review Задач 1-5 и итоговое review ветки пройдены (замечания закрыты) | Остаётся только: (1) CI на точном запушенном HEAD зелёный (**NOT RUN**, push не разрешён); (2) решение о merge принимает пользователь отдельно |
 | Windows correctness | **NOT RUN** | Raw I/O Windows не запускался; Windows-кода адаптера нет. План: [Windows](../superpowers/plans/2026-10-24-rmasscan-stage2b-windows.md) | Windows 11 x64 + Npcap с реальными TX/RX, byte parity, pause/resume, Stop ≤1 с, контракты RX health/TX stall на адаптере. Хоста нет (см. 3.1) |
 | macOS correctness | **NOT STARTED** | Нет плана и кода BPF-адаптера | Отдельный план; аппаратная проверка macOS; те же контракты потерь/остановки |
 | Studio integration | **OPEN** (pinned engine устарел) | Раздел 2 | Обновить vendor до актуального engine/net; настоящий Scan вместо offline-preview/fake-process; runner gate (раздел 5); UI-паритет |
@@ -24,14 +24,16 @@ Cargo license-поля, релизы и spikes-дерево этой задач�
 
 ### 1.1. Linux: что именно измерено
 
-Результаты ниже относятся к коммиту кода `ee51a19`, review Задачи 4 ещё не завершён, поэтому это
-не принятый gate. Подробности и сырые данные:
-[отчёт Linux, раздел «Повторная приёмка Linux 2026-10-24»](2026-10-23-rmasscan-stage2b-linux.md),
-[сырые данные](2026-10-24-rmasscan-linux-acceptance-raw/).
+Результаты ниже относятся к чистому коммиту кода `27e3042` (`rmasscan/` не менялся до HEAD
+этой записи, кроме теста `tx_stall.rs`); evidence-коммит `8479ff2`. Review Задачи 4 пройдено после fix round;
+прогон на `ee51a19`/`eb8812a` заменён (superseded) и не является текущим результатом. Подробности и сырые данные:
+[отчёт Linux, раздел «Fix round 1: повторный прогон на `27e3042`»](2026-10-23-rmasscan-stage2b-linux.md),
+[сырые данные](2026-10-24-rmasscan-linux-acceptance-raw/round1-27e3042/).
 
 - Functional: 141 pass / 0 fail / 0 skip.
-- Performance: 40 из 40 точек VALID; Rust `kernel_drops` = 0.
-- Воспроизведённое переполнение RX даёт `Failed(RxLoss)`.
+- Performance: 40 из 40 точек VALID; Rust `rx_health` `kernel_drops` = 0 в 20 из 20 прогонов; медианы Rust/C по
+  скоростям 100/1000/10000/100000 pps: 1.016/1.000/1.000/1.004.
+- Воспроизведённое переполнение RX даёт `Failed(RxLoss { kernel_drops: 173 })`, rc 3, без checkpoint.
 - CI для точного HEAD: **NOT RUN** (push не разрешён). Зелёный прогон старого PR #8
   (`df53e6d`) — не CI этого HEAD.
 - Не проверено: физический NIC, >100k pps, Windows, macOS, UI.

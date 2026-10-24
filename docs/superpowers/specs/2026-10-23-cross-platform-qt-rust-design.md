@@ -69,7 +69,7 @@ paused.conf и Windows console events больше не являются цел�
 
 ## 0. Текущее состояние и перечень возможностей
 
-Статус привязан к commit `c31ae16` ветки `feat/rmasscan-stage2b-linux`
+Статус привязан к commit `27e3042` (код; его дерево `rmasscan/` совпадает с HEAD этой записи, кроме теста `tx_stall.rs`; evidence `8479ff2`) ветки `feat/rmasscan-stage2b-linux`
 (2026-10-24). Он не распространяется на более поздние коммиты и не заменяет
 свежую проверку. Исторические отчёты в `docs/experiments/` остаются
 историческими: каждый описывает базу, указанную в его первых строках.
@@ -82,9 +82,9 @@ paused.conf и Windows console events больше не являются цел�
 | Область | Контракт |
 | --- | --- |
 | RX health | `Rx::health(timeout) -> Result<RxHealth, IoError>`: обязательный метод; `RxHealth { kernel_drops: Option<u64> }` кумулятивно с начала попытки; `None` означает «измерить нельзя» и никогда не становится нулём |
-| Проверка | Не реже раза в 250 мс по часам engine и обязательная финальная проверка перед исходом |
-| Исходы | `FailReason::RxLoss { kernel_drops }` при drops > 0, `RxStatsUnavailable` при `None`, `RxError(String)` при ошибке запроса статистики; ранее сохранённый ноль не подменяет ошибку. Принятые результаты остаются доступными; checkpoint не создаётся |
-| Outcome | `Outcome.rx_health: RxHealth` (не `Option`): последнее успешно измеренное состояние. Если запрос статистики завершился ошибкой, поле сбрасывается в `RxHealth { kernel_drops: None }`: ранее измеренный `Some(0)` не сохраняется и не подменяет ошибку. `kernel_drops: None` также, если измерения не было или статистики нет |
+| Проверка | Каждые ~250 мс по часам engine и обязательная финальная проверка перед исходом. Интервал проверяется после очередного вызова `recv` (≤50 мс), а сама проверка это вызов адаптера (≤50 мс), поэтому наибольший зазор между проверками ≈250 мс + ≤50 мс + ≤50 мс; на исход это не влияет, его закрывает финальная проверка |
+| Исходы | `FailReason::RxLoss { kernel_drops }` при drops > 0 (значение в момент первого обнаружения; может быть меньше `Outcome.rx_health`, см. строку «Outcome»), `RxStatsUnavailable` при `None`, `RxError(String)` при ошибке запроса статистики; ранее сохранённый ноль не подменяет ошибку. Принятые результаты остаются доступными; checkpoint не создаётся |
+| Outcome | `Outcome.rx_health: RxHealth` (не `Option`): последнее успешно измеренное состояние. Если запрос статистики завершился ошибкой, поле сбрасывается в `RxHealth { kernel_drops: None }`: ранее измеренный `Some(0)` не сохраняется и не подменяет ошибку. `kernel_drops: None` также, если измерения не было или статистики нет. Первый отказ сохраняется, а финальная проверка перезаписывает `rx_health`, поэтому возможен исход `Failed(RxLoss { kernel_drops: 5 })` при `rx_health = Some(7)`: `RxLoss.kernel_drops` это счёт при первом обнаружении и он ≤ `rx_health.kernel_drops`, покрывающего всё окно наблюдения. Причину отказа брать из `reason`, масштаб потерь за запуск из `rx_health`; на равенство их не сравнивать, только `≤` |
 | Приоритет | Первый отказ сохраняется. `Completed`, `Stopped`, `Paused` возможны только при подтверждённом `Some(0)`, в том числе при одновременном Stop |
 | Смысл Completed | Задание завершено, статистика доступна, kernel drops не наблюдались. Это не «найдены все открытые порты сети»: ноль drops не доказывает отсутствие потерь в сети или у удалённого хоста, а ненулевое значение консервативно (может включать посторонние кадры) |
 | TX stall | `EngineOptions::tx_stall_timeout`, по умолчанию `DEFAULT_TX_STALL_TIMEOUT` = 10 с; ноль отвергается (`StartError::InvalidOptions`). Окно идёт от первой попытки кадра, вернувшей `WouldBlockUnsent`, и сбрасывается только после `Sent`; throttle-сон между кадрами не считается. Итог `FailReason::TxStalled { idle_millis }`, курсор не продвинут, checkpoint не создаётся |
@@ -110,7 +110,7 @@ rx_health }`, причины `Reason::{Completed, Stopped, Paused, Failed(FailRe
 ### 0.2. Перечень возможностей
 
 Продукт (Studio) и библиотеки (rmasscan) разделены. Столбец «реализовано» это
-факт на `c31ae16` для этой ветки; Studio живёт в другом дереве и здесь не
+факт на `27e3042` для этой ветки; Studio живёт в другом дереве и здесь не
 собирается. Модуль runtime API здесь не вводится: таблица описывает только
 существующие типы и документы.
 
@@ -122,11 +122,11 @@ rx_health }`, причины `Reason::{Completed, Stopped, Paused, Failed(FailRe
 | `--echo-all`, `--offline --packet-trace` | cli | да, описанное подмножество | тесты CLI; README | живой скан из CLI не поддержан | Runner/Studio |
 | Разбор RX-кадров | core | да | unit/property тесты | VLAN возвращает `Unsupported` (не разбирается); чужие и обрезанные кадры отбрасываются | по решению |
 | Дедупликация ответов | engine | да, ограниченный FIFO-кэш (`DedupCache`, до `MAX_DEDUP_ENTRIES`) | тесты engine | не буквальный порт C `dedup_selftest` и не полная C-семантика; в core не переносится | по решению |
-| Runtime: Pause/Stop, checkpoint/resume | engine | да | fake-адаптер, ManualClock, лабораторный pause/resume | один NIC, TX=1, RX=1, shard 1/1, retries 0 | расширения по плану |
-| RX integrity, TX stall | engine | да (`364ee49`, `c31ae16`) | fake-адаптеры, ManualClock | см. §0.1; на проводе повторно не проверено | Задача 4 плана ремедиации |
+| Runtime: Pause/Stop, checkpoint/resume | engine | да | fake-адаптер, ManualClock, лабораторный pause/resume (повторно проверен на `27e3042`: functional 141/0/0) | один NIC, TX=1, RX=1, shard 1/1, retries 0 | расширения по плану |
+| RX integrity, TX stall | engine | да (`364ee49`, `c31ae16`) | fake-адаптеры, ManualClock; lab wire netns/veth на `27e3042`: functional 141/0/0, perf 40/40 VALID, `rx_health` 0 в 20/20, переполнение → `Failed(RxLoss)` | см. §0.1; физический NIC, >100k pps, Windows/macOS не проверены | Windows/macOS-адаптеры |
 | ARP | core | только кодек | unit-тесты | resolver и discovery шлюза отсутствуют | сетевая интеграция |
 | Парсер paused.conf | core | да | unit-тесты | пользовательского импорта нет | Runner/Studio |
-| Linux AF_PACKET (явный binding) | net | да | замкнутый стенд netns+veth против C-oracle: сохранённые отчёты 2B-Linux | отчёт относится к старой базе; повторная приёмка на `c31ae16` не выполнена; физический NIC, >100k pps не проверены | повторная приёмка Linux |
+| Linux AF_PACKET (явный binding) | net | да | замкнутый стенд netns+veth против C-oracle: сохранённые отчёты 2B-Linux | приёмка выполнена на `27e3042` (отчёт 2B-Linux, evidence `8479ff2`); CI на точном HEAD не запускался; физический NIC, >100k pps не проверены | CI на точном HEAD; физический NIC |
 | Windows (Npcap), macOS (BPF) raw I/O | net | нет | CI собирает и гоняет offline-тесты; raw I/O не запускался | raw I/O только Linux | 2B-Windows, затем macOS |
 | CI трёх ОС | CI | настроен | статус CI конкретного HEAD нужно смотреть на GitHub | зелёный CI не означает raw I/O на Windows/macOS | привязать к HEAD |
 

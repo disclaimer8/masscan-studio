@@ -630,6 +630,6 @@ a00a59ecd7e036756f34c0400dfc85616369fdedc02a6ef72b86f01401a36465  ./functional/r
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/runs/x01_foreign_replies.run2/status-post.json
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/runs/x01_foreign_replies.run2/status-pre.json
 a30a6b0e1acbdf35a80b4cf19f056cdac6ae9cc6f75d1cbbadc2b8b7e10f71d7  ./functional/verdict.json
-e436a2b96425f24955317aae6c3d5de0b063a61e9923b38f69e8bcbfe9408fc9  ./README.md
+667db8fe464c10eeaa5c5b635177962679a335ea7355ce9a16ef4e953c247848  ./README.md
 dc8833c124b4bcc06e9e29c5514559150ef32d3e142e1e94a4e73ebfafab3c73  ./verification/vm-clippy.log
 47bf4583722a46082366e4d90e7c204e5840447805130362fdbfca1498c49486  ./verification/vm-workspace-test.log

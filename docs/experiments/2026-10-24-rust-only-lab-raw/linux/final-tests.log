@@ -1,5 +1,5 @@
-   Compiling rmasscan-net v0.1.0 (/home/a1/masscan-lab-review-rust-only-v1/rmasscan/crates/rmasscan-net)
-   Compiling rmasscan-lab v0.1.0 (/home/a1/masscan-lab-review-rust-only-v1/rmasscan/crates/rmasscan-lab)
+   Compiling rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
+   Compiling rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
     Finished `test` profile [optimized + debuginfo] target(s) in 26.30s
      Running unittests src/main.rs (target/debug/deps/rmasscan-cf9d91846eb75871)
 

@@ -6,7 +6,7 @@ Verified:
 - Swift unit/integration suite: configuration validation, option injection
   rejection, result/progress parsing, chunk framing, resume index, numeric IP
   order, CSV, shell/AppleScript quoting, actual masscan --echo, transport lifecycle.
-- Four Python runner integration cases: real output with fragmented handshake,
+- Four runner integration cases (a script harness at the time; Swift tests since 2026-10-24): real output with fragmented handshake,
   disconnect before start, rejected invalid handshake, rejected target injection.
 - Release .app build and strict recursive code-signature verification.
 - Installed app opens, detects masscan, renders welcome and configuration sheet.
@@ -27,7 +27,7 @@ The core and process integration tests send no scan packets.
 
 ## v0.2 verification — 2026-10-20
 
-- 24 Swift tests and 6 Python integration tests passed.
+- 24 Swift tests and 6 runner integration tests passed (script harness at the time).
 - Persistent runner handles two --echo jobs with the same PID, rejects injected
   targets, survives a rejected configuration, exits on idle disconnect, and
   rejects oversized commands and invalid/fragmented handshakes appropriately.
@@ -46,7 +46,7 @@ The core and process integration tests send no scan packets.
 
 ## v0.3 verification — 2026-10-20
 
-- 30 Swift tests and 6 Python helper integration tests passed.
+- 30 Swift tests and 6 helper integration tests passed (script harness at the time).
 - Link tests cover HTTPS and alternate ports, a sibling web port for non-web
   rows, absent names, fallback HTTPS, and unsafe hostname syntax.
 - Nmap request tests restrict targets to one IPv4 address and discovered TCP
@@ -62,3 +62,14 @@ The core and process integration tests send no scan packets.
   browser navigation was not exercised.
 - The local test fixture was removed after validation. The user's sessions,
   results and paused resume checkpoint were retained.
+
+## 2026-10-24 note: the runner integration cases are Swift tests now
+
+The six "Python" runner integration cases listed under v0.1 to v0.3 (fragmented handshake and two
+jobs on one runner, disconnect before the start, invalid handshake, argument injection with
+recovery, idle disconnect, oversized command) moved to `Tests/ScanCoreTests/RunnerTests.swift` and
+drive the built `ScanHelper` over a loopback socket in `--echo` mode. The Nmap inspection test
+serves its page from a Swift fixture. The repository contains no interpreted programs of the
+banned kind (CI: `.github/workflows/language-guard.yml`). `swift test`: 36 tests, 0 failures
+(Swift 6.4, macOS 27, Nmap 7.992, masscan 1.3.2). The v0.1 to v0.3 entries above are the
+historical record of those sessions and were not edited.

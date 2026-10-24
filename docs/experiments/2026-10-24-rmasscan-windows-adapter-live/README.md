@@ -28,7 +28,7 @@ eno1 везде 0 кадров). Пакеты шли только с `\Device\NP
 
 ## Removed interpreter-dependent tools
 
-The repository allows no Python (CI guard `.github/workflows/no-python.yml`, `scripts/no-python.sh`). The files below invoked an interpreter and were deleted; the evidence data in this directory is unchanged. Each file is recoverable from git: `git show 5bcf8d5:docs/experiments/<path> | shasum -a 256` must print the recorded sha256. The corresponding lines were removed from `MANIFEST.sha256` (their hashes are recorded here instead).
+The repository allows no Python (CI guard `.github/workflows/language-guard.yml`, `scripts/language-guard.sh`). The files below invoked an interpreter and were deleted; the evidence data in this directory is unchanged. Each file is recoverable from git: `git show 5bcf8d5:docs/experiments/<path> | shasum -a 256` must print the recorded sha256. The corresponding lines were removed from `MANIFEST.sha256` (their hashes are recorded here instead).
 
 | Path (under `docs/experiments/`) | Last commit containing it | Last changed in | sha256 |
 |---|---|---|---|

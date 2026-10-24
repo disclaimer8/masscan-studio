@@ -186,6 +186,10 @@ impl PacketIo for PacketFd {
             drops: st.tp_drops,
         })
     }
+
+    fn backoff(&mut self, wait: std::time::Duration) {
+        std::thread::sleep(wait);
+    }
 }
 
 /// Проверка интерфейса через ОС (if_nametoindex, SIOCGIFHWADDR).

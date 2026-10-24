@@ -49,6 +49,10 @@ pub(crate) trait PacketIo: Send {
     fn poll(&mut self, write: bool, timeout_ms: i32) -> Result<Readiness, Errno>;
     /// PACKET_STATISTICS: ядро сбрасывает счётчики при чтении.
     fn packet_stats(&mut self) -> Result<KernelStats, Errno>;
+    /// Пауза между повторами после EINTR. `wait` уже ограничена остатком
+    /// дедлайна и [`EINTR_BACKOFF_MAX`]. Реализация обязана реально ждать
+    /// (иначе цикл крутится); тесты считают вызовы и сумму `wait`.
+    fn backoff(&mut self, wait: Duration);
 }
 
 /// Шов запросов к ОС об интерфейсе.
@@ -64,6 +68,8 @@ const EWOULDBLOCK: Errno = libc::EWOULDBLOCK;
 const EINTR: Errno = libc::EINTR;
 const ARPHRD_ETHER: u16 = libc::ARPHRD_ETHER;
 const PACKET_OUTGOING: u8 = libc::PACKET_OUTGOING;
+/// Максимальная пауза между повторами после EINTR (против busy-spin).
+pub(crate) const EINTR_BACKOFF_MAX: Duration = Duration::from_millis(1);
 /// Раз в столько принятых кадров забираем статистику ядра.
 const STATS_EVERY: u64 = 4096;
 
@@ -81,6 +87,13 @@ impl Deadline {
     }
     fn expired(&self) -> bool {
         Instant::now() >= self.0
+    }
+    /// Пауза перед повтором после EINTR: не более [`EINTR_BACKOFF_MAX`] и не
+    /// более остатка; исходный дедлайн не продлевается.
+    fn eintr_wait(&self) -> Duration {
+        self.0
+            .saturating_duration_since(Instant::now())
+            .min(EINTR_BACKOFF_MAX)
     }
     /// Остаток в мс для poll, округление ВВЕРХ (иначе poll(0) крутится).
     fn poll_ms(&self) -> i32 {
@@ -136,7 +149,7 @@ impl<I: PacketIo> TxHalf<I> {
                         Ok(Readiness::Failed) => {
                             return TxStep::Fatal("poll(POLLOUT): socket error".into());
                         }
-                        Err(EINTR) => {}
+                        Err(EINTR) => io.backoff(deadline.eintr_wait()),
                         Err(e) => return TxStep::Fatal(errno_msg("poll(POLLOUT)", e)),
                     }
                 }
@@ -146,6 +159,7 @@ impl<I: PacketIo> TxHalf<I> {
                     if deadline.expired() {
                         return TxStep::Done(SendStatus::WouldBlockUnsent);
                     }
+                    io.backoff(deadline.eintr_wait());
                 }
                 Err(e) => return TxStep::Fatal(errno_msg("send", e)),
             }
@@ -247,7 +261,8 @@ impl<I: PacketIo> RxHalf<I> {
                     }
                     match io.poll(false, deadline.poll_ms()) {
                         // Готовность без пакета: возвращаемся к recv.
-                        Ok(Readiness::Ready) | Err(EINTR) => {}
+                        Ok(Readiness::Ready) => {}
+                        Err(EINTR) => io.backoff(deadline.eintr_wait()),
                         Ok(Readiness::Timeout) => return RxStep::Idle,
                         Ok(Readiness::Failed) => {
                             return RxStep::Fatal("poll(POLLIN): socket error".into());
@@ -259,6 +274,7 @@ impl<I: PacketIo> RxHalf<I> {
                     if deadline.expired() {
                         return RxStep::Idle;
                     }
+                    io.backoff(deadline.eintr_wait());
                 }
                 Err(e) => return RxStep::Fatal(errno_msg("recvfrom", e)),
             }

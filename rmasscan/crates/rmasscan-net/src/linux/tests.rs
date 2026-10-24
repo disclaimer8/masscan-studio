@@ -24,6 +24,9 @@ struct Script {
     poll_ms: Vec<i32>,
     send_calls: usize,
     recv_calls: usize,
+    poll_calls: usize,
+    /// Каждая запрошенная пауза после EINTR.
+    backoffs: Vec<Duration>,
 }
 
 struct Fake {
@@ -82,6 +85,7 @@ impl PacketIo for Fake {
         let next = {
             let mut s = self.s.lock().unwrap();
             s.poll_ms.push(timeout_ms);
+            s.poll_calls += 1;
             s.polls.pop_front()
         };
         match next {
@@ -91,6 +95,12 @@ impl PacketIo for Fake {
                 Ok(Readiness::Timeout)
             }
         }
+    }
+    fn backoff(&mut self, wait: Duration) {
+        self.s.lock().unwrap().backoffs.push(wait);
+        // Часы Deadline реальные: пауза должна двигать время, иначе поток
+        // EINTR никогда не дойдёт до дедлайна.
+        std::thread::sleep(wait);
     }
     fn packet_stats(&mut self) -> Result<KernelStats, Errno> {
         self.s
@@ -241,6 +251,86 @@ fn tx_poll_eintr_flood_does_not_restart_the_deadline() {
     );
 }
 
+/// Общие утверждения о бэкоффе: счёт попыток и пауз через шов, не CPU и не
+/// верхняя граница wall time. `sleep` не бывает короче запрошенного, поэтому
+/// сумма пауз <= таймаут даёт детерминированную верхнюю границу числа повторов.
+fn assert_bounded_backoff(s: &Script, attempts: usize, timeout: Duration) {
+    assert!(!s.backoffs.is_empty(), "EINTR retries must back off");
+    assert!(
+        s.backoffs.iter().all(|w| *w <= EINTR_BACKOFF_MAX),
+        "{:?}",
+        s.backoffs
+    );
+    let total: Duration = s.backoffs.iter().sum();
+    assert!(
+        total <= timeout,
+        "waits {total:?} exceed deadline {timeout:?}"
+    );
+    // По одной паузе на повтор: попыток не больше пауз + 1.
+    assert!(
+        attempts <= s.backoffs.len() + 1,
+        "{attempts} vs {}",
+        s.backoffs.len()
+    );
+    // Не менее ~ timeout/1ms пауз нужно для достижения дедлайна, не более
+    // timeout/(1 мс) + 1 попыток: busy-spin дал бы миллионы.
+    let cap = (timeout.as_millis() as usize) + 2;
+    assert!(attempts <= cap, "{attempts} attempts > {cap}");
+}
+
+#[test]
+fn tx_send_eintr_backs_off_bounded_and_keeps_deadline() {
+    let (mut t, s, _, _) = tx(Script {
+        send_forever: Some(EINTR),
+        ..Default::default()
+    });
+    let timeout = Duration::from_millis(20);
+    assert_eq!(t.send(&FRAME, timeout), Ok(SendStatus::WouldBlockUnsent));
+    let s = s.lock().unwrap();
+    eprintln!(
+        "tx send EINTR: attempts={} waits={}",
+        s.send_calls,
+        s.backoffs.len()
+    );
+    assert_bounded_backoff(&s, s.send_calls, timeout);
+}
+
+#[test]
+fn tx_poll_eintr_backs_off_bounded_and_keeps_deadline() {
+    let (mut t, s, _, _) = tx(Script {
+        send_forever: Some(EAGAIN),
+        polls: std::iter::repeat_n(Err(EINTR), 100_000).collect(),
+        ..Default::default()
+    });
+    let timeout = Duration::from_millis(20);
+    assert_eq!(t.send(&FRAME, timeout), Ok(SendStatus::WouldBlockUnsent));
+    let s = s.lock().unwrap();
+    eprintln!(
+        "tx poll EINTR: polls={} waits={}",
+        s.poll_calls,
+        s.backoffs.len()
+    );
+    assert_bounded_backoff(&s, s.poll_calls, timeout);
+}
+
+#[test]
+fn backoff_is_capped_by_the_remaining_deadline() {
+    let (mut t, s, _, _) = tx(Script {
+        send_forever: Some(EINTR),
+        ..Default::default()
+    });
+    let timeout = Duration::from_micros(300);
+    assert_eq!(t.send(&FRAME, timeout), Ok(SendStatus::WouldBlockUnsent));
+    let s = s.lock().unwrap();
+    let total: Duration = s.backoffs.iter().sum();
+    assert!(
+        total <= timeout,
+        "{total:?} > {timeout:?}: {:?}",
+        s.backoffs
+    );
+    assert!(s.backoffs.iter().all(|w| *w <= timeout));
+}
+
 #[test]
 fn tx_partial_send_is_uncertain_and_keeps_fd_open() {
     let (mut t, _, dropped, c) = tx(Script {
@@ -385,6 +475,43 @@ fn rx_poll_eintr_flood_does_not_restart_the_deadline() {
     );
 }
 
+#[test]
+fn rx_recv_eintr_backs_off_bounded_and_keeps_deadline() {
+    let (mut r, s, _, _) = rx(Script {
+        recv_forever: Some(EINTR),
+        ..Default::default()
+    });
+    let timeout = Duration::from_millis(20);
+    let mut buf = [0u8; 4];
+    assert_eq!(r.recv(&mut buf, timeout), Ok(None));
+    let s = s.lock().unwrap();
+    eprintln!(
+        "rx recv EINTR: attempts={} waits={}",
+        s.recv_calls,
+        s.backoffs.len()
+    );
+    assert_bounded_backoff(&s, s.recv_calls, timeout);
+}
+
+#[test]
+fn rx_poll_eintr_backs_off_bounded_and_keeps_deadline() {
+    let (mut r, s, _, _) = rx(Script {
+        polls: std::iter::repeat_n(Err(EINTR), 100_000).collect(),
+        ..Default::default()
+    });
+    let timeout = Duration::from_millis(20);
+    let mut buf = [0u8; 4];
+    assert_eq!(r.recv(&mut buf, timeout), Ok(None));
+    let s = s.lock().unwrap();
+    eprintln!(
+        "rx poll EINTR: polls={} waits={}",
+        s.poll_calls,
+        s.backoffs.len()
+    );
+    assert_bounded_backoff(&s, s.poll_calls, timeout);
+}
+
+/// Userspace-fallback (ядро без PACKET_IGNORE_OUTGOING): rx_outgoing += 1.
 #[test]
 fn rx_drops_outgoing_frames() {
     let (mut r, _, _, c) = rx(Script {

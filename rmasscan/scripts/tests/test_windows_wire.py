@@ -140,6 +140,12 @@ def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_
     rj = {"identity": {"source_commit": COMMIT, "binary_sha256": EXE, "os": {"family": "windows"}}}
     rj.update(rj_extra)
     wj(os.path.join(d, "run.json"), rj)
+    job = rj.get("job")
+    if job:
+        argv = ["--iface", job["iface"], "--src-ip", job["src_ip"], "--src-mac", job["src_mac"], "--router-mac", job["router_mac"],
+                "--targets", job["targets"], "--ports", job["ports"], "--seed", str(job["seed"]), "--rate", str(job["rate"]),
+                "--wait", str(job["wait"]), "--source-port", job["source_port"]] + (["--exclude", job["exclude"]] if job["exclude"] else [])
+        wj(os.path.join(d, "argv.json"), {"exe": "x", "argv": argv})
     wj(os.path.join(d, "status-pre.json"), {"raw_run_allowed": True, "isolation_violations": []})
     wj(os.path.join(d, "status-post.json"), {"raw_run_allowed": True, "isolation_violations": []})
     wj(os.path.join(d, "guest-verify.json"), {"ok": True, "errors": []})
@@ -563,6 +569,54 @@ class VerifierTests(unittest.TestCase):
         self.assertTrue(S.may_discard("INVALID", False))
         self.assertFalse(S.may_discard("INVALID", True))
         self.assertFalse(S.may_discard("NOT RUN", True))
+
+    # ------------------------------------------------------------ NB1-NB3
+    def test_missing_continuous_pcap_is_not_run_not_a_crash(self):
+        os.unlink(self.path("runs", "c03_multi_ports.run1", "peer.pcap"))
+        v = self.verdict()  # must not raise
+        self.assertEqual({g["verdict"] for g in v["groups"]}, {"NOT RUN"})
+        self.assertNotEqual(v["overall"], "PASS")
+
+    def test_missing_leg_pcap_makes_its_group_not_run(self):
+        os.unlink(self.path("runs", "pause_N8", "peer.pcap"))
+        g = {x["tag"]: x["verdict"] for x in self.verdict()["groups"]}
+        self.assertEqual(g["group_pause_resume_N8"], "NOT RUN")
+
+    def test_stray_equality_is_invalid_not_fail_when_the_capture_is_incomplete(self):
+        t = "x01_foreign_replies.run1"
+        self.add_stray(t, 0.5)  # discarded stays 4: expected 5
+        self.edit_json("runs/%s/capture.json" % t, lambda d: d["quiet"].__setitem__("reached", False))
+        v = self.verdict()
+        r = [x for x in v["runs"] if x["tag"] == t][0]
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertFalse(r["behaviour_fail"])
+        self.assertEqual(S.rerun_verdict(self.root, t), ("INVALID", False))
+
+    def test_broadcast_frame_in_the_window_is_a_stray(self):
+        t = "x01_foreign_replies.run1"
+        bc = b"\xff" * 6 + mac(PEER) + b"\x08\x06" + b"\x00" * 28
+        self.rewrite_peer(t, lambda fr: sorted(fr + [(min(tt for tt, f in fr if V.vw.is_syn(f)) + 0.5, bc)], key=lambda x: x[0]))
+        self.assertEqual(self.run_verdict(t), "FAIL")
+        self.edit_json("runs/%s/run.json" % t, lambda d: d.update(discarded=5))
+        self.assertEqual(self.run_verdict(t), "PASS")
+
+    def test_frame_from_the_guest_is_never_a_stray(self):
+        t = "x01_foreign_replies.run1"
+        out = b"\xff" * 6 + mac(GUEST) + b"\x08\x06" + b"\x00" * 28
+        self.rewrite_peer(t, lambda fr: sorted(fr + [(min(tt for tt, f in fr if V.vw.is_syn(f)) + 0.5, out)], key=lambda x: x[0]))
+        self.assertEqual(self.run_verdict(t), "PASS")
+
+    def test_job_echo_mismatch_with_correct_argv_is_fail_but_wrong_argv_is_invalid(self):
+        self.edit_json("runs/c05_srcport_single.run1/run.json", lambda d: d["job"].__setitem__("source_port", "40000"))
+        self.assertEqual(V.run_status(self.root, "c05_srcport_single.run1"), ("FAIL", True))
+        self.edit_json("runs/c05_srcport_single.run2/argv.json", lambda d: d["argv"].__setitem__(d["argv"].index("--source-port") + 1, "40000"))
+        self.edit_json("runs/c05_srcport_single.run2/run.json", lambda d: d["job"].__setitem__("source_port", "40000"))
+        self.assertEqual(V.run_status(self.root, "c05_srcport_single.run2"), ("INVALID", False))
+        self.assertTrue(S.may_discard(*S.rerun_verdict(self.root, "c05_srcport_single.run2")))
+
+    def test_missing_argv_json_is_not_run(self):
+        os.unlink(self.path("runs", "c01_one_addr_port_synack.run1", "argv.json"))
+        self.assertEqual(self.run_verdict("c01_one_addr_port_synack.run1"), "NOT RUN")
 
     # ------------------------------------------------------------ M3b: strays
     def add_stray(self, tag, t_off):

@@ -335,14 +335,39 @@ def verify_identity(run, man, rj, meta):
 
 
 # ------------------------------------------------------------------ functional checks
-def job_matches(run, rj, case, bind, man):
+def argv_matches(run, d, case, bind, man):
+    """argv.json (what the orchestrator sent) must match the case definition: a mismatch is a harness error (INVALID)."""
+    a = try_json(os.path.join(d, "argv.json"))
+    if a is None:
+        run.add("argv.json present", NOT_RUN, "missing or not JSON")
+        return False
+    av = [str(x) for x in a.get("argv", [])]
+    got = {av[i]: av[i + 1] for i in range(0, len(av) - 1) if av[i].startswith("--")}
+    want = {"--iface": man["binding"]["iface"], "--src-ip": bind.src_ip, "--src-mac": bind.src_mac,
+            "--router-mac": bind.peer_mac, "--targets": case["targets"], "--ports": case["ports"], "--seed": str(SEED),
+            "--rate": str(RATE), "--wait": str(WAIT), "--source-port": case["source_port"]}
+    if case["exclude"]:
+        want["--exclude"] = case["exclude"]
+    bad = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v}
+    if not case["exclude"] and "--exclude" in got:
+        bad["--exclude"] = (got["--exclude"], None)
+    if "--allow-foreign-source-mac" in av:
+        bad["--allow-foreign-source-mac"] = (True, False)
+    return run.check("argv.json matches the case definition (harness input)", not bad, bad or "ok", bad=INVALID)
+
+
+def job_matches(run, rj, case, bind, man, d):
+    argv_ok = argv_matches(run, d, case, bind, man)
     job = (rj or {}).get("job") or {}
     want = {"iface": man["binding"]["iface"], "src_ip": bind.src_ip, "src_mac": bind.src_mac, "router_mac": bind.peer_mac,
             "source_port": case["source_port"], "targets": case["targets"], "exclude": case["exclude"],
             "ports": case["ports"], "seed": SEED, "rate": RATE, "wait": WAIT, "retries": 0, "shard": "1/1",
             "blackrock_rounds": 14}
     bad = {k: (job.get(k), v) for k, v in want.items() if job.get(k) != v}
-    run.check("run.json job echo == the case and the binding", not bad, bad or "ok", beh=True)
+    # the engine echoed another job than the (correct) argv asked for: a scanner failure. With a wrong argv it is the
+    # harness' fault, so the same mismatch is INVALID and may be rerun.
+    run.check("run.json job echo == the case and the binding", not bad, bad or "ok",
+              bad=FAIL if argv_ok else INVALID, beh=argv_ok)
 
 
 def health_measured_zero(rj):
@@ -403,7 +428,7 @@ def verify_continuous(run, root, man, fx, d, case, peer_frames, peer_bytes, rj, 
     sports = sport_range(case["source_port"])
     exp = expected_replies(case)
     n_open = sum(x.endswith(":open") for x in exp)
-    job_matches(run, rj, case, bind, man)
+    job_matches(run, rj, case, bind, man, d)
     run.check("guest exit code 0", rc == 0, "rc=%s" % rc, beh=True)
     run.check("outcome Completed", (rj or {}).get("status") == "ok" and rj.get("reason") == "Completed",
               "status=%s reason=%s detail=%s" % ((rj or {}).get("status"), (rj or {}).get("reason"), (rj or {}).get("fail_detail")), beh=True)
@@ -449,7 +474,9 @@ def stray_frames(peer_frames, bind, sports):
     t0, t1 = syns[0][0], syns[-1][0] + WAIT
     out = []
     for t, f in peer_frames:
-        if not (t0 <= t <= t1) or f[0:6] != mac_b(bind.src_mac) or f[12:14] == MARKER_ETHERTYPE:
+        # what the guest's Npcap RX can see: unicast to the guest or broadcast/multicast, never the guest's own frames
+        to_guest = f[0:6] == mac_b(bind.src_mac) or bool(f[0] & 1)
+        if not (t0 <= t <= t1) or not to_guest or f[6:12] == mac_b(bind.src_mac) or f[12:14] == MARKER_ETHERTYPE:
             continue
         i = tcp_info(f)
         if i and i[7] == FOREIGN_IP_ID:
@@ -495,8 +522,11 @@ def verify_foreign(run, peer_frames, rj, case, bind, inj):
     strays = stray_frames(peer_frames, bind, sports)
     run.notes["strays_in_rx_window"] = len(strays)
     run.notes["injected"] = sent
+    # exact equality reads the pcap: a FAIL only when the capture is proven complete, else INVALID (rerunnable)
+    proven = not any(c["result"] in (INVALID, NOT_RUN) for c in run.checks)
     run.check("engine discarded == injected + strays (each injected frame discarded one for one)",
-              d == sent + len(strays), "discarded=%s injected=%s strays=%d" % (d, sent, len(strays)), beh=True)
+              d == sent + len(strays), "discarded=%s injected=%s strays=%d capture_proven_complete=%s" % (d, sent, len(strays), proven),
+              bad=FAIL if proven else INVALID, beh=proven)
     genuine = len(peer_replies(peer_frames, bind, sports))
     run.check("duplicates are genuine peer retransmits only (received + duplicates <= genuine replies on the wire)",
               isinstance(rj.get("duplicates"), int) and rj.get("received", 0) + rj["duplicates"] <= genuine,
@@ -575,7 +605,7 @@ def verify_item(man, fx, root, item, ctxs, rel=None):
 def verify_pause_leg(run, root, man, fx, item, ctx):
     rj, rc, n = ctx["rj"], ctx["meta"].get("guest_exit"), item["n"]
     case = case_by_name(PAUSE_CASE)
-    job_matches(run, rj, case, ctx["bind"], man)
+    job_matches(run, rj, case, ctx["bind"], man, ctx["d"])
     run.check("N=%d pause leg: rc 0, Paused, sent=%d, next_index=%d, checkpoint written" % (n, n, n),
               rc == 0 and rj.get("reason") == "Paused" and rj.get("sent") == n and rj.get("next_index") == n
               and rj.get("checkpoint") is True and rj.get("checkpoint_next_index") == n,
@@ -589,7 +619,7 @@ def verify_pause_leg(run, root, man, fx, item, ctx):
 def verify_resume_leg(run, root, man, fx, item, ctx):
     rj, rc, n = ctx["rj"], ctx["meta"].get("guest_exit"), item["n"]
     case = case_by_name(PAUSE_CASE)
-    job_matches(run, rj, case, ctx["bind"], man)
+    job_matches(run, rj, case, ctx["bind"], man, ctx["d"])
     run.check("N=%d resume leg: rc 0, Completed, sent=%d" % (n, case["syn"] - n),
               rc == 0 and rj.get("reason") == "Completed" and rj.get("sent") == case["syn"] - n
               and rj.get("start_index") == n and rj.get("next_index") == case["syn"],
@@ -611,9 +641,19 @@ def verify_pause_groups(man, fx, root, runs_by_tag, ctxs):
             run.add("both legs have usable artifacts", NOT_RUN, "pause=%s resume=%s" % (ca is not None, cb is not None))
             out.append(run)
             continue
+        cont = ctxs.get("c03_multi_ports.run1")
+        needed = [a, b, "c03_multi_ports.run1"]
+        usable = all(ctxs.get(t) is not None and ctxs[t]["peer_bytes"] is not None and ctxs[t]["peer_frames"] is not None
+                     for t in needed)
+        if not usable:
+            run.add("pause leg, resume leg and the continuous run have usable captures", NOT_RUN,
+                    {t: (ctxs.get(t) is not None and ctxs[t]["peer_bytes"] is not None) for t in needed})
+            out.append(run)
+            continue
         bad_legs = [t for t in (a, b) if runs_by_tag[t].verdict != PASS]
         if bad_legs:
-            run.add("both legs PASS on their own", INVALID if any(runs_by_tag[t].verdict in (INVALID, NOT_RUN) for t in bad_legs) else FAIL,
+            vs = [runs_by_tag[t].verdict for t in bad_legs]
+            run.add("both legs PASS on their own", NOT_RUN if NOT_RUN in vs else INVALID if INVALID in vs else FAIL,
                     {t: runs_by_tag[t].verdict for t in bad_legs})
             out.append(run)
             continue
@@ -623,18 +663,14 @@ def verify_pause_groups(man, fx, root, runs_by_tag, ctxs):
                   and rb.get("resumed_from_attempt") == ra["attempt_id"] and ra.get("resumed_from_attempt") is None,
                   "scan=%s.. a1=%s.. a2=%s.. from=%s.." % (ra["scan_id"][:6], ra["attempt_id"][:6], rb["attempt_id"][:6],
                                                            str(rb.get("resumed_from_attempt"))[:6]))
-        cont = ctxs.get("c03_multi_ports.run1")
         fdata, _fframes = load_fixture(run, root, man, fx or {}, case["name"]) if fx else (None, None)
         legs = [ca["peer_bytes"], cb["peer_bytes"]]
         if fdata is not None:
             code, msg = vw.compare_bytes(fdata, legs)
             run.add("N=%d pause SYNs + resume SYNs == C oracle (bytes and order)" % n, {0: PASS, 1: FAIL, 2: INVALID}[code], msg)
-        if cont is not None:
-            code, msg = vw.compare_bytes(cont["peer_bytes"], legs)
-            run.add("N=%d pause SYNs + resume SYNs == continuous Rust run (bytes and order)" % n,
-                    {0: PASS, 1: FAIL, 2: INVALID}[code], msg)
-        else:
-            run.add("continuous run c03_multi_ports.run1 available", NOT_RUN, "missing")
+        code, msg = vw.compare_bytes(cont["peer_bytes"], legs)
+        run.add("N=%d pause SYNs + resume SYNs == continuous Rust run (bytes and order)" % n,
+                {0: PASS, 1: FAIL, 2: INVALID}[code], msg)
         na = len(scanner_syns(ca["peer_frames"], ca["bind"], sports))
         nb = len(scanner_syns(cb["peer_frames"], cb["bind"], sports))
         run.check("no probe lost or added across the seam (SYN counts %d + %d)" % (n, case["syn"] - n),

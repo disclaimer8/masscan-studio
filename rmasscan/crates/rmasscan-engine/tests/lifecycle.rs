@@ -538,6 +538,91 @@ fn duplicate_replies_are_collapsed_and_counted() {
     assert_eq!(o.progress.duplicates, 4);
 }
 
+/// Вставляет 802.1Q-тег (VID 1) между MAC-адресами и EtherType.
+fn vlan_tag(frame: &[u8]) -> Vec<u8> {
+    let mut v = frame[..12].to_vec();
+    v.extend_from_slice(&[0x81, 0x00, 0x00, 0x01]);
+    v.extend_from_slice(&frame[12..]);
+    v
+}
+
+/// VLAN остаётся явно неподдержанным: корректный по содержимому ответ в
+/// 802.1Q-теге не становится результатом, считается отброшенным, скан не
+/// падает. Контроль: те же ответы без тега доставляются.
+#[test]
+fn vlan_tagged_replies_are_unsupported_discarded_and_never_delivered() {
+    let p = plan(1_000_000.0, 3);
+    let clock = ManualClock::new();
+    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(clock.clone());
+    fake.set_responder(|f| {
+        reply_to_syn(f, 0x12)
+            .map(|r| vlan_tag(&r))
+            .into_iter()
+            .collect()
+    });
+    let h = start_manual(&p, &fake, &clock, opts());
+    let events = drain_to_finished(&h);
+    let o = h.join().unwrap();
+    assert_eq!(
+        o.reason,
+        Reason::Completed,
+        "VLAN input must not fail the scan"
+    );
+    assert!(
+        all_replies(&events).is_empty(),
+        "tagged replies were delivered"
+    );
+    assert_eq!(o.progress.received, 0);
+    assert_eq!(o.progress.discarded, PROBES, "{:?}", o.progress);
+
+    // Контроль: без тега те же ответы доставляются.
+    let clock2 = ManualClock::new();
+    let fake2 = rmasscan_engine::fake::FakeAdapter::new().with_clock(clock2.clone());
+    synack_responder(&fake2);
+    let h2 = start_manual(&p, &fake2, &clock2, opts());
+    let events2 = drain_to_finished(&h2);
+    h2.join().unwrap();
+    assert_eq!(all_replies(&events2).len() as u64, PROBES);
+}
+
+/// Bounded FIFO dedup на уровне engine: при ёмкости 2 повтор не обновляет
+/// порядок, поэтому после вытеснения тот же ответ доставляется снова, а
+/// повтор до вытеснения подавляется. Строгая C-семантика не обещается.
+#[test]
+fn engine_dedup_is_bounded_fifo_and_redelivers_after_eviction() {
+    let p = plan(1_000_000.0, 3);
+    let clock = ManualClock::new();
+    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(clock.clone());
+    let probes = reference_frames(&p, 3);
+    let [a, b, c] = [0, 1, 2].map(|i| reply_to_syn(&probes[i], 0x12).unwrap());
+    // A, B, A (повтор подавлен, порядок не обновлён), C (вытесняет A, а не B:
+    // FIFO, не LRU), A снова (доставлен повторно).
+    for f in [&a, &b, &a, &c, &a] {
+        fake.push_frame(f.clone());
+    }
+    let mut o = opts();
+    o.dedup_capacity = 2;
+    let h = start_manual(&p, &fake, &clock, o);
+    let events = drain_to_finished(&h);
+    let out = h.join().unwrap();
+    assert_eq!(out.reason, Reason::Completed);
+    let replies = all_replies(&events);
+    let key = |r: &Reply| (r.remote_ip, r.remote_port);
+    let ra = reply_key(&a, &p);
+    assert_eq!(replies.len(), 4, "A, B, C and A again: {replies:?}");
+    assert_eq!(replies.iter().filter(|r| key(r) == ra).count(), 2);
+    assert_eq!(out.progress.duplicates, 1, "{:?}", out.progress);
+    assert_eq!(out.progress.received, 4);
+}
+
+fn reply_key(frame: &[u8], p: &rmasscan_core::probe::ReadyPlan) -> (u32, u16) {
+    let r =
+        rmasscan_core::receive::parse_reply(frame, rmasscan_core::packet::LinkType::Ethernet, p)
+            .unwrap()
+            .unwrap();
+    (r.remote_ip, r.remote_port)
+}
+
 #[test]
 fn progress_events_coalesce_while_consumer_is_idle() {
     let p = plan(1_000_000.0, 3);

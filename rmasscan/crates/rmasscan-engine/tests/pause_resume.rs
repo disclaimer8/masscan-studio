@@ -275,12 +275,14 @@ fn full_result_queue_fails_and_never_offers_a_checkpoint() {
     });
     // На провале checkpoint не предлагается.
     assert!(h.checkpoint().is_none());
-    // Принятые до переполнения результаты сохраняются; Finished сюда не входит.
+    // Принятые до переполнения результаты сохраняются (ровно 2, capacity=2);
+    // Finished сюда не входит.
     let (outcome, events) = h.join_drain().unwrap();
     assert!(matches!(
         outcome.reason,
         Reason::Failed(FailReason::ConsumerTooSlow)
     ));
+    assert_eq!(all_replies(&events).len(), 2);
     assert!(!has_checkpoint_event(&events));
 }
 

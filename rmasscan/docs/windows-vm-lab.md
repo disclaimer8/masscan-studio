@@ -13,7 +13,7 @@ Windows 2nd e1000e -> TAP wvt-ID -> bridge wvb-ID -> veth wvh-ID == lab0 in netn
 ## Isolation rules (enforced by `check_isolation`, run by `up` and `status`)
 
 - The bridge is L2-only so the host IP stack never sees lab frames: `vlan_filtering 1` with the bridge's own (self) vid 1 removed (`bridge vlan del dev BR vid 1 self`; port VLANs stay, so TAP and veth still switch), NOARP on bridge/TAP/host veth, `arp_ignore=8`, `rp_filter=1`, `forwarding=0`, IPv6 off. Without this a lab-side ARP for the host's own address was answered with the bridge MAC and a SYN to the host's sshd could leak out via eno1.
-- NetworkManager resets `rp_filter` and may configure new devices, so `up` runs `nmcli device set <own dev> managed no` (runtime, own devices only) before the sysctls; `status` re-reads every value.
+- udev (`99-systemd.rules` running `systemd-sysctl`, `50-default.conf` `rp_filter=2`) rewrites per-device sysctls asynchronously after a device appears, so `up` and `status` run `udevadm settle` before applying/reading them and `status` re-reads every value. The kernel uses max(`conf.all`, `conf.<dev>`) for rp_filter, so the per-device value is the configured one, not the effective one; it is irrelevant here because no frame reaches the host IP stack. If NetworkManager is running, `up` also does a best-effort `nmcli device set <own dev> managed no` (runtime, own devices only); a missing or stopped NetworkManager is fine.
 - Violations (any makes `status` not ok and raw-run forbidden): physical or foreign port on the bridge; any IP on bridge/TAP/veth; ARP on; wrong sysctls; self vlan present or vlan_filtering off; global `ip_forward != 0`; nftables/iptables rules mentioning the lab interfaces. `plan` also refuses on name/MAC/address/route collisions, `ip_forward=1`, and firewall rules naming the lab interfaces.
 - No `ip_forward`, NAT, iptables/nftables, route or DNS change anywhere; `eno1`/`eno2`/`wlp*` are never touched.
 
@@ -24,7 +24,7 @@ ifalias `rmasscan-wvl:<run-id>:<token>`; the netns carries a marker file `/run/r
 records an object only after it really exists. `down` deletes only objects whose LIVE mark equals the manifest token (a
 same-named foreign object, or an object of another manifest with the same run-id, is skipped: exit 5). `up` refuses a
 leftover manifest unless its state is `down`, and refuses a `lab.env` of another run-id. A failed `up` rolls back and
-leaves state `down`. A second `down` is a no-op (exit 0).
+leaves state `down`. A second `down` is a no-op (exit 0). Creation failures never delete anything: if `ip link add` itself fails (name taken in the plan-to-create window) nothing is removed; only a device this call created is removed when a later step fails. up/down/status/record-guest are serialized per run-id with `flock` on `/run/rmasscan-wvl/<run-id>.lock`.
 
 ```
 python3 rmasscan/scripts/windows-vm-lab.py plan   --run-id ID --manifest FILE          # read-only

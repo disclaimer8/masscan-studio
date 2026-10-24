@@ -24,6 +24,8 @@ Ownership: every link carries ifalias `rmasscan-wvl:ID:NONCE`, the netns a marke
 objects whose live mark matches the manifest token. A second `down` is a no-op.
 """
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -78,6 +80,8 @@ def norm_mac(m):
 
 # ---------------------------------------------------------------- host abstraction
 class RealHost:
+    LOCK_TRIES = 300  # x 0.1 s
+
     def sh(self, *cmd, check=True):
         r = subprocess.run(cmd, capture_output=True, text=True)
         if check and r.returncode:
@@ -188,8 +192,12 @@ class RealHost:
         return {"pid": None, "cmdline_ok": False, "fd_iff": False, "start": 0}
 
     def _unmanage(self, name):
-        """NetworkManager resets rp_filter and may run DHCP/link-local on new devices: tell it to ignore OUR device."""
+        """Best effort: if NetworkManager is running, tell it to leave OUR new device alone (it could run
+        DHCP/link-local on it). Never fatal: absent/not-running NM is fine; status re-checks the result."""
         if subprocess.run(["which", "nmcli"], capture_output=True).returncode:
+            return
+        r = subprocess.run(["nmcli", "-t", "-f", "RUNNING", "general"], capture_output=True, text=True)
+        if r.returncode or r.stdout.strip() != "running":
             return
         subprocess.run(["nmcli", "device", "set", name, "managed", "no"], capture_output=True)
         for _ in range(30):
@@ -197,46 +205,69 @@ class RealHost:
             if "%s:unmanaged" % name in r.stdout.split("\n"):
                 return
             time.sleep(0.1)
-        raise LabError("NetworkManager did not release %s" % name)
+
+    def settle(self):
+        """The 99-systemd.rules `systemd-sysctl` hook (50-default.conf: rp_filter=2) rewrites per-device sysctls
+        asynchronously after a device appears; wait for udev before applying or reading them. (The kernel uses
+        max(conf.all, conf.dev) for rp_filter, so the per-device value is the configured, not effective, one;
+        it is irrelevant here because no frame reaches the host IP stack.)"""
+        subprocess.run(["udevadm", "settle", "--timeout=5"], capture_output=True)
 
     def _l2only(self, name):
         self._unmanage(name)
+        self.settle()
         self.sh("ip", "link", "set", name, "arp", "off")
-        for k, v in (("disable_ipv6", "1"),):
-            self.sh("sysctl", "-qw", "net.ipv6.conf.%s.%s=%s" % (name, k, v))
+        self.sh("sysctl", "-qw", "net.ipv6.conf.%s.disable_ipv6=1" % name)
         for k, v in (("arp_ignore", "8"), ("rp_filter", "1"), ("forwarding", "0")):
             self.sh("sysctl", "-qw", "net.ipv4.conf.%s.%s=%s" % (name, k, v))
 
-    def _guard(self, name, fn):
+    def _create(self, name, add_cmd, rest):
+        """`add_cmd` creates the device: if it fails (e.g. name taken) nothing of ours exists, so NOTHING is
+        deleted. Only after it succeeded may a later failure remove the device this call just created."""
+        self.sh(*add_cmd)
         try:
-            fn()
+            rest()
         except Exception:
-            subprocess.run(["ip", "link", "del", name], capture_output=True)
+            self.sh("ip", "link", "del", name, check=False)
             raise
 
+    @contextlib.contextmanager
+    def lock(self, run_id):
+        os.makedirs(MARK_DIR, mode=0o755, exist_ok=True)
+        fd = os.open(os.path.join(MARK_DIR, run_id + ".lock"), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            for _ in range(self.LOCK_TRIES):
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.1)
+            else:
+                raise LabError("another windows-vm-lab command holds the lock for run-id %s" % run_id)
+            yield
+        finally:
+            os.close(fd)
+
     def create_bridge(self, name, alias):
-        def go():
-            self.sh("ip", "link", "add", name, "type", "bridge", "stp_state", "0", "vlan_filtering", "1")
+        def rest():
             self.sh("ip", "link", "set", name, "alias", alias)
             self._l2only(name)
             self.sh("bridge", "vlan", "del", "dev", name, "vid", "1", "self")
             self.sh("ip", "link", "set", name, "up")
-        self._guard(name, go)
+        self._create(name, ("ip", "link", "add", name, "type", "bridge", "stp_state", "0", "vlan_filtering", "1"), rest)
 
     def create_tap(self, name, alias, user):
-        def go():
-            self.sh("ip", "tuntap", "add", "dev", name, "mode", "tap", "user", user)
+        def rest():
             self.sh("ip", "link", "set", name, "alias", alias)
             self._l2only(name)
-        self._guard(name, go)
+        self._create(name, ("ip", "tuntap", "add", "dev", name, "mode", "tap", "user", user), rest)
 
     def create_veth(self, host_if, peer_if, ns, alias, host_mac, peer_mac):
-        def go():
-            self.sh("ip", "link", "add", host_if, "address", host_mac, "type", "veth",
-                    "peer", "name", peer_if, "address", peer_mac, "netns", ns)
+        def rest():
             self.sh("ip", "link", "set", host_if, "alias", alias)
             self._l2only(host_if)
-        self._guard(host_if, go)
+        self._create(host_if, ("ip", "link", "add", host_if, "address", host_mac, "type", "veth",
+                               "peer", "name", peer_if, "address", peer_mac, "netns", ns), rest)
 
     def enslave(self, name, bridge):
         self.sh("ip", "link", "set", name, "master", bridge)
@@ -334,6 +365,7 @@ def plan(host, d, manifest):
 def check_isolation(host, d):
     """Violations of the sealed-switch invariants for this run's bridge."""
     v = []
+    host.settle()
     links = host.links()
     br = links.get(d["bridge"])
     if br is None:
@@ -596,8 +628,12 @@ def main(argv=None, host=None):
             os.execvp("sudo", ["sudo", "-n", sys.executable, os.path.abspath(__file__)] + (argv if argv is not None else sys.argv[1:]))
         host = RealHost()
     try:
-        return {"plan": cmd_plan, "up": cmd_up, "status": cmd_status, "down": cmd_down,
-                "record-guest": cmd_record_guest}[a.cmd](host, a)
+        fn = {"plan": cmd_plan, "up": cmd_up, "status": cmd_status, "down": cmd_down,
+              "record-guest": cmd_record_guest}[a.cmd]
+        if a.cmd == "plan":
+            return fn(host, a)
+        with host.lock(a.run_id):  # serialize every mutating command (also the manifest writes) per run-id
+            return fn(host, a)
     except LabError as e:
         print("ERROR: %s" % e, file=sys.stderr)
         return 3

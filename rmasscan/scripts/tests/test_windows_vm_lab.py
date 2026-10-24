@@ -63,6 +63,18 @@ class FakeHost:
     def vm_facts(self, d):
         return dict(self.vm)
 
+    def settle(self):
+        pass
+
+    @contextlib.contextmanager
+    def lock(self, run_id):
+        self.locked = getattr(self, "locked", 0) + 1
+        self.lock_depth = getattr(self, "lock_depth", 0) + 1
+        try:
+            yield
+        finally:
+            self.lock_depth -= 1
+
     def _add(self, n, kind, alias, mac=""):
         self.l[n] = dict(kind=kind, master=None, alias=alias, physical=False, mac=mac, addrs=[],
                          noarp=True, lower_up=False, vlan_filtering=kind == "bridge")
@@ -104,6 +116,28 @@ class FakeHost:
 
 def mk_alias(tok=TOK):
     return wvl.alias_of(D, tok)
+
+
+class RecordingHost(wvl.RealHost):
+    """RealHost with `sh` replaced: records commands, fails the ones named in `fail`."""
+
+    def __init__(self, fail=()):
+        self.cmds, self.fail = [], fail
+
+    def sh(self, *cmd, check=True):
+        self.cmds.append(cmd)
+        if any(cmd[:len(f)] == f for f in self.fail):
+            raise wvl.LabError("boom: " + " ".join(cmd))
+        return ""
+
+    def settle(self):
+        pass
+
+    def _unmanage(self, name):
+        pass
+
+    def deletes(self):
+        return [c for c in self.cmds if c[:3] == ("ip", "link", "del")]
 
 
 class T(unittest.TestCase):
@@ -341,6 +375,57 @@ class T(unittest.TestCase):
         rc, err = self.r("record-guest", ["--guest-json", g])
         self.assertEqual(rc, 3)
         self.assertIn("malformed", err)
+
+    # ---- N1: creation failure must never delete what this call did not create
+    def test_name_taken_at_create_deletes_nothing(self):
+        for fn, add in ((lambda h: h.create_bridge("wvb-x", "a"), ("ip", "link", "add", "wvb-x")),
+                        (lambda h: h.create_tap("wvt-x", "a", "u"), ("ip", "tuntap", "add")),
+                        (lambda h: h.create_veth("wvh-x", "lab0", "ns", "a", "m", "m"), ("ip", "link", "add", "wvh-x"))):
+            h = RecordingHost(fail=[add])
+            with self.assertRaises(wvl.LabError):
+                fn(h)
+            self.assertEqual(h.deletes(), [], add)
+
+    def test_failure_after_own_creation_removes_only_that_device(self):
+        h = RecordingHost(fail=[("ip", "link", "set", "wvb-x", "alias")])
+        with self.assertRaises(wvl.LabError):
+            h.create_bridge("wvb-x", "a")
+        self.assertEqual(h.deletes(), [("ip", "link", "del", "wvb-x")])
+
+    def test_commands_run_under_the_run_id_lock(self):
+        self.assertEqual(self.r("up")[0], 0)
+        self.host_status()
+        self.r("down")
+        self.assertEqual(self.h.locked, 3)
+        self.assertEqual(self.h.lock_depth, 0)
+
+    def test_real_flock_serializes_same_run_id(self):
+        old = wvl.MARK_DIR
+        wvl.MARK_DIR = self.td.name
+        self.addCleanup(setattr, wvl, "MARK_DIR", old)
+        h = wvl.RealHost()
+        h.LOCK_TRIES = 3
+        with h.lock("t1"):
+            with self.assertRaises(wvl.LabError):
+                with h.lock("t1"):
+                    pass
+            with h.lock("t2"):  # other run-id is independent
+                pass
+        with h.lock("t1"):      # released afterwards
+            pass
+
+    def test_nm_not_running_is_not_fatal(self):
+        import subprocess
+        real = subprocess.run
+        calls = []
+
+        def fake(cmd, **k):
+            calls.append(cmd[0])
+            return subprocess.CompletedProcess(cmd, 0 if cmd[0] == "which" else 8, "", "NetworkManager is not running")
+        subprocess.run = fake
+        self.addCleanup(setattr, subprocess, "run", real)
+        wvl.RealHost()._unmanage("wvb-x")  # must not raise
+        self.assertNotIn("set", calls)
 
     # ---- misc lifecycle
     def test_ambiguous_nic_and_management_mac(self):

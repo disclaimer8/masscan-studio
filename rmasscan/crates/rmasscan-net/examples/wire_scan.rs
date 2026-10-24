@@ -36,6 +36,8 @@
 //! 5 нет Npcap или недостаточно прав (Admin-only Npcap): нужна инструкция;
 //! 6 source MAC не совпадает с MAC выбранного NIC.
 
+#![forbid(unsafe_code)]
+
 use std::fmt::Write as _;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -165,7 +167,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--stop-in-drain" => a.stop_in_drain = true,
             "--no-consume" => a.no_consume = true,
             "--result-capacity" => {
-                a.result_capacity = Some(val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?);
+                let n: usize = val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?;
+                if n == 0 {
+                    return Err("--result-capacity must be > 0".into());
+                }
+                a.result_capacity = Some(n);
             }
             "--rx-stall-ms" => a.rx_stall_ms = val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?,
             "--observe-ms" => a.observe_ms = val(&k)?.parse().map_err(|e| format!("{k}: {e}"))?,
@@ -252,12 +258,40 @@ fn build_plan(a: &Args, src_mac: [u8; 6], rate: f64, wait: u32) -> Result<ReadyP
 }
 
 fn fail_json(stage: &str, kind: &str, msg: &str, opened: bool) -> String {
+    fail_json_job(stage, kind, msg, opened, None)
+}
+
+/// Как `fail_json`, но с `job` (что именно собирались сканировать), если план уже построен.
+fn fail_json_job(stage: &str, kind: &str, msg: &str, opened: bool, job: Option<&str>) -> String {
     format!(
-        "{{\"status\":\"error\",\"stage\":{},\"error\":{},\"message\":{},\"opened_adapter\":{opened},\"tx_sent\":0,\"identity\":{}}}",
+        "{{\"status\":\"error\",\"stage\":{},\"error\":{},\"message\":{},\"opened_adapter\":{opened},\"tx_sent\":0,\"job\":{},\"identity\":{}}}",
         js(stage),
         js(kind),
         js(msg),
+        job.unwrap_or("null"),
         identity_json()
+    )
+}
+
+/// Что именно сканировалось: все явные параметры и дайджест задания. Попадает
+/// в scan, reference, forge и в ошибки после построения плана, чтобы архив
+/// можно было привязать к заданию. Повторы, шард и раунды BlackRock не
+/// настраиваются harness-ом (значения по умолчанию ScanConfig, план требует 0, 1/1, 14).
+fn job_json(a: &Args, src_mac: [u8; 6], rate: f64, wait: u32, digest: &[u8]) -> String {
+    format!(
+        "{{\"iface\":{},\"src_ip\":{},\"src_mac\":{},\"router_mac\":{},\"source_port\":{},\
+\"targets\":{},\"exclude\":{},\"ports\":{},\"seed\":{},\"rate\":{rate},\"wait\":{wait},\
+\"retries\":0,\"shard\":\"1/1\",\"blackrock_rounds\":14,\"job_digest\":{}}}",
+        js(&a.iface),
+        js(&a.src_ip),
+        js(&mac_text(&src_mac)),
+        js(&a.router_mac),
+        js(&a.source_port),
+        js(&a.targets),
+        support::json_opt_str(a.exclude.as_deref()),
+        js(&a.ports),
+        a.seed,
+        js(&hex(digest)),
     )
 }
 
@@ -441,6 +475,11 @@ fn reference_mode(a: &Args, path: &str) -> Out {
         Ok(p) => p,
         Err(e) => return bad("plan", "BadPlan", &e),
     };
+    // Задание записывается так, как его запросил пользователь (его rate/wait и дайджест).
+    let job = match build_plan(a, src_mac, a.rate, a.wait) {
+        Ok(p) => job_json(a, src_mac, a.rate, a.wait, &job_digest(&p)),
+        Err(e) => return bad("plan", "BadPlan", &e),
+    };
     if plan.range() > MAX_REFERENCE_FRAMES {
         return bad(
             "reference",
@@ -495,7 +534,7 @@ fn reference_mode(a: &Args, path: &str) -> Out {
         0,
         format!(
             "{{\"status\":\"ok\",\"mode\":\"reference-pcap\",\"frames\":{},\"file\":{},\
-\"pcap_sha256\":{},\"opened_adapter\":false,\"npcap_loaded\":false,\"tx_sent\":0,\"identity\":{}}}",
+\"pcap_sha256\":{},\"opened_adapter\":false,\"npcap_loaded\":false,\"tx_sent\":0,\"job\":{job},\"identity\":{}}}",
             frames.len(),
             js(path),
             js(&sha256_hex(&bytes)),
@@ -573,8 +612,20 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         Err(e) => return (2, fail_json("plan", "BadPlan", &e, false)),
     };
     let digest = job_digest(&plan);
+    let job = job_json(a, src_mac, a.rate, a.wait, &digest);
 
     if let Some(n) = a.forge_next_index {
+        if n > plan.range() {
+            return (
+                2,
+                fail_json(
+                    "forge",
+                    "NextIndexBeyondRange",
+                    &format!("next_index {n} is beyond the range {}", plan.range()),
+                    false,
+                ),
+            );
+        }
         let cp = Checkpoint {
             format_version: rmasscan_engine::CHECKPOINT_FORMAT_VERSION,
             engine_version: ENGINE_ALGORITHM_VERSION,
@@ -591,7 +642,7 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         return (
             0,
             format!(
-                "{{\"status\":\"forged\",\"next_index\":{n},\"range\":{},\"opened_adapter\":false,\"tx_sent\":0,\"identity\":{}}}",
+                "{{\"status\":\"forged\",\"next_index\":{n},\"range\":{},\"opened_adapter\":false,\"tx_sent\":0,\"job\":{job},\"identity\":{}}}",
                 plan.range(),
                 identity_json()
             ),
@@ -610,11 +661,20 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
             Err(e) => {
                 return (
                     4,
-                    fail_json("resume-preflight", &format!("{e:?}"), &e.to_string(), false),
+                    fail_json_job(
+                        "resume-preflight",
+                        &format!("{e:?}"),
+                        &e.to_string(),
+                        false,
+                        Some(&job),
+                    ),
                 );
             }
         };
-        let pre = if cp.engine_version != ENGINE_ALGORITHM_VERSION {
+        // Всё, что Engine::resume проверит иначе только после открытия адаптера.
+        let pre = if cp.format_version != rmasscan_engine::CHECKPOINT_FORMAT_VERSION {
+            Some("UnsupportedFormat")
+        } else if cp.engine_version != ENGINE_ALGORITHM_VERSION {
             Some("EngineVersionMismatch")
         } else if cp.job_digest != digest {
             Some("JobMismatch")
@@ -624,17 +684,20 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
             Some("AttemptIdReused")
         } else if cp.next_index == plan.range() {
             Some("AlreadyCompleted")
+        } else if cp.next_index > plan.range() {
+            Some("NextIndexBeyondRange")
         } else {
             None
         };
         if let Some(kind) = pre {
             return (
                 4,
-                fail_json(
+                fail_json_job(
                     "resume-preflight",
                     kind,
                     "rejected before the adapter was opened",
                     false,
+                    Some(&job),
                 ),
             );
         }
@@ -653,7 +716,7 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         Err(e) => {
             return (
                 net_error_code(&e),
-                fail_json("open", &format!("{e:?}"), &e.to_string(), false),
+                fail_json_job("open", &format!("{e:?}"), &e.to_string(), false, Some(&job)),
             );
         }
     };
@@ -703,7 +766,13 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         Err(e) => {
             return (
                 4,
-                fail_json("engine-start", &format!("{e:?}"), &e.to_string(), true),
+                fail_json_job(
+                    "engine-start",
+                    &format!("{e:?}"),
+                    &e.to_string(),
+                    true,
+                    Some(&job),
+                ),
             );
         }
     };
@@ -763,7 +832,7 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         Err(e) => {
             return (
                 3,
-                fail_json("join", &format!("{e:?}"), &e.to_string(), true),
+                fail_json_job("join", &format!("{e:?}"), &e.to_string(), true, Some(&job)),
             );
         }
     };
@@ -893,7 +962,7 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
 \"resources\":{{\"fds_before_open\":{},\"fds_open\":{},\"fds_after_join\":{},\
 \"threads_before\":{},\"threads_after_join_immediate\":{},\"threads_settle_ms\":{threads_settle_ms:.3},\"threads_after_join\":{},\
 \"working_set_bytes_after_join\":{},\"peak_working_set_bytes\":{},\"cpu_user_ms\":{},\"cpu_kernel_ms\":{}}},\
-\"npcap\":{npcap},\"identity\":{}}}",
+\"npcap\":{npcap},\"job\":{job},\"identity\":{}}}",
         first as f64 / 1e9,
         last as f64 / 1e9,
         steady,
@@ -1199,6 +1268,97 @@ mod tests {
         let (code, json) = run(&with(&[]), &be);
         assert_eq!(code, 2, "{json}");
         assert_eq!(be.open_calls.get(), 0);
+    }
+
+    #[test]
+    fn checkpoint_beyond_the_range_is_rejected_before_adapter_open() {
+        let be = Mock {
+            nic: Some(NIC),
+            ..Mock::default()
+        };
+        // Контрольная точка нужного задания, но next_index за пределом диапазона (2 пробы).
+        let a = with(&[]);
+        let plan = build_plan(&a, NIC, a.rate, a.wait).unwrap();
+        let cp = Checkpoint {
+            format_version: rmasscan_engine::CHECKPOINT_FORMAT_VERSION,
+            engine_version: ENGINE_ALGORITHM_VERSION,
+            scan_id: a.scan_id,
+            attempt_id: [9; 16],
+            job_digest: job_digest(&plan),
+            next_index: 999,
+        };
+        let path = tmp("beyond.cp");
+        std::fs::write(&path, cp.to_bytes()).unwrap();
+        let a = with(&[
+            "--resume-checkpoint",
+            &path,
+            "--attempt-id",
+            &format!("{}0a", "09".repeat(15)),
+        ]);
+        let (code, json) = run(&a, &be);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(code, 4, "{json}");
+        assert!(json.contains("NextIndexBeyondRange"), "{json}");
+        assert_eq!(
+            be.open_calls.get(),
+            0,
+            "adapter opened for an out-of-range checkpoint"
+        );
+        // и forge не создаёт такую точку
+        let (c, j) = run(
+            &with(&[
+                "--src-mac",
+                "02:00:00:00:00:11",
+                "--forge-checkpoint-next-index",
+                "999",
+            ]),
+            &be,
+        );
+        assert_eq!(c, 2, "{j}");
+    }
+
+    #[test]
+    fn zero_result_capacity_is_rejected_at_argument_parsing() {
+        let mut v: Vec<&str> = BASE.to_vec();
+        v.extend_from_slice(&["--result-capacity", "0"]);
+        assert!(args(&v).err().unwrap().contains("result-capacity"));
+    }
+
+    #[test]
+    fn job_is_recorded_in_reference_forge_and_preflight_errors() {
+        let be = Mock {
+            nic: Some(NIC),
+            ..Mock::default()
+        };
+        let path = tmp("job.pcap");
+        let (code, json) = run(
+            &with(&[
+                "--src-mac",
+                "02:00:00:00:00:11",
+                "--write-reference-pcap",
+                &path,
+            ]),
+            &be,
+        );
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(code, 0, "{json}");
+        for k in [
+            "\"job\":{\"iface\":",
+            "\"src_ip\":\"198.18.0.1\"",
+            "\"router_mac\":\"02:00:00:00:00:22\"",
+            "\"targets\":\"198.18.0.2\"",
+            "\"ports\":\"80,81\"",
+            "\"seed\":7",
+            "\"rate\":100",
+            "\"job_digest\":\"",
+        ] {
+            assert!(json.contains(k), "{k} missing: {json}");
+        }
+        let cp = tmp("junkjob.cp");
+        std::fs::write(&cp, b"x").unwrap();
+        let (_, j) = run(&with(&["--resume-checkpoint", &cp]), &be);
+        let _ = std::fs::remove_file(&cp);
+        assert!(j.contains("\"job\":null") || j.contains("\"job\":{"), "{j}");
     }
 
     #[test]

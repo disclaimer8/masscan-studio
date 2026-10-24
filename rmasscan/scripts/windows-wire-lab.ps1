@@ -205,7 +205,17 @@ else {
 }
 Log "exe sha256=$exeHash"
 
+# Property that may be absent (StrictMode throws on a missing property).
+function Get-Prop($Object, [string]$Name) {
+    if ($null -ne $Object -and $null -ne $Object.PSObject.Properties[$Name]) { return $Object.$Name }
+    return $null
+}
+
 function Invoke-Harness([string[]]$ArgList, [string]$StdoutFile) {
+    # The exact argument array, one element per line, for the evidence archive.
+    Log ("exec: " + $ExePath)
+    $i = 0
+    foreach ($x in $ArgList) { Log ("  argv[{0}] = {1}" -f $i, $x); $i++ }
     # Argument ARRAY: no Invoke-Expression, no command line built from strings.
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -330,33 +340,46 @@ if (Test-Path -LiteralPath $runFile) {
     if ($raw) { try { $run = $raw | ConvertFrom-Json } catch { $run = $null } }
 }
 
-if ($runCode -eq 5) {
-    Write-Instructions
-    Finish 'NOT RUN' @('Npcap access was denied when opening the adapter; nothing was sent') 5
-}
-if ($runCode -eq 6) {
-    $m = ''
-    if ($run) { $m = $run.message }
-    Finish 'NOT RUN' @("source MAC refused: $m") 2
-}
-if ($runCode -ne 0 -and $runCode -ne 3) {
-    $m = ''
-    if ($run) { $m = $run.message }
-    Finish 'NOT RUN' @("the harness did not start the scan (exit $runCode): $m") 2
-}
-if ($null -eq $run) { Finish 'FAIL' @("run.json is missing or not valid JSON (exit $runCode)") 1 }
+try {
+    $hexCode = '0x{0:X8}' -f $runCode
+    $runStatus = Get-Prop $run 'status'
+    # NOT RUN only when the harness itself says it refused before touching the adapter:
+    # a known refusal code, a parsed run.json, nothing sent and no adapter opened.
+    $refusedBeforeOpen = (@(2, 4, 5, 6) -contains $runCode) -and ($null -ne $run) -and
+        ($runStatus -eq 'error') -and ((Get-Prop $run 'tx_sent') -eq 0) -and ((Get-Prop $run 'opened_adapter') -eq $false)
+    if ($refusedBeforeOpen) {
+        $m = Get-Prop $run 'message'
+        if ($runCode -eq 5) {
+            Write-Instructions
+            Finish 'NOT RUN' @('Npcap access was denied when opening the adapter; nothing was sent') 5
+        }
+        if ($runCode -eq 6) { Finish 'NOT RUN' @("source MAC refused: $m") 2 }
+        Finish 'NOT RUN' @("the harness refused before opening the adapter (exit $runCode): $m") 2
+    }
+    if ($runCode -ne 0 -and $runCode -ne 3) {
+        Finish 'FAIL' @("the harness ended abnormally: exit code $runCode ($hexCode); a crash or a failure after the adapter may have been used (run.json: $(if ($null -eq $run) { 'missing or invalid' } else { 'present' }))") 1
+    }
+    if ($null -eq $run) { Finish 'FAIL' @("run.json is missing or not valid JSON (exit $runCode, $hexCode)") 1 }
 
-$problems = @()
-if ($run.status -ne 'ok') { $problems += "status is '$($run.status)'" }
-if ($run.reason -ne 'Completed') { $problems += "reason is '$($run.reason)' $($run.fail_detail)" }
-if ($run.status -eq 'ok') {
-    if ($run.sent -ne $run.expected_total) { $problems += "sent $($run.sent) of $($run.expected_total) probes" }
-    if ($run.net.tx_uncertain -ne 0) { $problems += "tx_uncertain=$($run.net.tx_uncertain)" }
-    if ($run.net.tx_errors -ne 0) { $problems += "tx_errors=$($run.net.tx_errors)" }
-    if ($run.net.rx_errors -ne 0) { $problems += "rx_errors=$($run.net.rx_errors)" }
-    if ($null -eq $run.rx_health.kernel_drops) { $problems += 'receive drops are unknown (null)' }
-    elseif ($run.rx_health.kernel_drops -ne 0) { $problems += "receive drops=$($run.rx_health.kernel_drops)" }
-    if ($run.reply_total -eq 0) { $problems += 'no replies at all: check the peer, the router MAC and the source MAC' }
+    $problems = @()
+    if ($runCode -ne 0) { $problems += "harness exit code $runCode ($hexCode)" }
+    if ($runStatus -ne 'ok') {
+        $problems += ("status is '{0}', stage '{1}', error '{2}': {3}" -f $runStatus, (Get-Prop $run 'stage'), (Get-Prop $run 'error'), (Get-Prop $run 'message'))
+    }
+    else {
+        if ((Get-Prop $run 'reason') -ne 'Completed') { $problems += "reason is '$(Get-Prop $run 'reason')' $(Get-Prop $run 'fail_detail')" }
+        if ($run.sent -ne $run.expected_total) { $problems += "sent $($run.sent) of $($run.expected_total) probes" }
+        if ($run.net.tx_uncertain -ne 0) { $problems += "tx_uncertain=$($run.net.tx_uncertain)" }
+        if ($run.net.tx_errors -ne 0) { $problems += "tx_errors=$($run.net.tx_errors)" }
+        if ($run.net.rx_errors -ne 0) { $problems += "rx_errors=$($run.net.rx_errors)" }
+        if ($null -eq $run.rx_health.kernel_drops) { $problems += 'receive drops are unknown (null)' }
+        elseif ($run.rx_health.kernel_drops -ne 0) { $problems += "receive drops=$($run.rx_health.kernel_drops)" }
+        if ($run.reply_total -eq 0) { $problems += 'no replies at all: check the peer, the router MAC and the source MAC' }
+    }
+    if ($problems.Count -gt 0) { Finish 'FAIL' $problems 1 }
+    Finish 'PASS' @("sent $($run.sent) probes, $($run.reply_total) replies, no TX uncertainty, no receive drops") 0
 }
-if ($problems.Count -gt 0) { Finish 'FAIL' $problems 1 }
-Finish 'PASS' @("sent $($run.sent) probes, $($run.reply_total) replies, no TX uncertainty, no receive drops") 0
+catch {
+    # Any unexpected error still yields a verdict and an archive.
+    Finish 'FAIL' @("wrapper error while judging the run: $($_.Exception.Message)") 1
+}

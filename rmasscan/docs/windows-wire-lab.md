@@ -45,7 +45,9 @@ A source MAC that differs from the NIC's own MAC would give a scan that complete
 - `-SourceMac` defaults to the MAC of the chosen adapter (from the inventory).
 - An explicit `-SourceMac` that differs is refused (`wire_scan` exit 6, verdict `NOT RUN`) unless
   `-AllowForeignSourceMac` is given, which prints a warning and records `src_mac_check: "override-foreign"`.
-- A run with zero replies is `FAIL`, not `PASS`.
+- A run with zero replies is `FAIL`, not `PASS`. `NOT RUN` is used only when the harness itself reports that it refused before
+opening the adapter (exit 2/4/5/6, `tx_sent` 0, `opened_adapter` false); a crash or any other exit code is `FAIL` with the
+exit code in decimal and hex.
 
 `run.json` records how the MAC was chosen: `nic-default`, `explicit-equal`, `override-foreign` or `unverified`.
 
@@ -72,6 +74,9 @@ adapter is exit 5 with an `access_hint`.
 in-memory adapter, timestamps 0, byte-for-byte reproducible, at most 1,000,000 frames). It needs the same explicit
 parameters as a scan, including `--src-mac`. A resume checkpoint is validated before the adapter is opened.
 
+A resume checkpoint is fully pre-validated before the adapter is opened (format, engine version, job, scan id, attempt id,
+already-completed, next index beyond the range); `--result-capacity 0` is rejected when the arguments are parsed.
+
 Exit codes: 0 ok; 2 argument/plan/open error; 3 failed run; 4 resume rejected before open; 5 Npcap missing or access
 denied; 6 source MAC differs from the NIC MAC.
 
@@ -80,15 +85,17 @@ denied; 6 source MAC differs from the NIC MAC.
 Each JSON line carries `identity`: `source_commit` (embedded at build time through `RMASSCAN_SOURCE_COMMIT`, no
 `build.rs`), `binary_sha256` (computed at run time from the running EXE), `os` (family, arch, `RtlGetVersion` build
 and revision), `npcap_abi`, and `elevated`. Scan and inventory outputs also carry `npcap` (library version, driver
-version, loaded DLL paths, versions and SHA-256). The binding (interface, IPs, MACs, ports) is part of the job and its
-digest.
+version, loaded DLL paths, versions and SHA-256). Scan, reference, forge and post-plan error JSON also carry `job`: interface, source IP/MAC, router MAC, source port,
+targets, exclude, ports, seed, rate, wait, retries/shard/BlackRock rounds and the job digest. The wrapper logs the exact
+argument array of every EXE call in `run.log`.
 
 ## Metrics
 
 `resources` in `run.json`: handle/fd counts, thread counts, working set, CPU times. Whatever the OS cannot measure is
 `null`, never 0. On Linux the fd and thread counts come from `/proc/self`; on Windows the handle count, working set and
-CPU times come from `GetProcessHandleCount`, `K32GetProcessMemoryInfo` and `GetProcessTimes`, and the thread count is
-`null` (not measured). The Linux wire suites keep reading the same keys.
+CPU times come from `GetProcessHandleCount`, `K32GetProcessMemoryInfo` and `GetProcessTimes`, and the thread count comes from a Toolhelp thread snapshot
+(`null` when the snapshot fails). All Windows calls live in a private module of `rmasscan-net`; the example is
+`forbid(unsafe_code)`. The Linux wire suites keep reading the same keys.
 
 ## Package
 
@@ -98,7 +105,7 @@ CPU times come from `GetProcessHandleCount`, `K32GetProcessMemoryInfo` and `GetP
 
 | File | Purpose |
 | --- | --- |
-| `wire_scan.exe` | release x64 harness |
+| `wire_scan.exe` | release x64 harness, statically linked MSVC CRT (`-C target-feature=+crt-static`): no VCRUNTIME140.dll or UCRT redistributable needed |
 | `windows-wire-lab.ps1` | wrapper |
 | `README.txt` | short user instructions |
 | `SHA256SUMS` | hashes of the other files |

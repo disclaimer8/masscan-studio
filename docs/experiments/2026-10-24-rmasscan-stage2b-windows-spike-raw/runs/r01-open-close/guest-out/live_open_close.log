@@ -1,0 +1,24 @@
+
+running 1 test
+test windows::live::live_open_close ... VERSION Npcap version 1.90, based on libpcap version 1.10.7 (64-bit time_t)
+DLL DllInfo { name: "wpcap.dll", path: "C:\\WINDOWS\\system32\\Npcap\\wpcap.dll", sha256: "332f81cc1671a6d12ab4d20264a00ee16d12f6883745e05c92ee4030b3896a9f", version: Some("1.10.7.0") }
+DLL DllInfo { name: "Packet.dll", path: "C:\\WINDOWS\\system32\\Npcap\\packet.dll", sha256: "6f9116d9747dd356db97f6dfaf02fe1b9b0859ea3214856f17ced84d790658c2", version: Some("5.1.90.1020") }
+DEVICE DeviceInfo { name: "\\Device\\NPF_{74E1F253-3253-4101-9599-A7E7FFEEE559}", description: Some("WAN Miniport (Network Monitor)"), flags: 22 }
+DEVICE DeviceInfo { name: "\\Device\\NPF_{58D36372-E3AC-4246-9495-3EF3E2E1E06A}", description: Some("WAN Miniport (IPv6)"), flags: 22 }
+DEVICE DeviceInfo { name: "\\Device\\NPF_{8F5AFC24-8A2A-4B11-88C4-1CDF2825C288}", description: Some("WAN Miniport (IP)"), flags: 22 }
+DEVICE DeviceInfo { name: "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}", description: Some("Intel(R) 82574L Gigabit Network Connection #2"), flags: 22 }
+DEVICE DeviceInfo { name: "\\Device\\NPF_{17106836-47D3-411A-97C3-BA61A925970F}", description: Some("Intel(R) 82574L Gigabit Network Connection"), flags: 22 }
+DEVICE DeviceInfo { name: "\\Device\\NPF_Loopback", description: Some("Adapter for loopback traffic capture"), flags: 55 }
+SUMMARY none/pcap_create n=30 p50_us=123 p95_us=1079 p99_us=1607 max_us=1607 rc={1: 30}
+SUMMARY none/pcap_set_x5 n=30 p50_us=6 p95_us=6 p99_us=9 max_us=9 rc={0: 30}
+SUMMARY none/pcap_activate n=30 p50_us=203 p95_us=3943 p99_us=6423 max_us=6423 rc={0: 30}
+SUMMARY none/pcap_close n=30 p50_us=11 p95_us=70 p99_us=86 max_us=86 rc={0: 30}
+KV none/two_handles dlt_tx=1 dlt_rx=1 nonblock_tx=1 nonblock_rx=1
+KV none/fresh_rx_stats recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+KV none/fresh_tx_stats recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+KV none/open_bogus_device dur_us=181 result=Some(System("pcap_create failed: Error opening adapter: Network interface was not found.  (2150891563)"))
+KV none/resolve_bogus Some(InterfaceMismatch("no Npcap device named \"\\\\Device\\\\NPF_{DEAD}\" (6 devices enumerated)"))
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.10s
+

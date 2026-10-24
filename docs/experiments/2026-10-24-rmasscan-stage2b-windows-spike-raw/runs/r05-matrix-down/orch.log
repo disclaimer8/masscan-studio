@@ -1,0 +1,23 @@
+[2026-10-24T11:39:48.741Z] tag=r05-matrix-down test=live_io_matrix cond=down sha=53fe366
+raw_run_allowed True violations []
+[2026-10-24T11:39:52.593Z] tap wvt-n2 DOWN
+[2026-10-24T11:39:56.485Z] guest run begins
+[2026-10-24T11:40:22.392Z] guest run ended rc=0
+[2026-10-24T11:40:22.402Z] tap wvt-n2 UP (restored)
+peer.pcap frames=0
+eno1.pcap frames=0
+==> /home/a1/winvm/spike-ev/r05-matrix-down/peer.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r05-matrix-down/peerjunk.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r05-matrix-down/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

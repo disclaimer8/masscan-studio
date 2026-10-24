@@ -1,0 +1,7 @@
+
+running 1 test
+test windows::live::live_health_error ... KV none/stats_on_unactivated rc=-3 dur_us=13 geterr="This handle hasn't been activated yet" stat_after=recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.03s
+

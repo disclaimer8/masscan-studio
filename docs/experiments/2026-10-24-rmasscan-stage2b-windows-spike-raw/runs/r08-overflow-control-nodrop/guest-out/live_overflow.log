@@ -1,0 +1,19 @@
+
+running 1 test
+test windows::live::live_overflow ... KV overflow/baseline_A recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+KV overflow/baseline_B recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+SUMMARY overflow/health_during_overflow n=30 p50_us=12 p95_us=71 p99_us=77 max_us=77 rc={0: 30}
+KV overflow/health_series_ms_recv_drop [1 0 0][251 0 0][502 0 0][752 0 0][1004 4100 0][1255 9100 0][1508 14200 1092][1759 19200 6092][2010 24200 11092][2262 29300 16192][2515 34300 21192][2768 39400 26292][3018 44400 31292][3271 49400 36292][3522 54482 41374][3773 59500 46392][4025 64500 51392][4277 69600 56492][4528 74600 61492][4780 79600 66492][5031 84600 71492][5283 89700 76592][5534 94700 81592][5787 99800 86692][6039 100000 86892][6290 100000 86892][6542 100000 86892][6795 100000 86892][7045 100000 86892][7296 100000 86892]
+KV overflow/A_before_drain_x3 recv=100000 drop=86892 ifdrop=0 capt=0 sent=0 netdrop=0 | recv=100000 drop=86892 ifdrop=0 capt=0 sent=0 netdrop=0 | recv=100000 drop=86892 ifdrop=0 capt=0 sent=0 netdrop=0
+KV overflow/B_before_drain recv=100000 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+KV overflow/A_after_drain recv=100000 drop=86892 ifdrop=0 capt=0 sent=0 netdrop=0
+KV overflow/B_after_drain recv=100000 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+KV overflow/A_read frames=13108 junk=13108 dupes=0 other=0
+KV overflow/B_read frames=100000 junk=100000 dupes=0 other=0
+KV overflow/compare indep_loss_junk=86892 indep_loss_all=86892 A_ps_drop=86892 cumulative_since_start=86892 ok_ge_junk=true ok_ge_all=true recv_minus_drop_vs_read=0 
+KV overflow/fresh_C_after_flood recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+KV overflow/close_3_handles_us 38
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 25.72s
+

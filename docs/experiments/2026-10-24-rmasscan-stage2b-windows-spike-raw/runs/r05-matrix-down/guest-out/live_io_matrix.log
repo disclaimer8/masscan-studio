@@ -1,0 +1,35 @@
+
+running 1 test
+test windows::live::live_io_matrix ... KV down/baseline recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+SUMMARY down/rx_raw_next_ex n=3000 p50_us=14 p95_us=23 p99_us=30 max_us=58 rc={0: 3000}
+KV down/rx_raw_frames 0
+SUMMARY down/rx_deadline50_Spin n=60 p50_us=50018 p95_us=50026 p99_us=50031 max_us=57147 rc={0: 60}
+SUMMARY down/rx_deadline50_overshoot_Spin n=60 p50_us=18 p95_us=26 p99_us=31 max_us=7147 rc={0: 60}
+KV down/rx_deadline50_Spin_frames 0
+SUMMARY down/rx_deadline50_Sleep1ms n=60 p50_us=51986 p95_us=52316 p99_us=52332 max_us=52465 rc={0: 60}
+SUMMARY down/rx_deadline50_overshoot_Sleep1ms n=60 p50_us=1986 p95_us=2316 p99_us=2332 max_us=2465 rc={0: 60}
+KV down/rx_deadline50_Sleep1ms_frames 0
+SUMMARY down/rx_deadline50_Hybrid n=60 p50_us=50021 p95_us=50248 p99_us=50276 max_us=50324 rc={0: 60}
+SUMMARY down/rx_deadline50_overshoot_Hybrid n=60 p50_us=21 p95_us=248 p99_us=276 max_us=324 rc={0: 60}
+KV down/rx_deadline50_Hybrid_frames 0
+SUMMARY down/health_pcap_stats n=200 p50_us=9 p95_us=14 p99_us=14 max_us=15 rc={0: 200}
+KV down/health_last recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0 cum_drops=0
+SUMMARY down/tx_paced_1000 n=1000 p50_us=136 p95_us=275 p99_us=298 max_us=513 rc={0: 1000}
+KV down/rx_after_tx_paced junk=0 other=1000 own_tx=1000
+SUMMARY down/tx_burst_5000 n=5000 p50_us=113 p95_us=216 p99_us=262 max_us=406 rc={0: 5000}
+KV down/stop_rounds_send_nonzero_rc 0
+SUMMARY down/stop_rounds_slowest_send_per_round n=60 p50_us=313 p95_us=503 p99_us=844 max_us=986 rc={0: 60}
+SUMMARY down/stop_rounds_slowest_recv_per_round n=60 p50_us=2903 p95_us=3070 p99_us=3362 max_us=3774 rc={0: 60}
+SUMMARY down/stop_latency_tx_thread n=60 p50_us=95 p95_us=145 p99_us=219 max_us=293 rc={0: 60}
+SUMMARY down/stop_latency_rx_thread n=60 p50_us=23 p95_us=60 p99_us=65 max_us=74 rc={0: 60}
+SUMMARY down/stop_latency_joined_both n=60 p50_us=235 p95_us=327 p99_us=389 max_us=394 rc={0: 60}
+KV down/send_empty rc=-1 dur_us=67 err="The number of bytes to be sent must be positive: No error"
+KV down/send_9000 rc=-1 dur_us=95 err="send error: PacketSendPacket failed: The system cannot find the device specified.  (20)"
+KV down/final_rx_stats recv=33449 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0 cum_drops=0
+KV down/final_tx_stats recv=33449 drop=32608 ifdrop=0 capt=0 sent=0 netdrop=0
+KV down/frames_seen junk=0 dupes=0 other=1000 own_tx=1000
+KV down/close_after_load rx_us=31 tx_us=310
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 24.93s
+

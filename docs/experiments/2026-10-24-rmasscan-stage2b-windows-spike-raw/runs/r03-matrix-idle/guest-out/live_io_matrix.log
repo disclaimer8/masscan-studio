@@ -1,0 +1,35 @@
+
+running 1 test
+test windows::live::live_io_matrix ... KV idle/baseline recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+SUMMARY idle/rx_raw_next_ex n=3000 p50_us=14 p95_us=58 p99_us=178 max_us=2682 rc={0: 3000}
+KV idle/rx_raw_frames 0
+SUMMARY idle/rx_deadline50_Spin n=60 p50_us=50047 p95_us=51092 p99_us=51464 max_us=51977 rc={0: 60}
+SUMMARY idle/rx_deadline50_overshoot_Spin n=60 p50_us=47 p95_us=1092 p99_us=1464 max_us=1977 rc={0: 60}
+KV idle/rx_deadline50_Spin_frames 0
+SUMMARY idle/rx_deadline50_Sleep1ms n=60 p50_us=51587 p95_us=52978 p99_us=53221 max_us=53678 rc={0: 60}
+SUMMARY idle/rx_deadline50_overshoot_Sleep1ms n=60 p50_us=1587 p95_us=2978 p99_us=3221 max_us=3678 rc={0: 60}
+KV idle/rx_deadline50_Sleep1ms_frames 0
+SUMMARY idle/rx_deadline50_Hybrid n=60 p50_us=50031 p95_us=50518 p99_us=51049 max_us=51314 rc={0: 60}
+SUMMARY idle/rx_deadline50_overshoot_Hybrid n=60 p50_us=31 p95_us=518 p99_us=1049 max_us=1314 rc={0: 60}
+KV idle/rx_deadline50_Hybrid_frames 0
+SUMMARY idle/health_pcap_stats n=200 p50_us=10 p95_us=73 p99_us=323 max_us=481 rc={0: 200}
+KV idle/health_last recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0 cum_drops=0
+SUMMARY idle/tx_paced_1000 n=1000 p50_us=227 p95_us=1525 p99_us=2464 max_us=4459 rc={0: 1000}
+KV idle/rx_after_tx_paced junk=0 other=2000 own_tx=1000
+SUMMARY idle/tx_burst_5000 n=5000 p50_us=171 p95_us=768 p99_us=2072 max_us=22598 rc={0: 5000}
+KV idle/stop_rounds_send_nonzero_rc 0
+SUMMARY idle/stop_rounds_slowest_send_per_round n=60 p50_us=2494 p95_us=5225 p99_us=6824 max_us=6933 rc={0: 60}
+SUMMARY idle/stop_rounds_slowest_recv_per_round n=60 p50_us=4367 p95_us=50138 p99_us=51652 max_us=51756 rc={0: 60}
+SUMMARY idle/stop_latency_tx_thread n=60 p50_us=123 p95_us=604 p99_us=920 max_us=1311 rc={0: 60}
+SUMMARY idle/stop_latency_rx_thread n=60 p50_us=96 p95_us=50030 p99_us=51663 max_us=51683 rc={0: 60}
+SUMMARY idle/stop_latency_joined_both n=60 p50_us=671 p95_us=50659 p99_us=52158 max_us=53406 rc={0: 60}
+KV idle/send_empty rc=-1 dur_us=53 err="The number of bytes to be sent must be positive: No error"
+KV idle/send_9000 rc=-1 dur_us=85 err="send error: PacketSendPacket failed: The system cannot find the device specified.  (20)"
+KV idle/final_rx_stats recv=38094 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0 cum_drops=0
+KV idle/final_tx_stats recv=38094 drop=37264 ifdrop=0 capt=0 sent=0 netdrop=0
+KV idle/frames_seen junk=0 dupes=0 other=2000 own_tx=1000
+KV idle/close_after_load rx_us=35 tx_us=397
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 27.65s
+

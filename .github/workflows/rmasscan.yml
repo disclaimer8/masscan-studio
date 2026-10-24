@@ -79,6 +79,7 @@ jobs:
       - name: Rust laboratory tools (без Python)
         run: |
           cargo test --locked -p rmasscan-lab
+          cargo test --locked -p rmasscan-net --features lab --lib lab_io
 
       - name: Установить cargo-deny
         run: cargo install --locked cargo-deny@0.20.2

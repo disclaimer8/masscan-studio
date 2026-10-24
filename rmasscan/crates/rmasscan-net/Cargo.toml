@@ -5,11 +5,17 @@ edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
-# Единственный crate, где допускается unsafe (FFI к libc). Он намеренно НЕ
+# Единственный crate, где допускается unsafe (FFI к libc/ОС). Он намеренно НЕ
 # наследует workspace-линт `unsafe_code = "forbid"`: lib.rs ставит
-# `deny(unsafe_code)`, а private-модуль linux::socket разрешает unsafe локально.
+# `deny(unsafe_code)`, а unsafe разрешён только локально в private-модулях
+# (`linux::socket`, `windows::*`) и в `lab_io::imp` (feature `lab`, см. ниже).
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+
+[features]
+# Лабораторные примитивы процесса (sigaction-флаг остановки, listener с backlog 0).
+# НЕ по умолчанию: включает только rmasscan-lab; продуктовые потребители их не получают.
+lab = []
 
 [dependencies]
 rmasscan-core = { path = "../rmasscan-core" }
@@ -19,7 +25,7 @@ sha2.workspace = true
 
 # Только объявления FFI системной libc; C не компилируется (build.rs libc лишь
 # выбирает cfg). Версия уже закреплена в Cargo.lock.
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 # Windows: точечные объявления LoadLibraryExW/GetProcAddress и т.п. без

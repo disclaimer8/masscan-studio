@@ -22,7 +22,7 @@ fn driver_in(out: &Path) -> Driver {
             ipa: "10.200.0.100".into(),
             rust: "/tmp/wire_scan".into(),
             oracle: "/tmp/oracle".into(),
-            fixtures: PathBuf::new(),
+            fixtures: None,
             masked: false,
             empty: String::new(),
             lab: "/tmp/rmasscan-lab".into(),
@@ -448,4 +448,43 @@ fn fixture_c03_capture_meta_with_drops_or_a_truncated_pcap_is_invalid() {
         crate::pcap::compare_bytes(&raw, &[&raw[..raw.len() - 9]], None, &[]).0,
         2
     );
+}
+
+#[test]
+fn an_empty_fixtures_argument_is_none_never_the_current_directory() {
+    // wire-lab.sh always passes --fixtures, empty for the perf suite. PathBuf::from("") joined
+    // with "manifest.json" used to read ./manifest.json from the working directory.
+    assert_eq!(fixtures_arg(""), None);
+    assert_eq!(fixtures_arg("/golden"), Some(PathBuf::from("/golden")));
+    let d = driver_in(&scratch("fixtures"));
+    assert_eq!(d.c.fixture("manifest.json"), None);
+    let mut with = driver_in(&scratch("fixtures2"));
+    with.c.fixtures = fixtures_arg("/golden");
+    assert_eq!(
+        with.c.fixture("manifest.json"),
+        Some(PathBuf::from("/golden/manifest.json"))
+    );
+}
+
+#[test]
+fn only_gnu_time_with_verbose_output_satisfies_the_perf_preflight() {
+    let gnu = "\tCommand being timed: \"true\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tMaximum resident set size (kbytes): 1920\n\tExit status: 0\n";
+    assert!(gnu_time_report_ok(gnu));
+    // Missing binary, BSD/busybox time that rejects -v, or an empty report: every perf cell
+    // would otherwise be a "driver error" much later.
+    for bad in [
+        "",
+        "time: invalid option -- 'v'\n",
+        "real 0.00\nuser 0.00\nsys 0.00\n",
+        "\tUser time (seconds): 0.00\n",
+    ] {
+        assert!(!gnu_time_report_ok(bad), "{bad:?}");
+    }
+    // The rusage fields the perf cells read must be the ones GNU time prints.
+    assert_eq!(
+        gnu_time_metric(gnu, "Maximum resident set size (kbytes):"),
+        Some(1920.0)
+    );
+    assert_eq!(gnu_time_metric(gnu, "User time (seconds):"), Some(0.0));
+    assert_eq!(gnu_time_metric(gnu, "Elapsed (wall clock) time:"), None);
 }

@@ -38,13 +38,15 @@ mod tests {
         }
     }
 }
+use crate::link;
 use clap::{Parser, Subcommand};
-use rmasscan_net::lab_io::{self, RawSocket};
+use rmasscan_engine::{Rx, SendStatus};
+use rmasscan_net::lab_io;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
-    net::{Ipv4Addr, SocketAddr, TcpStream},
+    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     path::Path,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -180,18 +182,17 @@ fn seconds(n: f64) -> Result<Duration, String> {
         Ok(Duration::from_secs_f64(n))
     }
 }
-fn wait_syn(s: &RawSocket, gm: &str, wait: f64) -> Result<bool, String> {
+fn wait_syn(rx: &mut dyn Rx, gm: &str, wait: f64) -> Result<bool, String> {
     let gm = mac(gm)?;
     let start = Instant::now();
     let wait = seconds(wait)?;
     let mut b = vec![0; 65535];
     while start.elapsed() < wait && !lab_io::stop_requested() {
-        if let Some(r) = s
+        // The adapter already drops outgoing, truncated and foreign-interface frames.
+        if let Some(n) = rx
             .recv(&mut b, Duration::from_millis(50))
             .map_err(|e| e.to_string())?
-            && !r.outgoing
-            && !r.truncated
-            && is_syn(&b[..r.len], &gm)
+            && is_syn(&b[..n], &gm)
         {
             return Ok(true);
         }
@@ -374,10 +375,10 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             let mut sockets = vec![];
             let mut clients = vec![];
             for &p in &open {
-                sockets.push(lab_io::listen(ip, p, 128).map_err(|e| e.to_string())?);
+                sockets.push(TcpListener::bind((ip, p)).map_err(|e| e.to_string())?);
             }
             for &p in &silent {
-                sockets.push(lab_io::listen(ip, p, 0).map_err(|e| e.to_string())?);
+                sockets.push(lab_io::silent_listener(ip, p).map_err(|e| e.to_string())?);
                 clients.push(
                     TcpStream::connect_timeout(&SocketAddr::from((ip, p)), Duration::from_secs(1))
                         .map_err(|e| e.to_string())?,
@@ -414,18 +415,18 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             payload,
         } => {
             iface_guard(&iface)?;
-            let mut f = mac(&dst)?.to_vec();
-            f.extend(mac(&src)?);
-            f.extend(0x88b5_u16.to_be_bytes());
-            f.extend(if payload.is_empty() {
-                b"WIRELAB-READY".as_slice()
-            } else {
-                payload.as_bytes()
-            });
-            f.resize(f.len().max(60), 0);
-            let s = RawSocket::open(&iface).map_err(|e| e.to_string())?;
+            let f = link::marker_frame(
+                mac(&dst)?,
+                mac(&src)?,
+                if payload.is_empty() {
+                    link::START_PAYLOAD
+                } else {
+                    payload.as_bytes()
+                },
+            );
+            let mut l = link::open(&iface)?;
             for _ in 0..3 {
-                s.send(&f).map_err(|e| e.to_string())?;
+                link::send_blocking(&mut *l.tx, &f, link::SEND_PATIENCE, &lab_io::stop_requested)?;
                 thread::sleep(Duration::from_millis(50));
             }
             Ok(0)
@@ -461,14 +462,19 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             let frames = foreign_frames(&peer_mac, &guest_mac, &src_ip, sport, silent)?;
             let duration_d = seconds(duration)?;
             let interval_d = seconds(interval)?;
-            let s = RawSocket::open(&iface).map_err(|e| e.to_string())?;
-            let seen = wait_syn(&s, &guest_mac, wait_first)?;
+            let mut l = link::open(&iface)?;
+            let seen = wait_syn(&mut *l.rx, &guest_mac, wait_first)?;
             let mut counts: BTreeMap<String, u64> = frames.keys().map(|k| (k.clone(), 0)).collect();
             let mut first = None;
             let start = Instant::now();
             while seen && start.elapsed() < duration_d && !lab_io::stop_requested() {
                 for (k, f) in &frames {
-                    s.send(f).map_err(|e| e.to_string())?;
+                    link::send_blocking(
+                        &mut *l.tx,
+                        f,
+                        link::SEND_PATIENCE,
+                        &lab_io::stop_requested,
+                    )?;
                     *counts.get_mut(k).unwrap() += 1;
                     first.get_or_insert_with(now);
                 }
@@ -504,17 +510,36 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             f.extend([0; 4]);
             f.extend(b"RMSP");
             f.resize(size, 0);
-            let s = RawSocket::open(&iface).map_err(|e| e.to_string())?;
-            let (mut sent, mut errors, mut seq) = (0_u64, 0_u64, 0_u32);
+            let mut l = link::open(&iface)?;
+            let (mut sent, mut errors, mut blocked, mut seq) = (0_u64, 0_u64, 0_u64, 0_u32);
+            let mut fatal: Option<String> = None;
             let first = now();
             let start = Instant::now();
             while start.elapsed() < duration && !lab_io::stop_requested() {
                 f[14..18].copy_from_slice(&seq.to_be_bytes());
-                match s.send(&f) {
-                    Ok(_) => sent += 1,
-                    Err(_) => errors += 1,
+                match l.tx.send(&f, Duration::from_millis(50)) {
+                    Ok(SendStatus::Sent) => {
+                        sent += 1;
+                        seq = seq.wrapping_add(1);
+                    }
+                    // Device queue full: back-pressure, not an error. The same frame is offered
+                    // again, as the blocking Python sender did.
+                    Ok(SendStatus::WouldBlockUnsent) => {
+                        blocked += 1;
+                        continue;
+                    }
+                    Ok(SendStatus::Uncertain) => {
+                        errors += 1;
+                        seq = seq.wrapping_add(1);
+                    }
+                    // The adapter closes itself after a fatal error; spinning would only count
+                    // failures, so stop and say why.
+                    Err(e) => {
+                        errors += 1;
+                        fatal = Some(e.to_string());
+                        break;
+                    }
                 }
-                seq = seq.wrapping_add(1);
                 if pps > 0 && sent > 0 && sent % 50 == 0 {
                     let target = Duration::from_secs_f64(sent as f64 / pps as f64);
                     while target > start.elapsed()
@@ -532,9 +557,9 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             let last = now();
             save(
                 &out,
-                &json!({"sent":sent,"errors":errors,"t_first":first,"t_last":last,"size":size,"pps_target":pps,"pps_avg":sent as f64/(last-first).max(1e-9),"ethertype":0x88b6,"iface":iface,"dst_mac":guest_mac}),
+                &json!({"sent":sent,"errors":errors,"t_first":first,"t_last":last,"size":size,"pps_target":pps,"pps_avg":sent as f64/(last-first).max(1e-9),"ethertype":0x88b6,"iface":iface,"dst_mac":guest_mac,"would_block":blocked,"fatal_error":fatal}),
             )?;
-            Ok(0)
+            Ok(if fatal.is_some() { 4 } else { 0 })
         }
         Cmd::Linkloss {
             iface,
@@ -549,8 +574,8 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             iface_guard(&iface)?;
             let down_after = seconds(down_after)?;
             let hold = seconds(hold_max)?;
-            let s = RawSocket::open(&iface).map_err(|e| e.to_string())?;
-            let seen = wait_syn(&s, &guest_mac, wait_first)?;
+            let mut l = link::open(&iface)?;
+            let seen = wait_syn(&mut *l.rx, &guest_mac, wait_first)?;
             let mut events = vec![];
             let mut failure = None;
             if seen {

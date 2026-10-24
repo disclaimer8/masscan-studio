@@ -1,15 +1,9 @@
 //! Sealed Linux capture support and portable evidence manifests.
-use rmasscan_net::lab_io::{self, RawSocket};
+use crate::link;
+use rmasscan_net::lab_io;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::Write,
-    path::Path,
-    process::Command,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, fs, path::Path, process::Command, time::Duration};
 
 pub fn classify(frames: &[(f64, Vec<u8>)], scanner: [u8; 6], peer: [u8; 6]) -> Value {
     let mut result = json!({"syn_from_scanner":0,"synack_from_peer":0,"rst_from_peer":0,"rst_from_scanner":0,"marker":0,"other":0});
@@ -75,28 +69,7 @@ fn command(argv: &[&str]) -> String {
         Err(e) => format!("unavailable: {e}"),
     }
 }
-fn counter(iface: &str) -> Result<u64, String> {
-    if iface.contains('/') || iface == ".." {
-        return Err("invalid interface".into());
-    }
-    fs::read_to_string(format!("/sys/class/net/{iface}/statistics/rx_packets"))
-        .map_err(err)?
-        .trim()
-        .parse()
-        .map_err(err)
-}
 
-pub fn capture_valid(meta: &Value) -> bool {
-    meta["marker_acked"] == true
-        && meta["drops"] == 0
-        && meta["truncated_frames"] == 0
-        && meta["rx_counter_mismatch"] == false
-        && meta["frames_in"]
-            .as_u64()
-            .zip(meta["frames_out"].as_u64())
-            .and_then(|(a, b)| a.checked_add(b))
-            .is_some_and(|n| meta["kernel_tp_packets"].as_u64() == Some(n))
-}
 fn opts(args: &[String]) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
     let mut it = args.iter();
@@ -117,95 +90,14 @@ fn get<'a>(a: &'a BTreeMap<String, String>, k: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("--{k} required"))
 }
 
-/// Same role as the original recorder; all raw descriptors remain in rmasscan-net.
-fn record(a: &BTreeMap<String, String>) -> Result<i32, String> {
-    let iface = get(a, "iface")?;
-    let pcap = get(a, "pcap")?;
-    let meta = get(a, "meta")?;
-    let ready = get(a, "ready")?;
-    let ack = get(a, "ack")?;
-    lab_io::install_signal_handlers().map_err(err)?;
-    let sock = RawSocket::open(iface).map_err(err)?;
-    sock.stats().map_err(err)?;
-    let rx0 = counter(iface)?;
-    let mut out = fs::File::create(pcap).map_err(err)?;
-    out.write_all(&crate::pcap::encode(&Vec::new()))
-        .map_err(err)?;
-    fs::write(ready, "bound\n").map_err(err)?;
-    let (mut incoming, mut outgoing, mut truncated, mut acked) = (0u64, 0u64, 0u64, false);
-    let mut buf = vec![0; 65535];
-    let mut deadline = None;
-    loop {
-        if lab_io::stop_requested() && deadline.is_none() {
-            std::thread::sleep(Duration::from_millis(200));
-            deadline = Some(Instant::now() + Duration::from_secs(1));
-        }
-        if deadline.is_some_and(|d| Instant::now() >= d) {
-            break;
-        }
-        let Some(r) = sock
-            .recv(
-                &mut buf,
-                Duration::from_millis(if deadline.is_some() { 50 } else { 100 }),
-            )
-            .map_err(err)?
-        else {
-            if deadline.is_some() {
-                break;
-            }
-            continue;
-        };
-        if r.outgoing {
-            outgoing += 1;
-        } else {
-            incoming += 1;
-        }
-        if r.truncated {
-            truncated += 1;
-        }
-        let time = SystemTime::now().duration_since(UNIX_EPOCH).map_err(err)?;
-        let orig = u32::try_from(r.original_len).map_err(err)?;
-        for word in [
-            u32::try_from(time.as_secs()).map_err(err)?,
-            time.subsec_micros(),
-            r.len as u32,
-            orig,
-        ] {
-            out.write_all(&word.to_le_bytes()).map_err(err)?;
-        }
-        out.write_all(&buf[..r.len]).map_err(err)?;
-        if !acked
-            && buf.get(12..14) == Some(&[0x88, 0xb5])
-            && r.len >= 27
-            && &buf[14..27] == b"WIRELAB-READY"
-        {
-            fs::write(ack, "ack\n").map_err(err)?;
-            acked = true;
-        }
-    }
-    let stats = sock.stats();
-    out.flush().map_err(err)?;
-    let delta = counter(iface)?
-        .checked_sub(rx0)
-        .ok_or("interface counter reset")?;
-    let drops = stats.as_ref().map_or(-1, |s| i64::from(s.drops));
-    let mut v = json!({"iface":iface,"pcap":Path::new(pcap).file_name().and_then(|x|x.to_str()),"marker_acked":acked,"frames_in":incoming,"frames_out":outgoing,"kernel_tp_packets":stats.as_ref().map_or(-1,|s|i64::from(s.packets)),"drops":drops,"truncated_frames":truncated,"snaplen":65535,"iface_rx_delta":delta,"rx_counter_mismatch":delta!=incoming});
-    v["valid"] = json!(capture_valid(&v));
-    write_json(meta, &v)?;
-    Ok(0)
-}
 fn marker(a: &BTreeMap<String, String>) -> Result<i32, String> {
-    let s = RawSocket::open(get(a, "iface")?).map_err(err)?;
-    let mut f = Vec::new();
-    f.extend(mac(get(a, "dst")?)?);
-    f.extend(mac(get(a, "src")?)?);
-    f.extend([0x88, 0xb5]);
-    f.extend(b"WIRELAB-READY");
-    f.resize(60, 0);
+    let payload = a
+        .get("payload")
+        .map_or(link::START_PAYLOAD, |p| p.as_bytes());
+    let f = link::marker_frame(mac(get(a, "dst")?)?, mac(get(a, "src")?)?, payload);
+    let mut l = link::open(get(a, "iface")?)?;
     for _ in 0..3 {
-        if s.send(&f).map_err(err)? != f.len() {
-            return Err("short marker send".into());
-        }
+        link::send_blocking(&mut *l.tx, &f, link::SEND_PATIENCE, &lab_io::stop_requested)?;
         std::thread::sleep(Duration::from_millis(50));
     }
     Ok(0)
@@ -219,7 +111,8 @@ fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
         if p == 0 {
             return Err("port zero".into());
         }
-        listeners.push(lab_io::listen(std::net::Ipv4Addr::UNSPECIFIED, p, 128).map_err(err)?);
+        listeners
+            .push(std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, p)).map_err(err)?);
     }
     fs::write(get(a, "ready")?, format!("listening {ports}\n")).map_err(err)?;
     while !lab_io::stop_requested() {
@@ -499,7 +392,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let (cmd, rest) = args.split_first().ok_or("capture subcommand required")?;
     let a = opts(rest)?;
     match cmd.as_str() {
-        "record" => record(&a),
+        "dump" => crate::dump::run(&a),
         "marker" => marker(&a),
         "responder" => responder(&a),
         "env" => environment(&a),

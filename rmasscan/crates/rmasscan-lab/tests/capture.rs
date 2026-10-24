@@ -1,8 +1,24 @@
 use rmasscan_lab::capture::classify;
 #[test]
-fn queued_outgoing_tail_does_not_pass_as_complete_capture() {
-    let meta = serde_json::json!({"marker_acked":true,"drops":0,"truncated_frames":0,"rx_counter_mismatch":false,"frames_in":1,"frames_out":1,"kernel_tp_packets":3});
-    assert!(!rmasscan_lab::capture::capture_valid(&meta));
+fn a_queued_outgoing_tail_missing_from_the_pcap_does_not_pass_as_complete_capture() {
+    // The interface counted 3 frames (window 3..3) but the pcap holds 2 and tcpdump retired 2:
+    // the last frame was queued and never written.
+    let facts = rmasscan_lab::dump::Facts {
+        start_markers: 1,
+        end_markers: 3,
+        quiesced: true,
+        captured: Some(2),
+        received: Some(2),
+        dropped_kernel: Some(0),
+        dropped_if: Some(0),
+        interface_drop_delta: Some(0),
+        pcap_frames: 2,
+        pcap_error: None,
+        tcpdump_exited: true,
+        window_lo: Some(3),
+        window_hi: Some(3),
+    };
+    assert!(!rmasscan_lab::dump::problems(&facts).is_empty());
 }
 
 #[test]

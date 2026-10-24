@@ -1141,3 +1141,115 @@ fn refusal_without_recorded_checkpoints_is_not_run() {
         assert_eq!(d.status("ckpt_wrong_seed").0, NOT_RUN, "{file}");
     }
 }
+// ---- X1: from capture schema 3 the invocation nonce chain is mandatory ----
+const SCHEMA3_TAG: &str = "stop_silent";
+fn chain_case(change: impl FnOnce(&Scratch, &Path)) -> (String, bool) {
+    let d = Scratch::new("failure", Some(SCHEMA3_TAG));
+    let run = d.0.join("runs").join(SCHEMA3_TAG);
+    assert_eq!(
+        d.status(SCHEMA3_TAG),
+        (PASS.into(), false),
+        "schema 3 baseline"
+    );
+    change(&d, &run);
+    d.status(SCHEMA3_TAG)
+}
+#[test]
+fn schema3_requires_the_nonce_and_a_matching_guest_verify() {
+    let wanted = (INVALID.to_string(), false);
+    assert_eq!(
+        chain_case(|d, _| d.edit("runs/stop_silent/meta.json", |v| {
+            v.as_object_mut().unwrap().remove("invocation_nonce");
+        })),
+        wanted,
+        "nonce removed"
+    );
+    assert_eq!(
+        chain_case(
+            |d, _| d.edit("runs/stop_silent/meta.json", |v| v["invocation_nonce"] =
+                json!(""))
+        ),
+        wanted,
+        "nonce empty"
+    );
+    assert_eq!(
+        chain_case(
+            |d, _| d.edit("runs/stop_silent/meta.json", |v| v["invocation_nonce"] =
+                json!("other"))
+        ),
+        wanted,
+        "meta nonce differs from guest Verify and proof"
+    );
+    assert_eq!(
+        chain_case(|d, _| d.edit("runs/stop_silent/guest-verify.json", |v| {
+            v.as_object_mut().unwrap().remove("verification_nonce");
+        })),
+        wanted,
+        "guest Verify without nonce"
+    );
+}
+#[test]
+fn schema3_requires_the_hash_proof() {
+    let (verdict, behaviour) =
+        chain_case(|_, run| fs::remove_file(run.join("run-artifacts.json")).unwrap());
+    assert_eq!(
+        (verdict.as_str(), behaviour),
+        (INVALID, false),
+        "proof missing"
+    );
+    let (verdict, _) = chain_case(|d, _| {
+        d.edit("runs/stop_silent/run-artifacts.json", |v| {
+            v["invocation_nonce"] = json!("old")
+        })
+    });
+    assert_eq!(verdict, INVALID, "proof of another invocation");
+    let (verdict, _) = chain_case(|d, _| {
+        d.edit("runs/stop_silent/run-artifacts.json", |v| {
+            v["files"].as_object_mut().unwrap().remove("argv.json");
+        })
+    });
+    assert_eq!(verdict, INVALID, "proof does not cover argv");
+}
+#[test]
+fn schema3_records_the_guest_verify_exit_code_and_output() {
+    let (verdict, _) = chain_case(|d, _| {
+        d.edit("runs/stop_silent/meta.json", |v| {
+            v["guest_verify_exit"] = json!(1)
+        })
+    });
+    assert_eq!(verdict, INVALID, "failed Verify");
+    let (verdict, _) = chain_case(|d, _| {
+        d.edit("runs/stop_silent/meta.json", |v| {
+            v.as_object_mut().unwrap().remove("guest_verify_exit");
+        })
+    });
+    assert_eq!(verdict, INVALID, "exit code not recorded");
+    for file in ["guest-verify-stdout.txt", "guest-verify-stderr.txt"] {
+        let (verdict, _) = chain_case(|_, run| fs::remove_file(run.join(file)).unwrap());
+        assert_eq!(verdict, INVALID, "{file} missing");
+    }
+}
+#[test]
+fn schema_1_and_2_directories_keep_their_exemption_and_say_so() {
+    for schema in [2u64, 1] {
+        let p =
+            std::env::temp_dir().join(format!("rmasscan-schema-{schema}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        fixture::build_failure(&p, schema);
+        let v = verify_dir(&p);
+        fs::remove_dir_all(&p).unwrap();
+        // schema 1 has no end marker; the builder's captures still carry one, which is harmless.
+        assert_eq!(v["overall"], PASS, "schema {schema}: {v}");
+        let run = array(&v["runs"])
+            .iter()
+            .find(|r| r["tag"] == "stop_silent")
+            .unwrap();
+        assert!(
+            array(&run["checks"]).iter().any(|c| c["name"]
+                == format!("historical schema {schema}: invocation nonce chain not required")
+                && c["result"] == PASS
+                && s(&c["detail"]).contains("schema 3")),
+            "exemption must be stated in the verdict: {run}"
+        );
+    }
+}

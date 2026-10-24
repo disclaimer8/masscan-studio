@@ -34,9 +34,13 @@ NIC; управляющий NAT-интерфейс и forwarding не менял
 Первоначальный инвентарь (до установки) снят скопированным `.ps1` через встроенный
 Windows PowerShell 5.1: pwsh, Rust/Cargo, Git, VS Build Tools, Windows SDK и Npcap
 отсутствовали. Исходные данные: [inventory JSON](2026-10-24-windows-vm-inventory.json)
-(теперь обновлён до текущего состояния; начальный снимок помечен в поле `collected_utc_initial`).
+(теперь обновлён до текущего состояния). Исходный снимок Codex сохранён дословно:
+[codex-initial-inventory.json](2026-10-24-rmasscan-windows-baseline-raw/codex-initial-inventory.json)
+(часы гостя 10:04:41Z, реальный UTC ~03:04Z).
 
-## Повторный снимок после обновления (2026-10-24T18:15Z)
+## Повторный снимок после обновления (часы гостя 2026-10-24T18:15Z, реальный UTC ~11:15Z)
+
+Все метки времени из гостя (`collected_utc`, `captured_utc`) идут по часам гостя, которые на ~7 ч впереди реального UTC; подробности в [baseline](2026-10-24-rmasscan-windows-baseline.md) (примечание о часах). Исправление часов гостя выполняется спайком Task 2, см. его отчёт.
 
 Источник: свежий read-only снимок в гостевой ОС по SSH (план: повторить SSH и inventory после
 перезагрузки). Все значения этого раздела получены из него, если не указано иное.
@@ -46,7 +50,7 @@ Windows PowerShell 5.1: pwsh, Rust/Cargo, Git, VS Build Tools, Windows SDK и Np
 - Инвентарь: [inventory JSON](2026-10-24-windows-vm-inventory.json) целиком получен из одного запуска
   `masscan-winvm-inventory.ps1` ([скрипт](2026-10-24-rmasscan-windows-baseline-raw/after-update-inventory.ps1),
   копия вывода [after-update-inventory.json](2026-10-24-rmasscan-windows-baseline-raw/after-update-inventory.json)).
-  Первоначальный снимок (10:04Z, до установки) заменён; он показывал отсутствие toolchain и Npcap.
+  Первоначальный снимок (часы гостя 10:04Z, реальный UTC ~03:04Z, до установки) заменён в этом файле; он показывал отсутствие toolchain и Npcap.
 - Адаптеры: `Ethernet` (управляющий NAT, 10.0.2.15/24) и `Ethernet 2` (лабораторный NIC, добавлен
   позже в Task 2, 198.18.0.1/30; см. [windows-vm-lab.md](../../rmasscan/docs/windows-vm-lab.md)).
   Оба показаны как `Intel(R) 82574L Gigabit Network Connection` / `... #2`.

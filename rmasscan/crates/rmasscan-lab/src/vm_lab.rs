@@ -962,7 +962,7 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
                 write_manifest(&a.manifest, &m)?;
             }
             emit(
-                json!({"state":m["state"],"objects":objs,"isolation_violations":violations,"host_ok":host_ok,"vm":vm,"guest_verify_fresh":gf,"raw_run_allowed":full,"ok":ok}).to_string()
+                json!({"state":m["state"],"objects":objs,"isolation_violations":violations,"host_ok":host_ok,"vm":vm,"guest_verify_fresh":gf,"guest_verify_nonce":if a.host_only{Value::Null}else{m["guest"]["verify"]["verification_nonce"].clone()},"raw_run_allowed":full,"ok":ok}).to_string()
             );
             Ok(if ok { 0 } else { 1 })
         }
@@ -1562,6 +1562,32 @@ mod ownership_tests {
         ));
         assert!(execute(&h, &a).is_err());
         assert!(read_manifest(&a.manifest).unwrap().unwrap()["guest"]["verify"].is_null());
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn status_reports_the_nonce_of_the_guest_verify_it_relied_on() {
+        // WR I3 residual: status-pre.json must carry the attested nonce so the verifier can bind the
+        // gate decision to this invocation.
+        let h = host(None);
+        let (p, a) = record_setup(&h, now(), "check-1");
+        let report = |h: &Fake, p: &Path| {
+            out_lines();
+            let mut s = args(p, "status");
+            s.host_only = false;
+            execute(h, &s).unwrap();
+            out_lines().pop().unwrap()
+        };
+        assert!(
+            report(&h, &p)["guest_verify_nonce"].is_null(),
+            "nothing attested yet"
+        );
+        assert_eq!(execute(&h, &a).unwrap(), 0);
+        let r = report(&h, &p);
+        assert_eq!(r["guest_verify_nonce"], "check-1", "{r}");
+        // A host-only status makes no claim about the guest.
+        out_lines();
+        execute(&h, &args(&p, "status")).unwrap();
+        assert!(out_lines().pop().unwrap()["guest_verify_nonce"].is_null());
         fs::remove_dir_all(p).unwrap();
     }
     // ---- F2: port of test_windows_vm_lab.py ----

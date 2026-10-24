@@ -603,6 +603,12 @@ impl Suite<'_> {
         {
             return Err("raw run isolation gate refused".into());
         }
+        if st["guest_verify_nonce"].as_str() != Some(invocation_nonce.as_str()) {
+            return Err(format!(
+                "raw run gate refused: the host status relied on another guest Verify ({})",
+                st["guest_verify_nonce"]
+            ));
+        }
         Ok(verify_rc.get())
     }
     fn cp(&self, n: u64) -> String {

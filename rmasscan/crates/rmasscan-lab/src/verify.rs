@@ -849,6 +849,13 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
                 name,
             );
         }
+        let pre = read_json(ctx.d.join("status-pre.json"));
+        let bound = pre.as_ref().map(|v| v["guest_verify_nonce"].clone());
+        r.inv(
+            "status-pre carries this invocation's guest Verify nonce",
+            matches!((nonce.and_then(Value::as_str), bound.as_ref().and_then(Value::as_str)), (Some(a), Some(b)) if !a.is_empty() && a == b),
+            bound.map_or("status-pre missing".into(), |v| v.to_string()),
+        );
     } else if nonce.is_none() {
         r.add(
             &format!("historical schema {chain_schema}: invocation nonce chain not required"),

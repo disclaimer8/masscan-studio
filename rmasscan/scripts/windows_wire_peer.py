@@ -22,7 +22,7 @@ import time
 ADDR = "198.18.0.2"
 FOREIGN_IP_ID = 0xF0E1
 MARKER_ETHERTYPE = 0x88B5
-MARKER_PAYLOAD = b"WIRELAB-READY"
+MARKER_PAYLOAD = b"WIRELAB-READY"  # default payload; "WIRELAB-END" is the end-of-capture marker
 
 
 def guard_netns():
@@ -103,7 +103,8 @@ def cmd_marker(a):
     guard_netns()
     s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
     s.bind((a.iface, 0))
-    frame = mac_bytes(a.dst) + mac_bytes(a.src) + struct.pack(">H", MARKER_ETHERTYPE) + MARKER_PAYLOAD.ljust(46, b"\0")
+    frame = mac_bytes(a.dst) + mac_bytes(a.src) + struct.pack(">H", MARKER_ETHERTYPE) + \
+        (a.payload.encode() if a.payload else MARKER_PAYLOAD).ljust(46, b"\0")
     for _ in range(3):
         s.send(frame)
         time.sleep(0.05)
@@ -176,6 +177,7 @@ def main():
     p.add_argument("--iface", required=True)
     p.add_argument("--src", required=True)
     p.add_argument("--dst", required=True)
+    p.add_argument("--payload", default="")
     p.set_defaults(fn=cmd_marker)
     p = sub.add_parser("counters")
     p.add_argument("--iface", required=True)

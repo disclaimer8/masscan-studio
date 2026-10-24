@@ -58,8 +58,8 @@ def reply(case_sport, dport):
     return frame(PEER, GUEST, PEER_IP, SRC_IP, dport, case_sport, flags, seq=7, ack=1)
 
 
-def marker():
-    return mac(GUEST) + mac(PEER) + b"\x88\xb5" + b"WIRELAB-READY".ljust(46, b"\0")
+def marker(payload=b"WIRELAB-READY"):
+    return mac(GUEST) + mac(PEER) + b"\x88\xb5" + payload.ljust(46, b"\0")
 
 
 def pcap(frames_ts):
@@ -97,9 +97,9 @@ def tcpd(n):
     return {"captured": n, "received": n, "dropped_kernel": 0, "dropped_if": 0}
 
 
-def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_peer_frames=()):
+def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_peer_frames=(), sub="runs", end_marker=True):
     """One consistent run directory; returns its path."""
-    d = os.path.join(root, "runs", tag)
+    d = os.path.join(root, sub, tag)
     os.makedirs(d)
     t = 1000.0
     pf = [(t, marker())]
@@ -112,6 +112,9 @@ def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_
         t += 0.01
     for tt, f in extra_peer_frames:
         pf.append((tt, f))
+    if end_marker:
+        t_end = max(t for t, _f in pf) + 2.0
+        pf += [(t_end + i * 0.05, marker(V.END_PAYLOAD)) for i in range(3)]
     pf.sort(key=lambda x: x[0])
     peer = pcap(pf)
     eno = pcap([])
@@ -122,11 +125,11 @@ def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_
     n_tx += sum(1 for _t, f in pf if f[12:14] == b"\x88\xb5" and f[6:12] != mac(PEER))
     n_rx = n - n_tx
     cap = {
-        "peer": {"filter": "", "cmd": ["tcpdump", "-i", "lab0"], "listening": True, "tcpdump": tcpd(n),
+        "peer": {"filter": "", "cmd": ["tcpdump", "-i", "lab0", "--immediate-mode"], "listening": True, "tcpdump": tcpd(n),
                  "pcap": {"sha256": sha(peer), "size": len(peer), "frames": n},
                  "counters": {"rx_before": 10, "tx_before": 20, "rx_ready": 10, "tx_ready": 20,
                               "rx_end": 10 + n_rx, "tx_end": 20 + n_tx}},
-        "eno1": {"filter": "net 198.18.0.0/30", "cmd": ["tcpdump", "-i", "eno1"], "listening": True, "tcpdump": tcpd(0),
+        "eno1": {"filter": "net 198.18.0.0/30", "cmd": ["tcpdump", "-i", "eno1", "--immediate-mode"], "listening": True, "tcpdump": tcpd(0),
                  "pcap": {"sha256": sha(eno), "size": len(eno), "frames": 0}},
         "quiet": {"reached": True, "quiet_s": 1.5},
     }
@@ -181,7 +184,7 @@ def build(root, foreign=True):
         "binding": {"src_ip": SRC_IP, "src_mac": GUEST, "router_mac": PEER, "seed": 1, "rate": 100},
         "all_valid": True, "fixtures": fixtures})
     wj(os.path.join(root, "manifest.json"),
-       {"code_commit": COMMIT, "exe": {"sha256": EXE},
+       {"code_commit": COMMIT, "capture_schema": 2, "exe": {"sha256": EXE},
         "binding": {"iface": "\\Device\\NPF_{X}", "src_ip": SRC_IP, "src_mac": GUEST, "router_mac": PEER}})
     for c in V.CASES + [V.FOREIGN_CASE]:
         for r in (1, 2):
@@ -197,7 +200,8 @@ def build(root, foreign=True):
                 efr = [(1001.005 + i * 0.001, f) for i, f in enumerate(fr)]
                 files["injector.json"] = {"sent_total": 4, "kinds": {"other_ip": 1, "unscanned_port": 1, "wrong_cookie": 1,
                                                                     "wrong_dst_port": 1}}
-            write_run(root, tag, case_syns(c), case_replies(c, silent_answers=False), full_json(c, exp), extra_files=files,
+            fj = full_json(c, exp, discarded=4 if c is V.FOREIGN_CASE else 0)
+            write_run(root, tag, case_syns(c), case_replies(c, silent_answers=False), fj, extra_files=files,
                       extra_peer_frames=efr)
     pc = V.case_by_name(V.PAUSE_CASE)
     syns, reps = case_syns(pc), case_replies(pc)
@@ -473,13 +477,105 @@ class VerifierTests(unittest.TestCase):
 
     def test_refusal_with_a_syn_on_the_wire_is_fail(self):
         d = self.path("runs", "refuse_completed")
-        data = pcap([(1000.0, marker()), (1001.0, syn(40000, 8000))])
+        data = pcap([(1000.0, marker()), (1001.0, syn(40000, 8000))] + [(1003.0 + i * 0.05, marker(V.END_PAYLOAD)) for i in range(3)])
         bw(os.path.join(d, "peer.pcap"), data)
-        self.edit_json("runs/refuse_completed/capture.json", lambda c: (c["peer"].__setitem__("pcap", {"sha256": sha(data), "size": len(data), "frames": 2}),
-                                                                       c["peer"].__setitem__("tcpdump", tcpd(2)),
+        self.edit_json("runs/refuse_completed/capture.json", lambda c: (c["peer"].__setitem__("pcap", {"sha256": sha(data), "size": len(data), "frames": 5}),
+                                                                       c["peer"].__setitem__("tcpdump", tcpd(5)),
                                                                        c["peer"]["counters"].update(rx_end=c["peer"]["counters"]["rx_before"] + 1,
-                                                                                                    tx_end=c["peer"]["counters"]["tx_before"] + 1)))
+                                                                                                    tx_end=c["peer"]["counters"]["tx_before"] + 4)))
         self.assertEqual(self.run_verdict("refuse_completed"), "FAIL")
+
+    # ------------------------------------------------------------ M1: capture tail
+    def rewrite_peer(self, tag, mut):
+        d = self.path("runs", tag)
+        _lt, fr = V.vw.read_pcap_records(open(os.path.join(d, "peer.pcap"), "rb").read())
+        fr = mut(fr)
+        data = pcap(fr)
+        bw(os.path.join(d, "peer.pcap"), data)
+        n_tx = sum(1 for _t, f in fr if f[6:12] == mac(PEER) or f[12:14] == b"\x88\xb5")
+
+        def fix(c):
+            c["peer"]["pcap"] = {"sha256": sha(data), "size": len(data), "frames": len(fr)}
+            c["peer"]["tcpdump"] = tcpd(len(fr))
+            c["peer"]["counters"].update(rx_end=10 + len(fr) - n_tx, tx_end=20 + n_tx)
+        self.edit_json("runs/%s/capture.json" % tag, fix)
+
+    def test_missing_end_marker_is_invalid(self):
+        self.rewrite_peer("c01_one_addr_port_synack.run1", lambda fr: [x for x in fr if x[1][14:25] != V.END_PAYLOAD])
+        self.assertEqual(self.run_verdict("c01_one_addr_port_synack.run1"), "INVALID")
+
+    def test_frame_after_the_end_marker_is_invalid(self):
+        self.rewrite_peer("c01_one_addr_port_synack.run1", lambda fr: fr + [(max(t for t, _f in fr) + 1, reply(40000, 80))])
+        self.assertEqual(self.run_verdict("c01_one_addr_port_synack.run1"), "INVALID")
+
+    def test_capture_without_immediate_mode_is_invalid(self):
+        self.edit_json("runs/c02_one_addr_port_rst.run1/capture.json", lambda d: d["eno1"].__setitem__("cmd", ["tcpdump"]))
+        self.assertEqual(self.run_verdict("c02_one_addr_port_rst.run1"), "INVALID")
+
+    def test_older_capture_schema_does_not_require_the_end_marker(self):
+        self.edit_json("manifest.json", lambda d: d.pop("capture_schema"))
+        self.rewrite_peer("c01_one_addr_port_synack.run1", lambda fr: [x for x in fr if x[1][14:25] != V.END_PAYLOAD])
+        self.assertEqual(self.run_verdict("c01_one_addr_port_synack.run1"), "PASS")
+
+    # ------------------------------------------------------------ M3: discarded == injected
+    def test_foreign_frames_not_all_discarded_is_fail(self):
+        for val in (3, 5, None):
+            with self.subTest(val):
+                self.setUp()
+                self.edit_json("runs/x01_foreign_replies.run1/run.json", lambda d, v=val: d.__setitem__("discarded", v))
+                self.assertEqual(self.run_verdict("x01_foreign_replies.run1"), "FAIL")
+                self.tearDown()
+
+    def test_duplicates_beyond_genuine_retransmits_is_fail(self):
+        self.edit_json("runs/x01_foreign_replies.run2/run.json", lambda d: d.__setitem__("duplicates", 9))
+        self.assertEqual(self.run_verdict("x01_foreign_replies.run2"), "FAIL")
+
+    # ------------------------------------------------------------ I1: runs_discarded
+    def discard(self, tag, stamp="1"):
+        os.makedirs(self.path("runs_discarded"), exist_ok=True)
+        os.rename(self.path("runs", tag), self.path("runs_discarded", "%s.%s" % (tag, stamp)))
+
+    def test_discarded_fail_run_makes_overall_fail_and_is_listed(self):
+        t = "c03_multi_ports.run1"
+        self.edit_json("runs/%s/run.json" % t, lambda d: d.update(reason="Failed"))
+        self.discard(t)
+        # a clean replacement under runs/
+        write_run(self.path(), t, case_syns(V.case_by_name("c03_multi_ports")), case_replies(V.case_by_name("c03_multi_ports")),
+                  full_json(V.case_by_name("c03_multi_ports"), V.expected_replies(V.case_by_name("c03_multi_ports"))))
+        v = self.verdict()
+        self.assertEqual(v["overall"], "FAIL")
+        self.assertEqual([(r["tag"], r["verdict"]) for r in v["discarded"]], [(t + ".1", "FAIL")])
+        self.assertEqual(v["discarded_totals"]["FAIL"], 1)
+
+    def test_discarded_invalid_run_is_listed_but_allowed(self):
+        t = "c03_multi_ports.run1"
+        self.edit_json("runs/%s/capture.json" % t, lambda d: d["quiet"].__setitem__("reached", False))
+        self.discard(t)
+        c = V.case_by_name("c03_multi_ports")
+        write_run(self.path(), t, case_syns(c), case_replies(c), full_json(c, V.expected_replies(c)))
+        v = self.verdict()
+        self.assertEqual(v["overall"], "PASS")
+        self.assertEqual([r["verdict"] for r in v["discarded"]], ["INVALID"])
+
+    def test_discarded_pass_run_is_not_allowed(self):
+        t = "c03_multi_ports.run1"
+        self.discard(t)
+        c = V.case_by_name("c03_multi_ports")
+        write_run(self.path(), t, case_syns(c), case_replies(c), full_json(c, V.expected_replies(c)))
+        self.assertEqual(self.verdict()["overall"], "INVALID")
+
+    def test_unknown_discarded_directory_is_fail(self):
+        os.makedirs(self.path("runs_discarded", "nonsense.5"))
+        self.assertEqual(self.verdict()["overall"], "FAIL")
+
+    def test_rerun_policy_only_invalid_or_incomplete_may_be_discarded(self):
+        self.assertTrue(S.may_discard("INVALID"))
+        self.assertTrue(S.may_discard("NOT RUN"))
+        self.assertFalse(S.may_discard("FAIL"))
+        self.assertFalse(S.may_discard("PASS"))
+        self.edit_json("runs/c01_one_addr_port_synack.run1/run.json", lambda d: d.update(reason="Failed"))
+        self.assertFalse(S.may_discard(S.rerun_verdict(self.root, "c01_one_addr_port_synack.run1")))
+        self.assertFalse(S.may_discard(S.rerun_verdict(self.root, "c02_one_addr_port_rst.run1")))  # PASS
 
     def test_cases_psv_lists_six_classes_plus_the_foreign_case(self):
         lines = V.cases_psv().strip().splitlines()

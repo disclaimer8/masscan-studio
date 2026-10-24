@@ -14,6 +14,15 @@ independent C-oracle collection. Python is not a build, test or run dependency.
 The Windows PowerShell files remain system-integration wrappers. Bash entry
 points invoke the Rust tools and OS utilities; they contain no embedded Python.
 
+Capture on Linux is witnessed by the independent `tcpdump` (`capture dump`, `-U
+--immediate-mode`): a capture is valid only if the start marker is in the pcap before the
+scanner starts, the veth counters went quiet, three end markers follow, tcpdump reports no
+kernel or interface drops, and captured == received == pcap frames == the rx+tx counter
+window. The lab sends frames and listens through the same `open_explicit` adapter the product
+uses; the only `unsafe` the lab needs is in `rmasscan-net`'s non-default `lab` feature (a
+`sigaction` stop flag and one backlog-0 listener). There is no CLI self-test: the comparator and
+suite cases are `cargo test -p rmasscan-lab`.
+
 ```sh
 cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (no CLI self-test)
 target/release/rmasscan-lab windows-verify --dir PATH_TO_EVIDENCE

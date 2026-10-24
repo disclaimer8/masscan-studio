@@ -70,7 +70,7 @@ binding. Это НЕ пользовательское сканирование: 
 Проверка идёт только в замкнутом стенде (две netns + veth, без uplink/bridge/NAT):
 
 ```bash
-# на Linux-хосте со sudo -n, ip, ethtool, tcpdump и закреплённым C-oracle
+# на Linux-хосте со sudo -n, ip, ethtool, tcpdump (независимый свидетель захвата), GNU time (perf) и закреплённым C-oracle
 cargo build --locked --release -p rmasscan-lab
 cargo build --locked --release -p rmasscan-net --example wire_scan
 scripts/wire-lab.sh --oracle /path/to/oracle/masscan --out OUT --suite rust \

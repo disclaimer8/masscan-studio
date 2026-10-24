@@ -251,6 +251,24 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+const NETNS: &str = "wvp-n2";
+/// The exact tcpdump command lines the suite starts, and the eno1 filter. The
+/// verifier validates the recorded argv against the same shape.
+pub(crate) fn capture_commands(netns: &str, rev: &str, pm: &str) -> (String, String, String) {
+    let filter = format!(
+        "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host {MAC} or ether host {pm} or ether proto 0x88b5 or ether proto 0x88b6"
+    );
+    let peer = format!(
+        "ip netns exec {netns} tcpdump -i lab0 -n -U --immediate-mode -B 16384 -s 0 -Z root -w {}",
+        quote(&format!("{rev}/peer.pcap"))
+    );
+    let eno = format!(
+        "tcpdump -i eno1 -n -U --immediate-mode -B 4096 -s 0 -Z root -w {} {}",
+        quote(&format!("{rev}/eno1.pcap")),
+        quote(&filter)
+    );
+    (peer, eno, filter)
+}
 const GUEST: &str = "C:\\Users\\lab\\t4";
 const IFACE: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
 const MAC: &str = "52:54:00:04:80:a9";
@@ -602,19 +620,7 @@ impl Suite {
             &format!("{rev}/listener.json"),
             true,
         )?;
-        let filter = format!(
-            "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host {MAC} or ether host {} or ether proto 0x88b5 or ether proto 0x88b6",
-            self.pm
-        );
-        let peer_cmd = format!(
-            "ip netns exec wvp-n2 tcpdump -i lab0 -n -U --immediate-mode -B 16384 -s 0 -Z root -w {}",
-            quote(&format!("{rev}/peer.pcap"))
-        );
-        let eno_cmd = format!(
-            "tcpdump -i eno1 -n -U --immediate-mode -B 4096 -s 0 -Z root -w {} {}",
-            quote(&format!("{rev}/eno1.pcap")),
-            quote(&filter)
-        );
+        let (peer_cmd, eno_cmd, filter) = capture_commands(NETNS, rev, &self.pm);
         let c0 = self.counters()?;
         let drops0 = (self.interface_drops(true)?, self.interface_drops(false)?);
         for (n, cmd) in [("peer", &peer_cmd), ("eno1", &eno_cmd)] {

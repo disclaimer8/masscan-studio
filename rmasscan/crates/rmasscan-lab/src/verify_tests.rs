@@ -38,6 +38,11 @@ impl Scratch {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&p).unwrap();
+        if plan == "failure" {
+            // Part B evidence was discarded: the plan is synthesised, never read from disk.
+            fixture::build_failure(&p, 3);
+            return Self(p);
+        }
         let src = evidence(plan);
         if let Some(tag) = tag {
             fs::copy(src.join("manifest.json"), p.join("manifest.json")).unwrap();
@@ -54,8 +59,14 @@ impl Scratch {
         change(&mut v);
         fs::write(path, serde_json::to_vec(&v).unwrap()).unwrap();
     }
+    /// Edit scanner output and keep the invocation hash proof consistent: a
+    /// scanner that really reported it, so only the rule under test reacts.
+    fn edit_sealed(&self, file: &str, change: impl FnOnce(&mut Value)) {
+        self.edit(file, change);
+        fixture::reseal(self.0.join(file).parent().unwrap());
+    }
     fn edit_run(&self, tag: &str, path: &str, value: Value) {
-        self.edit(&format!("runs/{tag}/run.json"), |v| {
+        self.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
             *v.pointer_mut(path).expect(path) = value
         });
     }
@@ -70,7 +81,7 @@ impl Drop for Scratch {
 }
 fn mutate(plan: &str, tag: &str, file: &str, path: &str, value: Value, want: &str, beh: bool) {
     let d = Scratch::new(plan, Some(tag));
-    d.edit(&format!("runs/{tag}/{file}"), |v| {
+    d.edit_sealed(&format!("runs/{tag}/{file}"), |v| {
         *v.pointer_mut(path).expect(path) = value
     });
     assert_eq!(
@@ -81,8 +92,14 @@ fn mutate(plan: &str, tag: &str, file: &str, path: &str, value: Value, want: &st
 }
 #[test]
 fn full_failure_plan_replays_19_pass() {
-    let v = verify_dir(&evidence("failure"));
-    assert_eq!(v["overall"], PASS, "{v}");
+    let d = Scratch::new("failure", None);
+    let v = verify_dir(&d.0);
+    assert_eq!(
+        v["overall"],
+        PASS,
+        "{}",
+        serde_json::to_string_pretty(&v).unwrap()
+    );
     assert_eq!(v["totals"][PASS], 19);
 }
 #[test]
@@ -297,7 +314,7 @@ fn stop_latency_worker_and_resource_mutations_fail() {
 #[test]
 fn unrelated_process_worker_count_is_not_engine_leak() {
     let d = Scratch::new("failure", Some("stop_silent"));
-    d.edit("runs/stop_silent/run.json", |v| {
+    d.edit_sealed("runs/stop_silent/run.json", |v| {
         v["resources"]["threads_before"] = json!(1);
         v["resources"]["threads_after_join"] = json!(999);
     });
@@ -322,7 +339,7 @@ fn failure_plan_each_error_contract_enforced() {
         (
             "rxloss",
             "/fail_detail",
-            json!("RxLoss { kernel_drops: 7 }"),
+            json!("RxLoss { kernel_drops: 8 }"),
         ),
         ("rxloss", "/checkpoint", json!(true)),
     ] {
@@ -546,7 +563,7 @@ fn late_tx_is_failure_only_when_capture_complete() {
             fr.push((end + 0.3, packet));
             fr.sort_by(|a, b| a.0.total_cmp(&b.0));
         });
-        d.edit("runs/stop_silent/run.json", |v| {
+        d.edit_sealed("runs/stop_silent/run.json", |v| {
             let count = n(&v["sent"]) + 1;
             for k in [
                 "sent",
@@ -710,5 +727,272 @@ fn independent_nic_unknown_fields_are_not_measured_zero() {
             v["after"]["stats"]["ReceivedMulticastPackets"] = value
         });
         assert_eq!(d.status("rxloss").0, NOT_RUN);
+    }
+}
+// ---- part B rules, pinned on synthetic evidence (never on discarded runs) ----
+#[test]
+fn synthetic_failure_plan_has_every_run_passing_individually() {
+    let d = Scratch::new("failure", None);
+    let v = verify_dir(&d.0);
+    assert_eq!(v["totals"][PASS], 19, "manifest plus 18 runs");
+    for r in array(&v["runs"]) {
+        assert_eq!(r["verdict"], PASS, "{}", r["tag"]);
+    }
+    assert!(array(&v["behaviour_fail"]).is_empty());
+}
+#[test]
+fn every_checkpoint_refusal_variant_must_name_its_reason_and_open_nothing() {
+    for variant in [
+        "wrong_ports",
+        "wrong_seed",
+        "corrupt_next_index",
+        "corrupt_checksum",
+        "truncated",
+        "empty",
+        "future_format",
+        "future_engine",
+    ] {
+        let tag = format!("ckpt_{variant}");
+        for (file, path, value) in [
+            ("run.json", "/error", json!("Unrelated: wrong reason")),
+            ("run.json", "/stage", json!("scan")),
+            ("run.json", "/tx_sent", json!(1)),
+            ("run.json", "/opened_adapter", json!(true)),
+            ("meta.json", "/guest_exit", json!(0)),
+        ] {
+            mutate("failure", &tag, file, path, value, FAIL, true);
+        }
+    }
+}
+#[test]
+fn a_scanner_syn_in_a_refusal_or_restricted_run_is_a_failure_only_with_a_complete_capture() {
+    for tag in [
+        "ckpt_wrong_ports",
+        "perm_restricted_scan",
+        "perm_restricted_inventory",
+    ] {
+        let d = Scratch::new("failure", Some(tag));
+        rewrite_pcap(&d, tag, "peer", |fr| {
+            fr.push((1_800_000_004.0, fixture::scanner_syn(80, 40000)))
+        });
+        assert_eq!(d.status(tag), (FAIL.into(), true), "{tag}");
+        d.edit(&format!("runs/{tag}/capture.json"), |v| {
+            v["quiet"]["reached"] = json!(false)
+        });
+        assert_eq!(d.status(tag), (INVALID.into(), false), "{tag} lossy");
+    }
+}
+#[test]
+fn restricted_token_rules() {
+    mutate(
+        "failure",
+        "perm_restricted_scan",
+        "meta.json",
+        "/guest_exit",
+        json!(1),
+        FAIL,
+        true,
+    );
+    mutate(
+        "failure",
+        "perm_restricted_inventory",
+        "meta.json",
+        "/guest_exit",
+        json!(0),
+        FAIL,
+        true,
+    );
+    mutate(
+        "failure",
+        "perm_restricted_inventory",
+        "run.json",
+        "/access_hint",
+        json!(""),
+        FAIL,
+        true,
+    );
+    mutate(
+        "failure",
+        "perm_restricted_inventory",
+        "run.json",
+        "/mode",
+        json!("scan"),
+        FAIL,
+        true,
+    );
+    for tag in ["perm_restricted_scan", "perm_restricted_inventory"] {
+        mutate(
+            "failure",
+            tag,
+            "meta.json",
+            "/restricted_via",
+            json!(""),
+            INVALID,
+            false,
+        );
+    }
+}
+#[test]
+fn overflow_and_linkloss_contracts() {
+    for (tag, path, value) in [
+        ("overflow_queue", "/sent", json!(6)),
+        ("overflow_queue", "/replies", json!(["198.18.0.2:9:open"])),
+        ("overflow_queue", "/checkpoint", json!(true)),
+        ("linkloss", "/net/tx_uncertain", json!(0)),
+        ("linkloss", "/sent", json!(200)),
+        ("linkloss", "/checkpoint_hex", json!("00")),
+    ] {
+        mutate("failure", tag, "run.json", path, value, FAIL, true);
+    }
+    mutate(
+        "failure",
+        "overflow_queue",
+        "meta.json",
+        "/guest_exit",
+        json!(0),
+        FAIL,
+        true,
+    );
+    mutate(
+        "failure",
+        "linkloss",
+        "meta.json",
+        "/guest_exit",
+        json!(0),
+        FAIL,
+        true,
+    );
+}
+#[test]
+fn linkloss_harness_events_must_prove_down_then_restore_around_the_failure() {
+    for (path, value) in [
+        ("/first_syn_seen", json!(false)),
+        ("/events/1/reply", json!({"error":"x"})),
+        ("/events/1/t", json!(1_800_000_001.0)),
+        ("/events/0/t", json!(1_800_000_000.0 + 3.0 + 1.8 - 3.5)),
+        ("/events/0/t", json!(1_800_000_000.0 + 3.0 + 1.8 + 0.5)),
+    ] {
+        mutate(
+            "failure",
+            "linkloss",
+            "linkloss.json",
+            path,
+            value,
+            INVALID,
+            false,
+        );
+    }
+    let d = Scratch::new("failure", Some("linkloss"));
+    fs::remove_file(d.0.join("runs/linkloss/linkloss.json")).unwrap();
+    assert_eq!(d.status("linkloss").0, NOT_RUN);
+}
+#[test]
+fn uncertain_tx_window_bounds_the_wire_syn_count() {
+    // 30 confirmed + 1 uncertain: 31 on the wire is allowed; 32 or 29 is not.
+    for extra in [1i64, -2] {
+        let d = Scratch::new("failure", Some("linkloss"));
+        rewrite_pcap(&d, "linkloss", "peer", |fr| {
+            let syn: Vec<_> = fr
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, f))| pcap::is_syn(f))
+                .map(|(i, _)| i)
+                .collect();
+            if extra > 0 {
+                let mut again = fr[syn[0]].clone();
+                again.0 = fr[*syn.last().unwrap()].0 + 0.01;
+                fr.push(again);
+            } else {
+                for i in syn.iter().rev().take(2) {
+                    fr.remove(*i);
+                }
+            }
+        });
+        assert_eq!(d.status("linkloss"), (FAIL.into(), true), "{extra}");
+    }
+}
+#[test]
+fn syn_after_the_terminal_outcome_fails_on_a_complete_capture() {
+    let d = Scratch::new("failure", Some("stop_silent"));
+    rewrite_pcap(&d, "stop_silent", "peer", |fr| {
+        let mut late = fr.iter().find(|(_, f)| pcap::is_syn(f)).unwrap().clone();
+        late.0 = 1_800_000_003.0 + 2.5 + 0.2;
+        fr.push(late);
+    });
+    assert_eq!(d.status("stop_silent"), (FAIL.into(), true));
+}
+#[test]
+fn rx_overflow_independent_bounds_and_flood_accounting() {
+    mutate(
+        "failure",
+        "rxloss",
+        "nic.json",
+        "/after/stats/ReceivedUnicastPackets",
+        json!(1050),
+        FAIL,
+        true,
+    );
+    mutate(
+        "failure",
+        "rxloss",
+        "run.json",
+        "/net/rx_packets",
+        json!(5000),
+        FAIL,
+        true,
+    );
+    mutate(
+        "failure",
+        "rxloss",
+        "flood.json",
+        "/sent",
+        json!(11),
+        INVALID,
+        false,
+    );
+    mutate(
+        "failure",
+        "rxloss",
+        "flood.json",
+        "/errors",
+        json!(1),
+        INVALID,
+        false,
+    );
+    let d = Scratch::new("failure", Some("rxloss"));
+    fs::remove_file(d.0.join("runs/rxloss/flood.json")).unwrap();
+    assert_eq!(d.status("rxloss").0, NOT_RUN);
+}
+#[test]
+fn rx_load_flood_must_overlap_the_stop_and_stay_on_the_wire() {
+    for (path, value) in [
+        ("/t_first", json!(1_800_000_010.0)),
+        ("/t_last", json!(1_800_000_000.0)),
+        ("/sent", json!(11)),
+    ] {
+        mutate(
+            "failure",
+            "stop_load",
+            "flood.json",
+            path,
+            value,
+            INVALID,
+            false,
+        );
+    }
+}
+#[test]
+fn drain_and_fullqueue_stop_contracts() {
+    for (tag, path, value) in [
+        ("stop_drain", "/sent", json!(1)),
+        ("stop_drain", "/replies", json!([])),
+        ("stop_fullqueue", "/replies", json!(["198.18.0.2:80:open"])),
+        ("stop_fullqueue", "/sent", json!(1)),
+        ("stop_silent", "/reply_total", json!(1)),
+        ("stop_silent", "/sent", json!(20)),
+        ("stop_silent", "/sent", json!(0)),
+        ("stop_silent", "/fail_detail", json!("x")),
+    ] {
+        mutate("failure", tag, "run.json", path, value, FAIL, true);
     }
 }

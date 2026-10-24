@@ -41,7 +41,12 @@ if [ "$(id -u)" != 0 ]; then
   REEXEC=(--oracle "$(readlink -f "$ORACLE")" --out "$(readlink -f "$OUT")" --suite "$SUITE" --reps "$REPS" --rates "$RATES")
   [ -z "$RUST_BIN" ] || REEXEC+=(--rust-bin "$(readlink -f "$RUST_BIN")")
   [ -z "$FIXTURES" ] || REEXEC+=(--fixtures "$(readlink -f "$FIXTURES")")
-  exec sudo -n env "WIRELAB_INJECT=${WIRELAB_INJECT:-}" "$0" "${REEXEC[@]}"
+  exec sudo -n env "WIRELAB_INJECT=${WIRELAB_INJECT:-}" \
+    ${WIRELAB_MAC_A+"WIRELAB_MAC_A=$WIRELAB_MAC_A"} ${WIRELAB_MAC_B+"WIRELAB_MAC_B=$WIRELAB_MAC_B"} \
+    ${WIRELAB_IP_A_LINK+"WIRELAB_IP_A_LINK=$WIRELAB_IP_A_LINK"} ${WIRELAB_IP_ADAPTER+"WIRELAB_IP_ADAPTER=$WIRELAB_IP_ADAPTER"} \
+    ${WIRELAB_PEER_IPS+"WIRELAB_PEER_IPS=$WIRELAB_PEER_IPS"} ${WIRELAB_PEER_PREFIX+"WIRELAB_PEER_PREFIX=$WIRELAB_PEER_PREFIX"} \
+    ${WIRELAB_OPEN_PORTS+"WIRELAB_OPEN_PORTS=$WIRELAB_OPEN_PORTS"} ${WIRELAB_CASES_FILE+"WIRELAB_CASES_FILE=$WIRELAB_CASES_FILE"} \
+    "$0" "${REEXEC[@]}"
 fi
 [ -x "$ORACLE" ] || { echo "FATAL: oracle not executable: $ORACLE" >&2; exit 2; }
 for t in ip python3 timeout unshare; do command -v "$t" >/dev/null || { echo "FATAL: missing $t" >&2; exit 2; }; done
@@ -50,10 +55,15 @@ for t in ip python3 timeout unshare; do command -v "$t" >/dev/null || { echo "FA
 RUN_ID="$$-$RANDOM"
 NS_A="wl-scan-$RUN_ID"; NS_B="wl-peer-$RUN_ID"
 IF_A=veth-a; IF_B=veth-b
-MAC_A=02:aa:00:00:00:01; MAC_B=02:aa:00:00:00:02
-IP_A_LINK=10.200.0.1; IP_ADAPTER=10.200.0.100          # adapter IP is NOT assigned to any interface
-PEER_IPS="10.200.0.2 10.200.0.3 10.200.0.4 10.200.0.5"
-OPEN_PORTS=80,8080                                      # responder listens here; every other port gets RST
+# The defaults are the Linux binding. The Windows stand overrides them (same script, same capture path) with
+# WIRELAB_* so that the C oracle fixtures use the SAME source IP/MAC and peer MAC as the real Windows run.
+MAC_A=${WIRELAB_MAC_A:-02:aa:00:00:00:01}; MAC_B=${WIRELAB_MAC_B:-02:aa:00:00:00:02}
+IP_A_LINK=${WIRELAB_IP_A_LINK-10.200.0.1}             # empty = no address on the scanner end
+IP_ADAPTER=${WIRELAB_IP_ADAPTER:-10.200.0.100}         # adapter IP is NOT assigned to any interface
+PEER_IPS=${WIRELAB_PEER_IPS:-"10.200.0.2 10.200.0.3 10.200.0.4 10.200.0.5"}
+PEER_PREFIX=${WIRELAB_PEER_PREFIX:-24}
+OPEN_PORTS=${WIRELAB_OPEN_PORTS:-80,8080}               # responder listens here; every other port gets RST
+CASES_FILE=${WIRELAB_CASES_FILE:-}                      # optional "name|syn|synack|rst|masscan args" lines
 SEED=1; RATE=100
 CREATED_A=0; CREATED_B=0; PIDS=()
 mkdir -p "$OUT"; OUT=$(readlink -f "$OUT")
@@ -126,8 +136,8 @@ done
 ip -n "$NS_A" link set "$IF_A" address "$MAC_A"
 ip -n "$NS_B" link set "$IF_B" address "$MAC_B"
 nsa sysctl -qw "net.ipv6.conf.$IF_A.disable_ipv6=1"; nsb sysctl -qw "net.ipv6.conf.$IF_B.disable_ipv6=1"
-ip -n "$NS_A" addr add "$IP_A_LINK/24" dev "$IF_A"
-for ip_ in $PEER_IPS; do ip -n "$NS_B" addr add "$ip_/24" dev "$IF_B"; done
+[ -z "$IP_A_LINK" ] || ip -n "$NS_A" addr add "$IP_A_LINK/24" dev "$IF_A"
+for ip_ in $PEER_IPS; do ip -n "$NS_B" addr add "$ip_/$PEER_PREFIX" dev "$IF_B"; done
 ip -n "$NS_B" neigh add "$IP_ADAPTER" lladdr "$MAC_A" dev "$IF_B" nud permanent   # no ARP needed on the lab wire
 for ns in "$NS_A" "$NS_B"; do ip -n "$ns" link set lo up; done
 ip -n "$NS_A" link set "$IF_A" up
@@ -215,6 +225,9 @@ if [ "$SUITE" = oracle ]; then
 # ---- cases: name | expected SYN | expected SYN-ACK | expected RST | masscan targets/options
 COMMON=(--interface "$IF_A" --adapter-ip "$IP_ADAPTER" --adapter-mac "$MAC_A" --router-mac "$MAC_B"
         --seed "$SEED" --rate "$RATE" --blackrock-rounds 14 --retries 0 --wait 3)
+if [ -n "$CASES_FILE" ]; then
+  mapfile -t CASES <"$CASES_FILE"
+else
 CASES=(
 "c01_one_addr_port_synack|1|1|0|10.200.0.2 -p80 --source-port 40000"
 "c02_one_addr_port_rst|1|0|1|10.200.0.2 -p81 --source-port 40000"
@@ -223,6 +236,7 @@ CASES=(
 "c05_srcport_single|4|2|2|10.200.0.2-10.200.0.3 -p80,81 --source-port 50123"
 "c06_srcport_range|4|2|2|10.200.0.2-10.200.0.3 -p80,81 --source-port 50000-50015"
 )
+fi
 : >"$OUT/cases.tsv"
 for row in "${CASES[@]}"; do
   IFS='|' read -r name e_syn e_synack e_rst margs <<<"$row"

@@ -1,0 +1,38 @@
+{
+ "error": "AlreadyCompleted",
+ "identity": {
+  "binary_path": "C:\\Users\\lab\\src\\rmasscan-1a446c5\\rmasscan\\target\\release\\examples\\wire_scan.exe",
+  "binary_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+  "elevated": true,
+  "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+  "os": {
+   "arch": "x86_64",
+   "family": "windows",
+   "version": "10.0.26300"
+  },
+  "restricted_token": false,
+  "source_commit": "1a446c594d86db52fbfa9a07962dc8cc1b662ca9"
+ },
+ "job": {
+  "blackrock_rounds": 14,
+  "exclude": null,
+  "iface": "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+  "job_digest": "5ac5f6e35f058294621f96a6d251f7774d7cc02d7bbbc2f9938df5ed6fa378d4",
+  "ports": "8000-8015",
+  "rate": 100,
+  "retries": 0,
+  "router_mac": "02:57:4c:3d:2e:9b",
+  "seed": 1,
+  "shard": "1/1",
+  "source_port": "40000",
+  "src_ip": "198.18.0.1",
+  "src_mac": "52:54:00:04:80:a9",
+  "targets": "198.18.0.2",
+  "wait": 3
+ },
+ "message": "rejected before the adapter was opened",
+ "opened_adapter": false,
+ "stage": "resume-preflight",
+ "status": "error",
+ "tx_sent": 0
+}

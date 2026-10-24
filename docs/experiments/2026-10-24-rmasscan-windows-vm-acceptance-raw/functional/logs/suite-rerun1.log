@@ -1,0 +1,2 @@
+[15:49:53] x01_foreign_replies.run1: done guest_rc=0 peer_frames=96 eno1_frames=0 quiet=True
+[15:49:55] all planned runs executed; verify offline with windows_wire_verify.py --dir $REPO/docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional

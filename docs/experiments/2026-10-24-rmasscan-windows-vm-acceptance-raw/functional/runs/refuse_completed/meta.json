@@ -1,0 +1,16 @@
+{
+ "argv_file": "argv.json",
+ "capture_started_utc": 1792853307.841802,
+ "capture_stopped_utc": 1792853315.399911,
+ "exe_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+ "guest_exit": 4,
+ "guest_finished_utc": 1792853311.427101,
+ "guest_ssh_rc": 0,
+ "guest_started_utc": 1792853310.666137,
+ "guest_times": {
+  "finished_utc": 1792853311.193,
+  "started_utc": 1792853311.17
+ },
+ "kind": "refuse_completed",
+ "tag": "refuse_completed"
+}

@@ -1,0 +1,16 @@
+{
+ "argv_file": "argv.json",
+ "capture_started_utc": 1792852899.524089,
+ "capture_stopped_utc": 1792852911.240288,
+ "exe_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+ "guest_exit": 0,
+ "guest_finished_utc": 1792852906.9921558,
+ "guest_ssh_rc": 0,
+ "guest_started_utc": 1792852903.089758,
+ "guest_times": {
+  "finished_utc": 1792852906.838,
+  "started_utc": 1792852903.6
+ },
+ "kind": "foreign",
+ "tag": "x01_foreign_replies.run1"
+}

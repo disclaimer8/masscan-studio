@@ -1,4 +1,5 @@
 {
+ "behaviour_fail": [],
  "dir": "functional-r1-smoke",
  "discarded": [],
  "discarded_totals": {
@@ -9,46 +10,58 @@
  },
  "groups": [
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "pause=False resume=False",
      "name": "both legs have usable artifacts",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "group_pause_resume_N0",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "pause=False resume=False",
      "name": "both legs have usable artifacts",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "group_pause_resume_N1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "pause=False resume=False",
      "name": "both legs have usable artifacts",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "group_pause_resume_N8",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "pause=False resume=False",
      "name": "both legs have usable artifacts",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "group_pause_resume_N15",
    "verdict": "NOT RUN"
   }
@@ -56,517 +69,640 @@
  "overall": "NOT RUN",
  "runs": [
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "",
      "name": "manifest.code_commit present",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "manifest.exe present",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "manifest.binding present",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "manifest.exe.sha256 present",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "fixtures/manifest.json present",
      "result": "PASS"
     }
    ],
+   "notes": {},
    "tag": "manifest",
    "verdict": "PASS"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c01_one_addr_port_synack.run1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c01_one_addr_port_synack.run1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c01_one_addr_port_synack.run2",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c01_one_addr_port_synack.run2",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "10 frames",
      "name": "peer.pcap is a complete pcap",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "0 frames",
      "name": "eno1.pcap is a complete pcap",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "run=3126206d5e4dfb9c4187e3286252eb9d0e12b557 manifest=3126206d5e4dfb9c4187e3286252eb9d0e12b557",
      "name": "run.json comes from the manifest's commit (not another build)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "run=6586f536dfbba87e068fd2d1333a13b8fa4f3ea1fe32431df973b88f38a9497d manifest=6586f536dfbba87e068fd2d1333a13b8fa4f3ea1fe32431df973b88f38a9497d",
      "name": "run.json binary sha256 == the wire_scan.exe built from that commit",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "meta=6586f536dfbba87e068fd2d1333a13b8fa4f3ea1fe32431df973b88f38a9497d",
      "name": "guest hashed the same exe before the run",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'arch': 'x86_64', 'family': 'windows', 'version': '10.0.26300'}",
      "name": "the run was a Windows process",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "recorded={'frames': 10, 'sha256': 'f4726954a0660067510053ad2e37aae6d7bc7b75433e31c98c4b053bfe47f101', 'size': 740} actual=f4726954a066/740/10",
      "name": "peer pcap sha256/size/frames equal the values hashed before cleanup",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'captured': 10, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 10}",
      "name": "peer tcpdump statistics recorded",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'captured': 10, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 10}",
      "name": "peer capture has no kernel or interface drops",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'captured': 10, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 10} vs pcap 10",
      "name": "peer captured == received by filter == frames in the pcap",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "peer tcpdump confirmed listening before the guest started",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "peer filter recorded",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "recorded={'frames': 0, 'sha256': '704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea', 'size': 24} actual=704e5e5b3234/24/0",
      "name": "eno1 pcap sha256/size/frames equal the values hashed before cleanup",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
      "name": "eno1 tcpdump statistics recorded",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0}",
      "name": "eno1 capture has no kernel or interface drops",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'captured': 0, 'dropped_if': 0, 'dropped_kernel': 0, 'received': 0} vs pcap 0",
      "name": "eno1 captured == received by filter == frames in the pcap",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "eno1 tcpdump confirmed listening before the guest started",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "",
      "name": "eno1 filter recorded",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'rx_before': 92667, 'rx_end': 92669, 'rx_ready': 92667, 'tx_before': 2876918, 'tx_end': 2876926, 'tx_ready': 2876918}",
      "name": "peer interface counters recorded",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "frames=10",
      "name": "peer pcap frames lie in the lab0 rx+tx counter window [10, 10]",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "markers=6",
      "name": "readiness marker is in the peer pcap (capture proven live before the guest ran)",
      "result": "PASS"
     },
     {
-     "detail": "end_markers=3 frames_after=0",
-     "name": "end marker is in the peer pcap and nothing else follows it (the capture tail was flushed)",
+     "behaviour": false,
+     "detail": "run=1 dir=2",
+     "name": "run capture_schema is not older than the directory's (2)",
+     "result": "INVALID"
+    },
+    {
+     "behaviour": false,
+     "detail": "",
+     "name": "end marker not required: this run's capture_schema is 1 (older capture, tail protection absent)",
      "result": "PASS"
     },
     {
-     "detail": "['ip', 'netns', 'exec', 'wvp-n2', 'tcpdump', '-i', 'lab0', '-n', '-U', '--immediate-mode', '-B', '16384', '-s', '0', '-Z', 'root', '-w', '$HOME/winvm/t4-ev/r1smoke/c02_one_addr_port_rst.run1/peer.pcap']",
-     "name": "capture ran with --immediate-mode",
-     "result": "PASS"
-    },
-    {
+     "behaviour": false,
      "detail": "{'quiet_s': 1.5, 'reached': True}",
      "name": "capture reached quiescence before it was stopped (peer counters unchanged)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "[1792854752.078254, 1792854753.903008, 1792854758.34483, 1792854764.39144]",
      "name": "capture started before the guest and stopped after it (UTC order)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "eno1 frames=0",
      "name": "eno1 saw 0 lab packets (isolation)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "raw_run_allowed=True violations=[]",
      "name": "status-pre: raw_run_allowed true, no isolation violations",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "raw_run_allowed=True violations=[]",
      "name": "status-post: raw_run_allowed true, no isolation violations",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "[]",
      "name": "guest Verify ok before the run",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4096645}",
      "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
      "result": "PASS"
     },
     {
+     "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
      "result": "PASS"
     },
     {
+     "behaviour": true,
      "detail": "rc=0",
      "name": "guest exit code 0",
      "result": "PASS"
     },
     {
+     "behaviour": true,
      "detail": "status=ok reason=Completed detail=",
      "name": "outcome Completed",
      "result": "PASS"
     },
     {
+     "behaviour": true,
      "detail": "{'sent': 1, 'next_index': 1, 'range': 1, 'expected_total': 1}",
      "name": "sent == next_index == range == expected SYN count (1)",
      "result": "PASS"
     },
     {
+     "behaviour": true,
      "detail": "rx_health={'kernel_drops': 0} net.kernel_drops=0",
      "name": "rx_health.kernel_drops is a MEASURED 0 (not null)",
      "result": "PASS"
     },
     {
+     "behaviour": true,
      "detail": "{'kernel_drops': 0, 'rx_errors': 0, 'rx_outgoing': 0, 'rx_packets': 1, 'rx_truncated': 0, 'rx_wrong_interface': 0, 'tx_errors': 0, 'tx_sent': 1, 'tx_uncertain': 0, 'tx_would_block': 0}",
      "name": "net.tx_sent == sent, no uncertain/error TX, no RX errors",
      "result": "PASS"
     },
     {
+     "behaviour": true,
      "detail": "got=['198.18.0.2:81:closed'] want=['198.18.0.2:81:closed'] total=1 unique=1",
      "name": "results == expected Open/Closed from the peer's listeners (0 open, 1 closed)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "9cfa912acfe0 vs 9cfa912acfe0",
      "name": "fixture sha256 == fixtures/manifest.json",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "binding-matching=1 all=1",
      "name": "every SYN in the C fixture carries the guest MAC, peer MAC and adapter IP",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "1 SYN frames identical and in order",
      "name": "SYN bytes and order == C oracle fixture (byte-exact)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "all=1 scanner=1 want=1",
      "name": "no SYN on the wire other than the scanner's",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "c=['198.18.0.2:81:closed'] want=['198.18.0.2:81:closed']",
      "name": "C oracle replies on the wire == expected from the listeners (cross-check of the stand)",
      "result": "PASS"
     },
     {
+     "behaviour": false,
      "detail": "wire=1 unique=['198.18.0.2:81:closed'] received=1 duplicates=0",
      "name": "peer replies on the wire == results (extra copies are suppressed duplicates)",
      "result": "PASS"
     }
    ],
+   "notes": {},
    "tag": "c02_one_addr_port_rst.run1",
-   "verdict": "PASS"
+   "verdict": "INVALID"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c02_one_addr_port_rst.run2",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c02_one_addr_port_rst.run2",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c03_multi_ports.run1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c03_multi_ports.run1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c03_multi_ports.run2",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c03_multi_ports.run2",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c04_exclude.run1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c04_exclude.run1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c04_exclude.run2",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c04_exclude.run2",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c05_srcport_single.run1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c05_srcport_single.run1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c05_srcport_single.run2",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c05_srcport_single.run2",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c06_srcport_range.run1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c06_srcport_range.run1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/c06_srcport_range.run2",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "c06_srcport_range.run2",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/x01_foreign_replies.run1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "x01_foreign_replies.run1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/x01_foreign_replies.run2",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "x01_foreign_replies.run2",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/pause_N0",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "pause_N0",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/resume_N0",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "resume_N0",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/pause_N1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "pause_N1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/resume_N1",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "resume_N1",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/pause_N8",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "pause_N8",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/resume_N8",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "resume_N8",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/pause_N15",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "pause_N15",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/resume_N15",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "resume_N15",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/complete_nopause",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "complete_nopause",
    "verdict": "NOT RUN"
   },
   {
+   "behaviour_fail": false,
    "checks": [
     {
+     "behaviour": false,
      "detail": "missing runs/refuse_completed",
      "name": "run directory present",
      "result": "NOT RUN"
     }
    ],
+   "notes": {},
    "tag": "refuse_completed",
    "verdict": "NOT RUN"
   }
@@ -574,8 +710,8 @@
  "schema": 1,
  "totals": {
   "FAIL": 0,
-  "INVALID": 0,
+  "INVALID": 1,
   "NOT RUN": 27,
-  "PASS": 2
+  "PASS": 1
  }
 }

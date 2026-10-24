@@ -9,6 +9,8 @@
   "src_mac": "52:54:00:04:80:a9",
   "wait": 3
  },
+ "capture_schema": 1,
+ "capture_schema_note": "part A captures predate --immediate-mode and the end marker",
  "code_commit": "1a446c594d86db52fbfa9a07962dc8cc1b662ca9",
  "created_utc": "2026-10-24T14:34:14Z",
  "exe": {

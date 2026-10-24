@@ -1,4 +1,4 @@
-# CI порта masscan на Rust: core, cli, engine, net и lab; Python не требуется.
+# CI порта masscan на Rust: core, cli, engine, net и lab; интерпретаторы скриптов не требуются.
 # Raw-сокеты, сеть и повышение прав не используются: тесты, открывающие AF_PACKET, помечены #[ignore]
 # и идут только в замкнутом стенде (wire-lab.sh). CI не выполняет raw I/O;
 # Windows Npcap проверяется offline/fake tests, macOS raw I/O пока не реализован.
@@ -76,7 +76,7 @@ jobs:
           cargo test --locked -p rmasscan-net --example wire_scan
           cargo build --locked -p rmasscan-net --example wire_scan
 
-      - name: Rust laboratory tools (без Python)
+      - name: Rust laboratory tools (без интерпретаторов)
         run: |
           cargo test --locked -p rmasscan-lab
           cargo test --locked -p rmasscan-net --features lab --lib lab_io

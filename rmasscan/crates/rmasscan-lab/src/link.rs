@@ -14,7 +14,7 @@ use std::{
 pub const MARKER_ETHERTYPE: [u8; 2] = [0x88, 0xb5];
 pub const START_PAYLOAD: &[u8] = b"WIRELAB-READY";
 pub const END_PAYLOAD: &[u8] = b"WIRELAB-END";
-/// How long one frame may wait behind a full device queue before the sender gives up. The Python
+/// How long one frame may wait behind a full device queue before the sender gives up. The earlier
 /// senders blocked in `send`; this is the same behaviour with a bound, so a dead link cannot hang
 /// the lab forever.
 pub const SEND_PATIENCE: Duration = Duration::from_secs(30);

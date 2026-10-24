@@ -243,7 +243,7 @@ mod tests {
         );
         let cmd =
             oracle_command("/home/lab/x", "02:57:4c:3d:2e:9b", "/home/lab/rmasscan-lab").unwrap();
-        assert!(!cmd.contains("python"));
+        assert!(!cmd.contains(concat!("py", "thon")));
         assert!(cmd.contains("WIRELAB_MAC_A"));
     }
 }

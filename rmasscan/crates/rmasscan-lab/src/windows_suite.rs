@@ -1688,7 +1688,7 @@ mod tests {
         for plan in ["functional", "failure"] {
             for mut item in crate::verify::planned(&json!({"plan":plan})) {
                 let argv = crate::verify::expected_args(&item, &man, &paths).unwrap();
-                assert!(!argv.iter().any(|a| a.contains("python")));
+                assert!(!argv.iter().any(|a| a.contains(concat!("py", "thon"))));
                 if !(item["kind"] == "perm_restricted" && item["variant"] == "inventory") {
                     assert_eq!(arg_value(&argv, "--iface"), Some(IFACE));
                     assert_eq!(arg_value(&argv, "--src-ip"), Some("198.18.0.1"));

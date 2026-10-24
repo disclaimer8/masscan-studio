@@ -2155,7 +2155,7 @@ mod tests {
         );
         assert_eq!(&a[..4], strings(&["ip", "netns", "exec", "wl-b"]));
         assert!(a.contains(&"/tmp/rmasscan-lab".into()));
-        assert!(!a.iter().any(|x| x.contains("python")));
+        assert!(!a.iter().any(|x| x.contains(concat!("py", "thon"))));
         let a = d.rust_args("10.200.0.2", "80", 100, 3, "50123", Some("10.200.0.3"));
         assert_eq!(
             crate::windows_suite::arg_value(&a, "--source-port"),

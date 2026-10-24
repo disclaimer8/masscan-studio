@@ -1,6 +1,5 @@
 fc51e99daa06d3ae6da10c2c02d7550ce9b1ad4d6244379551bbe86fa8515f1c  ./binaries-and-host.txt
 165ed9e0433338da9601e9dcb7dd3d6e45fdd8bd99447f53e1b2911b0a00a0c5  ./linux_io-lab.out
-58ead8a064bb40278d7b68f2eda2aa23b283dde55e65e5a2b5ee0ba9c238d515  ./linux_io-lab.sh
 74a825ea240a02e146052fea3b48de2b0a3c97c0719af7513307aecc0a33fce2  ./perf.lab.log
 d51fe3c98061a82494b822e99c4195e6f2a9c04f83e62b213999d930ad379021  ./perf/cells-table.md
 d1eef9b9c2bdac6d551161e28a49cda954080bc2a5bb5ae6c064c3659536424b  ./perf/commands.txt
@@ -11,7 +10,6 @@ d1eef9b9c2bdac6d551161e28a49cda954080bc2a5bb5ae6c064c3659536424b  ./perf/command
 02bca98133c3196067e7ffc781edf09fb119fc31b121efccbd2ea5b59e34527d  ./perf/topology-after.txt
 02bca98133c3196067e7ffc781edf09fb119fc31b121efccbd2ea5b59e34527d  ./perf/topology-before.txt
 094d083cfbb7c8d21378d36a8e015285e850fce292591ea65baaad1cfd9e43a3  ./round1-27e3042/dedup-mutation-red.log
-56e0794c60684ea02724dc5fd9c27f6e5cba7b321a26ae670dff0c16911a85e0  ./round1-27e3042/linux_io-lab.sh
 e6b33a9f39db4603bebf29c9d4409294adaed9822ce5e92aaa8f671fb7ecc478  ./round1-27e3042/mac-clippy.log
 7b2843261f19403c41cb79286eeea80e477276c3aac6b9b2e5a40fad2f01291d  ./round1-27e3042/mac-deny.log
 a4201338084362706915a89e8a792c419fd778ecd2f39d310fdbd456c5376b9a  ./round1-27e3042/mac-fmt.log

@@ -65,7 +65,9 @@ struct OsModule {
     handle: usize,
 }
 
-impl Module for OsModule {
+// SAFETY: symbol() отдаёт только результат GetProcAddress живого HMODULE
+// (реальный экспорт; выгрузка лишь в Drop), нулевой результат это None.
+unsafe impl Module for OsModule {
     fn symbol(&self, name: &CStr) -> Option<*const c_void> {
         // SAFETY: handle это живой HMODULE (выгрузка только в Drop), name
         // NUL-терминирован.
@@ -76,23 +78,14 @@ impl Module for OsModule {
     fn describe(&self) -> Result<Vec<DllInfo>, NetError> {
         let wpcap_path = module_path(self.handle as *mut c_void)?;
         let mut out = vec![dll_info("wpcap.dll", &wpcap_path)?];
-        let dir = wpcap_path
-            .rsplit_once('\\')
-            .map(|(d, _)| d)
-            .unwrap_or_default();
         let name = wide("Packet.dll");
         // SAFETY: name NUL-терминирована. GetModuleHandleW не увеличивает
         // счётчик ссылок и не загружает библиотеку.
         let h = unsafe { GetModuleHandleW(name.as_ptr()) };
+        // Packet.dll может отсутствовать: тогда load_with (verify_diagnostics)
+        // отказывает; здесь только сообщаем фактическое состояние.
         if !h.is_null() {
-            let packet_path = module_path(h)?;
-            let expected = format!("{dir}\\Packet.dll");
-            if !packet_path.eq_ignore_ascii_case(&expected) {
-                return Err(NetError::DriverUnavailable(format!(
-                    "Packet.dll was loaded from {packet_path}, expected {expected}"
-                )));
-            }
-            out.push(dll_info("Packet.dll", &packet_path)?);
+            out.push(dll_info("Packet.dll", &module_path(h)?)?);
         }
         Ok(out)
     }

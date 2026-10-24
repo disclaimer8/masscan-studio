@@ -213,22 +213,36 @@ fn symbol_addr(name: &str) -> Option<*const c_void> {
 
 struct FakeModule {
     missing: Vec<&'static str>,
+    null_syms: Vec<&'static str>,
+    diag: Vec<DllInfo>,
 }
-impl Module for FakeModule {
+
+fn good_diag() -> Vec<DllInfo> {
+    let mk = |name: &str, path: &str| DllInfo {
+        name: name.into(),
+        path: path.into(),
+        sha256: "00".repeat(32),
+        version: Some("1.90.0.0".into()),
+    };
+    vec![
+        mk("wpcap.dll", GOOD_PATH),
+        mk("Packet.dll", "C:\\Windows\\System32\\Npcap\\Packet.dll"),
+    ]
+}
+// SAFETY: символы возвращают реальные тестовые функции с верными сигнатурами.
+unsafe impl Module for FakeModule {
     fn symbol(&self, name: &CStr) -> Option<*const c_void> {
         let n = name.to_str().ok()?;
         if self.missing.contains(&n) {
             return None;
         }
+        if self.null_syms.contains(&n) {
+            return Some(std::ptr::null());
+        }
         symbol_addr(n)
     }
     fn describe(&self) -> Result<Vec<DllInfo>, NetError> {
-        Ok(vec![DllInfo {
-            name: "wpcap.dll".into(),
-            path: GOOD_PATH.into(),
-            sha256: "00".repeat(32),
-            version: Some("1.90.0.0".into()),
-        }])
+        Ok(self.diag.clone())
     }
 }
 impl Drop for FakeModule {
@@ -239,6 +253,17 @@ impl Drop for FakeModule {
 
 struct FakeLoader {
     result: Result<Vec<&'static str>, LoadFailure>,
+    null_syms: Vec<&'static str>,
+    diag: Option<Vec<DllInfo>>,
+}
+impl FakeLoader {
+    fn ok() -> Self {
+        FakeLoader {
+            result: Ok(vec![]),
+            null_syms: vec![],
+            diag: None,
+        }
+    }
 }
 impl Loader for FakeLoader {
     fn load(&self, full_path: &str) -> Result<Box<dyn Module>, LoadFailure> {
@@ -246,6 +271,8 @@ impl Loader for FakeLoader {
         match &self.result {
             Ok(missing) => Ok(Box::new(FakeModule {
                 missing: missing.clone(),
+                null_syms: self.null_syms.clone(),
+                diag: self.diag.clone().unwrap_or_else(good_diag),
             })),
             Err(f) => Err(f.clone()),
         }
@@ -253,7 +280,7 @@ impl Loader for FakeLoader {
 }
 
 fn good_api() -> Arc<NpcapApi> {
-    NpcapApi::load_with(&FakeLoader { result: Ok(vec![]) }, GOOD_PATH).unwrap()
+    NpcapApi::load_with(&FakeLoader::ok(), GOOD_PATH).unwrap()
 }
 
 const PARAMS: OpenParams = OpenParams {
@@ -275,6 +302,7 @@ fn dll_missing_is_driver_unavailable_and_nothing_to_unload() {
     reset(|_| {});
     let l = FakeLoader {
         result: Err(LoadFailure::NotFound("os error 126".into())),
+        ..FakeLoader::ok()
     };
     let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
     assert!(
@@ -289,6 +317,7 @@ fn missing_symbol_is_missing_capability_naming_it_and_unloads() {
     reset(|_| {});
     let l = FakeLoader {
         result: Ok(vec!["pcap_set_immediate_mode", "pcap_stats"]),
+        ..FakeLoader::ok()
     };
     let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
     match e {
@@ -308,6 +337,7 @@ fn wrong_architecture_is_abi_mismatch() {
     reset(|_| {});
     let l = FakeLoader {
         result: Err(LoadFailure::BadImage("os error 193".into())),
+        ..FakeLoader::ok()
     };
     let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
     assert!(matches!(e, NetError::AbiMismatch(_)), "{e:?}");
@@ -318,6 +348,7 @@ fn other_os_failure_is_driver_unavailable() {
     reset(|_| {});
     let l = FakeLoader {
         result: Err(LoadFailure::Other("os error 5".into())),
+        ..FakeLoader::ok()
     };
     assert!(matches!(
         NpcapApi::load_with(&l, GOOD_PATH),
@@ -328,7 +359,7 @@ fn other_os_failure_is_driver_unavailable() {
 #[test]
 fn init_failure_null_version_is_driver_unavailable_and_unloads() {
     reset(|s| s.version_null = true);
-    let e = NpcapApi::load_with(&FakeLoader { result: Ok(vec![]) }, GOOD_PATH).unwrap_err();
+    let e = NpcapApi::load_with(&FakeLoader::ok(), GOOD_PATH).unwrap_err();
     assert!(matches!(e, NetError::DriverUnavailable(_)), "{e:?}");
     assert_eq!(events().last().unwrap(), "unload");
 }
@@ -341,7 +372,7 @@ fn successful_load_exposes_version_and_diagnostics() {
         api.lib_version(),
         "Npcap version 1.90, based on libpcap 1.10.7"
     );
-    assert_eq!(api.diagnostics().len(), 1);
+    assert_eq!(api.diagnostics().len(), 2);
     assert_eq!(api.diagnostics()[0].version.as_deref(), Some("1.90.0.0"));
     assert!(!events().contains(&"unload".to_string()));
 }
@@ -615,4 +646,87 @@ fn required_symbols_are_unique_and_prefixed() {
     for s in REQUIRED_SYMBOLS {
         assert!(symbol_addr(s).is_some(), "fake lacks {s}");
     }
+}
+
+// ---------- инварианты символов и модуля ----------
+
+#[test]
+fn null_symbol_address_is_rejected_as_missing_not_transmuted() {
+    reset(|_| {});
+    let l = FakeLoader {
+        null_syms: vec!["pcap_activate", "pcap_close"],
+        ..FakeLoader::ok()
+    };
+    match NpcapApi::load_with(&l, GOOD_PATH).unwrap_err() {
+        NetError::MissingCapability(m) => {
+            assert!(
+                m.contains("pcap_activate") && m.contains("pcap_close"),
+                "{m}"
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(events().last().unwrap(), "unload");
+}
+
+#[test]
+fn missing_packet_dll_is_rejected_and_unloads() {
+    reset(|_| {});
+    let mut d = good_diag();
+    d.retain(|i| i.name != "Packet.dll");
+    let l = FakeLoader {
+        diag: Some(d),
+        ..FakeLoader::ok()
+    };
+    let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
+    assert!(
+        matches!(e, NetError::DriverUnavailable(ref m) if m.contains("Packet.dll")),
+        "{e:?}"
+    );
+    assert_eq!(events().last().unwrap(), "unload");
+}
+
+#[test]
+fn packet_dll_from_another_directory_is_rejected() {
+    reset(|_| {});
+    let mut d = good_diag();
+    d[1].path = "C:\\Users\\x\\Packet.dll".into();
+    let l = FakeLoader {
+        diag: Some(d),
+        ..FakeLoader::ok()
+    };
+    assert!(matches!(
+        NpcapApi::load_with(&l, GOOD_PATH),
+        Err(NetError::DriverUnavailable(_))
+    ));
+}
+
+#[test]
+fn wpcap_loaded_from_an_unrequested_path_is_rejected() {
+    reset(|_| {});
+    let mut d = good_diag();
+    d[0].path = "C:\\Evil\\wpcap.dll".into();
+    let l = FakeLoader {
+        diag: Some(d),
+        ..FakeLoader::ok()
+    };
+    let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
+    assert!(
+        matches!(e, NetError::DriverUnavailable(ref m) if m.contains("Evil")),
+        "{e:?}"
+    );
+    assert_eq!(events().last().unwrap(), "unload");
+}
+
+#[test]
+fn diagnostic_paths_compare_case_insensitively() {
+    reset(|_| {});
+    let mut d = good_diag();
+    d[0].path = GOOD_PATH.to_ascii_uppercase();
+    d[1].path = d[1].path.to_ascii_lowercase();
+    let l = FakeLoader {
+        diag: Some(d),
+        ..FakeLoader::ok()
+    };
+    assert!(NpcapApi::load_with(&l, GOOD_PATH).is_ok());
 }

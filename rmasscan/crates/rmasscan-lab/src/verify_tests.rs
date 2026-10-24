@@ -1269,3 +1269,507 @@ fn guest_verify_nonce_is_checked_even_when_the_hash_proof_is_consistent() {
     });
     assert_eq!(d.status(SCHEMA3_TAG), (INVALID.into(), false));
 }
+
+// ---- F2: port of the remaining Python verifier tests (test_windows_wire.py) ----
+fn verdict_of(v: &Value, tag: &str) -> String {
+    array(&v["runs"])
+        .iter()
+        .find(|r| r["tag"] == tag)
+        .unwrap_or_else(|| panic!("no run {tag}"))["verdict"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+fn group_of(v: &Value, tag: &str) -> String {
+    array(&v["groups"])
+        .iter()
+        .find(|g| g["tag"] == tag)
+        .unwrap_or_else(|| panic!("no group {tag}"))["verdict"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+fn first_scanner_syn_time(d: &Scratch, tag: &str) -> f64 {
+    let (_, fr) =
+        pcap::read_pcap_records(&fs::read(d.0.join("runs").join(tag).join("peer.pcap")).unwrap())
+            .unwrap();
+    fr.iter().find(|(_, f)| pcap::is_syn(f)).unwrap().0
+}
+/// An ARP-looking frame (no TCP) between the lab MACs, `from` -> `to`.
+fn lab_frame(to: &str, from: &str) -> Vec<u8> {
+    let mac = |s: &str| -> Vec<u8> {
+        s.split(':')
+            .map(|p| u8::from_str_radix(p, 16).unwrap())
+            .collect()
+    };
+    let mut b = mac(to);
+    b.extend(mac(from));
+    b.extend([8, 6]);
+    b.extend([0u8; 28]);
+    b
+}
+const X01: &str = "x01_foreign_replies.run1";
+fn add_frame_at(d: &Scratch, tag: &str, offset: f64, frame: Vec<u8>) {
+    let at = first_scanner_syn_time(d, tag) + offset;
+    rewrite_pcap(d, tag, "peer", |fr| {
+        fr.push((at, frame));
+        fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    });
+}
+fn with_discarded(d: &Scratch, tag: &str, delta: i64) {
+    d.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
+        let now = v["discarded"].as_i64().unwrap();
+        v["discarded"] = json!(now + delta);
+    });
+}
+#[test]
+fn missing_fixture_manifest_and_planned_runs_are_not_run() {
+    let d = Scratch::new("functional", None);
+    fs::remove_file(d.0.join("fixtures/manifest.json")).unwrap();
+    assert_eq!(verify_dir(&d.0)["overall"], NOT_RUN);
+
+    let d = Scratch::new("functional", None);
+    fs::remove_dir_all(d.0.join("runs/pause_N8")).unwrap();
+    let v = verify_dir(&d.0);
+    assert_eq!(verdict_of(&v, "pause_N8"), NOT_RUN);
+    assert_eq!(group_of(&v, "group_pause_resume_N8"), NOT_RUN);
+    assert_ne!(v["overall"], PASS);
+    // The other groups are not dragged down by the missing leg.
+    assert_eq!(group_of(&v, "group_pause_resume_N1"), PASS);
+}
+#[test]
+fn missing_part_b_run_is_not_run() {
+    let d = Scratch::new("failure", None);
+    fs::remove_dir_all(d.0.join("runs/linkloss")).unwrap();
+    let v = verify_dir(&d.0);
+    assert_eq!(verdict_of(&v, "linkloss"), NOT_RUN);
+    assert_ne!(v["overall"], PASS);
+}
+#[test]
+fn missing_continuous_or_leg_pcap_makes_groups_not_run_without_crashing() {
+    let d = Scratch::new("functional", None);
+    fs::remove_file(d.0.join("runs/c03_multi_ports.run1/peer.pcap")).unwrap();
+    let v = verify_dir(&d.0);
+    let verdicts: BTreeSet<_> = array(&v["groups"])
+        .iter()
+        .map(|g| g["verdict"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(verdicts, BTreeSet::from([NOT_RUN.to_string()]));
+    assert_ne!(v["overall"], PASS);
+
+    let d = Scratch::new("functional", None);
+    fs::remove_file(d.0.join("runs/pause_N8/peer.pcap")).unwrap();
+    let v = verify_dir(&d.0);
+    assert_eq!(group_of(&v, "group_pause_resume_N8"), NOT_RUN);
+    assert_eq!(group_of(&v, "group_pause_resume_N0"), PASS);
+}
+#[test]
+fn foreign_reply_accepted_as_result_is_fail() {
+    let d = Scratch::new("functional", None);
+    d.edit_sealed(&format!("runs/{X01}/run.json"), |v| {
+        let a = v["replies"].as_array_mut().unwrap();
+        a.push(json!("198.18.0.2:8099:open"));
+        a.sort_by_key(|x| x.to_string());
+    });
+    assert_eq!(d.status(X01), (FAIL.into(), true));
+}
+#[test]
+fn foreign_frames_missing_from_the_wire_are_invalid_and_a_missing_injector_log_is_not_run() {
+    let d = Scratch::new("functional", None);
+    d.edit(&format!("runs/{X01}/injector.json"), |v| {
+        v["sent_total"] = json!(v["sent_total"].as_i64().unwrap() + 9)
+    });
+    assert_eq!(d.status(X01).0, INVALID);
+
+    let d = Scratch::new("functional", None);
+    fs::remove_file(d.0.join(format!("runs/{X01}/injector.json"))).unwrap();
+    assert_eq!(d.status(X01), (NOT_RUN.into(), false));
+}
+#[test]
+fn foreign_frames_must_each_be_discarded_and_duplicates_are_genuine_retransmits_only() {
+    let injected = {
+        let d = Scratch::new("functional", None);
+        read_json(d.0.join(format!("runs/{X01}/injector.json"))).unwrap()["sent_total"]
+            .as_i64()
+            .unwrap()
+    };
+    // Fewer discards than injected frames, more than explained, or an unmeasured
+    // count: each is a behaviour failure on this run (its capture is proven).
+    for value in [json!(injected - 1), json!(injected + 1), Value::Null] {
+        let d = Scratch::new("functional", None);
+        d.edit_sealed(&format!("runs/{X01}/run.json"), |v| {
+            v["discarded"] = value.clone()
+        });
+        assert_eq!(d.status(X01), (FAIL.into(), true), "discarded {value}");
+    }
+    let tag = "x01_foreign_replies.run2";
+    let d = Scratch::new("functional", None);
+    d.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
+        v["duplicates"] = json!(9)
+    });
+    assert_eq!(d.status(tag).0, FAIL);
+}
+#[test]
+fn pause_resume_group_failures() {
+    // A resume that repeats a probe the pause leg already sent.
+    let d = Scratch::new("functional", None);
+    let (_, fr) =
+        pcap::read_pcap_records(&fs::read(d.0.join("runs/resume_N8/peer.pcap")).unwrap()).unwrap();
+    let again = fr.iter().find(|(_, f)| pcap::is_syn(f)).unwrap().clone();
+    rewrite_pcap(&d, "resume_N8", "peer", |fr| {
+        fr.push((again.0 + 0.5, again.1.clone()));
+        fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    });
+    let v = verify_dir(&d.0);
+    assert_ne!(group_of(&v, "group_pause_resume_N8"), PASS);
+    // A pause leg that completed instead of pausing.
+    let d = Scratch::new("functional", None);
+    d.edit_sealed("runs/pause_N15/run.json", |v| {
+        v["reason"] = json!("Completed")
+    });
+    assert_eq!(d.status("pause_N15"), (FAIL.into(), true));
+    assert_ne!(group_of(&verify_dir(&d.0), "group_pause_resume_N15"), PASS);
+    // Identity rules are separate failures.
+    for (field, value) in [
+        ("attempt_id", json!("aa".repeat(16))),
+        ("scan_id", json!("22".repeat(16))),
+    ] {
+        let d = Scratch::new("functional", None);
+        let was = read_json(d.0.join("runs/pause_N1/run.json")).unwrap()["attempt_id"].clone();
+        let value = if field == "attempt_id" { was } else { value };
+        d.edit_sealed("runs/resume_N1/run.json", |v| v[field] = value.clone());
+        assert_eq!(
+            group_of(&verify_dir(&d.0), "group_pause_resume_N1"),
+            FAIL,
+            "{field}"
+        );
+    }
+}
+#[test]
+fn a_resumed_completed_job_and_a_syn_during_a_refusal_are_failures() {
+    let d = Scratch::new("functional", None);
+    d.edit_sealed("runs/refuse_completed/run.json", |v| {
+        v["status"] = json!("ok");
+        v["opened_adapter"] = json!(true);
+    });
+    assert_eq!(d.status("refuse_completed"), (FAIL.into(), true));
+
+    let d = Scratch::new("functional", None);
+    let (_, fr) = pcap::read_pcap_records(
+        &fs::read(d.0.join("runs/c03_multi_ports.run1/peer.pcap")).unwrap(),
+    )
+    .unwrap();
+    let syn = fr.into_iter().find(|(_, f)| pcap::is_syn(f)).unwrap();
+    rewrite_pcap(&d, "refuse_completed", "peer", |fr| {
+        let t = fr.iter().map(|x| x.0).fold(0., f64::max);
+        fr.push((t - 1.0, syn.1));
+        fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    });
+    assert_eq!(d.status("refuse_completed"), (FAIL.into(), true));
+}
+#[test]
+fn a_schema2_run_in_a_schema1_directory_cannot_skip_the_end_marker() {
+    let strip = |d: &Scratch| {
+        rewrite_pcap(d, "stop_silent", "peer", |fr| {
+            fr.retain(|(_, f)| f.get(14..25) != Some(b"WIRELAB-END".as_slice()))
+        })
+    };
+    // Control: a directory that predates the end marker does not need it.
+    let d = Scratch::new("failure", Some("stop_silent"));
+    d.edit("manifest.json", |v| {
+        v["capture_schema"] = json!(1);
+    });
+    d.edit("runs/stop_silent/capture.json", |v| {
+        v.as_object_mut().unwrap().remove("capture_schema");
+    });
+    strip(&d);
+    d.edit("runs/stop_silent/meta.json", |v| {
+        v["end_marker_seen"] = json!(false);
+        v.as_object_mut().unwrap().remove("invocation_nonce");
+        v.as_object_mut().unwrap().remove("guest_verify_exit");
+    });
+    assert_eq!(d.status("stop_silent").0, PASS);
+    // The attack: the run claims schema 2 but the directory manifest drops its schema.
+    d.edit("runs/stop_silent/capture.json", |v| {
+        v["capture_schema"] = json!(2)
+    });
+    assert_eq!(d.status("stop_silent"), (INVALID.into(), false));
+    // And a run older than its directory is invalid too.
+    let d = Scratch::new("failure", Some("stop_silent"));
+    d.edit("runs/stop_silent/capture.json", |v| {
+        v.as_object_mut().unwrap().remove("capture_schema");
+    });
+    assert_eq!(d.status("stop_silent").0, INVALID);
+}
+#[test]
+fn a_discarded_invalid_run_with_an_accepted_foreign_result_is_overall_fail() {
+    let d = Scratch::new("functional", None);
+    copy_tree(
+        &d.0.join("runs").join(X01),
+        &d.0.join("runs_discarded/x01_foreign_replies.run1.5"),
+    );
+    d.edit(
+        "runs_discarded/x01_foreign_replies.run1.5/capture.json",
+        |v| v["quiet"]["reached"] = json!(false),
+    );
+    d.edit_sealed("runs_discarded/x01_foreign_replies.run1.5/run.json", |v| {
+        v["replies"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("198.18.0.2:8099:open"))
+    });
+    let v = verify_dir(&d.0);
+    let mine = array(&v["discarded"])
+        .iter()
+        .find(|r| r["tag"] == "x01_foreign_replies.run1.5")
+        .unwrap();
+    assert_eq!(mine["verdict"], INVALID);
+    assert_eq!(mine["behaviour_fail"], true);
+    assert_eq!(v["overall"], FAIL);
+}
+#[test]
+fn pause_after_must_match_n() {
+    let d = Scratch::new("functional", None);
+    d.edit("runs/pause_N8/argv.json", |v| {
+        let a = v["argv"].as_array_mut().unwrap();
+        let i = a.iter().position(|x| x == "--pause-after").unwrap();
+        a[i + 1] = json!("7");
+    });
+    assert_eq!(d.status("pause_N8"), (INVALID.into(), false));
+}
+#[test]
+fn strays_in_the_receive_window_are_counted_and_required() {
+    let lab = |to: &str, from: &str| lab_frame(to, from);
+    let sm = fixture::SM;
+    let pm = fixture::PM;
+    // Unicast to the guest from the peer inside the window.
+    let d = Scratch::new("functional", None);
+    add_frame_at(&d, X01, 0.5, lab(sm, pm));
+    assert_eq!(d.status(X01), (FAIL.into(), true));
+    with_discarded(&d, X01, 1);
+    assert_eq!(d.status(X01), (PASS.into(), false));
+    let v = verify_dir(&d.0);
+    let r = array(&v["runs"]).iter().find(|r| r["tag"] == X01).unwrap();
+    let base = Scratch::new("functional", None);
+    let injected =
+        read_json(base.0.join(format!("runs/{X01}/injector.json"))).unwrap()["sent_total"]
+            .as_i64()
+            .unwrap();
+    assert_eq!(r["notes"]["strays_in_rx_window"], 1);
+    assert_eq!(r["notes"]["injected"], injected);
+    // A broadcast from the peer counts as well.
+    let d = Scratch::new("functional", None);
+    add_frame_at(&d, X01, 0.5, lab("ff:ff:ff:ff:ff:ff", pm));
+    assert_eq!(d.status(X01), (FAIL.into(), true));
+    with_discarded(&d, X01, 1);
+    assert_eq!(d.status(X01), (PASS.into(), false));
+    // A frame sent by the guest never does.
+    let d = Scratch::new("functional", None);
+    add_frame_at(&d, X01, 0.5, lab("ff:ff:ff:ff:ff:ff", sm));
+    assert_eq!(d.status(X01), (PASS.into(), false));
+    // Before the first SYN is outside the receive window.
+    let d = Scratch::new("functional", None);
+    add_frame_at(&d, X01, -0.5, lab(sm, pm));
+    assert_eq!(d.status(X01), (PASS.into(), false));
+}
+#[test]
+fn cases_psv_lists_six_classes_plus_the_foreign_case() {
+    let psv = cases_psv();
+    let lines: Vec<_> = psv.lines().collect();
+    assert_eq!(lines.len(), 7);
+    assert!(lines.iter().all(|l| l.split('|').count() == 5), "{psv}");
+    let names: Vec<_> = lines.iter().map(|l| l.split('|').next().unwrap()).collect();
+    assert_eq!(
+        &names[..6],
+        [
+            "c01_one_addr_port_synack",
+            "c02_one_addr_port_rst",
+            "c03_multi_ports",
+            "c04_exclude",
+            "c05_srcport_single",
+            "c06_srcport_range"
+        ]
+    );
+    assert!(names[6].starts_with("x01"));
+}
+
+// ---- F2: part B tests ----
+#[test]
+fn the_wire_syn_count_must_equal_tx_sent() {
+    let d = Scratch::new("failure", Some("stop_silent"));
+    d.edit_sealed("runs/stop_silent/run.json", |v| {
+        for k in ["sent", "tx_sent_at_join", "tx_sent_after_observe"] {
+            v[k] = json!(5);
+        }
+        v["net"]["tx_sent"] = json!(5);
+    });
+    assert_eq!(d.status("stop_silent"), (FAIL.into(), true));
+}
+#[test]
+fn the_clock_offset_is_recorded_from_the_wire_not_assumed() {
+    let d = Scratch::new("failure", Some("stop_silent"));
+    // Guest clock 50 s behind the peer: both wall stamps shift together.
+    d.edit_sealed("runs/stop_silent/run.json", |v| {
+        for k in ["t0_utc_ms", "outcome_utc_ms"] {
+            v["wall"][k] = json!(v["wall"][k].as_f64().unwrap() - 50_000.);
+        }
+    });
+    let v = verify_dir(&d.0);
+    let r = array(&v["runs"])
+        .iter()
+        .find(|r| r["tag"] == "stop_silent")
+        .unwrap();
+    let off = r["notes"]["clock_offset_ms"].as_f64().unwrap();
+    assert!((off - 50_000.).abs() < 5., "{off}");
+    assert_eq!(r["notes"]["syn_after_outcome"], 0);
+    assert!(
+        r["notes"]["alignment"]
+            .as_str()
+            .unwrap()
+            .contains("peer first SYN")
+    );
+    assert_eq!(r["verdict"], PASS);
+}
+#[test]
+fn stop_load_needs_the_flood_on_the_wire() {
+    let d = Scratch::new("failure", Some("stop_load"));
+    fs::remove_file(d.0.join("runs/stop_load/flood.json")).unwrap();
+    assert_eq!(d.status("stop_load"), (NOT_RUN.into(), false));
+    // The flood log is not enough: its frames must be in the capture.
+    let d = Scratch::new("failure", Some("stop_load"));
+    rewrite_pcap(&d, "stop_load", "peer", |fr| {
+        fr.retain(|(_, f)| !ether(f, [0x88, 0xb6]))
+    });
+    assert_eq!(d.status("stop_load").0, INVALID);
+}
+#[test]
+fn linkloss_without_events_is_not_run_and_without_proof_is_invalid() {
+    let d = Scratch::new("failure", Some("linkloss"));
+    fs::remove_file(d.0.join("runs/linkloss/linkloss.json")).unwrap();
+    assert_eq!(d.status("linkloss"), (NOT_RUN.into(), false));
+    let d = Scratch::new("failure", Some("linkloss"));
+    d.edit("runs/linkloss/linkloss.json", |v| {
+        v["first_syn_seen"] = json!(false)
+    });
+    assert_eq!(d.status("linkloss"), (INVALID.into(), false));
+    let d = Scratch::new("failure", Some("linkloss"));
+    d.edit("runs/linkloss/linkloss.json", |v| v["events"] = json!([]));
+    assert_eq!(d.status("linkloss").0, INVALID);
+}
+#[test]
+fn a_checkpoint_refusal_with_a_scanner_syn_on_the_wire_is_a_failure() {
+    let d = Scratch::new("failure", Some("ckpt_empty"));
+    let stop = Scratch::new("failure", Some("stop_silent"));
+    let (_, fr) =
+        pcap::read_pcap_records(&fs::read(stop.0.join("runs/stop_silent/peer.pcap")).unwrap())
+            .unwrap();
+    let syn = fr.into_iter().find(|(_, f)| pcap::is_syn(f)).unwrap();
+    rewrite_pcap(&d, "ckpt_empty", "peer", |fr| {
+        let t = fr.iter().map(|x| x.0).fold(f64::MAX, f64::min) + 1.0;
+        fr.push((t, syn.1));
+        fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    });
+    assert_eq!(d.status("ckpt_empty"), (FAIL.into(), true));
+}
+#[test]
+fn the_wrong_ports_checkpoint_variant_needs_its_matching_argv() {
+    let d = Scratch::new("failure", Some("ckpt_wrong_ports"));
+    d.edit("runs/ckpt_wrong_ports/argv.json", |v| {
+        let a = v["argv"].as_array_mut().unwrap();
+        let i = a.iter().position(|x| x == "--ports").unwrap();
+        a[i + 1] = json!("8000-8015");
+    });
+    assert_eq!(d.status("ckpt_wrong_ports"), (INVALID.into(), false));
+}
+#[test]
+fn restricted_scan_refusals_accepted_are_only_the_documented_ones() {
+    let tag = "perm_restricted_scan";
+    // InterfaceMismatch is documented for exit code 2 only.
+    let d = Scratch::new("failure", Some(tag));
+    d.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
+        v["error"] = json!("InterfaceMismatch(\"no Npcap device\")")
+    });
+    assert_eq!(d.status(tag), (FAIL.into(), true));
+    d.edit(&format!("runs/{tag}/meta.json"), |v| {
+        v["guest_exit"] = json!(2)
+    });
+    assert_eq!(d.status(tag), (PASS.into(), false));
+    // PermissionDenied is documented for exit code 5 only, and nothing else is.
+    d.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
+        v["error"] = json!("PermissionDenied(\"x\")")
+    });
+    assert_eq!(d.status(tag), (FAIL.into(), true));
+    let d = Scratch::new("failure", Some(tag));
+    d.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
+        v["error"] = json!("SomethingElse(\"x\")")
+    });
+    assert_eq!(d.status(tag), (FAIL.into(), true));
+}
+#[test]
+fn the_rxloss_independent_count_is_recorded_and_bounds_the_drops() {
+    let d = Scratch::new("failure", None);
+    let v = verify_dir(&d.0);
+    let r = array(&v["runs"])
+        .iter()
+        .find(|r| r["tag"] == "rxloss")
+        .unwrap();
+    let ind = &r["notes"]["independent_count"];
+    // The synthetic NIC moved 1000 -> 6000 unicast with 6 constant broadcasts.
+    assert_eq!(ind["kernel_drops_n"], 7);
+    assert_eq!(ind["nic_rx_delta"], 5000);
+    assert_eq!(ind["rx_read_by_handle"], 100);
+    assert_eq!(ind["nic_minus_read"], 4900);
+    assert_eq!(ind["peer_flood_sent"], 12);
+    // Drops beyond what the NIC counted (after drops + reads must fit in the delta).
+    let d = Scratch::new("failure", Some("rxloss"));
+    d.edit("runs/rxloss/nic.json", |v| {
+        v["after"]["stats"]["ReceivedUnicastPackets"] = json!(1050)
+    });
+    assert_eq!(d.status("rxloss"), (FAIL.into(), true));
+    // Drops beyond the peer flood, with the flood log still matching the capture.
+    let d = Scratch::new("failure", Some("rxloss"));
+    let mut seen = 0;
+    rewrite_pcap(&d, "rxloss", "peer", |fr| {
+        fr.retain(|(_, f)| {
+            if ether(f, [0x88, 0xb6]) {
+                seen += 1;
+                seen <= 3
+            } else {
+                true
+            }
+        })
+    });
+    d.edit("runs/rxloss/flood.json", |v| v["sent"] = json!(3));
+    assert_eq!(d.status("rxloss"), (FAIL.into(), true));
+    // Unreadable NIC counters cannot prove anything.
+    let d = Scratch::new("failure", Some("rxloss"));
+    d.edit("runs/rxloss/nic.json", |v| {
+        v["before"] = json!({"error":"Access denied"});
+        v["after"] = json!({"error":"Access denied"});
+    });
+    assert_eq!(d.status("rxloss").0, NOT_RUN);
+}
+#[test]
+fn a_wrong_stop_argument_is_a_harness_error_that_may_be_rerun() {
+    let d = Scratch::new("failure", Some("stop_silent"));
+    d.edit("runs/stop_silent/argv.json", |v| {
+        let a = v["argv"].as_array_mut().unwrap();
+        let i = a.iter().position(|x| x == "--stop-after-ms").unwrap();
+        a[i + 1] = json!("2000");
+    });
+    d.edit_sealed("runs/stop_silent/run.json", |v| {
+        v["timing"]["stop_to_outcome_ms"] = json!(5000.)
+    });
+    let (verdict, behaviour) = d.status("stop_silent");
+    assert_eq!((verdict.as_str(), behaviour), (INVALID, false));
+    assert!(crate::windows_suite::may_discard(&verdict, behaviour));
+    // An unexpected extra flag is a harness error as well.
+    let d = Scratch::new("failure", Some("rxloss"));
+    d.edit("runs/rxloss/argv.json", |v| {
+        v["argv"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("--allow-foreign-source-mac"))
+    });
+    assert_eq!(d.status("rxloss").0, INVALID);
+}

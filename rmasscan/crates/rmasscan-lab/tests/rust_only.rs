@@ -520,7 +520,12 @@ fn guard_with_links(tag: &str, files: &[(&str, String)], links: &[(&str, &str)])
 #[test]
 fn both_guards_fail_on_tracked_symlinks_to_banned_programs() {
     let bad_shebang = format!("#!/usr/bin/env {WORD}3\n");
-    let cases: Vec<(&str, Vec<(&str, String)>, Vec<(&str, String)>)> = vec![
+    type Case = (
+        &'static str,
+        Vec<(&'static str, String)>,
+        Vec<(&'static str, String)>,
+    );
+    let cases: Vec<Case> = vec![
         // (tag, files, links as (name, target))
         (
             "link-to-missing-py",

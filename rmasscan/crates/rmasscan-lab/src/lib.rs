@@ -1,4 +1,4 @@
-//! Rust-only laboratory tooling. No Python runtime or embedded interpreter.
+//! Rust-only laboratory tooling. No script interpreter or embedded runtime.
 #![forbid(unsafe_code)]
 
 pub mod capture;

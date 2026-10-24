@@ -523,7 +523,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
                         seq = seq.wrapping_add(1);
                     }
                     // Device queue full: back-pressure, not an error. The same frame is offered
-                    // again, as the blocking Python sender did.
+                    // again, as the earlier blocking sender did.
                     Ok(SendStatus::WouldBlockUnsent) => {
                         blocked += 1;
                         continue;

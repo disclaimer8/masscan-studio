@@ -1270,7 +1270,7 @@ fn guest_verify_nonce_is_checked_even_when_the_hash_proof_is_consistent() {
     assert_eq!(d.status(SCHEMA3_TAG), (INVALID.into(), false));
 }
 
-// ---- F2: port of the remaining Python verifier tests (test_windows_wire.py) ----
+// ---- F2: port of the remaining verifier tests of the retired script harness ----
 fn verdict_of(v: &Value, tag: &str) -> String {
     array(&v["runs"])
         .iter()

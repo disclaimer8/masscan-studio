@@ -90,7 +90,7 @@ f4726954a0660067510053ad2e37aae6d7bc7b75433e31c98c4b053bfe47f101  ./functional-r
 571326f8cf4469ee07263b04434a4097b6d113bea2ecd1eb6a536cd09e91edb0  ./functional-r1-smoke/runs/c02_one_addr_port_rst.run1/run.json
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional-r1-smoke/runs/c02_one_addr_port_rst.run1/status-post.json
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional-r1-smoke/runs/c02_one_addr_port_rst.run1/status-pre.json
-3f89de7eb406ca81ee0cf91a4388990b7dadebc74177197a580054c86a6cc1a2  ./functional-r1-smoke/verdict.json
+62f2168651503e6d5c33195661eea5e27c14f70dd4d819c221b437d1ef2c7dea  ./functional-r1-smoke/verdict.json
 24e4d8ae219384f554189463856bd2f82b09dd7a889e46db9b50d8edb19a79f5  ./functional/fixtures/c01_one_addr_port_synack.echo
 9b5d46b0941d45fa8594d1a56bac4b0f33e2b9d15d04931a9b2aa27b4800ab9e  ./functional/fixtures/c01_one_addr_port_synack.run1.capture.json
 e6d643d9de2e1fceb33dbd3a748441e3df6195117e0174f4d4cbe2fb3a89793b  ./functional/fixtures/c01_one_addr_port_synack.run1.oracle-stderr.txt
@@ -629,7 +629,7 @@ a00a59ecd7e036756f34c0400dfc85616369fdedc02a6ef72b86f01401a36465  ./functional/r
 1459ae14ab603edc9861e30add0508f52ccac82f8537b7898d9bccd9cccda0c2  ./functional/runs/x01_foreign_replies.run2/run.json
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/runs/x01_foreign_replies.run2/status-post.json
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/runs/x01_foreign_replies.run2/status-pre.json
-faef7fccf0f90a425c4fb0dca43ce96fb0226f3288e380ab86a18cc4d6bb47a1  ./functional/verdict.json
-c6418970c5f823c20e68a3bcc8683318e21fbf317aa4a139aa7ff3274755504c  ./README.md
+6cc3b0d08018f7d1d7450a5d1bc2c6bc3a217d0d92be4ebaaaac3e2a39e9e9d5  ./functional/verdict.json
+e436a2b96425f24955317aae6c3d5de0b063a61e9923b38f69e8bcbfe9408fc9  ./README.md
 dc8833c124b4bcc06e9e29c5514559150ef32d3e142e1e94a4e73ebfafab3c73  ./verification/vm-clippy.log
 47bf4583722a46082366e4d90e7c204e5840447805130362fdbfca1498c49486  ./verification/vm-workspace-test.log

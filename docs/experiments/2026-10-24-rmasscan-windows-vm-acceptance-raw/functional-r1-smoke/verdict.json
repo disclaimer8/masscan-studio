@@ -330,6 +330,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",

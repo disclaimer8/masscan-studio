@@ -73,6 +73,7 @@ jobs:
       - name: Net crate (офлайн) и сборка лабораторного harness
         run: |
           cargo test --locked -p rmasscan-net
+          cargo test --locked -p rmasscan-net --example wire_scan
           cargo build --locked -p rmasscan-net --example wire_scan
 
       - name: Установить cargo-deny
@@ -80,3 +81,53 @@ jobs:
 
       - name: cargo deny
         run: cargo deny check bans licenses sources
+
+  # Пакет для пользователя: release x64 EXE лабораторного harness + wrapper + README +
+  # SHA256SUMS + LICENSE/NOTICE + SOURCE_COMMIT. Npcap DLL/installer в ZIP не входят.
+  # Имя артефакта содержит commit, никаких «latest». Тестируется офлайн: job ничего не
+  # отправляет и не открывает адаптер. Письма и загрузки наружу не происходит.
+  package-windows-wire:
+    name: windows-x64 wire lab package
+    runs-on: windows-2022
+    needs: check
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: rmasscan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить toolchain
+        shell: bash
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal
+          rustup default ${{ env.RUST_TOOLCHAIN }}
+          rustc --version
+
+      - name: Собрать пакет
+        run: ./scripts/package-windows-wire.ps1 -Commit "${{ github.sha }}" -OutDir dist
+
+      - name: Проверить пакет (хэши, состав, без Npcap)
+        run: |
+          $zip = Get-ChildItem dist -Filter '*.zip' | Select-Object -First 1
+          $want = (Get-Content "$($zip.FullName).sha256").Split(' ')[0]
+          if ((Get-FileHash $zip.FullName).Hash.ToLower() -ne $want) { throw 'zip hash mismatch' }
+          Expand-Archive $zip.FullName -DestinationPath verify
+          $dir = Get-ChildItem verify | Select-Object -First 1
+          foreach ($l in Get-Content "$($dir.FullName)/SHA256SUMS") {
+            $h, $n = $l -split ' \*', 2
+            if ((Get-FileHash "$($dir.FullName)/$n").Hash.ToLower() -ne $h) { throw "hash mismatch: $n" }
+          }
+          $names = (Get-ChildItem $dir.FullName).Name | Sort-Object
+          $want = 'LICENSE','NOTICE','README.txt','SHA256SUMS','SOURCE_COMMIT','windows-wire-lab.ps1','wire_scan.exe'
+          if (Compare-Object $names ($want | Sort-Object)) { throw "unexpected package contents: $names" }
+          if (-not (Select-String -Path "$($dir.FullName)/SOURCE_COMMIT" -Pattern '${{ github.sha }}' -SimpleMatch -Quiet)) { throw 'SOURCE_COMMIT mismatch' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rmasscan-wire-windows-x64-${{ github.sha }}
+          path: |
+            rmasscan/dist/*.zip
+            rmasscan/dist/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

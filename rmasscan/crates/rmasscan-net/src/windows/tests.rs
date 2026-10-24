@@ -591,3 +591,58 @@ fn drop_counter_reset_looks_like_a_wrap_and_fails_safe() {
     // сброс на 0: огромная дельта (RxLoss), но не 0 и не уменьшение
     assert!(c.update(0) > 10);
 }
+
+// ---------- перечень (--inventory) ----------
+
+#[test]
+fn inventory_lists_devices_without_opening_or_sending() {
+    reset(|_| {});
+    let api = good_api();
+    let mac = [2, 0, 0, 0, 0, 9];
+    let inv = super::inventory::build(
+        &api,
+        &|n| (n == DEV1).then_some(mac),
+        Some("1.2.3.4".into()),
+    )
+    .unwrap();
+    // Ни одного pcap_create (адаптер не открывался), ни одной отправки.
+    let (creates, sends) = {
+        let mut r = (0, 0);
+        with(|s| r = (s.creates, s.send_calls));
+        r
+    };
+    assert_eq!((creates, sends), (0, 0), "inventory must not open or send");
+    assert_eq!(count("freealldevs"), 1);
+    assert_eq!(inv.devices.len(), 3);
+    assert_eq!(inv.devices[0].name, DEV1);
+    assert_eq!(inv.devices[0].mac, Some(mac));
+    assert_eq!(inv.devices[1].mac, None, "unknown MAC is None, not zeros");
+    assert!(inv.devices[2].loopback && !inv.devices[0].loopback);
+    assert_eq!(inv.lib_version, api.lib_version());
+    assert_eq!(inv.driver_version.as_deref(), Some("1.2.3.4"));
+    assert_eq!(inv.dlls.len(), api.diagnostics().len());
+    assert!(inv.dlls.iter().all(|d| d.sha256.len() == 64));
+}
+
+#[test]
+fn inventory_reports_enumeration_failure() {
+    reset(|s| s.findalldevs_rc = -1);
+    let api = good_api();
+    assert!(matches!(
+        super::inventory::build(&api, &|_| None, None),
+        Err(NetError::System(_))
+    ));
+}
+
+#[test]
+fn npf_guid_is_extracted_only_from_a_wellformed_device_name() {
+    use super::inventory::npf_guid;
+    assert_eq!(
+        npf_guid(DEV1),
+        Some("{11111111-2222-3333-4444-555555555555}")
+    );
+    assert_eq!(npf_guid(LOOP), None);
+    assert_eq!(npf_guid("\\Device\\NPF_{}"), None);
+    assert_eq!(npf_guid("eth0"), None);
+    assert_eq!(npf_guid("\\Device\\NPF_{abc"), None);
+}

@@ -1,32 +1,24 @@
 {
-  "collected_utc": "2026-10-24 (updated after Task 1 baseline and Task 2 lab NIC; initial snapshot 2026-10-24T10:04:41Z had no toolchain and no Npcap)",
+  "collected_utc": "2026-10-24T18:15:52.4039556Z",
   "computer": "W-",
   "user": "W-\\lab",
   "administrator": true,
   "os": {
     "caption": "Microsoft Windows 11 Pro",
-    "version": "10.0.26300.9711",
+    "version": "10.0.26300",
     "build": "26300",
-    "architecture": "64-bit",
-    "ubr": 9711,
-    "baseline_build_at_task1": "10.0.26300.9457",
-    "note": "baseline checks ran on 9457; a VM restart in Task 2 applied a pending update (9711)"
+    "architecture": "64-bit"
   },
   "cpu": "AMD Ryzen 9 7900X3D 12-Core Processor          ",
   "memory_gib": 7.99,
+  "powershell": "7.6.8",
   "tools": {
-    "pwsh": "7.6.8",
-    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
-    "cargo": "1.99.1",
-    "rustfmt": "1.10.0-stable",
-    "clippy": "0.1.99",
-    "cargo-deny": "0.20.2",
-    "git": "2.56.0.windows.3",
-    "python": "3.13.15",
-    "msvc": "14.44.35207",
-    "vs_buildtools": "17.14.37806.7",
-    "windows_sdk": "10.0.26100.0",
+    "pwsh": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+    "rustc": "C:\\Users\\lab\\.cargo\\bin\\rustc.exe",
+    "cargo": "C:\\Users\\lab\\.cargo\\bin\\cargo.exe",
+    "git": "C:\\Program Files\\Git\\cmd\\git.exe",
     "cmake": null,
+    "cl": null,
     "nmap": null
   },
   "known_install_locations": {
@@ -37,39 +29,52 @@
     "windows_sdk": true
   },
   "npcap_drivers": [
-    "npcap (service Running)"
+    {
+      "Name": "npcap",
+      "State": "Running",
+      "StartMode": "System",
+      "PathName": "C:\\WINDOWS\\system32\\DRIVERS\\npcap.sys"
+    }
   ],
   "npcap_dlls": [
-    "C:\\Windows\\System32\\Npcap\\wpcap.dll",
-    "C:\\Windows\\System32\\Npcap\\Packet.dll"
+    {
+      "path": "C:\\WINDOWS\\System32\\Npcap\\wpcap.dll",
+      "version": "1.10.7",
+      "sha256": "332F81CC1671A6D12AB4D20264A00EE16D12F6883745E05C92EE4030B3896A9F"
+    },
+    {
+      "path": "C:\\WINDOWS\\System32\\Npcap\\Packet.dll",
+      "version": "1.90",
+      "sha256": "6F9116D9747DD356DB97F6DFAF02FE1B9B0859EA3214856F17CED84D790658C2"
+    }
   ],
-  "npcap_admin_only": true,
+  "npcap_admin_only": 1,
   "adapters": [
+    {
+      "Name": "Ethernet 2",
+      "InterfaceDescription": "Intel(R) 82574L Gigabit Network Connection #2",
+      "Status": "Up",
+      "MacAddress": "52-54-00-04-80-A9",
+      "LinkSpeed": "1 Gbps"
+    },
     {
       "Name": "Ethernet",
       "InterfaceDescription": "Intel(R) 82574L Gigabit Network Connection",
       "Status": "Up",
       "MacAddress": "52-54-00-12-34-56",
       "LinkSpeed": "1 Gbps"
-    },
-    {
-      "Name": "Ethernet 2",
-      "InterfaceDescription": "Intel(R) 82574L Gigabit Network Connection (isolated lab NIC)",
-      "MacAddress": "52-54-00-04-80-A9",
-      "added_by": "Task 2, see rmasscan/docs/windows-vm-lab.md"
     }
   ],
   "ipv4": [
     {
+      "InterfaceAlias": "Ethernet 2",
+      "IPAddress": "198.18.0.1",
+      "PrefixLength": 30
+    },
+    {
       "InterfaceAlias": "Ethernet",
       "IPAddress": "10.0.2.15",
       "PrefixLength": 24
-    },
-    {
-      "InterfaceAlias": "Ethernet 2",
-      "IPAddress": "198.18.0.1",
-      "PrefixLength": 30,
-      "note": "lab NIC, no gateway/DNS; added by Task 2"
     },
     {
       "InterfaceAlias": "Loopback Pseudo-Interface 1",
@@ -81,24 +86,7 @@
     {
       "DeviceID": "C:",
       "Size": 67449647104,
-      "FreeSpace": 40843509760,
-      "FreeSpace_after_toolchain_approx": 20496756736
+      "FreeSpace": 19927683072
     }
-  ],
-  "collected_utc_initial": "2026-10-24T10:04:41.5149667Z",
-  "powershell_windows": "5.1.26100.9444",
-  "npcap": {
-    "version": "1.90",
-    "installer_sha256": "682b57e1c05ef375931975c9d6ded40888f4bfdf9f4b11571e654f962f1199b6",
-    "signer": "Nmap Software LLC (Authenticode Valid)",
-    "service": "Running",
-    "AdminOnly": 1,
-    "WinPcapCompatible": 0,
-    "Dot11Support": 0,
-    "LoopbackSupport_reg": 1,
-    "npcap_loopback_adapter_installed": false,
-    "wpcap_dll": "C:\\Windows\\System32\\Npcap\\wpcap.dll 1.10.7 sha256 332F81CC1671A6D12AB4D20264A00EE16D12F6883745E05C92EE4030B3896A9F",
-    "packet_dll": "C:\\Windows\\System32\\Npcap\\Packet.dll 1.90 sha256 6F9116D9747DD356DB97F6DFAF02FE1B9B0859EA3214856F17CED84D790658C2",
-    "pcap_findalldevs_elevated": "rc=0, 5 devices (4 NPF adapters + NPF_Loopback)"
-  }
+  ]
 }

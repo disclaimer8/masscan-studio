@@ -1,0 +1,16 @@
+captured_utc=2026-10-24T18:15:01Z
+os=10.0.26300 (captured after update 26300.9711)
+--- registry HKLM:\SYSTEM\CurrentControlSet\Services\npcap\Parameters
+
+AdminOnly         : 1
+WinPcapCompatible : 0
+Dot11Support      : 0
+LoopbackSupport   : 1
+
+service=Running
+C:\Windows\System32\Npcap\wpcap.dll version=1.10.7 sha256=332F81CC1671A6D12AB4D20264A00EE16D12F6883745E05C92EE4030B3896A9F sig=Valid signer=CN=Nmap Software LLC, O=Nmap Software LLC, L=Beaverton, S=Oregon, C=US, SERIALNUMBER=6397588, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US
+C:\Windows\System32\Npcap\Packet.dll version=1.90 sha256=6F9116D9747DD356DB97F6DFAF02FE1B9B0859EA3214856F17CED84D790658C2 sig=Valid signer=CN=Nmap Software LLC, O=Nmap Software LLC, L=Beaverton, S=Oregon, C=US, SERIALNUMBER=6397588, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US
+C:\Windows\System32\drivers\npcap.sys version=1.90 sha256=FC31A31243FF0DC2427EBE6B429ADE2AED33A336CD767D6F403D2ED96738A07B sig=Valid signer=CN=Microsoft Windows Hardware Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US
+legacy System32\wpcap.dll present=False; System32\Packet.dll present=False
+--- installer
+C:\Users\lab\npcap-1.90.exe sha256=682B57E1C05EF375931975C9D6DED40888F4BFDF9F4B11571E654F962F1199B6 sig=Valid signer=CN=Nmap Software LLC, O=Nmap Software LLC, L=Beaverton, S=Oregon, C=US, SERIALNUMBER=6397588, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US

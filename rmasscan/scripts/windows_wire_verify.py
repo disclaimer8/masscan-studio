@@ -68,10 +68,56 @@ FOREIGN_CASE = dict(name="x01_foreign_replies", targets=PEER_IP, ports="80,81,44
                     source_port="40000", syn=4)
 PAUSE_CASE = "c03_multi_ports"
 PAUSE_NS = [0, 1, 8, 15]
+# Part B: silent ports 8100-8119 let a rate-1 scan run with an EMPTY receive path; 8200-8399 is a long scan for the
+# link-loss case. The functional plan keeps SILENT_PORT only (its listeners.json says so).
+SILENT_PORTS = [SILENT_PORT] + list(range(8100, 8120))
+FLOOD_ETHERTYPE = b"\x88\xb6"
+
+
+def _b(name, ports, syn, rate, wait, targets=None):
+    return dict(name=name, targets=targets or PEER_IP, ports=ports, exclude=None, source_port="40000", syn=syn,
+                rate=rate, wait=wait)
+
+
+B_CASES = {c["name"]: c for c in [
+    _b("pb_stop_silent", "8100-8119", 20, 1, 10),
+    _b("pb_stop_drain", "80,81", 2, 1, 10),
+    _b("pb_stop_fullqueue", "80,81", 2, 1, 10),
+    _b("pb_stop_load", "8100-8119", 20, 1, 10),
+    _b("pb_overflow_queue", "80,81,82,83,84,85", 6, 1, 10),
+    _b("pb_linkloss", "8200-8399", 200, 20, 3),
+    _b("pb_rxloss", "8000-8015", 16, 100, 3),
+    _b("pb_perm_scan", "80", 1, 100, 3),
+]}
+# stop-scenario -> (case, extra argv, expectations)
+STOP_SCENARIOS = {
+    "silent": ("pb_stop_silent", {"--stop-after-ms": "2500", "--observe-ms": "1500"}),
+    "drain": ("pb_stop_drain", {"--stop-in-drain": True, "--observe-ms": "1500"}),
+    "fullqueue": ("pb_stop_fullqueue", {"--result-capacity": "2", "--no-consume": True, "--stop-after-ms": "4500",
+                                         "--observe-ms": "1500"}),
+    "load": ("pb_stop_load", {"--stop-after-ms": "2500", "--observe-ms": "1500"}),
+}
+FLOOD_STOP = dict(pps=10000, size=60, duration=40.0, lead=1.5)       # RX load during the Stop-under-load run (stopped by the orchestrator)
+FLOOD_OVERFLOW = dict(pps=20000, size=60, duration=40.0, lead=1.5)  # RX overflow run (stopped by the orchestrator)
+RXLOSS_STALL_MS = 6000
+# checkpoint refusal variants: name -> (override of the job the resume asks for, expected error prefix)
+CKPT_VARIANTS = {
+    "wrong_ports": ({"ports": "8000-8014"}, "JobMismatch"),
+    "wrong_seed": ({"seed": 2}, "JobMismatch"),
+    "corrupt_next_index": ({}, "BadChecksum"),
+    "corrupt_checksum": ({}, "BadChecksum"),
+    "truncated": ({}, "Malformed"),
+    "empty": ({}, "Malformed"),
+    "future_format": ({}, "UnsupportedFormat"),
+    "future_engine": ({}, "EngineVersionMismatch"),
+}
+CKPT_FORGE_N = 8
 SEED, RATE, WAIT = 1, 100, 3
 
 
 def case_by_name(name):
+    if name in B_CASES:
+        return B_CASES[name]
     for c in CASES + [FOREIGN_CASE]:
         if c["name"] == name:
             return c
@@ -95,7 +141,7 @@ def expected_replies(case, silent_answers=False):
     """Sorted 'ip:port:open|closed' derived ONLY from the peer's configured listeners. The silent port never
     answers on the Windows stand (silent_answers=False); the C fixture lab has no silent port (it answers RST)."""
     return sorted("%s:%d:%s" % (PEER_IP, p, "open" if p in LISTEN_OPEN else "closed")
-                  for p in port_list(case["ports"]) if silent_answers or p != SILENT_PORT)
+                  for p in port_list(case["ports"]) if silent_answers or p not in SILENT_PORTS)
 
 
 def masscan_args(case):
@@ -324,7 +370,8 @@ def verify_capture(run, man, d, cap, peer_frames, peer_bytes, eno_frames, eno_by
     else:
         inv("peer listeners are exactly the configured open ports plus the proven-silent port",
             sorted(li.get("open", [])) == sorted(LISTEN_OPEN) and li.get("ready") is True
-            and li.get("silent") == [SILENT_PORT] and li.get("silent_proven") is True, li)
+            and li.get("silent") == ((man.get("listeners") or {}).get("silent") or [SILENT_PORT])
+            and SILENT_PORT in li.get("silent", []) and li.get("silent_proven") is True, li)
 
 
 def verify_identity(run, man, rj, meta):
@@ -349,8 +396,9 @@ ANY = "<any>"  # the flag must be present, its value is a run-local path
 
 def base_argv(case, man, bind):
     a = {"--iface": man["binding"]["iface"], "--src-ip": bind.src_ip, "--src-mac": bind.src_mac,
-         "--router-mac": bind.peer_mac, "--targets": case["targets"], "--ports": case["ports"], "--seed": str(SEED),
-         "--rate": str(RATE), "--wait": str(WAIT), "--source-port": case["source_port"]}
+         "--router-mac": bind.peer_mac, "--targets": case["targets"], "--ports": case["ports"],
+         "--seed": str(case.get("seed", SEED)), "--rate": str(case.get("rate", RATE)),
+         "--wait": str(case.get("wait", WAIT)), "--source-port": case["source_port"]}
     if case["exclude"]:
         a["--exclude"] = case["exclude"]
     return a
@@ -398,7 +446,11 @@ def check_argv_file(run, d, fname, kind_def, item, man, bind):
         return False
     got = parse_argv([str(x) for x in a.get("argv", [])])
     case_name, extra = kind_def(item)
-    want = dict(base_argv(case_by_name(case_name), man, bind), **extra)
+    if case_name is None:
+        want = dict(extra)
+    else:
+        case = case_name if isinstance(case_name, dict) else case_by_name(case_name)
+        want = dict(base_argv(case, man, bind), **extra)
     bad = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v and not (v == ANY and k in got)}
     bad.update({k: (v, None) for k, v in got.items() if k not in want})
     return run.check("%s matches the argument definition of run kind %r (harness input)" % (fname, item["kind"]), not bad,
@@ -420,15 +472,32 @@ def verify_argv(run, item, man, d, bind):
     return run.argv_ok
 
 
-KIND_ARGV_B = {}
-KIND_SIDE_ARGV_B = {}
+def ckpt_case(item):
+    """The job a checkpoint-refusal run asks for: the pause case, with the variant's override (wrong ports, seed)."""
+    return dict(case_by_name(PAUSE_CASE), **CKPT_VARIANTS[item["variant"]][0])
+
+
+KIND_ARGV_B = {
+    "stop": lambda it: (STOP_SCENARIOS[it["scenario"]][0], dict(STOP_SCENARIOS[it["scenario"]][1])),
+    "overflow_queue": lambda it: ("pb_overflow_queue", {"--result-capacity": "1", "--no-consume": True, "--observe-ms": "1500"}),
+    "linkloss": lambda it: ("pb_linkloss", {"--checkpoint-out": ANY, "--observe-ms": "500"}),
+    "rxloss": lambda it: ("pb_rxloss", {"--rx-stall-ms": str(RXLOSS_STALL_MS), "--checkpoint-out": ANY, "--observe-ms": "500"}),
+    "ckpt_refuse": lambda it: (ckpt_case(it), {"--scan-id": SCAN_ID, "--attempt-id": ATTEMPT_2, "--resume-checkpoint": ANY}),
+    "perm_restricted": lambda it: (None, {"--inventory": True}) if it["variant"] == "inventory" else ("pb_perm_scan", {}),
+}
+KIND_SIDE_ARGV_B = {
+    "ckpt_refuse": ("forge-argv.json", lambda it: (PAUSE_CASE, {"--scan-id": SCAN_ID, "--attempt-id": ATTEMPT_1,
+                                                                 "--forge-checkpoint-next-index": str(CKPT_FORGE_N),
+                                                                 "--checkpoint-out": ANY})),
+}
 
 
 def job_matches(run, rj, case, bind, man, d):
     job = (rj or {}).get("job") or {}
     want = {"iface": man["binding"]["iface"], "src_ip": bind.src_ip, "src_mac": bind.src_mac, "router_mac": bind.peer_mac,
             "source_port": case["source_port"], "targets": case["targets"], "exclude": case["exclude"],
-            "ports": case["ports"], "seed": SEED, "rate": RATE, "wait": WAIT, "retries": 0, "shard": "1/1",
+            "ports": case["ports"], "seed": case.get("seed", SEED), "rate": case.get("rate", RATE),
+            "wait": case.get("wait", WAIT), "retries": 0, "shard": "1/1",
             "blackrock_rounds": 14}
     bad = {k: (job.get(k), v) for k, v in want.items() if job.get(k) != v}
     # the engine echoed another job than the (verified) argv asked for: a scanner failure; with a wrong argv the
@@ -648,6 +717,18 @@ def verify_item(man, fx, root, item, ctxs, rel=None):
             run.add("fixtures/manifest.json present", NOT_RUN, "missing")
         if kind == "foreign":
             verify_foreign(run, ctx["peer_frames"], rj, case, bind, try_json(os.path.join(ctx["d"], "injector.json")))
+    elif kind == "stop":
+        verify_stop(run, item, ctx, man)
+    elif kind == "overflow_queue":
+        verify_overflow_queue(run, item, ctx, man)
+    elif kind == "linkloss":
+        verify_linkloss(run, item, ctx, man)
+    elif kind == "ckpt_refuse":
+        verify_ckpt_refuse(run, item, ctx, man)
+    elif kind == "perm_restricted":
+        verify_perm_restricted(run, item, ctx, man)
+    elif kind == "rxloss":
+        verify_rxloss(run, item, ctx, man)
     elif kind == "pause":
         verify_pause_leg(run, root, man, fx, item, ctx)
     elif kind == "resume":
@@ -671,6 +752,285 @@ def verify_item(man, fx, root, item, ctxs, rel=None):
     else:
         run.add("known run kind", FAIL, kind)
     return run
+
+
+# ------------------------------------------------------------------ part B: stop, failure, overflow
+def capture_proven(run):
+    return not any(c["result"] in (INVALID, NOT_RUN) for c in run.checks)
+
+
+def cap_check(run, name, cond, detail=""):
+    """A check that reads the pcap: a FAIL (and a behaviour FAIL) only when the capture is proven complete."""
+    proven = capture_proven(run)
+    run.check(name, cond, detail, bad=FAIL if proven else INVALID, beh=proven)
+
+
+def verify_workers(run, rj):
+    """The ENGINE's own threads (TX and RX, by OS thread id) are gone after join, and the adapter handles were
+    closed. The process total thread count is NOT used: Windows system workers outlive join."""
+    w, res = rj.get("workers") or {}, rj.get("resources") or {}
+    ids_ok = all(isinstance(w.get(k), int) for k in ("tx_tid", "rx_tid"))
+    run.check("engine TX and RX threads were identified by OS thread id", ids_ok, w, beh=True)
+    run.check("engine TX and RX threads are gone after join (not in the process' thread list)",
+              ids_ok and w.get("tx_alive_after_join") is False and w.get("rx_alive_after_join") is False, w, beh=True)
+    b, o, a = res.get("fds_before_open"), res.get("fds_open"), res.get("fds_after_join")
+    run.check("handles: the adapter was open during the run and closed after join (after <= before + 2)",
+              all(isinstance(x, int) for x in (b, o, a)) and o > b and a <= b + 2, "before=%s open=%s after=%s" % (b, o, a), beh=True)
+
+
+def align_and_check_tx(run, rj, frames, bind, sports, uncertain_ok=False):
+    """Wire SYN count, and NO SYN after the terminal outcome. The guest and the peer host clocks are aligned with the
+    wire itself: the peer pcap time of the FIRST scanner SYN minus the guest wall time of its confirmed send
+    (t0_utc + first_send_s). The outcome time (guest wall clock) is then converted to peer time."""
+    syns = scanner_syns(frames, bind, sports)
+    net, wall, tm = rj.get("net") or {}, rj.get("wall") or {}, rj.get("timing") or {}
+    tx, unc = net.get("tx_sent"), net.get("tx_uncertain") or 0
+    ok = len(syns) == tx or (uncertain_ok and isinstance(tx, int) and tx <= len(syns) <= tx + unc)
+    cap_check(run, "wire SYN count == net.tx_sent%s" % (" (+ at most the uncertain frames)" if uncertain_ok else ""), ok,
+              "wire=%d tx_sent=%s uncertain=%s" % (len(syns), tx, unc))
+    if not syns:
+        run.add("clock alignment (first scanner SYN on the wire)", INVALID, "no scanner SYN in the peer pcap")
+        return None
+    try:
+        guest_first = wall["t0_utc_ms"] / 1000.0 + tm["first_send_s"]
+        outcome_guest = wall["outcome_utc_ms"] / 1000.0
+    except (KeyError, TypeError):
+        run.add("run.json carries wall-clock fields", INVALID, wall)
+        return None
+    offset = syns[0][0] - guest_first
+    outcome_peer = outcome_guest + offset
+    after = [t for t, _f in syns if t > outcome_peer + 0.02]
+    run.notes.update(clock_offset_ms=round(offset * 1000, 1), alignment="peer pcap time of the first scanner SYN minus guest "
+                     "wall time of its confirmed send", outcome_peer_ts=round(outcome_peer, 3), syn_after_outcome=len(after),
+                     last_syn_to_outcome_ms=round((outcome_peer - syns[-1][0]) * 1000, 1))
+    cap_check(run, "NO SYN on the wire after the terminal outcome (20 ms alignment margin)", not after,
+              "after=%d last_syn_before_outcome=%.0f ms offset=%.1f ms" % (len(after), (outcome_peer - syns[-1][0]) * 1000, offset * 1000))
+    return outcome_peer
+
+
+def tx_frozen(rj):
+    n = (rj.get("net") or {}).get("tx_sent")
+    return rj.get("tx_sent_at_join") == rj.get("tx_sent_after_observe") == n == rj.get("sent")
+
+
+def verify_stop(run, item, ctx, man):
+    sc, rj, rc, bind, d = item["scenario"], ctx["rj"], ctx["meta"].get("guest_exit"), ctx["bind"], ctx["d"]
+    case = case_by_name(STOP_SCENARIOS[sc][0])
+    sports = sport_range(case["source_port"])
+    tm = rj.get("timing") or {}
+    job_matches(run, rj, case, bind, man, d)
+    run.check("rc 0 and outcome Stopped (no failure detail)", rc == 0 and rj.get("status") == "ok" and rj.get("reason") == "Stopped"
+              and rj.get("fail_detail") == "", "rc=%s reason=%s %s" % (rc, rj.get("reason"), rj.get("fail_detail")), beh=True)
+    run.check("Stop was requested and the outcome came < 1000 ms later (measured), join < 1000 ms",
+              tm.get("stop_requested") is True and isinstance(tm.get("stop_to_outcome_ms"), (int, float))
+              and tm["stop_to_outcome_ms"] < 1000 and isinstance(tm.get("join_ms"), (int, float)) and tm["join_ms"] < 1000,
+              "stop_to_outcome_ms=%s join_ms=%s" % (tm.get("stop_to_outcome_ms"), tm.get("join_ms")), beh=True)
+    run.check("no checkpoint after Stop (summary, hex)", rj.get("checkpoint") is False and rj.get("checkpoint_hex") is None,
+              "checkpoint=%s" % rj.get("checkpoint"), beh=True)
+    run.check("rx_health measured 0 and no TX/RX errors", health_measured_zero(rj) and net_clean(rj), rj.get("rx_health"), beh=True)
+    run.check("TX frozen after the outcome (tx_sent at join == after the %s ms observation == net.tx_sent == sent)" % rj.get("observe_ms"),
+              tx_frozen(rj) and isinstance(rj.get("observe_ms"), int) and rj["observe_ms"] >= 1000,
+              {k: rj.get(k) for k in ("tx_sent_at_join", "tx_sent_after_observe", "sent", "observe_ms")}, beh=True)
+    exp = expected_replies(case)
+    if sc in ("silent", "load"):
+        run.check("Stop hit mid-TX (0 < sent < range) with an EMPTY receive path (no replies)",
+                  0 < rj.get("sent", 0) < rj.get("range", 0) and rj.get("reply_total") == 0,
+                  "sent=%s range=%s replies=%s" % (rj.get("sent"), rj.get("range"), rj.get("reply_total")), beh=True)
+    elif sc == "drain":
+        run.check("Stop came during the receive drain (all probes sent) and skipped the 10 s wait",
+                  rj.get("sent") == rj.get("range") == case["syn"] and (tm.get("total_s") or 99) < 6 and rj.get("replies") == exp,
+                  "sent=%s total_s=%s replies=%s" % (rj.get("sent"), tm.get("total_s"), rj.get("replies")), beh=True)
+    elif sc == "fullqueue":
+        run.check("full result queue (capacity 2): both replies were delivered, nothing lost",
+                  rj.get("replies") == exp and rj.get("reply_total") == 2 and rj.get("sent") == case["syn"],
+                  "replies=%s sent=%s" % (rj.get("replies"), rj.get("sent")), beh=True)
+    verify_workers(run, rj)
+    if sc == "load":
+        run.check("RX load reached the capture handle (net.rx_packets >= 1000)", (rj.get("net") or {}).get("rx_packets", 0) >= 1000,
+                  "rx_packets=%s" % (rj.get("net") or {}).get("rx_packets"), beh=True)
+    frames = ctx["peer_frames"]
+    if frames is not None:
+        outcome_peer = align_and_check_tx(run, rj, frames, bind, sports)
+        if sc == "load":
+            verify_flood(run, d, frames, outcome_peer, scan_syns=scanner_syns(frames, bind, sports))
+
+
+def verify_flood(run, d, frames, outcome_peer, scan_syns, need_overlap=True):
+    fl = try_json(os.path.join(d, "flood.json"))
+    if fl is None:
+        run.add("flood.json present", NOT_RUN, "missing or not JSON")
+        return None
+    on_wire = sum(1 for _t, f in frames if f[12:14] == FLOOD_ETHERTYPE)
+    run.check("every flooded frame is in the peer pcap (the load really was on the wire)", fl.get("sent", 0) > 0 and on_wire == fl["sent"]
+              and fl.get("errors") == 0, "flood sent=%s errors=%s on_wire=%d" % (fl.get("sent"), fl.get("errors"), on_wire), bad=INVALID)
+    if need_overlap and scan_syns and outcome_peer is not None:
+        run.check("the flood overlapped the scan (started before the first SYN, ran past the terminal outcome)",
+                  fl["t_first"] < scan_syns[0][0] and fl["t_last"] > outcome_peer,
+                  "flood %.2f..%.2f scan %.2f..%.2f" % (fl["t_first"], fl["t_last"], scan_syns[0][0], outcome_peer), bad=INVALID)
+    run.notes["flood"] = {k: fl.get(k) for k in ("sent", "pps_avg", "size", "t_first", "t_last")}
+    return fl
+
+
+def verify_overflow_queue(run, item, ctx, man):
+    rj, rc, bind, d = ctx["rj"], ctx["meta"].get("guest_exit"), ctx["bind"], ctx["d"]
+    case = case_by_name("pb_overflow_queue")
+    job_matches(run, rj, case, bind, man, d)
+    run.check("result queue overflow -> Failed(ConsumerTooSlow), rc 3, no checkpoint, partial scan",
+              rc == 3 and rj.get("reason") == "Failed" and "ConsumerTooSlow" in str(rj.get("fail_detail"))
+              and rj.get("checkpoint") is False and rj.get("checkpoint_hex") is None and 0 < rj.get("sent", 0) < rj.get("range", 0),
+              "rc=%s reason=%s %s sent=%s/%s" % (rc, rj.get("reason"), rj.get("fail_detail"), rj.get("sent"), rj.get("range")), beh=True)
+    run.check("TX frozen after the failure; no TX/RX errors", tx_frozen(rj) and (rj.get("net") or {}).get("tx_errors") == 0,
+              {k: rj.get(k) for k in ("tx_sent_at_join", "tx_sent_after_observe", "sent")}, beh=True)
+    run.check("results kept so far are genuine", set(rj.get("replies") or []) <= set(expected_replies(case)), rj.get("replies"), beh=True)
+    verify_workers(run, rj)
+    if ctx["peer_frames"] is not None:
+        align_and_check_tx(run, rj, ctx["peer_frames"], bind, sport_range(case["source_port"]))
+
+
+def link_events(d):
+    ll = try_json(os.path.join(d, "linkloss.json"))
+    if not ll:
+        return None
+    ev = {e.get("set_link"): e for e in ll.get("events", [])}
+    return ll, ev
+
+
+def verify_linkloss(run, item, ctx, man):
+    rj, rc, bind, d = ctx["rj"], ctx["meta"].get("guest_exit"), ctx["bind"], ctx["d"]
+    case = case_by_name("pb_linkloss")
+    sports = sport_range(case["source_port"])
+    job_matches(run, rj, case, bind, man, d)
+    net = rj.get("net") or {}
+    run.check("NIC disconnect mid-scan -> Failed(TxUncertain), rc 3, no checkpoint, partial scan",
+              rc == 3 and rj.get("reason") == "Failed" and "TxUncertain" in str(rj.get("fail_detail"))
+              and rj.get("checkpoint") is False and rj.get("checkpoint_hex") is None and 0 < rj.get("sent", 0) < rj.get("range", 0)
+              and (net.get("tx_uncertain") or 0) >= 1,
+              "rc=%s reason=%s %s sent=%s/%s uncertain=%s" % (rc, rj.get("reason"), rj.get("fail_detail"), rj.get("sent"), rj.get("range"),
+                                                              net.get("tx_uncertain")), beh=True)
+    run.check("an uncertain frame was never repeated or counted as sent; TX frozen after the failure",
+              net.get("tx_sent") == rj.get("sent") and rj.get("tx_sent_at_join") == rj.get("tx_sent_after_observe") == net.get("tx_sent"),
+              {k: rj.get(k) for k in ("sent", "tx_sent_at_join", "tx_sent_after_observe")} | {"tx_sent": net.get("tx_sent")}, beh=True)
+    run.check("no checkpoint file was written", ctx["meta"].get("checkpoint_file_exists") is False,
+              "checkpoint_file_exists=%s" % ctx["meta"].get("checkpoint_file_exists"), beh=True)
+    verify_workers(run, rj)
+    le = link_events(d)
+    if le is None:
+        run.add("linkloss.json present", NOT_RUN, "missing or not JSON")
+    else:
+        ll, ev = le
+        run.check("the lab NIC link was set down after the first SYN and set up again (QMP set_link on netdev lab0 only)",
+                  ll.get("first_syn_seen") is True and "down" in ev and "up" in ev and ev["down"]["t"] < ev["up"]["t"]
+                  and "return" in ev["down"].get("reply", {}) and "return" in ev["up"].get("reply", {}), ll, bad=INVALID)
+        run.notes["link"] = {k: ev[k]["t"] for k in ev}
+    frames = ctx["peer_frames"]
+    if frames is not None:
+        outcome_peer = align_and_check_tx(run, rj, frames, bind, sports, uncertain_ok=True)
+        if le and outcome_peer is not None and "down" in le[1]:
+            lag = outcome_peer - le[1]["down"]["t"]
+            run.notes["down_to_outcome_ms"] = round(lag * 1000, 1)
+            run.check("the failure followed the disconnect promptly (0 <= outcome - link down < 3 s)", 0 <= lag < 3.0,
+                      "%.0f ms" % (lag * 1000), bad=INVALID)
+            if "up" in le[1]:
+                run.check("the link came back only after the outcome", le[1]["up"]["t"] > outcome_peer, "", bad=INVALID)
+
+
+def verify_ckpt_refuse(run, item, ctx, man):
+    rj, rc, bind, d = ctx["rj"], ctx["meta"].get("guest_exit"), ctx["bind"], ctx["d"]
+    case = ckpt_case(item)
+    want = CKPT_VARIANTS[item["variant"]][1]
+    job_matches(run, rj, case, bind, man, d)
+    run.check("%s: refused BEFORE the adapter opened (rc 4, %s, opened_adapter false, tx_sent 0)" % (item["variant"], want),
+              rc == 4 and rj.get("status") == "error" and rj.get("stage") == "resume-preflight"
+              and str(rj.get("error", "")).startswith(want) and rj.get("opened_adapter") is False and rj.get("tx_sent") == 0,
+              {k: rj.get(k) for k in ("status", "stage", "error", "opened_adapter", "tx_sent")} | {"rc": rc}, beh=True)
+    if ctx["peer_frames"] is not None:
+        n = len(scanner_syns(ctx["peer_frames"], bind, sport_range(case["source_port"])))
+        cap_check(run, "no scanner SYN reached the wire", n == 0, "syns=%d" % n)
+
+
+def verify_perm_restricted(run, item, ctx, man):
+    rj, rc, bind, d = ctx["rj"], ctx["meta"].get("guest_exit"), ctx["bind"], ctx["d"]
+    ident = rj.get("identity") or {}
+    # The reduced token is made by `runas /trustlevel:0x20000`. The process' own token flags are recorded but cannot
+    # discriminate (measured: a limited token still reports elevated=true here); the EFFECT is what is verified below:
+    # Admin-only Npcap hides the lab adapter from this process, while the elevated control run sees and uses it.
+    run.notes["token_flags_reported_by_the_process"] = {k: ident.get(k) for k in ("elevated", "restricted_token")}
+    run.check("the run was started through runas /trustlevel:0x20000 (reduced token)",
+              "runas /trustlevel:0x20000" in str(ctx["meta"].get("restricted_via")), ctx["meta"].get("restricted_via"), bad=INVALID)
+    if item["variant"] == "inventory":
+        devs = rj.get("devices") or []
+        run.check("Admin-only Npcap hides the adapters from the restricted token: rc 5, only loopback visible, instructions hint",
+                  rc == 5 and rj.get("mode") == "inventory" and rj.get("opened_adapter") is False and rj.get("tx_sent") == 0
+                  and all(x.get("loopback") for x in devs) and "Administrators-only" in str(rj.get("access_hint")),
+                  {"rc": rc, "devices": [x.get("name") for x in devs], "hint": str(rj.get("access_hint"))[:60]}, beh=True)
+    else:
+        case = case_by_name("pb_perm_scan")
+        job_matches(run, rj, case, bind, man, d)
+        run.check("scan under a restricted token is refused before any send: the lab adapter is not visible to it "
+                  "(rc 2 InterfaceMismatch or rc 5 PermissionDenied/DriverUnavailable), no adapter opened, tx_sent 0",
+                  (rc, str(rj.get("error", "")).split("(")[0]) in {(2, "InterfaceMismatch"), (5, "PermissionDenied"), (5, "DriverUnavailable")}
+                  and rj.get("status") == "error" and rj.get("opened_adapter") is False and rj.get("tx_sent") == 0,
+                  {k: rj.get(k) for k in ("status", "stage", "error", "message", "opened_adapter", "tx_sent")} | {"rc": rc}, beh=True)
+    if ctx["peer_frames"] is not None:
+        n = len(scanner_syns(ctx["peer_frames"], bind, (1, 65535)))
+        cap_check(run, "no scanner SYN reached the wire", n == 0, "syns=%d" % n)
+
+
+def parse_rxloss(detail):
+    m = re.search(r"RxLoss\D*(\d+)", str(detail))
+    return int(m.group(1)) if m else None
+
+
+def verify_rxloss(run, item, ctx, man):
+    rj, rc, bind, d = ctx["rj"], ctx["meta"].get("guest_exit"), ctx["bind"], ctx["d"]
+    case = case_by_name("pb_rxloss")
+    job_matches(run, rj, case, bind, man, d)
+    drops = (rj.get("rx_health") or {}).get("kernel_drops")
+    if not (isinstance(drops, int) and not isinstance(drops, bool) and drops > 0):
+        run.add("RX overflow reproduced (measured kernel_drops > 0)", NOT_RUN,
+                "NOT REPRODUCED: reason=%s %s rx_health=%s" % (rj.get("reason"), rj.get("fail_detail"), rj.get("rx_health")))
+        return
+    n = parse_rxloss(rj.get("fail_detail"))
+    net = rj.get("net") or {}
+    run.check("RX overflow -> Failed(RxLoss{n}) with n == the measured kernel_drops, rc 3",
+              rc == 3 and rj.get("reason") == "Failed" and n == drops == net.get("kernel_drops"),
+              "rc=%s reason=%s %s drops=%s net.kernel_drops=%s" % (rc, rj.get("reason"), rj.get("fail_detail"), drops, net.get("kernel_drops")), beh=True)
+    run.check("no checkpoint (summary, hex, and no file on the guest)", rj.get("checkpoint") is False and rj.get("checkpoint_hex") is None
+              and ctx["meta"].get("checkpoint_file_exists") is False, "file=%s" % ctx["meta"].get("checkpoint_file_exists"), beh=True)
+    run.check("accepted results are kept and genuine (subset of the listener truth)", set(rj.get("replies") or []) <= set(expected_replies(case))
+              and rj.get("reply_total") == len(rj.get("replies") or []), rj.get("replies"), beh=True)
+    run.check("TX frozen after the failure", tx_frozen(rj), {k: rj.get(k) for k in ("sent", "tx_sent_at_join", "tx_sent_after_observe")}, beh=True)
+    verify_workers(run, rj)
+    nic = try_json(os.path.join(d, "nic.json"))
+    fl = try_json(os.path.join(d, "flood.json"))
+    ind = {"kernel_drops_n": drops, "rx_read_by_handle": net.get("rx_packets")}
+    def rxsum(x):
+        st = (x or {}).get("stats")
+        if not isinstance(st, dict):
+            return None
+        return sum(int(st.get(k) or 0) for k in ("ReceivedUnicastPackets", "ReceivedMulticastPackets", "ReceivedBroadcastPackets"))
+    if nic and fl and rxsum(nic.get("after")) is not None and rxsum(nic.get("before")) is not None:
+        nic_rx = rxsum(nic.get("after")) - rxsum(nic.get("before"))
+        ind.update(nic_rx_delta=nic_rx, peer_flood_sent=fl.get("sent"), nic_minus_read=nic_rx - (net.get("rx_packets") or 0))
+    run.notes["independent_count"] = ind
+    run.notes["independent_count_note"] = ("kernel_drops counts frames dropped by THIS Npcap handle's buffer (NPF scope). Frames still queued "
+                                           "in that buffer when the health sample is taken are not drops, so n is a lower bound of the "
+                                           "frames the handle did not read; the NIC counter is an upper bound check only.")
+    if not (nic and fl):
+        run.add("independent count inputs present (nic.json, flood.json)", NOT_RUN, "missing")
+    elif "nic_rx_delta" not in ind:
+        run.add("independent NIC counters readable (Get-NetAdapterStatistics)", NOT_RUN, nic)
+    else:
+        run.check("independent count: drops + frames read cannot exceed the frames the NIC itself received in the window "
+                  "(guest NIC counters, not Npcap)", drops + (net.get("rx_packets") or 0) <= ind["nic_rx_delta"],
+                  "n=%d read=%s nic_rx_delta=%d" % (drops, net.get("rx_packets"), ind["nic_rx_delta"]), beh=True)
+        run.check("independent count: drops cannot exceed the junk frames the peer sent (peer-side count)",
+                  drops <= (fl.get("sent") or 0), "n=%d peer_flood_sent=%s" % (drops, fl.get("sent")), beh=True)
+    if ctx["peer_frames"] is not None:
+        sports = sport_range(case["source_port"])
+        syns = scanner_syns(ctx["peer_frames"], bind, sports)
+        outcome_peer = align_and_check_tx(run, rj, ctx["peer_frames"], bind, sports)
+        verify_flood(run, d, ctx["peer_frames"], outcome_peer, syns, need_overlap=False)
 
 
 def verify_pause_leg(run, root, man, fx, item, ctx):
@@ -754,7 +1114,21 @@ def verify_pause_groups(man, fx, root, runs_by_tag, ctxs):
     return out
 
 
+def planned_b():
+    items = [dict(tag="stop_%s" % sc, kind="stop", scenario=sc) for sc in ("silent", "drain", "fullqueue", "load")]
+    items.append(dict(tag="overflow_queue", kind="overflow_queue"))
+    items.append(dict(tag="linkloss", kind="linkloss"))
+    items += [dict(tag="ckpt_%s" % v, kind="ckpt_refuse", variant=v) for v in CKPT_VARIANTS]
+    items += [dict(tag="perm_restricted_scan", kind="perm_restricted", variant="scan"),
+              dict(tag="perm_restricted_inventory", kind="perm_restricted", variant="inventory"),
+              dict(tag="perm_elevated_control", kind="case", case="c01_one_addr_port_synack", repeat=1),
+              dict(tag="rxloss", kind="rxloss")]
+    return items
+
+
 def planned(man):
+    if (man or {}).get("plan") == "failure":
+        return planned_b()
     items = []
     for c in CASES:
         for r in (1, 2):
@@ -792,8 +1166,9 @@ def verify_dir(root):
         r = verify_item(man, fx, root, item, ctxs)
         by_tag[item["tag"]] = r
         result["runs"].append(r.summary())
-    for g in verify_pause_groups(man, fx, root, by_tag, ctxs):
-        result["groups"].append(g.summary())
+    if man.get("plan") != "failure":
+        for g in verify_pause_groups(man, fx, root, by_tag, ctxs):
+            result["groups"].append(g.summary())
     result["discarded"] = verify_discarded(man, fx, root)
     return finish(result)
 

@@ -113,6 +113,32 @@ struct StallRx {
     stall: Option<Duration>,
 }
 
+/// RX-декоратор: запоминает ОС-идентификатор RX-потока движка (первый вызов `recv`/`health`).
+struct IdRx {
+    inner: Box<dyn Rx>,
+    tid: Arc<OnceLock<u64>>,
+}
+
+impl IdRx {
+    fn note(&self) {
+        if let Some(id) = rmasscan_net::lab_current_thread_id() {
+            let _ = self.tid.set(id);
+        }
+    }
+}
+
+impl Rx for IdRx {
+    fn recv(&mut self, buffer: &mut [u8], timeout: Duration) -> Result<Option<usize>, IoError> {
+        self.note();
+        self.inner.recv(buffer, timeout)
+    }
+
+    fn health(&mut self, timeout: Duration) -> Result<RxHealth, IoError> {
+        self.note();
+        self.inner.health(timeout)
+    }
+}
+
 impl Rx for StallRx {
     fn recv(&mut self, buffer: &mut [u8], timeout: Duration) -> Result<Option<usize>, IoError> {
         if let Some(d) = self.stall.take() {
@@ -311,6 +337,8 @@ fn job_json(a: &Args, src_mac: [u8; 6], rate: f64, wait: u32, digest: &[u8]) -> 
 /// Тайминги подтверждённых отправок (для steady-state скорости).
 struct TxTiming {
     t0: Instant,
+    /// Unix-время (мс) в момент `t0`: связывает относительные отметки с часами хоста (выравнивание по pcap пира).
+    t0_utc_ms: u64,
     mark_at: u64,
     first_ns: AtomicU64,
     mark_ns: AtomicU64,
@@ -327,10 +355,15 @@ struct HarnessTx {
     sent: u64,
     cancel: Arc<OnceLock<CancelHandle>>,
     timing: Arc<TxTiming>,
+    /// ОС-идентификатор TX-потока движка (первый вызов `send`): сверяется после join.
+    tid: Arc<OnceLock<u64>>,
 }
 
 impl Tx for HarnessTx {
     fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
+        if let Some(id) = rmasscan_net::lab_current_thread_id() {
+            let _ = self.tid.set(id);
+        }
         if self.pause_after == Some(self.sent) {
             let c = loop {
                 if let Some(c) = self.cancel.get() {
@@ -356,6 +389,26 @@ impl Tx for HarnessTx {
         }
         Ok(r)
     }
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// Жив ли каждый из потоков движка по снимку ОС (`None`: поток не наблюдался или ОС не даёт список).
+fn engine_alive(ids: &[Option<u64>; 2]) -> [Option<bool>; 2] {
+    let all = rmasscan_net::lab_thread_ids();
+    [0, 1].map(|i| ids[i].and_then(|id| all.as_ref().map(|v| v.contains(&id))))
+}
+
+fn json_opt_u64(v: Option<u64>) -> String {
+    v.map_or_else(|| "null".to_string(), |n| n.to_string())
+}
+
+fn json_opt_bool(v: Option<bool>) -> String {
+    v.map_or_else(|| "null".to_string(), |b| b.to_string())
 }
 
 fn reply_str(r: &Reply) -> String {
@@ -750,8 +803,11 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
 
     let start_index = resume.as_ref().map_or(0, |c| c.next_index);
     let expected_total = plan.range() - start_index;
+    let tx_tid: Arc<OnceLock<u64>> = Arc::default();
+    let rx_tid: Arc<OnceLock<u64>> = Arc::default();
     let timing = Arc::new(TxTiming {
         t0: Instant::now(),
+        t0_utc_ms: unix_ms(),
         mark_at: (expected_total / 10).max(1),
         first_ns: AtomicU64::new(0),
         mark_ns: AtomicU64::new(0),
@@ -767,21 +823,26 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
             sent: 0,
             cancel: cancel.clone(),
             timing: timing.clone(),
+            tid: tx_tid.clone(),
         }),
-        rx: if a.rx_stall_ms > 0 {
-            Box::new(StallRx {
-                inner: rx,
-                stall: Some(Duration::from_millis(a.rx_stall_ms)),
-            })
-        } else {
-            rx
-        },
+        rx: Box::new(IdRx {
+            inner: if a.rx_stall_ms > 0 {
+                Box::new(StallRx {
+                    inner: rx,
+                    stall: Some(Duration::from_millis(a.rx_stall_ms)),
+                })
+            } else {
+                rx
+            },
+            tid: rx_tid.clone(),
+        }),
     };
     let mut opts = EngineOptions::new(a.scan_id, a.attempt_id);
     if let Some(c) = a.result_capacity {
         opts.result_capacity = c;
     }
     let started = Instant::now();
+    let started_utc_ms = unix_ms();
     let handle = match &resume {
         Some(cp) => Engine::resume(plan.clone(), cp.clone(), io, opts),
         None => Engine::start(plan.clone(), io, opts),
@@ -847,6 +908,8 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         }
     }
     let outcome_seen = outcome_at.unwrap_or_else(Instant::now);
+    let outcome_utc_ms = started_utc_ms
+        + u64::try_from(outcome_seen.saturating_duration_since(started).as_millis()).unwrap_or(0);
     let checkpoint = handle.checkpoint();
     let scan_id = handle.scan_id();
     let attempt_id = handle.attempt_id();
@@ -890,6 +953,16 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         threads_after = Some(now);
     }
     let threads_settle_ms = settle_t0.elapsed().as_secs_f64() * 1000.0;
+    // потоки самого движка (TX и RX), а не общее число потоков процесса: системные рабочие потоки Windows
+    // переживают join. Ждём не дольше 1 с, пока ОС уберёт запись завершённого потока.
+    let engine_tids = [tx_tid.get().copied(), rx_tid.get().copied()];
+    let workers_t0 = Instant::now();
+    let mut alive = engine_alive(&engine_tids);
+    while alive.contains(&Some(true)) && workers_t0.elapsed() < Duration::from_secs(1) {
+        std::thread::sleep(Duration::from_millis(1));
+        alive = engine_alive(&engine_tids);
+    }
+    let workers_settle_ms = workers_t0.elapsed().as_secs_f64() * 1000.0;
     let after = metrics::sample();
     let stats_at_join = stats();
     if a.observe_ms > 0 {
@@ -1004,6 +1077,8 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
 \"resources\":{{\"fds_before_open\":{},\"fds_open\":{},\"fds_after_join\":{},\
 \"threads_before\":{},\"threads_after_join_immediate\":{},\"threads_settle_ms\":{threads_settle_ms:.3},\"threads_after_join\":{},\
 \"working_set_bytes_after_join\":{},\"peak_working_set_bytes\":{},\"cpu_user_ms\":{},\"cpu_kernel_ms\":{}}},\
+\"workers\":{{\"tx_tid\":{},\"rx_tid\":{},\"tx_alive_after_join\":{},\"rx_alive_after_join\":{},\"settle_ms\":{workers_settle_ms:.3}}},\
+\"wall\":{{\"t0_utc_ms\":{},\"started_utc_ms\":{started_utc_ms},\"outcome_utc_ms\":{},\"join_done_utc_ms\":{}}},\
 \"npcap\":{npcap},\"job\":{job},\"identity\":{}}}",
         first as f64 / 1e9,
         last as f64 / 1e9,
@@ -1025,6 +1100,13 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         metrics::json_opt(after.peak_working_set_bytes),
         metrics::json_opt(after.cpu_user_ms),
         metrics::json_opt(after.cpu_kernel_ms),
+        json_opt_u64(engine_tids[0]),
+        json_opt_u64(engine_tids[1]),
+        json_opt_bool(alive[0]),
+        json_opt_bool(alive[1]),
+        t.t0_utc_ms,
+        outcome_utc_ms,
+        unix_ms(),
         identity_json(),
     );
     (if reason == "Failed" { 3 } else { 0 }, j)
@@ -1447,6 +1529,35 @@ mod tests {
         assert!(json.contains("\"tx_sent\":1,"), "{json}");
         assert!(json.contains("\"opened_adapter\":true"), "{json}");
         assert!(json.contains("\"job\":{"), "{json}");
+    }
+
+    #[test]
+    fn success_json_reports_engine_threads_and_wall_clock() {
+        let be = Mock {
+            nic: Some(NIC),
+            fake: Some(rmasscan_engine::fake::FakeAdapter::new()),
+            ..Mock::default()
+        };
+        let (code, json) = run(&with(&["--wait", "0"]), &be);
+        assert_eq!(code, 0, "{json}");
+        for k in [
+            "\"workers\":{\"tx_tid\":",
+            "\"rx_tid\":",
+            "\"tx_alive_after_join\":",
+            "\"wall\":{\"t0_utc_ms\":",
+            "\"started_utc_ms\":",
+            "\"outcome_utc_ms\":",
+            "\"join_done_utc_ms\":",
+        ] {
+            assert!(json.contains(k), "{k} missing: {json}");
+        }
+        // where the OS gives thread ids, both engine threads were seen and are gone after join
+        #[cfg(any(windows, target_os = "linux"))]
+        assert!(
+            json.contains("\"tx_alive_after_join\":false")
+                && json.contains("\"rx_alive_after_join\":false"),
+            "{json}"
+        );
     }
 
     #[test]

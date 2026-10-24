@@ -7,12 +7,15 @@ Test tool, NOT product code. Every subcommand is meant to run INSIDE the lab pee
             full, the kernel drops SYNs), every other port gets the kernel's RST
   marker    send the readiness marker frame (ethertype 0x88b5) that proves the capture is live
   counters  print "rx tx" packets of the lab interface
+  flood     junk frames (ethertype 0x88b6) to the guest MAC only, on lab0 only, for RX load / overflow tests
+  linkloss  after the scan's first SYN: QMP set_link of the lab NIC (netdev lab0) down, hold, up (always restored)
   inject    after the first scanner SYN, send FOREIGN replies (other IP / unscanned port / wrong cookie to the
             silent port / wrong destination port); every frame carries IPv4 id 0xF0E1
 """
 import argparse
 import json
 import os
+import select
 import signal
 import socket
 import struct
@@ -21,6 +24,8 @@ import time
 
 ADDR = "198.18.0.2"
 FOREIGN_IP_ID = 0xF0E1
+FLOOD_ETHERTYPE = 0x88B6
+QMP_NETDEV = "lab0"
 MARKER_ETHERTYPE = 0x88B5
 MARKER_PAYLOAD = b"WIRELAB-READY"  # default payload; "WIRELAB-END" is the end-of-capture marker
 
@@ -55,42 +60,60 @@ def tcp_frame(src_mac, dst_mac, src_ip, dst_ip, sport, dport, flags, seq, ack, i
     return mac_bytes(dst_mac) + mac_bytes(src_mac) + b"\x08\x00" + ip + tcp
 
 
+def parse_ports(spec):
+    out = []
+    for tok in (spec or "").split(","):
+        if tok:
+            lo, _, hi = tok.partition("-")
+            out.extend(range(int(lo), int(hi or lo) + 1))
+    return out
+
+
 def cmd_listen(a):
     guard_netns()
     stop = {"flag": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("flag", True))
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
     socks = []
-    open_ports = [int(x) for x in a.open.split(",") if x]
+    open_ports = parse_ports(a.open)
     for p in open_ports:
         s = socket.socket()
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((ADDR, p))
         s.listen(128)
         socks.append(s)
-    silent = int(a.silent) if a.silent else None
+    silent = parse_ports(a.silent)
     clients = []
     silent_proven = None
     if silent:
-        s = socket.socket()
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((ADDR, silent))
-        s.listen(0)
-        socks.append(s)
-        # fill the accept queue: the first connection is queued (never accepted); a further one must time out
-        for _ in range(2):
+        for port in silent:
+            s = socket.socket()
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((ADDR, port))
+            s.listen(0)
+            socks.append(s)
             c = socket.socket()
             c.settimeout(1.0)
+            c.connect((ADDR, port))  # the first connection is queued and never accepted: the queue is full now
+            clients.append(c)
+        # proof for EVERY silent port: a further connection must time out (its SYN is dropped by the kernel)
+        silent_proven = True
+        pending = []
+        for port in silent:
+            c = socket.socket()
+            c.setblocking(False)
             try:
-                c.connect((ADDR, silent))
-                clients.append(c)
-            except OSError:
-                silent_proven = True  # the SYN was dropped: nothing answers on this port any more
-                c.close()
-                break
-        else:
-            silent_proven = False
-    info = {"open": open_ports, "silent": [silent] if silent else [], "silent_proven": silent_proven,
+                c.connect((ADDR, port))
+            except BlockingIOError:
+                pass
+            pending.append(c)
+        time.sleep(0.5)
+        for c, port in zip(pending, silent):
+            # connected (writable and no error) would mean the SYN was answered
+            if select.select([], [c], [], 0)[1] and c.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0:
+                silent_proven = False
+            c.close()
+    info = {"open": open_ports, "silent": silent, "silent_proven": silent_proven,
             "ready": silent_proven is not False, "bind": ADDR, "pid": os.getpid()}
     with open(a.ready, "w") as f:
         json.dump(info, f)
@@ -165,6 +188,93 @@ def cmd_inject(a):
     return 0 if seen else 3
 
 
+def cmd_flood(a):
+    guard_netns()
+    with open("/sys/class/net/%s/address" % a.iface) as f:
+        src = mac_bytes(f.read().strip())
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+    s.bind((a.iface, 0))
+    stop = {"flag": False}
+    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("flag", True))
+    signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
+    hdr = mac_bytes(a.guest_mac) + src + struct.pack(">H", FLOOD_ETHERTYPE)
+    sent = errors = seq = 0
+    t_first = time.time()
+    t0 = time.monotonic()
+    while not stop["flag"] and time.monotonic() - t0 < a.duration:
+        try:
+            s.send((hdr + struct.pack(">I", seq) + b"RMSP").ljust(a.size, b"\0"))
+            sent += 1
+        except OSError:
+            errors += 1
+        seq += 1
+        if a.pps and sent % 50 == 0:
+            ahead = t0 + sent / a.pps - time.monotonic()
+            if ahead > 0:
+                time.sleep(ahead)
+    t_last = time.time()
+    with open(a.out, "w") as f:
+        json.dump({"sent": sent, "errors": errors, "t_first": t_first, "t_last": t_last, "size": a.size, "pps_target": a.pps,
+                   "pps_avg": sent / max(t_last - t_first, 1e-9), "ethertype": FLOOD_ETHERTYPE, "iface": a.iface,
+                   "dst_mac": a.guest_mac}, f)
+    return 0
+
+
+def qmp_set_link(sock_path, up):
+    """QMP set_link on the lab NIC's netdev only. Returns the raw reply."""
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(5)
+    s.connect(sock_path)
+    f = s.makefile("rw")
+    assert "QMP" in json.loads(f.readline())
+
+    def call(cmd, args=None):
+        f.write(json.dumps({"execute": cmd, **({"arguments": args} if args else {})}) + "\n")
+        f.flush()
+        while True:
+            r = json.loads(f.readline())
+            if "return" in r or "error" in r:
+                return r
+    call("qmp_capabilities")
+    r = call("set_link", {"name": QMP_NETDEV, "up": up})
+    s.close()
+    return r
+
+
+def cmd_linkloss(a):
+    """Wait for the scan's first SYN, then down -> hold -> up. The link is restored on every exit path."""
+    guard_netns()
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+    s.bind((a.iface, 0))
+    s.settimeout(0.05)
+    gm = mac_bytes(a.guest_mac)
+    out = {"events": [], "first_syn_seen": False}
+    deadline = time.time() + a.wait_first
+    try:
+        while time.time() < deadline and not out["first_syn_seen"]:
+            try:
+                data, addr = s.recvfrom(65535)
+            except socket.timeout:
+                continue
+            if addr[2] != 4 and data[6:12] == gm and len(data) >= 54 and data[12:14] == b"\x08\x00" and data[23] == 6 \
+                    and (data[14 + (data[14] & 0xF) * 4 + 13] & 0x3F) == 0x02:
+                out["first_syn_seen"] = True
+        if out["first_syn_seen"]:
+            time.sleep(a.down_after)
+            r = qmp_set_link(a.sock, False)
+            out["events"].append({"t": time.time(), "set_link": "down", "reply": r})
+            end = time.time() + a.hold_max
+            while time.time() < end and not os.path.exists(a.stop_file):
+                time.sleep(0.05)
+    finally:
+        if out["first_syn_seen"] or out["events"]:
+            r = qmp_set_link(a.sock, True)
+            out["events"].append({"t": time.time(), "set_link": "up", "reply": r})
+        with open(a.out, "w") as f:
+            json.dump(out, f)
+    return 0 if out["first_syn_seen"] else 3
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -182,6 +292,24 @@ def main():
     p = sub.add_parser("counters")
     p.add_argument("--iface", required=True)
     p.set_defaults(fn=cmd_counters)
+    p = sub.add_parser("flood")
+    p.add_argument("--iface", default="lab0")
+    p.add_argument("--guest-mac", required=True)
+    p.add_argument("--pps", type=int, default=10000)
+    p.add_argument("--size", type=int, default=60)
+    p.add_argument("--duration", type=float, required=True)
+    p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_flood)
+    p = sub.add_parser("linkloss")
+    p.add_argument("--iface", default="lab0")
+    p.add_argument("--guest-mac", required=True)
+    p.add_argument("--sock", required=True)
+    p.add_argument("--down-after", type=float, default=2.0)
+    p.add_argument("--hold-max", type=float, default=15.0)
+    p.add_argument("--wait-first", type=float, default=120.0)
+    p.add_argument("--stop-file", required=True)
+    p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_linkloss)
     p = sub.add_parser("inject")
     p.add_argument("--iface", required=True)
     p.add_argument("--peer-mac", required=True)

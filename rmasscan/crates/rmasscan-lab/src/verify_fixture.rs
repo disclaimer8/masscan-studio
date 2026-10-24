@@ -6,13 +6,13 @@
 use super::*;
 use crate::windows_suite::{capture_commands, mutate_checkpoint};
 
-pub(super) const SM: &str = "52:54:00:04:80:a9";
-pub(super) const PM: &str = "02:57:4c:3d:2e:9b";
-pub(super) const NETNS: &str = "wvp-n2";
-const NPF: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
-const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-const EXE: &str = "abababababababababababababababababababababababababababababababab";
-const BASE: f64 = 1_800_000_000.0;
+pub(crate) const SM: &str = "52:54:00:04:80:a9";
+pub(crate) const PM: &str = "02:57:4c:3d:2e:9b";
+pub(crate) const NETNS: &str = "wvp-n2";
+pub(crate) const NPF: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
+pub(crate) const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+pub(crate) const EXE: &str = "abababababababababababababababababababababababababababababababab";
+pub(crate) const BASE: f64 = 1_800_000_000.0;
 const SRC: [u8; 4] = [198, 18, 0, 1];
 const DST: [u8; 4] = [198, 18, 0, 2];
 
@@ -51,7 +51,7 @@ fn frame(
     b[47] = flags;
     b
 }
-pub(super) fn scanner_syn(port: u16, sport: u16) -> Vec<u8> {
+pub(crate) fn scanner_syn(port: u16, sport: u16) -> Vec<u8> {
     frame(SM, PM, SRC, DST, sport, port, 2, 1)
 }
 fn peer_reply(port: u16, sport: u16, open: bool) -> Vec<u8> {
@@ -368,7 +368,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
         meta,
     }
 }
-pub(super) fn write_capture(
+pub(crate) fn write_capture(
     dir: &Path,
     man: &Value,
     schema: u64,
@@ -503,7 +503,7 @@ fn write_run(root: &Path, man: &Value, it: &Value, schema: u64) {
     }
 }
 /// Build a complete synthetic failure-plan directory (18 runs plus fixtures).
-pub(super) fn build_failure(root: &Path, schema: u64) {
+pub(crate) fn build_failure(root: &Path, schema: u64) {
     fs::create_dir_all(root.join("fixtures")).unwrap();
     let man = manifest(schema);
     put(root, "manifest.json", pretty(&man));
@@ -532,7 +532,7 @@ pub(super) fn build_failure(root: &Path, schema: u64) {
 /// Re-hash the files named by `run-artifacts.json`. Tests that mutate the
 /// scanner's own output (run.json) call this to model "the scanner really
 /// reported that", so only the rule under test reacts and not the hash proof.
-pub(super) fn reseal(run_dir: &Path) {
+pub(crate) fn reseal(run_dir: &Path) {
     let p = run_dir.join("run-artifacts.json");
     let Some(mut proof) = read_json(&p) else {
         return;

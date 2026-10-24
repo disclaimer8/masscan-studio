@@ -20,15 +20,16 @@ pub(crate) fn safe_id(s: &str) -> bool {
 pub(crate) fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
+/// Unguessable per-process run identifier: `r` plus 16 bytes from the operating system RNG
+/// as hex. It binds every guest Verify report and every returned artifact to one invocation,
+/// so it must not be derivable from the pid or the clock.
 pub(crate) fn nonce() -> String {
-    format!(
-        "r{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    )
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("the operating system RNG is unavailable");
+    format!("r{}", hex_of(&bytes))
+}
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 fn invocation_nonce(run: &str, tag: &str) -> String {
     let tag_hash = Sha256::digest(tag.as_bytes())
@@ -251,6 +252,66 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+/// Every external process of the orchestrator (ssh, scp) goes through this seam, so gate and
+/// run behaviour is testable offline with a recording stand and nothing can reach a host by
+/// accident.
+pub(crate) trait Exec {
+    fn exec(&self, argv: &[String], timeout: u64) -> Result<Output, String>;
+    fn pause(&self, d: Duration) {
+        thread::sleep(d);
+    }
+}
+pub(crate) struct Real;
+impl Exec for Real {
+    fn exec(&self, argv: &[String], timeout: u64) -> Result<Output, String> {
+        command(argv, timeout, false)
+    }
+}
+/// A suite failure with the exit code that operator scripts key off. NOT RUN (2) is a refusal
+/// before any remote action; the others happen once a run has begun or on an unusable directory.
+#[derive(Debug, PartialEq)]
+pub(crate) enum SuiteError {
+    NotRun(String),
+    Abort(String),
+    RerunRefused(String),
+    SchemaTooOld(String),
+}
+pub const EXIT_NOT_RUN: i32 = 2;
+pub const EXIT_ABORT: i32 = 10;
+pub const EXIT_RERUN_REFUSED: i32 = 11;
+pub const EXIT_SCHEMA_TOO_OLD: i32 = 12;
+/// Directories written by this suite carry this capture schema (3: nonce chain mandatory).
+pub(crate) const CAPTURE_SCHEMA: u64 = 3;
+impl SuiteError {
+    pub(crate) fn code(&self) -> i32 {
+        match self {
+            Self::NotRun(_) => EXIT_NOT_RUN,
+            Self::Abort(_) => EXIT_ABORT,
+            Self::RerunRefused(_) => EXIT_RERUN_REFUSED,
+            Self::SchemaTooOld(_) => EXIT_SCHEMA_TOO_OLD,
+        }
+    }
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::NotRun(m) | Self::Abort(m) | Self::RerunRefused(m) | Self::SchemaTooOld(m) => m,
+        }
+    }
+}
+impl From<String> for SuiteError {
+    fn from(m: String) -> Self {
+        Self::NotRun(m)
+    }
+}
+impl From<&str> for SuiteError {
+    fn from(m: &str) -> Self {
+        Self::NotRun(m.into())
+    }
+}
+/// A directory written before the current capture schema cannot be extended: its runs lack
+/// the nonce chain and the verifier would reject new runs next to them.
+pub(crate) fn schema_too_old(manifest: &Value) -> bool {
+    manifest["capture_schema"].as_u64().unwrap_or(1) < CAPTURE_SCHEMA
+}
 const NETNS: &str = "wvp-n2";
 /// The exact tcpdump command lines the suite starts, and the eno1 filter. The
 /// verifier validates the recorded argv against the same shape.
@@ -272,7 +333,8 @@ pub(crate) fn capture_commands(netns: &str, rev: &str, pm: &str) -> (String, Str
 const GUEST: &str = "C:\\Users\\lab\\t4";
 const IFACE: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
 const MAC: &str = "52:54:00:04:80:a9";
-struct Suite {
+struct Suite<'a> {
+    exec: &'a dyn Exec,
     out: PathBuf,
     suite: String,
     run_id: String,
@@ -285,9 +347,26 @@ struct Suite {
     timeout: u64,
     pm: String,
 }
-impl Suite {
+/// `check` turns a non-zero exit into an error, like `command(.., check)`.
+fn checked(out: Output, argv0: &str, check: bool) -> Result<Output, String> {
+    if check && out.rc != 0 {
+        Err(format!(
+            "{argv0} failed ({}): {} {}",
+            out.rc,
+            out.stderr.chars().take(600).collect::<String>(),
+            out.stdout.chars().take(600).collect::<String>()
+        ))
+    } else {
+        Ok(out)
+    }
+}
+impl Suite<'_> {
+    fn run_cmd(&self, argv: &[String], timeout: u64, check: bool) -> Result<Output, String> {
+        let out = self.exec.exec(argv, timeout)?;
+        checked(out, argv.first().map_or("", String::as_str), check)
+    }
     fn home(&self, cmd: &str, check: bool) -> Result<Output, String> {
-        command(
+        self.run_cmd(
             &strings(&[
                 "ssh",
                 "-o",
@@ -302,7 +381,7 @@ impl Suite {
         )
     }
     fn guest(&self, cmd: &str, check: bool) -> Result<Output, String> {
-        command(
+        self.run_cmd(
             &strings(&[
                 "ssh",
                 "-o",
@@ -347,7 +426,21 @@ impl Suite {
         } else {
             vec![remote, local]
         });
-        command(&a, 180, check).map(|_| ())
+        self.run_cmd(&a, 180, check).map(|_| ())
+    }
+    /// Best-effort copy of a remote scratch directory into local evidence (never fails the caller).
+    fn fetch_dir(&self, remote: &str, local: &Path) {
+        let _ = fs::create_dir_all(local);
+        let a = vec![
+            "scp".to_string(),
+            "-q".into(),
+            "-r".into(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            format!("home-pc:{remote}/."),
+            local.to_string_lossy().into_owned(),
+        ];
+        let _ = self.run_cmd(&a, 180, false);
     }
     fn peer(&self, args: &str) -> String {
         format!(
@@ -355,11 +448,14 @@ impl Suite {
             quote(&self.remote)
         )
     }
-    fn bg(&self, cmd: &str, pid: &str, err: &str) -> Result<(), String> {
+    /// Start a root process detached on home-pc. It runs under `timeout` (dead-man): if this
+    /// orchestrator dies, nothing outlives `bound` seconds, and a TERM to the recorded pid is
+    /// forwarded to the child so link-restoring handlers still run.
+    fn bg(&self, cmd: &str, pid: &str, err: &str, bound: u64) -> Result<(), String> {
         self.home(
             &format!(
                 "nohup sudo -n sh -c {} > /dev/null 2> {} < /dev/null &",
-                    quote(&format!("born=$(awk '{{print $22}}' /proc/$$/stat) || exit 1; printf '%s %s\\n' \"$$\" \"$born\" > {}; exec {cmd}", quote(pid))),
+                    quote(&format!("born=$(awk '{{print $22}}' /proc/$$/stat) || exit 1; printf '%s %s\\n' \"$$\" \"$born\" > {}; exec timeout -k 10 {bound} {cmd}", quote(pid))),
                 quote(err)
             ),
             true,
@@ -375,7 +471,7 @@ impl Suite {
             if self.home(condition, false)?.rc == 0 {
                 return Ok(());
             }
-            thread::sleep(Duration::from_millis(200));
+            self.exec.pause(Duration::from_millis(200));
         }
         Err(format!("timeout waiting for {condition}"))
     }
@@ -419,7 +515,9 @@ impl Suite {
         fs::write(ev.join(name), &r.stdout).map_err(|e| e.to_string())?;
         serde_json::from_str(&r.stdout).map_err(|e| e.to_string())
     }
-    fn gate(&self, ev: &Path, rev: &str, tag: &str) -> Result<(), String> {
+    /// The per-run raw-run gate. Returns the guest Verify exit code (always 0 on success) so
+    /// it is recorded in the run's evidence. Nothing here sends a frame.
+    fn gate(&self, ev: &Path, rev: &str, tag: &str) -> Result<i32, String> {
         let invocation_nonce = invocation_nonce(&self.run_id, tag);
         let report = fresh_report(&self.suite, tag, &self.run_id)?;
         let gp = format!("C:\\Users\\lab\\{}", report.replace('/', "\\"));
@@ -428,14 +526,34 @@ impl Suite {
             cmdquote(&invocation_nonce)?,
             cmdquote(&gp)?
         );
-        invoke_fresh_report(
+        let verify_rc = std::cell::Cell::new(-1);
+        let fresh = invoke_fresh_report(
             &invocation_nonce,
-            || self.guest(&cmd, false),
+            || {
+                let out = self.guest(&cmd, false)?;
+                verify_rc.set(out.rc);
+                fs::write(ev.join("guest-verify-stdout.txt"), &out.stdout)
+                    .map_err(|e| e.to_string())?;
+                fs::write(ev.join("guest-verify-stderr.txt"), &out.stderr)
+                    .map_err(|e| e.to_string())?;
+                Ok(out)
+            },
             || {
                 self.transfer(true, false, &ev.join("guest-verify.json"), &report, true)?;
                 read_json(ev.join("guest-verify.json"))
             },
         )?;
+        // The scanner is told which NPF device to open; it must be the lab NIC this very
+        // Verify just proved, not a constant that may have drifted from the guest.
+        let npf = fresh["npf"]
+            .as_str()
+            .or(fresh["lab"]["Npf"].as_str())
+            .unwrap_or("");
+        if npf != IFACE {
+            return Err(format!(
+                "freshly verified lab NIC {npf:?} differs from scanner --iface {IFACE:?}"
+            ));
+        }
         self.transfer(
             false,
             true,
@@ -461,7 +579,7 @@ impl Suite {
         {
             return Err("raw run isolation gate refused".into());
         }
-        Ok(())
+        Ok(verify_rc.get())
     }
     fn cp(&self, n: u64) -> String {
         format!("{GUEST}\\cp\\{}\\{}\\N{n}.bin", self.suite, self.run_id)
@@ -535,15 +653,19 @@ impl Suite {
         for n in ["listener", "inject", "flood", "linkloss", "peer", "eno1"] {
             self.stop(&format!("{rev}/{n}.pid"), "TERM");
         }
-        // Keep remote evidence on errors. Successful copies are hash checked before cleanup.
         if result.is_ok() {
-            self.home(
-                &format!(
-                    "test \"$(readlink -f -- {p})\" = {p} && rm -rf -- {p}",
-                    p = quote(&rev)
-                ),
-                true,
-            )?;
+            // Successful copies were hash checked before this point.
+            self.home(&remove_scratch_command(&rev), true)?;
+        } else {
+            // Keep the remote scratch directory and also bring a copy home, so an aborted
+            // run leaves its tcpdump/listener logs in the evidence tree.
+            self.fetch_dir(
+                &rev,
+                &self
+                    .out
+                    .join("runs_aborted")
+                    .join(format!("{tag}.{}", self.run_id)),
+            );
         }
         result
     }
@@ -558,7 +680,7 @@ impl Suite {
     ) -> Result<(), String> {
         let tag = item["tag"].as_str().ok_or("tag missing")?;
         let kind = item["kind"].as_str().unwrap_or("");
-        self.gate(ev, rev, tag)?;
+        let verify_exit = self.gate(ev, rev, tag)?;
         if kind == "resume" {
             let n = item["n"].as_u64().ok_or("resume n missing")?;
             let saved = self
@@ -608,6 +730,7 @@ impl Suite {
             )),
             &lis,
             &format!("{rev}/listener.err"),
+            self.bound(),
         )?;
         self.wait(
             &format!("test -s {}", quote(&format!("{rev}/listener.json"))),
@@ -624,7 +747,12 @@ impl Suite {
         let c0 = self.counters()?;
         let drops0 = (self.interface_drops(true)?, self.interface_drops(false)?);
         for (n, cmd) in [("peer", &peer_cmd), ("eno1", &eno_cmd)] {
-            self.bg(cmd, &format!("{rev}/{n}.pid"), &format!("{rev}/{n}.err"))?;
+            self.bg(
+                cmd,
+                &format!("{rev}/{n}.pid"),
+                &format!("{rev}/{n}.err"),
+                self.bound(),
+            )?;
         }
         self.wait(
             &format!(
@@ -656,8 +784,8 @@ impl Suite {
                 .split('-')
                 .next()
                 .unwrap_or("40000");
-            self.bg(&self.peer(&format!("inject --iface lab0 --peer-mac {} --guest-mac {MAC} --src-ip 198.18.0.1 --sport {sport} --silent 8099 --out {} --wait-first 120 --duration 2.0",self.pm,quote(&format!("{rev}/injector.json")))),&format!("{rev}/inject.pid"),&format!("{rev}/inject.err"))?;
-            thread::sleep(Duration::from_millis(500));
+            self.bg(&self.peer(&format!("inject --iface lab0 --peer-mac {} --guest-mac {MAC} --src-ip 198.18.0.1 --sport {sport} --silent 8099 --out {} --wait-first 120 --duration 2.0",self.pm,quote(&format!("{rev}/injector.json")))),&format!("{rev}/inject.pid"),&format!("{rev}/inject.err"),150)?;
+            self.exec.pause(Duration::from_millis(500));
         }
         let flood = kind == "rxloss" || (kind == "stop" && item["scenario"] == "load");
         if flood {
@@ -669,12 +797,13 @@ impl Suite {
                 )),
                 &format!("{rev}/flood.pid"),
                 &format!("{rev}/flood.err"),
+                60,
             )?;
-            thread::sleep(Duration::from_millis(1500));
+            self.exec.pause(Duration::from_millis(1500));
         }
         if kind == "linkloss" {
-            self.bg(&self.peer(&format!("linkloss --guest-mac {MAC} --sock {} --down-after 2.0 --hold-max 40 --stop-file {} --out {}",quote(&self.qmp),quote(&format!("{rev}/linkloss.stop")),quote(&format!("{rev}/linkloss.json")))),&format!("{rev}/linkloss.pid"),&format!("{rev}/linkloss.err"))?;
-            thread::sleep(Duration::from_millis(500));
+            self.bg(&self.peer(&format!("linkloss --guest-mac {MAC} --sock {} --down-after 2.0 --hold-max 40 --stop-file {} --out {}",quote(&self.qmp),quote(&format!("{rev}/linkloss.stop")),quote(&format!("{rev}/linkloss.json")))),&format!("{rev}/linkloss.pid"),&format!("{rev}/linkloss.err"),100)?;
+            self.exec.pause(Duration::from_millis(500));
         }
         let gstart = epoch();
         let gout = self.runner(ev, tag, argv, false, kind == "perm_restricted")?;
@@ -712,7 +841,7 @@ impl Suite {
                 if start.elapsed() > Duration::from_secs(60) {
                     return Err("link did not restore".into());
                 }
-                thread::sleep(Duration::from_secs(1));
+                self.exec.pause(Duration::from_secs(1));
             }
         }
         self.stop(&lis, "TERM");
@@ -820,6 +949,7 @@ impl Suite {
         let runner = read_json(ev.join("guest-runner.json"))?;
         meta["exe_sha256"] = runner["exe_sha256"].clone();
         meta["guest_times"] = runner["times"].clone();
+        meta["guest_verify_exit"] = json!(verify_exit);
         meta["guest_exit"] = json!(
             fs::read_to_string(ev.join("guest-exit.txt"))
                 .map_err(|e| e.to_string())?
@@ -829,7 +959,7 @@ impl Suite {
                 .map_err(|e| e.to_string())?
         );
         fs::rename(ev.join("guest-nic.json"), ev.join("nic.json")).map_err(|e| e.to_string())?;
-        let mut cap = json!({"capture_schema":2,"quiet":{"reached":quiet,"quiet_s":if quiet{1.5}else{0.0}},"status_post_raw_run_allowed":post["raw_run_allowed"]});
+        let mut cap = json!({"capture_schema":CAPTURE_SCHEMA,"quiet":{"reached":quiet,"quiet_s":if quiet{1.5}else{0.0}},"status_post_raw_run_allowed":post["raw_run_allowed"]});
         for (n, cmd, exited, filt) in [
             ("peer", &peer_cmd, ep, "(none: every frame on lab0)"),
             ("eno1", &eno_cmd, ee, filter.as_str()),
@@ -869,6 +999,8 @@ impl Suite {
             "run.json",
             "guest-runner.json",
             "guest-verify.json",
+            "guest-verify-stdout.txt",
+            "guest-verify-stderr.txt",
         ] {
             artifact_hashes.insert(file.into(), json!(hash(ev.join(file))?));
         }
@@ -885,8 +1017,34 @@ impl Suite {
                 true,
             )?;
         }
-        Ok(())
+        eno1_interlock(&cap)
     }
+    /// Seconds a detached remote tool may live at most: the per-run timeout plus slack for the
+    /// capture tail. A dead orchestrator therefore leaves nothing running past this bound.
+    fn bound(&self) -> u64 {
+        self.timeout + 180
+    }
+}
+/// Live isolation interlock: any lab frame on the user's LAN interface, or an eno1 capture
+/// that cannot be read back, aborts the suite before another raw run starts.
+pub(crate) fn eno1_interlock(cap: &Value) -> Result<(), String> {
+    match cap["eno1"]["pcap"]["frames"].as_u64() {
+        Some(0) => Ok(()),
+        Some(n) => Err(format!(
+            "eno1 interlock: {n} lab frame(s) captured on the host LAN interface; no further raw run"
+        )),
+        None => Err(
+            "eno1 interlock: the eno1 capture is unreadable, so LAN isolation is unproven; no further raw run"
+                .into(),
+        ),
+    }
+}
+/// Remote scratch removal: only the exact, symlink-free run directory this suite created.
+pub(crate) fn remove_scratch_command(rev: &str) -> String {
+    format!(
+        "test \"$(readlink -f -- {p})\" = {p} && test ! -L {p} && rm -rf -- {p}",
+        p = quote(rev)
+    )
 }
 fn cmdquote(s: &str) -> Result<String, String> {
     if s.chars().any(|c| "\"%\r\n!&|<>^".contains(c)) {
@@ -945,17 +1103,71 @@ pub(crate) fn mutate_checkpoint(variant: &str, data: &[u8]) -> Result<Vec<u8>, S
     }
     Ok(d)
 }
+/// Entry point of `windows-suite`. NOT RUN refusals (exit 2) are returned as errors; once a
+/// run has begun or a directory is unusable the distinct exit codes 10/11/12 are returned.
 pub fn run(args: &[String]) -> Result<i32, String> {
+    match run_with(args, &Real) {
+        Ok(code) => Ok(code),
+        Err(SuiteError::NotRun(m)) => Err(m),
+        Err(e) => {
+            let label = match e {
+                SuiteError::Abort(_) => "ABORT",
+                SuiteError::RerunRefused(_) => "RERUN REFUSED",
+                _ => "SCHEMA TOO OLD",
+            };
+            eprintln!("{label}: {}", e.message());
+            Ok(e.code())
+        }
+    }
+}
+fn home_cmd(exec: &dyn Exec, cmd: &str, check: bool) -> Result<Output, String> {
+    let argv = strings(&[
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        "home-pc",
+        cmd,
+    ]);
+    checked(exec.exec(&argv, 180)?, "ssh", check)
+}
+fn remote_home(exec: &dyn Exec) -> Result<String, String> {
+    let home = home_cmd(exec, "printf '%s' \"$HOME\"", true)?.stdout;
+    if !home.starts_with('/') || home.contains('\n') {
+        return Err("invalid remote home".into());
+    }
+    Ok(home)
+}
+/// Stop every pidfile-recorded remote process (pid + start time must match), then remove the
+/// suite's scratch directory. Used by `--cleanup` and at suite start, so a dead orchestrator
+/// never blocks the next one.
+fn sweep_remote(exec: &dyn Exec, suite: &str) -> Result<(), String> {
+    if !safe_id(suite) {
+        return Err("--suite must be a safe identifier".into());
+    }
+    let ev = format!("{}/winvm/t4-ev", remote_home(exec)?);
+    home_cmd(exec, &sweep_command(&ev, "TERM"), false)?;
+    exec.pause(Duration::from_secs(3));
+    home_cmd(exec, &sweep_command(&ev, "KILL"), false)?;
+    home_cmd(
+        exec,
+        &remove_scratch_command(&format!("{ev}/{suite}")),
+        true,
+    )?;
+    Ok(())
+}
+pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     let o = options(args)?;
     if o.contains_key("help") {
         println!(
-            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab [--suite ID] [--plan functional|failure] [--only TAG ...] [--rerun] [--list]"
+            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab [--suite ID] [--plan functional|failure] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote action), 10 aborted, 11 rerun refused, 12 directory capture schema too old"
         );
         return Ok(0);
     }
     let plan = opt(&o, "plan", "functional");
     if !matches!(plan.as_str(), "functional" | "failure") {
-        return Err("unknown suite plan".into());
+        return Err("unknown suite plan".to_string().into());
     }
     let items = crate::verify::planned(&json!({"plan":plan}));
     if o.contains_key("list") {
@@ -968,30 +1180,37 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         }
         return Ok(0);
     }
-    let out = PathBuf::from(required(&o, "out")?);
     let suite = opt(&o, "suite", "functional");
     if !safe_id(&suite) {
-        return Err("--suite must be a safe identifier".into());
+        return Err("--suite must be a safe identifier".to_string().into());
     }
+    if o.contains_key("cleanup") {
+        sweep_remote(exec, &suite)?;
+        println!("remote processes stopped and scratch directory removed for suite {suite}");
+        return Ok(0);
+    }
+    let out = PathBuf::from(required(&o, "out")?);
     let commit = required(&o, "commit")?;
     if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("--commit requires full SHA".into());
+        return Err("--commit requires full SHA".to_string().into());
     }
     let remote = required(&o, "remote-lab")?;
     if !remote.starts_with('/') || remote.contains('\n') {
-        return Err("--remote-lab must be absolute Linux binary path".into());
+        return Err("--remote-lab must be absolute Linux binary path"
+            .to_string()
+            .into());
     }
     let guest_exe = required(&o, "guest-exe")?;
     cmdquote(&guest_exe)?;
     let fixtures = PathBuf::from(required(&o, "fixtures")?);
     let fx = read_json(fixtures.join("manifest.json"))?;
     if fx["all_valid"] != true {
-        return Err("oracle fixtures are not all valid".into());
+        return Err("oracle fixtures are not all valid".to_string().into());
     }
     let only = o.get("only").cloned().unwrap_or_default();
     for tag in &only {
         if !safe_id(tag) || !items.iter().any(|i| i["tag"] == *tag) {
-            return Err(format!("unknown/unsafe tag {tag}"));
+            return Err(format!("unknown/unsafe tag {tag}").into());
         }
     }
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
@@ -1000,31 +1219,33 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         .as_ref()
         .is_some_and(|m| m["code_commit"] != commit || m["plan"] != plan || m["suite"] != suite)
     {
-        return Err("existing manifest identity differs".into());
+        return Err("existing manifest identity differs".to_string().into());
     }
-    if old
-        .as_ref()
-        .is_some_and(|m| m["capture_schema"].as_u64().unwrap_or(1) < 2)
-    {
-        return Err("use new directory: capture schema too old".into());
+    if old.as_ref().is_some_and(schema_too_old) {
+        return Err(SuiteError::SchemaTooOld(format!(
+            "use a new directory: capture schema is older than {CAPTURE_SCHEMA}"
+        )));
     }
     let mut moves = vec![];
     if o.contains_key("rerun") {
         if only.is_empty() {
-            return Err("--rerun requires explicit --only tags".into());
+            return Err("--rerun requires explicit --only tags".to_string().into());
         }
         for tag in &only {
             let p = out.join("runs").join(tag);
             if p.exists() {
                 let (v, b) = crate::verify::run_status(&out, tag);
                 if !may_discard(&v, b) {
-                    return Err(format!("cannot discard {tag}: {v}, behaviour failure={b}"));
+                    return Err(SuiteError::RerunRefused(format!(
+                        "cannot discard {tag}: {v}, behaviour failure={b}"
+                    )));
                 }
                 moves.push(p);
             }
         }
     }
     let mut s = Suite {
+        exec,
         out,
         suite,
         run_id: nonce(),
@@ -1036,16 +1257,15 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         plan,
         timeout: opt(&o, "run-timeout", "240")
             .parse()
-            .map_err(|_| "bad run timeout")?,
+            .map_err(|_| "bad run timeout".to_string())?,
         pm: String::new(),
     };
-    let home = s.home("printf '%s' \"$HOME\"", true)?.stdout;
-    if !home.starts_with('/') || home.contains('\n') {
-        return Err("invalid remote home".into());
-    }
+    let home = remote_home(exec)?;
     s.remote_ev = format!("{home}/winvm/t4-ev");
     s.qmp = format!("{home}/winvm/qmp.sock");
     s.manifest = format!("{home}/winvm/lab/n2.json");
+    // Nothing from a dead earlier orchestrator may still be running when this one starts.
+    sweep_remote(exec, &s.suite)?;
     s.home(
         &format!(
             "test -x {} && mkdir -p -- {}",
@@ -1063,18 +1283,26 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         .trim()
         .into();
     if !valid_mac(&s.pm) {
-        return Err("invalid peer MAC".into());
+        return Err("invalid peer MAC".to_string().into());
     }
     let scripts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
-    s.guest(&format!("pwsh -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{GUEST}\\in','{GUEST}\\cp\\{}\\{}' | Out-Null\"",s.suite,s.run_id),true)?;
     for f in [
         "windows_wire_run.ps1",
         "windows_wire_hash.ps1",
+        "windows_wire_prepare.ps1",
         "windows_wire_runas.cmd",
         "windows_wire_restricted.cmd",
     ] {
         s.transfer(true, true, &scripts.join(f), &format!("t4/{f}"), true)?;
     }
+    s.guest(
+        &format!(
+            "pwsh -NoProfile -File {GUEST}\\windows_wire_prepare.ps1 -Suite {} -RunId {}",
+            cmdquote(&s.suite)?,
+            cmdquote(&s.run_id)?
+        ),
+        true,
+    )?;
     for p in moves {
         let dst = s.out.join("runs_discarded");
         fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
@@ -1083,7 +1311,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     }
     let man = if let Some(old) = old {
         if old["code_commit"] != commit || old["plan"] != s.plan || old["suite"] != s.suite {
-            return Err("existing manifest identity differs".into());
+            return Err("existing manifest identity differs".to_string().into());
         }
         old
     } else {
@@ -1098,9 +1326,9 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             .stdout;
         let eh = eh.split_whitespace().collect::<Vec<_>>();
         if eh.len() != 2 {
-            return Err("invalid executable hash response".into());
+            return Err("invalid executable hash response".to_string().into());
         }
-        let man = json!({"schema":1,"capture_schema":2,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"created_utc":epoch()});
+        let man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"created_utc":epoch()});
         write_json(s.out.join("manifest.json"), &man)?;
         copy_tree(&fixtures, &s.out.join("fixtures"))?;
         man
@@ -1138,7 +1366,8 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             }
             forge = Some(a);
         }
-        s.one(&item, argv, forge, Some(cp))?;
+        s.one(&item, argv, forge, Some(cp))
+            .map_err(SuiteError::Abort)?;
     }
     println!(
         "all planned runs executed; verify offline with rmasscan-lab windows-verify --dir {}",
@@ -1179,17 +1408,30 @@ fn scratch_create(root: &str, suite: &str, nonce: &str, tag: &str) -> Result<Str
     Ok(commands.join(" && "))
 }
 fn owned_process_command(pidfile: &str, signal: Option<&str>) -> String {
+    owned_process_body(&quote(pidfile), signal)
+}
+/// `p` is an already shell-quoted word (a quoted path or `"$pidfile"`).
+fn owned_process_body(p: &str, signal: Option<&str>) -> String {
     let action = match signal {
         Some("TERM") => "sudo -n kill -TERM -- \"$pid\" 2>/dev/null",
         Some("INT") => "sudo -n kill -INT -- \"$pid\" 2>/dev/null",
+        Some("KILL") => "sudo -n kill -KILL -- \"$pid\" 2>/dev/null",
         None => "false",
         _ => "false",
     };
     // proc stat's comm field can contain whitespace/parentheses. Strip through
     // its final ')' before selecting starttime (field 20 of the remainder).
     format!(
-        "test ! -s {p} || {{ read -r pid born extra < {p}; case \"$pid:$born\" in *[!0-9:]*|:*|*:) exit 1;; esac; test -z \"$extra\" || exit 1; actual=$(sed 's/.*) //' /proc/\"$pid\"/stat 2>/dev/null | awk '{{print $20}}'); if test \"$actual\" != \"$born\"; then exit 0; fi; {action}; }}",
-        p = quote(pidfile)
+        "test ! -s {p} || {{ read -r pid born extra < {p}; case \"$pid:$born\" in *[!0-9:]*|:*|*:) exit 1;; esac; test -z \"$extra\" || exit 1; actual=$(sed 's/.*) //' /proc/\"$pid\"/stat 2>/dev/null | awk '{{print $20}}'); if test \"$actual\" != \"$born\"; then exit 0; fi; {action}; }}"
+    )
+}
+/// Signal every process whose pidfile sits under `<ev>/<suite>/<run>/<tag>/`. A pidfile whose
+/// recorded start time no longer matches (pid reuse) is skipped, exactly like a single stop.
+pub(crate) fn sweep_command(ev: &str, signal: &str) -> String {
+    format!(
+        "for pidfile in {}/*/*/*/*.pid; do ( {} ); done; true",
+        quote(ev),
+        owned_process_body("\"$pidfile\"", Some(signal))
     )
 }
 
@@ -1379,3 +1621,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "windows_suite_tests.rs"]
+mod suite_tests;

@@ -56,8 +56,7 @@ History and profiles are stored in
 ## Build and test
 
 ```sh
-swift test
-python3 scripts/test_helper.py
+swift test   # includes the persistent-runner tests (Tests/ScanCoreTests/RunnerTests.swift)
 bash scripts/package.sh
 ```
 

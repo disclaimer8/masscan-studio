@@ -1,0 +1,3 @@
+[wire-lab] suite perf finished rc=0 (see /home/a1/t4-out/perf/suite.log, results.json)
+[wire-lab] done: /home/a1/t4-out/perf/results.json
+[wire-lab] cleanup: rc=0 own_pids=1 namespaces_left=0

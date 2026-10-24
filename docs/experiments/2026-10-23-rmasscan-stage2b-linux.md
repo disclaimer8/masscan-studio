@@ -8,6 +8,11 @@
 > RX integrity и TX stall (`364ee49`, `c31ae16`) в этом отчёте не проверялись;
 > перечень возможностей см. §0 спеки studio
 > `docs/superpowers/specs/2026-10-23-cross-platform-qt-rust-design.md`.
+>
+> **Заменено (superseded-by):** результаты на `98ae43e` (матрица 40/40, паритет 1.027/1.003/1.001/1.002)
+> не относятся к текущему коду. Актуальная приёмка после контрактных правок `364ee49`/`c31ae16` — раздел
+> «Повторная приёмка Linux 2026-10-24» в конце этого файла и каталог
+> `2026-10-24-rmasscan-linux-acceptance-raw/`. Старые данные сохранены без изменений.
 
 Дата: 2026-10-23. Ветка `feat/rmasscan-stage2b-linux`, база задачи `7ce39bc`. Реальный
 AF_PACKET-ввод-вывод Rust-движка против закреплённого C-oracle ТОЛЬКО в замкнутом стенде
@@ -392,3 +397,124 @@ namespace): `rust-run1/2.results.json` + `.suite.log` (по строке на п
 `rust-isolation.json`, `rust-topology-*.txt`, `perf-final.results.json` (40 ячеек, каждая с capture-метой,
 счётчиками, CPU/RSS, остановкой), `perf-runA-*`, `perf-runC-*`, `perf-env.json`,
 `experiment-ignore-outgoing-100k.*` (черновая проверка), `perf-postfix.*`, `rust-postfix.*`, `perf-round3.*` и `perf-round3-1k-x10.*` (исправленный захват, 40/40 VALID; ТЕКУЩИЙ), `perf-round2.*`, `rust-round2.*` (после исправления находки 5; 38/40, заменён round3). Крупные pcap и бинарь oracle не включены.
+
+---
+
+## Повторная приёмка Linux 2026-10-24 (после контрактов RX integrity и TX stall)
+
+Заменяет результаты `98ae43e` (они остаются выше как историческая запись). Сырые данные:
+[`2026-10-24-rmasscan-linux-acceptance-raw/`](2026-10-24-rmasscan-linux-acceptance-raw/) (JSON-вердикты,
+логи, topology, isolation, env, команды, sha256 бинарей и 40 pcap набора `rust`; pcap perf-матрицы по
+дизайну удаляются драйвером после проверки, остаются их вердикты и счётчики).
+
+Что проверено, а что нет (слои не смешиваются): офлайн-тесты; lab wire на netns/veth `minipc`. НЕ проверено:
+физический NIC, CI на точном HEAD, Windows, UI.
+
+### Привязка к коммиту
+
+- Код/тесты/скрипты: **`ee51a19407ffb360d0ad9a0c683bd231d579b14c`** (ветка `feat/rmasscan-stage2b-linux`; предыдущие
+  `ad85ddd` тест engine, `66902da` docs). Прогон на чистом дереве: на `minipc` развёрнут
+  `git archive ee51a19 rmasscan` (в `~/rmasscan-t4-accept`, без правок), хэш списка файлов
+  `feec6c24da3943487f5cb3cf7cfe59064c4370d54b19f15cd213e618336ebac5` совпал с Mac, git tree `rmasscan/` =
+  `844a5e3e002d1b5bfba2c0f5001411bde8a4e702`. Dirty diff на Mac: пуст (кроме неотслеживаемых планов, review-файла и `supertool`).
+  Evidence-коммит добавляет только docs/evidence.
+- Хост: Ubuntu 26.04.1 LTS, ядро 7.0.0-38-generic x86_64, Python 3.14.4, tcpdump 4.99.6 (libpcap 1.10.6,
+  TPACKET_V3), rustc 1.99.1, `/etc/masscan/masscan.conf` отсутствует.
+- `wire_scan` (release) sha256 `1565974a8bb6c3da0f84927ab0aaad77b54c1d4bf1b5aea952cbedda1217eaf3`.
+- C-oracle: `8e6b3b0c07a81e8ea61d557c06134a21a6881614`, дерево чистое, оригинальный (не `--offline`) бинарь
+  sha256 `8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e` (равен бинарю из манифеста фикстур).
+- Скрипты sha256: `wire_suite.py` `c263382fc5b6...c80c7a` (полностью в `binaries-and-host.txt`), `wire-lab.sh`
+  `c59d6bdf51f4...b7c`, `wire_capture.py` `62ef56f53a9f...41c3`, `verify-wire.py` `fcb06cbdc917...dcef`.
+
+### Команды
+
+```bash
+# Mac
+cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check bans licenses sources; cargo test --locked --workspace
+cargo test -p rmasscan-core --test no_c_in_build
+python3 scripts/verify-wire.py --self-test; python3 scripts/wire_suite.py --self-test
+# minipc (вне netns): сборка
+cargo build --locked --release -p rmasscan-net --example wire_scan
+cargo clippy --locked --workspace --all-targets -- -D warnings; cargo test --locked --workspace
+# lab (sudo -n внутри wire-lab.sh)
+scripts/wire-lab.sh --oracle ~/rmasscan-oracle/masscan/bin/masscan --out ~/t4-out/rust --suite rust \
+    --rust-bin target/release/examples/wire_scan --fixtures tests/golden/wire
+scripts/wire-lab.sh --oracle ~/rmasscan-oracle/masscan/bin/masscan --out ~/t4-out/perf --suite perf \
+    --rust-bin target/release/examples/wire_scan --fixtures tests/golden/wire --reps 5
+RMASSCAN_WIRE_RESULTS=~/t4-out/rust RMASSCAN_WIRE_PERF_RESULTS=~/t4-out/perf \
+    cargo test --locked -p rmasscan-net --test linux_wire -- --include-ignored
+bash linux_io-lab.sh      # свои netns, linux_io --ignored --test-threads=1 + непривилегированный uid
+```
+
+### Итоги
+
+| Проверка | Результат |
+| --- | --- |
+| Mac: fmt, clippy `-D warnings`, deny (bans licenses sources), `cargo test --locked --workspace`, no-C guard | чисто / ok / все тесты ok |
+| minipc: clippy workspace, `cargo test --locked --workspace` | чисто; 366 passed, 0 failed, 13 ignored |
+| minipc: `rmasscan-net --lib` | 42 passed |
+| Python self-test | `verify-wire.py` 31/31, `wire_suite.py` 43/43 |
+| Functional suite (`--suite rust`) | **141 PASS, 0 FAIL, 0 NOT RUN** (включая новые группы `oracle` и `rxloss`, и `rx_health.kernel_drops == 0` в каждом parity-прогоне) |
+| Perf matrix 4 rates x 5 x C/Rust | **40/40 VALID**, 0 неполных capture, Rust rx-incomplete 0, rx_health drops 0 (измерено, не null) в 20/20 Rust-прогонах; suite: 12 PASS, 0 FAIL |
+| `linux_wire --include-ignored` | 9/9 ok (теперь проверяет rx_health и отсутствие INVALID-ячеек) |
+| `linux_io` lab (`--ignored`) | 5/5 privileged + 1/1 unprivileged ok (при `--test-threads=1`, см. замечание) |
+| CI exact HEAD (3 ОС) | **NOT RUN (no push authorized)**. Старый run PR #8 не относится к этому HEAD |
+
+Медианы steady-state pps по проводу (5 валидных повторов каждый), критерий +-20%:
+
+| rate | C | Rust | Rust/C | в пределах +-20% |
+| --- | --- | --- | --- | --- |
+| 100 | 98.7 | 100.2 | 1.015 | да |
+| 1000 | 994.2 | 999.4 | 1.005 | да |
+| 10000 | 10072.3 | 10085.3 | 1.001 | да |
+| 100000 | 100395.4 | 100784.2 | 1.004 | да |
+
+Все 40 ячеек поштучно: `2026-10-24-rmasscan-linux-acceptance-raw/perf/cells-table.md`. Хвост capture:
+`quiesced_before_stop = true` во всех 40, ни один capture не INVALID (причина двух ранних неполных capture:
+tcpdump/libpcap TPACKET_V3 отдаёт неполный блок кольца только после ~1 с, SIGINT его не обрабатывает; драйвер
+ждёт тишины счётчиков 1,5 с; регрессия закреплена `wire_suite.py --self-test`).
+
+### Воспроизведённый RX overflow (контракт RxLoss)
+
+`wire_scan --rx-stall-ms 2500` (только harness, продуктовый API не менялся): RX-поток спит 2,5 с до первого
+чтения, TX идёт 10 000 pps по /24 x 100 портов; сокет AF_PACKET переполняется. Измерено:
+`kernel_drops = 155`, `Failed(RxLoss { kernel_drops: 155 })`, код выхода 3, checkpoint нет (ни в сводке, ни
+файла), `tx_sent` заморожен на 23672 из 25600, потоки и fd без утечек. Принятый до отказа ответ остался в
+результатах (`replies` = 1). Это PASS по критерию «drops > 0, Failed, без checkpoint». Счётчик ядра
+консервативен (может включать собственные исходящие копии), это ровно «полнота приёма не доказана».
+Сырой вердикт: `raw/rust/rx_overflow.summary.json`.
+
+### Независимость C-эталона и компараторов
+
+- Пин и чистое дерево: проверки группы `oracle` (5 PASS): ревизия == закреплённая, дерево чистое, оригинальный
+  бинарь, sha256 == бинарь из манифеста фикстур, манифест фикстур закрепляет ту же ревизию и `all_valid`.
+- Сравнение SYN побайтное и строгое; расхождения не нормализуются. Негативные случаи на реальной фикстуре C
+  (`wire_suite.py --self-test`): изменённый байт cookie, изменённый dst-port, потерянный последний SYN,
+  переставленные SYN дают FAIL; drops в meta и усечённый pcap дают INVALID. Плюс 31 кейс `verify-wire.py`.
+- Фильтрация и source tuple (ужесточено в `ee51a19`): ответы пира считаются только при `peer MAC -> scanner MAC`,
+  dst IP = adapter IP и (perf) dst-порт = 40000; SYN сканера только при scanner MAC -> peer MAC, source IP =
+  adapter IP, sport 40000. Чужие кадры не входят в счётчик передачи.
+- RX completeness: C сравнивается по множеству open (в `-oL` только open), Rust по open и closed; точное равенство
+  с уникальными ответами пира на проводе, допуска нет. Дополнительно для Rust: `rx_health.kernel_drops` обязан
+  быть целым числом 0 и итог `Completed` (null, bool, >0, отсутствие поля дают FAIL; self-test).
+
+### Тесты границ контракта (offline, engine)
+
+`ad85ddd`: `vlan_tagged_replies_are_unsupported_discarded_and_never_delivered` (корректный ответ в 802.1Q не
+становится результатом, считается discarded, скан Completed; контроль без тега доставляется) и
+`engine_dedup_is_bounded_fifo_and_redelivers_after_eviction` (ёмкость 2: A,B,A,C,A даёт 4 результата,
+повтор A после вытеснения доставляется, дубль до вытеснения подавлен). Мутация «повтор обновляет порядок (LRU)»
+валит второй тест (left 3, right 4); без мутации зелёный. VLAN остаётся неподдержанной функцией, второго dedup в core нет.
+Fake backpressure/panic тесты не являются проверкой физического NIC.
+
+### Замечания
+
+- `linux_io::lab_drop_closes_every_fd_and_stats_outlive_them` считает fd всего процесса и падает при
+  параллельном запуске lab-тестов; требует `--test-threads=1` (проверено: при параллельном запуске 1 из 5
+  падает, при последовательном 5/5). Код продукта не затронут; в тесте не исправлялось.
+- Окружение: `minipc` запущен посторонний фоновый until-цикл другой работы; не трогался. Мои namespaces/процессы
+  удалены (`namespaces_left=0` после каждого запуска), каталоги `~/rmasscan-t4-accept`, `~/t4-out`,
+  `~/t4-iolab.sh` удалены после копирования данных.
+- Время C-остановки по SIGINT 11-12 с (C дожидается `wait`); к контракту Stop <= 1 с для Rust отношения не имеет
+  (Rust: 0,02-0,06 с).

@@ -35,7 +35,8 @@ COMMIT = "c" * 40
 EXE = "e" * 64
 
 
-ITEMS = {i["tag"]: i for i in V.planned(None)}
+ITEMS = {i["tag"]: i for i in V.planned(None) + V.planned_b()}
+LISTEN_SILENT = [V.SILENT_PORT]
 
 
 def mac(s):
@@ -148,15 +149,17 @@ def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_
         man = {"binding": {"iface": "\\Device\\NPF_{X}"}}
         bind = V.Binding({"src_ip": SRC_IP, "src_mac": GUEST, "router_mac": PEER})
         for fname, kd in [("argv.json", V.KIND_ARGV.get(item["kind"]) or V.KIND_ARGV_B.get(item["kind"]))] + (
-                [V.KIND_SIDE_ARGV[item["kind"]]] if item["kind"] in V.KIND_SIDE_ARGV else []):
+                [(V.KIND_SIDE_ARGV.get(item["kind"]) or V.KIND_SIDE_ARGV_B.get(item["kind"]))] if (
+                    item["kind"] in V.KIND_SIDE_ARGV or item["kind"] in V.KIND_SIDE_ARGV_B) else []):
             cname, extra = kd(item)
-            want = dict(V.base_argv(V.case_by_name(cname), man, bind), **extra)
-            argv = [x for k, v in want.items() for x in (k, "x.bin" if v == V.ANY else v)]
+            cc = cname if isinstance(cname, dict) or cname is None else V.case_by_name(cname)
+            want = dict(V.base_argv(cc, man, bind) if cc else {}, **extra)
+            argv = [x for k, v in want.items() for x in ((k,) if v is True else (k, "x.bin" if v == V.ANY else v))]
             wj(os.path.join(d, fname), {"exe": "x", "argv": argv})
     wj(os.path.join(d, "status-pre.json"), {"raw_run_allowed": True, "isolation_violations": []})
     wj(os.path.join(d, "status-post.json"), {"raw_run_allowed": True, "isolation_violations": []})
     wj(os.path.join(d, "guest-verify.json"), {"ok": True, "errors": []})
-    wj(os.path.join(d, "listeners.json"), {"open": V.LISTEN_OPEN, "ready": True, "silent": [V.SILENT_PORT], "silent_proven": True})
+    wj(os.path.join(d, "listeners.json"), {"open": V.LISTEN_OPEN, "ready": True, "silent": LISTEN_SILENT, "silent_proven": True})
     for k, v in (extra_files or {}).items():
         if isinstance(v, bytes):
             bw(os.path.join(d, k), v)
@@ -167,8 +170,8 @@ def write_run(root, tag, syns, replies, rj_extra, rc=0, extra_files=None, extra_
 
 def job_of(case, wait=3):
     return {"iface": "\\Device\\NPF_{X}", "src_ip": SRC_IP, "src_mac": GUEST, "router_mac": PEER, "source_port": case["source_port"],
-            "targets": case["targets"], "exclude": case["exclude"], "ports": case["ports"], "seed": 1, "rate": 100,
-            "wait": wait, "retries": 0, "shard": "1/1", "blackrock_rounds": 14}
+            "targets": case["targets"], "exclude": case["exclude"], "ports": case["ports"], "seed": case.get("seed", 1), "rate": case.get("rate", 100),
+            "wait": case.get("wait", wait), "retries": 0, "shard": "1/1", "blackrock_rounds": 14}
 
 
 def full_json(case, replies_sorted, sent=None, **kw):
@@ -231,6 +234,130 @@ def build(root, foreign=True):
     write_run(root, "refuse_completed", [], [], {"status": "error", "error": "AlreadyCompleted", "opened_adapter": False, "tx_sent": 0,
                                                  "job": job_of(pc)}, rc=4)
     return root
+
+
+# ------------------------------------------------------------------ part B builder
+def b_walls(n_syn, outcome_after=0.5, offset=50.0):
+    """wall/timing fields consistent with a pcap whose first scanner SYN is at 1001.0 and whose SYNs are 10 ms apart."""
+    first, last = 1001.0, 1001.0 + 0.01 * (n_syn - 1)
+    t0 = first - 0.002 - offset
+    return ({"t0_utc_ms": int(t0 * 1000), "started_utc_ms": int(t0 * 1000), "outcome_utc_ms": int((last + outcome_after - offset) * 1000),
+             "join_done_utc_ms": int((last + outcome_after - offset) * 1000) + 1}, {"first_send_s": 0.002})
+
+
+def b_rj(case, sent, reason="Stopped", fail_detail="", replies=(), stop=True, observe=1500, **kw):
+    wall, tm = b_walls(max(sent, 1))
+    replies = sorted(replies)
+    tm.update(stop_requested=stop, stop_to_outcome_ms=12.0 if stop else None, join_ms=0.3, total_s=3.0)
+    rj = {"status": "ok", "reason": reason, "fail_detail": fail_detail, "range": case["syn"], "start_index": 0,
+          "expected_total": case["syn"], "sent": sent, "next_index": sent, "received": len(replies), "discarded": 0, "duplicates": 0,
+          "rx_health": {"kernel_drops": 0}, "scan_id": "11" * 16, "attempt_id": "aa" * 16, "resumed_from_attempt": None,
+          "replies": replies, "reply_total": len(replies), "reply_unique": len(replies), "checkpoint": False, "checkpoint_hex": None,
+          "checkpoint_next_index": None,
+          "net": {"tx_sent": sent, "tx_uncertain": 0, "tx_errors": 0, "rx_errors": 0, "kernel_drops": 0, "rx_packets": 5},
+          "tx_sent_at_join": sent, "tx_sent_after_observe": sent, "observe_ms": observe, "timing": tm, "wall": wall,
+          "workers": {"tx_tid": 101, "rx_tid": 102, "tx_alive_after_join": False, "rx_alive_after_join": False, "settle_ms": 0.1},
+          "resources": {"fds_before_open": 110, "fds_open": 141, "fds_after_join": 111}, "job": job_of(case)}
+    rj.update(kw)
+    return rj
+
+
+def flood_frames(n, t_first=1000.5, t_last=1005.0):
+    f = mac(GUEST) + mac(PEER) + V.FLOOD_ETHERTYPE + b"\0" * 46
+    return [(t_first + (t_last - t_first) * i / max(n - 1, 1), f) for i in range(n)]
+
+
+def build_b(root):
+    global LISTEN_SILENT
+    LISTEN_SILENT = V.SILENT_PORTS
+    try:
+        return _build_b(root)
+    finally:
+        LISTEN_SILENT = [V.SILENT_PORT]
+
+
+def _build_b(root):
+    """A complete passing artifact set of the part B plan."""
+    os.makedirs(os.path.join(root, "fixtures"))
+    shutil_copy_fixtures(root)
+    wj(os.path.join(root, "manifest.json"),
+       {"code_commit": COMMIT, "capture_schema": 2, "plan": "failure", "exe": {"sha256": EXE},
+        "binding": {"iface": "\\Device\\NPF_{X}", "src_ip": SRC_IP, "src_mac": GUEST, "router_mac": PEER},
+        "listeners": {"open": V.LISTEN_OPEN, "silent": V.SILENT_PORTS}})
+    kw = lambda **k: k  # noqa: E731
+
+    def run(tag, case, syns, replies, rj, rc=0, files=None, extra=()):
+        write_run(root, tag, syns, replies, rj, rc=rc, extra_files=files, extra_peer_frames=extra)
+
+    def sy(case, n):
+        return case_syns(case)[:n]
+    for sc, (cname, _x) in V.STOP_SCENARIOS.items():
+        c = V.case_by_name(cname)
+        sent = {"silent": 3, "load": 3, "drain": 2, "fullqueue": 2}[sc]
+        reps = case_replies(c, silent_answers=False)[:sent] if sc in ("drain", "fullqueue") else []
+        rj = b_rj(c, sent, replies=V.expected_replies(c) if sc in ("drain", "fullqueue") else [])
+        if sc == "drain":
+            rj["timing"]["total_s"] = 3.2
+        if sc == "load":
+            rj["net"]["rx_packets"] = 40000
+        files, extra = {}, ()
+        if sc == "load":
+            fl = flood_frames(300)
+            extra = fl
+            files = {"flood.json": {"sent": 300, "errors": 0, "t_first": fl[0][0], "t_last": fl[-1][0], "pps_avg": 20000.0, "size": 60}}
+        run("stop_%s" % sc, c, sy(c, sent), reps, rj, files=files, extra=extra)
+    c = V.case_by_name("pb_overflow_queue")
+    run("overflow_queue", c, sy(c, 3), [], b_rj(c, 3, reason="Failed", fail_detail="ConsumerTooSlow", stop=False,
+                                                 replies=V.expected_replies(c)[:1]), rc=3)
+    c = V.case_by_name("pb_linkloss")
+    rj = b_rj(c, 40, reason="Failed", fail_detail="TxUncertain", stop=False, observe=500)
+    rj["net"]["tx_uncertain"] = 1
+    outcome = 1001.0 + 0.01 * 39 + 0.5
+    run("linkloss", c, sy(c, 40), [], rj, rc=3, files={"linkloss.json": {"first_syn_seen": True, "events": [
+        {"t": outcome - 0.2, "set_link": "down", "reply": {"return": {}}}, {"t": outcome + 1.0, "set_link": "up", "reply": {"return": {}}}]}})
+    wj(os.path.join(root, "runs", "linkloss", "meta.json"), dict(json.load(open(os.path.join(root, "runs", "linkloss", "meta.json"))),
+                                                               checkpoint_file_exists=False))
+    pc = V.case_by_name(V.PAUSE_CASE)
+    for v, (ov, want) in V.CKPT_VARIANTS.items():
+        c = dict(pc, **ov)
+        run("ckpt_%s" % v, c, [], [], {"status": "error", "stage": "resume-preflight", "error": want, "message": "x", "opened_adapter": False,
+                                       "tx_sent": 0, "job": job_of(c)}, rc=4)
+    c = V.case_by_name("pb_perm_scan")
+    ident = {"source_commit": COMMIT, "binary_sha256": EXE, "os": {"family": "windows"}, "elevated": False, "restricted_token": True}
+    run("perm_restricted_scan", c, [], [], {"status": "error", "stage": "open", "error": "PermissionDenied", "message": "x",
+                                              "opened_adapter": False, "tx_sent": 0, "job": job_of(c), "identity": ident}, rc=5)
+    for t in ("perm_restricted_scan",):
+        wj(os.path.join(root, "runs", t, "meta.json"), dict(json.load(open(os.path.join(root, "runs", t, "meta.json"))),
+                                                          restricted_via="runas /trustlevel:0x20000 (windows_wire_runas.cmd)"))
+    run("perm_restricted_inventory", c, [], [], {"status": "ok", "mode": "inventory", "opened_adapter": False, "tx_sent": 0,
+                                                   "devices": [{"name": "\\Device\\NPF_Loopback", "loopback": True}],
+                                                   "access_hint": "Npcap may be installed in Administrators-only mode", "identity": ident}, rc=5)
+    c1 = V.case_by_name("c01_one_addr_port_synack")
+    wj(os.path.join(root, "runs", "perm_restricted_inventory", "meta.json"),
+       dict(json.load(open(os.path.join(root, "runs", "perm_restricted_inventory", "meta.json"))),
+            restricted_via="runas /trustlevel:0x20000 (windows_wire_runas.cmd)"))
+    run("perm_elevated_control", c1, case_syns(c1), case_replies(c1, silent_answers=False), full_json(c1, V.expected_replies(c1)))
+    c = V.case_by_name("pb_rxloss")
+    rj = b_rj(c, 16, reason="Failed", fail_detail="RxLoss { kernel_drops: 420 }", stop=False, observe=500,
+              replies=V.expected_replies(c)[:3])
+    rj["rx_health"] = {"kernel_drops": 420}
+    rj["net"].update(kernel_drops=420, rx_packets=9000)
+    fl = flood_frames(500, 1000.2, 1002.0)
+    run("rxloss", c, sy(c, 16), [], rj, rc=3, extra=fl, files={
+        "flood.json": {"sent": 500, "errors": 0, "t_first": fl[0][0], "t_last": fl[-1][0], "pps_avg": 15000.0, "size": 600},
+        "nic.json": {"before": {"stats": {"ReceivedUnicastPackets": 1000}}, "after": {"stats": {"ReceivedUnicastPackets": 10420}}}})
+    wj(os.path.join(root, "runs", "rxloss", "meta.json"), dict(json.load(open(os.path.join(root, "runs", "rxloss", "meta.json"))),
+                                                             checkpoint_file_exists=False))
+    return root
+
+
+def shutil_copy_fixtures(root):
+    src = tempfile.mkdtemp()
+    build(src)
+    import shutil
+    shutil.rmtree(os.path.join(root, "fixtures"))
+    shutil.copytree(os.path.join(src, "fixtures"), os.path.join(root, "fixtures"))
+    shutil.rmtree(src)
 
 
 class VerifierTests(unittest.TestCase):
@@ -750,6 +877,257 @@ class VerifierTests(unittest.TestCase):
         self.assertTrue(all(len(l.split("|")) == 5 for l in lines))
 
 
+class PartBTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = build_b(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    path = VerifierTests.path
+    edit_json = VerifierTests.edit_json
+    rewrite_peer = VerifierTests.rewrite_peer
+    verdict = VerifierTests.verdict
+    run_verdict = VerifierTests.run_verdict
+
+    def status(self, tag):
+        return V.run_status(self.root, tag)
+
+    def edit_run(self, tag, fn):
+        self.edit_json("runs/%s/run.json" % tag, fn)
+
+    def test_complete_part_b_set_passes(self):
+        v = self.verdict()
+        self.assertEqual([(r["tag"], c["name"]) for r in v["runs"] for c in r["checks"] if c["result"] != "PASS"], [])
+        self.assertEqual(v["overall"], "PASS")
+        self.assertEqual(len(v["runs"]), 1 + 18)
+
+    def test_every_planned_part_b_kind_has_an_argument_definition(self):
+        for it in V.planned_b():
+            self.assertTrue(it["kind"] in V.KIND_ARGV or it["kind"] in V.KIND_ARGV_B, it)
+
+    def test_missing_part_b_run_is_not_run(self):
+        import shutil
+        shutil.rmtree(self.path("runs", "linkloss"))
+        self.assertEqual(self.run_verdict("linkloss"), "NOT RUN")
+        self.assertNotEqual(self.verdict()["overall"], "PASS")
+
+    # ---- stop
+    def test_stop_latency_over_a_second_is_fail(self):
+        self.edit_run("stop_silent", lambda d: d["timing"].__setitem__("stop_to_outcome_ms", 1200.0))
+        self.assertEqual(self.status("stop_silent"), ("FAIL", True))
+
+    def test_stop_without_a_measured_latency_is_fail(self):
+        self.edit_run("stop_drain", lambda d: d["timing"].__setitem__("stop_to_outcome_ms", None))
+        self.assertEqual(self.status("stop_drain"), ("FAIL", True))
+
+    def test_stop_with_a_checkpoint_or_another_outcome_is_fail(self):
+        self.edit_run("stop_silent", lambda d: d.update(checkpoint=True))
+        self.assertEqual(self.status("stop_silent"), ("FAIL", True))
+        self.edit_run("stop_drain", lambda d: d.update(reason="Completed"))
+        self.assertEqual(self.status("stop_drain"), ("FAIL", True))
+
+    def test_engine_worker_alive_after_join_is_fail(self):
+        self.edit_run("stop_fullqueue", lambda d: d["workers"].__setitem__("rx_alive_after_join", True))
+        self.assertEqual(self.status("stop_fullqueue"), ("FAIL", True))
+
+    def test_unidentified_workers_are_fail_not_pass(self):
+        self.edit_run("stop_silent", lambda d: d["workers"].__setitem__("tx_tid", None))
+        self.assertEqual(self.status("stop_silent"), ("FAIL", True))
+
+    def test_total_process_threads_are_not_used(self):
+        # total thread counts differ before/after (Windows system workers) and that must not matter
+        self.edit_run("stop_silent", lambda d: d["resources"].update(threads_before=4, threads_after_join=9))
+        self.assertEqual(self.status("stop_silent"), ("PASS", False))
+
+    def test_leaked_adapter_handles_are_fail(self):
+        self.edit_run("stop_silent", lambda d: d["resources"].__setitem__("fds_after_join", 141))
+        self.assertEqual(self.status("stop_silent"), ("FAIL", True))
+
+    def test_syn_after_the_terminal_outcome_is_fail(self):
+        # outcome = last SYN + 0.5 s; add one more scanner SYN 0.3 s after the outcome
+        t = "stop_silent"
+        c = V.case_by_name("pb_stop_silent")
+        late = 1001.0 + 0.01 * 2 + 0.5 + 0.3
+        self.rewrite_peer(t, lambda fr: fr + [(late, case_syns(c)[3])])
+        self.edit_run(t, lambda d: d["net"].update(tx_sent=4) or d.update(sent=4, next_index=4, tx_sent_at_join=4, tx_sent_after_observe=4))
+        self.assertEqual(self.status(t), ("FAIL", True))
+
+    def test_wire_syn_count_must_equal_tx_sent(self):
+        t = "stop_silent"
+        self.edit_run(t, lambda d: d["net"].__setitem__("tx_sent", 5) or d.update(sent=5, tx_sent_at_join=5, tx_sent_after_observe=5))
+        self.assertEqual(self.status(t)[0], "FAIL")
+
+    def test_syn_after_outcome_with_a_lossy_capture_is_invalid_not_fail(self):
+        t = "stop_silent"
+        c = V.case_by_name("pb_stop_silent")
+        self.rewrite_peer(t, lambda fr: fr + [(1001.0 + 0.02 + 0.8, case_syns(c)[3])])
+        self.edit_run(t, lambda d: d["net"].update(tx_sent=4) or d.update(sent=4, next_index=4, tx_sent_at_join=4, tx_sent_after_observe=4))
+        self.edit_json("runs/%s/capture.json" % t, lambda d: d["quiet"].__setitem__("reached", False))
+        self.assertEqual(self.status(t), ("INVALID", False))
+
+    def test_clock_offset_is_recorded_from_the_wire(self):
+        r = [x for x in self.verdict()["runs"] if x["tag"] == "stop_silent"][0]
+        self.assertAlmostEqual(r["notes"]["clock_offset_ms"], 50000.0, delta=5)
+        self.assertEqual(r["notes"]["syn_after_outcome"], 0)
+        self.assertIn("alignment", r["notes"])
+
+    def test_stop_silent_with_replies_is_fail(self):
+        self.edit_run("stop_silent", lambda d: d.update(reply_total=1, replies=["198.18.0.2:80:open"]))
+        self.assertEqual(self.status("stop_silent"), ("FAIL", True))
+
+    def test_stop_drain_that_waited_the_full_wait_is_fail(self):
+        self.edit_run("stop_drain", lambda d: d["timing"].__setitem__("total_s", 10.5))
+        self.assertEqual(self.status("stop_drain"), ("FAIL", True))
+
+    def test_stop_load_needs_the_flood_on_the_wire(self):
+        os.unlink(self.path("runs", "stop_load", "flood.json"))
+        self.assertEqual(self.run_verdict("stop_load"), "NOT RUN")
+        self.edit_json("runs/stop_load/capture.json", lambda d: None)
+
+    def test_stop_load_flood_count_must_match_the_pcap(self):
+        self.edit_json("runs/stop_load/flood.json", lambda d: d.__setitem__("sent", 301))
+        self.assertEqual(self.status("stop_load")[0], "INVALID")
+
+    def test_stop_load_flood_must_overlap_the_scan(self):
+        self.edit_json("runs/stop_load/flood.json", lambda d: d.__setitem__("t_last", 1001.1))
+        self.assertEqual(self.status("stop_load")[0], "INVALID")
+
+    # ---- queue overflow
+    def test_queue_overflow_must_be_consumer_too_slow(self):
+        self.edit_run("overflow_queue", lambda d: d.update(fail_detail="RxLoss { kernel_drops: 3 }"))
+        self.assertEqual(self.status("overflow_queue"), ("FAIL", True))
+
+    # ---- link loss
+    def test_linkloss_must_end_in_failed_tx_uncertain_without_checkpoint(self):
+        self.edit_run("linkloss", lambda d: d.update(fail_detail="TxError"))
+        self.assertEqual(self.status("linkloss"), ("FAIL", True))
+
+    def test_linkloss_checkpoint_file_is_fail(self):
+        self.edit_json("runs/linkloss/meta.json", lambda d: d.__setitem__("checkpoint_file_exists", True))
+        self.assertEqual(self.status("linkloss"), ("FAIL", True))
+
+    def test_linkloss_without_link_events_is_not_run_and_without_proof_is_invalid(self):
+        os.unlink(self.path("runs", "linkloss", "linkloss.json"))
+        self.assertEqual(self.run_verdict("linkloss"), "NOT RUN")
+
+    def test_linkloss_set_link_that_the_stand_rejected_is_invalid(self):
+        def bad(d):
+            d["events"][0]["reply"] = {"error": {"desc": "x"}}
+        self.edit_json("runs/linkloss/linkloss.json", bad)
+        self.assertEqual(self.status("linkloss")[0], "INVALID")
+
+    def test_linkloss_failure_long_after_the_disconnect_is_invalid(self):
+        def late(d):
+            d["events"][0]["t"] -= 10
+        self.edit_json("runs/linkloss/linkloss.json", late)
+        self.assertEqual(self.status("linkloss")[0], "INVALID")
+
+    # ---- checkpoint refusals
+    def test_every_checkpoint_variant_is_refused_before_the_adapter_opens(self):
+        for v in V.CKPT_VARIANTS:
+            self.assertEqual(self.status("ckpt_" + v), ("PASS", False), v)
+
+    def test_checkpoint_refusal_that_opened_the_adapter_is_fail(self):
+        self.edit_run("ckpt_truncated", lambda d: d.update(opened_adapter=True))
+        self.assertEqual(self.status("ckpt_truncated"), ("FAIL", True))
+
+    def test_checkpoint_refusal_with_the_wrong_reason_is_fail(self):
+        self.edit_run("ckpt_wrong_seed", lambda d: d.update(error="BadChecksum"))
+        self.assertEqual(self.status("ckpt_wrong_seed"), ("FAIL", True))
+
+    def test_checkpoint_refusal_with_a_syn_on_the_wire_is_fail(self):
+        c = V.case_by_name(V.PAUSE_CASE)
+        self.rewrite_peer("ckpt_empty", lambda fr: fr + [(1001.0, case_syns(c)[0])])
+        self.assertEqual(self.status("ckpt_empty"), ("FAIL", True))
+
+    def test_checkpoint_wrong_ports_variant_needs_matching_argv(self):
+        self.edit_json("runs/ckpt_wrong_ports/argv.json", lambda d: d["argv"].__setitem__(d["argv"].index("--ports") + 1, "8000-8015"))
+        self.assertEqual(self.status("ckpt_wrong_ports"), ("INVALID", False))
+
+    # ---- permissions
+    def test_restricted_run_must_have_been_started_through_runas(self):
+        self.edit_json("runs/perm_restricted_scan/meta.json", lambda d: d.pop("restricted_via"))
+        self.assertEqual(self.status("perm_restricted_scan")[0], "INVALID")
+
+    def test_restricted_scan_refusals_accepted_are_only_the_documented_ones(self):
+        self.edit_run("perm_restricted_scan", lambda d: d.update(error="InterfaceMismatch(\"no Npcap device\")"))
+        self.assertEqual(self.status("perm_restricted_scan"), ("FAIL", True))  # rc is still 5, not 2
+        self.setUp()
+        self.edit_json("runs/perm_restricted_scan/meta.json", lambda d: d.__setitem__("guest_exit", 2))
+        self.edit_run("perm_restricted_scan", lambda d: d.update(error="InterfaceMismatch(\"no Npcap device\")"))
+        self.assertEqual(self.status("perm_restricted_scan"), ("PASS", False))
+
+    def test_restricted_scan_that_ran_is_fail(self):
+        self.edit_run("perm_restricted_scan", lambda d: d.update(tx_sent=1, opened_adapter=True))
+        self.assertEqual(self.status("perm_restricted_scan"), ("FAIL", True))
+
+    def test_restricted_inventory_must_hide_the_adapters(self):
+        self.edit_run("perm_restricted_inventory", lambda d: d["devices"].append({"name": "NPF_X", "loopback": False}))
+        self.assertEqual(self.status("perm_restricted_inventory"), ("FAIL", True))
+
+    # ---- RX overflow
+    def test_rx_overflow_not_reproduced_is_not_run_never_pass(self):
+        def none(d):
+            d.update(reason="Completed", fail_detail="", rx_health={"kernel_drops": 0})
+        self.edit_run("rxloss", none)
+        self.assertEqual(self.run_verdict("rxloss"), "NOT RUN")
+        self.assertNotEqual(self.verdict()["overall"], "PASS")
+
+    def test_rx_overflow_unknown_health_is_not_run(self):
+        self.edit_run("rxloss", lambda d: d.update(rx_health={"kernel_drops": None}))
+        self.assertEqual(self.run_verdict("rxloss"), "NOT RUN")
+
+    def test_rxloss_count_in_the_outcome_must_equal_the_measured_drops(self):
+        self.edit_run("rxloss", lambda d: d.update(fail_detail="RxLoss { kernel_drops: 7 }"))
+        self.assertEqual(self.status("rxloss"), ("FAIL", True))
+
+    def test_rxloss_with_a_checkpoint_is_fail(self):
+        self.edit_json("runs/rxloss/meta.json", lambda d: d.__setitem__("checkpoint_file_exists", True))
+        self.assertEqual(self.status("rxloss"), ("FAIL", True))
+        self.setUp()
+        self.edit_run("rxloss", lambda d: d.update(checkpoint=True))
+        self.assertEqual(self.status("rxloss"), ("FAIL", True))
+
+    def test_rxloss_records_the_independent_count(self):
+        r = [x for x in self.verdict()["runs"] if x["tag"] == "rxloss"][0]
+        ind = r["notes"]["independent_count"]
+        self.assertEqual((ind["kernel_drops_n"], ind["nic_rx_delta"], ind["rx_read_by_handle"], ind["nic_minus_read"]),
+                         (420, 9420, 9000, 420))
+
+    def test_rxloss_drops_beyond_the_nic_count_are_fail(self):
+        self.edit_json("runs/rxloss/nic.json", lambda d: d["after"]["stats"].__setitem__("ReceivedUnicastPackets", 1100))
+        self.assertEqual(self.status("rxloss"), ("FAIL", True))
+
+    def test_rxloss_drops_beyond_the_peer_flood_are_fail(self):
+        self.edit_json("runs/rxloss/flood.json", lambda d: d.__setitem__("sent", 100))
+        self.assertNotEqual(self.status("rxloss")[0], "PASS")
+
+    def test_rxloss_unreadable_nic_counters_are_not_run(self):
+        self.edit_json("runs/rxloss/nic.json", lambda d: d.update(before={"error": "Access denied"}, after={"error": "Access denied"}))
+        self.assertEqual(self.status("rxloss")[0], "NOT RUN")
+
+    def test_rxloss_without_independent_inputs_is_not_run(self):
+        os.unlink(self.path("runs", "rxloss", "nic.json"))
+        self.assertEqual(self.run_verdict("rxloss"), "NOT RUN")
+
+    # ---- argv gate for part B
+    def test_wrong_stop_argument_is_a_harness_error(self):
+        self.edit_json("runs/stop_silent/argv.json", lambda d: d["argv"].__setitem__(d["argv"].index("--stop-after-ms") + 1, "2000"))
+        self.edit_run("stop_silent", lambda d: d["timing"].__setitem__("stop_to_outcome_ms", 5000.0))
+        self.assertEqual(self.status("stop_silent"), ("INVALID", False))
+        self.assertTrue(S.may_discard(*S.rerun_verdict(self.root, "stop_silent")))
+
+    def test_unexpected_extra_flag_is_a_harness_error(self):
+        self.edit_json("runs/rxloss/argv.json", lambda d: d["argv"].append("--allow-foreign-source-mac"))
+        self.assertEqual(self.status("rxloss")[0], "INVALID")
+
+    def test_plan_is_taken_from_the_manifest(self):
+        self.assertEqual(len(V.planned({"plan": "failure"})), 18)
+        self.assertEqual(len(V.planned({})), 24)
+
+
 def vw_is_syn(f):
     return V.vw.is_syn(f)
 
@@ -790,6 +1168,50 @@ class OrchestratorPureTests(unittest.TestCase):
         t = {"now": 0.0}
         self.assertFalse(S.wait_quiet(read, quiet_s=1.0, poll_s=0.5, timeout_s=5, clock=lambda: t["now"],
                                       sleep=lambda s: t.__setitem__("now", t["now"] + s)))
+
+    def test_ports_spec(self):
+        self.assertEqual(S.ports_spec(V.SILENT_PORTS), "8099-8119")
+        self.assertEqual(S.ports_spec([80, 443, 8000, 8001]), "80,443,8000-8001")
+
+    def test_checkpoint_mutations(self):
+        body = b"RMSPCKPT" + (1).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes(range(16)) + bytes(16) + bytes(32) + (8).to_bytes(8, "big")
+        good = body + hashlib.sha256(body).digest()
+        self.assertEqual(len(good), 120)
+        ok = lambda b: len(b) == 120 and hashlib.sha256(b[:-32]).digest() == b[-32:]  # noqa: E731
+        self.assertTrue(ok(S.mutate_checkpoint("wrong_ports", good)))
+        self.assertTrue(ok(S.mutate_checkpoint("future_format", good)))
+        self.assertEqual(S.mutate_checkpoint("future_format", good)[8:12], (99).to_bytes(4, "big"))
+        self.assertEqual(S.mutate_checkpoint("future_engine", good)[12:16], (99).to_bytes(4, "big"))
+        self.assertTrue(ok(S.mutate_checkpoint("future_engine", good)))
+        self.assertFalse(ok(S.mutate_checkpoint("corrupt_next_index", good)))
+        self.assertNotEqual(S.mutate_checkpoint("corrupt_next_index", good)[87], good[87])
+        self.assertFalse(ok(S.mutate_checkpoint("corrupt_checksum", good)))
+        self.assertEqual(len(S.mutate_checkpoint("truncated", good)), 60)
+        self.assertEqual(S.mutate_checkpoint("empty", good), b"")
+
+    def test_argv_sent_by_the_orchestrator_passes_the_verifiers_argument_gate_for_every_part_b_kind(self):
+        man = {"binding": {"iface": S.LAB_NIC}}
+        bind = V.Binding({"src_ip": S.SRC_IP, "src_mac": S.GUEST_MAC, "router_mac": PEER})
+        for it in V.planned_b():
+            if it["kind"] == "case":
+                continue
+            kd = V.KIND_ARGV_B[it["kind"]]
+            argv = S.argv_from_def(kd, it, PEER, {"--checkpoint-out": "p.bin", "--resume-checkpoint": "q.bin"})
+            r = V.Run(it["tag"])
+            with tempfile.TemporaryDirectory() as d:
+                wj(os.path.join(d, "argv.json"), {"exe": "x", "argv": argv})
+                self.assertTrue(V.check_argv_file(r, d, "argv.json", kd, it, man, bind), (it["tag"], r.checks))
+        # the forge helper of a refusal run too
+        it = [i for i in V.planned_b() if i["tag"] == "ckpt_empty"][0]
+        kd = V.KIND_SIDE_ARGV_B["ckpt_refuse"][1]
+        r = V.Run("x")
+        with tempfile.TemporaryDirectory() as d:
+            wj(os.path.join(d, "forge-argv.json"), {"exe": "x", "argv": S.argv_from_def(kd, it, PEER, {"--checkpoint-out": "p.bin"})})
+            self.assertTrue(V.check_argv_file(r, d, "forge-argv.json", kd, it, man, bind), r.checks)
+
+    def test_flood_and_silent_helpers_of_the_peer_tool(self):
+        self.assertEqual(P.parse_ports("8099,8100-8102"), [8099, 8100, 8101, 8102])
+        self.assertEqual(P.parse_ports(""), [])
 
     def test_foreign_frames_are_marked_and_valid_ipv4(self):
         frames = S.foreign_frames(PEER, GUEST, SRC_IP, 40000)

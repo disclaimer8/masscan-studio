@@ -276,3 +276,51 @@ pub fn token_flags() -> TokenFlags {
 pub fn token_flags() -> TokenFlags {
     TokenFlags::default()
 }
+
+/// Идентификатор текущего потока ОС (служебный API harness: проверка потоков движка после join).
+#[doc(hidden)]
+#[cfg(windows)]
+pub fn lab_current_thread_id() -> Option<u64> {
+    windows::process::current_thread_id()
+}
+
+/// Linux: `/proc/thread-self` указывает на `<pid>/task/<tid>`.
+#[doc(hidden)]
+#[cfg(target_os = "linux")]
+pub fn lab_current_thread_id() -> Option<u64> {
+    std::fs::read_link("/proc/thread-self")
+        .ok()?
+        .file_name()?
+        .to_str()?
+        .parse()
+        .ok()
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn lab_current_thread_id() -> Option<u64> {
+    None
+}
+
+/// Идентификаторы всех потоков процесса (`None`, если ОС их не даёт).
+#[doc(hidden)]
+#[cfg(windows)]
+pub fn lab_thread_ids() -> Option<Vec<u64>> {
+    windows::process::thread_ids()
+}
+
+#[doc(hidden)]
+#[cfg(target_os = "linux")]
+pub fn lab_thread_ids() -> Option<Vec<u64>> {
+    let ids: Vec<u64> = std::fs::read_dir("/proc/self/task")
+        .ok()?
+        .filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
+        .collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn lab_thread_ids() -> Option<Vec<u64>> {
+    None
+}

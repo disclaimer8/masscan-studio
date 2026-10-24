@@ -14,8 +14,8 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetProcessHandleCount, GetProcessTimes,
-    OpenProcessToken,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, GetProcessHandleCount,
+    GetProcessTimes, OpenProcessToken,
 };
 
 use crate::{ProcessSample, TokenFlags};
@@ -56,6 +56,41 @@ fn thread_count() -> Option<u64> {
     // SAFETY: snap это открытый нами handle, закрывается один раз.
     unsafe { CloseHandle(snap) };
     ok.then_some(n)
+}
+
+/// Идентификатор текущего потока ОС (для сверки потоков движка до и после join).
+pub(crate) fn current_thread_id() -> Option<u64> {
+    // SAFETY: GetCurrentThreadId без предусловий.
+    Some(u64::from(unsafe { GetCurrentThreadId() }))
+}
+
+/// Идентификаторы всех потоков процесса по снимку Toolhelp (`None`, если снимок
+/// недоступен или пуст). Нужны, чтобы проверить конкретные потоки движка, а не
+/// общее число потоков: системные рабочие потоки Windows переживают join.
+pub(crate) fn thread_ids() -> Option<Vec<u64>> {
+    // SAFETY: вызов без указателей; результат проверяется на INVALID_HANDLE_VALUE.
+    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snap == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    // SAFETY: GetCurrentProcessId без предусловий.
+    let me = unsafe { GetCurrentProcessId() };
+    // SAFETY: структура из нулей допустима для THREADENTRY32.
+    let mut e: THREADENTRY32 = unsafe { std::mem::zeroed() };
+    e.dwSize = size_of::<THREADENTRY32>() as u32;
+    let mut ids = Vec::new();
+    // SAFETY: snap это живой снимок потоков, e имеет верный dwSize.
+    let mut more = unsafe { Thread32First(snap, &mut e) } != 0;
+    while more {
+        if e.th32OwnerProcessID == me {
+            ids.push(u64::from(e.th32ThreadID));
+        }
+        // SAFETY: snap жив, e по-прежнему с верным dwSize.
+        more = unsafe { Thread32Next(snap, &mut e) } != 0;
+    }
+    // SAFETY: snap это открытый нами handle, закрывается один раз.
+    unsafe { CloseHandle(snap) };
+    (!ids.is_empty()).then_some(ids)
 }
 
 pub(crate) fn process_sample() -> ProcessSample {

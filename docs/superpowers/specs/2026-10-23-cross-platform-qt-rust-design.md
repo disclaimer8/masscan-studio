@@ -135,7 +135,7 @@ rx_health }`, причины `Reason::{Completed, Stopped, Paused, Failed(FailRe
 | Capability | Слой | Реализовано | Проверка | Ограничение | Следующий этап |
 | --- | --- | --- | --- | --- | --- |
 | UI на Slint | Studio | выбран; прототип A1 в spikes-дереве | отчёт A1 (spikes-дерево) | Qt/CXX-Qt исключены; сравнения двух UI нет | функциональный и UI-паритет |
-| Swift v0.3 (эталон) | Studio | да, macOS | `docs/VERIFICATION.md` | только macOS, внешний masscan | откат/импорт |
+| Swift v0.3 (эталон) | Studio | да, macOS | `docs/history/VERIFICATION.md` | только macOS, внешний masscan | откат/импорт |
 | Offline-ядро в Studio | Studio | подготовка задания, исключения, число целей, первые 32 элемента порядка (spikes-дерево) | тесты spikes-дерева | не сетевой скан | настоящий Scan |
 | Runner, IPC, права, durable checkpoint | Studio | нет | нет | описано в §5–6 как требование | Runner/Studio |
 | Хранилище (SQLite) | Studio | нет | нет | решение 5 это требование; реализации нет | Runner/Studio |
@@ -207,7 +207,7 @@ rx_health }`, причины `Reason::{Completed, Stopped, Paused, Failed(FailRe
 Чтением при прошлом ревью подтверждены 2 сессии и 971 результат; это не нагрузочный
 тест. Реальную историю не помещаем в fixtures или Git.
 
-`docs/VERIFICATION.md` фиксирует проверки masscan 1.3.2 и Nmap 7.992, Swift-тесты,
+`docs/history/VERIFICATION.md` фиксирует проверки masscan 1.3.2 и Nmap 7.992, Swift-тесты,
 helper/`--echo` и Nmap на локальном fixture. Там **не подтверждены агентом**
 настоящий привилегированный скан и живой pause/resume на macOS. Текущий код служит
 эталоном проверенного поведения, а живая пауза требует отдельной проверки.
@@ -773,7 +773,7 @@ URL hostname syntax, u64 и импорт, один экземпляр, прав�
 Ответы пользователя №1–9 — текущая беседа. Первоначальный замысел:
 `docs/superpowers/specs/2026-10-20-masscan-studio-design.md`; поведение v0.3:
 README, Sources/ScanCore, Sources/ScanHelper, Sources/MasscanStudio и Tests;
-границы проверок Swift: `docs/VERIFICATION.md`; новые измерения Slint:
+границы проверок Swift: `docs/history/VERIFICATION.md`; новые измерения Slint:
 отчёт `2026-10-23-a1-macos` (spikes-дерево, не перенесён). Локальный upstream: `/Users/denyskolomiiets/masscan`:
 src/main.c (SIGINT/paused.conf/диапазон обхода), src/output.c (filename `-`),
 src/rawsock.c и src/stub-pcap.c (Windows adapters/pcap), LICENSE.

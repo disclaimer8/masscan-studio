@@ -103,11 +103,13 @@ fn full_failure_plan_replays_19_pass() {
     assert_eq!(v["totals"][PASS], 19);
 }
 #[test]
-fn malformed_exported_checkpoints_never_pass() {
+fn malformed_exported_checkpoints_are_a_behaviour_failure_and_never_rerunnable() {
     for bytes in [vec![], vec![0; 120], vec![1; 60]] {
         let d = Scratch::new("functional", Some("pause_N8"));
         fs::write(d.0.join("runs/pause_N8/checkpoint.bin"), bytes).unwrap();
-        assert_eq!(d.status("pause_N8").0, INVALID);
+        let (verdict, behaviour) = d.status("pause_N8");
+        assert_eq!((verdict.as_str(), behaviour), (FAIL, true));
+        assert!(!crate::windows_suite::may_discard(&verdict, behaviour));
     }
 }
 #[test]
@@ -122,7 +124,7 @@ fn exported_checkpoint_checksum_and_identity_are_verified() {
             bytes[88..].copy_from_slice(&sum);
         }
         fs::write(p, bytes).unwrap();
-        assert_eq!(d.status("pause_N8").0, INVALID, "position {pos}");
+        assert_eq!(d.status("pause_N8"), (FAIL.into(), true), "position {pos}");
     }
 }
 #[test]
@@ -137,8 +139,8 @@ fn all_checkpoint_fields_must_match_report() {
             "run.json",
             path,
             value,
-            INVALID,
-            false,
+            FAIL,
+            true,
         );
     }
 }
@@ -1080,4 +1082,62 @@ fn eno1_capture_must_run_in_the_host_namespace_with_the_derived_filter() {
         v["eno1"]["filter"] = json!("tcp port 1");
     });
     assert_eq!(d.status(tag), (INVALID.into(), false));
+}
+// ---- X5: refusal cases must have tested the file they claim ----
+const CKPT_VARIANTS: [&str; 8] = [
+    "wrong_ports",
+    "wrong_seed",
+    "corrupt_next_index",
+    "corrupt_checksum",
+    "truncated",
+    "empty",
+    "future_format",
+    "future_engine",
+];
+#[test]
+fn refusal_used_checkpoint_must_be_the_declared_mutation_of_the_forged_one() {
+    for variant in CKPT_VARIANTS {
+        let tag = format!("ckpt_{variant}");
+        let d = Scratch::new("failure", Some(&tag));
+        assert_eq!(d.status(&tag), (PASS.into(), false), "{variant} baseline");
+        // The suite used the wrong file: any other byte string than the mutation.
+        let used = d.0.join("runs").join(&tag).join("checkpoint-used.bin");
+        let mut bytes = fs::read(&used).unwrap();
+        bytes.push(0);
+        fs::write(&used, bytes).unwrap();
+        assert_eq!(
+            d.status(&tag),
+            (FAIL.into(), true),
+            "{variant} used differs"
+        );
+        // The forged source changed after the mutation was derived.
+        let d = Scratch::new("failure", Some(&tag));
+        let forged = d.0.join("runs").join(&tag).join("checkpoint-forged.bin");
+        let mut bytes = fs::read(&forged).unwrap();
+        bytes[20] ^= 1;
+        fs::write(&forged, bytes).unwrap();
+        // `empty` discards every byte, so the flipped source byte cannot matter there.
+        let want = if variant == "empty" {
+            (PASS.into(), false)
+        } else {
+            (FAIL.into(), true)
+        };
+        assert_eq!(d.status(&tag), want, "{variant} forged source changed");
+    }
+}
+#[test]
+fn refusal_with_the_wrong_variants_checkpoint_fails() {
+    let d = Scratch::new("failure", Some("ckpt_truncated"));
+    let runs = d.0.join("runs");
+    // Pretend the suite fed the 'empty' mutation to the 'truncated' case.
+    fs::write(runs.join("ckpt_truncated/checkpoint-used.bin"), []).unwrap();
+    assert_eq!(d.status("ckpt_truncated"), (FAIL.into(), true));
+}
+#[test]
+fn refusal_without_recorded_checkpoints_is_not_run() {
+    for file in ["checkpoint-forged.bin", "checkpoint-used.bin"] {
+        let d = Scratch::new("failure", Some("ckpt_wrong_seed"));
+        fs::remove_file(d.0.join("runs/ckpt_wrong_seed").join(file)).unwrap();
+        assert_eq!(d.status("ckpt_wrong_seed").0, NOT_RUN, "{file}");
+    }
 }

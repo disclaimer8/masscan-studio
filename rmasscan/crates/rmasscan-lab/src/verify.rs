@@ -1188,7 +1188,7 @@ fn checkpoint(r: &mut Run, ctx: &Ctx, it: &Value) {
         && bytes.get(8..12) == Some(1u32.to_be_bytes().as_slice())
         && bytes.get(12..16) == Some(1u32.to_be_bytes().as_slice())
         && Sha256::digest(&bytes[..88]).as_slice() == &bytes[88..];
-    r.inv(
+    r.beh(
         "exported checkpoint format and checksum valid",
         valid,
         format!("{} bytes", bytes.len()),
@@ -1200,7 +1200,7 @@ fn checkpoint(r: &mut Run, ctx: &Ctx, it: &Value) {
     let av = read_json(ctx.d.join("argv.json"))
         .and_then(|v| parse_args(&v).ok())
         .unwrap_or_default();
-    r.inv(
+    r.beh(
         "checkpoint bytes match summary, job digest and requested identity",
         hex(&bytes) == s(&j["checkpoint_hex"])
             && hex(&bytes[16..32]) == s(&j["scan_id"])
@@ -1576,6 +1576,33 @@ fn rxloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
         flood(r, ctx, c, end, false);
     }
 }
+/// The refusal must have been tested with the file it claims: checkpoint-used.bin is the
+/// declared mutation of checkpoint-forged.bin, otherwise the case proved something else.
+fn refusal_provenance(r: &mut Run, ctx: &Ctx, variant: &str) {
+    match (
+        fs::read(ctx.d.join("checkpoint-forged.bin")),
+        fs::read(ctx.d.join("checkpoint-used.bin")),
+    ) {
+        (Ok(forged), Ok(used)) => {
+            let want = crate::windows_suite::mutate_checkpoint(variant, &forged);
+            r.beh(
+                "checkpoint-used.bin is the declared mutation of checkpoint-forged.bin",
+                want.as_ref().is_ok_and(|w| *w == used),
+                format!(
+                    "{variant}: forged {} bytes, used {} bytes",
+                    forged.len(),
+                    used.len()
+                ),
+            );
+        }
+        _ => r.add(
+            "checkpoint-forged.bin and checkpoint-used.bin recorded",
+            NOT_RUN,
+            "missing",
+            false,
+        ),
+    }
+}
 fn refusal(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     job(r, j, c, man);
@@ -1587,6 +1614,9 @@ fn refusal(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         "future_engine" => "EngineVersionMismatch",
         _ => "AlreadyCompleted",
     };
+    if it["kind"] == "ckpt_refuse" {
+        refusal_provenance(r, ctx, s(&it["variant"]));
+    }
     r.beh(
         "checkpoint refused before adapter opens with expected reason",
         ctx.meta["guest_exit"] == 4

@@ -48,6 +48,7 @@ if [ "$(id -u)" != 0 ]; then
   [ -z "$RUST_BIN" ] || REEXEC+=(--rust-bin "$(readlink -f "$RUST_BIN")")
   [ -z "$FIXTURES" ] || REEXEC+=(--fixtures "$(readlink -f "$FIXTURES")")
   exec sudo -n env "RMASSCAN_LAB_BIN=$LAB_BIN" "WIRELAB_INJECT=${WIRELAB_INJECT:-}" \
+    ${RMASSCAN_DEPLOY_MANIFEST:+"RMASSCAN_DEPLOY_MANIFEST=$(readlink -f "$RMASSCAN_DEPLOY_MANIFEST")"} \
     ${WIRELAB_MAC_A+"WIRELAB_MAC_A=$WIRELAB_MAC_A"} ${WIRELAB_MAC_B+"WIRELAB_MAC_B=$WIRELAB_MAC_B"} \
     ${WIRELAB_IP_A_LINK+"WIRELAB_IP_A_LINK=$WIRELAB_IP_A_LINK"} ${WIRELAB_IP_ADAPTER+"WIRELAB_IP_ADAPTER=$WIRELAB_IP_ADAPTER"} \
     ${WIRELAB_PEER_IPS+"WIRELAB_PEER_IPS=$WIRELAB_PEER_IPS"} ${WIRELAB_PEER_PREFIX+"WIRELAB_PEER_PREFIX=$WIRELAB_PEER_PREFIX"} \
@@ -211,7 +212,9 @@ fi
 
 "$LAB_BIN" capture env --out "$OUT/env.json" --oracle "$ORACLE" --ns-a "$NS_A" --ns-b "$NS_B" \
   --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" --ip-a "$IP_ADAPTER" --peer-ips "$PEER_IPS" \
-  --seed "$SEED" --rate "$RATE" --open-ports "$OPEN_PORTS" --conf-masked "$CONF_MASKED"
+  --seed "$SEED" --rate "$RATE" --open-ports "$OPEN_PORTS" --conf-masked "$CONF_MASKED" \
+  --wire-lab-sh "$HERE/wire-lab.sh" --process-group-sh "$HERE/lab-process-group.sh" \
+  ${RMASSCAN_DEPLOY_MANIFEST:+--deploy-manifest "$RMASSCAN_DEPLOY_MANIFEST"}
 sed -i -E "s/wl-(scan|peer)-[0-9]+-[0-9]+/wl-\1-RUNID/g" "$OUT/env.json"
 topo "$OUT/topology-before.txt"          # topology + routes are saved BEFORE any scanner traffic
 

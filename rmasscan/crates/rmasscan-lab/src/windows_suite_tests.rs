@@ -14,6 +14,10 @@ struct Knobs {
     record_rc: i32,
     eno1_frames: usize,
     fail_runner: bool,
+    lab_binary: Vec<u8>,
+    guest_clock_offset: f64,
+    tamper_script: Option<String>,
+    missing_script: Option<String>,
 }
 struct Stand {
     src: PathBuf,
@@ -22,6 +26,13 @@ struct Stand {
     tag: RefCell<String>,
     counter_calls: Cell<usize>,
     nonce: RefCell<String>,
+    commit_reads: RefCell<Vec<(String, String)>>,
+}
+/// The "installed" Linux binary of the fake stand; the default deploy manifest vouches for it.
+const LAB_BINARY: &[u8] = b"rmasscan-lab test binary";
+const REMOTE_LAB: &str = "/home/a1/rmasscan-lab";
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 fn out(rc: i32, stdout: &str) -> Result<Output, String> {
     Ok(Output {
@@ -35,11 +46,22 @@ impl Stand {
         Self {
             src: src.to_path_buf(),
             log: RefCell::default(),
-            knobs: RefCell::default(),
+            knobs: RefCell::new(Knobs {
+                lab_binary: LAB_BINARY.to_vec(),
+                ..Knobs::default()
+            }),
             tag: RefCell::default(),
             counter_calls: Cell::new(0),
             nonce: RefCell::default(),
+            commit_reads: RefCell::default(),
         }
+    }
+    fn script_bytes(&self, name: &str) -> Option<Vec<u8>> {
+        crate::deploy::GUEST_SCRIPTS
+            .iter()
+            .any(|(n, _)| *n == name)
+            .then(|| fs::read(repo_root().join("rmasscan/scripts").join(name)).ok())
+            .flatten()
     }
     fn calls(&self) -> Vec<String> {
         self.log.borrow().clone()
@@ -81,6 +103,18 @@ impl Stand {
         }
         if cmd.contains("cat /sys/class/net/lab0/address") {
             return out(0, &format!("{PM}\n"));
+        }
+        if cmd == format!("sha256sum -- '{REMOTE_LAB}'") {
+            return out(
+                0,
+                &format!(
+                    "{}  {REMOTE_LAB}\n",
+                    crate::deploy::sha256_hex(&k.lab_binary)
+                ),
+            );
+        }
+        if cmd == "date -u +%s.%N" {
+            return out(0, &format!("{:.3}\n", epoch()));
         }
         if cmd.contains("record-guest") {
             return out(k.record_rc, "{}");
@@ -125,6 +159,26 @@ impl Stand {
     }
     fn guest(&self, cmd: &str) -> Result<Output, String> {
         let k = self.knobs.borrow();
+        if cmd.contains("windows_wire_clock.ps1") && !cmd.contains("windows_wire_hash.ps1") {
+            return out(0, &format!("{:.3}\n", epoch() + k.guest_clock_offset));
+        }
+        if cmd.contains("windows_wire_hash.ps1") {
+            let path = cmd
+                .split("-Path \"")
+                .nth(1)
+                .and_then(|s| s.split('"').next());
+            let name = path.and_then(|p| p.rsplit('\\').next()).unwrap_or("");
+            if let Some(mut bytes) = self.script_bytes(name) {
+                if k.tamper_script.as_deref() == Some(name) {
+                    bytes.push(b'x');
+                }
+                return out(
+                    0,
+                    &format!("{}\n{}\n", crate::deploy::sha256_hex(&bytes), bytes.len()),
+                );
+            }
+            return out(0, &format!("{EXE}\n42\n"));
+        }
         if cmd.contains("windows-vm-lab.ps1") {
             let nonce = cmd
                 .split("-VerificationNonce \"")
@@ -138,9 +192,6 @@ impl Stand {
                 stdout: "verify stdout".into(),
                 stderr: "verify stderr".into(),
             });
-        }
-        if cmd.contains("windows_wire_hash.ps1") {
-            return out(0, &format!("{EXE}\n42\n"));
         }
         if cmd.contains("windows_wire_run.ps1") && k.fail_runner {
             return out(255, "");
@@ -202,6 +253,21 @@ impl Stand {
     }
 }
 impl Exec for Stand {
+    fn file_at_commit(&self, _repo: &Path, commit: &str, path: &str) -> Result<Vec<u8>, String> {
+        self.commit_reads
+            .borrow_mut()
+            .push((commit.into(), path.into()));
+        if self
+            .knobs
+            .borrow()
+            .missing_script
+            .as_deref()
+            .is_some_and(|m| path.ends_with(m))
+        {
+            return Err("path does not exist in the commit".into());
+        }
+        fs::read(repo_root().join(path)).map_err(|e| e.to_string())
+    }
     fn exec(&self, argv: &[String], _timeout: u64) -> Result<Output, String> {
         let last = argv.last().cloned().unwrap_or_default();
         match argv[0].as_str() {
@@ -234,6 +300,7 @@ impl Exec for Stand {
 struct World {
     root: PathBuf,
     src: PathBuf,
+    deploy: PathBuf,
 }
 impl World {
     fn new(name: &str) -> Self {
@@ -248,7 +315,13 @@ impl World {
         // The suite writes its own runs: start from the manifest and fixtures only.
         copy_tree(&src.join("fixtures"), &root.join("fixtures")).unwrap();
         fs::copy(src.join("manifest.json"), root.join("manifest.json")).unwrap();
-        Self { root, src }
+        let deploy = base.join("deploy.json");
+        write_json(
+            &deploy,
+            &crate::deploy::build_manifest(COMMIT, REMOTE_LAB, LAB_BINARY, "rustc test", 1.0),
+        )
+        .unwrap();
+        Self { root, src, deploy }
     }
 }
 impl Drop for World {
@@ -310,6 +383,8 @@ fn suite_args(w: &World, extra: &[&str]) -> Vec<String> {
         w.root.join("fixtures").to_str().unwrap(),
         "--remote-lab",
         "/home/a1/rmasscan-lab",
+        "--deploy-manifest",
+        w.deploy.to_str().unwrap(),
         "--plan",
         "failure",
     ]);
@@ -837,4 +912,246 @@ fn schema_age_gate() {
     assert!(schema_too_old(&json!({"capture_schema":2})));
     assert!(!schema_too_old(&json!({"capture_schema":CAPTURE_SCHEMA})));
     assert_eq!(CAPTURE_SCHEMA, 3);
+}
+
+// ---- I8: deployment provenance and preflights ----
+fn gate_failing_args(w: &World) -> Vec<String> {
+    suite_args(w, &["--suite", "failure", "--only", TAG])
+}
+fn mutating(call: &str) -> bool {
+    // Anything beyond reading $HOME and hashing the binary changes or starts something.
+    !(call.contains("printf '%s' \"$HOME\"") || call.contains("sha256sum --"))
+}
+#[test]
+fn a_remote_binary_that_is_not_in_the_manifest_is_refused_before_anything_runs() {
+    let w = World::new("binary-hash");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().lab_binary = b"a rebuilt or replaced binary".to_vec();
+    let e = run_with(&gate_failing_args(&w), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("not in the deploy manifest")),
+        "{e:?}"
+    );
+    assert_eq!(e.code(), 2);
+    let calls = stand.calls();
+    assert!(
+        calls.iter().any(|c| c.contains("sha256sum --")),
+        "the hash is checked: {calls:?}"
+    );
+    assert!(
+        calls.iter().all(|c| !mutating(c)),
+        "nothing ran, swept, copied or started: {calls:?}"
+    );
+}
+#[test]
+fn the_vouched_binary_passes_and_its_hash_is_recorded_in_the_evidence() {
+    let w = World::new("binary-ok");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().verify_rc = 1; // stop at the first gate: the preflights are done
+    let _ = run_with(&gate_failing_args(&w), &stand);
+    let pre = fs::read_dir(w.root.join("deploy"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("preflight-"))
+        .expect("preflight record")
+        .path();
+    let rec = read_json(pre).unwrap();
+    assert_eq!(rec["commit"], COMMIT);
+    assert_eq!(
+        rec["remote_lab"]["sha256"],
+        crate::deploy::sha256_hex(LAB_BINARY)
+    );
+    assert_eq!(rec["remote_lab"]["path"], REMOTE_LAB);
+    assert_eq!(
+        rec["deploy_manifest_sha256"],
+        hash(&w.deploy).unwrap(),
+        "the manifest that vouched is the one recorded"
+    );
+    assert_eq!(
+        fs::read(w.root.join("deploy/deploy-manifest.json")).unwrap(),
+        fs::read(&w.deploy).unwrap()
+    );
+}
+#[test]
+fn a_manifest_for_another_commit_or_binary_path_or_a_missing_one_is_refused_locally() {
+    let w = World::new("manifest-refusals");
+    for (label, manifest) in [
+        (
+            "other commit",
+            crate::deploy::build_manifest(&"f".repeat(40), REMOTE_LAB, LAB_BINARY, "", 1.0),
+        ),
+        (
+            "other path",
+            crate::deploy::build_manifest(COMMIT, "/home/a1/other-lab", LAB_BINARY, "", 1.0),
+        ),
+        ("not a manifest", json!({"hello": 1})),
+    ] {
+        write_json(&w.deploy, &manifest).unwrap();
+        let stand = Stand::new(&w.src);
+        let r = run_with(&gate_failing_args(&w), &stand);
+        assert!(matches!(r, Err(SuiteError::NotRun(_))), "{label}: {r:?}");
+        assert!(stand.calls().is_empty(), "{label}: {:?}", stand.calls());
+    }
+    let stand = Stand::new(&w.src);
+    let mut a = gate_failing_args(&w);
+    let at = a.iter().position(|x| x == "--deploy-manifest").unwrap();
+    a.drain(at..at + 2);
+    let r = run_with(&a, &stand);
+    assert!(
+        matches!(&r, Err(SuiteError::NotRun(m)) if m.contains("--deploy-manifest")),
+        "{r:?}"
+    );
+    assert!(stand.calls().is_empty());
+}
+#[test]
+fn guest_scripts_come_from_the_commit_and_their_hashes_are_evidence() {
+    let w = World::new("guest-scripts");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().verify_rc = 1;
+    let _ = run_with(&gate_failing_args(&w), &stand);
+    // Every script was read from the tree of --commit.
+    let reads = stand.commit_reads.borrow().clone();
+    assert_eq!(reads.len(), crate::deploy::GUEST_SCRIPTS.len());
+    assert!(
+        reads
+            .iter()
+            .all(|(c, p)| c == COMMIT && p.starts_with("rmasscan/scripts/"))
+    );
+    // windows-vm-lab.ps1 is deployed too (the old guest copy made every gate fail), at the
+    // path the gate runs it from.
+    let calls = stand.calls();
+    assert!(
+        calls.iter().any(|c| c.starts_with("scp ")
+            && c.contains("guest-scripts/windows-vm-lab.ps1")
+            && c.ends_with("lab@127.0.0.1:windows-vm-lab.ps1")),
+        "{calls:?}"
+    );
+    // The copies are taken from the evidence staging area, never from the build tree.
+    let build_tree = repo_root().join("rmasscan/scripts");
+    let build_tree = build_tree.to_string_lossy();
+    for c in calls
+        .iter()
+        .filter(|c| c.starts_with("scp ") && c.contains(" lab@127.0.0.1:"))
+    {
+        assert!(
+            !c.contains(&*build_tree) && c.contains("/deploy/guest-scripts/"),
+            "{c}"
+        );
+    }
+    // Hashes in the preflight record equal the bytes of the staged evidence copies and of the
+    // committed scripts.
+    let pre = fs::read_dir(w.root.join("deploy"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("preflight-"))
+        .unwrap()
+        .path();
+    let rec = read_json(pre).unwrap();
+    for (name, _) in crate::deploy::GUEST_SCRIPTS {
+        let staged = w.root.join("deploy/guest-scripts").join(name);
+        let committed = fs::read(repo_root().join("rmasscan/scripts").join(name)).unwrap();
+        assert_eq!(fs::read(&staged).unwrap(), committed, "{name}");
+        assert_eq!(
+            rec["guest_scripts"][*name]["sha256"],
+            crate::deploy::sha256_hex(&committed),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        rec["guest_scripts"].as_object().unwrap().len(),
+        crate::deploy::GUEST_SCRIPTS.len()
+    );
+}
+#[test]
+fn a_script_missing_at_the_commit_is_refused_before_any_remote_command() {
+    let w = World::new("script-missing");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().missing_script = Some("windows-vm-lab.ps1".into());
+    let e = run_with(&gate_failing_args(&w), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("windows-vm-lab.ps1")),
+        "{e:?}"
+    );
+    assert!(stand.calls().is_empty(), "{:?}", stand.calls());
+}
+#[test]
+fn a_guest_copy_that_differs_from_the_commit_stops_the_suite_before_the_gate() {
+    let w = World::new("guest-tamper");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().tamper_script = Some("windows-vm-lab.ps1".into());
+    let e = run_with(&gate_failing_args(&w), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("windows-vm-lab.ps1") && m.contains("does not match")),
+        "{e:?}"
+    );
+    assert_eq!(stand.count("-Action Verify"), 0);
+    assert_eq!(stand.count("windows_wire_prepare.ps1 -Suite"), 0);
+}
+#[test]
+fn clock_skew_beyond_plus_five_or_minus_sixty_seconds_refuses_every_raw_run() {
+    for (offset, refused) in [
+        (0.0, false),
+        (3.0, false),
+        (-30.0, false),
+        (8.0, true),
+        (-90.0, true),
+    ] {
+        let w = World::new("clock");
+        let stand = Stand::new(&w.src);
+        {
+            let mut k = stand.knobs.borrow_mut();
+            k.guest_clock_offset = offset;
+            k.verify_rc = 1; // a passing clock reaches the (failing) gate
+        }
+        let r = run_with(&gate_failing_args(&w), &stand);
+        if refused {
+            assert!(
+                matches!(&r, Err(SuiteError::NotRun(m)) if m.contains("clock")),
+                "{offset}: {r:?}"
+            );
+            assert_eq!(stand.count("-Action Verify"), 0, "{offset}");
+            assert_eq!(
+                stand.count("windows_wire_prepare.ps1 -Suite"),
+                0,
+                "{offset}"
+            );
+        } else {
+            assert!(
+                !matches!(&r, Err(SuiteError::NotRun(m)) if m.contains("clock")),
+                "{offset}: {r:?}"
+            );
+            assert_eq!(stand.count("-Action Verify"), 1, "{offset}");
+        }
+    }
+}
+#[test]
+fn the_clock_reading_is_recorded_in_the_preflight_evidence() {
+    let w = World::new("clock-record");
+    let stand = Stand::new(&w.src);
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.guest_clock_offset = -12.0;
+        k.verify_rc = 1;
+    }
+    let _ = run_with(&gate_failing_args(&w), &stand);
+    let pre = fs::read_dir(w.root.join("deploy"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("preflight-"))
+        .unwrap()
+        .path();
+    let rec = read_json(pre).unwrap();
+    let offset = rec["clock"]["guest_minus_home_s"].as_f64().unwrap();
+    assert!((offset + 12.0).abs() < 2.0, "{offset}");
+    assert_eq!(rec["clock"]["limits"]["guest_ahead_s"], 5.0);
+    assert_eq!(rec["clock"]["limits"]["guest_behind_s"], 60.0);
+}
+#[test]
+fn the_clock_limits_are_the_ones_record_guest_enforces() {
+    // One definition: the preflight and record-guest cannot drift apart.
+    let source = include_str!("vm_lab.rs");
+    assert!(source.contains("verified > now() + VERIFY_FUTURE_SKEW_S"));
+    assert!(source.contains("now() - verified > VERIFY_MAX_AGE_S"));
+    assert_eq!(crate::vm_lab::VERIFY_FUTURE_SKEW_S, 5.0);
+    assert_eq!(crate::vm_lab::VERIFY_MAX_AGE_S, 60.0);
 }

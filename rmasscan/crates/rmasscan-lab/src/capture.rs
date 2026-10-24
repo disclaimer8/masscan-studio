@@ -121,6 +121,30 @@ fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
     drop(listeners);
     Ok(0)
 }
+/// Hashes of the harness that is actually executing (L M4): the running binary, and the exact
+/// scripts the caller names (wire-lab.sh passes its own path and the helper it sourced, never a
+/// compile-time path). A named script that cannot be read is an error, not a silent omission.
+/// With `--deploy-manifest` the running binary must be one the manifest vouches for, which
+/// binds the run to the commit the manifest records.
+fn harness_record(a: &BTreeMap<String, String>) -> Result<Value, String> {
+    let exe = std::env::current_exe().map_err(err)?;
+    let exe_sha = sha(&exe)?;
+    let mut harness = json!({"rmasscan-lab":exe_sha,"wire-lab.sh":sha(get(a, "wire-lab-sh")?)?,"lab-process-group.sh":sha(get(a, "process-group-sh")?)?});
+    if let Ok(path) = get(a, "deploy-manifest") {
+        let m = read_json(path)?;
+        let vouched: Vec<String> = m["binaries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|b| b["sha256"].as_str().map(str::to_owned))
+            .collect();
+        if m["kind"] != crate::deploy::MANIFEST_KIND || !vouched.contains(&exe_sha) {
+            return Err("the running rmasscan-lab is not in the deploy manifest".into());
+        }
+        harness["deploy"] = json!({"manifest_sha256":sha(path)?,"commit":m["commit"]});
+    }
+    Ok(harness)
+}
 fn environment(a: &BTreeMap<String, String>) -> Result<i32, String> {
     let oracle = get(a, "oracle")?;
     let src = Path::new(oracle)
@@ -135,12 +159,7 @@ fn environment(a: &BTreeMap<String, String>) -> Result<i32, String> {
         ci["sha256"] = json!(sha(conf)?);
         ci["size"] = json!(fs::metadata(conf).map_err(err)?.len());
     }
-    let exe = std::env::current_exe().map_err(err)?;
-    let mut harness = json!({"rmasscan-lab":sha(&exe)?});
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/wire-lab.sh");
-    if script.exists() {
-        harness["wire-lab.sh"] = json!(sha(script)?);
-    }
+    let harness = harness_record(a)?;
     let os = fs::read_to_string("/etc/os-release").unwrap_or_default();
     let pretty = os
         .lines()
@@ -456,6 +475,71 @@ pub fn run(args: &[String]) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("rmasscan-harness-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+    #[test]
+    fn harness_hashes_the_scripts_it_is_given_and_never_omits_one() {
+        let d = scratch("scripts");
+        let (wl, pg) = (d.join("wire-lab.sh"), d.join("pg.sh"));
+        fs::write(&wl, "one").unwrap();
+        fs::write(&pg, "two").unwrap();
+        let a = args(&[
+            ("wire-lab-sh", wl.to_str().unwrap()),
+            ("process-group-sh", pg.to_str().unwrap()),
+        ]);
+        let h = harness_record(&a).unwrap();
+        assert_eq!(h["wire-lab.sh"], hex_digest(b"one"));
+        assert_eq!(h["lab-process-group.sh"], hex_digest(b"two"));
+        assert_eq!(
+            h["rmasscan-lab"],
+            sha(std::env::current_exe().unwrap()).unwrap()
+        );
+        assert!(h.get("deploy").is_none());
+        // A path that is absent, or an omitted argument, is an error and not a missing key.
+        let gone = args(&[
+            ("wire-lab-sh", d.join("absent").to_str().unwrap()),
+            ("process-group-sh", pg.to_str().unwrap()),
+        ]);
+        assert!(harness_record(&gone).is_err());
+        assert!(harness_record(&args(&[("wire-lab-sh", wl.to_str().unwrap())])).is_err());
+        let _ = fs::remove_dir_all(d);
+    }
+    #[test]
+    fn a_deploy_manifest_binds_the_running_binary_to_a_commit() {
+        let d = scratch("deploy");
+        let (wl, pg, manifest) = (d.join("wl.sh"), d.join("pg.sh"), d.join("m.json"));
+        fs::write(&wl, "a").unwrap();
+        fs::write(&pg, "b").unwrap();
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        let mk = |bytes: &[u8]| crate::deploy::build_manifest(commit, "/x/lab", bytes, "", 1.0);
+        let a = args(&[
+            ("wire-lab-sh", wl.to_str().unwrap()),
+            ("process-group-sh", pg.to_str().unwrap()),
+            ("deploy-manifest", manifest.to_str().unwrap()),
+        ]);
+        write_json(&manifest, &mk(&exe)).unwrap();
+        let h = harness_record(&a).unwrap();
+        assert_eq!(h["deploy"]["commit"], commit);
+        assert_eq!(h["deploy"]["manifest_sha256"], sha(&manifest).unwrap());
+        write_json(&manifest, &mk(b"some other build")).unwrap();
+        assert!(
+            harness_record(&a).is_err(),
+            "a binary the manifest does not list"
+        );
+        let _ = fs::remove_dir_all(d);
+    }
     #[test]
     fn classifies_only_complete_tcp_headers_and_directions() {
         let scanner = [1; 6];

@@ -36,6 +36,10 @@ use std::{
 };
 const MARK_DIR: &str = "/run/rmasscan-wvl";
 const MGMT: &str = "52:54:00:12:34:56";
+/// A guest Verify report may be at most this far ahead of the home-pc clock (seconds).
+pub(crate) const VERIFY_FUTURE_SKEW_S: f64 = 5.0;
+/// A guest Verify report older than this on the home-pc clock is stale (seconds).
+pub(crate) const VERIFY_MAX_AGE_S: f64 = 60.0;
 fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1020,8 +1024,8 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
                 let start = vm["start"].as_f64().unwrap_or(0.0);
                 if v["verification_nonce"] != nonce
                     || m["guest"]["verification_nonce"] == nonce
-                    || verified > now() + 5.0
-                    || now() - verified > 60.0
+                    || verified > now() + VERIFY_FUTURE_SKEW_S
+                    || now() - verified > VERIFY_MAX_AGE_S
                     || start <= 0.0
                     || verified < start
                 {

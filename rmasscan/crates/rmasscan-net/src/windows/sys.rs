@@ -121,7 +121,7 @@ fn dll_info(name: &str, path: &str) -> Result<DllInfo, NetError> {
     })
 }
 
-fn file_version(path: &str) -> Option<String> {
+pub(crate) fn file_version(path: &str) -> Option<String> {
     let w = wide(path);
     let mut dummy = 0u32;
     // SAFETY: w NUL-терминирована, dummy валидный выходной параметр.
@@ -152,6 +152,90 @@ fn file_version(path: &str) -> Option<String> {
         info.dwFileVersionLS >> 16,
         info.dwFileVersionLS & 0xffff
     ))
+}
+
+/// MAC адаптера ОС по GUID `{...}` (`GetAdaptersAddresses`); `None`, если
+/// адаптера нет или вызов не удался. Только чтение системного состояния.
+pub(crate) fn adapter_mac_by_guid(guid: &str) -> Option<[u8; 6]> {
+    use windows_sys::Win32::Foundation::ERROR_BUFFER_OVERFLOW;
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
+        GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
+
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut size: u32 = 32 * 1024;
+    // u64: выравнивание 8, как требует IP_ADAPTER_ADDRESSES_LH.
+    let mut buf: Vec<u64> = vec![0; (size as usize).div_ceil(8)];
+    for _ in 0..4 {
+        // SAFETY: buf имеет не менее `size` байт и выровнен по 8; size это
+        // входной/выходной параметр API; reserved обязан быть NULL.
+        let rc = unsafe {
+            GetAdaptersAddresses(
+                u32::from(AF_UNSPEC),
+                flags,
+                std::ptr::null(),
+                buf.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if rc == ERROR_BUFFER_OVERFLOW {
+            buf = vec![0; (size as usize).div_ceil(8)];
+            continue;
+        }
+        if rc != 0 {
+            return None;
+        }
+        let mut p = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+        while !p.is_null() {
+            // SAFETY: p указывает на узел списка внутри buf (заполнен API,
+            // buf жив); Next ведёт в тот же буфер или NULL.
+            let a = unsafe { &*p };
+            if !a.AdapterName.is_null() {
+                // SAFETY: AdapterName это NUL-терминированная строка внутри buf.
+                let name = unsafe { std::ffi::CStr::from_ptr(a.AdapterName.cast()) };
+                if name.to_string_lossy().eq_ignore_ascii_case(guid) && a.PhysicalAddressLength == 6
+                {
+                    let mut mac = [0u8; 6];
+                    mac.copy_from_slice(&a.PhysicalAddress[..6]);
+                    return Some(mac);
+                }
+            }
+            p = a.Next;
+        }
+        return None;
+    }
+    None
+}
+
+/// Версия ОС `major.minor.build[.revision]`. `RtlGetVersion` не подвержена
+/// «обману» совместимости (GetFileVersionInfo у процесса без манифеста отдаёт
+/// 6.2); ревизия (UBR) берётся из версии kernel32.dll, если номер сборки
+/// совпал.
+pub(crate) fn os_version() -> Option<String> {
+    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+
+    // SAFETY: структура из нулей допустима для OSVERSIONINFOW (целые и массив u16).
+    let mut v: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+    v.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+    // SAFETY: v это валидная структура с заполненным размером.
+    if unsafe { RtlGetVersion(&mut v) } != 0 {
+        return None;
+    }
+    let base = format!(
+        "{}.{}.{}",
+        v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber
+    );
+    let rev = system_directory()
+        .ok()
+        .and_then(|d| file_version(&format!("{d}\\kernel32.dll")))
+        .and_then(|f| {
+            let p: Vec<&str> = f.split('.').collect();
+            (p.len() == 4 && p[2] == v.dwBuildNumber.to_string()).then(|| p[3].to_string())
+        });
+    Some(rev.map_or(base.clone(), |r| format!("{base}.{r}")))
 }
 
 /// Настоящий загрузчик.

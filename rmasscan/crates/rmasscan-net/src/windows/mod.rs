@@ -15,6 +15,7 @@ pub(crate) mod adapter;
 pub(crate) mod ffi;
 #[allow(unsafe_code)]
 pub(crate) mod handle;
+pub(crate) mod inventory;
 #[allow(unsafe_code)]
 pub(crate) mod loader;
 #[cfg(windows)]

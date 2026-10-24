@@ -50,6 +50,44 @@ pub enum NetError {
     System(String),
 }
 
+/// Идентификатор ABI-слоя Npcap, попадающий в идентичность каждого JSON:
+/// динамическая загрузка `wpcap.dll` по полному пути, собственные объявления
+/// (без Npcap SDK и import-библиотек), x86_64.
+pub const NPCAP_ABI_ID: &str =
+    "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64";
+
+/// Загруженная и проверенная DLL Npcap (путь, версия, хэш содержимого).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DllReport {
+    pub name: String,
+    pub path: String,
+    pub sha256: String,
+    pub version: Option<String>,
+}
+
+/// Устройство из перечня Npcap. `mac` это MAC того же адаптера в ОС
+/// (`None`, если не определён).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceReport {
+    pub name: String,
+    pub description: Option<String>,
+    pub loopback: bool,
+    pub mac: Option<[u8; 6]>,
+}
+
+/// Результат `--inventory`: что установлено и какие адаптеры видны. Получается
+/// без открытия адаптера и без единой отправки.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inventory {
+    /// Строка `pcap_lib_version`.
+    pub lib_version: String,
+    pub utf8_text: bool,
+    pub dlls: Vec<DllReport>,
+    /// Версия драйвера `npcap.sys`, если файл найден.
+    pub driver_version: Option<String>,
+    pub devices: Vec<DeviceReport>,
+}
+
 /// Накопленные счётчики. `kernel_drops == None` значит «недоступно».
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetStats {
@@ -155,4 +193,40 @@ pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError
 #[cfg(not(any(target_os = "linux", windows)))]
 pub fn open_explicit(_binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
     Err(NetError::UnsupportedPlatform)
+}
+
+/// Перечень Npcap и адаптеров БЕЗ открытия адаптера и без отправки. Загружает
+/// `wpcap.dll` (только чтение), поэтому отсутствие Npcap это `DriverUnavailable`.
+#[cfg(windows)]
+pub fn inventory() -> Result<Inventory, NetError> {
+    windows::inventory::collect()
+}
+
+#[cfg(not(windows))]
+pub fn inventory() -> Result<Inventory, NetError> {
+    Err(NetError::UnsupportedPlatform)
+}
+
+/// MAC адаптера ОС по имени Npcap `\Device\NPF_{GUID}`. `None`, если
+/// определить нельзя (в том числе вне Windows).
+#[cfg(windows)]
+pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
+    windows::inventory::nic_mac(interface_id)
+}
+
+#[cfg(not(windows))]
+pub fn nic_mac(_interface_id: &str) -> Option<[u8; 6]> {
+    None
+}
+
+/// Версия ОС (`major.minor.build.revision` файла kernel32.dll) для привязки
+/// доказательств к сборке Windows; `None` вне Windows.
+#[cfg(windows)]
+pub fn os_version() -> Option<String> {
+    windows::inventory::os_version()
+}
+
+#[cfg(not(windows))]
+pub fn os_version() -> Option<String> {
+    None
 }

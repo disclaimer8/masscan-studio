@@ -28,10 +28,13 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", default-features = false, features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
+    "Wdk_System_SystemServices",
 ] }
 
 # Только живые тесты: проверка MAC лабораторного NIC (GetAdaptersAddresses) до
@@ -42,4 +45,9 @@ windows-sys = { version = "=0.61.2", default-features = false, features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
+    # Только harness (examples/support/metrics.rs): число handle, времена
+    # процесса, рабочий набор, повышен ли токен.
+    "Win32_Security",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
 ] }

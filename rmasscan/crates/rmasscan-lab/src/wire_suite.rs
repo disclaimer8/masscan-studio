@@ -35,8 +35,42 @@ fn leak_ok(s: &Value) -> bool {
         && s["resources"]["threads_after_join"] == s["resources"]["threads_before"]
         && matches!((s["resources"]["fds_after_join"].as_u64(),s["resources"]["fds_before_open"].as_u64()),(Some(a),Some(b)) if a<=b)
 }
-fn n(s: &Value, k: &str) -> u64 {
-    s[k].as_u64().unwrap_or(u64::MAX)
+/// A summary counter that may be absent. An absent counter equals nothing, not even another
+/// absent one, and is ordered against nothing, so a missing field can never satisfy a check.
+#[derive(Clone, Copy, Debug)]
+struct Num(Option<u64>);
+impl PartialEq for Num {
+    fn eq(&self, o: &Self) -> bool {
+        matches!((self.0, o.0), (Some(a), Some(b)) if a == b)
+    }
+}
+impl PartialEq<u64> for Num {
+    fn eq(&self, o: &u64) -> bool {
+        self.0 == Some(*o)
+    }
+}
+impl PartialEq<Num> for u64 {
+    fn eq(&self, o: &Num) -> bool {
+        o.0 == Some(*self)
+    }
+}
+impl PartialOrd for Num {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.0?.cmp(&o.0?))
+    }
+}
+impl PartialOrd<u64> for Num {
+    fn partial_cmp(&self, o: &u64) -> Option<std::cmp::Ordering> {
+        Some(self.0?.cmp(o))
+    }
+}
+impl Num {
+    fn saturating_add(self, o: Num) -> Num {
+        Num(self.0.zip(o.0).map(|(a, b)| a.saturating_add(b)))
+    }
+}
+fn n(s: &Value, k: &str) -> Num {
+    Num(s[k].as_u64())
 }
 fn sorted_replies(s: &Value) -> Vec<String> {
     let mut r = s["replies"]
@@ -1638,6 +1672,10 @@ impl Driver {
                 }
             }
         }
+        self.perf_summarize(&cells, rates);
+        Ok(())
+    }
+    fn perf_summarize(&mut self, cells: &[Value], rates: &[u64]) {
         let mut rows = vec![];
         for &rate in rates {
             let mut row = json!({"rate":rate});
@@ -1717,7 +1755,7 @@ impl Driver {
             "perf",
             "every Rust run Completed with measured zero RX drops",
             Some(rows.iter().all(|r| r["rust_rx_health_bad_runs"] == 0)),
-            json!(rows),
+            json!("per-rate rows are in perf_summary"),
         );
         self.check(
             "perf",
@@ -1728,18 +1766,17 @@ impl Driver {
                         .as_array()
                         .is_some_and(|a| a.iter().all(|d| d.as_u64() == Some(0)))
             })),
-            json!(rows),
+            json!("per-rate rows are in perf_summary"),
         );
         for row in &rows {
             self.check(
                 "perf",
                 &format!("{} pps Rust steady rate within 20% of C", row["rate"]),
                 row["within_20pct"].as_bool(),
-                row.clone(),
+                json!({"rate":row["rate"],"rust_over_c":row["rust_over_c"],"within_20pct":row["within_20pct"]}),
             );
         }
         self.extra["perf_summary"] = json!(rows);
-        Ok(())
     }
 }
 fn wait_child(p: &mut OwnedChild, timeout: u64) -> Result<i32, String> {
@@ -2181,3 +2218,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "wire_suite_tests.rs"]
+mod suite_tests;

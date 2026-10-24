@@ -38,3 +38,6 @@
 ## Fix round 2
 * Verifier re-run with the round 2 rules (capture_schema per run, behaviour failures, strays). `functional/manifest.json` now labels part A `capture_schema` 1. Part A: unchanged, 29 PASS, overall PASS, discarded INVALID x01 run listed, no behaviour failure; x01 runs: discarded 80 == injected 80 + strays 0.
 * `functional-r1-smoke/` CHANGED: its run is now INVALID (`run capture_schema 1 < directory 2`). The run was captured by the round 1 orchestrator, which recorded the schema only in the directory manifest and not in `capture.json`; it did have `--immediate-mode` and the end marker (its checks passed in round 1). I did not edit its `capture.json` to add the field. A fresh smoke with the round 2 orchestrator would be needed for a PASS verdict.
+
+## Fix round 3
+Verdicts regenerated with the round 3 verifier (argv.json check, strays incl. broadcast, NOT RUN for missing continuous captures). Unchanged: `functional` 29 PASS / overall PASS; `functional-r1-smoke` run INVALID (no per-run capture_schema). No raw evidence file was edited.

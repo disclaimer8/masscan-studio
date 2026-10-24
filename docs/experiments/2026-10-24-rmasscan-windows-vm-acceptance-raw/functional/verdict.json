@@ -198,6 +198,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -300,8 +306,8 @@
      "result": "PASS"
     },
     {
-     "behaviour": true,
-     "detail": "discarded=80 injected=80 strays=0",
+     "behaviour": false,
+     "detail": "discarded=80 injected=80 strays=0 capture_proven_complete=False",
      "name": "engine discarded == injected + strays (each injected frame discarded one for one)",
      "result": "PASS"
     },
@@ -740,6 +746,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -1015,6 +1027,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -1296,6 +1314,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -1571,6 +1595,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -1852,6 +1882,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -2127,6 +2163,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -2408,6 +2450,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -2683,6 +2731,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -2964,6 +3018,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -3239,6 +3299,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -3520,6 +3586,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -3795,6 +3867,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -4076,6 +4154,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -4179,7 +4263,7 @@
     },
     {
      "behaviour": true,
-     "detail": "discarded=80 injected=80 strays=0",
+     "detail": "discarded=80 injected=80 strays=0 capture_proven_complete=True",
      "name": "engine discarded == injected + strays (each injected frame discarded one for one)",
      "result": "PASS"
     },
@@ -4393,6 +4477,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -4496,7 +4586,7 @@
     },
     {
      "behaviour": true,
-     "detail": "discarded=80 injected=80 strays=0",
+     "detail": "discarded=80 injected=80 strays=0 capture_proven_complete=True",
      "name": "engine discarded == injected + strays (each injected frame discarded one for one)",
      "result": "PASS"
     },
@@ -4707,6 +4797,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -4934,6 +5030,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -5149,6 +5251,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -5376,6 +5484,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -5591,6 +5705,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -5818,6 +5938,12 @@
      "result": "PASS"
     },
     {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
+     "result": "PASS"
+    },
+    {
      "behaviour": true,
      "detail": "ok",
      "name": "run.json job echo == the case and the binding",
@@ -6033,6 +6159,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -6257,6 +6389,12 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {

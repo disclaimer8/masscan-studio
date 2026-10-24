@@ -1409,3 +1409,47 @@ mod local_sweep {
             .unwrap_or(false)
     }
 }
+
+// ---- F5 (WR N4): the orchestrator build is recorded with the evidence ----
+#[test]
+fn a_new_evidence_directory_records_the_orchestrator_build_in_manifest_and_preflight() {
+    let w = World::new("orchestrator-build");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().verify_rc = 1; // stop at the first gate: the manifest is already written
+    let out = w.root.parent().unwrap().join("fresh-out");
+    let a = strings(&[
+        "--out",
+        out.to_str().unwrap(),
+        "--commit",
+        COMMIT,
+        "--guest-exe",
+        "C:\\x\\wire_scan.exe",
+        "--fixtures",
+        w.src.join("fixtures").to_str().unwrap(),
+        "--remote-lab",
+        "/home/a1/rmasscan-lab",
+        "--deploy-manifest",
+        w.deploy.to_str().unwrap(),
+        "--plan",
+        "failure",
+        "--only",
+        TAG,
+    ]);
+    let _ = run_with(&a, &stand);
+    let man = read_json(out.join("manifest.json")).expect("a new directory gets a manifest");
+    let orch = &man["orchestrator"];
+    assert_eq!(crate::provenance::problem(orch), None, "{orch}");
+    let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+    assert_eq!(orch["binary_sha256"], crate::deploy::sha256_hex(&exe));
+    let pre = fs::read_dir(out.join("deploy"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("preflight-"))
+        .expect("preflight record")
+        .path();
+    assert_eq!(
+        read_json(pre).unwrap()["orchestrator"],
+        *orch,
+        "every start records the build that ran it"
+    );
+}

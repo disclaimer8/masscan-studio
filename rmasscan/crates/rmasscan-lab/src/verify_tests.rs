@@ -1838,3 +1838,75 @@ fn the_checkpoint_magic_version_and_trailer_are_each_checked_on_their_own() {
         assert_eq!(d.status("pause_N8"), (FAIL.into(), true), "position {pos}");
     }
 }
+
+// ---- F5 (WR N4): the build that produced the evidence is recorded and reported ----
+
+#[test]
+fn a_schema_3_manifest_must_record_the_orchestrator_build() {
+    let d = Scratch::new("failure", None);
+    assert_eq!(verify_dir(&d.0)["overall"], PASS);
+    for (label, change) in [
+        ("missing", None),
+        ("short commit", Some(("git_commit", json!("abc")))),
+        ("no dirty flag", Some(("git_dirty", Value::Null))),
+        ("no binary hash", Some(("binary_sha256", Value::Null))),
+    ] {
+        let d = Scratch::new("failure", None);
+        let path = d.0.join("manifest.json");
+        let mut m = read_json(&path).unwrap();
+        match change {
+            None => {
+                m.as_object_mut().unwrap().remove("orchestrator");
+            }
+            Some((k, v)) => m["orchestrator"][k] = v,
+        }
+        fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+        let v = verify_dir(&d.0);
+        assert_ne!(v["overall"], PASS, "{label}");
+        assert!(
+            serde_json::to_string(&v)
+                .unwrap()
+                .contains("orchestrator build recorded"),
+            "{label}: the refusal must name the rule"
+        );
+    }
+}
+
+#[test]
+fn the_verdict_reports_the_orchestrator_and_the_verifier_builds_and_flags_a_dirty_tree() {
+    let d = Scratch::new("failure", None);
+    let v = verify_dir(&d.0);
+    let man = read_json(d.0.join("manifest.json")).unwrap();
+    assert_eq!(v["provenance"]["orchestrator"], man["orchestrator"]);
+    let ver = &v["provenance"]["verifier"];
+    assert_eq!(ver["binary_sha256"].as_str().unwrap().len(), 64);
+    // (the verifier warning depends on the tree this test runs in; only the orchestrator is fixed)
+    let none = serde_json::to_string(&v["provenance"]["warnings"]).unwrap();
+    assert!(!none.contains("orchestrator"), "{none}");
+
+    let path = d.0.join("manifest.json");
+    let mut m = man;
+    m["orchestrator"]["git_dirty"] = json!(true);
+    fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+    let v = verify_dir(&d.0);
+    assert_eq!(v["overall"], PASS, "a dirty build is reported, not refused");
+    let warnings = serde_json::to_string(&v["provenance"]["warnings"]).unwrap();
+    assert!(warnings.contains("uncommitted"), "{warnings}");
+    m["orchestrator"]["git_dirty"] = json!(false);
+    m["orchestrator"]["git_commit"] = json!("1".repeat(40));
+    fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+    let warnings = serde_json::to_string(&verify_dir(&d.0)["provenance"]["warnings"]).unwrap();
+    assert!(
+        warnings.contains("differs from the commit under test"),
+        "{warnings}"
+    );
+}
+
+#[test]
+fn schema_below_3_keeps_its_exemption_and_says_so() {
+    let d = Scratch::new("functional", None);
+    let v = verify_dir(&d.0);
+    let text = serde_json::to_string(&v["provenance"]).unwrap();
+    assert!(text.contains("not recorded"), "{text}");
+    assert_ne!(v["overall"], "INVALID");
+}

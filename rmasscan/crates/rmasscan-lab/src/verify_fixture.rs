@@ -99,7 +99,7 @@ fn put(dir: &Path, name: &str, bytes: impl AsRef<[u8]>) {
 fn manifest(schema: u64) -> Value {
     let mut silent = vec![8099u32];
     silent.extend(8100..8120);
-    json!({
+    let mut m = json!({
         "schema":1,"capture_schema":schema,"suite":"failure","plan":"failure",
         "code_commit":COMMIT,
         "exe":{"sha256":EXE,"size":1,"guest_path":"C:\\x\\wire_scan.exe","build":"synthetic"},
@@ -108,7 +108,12 @@ fn manifest(schema: u64) -> Value {
         "listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
         "oracle":{"sha256":"cd","git_commit":"ef","git_tree_clean":true},
         "pause":{"case":"c03_multi_ports","n":[0,1,8,15]}
-    })
+    });
+    if schema >= 3 {
+        // What the suite records for the Mac-side build that ran it (provenance.rs).
+        m["orchestrator"] = json!({"git_commit":COMMIT,"git_dirty":false,"binary_sha256":"ab".repeat(32),"binary_name":"rmasscan-lab","errors":[]});
+    }
+    m
 }
 fn job_echo(c: &Value, man: &Value) -> Value {
     let b = &man["binding"];

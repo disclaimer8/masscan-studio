@@ -568,14 +568,21 @@ class DumpRec:
         self.rx0 = self.rx()  # counters right after tcpdump is listening
 
     def stop(self):
-        # Quiesce first: tcpdump loses frames still queued in its ring when it is interrupted, so stop it
-        # only after the peer veth counters were stable for two consecutive reads (no frame in flight).
-        prev, stable, end = -1, 0, time.time() + 10
-        while stable < 2 and time.time() < end:
-            time.sleep(0.25)
+        # Quiesce first. tcpdump (libpcap TPACKET_V3) retires a partially filled ring block only after the capture
+        # timeout (tcpdump uses 1000 ms), and SIGINT breaks the loop WITHOUT processing that block, so the last frame
+        # (typically a SYN-ACK retransmit from the peer, since the Rust scanner never RSTs half-open sockets) can be
+        # counted in "received by filter" yet missing from the pcap. Stop only after the peer veth counters were
+        # unchanged for QUIET_S (> the retire timeout) so every received frame has been retired to userspace.
+        # The completeness check below is unchanged and strict.
+        QUIET_S, POLL_S = 1.5, 0.25
+        prev, quiet_since, end = -1, None, time.time() + 20
+        while time.time() < end:
+            time.sleep(POLL_S)
             cur = self.rx()
-            stable = stable + 1 if cur == prev else 0
-            prev = cur
+            if cur != prev:
+                prev, quiet_since = cur, time.time()
+            elif time.time() - quiet_since >= QUIET_S:
+                break
         rx1 = self.rx()  # counters just BEFORE tcpdump is stopped
         self.p.send_signal(signal.SIGINT)
         self.p.wait()

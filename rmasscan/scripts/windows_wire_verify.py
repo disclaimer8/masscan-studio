@@ -124,6 +124,9 @@ class Run:
         self.tag = tag
         self.checks = []
         self.notes = {}
+        # None: the argv check did not run; True: argv.json matches the expected definition of this run kind;
+        # False: it does not. A run whose argv is not proven right cannot blame the scanner for anything.
+        self.argv_ok = None
 
     def add(self, name, result, detail="", beh=False):
         # beh: a capture-independent BEHAVIOUR check (outcome, results, health, counters, job echo). A FAIL there
@@ -136,12 +139,17 @@ class Run:
 
     @property
     def behaviour_fail(self):
-        return any(c["behaviour"] and c["result"] == FAIL for c in self.checks)
+        return self.argv_ok is True and any(c["behaviour"] and c["result"] == FAIL for c in self.checks)
+
+    def _results(self):
+        # a FAIL in a run whose argv is wrong or unchecked is the harness' fault: INVALID, rerunnable
+        return [INVALID if (c["result"] == FAIL and self.argv_ok is not True) else c["result"] for c in self.checks]
 
     @property
     def verdict(self):
+        res = self._results()
         for v in ORDER:
-            if any(c["result"] == v for c in self.checks):
+            if v in res:
                 return v
         return NOT_RUN  # no check at all is never PASS
 
@@ -335,39 +343,97 @@ def verify_identity(run, man, rj, meta):
 
 
 # ------------------------------------------------------------------ functional checks
-def argv_matches(run, d, case, bind, man):
-    """argv.json (what the orchestrator sent) must match the case definition: a mismatch is a harness error (INVALID)."""
-    a = try_json(os.path.join(d, "argv.json"))
-    if a is None:
-        run.add("argv.json present", NOT_RUN, "missing or not JSON")
-        return False
-    av = [str(x) for x in a.get("argv", [])]
-    got = {av[i]: av[i + 1] for i in range(0, len(av) - 1) if av[i].startswith("--")}
-    want = {"--iface": man["binding"]["iface"], "--src-ip": bind.src_ip, "--src-mac": bind.src_mac,
-            "--router-mac": bind.peer_mac, "--targets": case["targets"], "--ports": case["ports"], "--seed": str(SEED),
-            "--rate": str(RATE), "--wait": str(WAIT), "--source-port": case["source_port"]}
+SCAN_ID, ATTEMPT_1, ATTEMPT_2 = "11" * 16, "aa" * 16, "bb" * 16
+ANY = "<any>"  # the flag must be present, its value is a run-local path
+
+
+def base_argv(case, man, bind):
+    a = {"--iface": man["binding"]["iface"], "--src-ip": bind.src_ip, "--src-mac": bind.src_mac,
+         "--router-mac": bind.peer_mac, "--targets": case["targets"], "--ports": case["ports"], "--seed": str(SEED),
+         "--rate": str(RATE), "--wait": str(WAIT), "--source-port": case["source_port"]}
     if case["exclude"]:
-        want["--exclude"] = case["exclude"]
-    bad = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v}
-    if not case["exclude"] and "--exclude" in got:
-        bad["--exclude"] = (got["--exclude"], None)
-    if "--allow-foreign-source-mac" in av:
-        bad["--allow-foreign-source-mac"] = (True, False)
-    return run.check("argv.json matches the case definition (harness input)", not bad, bad or "ok", bad=INVALID)
+        a["--exclude"] = case["exclude"]
+    return a
+
+
+# kind -> (case name, function(item) -> extra flags). Every kind defines ALL of its flags: an unexpected flag is a
+# harness error just like a missing or wrong one. Part B kinds are registered in KIND_ARGV_B (see below).
+KIND_ARGV = {
+    "case": lambda it: (it["case"], {}),
+    "foreign": lambda it: (it["case"], {}),
+    "pause": lambda it: (PAUSE_CASE, {"--scan-id": SCAN_ID, "--attempt-id": ATTEMPT_1, "--pause-after": str(it["n"]),
+                                      "--checkpoint-out": ANY}),
+    "resume": lambda it: (PAUSE_CASE, {"--scan-id": SCAN_ID, "--attempt-id": ATTEMPT_2, "--resume-checkpoint": ANY}),
+    "complete_nopause": lambda it: (PAUSE_CASE, {"--scan-id": SCAN_ID, "--attempt-id": ATTEMPT_1, "--pause-after": "16",
+                                                 "--checkpoint-out": ANY}),
+    "refuse_completed": lambda it: (PAUSE_CASE, {"--scan-id": SCAN_ID, "--attempt-id": ATTEMPT_2, "--resume-checkpoint": ANY}),
+}
+# side argv files some kinds write next to argv.json (offline helper invocations)
+KIND_SIDE_ARGV = {
+    "refuse_completed": ("forge-argv.json", lambda it: (PAUSE_CASE, {"--scan-id": SCAN_ID, "--attempt-id": ATTEMPT_1,
+                                                                     "--forge-checkpoint-next-index": "16", "--checkpoint-out": ANY})),
+}
+
+
+def parse_argv(av):
+    out, i = {}, 0
+    while i < len(av):
+        t = av[i]
+        if t.startswith("--"):
+            if i + 1 < len(av) and not av[i + 1].startswith("--"):
+                out[t] = av[i + 1]
+                i += 2
+                continue
+            out[t] = True
+        else:
+            out["<positional %d>" % i] = t
+        i += 1
+    return out
+
+
+def check_argv_file(run, d, fname, kind_def, item, man, bind):
+    a = try_json(os.path.join(d, fname))
+    if a is None:
+        run.add("%s present" % fname, NOT_RUN, "missing or not JSON")
+        return False
+    got = parse_argv([str(x) for x in a.get("argv", [])])
+    case_name, extra = kind_def(item)
+    want = dict(base_argv(case_by_name(case_name), man, bind), **extra)
+    bad = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v and not (v == ANY and k in got)}
+    bad.update({k: (v, None) for k, v in got.items() if k not in want})
+    return run.check("%s matches the argument definition of run kind %r (harness input)" % (fname, item["kind"]), not bad,
+                     bad or "ok", bad=INVALID)
+
+
+def verify_argv(run, item, man, d, bind):
+    """Central argv gate: until it is PASS no check of this run can count as a scanner failure."""
+    kd = KIND_ARGV.get(item["kind"]) or KIND_ARGV_B.get(item["kind"])
+    if kd is None:
+        run.add("run kind has an argument definition", INVALID, item["kind"])
+        run.argv_ok = False
+        return False
+    ok = check_argv_file(run, d, "argv.json", kd, item, man, bind)
+    side = KIND_SIDE_ARGV.get(item["kind"]) or KIND_SIDE_ARGV_B.get(item["kind"])
+    if side:
+        ok = check_argv_file(run, d, side[0], side[1], item, man, bind) and ok
+    run.argv_ok = bool(ok)
+    return run.argv_ok
+
+
+KIND_ARGV_B = {}
+KIND_SIDE_ARGV_B = {}
 
 
 def job_matches(run, rj, case, bind, man, d):
-    argv_ok = argv_matches(run, d, case, bind, man)
     job = (rj or {}).get("job") or {}
     want = {"iface": man["binding"]["iface"], "src_ip": bind.src_ip, "src_mac": bind.src_mac, "router_mac": bind.peer_mac,
             "source_port": case["source_port"], "targets": case["targets"], "exclude": case["exclude"],
             "ports": case["ports"], "seed": SEED, "rate": RATE, "wait": WAIT, "retries": 0, "shard": "1/1",
             "blackrock_rounds": 14}
     bad = {k: (job.get(k), v) for k, v in want.items() if job.get(k) != v}
-    # the engine echoed another job than the (correct) argv asked for: a scanner failure. With a wrong argv it is the
-    # harness' fault, so the same mismatch is INVALID and may be rerun.
-    run.check("run.json job echo == the case and the binding", not bad, bad or "ok",
-              bad=FAIL if argv_ok else INVALID, beh=argv_ok)
+    # the engine echoed another job than the (verified) argv asked for: a scanner failure; with a wrong argv the
+    # Run maps every FAIL to INVALID
+    run.check("run.json job echo == the case and the binding", not bad, bad or "ok", beh=True)
 
 
 def health_measured_zero(rj):
@@ -502,9 +568,12 @@ def verify_foreign(run, peer_frames, rj, case, bind, inj):
         return
     sent = inj.get("sent_total")
     d = rj.get("discarded")
-    # capture-independent floor: every injected frame is discarded by the engine
-    run.check("engine discarded >= injected foreign frames (nothing absorbed as a result or duplicate)",
-              isinstance(d, int) and isinstance(sent, int) and d >= sent, "discarded=%s injected=%s" % (d, sent), beh=True)
+    strays_seen = stray_frames(peer_frames, bind, sports) if peer_frames is not None else []
+    # capture-independent floor: every injected frame AND every stray frame seen in the pcap was discarded by the
+    # engine. A lossy capture can only hide strays, never invent them, so a count below this floor is a scanner failure.
+    run.check("engine discarded >= injected + strays seen (nothing absorbed as a result or duplicate)",
+              isinstance(d, int) and isinstance(sent, int) and d >= sent + len(strays_seen),
+              "discarded=%s injected=%s strays_seen=%d" % (d, sent, len(strays_seen)), beh=True)
     if peer_frames is None:
         return
     foreign = [(t, f) for t, f in peer_frames if (tcp_info(f) or (0,) * 9)[7] == FOREIGN_IP_ID]
@@ -519,13 +588,14 @@ def verify_foreign(run, peer_frames, rj, case, bind, inj):
         inside = [t for t, _f in foreign if t0 <= t <= t1]
         run.check("foreign frames arrived inside the scan's receive window", len(inside) >= 1,
                   "inside=%d of %d" % (len(inside), len(foreign)), bad=INVALID)
-    strays = stray_frames(peer_frames, bind, sports)
+    strays = strays_seen
     run.notes["strays_in_rx_window"] = len(strays)
     run.notes["injected"] = sent
-    # exact equality reads the pcap: a FAIL only when the capture is proven complete, else INVALID (rerunnable)
+    # the upper bound needs a COMPLETE capture (a stray the capture lost would explain extra discards): FAIL only
+    # when the capture is proven complete, else INVALID (rerunnable)
     proven = not any(c["result"] in (INVALID, NOT_RUN) for c in run.checks)
-    run.check("engine discarded == injected + strays (each injected frame discarded one for one)",
-              d == sent + len(strays), "discarded=%s injected=%s strays=%d capture_proven_complete=%s" % (d, sent, len(strays), proven),
+    run.check("engine discarded <= injected + strays (no unexplained discards)",
+              isinstance(d, int) and d <= sent + len(strays), "discarded=%s injected=%s strays=%d capture_proven_complete=%s" % (d, sent, len(strays), proven),
               bad=FAIL if proven else INVALID, beh=proven)
     genuine = len(peer_replies(peer_frames, bind, sports))
     run.check("duplicates are genuine peer retransmits only (received + duplicates <= genuine replies on the wire)",
@@ -565,6 +635,7 @@ def verify_item(man, fx, root, item, ctxs, rel=None):
         return run
     rj, rc, bind = ctx["rj"], ctx["meta"].get("guest_exit"), ctx["bind"]
     kind = item["kind"]
+    verify_argv(run, item, man, ctx["d"], bind)
     if fx:
         verify_fixture_binding(run, fx, man, bind)
     else:
@@ -657,6 +728,7 @@ def verify_pause_groups(man, fx, root, runs_by_tag, ctxs):
                     {t: runs_by_tag[t].verdict for t in bad_legs})
             out.append(run)
             continue
+        run.argv_ok = True  # both legs PASS on their own, so their argv was verified
         ra, rb = ca["rj"], cb["rj"]
         run.check("scan_id constant, attempt_id new, resume origin recorded",
                   ra["scan_id"] == rb["scan_id"] and ra["attempt_id"] != rb["attempt_id"]
@@ -741,6 +813,7 @@ def verify_discarded(man, fx, root):
         item = by_tag.get(tag)
         if item is None:
             r = Run(name)
+            r.argv_ok = True
             r.add("discarded run belongs to a planned tag", FAIL, "unknown tag %s" % tag)
         else:
             r = verify_item(man, fx, root, dict(item, tag=name), {}, rel=os.path.join("runs_discarded", name))

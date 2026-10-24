@@ -306,6 +306,24 @@ pub const EXIT_RERUN_REFUSED: i32 = 11;
 pub const EXIT_SCHEMA_TOO_OLD: i32 = 12;
 /// Directories written by this suite carry this capture schema (3: nonce chain mandatory).
 pub(crate) const CAPTURE_SCHEMA: u64 = 3;
+
+// Dead-man bounds (`timeout -k 10 BOUND`) of the detached remote tools. The bound is a safety net for an
+// orchestrator that died, not a limit on a healthy run: `timeout` stopping tcpdump or the link-restoring
+// tool in the middle of a slow run would turn it INVALID (or leave a link down until the handler ran),
+// so every bound is twice the worst-case expected run time. Expected times come from the tools' own
+// arguments in `one_inner`: inject `--wait-first 120 --duration 2.0`, flood `--duration 40`, linkloss
+// `--wait-first 120 --down-after 2.0 --hold-max 40` plus restore/exit slack.
+pub(crate) const INJECT_EXPECTED_S: u64 = 120 + 2 + 3;
+pub(crate) const INJECT_BOUND_S: u64 = 2 * INJECT_EXPECTED_S;
+pub(crate) const FLOOD_EXPECTED_S: u64 = 40 + 5;
+pub(crate) const FLOOD_BOUND_S: u64 = 2 * FLOOD_EXPECTED_S;
+pub(crate) const LINKLOSS_EXPECTED_S: u64 = 120 + 2 + 40 + 30;
+pub(crate) const LINKLOSS_BOUND_S: u64 = 2 * LINKLOSS_EXPECTED_S;
+/// Worst-case seconds a capture or the listener lives for one run: the per-run timeout plus the longest
+// tail (linkloss: marker 15 + tool exit 30 + link restore 60 + quiet 40 + end marker 15 = 160, rounded up).
+pub(crate) const fn capture_expected_s(run_timeout: u64) -> u64 {
+    run_timeout + 165
+}
 impl SuiteError {
     pub(crate) fn code(&self) -> i32 {
         match self {
@@ -814,7 +832,7 @@ impl Suite<'_> {
                 .split('-')
                 .next()
                 .unwrap_or("40000");
-            self.bg(&self.peer(&format!("inject --iface lab0 --peer-mac {} --guest-mac {MAC} --src-ip 198.18.0.1 --sport {sport} --silent 8099 --out {} --wait-first 120 --duration 2.0",self.pm,quote(&format!("{rev}/injector.json")))),&format!("{rev}/inject.pid"),&format!("{rev}/inject.err"),150)?;
+            self.bg(&self.peer(&format!("inject --iface lab0 --peer-mac {} --guest-mac {MAC} --src-ip 198.18.0.1 --sport {sport} --silent 8099 --out {} --wait-first 120 --duration 2.0",self.pm,quote(&format!("{rev}/injector.json")))),&format!("{rev}/inject.pid"),&format!("{rev}/inject.err"),INJECT_BOUND_S)?;
             self.exec.pause(Duration::from_millis(500));
         }
         let flood = kind == "rxloss" || (kind == "stop" && item["scenario"] == "load");
@@ -827,12 +845,12 @@ impl Suite<'_> {
                 )),
                 &format!("{rev}/flood.pid"),
                 &format!("{rev}/flood.err"),
-                60,
+                FLOOD_BOUND_S,
             )?;
             self.exec.pause(Duration::from_millis(1500));
         }
         if kind == "linkloss" {
-            self.bg(&self.peer(&format!("linkloss --guest-mac {MAC} --sock {} --down-after 2.0 --hold-max 40 --stop-file {} --out {}",quote(&self.qmp),quote(&format!("{rev}/linkloss.stop")),quote(&format!("{rev}/linkloss.json")))),&format!("{rev}/linkloss.pid"),&format!("{rev}/linkloss.err"),100)?;
+            self.bg(&self.peer(&format!("linkloss --guest-mac {MAC} --sock {} --down-after 2.0 --hold-max 40 --stop-file {} --out {}",quote(&self.qmp),quote(&format!("{rev}/linkloss.stop")),quote(&format!("{rev}/linkloss.json")))),&format!("{rev}/linkloss.pid"),&format!("{rev}/linkloss.err"),LINKLOSS_BOUND_S)?;
             self.exec.pause(Duration::from_millis(500));
         }
         let gstart = epoch();
@@ -1049,10 +1067,10 @@ impl Suite<'_> {
         }
         eno1_interlock(&cap)
     }
-    /// Seconds a detached remote tool may live at most: the per-run timeout plus slack for the
-    /// capture tail. A dead orchestrator therefore leaves nothing running past this bound.
+    /// Dead-man bound of the listener and both captures: twice the worst-case seconds one run keeps them
+    /// alive (see [`capture_expected_s`]). A dead orchestrator leaves nothing running past this bound.
     fn bound(&self) -> u64 {
-        self.timeout + 180
+        2 * capture_expected_s(self.timeout)
     }
 }
 /// Live isolation interlock: any lab frame on the user's LAN interface, or an eno1 capture

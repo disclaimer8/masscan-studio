@@ -31,6 +31,8 @@ INVALID 100k cell shows whether the witness (capture) or the scanner lost frames
 `wire-lab.sh --suite perf --reps 1` once on the Linux host before the 5-rep run to see this.
 
 ```sh
+# working directory: rmasscan/ (the cargo workspace). The live-run commands in the deployment section
+# below run from the repository root instead and say so.
 cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (no CLI self-test)
 target/release/rmasscan-lab windows-verify --dir PATH_TO_EVIDENCE
 target/release/rmasscan-lab windows-suite --list --plan failure
@@ -103,9 +105,17 @@ the last two items.
    `RMASSCAN_SOURCE_COMMIT=$COMMIT`, release, static CRT); `run.json`'s `source_commit` is checked
    against `--commit`. Do not copy any guest script by hand: the suite deploys all seven
    (`windows-vm-lab.ps1` to `C:\Users\lab\`, the `windows_wire_*` files to `C:\Users\lab\t4\`).
+   The suite creates `~/winvm/t4-ev` on home-pc itself; `C:\Users\lab\t4` must already exist on the
+   guest because the script copy targets it before `windows_wire_prepare.ps1` runs.
 
-5. **Run the suite.** `--repo` is a checkout that contains `--commit` (default: the current
-   directory). Before the first remote mutation the suite
+5. **Run the suite.** Run it from the REPOSITORY ROOT of a clean checkout of `$COMMIT` (not from
+   `rmasscan/`): every relative path below, including `--out`, `--fixtures`, `--repo .` and
+   `./deploy-manifest.json` from step 3, is relative to that directory. Build the Mac binary from the
+   same checkout first, `(cd rmasscan && cargo build --locked --release -p rmasscan-lab)`, which puts it
+   at `rmasscan/target/release/rmasscan-lab`. The suite records that binary's sha256, the commit and a
+   dirty flag of `--repo` (the orchestrator build) in the manifest and each preflight record, and
+   `windows-verify` reports it; it refuses to start when it cannot establish them. `--repo` is a
+   checkout that contains `--commit`. Before the first remote mutation the suite
 
    - refuses a missing `--deploy-manifest`, a manifest for another commit or another
      `--remote-lab` path;
@@ -120,7 +130,7 @@ the last two items.
      the first gate would fail anyway; fix time sync, do not relax the limits.
 
    ```sh
-   target/release/rmasscan-lab windows-suite \
+   rmasscan/target/release/rmasscan-lab windows-suite \
      --out docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional-r2 \
      --suite functional-r2 --plan functional --commit $COMMIT --repo . \
      --guest-exe 'C:\Users\lab\t4\wire_scan.exe' \

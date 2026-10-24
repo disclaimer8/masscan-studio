@@ -2,6 +2,129 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    mod qmp {
+        use super::*;
+        use std::{
+            io::{BufRead, BufReader, Write},
+            os::unix::net::UnixListener,
+            sync::mpsc,
+            thread,
+        };
+
+        /// A one-connection QMP server. `script` gets the received lines one at a time and returns the
+        /// lines to send back for each (None closes the connection). Returns the lines it received.
+        fn serve(
+            tag: &str,
+            greeting: &str,
+            script: impl Fn(usize, &str) -> Option<Vec<String>> + Send + 'static,
+        ) -> (String, thread::JoinHandle<Vec<String>>) {
+            let path = std::env::temp_dir().join(format!("qmp-{tag}-{}.sock", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            let l = UnixListener::bind(&path).unwrap();
+            let (tx, rx) = mpsc::channel::<()>();
+            let greeting = greeting.to_owned();
+            let h = thread::spawn(move || {
+                tx.send(()).unwrap();
+                let (mut s, _) = l.accept().unwrap();
+                writeln!(s, "{greeting}").unwrap();
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                let mut got = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let line = line.trim().to_owned();
+                    let reply = script(got.len(), &line);
+                    got.push(line);
+                    match reply {
+                        Some(out) => {
+                            for o in out {
+                                writeln!(s, "{o}").unwrap();
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                let _ = std::fs::remove_file(path);
+                got
+            });
+            rx.recv().unwrap();
+            (
+                std::env::temp_dir()
+                    .join(format!("qmp-{tag}-{}.sock", std::process::id()))
+                    .to_string_lossy()
+                    .into_owned(),
+                h,
+            )
+        }
+        const GREETING: &str = r#"{"QMP":{"version":{},"capabilities":[]}}"#;
+
+        #[test]
+        fn set_link_sends_capabilities_then_set_link_on_lab0_only_with_the_requested_state() {
+            for up in [false, true] {
+                let (sock, h) = serve(&format!("ok{up}"), GREETING, |i, _| {
+                    Some(match i {
+                        // an asynchronous event before the reply must be skipped, not mistaken for it
+                        1 => vec![
+                            r#"{"event":"NIC_RX_FILTER_CHANGED"}"#.into(),
+                            r#"{"return":{}}"#.into(),
+                        ],
+                        _ => vec![r#"{"return":{}}"#.into()],
+                    })
+                });
+                let reply = qmp_set_link(&sock, up).unwrap();
+                assert_eq!(reply, json!({"return":{}}));
+                let got = h.join().unwrap();
+                assert_eq!(got.len(), 2, "{got:?}");
+                assert_eq!(
+                    serde_json::from_str::<Value>(&got[0]).unwrap(),
+                    json!({"execute":"qmp_capabilities"})
+                );
+                assert_eq!(
+                    serde_json::from_str::<Value>(&got[1]).unwrap(),
+                    json!({"execute":"set_link","arguments":{"name":"lab0","up":up}})
+                );
+            }
+        }
+
+        #[test]
+        fn a_qmp_error_reply_an_eof_or_a_bad_greeting_is_an_error_never_success() {
+            let (sock, h) = serve("err", GREETING, |i, _| {
+                Some(if i == 0 {
+                    vec![r#"{"return":{}}"#.into()]
+                } else {
+                    vec![r#"{"error":{"class":"DeviceNotFound","desc":"no lab0"}}"#.into()]
+                })
+            });
+            let e = qmp_set_link(&sock, false).unwrap_err();
+            assert!(
+                e.contains("QMP error") && e.contains("DeviceNotFound"),
+                "{e}"
+            );
+            h.join().unwrap();
+
+            let (sock, h) = serve("eof", GREETING, |i, _| {
+                if i == 0 {
+                    Some(vec![r#"{"return":{}}"#.into()])
+                } else {
+                    None
+                }
+            });
+            assert_eq!(qmp_set_link(&sock, true).unwrap_err(), "QMP EOF");
+            h.join().unwrap();
+
+            let (sock, h) = serve("greet", r#"{"hello":1}"#, |_, _| Some(vec![]));
+            assert_eq!(
+                qmp_set_link(&sock, true).unwrap_err(),
+                "invalid QMP greeting"
+            );
+            let _ = h.join();
+
+            assert!(qmp_set_link("/nonexistent/qmp.sock", true).is_err());
+        }
+    }
     #[test]
     fn port_ranges_reject_reverse_and_zero() {
         assert!(parse_ports("90-80").is_err());

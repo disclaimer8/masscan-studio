@@ -1476,3 +1476,71 @@ fn the_gate_refuses_a_status_that_relied_on_another_guest_verify() {
     let e = s.gate(&ev, "/r", TAG).unwrap_err();
     assert!(e.contains("another guest Verify"), "{e}");
 }
+
+// ---- F5 (WR N6): dead-man bounds with real slack ----
+fn bound_of(call: &str) -> u64 {
+    call.split("exec timeout -k 10 ")
+        .nth(1)
+        .and_then(|t| t.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no timeout bound in {call}"))
+}
+#[test]
+fn every_background_tool_has_at_least_twice_its_expected_run_time_as_dead_man_bound() {
+    // A bound that is only slightly above the worst case would make `timeout` stop tcpdump or the
+    // link-restoring tool in the middle of a slow but healthy run (WR N6: 420 s against a ~405 s
+    // worst-case linkloss timeline). The bound is a safety net for a dead orchestrator, not a limit.
+    for (tag, tools) in [
+        (
+            "linkloss",
+            vec![
+                ("-i lab0", capture_expected_s(240)),
+                ("-i eno1", capture_expected_s(240)),
+                ("listen --open", capture_expected_s(240)),
+                ("linkloss --guest-mac", LINKLOSS_EXPECTED_S),
+            ],
+        ),
+        (
+            "rxloss",
+            vec![
+                ("-i lab0", capture_expected_s(240)),
+                ("flood --guest-mac", FLOOD_EXPECTED_S),
+            ],
+        ),
+    ] {
+        let w = World::new(&format!("bound-{}", tag.replace('.', "-")));
+        let stand = Stand::new(&w.src);
+        let s = suite(&stand, &w.root);
+        let argv = argv_for(tag, &w);
+        let _ = s.one(&item(tag), argv, None, None);
+        let calls: Vec<String> = stand
+            .calls()
+            .into_iter()
+            .filter(|c| c.contains("nohup sudo -n sh -c"))
+            .collect();
+        for (needle, expected) in tools {
+            let c = calls
+                .iter()
+                .find(|c| c.contains(needle))
+                .unwrap_or_else(|| panic!("{tag}: {needle} not started: {calls:?}"));
+            let bound = bound_of(c);
+            assert!(
+                bound >= 2 * expected,
+                "{tag} {needle}: bound {bound} s < 2 x expected {expected} s"
+            );
+        }
+    }
+}
+#[test]
+fn the_inject_and_flood_bounds_are_also_twice_their_expected_time() {
+    assert!(INJECT_BOUND_S >= 2 * INJECT_EXPECTED_S);
+    assert!(FLOOD_BOUND_S >= 2 * FLOOD_EXPECTED_S);
+    assert!(LINKLOSS_BOUND_S >= 2 * LINKLOSS_EXPECTED_S);
+    // The windows these constants describe come from the tools' own arguments.
+    assert!(INJECT_EXPECTED_S >= 120 + 2, "wait-first 120 + duration 2");
+    assert!(FLOOD_EXPECTED_S >= 40, "flood --duration 40");
+    assert!(
+        LINKLOSS_EXPECTED_S >= 120 + 2 + 40,
+        "wait-first + down-after + hold-max"
+    );
+}

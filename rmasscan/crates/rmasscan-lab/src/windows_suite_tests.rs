@@ -311,6 +311,10 @@ struct World {
     root: PathBuf,
     src: PathBuf,
     deploy: PathBuf,
+    /// A tiny throwaway git repository for `--repo`: the suite records the orchestrator build
+    /// (commit, dirty flag) from it, and the tests must not depend on the tree they run in
+    /// (`git archive` exports have no .git).
+    repo: PathBuf,
 }
 impl World {
     fn new(name: &str) -> Self {
@@ -331,7 +335,39 @@ impl World {
             &crate::deploy::build_manifest(COMMIT, REMOTE_LAB, LAB_BINARY, "rustc test", 1.0),
         )
         .unwrap();
-        Self { root, src, deploy }
+        let repo = base.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("a.txt"), "x").unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", "-A"],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "x",
+            ],
+        ] {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(st.status.success(), "{st:?}");
+        }
+        Self {
+            root,
+            src,
+            deploy,
+            repo,
+        }
     }
 }
 impl Drop for World {
@@ -397,6 +433,8 @@ fn suite_args(w: &World, extra: &[&str]) -> Vec<String> {
         w.deploy.to_str().unwrap(),
         "--plan",
         "failure",
+        "--repo",
+        w.repo.to_str().unwrap(),
     ]);
     a.extend(strings(extra));
     a
@@ -1442,6 +1480,8 @@ fn a_new_evidence_directory_records_the_orchestrator_build_in_manifest_and_prefl
         w.deploy.to_str().unwrap(),
         "--plan",
         "failure",
+        "--repo",
+        w.repo.to_str().unwrap(),
         "--only",
         TAG,
     ]);

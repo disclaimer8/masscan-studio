@@ -4,11 +4,12 @@
 # this script), in plain shell so it needs no toolchain.
 #
 # Fails when
-#   1. a tracked file has a banned source extension (*.py, *.pyw, *.pyc),
+#   1. a tracked file has a banned source extension (*.py, *.pyw, *.pyc, *.pyz; any letter case),
 #   2. a tracked file starts with a shebang that names the banned interpreter,
 #   3. a tracked script or source file (.sh .bash .ps1 .cmd .bat .swift .rs .yml
-#      .yaml, or any extensionless/other file that starts with a shebang) mentions the
-#      interpreter as a word at all (comments included).
+#      .yaml, Makefile*, GNUmakefile*, *.mk, or any other file that starts with a shebang)
+#      mentions the interpreter as a word at all (comments included), or calls the Windows
+#      launcher (two letters, then a dash and a version digit; assembled below).
 # Prose (.md) and recorded evidence data (.json, .txt, .log, ...) are not scanned.
 #
 # The banned word is assembled below so that this file does not contain it and
@@ -25,6 +26,13 @@ word="${word}thon"
 # launcher), word boundary. Case-insensitive via grep -i.
 pattern="(^|[^A-Za-z0-9_])${word}[0-9.]*w?([^A-Za-z0-9_]|\$)"
 shebang="^#!.*${word}"
+# the Windows launcher (name, space, -<digit>); not a longer word, a variable or a path component
+lau=p
+lau="${lau}y"
+launcher="(^|[^A-Za-z0-9_.\$-])${lau}[[:space:]]+-[0-9]"
+
+# bash 3.2 (macOS) has nocasematch: extension and file-name tests ignore letter case
+shopt -s nocasematch
 
 fail=0
 report() { printf 'FAIL %s\n' "$1"; fail=1; }
@@ -35,7 +43,7 @@ tracked=$(git ls-files -z | tr '\0' '\n')
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in
-    *.py | *.pyw | *.pyc) report "$f: banned source file" ;;
+    *.py | *.pyw | *.pyc | *.pyz) report "$f: banned source file" ;;
   esac
 done <<<"$tracked"
 
@@ -53,10 +61,14 @@ while IFS= read -r f; do
   fi
   scan=$has_shebang
   case "$f" in
-    *.sh | *.bash | *.ps1 | *.cmd | *.bat | *.swift | *.rs | *.yml | *.yaml) scan=1 ;;
+    *.sh | *.bash | *.ps1 | *.cmd | *.bat | *.swift | *.rs | *.yml | *.yaml | *.mk) scan=1 ;;
+  esac
+  base=${f##*/}
+  case "$base" in
+    makefile* | gnumakefile*) scan=1 ;;
   esac
   if [ "$scan" = 1 ]; then
-    hits=$(grep -a -n -i -E -- "$pattern" "$f" 2>/dev/null || true)
+    hits=$(grep -a -n -i -E -- "$pattern|$launcher" "$f" 2>/dev/null || true)
     if [ -n "$hits" ]; then
       while IFS= read -r h; do report "$f:${h%%:*}: mentions the banned interpreter"; done <<<"$hits"
     fi

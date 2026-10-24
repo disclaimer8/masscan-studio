@@ -1439,6 +1439,77 @@ pub(crate) fn sweep_command(ev: &str, signal: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn quiescence_waits_for_unchanged_counters() {
+        let mut reads = 0u32;
+        let mut last_change = None;
+        let started = Instant::now();
+        let quiet = wait_quiet(
+            || {
+                reads += 1;
+                // 1, 2, 3 then constant: the counters last change on the third read.
+                let value = reads.min(3);
+                if reads <= 3 {
+                    last_change = Some(Instant::now());
+                }
+                Ok(value)
+            },
+            0.12,
+            0.03,
+            10.0,
+        )
+        .unwrap();
+        assert!(quiet);
+        assert!(
+            last_change.unwrap().elapsed().as_secs_f64() >= 0.12,
+            "returned before a full quiet period"
+        );
+        assert!(reads >= 3 + 3, "reads={reads}");
+        assert!(started.elapsed().as_secs_f64() < 5.0);
+    }
+    #[test]
+    fn quiescence_times_out_on_endless_traffic_and_propagates_read_errors() {
+        let mut n = 0u64;
+        let started = Instant::now();
+        let quiet = wait_quiet(
+            || {
+                n += 1;
+                Ok(n)
+            },
+            0.1,
+            0.02,
+            0.3,
+        )
+        .unwrap();
+        assert!(!quiet);
+        assert!(started.elapsed().as_secs_f64() >= 0.3);
+        let err = wait_quiet(
+            || Err::<u8, _>("counters unreadable".to_string()),
+            0.1,
+            0.01,
+            1.0,
+        );
+        assert_eq!(err, Err("counters unreadable".into()));
+    }
+    #[test]
+    fn scanner_argv_carries_every_explicit_parameter() {
+        let man = json!({"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":"02:57:4c:3d:2e:9b","seed":1,"wait":3,"rate":100}});
+        let item = crate::verify::planned(&json!({"plan":"functional"}))
+            .into_iter()
+            .find(|i| i["tag"] == "c04_exclude.run1")
+            .unwrap();
+        let case = crate::verify::case_by_name("c04_exclude").unwrap();
+        let argv = crate::verify::expected_args(&item, &man, &BTreeMap::new()).unwrap();
+        assert_eq!(arg_value(&argv, "--exclude"), case["exclude"].as_str());
+        assert_eq!(arg_value(&argv, "--src-mac"), Some(MAC));
+        assert_eq!(arg_value(&argv, "--router-mac"), Some("02:57:4c:3d:2e:9b"));
+        assert_eq!(arg_value(&argv, "--seed"), Some("1"));
+        assert_eq!(arg_value(&argv, "--wait"), Some("3"));
+        assert_eq!(arg_value(&argv, "--rate"), Some("100"));
+        assert_eq!(arg_value(&argv, "--targets"), case["targets"].as_str());
+        assert_eq!(arg_value(&argv, "--ports"), case["ports"].as_str());
+        assert!(!argv.iter().any(|a| a == "--allow-foreign-source-mac"));
+    }
+    #[test]
     fn remote_cleanup_matches_pid_starttime_before_signalling() {
         for signal in [Some("TERM"), Some("INT"), None] {
             let cmd = owned_process_command("/tmp/owned-run/listener.pid", signal);

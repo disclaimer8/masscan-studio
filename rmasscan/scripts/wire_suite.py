@@ -160,7 +160,26 @@ class PyRecorder:
         self.p.terminate()
         self.p.wait()
         meta = json.load(open(self.meta))
+        record_pcap(self.tag, self.pcap)
         return meta
+
+
+PCAPS = []
+
+
+def record_pcap(tag, path):
+    """sha256 + size + frame count of a capture, recorded in results.json BEFORE any cleanup deletes the file."""
+    import hashlib
+    data = open(path, "rb").read()
+    rec = {"tag": tag, "file": os.path.basename(path), "sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data)}
+    try:
+        rec["pcap_frames"] = len(vw.read_pcap_records(data)[1])
+    except vw.PcapError as e:
+        rec["pcap_frames"] = None
+        rec["pcap_error"] = str(e)
+    PCAPS.append(rec)
+    EXTRA["pcaps"] = PCAPS
+    return rec
 
 
 def read_frames(path):
@@ -700,6 +719,7 @@ class DumpRec:
         cap, recv, kdrop, idrop = (g(r"(\d+) packets? captured"), g(r"(\d+) packets? received by filter"),
                                    g(r"(\d+) packets? dropped by kernel"), g(r"(\d+) packets? dropped by interface"))
         frames = read_frames(self.pcap)
+        pc = record_pcap(self.tag, self.pcap)
         from_a = len(scanner_syns(frames))
         # The peer kernel keeps retransmitting SYN-ACKs for half-open sockets (the Rust scanner never RSTs
         # them), so a frame can land between the counter reads and tcpdump's stop. The capture count must
@@ -709,7 +729,7 @@ class DumpRec:
         self.meta = {"tcpdump_captured": cap, "received_by_filter": recv, "kernel_drops": kdrop,
                      "interface_drops": max(idrop, 0), "pcap_frames": len(frames), "scanner_syn_frames": from_a,
                      "iface_rxtx_delta_lo": delta, "iface_rxtx_delta_hi": d_hi,
-                     "quiesced_before_stop": quiesced,
+                     "quiesced_before_stop": quiesced, "pcap_sha256": pc["sha256"], "pcap_size_bytes": pc["size_bytes"],
                      "valid": capture_complete(cap, recv, kdrop, idrop, len(frames), delta, d_hi)}
         self.frames = frames
         return self.meta
@@ -1085,6 +1105,17 @@ def self_test():
         check("fixture: truncated capture -> INVALID", vw.compare_bytes(raw, [raw[:-9]])[0], 2)
     else:
         check("fixture present for oracle negative cases", False, True)
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        tp = os.path.join(td, "x.pcap")
+        raw = bytes.fromhex("d4c3b2a1020004000000000000000000ffff000001000000")  # empty classic pcap
+        open(tp, "wb").write(raw)
+        r = record_pcap("selftest", tp)
+        import hashlib
+        check("record_pcap: sha256/size/frames of an existing capture", (r["sha256"], r["size_bytes"], r["pcap_frames"]),
+              (hashlib.sha256(raw).hexdigest(), len(raw), 0))
+        os.unlink(tp)
+        check("record_pcap: recorded before the file is deleted (kept in results)", PCAPS[-1]["file"], "x.pcap")
     print("self-test: %d/%d checks passed" % (sum(res), len(res)))
     return 0 if all(res) else 1
 

@@ -27,7 +27,7 @@ is a no-op (exit 0).
 
 ```
 python3 rmasscan/scripts/windows-vm-lab.py plan   --run-id ID --manifest FILE          # read-only
-python3 rmasscan/scripts/windows-vm-lab.py up     --run-id ID --manifest FILE [--tap-user U] [--lab-env ~/winvm/lab.env] [--qmp ~/winvm/qmp.sock]
+python3 rmasscan/scripts/windows-vm-lab.py up     --run-id ID --manifest FILE [--tap-user U] [--lab-env ~/winvm/lab.env]
 python3 rmasscan/scripts/windows-vm-lab.py status --run-id ID --manifest FILE
 python3 rmasscan/scripts/windows-vm-lab.py down   --run-id ID --manifest FILE
 python3 rmasscan/scripts/windows-vm-lab.py record-guest --run-id ID --manifest FILE --guest-json FILE.guest.json
@@ -50,8 +50,11 @@ adapter that holds the management address or a default route, and writes `<Manif
 q35 has no PCIe root port in `~/winvm/run.sh`; QEMU cannot hotplug onto `pcie.0`. The lab NIC is therefore
 cold-plugged: when `~/winvm/lab.env` (written by `up --lab-env`) exists and its TAP exists, run.sh appends
 `-netdev tap,id=lab0,ifname=$LAB_TAP,script=no,downscript=no -device e1000e,netdev=lab0,mac=$LAB_MAC`.
-The management `-netdev user ... hostfwd` line is unchanged. After `down` + `up` (a new TAP), `up --qmp`
-re-binds backend `lab0` with `netdev_del`/`netdev_add` to the new TAP. The manifest records the result in `vm`.
+The management `-netdev user ... hostfwd` line is unchanged (backup: `~/winvm/run.sh.pre-n2`).
+A cold-plugged NIC stays bound to the TAP file descriptor it was started with. After `down` + `up` (a new
+TAP) the VM must be restarted via run.sh (graceful `shutdown /s /t 0`); QMP `netdev_del`/`netdev_add` was
+tried live and does NOT re-peer the e1000e (zero frames reach the new TAP), so `up` no longer attempts it and
+records `vm.attached=false` with a note.
 
 ## Tests
 

@@ -187,6 +187,12 @@ class T(unittest.TestCase):
         self.assertEqual(self.h.l.keys(), {"eno1"})
         self.assertIn("foreign-ns", self.h.ns)
 
+    def test_reup_after_clean_down(self):
+        self.assertEqual(self.r("up")[0], 0)
+        self.assertEqual(self.r("down")[0], 0)
+        self.assertEqual(self.r("up")[0], 0)
+        self.assertEqual(self.r("status")[0], 0)
+
     def test_up_status_down_roundtrip(self):
         self.assertEqual(self.r("up")[0], 0)
         self.assertEqual(self.r("status")[0], 0)

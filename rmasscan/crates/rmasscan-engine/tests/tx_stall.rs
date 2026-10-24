@@ -54,6 +54,9 @@ fn persistent_would_block_fails_with_tx_stalled_after_ten_seconds() {
     assert_eq!(out.progress.sent, 2);
     assert_eq!(out.progress.next_index, 2);
     assert_eq!(fake.sent_count(), 2);
+    // 10 с / 1 мс backoff: ровно 10_000 неудачных попыток. Новая попытка на
+    // границе дедлайна не начинается (проверка перед send в engine.rs).
+    assert_eq!(fake.would_block_count(), 10_000);
     assert!(cp.is_none());
     assert!(no_checkpoint(&events));
     // Принятые до отказа результаты доступны.

@@ -188,6 +188,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'foreign' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -195,12 +201,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -289,8 +289,8 @@
     },
     {
      "behaviour": true,
-     "detail": "discarded=80 injected=80",
-     "name": "engine discarded >= injected foreign frames (nothing absorbed as a result or duplicate)",
+     "detail": "discarded=80 injected=80 strays_seen=0",
+     "name": "engine discarded >= injected + strays seen (nothing absorbed as a result or duplicate)",
      "result": "PASS"
     },
     {
@@ -308,7 +308,7 @@
     {
      "behaviour": false,
      "detail": "discarded=80 injected=80 strays=0 capture_proven_complete=False",
-     "name": "engine discarded == injected + strays (each injected frame discarded one for one)",
+     "name": "engine discarded <= injected + strays (no unexplained discards)",
      "result": "PASS"
     },
     {
@@ -736,6 +736,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -743,12 +749,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -1020,6 +1020,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -1027,12 +1033,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -1304,6 +1304,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -1311,12 +1317,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -1588,6 +1588,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -1595,12 +1601,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -1872,6 +1872,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -1879,12 +1885,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -2156,6 +2156,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -2163,12 +2169,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -2440,6 +2440,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -2447,12 +2453,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -2724,6 +2724,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -2731,12 +2737,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -3008,6 +3008,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -3015,12 +3021,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -3292,6 +3292,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -3299,12 +3305,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -3576,6 +3576,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -3583,12 +3589,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -3860,6 +3860,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'case' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -3867,12 +3873,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -4144,6 +4144,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'foreign' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -4151,12 +4157,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -4245,8 +4245,8 @@
     },
     {
      "behaviour": true,
-     "detail": "discarded=80 injected=80",
-     "name": "engine discarded >= injected foreign frames (nothing absorbed as a result or duplicate)",
+     "detail": "discarded=80 injected=80 strays_seen=0",
+     "name": "engine discarded >= injected + strays seen (nothing absorbed as a result or duplicate)",
      "result": "PASS"
     },
     {
@@ -4264,7 +4264,7 @@
     {
      "behaviour": true,
      "detail": "discarded=80 injected=80 strays=0 capture_proven_complete=True",
-     "name": "engine discarded == injected + strays (each injected frame discarded one for one)",
+     "name": "engine discarded <= injected + strays (no unexplained discards)",
      "result": "PASS"
     },
     {
@@ -4467,6 +4467,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'foreign' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -4474,12 +4480,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -4568,8 +4568,8 @@
     },
     {
      "behaviour": true,
-     "detail": "discarded=80 injected=80",
-     "name": "engine discarded >= injected foreign frames (nothing absorbed as a result or duplicate)",
+     "detail": "discarded=80 injected=80 strays_seen=0",
+     "name": "engine discarded >= injected + strays seen (nothing absorbed as a result or duplicate)",
      "result": "PASS"
     },
     {
@@ -4587,7 +4587,7 @@
     {
      "behaviour": true,
      "detail": "discarded=80 injected=80 strays=0 capture_proven_complete=True",
-     "name": "engine discarded == injected + strays (each injected frame discarded one for one)",
+     "name": "engine discarded <= injected + strays (no unexplained discards)",
      "result": "PASS"
     },
     {
@@ -4790,6 +4790,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'pause' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -4797,12 +4803,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -5020,6 +5020,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'resume' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -5027,12 +5033,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -5244,6 +5244,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'pause' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -5251,12 +5257,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -5474,6 +5474,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'resume' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -5481,12 +5487,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -5698,6 +5698,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'pause' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -5705,12 +5711,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -5928,6 +5928,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'resume' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -5935,12 +5941,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -6152,6 +6152,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'pause' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -6159,12 +6165,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -6382,6 +6382,12 @@
     {
      "behaviour": false,
      "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'resume' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
      "name": "fixtures were generated for the same source IP/MAC and peer MAC (no normalisation)",
      "result": "PASS"
     },
@@ -6389,12 +6395,6 @@
      "behaviour": false,
      "detail": "{'sha256': '8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e', 'git_commit': '8e6b3b0c07a81e8ea61d557c06134a21a6881614', 'git_tree_clean': True}",
      "name": "fixtures name the oracle binary sha256 and the pinned revision",
-     "result": "PASS"
-    },
-    {
-     "behaviour": false,
-     "detail": "ok",
-     "name": "argv.json matches the case definition (harness input)",
      "result": "PASS"
     },
     {
@@ -6601,6 +6601,12 @@
      "behaviour": false,
      "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4091857}",
      "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'complete_nopause' (harness input)",
      "result": "PASS"
     },
     {
@@ -6813,6 +6819,18 @@
      "behaviour": false,
      "detail": "{'open': [80, 443, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007], 'silent': [8099], 'silent_proven': True, 'ready': True, 'bind': '198.18.0.2', 'pid': 4092083}",
      "name": "peer listeners are exactly the configured open ports plus the proven-silent port",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "argv.json matches the argument definition of run kind 'refuse_completed' (harness input)",
+     "result": "PASS"
+    },
+    {
+     "behaviour": false,
+     "detail": "ok",
+     "name": "forge-argv.json matches the argument definition of run kind 'refuse_completed' (harness input)",
      "result": "PASS"
     },
     {

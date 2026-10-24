@@ -1773,3 +1773,68 @@ fn a_wrong_stop_argument_is_a_harness_error_that_may_be_rerun() {
     });
     assert_eq!(d.status("rxloss").0, INVALID);
 }
+
+// ---- F5 (WR N3, M1): rules that other checks used to mask ----
+
+/// Names of the checks that did not pass for one run directory.
+fn failed_checks(d: &Scratch, tag: &str) -> Vec<String> {
+    let man = read_json(d.0.join("manifest.json")).unwrap();
+    let it = planned(&man).into_iter().find(|i| i["tag"] == tag).unwrap();
+    let fx = read_json(d.0.join("fixtures/manifest.json")).unwrap_or(Value::Null);
+    let (r, _) = verify_item(&d.0, &man, &fx, &it, None);
+    r.checks
+        .iter()
+        .filter(|c| c["result"] != PASS)
+        .map(|c| c["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_requested_scan_and_attempt_id_is_checked_in_each_leg_on_its_own() {
+    // Replacing one leg's id alone (so no cross-leg or checkpoint comparison can notice) must still
+    // trip the rule that compares run.json with the requested argv.
+    for tag in ["pause_N8", "resume_N8"] {
+        for field in ["scan_id", "attempt_id"] {
+            let d = Scratch::new("functional", Some(tag));
+            d.edit_run(tag, &format!("/{field}"), json!("cc".repeat(16)));
+            let failed = failed_checks(&d, tag);
+            let want = format!("{field} matches requested argv");
+            assert!(failed.contains(&want), "{tag} {field}: {failed:?}");
+        }
+    }
+}
+
+#[test]
+fn linkloss_must_have_at_least_one_uncertain_tx() {
+    let d = Scratch::new("failure", Some("linkloss"));
+    d.edit_run("linkloss", "/net/tx_uncertain", json!(0));
+    let failed = failed_checks(&d, "linkloss");
+    assert!(
+        failed.contains(&"NIC disconnect fails TxUncertain, partial scan, no checkpoint".into()),
+        "{failed:?}"
+    );
+}
+
+#[test]
+fn the_checkpoint_magic_version_and_trailer_are_each_checked_on_their_own() {
+    // WR M1: tamper the exported file AND keep run.json's checkpoint_hex in step, so the byte
+    // comparison cannot be what reacts; only the format/checksum rule is left to notice.
+    for pos in [0usize, 7, 8, 11, 12, 15, 88, 119] {
+        let d = Scratch::new("functional", Some("pause_N8"));
+        let p = d.0.join("runs/pause_N8/checkpoint.bin");
+        let mut bytes = fs::read(&p).unwrap();
+        bytes[pos] ^= 1;
+        if pos < 88 {
+            let sum = Sha256::digest(&bytes[..88]);
+            bytes[88..].copy_from_slice(&sum);
+        }
+        fs::write(&p, &bytes).unwrap();
+        d.edit_run("pause_N8", "/checkpoint_hex", json!(hex(&bytes)));
+        let failed = failed_checks(&d, "pause_N8");
+        assert!(
+            failed.contains(&"exported checkpoint format and checksum valid".into()),
+            "position {pos}: {failed:?}"
+        );
+        assert_eq!(d.status("pause_N8"), (FAIL.into(), true), "position {pos}");
+    }
+}

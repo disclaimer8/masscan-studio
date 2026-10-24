@@ -56,7 +56,7 @@ use rmasscan_engine::{
     CancelHandle, Checkpoint, ENGINE_ALGORITHM_VERSION, Engine, EngineOptions, Event, Reason,
     job_digest,
 };
-use rmasscan_net::{Inventory, NetError, OpenedAdapter, open_explicit};
+use rmasscan_net::{Inventory, NetError, NetStats, open_explicit};
 
 mod support;
 use support::metrics;
@@ -263,8 +263,21 @@ fn fail_json(stage: &str, kind: &str, msg: &str, opened: bool) -> String {
 
 /// Как `fail_json`, но с `job` (что именно собирались сканировать), если план уже построен.
 fn fail_json_job(stage: &str, kind: &str, msg: &str, opened: bool, job: Option<&str>) -> String {
+    fail_json_sent(stage, kind, msg, opened, job, 0)
+}
+
+/// Как `fail_json_job`, но с реальным числом отправленных кадров: отказ после
+/// отправки (join, запись checkpoint) не должен выглядеть как «ничего не ушло».
+fn fail_json_sent(
+    stage: &str,
+    kind: &str,
+    msg: &str,
+    opened: bool,
+    job: Option<&str>,
+    tx_sent: u64,
+) -> String {
     format!(
-        "{{\"status\":\"error\",\"stage\":{},\"error\":{},\"message\":{},\"opened_adapter\":{opened},\"tx_sent\":0,\"job\":{},\"identity\":{}}}",
+        "{{\"status\":\"error\",\"stage\":{},\"error\":{},\"message\":{},\"opened_adapter\":{opened},\"tx_sent\":{tx_sent},\"job\":{},\"identity\":{}}}",
         js(stage),
         js(kind),
         js(msg),
@@ -359,7 +372,14 @@ fn reply_str(r: &Reply) -> String {
 trait Backend {
     fn inventory(&self) -> Result<Inventory, NetError>;
     fn nic_mac(&self, interface_id: &str) -> Option<[u8; 6]>;
-    fn open(&self, binding: &AdapterBinding) -> Result<OpenedAdapter, NetError>;
+    fn open(&self, binding: &AdapterBinding) -> Result<Opened, NetError>;
+}
+
+/// Открытый адаптер для harness: пара TX/RX для движка и независимое чтение
+/// счётчиков сети (переживает закрытие адаптера; нужно и подставному backend).
+struct Opened {
+    io: AdapterPair,
+    stats: Box<dyn Fn() -> NetStats>,
 }
 
 struct RealBackend;
@@ -371,8 +391,13 @@ impl Backend for RealBackend {
     fn nic_mac(&self, interface_id: &str) -> Option<[u8; 6]> {
         rmasscan_net::nic_mac(interface_id)
     }
-    fn open(&self, binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
-        open_explicit(binding)
+    fn open(&self, binding: &AdapterBinding) -> Result<Opened, NetError> {
+        let o = open_explicit(binding)?;
+        let stats = o.stats.clone();
+        Ok(Opened {
+            io: o.io,
+            stats: Box::new(move || stats.snapshot()),
+        })
     }
 }
 
@@ -721,7 +746,7 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         }
     };
     let during = metrics::sample();
-    let stats = opened.stats.clone();
+    let stats = opened.stats;
 
     let start_index = resume.as_ref().map_or(0, |c| c.next_index);
     let expected_total = plan.range() - start_index;
@@ -832,7 +857,14 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         Err(e) => {
             return (
                 3,
-                fail_json_job("join", &format!("{e:?}"), &e.to_string(), true, Some(&job)),
+                fail_json_sent(
+                    "join",
+                    &format!("{e:?}"),
+                    &e.to_string(),
+                    true,
+                    Some(&job),
+                    stats().tx_sent,
+                ),
             );
         }
     };
@@ -859,11 +891,11 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
     }
     let threads_settle_ms = settle_t0.elapsed().as_secs_f64() * 1000.0;
     let after = metrics::sample();
-    let stats_at_join = stats.snapshot();
+    let stats_at_join = stats();
     if a.observe_ms > 0 {
         std::thread::sleep(Duration::from_millis(a.observe_ms));
     }
-    let stats_end = stats.snapshot();
+    let stats_end = stats();
 
     let (reason, fail_detail) = match &outcome_j.reason {
         Reason::Completed => ("Completed", String::new()),
@@ -874,7 +906,17 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
     if let (Some(cp), Some(p)) = (&checkpoint, &a.checkpoint_out)
         && let Err(e) = std::fs::write(p, cp.to_bytes())
     {
-        return (2, fail_json("checkpoint-write", "Io", &e.to_string(), true));
+        return (
+            2,
+            fail_json_sent(
+                "checkpoint-write",
+                "Io",
+                &e.to_string(),
+                true,
+                Some(&job),
+                stats().tx_sent,
+            ),
+        );
     }
 
     let mut rs: Vec<String> = replies.iter().map(reply_str).collect();
@@ -1004,6 +1046,7 @@ mod tests {
         inventory_calls: Cell<u32>,
         open_calls: Cell<u32>,
         nic_calls: Cell<u32>,
+        fake: Option<rmasscan_engine::fake::FakeAdapter>,
     }
 
     impl Backend for Mock {
@@ -1021,11 +1064,21 @@ mod tests {
             self.nic_calls.set(self.nic_calls.get() + 1);
             self.nic
         }
-        fn open(&self, _: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+        fn open(&self, _: &AdapterBinding) -> Result<Opened, NetError> {
             self.open_calls.set(self.open_calls.get() + 1);
-            Err(NetError::System(
-                "mock: adapter must not be opened here".into(),
-            ))
+            let Some(fake) = &self.fake else {
+                return Err(NetError::System(
+                    "mock: adapter must not be opened here".into(),
+                ));
+            };
+            let counted = fake.clone();
+            Ok(Opened {
+                io: fake.pair(),
+                stats: Box::new(move || NetStats {
+                    tx_sent: counted.sent_count() as u64,
+                    ..NetStats::default()
+                }),
+            })
         }
     }
 
@@ -1366,6 +1419,34 @@ mod tests {
         assert_eq!(net_error_code(&NetError::PermissionDenied("x".into())), 5);
         assert_eq!(net_error_code(&NetError::DriverUnavailable("x".into())), 5);
         assert_eq!(net_error_code(&NetError::System("x".into())), 2);
+    }
+
+    #[test]
+    fn failure_after_sending_reports_the_real_tx_counters() {
+        // Pause после 1 отправки даёт checkpoint; запись в каталог падает
+        // (checkpoint-write). Кадр уже ушёл: tx_sent обязан быть 1, не 0.
+        let be = Mock {
+            nic: Some(NIC),
+            fake: Some(rmasscan_engine::fake::FakeAdapter::new()),
+            ..Mock::default()
+        };
+        let dir = std::env::temp_dir().display().to_string();
+        let (code, json) = run(
+            &with(&[
+                "--wait",
+                "0",
+                "--pause-after",
+                "1",
+                "--checkpoint-out",
+                &dir,
+            ]),
+            &be,
+        );
+        assert_eq!(code, 2, "{json}");
+        assert!(json.contains("\"stage\":\"checkpoint-write\""), "{json}");
+        assert!(json.contains("\"tx_sent\":1,"), "{json}");
+        assert!(json.contains("\"opened_adapter\":true"), "{json}");
+        assert!(json.contains("\"job\":{"), "{json}");
     }
 
     #[test]

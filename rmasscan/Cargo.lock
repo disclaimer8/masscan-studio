@@ -468,6 +468,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmasscan-lab"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "rmasscan-core",
+ "rmasscan-net",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "rmasscan-net"
 version = "0.1.0"
 dependencies = [

@@ -1,7 +1,7 @@
-# CI порта masscan на Rust (этапы 0-2B: core, cli, engine, net): fmt, clippy, тесты, правило «без C».
+# CI порта masscan на Rust: core, cli, engine, net и lab; Python не требуется.
 # Raw-сокеты, сеть и повышение прав не используются: тесты, открывающие AF_PACKET, помечены #[ignore]
-# и идут только в замкнутом стенде (wire-lab.sh). На macOS и Windows crate net проверяется как
-# сборка (open_explicit возвращает UnsupportedPlatform), а не как сырой ввод-вывод.
+# и идут только в замкнутом стенде (wire-lab.sh). CI не выполняет raw I/O;
+# Windows Npcap проверяется offline/fake tests, macOS raw I/O пока не реализован.
 name: rmasscan
 
 on:
@@ -75,6 +75,11 @@ jobs:
           cargo test --locked -p rmasscan-net
           cargo test --locked -p rmasscan-net --example wire_scan
           cargo build --locked -p rmasscan-net --example wire_scan
+
+      - name: Rust laboratory tools (без Python)
+        run: |
+          cargo test --locked -p rmasscan-lab
+          cargo run --locked -p rmasscan-lab -- verify-wire --self-test
 
       - name: Установить cargo-deny
         run: cargo install --locked cargo-deny@0.20.2

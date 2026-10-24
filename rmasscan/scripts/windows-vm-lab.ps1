@@ -7,7 +7,9 @@
 # Never touches firewall, other adapters, default routes or DNS of the management NIC. No secrets.
 param(
     [Parameter(Mandatory)][string]$Manifest,
-    [Parameter(Mandatory)][ValidateSet('Inventory', 'Configure', 'Verify')][string]$Action
+    [Parameter(Mandatory)][ValidateSet('Inventory', 'Configure', 'Verify')][string]$Action,
+    [string]$VerificationNonce,
+    [string]$ReportPath
 )
 $ErrorActionPreference = 'Stop'
 $m = Get-Content -Raw -LiteralPath $Manifest | ConvertFrom-Json
@@ -61,6 +63,9 @@ switch ($Action) {
         $out.lab | ConvertTo-Json -Depth 4
     }
     'Verify' {
+        if ($VerificationNonce -notmatch '^[A-Za-z0-9_-]{16,128}$') { throw 'Verify requires a unique -VerificationNonce (16-128 safe characters)' }
+        if (-not $ReportPath) { throw 'Verify requires a unique -ReportPath' }
+        if (Test-Path -LiteralPath $ReportPath) { throw 'Refusing to overwrite an existing verification report' }
         $lab = Select-Lab $inv
         $errs = @()
         if ($lab.Status -ne 'Up') { $errs += "lab NIC Status is '$($lab.Status)', expected 'Up'" }
@@ -74,8 +79,8 @@ switch ($Action) {
         $mgmt = @($inv.adapters | Where-Object { $_.IPv4 | Where-Object { $_ -like "$mgmtPrefix*" } })
         if ($mgmt.Count -ne 1) { $errs += "management NIC (10.0.2.x) count = $($mgmt.Count)" }
         if (@($inv.default_routes | Where-Object { $mgmt.Count -eq 1 -and $_.ifIndex -eq $mgmt[0].ifIndex }).Count -ne 1) { $errs += 'default route is not exactly via the management NIC' }
-        $res = [pscustomobject]@{ ok = ($errs.Count -eq 0); errors = $errs; lab = $lab; npf = $lab.Npf }
-        $res | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$Manifest.verify.json" -Encoding utf8
+        $res = [pscustomobject]@{ ok = ($errs.Count -eq 0); errors = $errs; lab = $lab; npf = $lab.Npf; verification_nonce = $VerificationNonce; verified_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 }
+        $res | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $ReportPath -Encoding utf8
         $res | ConvertTo-Json -Depth 4
         if ($errs.Count) { exit 1 }
     }

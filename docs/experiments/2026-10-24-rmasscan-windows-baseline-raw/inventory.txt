@@ -1,0 +1,10 @@
+rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+cargo: cargo 1.99.1 (5f94df478 2026-08-27)
+rustfmt: rustfmt 1.10.0-stable (58cf8f9c35 2026-10-13)
+clippy: clippy 0.1.99 (58cf8f9c35 2026-10-13)
+deny: cargo-deny 0.20.2
+python: Python 3.13.15
+git: git version 2.56.0.windows.3
+pwsh: 7.6.8
+os: Microsoft Windows 11 Pro 10.0.26300
+free=20496756736 used=46952890368

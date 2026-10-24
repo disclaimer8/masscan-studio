@@ -257,6 +257,9 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
 /// accident.
 pub(crate) trait Exec {
     fn exec(&self, argv: &[String], timeout: u64) -> Result<Output, String>;
+    /// Bytes of `path` (relative to the repository root) in the tree of `commit`, read with
+    /// `git show`. The guest scripts come from here, never from a compile-time path.
+    fn file_at_commit(&self, repo: &Path, commit: &str, path: &str) -> Result<Vec<u8>, String>;
     fn pause(&self, d: Duration) {
         thread::sleep(d);
     }
@@ -265,6 +268,27 @@ pub(crate) struct Real;
 impl Exec for Real {
     fn exec(&self, argv: &[String], timeout: u64) -> Result<Output, String> {
         command(argv, timeout, false)
+    }
+    fn file_at_commit(&self, repo: &Path, commit: &str, path: &str) -> Result<Vec<u8>, String> {
+        if !crate::deploy::full_commit(commit) || path.starts_with('-') || path.contains("..") {
+            return Err("unsafe commit or path".into());
+        }
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("show")
+            .arg(format!("{commit}:{path}"))
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        if out.status.success() {
+            Ok(out.stdout)
+        } else {
+            Err(format!(
+                "git show {commit}:{path} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        }
     }
 }
 /// A suite failure with the exit code that operator scripts key off. NOT RUN (2) is a refusal
@@ -1210,7 +1234,7 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     let o = options(args)?;
     if o.contains_key("help") {
         println!(
-            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab [--suite ID] [--plan functional|failure] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote action), 10 aborted, 11 rerun refused, 12 directory capture schema too old"
+            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote action), 10 aborted, 11 rerun refused, 12 directory capture schema too old"
         );
         return Ok(0);
     }
@@ -1251,6 +1275,9 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     }
     let guest_exe = required(&o, "guest-exe")?;
     cmdquote(&guest_exe)?;
+    let deploy_path = PathBuf::from(required(&o, "deploy-manifest")?);
+    let deploy = read_json(&deploy_path)?;
+    let allowed = crate::deploy::allowed_binary_hashes(&deploy, &commit, &remote)?;
     let fixtures = PathBuf::from(required(&o, "fixtures")?);
     let fx = read_json(fixtures.join("manifest.json"))?;
     if fx["all_valid"] != true {
@@ -1293,6 +1320,13 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
             }
         }
     }
+    // Local, before any remote action: the guest scripts of the commit under test, kept as
+    // evidence next to the deploy manifest that vouches for the remote binary.
+    let repo = PathBuf::from(opt(&o, "repo", "."));
+    let staged = crate::deploy::StagedScripts::load(|p| exec.file_at_commit(&repo, &commit, p))?;
+    let deploy_dir = out.join("deploy");
+    staged.write_to(&deploy_dir.join("guest-scripts"))?;
+    fs::copy(&deploy_path, deploy_dir.join("deploy-manifest.json")).map_err(|e| e.to_string())?;
     let mut s = Suite {
         exec,
         out,
@@ -1313,6 +1347,17 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     s.remote_ev = format!("{home}/winvm/t4-ev");
     s.qmp = format!("{home}/winvm/qmp.sock");
     s.manifest = format!("{home}/winvm/lab/n2.json");
+    // The binary about to run as root must be the one the deploy manifest vouches for.
+    let remote_sum = s.home(&format!("sha256sum -- {}", quote(&s.remote)), false)?;
+    if remote_sum.rc != 0 {
+        return Err(format!(
+            "cannot hash the remote rmasscan-lab: {}",
+            remote_sum.stderr.trim()
+        )
+        .into());
+    }
+    let remote_sha = crate::deploy::parse_sha256sum(&remote_sum.stdout)?;
+    crate::deploy::check_remote_binary(&allowed, &remote_sha)?;
     // Nothing from a dead earlier orchestrator may still be running when this one starts.
     sweep_remote(exec, &s.suite)?;
     s.home(
@@ -1334,16 +1379,55 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     if !valid_mac(&s.pm) {
         return Err("invalid peer MAC".to_string().into());
     }
-    let scripts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
-    for f in [
-        "windows_wire_run.ps1",
-        "windows_wire_hash.ps1",
-        "windows_wire_prepare.ps1",
-        "windows_wire_runas.cmd",
-        "windows_wire_restricted.cmd",
-    ] {
-        s.transfer(true, true, &scripts.join(f), &format!("t4/{f}"), true)?;
+    let stage = deploy_dir.join("guest-scripts");
+    for (name, guest, _, _) in &staged.files {
+        s.transfer(true, true, &stage.join(name), guest, true)?;
     }
+    // What sits on the guest is what the commit contains, byte for byte.
+    for (name, guest, bytes, sha) in &staged.files {
+        let abs = format!("C:\\Users\\lab\\{}", guest.replace('/', "\\"));
+        let reply = s
+            .guest(
+                &format!(
+                    "pwsh -NoProfile -File {GUEST}\\windows_wire_hash.ps1 -Path {}",
+                    cmdquote(&abs)?
+                ),
+                true,
+            )?
+            .stdout;
+        let seen = reply.split_whitespace().collect::<Vec<_>>();
+        if seen.len() != 2 || seen[0] != sha || seen[1] != bytes.len().to_string() {
+            return Err(
+                format!("guest copy of {name} does not match the commit: {reply:?}").into(),
+            );
+        }
+    }
+    // record-guest rejects a Verify report outside +5/-60 s of the home-pc clock.
+    let home_clock = |s: &Suite| -> Result<f64, String> {
+        crate::deploy::parse_epoch(&s.home("date -u +%s.%N", true)?.stdout)
+    };
+    let before = home_clock(&s)?;
+    let guest_clock = crate::deploy::parse_epoch(
+        &s.guest(
+            &format!("pwsh -NoProfile -File {GUEST}\\windows_wire_clock.ps1"),
+            true,
+        )?
+        .stdout,
+    )?;
+    let after = home_clock(&s)?;
+    let clock = crate::deploy::clock_verdict(before, guest_clock, after)?;
+    write_json(
+        deploy_dir.join(format!("preflight-{}.json", s.run_id)),
+        &json!({
+            "run_id": s.run_id, "suite": s.suite, "commit": commit,
+            "deploy_manifest_sha256": hash(&deploy_path)?,
+            "remote_lab": {"path": s.remote, "sha256": remote_sha},
+            "guest_scripts": staged.record(),
+            "clock": {"guest_minus_home_s": clock.offset, "uncertainty_s": clock.uncertainty,
+                      "limits": {"guest_ahead_s": crate::vm_lab::VERIFY_FUTURE_SKEW_S, "guest_behind_s": crate::vm_lab::VERIFY_MAX_AGE_S}},
+            "checked_utc": epoch(),
+        }),
+    )?;
     s.guest(
         &format!(
             "pwsh -NoProfile -File {GUEST}\\windows_wire_prepare.ps1 -Suite {} -RunId {}",

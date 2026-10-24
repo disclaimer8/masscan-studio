@@ -821,8 +821,43 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
         };
         r.inv(&format!("{name} valid before/after run"), ok, v.to_string());
     }
-    // New runs bind preflight and returned artifacts to the run nonce; schema 1 archives predate this contract.
-    if let Some(id) = ctx.meta.get("invocation_nonce") {
+    // From capture schema 3 the invocation nonce chain is mandatory: a run without it has no
+    // binding between the gate and this scanner invocation. Schema 1/2 archives predate the
+    // contract and keep an exemption that the verdict states.
+    let chain_schema = cap["capture_schema"]
+        .as_u64()
+        .unwrap_or(1)
+        .max(man["capture_schema"].as_u64().unwrap_or(1));
+    let nonce = ctx.meta.get("invocation_nonce");
+    if chain_schema >= 3 {
+        r.inv(
+            "invocation nonce recorded (capture schema 3 requires the chain)",
+            nonce.and_then(Value::as_str).is_some_and(|s| !s.is_empty()),
+            nonce.map_or("missing".into(), Value::to_string),
+        );
+        r.inv(
+            "guest Verify exit code recorded and zero",
+            ctx.meta.get("guest_verify_exit").and_then(Value::as_i64) == Some(0),
+            ctx.meta
+                .get("guest_verify_exit")
+                .map_or("missing".into(), Value::to_string),
+        );
+        for name in ["guest-verify-stdout.txt", "guest-verify-stderr.txt"] {
+            r.inv(
+                &format!("{name} recorded"),
+                ctx.d.join(name).is_file(),
+                name,
+            );
+        }
+    } else if nonce.is_none() {
+        r.add(
+            &format!("historical schema {chain_schema}: invocation nonce chain not required"),
+            PASS,
+            "directory predates capture schema 3, which makes the chain mandatory",
+            false,
+        );
+    }
+    if let Some(id) = nonce {
         let gv = read_json(ctx.d.join("guest-verify.json"));
         r.inv(
             "guest Verify belongs to this invocation",
@@ -833,7 +868,7 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
         match read_json(ctx.d.join("run-artifacts.json")) {
             None => r.add(
                 "current invocation artifact hashes present",
-                NOT_RUN,
+                if chain_schema >= 3 { INVALID } else { NOT_RUN },
                 "run-artifacts.json missing",
                 false,
             ),
@@ -2146,6 +2181,22 @@ mod tests {
             serde_json::to_string_pretty(&v).unwrap()
         );
         assert_eq!(v["totals"][PASS], 29);
+    }
+    #[test]
+    fn committed_r1_smoke_replays_as_documented() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional-r1-smoke",
+        );
+        let v = verify_dir(&dir);
+        assert_eq!(v["overall"], NOT_RUN);
+        assert_eq!(
+            (
+                v["totals"][PASS].as_u64(),
+                v["totals"][INVALID].as_u64(),
+                v["totals"][NOT_RUN].as_u64()
+            ),
+            (Some(1), Some(1), Some(27))
+        );
     }
     #[test]
     fn plans_have_full_spec() {

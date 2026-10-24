@@ -1,5 +1,6 @@
-//! Language policy for the whole repository: no interpreted programs of the banned kind, in
-//! any tracked script or source file, and no shebang that names the interpreter.
+//! Language policy for the whole repository (Rust-only): no Swift, C, C++ or Objective-C, or interpreter-script
+//! source files, no use of the banned interpreter in any tracked script or source file, and no
+//! shebang that names it.
 //!
 //! The same policy runs in CI as `scripts/language-guard.sh` (shell, workflow `language-guard.yml`, no
 //! path filter). Keep the two in step. The banned word is assembled at run time so this file
@@ -14,10 +15,11 @@ use std::{
 const WORD: &str = concat!("py", "thon");
 /// The Windows launcher (two letters), assembled so this file does not contain a call of it.
 const LAUNCHER: &str = concat!("p", "y");
-const SCANNED_EXTENSIONS: &[&str] = &[
-    "sh", "bash", "ps1", "cmd", "bat", "swift", "rs", "yml", "yaml",
+const SCANNED_EXTENSIONS: &[&str] = &["sh", "bash", "ps1", "cmd", "bat", "rs", "yml", "yaml"];
+/// Sources the Rust-only repository does not allow: Swift, C, C++, Objective-C and the interpreter scripts.
+const BANNED_EXTENSIONS: &[&str] = &[
+    "swift", "py", "pyw", "pyc", "pyz", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "m", "mm",
 ];
-const BANNED_EXTENSIONS: &[&str] = &["py", "pyw", "pyc", "pyz"];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -52,7 +54,7 @@ fn walk(root: &Path, dir: &Path, files: &mut Vec<String>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if matches!(name.as_str(), ".git" | "target" | ".build" | "node_modules") {
+        if matches!(name.as_str(), ".git" | "target" | "node_modules") {
             continue;
         }
         if path.is_dir() {
@@ -376,4 +378,32 @@ fn the_rust_matcher_flags_the_same_additions() {
         );
     }
     assert!(violations_of("b.ps1", b"$p = 1\nhappy -3\ncopy -3\n").is_empty());
+}
+
+#[test]
+fn banned_source_extensions_are_flagged_in_any_letter_case() {
+    for name in [
+        "a.swift", "A.SWIFT", "x/y.c", "x/Y.C", "i.h", "i.H", "a.cc", "a.cpp", "a.CXX", "a.hpp",
+        "a.hh", "a.m", "a.mm", "a.py", "a.PYZ",
+    ] {
+        assert_eq!(violations_of(name, b"").len(), 1, "{name}");
+    }
+    for name in ["a.rs", "a.md", "a.sh", "a.json", "chart.hex", "Cargo.toml"] {
+        assert!(violations_of(name, b"").is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn the_shell_guard_fails_on_planted_swift_c_and_cpp_sources() {
+    for (tag, name) in [
+        ("swift", "Sources/App.swift"),
+        ("upper-swift", "Sources/App.SWIFT"),
+        ("c", "src/main.c"),
+        ("header", "src/main.h"),
+        ("cpp", "src/main.cpp"),
+        ("objc", "src/main.m"),
+    ] {
+        let files = [("ok.sh", "echo ok\n".into()), (name, String::new())];
+        assert_eq!(guard_rc(tag, &files), 1, "guard missed {name}");
+    }
 }

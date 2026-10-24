@@ -5,18 +5,23 @@ Runs on the Ubuntu VM host (home-pc), as root (re-execs through `sudo -n`).
 
   windows-vm-lab.py plan   --run-id ID --manifest FILE       read-only: checks + what `up` would create
   windows-vm-lab.py up     --run-id ID --manifest FILE [--tap-user U] [--lab-env FILE]
-  windows-vm-lab.py status --run-id ID --manifest FILE
-  windows-vm-lab.py down   --run-id ID --manifest FILE [--lab-env FILE]
-  windows-vm-lab.py record-guest --run-id ID --manifest FILE --guest-json FILE
+  windows-vm-lab.py status --run-id ID --manifest FILE [--host-only]
+  windows-vm-lab.py down   --run-id ID --manifest FILE
+  windows-vm-lab.py record-guest --run-id ID --manifest FILE [--guest-json F] [--verify-json F]
 
 Topology (no host IP, no uplink, no forwarding/NAT, nothing touches eno1/eno2/wlp*):
 
   Windows 2nd e1000e -> TAP wvt-ID -> bridge wvb-ID -> veth wvh-ID == lab0 in netns wvp-ID
   198.18.0.0/30: Windows .1, Linux peer .2, no gateway, no DNS.
 
-Ownership: every link carries ifalias `rmasscan-wvl:ID`; the netns is owned through the manifest
-write-ahead `created` list. `down` removes only objects that carry this run-id's mark, never uses
-pkill/iptables/route changes, and a second `down` is a no-op.
+The bridge is L2-only: vlan_filtering with the bridge's own (self) vid 1 removed, so no frame is ever
+delivered to the host IP stack; plus NOARP, arp_ignore=8, rp_filter=1, forwarding=0, IPv6 off on
+bridge/TAP/host veth. `status` is `ok` (raw-run allowed) only when all of that still holds, the VM is
+truly attached (qemu cmdline + TAP fd + carrier) and a guest Verify record is fresh.
+
+Ownership: every link carries ifalias `rmasscan-wvl:ID:NONCE`, the netns a marker file
+/run/rmasscan-wvl/<ns> holding the same token; NONCE is random per manifest. `down` deletes only
+objects whose live mark matches the manifest token. A second `down` is a no-op.
 """
 import argparse
 import hashlib
@@ -24,14 +29,18 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
+import time
 
 NET = ipaddress.ip_network("198.18.0.0/30")
 WIN_IP, PEER_IP, PREFIX = "198.18.0.1", "198.18.0.2", 30
 RUN_RE = re.compile(r"^[a-z0-9]{1,8}$")
 ALIAS_PREFIX = "rmasscan-wvl:"
 PEER_IF = "lab0"
+MGMT_MAC = "52:54:00:12:34:56"
+MARK_DIR = "/run/rmasscan-wvl"
 
 
 class LabError(Exception):
@@ -42,9 +51,8 @@ def derive(run_id):
     if not RUN_RE.match(run_id or ""):
         raise LabError("run-id must match [a-z0-9]{1,8}")
     h = hashlib.sha256(run_id.encode()).digest()
-    return {
+    d = {
         "run_id": run_id,
-        "alias": ALIAS_PREFIX + run_id,
         "bridge": "wvb-" + run_id,
         "tap": "wvt-" + run_id,
         "veth_host": "wvh-" + run_id,
@@ -52,7 +60,16 @@ def derive(run_id):
         "peer_if": PEER_IF,
         "windows_mac": "52:54:00:%02x:%02x:%02x" % (h[0], h[1], h[2]),
         "peer_mac": "02:57:4c:%02x:%02x:%02x" % (h[3], h[4], h[5]),
+        "veth_host_mac": "02:57:4d:%02x:%02x:%02x" % (h[6], h[7], h[8]),
     }
+    macs = [d["windows_mac"], d["peer_mac"], d["veth_host_mac"], MGMT_MAC]
+    if len(set(macs)) != len(macs):
+        raise LabError("derived MACs collide for run-id %s; pick another" % run_id)
+    return d
+
+
+def alias_of(d, token):
+    return "%s%s:%s" % (ALIAS_PREFIX, d["run_id"], token)
 
 
 def norm_mac(m):
@@ -71,6 +88,7 @@ class RealHost:
         out = {}
         for l in json.loads(self.sh("ip", "-j", "-d", "addr", "show") or "[]"):
             n = l["ifname"]
+            flags = l.get("flags", [])
             out[n] = {
                 "kind": (l.get("linkinfo") or {}).get("info_kind", ""),
                 "master": l.get("master"),
@@ -78,6 +96,9 @@ class RealHost:
                 "physical": os.path.exists("/sys/class/net/%s/device" % n),
                 "mac": norm_mac(l.get("address")),
                 "addrs": [a["local"] + "/" + str(a["prefixlen"]) for a in l.get("addr_info", [])],
+                "noarp": "NOARP" in flags,
+                "lower_up": "LOWER_UP" in flags,
+                "vlan_filtering": bool(((l.get("linkinfo") or {}).get("info_data") or {}).get("vlan_filtering")),
             }
         return out
 
@@ -87,25 +108,135 @@ class RealHost:
     def netns_list(self):
         return {l.split()[0] for l in self.sh("ip", "netns", "list").splitlines() if l.strip()}
 
-    def netns_links(self, ns):
-        return json.loads(self.sh("ip", "-j", "-n", ns, "link", "show") or "[]")
+    def sysctl(self, key):
+        try:
+            with open("/proc/sys/" + key.replace(".", "/")) as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    def bridge_self_vlans(self, br):
+        r = subprocess.run(["bridge", "-j", "vlan", "show", "dev", br], capture_output=True, text=True)
+        if r.returncode:
+            return None
+        return [v["vlan"] for e in json.loads(r.stdout or "[]") if e.get("ifname") == br for v in e.get("vlans", [])]
+
+    def fw_refs(self, names):
+        hits = []
+        for cmd in (["nft", "list", "ruleset"], ["iptables-save"], ["ip6tables-save"]):
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            for line in (r.stdout if r.returncode == 0 else "").splitlines():
+                if any(re.search(r'(?<![\w-])%s(?![\w-])' % re.escape(n), line) for n in names):
+                    hits.append("%s: %s" % (cmd[0], line.strip()))
+        return hits
+
+    def netns_mark_read(self, ns):
+        try:
+            with open(os.path.join(MARK_DIR, ns)) as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    def netns_mark_write(self, ns, token):
+        os.makedirs(MARK_DIR, mode=0o755, exist_ok=True)
+        fd = os.open(os.path.join(MARK_DIR, ns), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(fd, "w") as f:
+            f.write(token + "\n")
+
+    def netns_mark_remove(self, ns):
+        try:
+            os.remove(os.path.join(MARK_DIR, ns))
+        except OSError:
+            pass
+
+    def vm_facts(self, d):
+        """What the running qemu really holds: cmdline netdev+MAC, TAP fd, start time."""
+        want_if, want_mac = "ifname=" + d["tap"], "mac=" + d["windows_mac"]
+        boot = 0
+        try:
+            with open("/proc/stat") as f:
+                boot = int([l for l in f if l.startswith("btime")][0].split()[1])
+        except (OSError, IndexError, ValueError):
+            pass
+        for pid in filter(str.isdigit, os.listdir("/proc")):
+            try:
+                with open("/proc/%s/cmdline" % pid, "rb") as f:
+                    argv = f.read().decode(errors="replace").split("\0")
+            except OSError:
+                continue
+            if not argv or "qemu-system" not in argv[0]:
+                continue
+            tap_ok = any(a.startswith("tap,") and "id=lab0" in a and want_if in a.split(",") for a in argv)
+            mac_ok = any(a.startswith("e1000e,") and "netdev=lab0" in a and want_mac in a.split(",") for a in argv)
+            fd_iff = False
+            try:
+                for fd in os.listdir("/proc/%s/fd" % pid):
+                    if os.readlink("/proc/%s/fd/%s" % (pid, fd)) == "/dev/net/tun":
+                        with open("/proc/%s/fdinfo/%s" % (pid, fd)) as f:
+                            if ("iff:\t" + d["tap"]) in f.read().splitlines():
+                                fd_iff = True
+            except OSError:
+                pass
+            start = 0
+            try:
+                with open("/proc/%s/stat" % pid) as f:
+                    start = boot + int(f.read().rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
+            except (OSError, IndexError, ValueError):
+                pass
+            if tap_ok or mac_ok:
+                return {"pid": int(pid), "cmdline_ok": tap_ok and mac_ok, "fd_iff": fd_iff, "start": start}
+        return {"pid": None, "cmdline_ok": False, "fd_iff": False, "start": 0}
+
+    def _unmanage(self, name):
+        """NetworkManager resets rp_filter and may run DHCP/link-local on new devices: tell it to ignore OUR device."""
+        if subprocess.run(["which", "nmcli"], capture_output=True).returncode:
+            return
+        subprocess.run(["nmcli", "device", "set", name, "managed", "no"], capture_output=True)
+        for _ in range(30):
+            r = subprocess.run(["nmcli", "-t", "-f", "DEVICE,STATE", "device"], capture_output=True, text=True)
+            if "%s:unmanaged" % name in r.stdout.split("\n"):
+                return
+            time.sleep(0.1)
+        raise LabError("NetworkManager did not release %s" % name)
+
+    def _l2only(self, name):
+        self._unmanage(name)
+        self.sh("ip", "link", "set", name, "arp", "off")
+        for k, v in (("disable_ipv6", "1"),):
+            self.sh("sysctl", "-qw", "net.ipv6.conf.%s.%s=%s" % (name, k, v))
+        for k, v in (("arp_ignore", "8"), ("rp_filter", "1"), ("forwarding", "0")):
+            self.sh("sysctl", "-qw", "net.ipv4.conf.%s.%s=%s" % (name, k, v))
+
+    def _guard(self, name, fn):
+        try:
+            fn()
+        except Exception:
+            subprocess.run(["ip", "link", "del", name], capture_output=True)
+            raise
 
     def create_bridge(self, name, alias):
-        self.sh("ip", "link", "add", name, "type", "bridge", "stp_state", "0")
-        self.sh("ip", "link", "set", name, "alias", alias)
-        self._no_v6(name)
-        self.sh("ip", "link", "set", name, "up")
+        def go():
+            self.sh("ip", "link", "add", name, "type", "bridge", "stp_state", "0", "vlan_filtering", "1")
+            self.sh("ip", "link", "set", name, "alias", alias)
+            self._l2only(name)
+            self.sh("bridge", "vlan", "del", "dev", name, "vid", "1", "self")
+            self.sh("ip", "link", "set", name, "up")
+        self._guard(name, go)
 
     def create_tap(self, name, alias, user):
-        self.sh("ip", "tuntap", "add", "dev", name, "mode", "tap", "user", user)
-        self.sh("ip", "link", "set", name, "alias", alias)
-        self._no_v6(name)
+        def go():
+            self.sh("ip", "tuntap", "add", "dev", name, "mode", "tap", "user", user)
+            self.sh("ip", "link", "set", name, "alias", alias)
+            self._l2only(name)
+        self._guard(name, go)
 
     def create_veth(self, host_if, peer_if, ns, alias, host_mac, peer_mac):
-        self.sh("ip", "link", "add", host_if, "address", host_mac, "type", "veth",
-                "peer", "name", peer_if, "address", peer_mac, "netns", ns)
-        self.sh("ip", "link", "set", host_if, "alias", alias)
-        self._no_v6(host_if)
+        def go():
+            self.sh("ip", "link", "add", host_if, "address", host_mac, "type", "veth",
+                    "peer", "name", peer_if, "address", peer_mac, "netns", ns)
+            self.sh("ip", "link", "set", host_if, "alias", alias)
+            self._l2only(host_if)
+        self._guard(host_if, go)
 
     def enslave(self, name, bridge):
         self.sh("ip", "link", "set", name, "master", bridge)
@@ -125,9 +256,6 @@ class RealHost:
 
     def netns_del(self, ns):
         self.sh("ip", "netns", "del", ns)
-
-    def _no_v6(self, name):
-        self.sh("sysctl", "-qw", "net.ipv6.conf.%s.disable_ipv6=1" % name)
 
 
 # ---------------------------------------------------------------- manifest
@@ -156,38 +284,8 @@ def write_manifest(path, m):
 
 
 # ---------------------------------------------------------------- checks
-def owned(link, d):
-    return link.get("alias") == d["alias"]
-
-
-def plan(host, d, manifest):
-    """Read-only. Returns (problems, actions)."""
-    problems = []
-    links, nss = host.links(), host.netns_list()
-    for key in ("bridge", "tap", "veth_host"):
-        if d[key] in links:
-            problems.append("name busy: link %s (%s)" % (d[key], "own mark" if owned(links[d[key]], d) else "FOREIGN"))
-    if d["netns"] in nss:
-        problems.append("name busy: netns %s" % d["netns"])
-    if manifest is not None and manifest.get("state") != "down":
-        problems.append("manifest exists with state=%s: run `down` first" % manifest.get("state"))
-    for n, l in links.items():
-        if norm_mac(l.get("mac")) in (d["windows_mac"], d["peer_mac"]):
-            problems.append("MAC %s already used by host link %s" % (l["mac"], n))
-        for a in l.get("addrs", []):
-            if _overlap(a):
-                problems.append("address conflict: %s on %s overlaps %s" % (a, n, NET))
-    for r in host.routes():
-        if r and r != "default" and _overlap(r):
-            problems.append("route conflict: %s overlaps %s" % (r, NET))
-    actions = [
-        "create bridge %s (no IP, stp off, ipv6 off)" % d["bridge"],
-        "create tap %s, enslave to %s" % (d["tap"], d["bridge"]),
-        "create netns %s; veth %s <-> %s in netns, enslave host end to %s" % (d["netns"], d["veth_host"], PEER_IF, d["bridge"]),
-        "set %s/%d on %s in netns %s only (no gateway/DNS)" % (PEER_IP, PREFIX, PEER_IF, d["netns"]),
-        "verify isolation (bridge slaves == {tap, veth}, no physical port, no host IP)",
-    ]
-    return problems, actions
+def owned(link, d, token):
+    return link.get("alias") == alias_of(d, token)
 
 
 def _overlap(cidr):
@@ -197,6 +295,42 @@ def _overlap(cidr):
         return False
 
 
+def plan(host, d, manifest):
+    """Read-only. Returns (problems, actions)."""
+    problems = []
+    links, nss = host.links(), host.netns_list()
+    for key in ("bridge", "tap", "veth_host"):
+        if d[key] in links:
+            fam = links[d[key]].get("alias", "").startswith(ALIAS_PREFIX + d["run_id"] + ":")
+            problems.append("name busy: link %s (%s)" % (d[key], "another manifest of this run-id" if fam else "FOREIGN"))
+    if d["netns"] in nss:
+        problems.append("name busy: netns %s" % d["netns"])
+    if manifest is not None and manifest.get("state") != "down":
+        problems.append("manifest exists with state=%s: run `down` first" % manifest.get("state"))
+    mine = {d["windows_mac"], d["peer_mac"], d["veth_host_mac"]}
+    for n, l in links.items():
+        if norm_mac(l.get("mac")) in mine:
+            problems.append("MAC %s already used by host link %s" % (l["mac"], n))
+        for a in l.get("addrs", []):
+            if _overlap(a):
+                problems.append("address conflict: %s on %s overlaps %s" % (a, n, NET))
+    for r in host.routes():
+        if r and r != "default" and _overlap(r):
+            problems.append("route conflict: %s overlaps %s" % (r, NET))
+    if host.sysctl("net.ipv4.ip_forward") != "0":
+        problems.append("global net.ipv4.ip_forward is %s (must be 0)" % host.sysctl("net.ipv4.ip_forward"))
+    for h in host.fw_refs([d["bridge"], d["tap"], d["veth_host"]]):
+        problems.append("firewall rule already references lab interfaces: " + h)
+    actions = [
+        "create bridge %s: L2-only (vlan_filtering, self vid 1 removed, NOARP, arp_ignore=8, rp_filter=1, fwd=0, ipv6 off)" % d["bridge"],
+        "create tap %s (same hardening), enslave to %s" % (d["tap"], d["bridge"]),
+        "create netns %s + owner marker; veth %s <-> %s in netns (same hardening on host end), enslave host end" % (d["netns"], d["veth_host"], PEER_IF),
+        "set %s/%d on %s in netns %s only (no gateway/DNS)" % (PEER_IP, PREFIX, PEER_IF, d["netns"]),
+        "verify isolation (ports == {tap, veth}, no physical port, no host IP, L2-only, forwarding 0, no firewall refs)",
+    ]
+    return problems, actions
+
+
 def check_isolation(host, d):
     """Violations of the sealed-switch invariants for this run's bridge."""
     v = []
@@ -204,8 +338,6 @@ def check_isolation(host, d):
     br = links.get(d["bridge"])
     if br is None:
         return ["bridge %s missing" % d["bridge"]]
-    if br.get("addrs"):
-        v.append("bridge has host IP %s" % br["addrs"])
     allowed = {d["tap"], d["veth_host"]}
     for n, l in links.items():
         if l.get("master") == d["bridge"]:
@@ -213,22 +345,53 @@ def check_isolation(host, d):
                 v.append("physical uplink %s enslaved to bridge" % n)
             elif n not in allowed:
                 v.append("unexpected port %s on bridge" % n)
-    for n in allowed:
-        if n in links:
-            if links[n].get("addrs"):
-                v.append("%s has host IP %s" % (n, links[n]["addrs"]))
-            if links[n].get("master") != d["bridge"]:
-                v.append("%s not enslaved to bridge" % n)
+    mine = [d["bridge"]] + [n for n in sorted(allowed) if n in links]
+    for n in mine:
+        l = links[n]
+        if l.get("addrs"):
+            v.append("%s has host IP %s" % (n, l["addrs"]))
+        if not l.get("noarp"):
+            v.append("%s is not NOARP" % n)
+        for k, want in (("arp_ignore", "8"), ("rp_filter", "1"), ("forwarding", "0")):
+            got = host.sysctl("net.ipv4.conf.%s.%s" % (n, k))
+            if got != want:
+                v.append("%s: %s=%s (want %s)" % (n, k, got, want))
+        if host.sysctl("net.ipv6.conf.%s.disable_ipv6" % n) != "1":
+            v.append("%s: ipv6 not disabled" % n)
+        if n != d["bridge"] and l.get("master") != d["bridge"]:
+            v.append("%s not enslaved to bridge" % n)
+    if not br.get("vlan_filtering"):
+        v.append("bridge vlan_filtering is off (self vlan cannot be removed)")
+    sv = host.bridge_self_vlans(d["bridge"])
+    if sv is None:
+        v.append("cannot read bridge self vlans")
+    elif sv:
+        v.append("bridge self vlan present %s: frames reach the host IP stack" % sv)
+    if host.sysctl("net.ipv4.ip_forward") != "0":
+        v.append("global ip_forward=%s" % host.sysctl("net.ipv4.ip_forward"))
+    for h in host.fw_refs(mine):
+        v.append("firewall references lab interface: " + h)
     return v
 
 
 def select_adapter(adapters, mac):
     """Unique adapter by MAC from a guest Inventory; ambiguity or absence is an error."""
     want = norm_mac(mac)
+    if want == MGMT_MAC:
+        raise LabError("refusing: MAC %s is the management NIC" % want)
     hits = [a for a in adapters if norm_mac(a.get("MacAddress") or a.get("mac")) == want]
     if len(hits) != 1:
         raise LabError("lab NIC ambiguous/absent: %d adapters match MAC %s" % (len(hits), want))
     return hits[0]
+
+
+def vm_attachment(host, d, links=None):
+    f = host.vm_facts(d)
+    links = links if links is not None else host.links()
+    tap = links.get(d["tap"], {})
+    f["carrier"] = bool(tap.get("lower_up"))
+    f["attached"] = bool(f["pid"] and f["cmdline_ok"] and f["fd_iff"] and f["carrier"])
+    return f
 
 
 # ---------------------------------------------------------------- commands
@@ -243,27 +406,37 @@ def cmd_plan(host, a):
 def cmd_up(host, a):
     d = derive(a.run_id)
     problems, _ = plan(host, d, read_manifest(a.manifest))
+    if a.lab_env and os.path.exists(a.lab_env):
+        with open(a.lab_env) as f:
+            if ("LAB_RUN_ID=%s\n" % a.run_id) not in f.read():
+                problems.append("lab.env %s belongs to another run-id" % a.lab_env)
     if problems:
         print("REFUSED (nothing created or removed):\n  " + "\n  ".join(problems), file=sys.stderr)
         return 3
-    m = {"schema": 1, "run_id": a.run_id, "state": "creating", "names": d, "created": [],
+    token = secrets.token_hex(8)
+    alias = alias_of(d, token)
+    m = {"schema": 2, "run_id": a.run_id, "token": token, "state": "creating", "names": d, "created": [],
          "lab": {"net": str(NET), "windows_ip": WIN_IP, "peer_ip": PEER_IP, "prefix": PREFIX,
                  "gateway": None, "dns": None},
          "guest": {"guid": None, "npf": None}, "vm": {"attached": False}}
     write_manifest(a.manifest, m)
 
     def step(kind, name, fn):
-        m["created"].append({"kind": kind, "name": name})  # write-ahead: owned even if fn dies midway
+        fn()  # ownership is recorded only after the object really exists
+        m["created"].append({"kind": kind, "name": name, "at": time.time()})
         write_manifest(a.manifest, m)
-        fn()
 
     try:
-        step("link", d["bridge"], lambda: host.create_bridge(d["bridge"], d["alias"]))
-        step("link", d["tap"], lambda: host.create_tap(d["tap"], d["alias"], a.tap_user))
+        step("link", d["bridge"], lambda: host.create_bridge(d["bridge"], alias))
+        step("link", d["tap"], lambda: host.create_tap(d["tap"], alias, a.tap_user))
         host.enslave(d["tap"], d["bridge"])
-        step("netns", d["netns"], lambda: host.netns_add(d["netns"]))
+
+        def mk_ns():
+            host.netns_add(d["netns"])
+            host.netns_mark_write(d["netns"], token)
+        step("netns", d["netns"], mk_ns)
         step("link", d["veth_host"], lambda: host.create_veth(
-            d["veth_host"], PEER_IF, d["netns"], d["alias"], d["peer_mac"][:-2] + "ff", d["peer_mac"]))
+            d["veth_host"], PEER_IF, d["netns"], alias, d["veth_host_mac"], d["peer_mac"]))
         host.enslave(d["veth_host"], d["bridge"])
         host.peer_config(d["netns"], PEER_IF, PEER_IP)
         viol = check_isolation(host, d)
@@ -271,14 +444,16 @@ def cmd_up(host, a):
             raise LabError("isolation check failed: " + "; ".join(viol))
     except Exception as e:
         print("up failed: %s; rolling back own objects" % e, file=sys.stderr)
-        _teardown(host, a.manifest, m, d)
+        if _teardown(host, d, token) == 0:
+            m["state"] = "down"
+            write_manifest(a.manifest, m)
         return 4
-    # QMP netdev_del/netdev_add on a cold-plugged e1000e does NOT re-peer the NIC (verified live):
-    # after any down+up the VM must be restarted with run.sh to attach to the new TAP.
     m["vm"] = {"attached": False, "note": "restart the VM via ~/winvm/run.sh to bind the new TAP"}
     if a.lab_env:
-        with open(a.lab_env, "w") as f:
+        tmp = a.lab_env + ".tmp"
+        with open(tmp, "w") as f:
             f.write("LAB_RUN_ID=%s\nLAB_TAP=%s\nLAB_MAC=%s\n" % (a.run_id, d["tap"], d["windows_mac"]))
+        os.replace(tmp, a.lab_env)
         m["lab_env"] = a.lab_env
     m["state"] = "up"
     write_manifest(a.manifest, m)
@@ -286,22 +461,28 @@ def cmd_up(host, a):
     return 0
 
 
-def _teardown(host, path, m, d):
-    """Remove only objects recorded in this manifest AND carrying this run's mark."""
+def _teardown(host, d, token):
+    """Remove only objects whose LIVE mark carries this manifest's token."""
     rc = 0
     links, nss = host.links(), host.netns_list()
-    for ent in reversed(m.get("created", [])):
-        k, n = ent["kind"], ent["name"]
-        if k == "link":
-            if n not in links:
-                continue
-            if not owned(links[n], d):
-                print("SKIP %s: not marked %s (foreign object left untouched)" % (n, d["alias"]), file=sys.stderr)
-                rc = 5
-                continue
-            host.link_del(n)
-        elif k == "netns" and n in nss:
-            host.netns_del(n)
+    for n in (d["tap"], d["veth_host"], d["bridge"]):
+        if n not in links:
+            continue
+        if not owned(links[n], d, token):
+            print("SKIP %s: live mark %r is not this manifest's (left untouched)" % (n, links[n].get("alias")), file=sys.stderr)
+            rc = 5
+            continue
+        host.link_del(n)
+    ns = d["netns"]
+    if ns in nss:
+        if host.netns_mark_read(ns) == token:
+            host.netns_del(ns)
+            host.netns_mark_remove(ns)
+        else:
+            print("SKIP netns %s: owner marker is not this manifest's (left untouched)" % ns, file=sys.stderr)
+            rc = 5
+    elif host.netns_mark_read(ns) == token:
+        host.netns_mark_remove(ns)
     return rc
 
 
@@ -311,22 +492,32 @@ def cmd_down(host, a):
     if m is None:
         print("down: no manifest, nothing owned by run-id %s (no-op)" % a.run_id)
         return 0
-    if m.get("run_id") != a.run_id:
-        print("REFUSED: manifest belongs to run-id %s" % m.get("run_id"), file=sys.stderr)
+    if m.get("run_id") != a.run_id or not m.get("token"):
+        print("REFUSED: manifest belongs to run-id %s / has no token" % m.get("run_id"), file=sys.stderr)
         return 3
     if m.get("state") == "down":
         print("down: already down (no-op)")
         return 0
-    rc = _teardown(host, a.manifest, m, d)
+    rc = _teardown(host, d, m["token"])
     env = m.get("lab_env")
     if env and os.path.exists(env):
         with open(env) as f:
             if "LAB_RUN_ID=%s\n" % a.run_id in f.read():
                 os.remove(env)
     m["state"] = "down" if rc == 0 else "down-incomplete"
+    m["vm"] = {"attached": False}
     write_manifest(a.manifest, m)
     print("down: %s" % m["state"])
     return rc
+
+
+def guest_fresh(m, vm):
+    g = m.get("guest") or {}
+    v = g.get("verify") or {}
+    d = m["names"]
+    return bool(v.get("ok") and v.get("status") == "Up" and norm_mac(v.get("mac")) == d["windows_mac"]
+                and v.get("guid") and v.get("guid") == g.get("guid")
+                and v.get("recorded_at", 0) >= vm.get("start", 1e18))
 
 
 def cmd_status(host, a):
@@ -336,28 +527,50 @@ def cmd_status(host, a):
         print(json.dumps({"state": "absent"}))
         return 2
     links, nss = host.links(), host.netns_list()
+    tok = m.get("token")
     objs = {}
     for ent in m.get("created", []):
         n = ent["name"]
-        objs[n] = ("netns present" if n in nss else "MISSING") if ent["kind"] == "netns" else (
-            "present, owned" if n in links and owned(links[n], d) else
-            "FOREIGN" if n in links else "MISSING")
-    viol = check_isolation(host, d) if m["state"] == "up" else []
-    ok = m["state"] == "up" and all(v.startswith("present") or v == "netns present" for v in objs.values()) and not viol
-    print(json.dumps({"state": m["state"], "objects": objs, "isolation_violations": viol,
-                      "vm": m.get("vm"), "guest": m.get("guest"), "ok": ok}, indent=2))
+        if ent["kind"] == "netns":
+            objs[n] = "present, owned" if n in nss and host.netns_mark_read(n) == tok else ("FOREIGN" if n in nss else "MISSING")
+        else:
+            objs[n] = "present, owned" if n in links and owned(links[n], d, tok) else ("FOREIGN" if n in links else "MISSING")
+    up = m["state"] == "up"
+    viol = check_isolation(host, d) if up else []
+    host_ok = up and len(objs) == 4 and all(v == "present, owned" for v in objs.values()) and not viol
+    vm = vm_attachment(host, d, links) if up else {"attached": False}
+    gf = guest_fresh(m, vm) if up else False
+    full = bool(host_ok and vm["attached"] and gf)
+    ok = host_ok if a.host_only else full
+    if up and not a.host_only:  # live manifest follows facts, not hopes
+        m["vm"] = {k: vm[k] for k in ("attached", "pid", "cmdline_ok", "fd_iff", "carrier", "start")}
+        m["status_checked_at"] = time.time()
+        write_manifest(a.manifest, m)
+    print(json.dumps({"state": m["state"], "objects": objs, "isolation_violations": viol, "host_ok": host_ok,
+                      "vm": vm, "guest_verify_fresh": gf, "raw_run_allowed": full, "ok": ok}, indent=2))
     return 0 if ok else 1
 
 
 def cmd_record_guest(host, a):
     m = read_manifest(a.manifest)
-    if m is None or m["run_id"] != a.run_id:
-        raise LabError("no manifest for run-id")
-    with open(a.guest_json) as f:
-        g = json.load(f)
-    ad = select_adapter(g["adapters"], m["names"]["windows_mac"])
-    m["guest"] = {"guid": ad["InterfaceGuid"], "npf": "\\Device\\NPF_" + ad["InterfaceGuid"],
-                  "name": ad.get("Name"), "ifindex": ad.get("ifIndex")}
+    if m is None or m["run_id"] != a.run_id or m.get("state") != "up":
+        raise LabError("no 'up' manifest for run-id")
+    mac = m["names"]["windows_mac"]
+    try:
+        if a.guest_json:
+            with open(a.guest_json) as f:
+                g = json.load(f)
+            ad = select_adapter(g["adapters"], mac)
+            m["guest"].update({"guid": ad["InterfaceGuid"], "npf": "\\Device\\NPF_" + ad["InterfaceGuid"],
+                               "name": ad.get("Name"), "ifindex": ad.get("ifIndex")})
+        if a.verify_json:
+            with open(a.verify_json) as f:
+                v = json.load(f)
+            lab = v["lab"]
+            m["guest"]["verify"] = {"ok": bool(v["ok"]), "status": lab["Status"], "mac": norm_mac(lab["MacAddress"]),
+                                    "guid": lab["InterfaceGuid"], "recorded_at": time.time()}
+    except (KeyError, TypeError, ValueError) as e:
+        raise LabError("malformed guest record: %r" % e)
     write_manifest(a.manifest, m)
     print(json.dumps(m["guest"]))
     return 0
@@ -371,13 +584,15 @@ def main(argv=None, host=None):
     p.add_argument("--tap-user", default=os.environ.get("SUDO_USER") or "root")
     p.add_argument("--lab-env")
     p.add_argument("--guest-json")
+    p.add_argument("--verify-json")
+    p.add_argument("--host-only", action="store_true", help="status: skip VM attachment and guest record")
     a = p.parse_args(argv)
     a.manifest = os.path.abspath(a.manifest)
     if host is None:
         if sys.platform != "linux":
             print("FATAL: Linux only", file=sys.stderr)
             return 2
-        if os.geteuid() != 0 and a.cmd != "plan":
+        if os.geteuid() != 0:
             os.execvp("sudo", ["sudo", "-n", sys.executable, os.path.abspath(__file__)] + (argv if argv is not None else sys.argv[1:]))
         host = RealHost()
     try:

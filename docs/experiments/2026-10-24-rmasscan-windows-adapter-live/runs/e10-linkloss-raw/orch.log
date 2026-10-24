@@ -1,0 +1,18 @@
+[2026-10-24T12:51:35.150Z] tag=e10-linkloss-raw bin=windows_live test=live_link_loss_raw_calls cond=linkloss sha=f51be48
+raw_run_allowed True violations []
+[2026-10-24T12:51:38.999Z] guest run begins (RMASSCAN_NPCAP_START_AT=1792846318000,RMASSCAN_NPCAP_DOWN_AT=1792846326000,RMASSCAN_NPCAP_UP_AT=1792846336000,RMASSCAN_NPCAP_TOTAL_MS=30000)
+[2026-10-24T12:52:28.129Z] guest run ended rc=0
+[2026-10-24T12:52:28.147Z] link restored (trap/explicit)
+peer.pcap frames=1821
+eno1.pcap frames=0
+peer_syn_from_guest=873
+==> /home/a1/winvm/t3-ev/e10-linkloss-raw/peer.err <==
+1821 packets captured
+1821 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/t3-ev/e10-linkloss-raw/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

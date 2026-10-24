@@ -1,0 +1,7 @@
+
+running 1 test
+test live_own_tx_never_reaches_rx_and_peer_replies_do ... KV plain/own_tx_filter own_frames_returned=0 synack=36 rst=20 other=0 net.rx_outgoing=0 net.rx_packets=56 net.tx_sent=40
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 3.26s
+

@@ -1,0 +1,17 @@
+[2026-10-24T12:49:45.840Z] tag=e03-stop bin=windows_live test=live_stop_is_prompt_and_nothing_is_sent_afterwards cond=plain sha=f51be48
+raw_run_allowed True violations []
+[2026-10-24T12:49:49.739Z] guest run begins (RMASSCAN_NPCAP_NOP=1)
+[2026-10-24T12:49:53.433Z] guest run ended rc=0
+peer.pcap frames=902
+eno1.pcap frames=0
+peer_syn_from_guest=450
+==> /home/a1/winvm/t3-ev/e03-stop/peer.err <==
+902 packets captured
+902 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/t3-ev/e03-stop/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

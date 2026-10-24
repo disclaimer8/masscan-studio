@@ -1,26 +1,78 @@
 import XCTest
 @testable import ScanCore
 
+/// Loopback HTTP fixture: answers every connection with one fixed HTML page.
+private final class LocalHTTPFixture {
+    let port: Int
+    private let listener: Int32
+    private var running = true
+    private let lock = NSLock()
+
+    init() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw ScanError("fixture socket") }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, size) }
+        }
+        guard bound == 0, Darwin.listen(fd, 8) == 0 else { close(fd); throw ScanError("fixture bind") }
+        var length = size
+        _ = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        port = Int(UInt16(bigEndian: address.sin_port))
+        listener = fd
+        Thread.detachNewThread { [self] in serve() }
+    }
+
+    private func serve() {
+        // nmap only names the service when the banner is one it knows: advertise a common server.
+        let body = "<html><title>Local fixture</title></html>"
+        let response = Data("HTTP/1.0 200 OK\r\nServer: nginx/1.24.0\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)".utf8)
+        while true {
+            let client = accept(listener, nil, nil)
+            lock.lock(); let stop = !running; lock.unlock()
+            if client < 0 || stop { if client >= 0 { close(client) }; close(listener); return }
+            var quiet: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &quiet, socklen_t(MemoryLayout<Int32>.size))
+            var timeout = timeval(tv_sec: 10, tv_usec: 0)
+            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            var request = [UInt8](repeating: 0, count: 4096)
+            // Like a real server, stay silent for a client that sends nothing (nmap's NULL probe).
+            if recv(client, &request, request.count, 0) > 0 {
+                response.withUnsafeBytes { _ = send(client, $0.baseAddress, response.count, 0) }
+            }
+            close(client)
+        }
+    }
+
+    func stop() {
+        lock.lock(); running = false; lock.unlock()
+        // Wake the blocked accept with one throwaway connection, then release the port.
+        let wake = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        _ = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(wake, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        close(wake)
+    }
+}
+
 final class InspectionTests: XCTestCase {
     func testRealNmapInspectsLocalHTTPWithoutAdministrator() throws {
         guard ServiceInspector.binary != nil else { throw XCTSkip("Nmap not installed") }
-        let server = Process(), output = Pipe()
-        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        server.arguments = ["-u", "-c", """
-        from http.server import HTTPServer, BaseHTTPRequestHandler
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200); self.send_header('Content-Type','text/html'); self.end_headers()
-                self.wfile.write(b'<html><title>Local fixture</title></html>')
-            def log_message(self, *args): pass
-        server = HTTPServer(('127.0.0.1',0), Handler)
-        print(server.server_port, flush=True)
-        server.serve_forever()
-        """]
-        server.standardOutput = output; server.standardError = FileHandle.nullDevice
-        try server.run()
-        defer { server.terminate(); server.waitUntilExit() }
-        let port = try XCTUnwrap(Int(String(decoding: output.fileHandleForReading.availableData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)))
+        let server = try LocalHTTPFixture()
+        defer { server.stop() }
+        let port = server.port
         let report = try ServiceInspector().run(InspectionRequest(ip: "127.0.0.1", ports: [port]))
         XCTAssertEqual(report.services.first?.state, "open")
         XCTAssertEqual(report.services.first?.name, "http")

@@ -522,3 +522,60 @@ fn the_suite_comparison_carries_every_run_capture_meta_into_the_verdict() {
     assert!(d.compare(&exp, &[&none]).is_err());
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn rust_suite_captures_stay_in_the_evidence_directory_and_perf_captures_in_scratch() {
+    let out = scratch("evidence-out");
+    let work = scratch("evidence-work");
+    let mut d = driver_in(&out);
+    d.c.work = work.clone();
+    // The rust suite's pcaps are evidence (hashed into results.json and the manifest); perf pcaps
+    // are deleted after each cell and must never land in the evidence tree.
+    let (p, m) = d.capture_paths("pr_completed", Evidence::Keep);
+    assert_eq!(p, out.join("pr_completed.pcap"));
+    assert_eq!(m, out.join("pr_completed.capture.json"));
+    let (p, m) = d.capture_paths("perf.rust.100.r1", Evidence::Scratch);
+    assert_eq!(p, work.join("perf.rust.100.r1.pcap"));
+    assert_eq!(
+        m,
+        out.join("perf.rust.100.r1.capture.json"),
+        "the verdict is always evidence"
+    );
+    let _ = fs::remove_dir_all(out);
+    let _ = fs::remove_dir_all(work);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_witness_that_dies_before_it_is_ready_fails_fast_with_its_own_message() {
+    let dir = scratch("early-exit");
+    let err = dir.join("w.err");
+    let mut child = OwnedChild(Some(
+        spawn(
+            &strings(&["sh", "-c", "echo 'tcpdump: no permission' >&2; exit 3"]),
+            &dir.join("w.out"),
+            &err,
+        )
+        .unwrap(),
+    ));
+    let started = Instant::now();
+    let e = wait_ready(&mut child, &dir.join("never.ready"), 30, &err).unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "waited the full timeout"
+    );
+    assert!(e.contains("exited") && e.contains("no permission"), "{e}");
+    // A witness that becomes ready is reported as ready.
+    fs::write(dir.join("ok.ready"), "x").unwrap();
+    let mut alive = OwnedChild(Some(
+        spawn(
+            &strings(&["sleep", "5"]),
+            &dir.join("a.out"),
+            &dir.join("a.err"),
+        )
+        .unwrap(),
+    ));
+    assert!(wait_ready(&mut alive, &dir.join("ok.ready"), 5, &dir.join("a.err")).is_ok());
+    alive.stop("TERM").unwrap();
+    let _ = fs::remove_dir_all(dir);
+}

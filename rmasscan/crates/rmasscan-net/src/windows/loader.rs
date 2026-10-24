@@ -37,7 +37,13 @@ pub(crate) enum LoadFailure {
 }
 
 /// Загруженный модуль. `Drop` обязан выгрузить библиотеку (`FreeLibrary`).
-pub(crate) trait Module: Send + Sync {
+///
+/// # Safety
+/// Реализация гарантирует: `symbol` возвращает `Some(p)` только для реального
+/// экспорта загруженной библиотеки под этим именем, с сигнатурой, объявленной в
+/// `ffi` для такого имени, и `p` остаётся действительным, пока жив модуль.
+/// Нулевой адрес допустим (трактуется как отсутствие), мусорный нет.
+pub(crate) unsafe trait Module: Send + Sync {
     /// Адрес экспорта или `None`.
     fn symbol(&self, name: &CStr) -> Option<*const c_void>;
     /// Пути, версии и хэши реально загруженных wpcap/Packet DLL.
@@ -95,6 +101,42 @@ pub(crate) fn npcap_dll_path(system_dir: &str) -> Result<String, NetError> {
     Ok(format!("{base}\\Npcap\\wpcap.dll"))
 }
 
+/// Требует, чтобы реально загруженный wpcap.dll лежал по запрошенному полному
+/// пути, а Packet.dll был загружен из того же каталога. Отсутствие любой из
+/// двух DLL или иной путь это отказ (подмена/неполная установка).
+pub(crate) fn verify_diagnostics(requested: &str, infos: &[DllInfo]) -> Result<(), NetError> {
+    let wpcap = infos
+        .iter()
+        .find(|d| d.name == "wpcap.dll")
+        .ok_or_else(|| {
+            NetError::DriverUnavailable("wpcap.dll missing from loaded module diagnostics".into())
+        })?;
+    if !wpcap.path.eq_ignore_ascii_case(requested) {
+        return Err(NetError::DriverUnavailable(format!(
+            "wpcap.dll was loaded from {}, requested {requested}",
+            wpcap.path
+        )));
+    }
+    let dir = wpcap
+        .path
+        .rsplit_once('\\')
+        .map(|(d, _)| d)
+        .unwrap_or_default();
+    let expected = format!("{dir}\\Packet.dll");
+    let packet = infos.iter().find(|d| d.name == "Packet.dll").ok_or_else(|| {
+        NetError::DriverUnavailable(format!(
+            "Packet.dll is not loaded (expected {expected}); the Npcap installation is incomplete or Packet.dll would be resolved lazily"
+        ))
+    })?;
+    if !packet.path.eq_ignore_ascii_case(&expected) {
+        return Err(NetError::DriverUnavailable(format!(
+            "Packet.dll was loaded from {}, expected {expected}",
+            packet.path
+        )));
+    }
+    Ok(())
+}
+
 /// SHA-256 в нижнем регистре hex.
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
     let digest = Sha256::digest(data);
@@ -147,6 +189,7 @@ impl NpcapApi {
         // строку внутри загруженной DLL, которая жива (module владеет ею).
         let version = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
         let diagnostics = module.describe()?;
+        verify_diagnostics(full_path, &diagnostics)?;
         Ok(Arc::new(NpcapApi {
             fns,
             version,

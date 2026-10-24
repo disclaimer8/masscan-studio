@@ -168,14 +168,17 @@ macro_rules! pcap_api {
         pub(crate) const REQUIRED_SYMBOLS: &[&str] = &[$($name),+];
 
         impl PcapFns {
-            /// Разрешает все символы; при отсутствии возвращает ВСЕ
-            /// недостающие имена.
+            /// Разрешает все символы; при отсутствии (или нулевом адресе)
+            /// возвращает ВСЕ недостающие имена. Безопасность держится на
+            /// контракте `unsafe trait Module`, через который идёт lookup.
             pub(crate) fn resolve(
                 lookup: &mut dyn FnMut(&str) -> Option<*const c_void>,
             ) -> Result<PcapFns, Vec<&'static str>> {
                 let mut missing: Vec<&'static str> = Vec::new();
                 $(
-                    let $field: Option<*const c_void> = lookup($name);
+                    // Нулевой адрес считается отсутствующим символом.
+                    let $field: Option<*const c_void> =
+                        lookup($name).filter(|p| !p.is_null());
                     if $field.is_none() {
                         missing.push($name);
                     }
@@ -185,11 +188,14 @@ macro_rules! pcap_api {
                 }
                 Ok(PcapFns {
                     $($field: {
-                        let p = $field.unwrap_or(std::ptr::null());
-                        // SAFETY: p не нулевой (проверено выше), взят из
-                        // экспорта wpcap под именем $name, чья сигнатура
-                        // задана типом поля; указатель данных и fn-указатель
-                        // одного размера на всех поддерживаемых целях.
+                        let Some(p) = $field else {
+                            unreachable!("missing symbols were rejected above")
+                        };
+                        // SAFETY: p не нулевой (отфильтровано выше). По
+                        // контракту `unsafe trait Module` lookup возвращает
+                        // реальный экспорт $name с сигнатурой, заданной типом
+                        // поля, живой, пока жив модуль; указатель данных и
+                        // fn-указатель одного размера на всех целях.
                         unsafe { std::mem::transmute::<*const c_void, $ty>(p) }
                     },)+
                 })

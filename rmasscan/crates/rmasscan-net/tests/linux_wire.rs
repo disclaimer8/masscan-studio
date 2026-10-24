@@ -223,8 +223,11 @@ const CASES: [&str; 6] = [
 #[test]
 #[ignore = "sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)"]
 fn lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run() {
-    let res = lab_dir("RMASSCAN_WIRE_RESULTS");
-    let fx = fixtures();
+    check_rust_syn_streams(&lab_dir("RMASSCAN_WIRE_RESULTS"), &fixtures());
+}
+
+/// Тело приёмки `--suite rust` для SYN-потоков; вынесено, чтобы офлайн-тест гонял ровно её.
+fn check_rust_syn_streams(res: &Path, fx: &Path) {
     for case in CASES {
         let want = load_syns(&fx.join(format!("{case}.run1.pcap")));
         assert!(!want.is_empty(), "{case}: empty C fixture");
@@ -232,8 +235,9 @@ fn lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run() {
             let tag = format!("rust.{case}.run{run}");
             let meta = compact(&res.join(format!("{tag}.capture.json")));
             assert!(
-                meta.contains("\"valid\":true") && meta.contains("\"drops\":0"),
-                "{tag}: INVALID capture {meta}"
+                wire_meta::capture_meta_problem(&meta).is_none(),
+                "{tag}: INVALID capture ({:?}) {meta}",
+                wire_meta::capture_meta_problem(&meta)
             );
             let got = load_syns(&res.join(format!("{tag}.pcap")));
             assert_eq!(got.len(), want.len(), "{tag}: SYN count");
@@ -427,4 +431,59 @@ fn lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised() {
         "an INVALID cell: the 40-cell gate stays open (INVALID is never normalised)"
     );
     // ±20% — открытый gate: этот тест НЕ утверждает паритет скорости.
+}
+
+// ------------------------------------------------- offline: witness artifacts ---
+
+#[path = "common/wire_meta.rs"]
+mod wire_meta;
+
+/// LR N1: `--suite rust` пишет `<tag>.capture.json` свидетелем tcpdump (схема `dump::witness`),
+/// а не старой записью с полем `drops`. Здесь собирается каталог результатов из эталонов C и
+/// образца такой меты, и гонится ровно приёмка SYN-потоков.
+fn witness_shaped_results(tag: &str, meta: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("linux-wire-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for case in CASES {
+        for run in 1..=2 {
+            let t = format!("rust.{case}.run{run}");
+            std::fs::copy(
+                fixtures().join(format!("{case}.run1.pcap")),
+                dir.join(format!("{t}.pcap")),
+            )
+            .unwrap();
+            std::fs::write(dir.join(format!("{t}.capture.json")), meta).unwrap();
+            std::fs::write(
+                dir.join(format!("{t}.summary.json")),
+                "{\"reason\":\"Completed\"}",
+            )
+            .unwrap();
+        }
+    }
+    dir
+}
+
+#[test]
+fn rust_suite_acceptance_accepts_tcpdump_witness_metas() {
+    let dir = witness_shaped_results("ok", wire_meta::SAMPLE_META);
+    check_rust_syn_streams(&dir, &fixtures());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+#[should_panic(expected = "INVALID capture")]
+fn rust_suite_acceptance_rejects_a_witness_meta_with_kernel_drops() {
+    let bad = wire_meta::SAMPLE_META.replace("\"kernel_drops\":0", "\"kernel_drops\":2");
+    let dir = witness_shaped_results("kdrop", &bad);
+    check_rust_syn_streams(&dir, &fixtures());
+}
+
+#[test]
+#[should_panic(expected = "INVALID capture")]
+fn rust_suite_acceptance_rejects_an_interface_drop() {
+    let bad =
+        wire_meta::SAMPLE_META.replace("\"interface_drop_delta\":0", "\"interface_drop_delta\":1");
+    let dir = witness_shaped_results("idrop", &bad);
+    check_rust_syn_streams(&dir, &fixtures());
 }

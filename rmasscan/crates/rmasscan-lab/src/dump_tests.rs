@@ -187,13 +187,13 @@ mod sequence {
     use crate::link::marker_frame;
     use std::time::SystemTime;
 
-    struct Scripted {
+    pub(super) struct Scripted {
         /// counters(): the first two calls (c0, c1) return 0, every later one `total`; when
         /// `drifting`, every call returns a new value (never quiet).
         total: u64,
         drifting: bool,
         calls: u64,
-        drops: Vec<u64>,
+        pub(super) drops: Vec<u64>,
         ack: PathBuf,
         born: Instant,
         deadline: Duration,
@@ -223,11 +223,11 @@ mod sequence {
         }
     }
 
-    struct Rig {
-        dir: PathBuf,
-        cfg: Config,
+    pub(super) struct Rig {
+        pub(super) dir: PathBuf,
+        pub(super) cfg: Config,
     }
-    fn rig(tag: &str, script: &str, frames: Vec<Vec<u8>>, stats: &str) -> Rig {
+    pub(super) fn rig(tag: &str, script: &str, frames: Vec<Vec<u8>>, stats: &str) -> Rig {
         let dir = std::env::temp_dir().join(format!(
             "rmasscan-dump-{tag}-{}-{}",
             std::process::id(),
@@ -274,9 +274,9 @@ mod sequence {
         };
         Rig { dir, cfg }
     }
-    const LISTENING: &str = "#!/bin/sh\necho 'tcpdump: listening on fake0, link-type EN10MB (Ethernet)' >&2\ntrap 'cat \"$1\" >&2; exit 0' INT\nwhile :; do sleep 0.02; done\n";
-    const DEAF: &str = "#!/bin/sh\necho 'tcpdump: listening on fake0' >&2\ntrap '' INT\nwhile :; do sleep 0.02; done\n";
-    fn stats(n: u64, kernel: u64) -> String {
+    pub(super) const LISTENING: &str = "#!/bin/sh\necho 'tcpdump: listening on fake0, link-type EN10MB (Ethernet)' >&2\ntrap 'cat \"$1\" >&2; exit 0' INT\nwhile :; do sleep 0.02; done\n";
+    pub(super) const DEAF: &str = "#!/bin/sh\necho 'tcpdump: listening on fake0' >&2\ntrap '' INT\nwhile :; do sleep 0.02; done\n";
+    pub(super) fn stats(n: u64, kernel: u64) -> String {
         format!(
             "{n} packets captured\n{n} packets received by filter\n{kernel} packets dropped by kernel\n"
         )
@@ -301,7 +301,7 @@ mod sequence {
         }
         v
     }
-    fn probe(r: &Rig, total: u64, deadline_ms: u64) -> Scripted {
+    pub(super) fn probe(r: &Rig, total: u64, deadline_ms: u64) -> Scripted {
         Scripted {
             total,
             drifting: false,
@@ -313,7 +313,7 @@ mod sequence {
             end_sent: false,
         }
     }
-    fn done(r: Rig) {
+    pub(super) fn done(r: Rig) {
         let _ = fs::remove_dir_all(r.dir);
     }
 
@@ -439,5 +439,153 @@ mod sequence {
         let e = witness(&r.cfg, &mut p).unwrap_err();
         assert!(e.contains("exited at startup") && e.contains("boom"), "{e}");
         done(r);
+    }
+}
+
+/// LR N1: the acceptance of `linux_wire.rs` (`rmasscan-net/tests/common/wire_meta.rs`, one
+/// predicate shared by both crates) must accept what `witness()` really writes, over the
+/// committed golden frames, and must still reject any loss.
+#[cfg(unix)]
+mod linux_wire_gate {
+    use super::sequence::*;
+    use super::*;
+
+    mod wire_meta {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../rmasscan-net/tests/common/wire_meta.rs"
+        ));
+    }
+
+    pub(super) fn golden(case: &str) -> Vec<Vec<u8>> {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../tests/golden/wire/{case}.run1.pcap"));
+        let bytes = fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        crate::pcap::read_pcap_records(&bytes)
+            .unwrap()
+            .1
+            .into_iter()
+            .map(|(_, f)| f)
+            .collect()
+    }
+    fn compact(meta: &serde_json::Value) -> String {
+        serde_json::to_string(meta).unwrap()
+    }
+    const CASES: [&str; 6] = [
+        "c01_one_addr_port_synack",
+        "c02_one_addr_port_rst",
+        "c03_multi_addr_ports",
+        "c04_exclude",
+        "c05_srcport_single",
+        "c06_srcport_range",
+    ];
+
+    #[test]
+    fn real_witness_metas_over_every_golden_case_pass_the_linux_wire_gate() {
+        for case in CASES {
+            let mut all = vec![crate::link::marker_frame([2; 6], [1; 6], START_PAYLOAD)];
+            all.extend(golden(case));
+            for _ in 0..3 {
+                all.push(crate::link::marker_frame([1; 6], [2; 6], END_PAYLOAD));
+            }
+            let n = all.len() as u64;
+            let r = rig(&format!("gate-{case}"), LISTENING, all, &stats(n, 0));
+            let mut p = probe(&r, n, 5000);
+            let meta = witness(&r.cfg, &mut p).unwrap();
+            assert_eq!(meta["valid"], true, "{case}: {meta}");
+            assert_eq!(
+                wire_meta::capture_meta_problem(&compact(&meta)),
+                None,
+                "{case}: a valid witness meta was rejected: {meta}"
+            );
+            done(r);
+        }
+    }
+
+    #[test]
+    fn any_loss_in_a_real_witness_meta_fails_the_linux_wire_gate() {
+        let mk = |tag: &str, st: String, drops: Vec<u64>| {
+            let mut all = vec![crate::link::marker_frame([2; 6], [1; 6], START_PAYLOAD)];
+            all.extend(golden("c03_multi_addr_ports"));
+            for _ in 0..3 {
+                all.push(crate::link::marker_frame([1; 6], [2; 6], END_PAYLOAD));
+            }
+            let n = all.len() as u64;
+            let r = rig(tag, LISTENING, all, &st);
+            let mut p = probe(&r, n, 5000);
+            p.drops = drops;
+            let meta = witness(&r.cfg, &mut p).unwrap();
+            done(r);
+            meta
+        };
+        let n = 1 + golden("c03_multi_addr_ports").len() as u64 + 3;
+        // A kernel drop.
+        let m = mk("gate-kdrop", stats(n, 1), vec![0]);
+        assert!(
+            wire_meta::capture_meta_problem(&compact(&m)).is_some(),
+            "{m}"
+        );
+        // An interface drop (sysfs delta).
+        let m = mk("gate-idrop", stats(n, 0), vec![0, 1]);
+        assert!(
+            wire_meta::capture_meta_problem(&compact(&m)).is_some(),
+            "{m}"
+        );
+        // An interface drop reported by tcpdump itself.
+        let st = format!(
+            "{n} packets captured\n{n} packets received by filter\n0 packets dropped by kernel\n2 packets dropped by interface\n"
+        );
+        let m = mk("gate-ifline", st, vec![0]);
+        assert!(
+            wire_meta::capture_meta_problem(&compact(&m)).is_some(),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn the_shared_sample_meta_has_exactly_the_keys_the_real_witness_writes() {
+        let mut all = vec![crate::link::marker_frame([2; 6], [1; 6], START_PAYLOAD)];
+        all.extend(golden("c01_one_addr_port_synack"));
+        for _ in 0..3 {
+            all.push(crate::link::marker_frame([1; 6], [2; 6], END_PAYLOAD));
+        }
+        let n = all.len() as u64;
+        let r = rig("gate-keys", LISTENING, all, &stats(n, 0));
+        let mut p = probe(&r, n, 5000);
+        let real = witness(&r.cfg, &mut p).unwrap();
+        done(r);
+        let sample: serde_json::Value = serde_json::from_str(wire_meta::SAMPLE_META).unwrap();
+        let keys =
+            |v: &serde_json::Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys(&real), keys(&sample));
+        assert_eq!(
+            wire_meta::capture_meta_problem(wire_meta::SAMPLE_META),
+            None
+        );
+    }
+
+    #[test]
+    fn the_gate_rejects_hand_edited_metas() {
+        let ok = r#"{"interface_drop_delta":0,"interface_drops":0,"invalid_reasons":[],"kernel_drops":0,"valid":true}"#;
+        assert_eq!(wire_meta::capture_meta_problem(ok), None);
+        // tcpdump without the "dropped by interface" line: the measured delta decides.
+        let null_if = ok.replace("\"interface_drops\":0", "\"interface_drops\":null");
+        assert_eq!(wire_meta::capture_meta_problem(&null_if), None);
+        for bad in [
+            ok.replace("\"kernel_drops\":0", "\"kernel_drops\":1"),
+            ok.replace("\"kernel_drops\":0", "\"kernel_drops\":null"),
+            ok.replace("\"interface_drop_delta\":0", "\"interface_drop_delta\":3"),
+            ok.replace(
+                "\"interface_drop_delta\":0",
+                "\"interface_drop_delta\":null",
+            ),
+            ok.replace("\"interface_drops\":0", "\"interface_drops\":2"),
+            ok.replace("\"valid\":true", "\"valid\":false"),
+            ok.replace("\"invalid_reasons\":[]", "\"invalid_reasons\":[\"x\"]"),
+            ok.replace("\"kernel_drops\":0,", ""),
+            ok.replace("\"kernel_drops\":0", "\"kernel_drops\":10"),
+        ] {
+            assert!(wire_meta::capture_meta_problem(&bad).is_some(), "{bad}");
+        }
     }
 }

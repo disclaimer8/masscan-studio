@@ -15,10 +15,17 @@ use std::{
 const WORD: &str = concat!("py", "thon");
 /// The Windows launcher (two letters), assembled so this file does not contain a call of it.
 const LAUNCHER: &str = concat!("p", "y");
-const SCANNED_EXTENSIONS: &[&str] = &["sh", "bash", "ps1", "cmd", "bat", "rs", "yml", "yaml"];
+const SCANNED_EXTENSIONS: &[&str] = &[
+    "sh", "bash", "zsh", "ksh", "fish", "ps1", "cmd", "bat", "rs", "yml", "yaml", "cmake", "just",
+];
+/// Build files that are scanned for the interpreter like scripts (recipes that call it).
+const SCANNED_BASENAMES: &[&str] = &["cmakelists.txt", "justfile", ".justfile"];
+/// Build files of the banned interpreter's own projects: not allowed at all.
+const BANNED_BASENAMES: &[&str] = &["pyproject.toml", "setup.cfg", "pipfile"];
 /// Sources the Rust-only repository does not allow: Swift, C, C++, Objective-C and the interpreter scripts.
 const BANNED_EXTENSIONS: &[&str] = &[
-    "swift", "py", "pyw", "pyc", "pyz", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "m", "mm",
+    "swift", "py", "pyi", "pyw", "pyc", "pyz", "ipynb", "c", "h", "cc", "cpp", "cxx", "c++", "hpp",
+    "hh", "hxx", "h++", "cppm", "ixx", "m", "mm",
 ];
 
 fn repo_root() -> PathBuf {
@@ -141,7 +148,7 @@ fn violations_of(rel: &str, bytes: &[u8]) -> Vec<String> {
     let ext = ext.as_str();
     let base = rel.rsplit('/').next().unwrap_or(rel).to_ascii_lowercase();
     let makefile = base.starts_with("makefile") || base.starts_with("gnumakefile") || ext == "mk";
-    if BANNED_EXTENSIONS.contains(&ext) {
+    if BANNED_EXTENSIONS.contains(&ext) || BANNED_BASENAMES.contains(&base.as_str()) {
         found.push(format!("{rel}: banned source file"));
     }
     let text = String::from_utf8_lossy(bytes);
@@ -149,12 +156,75 @@ fn violations_of(rel: &str, bytes: &[u8]) -> Vec<String> {
     if shebang_names_interpreter(text.lines().next().unwrap_or("")) {
         found.push(format!("{rel}:1: shebang names the banned interpreter"));
     }
-    if has_shebang || makefile || SCANNED_EXTENSIONS.contains(&ext) {
+    if has_shebang
+        || makefile
+        || SCANNED_EXTENSIONS.contains(&ext)
+        || SCANNED_BASENAMES.contains(&base.as_str())
+    {
         for (n, line) in text.lines().enumerate() {
             if mentions(line) || calls_launcher(line) {
                 found.push(format!("{rel}:{}: mentions the banned interpreter", n + 1));
             }
         }
+    }
+    found
+}
+
+/// Policy violations of a tracked SYMLINK `rel` whose link text is `target`: the target's name is banned, or
+/// (when it resolves to a regular file) its first line is a shebang naming the interpreter. The chain is
+/// followed hop by hop; only the first line of the final target is read, wherever it lives.
+fn link_violations(root: &Path, rel: &str, target: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut cur = root.join(rel);
+    let mut text = target.to_owned();
+    for _ in 0..16 {
+        let lower = text.to_ascii_lowercase();
+        let base = lower.rsplit('/').next().unwrap_or("");
+        let ext = Path::new(base)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if BANNED_EXTENSIONS.contains(&ext) || BANNED_BASENAMES.contains(&base) {
+            found.push(format!("{rel}: symlink to a banned source file ({text})"));
+        }
+        cur = cur.parent().unwrap_or(Path::new("/")).join(&text);
+        match fs::read_link(&cur) {
+            Ok(next) => text = next.to_string_lossy().into_owned(),
+            Err(_) => break,
+        }
+    }
+    if cur.is_file() {
+        use std::io::Read;
+        let mut head = Vec::new();
+        if let Ok(f) = fs::File::open(&cur) {
+            let _ = f.take(512).read_to_end(&mut head);
+        }
+        let first = String::from_utf8_lossy(&head);
+        if shebang_names_interpreter(first.lines().next().unwrap_or("")) {
+            found.push(format!(
+                "{rel}: symlink to a file whose shebang names the banned interpreter"
+            ));
+        }
+    }
+    found
+}
+
+/// Every violation among the tracked `files` of the tree at `root` (symlinks are checked by name and target).
+fn policy_violations(root: &Path, files: &[String]) -> Vec<String> {
+    let mut found = Vec::new();
+    for rel in files {
+        let path = root.join(rel);
+        if path.is_symlink() {
+            found.extend(violations_of(rel, b""));
+            if let Ok(t) = fs::read_link(&path) {
+                found.extend(link_violations(root, rel, &t.to_string_lossy()));
+            }
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        found.extend(violations_of(rel, &fs::read(&path).unwrap()));
     }
     found
 }
@@ -170,14 +240,7 @@ fn the_tracked_tree_has_no_interpreted_programs() {
         "file enumeration is broken: {} files, this test not among them",
         files.len()
     );
-    let mut found = Vec::new();
-    for rel in &files {
-        let path = root.join(rel);
-        if path.is_symlink() || !path.is_file() {
-            continue;
-        }
-        found.extend(violations_of(rel, &fs::read(&path).unwrap()));
-    }
+    let found = policy_violations(&root, &files);
     assert!(
         found.is_empty(),
         "interpreter policy violations: {found:#?}"
@@ -406,4 +469,179 @@ fn the_shell_guard_fails_on_planted_swift_c_and_cpp_sources() {
         let files = [("ok.sh", "echo ok\n".into()), (name, String::new())];
         assert_eq!(guard_rc(tag, &files), 1, "guard missed {name}");
     }
+}
+
+// ---- F7: symlinks, more extensions, build files, more shells --------------------------------------
+
+/// Runs the shell guard on a fresh git repository holding `files` and the symlinks `links` (name, link text);
+/// returns its rc and output.
+#[cfg(unix)]
+fn guard_with_links(tag: &str, files: &[(&str, String)], links: &[(&str, &str)]) -> (i32, String) {
+    let dir = std::env::temp_dir().join(format!("rmasscan-guard-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    for (name, text) in files {
+        let p = dir.join(name);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    }
+    for (name, target) in links {
+        let p = dir.join(name);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(target, p).unwrap();
+    }
+    let git = |args: &[&str]| {
+        let st = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "git {args:?}: {st:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    let guard = repo_root().join("scripts/language-guard.sh");
+    let out = Command::new("bash").arg(guard).arg(&dir).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let rc = out.status.code().unwrap();
+    // the Rust matcher over the same planted tree
+    let rust = policy_violations(&dir, &tracked_files(&dir));
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(
+        rc == 1,
+        !rust.is_empty(),
+        "shell guard (rc {rc}: {text}) and Rust matcher ({rust:?}) disagree on {tag}"
+    );
+    (rc, text)
+}
+
+#[cfg(unix)]
+#[test]
+fn both_guards_fail_on_tracked_symlinks_to_banned_programs() {
+    let bad_shebang = format!("#!/usr/bin/env {WORD}3\n");
+    let cases: Vec<(&str, Vec<(&str, String)>, Vec<(&str, String)>)> = vec![
+        // (tag, files, links as (name, target))
+        (
+            "link-to-missing-py",
+            vec![("ok.sh", "echo ok\n".into())],
+            vec![("bin/tool", "../elsewhere/gone.py".into())],
+        ),
+        (
+            "link-to-shebang",
+            vec![("tools/real", bad_shebang.clone())],
+            vec![("bin/tool", "../tools/real".into())],
+        ),
+        (
+            "link-chain-to-shebang",
+            vec![("tools/real", bad_shebang.clone())],
+            vec![("bin/a", "../tools/real".into()), ("bin/b", "a".into())],
+        ),
+        (
+            "link-named-py",
+            vec![("tools/real", "echo ok\n".into())],
+            vec![("bin/tool.py", "../tools/real".into())],
+        ),
+        (
+            "link-to-c",
+            vec![("ok.sh", "echo ok\n".into())],
+            vec![("bin/x", "../src/main.c".into())],
+        ),
+    ];
+    for (tag, files, links) in cases {
+        let links: Vec<(&str, &str)> = links.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let (rc, text) = guard_with_links(tag, &files, &links);
+        assert_eq!(rc, 1, "guard missed {tag}: {text}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn both_guards_accept_harmless_symlinks() {
+    let (rc, text) = guard_with_links(
+        "link-ok",
+        &[
+            ("tools/real.sh", "echo ok\n".into()),
+            ("tools/plain", "#!/bin/sh\necho ok\n".into()),
+        ],
+        &[
+            ("bin/a", "../tools/real.sh"),
+            ("bin/b", "../tools/plain"),
+            ("bin/dangling", "nowhere"),
+        ],
+    );
+    assert_eq!(rc, 0, "{text}");
+}
+
+#[test]
+fn more_banned_extensions_and_build_files_fail_both_guards() {
+    let call = format!("{WORD}3 tool\n");
+    for name in [
+        "a.pyi",
+        "n/a.ipynb",
+        "A.IPYNB",
+        "a.hxx",
+        "a.h++",
+        "a.c++",
+        "a.cppm",
+        "a.ixx",
+        "pyproject.toml",
+        "sub/setup.cfg",
+        "Pipfile",
+    ] {
+        assert_eq!(violations_of(name, b"").len(), 1, "rust: {name}");
+        assert_eq!(
+            guard_rc("ext", &[(name, String::new())]),
+            1,
+            "shell: {name}"
+        );
+    }
+    for name in [
+        "CMakeLists.txt",
+        "sub/CMakeLists.txt",
+        "cmake/run.cmake",
+        "justfile",
+        "Justfile",
+        "tools/.justfile",
+        "x.just",
+        "a.zsh",
+        "a.ksh",
+        "a.fish",
+    ] {
+        assert_eq!(
+            violations_of(name, call.as_bytes()).len(),
+            1,
+            "rust: {name}"
+        );
+        assert_eq!(
+            guard_rc("recipe", &[(name, call.clone())]),
+            1,
+            "shell: {name}"
+        );
+        // no interpreter, no finding
+        assert!(violations_of(name, b"echo ok\n").is_empty(), "rust: {name}");
+        assert_eq!(
+            guard_rc("recipe-ok", &[(name, "echo ok\n".into())]),
+            0,
+            "shell: {name}"
+        );
+    }
+}
+
+/// The target is outside the repository (so it is not itself a tracked file): only the link can be caught.
+#[cfg(unix)]
+#[test]
+fn both_guards_fail_on_a_symlink_to_an_outside_file_with_the_banned_shebang() {
+    let outside =
+        std::env::temp_dir().join(format!("rmasscan-guard-target-{}", std::process::id()));
+    fs::write(&outside, format!("#!/usr/bin/env {WORD}3\nprint(1)\n")).unwrap();
+    let target = outside.to_string_lossy().into_owned();
+    let (rc, text) = guard_with_links(
+        "outside",
+        &[("ok.sh", "echo ok\n".into())],
+        &[("bin/x", &target)],
+    );
+    let _ = fs::remove_file(&outside);
+    assert_eq!(rc, 1, "guard missed the outside shebang target: {text}");
+    assert!(text.contains("bin/x"), "{text}");
 }

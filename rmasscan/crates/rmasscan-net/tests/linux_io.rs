@@ -170,7 +170,7 @@ fn lab_empty_rx_times_out_within_the_bound() {
 
 #[test]
 #[ignore = "opens real AF_PACKET sockets: sealed lab only"]
-fn lab_send_is_sent_and_own_frame_is_dropped_as_outgoing() {
+fn lab_send_is_confirmed_and_own_frame_never_reaches_rx() {
     let l = lab();
     let mut a = open_explicit(&lab_binding(&l)).expect("open");
     // 60 байт, локальный экспериментальный ethertype 0x88b5: стенд замкнут.
@@ -185,6 +185,7 @@ fn lab_send_is_sent_and_own_frame_is_dropped_as_outgoing() {
     assert_eq!(st, SendStatus::Sent);
     let mut buf = [0u8; 2048];
     let deadline = Instant::now() + Duration::from_millis(300);
+    let mut own_frames = 0u32;
     while Instant::now() < deadline {
         if let Some(n) =
             a.io.rx
@@ -192,15 +193,20 @@ fn lab_send_is_sent_and_own_frame_is_dropped_as_outgoing() {
                 .expect("recv")
         {
             // Допустим только чужой кадр, но не наш собственный.
-            assert!(!(n == 60 && buf[12..14] == [0x88, 0xb5] && buf[6..12] == l.mac));
+            if n == 60 && buf[12..14] == [0x88, 0xb5] && buf[6..12] == l.mac {
+                own_frames += 1;
+            }
         }
     }
+    // Ядро с PACKET_IGNORE_OUTGOING (socket.rs включает его на RX fd) вообще не
+    // доставляет наш кадр, поэтому userspace-счётчик rx_outgoing тут не
+    // требуется: он 0. Путь userspace-fallback (счётчик += 1) проверяет
+    // offline-тест шва `rx_drops_outgoing_frames`.
+    assert_eq!(own_frames, 0, "our own outgoing frame reached RX output");
     let s = a.stats.snapshot();
-    assert_eq!(s.tx_sent, 1);
-    assert!(
-        s.rx_outgoing >= 1,
-        "PACKET_OUTGOING copy must be counted and dropped: {s:?}"
-    );
+    assert_eq!(s.tx_sent, 1, "send must be confirmed: {s:?}");
+    assert_eq!(s.tx_uncertain, 0, "{s:?}");
+    assert_eq!(s.tx_errors, 0, "{s:?}");
 }
 
 #[test]

@@ -76,6 +76,7 @@ OPEN_PORTS=${WIRELAB_OPEN_PORTS:-80,8080}               # responder listens here
 CASES_FILE=${WIRELAB_CASES_FILE:-}                      # optional "name|syn|synack|rst|masscan args" lines
 SEED=1; RATE=100
 CREATED_A=0; CREATED_B=0; PIDS=()
+STOP_GRACE=45   # witness: quiet wait <= 20 s + end markers <= 15 s + tcpdump stop <= 30 s, but normally 2-3 s
 mkdir -p "$OUT"; OUT=$(readlink -f "$OUT")
 WORK="$OUT/.work"; rm -rf "$WORK"; mkdir -p "$WORK"
 : >"$OUT/commands.txt"
@@ -88,17 +89,21 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
   stop_suite_group
-  local pid
-  for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; done
-  sleep 0.3
-  for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null; done
-  for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && wait "$pid" 2>/dev/null; done
+  # Each background child is the leader of its own session (start_bg). The leader is TERMed alone and
+  # given STOP_GRACE seconds (the capture witness needs its quiescence wait, end markers, tcpdump stop
+  # and meta write); then the whole session, including a tcpdump child, is TERMed and KILLed.
+  local pid stray=0
+  for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && { stop_session "$pid" "$STOP_GRACE" || stray=$((stray + 1)); }; done
   [ "$CREATED_A" = 1 ] && ip netns del "$NS_A" 2>/dev/null
   [ "$CREATED_B" = 1 ] && ip netns del "$NS_B" 2>/dev/null
+  # nothing of this run may outlive it: no tcpdump writing into OUT, no live member of a tracked session
+  stray=$((stray + $(stray_processes tcpdump "$OUT/")))
   local left; left=$(ip netns list 2>/dev/null | grep -c -- "$RUN_ID")
   rm -rf "$WORK"
   [ -n "${SUDO_UID:-}" ] && chown -R "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$OUT" 2>/dev/null
-  log "cleanup: rc=$rc own_pids=${#PIDS[@]} namespaces_left=$left"
+  log "cleanup: rc=$rc own_pids=${#PIDS[@]} stray_processes=$stray namespaces_left=$left"
+  # a leftover process or namespace is a failure of the run even when the body succeeded
+  if [ "$rc" = 0 ] && { [ "$left" -gt 0 ] || [ "$stray" -gt 0 ]; }; then rc=1; fi
   exit "$rc"
 }
 trap cleanup EXIT
@@ -110,12 +115,13 @@ nsb() { ip netns exec "$NS_B" "$@"; }
 
 start_bg() {  # start_bg LOGFILE cmd... ; sets BGPID, tracks it for cleanup
   local lf=$1; shift
-  "$@" >"$lf" 2>&1 &
-  BGPID=$!; PIDS+=("$BGPID")
+  start_bg_session "$lf" "$@"
+  PIDS+=("$BGPID")
 }
-stop_bg() {  # stop_bg PID : terminate one tracked child and reap it
-  kill -TERM "$1" 2>/dev/null || true
-  wait "$1" 2>/dev/null || true
+stop_bg() {  # stop_bg PID : stop one tracked child (leader first, bounded), sweep its session, reap it
+  local i
+  stop_session "$1" "$STOP_GRACE" || true
+  for i in "${!PIDS[@]}"; do [ "${PIDS[$i]}" = "$1" ] && PIDS[$i]=""; done   # a stopped session id is never signalled again
 }
 wait_file() {  # wait_file PATH SECONDS
   local i; for i in $(seq 1 $(( $2 * 20 ))); do [ -e "$1" ] && return 0; sleep 0.05; done
@@ -220,7 +226,7 @@ topo "$OUT/topology-before.txt"          # topology + routes are saved BEFORE an
 
 case "${WIRELAB_INJECT:-}" in
   error) log "injected error"; false ;;
-  hang) log "injected hang"; sleep 600 & PIDS+=($!); wait $! ;;
+  hang) log "injected hang"; start_bg "$WORK/hang.log" sleep 600; wait "$BGPID" ;;
 esac
 
 if [ "$SUITE" = oracle ]; then

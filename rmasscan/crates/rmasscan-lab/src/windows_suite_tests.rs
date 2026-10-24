@@ -319,9 +319,17 @@ fn suite_args(w: &World, extra: &[&str]) -> Vec<String> {
 #[test]
 fn invalid_suite_ids_and_tags_are_refused_before_any_remote_command() {
     let w = World::new("validate");
+    // A fresh output directory: no existing manifest can mask a missing check.
+    let fresh = w.root.parent().unwrap().join("fresh-out");
+    fs::create_dir_all(&fresh).unwrap();
+    let args_for = |extra: &[&str]| {
+        let mut a = suite_args(&w, extra);
+        a[1] = fresh.to_str().unwrap().into();
+        a
+    };
     for bad in ["../functional", "a b", "x;rm -rf ~", "", "-x", "a..b"] {
         let stand = Stand::new(&w.src);
-        let r = run_with(&suite_args(&w, &["--suite", bad]), &stand);
+        let r = run_with(&args_for(&["--suite", bad]), &stand);
         assert!(
             matches!(r, Err(SuiteError::NotRun(_))),
             "--suite {bad:?}: {r:?}"
@@ -353,7 +361,7 @@ fn invalid_suite_ids_and_tags_are_refused_before_any_remote_command() {
         ("--remote-lab", "relative/lab"),
         ("--commit", "abc"),
     ] {
-        let mut a = suite_args(&w, &["--suite", "failure"]);
+        let mut a = args_for(&["--suite", "failure"]);
         let at = a.iter().position(|x| x == flag).unwrap();
         a[at + 1] = value.into();
         assert!(

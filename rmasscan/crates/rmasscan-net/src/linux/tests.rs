@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::*;
 use crate::NetStats;
@@ -649,6 +650,88 @@ fn stats_handle_survives_the_close_and_final_drops_are_collected() {
     assert!(dropped.load(Ordering::SeqCst));
     assert_eq!(h.snapshot().kernel_drops, Some(9));
     assert_eq!(h.clone().snapshot(), h.snapshot());
+}
+
+// ------------------------------------------------------------ rx health
+
+fn ks(drops: u32) -> Result<KernelStats, Errno> {
+    Ok(KernelStats { packets: 1, drops })
+}
+
+#[test]
+fn health_reports_cumulative_drops_from_resetting_deltas() {
+    let (mut r, _, _, c) = rx(Script {
+        stats: [ks(2), ks(0), ks(3)].into(),
+        ..Default::default()
+    });
+    let t = Instant::now();
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(2));
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(2));
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(5));
+    assert!(t.elapsed() < MS50, "health must respect the call limit");
+    assert_eq!(snap(&c).kernel_drops, Some(5));
+}
+
+#[test]
+fn health_error_never_returns_a_cached_zero() {
+    let (mut r, _, _, c) = rx(Script {
+        stats: [ks(0), Err(libc::ENOPROTOOPT)].into(),
+        ..Default::default()
+    });
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(0));
+    let e = r
+        .health(MS50)
+        .expect_err("last read failed: no cached Some(0)");
+    assert!(e.message.contains("PACKET_STATISTICS"), "{}", e.message);
+    // Неудачное чтение ядро не сбрасывает: накопленное не потеряно.
+    assert_eq!(snap(&c).kernel_drops, Some(0));
+}
+
+#[test]
+fn health_error_after_a_good_periodic_flush_is_still_an_error() {
+    let (mut r, _, _, _) = rx(Script {
+        stats: [ks(4), Err(libc::EIO)].into(),
+        ..Default::default()
+    });
+    let mut buf = [0u8; 8];
+    assert_eq!(r.recv(&mut buf, Duration::from_millis(2)), Ok(None)); // flush: 4
+    assert!(r.health(MS50).is_err());
+}
+
+#[test]
+fn periodic_flush_health_and_drop_have_one_owner_without_double_counting() {
+    let (mut r, _, _, c) = rx(Script {
+        stats: [ks(3), ks(0), ks(0)].into(),
+        ..Default::default()
+    });
+    let mut buf = [0u8; 8];
+    assert_eq!(r.recv(&mut buf, Duration::from_millis(2)), Ok(None)); // +3
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(3), "not 6");
+    drop(r); // Drop читает ещё раз: delta 0, итог не меняется
+    assert_eq!(snap(&c).kernel_drops, Some(3));
+}
+
+#[test]
+fn drop_after_health_with_failing_read_keeps_the_total() {
+    let (mut r, _, _, c) = rx(Script {
+        stats: [ks(4)].into(),
+        ..Default::default()
+    });
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(4));
+    drop(r); // чтение в Drop падает (очередь пуста): ничего не стирается
+    assert_eq!(snap(&c).kernel_drops, Some(4));
+}
+
+#[test]
+fn health_after_fatal_error_reports_the_closed_adapter() {
+    let (mut r, _, _, _) = rx(Script {
+        recv_forever: Some(libc::EIO),
+        stats: [ks(1)].into(),
+        ..Default::default()
+    });
+    let mut buf = [0u8; 8];
+    assert!(r.recv(&mut buf, MS50).is_err());
+    assert!(r.health(MS50).is_err(), "closed fd cannot prove integrity");
 }
 
 // ---------------------------------------------------------------- binding

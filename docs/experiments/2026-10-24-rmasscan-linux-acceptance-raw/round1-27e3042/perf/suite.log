@@ -1,0 +1,53 @@
+[oracle] PASS oracle built from the pinned revision git_commit=8e6b3b0c07a81e8ea61d557c06134a21a6881614 pin=8e6b3b0c07a81e8ea61d557c06134a21a6881614
+[oracle] PASS oracle source tree clean (no modified or untracked files) git_tree_clean=True
+[oracle] PASS oracle is the original pinned binary (not the --offline-patched copy) original pinned binary (NOT the --offline-patched copy)
+[oracle] PASS lab oracle binary sha256 == the binary recorded in the fixture manifest lab=8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e fixtures=8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e
+[oracle] PASS fixture manifest pins the same revision, all fixture captures valid fixture git_commit=8e6b3b0c07a81e8ea61d557c06134a21a6881614 all_valid=True
+[perf] c       100 rep1 valid=True wire=512/512 steady=99 cpu=0.02+0.10s rss=41948KB stop=11.645s
+[perf] rust    100 rep1 valid=True wire=512/512 steady=101 cpu=0.03+0.04s rss=2860KB stop=0.044s
+[perf] c       100 rep2 valid=True wire=512/512 steady=98 cpu=0.04+0.07s rss=41844KB stop=12.41s
+[perf] rust    100 rep2 valid=True wire=512/512 steady=100 cpu=0.03+0.05s rss=2892KB stop=0.058s
+[perf] c       100 rep3 valid=True wire=512/512 steady=98 cpu=0.05+0.10s rss=41944KB stop=11.657s
+[perf] rust    100 rep3 valid=True wire=512/512 steady=100 cpu=0.03+0.11s rss=2868KB stop=0.047s
+[perf] c       100 rep4 valid=True wire=512/512 steady=100 cpu=0.03+0.18s rss=41956KB stop=11.662s
+[perf] rust    100 rep4 valid=True wire=512/512 steady=100 cpu=0.04+0.14s rss=2864KB stop=0.045s
+[perf] c       100 rep5 valid=True wire=512/512 steady=99 cpu=0.05+0.13s rss=42008KB stop=11.407s
+[perf] rust    100 rep5 valid=True wire=512/512 steady=100 cpu=0.05+0.13s rss=2868KB stop=0.044s
+[perf] c      1000 rep1 valid=True wire=3072/3072 steady=995 cpu=0.04+0.14s rss=41992KB stop=11.664s
+[perf] rust   1000 rep1 valid=True wire=3072/3072 steady=1000 cpu=0.03+0.14s rss=2840KB stop=0.036s
+[perf] c      1000 rep2 valid=True wire=3072/3072 steady=1000 cpu=0.03+0.12s rss=41992KB stop=12.409s
+[perf] rust   1000 rep2 valid=True wire=3072/3072 steady=999 cpu=0.04+0.10s rss=2872KB stop=0.04s
+[perf] c      1000 rep3 valid=True wire=3072/3072 steady=1001 cpu=0.04+0.15s rss=41888KB stop=12.412s
+[perf] rust   1000 rep3 valid=True wire=3072/3072 steady=1004 cpu=0.04+0.08s rss=2880KB stop=0.045s
+[perf] c      1000 rep4 valid=True wire=3072/3072 steady=1000 cpu=0.04+0.14s rss=41948KB stop=12.416s
+[perf] rust   1000 rep4 valid=True wire=3072/3072 steady=996 cpu=0.05+0.12s rss=2880KB stop=0.032s
+[perf] c      1000 rep5 valid=True wire=3072/3072 steady=1007 cpu=0.03+0.09s rss=41992KB stop=12.407s
+[perf] rust   1000 rep5 valid=True wire=3072/3072 steady=1001 cpu=0.05+0.12s rss=2860KB stop=0.035s
+[perf] c     10000 rep1 valid=True wire=30720/30720 steady=10087 cpu=0.07+0.24s rss=41992KB stop=11.668s
+[perf] rust  10000 rep1 valid=True wire=30720/30720 steady=10145 cpu=0.05+0.12s rss=2868KB stop=0.019s
+[perf] c     10000 rep2 valid=True wire=30720/30720 steady=10078 cpu=0.13+0.31s rss=41992KB stop=11.898s
+[perf] rust  10000 rep2 valid=True wire=30720/30720 steady=10075 cpu=0.05+0.11s rss=2896KB stop=0.05s
+[perf] c     10000 rep3 valid=True wire=30720/30720 steady=10037 cpu=0.07+0.20s rss=42052KB stop=12.155s
+[perf] rust  10000 rep3 valid=True wire=30720/30720 steady=9829 cpu=0.06+0.14s rss=2872KB stop=0.061s
+[perf] c     10000 rep4 valid=True wire=30720/30720 steady=10092 cpu=0.08+0.24s rss=41980KB stop=11.657s
+[perf] rust  10000 rep4 valid=True wire=30720/30720 steady=10121 cpu=0.09+0.22s rss=2900KB stop=0.02s
+[perf] c     10000 rep5 valid=True wire=30720/30720 steady=10035 cpu=0.11+0.32s rss=42012KB stop=11.905s
+[perf] rust  10000 rep5 valid=True wire=30720/30720 steady=9789 cpu=0.07+0.21s rss=2896KB stop=0.049s
+[perf] c    100000 rep1 valid=True wire=307200/307200 steady=100147 cpu=0.26+0.82s rss=42048KB stop=11.673s
+[perf] rust 100000 rep1 valid=True wire=307200/307200 steady=99600 cpu=0.34+0.79s rss=2892KB stop=0.064s
+[perf] c    100000 rep2 valid=True wire=307200/307200 steady=100314 cpu=0.27+0.88s rss=41988KB stop=11.659s
+[perf] rust 100000 rep2 valid=True wire=307200/307200 steady=100663 cpu=0.31+0.76s rss=2920KB stop=0.061s
+[perf] c    100000 rep3 valid=True wire=307200/307200 steady=100245 cpu=0.30+0.80s rss=42008KB stop=11.651s
+[perf] rust 100000 rep3 valid=True wire=307200/307200 steady=100855 cpu=0.32+0.74s rss=2956KB stop=0.063s
+[perf] c    100000 rep4 valid=True wire=307200/307200 steady=102818 cpu=0.28+0.82s rss=42016KB stop=12.408s
+[perf] rust 100000 rep4 valid=True wire=307200/307200 steady=98794 cpu=0.35+0.74s rss=3212KB stop=0.056s
+[perf] c    100000 rep5 valid=True wire=307200/307200 steady=100106 cpu=0.28+0.80s rss=42044KB stop=12.157s
+[perf] rust 100000 rep5 valid=True wire=307200/307200 steady=100658 cpu=0.35+0.81s rss=2964KB stop=0.059s
+[perf] PASS perf matrix complete: every cell VALID (incomplete captures are INVALID, not normalised) 40/40 cells valid
+[perf] PASS all rates: engine rx_health.kernel_drops is a MEASURED 0 (not null) and Completed in every Rust run per rate: 100: bad=0, [0, 0, 0, 0, 0]; 1000: bad=0, [0, 0, 0, 0, 0]; 10000: bad=0, [0, 0, 0, 0, 0]; 100000: bad=0, [0, 0, 0, 0, 0]
+[perf] PASS all rates: Rust received every in-job reply (0 rx-incomplete runs, 0 kernel drops) per rate (rx_incomplete_runs, kernel_drops_per_run): 100: 0, [0, 0, 0, 0, 0]; 1000: 0, [0, 0, 0, 0, 0]; 10000: 0, [0, 0, 0, 0, 0]; 100000: 0, [0, 0, 0, 0, 0]
+[perf] PASS 100 pps: Rust steady-state pps within +-20% of C rust/c=1.016 (rust 100.2484591587438 vs c 98.70098649837838)
+[perf] PASS 1000 pps: Rust steady-state pps within +-20% of C rust/c=1.000 (rust 999.9829431840276 vs c 999.8546113402092)
+[perf] PASS 10000 pps: Rust steady-state pps within +-20% of C rust/c=1.000 (rust 10075.324543049928 vs c 10078.352611338883)
+[perf] PASS 100000 pps: Rust steady-state pps within +-20% of C rust/c=1.004 (rust 100658.25724378251 vs c 100244.60213653544)
+suite perf: 12 PASS, 0 FAIL, 0 NOT RUN

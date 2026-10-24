@@ -1079,6 +1079,7 @@ mod ownership_tests {
         marks: RefCell<BTreeMap<String, String>>,
         fail: RefCell<Option<String>>,
         mark_fail: bool,
+        vm_start: std::cell::Cell<Option<f64>>,
     }
     impl Host for Fake {
         fn sh(&self, a: &[&str], _: bool) -> Result<String, String> {
@@ -1163,7 +1164,7 @@ mod ownership_tests {
             )
         }
         fn vm(&self, _: &Names) -> Value {
-            json!({"pid":42,"cmdline_ok":true,"fd_iff":true,"start":1.0})
+            json!({"pid":42,"cmdline_ok":true,"fd_iff":true,"start":self.vm_start.get().unwrap_or(1.0)})
         }
     }
     fn temp() -> PathBuf {
@@ -1370,6 +1371,80 @@ mod ownership_tests {
         assert_eq!(a.len(), 32);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+    /// An `up` stand with a recorded guest GUID, and a Verify report written by the guest.
+    fn record_setup(h: &Fake, verified_at: f64, report_nonce: &str) -> (PathBuf, Args) {
+        let p = temp();
+        let a = args(&p, "up");
+        execute(h, &a).unwrap();
+        let mut m = read_manifest(&a.manifest).unwrap().unwrap();
+        m["guest"]["guid"] = json!("{A}");
+        write_manifest(&a.manifest, &m).unwrap();
+        let verify = p.join("verify.json");
+        write_manifest(&verify, &json!({"ok":true,"verified_at":verified_at,"verification_nonce":report_nonce,"lab":{"Status":"Up","MacAddress":derive("t1").unwrap().windows_mac,"InterfaceGuid":"{A}"}})).unwrap();
+        let mut r = args(&p, "record-guest");
+        r.verify_json = Some(verify);
+        r.nonce = Some("check-1".into());
+        (p, r)
+    }
+    fn fresh_after(h: &Fake, a: &Args) -> bool {
+        guest_fresh(
+            &read_manifest(&a.manifest).unwrap().unwrap(),
+            &h.vm(&derive("t1").unwrap()),
+        )
+    }
+    fn host(start: Option<f64>) -> Fake {
+        let h = Fake::default();
+        h.vm_start.set(start);
+        h
+    }
+    #[test]
+    fn record_guest_refuses_a_report_for_another_nonce() {
+        let h = host(None);
+        let (p, a) = record_setup(&h, now(), "check-OTHER");
+        assert!(execute(&h, &a).unwrap_err().contains("mismatched"));
+        assert!(!fresh_after(&h, &a));
+        assert!(read_manifest(&a.manifest).unwrap().unwrap()["guest"]["verify"].is_null());
+        fs::remove_dir_all(p).unwrap();
+        let h = host(None);
+        let (p, ok) = record_setup(&h, now(), "check-1");
+        assert_eq!(execute(&h, &ok).unwrap(), 0);
+        assert!(fresh_after(&h, &ok));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn record_guest_refuses_reports_outside_the_sixty_second_window() {
+        for (age, accepted) in [(30.0, true), (59.0, true), (61.0, false), (3600.0, false)] {
+            let h = host(None);
+            let (p, a) = record_setup(&h, now() - age, "check-1");
+            assert_eq!(execute(&h, &a).is_ok(), accepted, "age {age}s");
+            assert_eq!(fresh_after(&h, &a), accepted, "age {age}s");
+            fs::remove_dir_all(p).unwrap();
+        }
+        // A report time in the future beyond clock skew is not a fresh Verify either.
+        let h = host(None);
+        let (p, a) = record_setup(&h, now() + 30.0, "check-1");
+        assert!(execute(&h, &a).is_err());
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn record_guest_refuses_a_verify_that_predates_the_vm_start() {
+        // Both reports are inside the 60 s window, so only the VM start rule can refuse.
+        let h = host(Some(now() - 10.0));
+        let (p, a) = record_setup(&h, now() - 20.0, "check-1");
+        assert!(execute(&h, &a).is_err());
+        assert!(!fresh_after(&h, &a));
+        fs::remove_dir_all(p).unwrap();
+        let h = host(Some(now() - 10.0));
+        let (p, a) = record_setup(&h, now() - 5.0, "check-1");
+        assert_eq!(execute(&h, &a).unwrap(), 0);
+        assert!(fresh_after(&h, &a));
+        fs::remove_dir_all(p).unwrap();
+        // An unknown VM start (no VM process) can never validate a report.
+        let h = host(Some(0.0));
+        let (p, a) = record_setup(&h, now(), "check-1");
+        assert!(execute(&h, &a).is_err());
+        fs::remove_dir_all(p).unwrap();
     }
     #[test]
     fn verification_import_rejects_replay_and_revokes_previous_success() {

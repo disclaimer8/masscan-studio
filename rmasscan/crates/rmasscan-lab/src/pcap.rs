@@ -165,7 +165,10 @@ pub fn steady_state_rate(ts: &[f64]) -> Option<f64> {
 }
 pub fn run(args: &[String]) -> Result<i32, String> {
     if args.iter().any(|x| x == "--self-test") {
-        return self_test();
+        return Err(
+            "--self-test was removed: the comparator cases are unit tests; run cargo test -p rmasscan-lab"
+                .into(),
+        );
     }
     let mut exp = None;
     let mut acts = Vec::new();
@@ -206,6 +209,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     println!("{}: {msg}", ["PASS", "FAIL", "INVALID"][code as usize]);
     Ok(code)
 }
+#[cfg(test)]
 fn sample_packet(port: u16) -> Vec<u8> {
     let mut p = vec![0; 54];
     p[12] = 8;
@@ -229,6 +233,7 @@ pub fn encode(frames: &Frames) -> Vec<u8> {
     }
     b
 }
+#[cfg(test)]
 fn self_test() -> Result<i32, String> {
     let a = sample_packet(80);
     let b = sample_packet(443);
@@ -461,5 +466,53 @@ mod acceptance_tests {
         p[21] = 0;
         p[14] = 0x44;
         assert!(!is_syn(&p));
+    }
+    #[test]
+    fn an_expected_capture_without_any_syn_is_invalid_even_with_other_frames() {
+        let mut arp = vec![0; 42];
+        arp[12] = 8;
+        arp[13] = 6;
+        let only_arp = bytes(vec![arp]);
+        let good = bytes(vec![sample_packet(80)]);
+        let (code, why) = compare_bytes(&only_arp, &[&good], None, &[]);
+        assert_eq!(code, 2, "{why}");
+        assert!(why.contains("no SYN"), "{why}");
+    }
+    #[test]
+    fn capture_meta_of_either_side_decides_invalid_and_a_clean_meta_still_passes() {
+        let good = bytes(vec![sample_packet(80), sample_packet(443)]);
+        assert_eq!(
+            compare_bytes(&good, &[&good], Some(&json!({"truncated_frames":1})), &[]).0,
+            2,
+            "truncation reported by the EXPECTED meta"
+        );
+        assert_eq!(
+            compare_bytes(
+                &good,
+                &[&good],
+                None,
+                &[json!({"rx_counter_mismatch":true})]
+            )
+            .0,
+            2
+        );
+        let clean =
+            json!({"drops":0,"truncated_frames":0,"rx_counter_mismatch":false,"valid":true});
+        assert_eq!(
+            compare_bytes(&good, &[&good], Some(&json!({"drops":0})), &[clean]).0,
+            0
+        );
+    }
+    #[test]
+    fn a_slow_startup_is_excluded_from_the_steady_rate() {
+        let mut ts: Vec<f64> = (0..10).map(|i| f64::from(i) * 0.01).collect();
+        ts.extend((0..900).map(|i| 1.0 + f64::from(i) * 0.001));
+        let r = steady_state_rate(&ts).unwrap();
+        assert!(r > 900. && r < 1100., "{r}");
+    }
+    #[test]
+    fn the_cli_self_test_is_gone_and_says_where_the_cases_run() {
+        let e = run(&["--self-test".to_string()]).unwrap_err();
+        assert!(e.contains("cargo test -p rmasscan-lab"), "{e}");
     }
 }

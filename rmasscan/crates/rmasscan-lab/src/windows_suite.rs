@@ -1058,25 +1058,54 @@ pub(crate) fn arg_value<'a>(a: &'a [String], k: &str) -> Option<&'a str> {
         .and_then(|i| a.get(i + 1))
         .map(String::as_str)
 }
+/// Time source of [`wait_quiet_with`]; tests drive it with virtual time.
+pub(crate) trait Clock {
+    fn now(&self) -> f64;
+    fn sleep(&self, secs: f64);
+    fn stopped(&self) -> bool;
+}
+struct RealClock(Instant);
+impl Clock for RealClock {
+    fn now(&self) -> f64 {
+        self.0.elapsed().as_secs_f64()
+    }
+    fn sleep(&self, secs: f64) {
+        thread::sleep(Duration::from_secs_f64(secs));
+    }
+    fn stopped(&self) -> bool {
+        rmasscan_net::lab_io::stop_requested()
+    }
+}
 pub(crate) fn wait_quiet<T: PartialEq>(
-    mut read: impl FnMut() -> Result<T, String>,
+    read: impl FnMut() -> Result<T, String>,
     quiet: f64,
     poll: f64,
     timeout: f64,
 ) -> Result<bool, String> {
-    let start = Instant::now();
+    wait_quiet_with(read, quiet, poll, timeout, &RealClock(Instant::now()))
+}
+/// Block until `read()` was unchanged for `quiet` seconds: true once quiet, false at `timeout`.
+/// The quiet period starts at the first sample, so the elapsed-quiet arithmetic needs no `None`.
+pub(crate) fn wait_quiet_with<T: PartialEq>(
+    mut read: impl FnMut() -> Result<T, String>,
+    quiet: f64,
+    poll: f64,
+    timeout: f64,
+    clock: &dyn Clock,
+) -> Result<bool, String> {
+    let start = clock.now();
     let mut prev = None;
-    let mut since = Instant::now();
-    while start.elapsed().as_secs_f64() < timeout {
-        if rmasscan_net::lab_io::stop_requested() {
+    let mut since = clock.now();
+    while clock.now() - start < timeout {
+        if clock.stopped() {
             return Err("suite interrupted".into());
         }
-        thread::sleep(Duration::from_secs_f64(poll));
+        clock.sleep(poll);
         let cur = read()?;
         if prev.as_ref() != Some(&cur) {
             prev = Some(cur);
-            since = Instant::now();
-        } else if since.elapsed().as_secs_f64() >= quiet {
+            since = clock.now();
+        } else if clock.now() - since >= quiet {
             return Ok(true);
         }
     }

@@ -79,7 +79,7 @@ scripts/wire-lab.sh --oracle /path/to/oracle/masscan --out OUT-perf --suite perf
   --rust-bin target/release/examples/wire_scan --reps 5
 RMASSCAN_WIRE_RESULTS=OUT RMASSCAN_WIRE_PERF_RESULTS=OUT-perf \
   cargo test --locked -p rmasscan-net --test linux_wire -- --ignored
-target/release/rmasscan-lab verify-wire --self-test
+cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (no CLI self-test)
 ```
 
 Все активные лабораторные инструменты и проверки перенесены в Rust crate

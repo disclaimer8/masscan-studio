@@ -27,6 +27,17 @@ pub(crate) fn capture_complete(
         && lo <= frames
         && frames <= hi
 }
+/// Scanner-side reply completeness against the capture: unique replies the peer sent to the
+/// scanner. C reports open ports only (`received_closed` is `None`); Rust must also match the
+/// RST set. Exact equality, no tolerance, and an unreported open count is never complete.
+pub(crate) fn rx_is_complete(
+    received_open: Option<u64>,
+    received_closed: Option<u64>,
+    wire_open: u64,
+    wire_closed: u64,
+) -> bool {
+    received_open == Some(wire_open) && received_closed.is_none_or(|c| c == wire_closed)
+}
 pub(crate) fn rx_health_ok(s: &Value) -> bool {
     s["reason"] == "Completed" && s["rx_health"]["kernel_drops"].as_u64() == Some(0)
 }
@@ -1592,11 +1603,15 @@ impl Driver {
         let tx = rc == 0
             && syns.len() as u64 == total
             && (implementation == "c" || cell["transmitted_stats"].as_u64() == Some(total));
-        cell["rx_complete"] = json!(
-            cell["received_open"].as_u64() == Some(wire_open as u64)
-                && (cell["received_closed"].is_null()
-                    || cell["received_closed"].as_u64() == Some(wire_closed as u64))
-        );
+        // C reports null for closed ports; any other non-integer must not pass as "absent".
+        let received_closed = (!cell["received_closed"].is_null())
+            .then(|| cell["received_closed"].as_u64().unwrap_or(u64::MAX));
+        cell["rx_complete"] = json!(rx_is_complete(
+            cell["received_open"].as_u64(),
+            received_closed,
+            wire_open as u64,
+            wire_closed as u64
+        ));
         cell["valid"] = json!(meta["valid"] == true && tx);
         cell["invalid_reason"] = if cell["valid"] == true {
             Value::Null
@@ -1917,16 +1932,10 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
 pub fn run(args: &[String]) -> Result<i32, String> {
     let o = options(args)?;
     if o.contains_key("self-test") {
-        if !capture_complete(Some(100), Some(100), Some(0), Some(0), 100, 98, 101)
-            || capture_complete(Some(99), Some(100), Some(0), Some(0), 99, 98, 101)
-            || rx_health_ok(&json!({"reason":"Completed","rx_health":{"kernel_drops":null}}))
-        {
-            return Err("suite acceptance helper self-test failed".into());
-        }
-        println!(
-            "wire suite helper self-test PASS; cargo test -p rmasscan-lab for packet and orchestration regression suite"
+        return Err(
+            "--self-test was removed: the suite helpers are unit tests; run cargo test -p rmasscan-lab"
+                .into(),
         );
-        return Ok(0);
     }
     if o.contains_key("help") {
         println!(

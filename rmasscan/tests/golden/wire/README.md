@@ -49,7 +49,7 @@ config.
 
     target/release/rmasscan-lab verify-wire --expected EXPECTED.pcap --actual ACTUAL.pcap \
         [--expected-meta M.json --actual-meta M.json]
-    target/release/rmasscan-lab verify-wire --self-test
+    cargo test --locked -p rmasscan-lab   # the original 31 comparator cases are unit tests; the CLI self-test was removed
 
 Compares the ordered list of IPv4/TCP frames with only SYN set, byte for byte. Timestamps, ARP,
 RST, SYN-ACK and other frames are ignored. Exit 0 PASS, 1 FAIL, 2 INVALID (truncated or malformed

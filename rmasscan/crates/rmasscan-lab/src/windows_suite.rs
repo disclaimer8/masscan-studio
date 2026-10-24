@@ -1066,7 +1066,7 @@ pub(crate) fn eno1_interlock(cap: &Value) -> Result<(), String> {
 /// Remote scratch removal: only the exact, symlink-free run directory this suite created.
 pub(crate) fn remove_scratch_command(rev: &str) -> String {
     format!(
-        "test \"$(readlink -f -- {p})\" = {p} && test ! -L {p} && rm -rf -- {p}",
+        "if test -e {p} || test -L {p}; then test \"$(readlink -f -- {p})\" = {p} && test ! -L {p} && rm -rf -- {p}; fi",
         p = quote(rev)
     )
 }
@@ -1206,7 +1206,9 @@ fn home_cmd(exec: &dyn Exec, cmd: &str, check: bool) -> Result<Output, String> {
     checked(exec.exec(&argv, 180)?, "ssh", check)
 }
 fn remote_home(exec: &dyn Exec) -> Result<String, String> {
-    let home = home_cmd(exec, "printf '%s' \"$HOME\"", true)?.stdout;
+    // The physical path: the scratch removal compares `readlink -f` with the path it was given, which
+    // fails for a home reached through a symlink (macOS /var, /home -> /data/home, ...).
+    let home = home_cmd(exec, "cd \"$HOME\" && printf '%s' \"$(pwd -P)\"", true)?.stdout;
     if !home.starts_with('/') || home.contains('\n') {
         return Err("invalid remote home".into());
     }
@@ -1220,6 +1222,8 @@ fn sweep_remote(exec: &dyn Exec, suite: &str) -> Result<(), String> {
         return Err("--suite must be a safe identifier".into());
     }
     let ev = format!("{}/winvm/t4-ev", remote_home(exec)?);
+    // A first-ever start (or --cleanup) must not end NOT RUN because the evidence root is absent.
+    home_cmd(exec, &format!("mkdir -p -- {}", quote(&ev)), true)?;
     home_cmd(exec, &sweep_command(&ev, "TERM"), false)?;
     exec.pause(Duration::from_secs(3));
     home_cmd(exec, &sweep_command(&ev, "KILL"), false)?;
@@ -1548,7 +1552,12 @@ fn owned_process_body(p: &str, signal: Option<&str>) -> String {
     let action = match signal {
         Some("TERM") => "sudo -n kill -TERM -- \"$pid\" 2>/dev/null",
         Some("INT") => "sudo -n kill -INT -- \"$pid\" 2>/dev/null",
-        Some("KILL") => "sudo -n kill -KILL -- \"$pid\" 2>/dev/null",
+        Some("KILL") => {
+            // The recorded pid is the `timeout` wrapper, which makes itself the leader of a new
+            // process group that holds the tool. SIGKILL cannot be forwarded by the wrapper, so the
+            // group is killed first and the wrapper second.
+            "sudo -n kill -KILL -- \"-$pid\" 2>/dev/null; sudo -n kill -KILL -- \"$pid\" 2>/dev/null"
+        }
         None => "false",
         _ => "false",
     };

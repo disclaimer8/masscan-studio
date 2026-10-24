@@ -98,7 +98,7 @@ impl Stand {
     }
     fn home(&self, cmd: &str) -> Result<Output, String> {
         let k = self.knobs.borrow();
-        if cmd.contains("printf '%s' \"$HOME\"") {
+        if cmd.contains("pwd -P") {
             return out(0, "/home/a1");
         }
         if cmd.contains("cat /sys/class/net/lab0/address") {
@@ -644,6 +644,27 @@ fn a_refused_gate_starts_no_listener_capture_marker_or_scanner() {
     );
 }
 #[test]
+fn an_aborted_run_is_copied_from_its_own_scratch_into_runs_aborted_under_tag_and_run_id() {
+    // WR N3: the copy source and destination are pinned exactly, not just "some scp -r".
+    let w = World::new("one-aborted-copy");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().fail_runner = true;
+    let s = suite(&stand, &w.root);
+    let argv = argv_for(TAG, &w);
+    assert!(s.one(&item(TAG), argv, None, None).is_err());
+    let want = format!(
+        "scp home-pc:/home/a1/winvm/t4-ev/failure/{id}/{TAG}/. {out}/runs_aborted/{TAG}.{id}",
+        id = s.run_id,
+        out = w.root.display()
+    );
+    let copies: Vec<String> = stand
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("scp home-pc:") && c.contains("/. "))
+        .collect();
+    assert_eq!(copies, vec![want]);
+}
+#[test]
 fn guest_scanner_failure_keeps_remote_scratch_and_stops_the_remote_tools() {
     let w = World::new("one-runner");
     let stand = Stand::new(&w.src);
@@ -828,7 +849,10 @@ fn every_suite_start_sweeps_before_it_creates_anything() {
     let first_create = calls
         .iter()
         .position(|c| {
-            c.contains("mkdir -p") || c.contains("windows_wire_prepare") || c.contains("mkdir --")
+            // the evidence-root bootstrap `mkdir -p -- ev` is the one create allowed before the sweep
+            (c.contains("mkdir -p") && !c.ends_with("winvm/t4-ev'"))
+                || c.contains("windows_wire_prepare")
+                || c.contains("mkdir --")
         })
         .unwrap();
     assert!(sweep < first_create, "{calls:?}");
@@ -845,7 +869,7 @@ fn scratch_removal_is_quoted_and_symlink_checked() {
     let cmd = remove_scratch_command("/home/a1/winvm/t4-ev/s/n/it's");
     assert_eq!(
         cmd.matches("'/home/a1/winvm/t4-ev/s/n/it'\"'\"'s'").count(),
-        4,
+        6,
         "{cmd}"
     );
     assert!(
@@ -920,7 +944,7 @@ fn gate_failing_args(w: &World) -> Vec<String> {
 }
 fn mutating(call: &str) -> bool {
     // Anything beyond reading $HOME and hashing the binary changes or starts something.
-    !(call.contains("printf '%s' \"$HOME\"") || call.contains("sha256sum --"))
+    !(call.contains("pwd -P") || call.contains("sha256sum --"))
 }
 #[test]
 fn a_remote_binary_that_is_not_in_the_manifest_is_refused_before_anything_runs() {
@@ -1154,4 +1178,234 @@ fn the_clock_limits_are_the_ones_record_guest_enforces() {
     assert!(source.contains("now() - verified > VERIFY_MAX_AGE_S"));
     assert_eq!(crate::vm_lab::VERIFY_FUTURE_SKEW_S, 5.0);
     assert_eq!(crate::vm_lab::VERIFY_MAX_AGE_S, 60.0);
+}
+
+// ---- F5: the remote sweep against a real local shell (WR N1, N2) ----
+//
+// `LocalHome` answers the `ssh home-pc CMD` calls by running CMD in a local `sh` with a private
+// HOME and a `sudo` stub that drops `-n` and execs the rest. Nothing leaves this machine.
+#[cfg(unix)]
+mod local_sweep {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    pub(super) struct LocalHome {
+        pub home: PathBuf,
+        bin: PathBuf,
+    }
+    impl LocalHome {
+        pub(super) fn new(tag: &str) -> Self {
+            let base = std::env::temp_dir().join(format!(
+                "rmasscan-localhome-{tag}-{}-{}",
+                std::process::id(),
+                nonce()
+            ));
+            fs::create_dir_all(&base).unwrap();
+            let base = base.canonicalize().unwrap(); // macOS: /var -> /private/var
+            let home = base.join("home");
+            let bin = base.join("bin");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&bin).unwrap();
+            let sudo = bin.join("sudo");
+            fs::write(
+                &sudo,
+                "#!/bin/sh\nif [ \"$1\" = -n ]; then shift; fi\nexec \"$@\"\n",
+            )
+            .unwrap();
+            let _ = Command::new("chmod").arg("+x").arg(&sudo).status();
+            Self { home, bin }
+        }
+        pub(super) fn base(&self) -> PathBuf {
+            self.home.parent().unwrap().to_path_buf()
+        }
+    }
+    impl Drop for LocalHome {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(self.base());
+        }
+    }
+    impl Exec for LocalHome {
+        fn exec(&self, argv: &[String], _timeout: u64) -> Result<Output, String> {
+            assert_eq!(argv[0], "ssh", "only home-pc calls are local: {argv:?}");
+            let cmd = argv.last().unwrap();
+            let path = format!(
+                "{}:{}",
+                self.bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            );
+            let o = Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .env("HOME", &self.home)
+                .env("PATH", path)
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(Output {
+                rc: o.status.code().unwrap_or(-1),
+                stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+            })
+        }
+        fn file_at_commit(&self, _: &Path, _: &str, _: &str) -> Result<Vec<u8>, String> {
+            Err("not used".into())
+        }
+        fn pause(&self, d: Duration) {
+            thread::sleep(d.min(Duration::from_millis(300)));
+        }
+    }
+
+    fn sh(cmd: &str) -> i32 {
+        Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(Stdio::null())
+            .status()
+            .unwrap()
+            .code()
+            .unwrap_or(-1)
+    }
+
+    #[test]
+    fn removing_a_scratch_directory_that_does_not_exist_is_a_clean_no_op() {
+        // WR N1: `readlink -f` of a path whose parents are missing prints nothing, which used to
+        // fail the check and end every suite start in NOT RUN.
+        let h = LocalHome::new("rm-missing");
+        let p = h.home.join("winvm/t4-ev/failure");
+        assert_eq!(sh(&remove_scratch_command(&p.to_string_lossy())), 0);
+        assert!(
+            !h.home.join("winvm").exists(),
+            "nothing is created by a removal"
+        );
+        // An existing run directory is still removed...
+        fs::create_dir_all(p.join("run/tag")).unwrap();
+        assert_eq!(sh(&remove_scratch_command(&p.to_string_lossy())), 0);
+        assert!(!p.exists());
+        // ...but a symlink in its place, or a symlinked parent, is still refused and kept.
+        let target = h.base().join("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &p).unwrap();
+        assert_ne!(sh(&remove_scratch_command(&p.to_string_lossy())), 0);
+        assert!(target.exists() && p.is_symlink());
+        let _ = fs::remove_file(&p);
+        let linked = h.base().join("linked");
+        std::os::unix::fs::symlink(h.home.join("winvm"), &linked).unwrap();
+        fs::create_dir_all(h.home.join("winvm/t4-ev/failure")).unwrap();
+        let via = linked.join("t4-ev/failure");
+        assert_ne!(sh(&remove_scratch_command(&via.to_string_lossy())), 0);
+        assert!(h.home.join("winvm/t4-ev/failure").exists());
+    }
+
+    #[test]
+    fn the_sweep_creates_the_evidence_root_and_works_on_a_first_ever_start() {
+        let h = LocalHome::new("first-start");
+        assert!(!h.home.join("winvm").exists());
+        sweep_remote(&h, "failure").unwrap();
+        assert!(h.home.join("winvm/t4-ev").is_dir());
+        // A second call (the --cleanup path) is equally clean.
+        sweep_remote(&h, "failure").unwrap();
+    }
+
+    #[test]
+    fn the_sweep_works_when_home_is_reached_through_a_symlink() {
+        // macOS-style: /var -> /private/var. The sweep compares real paths, so it must use one.
+        let h = LocalHome::new("symlink-home");
+        let link = h.base().join("home-link");
+        std::os::unix::fs::symlink(&h.home, &link).unwrap();
+        struct Linked<'a>(&'a LocalHome, PathBuf);
+        impl Exec for Linked<'_> {
+            fn exec(&self, argv: &[String], t: u64) -> Result<Output, String> {
+                let mut a = argv.to_vec();
+                *a.last_mut().unwrap() = format!(
+                    "HOME='{}'; export HOME; {}",
+                    self.1.display(),
+                    a.last().unwrap()
+                );
+                self.0.exec(&a, t)
+            }
+            fn file_at_commit(&self, _: &Path, _: &str, _: &str) -> Result<Vec<u8>, String> {
+                Err("unused".into())
+            }
+            fn pause(&self, d: Duration) {
+                self.0.pause(d);
+            }
+        }
+        let l = Linked(&h, link);
+        sweep_remote(&l, "failure").unwrap();
+        assert!(h.home.join("winvm/t4-ev").is_dir());
+    }
+
+    /// A pidfile line as `Suite::bg` writes it, for a TERM-ignoring tool under the dead-man.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cleanup_kills_a_tool_that_ignores_term_not_only_its_timeout_wrapper() {
+        // WR N2: the pidfile pid is the `timeout` wrapper; SIGKILL to it alone orphans the tool.
+        let h = LocalHome::new("kill-tool");
+        let ev = h.home.join("winvm/t4-ev");
+        let dir = ev.join("failure/r1/tag");
+        fs::create_dir_all(&dir).unwrap();
+        let toolpid = dir.join("tool.pid");
+        let w = Suite {
+            exec: &h,
+            out: h.base(),
+            suite: "failure".into(),
+            run_id: "r1".into(),
+            remote: "/unused".into(),
+            remote_ev: ev.to_string_lossy().into_owned(),
+            qmp: String::new(),
+            manifest: String::new(),
+            guest_exe: String::new(),
+            plan: "failure".into(),
+            timeout: 240,
+            pm: PM.into(),
+        };
+        // The real wrapper of `Suite::bg`, around a TERM-ignoring shell.
+        let tool = format!(
+            "sh -c 'trap \"\" TERM; echo $$ > {}; while :; do sleep 1; done'",
+            quote(&toolpid.to_string_lossy())
+        );
+        let pidfile = dir.join("x.pid");
+        w.bg(
+            &tool,
+            &pidfile.to_string_lossy(),
+            &dir.join("x.err").to_string_lossy(),
+            120,
+        )
+        .unwrap();
+        for _ in 0..100 {
+            if toolpid.exists() && fs::read_to_string(&toolpid).is_ok_and(|s| !s.trim().is_empty())
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let tool_pid: i32 = fs::read_to_string(&toolpid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(alive(tool_pid), "the tool must be running before the sweep");
+        sweep_remote(&h, "failure").unwrap();
+        for _ in 0..100 {
+            if !alive(tool_pid) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let survived = alive(tool_pid);
+        if survived {
+            let _ = Command::new("kill")
+                .args(["-KILL", &tool_pid.to_string()])
+                .status();
+        }
+        assert!(!survived, "the TERM-ignoring tool survived --cleanup");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn alive(pid: i32) -> bool {
+        // /proc state: a zombie is gone for our purposes.
+        fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|s| !s.rsplit(") ").next().unwrap_or("").starts_with('Z'))
+            .unwrap_or(false)
+    }
 }

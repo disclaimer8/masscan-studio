@@ -1531,16 +1531,13 @@ fn every_background_tool_has_at_least_twice_its_expected_run_time_as_dead_man_bo
         }
     }
 }
-#[test]
-fn the_inject_and_flood_bounds_are_also_twice_their_expected_time() {
+// Compile-time: a bound below twice the expected time, or an expected time below what the tool's own
+// arguments need, does not build.
+const _: () = {
     assert!(INJECT_BOUND_S >= 2 * INJECT_EXPECTED_S);
     assert!(FLOOD_BOUND_S >= 2 * FLOOD_EXPECTED_S);
     assert!(LINKLOSS_BOUND_S >= 2 * LINKLOSS_EXPECTED_S);
-    // The windows these constants describe come from the tools' own arguments.
-    assert!(INJECT_EXPECTED_S >= 120 + 2, "wait-first 120 + duration 2");
-    assert!(FLOOD_EXPECTED_S >= 40, "flood --duration 40");
-    assert!(
-        LINKLOSS_EXPECTED_S >= 120 + 2 + 40,
-        "wait-first + down-after + hold-max"
-    );
-}
+    assert!(INJECT_EXPECTED_S >= 120 + 2); // wait-first 120 + duration 2
+    assert!(FLOOD_EXPECTED_S >= 40); // flood --duration 40
+    assert!(LINKLOSS_EXPECTED_S >= 120 + 2 + 40); // wait-first + down-after + hold-max
+};

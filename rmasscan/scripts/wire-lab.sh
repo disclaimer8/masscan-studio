@@ -16,6 +16,9 @@
 # no pkill/killall, no firewall/route/bridge changes, no edits to host files.
 # Needs root (re-execs itself through `sudo -n`). Linux only.
 set -euo pipefail
+# Byte-order sorting everywhere: `capture isolation` compares the host link baseline against a
+# byte-sorted list, and a locale collation (en_US.UTF-8) orders br0 / br-1a2b differently.
+export LC_ALL=C
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$HERE/lab-process-group.sh"
@@ -52,7 +55,10 @@ if [ "$(id -u)" != 0 ]; then
     "$0" "${REEXEC[@]}"
 fi
 [ -x "$ORACLE" ] || { echo "FATAL: oracle not executable: $ORACLE" >&2; exit 2; }
-for t in ip timeout unshare setsid; do command -v "$t" >/dev/null || { echo "FATAL: missing $t" >&2; exit 2; }; done
+for t in ip timeout unshare setsid tcpdump; do command -v "$t" >/dev/null || { echo "FATAL: missing $t (the capture witness is tcpdump)" >&2; exit 2; }; done
+if [ "$SUITE" = perf ]; then
+  [ -x /usr/bin/time ] && /usr/bin/time -v -o /dev/null true >/dev/null 2>&1 || { echo "FATAL: the perf suite needs GNU time at /usr/bin/time (apt install time)" >&2; exit 2; }
+fi
 
 # ---- binding (explicit; identical for every case) ----------------------------
 RUN_ID="$$-$RANDOM"
@@ -240,12 +246,12 @@ for row in "${CASES[@]}"; do
   for run in 1 2; do
     pfx="$name.run$run"
     rm -f "$WORK/rec.ready" "$WORK/rec.ack"
-    start_bg "$WORK/rec.log" ip netns exec "$NS_B" "$LAB_BIN" capture record --iface "$IF_B" \
-      --pcap "$OUT/$pfx.pcap" --meta "$OUT/$pfx.capture.json" --ready "$WORK/rec.ready" --ack "$WORK/rec.ack"
+    start_bg "$WORK/rec.log" ip netns exec "$NS_B" "$LAB_BIN" capture dump --iface "$IF_B" \
+      --pcap "$OUT/$pfx.pcap" --meta "$OUT/$pfx.capture.json" --ready "$WORK/rec.ready" --ack "$WORK/rec.ack" --end-dst "$MAC_A"
     REC_PID=$BGPID
-    wait_file "$WORK/rec.ready" 10 || fail "recorder not ready ($pfx)"
+    wait_file "$WORK/rec.ready" 30 || fail "tcpdump witness not ready ($pfx)"
     nsa "$LAB_BIN" capture marker --iface "$IF_A" --src "$MAC_A" --dst "$MAC_B"
-    wait_file "$WORK/rec.ack" 10 || fail "recorder never acknowledged the marker frame ($pfx)"
+    wait_file "$WORK/rec.ack" 15 || fail "tcpdump never captured the start marker frame ($pfx)"
     # capture is live and acknowledged; only now does the scanner start
     if [ "$CONF_MASKED" = 1 ]; then  # host conf masked inside a private mount namespace
       start_bg "$WORK/scan.log" ip netns exec "$NS_A" timeout 60 unshare -m sh -c 'mount --bind "$0" /etc/masscan && exec "$@"' "$EMPTY" "$ORACLE" "${MARGS[@]}" "${COMMON[@]}" -oL "$OUT/$pfx.scan.txt"
@@ -255,7 +261,7 @@ for row in "${CASES[@]}"; do
     SCAN_PID=$BGPID
     wait "$SCAN_PID" || fail "oracle failed ($pfx): $(tail -3 "$WORK/scan.log")"
     sleep 0.5
-    stop_bg "$REC_PID"
+    stop_bg "$REC_PID"   # SIGTERM: the witness waits for quiet, sends end markers, stops tcpdump, writes the meta
     cp "$WORK/scan.log" "$OUT/$pfx.oracle-stderr.txt"
     log "$pfx done: $("$LAB_BIN" capture summary --meta "$OUT/$pfx.capture.json")"
   done

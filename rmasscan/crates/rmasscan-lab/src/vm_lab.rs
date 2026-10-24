@@ -664,9 +664,8 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
     match a.cmd.as_str() {
         "plan" => {
             let (p, actions) = plan(h, &d, m.as_ref())?;
-            println!(
-                "{}",
-                json!({"run_id":a.run_id,"names":d,"problems":p,"actions":actions,"net":"198.18.0.0/30","ok":p.is_empty()})
+            emit(
+                json!({"run_id":a.run_id,"names":d,"problems":p,"actions":actions,"net":"198.18.0.0/30","ok":p.is_empty()}).to_string()
             );
             Ok(if p.is_empty() { 0 } else { 3 })
         }
@@ -918,9 +917,8 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
                 m["status_checked_at"] = json!(now());
                 write_manifest(&a.manifest, &m)?;
             }
-            println!(
-                "{}",
-                json!({"state":m["state"],"objects":objs,"isolation_violations":violations,"host_ok":host_ok,"vm":vm,"guest_verify_fresh":gf,"raw_run_allowed":full,"ok":ok})
+            emit(
+                json!({"state":m["state"],"objects":objs,"isolation_violations":violations,"host_ok":host_ok,"vm":vm,"guest_verify_fresh":gf,"raw_run_allowed":full,"ok":ok}).to_string()
             );
             Ok(if ok { 0 } else { 1 })
         }
@@ -1038,33 +1036,44 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             .map(|s| s.code().unwrap_or(3))
             .map_err(|e| e.to_string());
     }
+    dispatch(&RealHost, &a, Path::new(MARK_DIR), Duration::from_secs(30))
+}
+/// Every command except `plan` runs under the run-id lock, so two lab commands for the
+/// same run-id can never interleave. The lock is released when this returns.
+fn dispatch(h: &dyn Host, a: &Args, lock_dir: &Path, wait: Duration) -> Result<i32, String> {
     let mut lock = None;
     if a.cmd != "plan" {
-        fs::create_dir_all(MARK_DIR).map_err(|e| e.to_string())?;
+        fs::create_dir_all(lock_dir).map_err(|e| e.to_string())?;
         let f = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
-            .open(Path::new(MARK_DIR).join(format!("{}.lock", a.run_id)))
+            .open(lock_dir.join(format!("{}.lock", a.run_id)))
             .map_err(|e| e.to_string())?;
         let start = Instant::now();
         loop {
             match f.try_lock() {
                 Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock)
-                    if start.elapsed() < Duration::from_secs(30) =>
-                {
-                    thread::sleep(Duration::from_millis(100))
+                Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < wait => {
+                    thread::sleep(Duration::from_millis(20))
                 }
                 Err(e) => return Err(format!("another VM lab command holds run lock: {e}")),
             }
         }
         lock = Some(f);
     }
-    let result = execute(&RealHost, &a);
+    let result = execute(h, a);
     drop(lock);
     result
+}
+#[cfg(test)]
+thread_local!(static OUTPUT: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) });
+fn emit(line: String) {
+    #[cfg(test)]
+    OUTPUT.with(|o| o.borrow_mut().push(line));
+    #[cfg(not(test))]
+    println!("{line}");
 }
 
 #[cfg(test)]
@@ -1080,12 +1089,32 @@ mod ownership_tests {
         fail: RefCell<Option<String>>,
         mark_fail: bool,
         vm_start: std::cell::Cell<Option<f64>>,
+        sysctls: RefCell<BTreeMap<String, String>>,
+        replies: RefCell<Vec<(String, String)>>,
+        vm_facts: RefCell<Option<Value>>,
+        rogue: RefCell<Option<String>>,
+        lock_probe: RefCell<Option<PathBuf>>,
+        lock_was_held: std::cell::Cell<usize>,
+        lock_was_free: std::cell::Cell<usize>,
     }
     impl Host for Fake {
         fn sh(&self, a: &[&str], _: bool) -> Result<String, String> {
             self.calls
                 .borrow_mut()
                 .push(a.iter().map(|s| s.to_string()).collect());
+            if let Some(dir) = self.lock_probe.borrow().as_ref() {
+                let f = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(dir.join("t1.lock"))
+                    .unwrap();
+                match f.try_lock() {
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        self.lock_was_held.set(self.lock_was_held.get() + 1)
+                    }
+                    _ => self.lock_was_free.set(self.lock_was_free.get() + 1),
+                }
+            }
             if self
                 .fail
                 .borrow()
@@ -1112,6 +1141,12 @@ mod ownership_tests {
                         ..Default::default()
                     },
                 );
+                if a.contains(&"bridge")
+                    && let Some(r) = self.rogue.borrow().as_ref()
+                    && let Some(x) = l.get_mut(r)
+                {
+                    x.master = Some(a[3].into());
+                }
             } else if a.starts_with(&["ip", "tuntap", "add"]) {
                 self.links.borrow_mut().insert(a[4].into(), Link::default());
             } else if a.starts_with(&["ip", "link", "del"]) {
@@ -1125,6 +1160,15 @@ mod ownership_tests {
                     "arp" => l.noarp = a[5] == "off",
                     _ => {}
                 }
+            }
+            let joined = a.join(" ");
+            if let Some((_, out)) = self
+                .replies
+                .borrow()
+                .iter()
+                .find(|(p, _)| joined.starts_with(p.as_str()))
+            {
+                return Ok(out.clone());
             }
             if a.starts_with(&["ip", "-j", "route"]) || a.starts_with(&["bridge", "-j"]) {
                 return Ok("[]".into());
@@ -1152,6 +1196,9 @@ mod ownership_tests {
             Ok(self.ns.borrow().clone())
         }
         fn sysctl(&self, k: &str) -> Option<String> {
+            if let Some(v) = self.sysctls.borrow().get(k) {
+                return Some(v.clone());
+            }
             Some(
                 if k.ends_with("arp_ignore") {
                     "8"
@@ -1164,6 +1211,9 @@ mod ownership_tests {
             )
         }
         fn vm(&self, _: &Names) -> Value {
+            if let Some(v) = self.vm_facts.borrow().as_ref() {
+                return v.clone();
+            }
             json!({"pid":42,"cmdline_ok":true,"fd_iff":true,"start":self.vm_start.get().unwrap_or(1.0)})
         }
     }
@@ -1377,6 +1427,7 @@ mod ownership_tests {
         let p = temp();
         let a = args(&p, "up");
         execute(h, &a).unwrap();
+        attach(h);
         let mut m = read_manifest(&a.manifest).unwrap().unwrap();
         m["guest"]["guid"] = json!("{A}");
         write_manifest(&a.manifest, &m).unwrap();
@@ -1468,5 +1519,754 @@ mod ownership_tests {
         assert!(execute(&h, &a).is_err());
         assert!(read_manifest(&a.manifest).unwrap().unwrap()["guest"]["verify"].is_null());
         fs::remove_dir_all(p).unwrap();
+    }
+    // ---- F2: port of test_windows_vm_lab.py ----
+    fn is_cmd(c: &[String], p: &[&str]) -> bool {
+        c.len() >= p.len() && c.iter().zip(p).all(|(a, b)| a == b)
+    }
+    fn out_lines() -> Vec<Value> {
+        OUTPUT.with(|o| {
+            o.borrow_mut()
+                .drain(..)
+                .filter_map(|l| serde_json::from_str(&l).ok())
+                .collect()
+        })
+    }
+    fn up(h: &Fake) -> (PathBuf, Args) {
+        let p = temp();
+        let a = args(&p, "up");
+        assert_eq!(execute(h, &a).unwrap(), 0);
+        (p, a)
+    }
+    /// Host-only status of an up stand: (exit code, report).
+    fn status(h: &Fake, p: &Path) -> (i32, Value) {
+        out_lines();
+        let rc = execute(h, &args(p, "status")).unwrap();
+        (rc, out_lines().pop().unwrap())
+    }
+    fn full_status(h: &Fake, p: &Path) -> (i32, Value) {
+        out_lines();
+        let mut a = args(p, "status");
+        a.host_only = false;
+        let rc = execute(h, &a).unwrap();
+        (rc, out_lines().pop().unwrap())
+    }
+    fn violations(report: &Value) -> String {
+        report["isolation_violations"].to_string()
+    }
+    fn set_sysctl(h: &Fake, k: &str, v: &str) {
+        h.sysctls.borrow_mut().insert(k.into(), v.into());
+    }
+    fn no_mutation(h: &Fake) -> bool {
+        h.links.borrow().is_empty()
+            && h.ns.borrow().is_empty()
+            && !h.calls.borrow().iter().any(|c| {
+                c.starts_with(&["ip".into(), "link".into(), "add".into()])
+                    || c.starts_with(&["ip".into(), "tuntap".into()])
+                    || c.starts_with(&["ip".into(), "netns".into(), "add".into()])
+            })
+    }
+    #[test]
+    fn derived_names_fit_ifnamsiz_and_macs_never_collide() {
+        let d = derive("abcdefgh").unwrap();
+        for n in [&d.bridge, &d.tap, &d.veth_host, &d.peer_if] {
+            assert!(n.len() <= 15, "{n}");
+        }
+        assert_ne!(
+            derive("a").unwrap().windows_mac,
+            derive("b").unwrap().windows_mac
+        );
+        // The old derivation collided for these ids.
+        for id in ["rg", "yr", "6p", "80", "n2", "t1"] {
+            let d = derive(id).unwrap();
+            let macs = BTreeSet::from([d.windows_mac, d.peer_mac, d.veth_host_mac]);
+            assert_eq!(macs.len(), 3, "{id}");
+        }
+        assert!(derive("../x").is_err());
+    }
+    #[test]
+    fn busy_names_refuse_up_and_change_nothing() {
+        for busy in ["wvb-t1", "wvt-t1", "wvh-t1", "wvp-t1"] {
+            let h = Fake::default();
+            if busy.starts_with("wvp") {
+                h.ns.borrow_mut().insert(busy.into());
+            } else {
+                h.links.borrow_mut().insert(busy.into(), Link::default());
+            }
+            let before = (h.links.borrow().clone().len(), h.ns.borrow().clone());
+            let p = temp();
+            let err = execute(&h, &args(&p, "up")).unwrap_err();
+            assert!(err.contains("busy"), "{err}");
+            assert!(err.contains("nothing created or removed"));
+            assert_eq!((h.links.borrow().len(), h.ns.borrow().clone()), before);
+            assert!(
+                !h.calls
+                    .borrow()
+                    .iter()
+                    .any(|c| is_cmd(c, &["ip", "link", "del"]))
+            );
+            assert!(!p.join("manifest.json").exists(), "{busy}");
+            fs::remove_dir_all(p).unwrap();
+        }
+    }
+    #[test]
+    fn a_foreign_namespace_of_our_name_is_never_deleted_by_a_stale_manifest() {
+        let h = Fake::default();
+        let d = derive("t1").unwrap();
+        h.ns.borrow_mut().insert(d.netns.clone());
+        let p = temp();
+        write_manifest(
+            &p.join("manifest.json"),
+            &json!({"run_id":"t1","token":"tok-A","state":"creating","names":d,"created":[{"kind":"netns","name":d.netns}]}),
+        )
+        .unwrap();
+        assert_eq!(execute(&h, &args(&p, "down")).unwrap(), 5);
+        assert!(h.ns.borrow().contains(&d.netns));
+        assert!(
+            !h.calls
+                .borrow()
+                .iter()
+                .any(|c| is_cmd(c, &["ip", "netns", "del"]))
+        );
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn another_manifest_for_the_same_run_id_cannot_delete_our_stand() {
+        let h = Fake::default();
+        let (p, a) = up(&h);
+        let d = derive("t1").unwrap();
+        let other = p.join("other.json");
+        write_manifest(
+            &other,
+            &json!({"run_id":"t1","token":"other-token","state":"up","names":d,"created":[]}),
+        )
+        .unwrap();
+        let mut o = args(&p, "down");
+        o.manifest = other;
+        assert_eq!(execute(&h, &o).unwrap(), 5);
+        for n in [&d.bridge, &d.tap, &d.veth_host] {
+            assert!(h.links.borrow().contains_key(n), "{n}");
+        }
+        assert_eq!(execute(&h, &args(&p, "down")).unwrap(), 0);
+        assert!(h.links.borrow().is_empty() && h.ns.borrow().is_empty());
+        let _ = a;
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn a_namespace_with_another_manifests_token_is_not_deleted() {
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        let d = derive("t1").unwrap();
+        h.marks
+            .borrow_mut()
+            .insert(d.netns.clone(), "someone-elses-token".into());
+        assert_eq!(execute(&h, &args(&p, "down")).unwrap(), 5);
+        assert!(h.ns.borrow().contains(&d.netns));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn plan_changes_nothing_and_conflicts_block_it() {
+        let h = Fake::default();
+        let p = temp();
+        assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 0);
+        assert!(no_mutation(&h));
+        assert!(!p.join("manifest.json").exists());
+        // A routed 198.18.0.0/24 conflicts.
+        let h = Fake::default();
+        h.replies.borrow_mut().push((
+            "ip -j route".into(),
+            r#"[{"dst":"198.18.0.0/24"},{"dst":"default"}]"#.into(),
+        ));
+        assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 3);
+        assert!(
+            out_lines().pop().unwrap()["problems"]
+                .to_string()
+                .contains("route conflict")
+        );
+        // So does a host address inside the lab net.
+        let h = Fake::default();
+        h.links.borrow_mut().insert(
+            "eno1".into(),
+            Link {
+                addrs: vec!["198.18.0.5/24".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 3);
+        // Global forwarding or a firewall rule naming a lab interface blocks plan and up.
+        let h = Fake::default();
+        set_sysctl(&h, "net.ipv4.ip_forward", "1");
+        assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 3);
+        assert!(execute(&h, &args(&p, "up")).is_err());
+        assert!(no_mutation(&h));
+        let h = Fake::default();
+        h.replies.borrow_mut().push((
+            "nft list ruleset".into(),
+            "iifname \"wvb-t1\" accept".into(),
+        ));
+        assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 3);
+        assert!(
+            out_lines().pop().unwrap()["problems"]
+                .to_string()
+                .contains("firewall")
+        );
+        assert!(execute(&h, &args(&p, "up")).is_err());
+        assert!(no_mutation(&h));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn a_physical_uplink_enslaved_during_up_is_rejected_and_rolled_back() {
+        let h = Fake::default();
+        h.links.borrow_mut().insert(
+            "eno1".into(),
+            Link {
+                physical: true,
+                addrs: vec!["192.168.1.148/24".into()],
+                ..Default::default()
+            },
+        );
+        let before = h.links.borrow().get("eno1").unwrap().addrs.clone();
+        *h.rogue.borrow_mut() = Some("eno1".into());
+        let p = temp();
+        assert_eq!(execute(&h, &args(&p, "up")).unwrap(), 4);
+        let l = h.links.borrow();
+        assert_eq!(l.keys().cloned().collect::<Vec<_>>(), vec!["eno1"]);
+        assert_eq!(l["eno1"].addrs, before);
+        assert!(
+            !h.calls
+                .borrow()
+                .iter()
+                .any(|c| c == &["ip", "link", "del", "eno1"])
+        );
+        assert!(h.ns.borrow().is_empty() && h.marks.borrow().is_empty());
+        let m = read_manifest(&p.join("manifest.json")).unwrap().unwrap();
+        assert_eq!(m["state"], "down"); // a re-upable manifest
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn status_flags_a_physical_uplink_enslaved_later() {
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        h.links.borrow_mut().insert(
+            "eno1".into(),
+            Link {
+                physical: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(status(&h, &p).0, 0);
+        h.links.borrow_mut().get_mut("eno1").unwrap().master = Some("wvb-t1".into());
+        let (rc, r) = status(&h, &p);
+        assert_eq!(rc, 1);
+        assert!(violations(&r).contains("physical uplink eno1"));
+        fs::remove_dir_all(p).unwrap();
+    }
+    /// Break one isolation fact on an up stand and require status to name it.
+    fn break_and_expect(change: impl FnOnce(&Fake), needle: &str) {
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        let (rc, r) = status(&h, &p);
+        assert_eq!(rc, 0, "{r}");
+        assert_eq!(r["isolation_violations"], json!([]));
+        change(&h);
+        let (rc, r) = status(&h, &p);
+        assert_eq!(rc, 1, "{needle}");
+        assert!(violations(&r).contains(needle), "{needle}: {r}");
+        assert_eq!(r["raw_run_allowed"], false);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn bridge_self_vlan_is_a_violation() {
+        break_and_expect(
+            |h| {
+                h.replies.borrow_mut().push((
+                    "bridge -j vlan show".into(),
+                    r#"[{"ifname":"wvb-t1","vlans":[{"vlan":1}]}]"#.into(),
+                ))
+            },
+            "self VLAN",
+        );
+    }
+    #[test]
+    fn an_unreadable_bridge_vlan_table_is_a_violation_not_a_pass() {
+        break_and_expect(
+            |h| {
+                h.replies
+                    .borrow_mut()
+                    .push(("bridge -j vlan show".into(), "not json".into()))
+            },
+            "cannot read bridge self VLANs",
+        );
+    }
+    #[test]
+    fn vlan_filtering_off_is_a_violation() {
+        break_and_expect(
+            |h| {
+                h.links
+                    .borrow_mut()
+                    .get_mut("wvb-t1")
+                    .unwrap()
+                    .vlan_filtering = false
+            },
+            "vlan_filtering",
+        );
+    }
+    #[test]
+    fn arp_on_is_a_violation_on_every_lab_interface() {
+        for n in ["wvb-t1", "wvt-t1", "wvh-t1"] {
+            break_and_expect(
+                |h| h.links.borrow_mut().get_mut(n).unwrap().noarp = false,
+                &format!("{n} is not NOARP"),
+            );
+        }
+    }
+    #[test]
+    fn arp_ignore_rp_filter_forwarding_and_ipv6_violations() {
+        for (n, key, bad) in [
+            ("wvb-t1", "arp_ignore", "0"),
+            ("wvt-t1", "rp_filter", "2"),
+            ("wvh-t1", "forwarding", "1"),
+        ] {
+            break_and_expect(
+                |h| set_sysctl(h, &format!("net.ipv4.conf.{n}.{key}"), bad),
+                &format!("{n}: {key}"),
+            );
+        }
+        break_and_expect(
+            |h| set_sysctl(h, "net.ipv6.conf.wvt-t1.disable_ipv6", "0"),
+            "IPv6 not disabled",
+        );
+    }
+    #[test]
+    fn global_ip_forward_enabled_later_is_a_violation() {
+        break_and_expect(|h| set_sysctl(h, "net.ipv4.ip_forward", "1"), "ip_forward");
+    }
+    #[test]
+    fn a_host_ip_on_bridge_or_tap_is_a_violation() {
+        for n in ["wvb-t1", "wvt-t1", "wvh-t1"] {
+            break_and_expect(
+                |h| {
+                    h.links
+                        .borrow_mut()
+                        .get_mut(n)
+                        .unwrap()
+                        .addrs
+                        .push("198.18.0.9/30".into())
+                },
+                "host IP",
+            );
+        }
+    }
+    #[test]
+    fn a_firewall_rule_naming_a_lab_interface_is_a_violation() {
+        for cmd in ["nft list ruleset", "iptables-save", "ip6tables-save"] {
+            break_and_expect(
+                |h| {
+                    h.replies
+                        .borrow_mut()
+                        .push((cmd.into(), "-A FORWARD -i wvb-t1 -j ACCEPT".into()))
+                },
+                "firewall",
+            );
+        }
+        // A rule that merely contains the name as a substring of another word is not ours.
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        h.replies.borrow_mut().push((
+            "nft list ruleset".into(),
+            "iifname \"xwvb-t1y\" accept".into(),
+        ));
+        assert_eq!(status(&h, &p).0, 0);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn host_only_status_is_ok_but_never_allows_a_raw_run_without_attachment() {
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        let (rc, r) = status(&h, &p);
+        assert_eq!(rc, 0);
+        assert_eq!(r["host_ok"], true);
+        // The TAP has no carrier, so the VM is not attached, and no guest record exists.
+        assert_eq!(r["raw_run_allowed"], false);
+        assert_eq!(r["vm"]["attached"], false);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn status_is_not_ok_without_vm_attachment() {
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        let (rc, r) = full_status(&h, &p);
+        assert_eq!(rc, 1);
+        assert_eq!(r["raw_run_allowed"], false);
+        let m = read_manifest(&p.join("manifest.json")).unwrap().unwrap();
+        assert_eq!(m["vm"]["attached"], false);
+        fs::remove_dir_all(p).unwrap();
+    }
+    fn attach(h: &Fake) {
+        h.links.borrow_mut().get_mut("wvt-t1").unwrap().lower_up = true;
+    }
+    fn recorded_stand(h: &Fake, status_text: &str, mac: Option<&str>) -> (PathBuf, Args) {
+        let p = temp();
+        let a = args(&p, "up");
+        execute(h, &a).unwrap();
+        attach(h);
+        let mut m = read_manifest(&a.manifest).unwrap().unwrap();
+        m["guest"]["guid"] = json!("{A}");
+        write_manifest(&a.manifest, &m).unwrap();
+        let verify = p.join("verify.json");
+        let mac = mac.map_or(derive("t1").unwrap().windows_mac, str::to_string);
+        write_manifest(&verify, &json!({"ok":true,"verified_at":now(),"verification_nonce":"check-1","lab":{"Status":status_text,"MacAddress":mac,"InterfaceGuid":"{A}"}})).unwrap();
+        let mut r = args(&p, "record-guest");
+        r.verify_json = Some(verify);
+        r.nonce = Some("check-1".into());
+        assert_eq!(execute(h, &r).unwrap(), 0);
+        (p, a)
+    }
+    #[test]
+    fn status_ok_needs_every_attachment_fact_the_carrier_and_a_fresh_guest() {
+        let h = Fake::default();
+        let (p, _) = recorded_stand(&h, "Up", None);
+        let (rc, r) = full_status(&h, &p);
+        assert_eq!((rc, r["raw_run_allowed"].clone()), (0, json!(true)), "{r}");
+        let m = read_manifest(&p.join("manifest.json")).unwrap().unwrap();
+        assert_eq!(m["vm"]["attached"], true);
+        let good = json!({"pid":42,"cmdline_ok":true,"fd_iff":true,"start":1.0});
+        for (k, bad) in [
+            ("cmdline_ok", json!(false)),
+            ("fd_iff", json!(false)),
+            ("pid", Value::Null),
+        ] {
+            let mut v = good.clone();
+            v[k] = bad;
+            *h.vm_facts.borrow_mut() = Some(v);
+            let (rc, r) = full_status(&h, &p);
+            assert_eq!((rc, r["raw_run_allowed"].clone()), (1, json!(false)), "{k}");
+            let m = read_manifest(&p.join("manifest.json")).unwrap().unwrap();
+            assert_eq!(m["vm"]["attached"], false, "{k}");
+        }
+        *h.vm_facts.borrow_mut() = None;
+        // A stale or detached TAP has no carrier.
+        h.links.borrow_mut().get_mut("wvt-t1").unwrap().lower_up = false;
+        assert_eq!(full_status(&h, &p).0, 1);
+        attach(&h);
+        assert_eq!(full_status(&h, &p).0, 0);
+        // The VM restarted after the guest record: the record is stale.
+        h.vm_start.set(Some(now() + 1000.0));
+        assert_eq!(full_status(&h, &p).0, 1);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn a_guest_verify_must_be_up_and_report_the_lab_mac() {
+        for (status_text, mac) in [("Disconnected", None), ("Up", Some("52-54-00-aa-aa-aa"))] {
+            let h = Fake::default();
+            let (p, _) = recorded_stand(&h, status_text, mac);
+            let (rc, r) = full_status(&h, &p);
+            assert_eq!(rc, 1, "{status_text} {mac:?}");
+            assert_eq!(r["guest_verify_fresh"], false);
+            assert_eq!(r["host_ok"], true);
+            fs::remove_dir_all(p).unwrap();
+        }
+        // ok:false from the guest is not fresh either.
+        let h = Fake::default();
+        let (p, _) = recorded_stand(&h, "Up", None);
+        let mut m = read_manifest(&p.join("manifest.json")).unwrap().unwrap();
+        m["guest"]["verify"]["ok"] = json!(false);
+        write_manifest(&p.join("manifest.json"), &m).unwrap();
+        assert_eq!(full_status(&h, &p).0, 1);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn record_guest_selects_exactly_one_adapter_by_the_lab_mac() {
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        let mac = derive("t1").unwrap().windows_mac;
+        let guest = |ads: Value| {
+            let g = p.join("g.json");
+            write_manifest(&g, &json!({"adapters": ads})).unwrap();
+            let mut a = args(&p, "record-guest");
+            a.guest_json = Some(g);
+            execute(&h, &a)
+        };
+        let upper = mac.to_uppercase().replace(':', "-");
+        let two = json!([{"MacAddress":upper,"InterfaceGuid":"{1}"},{"MacAddress":mac,"InterfaceGuid":"{2}"}]);
+        assert!(guest(two).unwrap_err().contains("ambiguous"));
+        assert!(guest(json!([{"MacAddress":"52-54-00-00-00-01","InterfaceGuid":"{1}"}])).is_err());
+        // The management NIC is never the lab NIC.
+        assert!(
+            guest(
+                json!([{"MacAddress":MGMT.to_uppercase().replace(':', "-"),"InterfaceGuid":"{M}"}])
+            )
+            .is_err()
+        );
+        assert!(
+            guest(json!([{"MacAddress":upper,"InterfaceGuid":""}]))
+                .unwrap_err()
+                .contains("malformed")
+        );
+        assert_eq!(
+            guest(json!([{"MacAddress":upper,"InterfaceGuid":"{1}"}])).unwrap(),
+            0
+        );
+        let m = read_manifest(&p.join("manifest.json")).unwrap().unwrap();
+        assert_eq!(m["guest"]["guid"], "{1}");
+        assert_eq!(m["guest"]["npf"], "\\Device\\NPF_{1}");
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn a_malformed_guest_record_is_a_clean_error() {
+        let h = Fake::default();
+        let (p, _) = up(&h);
+        let g = p.join("bad.json");
+        fs::write(&g, "{}").unwrap();
+        let mut a = args(&p, "record-guest");
+        a.guest_json = Some(g);
+        assert!(execute(&h, &a).unwrap_err().contains("malformed"));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn a_taken_name_at_create_time_deletes_nothing_it_did_not_create() {
+        for (failing, created, may_delete) in [
+            ("ip link add wvb-t1", vec![], vec![]),
+            ("ip tuntap add", vec!["wvb-t1"], vec!["wvb-t1"]),
+            (
+                "ip link add wvh-t1",
+                vec!["wvb-t1", "wvt-t1"],
+                vec!["wvb-t1", "wvt-t1"],
+            ),
+        ] {
+            let h = Fake::default();
+            *h.fail.borrow_mut() = Some(failing.into());
+            let p = temp();
+            assert_eq!(execute(&h, &args(&p, "up")).unwrap(), 4, "{failing}");
+            let deleted: Vec<String> = h
+                .calls
+                .borrow()
+                .iter()
+                .filter(|c| is_cmd(c, &["ip", "link", "del"]))
+                .map(|c| c[3].clone())
+                .collect();
+            assert!(
+                deleted.iter().all(|d| may_delete.contains(&d.as_str())),
+                "{failing}: {deleted:?}"
+            );
+            assert_eq!(deleted.len(), created.len(), "{failing}: {deleted:?}");
+            assert!(h.links.borrow().is_empty());
+            fs::remove_dir_all(p).unwrap();
+        }
+    }
+    #[test]
+    fn every_non_plan_command_runs_under_the_run_id_lock() {
+        let locks = temp();
+        let h = Fake::default();
+        *h.lock_probe.borrow_mut() = Some(locks.clone());
+        // The probe opens the lock file, so it must exist before the first command.
+        fs::write(locks.join("t1.lock"), "").unwrap();
+        let p = temp();
+        for cmd in ["up", "status", "down"] {
+            let mut a = args(&p, cmd);
+            a.manifest = locks.join("manifest.json");
+            let held = h.lock_was_held.get();
+            dispatch(&h, &a, &locks, Duration::from_secs(1)).unwrap();
+            assert!(h.lock_was_held.get() > held, "{cmd}");
+            assert_eq!(
+                h.lock_was_free.get(),
+                0,
+                "{cmd}: ran a command outside the lock"
+            );
+        }
+        fs::remove_dir_all(p).unwrap();
+        // plan takes no lock.
+        let h = Fake::default();
+        *h.lock_probe.borrow_mut() = Some(locks.clone());
+        let p = temp();
+        let mut a = args(&p, "plan");
+        a.manifest = locks.join("m2.json");
+        dispatch(&h, &a, &locks, Duration::from_secs(1)).unwrap();
+        assert!(h.lock_was_held.get() == 0 && h.lock_was_free.get() > 0);
+        fs::remove_dir_all(p).unwrap();
+        fs::remove_dir_all(locks).unwrap();
+    }
+    #[test]
+    fn the_real_lock_serializes_the_same_run_id_and_releases_afterwards() {
+        let dir = temp();
+        let lock = |id: &str| {
+            let f = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(dir.join(format!("{id}.lock")))
+                .unwrap();
+            f.try_lock().map(|()| f)
+        };
+        let held = lock("t1").unwrap();
+        assert!(matches!(lock("t1"), Err(std::fs::TryLockError::WouldBlock)));
+        // dispatch with a busy lock times out with a clear error and runs nothing.
+        let h = Fake::default();
+        let p = temp();
+        let err = dispatch(&h, &args(&p, "status"), &dir, Duration::from_millis(100)).unwrap_err();
+        assert!(err.contains("holds run lock"), "{err}");
+        assert!(h.calls.borrow().is_empty());
+        // Another run-id is independent.
+        let other = lock("t2").unwrap();
+        drop(other);
+        drop(held);
+        assert!(lock("t1").is_ok());
+        fs::remove_dir_all(p).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn network_manager_not_running_is_not_fatal_and_running_marks_the_link_unmanaged() {
+        let h = Fake::default();
+        l2only(&h, "wvb-t1").unwrap();
+        assert!(
+            !h.calls
+                .borrow()
+                .iter()
+                .any(|c| is_cmd(c, &["nmcli", "device"]))
+        );
+        assert!(
+            h.calls
+                .borrow()
+                .iter()
+                .any(|c| c == &["ip", "link", "set", "wvb-t1", "arp", "off"])
+        );
+        let h = Fake::default();
+        *h.fail.borrow_mut() = Some("nmcli -t -f RUNNING".into());
+        l2only(&h, "wvb-t1").unwrap();
+        assert!(
+            !h.calls
+                .borrow()
+                .iter()
+                .any(|c| is_cmd(c, &["nmcli", "device"]))
+        );
+        let h = Fake::default();
+        h.replies
+            .borrow_mut()
+            .push(("nmcli -t -f RUNNING".into(), "running".into()));
+        h.replies
+            .borrow_mut()
+            .push(("nmcli -t -f DEVICE,STATE".into(), "wvb-t1:unmanaged".into()));
+        l2only(&h, "wvb-t1").unwrap();
+        assert!(
+            h.calls
+                .borrow()
+                .iter()
+                .any(|c| c == &["nmcli", "device", "set", "wvb-t1", "managed", "no"])
+        );
+    }
+    #[test]
+    fn down_without_a_manifest_is_a_noop_that_leaves_look_alike_objects() {
+        let h = Fake::default();
+        let d = derive("t1").unwrap();
+        h.links.borrow_mut().insert(
+            d.bridge.clone(),
+            Link {
+                alias: alias(&d, "whatever"),
+                ..Default::default()
+            },
+        );
+        let p = temp();
+        assert_eq!(execute(&h, &args(&p, "down")).unwrap(), 0);
+        assert!(h.links.borrow().contains_key(&d.bridge));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn an_incomplete_up_is_refused_and_down_cleans_only_our_objects() {
+        let h = Fake::default();
+        let d = derive("t1").unwrap();
+        let p = temp();
+        write_manifest(
+            &p.join("manifest.json"),
+            &json!({"run_id":"t1","token":"tok-A","state":"creating","names":d,"created":[{"kind":"link","name":d.bridge}]}),
+        )
+        .unwrap();
+        for n in [&d.bridge, &d.tap] {
+            h.links.borrow_mut().insert(
+                n.clone(),
+                Link {
+                    alias: alias(&d, "tok-A"),
+                    noarp: true,
+                    ..Default::default()
+                },
+            );
+        }
+        h.ns.borrow_mut().insert("foreign-ns".into());
+        let err = execute(&h, &args(&p, "up")).unwrap_err();
+        assert!(err.contains("state=\"creating\""), "{err}");
+        assert_eq!(status(&h, &p).0, 1);
+        assert_eq!(execute(&h, &args(&p, "down")).unwrap(), 0);
+        assert!(h.links.borrow().is_empty());
+        assert!(h.ns.borrow().contains("foreign-ns"));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn up_after_a_clean_down_gets_a_fresh_token_and_a_healthy_stand() {
+        let h = Fake::default();
+        let (p, a) = up(&h);
+        let t1 = read_manifest(&a.manifest).unwrap().unwrap()["token"].clone();
+        assert_eq!(execute(&h, &args(&p, "down")).unwrap(), 0);
+        assert_eq!(execute(&h, &args(&p, "up")).unwrap(), 0);
+        let t2 = read_manifest(&a.manifest).unwrap().unwrap()["token"].clone();
+        assert_ne!(t1, t2);
+        assert_eq!(status(&h, &p).0, 0);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn the_lab_env_of_another_run_is_not_overwritten() {
+        let h = Fake::default();
+        let p = temp();
+        let env = p.join("lab.env");
+        fs::write(&env, "LAB_RUN_ID=other\nLAB_TAP=wvt-other\n").unwrap();
+        let mut a = args(&p, "up");
+        a.lab_env = Some(env.clone());
+        let err = execute(&h, &a).unwrap_err();
+        assert!(err.contains("another run-id"), "{err}");
+        assert!(h.links.borrow().is_empty());
+        assert!(
+            fs::read_to_string(env)
+                .unwrap()
+                .contains("LAB_RUN_ID=other")
+        );
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn up_status_down_roundtrip_records_the_lab_net_and_keeps_the_uplink() {
+        let h = Fake::default();
+        let eno1 = Link {
+            physical: true,
+            addrs: vec!["192.168.1.148/24".into()],
+            mac: "c8:7f:54:6c:e4:33".into(),
+            lower_up: true,
+            ..Default::default()
+        };
+        h.links.borrow_mut().insert("eno1".into(), eno1.clone());
+        let (p, a) = up(&h);
+        let m = read_manifest(&a.manifest).unwrap().unwrap();
+        assert_eq!(m["state"], "up");
+        assert_eq!(m["lab"]["windows_ip"], "198.18.0.1");
+        assert_eq!(m["lab"]["peer_ip"], "198.18.0.2");
+        assert!(m["lab"]["gateway"].is_null() && m["lab"]["dns"].is_null());
+        assert_eq!(h.links.borrow()["eno1"].addrs, eno1.addrs);
+        assert_eq!(h.links.borrow()["eno1"].master, None);
+        assert_eq!(execute(&h, &args(&p, "down")).unwrap(), 0);
+        assert_eq!(h.links.borrow()["eno1"].addrs, eno1.addrs);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn the_guest_script_keeps_its_guards() {
+        let ps1 = include_str!("../../../scripts/windows-vm-lab.ps1");
+        for needle in [
+            "Inventory",
+            "Configure",
+            "Verify",
+            "ambiguous",
+            "DefaultGateway",
+            "'Up'",
+            "52-54-00-12-34-56",
+            "VerificationNonce",
+        ] {
+            assert!(ps1.contains(needle), "{needle}");
+        }
     }
 }

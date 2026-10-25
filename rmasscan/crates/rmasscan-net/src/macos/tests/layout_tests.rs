@@ -1,6 +1,6 @@
 //! Раскладка структур и номера ioctl BPF macOS (aarch64, LP64).
 
-use std::mem::{offset_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 
 use crate::macos::sys::*;
 
@@ -21,10 +21,32 @@ fn ior(num: u32, len: usize) -> u32 {
 
 #[test]
 fn struct_layouts_match_lp64() {
-    assert_eq!(size_of::<BpfHdr>(), 18);
+    // sizeof(struct bpf_hdr) = 20 (как libc); запись ядра = SIZEOF_BPF_HDR = 18.
+    assert_eq!(size_of::<BpfHdr>(), 20);
+    assert_eq!(align_of::<BpfHdr>(), 4);
+    assert_eq!(size_of::<BpfHdr>(), size_of::<libc::bpf_hdr>());
+    assert_eq!(align_of::<BpfHdr>(), align_of::<libc::bpf_hdr>());
+    assert_eq!(
+        offset_of!(BpfHdr, bh_tstamp),
+        offset_of!(libc::bpf_hdr, bh_tstamp)
+    );
     assert_eq!(offset_of!(BpfHdr, bh_caplen), 8);
     assert_eq!(offset_of!(BpfHdr, bh_datalen), 12);
     assert_eq!(offset_of!(BpfHdr, bh_hdrlen), 16);
+    assert_eq!(
+        offset_of!(BpfHdr, bh_caplen),
+        offset_of!(libc::bpf_hdr, bh_caplen)
+    );
+    assert_eq!(
+        offset_of!(BpfHdr, bh_datalen),
+        offset_of!(libc::bpf_hdr, bh_datalen)
+    );
+    assert_eq!(
+        offset_of!(BpfHdr, bh_hdrlen),
+        offset_of!(libc::bpf_hdr, bh_hdrlen)
+    );
+    assert_eq!(SIZEOF_BPF_HDR, 18);
+    assert_eq!(bpf_wordalign(SIZEOF_BPF_HDR), 20);
     assert_eq!(bpf_wordalign(18), 20);
     assert_eq!(size_of::<BpfInsn>(), 8);
     assert_eq!(size_of::<BpfProgram>(), 16);
@@ -100,11 +122,11 @@ fn own_constants_match_the_sdk_header() {
     let norm = |s: &str| s.replace(", ", ",");
     let squashed = norm(&squashed);
     for want in [
-        "BIOCSETF _IOW('B',103,",
-        "BIOCSRTIMEOUT _IOW('B',109,",
-        "BIOCGSEESENT _IOR('B',118,",
-        "BIOCSSEESENT _IOW('B',119,",
-        "BIOCSETFNR _IOW('B',126,",
+        "BIOCSETF _IOW('B',103,struct bpf_program)",
+        "BIOCSRTIMEOUT _IOW('B',109,struct timeval)",
+        "BIOCGSEESENT _IOR('B',118,u_int)",
+        "BIOCSSEESENT _IOW('B',119,u_int)",
+        "BIOCSETFNR _IOW('B',126,struct bpf_program)",
         "#define BPF_TIMEVAL timeval32",
     ] {
         assert!(squashed.contains(want), "SDK header lacks {want:?}");

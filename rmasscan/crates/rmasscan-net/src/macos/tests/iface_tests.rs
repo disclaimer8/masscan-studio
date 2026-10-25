@@ -8,7 +8,9 @@ use rmasscan_core::probe::AdapterBinding;
 
 use crate::NetError;
 use crate::macos::Errno;
-use crate::macos::ifinfo::{IfaceInfo, LinkInfo, OsIface, nic_mac, verify_binding};
+use crate::macos::ifinfo::{
+    IfaceInfo, LinkInfo, OsIface, link_from_bytes, nic_mac, verify_binding,
+};
 use crate::macos::sys::IFT_ETHER;
 
 const IFINDEX: u32 = 9;
@@ -198,10 +200,72 @@ fn inventory_lists_lo0_and_bpf0_without_opening_anything() {
     if let Some(max) = inv.bpf_maxdevices {
         assert!(inv.devices.len() <= max as usize);
     }
-    let mut paths: Vec<_> = inv.devices.iter().map(|d| d.path.clone()).collect();
-    let sorted = paths.clone();
-    paths.sort_by_key(|p| p["/dev/bpf".len()..].parse::<u32>().unwrap());
-    assert_eq!(paths, sorted, "contiguous ascending from bpf0");
+    for (i, d) in inv.devices.iter().enumerate() {
+        assert_eq!(d.path, format!("/dev/bpf{i}"), "contiguous from bpf0");
+    }
     assert!(inv.os_version.as_deref().is_some_and(|v| v.contains('(')));
     assert!(inv.instant_clock.starts_with("CLOCK_UPTIME_RAW"));
+}
+
+/// Запись `sockaddr_dl`: len, family(18), index(2), type, nlen, alen, slen, data.
+fn dl(len: usize, ty: u8, nlen: u8, alen: u8, data: &[u8]) -> Vec<u8> {
+    let mut r = vec![0u8; len];
+    r[0] = len as u8;
+    r[1] = 18;
+    r[4] = ty;
+    r[5] = nlen;
+    r[6] = alen;
+    let n = data.len().min(len.saturating_sub(8));
+    r[8..8 + n].copy_from_slice(&data[..n]);
+    r
+}
+
+#[test]
+fn parse_link_reads_the_mac_after_the_name() {
+    let mut data = b"en0".to_vec();
+    data.extend_from_slice(&MAC);
+    let rec = dl(20, IFT_ETHER, 3, 6, &data);
+    assert_eq!(
+        link_from_bytes(&rec),
+        Some(LinkInfo {
+            sdl_type: IFT_ETHER,
+            mac: Some(MAC)
+        })
+    );
+}
+
+#[test]
+fn parse_link_reads_past_the_twelve_declared_data_bytes() {
+    let mut data = b"feth4201xyz".to_vec(); // nlen 11
+    data.extend_from_slice(&MAC); // MAC at data[11..17], beyond [i8; 12]
+    let rec = dl(8 + 17, IFT_ETHER, 11, 6, &data);
+    assert_eq!(link_from_bytes(&rec).unwrap().mac, Some(MAC));
+}
+
+#[test]
+fn parse_link_rejects_hostile_lengths_without_reading_out_of_bounds() {
+    // alen != 6
+    for alen in [0u8, 5, 7, 8, 255] {
+        let rec = dl(20, IFT_ETHER, 3, alen, &[0; 12]);
+        assert_eq!(link_from_bytes(&rec).unwrap().mac, None, "alen {alen}");
+    }
+    // MAC would end past sdl_len
+    assert_eq!(
+        link_from_bytes(&dl(20, IFT_ETHER, 7, 6, &[0; 12]))
+            .unwrap()
+            .mac,
+        None
+    );
+    assert_eq!(
+        link_from_bytes(&dl(20, IFT_ETHER, 255, 6, &[0; 12]))
+            .unwrap()
+            .mac,
+        None
+    );
+    // record shorter than the 8-byte header
+    for len in 0..8 {
+        assert_eq!(link_from_bytes(&vec![0u8; len]), None, "len {len}");
+    }
+    // exactly header, no data
+    assert_eq!(link_from_bytes(&dl(8, 24, 0, 0, &[])).unwrap().sdl_type, 24);
 }

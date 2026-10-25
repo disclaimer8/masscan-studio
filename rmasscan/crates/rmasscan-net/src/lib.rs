@@ -1,6 +1,6 @@
 //! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; Windows: Npcap. Это
 //! единственный crate, где допускается `unsafe`: весь FFI находится в
-//! private-модулях (`linux::socket`; `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
+//! private-модулях (`linux::socket`; `macos::{sys, ifinfo}` (BPF ABI, sysctl, getifaddrs); `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
 //! телеметрия процесса (Toolhelp, токен, счётчики памяти), в продуктовой сборке она
 //! тоже присутствует) и,
 //! только с feature `lab` (включает один rmasscan-lab), в `lab_io::imp`
@@ -247,7 +247,6 @@ pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError
     windows::open(binding)
 }
 
-/// Остальные платформы: явная ошибка до любой отправки.
 /// macOS: адаптер BPF реализуется в задаче 4.
 #[cfg(target_os = "macos")]
 pub fn open_explicit(_binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {

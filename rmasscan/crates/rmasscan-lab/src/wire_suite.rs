@@ -47,11 +47,12 @@ pub(crate) fn capture_complete(
         && frames <= hi
 }
 /// The Stop stage of a perf cell counts only if its own capture is valid, the scanner exited 0, the stop
-/// took effect before the last probe and, for Rust, the engine reported `Stopped`.
+/// took effect before the last probe, the stop time was measured and, for Rust, the engine reported `Stopped`.
 pub(crate) fn stop_stage_valid(stop: &Value, implementation: &str) -> bool {
     stop["capture_valid"] == true
         && stop["rc"] == 0
         && stop["stopped_early"] == true
+        && stop["stop_to_exit_s"].as_f64().is_some()
         && (implementation == "c" || stop["reason"] == "Stopped")
 }
 /// Scanner-side reply completeness against the capture: unique replies the peer sent to the

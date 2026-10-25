@@ -1141,17 +1141,22 @@ impl Suite<'_> {
                 .map(|i| self.st.counters(i).map(|c| (i, c)))
                 .collect()
         };
-        let first = read()?;
-        self.st.pause(Duration::from_secs(1));
-        let second = read()?;
-        let moved: Vec<String> = first
-            .iter()
-            .zip(&second)
-            .filter(|(a, b)| a.1 != b.1)
-            .map(|(a, b)| format!("{}: {:?} -> {:?}", a.0, a.1, b.1))
-            .collect();
-        if moved.is_empty() {
-            return Ok(());
+        // Up to three windows: background multicast (mDNS) on the pair moves the counters now and then. The pair is
+        // quiet as soon as one window is still; it is refused only when every window moved (fail closed).
+        let mut moved: Vec<String> = Vec::new();
+        for _ in 0..3 {
+            let first = read()?;
+            self.st.pause(Duration::from_secs(1));
+            let second = read()?;
+            moved = first
+                .iter()
+                .zip(&second)
+                .filter(|(a, b)| a.1 != b.1)
+                .map(|(a, b)| format!("{}: {:?} -> {:?}", a.0, a.1, b.1))
+                .collect();
+            if moved.is_empty() {
+                return Ok(());
+            }
         }
         Err(SuiteError::NotRun(format!(
             "the pair is not quiet (its packet counters moved over about a second: {}): some other sender is active. Find it (a spike, a test, a forgotten tool) and stop it; nothing was started",

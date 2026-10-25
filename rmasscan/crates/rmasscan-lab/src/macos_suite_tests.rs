@@ -94,6 +94,8 @@ struct Fake {
     ps_has_self: Cell<bool>,
     /// Every `counters` call moves the pair's packet counters.
     pair_busy: Cell<bool>,
+    /// With `pair_busy`: only the first N counter reads move (0: all of them).
+    busy_reads: Cell<u64>,
     listener_ready: Cell<bool>,
     counter_reads: Cell<u64>,
     /// `stopped` turns true from this call on (0: use `stopped`).
@@ -126,6 +128,7 @@ impl Fake {
             ps_rc: Cell::new(0),
             ps_has_self: Cell::new(true),
             pair_busy: Cell::new(false),
+            busy_reads: Cell::new(0),
             listener_ready: Cell::new(true),
             counter_reads: Cell::new(0),
             stopped_from_call: Cell::new(0),
@@ -297,7 +300,9 @@ impl Stand for Fake {
         }))
     }
     fn counters(&self, _: &str) -> Result<NetstatCounters, String> {
-        if self.pair_busy.get() {
+        if self.pair_busy.get()
+            && (self.busy_reads.get() == 0 || self.counter_reads.get() < self.busy_reads.get())
+        {
             self.counter_reads.set(self.counter_reads.get() + 1);
         }
         Ok(NetstatCounters {
@@ -1666,6 +1671,31 @@ fn a_pair_that_is_not_quiet_refuses_the_run() {
     rig.suite(&st, "functional")
         .one(&item("functional", C01), 30)
         .unwrap();
+}
+
+#[test]
+fn a_pair_that_moves_in_one_window_only_is_still_quiet_enough() {
+    // mDNS chatter: the first window moves, the next is still; the run goes ahead.
+    for busy in [2, 4] {
+        let rig = Rig::new();
+        let st = Fake::new(&rig.wire);
+        st.pair_busy.set(true);
+        st.busy_reads.set(busy);
+        rig.suite(&st, "functional")
+            .one(&item("functional", C01), 30)
+            .unwrap();
+    }
+    // Every one of the three windows moved: refused, nothing started.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.pair_busy.set(true);
+    st.busy_reads.set(11);
+    let e = rig
+        .suite(&st, "functional")
+        .one(&item("functional", C01), 30)
+        .unwrap_err();
+    assert!(e.message().contains("not quiet"), "{e:?}");
+    assert!(!st.any_spawned());
 }
 
 #[test]

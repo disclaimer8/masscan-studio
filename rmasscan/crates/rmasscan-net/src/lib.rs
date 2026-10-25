@@ -26,6 +26,10 @@ use rmasscan_engine::AdapterPair;
 #[cfg(target_os = "linux")]
 mod linux;
 
+// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo}`.
+#[cfg(target_os = "macos")]
+mod macos;
+
 // Windows/Npcap: на Windows это рабочий backend; в тестах других платформ
 // собираются портабельные части (ABI, подставная таблица функций). `unsafe`
 // разрешён только в FFI-подмодулях (см. `windows/mod.rs`).
@@ -89,6 +93,54 @@ pub struct Inventory {
     /// Версия драйвера `npcap.sys`, если файл найден.
     pub driver_version: Option<String>,
     pub devices: Vec<DeviceReport>,
+}
+
+/// Идентификатор ABI-слоя BPF macOS, попадающий в идентичность каждого JSON:
+/// `/dev/bpf*` через ioctl, собственные объявления поверх `libc`, aarch64.
+pub const BPF_ABI_ID: &str = "/dev/bpf* ioctl via libc; own declarations v1; aarch64";
+
+/// Узел `/dev/bpfN` (только `stat`, без открытия).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BpfDevice {
+    pub path: String,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+/// Интерфейс из `getifaddrs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IfaceReport {
+    pub name: String,
+    pub index: u32,
+    pub mac: Option<[u8; 6]>,
+    pub ethernet: bool,
+    pub up: bool,
+    pub ipv4: Vec<std::net::Ipv4Addr>,
+}
+
+/// Результат инвентаря macOS: получается без привилегий, без открытия BPF и
+/// без единой отправки.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BpfInventory {
+    pub os_version: Option<String>,
+    pub kernel_version: Option<String>,
+    pub bpf_maxbufsize: Option<u32>,
+    pub bpf_maxdevices: Option<u32>,
+    pub devices: Vec<BpfDevice>,
+    pub interfaces: Vec<IfaceReport>,
+    pub instant_clock: &'static str,
+}
+
+/// macOS: инвентарь BPF (sysctl, `stat` узлов, `getifaddrs`).
+#[cfg(target_os = "macos")]
+pub fn inventory_bpf() -> Result<BpfInventory, NetError> {
+    macos::inventory()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn inventory_bpf() -> Result<BpfInventory, NetError> {
+    Err(NetError::UnsupportedPlatform)
 }
 
 /// Накопленные счётчики. `kernel_drops == None` значит «недоступно».
@@ -196,7 +248,16 @@ pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError
 }
 
 /// Остальные платформы: явная ошибка до любой отправки.
-#[cfg(not(any(target_os = "linux", windows)))]
+/// macOS: адаптер BPF реализуется в задаче 4.
+#[cfg(target_os = "macos")]
+pub fn open_explicit(_binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+    Err(NetError::System(
+        "macOS BPF adapter: open is implemented in task 4".into(),
+    ))
+}
+
+/// Остальные платформы: явная ошибка до любой отправки.
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 pub fn open_explicit(_binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
     Err(NetError::UnsupportedPlatform)
 }
@@ -220,7 +281,13 @@ pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
     windows::inventory::nic_mac(interface_id)
 }
 
-#[cfg(not(windows))]
+/// macOS: MAC интерфейса по имени (`getifaddrs`/AF_LINK).
+#[cfg(target_os = "macos")]
+pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
+    macos::ifinfo::nic_mac(interface_id)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn nic_mac(_interface_id: &str) -> Option<[u8; 6]> {
     None
 }
@@ -232,7 +299,13 @@ pub fn os_version() -> Option<String> {
     windows::inventory::os_version()
 }
 
-#[cfg(not(windows))]
+/// macOS: `kern.osproductversion (kern.osversion)`, например `27.0.1 (26A434)`.
+#[cfg(target_os = "macos")]
+pub fn os_version() -> Option<String> {
+    macos::os_version()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn os_version() -> Option<String> {
     None
 }

@@ -351,7 +351,10 @@ fn serve() -> Result<(), String> {
                             )?;
                         }
                     }
-                    Err(_) => {}
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => {
+                        return Err("Scanner event stream closed without a terminal result".into());
+                    }
                 }
             } else {
                 std::thread::sleep(Duration::from_millis(2));

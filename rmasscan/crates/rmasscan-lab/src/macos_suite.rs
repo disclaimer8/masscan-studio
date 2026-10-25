@@ -1131,6 +1131,27 @@ impl Suite<'_> {
         let _ = fs::write(path, format!("{}\n", keep.join("\n")));
     }
 
+    /// Raw `netstat -an -p tcp` (read only): the evidence of which host services listen beside the lab ones.
+    fn host_listen(&self, work: &Path, name: &str) -> Result<(), SuiteError> {
+        let o = self.st.exec(
+            &[
+                "/usr/sbin/netstat".into(),
+                "-an".into(),
+                "-p".into(),
+                "tcp".into(),
+            ],
+            20,
+        )?;
+        io(
+            fs::write(
+                work.join(name),
+                format!("rc {}\n{}{}", o.rc, o.stdout, o.stderr),
+            ),
+            name,
+        )?;
+        Ok(())
+    }
+
     /// The pair carries no frame of anyone else: the packet counters of feth4201 and feth4202 are read twice,
     /// a pause apart (the seam's, not a timing the test depends on), and must not have moved. A sender the name
     /// based gate cannot know (a test binary, a renamed tool) shows up here.
@@ -1412,28 +1433,27 @@ impl Suite<'_> {
         let mut cap = json!({"capture_schema":mv::CAPTURE_SCHEMA});
         let mut meta =
             json!({"tag":tag,"kind":kind,"invocation_nonce":run_nonce,"euid":self.st.euid()?});
-        // The OS rate-limits closed-port RSTs; the limit in force is part of every run (read only).
+        // The OS rate-limits closed-port RSTs (Darwin: net.inet.tcp.rst_rlc_*); read only, raw, informational.
         let lim = self.st.exec(
             &[
                 "/usr/sbin/sysctl".into(),
                 "-n".into(),
-                "net.inet.icmp.icmplim".into(),
+                "net.inet.tcp.rst_rlc_enable".into(),
+                "net.inet.tcp.rst_rlc_bucket_ms".into(),
             ],
             20,
         )?;
         io(
             fs::write(
-                work.join("icmplim.txt"),
+                work.join("rst_rlc.txt"),
                 format!("rc {}\n{}{}", lim.rc, lim.stdout, lim.stderr),
             ),
-            "icmplim.txt",
+            "rst_rlc.txt",
         )?;
         meta["syncookie"] = lj["syncookie"].clone();
-        meta["icmplim"] = json!(if lim.rc == 0 {
-            lim.stdout.trim()
-        } else {
-            "unreadable"
-        });
+        meta["rst_rlc"] = json!(format!("{}{}", lim.stdout, lim.stderr).trim());
+        // The host's TCP LISTEN sockets before the run (wildcard host services also answer on 198.18.0.2).
+        self.host_listen(work, "host-listen-before.txt")?;
         let (mut up0, mut c0) = (None, None);
         if denied {
             // BPF is denied, so no witness can run: the interface counters are the only evidence.
@@ -1724,13 +1744,8 @@ impl Suite<'_> {
                 &rec,
             )?;
         }
-        if let Some(l) = t.listener.as_mut() {
-            l.signal("TERM");
-            if wait_exit(l.as_mut(), self.st, 100).is_none() {
-                l.kill();
-            }
-        }
-        t.listener = None;
+        // The host's LISTEN sockets after the run, taken while the lab listeners are still up.
+        self.host_listen(work, "host-listen-after.txt")?;
         // 7. the witnesses.
         if denied {
             let read = |i: &str| -> Result<Value, String> {
@@ -1808,6 +1823,15 @@ impl Suite<'_> {
                 .remove("uplink_argv");
             cap["quiet"] = json!({"reached":cap["peer"]["witness"]["quiesced_before_stop"]});
         }
+        // The listeners go only after the witness stopped: stopping one makes Darwin reset its embryonic
+        // connections, and those RSTs belong to no scan.
+        if let Some(l) = t.listener.as_mut() {
+            l.signal("TERM");
+            if wait_exit(l.as_mut(), self.st, 100).is_none() {
+                l.kill();
+            }
+        }
+        t.listener = None;
         // 8. status after, then the interlock before a single byte is trusted or copied.
         let (post_rc, post) = self.status(work, "status-post.json")?;
         cap["status_post_raw_run_allowed"] = json!(post_rc == 0 && post["raw_run_allowed"] == true);

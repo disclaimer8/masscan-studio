@@ -121,9 +121,9 @@ pub(crate) fn results_on_wire(r: &mut Run, ctx: &Ctx, c: &Value, results: &Value
         return;
     }
     let Some((fr, _)) = &ctx.peer else { return };
-    let wire: BTreeSet<String> = unique(wire_replies(fr, &ctx.bind, Some(sports(c))))
-        .into_iter()
-        .collect();
+    let _ = fr;
+    note_post_run(r, ctx, c);
+    let wire: BTreeSet<String> = unique(run_wire_replies(ctx, c)).into_iter().collect();
     let bad: Vec<&str> = array(results)
         .iter()
         .map(s)
@@ -681,13 +681,74 @@ pub(crate) fn syns(fr: &Frames, b: &Binding, sp: (u16, u16)) -> Frames {
         .collect()
 }
 pub(crate) fn wire_replies(fr: &Frames, b: &Binding, sp: Option<(u16, u16)>) -> Vec<String> {
+    wire_replies_in(fr, b, sp, None, None)
+}
+/// The scanner's receive window on the Mac stand: first SYN to the scanner's own recorded exit
+/// (`guest_finished_utc`; last SYN + wait when the evidence has none). Nothing else is applied elsewhere.
+pub(crate) fn rx_window(ctx: &Ctx, c: &Value) -> Option<(f64, f64)> {
+    if !mac_stand() {
+        return None;
+    }
+    let (fr, _) = ctx.peer.as_ref()?;
+    let sy = syns(fr, &ctx.bind, sports(c));
+    let (first, last) = (sy.first()?.0, sy.last()?.0);
+    let end = ctx.meta["guest_finished_utc"]
+        .as_f64()
+        .map_or(last + f(&c["wait"]), |t| t.max(last));
+    Some((first, end))
+}
+/// Genuine wire replies of one run: inside the scanner's receive window on the Mac, all of them elsewhere.
+pub(crate) fn run_wire_replies(ctx: &Ctx, c: &Value) -> Vec<String> {
+    let Some((fr, _)) = &ctx.peer else {
+        return vec![];
+    };
+    // On the Mac an injected frame is told by its recorded sha256, never by the IP id alone: a genuine kernel
+    // reply carries 0xf0e1 about once in 65536 frames (seen live in the 100000 pps cells).
+    let known = mac_stand().then(|| {
+        read_json(ctx.d.join("injector.json"))
+            .and_then(|v| v["injected"].as_object().cloned())
+            .map(|m| m.values().map(|v| s(v).to_owned()).collect::<BTreeSet<_>>())
+            .unwrap_or_default()
+    });
+    wire_replies_in(
+        fr,
+        &ctx.bind,
+        Some(sports(c)),
+        rx_window(ctx, c),
+        known.as_ref(),
+    )
+}
+/// Replies the peer sent after the scanner had exited (Darwin aborting the embryonic connections when the lab
+/// stops its listener). Neither results nor failures; reported in the notes.
+pub(crate) fn note_post_run(r: &mut Run, ctx: &Ctx, c: &Value) {
+    let (Some(win), Some((fr, _))) = (rx_window(ctx, c), &ctx.peer) else {
+        return;
+    };
+    let late: Vec<_> = fr.iter().filter(|(t, _)| *t > win.1).cloned().collect();
+    let n = wire_replies_in(&late, &ctx.bind, Some(sports(c)), None, None).len();
+    if n > 0 {
+        r.notes.insert(
+            "post_run_replies".into(),
+            json!({"count":n,"kind":"post-run (listener teardown)","window_end":win.1}),
+        );
+    }
+}
+fn wire_replies_in(
+    fr: &Frames,
+    b: &Binding,
+    sp: Option<(u16, u16)>,
+    win: Option<(f64, f64)>,
+    known: Option<&BTreeSet<String>>,
+) -> Vec<String> {
     fr.iter()
+        .filter(|(t, _)| win.is_none_or(|w| *t >= w.0 && *t <= w.1))
+        .filter(|(_, f)| known.is_none_or(|k| !k.contains(&sha(f))))
         .filter_map(|(_, f)| tcp(f))
         .filter(|i| {
             i.sm == b.pm
                 && i.dm == b.sm
                 && i.dst == b.src
-                && i.id != 0xf0e1
+                && (known.is_some() || i.id != 0xf0e1)
                 && sp.is_none_or(|sp| (sp.0..=sp.1).contains(&i.dp))
         })
         .filter_map(|i| {
@@ -1276,7 +1337,8 @@ pub(crate) fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx:
                 false,
             );
         }
-        let wire = wire_replies(fr, &ctx.bind, Some(sports(c)));
+        note_post_run(r, ctx, c);
+        let wire = run_wire_replies(ctx, c);
         r.check(
             "peer wire replies equal results",
             wire_matches(&unique(wire.clone()), &exp, &j["replies"])
@@ -1392,7 +1454,7 @@ pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
             discarded <= sent + ns_max as i128,
             format!("{discarded} <= {sent} + {ns_max}"),
         );
-        let genuine = wire_replies(fr, &ctx.bind, Some(sports(c))).len();
+        let genuine = run_wire_replies(ctx, c).len();
         r.check(
             "duplicates are genuine peer retransmits only",
             received_with_duplicates(j).is_some_and(|count| count <= genuine as u128),
@@ -1609,15 +1671,7 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         _ if mac_stand() => {
             // Both ports are closed on the Mac, so the scenario is two RSTs from the peer, at 1 pps far below the
             // OS limit. Fewer than two on the wire means the full queue was never exercised: INVALID, never PASS.
-            let wire: BTreeSet<String> = ctx
-                .peer
-                .as_ref()
-                .map(|(fr, _)| {
-                    unique(wire_replies(fr, &ctx.bind, Some(sports(c))))
-                        .into_iter()
-                        .collect()
-                })
-                .unwrap_or_default();
+            let wire: BTreeSet<String> = unique(run_wire_replies(ctx, c)).into_iter().collect();
             r.inv(
                 "two peer replies on the wire (the full-queue scenario was exercised)",
                 wire.len() >= 2,
@@ -2191,12 +2245,70 @@ fn verify_item(
     }
     (r, Some(ctx))
 }
+/// TCP LISTEN ports a raw `netstat -an -p tcp` shows on `*.<port>` or `198.18.0.2.<port>`.
+pub(crate) fn host_listen_ports(text: &str) -> BTreeSet<u16> {
+    text.lines()
+        .filter(|l| l.contains("LISTEN"))
+        .filter_map(|l| l.split_whitespace().nth(3))
+        .filter_map(|a| {
+            a.strip_prefix("*.")
+                .or_else(|| a.strip_prefix(&format!("{PEER}.")))
+        })
+        .filter_map(|p| p.parse().ok())
+        .collect()
+}
+/// The Mac stand answers on 198.18.0.2 for the host's wildcard services too (AirPlay on 5000 and 7000, say).
+/// The open truth is the lab listeners plus every host LISTEN socket recorded both before and after the run; for
+/// evidence without that record it is the set of ports with a genuine SYN-ACK on the wire inside the scanner's
+/// receive window, which needs a complete capture. A missed open port is then a FAIL (it stays in the truth).
+pub(crate) fn host_truth(r: &mut Run, ctx: &Ctx, c: &Value, exp: Vec<String>) -> Vec<String> {
+    if !mac_stand() {
+        return exp;
+    }
+    let rec = |n: &str| fs::read_to_string(ctx.d.join(n)).ok();
+    let extra: BTreeSet<u16> = if let (Some(b), Some(a)) =
+        (rec("host-listen-before.txt"), rec("host-listen-after.txt"))
+    {
+        r.notes.insert(
+            "open_truth".into(),
+            json!("lab listeners plus host LISTEN sockets present before and after the run"),
+        );
+        host_listen_ports(&b)
+            .intersection(&host_listen_ports(&a))
+            .copied()
+            .collect()
+    } else {
+        r.inv(
+            "open truth derived from the wire needs a complete capture (host listeners not recorded)",
+            r.proven(),
+            "",
+        );
+        r.notes.insert(
+            "open_truth".into(),
+            json!("open truth derived from the wire (host listeners not recorded)"),
+        );
+        run_wire_replies(ctx, c)
+            .iter()
+            .filter_map(|x| x.strip_suffix(":open"))
+            .filter_map(|x| x.rsplit(':').next()?.parse().ok())
+            .collect()
+    };
+    exp.into_iter()
+        .map(|e| {
+            let port = e.split(':').nth(1).and_then(|p| p.parse::<u16>().ok());
+            match (e.strip_suffix(":closed"), port) {
+                (Some(h), Some(p)) if extra.contains(&p) => format!("{h}:open"),
+                _ => e,
+            }
+        })
+        .collect()
+}
 /// One perf cell (ruling 7). The capture-completeness rules ran in `capture` (INVALID); everything
 /// here is a behaviour or isolation finding (FAIL). The cell's metrics are recorded in `notes.perf`.
 pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     job(r, j, c, man);
-    let exp = perf_expected(c);
+    let exp = host_truth(r, ctx, c, perf_expected(c));
     let exp_open = exp.iter().filter(|x| x.ends_with(":open")).count();
     let completed = j["status"] == "ok" && j["reason"] == "Completed";
     let drops = j["rx_health"]["kernel_drops"].as_u64();
@@ -2273,7 +2385,7 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
                 ),
             );
         }
-        wire_replies_n = Some(wire_replies(fr, &ctx.bind, Some(sp)).len());
+        wire_replies_n = Some(run_wire_replies(ctx, c).len());
         wire_syns = Some(ours);
     }
     if completed {
@@ -2420,12 +2532,10 @@ pub(crate) fn groups(
         );
         if mac_stand() {
             // Every result of either leg is a reply that leg's capture shows (a missing RST is tolerated).
-            let on_wire = |p: &(Frames, Vec<u8>)| -> BTreeSet<String> {
-                unique(wire_replies(&p.0, &ca.bind, Some(sports(&c))))
-                    .into_iter()
-                    .collect()
+            let on_wire = |x: &Ctx| -> BTreeSet<String> {
+                unique(run_wire_replies(x, &c)).into_iter().collect()
             };
-            let wire: BTreeSet<String> = on_wire(pa).union(&on_wire(pb)).cloned().collect();
+            let wire: BTreeSet<String> = on_wire(ca).union(&on_wire(cb)).cloned().collect();
             let bad: Vec<&String> = union.iter().filter(|x| !wire.contains(*x)).collect();
             r.check(
                 "results are replies the peer sent (on the wire)",

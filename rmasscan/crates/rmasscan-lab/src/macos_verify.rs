@@ -1113,14 +1113,18 @@ pub(crate) fn verify_item(
         }),
         fx["binding"]["responder_open_ports"].to_string(),
     );
-    // The OS rate-limits closed-port RSTs (`net.inet.icmp.icmplim`); the limit in force is part of every run.
-    r.inv(
-        "the closed-port RST rate limit (net.inet.icmp.icmplim) is recorded",
-        ctx.meta["icmplim"]
-            .as_str()
-            .is_some_and(|v| v.trim().parse::<u64>().is_ok()),
-        ctx.meta["icmplim"].to_string(),
-    );
+    // The OS rate-limits closed-port RSTs (Darwin: `net.inet.tcp.rst_rlc_*`; older records read the Linux-style
+    // `net.inet.icmp.icmplim`, which Darwin 27 does not have). Whatever was recorded, an error included, is
+    // informational context and never makes a run INVALID.
+    {
+        let raw = ["rst_rlc.txt", "icmplim.txt"]
+            .iter()
+            .find_map(|n| fs::read_to_string(ctx.d.join(n)).ok());
+        r.notes.insert(
+            "rst_rate_limit".into(),
+            json!({"informational":true,"raw":raw,"meta":ctx.meta.get("rst_rlc").or(ctx.meta.get("icmplim"))}),
+        );
+    }
     let wanted = arg_map(it, man, false);
     for (k, field) in [("--scan-id", "scan_id"), ("--attempt-id", "attempt_id")] {
         if let Some(v) = wanted.get(k) {

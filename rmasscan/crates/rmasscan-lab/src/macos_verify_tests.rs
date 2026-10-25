@@ -1702,16 +1702,6 @@ fn a_missing_closed_port_rst_is_not_a_finding_but_a_missing_open_answer_and_inve
 
 #[test]
 fn the_rst_rate_limit_and_the_fixture_ports_are_part_of_the_evidence() {
-    let env = Env::new("functional");
-    let mut ev = build(&env, C01);
-    ev.json("meta.json", |v| {
-        v.as_object_mut().unwrap().remove("icmplim");
-    });
-    let (r, _) = ev.verify(&env);
-    assert_eq!(
-        result_of(&r, "RST rate limit (net.inet.icmp.icmplim) is recorded"),
-        INVALID
-    );
     let mut env2 = Env::new("functional");
     env2.fx["binding"]["responder_open_ports"] =
         json!("80,443,8000,8001,8002,8003,8004,8005,8006,8007");
@@ -1845,21 +1835,29 @@ fn results_must_be_replies_the_peer_really_sent_for_perf_drain_and_the_group_uni
 }
 
 #[test]
-fn icmplim_must_be_a_number() {
+fn the_rst_rate_limit_is_informational_whatever_was_recorded() {
     let env = Env::new("functional");
-    for bad in ["unreadable", "", "25x", "-1", "2.5"] {
+    // Darwin 27 has no net.inet.icmp.icmplim: the error text is kept in the notes and the run is not INVALID.
+    for bad in ["unreadable", "", "25x"] {
         let mut ev = build(&env, C01);
         ev.json("meta.json", |v| v["icmplim"] = json!(bad));
+        ev.files.insert(
+            "icmplim.txt".into(),
+            b"rc 1\nsysctl: unknown oid 'net.inet.icmp.icmplim'\n".to_vec(),
+        );
         let (r, _) = ev.verify(&env);
-        assert_eq!(
-            result_of(&r, "RST rate limit (net.inet.icmp.icmplim) is recorded"),
-            INVALID,
-            "{bad:?}"
+        assert_eq!(r.verdict(), PASS, "{bad:?} {:?}", failing_checks(&r));
+        assert!(
+            s(&r.notes["rst_rate_limit"]["raw"]).contains("unknown oid"),
+            "{:?}",
+            r.notes
         );
     }
     let mut ev = build(&env, C01);
-    ev.json("meta.json", |v| v["icmplim"] = json!("250"));
-    assert_eq!(ev.verdict(&env), PASS);
+    ev.json("meta.json", |v| {
+        v.as_object_mut().unwrap().remove("icmplim");
+    });
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
 }
 
 #[test]
@@ -2039,4 +2037,164 @@ fn an_mdns_frame_outside_the_syn_window_is_a_stray_and_never_a_foreign_reply() {
     edit_scanner_output(&mut ev, |v| v["discarded"] = json!(4));
     let (r, _) = ev.verify(&env);
     assert_ne!(result_of(&r, "no unexplained discards"), PASS);
+}
+
+/// The teardown shape of the live T7 c03 run: the scanner finished (last SYN + wait), then Darwin reset the
+/// embryonic connections of 8000-8007 when the lab stopped the listener, at last SYN + 3.14 s.
+#[test]
+fn listener_teardown_resets_after_the_scanner_exited_are_not_replies_of_the_run() {
+    let env = Env::new("functional");
+    let mut ev = build(&env, C03);
+    let last_syn = BASE + 0.002 + 15.0 * 0.01;
+    ev.json("meta.json", |v| {
+        v["guest_finished_utc"] = json!(last_syn + 3.0)
+    });
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (k, p) in (8000..8008u16).enumerate() {
+        fr.push((last_syn + 3.15 + k as f64 * 0.00004, reply(p, false)));
+    }
+    fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    assert_eq!(r.notes["post_run_replies"]["count"], 8, "{:?}", r.notes);
+    assert!(
+        s(&r.notes["post_run_replies"]["kind"]).contains("listener teardown"),
+        "{:?}",
+        r.notes
+    );
+    // A reply inside the window that the scanner did not report is still a mismatch (no tolerance re-includes it).
+    let mut ev = build(&env, C03);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.push((BASE + 1.0, reply(8000, false)));
+    fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &fr);
+    assert!(failed(
+        &ev.verify(&env).0,
+        "peer wire replies equal results"
+    ));
+}
+
+/// The host's wildcard services (AirPlay on 5000) answer on 198.18.0.2 as well; perf.1000 scans ports 1-5000.
+fn long_perf(ev: &mut Ev) {
+    // 5000 probes at 1 ms: the scanner exits after the last of them.
+    ev.json("meta.json", |v| v["guest_finished_utc"] = json!(BASE + 7.0));
+    edit_scanner_output(ev, |v| {
+        v["wall"]["outcome_utc_ms"] = json!(((BASE + 6.9) * 1000.).round());
+        v["wall"]["join_done_utc_ms"] = json!(((BASE + 7.0) * 1000.).round());
+    });
+}
+fn host_listener_on_5000(ev: &mut Ev) {
+    long_perf(ev);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (_, f) in fr.iter_mut() {
+        if tcp(f).is_some_and(|i| i.sm == PM && i.sp == 5000) {
+            *f = reply(5000, true);
+        }
+    }
+    rebuild_peer(ev, &fr);
+    edit_scanner_output(ev, |v| {
+        let r: Vec<Value> = array(&v["replies"])
+            .iter()
+            .map(|x| {
+                if s(x) == "198.18.0.2:5000:closed" {
+                    json!("198.18.0.2:5000:open")
+                } else {
+                    x.clone()
+                }
+            })
+            .collect();
+        v["replies"] = json!(r);
+    });
+}
+
+#[test]
+fn a_host_wildcard_listener_is_open_truth_when_the_wire_or_the_record_shows_it() {
+    let env = Env::new("perf");
+    let tag = "perf.1000.r1";
+    // No host record (all of 717e45c): derived from the SYN-ACK on the wire, said so in the notes.
+    let mut ev = build(&env, tag);
+    host_listener_on_5000(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    assert!(
+        s(&r.notes["open_truth"]).contains("derived from the wire (host listeners not recorded)"),
+        "{:?}",
+        r.notes
+    );
+    // The SYN-ACK is on the wire but the scanner missed the open port: FAIL.
+    let mut ev = build(&env, tag);
+    host_listener_on_5000(&mut ev);
+    edit_scanner_output(&mut ev, |v| {
+        let r: Vec<Value> = array(&v["replies"])
+            .iter()
+            .filter(|x| s(x) != "198.18.0.2:5000:open")
+            .cloned()
+            .collect();
+        v["reply_total"] = json!(r.len());
+        v["reply_unique"] = json!(r.len());
+        v["received"] = json!(r.len());
+        v["replies"] = json!(r);
+    });
+    assert!(failed(&ev.verify(&env).0, "results equal listener truth"));
+    // An open result with no SYN-ACK on the wire is invented: FAIL.
+    let mut ev = build(&env, tag);
+    long_perf(&mut ev);
+    edit_scanner_output(&mut ev, |v| {
+        let r: Vec<Value> = array(&v["replies"])
+            .iter()
+            .map(|x| {
+                if s(x) == "198.18.0.2:5000:closed" {
+                    json!("198.18.0.2:5000:open")
+                } else {
+                    x.clone()
+                }
+            })
+            .collect();
+        v["replies"] = json!(r);
+    });
+    assert!(failed(&ev.verify(&env).0, "results equal listener truth"));
+    // With the record: the ports present both before and after are the truth, the wire is not consulted.
+    let listen = |ports: &[u16]| {
+        let mut t = String::from(
+            "rc 0\nActive Internet connections (including servers)\nProto Recv-Q Send-Q  Local Address          Foreign Address        (state)\n",
+        );
+        for p in ports {
+            t += &format!(
+                "tcp46      0      0  *.{p}                   *.*                    LISTEN\n"
+            );
+        }
+        t.into_bytes()
+    };
+    let mut ev = build(&env, tag);
+    host_listener_on_5000(&mut ev);
+    ev.files
+        .insert("host-listen-before.txt".into(), listen(&[5000, 7000]));
+    ev.files
+        .insert("host-listen-after.txt".into(), listen(&[5000]));
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    let mut ev = build(&env, tag);
+    host_listener_on_5000(&mut ev);
+    ev.files
+        .insert("host-listen-before.txt".into(), listen(&[5000]));
+    ev.files.insert("host-listen-after.txt".into(), listen(&[]));
+    assert!(failed(&ev.verify(&env).0, "results equal listener truth"));
+}
+
+/// Seen live at 100000 pps: the kernel's own RSTs carry IP id 0xf0e1 now and then (1 in 65536). Only the frames
+/// the injector recorded writing are injected; a genuine reply with that id is a reply like any other.
+#[test]
+fn a_genuine_kernel_reply_with_the_injected_ip_id_is_still_a_reply() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (_, f) in fr.iter_mut() {
+        if tcp(f).is_some_and(|i| i.sm == PM && i.sp == 17) {
+            f[18..20].copy_from_slice(&0xf0e1u16.to_be_bytes());
+        }
+    }
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
 }

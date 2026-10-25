@@ -363,3 +363,22 @@ Linux are unchanged):
 - x01: multicast and broadcast frames (destination group bit) anywhere in the peer capture count as strays for the
   upper bound of discards ("no unexplained discards"); the lower bound and unicast strays stay in the
   first-SYN to last-SYN + 3 s window. A multicast frame is never a foreign reply.
+
+### Live T7 findings (round 8)
+
+- RST rate limit: Darwin 27 has no `net.inet.icmp.icmplim`. The suite now records
+  `sysctl -n net.inet.tcp.rst_rlc_enable net.inet.tcp.rst_rlc_bucket_ms` raw in `rst_rlc.txt` (and `meta.rst_rlc`).
+  The verifier only notes whatever is recorded (`notes.rst_rate_limit`, old `icmplim.txt` included); it never makes a
+  run INVALID. A missing closed RST stays tolerated and results must still be genuine wire replies.
+- Receive window: genuine wire replies are those from the first SYN to the scanner's own exit
+  (`guest_finished_utc`; last SYN + wait if absent). Later replies are Darwin resetting embryonic connections when the
+  lab stops its listener; they go to `notes.post_run_replies` ("post-run (listener teardown)") and are neither
+  results nor a FAIL. The suite now stops the peer witness before the listeners. The window applies to c01-c06, x01,
+  perf, the stop runs and the pause/resume union.
+- Host wildcard listeners: 198.18.0.2 is a local address, so host services bound to `*` (5000, 7000, 49158) answer
+  there. The suite records `host-listen-before.txt` and `host-listen-after.txt` (raw `netstat -an -p tcp`); the open
+  truth is the lab listeners plus the `*.port` / `198.18.0.2.port` LISTEN sockets present in both. Without the record
+  (717e45c) the open truth is the set of SYN-ACKs on the wire inside the window and needs a complete capture
+  ("open truth derived from the wire (host listeners not recorded)"). A SYN-ACK without an open result is a FAIL.
+- Injected frames are told by the injector's recorded sha256, not by IP id 0xf0e1 alone: genuine kernel RSTs carry
+  that id once in 65536 frames (seen in the 100000 pps cells).

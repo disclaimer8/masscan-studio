@@ -1707,6 +1707,31 @@ fn restricted_scan_refusals_accepted_are_only_the_documented_ones() {
     assert_eq!(d.status(tag), (FAIL.into(), true));
 }
 #[test]
+fn a_manifest_expecting_permission_denied_accepts_only_exit_5_with_the_admin_only_hint() {
+    // Suites from the final-review I1 fix on record the expectation; then the pre-fix
+    // InterfaceMismatch refusal (exit 2) is no longer evidence of the fixed behaviour.
+    let tag = "perm_restricted_scan";
+    let d = Scratch::new("failure", Some(tag));
+    d.edit("manifest.json", |m| {
+        m["perm_restricted_refusal"] = json!("PermissionDenied")
+    });
+    // Exit 5 PermissionDenied but without the Administrators-only hint.
+    assert_eq!(d.status(tag), (FAIL.into(), true));
+    d.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
+        v["error"] = json!(
+            "PermissionDenied(\"no Npcap device named \\\"x\\\": only loopback is visible: Npcap may be installed in Administrators-only mode and this process lacks rights (1 devices enumerated)\")"
+        )
+    });
+    assert_eq!(d.status(tag), (PASS.into(), false));
+    d.edit_sealed(&format!("runs/{tag}/run.json"), |v| {
+        v["error"] = json!("InterfaceMismatch(\"no Npcap device\")")
+    });
+    d.edit(&format!("runs/{tag}/meta.json"), |v| {
+        v["guest_exit"] = json!(2)
+    });
+    assert_eq!(d.status(tag), (FAIL.into(), true));
+}
+#[test]
 fn the_rxloss_independent_count_is_recorded_and_bounds_the_drops() {
     let d = Scratch::new("failure", None);
     let v = verify_dir(&d.0);

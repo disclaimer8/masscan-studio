@@ -1790,13 +1790,18 @@ fn permission(r: &mut Run, ctx: &Ctx, it: &Value, man: &Value) {
     } else {
         job(r, j, &case_by_name("pb_perm_scan").unwrap(), man);
         let e = s(&j["error"]).split('(').next().unwrap_or("");
+        // Suites from the final-review I1 fix on record `perm_restricted_refusal`: only exit 5
+        // PermissionDenied with the Administrators-only hint proves the fixed behaviour. Older
+        // manifests keep the pre-fix rule, under which InterfaceMismatch (exit 2) was the refusal.
+        let refused = if man["perm_restricted_refusal"] == "PermissionDenied" {
+            rc == 5 && e == "PermissionDenied" && s(&j["error"]).contains("Administrators-only")
+        } else {
+            (rc == 2 && e == "InterfaceMismatch")
+                || (rc == 5 && (e == "PermissionDenied" || e == "DriverUnavailable"))
+        };
         r.beh(
             "restricted scan refuses before opening adapter or sending",
-            ((rc == 2 && e == "InterfaceMismatch")
-                || (rc == 5 && (e == "PermissionDenied" || e == "DriverUnavailable")))
-                && j["status"] == "error"
-                && j["opened_adapter"] == false
-                && j["tx_sent"] == 0,
+            refused && j["status"] == "error" && j["opened_adapter"] == false && j["tx_sent"] == 0,
             j["error"].to_string(),
         );
     }

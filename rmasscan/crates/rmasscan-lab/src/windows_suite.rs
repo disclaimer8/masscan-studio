@@ -1971,6 +1971,9 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         if s.plan == "perf" {
             man["perf"] = json!({"rates":crate::verify::PERF_RATES,"reps":crate::verify::PERF_REPS,"order":"rep-major","target":"198.18.0.2"});
         }
+        // The exe comes from this code, which has the final-review I1 fix: a restricted-token
+        // scan must be refused with PermissionDenied (exit 5), never InterfaceMismatch.
+        man["perm_restricted_refusal"] = json!("PermissionDenied");
         write_json(s.out.join("manifest.json"), &man)?;
         copy_tree(&fixtures, &s.out.join("fixtures"))?;
         man

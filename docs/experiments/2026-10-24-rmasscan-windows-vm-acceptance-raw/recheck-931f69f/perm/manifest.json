@@ -1,0 +1,93 @@
+{
+  "binding": {
+    "iface": "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "peer_ip": "198.18.0.2",
+    "rate": 100,
+    "router_mac": "02:57:4c:3d:2e:9b",
+    "seed": 1,
+    "src_ip": "198.18.0.1",
+    "src_mac": "52:54:00:04:80:a9",
+    "wait": 3
+  },
+  "capture_schema": 3,
+  "code_commit": "931f69fd1eaa0affd160d047b39855843c8cb152",
+  "created_utc": 1792901886.881173,
+  "exe": {
+    "build": "Rust static CRT wire_scan from code_commit",
+    "guest_path": "C:\\Users\\lab\\t4\\wire_scan.exe",
+    "sha256": "02d67866b94e9f8b0f76ddabca0d7fd6cf3c451ee9785442b59c9b57d5be6915",
+    "size": 629248
+  },
+  "listeners": {
+    "open": [
+      80,
+      443,
+      8000,
+      8001,
+      8002,
+      8003,
+      8004,
+      8005,
+      8006,
+      8007
+    ],
+    "silent": [
+      8099,
+      8100,
+      8101,
+      8102,
+      8103,
+      8104,
+      8105,
+      8106,
+      8107,
+      8108,
+      8109,
+      8110,
+      8111,
+      8112,
+      8113,
+      8114,
+      8115,
+      8116,
+      8117,
+      8118,
+      8119
+    ]
+  },
+  "oracle": {
+    "git_commit": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "git_tree_clean": true,
+    "host": "minipc",
+    "pinned_revision": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "variant": "original pinned binary (NOT the --offline-patched copy)",
+    "version_line": "Masscan version 1.3.9-integration ( https://github.com/robertdavidgraham/masscan )"
+  },
+  "orchestrator": {
+    "binary_name": "rmasscan-lab",
+    "binary_sha256": "a854f049a875f1e464aa3dffac3c52e125e25a285aa0211db00bcfb9068c985d",
+    "build_commit": "931f69fd1eaa0affd160d047b39855843c8cb152",
+    "errors": [],
+    "git_commit": "931f69fd1eaa0affd160d047b39855843c8cb152",
+    "git_dirty": false
+  },
+  "pause": {
+    "case": "c03_multi_ports",
+    "n": [
+      0,
+      1,
+      8,
+      15
+    ]
+  },
+  "perm_restricted_refusal": "PermissionDenied",
+  "plan": "failure",
+  "schema": 1,
+  "stand": {
+    "manifest": "$HOME/winvm/lab/n2.json",
+    "netns": "wvp-n2",
+    "run_id": "n2"
+  },
+  "suite": "recheck-perm"
+}

@@ -1,4 +1,4 @@
-a2d90132331083d96d78d35203827090c468155a88c8e622266a0ceb612897e6  ./README.md
+f4738efe11c9b1c09b18523a8f4147cdfa8815ed41439edf8f300460c5272e18  ./README.md
 ad34159b09e16f09eefdd7018e813abdc7c0a851d0cdee7fbf0659b2ae1742e2  ./deploy/deploy-manifest.json
 71cd2d1493d61bffed99a8f3adbe6fb2b2d16d1af9b73d654def0a7a344bf4b1  ./deploy/guest-scripts/windows-vm-lab.ps1
 1f20e2abf5428c0fac01aa23baba2748378dbf45c30736b11c4dce6deded3199  ./deploy/guest-scripts/windows_wire_clock.ps1

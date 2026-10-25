@@ -700,6 +700,8 @@ fn the_guard_workflow_runs_on_every_change_and_calls_the_shell_guard() {
 // ---- LR N3: the shell guard, run against planted temporary repositories ---------------------------
 
 /// Runs `scripts/language-guard.sh` on a fresh git repository holding `files`; returns its rc.
+/// The shell guard is a bash script that CI runs on Linux, so this helper and its tests are unix-only.
+#[cfg(unix)]
 fn guard_rc(tag: &str, files: &[(&str, String)]) -> i32 {
     let dir = std::env::temp_dir().join(format!("rmasscan-guard-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -726,6 +728,7 @@ fn guard_rc(tag: &str, files: &[(&str, String)]) -> i32 {
     out.status.code().unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn the_shell_guard_passes_a_clean_repository_and_ignores_prose() {
     let prose = format!("we no longer use {WORD} here\n");
@@ -742,6 +745,7 @@ fn the_shell_guard_passes_a_clean_repository_and_ignores_prose() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn the_shell_guard_catches_case_variants_zipapps_makefiles_and_the_windows_launcher() {
     let call = format!("{WORD}3 tool\n");
@@ -792,6 +796,7 @@ fn the_shell_guard_catches_case_variants_zipapps_makefiles_and_the_windows_launc
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn the_shell_guard_does_not_flag_py_as_part_of_other_words() {
     // `py` alone is not the interpreter; only the launcher form `py -<digit>` is.
@@ -839,6 +844,7 @@ fn banned_source_extensions_are_flagged_in_any_letter_case() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn the_shell_guard_fails_on_planted_swift_c_and_cpp_sources() {
     for (tag, name) in [
@@ -961,6 +967,7 @@ fn both_guards_accept_harmless_symlinks() {
     assert_eq!(rc, 0, "{text}");
 }
 
+#[cfg(unix)]
 #[test]
 fn more_banned_extensions_and_build_files_fail_both_guards() {
     let call = format!("{WORD}3 tool\n");

@@ -2628,3 +2628,43 @@ fn the_lock_guard_notices_that_its_ssh_session_died() {
     let busy = lock_session("sh", &strings(&["-c", "echo BUSY"]));
     assert_eq!(busy.err().as_deref(), Some(LOCK_BUSY));
 }
+
+// ---- review 7ffa155, P1: another suite's unfinished evidence blocks a new suite name ----
+#[cfg(unix)]
+#[test]
+fn unfinished_evidence_of_another_suite_is_reported_and_nothing_of_it_is_deleted() {
+    let h = local_sweep::LocalHome::new("other-suite-kept");
+    let ev = h.home.join("winvm/t4-ev");
+    let kept = ev.join("old-suite/run/tag");
+    let other_done = ev.join("old-suite/run/done");
+    let own_done = ev.join("new-suite/run/done");
+    for d in [&kept, &other_done, &own_done] {
+        fs::create_dir_all(d).unwrap();
+    }
+    fs::write(kept.join(ABORT_MARKER), "").unwrap();
+    let reports = sweep_remote(&h, "new-suite").unwrap();
+    assert_eq!(reports, vec![kept.to_string_lossy().into_owned()]);
+    assert!(
+        kept.join(ABORT_MARKER).exists(),
+        "kept evidence is never deleted"
+    );
+    assert!(
+        other_done.exists(),
+        "another suite's scratch is not this run's to delete"
+    );
+    assert!(
+        !own_done.exists(),
+        "the own suite's unmarked scratch is still swept"
+    );
+    // The start refuses with the directory named, whatever the suite name.
+    let e = refuse_kept_runs(&h, &reports);
+    assert!(
+        matches!(&e, SuiteError::Abort(m) if m.contains("old-suite/run/tag")),
+        "{e:?}"
+    );
+    // Own kept evidence is reported once, not twice.
+    let own = ev.join("new-suite/run/tag");
+    fs::create_dir_all(&own).unwrap();
+    fs::write(own.join(ABORT_MARKER), "").unwrap();
+    assert_eq!(sweep_remote(&h, "new-suite").unwrap().len(), 2);
+}

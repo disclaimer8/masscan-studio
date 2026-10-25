@@ -1495,11 +1495,13 @@ pub(crate) const TERM_GRACE_S: u64 = 12;
 /// Removes the finished or dead runs' scratch below `<ev>/<suite>` (one directory per run id, one per tag)
 /// and leaves every run that carries [`ABORT_MARKER`]: its evidence has not been copied home and
 /// hash-matched yet. Each removed directory must be its own physical, symlink-free path. Kept runs are
-/// listed as `kept-uncopied <path>`.
+/// listed as `kept-uncopied <path>`. Run directories of the other suites under the same evidence root are
+/// only looked at, never touched: one that carries the marker is listed too, so a new suite name cannot
+/// start over unfinished evidence.
 pub(crate) fn sweep_scratch_command(suite_dir: &str) -> String {
     let p = quote(suite_dir);
     format!(
-        "p={p}; if test -d \"$p\" && test ! -L \"$p\" && test \"$(readlink -f -- \"$p\")\" = \"$p\"; then for t in \"$p\"/*/*; do test -d \"$t\" || continue; if test -e \"$t/{ABORT_MARKER}\"; then echo \"kept-uncopied $t\"; continue; fi; test ! -L \"$t\" && test \"$(readlink -f -- \"$t\")\" = \"$t\" && rm -rf -- \"$t\"; done; rmdir \"$p\"/* \"$p\" 2>/dev/null; fi; true"
+        "p={p}; if test -d \"$p\" && test ! -L \"$p\" && test \"$(readlink -f -- \"$p\")\" = \"$p\"; then for t in \"$p\"/*/*; do test -d \"$t\" || continue; if test -e \"$t/{ABORT_MARKER}\"; then echo \"kept-uncopied $t\"; continue; fi; test ! -L \"$t\" && test \"$(readlink -f -- \"$t\")\" = \"$t\" && rm -rf -- \"$t\"; done; rmdir \"$p\"/* \"$p\" 2>/dev/null; fi; for t in \"${{p%/*}}\"/*/*/*; do case \"$t\" in \"$p\"/*) continue;; esac; test -d \"$t\" && test -e \"$t/{ABORT_MARKER}\" && echo \"kept-uncopied $t\"; done; true"
     )
 }
 /// Remote scratch removal: only the exact, symlink-free run directory this suite created.

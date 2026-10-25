@@ -1,0 +1,10 @@
+[package]
+name = "studio-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+studio-protocol.workspace = true
+studio-store.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,16 @@
+TEST_EXIT=101
+test deploy::tests::the_deploy_manifest_command_hashes_the_installed_file ... FAILED
+test windows_suite::suite_tests::an_aborted_run_is_copied_from_its_own_scratch_into_runs_aborted_under_tag_and_run_id ... FAILED
+test windows_suite::suite_tests::gate_binds_the_nonce_records_the_verify_and_only_then_reports_status ... FAILED
+test windows_suite::suite_tests::guest_scripts_come_from_the_commit_and_their_hashes_are_evidence ... FAILED
+test windows_suite::suite_tests::the_sweep_keeps_uncopied_abort_evidence_and_removes_the_rest ... FAILED
+test wire_suite::suite_tests::cleanup_signals_do_not_go_through_command_and_reach_the_process ... FAILED
+assertion `left == right` failed
+test result: FAILED. 360 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 59.07s
+error: test failed, to rerun pass `-p rmasscan-lab --lib`
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+error: 1 target failed:

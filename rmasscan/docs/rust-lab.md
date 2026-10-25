@@ -253,7 +253,7 @@ the last two items.
    first, because the verifier reads `peer.pcap` and the recorded sha256 is that of the uncompressed file.
 
 Cleanup after an aborted suite: `rmasscan-lab windows-suite --cleanup --suite ID` stops every
-recorded remote process (pid and start time must match) and removes the suite's scratch directory.
+recorded remote process (pid and start time must match) and removes the suite's scratch directories except runs that still carry the keep marker (see below); those are reported.
 
 ### Exit codes of `windows-suite`
 
@@ -287,15 +287,25 @@ NOT RUN (discardable). The interlock requires the eno1 tcpdump counters `receive
 `dropped_kernel` to be measured and zero as well as the frame count. The scratch is copied to
 `runs_aborted/<tag>.<run id>/` after its sha256 sums were recorded on home-pc
 (`abort-hashes-on-home-pc.txt`); the remote scratch stays and carries a `.abort-uncopied` marker
-until the copy matches. The start-of-suite sweep and `--cleanup` never remove a marked run (they
-print its path). The verifier evaluates the safety checks on every `eno1.pcap` and `peer.pcap`
+until the copy matches. The marker is written when the run's scratch is created, before anything can be
+sent, so an orchestrator that dies or an ssh that fails after the send leaves the evidence marked too. A
+successful run removes its scratch (marker included) after its copies were hash-checked; an aborted run
+clears the marker only after the hash match, and not while the scratch holds a sub-directory. The
+start-of-suite sweep and `--cleanup` never remove a marked run. A start that finds one deletes nothing and
+starts no run: exit 13 when its `eno1.pcap` shows a lab frame, else exit 10 naming the run. Recovery: on
+home-pc inspect the directory (`ls -l`, `tcpdump -nr eno1.pcap`), copy it home with
+`scp -r home-pc:DIR OUT/runs_aborted/NAME`, compare `sha256sum` on both sides, `rm DIR/.abort-uncopied`,
+start again. `--cleanup` keeps marked runs and lists them. An unproven eno1 (unreadable, unmeasured, kernel
+drops) exits 10 even when the operator stopped the suite, so it is never reported as a plain interrupt (130). The verifier evaluates the safety checks on every `eno1.pcap` and `peer.pcap`
 under `runs_aborted/`; an aborted run without pcaps changes nothing.
 
 **Ctrl-C (M-1).** SIGINT and SIGTERM only raise a flag. The ssh children sit in their own process
 group, so the terminal does not signal them. The suite then stops the run's remote tools through
 an exec path that ignores the flag (otherwise it would kill its own cleanup), copies the evidence
 as for any abort, TERMs every recorded process of the suite, waits 12 s (a TERMed link-loss tool needs
-up to 10 s to put lab0 back up) and KILLs what is left. The exit code is 130. If the link is still
+up to 10 s to put lab0 back up) and KILLs what is left. The exit code is 130 (10 or 13 when the eno1 evidence is unproven or shows a lab frame). The cleanup is about
+20 ssh round trips plus the 12 s grace, one to three minutes over the jump chain: wait for it, a second
+Ctrl-C does nothing and `kill -9` leaves the tools to their dead-man bounds. If the link is still
 down afterwards (`vm-lab status` shows `raw_run_allowed` false and the next Verify fails closed),
 bring it up by hand with any QMP client on home-pc, for example
 `printf '{"execute":"qmp_capabilities"}\n{"execute":"set_link","arguments":{"name":"lab0","up":true}}\n' | socat - UNIX-CONNECT:$HOME/winvm/qmp.sock`.
@@ -309,6 +319,11 @@ stdin stays open (a dead orchestrator closes it, so the lock cannot outlive it).
 changes anything. Without the lock its start-of-suite sweep would TERM and KILL the other run's captures,
 listener and link-loss tool.
 
+The lock session uses `ServerAliveInterval=15` and `ServerAliveCountMax=4`, so a dropped link is noticed
+within a minute. A missing `flock` on home-pc exits 10 with its own message. If the lock is reported busy
+and no suite is running, find the holder on home-pc with `fuser -v ~/winvm/t4-ev/.suite.lock` (or
+`ps -eo pid,etime,args | grep '[.]suite.lock'`); it is a `sh` with a `cat` child left by a half-open ssh
+session. Kill that `sh` (and the `cat`) and start again. Never kill the holder while a suite is running.
 **Options (M-5).** Each subcommand accepts only its own options. An unknown option (`--pla perf`) or a
 repeated one (`--only a --only b`; give all tags after one `--only`) exits 2 and names the option. The
 commands in this document are parsed against the same lists by a unit test.

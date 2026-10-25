@@ -1,0 +1,5 @@
+KV rx_loss/gate scanner_if=feth4201 peer_if=feth4202 src_mac=[02, ac, 00, 00, 00, 01] peer_mac=[02, ac, 00, 00, 00, 02] mac_check=os-masked
+KV rx_loss/load bpf_buffer_len=524288 junk_frames_needed=19661 ethertype=0x88b5
+KV rx_loss/rx_loss reason=Failed(RxLoss { kernel_drops: 6555 }) sent=110 next_index=110 received=103 rx_health=Some(6555) net.tx_sent=110 net.tx_would_block=0 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=103 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(6555) command_to_outcome_ms=None checkpoint=false
+KV rx_loss/load_result junk_sent=19661 peer.tx_sent=19661 peer.tx_would_block=0 scanner.rx_packets=103 scanner.kernel_drops=Some(6555)
+KV rx_loss/burst_end burst_end_ms=2064 stall_end_ms=3400

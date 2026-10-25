@@ -1,0 +1,3 @@
+KV uncertain/gate scanner_if=feth4201 peer_if=feth4202 src_mac=[02, ac, 00, 00, 00, 01] peer_mac=[02, ac, 00, 00, 00, 02] mac_check=os-masked
+KV uncertain/uncertain reason=Failed(TxUncertain) sent=3 next_index=3 received=2 rx_health=Some(0) net.tx_sent=3 net.tx_would_block=0 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=2 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) command_to_outcome_ms=None checkpoint=false
+KV uncertain/uncertain_silence witness_syns_settled=3 witness_syns_after=3 runtime_sent=3 witness_alive=true witness_drops=Some(0)

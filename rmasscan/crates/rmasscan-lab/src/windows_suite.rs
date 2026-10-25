@@ -960,6 +960,31 @@ impl Suite<'_> {
         self.home(&remove_scratch_command(&rev), true)?;
         Ok(())
     }
+    /// Lost-lock cleanup. The lock may already belong to another orchestrator, so there is no suite-wide
+    /// sweep: only the processes recorded in this run's own pidfiles (pid and start time must match) get TERM,
+    /// then KILL of their process group, each wait bounded. What cannot be stopped is left alone and named.
+    fn reap_own_run(&self, rev: &str) -> Vec<String> {
+        let mut notes = Vec::new();
+        let pids = ["listener", "inject", "flood", "linkloss", "peer", "eno1"];
+        for n in pids {
+            self.stop(&format!("{rev}/{n}.pid"), "TERM");
+        }
+        for n in pids {
+            let pidfile = format!("{rev}/{n}.pid");
+            if self.exited(&pidfile, 5) {
+                continue;
+            }
+            self.stop(&pidfile, "KILL");
+            if !self.exited(&pidfile, 5) {
+                let advice = format!(
+                    "the process recorded in {pidfile} could not be stopped and was left alone (the suite lock is lost, so no sweep was run); on home-pc check `cat {pidfile}` against /proc/PID/stat, and only if it is the lab tool run: sudo kill -KILL -- -PID PID"
+                );
+                eprintln!("NOTICE: {advice}");
+                notes.push(advice);
+            }
+        }
+        notes
+    }
     /// The failure path of one run (final review I-2). It always stops the run's remote tools and brings
     /// the scratch evidence home hash-checked. Once the guest runner was invoked it also reads the eno1
     /// frame count on home-pc: a lab frame is reported as the isolation interlock (exit 13), exactly like
@@ -971,10 +996,14 @@ impl Suite<'_> {
         for n in pids {
             self.stop(&format!("{rev}/{n}.pid"), "TERM");
         }
-        for n in pids {
-            self.exited(&format!("{rev}/{n}.pid"), 20);
-        }
-        let mut notes = Vec::new();
+        let mut notes = if self.lock.is_some_and(LockGuard::lost) {
+            self.reap_own_run(rev)
+        } else {
+            for n in pids {
+                self.exited(&format!("{rev}/{n}.pid"), 20);
+            }
+            Vec::new()
+        };
         let mut breach = None;
         // The live interlock already found a lab frame: its message carries the mark and needs no second reading.
         if self.runner_invoked.get() && !err.contains(LAB_FRAME_MARK) {
@@ -2069,7 +2098,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         }
         if let Err(m) = s.one(&item, argv, forge, Some(cp)) {
             let stopped = exec.stopped();
-            if stopped {
+            if stopped && !s.lock.is_some_and(LockGuard::lost) {
                 // Suite-wide TERM, 12 s, KILL: through the uninterruptible exec path, so the stop flag cannot kill it.
                 let _ = sweep_remote(exec, &s.suite);
             }

@@ -327,6 +327,24 @@ pub(crate) const LINKLOSS_BOUND_S: u64 = 2 * LINKLOSS_EXPECTED_S;
 pub(crate) const fn capture_expected_s(run_timeout: u64) -> u64 {
     run_timeout + 165
 }
+/// Fixed seconds one run spends besides sending and waiting: the gate's guest Verify, the runner's
+/// start and the result transfer. The 240 s per-run default is its generous multiple.
+pub(crate) const PERF_OVERHEAD_S: u64 = 60;
+/// Seconds one perf cell takes on the guest when healthy: sending at the requested pace (rounded up)
+/// plus the scanner's wait.
+pub(crate) fn perf_nominal_s(item: &Value) -> u64 {
+    let c = crate::verify::perf_case(item["rate"].as_u64().unwrap_or(1));
+    c["syn"]
+        .as_u64()
+        .unwrap_or(0)
+        .div_ceil(c["rate"].as_u64().unwrap_or(1).max(1))
+        + c["wait"].as_u64().unwrap_or(0)
+}
+/// Per-run timeout of a perf cell: at least twice (nominal + overhead), and never below the operator's
+/// `--run-timeout`. It also sets the dead-man bound of the listener and captures (see `Suite::bound`).
+pub(crate) fn perf_run_timeout(item: &Value, floor: u64) -> u64 {
+    floor.max(2 * (perf_nominal_s(item) + PERF_OVERHEAD_S))
+}
 impl SuiteError {
     pub(crate) fn code(&self) -> i32 {
         match self {
@@ -1265,12 +1283,12 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     let o = options(args)?;
     if o.contains_key("help") {
         println!(
-            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old"
+            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure|perf] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old"
         );
         return Ok(0);
     }
     let plan = opt(&o, "plan", "functional");
-    if !matches!(plan.as_str(), "functional" | "failure") {
+    if !matches!(plan.as_str(), "functional" | "failure" | "perf") {
         return Err("unknown suite plan".to_string().into());
     }
     let items = crate::verify::planned(&json!({"plan":plan}));
@@ -1285,6 +1303,12 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
         return Ok(0);
     }
     let suite = opt(&o, "suite", "functional");
+    if plan == "perf" && !o.contains_key("suite") {
+        return Err(SuiteError::NotRun(
+            "--plan perf needs an explicit --suite ID (for example perf-r1): the default would reuse the functional suite id"
+                .into(),
+        ));
+    }
     if !safe_id(&suite) {
         return Err("--suite must be a safe identifier".to_string().into());
     }
@@ -1500,15 +1524,23 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
         if eh.len() != 2 {
             return Err("invalid executable hash response".to_string().into());
         }
-        let man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"orchestrator":orchestrator,"created_utc":epoch()});
+        let mut man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"orchestrator":orchestrator,"created_utc":epoch()});
+        if s.plan == "perf" {
+            man["perf"] = json!({"rates":crate::verify::PERF_RATES,"reps":crate::verify::PERF_REPS,"order":"rep-major","target":"198.18.0.2"});
+        }
         write_json(s.out.join("manifest.json"), &man)?;
         copy_tree(&fixtures, &s.out.join("fixtures"))?;
         man
     };
+    let base_timeout = s.timeout;
     for item in items {
         let tag = item["tag"].as_str().ok_or("planned tag missing")?;
         if !only.is_empty() && !only.iter().any(|t| t == tag) {
             continue;
+        }
+        if s.plan == "perf" {
+            // Guest timeouts and dead-man bounds follow this cell; the operator's value is a floor.
+            s.timeout = perf_run_timeout(&item, base_timeout);
         }
         let kind = item["kind"].as_str().unwrap_or("");
         let cp = if matches!(kind, "pause" | "resume") {

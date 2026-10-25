@@ -157,6 +157,7 @@ impl Stand {
         }
         if cmd.contains("mkdir --") {
             // scratch_create: the leaf is the run tag.
+            self.counter_calls.set(0);
             let leaf = cmd.rsplit("mkdir -- '").next().unwrap_or("");
             if let Some(tag) = leaf.trim_end_matches('\'').rsplit('/').next() {
                 *self.tag.borrow_mut() = tag.into();
@@ -318,6 +319,13 @@ struct World {
 }
 impl World {
     fn new(name: &str) -> Self {
+        Self::build(name, |src| fixture::build_failure(src, 3))
+    }
+    /// A stand whose canned evidence is the named perf cells (all twenty when `only` is empty).
+    fn perf(name: &str, only: &[&str]) -> Self {
+        Self::build(name, |src| fixture::build_perf_only(src, 3, only, &|_| {}))
+    }
+    fn build(name: &str, evidence: impl FnOnce(&Path)) -> Self {
         let base = std::env::temp_dir().join(format!(
             "rmasscan-suite-{name}-{}-{}",
             std::process::id(),
@@ -325,7 +333,7 @@ impl World {
         ));
         let (root, src) = (base.join("out"), base.join("src"));
         fs::create_dir_all(&root).unwrap();
-        fixture::build_failure(&src, 3);
+        evidence(&src);
         // The suite writes its own runs: start from the manifest and fixtures only.
         copy_tree(&src.join("fixtures"), &root.join("fixtures")).unwrap();
         fs::copy(src.join("manifest.json"), root.join("manifest.json")).unwrap();
@@ -1581,3 +1589,140 @@ const _: () = {
     assert!(FLOOD_EXPECTED_S >= 40); // flood --duration 40
     assert!(LINKLOSS_EXPECTED_S >= 120 + 2 + 40); // wait-first + down-after + hold-max
 };
+
+// ---- perf plan (N4c) ----
+fn perf_item(rate: u64, rep: u64) -> Value {
+    crate::verify::planned(&json!({"plan":"perf"}))
+        .into_iter()
+        .find(|i| i["tag"] == format!("perf.{rate}.r{rep}"))
+        .unwrap()
+}
+fn perf_args(w: &World, extra: &[&str]) -> Vec<String> {
+    let mut a = vec!["--plan", "perf", "--suite", "perf"];
+    a.extend(extra);
+    suite_args(w, &a)
+}
+#[test]
+fn perf_is_a_known_plan_and_other_names_are_still_refused() {
+    let w = World::perf("perf-plan-names", &[]);
+    let stand = Stand::new(&w.src);
+    assert_eq!(
+        run_with(&strings(&["--plan", "perf", "--list"]), &stand).unwrap(),
+        0
+    );
+    for bad in ["perfs", "Perf", "", "functional,perf", "stress"] {
+        let r = run_with(&strings(&["--plan", bad, "--list"]), &stand);
+        assert!(matches!(r, Err(SuiteError::NotRun(_))), "{bad:?}: {r:?}");
+    }
+    assert!(stand.calls().is_empty());
+}
+#[test]
+fn a_perf_run_needs_an_explicit_suite_id() {
+    // The default suite id is "functional": a perf directory must never be mistaken for it.
+    let w = World::perf("perf-needs-suite", &[]);
+    let stand = Stand::new(&w.src);
+    let mut a = suite_args(&w, &["--plan", "perf"]);
+    let at = a.iter().position(|x| x == "--suite");
+    assert!(at.is_none(), "suite_args must not set --suite: {a:?}");
+    a.extend(strings(&["--only", "perf.100.r1"]));
+    let r = run_with(&a, &stand);
+    assert!(
+        matches!(&r, Err(SuiteError::NotRun(m)) if m.contains("--suite")),
+        "{r:?}"
+    );
+    assert!(stand.calls().is_empty());
+}
+#[test]
+fn perf_timeouts_scale_with_the_run_and_both_extreme_cells_fit() {
+    let c100 = perf_item(100, 1);
+    let c100k = perf_item(100000, 1);
+    // 500 probes at 100 pps are 5 s plus the 3 s wait; 65535 probes at 100 kpps are 0.66 s (rounded up to 1 s) plus 3 s.
+    assert_eq!(perf_nominal_s(&c100), 8);
+    assert_eq!(perf_nominal_s(&c100k), 4);
+    for item in crate::verify::planned(&json!({"plan":"perf"})) {
+        let nominal = perf_nominal_s(&item);
+        // The formula alone (no floor) already has twice the nominal time plus the fixed overhead.
+        let t = perf_run_timeout(&item, 0);
+        assert!(t >= 2 * (nominal + PERF_OVERHEAD_S), "{} {t}", item["tag"]);
+        // The capture and listener dead-man bound (2 x capture_expected_s) is above 2 x everything one run does.
+        let bound = 2 * capture_expected_s(t);
+        assert!(
+            bound >= 2 * (nominal + PERF_OVERHEAD_S + 165),
+            "{}",
+            item["tag"]
+        );
+        // The default per-run timeout of 240 s is never lowered.
+        assert!(perf_run_timeout(&item, 240) >= 240);
+    }
+    // A stingy --run-timeout cannot cut the 100-pps cell short, and a long one is kept.
+    assert!(perf_run_timeout(&c100, 10) >= 2 * (8 + PERF_OVERHEAD_S));
+    assert_eq!(perf_run_timeout(&c100, 900), 900);
+}
+#[test]
+fn a_perf_cell_runs_through_the_same_gate_with_its_rate_and_ports_and_scaled_bounds() {
+    let tags = ["perf.100.r1", "perf.100000.r1"];
+    let w = World::perf("perf-run", &tags);
+    let stand = Stand::new(&w.src);
+    let a = perf_args(&w, &["--run-timeout", "10", "--only", tags[0], tags[1]]);
+    assert_eq!(run_with(&a, &stand).unwrap(), 0, "{:?}", stand.calls());
+    // Each cell went through the unchanged per-run gate: guest Verify, record-guest, status.
+    assert_eq!(stand.count("-Action Verify"), 2);
+    assert_eq!(stand.count("record-guest"), 2);
+    let man = read_json(w.root.join("manifest.json")).unwrap();
+    assert_eq!(man["plan"], "perf");
+    for (tag, rate, last) in [(tags[0], "100", "1-500"), (tags[1], "100000", "1-65535")] {
+        let argv = read_json(w.root.join("runs").join(tag).join("argv.json")).unwrap();
+        let av: Vec<String> = argv["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(arg_value(&av, "--rate"), Some(rate));
+        assert_eq!(arg_value(&av, "--ports"), Some(last));
+        assert_eq!(arg_value(&av, "--targets"), Some("198.18.0.2"));
+        assert_eq!(arg_value(&av, "--source-port"), Some("40000"));
+        assert_eq!(arg_value(&av, "--wait"), Some("3"));
+        assert_eq!(arg_value(&av, "--seed"), Some("1"));
+        let v = crate::verify::verify_dir(&w.root);
+        let r = v["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["tag"] == tag)
+            .unwrap();
+        let bad: Vec<_> = r["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["result"] != "PASS")
+            .collect();
+        assert_eq!(
+            crate::verify::run_status(&w.root, tag).0,
+            "PASS",
+            "{tag}: {bad:?}"
+        );
+    }
+    // The dead-man bound of the lab0 capture of each cell follows that cell's own timeout.
+    let bounds: Vec<u64> = stand
+        .calls()
+        .iter()
+        .filter(|c| c.contains("nohup sudo -n sh -c") && c.contains("-i lab0"))
+        .map(|c| bound_of(c))
+        .collect();
+    assert_eq!(
+        bounds,
+        vec![
+            2 * capture_expected_s(2 * (8 + PERF_OVERHEAD_S)),
+            2 * capture_expected_s(2 * (4 + PERF_OVERHEAD_S)),
+        ]
+    );
+    // No pcap is deleted or compressed by the suite: both captures of both cells are on disk, hashed.
+    for tag in tags {
+        let ev = w.root.join("runs").join(tag);
+        assert!(ev.join("peer.pcap").is_file() && ev.join("eno1.pcap").is_file());
+        assert!(ev.join("pcap-hashes-on-home-pc.txt").is_file());
+        assert!(!ev.join("peer.pcap.gz").exists());
+    }
+    assert_eq!(stand.count("gzip"), 0);
+}

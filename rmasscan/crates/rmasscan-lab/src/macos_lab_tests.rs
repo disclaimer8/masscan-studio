@@ -2467,10 +2467,103 @@ fn a_missing_entry_on_delete_is_ignored() {
         st.arp = None;
         st.arp_incomplete = false;
     });
+    let from = h.log().len();
     let (r, out) = go(&h, &link_args(&s, false));
     assert_eq!(r, Ok(0), "{out}");
-    assert!(out.contains("ignored"), "{out}");
+    // Absent entry: nothing to delete, only the constant set.
+    let log = h.log()[from..].to_vec();
+    assert!(!log.iter().any(|c| c.starts_with("arp -d")), "{log:?}");
+    assert!(
+        log.iter()
+            .any(|c| c == "arp -S 198.18.0.1 02:ac:00:00:00:01 ifscope feth4202"),
+        "{log:?}"
+    );
     assert_eq!(status_json(&h, &s).0, 0);
+}
+
+// ---- final-fix round: link needs a sealed stand; ARP restore only when absent or incomplete
+
+#[test]
+fn link_requires_a_sealed_stand_with_the_peer_interface_in_created() {
+    for how in ["unsealed", "peer-not-created", "nothing-created"] {
+        let s = Scratch::new();
+        let h = Fake::new();
+        up_ok(&h, &s);
+        let mut m = manifest_of(&s);
+        match how {
+            "unsealed" => m["state"] = "creating".into(),
+            "peer-not-created" => m["created"] = serde_json::json!(["feth4201"]),
+            _ => m["created"] = serde_json::json!([]),
+        }
+        write_manifest(&s.manifest(), &m).unwrap();
+        let from = h.log().len();
+        for down in [true, false] {
+            let (r, out) = go(&h, &link_args(&s, down));
+            let e = r.unwrap_err();
+            assert!(
+                e.contains("sealed") || e.contains("created"),
+                "{how}: {e} {out}"
+            );
+        }
+        assert!(
+            !h.log()[from..]
+                .iter()
+                .any(|c| c.starts_with("ifconfig feth4202 ")
+                    && (c.ends_with(" up") || c.ends_with(" down"))),
+            "{how}: no flap may run: {:?}",
+            h.log()[from..].to_vec()
+        );
+        assert!(h.st(|st| st.ifaces["feth4202"].up), "{how}");
+    }
+}
+
+#[test]
+fn link_up_leaves_a_complete_permanent_entry_alone() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    let from = h.log().len();
+    let (r, out) = go(&h, &link_args(&s, false));
+    assert_eq!(r, Ok(0), "{out}");
+    let log = h.log()[from..].to_vec();
+    assert!(
+        !log.iter()
+            .any(|c| c.starts_with("arp -d") || c.starts_with("arp -S")),
+        "an entry that is already right is not rewritten: {log:?}"
+    );
+    assert!(out.contains("already"), "{out}");
+}
+
+#[test]
+fn link_up_does_not_overwrite_a_foreign_complete_entry() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    h.st(|st| {
+        st.arp_override =
+            Some("? (198.18.0.1) at aa:bb:cc:dd:ee:ff on feth4202 ifscope [ethernet]\n".into())
+    });
+    let from = h.log().len();
+    let (r, out) = go(&h, &link_args(&s, false));
+    assert_eq!(r, Ok(10), "{out}");
+    let log = h.log()[from..].to_vec();
+    assert!(
+        !log.iter()
+            .any(|c| c.starts_with("arp -d") || c.starts_with("arp -S")),
+        "a complete entry that is not ours is left alone: {log:?}"
+    );
+    assert!(out.contains("sudo arp -d 198.18.0.1"), "{out}");
+}
+
+#[test]
+fn the_arp_step_is_one_named_constant_used_by_up_restore_and_plan() {
+    assert_eq!(
+        up_steps().into_iter().find(|s| s[0] == "arp"),
+        Some(ARP_SET.to_vec())
+    );
+    let s = Scratch::new();
+    let (_, out) = go(&Fake::new(), &args(&s, "plan"));
+    assert!(out.contains(&ARP_SET.join(" ")), "{out}");
 }
 
 #[test]

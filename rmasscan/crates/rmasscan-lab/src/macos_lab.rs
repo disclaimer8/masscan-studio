@@ -805,9 +805,13 @@ pub(crate) fn up_steps() -> Vec<Vec<&'static str>> {
         ],
         vec!["ifconfig", SCANNER_IF, "up"],
         vec!["ifconfig", PEER_IF, "up"],
-        vec!["arp", "-S", SOURCE_IP, SCANNER_MAC, "ifscope", PEER_IF],
+        ARP_SET.to_vec(),
     ]
 }
+
+/// The one `arp` step that sets the permanent entry the pair needs (constants only): used by
+/// `up`, by `link --up` and by the printed plan.
+pub(crate) const ARP_SET: [&str; 6] = ["arp", "-S", SOURCE_IP, SCANNER_MAC, "ifscope", PEER_IF];
 
 fn arp_delete() -> Vec<&'static str> {
     vec!["arp", "-d", SOURCE_IP, "ifscope", PEER_IF]
@@ -1083,13 +1087,7 @@ fn plan(out: &mut Vec<String>) {
     ));
     out.push(format!("ifconfig {PEER_IF} up, then restore the entry:"));
     out.push(arp_delete().join(" "));
-    out.push(
-        up_steps()
-            .iter()
-            .find(|s| s[0] == "arp")
-            .map(|s| s.join(" "))
-            .unwrap_or_default(),
-    );
+    out.push(ARP_SET.join(" "));
     out.push("# macos-lab down (root)".into());
     out.push(arp_delete().join(" "));
     out.push(format!("ifconfig {SCANNER_IF} destroy"));
@@ -1269,9 +1267,10 @@ fn names_of(m: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `created` comes from a user-writable manifest and decides what a root `ifconfig destroy`
-/// touches, so it may name only the two fixed lab interfaces. Anything else refuses the whole
-/// operation before any command runs.
+/// `created` is read from the root-owned manifest under `/var/run` (through `read_trusted`),
+/// but it still decides what a root `ifconfig destroy` touches, so, as defence in depth, it may
+/// name only the two fixed lab interfaces. Anything else refuses the whole operation before
+/// any command runs.
 fn lab_names(list: &[String]) -> Result<Vec<String>, String> {
     for n in list {
         if n != SCANNER_IF && n != PEER_IF {
@@ -1592,7 +1591,20 @@ fn bpf_access_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, 
 
 fn link_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     require_root(h)?;
-    load_stand(h, a)?;
+    let m = load_stand(h, a)?;
+    // `link` flaps an interface by name as root: only on a stand that `up` finished (sealed) and
+    // that recorded feth4202 as created by this lab.
+    if m["state"] != "sealed" {
+        return Err("the stand is not sealed; link acts only on a sealed stand".into());
+    }
+    if !lab_names(&names_of(&m, "created"))?
+        .iter()
+        .any(|c| c == PEER_IF)
+    {
+        return Err(format!(
+            "the manifest does not list {PEER_IF} as created by this lab; link acts only on a stand whose created list holds it"
+        ));
+    }
     let info = parse_ifconfig(&h.sh(&["ifconfig", PEER_IF])?);
     if info.ether.as_deref() != Some(PEER_MAC) {
         return Err(format!(
@@ -1621,16 +1633,46 @@ pub const ARP_FALLBACK: &str = "manual fallback: sudo arp -d 198.18.0.1 ifscope 
 /// fine) and setting it again. Only constants reach `arp`. The entry is then checked (root sees
 /// real MACs); rc 10 with the manual fallback if it is not back.
 fn restore_arp(h: &dyn Host, out: &mut Vec<String>) -> i32 {
-    out.push(format!("+ {}", arp_delete().join(" ")));
-    if let Err(e) = h.sh(&arp_delete()) {
-        out.push(format!(
-            "note: arp -d: {e} (ignored: the entry may not exist)"
-        ));
-    }
-    let set = up_steps()
+    // Only an absent or `(incomplete)` entry is rewritten. A complete permanent entry is already
+    // right; a complete one that is not ours is not overwritten (rc 10 with the manual fallback).
+    let table = match h.sh(&["arp", "-an"]) {
+        Ok(t) => t,
+        Err(e) => {
+            out.push(format!("FAILED: cannot read the ARP table: {e}"));
+            out.push(ARP_FALLBACK.into());
+            return 10;
+        }
+    };
+    let entry = parse_arp(&table)
         .into_iter()
-        .find(|s| s[0] == "arp")
-        .unwrap_or_default();
+        .find(|e| e.ip == SOURCE_IP && e.iface == PEER_IF);
+    match entry {
+        Some(e) if e.mac.as_deref() == Some(SCANNER_MAC) && e.permanent => {
+            out.push(format!(
+                "OK: {SOURCE_IP} -> {SCANNER_MAC} on {PEER_IF} is already permanent; nothing to restore"
+            ));
+            return 0;
+        }
+        Some(e) if e.mac.is_some() => {
+            out.push(format!(
+                "FAILED: {PEER_IF} holds a complete entry for {SOURCE_IP} that is not the lab's ({:?}, permanent {}); left alone",
+                e.mac, e.permanent
+            ));
+            out.push(ARP_FALLBACK.into());
+            return 10;
+        }
+        Some(_) => {
+            // Incomplete: a plain `arp -S` over it does nothing, so delete it first.
+            out.push(format!("+ {}", arp_delete().join(" ")));
+            if let Err(e) = h.sh(&arp_delete()) {
+                out.push(format!("FAILED: {e}"));
+                out.push(ARP_FALLBACK.into());
+                return 10;
+            }
+        }
+        None => {}
+    }
+    let set = ARP_SET.to_vec();
     out.push(format!("+ {}", set.join(" ")));
     let set_ok = match h.sh(&set) {
         Ok(_) => true,

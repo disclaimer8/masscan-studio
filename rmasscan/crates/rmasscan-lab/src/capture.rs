@@ -454,8 +454,26 @@ pub fn check_isolation_snapshot(
     Ok(())
 }
 
+/// macOS: `capture marker` and `capture responder` are Linux-lab tools (CAP_NET_RAW inside a
+/// network namespace). On a Mac they would write frames on any interface the process can open
+/// (`marker`) or bind wildcard ports on every interface (`responder`), outside the lab guard
+/// that every macOS writer goes through (`GuardedTx`, `injection_allowed`). The macOS suite
+/// uses neither, so both refuse with rc 2 and an explanation; Linux and Windows are unchanged.
+fn macos_refusal(cmd: &str, macos: bool) -> Option<String> {
+    if !macos || !matches!(cmd, "marker" | "responder") {
+        return None;
+    }
+    Some(format!(
+        "capture {cmd} is refused on macOS: it is a Linux-lab tool that writes frames on a caller-chosen interface or binds wildcard ports without the lab guard. The macOS suite never uses it; start markers and listeners through `macos-suite` (guarded `peer` and `capture dump` on feth4202 only)"
+    ))
+}
+
 pub fn run(args: &[String]) -> Result<i32, String> {
     let (cmd, rest) = args.split_first().ok_or("capture subcommand required")?;
+    if let Some(why) = macos_refusal(cmd, cfg!(target_os = "macos")) {
+        eprintln!("{why}");
+        return Ok(2);
+    }
     let a = opts(rest)?;
     match cmd.as_str() {
         "dump" => crate::dump::run(&a),
@@ -475,6 +493,50 @@ pub fn run(args: &[String]) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn macos_refuses_marker_and_responder_with_an_explanation_and_leaves_the_rest() {
+        for cmd in ["marker", "responder"] {
+            let why = macos_refusal(cmd, true).expect("refused on macOS");
+            assert!(
+                why.contains("refused on macOS") && why.contains(cmd),
+                "{why}"
+            );
+            assert_eq!(
+                macos_refusal(cmd, false),
+                None,
+                "Linux/Windows unchanged: {cmd}"
+            );
+        }
+        for cmd in ["dump", "env", "manifest", "isolation", "summary", "bogus"] {
+            assert_eq!(macos_refusal(cmd, true), None, "{cmd} is not refused here");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_run_returns_rc_2_for_marker_and_responder_before_opening_anything() {
+        let words = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // en0 and a bogus MAC pair: were the guard missing, `marker` would try to open /dev/bpf*.
+        let marker = words(&[
+            "marker",
+            "--iface",
+            "en0",
+            "--dst",
+            "ff:ff:ff:ff:ff:ff",
+            "--src",
+            "02:ac:00:00:00:01",
+        ]);
+        assert_eq!(run(&marker), Ok(2));
+        let responder = words(&[
+            "responder",
+            "--ports",
+            "8000",
+            "--ready",
+            "/nonexistent/ready",
+        ]);
+        assert_eq!(run(&responder), Ok(2));
+    }
+
     fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
             .iter()

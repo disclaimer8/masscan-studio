@@ -2345,3 +2345,31 @@ fn a_stale_synack_retransmit_of_an_earlier_cell_is_not_a_missed_open_reply() {
     let (r, _) = ev.verify(&env);
     assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
 }
+
+// ---- final-fix round: directories that hold only compressed captures are not skipped
+
+#[test]
+fn a_run_directory_with_only_compressed_captures_is_unproven_and_fails_closed() {
+    for sub in ["runs", "runs_discarded", "runs_aborted", ".work"] {
+        for gz in ["uplink.pcap.gz", "peer.pcap.gz"] {
+            let env = Env::new("functional");
+            let d = env.root.join(sub).join(format!("unplanned.{}", nonce()));
+            fs::create_dir_all(&d).unwrap();
+            // A foreign SYN on the uplink would sit in here; the verifier cannot read it without gunzip.
+            fs::write(d.join(gz), b"\x1f\x8b not read").unwrap();
+            assert_eq!(safety_trips(&env.root).len(), 1, "{sub}/{gz}");
+            let v = verify_dir(&env.root);
+            assert_eq!(v["overall"], FAIL, "{sub}/{gz}: {v:#}");
+            assert!(
+                format!("{v}").contains("gunzip"),
+                "{sub}/{gz}: the finding says what to do"
+            );
+        }
+    }
+    // A directory with nothing capture-like at all is still skipped, as before.
+    let env = Env::new("functional");
+    let d = env.root.join("runs").join(format!("plain.{}", nonce()));
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("stdout.txt"), b"x").unwrap();
+    assert!(safety_trips(&env.root).is_empty());
+}

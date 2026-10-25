@@ -2,7 +2,9 @@
 //! compressed (`*.pcap.gz`) without extracting them to disk and without a new dependency. Any malformed input is an
 //! error, never a partial result: the caller fails closed.
 
-const MAX_OUT: usize = 1 << 30;
+/// Largest output accepted (above the largest archived capture, 9.6 MB). The declared ISIZE is checked against it
+/// before anything is allocated, and the output never grows past the declared size.
+const MAX_OUT: usize = 256 << 20;
 
 struct Bits<'a> {
     d: &'a [u8],
@@ -95,11 +97,22 @@ const DEXT: [u8; 30] = [
     13,
 ];
 
-fn codes(b: &mut Bits, out: &mut Vec<u8>, lit: &Huff, dist: &Huff) -> Result<(), String> {
+fn codes(
+    b: &mut Bits,
+    out: &mut Vec<u8>,
+    lit: &Huff,
+    dist: &Huff,
+    limit: usize,
+) -> Result<(), String> {
     loop {
         let sym = usize::from(lit.decode(b)?);
         match sym {
-            0..=255 => out.push(sym as u8),
+            0..=255 => {
+                if out.len() >= limit {
+                    return Err("output larger than the declared size".into());
+                }
+                out.push(sym as u8)
+            }
             256 => return Ok(()),
             257..=285 => {
                 let i = sym - 257;
@@ -112,19 +125,19 @@ fn codes(b: &mut Bits, out: &mut Vec<u8>, lit: &Huff, dist: &Huff) -> Result<(),
                 if d > out.len() {
                     return Err("distance too far back".into());
                 }
+                if out.len() + len > limit {
+                    return Err("output larger than the declared size".into());
+                }
                 for _ in 0..len {
                     out.push(out[out.len() - d]);
                 }
             }
             _ => return Err("bad length symbol".into()),
         }
-        if out.len() > MAX_OUT {
-            return Err("output too large".into());
-        }
     }
 }
 
-fn inflate(d: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn inflate(d: &[u8], limit: usize) -> Result<(Vec<u8>, usize), String> {
     let mut b = Bits {
         d,
         pos: 0,
@@ -144,6 +157,9 @@ fn inflate(d: &[u8]) -> Result<(Vec<u8>, usize), String> {
                     return Err("stored block length check failed".into());
                 }
                 b.pos += 4;
+                if out.len() + len > limit {
+                    return Err("output larger than the declared size".into());
+                }
                 out.extend_from_slice(d.get(b.pos..b.pos + len).ok_or("truncated stored block")?);
                 b.pos += len;
             }
@@ -151,7 +167,13 @@ fn inflate(d: &[u8]) -> Result<(Vec<u8>, usize), String> {
                 let mut l = [8u8; 288];
                 l[144..256].fill(9);
                 l[256..280].fill(7);
-                codes(&mut b, &mut out, &Huff::new(&l)?, &Huff::new(&[5u8; 30])?)?;
+                codes(
+                    &mut b,
+                    &mut out,
+                    &Huff::new(&l)?,
+                    &Huff::new(&[5u8; 30])?,
+                    limit,
+                )?;
             }
             2 => {
                 let (nlen, ndist, ncode) = (
@@ -201,12 +223,10 @@ fn inflate(d: &[u8]) -> Result<(Vec<u8>, usize), String> {
                     &mut out,
                     &Huff::new(&ls[..nlen])?,
                     &Huff::new(&ls[nlen..])?,
+                    limit,
                 )?;
             }
             _ => return Err("reserved deflate block type".into()),
-        }
-        if out.len() > MAX_OUT {
-            return Err("output too large".into());
         }
         if last == 1 {
             return Ok((out, b.pos));
@@ -240,7 +260,20 @@ pub fn gunzip(d: &[u8]) -> Result<Vec<u8>, String> {
         p += 2;
     }
     let body = d.get(p..).ok_or("short header")?;
-    let (out, used) = inflate(body)?;
+    // ISIZE (the last four bytes) is the declared size: refuse an absurd one before allocating anything, and never
+    // let the output grow past it.
+    let declared = u32::from_le_bytes([
+        d[d.len() - 4],
+        d[d.len() - 3],
+        d[d.len() - 2],
+        d[d.len() - 1],
+    ]) as usize;
+    if declared > MAX_OUT {
+        return Err(format!(
+            "declared size {declared} exceeds the {MAX_OUT} byte limit"
+        ));
+    }
+    let (out, used) = inflate(body, declared)?;
     let tr = body.get(used..used + 8).ok_or("missing gzip trailer")?;
     if body.len() != used + 8 {
         return Err("bytes after the gzip trailer".into());
@@ -372,7 +405,10 @@ mod tests {
     fn a_vector_with_more_than_one_deflate_block_is_read() {
         // 70000 symbols cannot fit one gzip block (32768 symbols per block): the stream continues past a non-final block.
         let z = gz!("multi.l6");
-        assert_eq!(inflate(&z[10..z.len()]).map(|(o, _)| o.len()), Ok(70000));
+        assert_eq!(
+            inflate(&z[10..z.len()], 70000).map(|(o, _)| o.len()),
+            Ok(70000)
+        );
         let first_final = z[10] & 1;
         assert_eq!(first_final, 0, "the first block must not be the last one");
     }
@@ -403,6 +439,58 @@ mod tests {
         magic[0] = 0;
         assert!(gunzip(&magic).is_err());
         assert!(gunzip(b"not gzip at all, really not gzip").is_err());
+    }
+
+    /// A small input must not make the reader allocate: a declared size beyond the cap is refused up front, and a
+    /// stream that expands past its own declared size stops there.
+    #[test]
+    fn a_small_input_claiming_or_expanding_to_a_huge_size_is_an_error_without_a_big_allocation() {
+        // 1. ISIZE claims 4 GiB - 1: refused before inflating.
+        let mut z = gz!("hello.l6").to_vec();
+        let n = z.len();
+        z[n - 4..].copy_from_slice(&u32::MAX.to_le_bytes());
+        let e = gunzip(&z).unwrap_err();
+        assert!(e.contains("exceeds"), "{e}");
+        // 2. The multi-block vector expands to 70000 bytes but claims 10: the output stops at the claim.
+        let mut z = gz!("multi.l6").to_vec();
+        let n = z.len();
+        z[n - 4..].copy_from_slice(&10u32.to_le_bytes());
+        let e = gunzip(&z).unwrap_err();
+        assert!(e.contains("declared size"), "{e}");
+        // 3. A tiny hand-made stream: a fixed block with a 258-byte match repeated, claiming 1000 bytes, whose
+        // symbols would expand to far more; it stops at the claim.
+        let mut bits = Vec::<u8>::new();
+        let mut acc = 0u64;
+        let mut cnt = 0u32;
+        let mut put = |v: u64, k: u32, bits: &mut Vec<u8>| {
+            acc |= v << cnt;
+            cnt += k;
+            while cnt >= 8 {
+                bits.push(acc as u8);
+                acc >>= 8;
+                cnt -= 8;
+            }
+        };
+        let rev = |code: u32, len: u32| {
+            (0..len).fold(0u64, |a, i| {
+                a | (u64::from((code >> i) & 1) << (len - 1 - i))
+            })
+        };
+        put(1, 1, &mut bits); // final
+        put(1, 2, &mut bits); // fixed
+        put(rev(0x30 + u32::from(b'a'), 8), 8, &mut bits); // literal 'a'
+        for _ in 0..4000 {
+            put(rev(0xc0 + 285 - 280, 8), 8, &mut bits); // length 258
+            put(rev(0, 5), 5, &mut bits); // distance 1
+        }
+        put(0, 7, &mut bits); // end of block
+        put(0, 7, &mut bits);
+        let mut z = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255];
+        z.extend_from_slice(&bits);
+        z.extend_from_slice(&0u32.to_le_bytes());
+        z.extend_from_slice(&1000u32.to_le_bytes());
+        let e = gunzip(&z).unwrap_err();
+        assert!(e.contains("declared size"), "{e}");
     }
 
     /// Cross-check against the system gzip on Unix, in addition to the embedded vectors.

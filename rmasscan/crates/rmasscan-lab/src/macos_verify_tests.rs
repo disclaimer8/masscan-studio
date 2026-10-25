@@ -2393,3 +2393,157 @@ fn a_missing_peer_capture_without_a_host_record_makes_the_listener_truth_invalid
     assert_ne!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
     assert!(!failed(&r, "results equal listener truth"));
 }
+
+fn gz_bytes(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut g = std::process::Command::new("/usr/bin/gzip")
+        .arg("-c")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = g.stdin.take().unwrap();
+    let d = data.to_vec();
+    let w = std::thread::spawn(move || stdin.write_all(&d).unwrap());
+    let o = g.wait_with_output().unwrap();
+    w.join().unwrap();
+    assert!(o.status.success());
+    o.stdout
+}
+
+/// Review P2: a readable `peer.pcap` beside a compressed uplink must not hide the uplink. Every capture is read on
+/// its own, a compressed one in memory, in kept, discarded, aborted and work directories alike.
+#[test]
+fn a_compressed_capture_beside_a_plain_one_is_read_on_its_own() {
+    let leak = pcap::encode(&vec![(BASE, syn(80))]);
+    for sub in ["runs", "runs_discarded", "runs_aborted", ".work"] {
+        // (capture that exists only compressed, its bytes, the plain one that stays readable beside it)
+        for (leaky, bytes, plain_other) in [
+            ("uplink", gz_bytes(&leak), "peer"),
+            ("peer", b"\x1f\x8b garbage".to_vec(), "uplink"),
+        ] {
+            let env = Env::new("functional");
+            let mut ev = build(&env, C01);
+            ev.files.remove(&format!("{leaky}.pcap"));
+            ev.files.remove("uplink.err");
+            ev.files.insert(format!("{leaky}.pcap.gz"), bytes);
+            assert!(ev.files.contains_key(&format!("{plain_other}.pcap")));
+            let d = ev.write(&env);
+            let target = env.root.join(sub).join(format!("unplanned.{}", nonce()));
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::rename(&d, &target).unwrap();
+            let trips = safety_trips(&env.root);
+            assert_eq!(trips.len(), 1, "{sub} {leaky}: {trips:?}");
+            assert_eq!(verify_dir(&env.root)["overall"], FAIL, "{sub} {leaky}");
+        }
+    }
+    // A clean compressed uplink beside a plain peer is read and does not trip; a corrupt one fails closed.
+    for (bytes, trips) in [
+        (gz_bytes(&pcap::encode(&vec![])), 0),
+        (b"\x1f\x8b garbage".to_vec(), 1),
+    ] {
+        let env = Env::new("functional");
+        let mut ev = build(&env, C01);
+        ev.files.remove("uplink.pcap");
+        ev.files.remove("uplink.err");
+        ev.files.insert("uplink.pcap.gz".into(), bytes);
+        let d = ev.write(&env);
+        let target = env.root.join("runs").join(format!("unplanned.{}", nonce()));
+        fs::rename(&d, &target).unwrap();
+        assert_eq!(safety_trips(&env.root).len(), trips);
+    }
+}
+
+// ---- post-merge review P1: a genuine, probe-matched, in-window RST on a proven-complete capture is a result
+
+fn drop_all_results(ev: &mut Ev) {
+    edit_scanner_output(ev, |v| {
+        let old = v["received"].as_u64().unwrap_or(0);
+        v["discarded"] = json!(v["discarded"].as_u64().unwrap_or(0) + old);
+        v["replies"] = json!([]);
+        for field in ["reply_total", "reply_unique", "received"] {
+            v[field] = json!(0);
+        }
+    });
+}
+
+#[test]
+fn losing_every_captured_rst_of_a_completed_perf_cell_is_a_behaviour_fail() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    assert!(r.behaviour_fail());
+    assert!(failed(&r, "every genuine probe-matched RST"));
+}
+
+#[test]
+fn losing_both_captured_rsts_of_stop_drain_is_a_behaviour_fail() {
+    let env = Env::new("failure");
+    let mut ev = build(&env, "stop_drain");
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    assert!(failed(&r, "every genuine probe-matched RST"));
+}
+
+/// The reviewer's mutation of the REAL perf.100.r1 of the committed acceptance archive (read-only, never written):
+/// 418 genuine RSTs on the wire, the results removed.
+#[test]
+fn losing_the_real_418_rsts_of_the_archived_perf_100_r1_is_a_behaviour_fail() {
+    let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance-raw/perf-r1");
+    let name = "perf.100.r1.r966275c49346217082cdf169b105b0da";
+    let d = raw.join("runs").join(name);
+    assert!(
+        d.is_dir(),
+        "the committed archive is missing: {}",
+        d.display()
+    );
+    let env = Env {
+        root: scratch(),
+        man: read_json(raw.join("manifest.json")).unwrap(),
+        fx: read_json(raw.join("fixtures/manifest.json")).unwrap(),
+    };
+    let mut ev = Ev {
+        tag: "perf.100.r1".into(),
+        nonce: "r966275c49346217082cdf169b105b0da".into(),
+        item: env.item("perf.100.r1"),
+        files: BTreeMap::new(),
+    };
+    for f in fs::read_dir(&d).unwrap() {
+        let f = f.unwrap();
+        if f.file_type().unwrap().is_file() && f.file_name() != HASHES {
+            ev.files.insert(
+                f.file_name().to_str().unwrap().into(),
+                fs::read(f.path()).unwrap(),
+            );
+        }
+    }
+    let (baseline, _) = ev.verify(&env);
+    assert_eq!(baseline.verdict(), PASS, "{:?}", failing_checks(&baseline));
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    assert!(r.behaviour_fail());
+}
+
+/// An RST that never appeared on the wire stays tolerated (the OS rate limit); lost results with an unproven
+/// capture are never PASS.
+#[test]
+fn a_closed_result_missing_only_because_its_rst_never_hit_the_wire_still_passes() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    lose_reply(&mut ev, 17);
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    let mut ev = build(&env, "perf.100.r1");
+    drop_all_results(&mut ev);
+    ev.json("capture.json", |v| {
+        v["peer"]["tcpdump"]["dropped_kernel"] = json!(1)
+    });
+    let (r, _) = ev.verify(&env);
+    assert_ne!(r.verdict(), PASS);
+}

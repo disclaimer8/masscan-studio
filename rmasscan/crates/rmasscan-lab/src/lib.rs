@@ -4,6 +4,7 @@
 pub mod capture;
 pub mod deploy;
 pub mod dump;
+pub mod gunzip;
 pub mod link;
 #[cfg(target_os = "macos")]
 pub mod macos_lab;

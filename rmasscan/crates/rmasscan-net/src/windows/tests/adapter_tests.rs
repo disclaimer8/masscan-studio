@@ -1070,3 +1070,47 @@ fn a_worker_panic_ends_the_run_and_closes_every_handle() {
     drop(api);
     assert_eq!(count("unload"), 1);
 }
+
+// ---------- маршрутизация по handle ----------
+
+fn hcalls(key: &str) -> usize {
+    with_ret(|s| s.per_handle.get(key).copied().unwrap_or(0))
+}
+
+#[test]
+fn rx_and_stats_hit_only_the_rx_handle_sends_only_the_tx_handle_and_each_closes_once() {
+    // handle 1 = TX, handle 2 = RX (см. open_configures_two_handles_...).
+    reset(|s| s.next_script.push_back(NextStep::Frame(peer_frame(60))));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let mut b = buf();
+    assert!(
+        a.io.rx
+            .recv(&mut b, Duration::from_millis(50))
+            .unwrap()
+            .is_some()
+    );
+    a.io.rx.health(Duration::from_millis(50)).unwrap();
+    let f = own_frame(60);
+    a.io.tx.send(&f, Duration::from_millis(50)).unwrap();
+    a.io.tx.send(&f, Duration::from_millis(50)).unwrap();
+
+    assert!(hcalls("next_ex:2") >= 1, "RX reads the RX handle");
+    assert_eq!(hcalls("next_ex:1"), 0, "RX never reads the TX handle");
+    assert!(
+        hcalls("stats:2") >= 2,
+        "baseline plus health on the RX handle"
+    );
+    assert_eq!(hcalls("stats:1"), 0, "stats never read from the TX handle");
+    assert_eq!(hcalls("send:1"), 2, "sends go to the TX handle");
+    assert_eq!(hcalls("send:2"), 0, "nothing is sent on the RX handle");
+
+    drop(a);
+    assert_eq!(count("close:1"), 1);
+    assert_eq!(count("close:2"), 1);
+    assert_eq!(count("close"), 2);
+    drop(api);
+    let ev = events();
+    let unload = pos(&ev, "unload");
+    assert!(pos(&ev, "close:1") < unload && pos(&ev, "close:2") < unload);
+}

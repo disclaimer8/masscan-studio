@@ -281,12 +281,15 @@ fn handle_moves_to_another_thread_and_closes_there_before_unload() {
     let api = good_api();
     let h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
     drop(api);
-    // Журнал потоковый: проверяем только компиляцию Send и отсутствие паник.
+    // Журнал общий (STATE глобален), поэтому закрытие в другом потоке видно.
     std::thread::spawn(move || {
         let _ = h.datalink();
     })
     .join()
     .unwrap();
+    let ev = events();
+    assert_eq!(count("close:1"), 1, "{ev:?}");
+    assert!(pos(&ev, "close:1") < pos(&ev, "unload"), "{ev:?}");
 }
 
 #[test]

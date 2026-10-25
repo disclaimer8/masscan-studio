@@ -38,6 +38,8 @@ pub(super) type Responder = Arc<dyn Fn(&[u8]) -> Vec<Vec<u8>> + Send + Sync>;
 
 pub(super) struct Scenario {
     pub log: Vec<String>,
+    /// Вызовы по handle: ключ `"next_ex:2"`, `"stats:2"`, `"send:1"`.
+    pub per_handle: std::collections::HashMap<String, usize>,
     pub version_null: bool,
     pub activate_rc: c_int,
     /// `(номер create с 1, rc)`: activate этого handle вернёт rc.
@@ -96,6 +98,7 @@ impl Default for Scenario {
     fn default() -> Self {
         Scenario {
             log: Vec::new(),
+            per_handle: std::collections::HashMap::new(),
             version_null: false,
             activate_rc: 0,
             activate_fail_nth: None,
@@ -207,6 +210,12 @@ fn hid(p: *mut PcapT) -> usize {
     (p as usize - FAKE_T) / STEP
 }
 
+fn bump(s: &mut Scenario, what: &str, p: *mut PcapT) {
+    *s.per_handle
+        .entry(format!("{what}:{}", hid(p)))
+        .or_insert(0) += 1;
+}
+
 fn put_err(err: *mut c_char, msg: &[u8]) {
     // SAFETY: тестовый буфер имеет PCAP_ERRBUF_SIZE байт, msg короче.
     unsafe { std::ptr::copy_nonoverlapping(msg.as_ptr().cast(), err, msg.len()) };
@@ -300,13 +309,10 @@ unsafe extern "C" fn f_activate(p: *mut PcapT) -> c_int {
         _ => s.activate_rc,
     }
 }
-unsafe extern "C" fn f_next_ex(
-    _p: *mut PcapT,
-    h: *mut *mut PcapPkthdr,
-    d: *mut *const u8,
-) -> c_int {
+unsafe extern "C" fn f_next_ex(p: *mut PcapT, h: *mut *mut PcapPkthdr, d: *mut *const u8) -> c_int {
     let mut s = st();
     s.next_calls += 1;
+    bump(&mut s, "next_ex", p);
     // Предыдущий кадр больше не действителен: затираем, чтобы тест поймал
     // использование указателя после следующего вызова.
     s.cur_data.fill(0xAA);
@@ -359,9 +365,10 @@ unsafe extern "C" fn f_next_ex(
     }
     1
 }
-unsafe extern "C" fn f_sendpacket(_p: *mut PcapT, b: *const u8, n: c_int) -> c_int {
+unsafe extern "C" fn f_sendpacket(p: *mut PcapT, b: *const u8, n: c_int) -> c_int {
     let mut s = st();
     s.send_calls += 1;
+    bump(&mut s, "send", p);
     s.log.push("sendpacket".into());
     let rc = s.send_rcs.pop_front().unwrap_or(0);
     if rc == 0 {
@@ -403,9 +410,10 @@ unsafe extern "C" fn f_getnonblock(p: *mut PcapT, _e: *mut c_char) -> c_int {
     let id = hid(p);
     c_int::from(s.nonblock.iter().any(|(i, on)| *i == id && *on))
 }
-unsafe extern "C" fn f_stats(_p: *mut PcapT, out: *mut PcapStat) -> c_int {
+unsafe extern "C" fn f_stats(p: *mut PcapT, out: *mut PcapStat) -> c_int {
     let mut s = st();
     s.stats_calls += 1;
+    bump(&mut s, "stats", p);
     s.log.push("stats".into());
     let step = s.stats_script.pop_front().unwrap_or(Ok(s.stats_drop));
     match step {
@@ -483,8 +491,9 @@ unsafe extern "C" fn f_freecode(prog: *mut BpfProgram) {
         pr.bf_insns = std::ptr::null_mut();
     }
 }
-unsafe extern "C" fn f_close(_p: *mut PcapT) {
+unsafe extern "C" fn f_close(p: *mut PcapT) {
     log("close");
+    log(&format!("close:{}", hid(p)));
 }
 
 pub(super) fn symbol_addr(name: &str) -> Option<*const c_void> {

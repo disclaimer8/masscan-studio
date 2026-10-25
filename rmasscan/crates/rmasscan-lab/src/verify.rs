@@ -104,6 +104,39 @@ fn functional_cases() -> Vec<Value> {
     .filter_map(|x| case_by_name(x))
     .collect()
 }
+/// Requested pps of the perf plan and the repetitions of each (ruling 1).
+pub const PERF_RATES: [u64; 4] = [100, 1000, 10000, 100000];
+pub const PERF_REPS: u64 = 5;
+const PERF_WAIT: u64 = 3;
+/// Ports `1-N` sized for about 5 s of sending at `rate`, capped at the port space.
+fn perf_last_port(rate: u64) -> u64 {
+    rate.saturating_mul(5).min(65535)
+}
+/// The case of one perf cell: the functional binding, only 198.18.0.2, ports sized by the rate.
+pub(crate) fn perf_case(rate: u64) -> Value {
+    let last = perf_last_port(rate);
+    json!({"name":format!("perf_{rate}"),"ports":format!("1-{last}"),"source_port":"40000","syn":last,"rate":rate,"wait":PERF_WAIT,"seed":1,"targets":PEER,"exclude":Value::Null})
+}
+/// What the functional listener set answers for a perf case: every port but the silent 8099.
+/// (8100-8119 are silent only in the failure plan; here they answer closed.)
+pub(crate) fn perf_expected(case: &Value) -> Vec<String> {
+    let mut a: Vec<_> = ports(s(&case["ports"]))
+        .into_iter()
+        .filter(|p| *p != 8099)
+        .map(|p| {
+            format!(
+                "{PEER}:{p}:{}",
+                if open_ports().contains(&p) {
+                    "open"
+                } else {
+                    "closed"
+                }
+            )
+        })
+        .collect();
+    a.sort();
+    a
+}
 fn replies(case: &Value, silent: bool) -> Vec<String> {
     let mut a: Vec<_> = ports(s(&case["ports"]))
         .into_iter()
@@ -174,6 +207,13 @@ pub fn planned(man: &Value) -> Vec<Value> {
         }
         out.push(json!({"tag":"perm_elevated_control","kind":"case","case":"c01_one_addr_port_synack","repeat":1}));
         out.push(json!({"tag":"rxloss","kind":"rxloss"}));
+    } else if man["plan"] == "perf" {
+        // Repetition-major, so slow drift of the VM spreads over the rates instead of landing on one.
+        for rep in 1..=PERF_REPS {
+            for rate in PERF_RATES {
+                out.push(json!({"tag":format!("perf.{rate}.r{rep}"),"kind":"perf","rate":rate,"rep":rep}));
+            }
+        }
     } else {
         for c in functional_cases() {
             for r in 1..=2 {
@@ -192,6 +232,9 @@ pub fn planned(man: &Value) -> Vec<Value> {
     out
 }
 fn kind_case(it: &Value) -> Option<Value> {
+    if it["kind"] == "perf" {
+        return Some(perf_case(it["rate"].as_u64()?));
+    }
     let name = match s(&it["kind"]) {
         "case" | "foreign" => s(&it["case"]),
         "stop" => match s(&it["scenario"]) {
@@ -645,7 +688,17 @@ struct Ctx {
     peer: Option<(Frames, Vec<u8>)>,
     bind: Binding,
 }
+/// The per-run gate (guest Verify, nonce chain, status before/after). A gate leg that did not hold is
+/// INVALID evidence for the older plans; for the perf plan it is a FAIL of the cell (ruling 7).
+fn gate_leg(r: &mut Run, perf: bool, name: &str, ok: bool, detail: impl ToString) {
+    if perf {
+        r.beh(name, ok, detail);
+    } else {
+        r.inv(name, ok, detail);
+    }
+}
 fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frames, Vec<u8>)>) {
+    let perf = man["plan"] == "perf";
     let b = &ctx.bind;
     for (who, p) in [("peer", &ctx.peer), ("eno1", eno)] {
         let c = &cap[who];
@@ -819,7 +872,17 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
                     && v["silent_proven"] == true
             }
         };
-        r.inv(&format!("{name} valid before/after run"), ok, v.to_string());
+        if name == "listeners" {
+            r.inv(&format!("{name} valid before/after run"), ok, v.to_string());
+        } else {
+            gate_leg(
+                r,
+                perf,
+                &format!("{name} valid before/after run"),
+                ok,
+                v.to_string(),
+            );
+        }
     }
     // From capture schema 3 the invocation nonce chain is mandatory: a run without it has no
     // binding between the gate and this scanner invocation. Schema 1/2 archives predate the
@@ -835,7 +898,9 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
             nonce.and_then(Value::as_str).is_some_and(|s| !s.is_empty()),
             nonce.map_or("missing".into(), Value::to_string),
         );
-        r.inv(
+        gate_leg(
+            r,
+            perf,
             "guest Verify exit code recorded and zero",
             ctx.meta.get("guest_verify_exit").and_then(Value::as_i64) == Some(0),
             ctx.meta
@@ -851,7 +916,9 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
         }
         let pre = read_json(ctx.d.join("status-pre.json"));
         let bound = pre.as_ref().map(|v| v["guest_verify_nonce"].clone());
-        r.inv(
+        gate_leg(
+            r,
+            perf,
             "status-pre carries this invocation's guest Verify nonce",
             matches!((nonce.and_then(Value::as_str), bound.as_ref().and_then(Value::as_str)), (Some(a), Some(b)) if !a.is_empty() && a == b),
             bound.map_or("status-pre missing".into(), |v| v.to_string()),
@@ -866,7 +933,9 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
     }
     if let Some(id) = nonce {
         let gv = read_json(ctx.d.join("guest-verify.json"));
-        r.inv(
+        gate_leg(
+            r,
+            perf,
             "guest Verify belongs to this invocation",
             id.as_str().is_some_and(|s| !s.is_empty())
                 && gv.as_ref().is_some_and(|v| v["verification_nonce"] == *id),
@@ -1807,6 +1876,7 @@ fn verify_item(
         "overflow_queue" => overflow(&mut r, &ctx, &c, man),
         "linkloss" => linkloss(&mut r, &ctx, &c, man),
         "rxloss" => rxloss(&mut r, &ctx, &c, man),
+        "perf" => perf(&mut r, &ctx, it, &c, man),
         "ckpt_refuse" | "refuse_completed" => refusal(&mut r, &ctx, it, &c, man),
         "perm_restricted" => permission(&mut r, &ctx, it, man),
         "pause" => {
@@ -1865,6 +1935,123 @@ fn verify_item(
         _ => r.add("known run kind", INVALID, it.to_string(), false),
     }
     (r, Some(ctx))
+}
+/// One perf cell (ruling 7). The capture-completeness rules ran in `capture` (INVALID); everything
+/// here is a behaviour or isolation finding (FAIL). The cell's metrics are recorded in `notes.perf`.
+fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
+    let j = &ctx.rj;
+    job(r, j, c, man);
+    let exp = perf_expected(c);
+    let exp_open = exp.iter().filter(|x| x.ends_with(":open")).count();
+    let completed = j["status"] == "ok" && j["reason"] == "Completed";
+    let drops = j["rx_health"]["kernel_drops"].as_u64();
+    let rx_loss = j["reason"] == "Failed" && s(&j["fail_detail"]).contains("RxLoss");
+    let outcome = if completed {
+        "Completed".to_owned()
+    } else if rx_loss {
+        "Failed(RxLoss)".to_owned()
+    } else if j["reason"] == "Failed" {
+        format!("Failed({})", s(&j["fail_detail"]))
+    } else {
+        s(&j["reason"]).to_owned()
+    };
+    r.beh(
+        "outcome is Completed or Failed(RxLoss)",
+        completed || rx_loss,
+        &outcome,
+    );
+    r.beh(
+        "guest exit code matches the outcome",
+        ctx.meta["guest_exit"] == if completed { 0 } else { 3 } && (completed || rx_loss),
+        ctx.meta["guest_exit"].to_string(),
+    );
+    if rx_loss {
+        r.beh(
+            "RxLoss run has measured kernel drops above zero",
+            drops.is_some_and(|d| d > 0),
+            j["rx_health"].to_string(),
+        );
+    } else if completed {
+        r.beh(
+            "Completed run has measured zero kernel drops",
+            health(j),
+            j["rx_health"].to_string(),
+        );
+    }
+    let sp = sports(c);
+    let mut wire_syns = None;
+    let mut wire_replies_n = None;
+    if let Some((fr, _)) = &ctx.peer {
+        let all = fr.iter().filter(|(_, f)| pcap::is_syn(f)).count();
+        let ours = syns(fr, &ctx.bind, sp);
+        r.beh(
+            "every SYN on the wire is the scanner's, to 198.18.0.2, from the bound MAC, IP and source port",
+            all == ours.len(),
+            format!("{all} SYN, {} from the binding", ours.len()),
+        );
+        // Wire count equals tx_sent, and no SYN after the outcome (both FAIL when the capture is proven).
+        align(r, ctx, c, false);
+        if completed {
+            let mut seen = BTreeMap::<u16, usize>::new();
+            for (_, f) in &ours {
+                if let Some(t) = tcp(f) {
+                    *seen.entry(t.dp).or_default() += 1;
+                }
+            }
+            let want = ports(s(&c["ports"]));
+            let once = ours.len() == want.len()
+                && want.iter().all(|p| seen.get(p) == Some(&1))
+                && seen.len() == want.len();
+            r.beh(
+                "each probe exactly once on the wire",
+                once,
+                format!(
+                    "{} SYN for {} probes ({} distinct ports)",
+                    ours.len(),
+                    want.len(),
+                    seen.len()
+                ),
+            );
+        }
+        wire_replies_n = Some(wire_replies(fr, &ctx.bind, Some(sp)).len());
+        wire_syns = Some(ours);
+    }
+    if completed {
+        r.beh(
+            "received open/closed results equal listener truth",
+            j["replies"] == json!(exp),
+            format!(
+                "{} results for {} expected",
+                n(&j["reply_total"]),
+                exp.len()
+            ),
+        );
+    }
+    let reps = array(&j["replies"]);
+    let count = |end: &str| reps.iter().filter(|x| s(x).ends_with(end)).count();
+    let times: Vec<f64> = wire_syns
+        .iter()
+        .flatten()
+        .map(|(t, _)| *t)
+        .collect::<Vec<_>>();
+    let total_s = j["timing"]["total_s"].as_f64();
+    let last_send = j["timing"]["last_send_s"].as_f64();
+    let res = &j["resources"];
+    r.notes.insert("perf".into(), json!({
+        "rate":it["rate"],"rep":it["rep"],"probes":n(&c["syn"]),
+        "expected_open":exp_open,"expected_closed":exp.len() - exp_open,
+        "transmitted_wire":wire_syns.as_ref().map(Vec::len),"tx_sent":j["net"]["tx_sent"],
+        "steady_pps_wire":pcap::steady_state_rate(&times),"steady_pps_inprocess":j["timing"]["steady_pps"],
+        "cpu_user_ms":res["cpu_user_ms"],"cpu_kernel_ms":res["cpu_kernel_ms"],
+        "peak_working_set_bytes":res["peak_working_set_bytes"],
+        "working_set_bytes_after_join":res["working_set_bytes_after_join"],
+        "join_ms":j["timing"]["join_ms"],
+        "drain_s":total_s.zip(last_send).map(|(t, l)| t - l),
+        "rx_packets":j["net"]["rx_packets"],"kernel_drops":j["rx_health"]["kernel_drops"],
+        "received_open":count(":open"),"received_closed":count(":closed"),
+        "peer_replies_on_wire":wire_replies_n,
+        "outcome":outcome,"rx_loss":rx_loss,"capture_valid":r.proven(),
+    }));
 }
 fn groups(
     root: &Path,
@@ -2057,6 +2244,73 @@ fn provenance_report(man: &Value) -> Value {
     }
     json!({"orchestrator":orch,"verifier":verifier,"warnings":warnings})
 }
+const PERF_METRICS: [&str; 7] = [
+    "steady_pps_wire",
+    "steady_pps_inprocess",
+    "cpu_user_ms",
+    "cpu_kernel_ms",
+    "peak_working_set_bytes",
+    "join_ms",
+    "drain_s",
+];
+/// Fewer PASS cells than this at a rate leave its gate NOT RUN (ruling 8).
+const PERF_MIN_PASS: usize = 3;
+fn median(mut v: Vec<f64>) -> Option<f64> {
+    v.retain(|x| x.is_finite());
+    v.sort_by(f64::total_cmp);
+    match v.len() {
+        0 => None,
+        k if k % 2 == 1 => Some(v[k / 2]),
+        k => Some((v[k / 2 - 1] + v[k / 2]) / 2.),
+    }
+}
+/// The `perf_summary` of a verdict: one row per requested rate, from the per-run summaries of the
+/// perf cells. Medians run over the PASS cells only. The rate gate is a finding about the VM and
+/// never changes `overall`.
+pub(crate) fn perf_summary(runs: &[Value]) -> Value {
+    let mut rows = Vec::new();
+    for rate in PERF_RATES {
+        let prefix = format!("perf.{rate}.r");
+        let cells: Vec<&Value> = runs
+            .iter()
+            .filter(|r| s(&r["tag"]).starts_with(&prefix))
+            .collect();
+        let count = |v: &str| cells.iter().filter(|r| r["verdict"] == v).count();
+        let pass: Vec<&&Value> = cells.iter().filter(|r| r["verdict"] == PASS).collect();
+        let mut med = serde_json::Map::new();
+        for k in PERF_METRICS {
+            let values = pass
+                .iter()
+                .filter_map(|r| r["notes"]["perf"][k].as_f64())
+                .collect();
+            med.insert(k.into(), json!(median(values)));
+        }
+        let wire = med["steady_pps_wire"].as_f64();
+        let gate = if pass.len() < PERF_MIN_PASS {
+            "NOT RUN"
+        } else if wire.is_some_and(|w| (w - rate as f64).abs() <= 0.2 * rate as f64) {
+            "MET"
+        } else {
+            "OPEN"
+        };
+        rows.push(json!({
+            "rate":rate,"planned":PERF_REPS,
+            "pass":pass.len(),"fail":count(FAIL),"invalid":count(INVALID),
+            "not_run":(PERF_REPS as usize).saturating_sub(pass.len() + count(FAIL) + count(INVALID)),
+            "rx_loss":pass.iter().filter(|r| r["notes"]["perf"]["rx_loss"] == true).count(),
+            "median":med,"rate_gate":gate,
+        }));
+    }
+    json!({
+        "rows":rows,
+        "notes":[
+            "rate_gate is MET when the median steady_pps_wire of the PASS cells is within 20 percent of the requested rate, OPEN otherwise, NOT RUN with fewer than 3 PASS cells. It never changes overall.",
+            "VM speed, not physical NIC; ±20% gate may stay OPEN until 2B-sendqueue",
+            "Call latency here is join_ms and drain_s only. Stop latency under load is measured by the stop_* runs of failure-r1 (docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/failure-r1); per-Npcap-call latency by the spike evidence (docs/experiments/2026-10-24-rmasscan-stage2b-windows-spike-raw).",
+            "A PASS cell with rx_loss true is honest measured loss (Failed(RxLoss) with kernel drops above zero); its results are recorded, not compared, and it still counts in the medians."
+        ]
+    })
+}
 pub fn verify_dir(root: &Path) -> Value {
     let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[]});
     let Some(man) = read_json(root.join("manifest.json")) else {
@@ -2118,7 +2372,10 @@ pub fn verify_dir(root: &Path) -> Value {
         }
         rs.insert(s(&it["tag"]).into(), r);
     }
-    if man["plan"] != "failure" {
+    if man["plan"] == "perf" {
+        result["perf_summary"] = perf_summary(&runs);
+    }
+    if !matches!(man["plan"].as_str(), Some("failure" | "perf")) {
         result["groups"] = json!(groups(root, &man, &fx, &rs, &cs));
     }
     result["runs"] = json!(runs);
@@ -2211,6 +2468,21 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             s(&r["verdict"]),
             s(&r["tag"]),
             bad.join("; ")
+        );
+    }
+    for row in array(&res["perf_summary"]["rows"]) {
+        println!(
+            "perf {:>6} pps: pass {} fail {} invalid {} not run {} rx_loss {}; median wire {} pps; rate gate {}",
+            row["rate"],
+            row["pass"],
+            row["fail"],
+            row["invalid"],
+            row["not_run"],
+            row["rx_loss"],
+            row["median"]["steady_pps_wire"]
+                .as_f64()
+                .map_or("n/a".to_owned(), |w| format!("{w:.1}")),
+            s(&row["rate_gate"]),
         );
     }
     let p = &res["provenance"];
@@ -2306,6 +2578,9 @@ mod tests {
 #[cfg(test)]
 #[path = "verify_fixture.rs"]
 pub(crate) mod fixture;
+#[cfg(test)]
+#[path = "verify_perf_tests.rs"]
+mod perf_tests;
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod regression_tests;

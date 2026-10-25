@@ -134,6 +134,12 @@ jobs:
           if (Compare-Object $names ($want | Sort-Object)) { throw "unexpected package contents: $names" }
           if (-not (Select-String -Path "$($dir.FullName)/SOURCE_COMMIT" -Pattern '${{ env.PACKAGE_COMMIT }}' -SimpleMatch -Quiet)) { throw 'SOURCE_COMMIT mismatch' }
 
+      - name: Проверить DLL-search hardening пакета (Dependent Load Flag 0x800)
+        run: |
+          $exe = Get-ChildItem verify -Recurse -Filter wire_scan.exe | Select-Object -First 1
+          if (-not $exe) { throw 'wire_scan.exe not found in the package' }
+          ./scripts/check-dll-search-flag.ps1 -Exe $exe.FullName
+
       - uses: actions/upload-artifact@v4
         with:
           name: rmasscan-wire-windows-x64-${{ env.PACKAGE_COMMIT }}

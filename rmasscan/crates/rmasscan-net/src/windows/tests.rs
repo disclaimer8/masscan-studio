@@ -740,9 +740,7 @@ fn rec(n: usize) -> u32 {
 }
 
 fn fake_queue_len(i: usize) -> u32 {
-    let mut out = 0;
-    with(|s| out = s.queues[i].0.len);
-    out
+    queue_len(i)
 }
 
 #[test]
@@ -925,8 +923,76 @@ fn transmit_returns_the_scripted_bytes_and_passes_sync_zero() {
                 .collect::<Vec<_>>()
         );
         assert_eq!(s.sent.len(), 9);
+        // Частичный исход доставляет ПЕРВЫЕ k записей в порядке очереди.
+        let all: Vec<Vec<u8>> = frames.iter().map(|f| f.to_vec()).collect();
+        assert_eq!(s.transmitted[0], all);
+        assert_eq!(s.transmitted[1], &all[..1]);
+        assert_eq!(s.transmitted[2], &all[..1]);
+        assert_eq!(s.transmitted[3], &all[..1]);
+        assert_eq!(s.transmitted[4], all);
+        // `sent` это те же кадры подряд: 3 + 1 + 1 + 1 + 3.
+        let flat: Vec<Vec<u8>> = s.transmitted.iter().flatten().cloned().collect();
+        assert_eq!(s.sent, flat);
     });
-    assert_eq!(count("sendqueue_transmit:3"), 5);
+    assert_eq!(count("sendqueue_transmit_records:3"), 5);
+    assert!(events().iter().all(|e| !e.starts_with("fake_error")));
+}
+
+#[test]
+fn transmitted_frames_reach_the_responder_and_the_echo_in_queue_order() {
+    reset(|s| {
+        s.echo_tx = true;
+        s.responder = Some(Arc::new(|f: &[u8]| vec![vec![f[0] + 100; 64]]));
+        s.transmit_script.push_back(TransmitStep::Boundary(2));
+    });
+    let api = good_api();
+    let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    for b in [1u8, 2, 3] {
+        q.push(&[b; 60]).unwrap();
+    }
+    h.transmit_raw(&mut q, false);
+    with(|s| {
+        // Первые два кадра: для каждого эхо, затем ответ ответчика. Третий не ушёл.
+        let got: Vec<Vec<u8>> = s
+            .next_script
+            .iter()
+            .map(|n| match n {
+                NextStep::Frame(v) => v.clone(),
+                _ => panic!("unexpected step"),
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                vec![1u8; 60],
+                vec![101u8; 64],
+                vec![2u8; 60],
+                vec![102u8; 64]
+            ]
+        );
+    });
+}
+
+#[test]
+fn push_raw_records_an_arbitrary_header_and_refuses_a_short_buffer() {
+    reset(|_| {});
+    let api = good_api();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    let hdr = PcapPkthdr {
+        caplen: 10,
+        len: 60,
+        ..PcapPkthdr::default()
+    };
+    assert_eq!(q.push_raw(&hdr, &[9u8; 10]), Ok(()));
+    assert_eq!(q.record_sizes(), [rec(10)]);
+    with(|s| {
+        let b = &s.queues[0].1;
+        assert_eq!(u32::from_ne_bytes(b[8..12].try_into().unwrap()), 10);
+        assert_eq!(u32::from_ne_bytes(b[12..16].try_into().unwrap()), 60);
+    });
+    assert_eq!(q.push_raw(&hdr, &[9u8; 9]), Err(-1));
+    assert_eq!(q.len(), 1);
 }
 
 #[test]

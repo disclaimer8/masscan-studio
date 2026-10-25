@@ -932,3 +932,26 @@ fn a_genuine_rxloss_cell_still_passes() {
     let v = d.summary(CELL);
     assert_eq!(verdict(&v), PASS, "{:?}", bad(&v));
 }
+
+// ---- final review I-1: a lab0 drop cannot hide an eno1 frame --------------------------------
+#[test]
+fn eno1_frame_with_a_lab0_drop_is_fail_and_not_discardable() {
+    let d = Dir::clean(CELL);
+    d.edit(CELL, "capture.json", |c| {
+        c["peer"]["tcpdump"]["dropped_kernel"] = json!(3)
+    });
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), INVALID, "drop alone is a discardable INVALID");
+    assert!(crate::windows_suite::may_discard(verdict(&v), false));
+    d.eno1(
+        CELL,
+        vec![(fixture::BASE + 4.0, fixture::scanner_syn(80, 40000))],
+    );
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert_eq!(v["safety_trip"], true);
+    assert!(!crate::windows_suite::may_discard(
+        verdict(&v),
+        v["behaviour_fail"] == true
+    ));
+}

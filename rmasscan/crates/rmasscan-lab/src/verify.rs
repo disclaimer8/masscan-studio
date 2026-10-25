@@ -406,6 +406,16 @@ impl Run {
         self.add(name, if ok { PASS } else { bad }, detail, beh);
         ok
     }
+    /// A safety check (lab isolation). Independent of argv and of capture completeness: a tripped one
+    /// makes the run FAIL whatever else is INVALID or NOT RUN, so it can never be discarded.
+    fn safety(&mut self, name: &str, ok: bool, detail: impl ToString) {
+        self.checks.push(json!({"name":name,"result":if ok { PASS } else { FAIL },"detail":detail.to_string(),"behaviour":false,"safety":true}));
+    }
+    fn safety_trip(&self) -> bool {
+        self.checks
+            .iter()
+            .any(|c| c["safety"] == true && c["result"] == FAIL)
+    }
     fn inv(&mut self, name: &str, ok: bool, detail: impl ToString) {
         self.check(name, ok, detail, INVALID, false);
     }
@@ -430,6 +440,9 @@ impl Run {
                 .any(|c| c["behaviour"] == true && c["result"] == FAIL)
     }
     fn verdict(&self) -> &str {
+        if self.safety_trip() {
+            return FAIL;
+        }
         for v in [NOT_RUN, INVALID, FAIL, PASS] {
             if self.checks.iter().any(|c| {
                 if c["result"] == FAIL && !self.argv_ok {
@@ -444,7 +457,7 @@ impl Run {
         NOT_RUN
     }
     fn summary(&self) -> Value {
-        json!({"tag":self.tag,"checks":self.checks,"notes":self.notes,"verdict":self.verdict(),"behaviour_fail":self.behaviour_fail()})
+        json!({"tag":self.tag,"checks":self.checks,"notes":self.notes,"verdict":self.verdict(),"behaviour_fail":self.behaviour_fail(),"safety_trip":self.safety_trip()})
     }
 }
 fn parse_args(v: &Value) -> Result<BTreeMap<String, Value>, String> {
@@ -838,15 +851,6 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
             "capture encloses guest in UTC",
             ts.iter().all(|x| x.is_finite()) && ts.windows(2).all(|w| w[0] <= w[1]),
             format!("{ts:?}"),
-        );
-    }
-    if let Some((fr, _)) = eno {
-        r.check(
-            "eno1 saw zero lab packets",
-            fr.is_empty(),
-            fr.len(),
-            FAIL,
-            false,
         );
     }
     for name in ["status-pre", "status-post", "guest-verify", "listeners"] {
@@ -1804,6 +1808,44 @@ fn permission(r: &mut Run, ctx: &Ctx, it: &Value, man: &Value) {
         );
     }
 }
+/// Lab-isolation checks on the two witness captures. They need nothing but the pcaps, the manifest
+/// binding and the run kind, so they run before any other evidence is looked at: a missing meta, an
+/// incomplete capture, a failed gate leg or a wrong argv cannot hide them (final review I-1, I-2).
+fn safety_checks(
+    r: &mut Run,
+    man: &Value,
+    kind: &str,
+    peer: Option<&Frames>,
+    eno: Option<&Frames>,
+) {
+    if let Some(fr) = eno {
+        r.safety("eno1 saw zero lab packets", fr.is_empty(), fr.len());
+    }
+    let Some(fr) = peer else { return };
+    let b = Binding::new(&man["binding"]);
+    if !b.src.is_empty() && !b.sm.is_empty() {
+        let foreign = fr
+            .iter()
+            .filter(|(_, f)| {
+                pcap::is_syn(f)
+                    && !tcp(f).is_some_and(|i| i.sm == b.sm && i.src == b.src && i.dst == PEER)
+            })
+            .count();
+        r.safety(
+            "no SYN from outside the binding or to anything but 198.18.0.2",
+            foreign == 0,
+            foreign,
+        );
+    }
+    if matches!(kind, "ckpt_refuse" | "refuse_completed" | "perm_restricted") {
+        let sent = fr.iter().filter(|(_, f)| pcap::is_syn(f)).count();
+        r.safety(
+            "no scanner SYN during a refusal or restricted-token run",
+            sent == 0,
+            sent,
+        );
+    }
+}
 fn verify_item(
     root: &Path,
     man: &Value,
@@ -1833,6 +1875,13 @@ fn verify_item(
     }
     let peer = load_pcap(&mut r, &d.join("peer.pcap"));
     let eno = load_pcap(&mut r, &d.join("eno1.pcap"));
+    safety_checks(
+        &mut r,
+        man,
+        s(&it["kind"]),
+        peer.as_ref().map(|p| &p.0),
+        eno.as_ref().map(|p| &p.0),
+    );
     let (Some(rj), Some(meta), Some(cap)) = (rj, meta, cap) else {
         return (r, None);
     };
@@ -2189,6 +2238,7 @@ fn finish(mut result: Value) -> Value {
         .chain(array(&result["groups"]))
         .collect();
     let disc = array(&result["discarded"]);
+    let aborted = array(&result["aborted"]);
     let totals = |a: &[&Value]| -> Value {
         let mut o = serde_json::Map::new();
         for v in [NOT_RUN, INVALID, FAIL, PASS] {
@@ -2217,7 +2267,16 @@ fn finish(mut result: Value) -> Value {
         .filter(|r| r["behaviour_fail"] == true)
         .map(|r| r["tag"].clone())
         .collect();
-    if !beh.is_empty() || disc.iter().any(|r| r["verdict"] == FAIL) {
+    // A tripped lab-isolation check in any kept, discarded or aborted run fails the directory.
+    let trips: Vec<_> = vs
+        .iter()
+        .copied()
+        .chain(disc)
+        .chain(aborted)
+        .filter(|r| r["safety_trip"] == true)
+        .map(|r| r["tag"].clone())
+        .collect();
+    if !trips.is_empty() || !beh.is_empty() || disc.iter().any(|r| r["verdict"] == FAIL) {
         overall = FAIL;
     } else if overall == PASS && disc.iter().any(|r| r["verdict"] == PASS) {
         overall = INVALID;
@@ -2226,6 +2285,7 @@ fn finish(mut result: Value) -> Value {
     result["discarded_totals"] = ds;
     result["overall"] = json!(overall);
     result["behaviour_fail"] = json!(beh);
+    result["safety_trips"] = json!(trips);
     result
 }
 /// The `provenance` block of a verdict: the build recorded at run time, this verifier's own build, and
@@ -2352,12 +2412,72 @@ pub(crate) fn perf_summary(runs: &[Value]) -> Value {
         ]
     })
 }
+/// Aborted runs (`runs_aborted/<tag>.<run id>/`, written when the suite fails after the guest runner
+/// started) are not part of the plan, but their witness captures are still lab-isolation evidence: an
+/// eno1 frame or a foreign SYN there fails the directory. A copy without any pcap is not listed.
+fn aborted_runs(root: &Path, man: &Value) -> Vec<Value> {
+    let Ok(entries) = fs::read_dir(root.join("runs_aborted")) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<_> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .collect();
+    dirs.sort_by_key(|e| e.file_name());
+    let items = if man.is_null() {
+        Vec::new()
+    } else {
+        planned(man)
+    };
+    let mut out = Vec::new();
+    for e in dirs {
+        let name = e.file_name().to_string_lossy().to_string();
+        let d = e.path();
+        if !d.join("eno1.pcap").exists() && !d.join("peer.pcap").exists() {
+            continue;
+        }
+        let kind = items
+            .iter()
+            .filter(|it| name.starts_with(&format!("{}.", s(&it["tag"]))))
+            .max_by_key(|it| s(&it["tag"]).len())
+            .map_or("", |it| s(&it["kind"]));
+        let mut r = Run::new(&name);
+        let peer = d
+            .join("peer.pcap")
+            .exists()
+            .then(|| load_pcap(&mut r, &d.join("peer.pcap")))
+            .flatten();
+        let eno = d
+            .join("eno1.pcap")
+            .exists()
+            .then(|| load_pcap(&mut r, &d.join("eno1.pcap")))
+            .flatten();
+        safety_checks(
+            &mut r,
+            man,
+            kind,
+            peer.as_ref().map(|p| &p.0),
+            eno.as_ref().map(|p| &p.0),
+        );
+        out.push(r.summary());
+    }
+    out
+}
+/// Every run of `root` (kept, discarded or aborted) whose lab-isolation checks tripped. The suite
+/// refuses to start or to `--rerun` in a directory where this is not empty.
+pub fn safety_trips(root: &Path) -> Vec<String> {
+    array(&verify_dir(root)["safety_trips"])
+        .iter()
+        .map(|t| s(t).to_owned())
+        .collect()
+}
 pub fn verify_dir(root: &Path) -> Value {
-    let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[]});
+    let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[],"aborted":[]});
     let Some(man) = read_json(root.join("manifest.json")) else {
         let mut r = Run::new("manifest");
         r.add("manifest present and valid JSON", NOT_RUN, "missing", false);
         result["runs"] = json!([r.summary()]);
+        result["aborted"] = json!(aborted_runs(root, &Value::Null));
         return finish(result);
     };
     let fx = read_json(root.join("fixtures/manifest.json"));
@@ -2408,6 +2528,7 @@ pub fn verify_dir(root: &Path) -> Value {
     let mut runs = vec![r.summary()];
     if r.verdict() != PASS {
         result["runs"] = json!(runs);
+        result["aborted"] = json!(aborted_runs(root, &man));
         return finish(result);
     }
     let fx = fx.unwrap();
@@ -2460,6 +2581,7 @@ pub fn verify_dir(root: &Path) -> Value {
         }
     }
     result["discarded"] = json!(discarded);
+    result["aborted"] = json!(aborted_runs(root, &man));
     finish(result)
 }
 pub fn run_status(root: &Path, tag: &str) -> (String, bool) {

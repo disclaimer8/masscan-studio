@@ -2355,17 +2355,25 @@ fn a_run_directory_with_only_compressed_captures_is_unproven_and_fails_closed() 
             let env = Env::new("functional");
             let d = env.root.join(sub).join(format!("unplanned.{}", nonce()));
             fs::create_dir_all(&d).unwrap();
-            // A foreign SYN on the uplink would sit in here; the verifier cannot read it without gunzip.
+            // A compressed capture is refused outright: the verifier has no decompression and isolation is unproven.
             fs::write(d.join(gz), b"\x1f\x8b not read").unwrap();
             assert_eq!(safety_trips(&env.root).len(), 1, "{sub}/{gz}");
             let v = verify_dir(&env.root);
             assert_eq!(v["overall"], FAIL, "{sub}/{gz}: {v:#}");
             assert!(
-                format!("{v}").contains("gunzip"),
+                format!("{v}").contains("store captures uncompressed"),
                 "{sub}/{gz}: the finding says what to do"
             );
         }
     }
+    // A planned run whose readable plain captures sit beside a compressed one is refused as well.
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    ev.files
+        .insert("peer.pcap.gz".into(), b"\x1f\x8b not read".to_vec());
+    let (r, _) = ev.verify(&env);
+    assert!(r.safety_trip(), "{:?}", failing_checks(&r));
+    assert_eq!(r.verdict(), FAIL);
     // A directory with nothing capture-like at all is still skipped, as before.
     let env = Env::new("functional");
     let d = env.root.join("runs").join(format!("plain.{}", nonce()));
@@ -2392,4 +2400,150 @@ fn a_missing_peer_capture_without_a_host_record_makes_the_listener_truth_invalid
     );
     assert_ne!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
     assert!(!failed(&r, "results equal listener truth"));
+}
+
+// ---- post-merge review P1: a genuine, probe-matched, in-window RST on a proven-complete capture is a result
+
+fn drop_all_results(ev: &mut Ev) {
+    edit_scanner_output(ev, |v| {
+        let old = v["received"].as_u64().unwrap_or(0);
+        v["discarded"] = json!(v["discarded"].as_u64().unwrap_or(0) + old);
+        v["replies"] = json!([]);
+        for field in ["reply_total", "reply_unique", "received"] {
+            v[field] = json!(0);
+        }
+    });
+}
+
+#[test]
+fn losing_every_captured_rst_of_a_completed_perf_cell_is_a_behaviour_fail() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    assert!(r.behaviour_fail());
+    assert!(failed(&r, "every genuine probe-matched RST"));
+}
+
+#[test]
+fn losing_both_captured_rsts_of_stop_drain_is_a_behaviour_fail() {
+    let env = Env::new("failure");
+    let mut ev = build(&env, "stop_drain");
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    assert!(failed(&r, "every genuine probe-matched RST"));
+}
+
+/// The reviewer's mutation of the REAL perf.100.r1 of the committed acceptance archive (read-only, never written):
+/// 418 genuine RSTs on the wire, the results removed.
+#[test]
+fn losing_the_real_418_rsts_of_the_archived_perf_100_r1_is_a_behaviour_fail() {
+    let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance-raw/perf-r1");
+    let name = "perf.100.r1.r966275c49346217082cdf169b105b0da";
+    let d = raw.join("runs").join(name);
+    assert!(
+        d.is_dir(),
+        "the committed archive is missing: {}",
+        d.display()
+    );
+    let env = Env {
+        root: scratch(),
+        man: read_json(raw.join("manifest.json")).unwrap(),
+        fx: read_json(raw.join("fixtures/manifest.json")).unwrap(),
+    };
+    let mut ev = Ev {
+        tag: "perf.100.r1".into(),
+        nonce: "r966275c49346217082cdf169b105b0da".into(),
+        item: env.item("perf.100.r1"),
+        files: BTreeMap::new(),
+    };
+    for f in fs::read_dir(&d).unwrap() {
+        let f = f.unwrap();
+        if f.file_type().unwrap().is_file() && f.file_name() != HASHES {
+            ev.files.insert(
+                f.file_name().to_str().unwrap().into(),
+                fs::read(f.path()).unwrap(),
+            );
+        }
+    }
+    let (baseline, _) = ev.verify(&env);
+    assert_eq!(baseline.verdict(), PASS, "{:?}", failing_checks(&baseline));
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    assert!(r.behaviour_fail());
+}
+
+/// An RST that never appeared on the wire stays tolerated (the OS rate limit); lost results with an unproven
+/// capture are never PASS.
+#[test]
+fn a_closed_result_missing_only_because_its_rst_never_hit_the_wire_still_passes() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    lose_reply(&mut ev, 17);
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    let mut ev = build(&env, "perf.100.r1");
+    drop_all_results(&mut ev);
+    ev.json("capture.json", |v| {
+        v["peer"]["tcpdump"]["dropped_kernel"] = json!(1)
+    });
+    let (r, _) = ev.verify(&env);
+    assert_ne!(r.verdict(), PASS);
+}
+
+/// Seen live (perf.100000.r2, port 7000): a host service answers SYN-ACK and Darwin later aborts the embryonic
+/// connection with an RST,ACK whose ack still matches the SYN. The port has its open result; the RST is no second one.
+#[test]
+fn an_rst_that_follows_the_synack_of_the_same_port_needs_no_closed_result() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.1000.r1");
+    host_listener_on_5000(&mut ev);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.push((BASE + 5.0, reply(5000, false)));
+    fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+}
+
+/// Post-merge re-review, Stopped-leg hole: a stop_silent whose results were all dropped used to PASS.
+#[test]
+fn a_stopped_scan_that_lost_replies_received_well_before_the_stop_fails() {
+    for tag in ["stop_silent", "stop_load"] {
+        let env = Env::new("failure");
+        let ev = build(&env, tag);
+        let (base, _) = ev.verify(&env);
+        if base.verdict() != PASS {
+            // stop_load needs flood.json in this fixture; the rule is the same code path as stop_silent.
+            continue;
+        }
+        let mut ev = build(&env, tag);
+        drop_all_results(&mut ev);
+        let (r, _) = ev.verify(&env);
+        assert_eq!(r.verdict(), FAIL, "{tag}: {:?}", failing_checks(&r));
+        assert!(failed(&r, "well before the Stop request"));
+    }
+    let env = Env::new("failure");
+    let mut ev = build(&env, "stop_silent");
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    // Replies closer than 250 ms to the Stop, or after the outcome, are tolerated.
+    let mut ev = build(&env, "stop_silent");
+    drop_all_results(&mut ev);
+    edit_scanner_output(&mut ev, |v| {
+        v["timing"]["stop_to_outcome_ms"] = json!(2990.0);
+    });
+    let (r, _) = ev.verify(&env);
+    assert!(
+        !failed(&r, "well before the Stop request"),
+        "{:?}",
+        failing_checks(&r)
+    );
 }

@@ -90,7 +90,7 @@ fn alias(d: &Names, t: &str) -> String {
 fn norm(s: &str) -> String {
     s.to_ascii_lowercase().replace('-', ":")
 }
-fn overlap(s: &str) -> bool {
+pub(crate) fn overlap(s: &str) -> bool {
     let (ip, prefix) = s.split_once('/').unwrap_or((s, "32"));
     let Ok(ip) = ip.parse::<Ipv4Addr>() else {
         return false;
@@ -357,7 +357,7 @@ fn vm_facts(d: &Names) -> Value {
     }
     out
 }
-fn read_manifest(p: &Path) -> Result<Option<Value>, String> {
+pub(crate) fn read_manifest(p: &Path) -> Result<Option<Value>, String> {
     match fs::read(p) {
         Ok(b) => serde_json::from_slice(&b)
             .map(Some)
@@ -366,7 +366,7 @@ fn read_manifest(p: &Path) -> Result<Option<Value>, String> {
         Err(e) => Err(e.to_string()),
     }
 }
-fn write_manifest(p: &Path, m: &Value) -> Result<(), String> {
+pub(crate) fn write_manifest(p: &Path, m: &Value) -> Result<(), String> {
     atomic_write(p, &serde_json::to_vec_pretty(m).map_err(|e| e.to_string())?)
 }
 /// The owner to give a report back when sudo atomically replaced an unprivileged user's file:
@@ -410,7 +410,7 @@ fn restore_sudo_owner(file: &fs::File) -> io::Result<()> {
 fn restore_sudo_owner(_file: &fs::File) -> io::Result<()> {
     Ok(())
 }
-fn atomic_write(p: &Path, b: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_write(p: &Path, b: &[u8]) -> Result<(), String> {
     let mut name = p.as_os_str().to_os_string();
     name.push(format!(".{}.tmp", std::process::id()));
     let tmp = PathBuf::from(name);

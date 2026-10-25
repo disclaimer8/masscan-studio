@@ -8,6 +8,28 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the process stop flag is global, so tests raise a per-thread one instead.
+    pub(crate) static TEST_STOP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+fn stop_requested() -> bool {
+    #[cfg(test)]
+    if TEST_STOP.with(std::cell::Cell::get) {
+        return true;
+    }
+    rmasscan_net::lab_io::stop_requested()
+}
+/// Signal a process directly. `command()` kills its own child as soon as the stop flag is up, so a
+/// cleanup kill sent through it would die before it ran (final review M-2).
+fn signal_process(sig: &str, pid: u32) {
+    let _ = Command::new("kill")
+        .arg(format!("-{sig}"))
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
 pub(crate) fn capture_complete(
     cap: Option<u64>,
     recv: Option<u64>,
@@ -115,14 +137,10 @@ impl OwnedChild {
         if let Some(p) = &mut self.0
             && p.try_wait().map_err(|e| e.to_string())?.is_none()
         {
-            command(
-                &strings(&["kill", &format!("-{sig}"), &p.id().to_string()]),
-                5,
-                false,
-            )?;
+            signal_process(sig, p.id());
             let t = Instant::now();
             while p.try_wait().map_err(|e| e.to_string())?.is_none() {
-                if rmasscan_net::lab_io::stop_requested() {
+                if stop_requested() {
                     p.kill().map_err(|e| e.to_string())?;
                     p.wait().map_err(|e| e.to_string())?;
                     return Err("suite interrupted during child cleanup".into());
@@ -168,7 +186,7 @@ fn wait_ready(p: &mut OwnedChild, ready: &Path, secs: u64, err: &Path) -> Result
                     .collect::<String>()
             ));
         }
-        if rmasscan_net::lab_io::stop_requested() {
+        if stop_requested() {
             return Err("suite interrupted".into());
         }
         thread::sleep(Duration::from_millis(20));
@@ -178,7 +196,7 @@ fn wait_ready(p: &mut OwnedChild, ready: &Path, secs: u64, err: &Path) -> Result
 fn wait_file(p: &Path, secs: u64) -> bool {
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(secs) {
-        if rmasscan_net::lab_io::stop_requested() {
+        if stop_requested() {
             return false;
         }
         if p.exists() {
@@ -1436,9 +1454,9 @@ impl Driver {
                 .split_whitespace()
                 .next()
                 .and_then(|n| n.parse::<u32>().ok());
-            if rmasscan_net::lab_io::stop_requested() {
+            if stop_requested() {
                 if let Some(pid) = process {
-                    let _ = command(&strings(&["kill", "-TERM", &pid.to_string()]), 5, false);
+                    signal_process("TERM", pid);
                 }
                 return Err("suite interrupted".into());
             }
@@ -1630,7 +1648,32 @@ impl Driver {
         for &rate in rates {
             for rep in 1..=reps {
                 for implementation in ["c", "rust"] {
-                    match self.perf_cell(implementation,rate,rep){Ok(c)=>cells.push(c),Err(e)=>cells.push(json!({"impl":implementation,"rate":rate,"rep":rep,"valid":false,"invalid_reason":format!("driver error: {e}")}))}
+                    // An interrupted run is partial: it must neither start further cells (each would respawn a
+                    // responder) nor be written up as a complete matrix with every remaining cell failed.
+                    if stop_requested() {
+                        self.extra["perf_cells"] = json!(cells);
+                        self.extra["interrupted"] = json!(true);
+                        self.save(true)?;
+                        return Err(format!(
+                            "suite interrupted: perf run is partial ({} of {} cells recorded)",
+                            cells.len(),
+                            rates.len() as u64 * reps * 2
+                        ));
+                    }
+                    match self.perf_cell(implementation, rate, rep) {
+                        Ok(c) => cells.push(c),
+                        Err(e) => {
+                            if stop_requested() {
+                                self.extra["perf_cells"] = json!(cells);
+                                self.extra["interrupted"] = json!(true);
+                                self.save(true)?;
+                                return Err(format!(
+                                    "suite interrupted: perf run is partial ({e})"
+                                ));
+                            }
+                            cells.push(json!({"impl":implementation,"rate":rate,"rep":rep,"valid":false,"invalid_reason":format!("driver error: {e}")}))
+                        }
+                    }
                     self.extra["perf_cells"] = json!(cells);
                     self.save(true)?;
                 }
@@ -1795,7 +1838,7 @@ fn preflight_gnu_time(work: &Path) -> Result<(), String> {
 fn wait_child(p: &mut OwnedChild, timeout: u64) -> Result<i32, String> {
     let t = Instant::now();
     loop {
-        if rmasscan_net::lab_io::stop_requested() {
+        if stop_requested() {
             return Err("suite interrupted".into());
         }
         let child = p.0.as_mut().ok_or("child missing")?;

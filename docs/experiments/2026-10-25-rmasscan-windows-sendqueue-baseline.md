@@ -67,7 +67,7 @@
 | QEMU | `ssh home-pc 'pgrep -af qemu'` | `qemu-system-x86_64 -enable-kvm -machine q35 ... -smp 6 -m 8192`, pid 4009645, совпадает с `vm.pid` |
 | гость | `ssh -J home-pc -p 2222 lab@127.0.0.1 ver` | первая попытка: `Connection timed out during banner exchange`; повтор через ~2 мин: `Microsoft Windows [Version 10.0.26300.9711]` |
 | Npcap | `docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/recheck-931f69f/logs/inv.out`, `.../README.md` строка 12 | Npcap 1.90, `lib_version` «Npcap version 1.90, based on libpcap version 1.10.7 (64-bit time_t)», wpcap.dll 1.10.7.0, Packet.dll/драйвер 5.1.90.1020 (из прошлой записи, на госте в этом проходе не перепроверялось) |
-| rustc гостя | не запускался (вне разрешённого перечня чтений) | в записи `recheck-931f69f`: `rustc 1.99.1 (58cf8f9c3 2026-10-13)` |
+| rustc гостя | `ssh -J home-pc -p 2222 lab@127.0.0.1 "rustc --version & cargo --version"` (контролёр, только чтение) | `rustc 1.99.1 (58cf8f9c3 2026-10-13)`, `cargo 1.99.1 (5f94df478 2026-08-27)`; прежняя ссылка на `recheck-931f69f` относилась к сборщику на home-pc/Mac, не к гостю |
 
 Вывод: VM запущена, стенд `n2` поднят и запечатан, `raw_run_allowed: true` по host-only статусу. Действия B1/B2 не требуются.
 Остаётся действие пользователя A (разрешение живого окна) перед задачей 3 и перед задачей 6. Полный (не host-only) статус с гостевым Verify и nonce снимается живым оператором непосредственно перед каждым прогоном.

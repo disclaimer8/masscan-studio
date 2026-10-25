@@ -14,7 +14,8 @@ Cargo license-поля, релизы и spikes-дерево этой задач�
 | Направление | Статус | Доказательство | Точный блокирующий gate |
 | --- | --- | --- | --- |
 | Linux merge readiness | **OPEN** | Код и контракты: `364ee49`, `c31ae16`; приёмка Linux измерена на коммите кода `27e3042`, evidence `8479ff2`, [раздел отчёта](2026-10-23-rmasscan-stage2b-linux.md); review Задач 1-5 и итоговое review ветки пройдены (замечания закрыты) | Остаётся только: (1) CI на точном запушенном HEAD зелёный (**NOT RUN**, push не разрешён); (2) решение о merge принимает пользователь отдельно |
-| Windows correctness | **NOT RUN** | Raw I/O Windows не запускался; Windows-кода адаптера нет. План: [Windows](../superpowers/plans/2026-10-24-rmasscan-stage2b-windows.md) | Windows 11 x64 + Npcap с реальными TX/RX, byte parity, pause/resume, Stop ≤1 с, контракты RX health/TX stall на адаптере. Хоста нет (см. 3.1) |
+| Windows correctness | **GO (VM), условно** | Приёмка на виртуальной Windows 11 + Npcap 1.90 (Admin-only), запечатанный стенд n2: часть A 29 PASS, часть B 19 PASS (коды `9ecbe32`), часть C 21 PASS (`847e218`); отчёт [Windows VM acceptance](2026-10-24-rmasscan-windows-vm-acceptance.md), сырые данные [raw](2026-10-24-rmasscan-windows-vm-acceptance-raw/) (evidence `dd78c4b`, `c5ee494`; перепроверка после итогового ревью на `931f69f`: `perm_restricted_scan` exit 5 PASS, флаг поиска DLL 0x800, подложенная DLL не грузится, раздел 11 отчёта). План: [Windows](../superpowers/plans/2026-10-24-rmasscan-stage2b-windows.md) | Остаётся: (1) CI на точном HEAD **NOT RUN** (push не разрешён; сборка и тесты под Windows на госте прошли, но это не CI); (2) физический NIC не доказан (**NOT RUN**): VM не заменяет физическую приёмку |
+| Windows throughput | **OPEN** | Часть C: на VM gate ±20% MET на 100 и 1000 pps, **OPEN** на 10k и 100k; потолок VM около 6.4 kpps (медиана 6444.6 / 6321.1 pps) при одном `pcap_sendpacket` на кадр; [отчёт](2026-10-24-rmasscan-windows-vm-acceptance.md), раздел 6 | 2B-sendqueue; затем замер на физическом NIC. Измерение VM не есть физическая скорость |
 | macOS correctness | **NOT STARTED** | Нет плана и кода BPF-адаптера | Отдельный план; аппаратная проверка macOS; те же контракты потерь/остановки |
 | Studio integration | **OPEN** (pinned engine устарел) | Раздел 2 | Обновить vendor до актуального engine/net; настоящий Scan вместо offline-preview/fake-process; runner gate (раздел 5); UI-паритет |
 | Distribution | **OPEN** | Раздел 4 | Решение по лицензиям (раздел 4.3); воспроизводимый source/binary bundle; повторная проверка ad-hoc подписи Mac |
@@ -89,9 +90,9 @@ INCONCLUSIVE; Windows-запуск не проверен (Wine не засчит
 
 ### 3.1. Windows
 
-- Windows + Npcap хоста нет. На home-pc (Ubuntu, QEMU/KVM) готовится VM Windows 11, ISO ещё нет: загрузка
-  через Mido 2026-10-24 10:21 вернула HTTP 404 от Microsoft. Даже с VM NIC виртуальный, поэтому
-  физический паритет остаётся **NOT RUN**.
+- Физического Windows-хоста с Npcap нет. (Запись ранней редакции «ISO ещё нет, Mido вернул HTTP 404» устарела: VM Windows 11 Pro
+  на home-pc (Ubuntu, QEMU/KVM) создана, Npcap 1.90 установлен, wire-приёмка на VM выполнена, см. строки таблицы и
+  [отчёт](2026-10-24-rmasscan-windows-vm-acceptance.md).) NIC виртуальный, поэтому физический паритет остаётся **NOT RUN**.
 - План Windows обновлён: [Задача 0](../superpowers/plans/2026-10-24-rmasscan-stage2b-windows.md) теперь
   ссылается на закрытые задачи [плана ремедиации](../superpowers/plans/2026-10-24-rmasscan-review-remediation.md)
   и включает контракты, которым должен удовлетворять адаптер. Предыдущие команды и цифры не являются
@@ -176,5 +177,5 @@ AGPL-3.0 для порта принят пользователем; Nmap ост�
 
 ## 6. Что этот документ не закрывает
 
-Windows/macOS/UI/licensing gates остаются открытыми. Очередь дальше: Windows/Npcap, macOS BPF, сетевая
+Windows на физическом NIC, Windows throughput, macOS, UI и licensing gates остаются открытыми (Windows VM correctness: GO (VM), условно, см. таблицу). Очередь дальше: Windows/Npcap физический стенд и sendqueue, macOS BPF, сетевая
 интеграция (discovery/ARP, network identity, sleep/VPN), runner/Studio, поставка.

@@ -169,15 +169,19 @@ fn stop_inside_long_would_block_is_fast() {
 fn pause_inside_long_would_block_is_fast_and_checkpoints() {
     let p = plan(1_000_000.0, 3);
     let clock = ManualClock::new();
-    clock.set_hold(true);
     let fake = FakeAdapter::new();
     fake.script_tx([TxStep::Sent, TxStep::Sent, TxStep::Sent]);
     fake.set_would_block_forever(true);
-    let h = start_manual(&p, &fake, &clock, opts());
+    // Sleeps advance the manual clock, so the throttle and the would-block backoff run in
+    // virtual time. A held clock froze the throttle, which then crawled out of its 256 buckets
+    // with real 1 ms sleeps and missed the 10 s wait on a loaded runner. The one-hour stall
+    // limit keeps TX inside the would-block loop until the pause arrives.
+    let mut o = opts();
+    o.tx_stall_timeout = Duration::from_secs(3600);
+    let h = start_manual(&p, &fake, &clock, o);
     wait_for("blocking", || fake.would_block_count() > 5);
     let t = Instant::now();
     h.pause();
-    clock.set_hold(false);
     wait_for("paused", || {
         clock.advance(Duration::from_millis(500));
         h.outcome().is_some()

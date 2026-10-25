@@ -36,6 +36,10 @@ struct State {
     /// Verbatim `ifconfig NAME` output (the real, or the OS-masked, text).
     ifconfig_override: BTreeMap<String, String>,
     arp_override: Option<String>,
+    /// Darwin: after `ifconfig feth4202 down` the entry is `(incomplete)`.
+    arp_incomplete: bool,
+    /// `arp -S` accepted but doing nothing (as over an incomplete entry).
+    arp_s_noop: bool,
 }
 
 struct Fake(RefCell<State>);
@@ -62,6 +66,8 @@ impl Fake {
             appear_on_create: None,
             ifconfig_override: BTreeMap::new(),
             arp_override: None,
+            arp_incomplete: false,
+            arp_s_noop: false,
         }))
     }
     fn log(&self) -> Vec<String> {
@@ -203,6 +209,11 @@ impl Host for Fake {
             }
             ["ifconfig", n, "up"] | ["ifconfig", n, "down"] => {
                 let up = args[2] == "up";
+                if *n == "feth4202" && !up {
+                    // Darwin flushes the static ARP entry when the interface goes down.
+                    s.arp = None;
+                    s.arp_incomplete = true;
+                }
                 s.ifaces.get_mut(*n).ok_or("no such interface")?.up = up;
                 Ok(String::new())
             }
@@ -215,7 +226,14 @@ impl Host for Fake {
                 .map(|f| render(n, f))
                 .ok_or_else(|| format!("ifconfig: interface {n} does not exist")),
             ["arp", "-S", ip, m, "ifscope", i] => {
-                s.arp = Some(((*ip).into(), (*m).into(), (*i).into()));
+                // Over an incomplete entry a plain -S does nothing (observed on Darwin).
+                if !s.arp_incomplete && !s.arp_s_noop {
+                    s.arp = Some(((*ip).into(), (*m).into(), (*i).into()));
+                }
+                Ok(String::new())
+            }
+            ["arp", "-d", "198.18.0.1", "ifscope", "feth4202"] if s.arp_incomplete => {
+                s.arp_incomplete = false;
                 Ok(String::new())
             }
             ["arp", "-d", ip, "ifscope", i] => match &s.arp {
@@ -232,6 +250,9 @@ impl Host for Fake {
                 let mut t = String::from(
                     "? (192.168.1.1) at 84:3c:99:3d:79:ab on en0 ifscope [ethernet]\n",
                 );
+                if s.arp_incomplete {
+                    t += "? (198.18.0.1) at (incomplete) on feth4202 ifscope [ethernet]\n";
+                }
                 if let Some((ip, m, i)) = &s.arp {
                     t += &format!(
                         "? ({ip}) at {} on {i} ifscope permanent [ethernet]\n",
@@ -1509,14 +1530,14 @@ fn dispatch_creates_the_directory_for_up_and_removes_the_lock_after_down() {
     a.manifest = s.0.join("sub").join("m1.json");
     let mut out = vec![];
     assert_eq!(
-        dispatch_in(&h, &a, Duration::ZERO, &mut out),
+        dispatch_in(&h, &a, Duration::from_secs(30), &mut out),
         Ok(0),
         "{out:?}"
     );
     assert!(lock_path(&a.manifest).exists());
     a.cmd = "down".into();
     assert_eq!(
-        dispatch_in(&h, &a, Duration::ZERO, &mut out),
+        dispatch_in(&h, &a, Duration::from_secs(30), &mut out),
         Ok(0),
         "{out:?}"
     );
@@ -2329,4 +2350,135 @@ fn a_failed_or_unparseable_id_counts_as_root() {
     ] {
         assert!(root_from_id(out.clone()), "{out:?}");
     }
+}
+
+// ---- fix round 7: link --up restores the static ARP entry Darwin drops
+
+fn link_args(s: &Scratch, down: bool) -> Args {
+    let mut l = args(s, "link");
+    l.down = down;
+    l.up = !down;
+    l
+}
+
+#[test]
+fn link_down_drops_the_entry_and_up_restores_it_with_delete_then_set() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    let (r, out) = go(&h, &link_args(&s, true));
+    assert_eq!(r, Ok(0), "{out}");
+    assert!(out.contains("drops the static ARP entry"), "{out}");
+    // Darwin's text after the flush.
+    let arp = h.sh(&["arp", "-an"]).unwrap();
+    assert!(arp.contains("? (198.18.0.1) at (incomplete) on feth4202 ifscope [ethernet]"));
+    assert!(!check_ok(&status_json(&h, &s).1, "arp"));
+    let from = h.log().len();
+    let (r, out) = go(&h, &link_args(&s, false));
+    assert_eq!(r, Ok(0), "{out}");
+    let log = h.log()[from..].to_vec();
+    let pos = |needle: &str| {
+        log.iter()
+            .position(|c| c == needle)
+            .unwrap_or_else(|| panic!("{needle} not run: {log:?}"))
+    };
+    assert!(pos("ifconfig feth4202 up") < pos("arp -d 198.18.0.1 ifscope feth4202"));
+    assert!(
+        pos("arp -d 198.18.0.1 ifscope feth4202")
+            < pos("arp -S 198.18.0.1 02:ac:00:00:00:01 ifscope feth4202")
+    );
+    assert!(
+        h.sh(&["arp", "-an"])
+            .unwrap()
+            .contains("at 2:ac:0:0:0:1 on feth4202 ifscope permanent")
+    );
+    assert_eq!(status_json(&h, &s).0, 0);
+}
+
+#[test]
+fn a_plain_set_over_the_incomplete_entry_would_not_have_worked() {
+    // The fake mirrors Darwin: -S alone does nothing over an incomplete entry.
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    assert_eq!(go(&h, &link_args(&s, true)).0, Ok(0));
+    h.sh(&[
+        "arp",
+        "-S",
+        "198.18.0.1",
+        "02:ac:00:00:00:01",
+        "ifscope",
+        "feth4202",
+    ])
+    .unwrap();
+    assert!(h.sh(&["arp", "-an"]).unwrap().contains("(incomplete)"));
+}
+
+#[test]
+fn only_constants_reach_arp_on_link_up() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    go(&h, &link_args(&s, true)).0.unwrap();
+    let from = h.log().len();
+    go(&h, &link_args(&s, false)).0.unwrap();
+    for c in h.log()[from..].iter().filter(|c| c.starts_with("arp ")) {
+        assert!(
+            c == "arp -d 198.18.0.1 ifscope feth4202"
+                || c == "arp -S 198.18.0.1 02:ac:00:00:00:01 ifscope feth4202"
+                || c == "arp -an",
+            "unexpected arp command {c}"
+        );
+    }
+}
+
+#[test]
+fn a_failed_restore_is_rc_10_with_the_manual_fallback() {
+    for how in ["set-fails", "set-does-nothing"] {
+        let s = Scratch::new();
+        let h = Fake::new();
+        up_ok(&h, &s);
+        go(&h, &link_args(&s, true)).0.unwrap();
+        if how == "set-fails" {
+            h.st(|st| {
+                st.fail
+                    .push("arp -S 198.18.0.1 02:ac:00:00:00:01 ifscope feth4202".into())
+            });
+        } else {
+            h.st(|st| st.arp_s_noop = true);
+        }
+        let (r, out) = go(&h, &link_args(&s, false));
+        assert_eq!(r, Ok(10), "{how}: {out}");
+        assert!(
+            out.contains("sudo arp -d 198.18.0.1 ifscope feth4202; sudo arp -S 198.18.0.1 02:ac:00:00:00:01 ifscope feth4202"),
+            "{how}: {out}"
+        );
+        assert!(!check_ok(&status_json(&h, &s).1, "arp"), "{how}");
+    }
+}
+
+#[test]
+fn a_missing_entry_on_delete_is_ignored() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    // The entry is gone (not even incomplete): arp -d says "no entry", link --up carries on.
+    h.st(|st| {
+        st.arp = None;
+        st.arp_incomplete = false;
+    });
+    let (r, out) = go(&h, &link_args(&s, false));
+    assert_eq!(r, Ok(0), "{out}");
+    assert!(out.contains("ignored"), "{out}");
+    assert_eq!(status_json(&h, &s).0, 0);
+}
+
+#[test]
+fn plan_prints_the_link_steps_and_the_guide_documents_them() {
+    let s = Scratch::new();
+    let (_, out) = go(&Fake::new(), &args(&s, "plan"));
+    assert!(out.contains("# macos-lab link --down / --up"));
+    assert!(out.contains("Darwin drops the static ARP entry"));
+    let doc = include_str!("../../../docs/macos-feth-lab.md");
+    assert!(doc.contains("drops the static ARP entry"));
 }

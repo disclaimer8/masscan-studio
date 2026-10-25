@@ -22,7 +22,7 @@ use crate::{
         parse_tcpdump, read_json, required, safe_id, write_json,
     },
 };
-use rmasscan_engine::{IoError, Rx, SendStatus, Tx};
+use rmasscan_engine::{Rx, SendStatus, Tx};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -57,46 +57,10 @@ pub(crate) const OPTIONS: &[&str] = &[
     "remove-stale-lock",
 ];
 /// The scanner and peer MACs of the stand, as bytes (the frames the lab may write).
-const SM: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x01];
-const PM: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x02];
+use link::{GuardedTx, STAND_PEER_MAC as PM, STAND_SCANNER_MAC as SM};
 const KEPT_RECOVERY: &str = "Recovery: inspect the directory (tcpdump -nr uplink.pcap), compare it with hashes-before-copy.txt, then move it by hand.";
 
 // ------------------------------------------------------------------ the frames the lab may write
-
-/// The one rule for everything this suite writes to the stand: peer MAC to scanner MAC, and either
-/// the lab marker ethertype (0x88b5) or IPv4 from 198.18.0.2 to 198.18.0.1.
-pub(crate) fn injection_allowed(f: &[u8]) -> bool {
-    if f.len() < 14 || f[0..6] != SM || f[6..12] != PM {
-        return false;
-    }
-    match [f[12], f[13]] {
-        [0x88, 0xb5] => true,
-        [0x08, 0x00] => {
-            f.len() >= 34
-                && f[14] >> 4 == 4
-                && f[26..30] == [198, 18, 0, 2]
-                && f[30..34] == [198, 18, 0, 1]
-        }
-        _ => false,
-    }
-}
-
-/// Wraps the peer-side `Tx`; a frame outside [`injection_allowed`] is refused and counted, never written.
-pub(crate) struct GuardedTx {
-    pub(crate) inner: Box<dyn Tx>,
-    pub(crate) refused: Arc<AtomicU64>,
-}
-impl Tx for GuardedTx {
-    fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
-        if !injection_allowed(frame) {
-            self.refused.fetch_add(1, Ordering::Relaxed);
-            return Err(IoError::new(
-                "refused: the frame is outside the lab's peer-side guard",
-            ));
-        }
-        self.inner.send(frame, timeout)
-    }
-}
 
 /// A flood frame: peer to scanner on the lab marker ethertype, sequence number at 14, `RMSP` at 18.
 pub(crate) fn flood_frame(seq: u32) -> Vec<u8> {
@@ -121,6 +85,24 @@ pub(crate) trait Proc {
 pub(crate) trait Side {
     /// Stop it and return its record.
     fn finish(self: Box<Self>) -> Result<Value, String>;
+}
+/// See [`Stand::link_state`].
+#[derive(Clone, Copy)]
+pub(crate) struct LinkState {
+    pub peer_up: bool,
+    pub scanner_active: bool,
+}
+/// `socketfilterfw --getglobalstate`: "Firewall is enabled. (State = 1)" or "(State = 2)"; anything else is not enabled.
+pub(crate) fn firewall_enabled(text: &str) -> bool {
+    let t = text.to_lowercase();
+    t.contains("is enabled") || t.contains("state = 1") || t.contains("state = 2")
+}
+/// `UP` in the `flags=...<...>` list of an `ifconfig` listing (the administrative state).
+pub(crate) fn flags_up(text: &str) -> bool {
+    text.lines()
+        .find_map(|l| l.split_once("<").filter(|_| l.contains("flags=")))
+        .and_then(|(_, rest)| rest.split_once('>'))
+        .is_some_and(|(list, _)| list.split(',').any(|f| f == "UP"))
 }
 pub(crate) struct InjectSpec {
     pub sport: u16,
@@ -151,8 +133,11 @@ pub(crate) trait Stand {
     fn start_flood(&self, spec: &FloodSpec) -> Result<Box<dyn Side>, String>;
     /// Frames needed to overflow the scanner's BPF buffer.
     fn flood_burst_frames(&self) -> Result<u64, String>;
-    /// Is the scanner-side interface `status: active`?
-    fn link_active(&self) -> Result<bool, String>;
+    /// The administrative state of the peer interface (what `macos-lab link --down` changes) and the media
+    /// state of the scanner interface.
+    fn link_state(&self) -> Result<LinkState, String>;
+    /// The effective uid of this process (the suite must never run as root).
+    fn euid(&self) -> Result<u32, String>;
     fn provenance(&self, repo: &Path) -> Value {
         crate::provenance::collect(repo)
     }
@@ -373,17 +358,32 @@ impl Stand for RealStand {
         );
         Ok((max.min(4 << 20) * 2 * 3 / 2).div_ceil(80))
     }
-    fn link_active(&self) -> Result<bool, String> {
-        let out = Command::new("/sbin/ifconfig")
-            .arg(SCANNER_IF)
-            .output()
-            .map_err(|e| e.to_string())?;
-        Ok(
-            crate::macos_lab::parse_ifconfig(&String::from_utf8_lossy(&out.stdout))
+    fn link_state(&self) -> Result<LinkState, String> {
+        let read = |i: &str| -> Result<String, String> {
+            let out = Command::new("/sbin/ifconfig")
+                .arg(i)
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        };
+        Ok(LinkState {
+            peer_up: flags_up(&read(PEER_IF)?),
+            scanner_active: crate::macos_lab::parse_ifconfig(&read(SCANNER_IF)?)
                 .status
                 .as_deref()
                 == Some("active"),
-        )
+        })
+    }
+    fn euid(&self) -> Result<u32, String> {
+        // `id -u` by absolute path: no unsafe in this crate, and the value is the kernel's.
+        let out = Command::new("/usr/bin/id")
+            .arg("-u")
+            .output()
+            .map_err(|e| format!("id: {e}"))?;
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .map_err(|_| "id -u printed no uid".to_string())
     }
     fn pause(&self, d: Duration) {
         thread::sleep(d);
@@ -496,15 +496,34 @@ pub(crate) fn uplink_interlock(dir: &Path) -> Result<(), String> {
             ));
         }
     }
-    let st = parse_tcpdump(&fs::read_to_string(dir.join("uplink.err")).unwrap_or_default());
-    match (st["received"].as_u64(), st["dropped_kernel"].as_u64()) {
+    interlock_stats(&fs::read_to_string(dir.join("uplink.err")).unwrap_or_default())
+}
+
+/// The tcpdump statistics of the uplink capture, read the macOS way. `packets received by filter` is the
+/// count before the kernel filter on macOS (every packet the descriptor saw), so it is information only and
+/// never a lab-frame count. A lab frame is a stored frame, or a frame tcpdump captured (it matched the lab
+/// filter) without storing it; a kernel drop is a matched frame lost, so the capture is unproven.
+pub(crate) fn interlock_stats(err: &str) -> Result<(), String> {
+    let st = parse_tcpdump(err);
+    match (st["captured"].as_u64(), st["dropped_kernel"].as_u64()) {
         (Some(0), Some(0)) => Ok(()),
-        (Some(r), _) if r > 0 => Err(format!(
-            "uplink interlock: tcpdump counted {r} packet(s) received by the lab filter although the file holds none; treated as {LAB_FRAME_MARK}; no further raw run"
+        (Some(c), _) if c > 0 => Err(format!(
+            "uplink interlock: tcpdump captured {c} packet(s) that matched the lab filter although the file holds none; treated as {LAB_FRAME_MARK}; no further raw run"
+        )),
+        (Some(_), Some(d)) => Err(format!(
+            "uplink interlock: tcpdump dropped {d} packet(s) in the kernel (on macOS only filter matches are counted), so {UNPROVEN_MARK}; no further raw run"
         )),
         _ => Err(format!(
-            "uplink interlock: the uplink tcpdump counters are not measured zero, so {UNPROVEN_MARK}; no further raw run"
+            "uplink interlock: the uplink tcpdump counters (captured, dropped by kernel) are not measured, so {UNPROVEN_MARK}; no further raw run"
         )),
+    }
+}
+
+/// Removes the work root when the suite ends if nothing is left in it (a kept run stays).
+struct WorkRoot(PathBuf);
+impl Drop for WorkRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
     }
 }
 
@@ -519,13 +538,16 @@ impl Drop for Lock {
         let _ = fs::remove_file(&self.0);
     }
 }
+/// `kill -0` succeeded, or failed only because the process belongs to someone else (EPERM): alive either way.
+pub(crate) fn alive_from(success: bool, stderr: &str) -> bool {
+    success || stderr.contains("not permitted")
+}
 fn pid_alive(pid: u32) -> bool {
     Command::new("/bin/kill")
         .args(["-0", &pid.to_string()])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        .output()
+        .is_ok_and(|o| alive_from(o.status.success(), &String::from_utf8_lossy(&o.stderr)))
 }
 pub(crate) fn take_lock(path: &Path) -> Result<Lock, String> {
     if let Some(dir) = path.parent() {
@@ -681,6 +703,7 @@ struct Suite<'a> {
 #[derive(Default)]
 struct Tools {
     listener: Option<Box<dyn Proc>>,
+    scanner: Option<Box<dyn Proc>>,
     witness: Option<Box<dyn Proc>>,
     uplink: Option<Box<dyn Proc>>,
     sides: Vec<(String, Box<dyn Side>)>,
@@ -751,6 +774,25 @@ impl Suite<'_> {
         Ok(v)
     }
 
+    /// The macOS Application Firewall can prompt for, or silently block, an unsigned listener; its state is
+    /// recorded in `alf.txt` and an enabled firewall refuses the run before anything starts.
+    fn application_firewall(&self, work: &Path) -> Result<(), SuiteError> {
+        let o = self.st.exec(
+            &[
+                "/usr/libexec/ApplicationFirewall/socketfilterfw".into(),
+                "--getglobalstate".into(),
+            ],
+            20,
+        )?;
+        io(fs::write(work.join("alf.txt"), &o.stdout), "alf.txt")?;
+        if firewall_enabled(&o.stdout) {
+            return Err(SuiteError::NotRun(
+                "the macOS Application Firewall is enabled; it can block or prompt for the peer listeners. Turn it off for the session (System Settings, Network, Firewall) and start again; nothing was started".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn start_proc(
         &self,
         argv: &[String],
@@ -765,6 +807,14 @@ impl Suite<'_> {
     }
 
     fn stop_tools(&self, t: &mut Tools) {
+        // The raw sender goes first: nothing may keep writing frames once its witnesses are gone.
+        if let Some(sc) = t.scanner.as_mut() {
+            sc.signal("INT");
+            if wait_exit(sc.as_mut(), self.st, 100).is_none() {
+                sc.kill();
+            }
+        }
+        t.scanner = None;
         if let Some(p) = t.listener.as_mut() {
             p.signal("TERM");
         }
@@ -842,6 +892,13 @@ impl Suite<'_> {
         if !safe_id(tag) {
             return Err("unsafe tag".to_string().into());
         }
+        let existing = mv::run_dirs(&self.out, "runs", tag);
+        if !existing.is_empty() {
+            return Err(SuiteError::NotRun(format!(
+                "{tag} already has a run in {}; run it again only with --rerun --only {tag} (it is set aside under runs_discarded when its verdict allows)",
+                self.out.join("runs").display()
+            )));
+        }
         let run_nonce = nonce();
         let name = format!("{tag}.{run_nonce}");
         let work = self.out.join(".work").join(&name);
@@ -868,6 +925,7 @@ impl Suite<'_> {
         let denied = kind == "perm_denied";
         // 1. gate: the stand, then the binary the manifest vouches for.
         let pre = self.gate_status(work, item)?;
+        self.application_firewall(work)?;
         if hash(&self.wire_scan)? != self.wire_sha {
             return Err(SuiteError::NotRun(
                 "the scanner binary changed since the manifest was written; nothing was started"
@@ -925,7 +983,8 @@ impl Suite<'_> {
         }
         let uplink_if = pre["uplink"].as_str().unwrap_or("").to_owned();
         let mut cap = json!({"capture_schema":mv::CAPTURE_SCHEMA});
-        let mut meta = json!({"tag":tag,"kind":kind,"invocation_nonce":run_nonce});
+        let mut meta =
+            json!({"tag":tag,"kind":kind,"invocation_nonce":run_nonce,"euid":self.st.euid()?});
         let (mut up0, mut c0) = (None, None);
         if denied {
             // BPF is denied, so no witness can run: the interface counters are the only evidence.
@@ -933,8 +992,11 @@ impl Suite<'_> {
                 let c = self.st.counters(i)?;
                 Ok(json!({"ipkts":c.ipkts,"opkts":c.opkts}))
             };
-            c0 = Some(json!({SCANNER_IF:read(SCANNER_IF)?,PEER_IF:read(PEER_IF)?}));
-            meta["capture_started_utc"] = json!(epoch());
+            c0 = Some((
+                json!({SCANNER_IF:read(SCANNER_IF)?,PEER_IF:read(PEER_IF)?}),
+                epoch(),
+            ));
+            meta["capture_started_utc"] = json!(c0.as_ref().map(|c| c.1));
         } else {
             if uplink_if.is_empty() || uplink_if.starts_with("feth") {
                 return Err(SuiteError::NotRun(format!(
@@ -956,6 +1018,9 @@ impl Suite<'_> {
                 Some(&filter),
             );
             argv[0] = "/usr/sbin/tcpdump".into();
+            // Not promiscuous: the uplink is the user's own NIC, and what is looked for (frames the lab
+            // itself emitted) needs no promiscuous mode.
+            argv.insert(1, "-p".into());
             // From here on a frame may exist on the wire; an abort reads the uplink evidence.
             t.frames_possible = true;
             meta["capture_started_utc"] = json!(epoch());
@@ -1099,42 +1164,47 @@ impl Suite<'_> {
         argv.extend(argv_tail);
         meta["exe_sha256"] = json!(self.wire_sha);
         meta["guest_started_utc"] = json!(epoch());
-        let mut scanner = self.start_proc(&argv, work, "scanner")?;
+        t.scanner = Some(self.start_proc(&argv, work, "scanner")?);
         if kind == "linkloss" {
             eprintln!(
-                "ACTION REQUIRED NOW (linkloss): in a root shell run\n  rmasscan-lab macos-lab link --run-id {} --down ; sleep 3 ; rmasscan-lab macos-lab link --run-id {} --up\nThe scan lasts about 10 s; without it this run is NOT RUN (user action not performed).",
+                "ACTION REQUIRED NOW (linkloss): in a root shell run\n  rmasscan-lab macos-lab link --run-id {} --down ; sleep 3 ; rmasscan-lab macos-lab link --run-id {} --up\n(that takes {PEER_IF} down and up; the suite watches {PEER_IF}). The scan lasts about 10 s; without it this run is NOT RUN (user action not performed).",
                 self.lab_run_id, self.lab_run_id
             );
         }
         let deadline = Instant::now() + Duration::from_secs(run_timeout);
         let mut events: Vec<Value> = vec![];
-        let mut link_was = true;
+        let mut peer_was = true;
         let rc = loop {
+            // An error here leaves the scanner in `t`: `abort` stops it before any witness.
+            let scanner = t.scanner.as_mut().ok_or("scanner missing")?;
             if let Some(rc) = scanner.try_wait()? {
                 break rc;
             }
             if self.st.stopped() {
-                scanner.signal("INT");
-                scanner.kill();
                 return Err(SuiteError::Interrupted(format!(
                     "stopped while {tag} was running"
                 )));
             }
             if Instant::now() > deadline {
-                scanner.kill();
                 return Err(SuiteError::Abort(format!(
                     "the scanner exceeded {run_timeout} s"
                 )));
             }
-            if kind == "linkloss" {
-                let now = self.st.link_active()?;
-                if now != link_was {
-                    events.push(json!({"link":if now {"up"} else {"down"},"t":epoch()}));
-                    link_was = now;
-                }
+            if kind == "linkloss"
+                && let Ok(s) = self.st.link_state()
+                && s.peer_up != peer_was
+            {
+                // `macos-lab link --down` takes down the peer side; the scanner side's media state is
+                // recorded next to it, the down event itself is the peer's.
+                events.push(
+                    json!({"link":if s.peer_up {"up"} else {"down"},"iface":PEER_IF,
+                    "scanner_if":SCANNER_IF,"scanner_active":s.scanner_active,"t":epoch()}),
+                );
+                peer_was = s.peer_up;
             }
             self.st.pause(Duration::from_millis(100));
         };
+        t.scanner = None;
         meta["guest_finished_utc"] = json!(epoch());
         meta["guest_exit"] = json!(rc);
         if kind == "linkloss" {
@@ -1155,8 +1225,10 @@ impl Suite<'_> {
                 ));
             }
             let mut ev = events.clone();
-            if ev.last().is_some_and(|e| e["link"] == "down") && self.st.link_active()? {
-                ev.push(json!({"link":"up","t":epoch()}));
+            if ev.last().is_some_and(|e| e["link"] == "down")
+                && self.st.link_state().is_ok_and(|s| s.peer_up)
+            {
+                ev.push(json!({"link":"up","iface":PEER_IF,"t":epoch()}));
             }
             write_json(work.join("linkloss.json"), &json!({"events":ev}))?;
         }
@@ -1170,7 +1242,10 @@ impl Suite<'_> {
             "stderr",
         )?;
         io(fs::write(work.join("exit.txt"), format!("{rc}\n")), "exit")?;
-        if let Some(run) = json_line(&o_out) {
+        if let Some(mut run) = json_line(&o_out) {
+            // The scanner has no nonce argument; the suite binds its own to the summary it received.
+            // stdout.txt keeps the scanner's line byte for byte.
+            run["invocation_nonce"] = json!(run_nonce);
             write_json(work.join("run.json"), &run)?;
         }
         if matches!(kind, "linkloss" | "rxloss") {
@@ -1201,11 +1276,13 @@ impl Suite<'_> {
                 Ok(json!({"ipkts":c.ipkts,"opkts":c.opkts}))
             };
             let after = json!({SCANNER_IF:read(SCANNER_IF)?,PEER_IF:read(PEER_IF)?});
+            let after_utc = epoch();
+            let (before, before_utc) = c0.take().ok_or("counters before the run are missing")?;
             write_json(
                 work.join("counters.json"),
-                &json!({"before":c0,"after":after}),
+                &json!({"before":before,"before_utc":before_utc,"after":after,"after_utc":after_utc}),
             )?;
-            meta["capture_stopped_utc"] = json!(epoch());
+            meta["capture_stopped_utc"] = json!(after_utc);
             cap["peer"] = Value::Null;
             cap["uplink"] = Value::Null;
             cap["witness"] = json!(mv::NO_WITNESS);
@@ -1223,6 +1300,11 @@ impl Suite<'_> {
             let urc = wait_exit(u.as_mut(), self.st, 400);
             if urc.is_none() {
                 u.kill();
+            }
+            if urc != Some(0) {
+                return Err(SuiteError::Abort(format!(
+                    "the uplink tcpdump did not exit cleanly (exit {urc:?}); its statistics are not evidence"
+                )));
             }
             meta["capture_stopped_utc"] = json!(epoch());
             if wrc != Some(0) {
@@ -1334,6 +1416,13 @@ pub(crate) fn run_locked(
     exe: PathBuf,
     lock: &dyn Fn() -> Result<Lock, String>,
 ) -> Result<i32, SuiteError> {
+    // Nothing runs as root: a root suite would make the BPF permission runs meaningless.
+    let uid = st.euid().map_err(SuiteError::NotRun)?;
+    if uid == 0 {
+        return Err(SuiteError::NotRun(
+            "macos-suite must not run as root (effective uid 0); run it as your own user".into(),
+        ));
+    }
     let o = options_for("macos-suite", args, OPTIONS)?;
     if o.contains_key("help") {
         println!(
@@ -1462,6 +1551,7 @@ pub(crate) fn run_locked(
     // The stand must be sealed before anything is written into --out.
     let probe_dir = out.join(".work");
     io(fs::create_dir_all(&probe_dir), "work root")?;
+    let _work_root = WorkRoot(probe_dir.clone());
     let (rc, status0) = s.status(&probe_dir, "status-start.json")?;
     let _ = fs::remove_file(probe_dir.join("status-start.json"));
     if rc != 0 || status0["raw_run_allowed"] != true {
@@ -1476,6 +1566,12 @@ pub(crate) fn run_locked(
                 "ifconfig reports {got} on {iface}, the stand binding is {want}"
             )));
         }
+    }
+    if old.as_ref().is_some_and(|m| m["exe"]["sha256"] != wire_sha) {
+        return Err(SuiteError::NotRun(
+            "the scanner binary differs from the one in the existing manifest; use a new --out"
+                .into(),
+        ));
     }
     let man = match old {
         Some(m) => m,
@@ -1494,7 +1590,7 @@ pub(crate) fn run_locked(
                 "stand":{"run_id":s.lab_run_id,"scanner_if":SCANNER_IF,"peer_if":PEER_IF,
                     "uplink":status0["uplink"],"gateway":status0["gateway"]},
                 "listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
-                "orchestrator":orchestrator,"created_utc":epoch()});
+                "euid":uid,"orchestrator":orchestrator,"created_utc":epoch()});
             if plan == "perf" {
                 m["perf"] = json!({"rates":rates.clone().unwrap_or_else(|| crate::verify::PERF_RATES.to_vec()),
                     "reps":reps.unwrap_or(crate::verify::PERF_REPS),"order":"rep-major","target":PEER_IP});

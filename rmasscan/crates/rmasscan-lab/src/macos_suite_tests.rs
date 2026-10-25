@@ -2,7 +2,9 @@
 //! frame. Scratch names come from `windows_suite::nonce`, never from the clock.
 use super::*;
 use crate::windows_suite::nonce;
+use rmasscan_engine::IoError;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -12,13 +14,48 @@ fn scratch() -> PathBuf {
     d
 }
 
-struct FakeProc(i32);
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    /// Exits at once with this code.
+    Exits(i32),
+    /// Runs for this many `try_wait` calls, then exits 3 (a scan that ran its course).
+    ExitsAfter(u32),
+    /// Runs until it is signalled (INT or TERM) or killed.
+    Hangs,
+    /// The first `try_wait` fails, then it runs until signalled.
+    FailsOnceThenHangs,
+}
+struct FakeProc {
+    name: &'static str,
+    log: Rc<RefCell<Vec<String>>>,
+    mode: Mode,
+    done: bool,
+    failed: bool,
+    polls: u32,
+}
 impl Proc for FakeProc {
     fn try_wait(&mut self) -> Result<Option<i32>, String> {
-        Ok(Some(self.0))
+        match self.mode {
+            Mode::Exits(rc) => Ok(Some(rc)),
+            Mode::ExitsAfter(n) => {
+                self.polls += 1;
+                Ok((self.polls > n || self.done).then_some(3))
+            }
+            Mode::FailsOnceThenHangs if !self.failed => {
+                self.failed = true;
+                Err("try_wait failed".into())
+            }
+            _ => Ok(self.done.then_some(0)),
+        }
     }
-    fn signal(&mut self, _: &str) {}
-    fn kill(&mut self) {}
+    fn signal(&mut self, sig: &str) {
+        self.log.borrow_mut().push(format!("{}:{sig}", self.name));
+        self.done = true;
+    }
+    fn kill(&mut self) {
+        self.log.borrow_mut().push(format!("{}:KILL", self.name));
+        self.done = true;
+    }
 }
 struct FakeSide(Value);
 impl Side for FakeSide {
@@ -36,6 +73,14 @@ struct Fake {
     spawned: RefCell<Vec<Vec<String>>>,
     markers: Cell<u32>,
     stopped: Cell<bool>,
+    euid: Cell<u32>,
+    alf_enabled: Cell<bool>,
+    scanner: Cell<Mode>,
+    log: Rc<RefCell<Vec<String>>>,
+    peer_up: Cell<bool>,
+    /// `link_state` reports the peer down from this call on (0: never).
+    flip_after: Cell<u32>,
+    link_calls: Cell<u32>,
 }
 impl Fake {
     fn new(wire: &str) -> Self {
@@ -48,6 +93,13 @@ impl Fake {
             spawned: RefCell::default(),
             markers: Cell::new(0),
             stopped: Cell::new(false),
+            euid: Cell::new(501),
+            alf_enabled: Cell::new(false),
+            scanner: Cell::new(Mode::Exits(0)),
+            log: Rc::default(),
+            peer_up: Cell::new(true),
+            flip_after: Cell::new(0),
+            link_calls: Cell::new(0),
         }
     }
     fn scanner_runs(&self) -> usize {
@@ -60,14 +112,20 @@ impl Fake {
     fn any_spawned(&self) -> bool {
         !self.spawned.borrow().is_empty()
     }
+    fn position(&self, what: &str) -> Option<usize> {
+        self.log.borrow().iter().position(|x| x == what)
+    }
 }
 fn after<'a>(a: &'a [String], k: &str) -> &'a str {
     let i = a.iter().position(|x| x == k).unwrap();
     &a[i + 1]
 }
 fn err_text(frames: usize) -> String {
+    err_text3(frames, frames, 0)
+}
+fn err_text3(captured: usize, received: usize, dropped: usize) -> String {
     format!(
-        "tcpdump: listening on x, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n{frames} packets captured\n{frames} packets received by filter\n0 packets dropped by kernel\n"
+        "tcpdump: listening on x, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n{captured} packets captured\n{received} packets received by filter\n{dropped} packets dropped by kernel\n"
     )
 }
 fn pcap_of(n: usize) -> Vec<u8> {
@@ -88,6 +146,18 @@ impl Stand for Fake {
                 stderr: String::new(),
             });
         }
+        if argv[0].ends_with("socketfilterfw") {
+            let on = self.alf_enabled.get();
+            return Ok(Output {
+                rc: 0,
+                stdout: format!(
+                    "Firewall is {}. (State = {})\n",
+                    if on { "enabled" } else { "disabled" },
+                    u8::from(on)
+                ),
+                stderr: String::new(),
+            });
+        }
         self.spawned.borrow_mut().push(argv.to_vec());
         Ok(Output {
             rc: 0,
@@ -104,16 +174,27 @@ impl Stand for Fake {
         self.spawned.borrow_mut().push(argv.to_vec());
         fs::write(stdout, "").unwrap();
         fs::write(stderr, "").unwrap();
+        let mut name = "other";
+        let mut mode = Mode::Exits(0);
         if argv.iter().any(|a| a == "listen") {
+            name = "listener";
             fs::write(
                 after(argv, "--ready"),
                 json!({"open":[80],"silent":[8099],"silent_proven":true,"ready":true}).to_string(),
             )
             .unwrap();
         } else if argv[0] == "/usr/sbin/tcpdump" {
+            name = "uplink";
             fs::write(after(argv, "-w"), pcap_of(self.uplink_frames.get())).unwrap();
-            fs::write(stderr, err_text(self.uplink_frames.get())).unwrap();
+            // macOS: frames the descriptor saw before its filter are counted as received; only
+            // what passed the filter is captured.
+            fs::write(
+                stderr,
+                err_text3(self.uplink_frames.get(), self.uplink_frames.get() + 57, 0),
+            )
+            .unwrap();
         } else if argv.iter().any(|a| a == "dump") {
+            name = "witness";
             let p = after(argv, "--pcap");
             fs::write(after(argv, "--ready"), "{}").unwrap();
             if self.ack.get() {
@@ -130,13 +211,22 @@ impl Stand for Fake {
             )
             .unwrap();
         } else if argv[0] == self.wire {
+            name = "scanner";
+            mode = self.scanner.get();
             fs::write(
                 stdout,
                 format!("{}\n", json!({"status":"ok","reason":"Completed","sent":1})),
             )
             .unwrap();
         }
-        Ok(Box::new(FakeProc(0)))
+        Ok(Box::new(FakeProc {
+            name,
+            log: self.log.clone(),
+            mode,
+            done: false,
+            failed: false,
+            polls: 0,
+        }))
     }
     fn counters(&self, _: &str) -> Result<NetstatCounters, String> {
         Ok(NetstatCounters {
@@ -167,8 +257,16 @@ impl Stand for Fake {
     fn flood_burst_frames(&self) -> Result<u64, String> {
         Ok(10)
     }
-    fn link_active(&self) -> Result<bool, String> {
-        Ok(true)
+    fn link_state(&self) -> Result<LinkState, String> {
+        self.link_calls.set(self.link_calls.get() + 1);
+        let flipped = self.flip_after.get() != 0 && self.link_calls.get() >= self.flip_after.get();
+        Ok(LinkState {
+            peer_up: self.peer_up.get() && !flipped,
+            scanner_active: true,
+        })
+    }
+    fn euid(&self) -> Result<u32, String> {
+        Ok(self.euid.get())
     }
     fn provenance(&self, _: &Path) -> Value {
         json!({"git_commit":COMMIT,"git_dirty":false,"binary_sha256":"ab".repeat(32),"errors":[]})
@@ -625,28 +723,28 @@ fn list_prints_the_plan_without_any_action() {
 #[test]
 fn the_lab_writes_only_peer_to_scanner_markers_and_peer_ip_frames() {
     let marker = link::marker_frame(SM, PM, link::START_PAYLOAD);
-    assert!(injection_allowed(&marker));
-    assert!(injection_allowed(&flood_frame(7)));
+    assert!(link::injection_allowed(&marker));
+    assert!(link::injection_allowed(&flood_frame(7)));
     // The foreign replies: three kinds are inside the guard, the 198.18.0.3 one is not.
     let frames =
         crate::peer::foreign_frames(PEER_MAC, SCANNER_MAC, SOURCE_IP, 40000, 8099).unwrap();
     for (k, f) in &frames {
-        assert_eq!(injection_allowed(f), k != "other_ip", "{k}");
+        assert_eq!(link::injection_allowed(f), k != "other_ip", "{k}");
     }
     let mut bad = marker.clone();
     bad[0] ^= 1;
-    assert!(!injection_allowed(&bad), "wrong destination MAC");
+    assert!(!link::injection_allowed(&bad), "wrong destination MAC");
     let mut bad = marker.clone();
     bad[6] ^= 1;
-    assert!(!injection_allowed(&bad), "wrong source MAC");
+    assert!(!link::injection_allowed(&bad), "wrong source MAC");
     let mut bad = marker.clone();
     bad[12..14].copy_from_slice(&[0x08, 0x06]);
-    assert!(!injection_allowed(&bad), "ARP");
+    assert!(!link::injection_allowed(&bad), "ARP");
     let mut ip = frames["unscanned_port"].clone();
-    assert!(injection_allowed(&ip));
+    assert!(link::injection_allowed(&ip));
     ip[30..34].copy_from_slice(&[198, 18, 0, 9]);
-    assert!(!injection_allowed(&ip), "another destination");
-    assert!(!injection_allowed(&marker[..13]) && !injection_allowed(&[]));
+    assert!(!link::injection_allowed(&ip), "another destination");
+    assert!(!link::injection_allowed(&marker[..13]) && !link::injection_allowed(&[]));
     // The guard in front of the real Tx refuses and counts, and passes the good frame through.
     struct Count(Arc<AtomicU64>);
     impl Tx for Count {
@@ -657,7 +755,7 @@ fn the_lab_writes_only_peer_to_scanner_markers_and_peer_ip_frames() {
     }
     let written = Arc::new(AtomicU64::new(0));
     let refused = Arc::new(AtomicU64::new(0));
-    let mut g = GuardedTx {
+    let mut g = link::GuardedTx {
         inner: Box::new(Count(written.clone())),
         refused: refused.clone(),
     };
@@ -699,4 +797,291 @@ fn an_uplink_capture_that_cannot_be_read_is_not_isolation_proof() {
     fs::write(d.join("uplink.pcap"), pcap_of(1)).unwrap();
     assert!(uplink_interlock(&d).unwrap_err().contains(LAB_FRAME_MARK));
     let _ = fs::remove_dir_all(d);
+}
+
+#[test]
+fn received_by_filter_is_information_only_for_the_uplink_interlock() {
+    // macOS: every packet the descriptor saw is "received", whatever the filter did with it.
+    assert!(interlock_stats(&err_text3(0, 57, 0)).is_ok());
+    let e = interlock_stats(&err_text3(1, 58, 0)).unwrap_err();
+    assert!(e.contains(LAB_FRAME_MARK), "{e}");
+    let e = interlock_stats(&err_text3(0, 57, 1)).unwrap_err();
+    assert!(
+        e.contains(UNPROVEN_MARK) && !e.contains(LAB_FRAME_MARK),
+        "{e}"
+    );
+    let e = interlock_stats("tcpdump: listening on x\n").unwrap_err();
+    assert!(e.contains(UNPROVEN_MARK), "{e}");
+    // Through a directory: an empty pcap with 57 pre-filter packets is clean.
+    let d = scratch();
+    fs::write(d.join("uplink.pcap"), pcap_of(0)).unwrap();
+    fs::write(d.join("uplink.err"), err_text3(0, 57, 0)).unwrap();
+    assert!(uplink_interlock(&d).is_ok());
+    let _ = fs::remove_dir_all(d);
+}
+
+#[test]
+fn background_traffic_on_the_uplink_is_not_an_isolation_breach() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire); // the fake uplink reports 57 pre-filter packets and none captured
+    let code = run_locked(
+        &rig.args(&["--only", C01]),
+        &st,
+        PathBuf::from("/x/l"),
+        rig.lock().as_ref(),
+    )
+    .unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(fs::read_dir(rig.out.join("runs")).unwrap().count(), 1);
+    assert!(mv::safety_trips(&rig.out).is_empty());
+    assert!(
+        !rig.out.join(".work").exists(),
+        "no empty work root is left behind"
+    );
+}
+
+#[test]
+fn a_tag_that_already_has_a_run_is_not_run_again() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    let s = rig.suite(&st, "functional");
+    s.one(&item("functional", C01), 30).unwrap();
+    let before = st.spawned.borrow().len();
+    let e = s.one(&item("functional", C01), 30).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("--rerun"),
+        "{e:?}"
+    );
+    assert_eq!(
+        st.spawned.borrow().len(),
+        before,
+        "nothing is started for a repeated tag"
+    );
+}
+
+#[test]
+fn the_suite_refuses_to_run_as_root_before_anything_else() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.euid.set(0);
+    let e = run_locked(
+        &rig.args(&["--only", C01]),
+        &st,
+        PathBuf::from("/x/l"),
+        rig.lock().as_ref(),
+    )
+    .unwrap_err();
+    assert!(matches!(e, SuiteError::NotRun(_)) && e.message().contains("must not run as root"));
+    assert!(!st.any_spawned() && !rig.out.exists());
+    // --list is refused too: it is the same entry.
+    assert!(
+        run_locked(
+            &rig.args(&["--list"]),
+            &st,
+            PathBuf::from("/x/l"),
+            rig.lock().as_ref()
+        )
+        .is_err()
+    );
+    // As a normal user the uid is recorded in the manifest and in the run.
+    st.euid.set(501);
+    run_locked(
+        &rig.args(&["--only", C01]),
+        &st,
+        PathBuf::from("/x/l"),
+        rig.lock().as_ref(),
+    )
+    .unwrap();
+    let man: Value = read_json(rig.out.join("manifest.json")).unwrap();
+    assert_eq!(man["euid"], 501);
+    let d = mv::run_dirs(&rig.out, "runs", C01).pop().unwrap();
+    assert_eq!(read_json(d.join("meta.json")).unwrap()["euid"], 501);
+    assert_eq!(
+        read_json(d.join("run.json")).unwrap()["invocation_nonce"],
+        read_json(d.join("meta.json")).unwrap()["invocation_nonce"]
+    );
+}
+
+#[test]
+fn an_error_while_the_scanner_runs_stops_and_reaps_it_before_the_witnesses() {
+    // Path 1: the supervision of the scanner itself fails.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.scanner.set(Mode::FailsOnceThenHangs);
+    let s = rig.suite(&st, "functional");
+    let e = s.one(&item("functional", C01), 30).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::Abort(_) | SuiteError::NotRun(_)),
+        "{e:?}"
+    );
+    let log = st.log.borrow().clone();
+    let sc = st
+        .position("scanner:INT")
+        .unwrap_or_else(|| panic!("scanner was never stopped: {log:?}"));
+    for w in ["witness:INT", "uplink:INT"] {
+        assert!(
+            sc < st.position(w).unwrap(),
+            "{w} stopped before the scanner: {log:?}"
+        );
+    }
+    // Path 2: the operator stops the suite (Ctrl-C) while the scanner runs.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.scanner.set(Mode::Hangs);
+    st.stopped.set(true);
+    let s = rig.suite(&st, "functional");
+    let e = s.one(&item("functional", C01), 30).unwrap_err();
+    assert!(matches!(e, SuiteError::Interrupted(_)), "{e:?}");
+    let log = st.log.borrow().clone();
+    let sc = st
+        .position("scanner:INT")
+        .unwrap_or_else(|| panic!("{log:?}"));
+    assert!(sc < st.position("witness:INT").unwrap(), "{log:?}");
+    assert_eq!(
+        st.position("scanner:KILL"),
+        None,
+        "it exited on INT: no SIGKILL needed"
+    );
+    // The evidence of the interrupted run is kept, hash-checked.
+    assert_eq!(
+        fs::read_dir(rig.out.join("runs_aborted")).unwrap().count(),
+        1
+    );
+}
+
+#[test]
+fn a_scanner_that_ignores_int_is_killed_before_the_witnesses_stop() {
+    struct Stubborn(Rc<RefCell<Vec<String>>>);
+    impl Proc for Stubborn {
+        fn try_wait(&mut self) -> Result<Option<i32>, String> {
+            Ok(None)
+        }
+        fn signal(&mut self, s: &str) {
+            self.0.borrow_mut().push(format!("scanner:{s}"));
+        }
+        fn kill(&mut self) {
+            self.0.borrow_mut().push("scanner:KILL".into());
+        }
+    }
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    let s = rig.suite(&st, "functional");
+    let mut t = Tools {
+        scanner: Some(Box::new(Stubborn(st.log.clone()))),
+        witness: Some(Box::new(FakeProc {
+            name: "witness",
+            log: st.log.clone(),
+            mode: Mode::Hangs,
+            done: false,
+            failed: false,
+            polls: 0,
+        })),
+        ..Tools::default()
+    };
+    s.stop_tools(&mut t);
+    let log = st.log.borrow().clone();
+    assert_eq!(
+        log[..3],
+        ["scanner:INT", "scanner:KILL", "witness:INT"],
+        "{log:?}"
+    );
+}
+
+#[test]
+fn the_uplink_capture_is_not_promiscuous_and_the_firewall_state_is_recorded() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    let s = rig.suite(&st, "functional");
+    let dest = s.one(&item("functional", C01), 30).unwrap();
+    let up = st
+        .spawned
+        .borrow()
+        .iter()
+        .find(|a| a[0] == "/usr/sbin/tcpdump")
+        .unwrap()
+        .clone();
+    assert_eq!(up[..3], ["/usr/sbin/tcpdump", "-p", "-i"], "{up:?}");
+    assert!(dest.join("alf.txt").is_file());
+    // An enabled Application Firewall refuses the run before anything starts.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.alf_enabled.set(true);
+    let s = rig.suite(&st, "functional");
+    let e = s.one(&item("functional", C01), 30).unwrap_err();
+    assert!(
+        e.message().contains("Application Firewall"),
+        "{}",
+        e.message()
+    );
+    assert!(!st.any_spawned());
+    assert!(firewall_enabled("Firewall is enabled. (State = 1)"));
+    assert!(firewall_enabled("Firewall is enabled. (State = 2)"));
+    assert!(!firewall_enabled("Firewall is disabled. (State = 0)"));
+}
+
+#[test]
+fn a_rebuilt_scanner_binary_cannot_extend_an_existing_directory() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    run_locked(
+        &rig.args(&["--only", C01]),
+        &st,
+        PathBuf::from("/x/l"),
+        rig.lock().as_ref(),
+    )
+    .unwrap();
+    fs::write(&rig.wire, b"a different scanner").unwrap();
+    let e = run_locked(
+        &rig.args(&["--only", "c01_one_addr_port_synack.run2"]),
+        &st,
+        PathBuf::from("/x/l"),
+        rig.lock().as_ref(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("differs"),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn the_uplink_filter_of_the_verifier_is_the_one_of_the_lab() {
+    assert_eq!(
+        mv::uplink_filter(SCANNER_MAC, PEER_MAC),
+        crate::macos_lab::UPLINK_FILTER
+    );
+}
+
+#[test]
+fn a_lock_owned_by_another_user_is_alive_and_media_flags_are_read() {
+    assert!(alive_from(true, ""));
+    assert!(alive_from(false, "kill: 1: Operation not permitted"));
+    assert!(!alive_from(false, "kill: 4294967290: No such process"));
+    assert!(flags_up(
+        "feth4202: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\tether 2:ac:0:0:0:2\n"
+    ));
+    assert!(!flags_up(
+        "feth4202: flags=8822<BROADCAST,SMART,SIMPLEX,MULTICAST> mtu 1500\n"
+    ));
+    assert!(!flags_up("no flags here\n"));
+}
+
+#[test]
+fn link_loss_is_recorded_on_the_peer_interface_the_user_takes_down() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.scanner.set(Mode::ExitsAfter(6));
+    st.flip_after.set(3);
+    let s = rig.suite(&st, "failure");
+    let dest = s.one(&item("failure", "linkloss"), 30).unwrap();
+    let ll = read_json(dest.join("linkloss.json")).unwrap();
+    let down = ll["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["link"] == "down")
+        .unwrap();
+    assert_eq!(down["iface"], PEER_IF);
+    assert_eq!(down["scanner_if"], SCANNER_IF);
+    assert!(down["scanner_active"].is_boolean());
 }

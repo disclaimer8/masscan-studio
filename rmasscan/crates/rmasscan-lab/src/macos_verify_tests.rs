@@ -86,8 +86,11 @@ fn scratch() -> PathBuf {
     d
 }
 fn tcpdump_err(frames: usize) -> String {
+    tcpdump_err3(frames, frames, 0)
+}
+fn tcpdump_err3(captured: usize, received: usize, dropped: usize) -> String {
     format!(
-        "tcpdump: listening on x, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n{frames} packets captured\n{frames} packets received by filter\n0 packets dropped by kernel\n"
+        "tcpdump: listening on x, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n{captured} packets captured\n{received} packets received by filter\n{dropped} packets dropped by kernel\n"
     )
 }
 fn checkpoint_bytes(scan: &str, attempt: &str, next: u64) -> Vec<u8> {
@@ -284,7 +287,7 @@ fn build(env: &Env, tag: &str) -> Ev {
     // The scanner's SYNs and the peer's replies on the wire.
     let mut peer: Frames = vec![];
     let ports: Vec<u16> = match kind.as_str() {
-        "case" => (0..n(&c["syn"]) as usize)
+        "case" | "foreign" | "perf" => (0..n(&c["syn"]) as usize)
             .map(|k| {
                 let first = verify_ports(&c);
                 first[k]
@@ -296,13 +299,16 @@ fn build(env: &Env, tag: &str) -> Ev {
     };
     let denied = kind == "perm_denied";
     match kind.as_str() {
-        "case" | "pause" | "resume" => {
+        "case" | "foreign" | "perf" | "pause" | "resume" => {
             for (k, p) in ports.iter().enumerate() {
                 peer.push((BASE + 0.002 + k as f64 * 0.01, syn(*p)));
-                peer.push((BASE + 0.003 + k as f64 * 0.01, reply(*p, is_open(*p))));
+                if *p != 8099 {
+                    peer.push((BASE + 0.003 + k as f64 * 0.01, reply(*p, is_open(*p))));
+                }
             }
             let mut exp: Vec<String> = ports
                 .iter()
+                .filter(|p| **p != 8099)
                 .map(|p| {
                     format!(
                         "198.18.0.2:{p}:{}",
@@ -375,8 +381,9 @@ fn build(env: &Env, tag: &str) -> Ev {
         "argv.json".into(),
         pretty(&json!({"exe":"/x/wire_scan","argv":argv,"invocation_nonce":nonce})),
     );
+    run["invocation_nonce"] = json!(nonce);
     files.insert("run.json".into(), pretty(&run));
-    let mut meta = json!({"tag":tag,"kind":kind,"invocation_nonce":nonce,"guest_exit":guest_exit,
+    let mut meta = json!({"tag":tag,"kind":kind,"invocation_nonce":nonce,"guest_exit":guest_exit,"euid":1000,
         "exe_sha256":EXE,"capture_started_utc":BASE-2.0,"guest_started_utc":BASE,
         "guest_finished_utc":BASE+3.0,"capture_stopped_utc":BASE+9.0});
     for (k, v) in exit_meta.as_object().unwrap() {
@@ -419,9 +426,30 @@ fn build(env: &Env, tag: &str) -> Ev {
         let c = json!({"feth4201":{"ipkts":5,"opkts":5},"feth4202":{"ipkts":7,"opkts":7}});
         ev.files.insert(
             "counters.json".into(),
-            pretty(&json!({"before":c,"after":c})),
+            pretty(&json!({"before":c,"after":c,"before_utc":BASE-1.0,"after_utc":BASE+4.0})),
         );
         return ev;
+    }
+    if kind == "foreign" {
+        // Three kinds of foreign reply, as the macOS injector writes them (never "other_ip").
+        for k in 0..3u16 {
+            let mut f = tcp_frame(
+                PM,
+                SM,
+                [198, 18, 0, 2],
+                [198, 18, 0, 1],
+                9999 + k,
+                40000,
+                0x12,
+            );
+            f[18..20].copy_from_slice(&0xf0e1u16.to_be_bytes());
+            peer.push((BASE + 0.5 + f64::from(k) * 0.01, f));
+        }
+        ev.files.insert(
+            "injector.json".into(),
+            pretty(&json!({"first_syn_seen":true,"sent_total":3,
+                "kinds":{"unscanned_port":1,"wrong_cookie":1,"wrong_dst_port":1},"guard_refused":0})),
+        );
     }
     // Peer witness: start markers, the scan, end markers.
     let mut all: Frames = (0..3)
@@ -444,7 +472,7 @@ fn build(env: &Env, tag: &str) -> Ev {
             "tcpdump":{"captured":nframes,"received":nframes,"dropped_kernel":0,"dropped_if":null},
             "pcap":peer_rec,"interface_drop_delta":0,
             "witness":{"iface_rxtx_delta_lo":nframes-3,"iface_rxtx_delta_hi":nframes,"quiesced_before_stop":true,"valid":true,"invalid_reasons":[]}},
-        "uplink":{"iface":"en0","cmd":["tcpdump","-i","en0","-n","-U","--immediate-mode","-s","0","-w","/work/uplink.pcap",up_filter],
+        "uplink":{"iface":"en0","cmd":["tcpdump","-i","en0","-p","-n","-U","--immediate-mode","-s","0","-w","/work/uplink.pcap",up_filter],
             "filter":up_filter,"exited":true,"listening":true,
             "tcpdump":{"captured":0,"received":0,"dropped_kernel":0,"dropped_if":null},
             "pcap":up_rec,"interface_drop_delta":0},
@@ -587,19 +615,40 @@ fn hash_mismatch_after_copy_is_invalid() {
 #[test]
 fn status_pre_or_post_not_allowed_is_not_run() {
     let env = Env::new("functional");
-    for name in ["status-pre", "status-post"] {
-        let mut ev = build(&env, C01);
-        ev.json(&format!("{name}.json"), |v| {
-            v["raw_run_allowed"] = json!(false)
-        });
-        assert_eq!(ev.verdict(&env), NOT_RUN, "{name}");
-        // A stand whose BPF access is not what the run needs is the same refusal.
-        let mut ev = build(&env, "c02_one_addr_port_rst.run1");
-        ev.json(&format!("{name}.json"), |v| {
-            v["bpf_access"] = json!("denied")
-        });
-        assert_eq!(ev.verdict(&env), NOT_RUN, "{name} bpf");
-    }
+    // The brief's name keeps the pre case: a refused gate means the run did not happen.
+    let name = "status-pre";
+    let mut ev = build(&env, C01);
+    ev.json(&format!("{name}.json"), |v| {
+        v["raw_run_allowed"] = json!(false)
+    });
+    assert_eq!(ev.verdict(&env), NOT_RUN, "{name}");
+    // A stand whose BPF access is not what the run needs is the same refusal.
+    let mut ev = build(&env, "c02_one_addr_port_rst.run1");
+    ev.json(&format!("{name}.json"), |v| {
+        v["bpf_access"] = json!("denied")
+    });
+    assert_eq!(ev.verdict(&env), NOT_RUN, "{name} bpf");
+}
+
+#[test]
+fn status_post_not_allowed_is_invalid_and_a_fail_for_a_perf_cell() {
+    // The scanner ran: the stand is no longer proven afterwards. Windows parity.
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    ev.json("status-post.json", |v| v["raw_run_allowed"] = json!(false));
+    assert_eq!(ev.verdict(&env), INVALID);
+    let mut ev = build(&env, C01);
+    ev.json("status-post.json", |v| v["bpf_access"] = json!("mixed"));
+    assert_eq!(ev.verdict(&env), INVALID);
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    ev.json("status-post.json", |v| v["raw_run_allowed"] = json!(false));
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "status-post allows a raw run"),
+        "a perf cell with a failed post gate is a FAIL"
+    );
+    assert!(!may_discard(r.verdict(), r.behaviour_fail()));
 }
 
 #[test]
@@ -907,7 +956,10 @@ fn linkloss_without_a_down_event_is_not_run_user_action_not_performed() {
     ev.files
         .insert("linkloss.json".into(), pretty(&json!({"events":[]})));
     let (r, _) = ev.verify(&env);
-    assert_eq!(result_of(&r, "link-down event observed"), NOT_RUN);
+    assert_eq!(
+        result_of(&r, "link-down event of the peer interface observed"),
+        NOT_RUN
+    );
     assert_eq!(r.verdict(), NOT_RUN);
 }
 #[test]
@@ -938,4 +990,250 @@ fn only_a_discardable_verdict_may_be_rerun() {
     assert!(!may_discard(INVALID, true));
     assert!(!may_discard(FAIL, false));
     assert!(!may_discard(PASS, false));
+}
+
+fn has_check(r: &Run, needle: &str) -> bool {
+    r.summary()["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| s(&c["name"]).contains(needle))
+}
+/// Rewrite both the stats file of a witness and the record of it in capture.json.
+fn set_stats(ev: &mut Ev, who: &str, captured: usize, received: usize, dropped: usize) {
+    ev.files.insert(
+        format!("{who}.err"),
+        tcpdump_err3(captured, received, dropped).into_bytes(),
+    );
+    ev.json("capture.json", |v| {
+        v[who]["tcpdump"] = json!({"captured":captured,"received":received,"dropped_kernel":dropped,"dropped_if":null});
+    });
+}
+
+#[test]
+fn macos_received_by_filter_counts_everything_the_descriptor_saw_and_is_information_only() {
+    let env = Env::new("functional");
+    // The uplink saw 57 unrelated packets before its filter and passed none: that is not a lab frame.
+    let mut ev = build(&env, C01);
+    set_stats(&mut ev, "uplink", 0, 57, 0);
+    let (r, _) = ev.verify(&env);
+    assert!(!r.safety_trip(), "{:#?}", r.summary()["checks"]);
+    assert_eq!(r.verdict(), PASS);
+    // The same reading applies to the peer capture: its received count is not a matched-frame count.
+    let mut ev = build(&env, C01);
+    let stored = pcap::read_pcap_records(&ev.files["peer.pcap"])
+        .unwrap()
+        .1
+        .len();
+    set_stats(&mut ev, "peer", stored, stored + 50, 0);
+    assert_eq!(ev.verdict(&env), PASS);
+    // A kernel drop on the filtered uplink capture is a matched frame lost: unproven (INVALID), not a pass.
+    let mut ev = build(&env, C01);
+    set_stats(&mut ev, "uplink", 0, 57, 1);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), INVALID);
+    // A frame that matched the lab filter but was not stored is a lab frame.
+    let mut ev = build(&env, C01);
+    set_stats(&mut ev, "uplink", 1, 58, 0);
+    assert!(ev.verify(&env).0.safety_trip());
+}
+
+#[test]
+fn a_tag_with_two_directories_is_judged_in_each_and_a_fail_is_never_hidden_as_invalid() {
+    let env = Env::new("functional");
+    let mut bad = build(&env, C01);
+    bad.json("run.json", |v| v["rx_health"]["kernel_drops"] = json!(3));
+    bad.write(&env);
+    build(&env, C01).write(&env);
+    let it = env.item(C01);
+    let (r, _) = judge_tag(&env.root, &env.man, &env.fx, &it);
+    assert!(has_check(&r, "exactly one run directory"));
+    assert!(
+        r.behaviour_fail(),
+        "the behaviour FAIL of one directory survives"
+    );
+    assert!(run_status(&env.root, C01).1);
+    let v = verify_dir(&env.root);
+    assert_eq!(v["overall"], FAIL, "{}", v["totals"]);
+    // A safety trip in the second directory fails the directory too.
+    let env = Env::new("functional");
+    build(&env, C01).write(&env);
+    let mut trip = build(&env, C01);
+    trip.set_frames("uplink", &vec![(BASE, syn(80))]);
+    trip.write(&env);
+    let (r, _) = judge_tag(&env.root, &env.man, &env.fx, &env.item(C01));
+    assert!(r.safety_trip());
+    assert_eq!(verify_dir(&env.root)["overall"], FAIL);
+}
+
+#[test]
+fn a_failed_manifest_gate_cannot_turn_a_safety_trip_into_not_run() {
+    for sub in ["runs", "runs_discarded"] {
+        let env = Env::new("functional");
+        let mut ev = build(&env, C01);
+        ev.set_frames("uplink", &vec![(BASE, syn(80))]);
+        let d = ev.write(&env);
+        if sub == "runs_discarded" {
+            fs::create_dir_all(env.root.join(sub)).unwrap();
+            fs::rename(&d, env.root.join(sub).join(d.file_name().unwrap())).unwrap();
+        }
+        // No fixtures manifest: the manifest gate fails.
+        fs::remove_file(env.root.join("fixtures/manifest.json")).unwrap();
+        let v = verify_dir(&env.root);
+        assert_eq!(v["overall"], FAIL, "{sub}: {v:#}");
+        assert_eq!(v["safety_trips"].as_array().unwrap().len(), 1, "{sub}");
+        // And with no manifest at all.
+        fs::remove_file(env.root.join("manifest.json")).unwrap();
+        assert_eq!(
+            verify_dir(&env.root)["overall"],
+            FAIL,
+            "{sub} without manifest"
+        );
+    }
+}
+
+#[test]
+fn the_recorded_effective_uid_must_be_there_and_not_root() {
+    let env = Env::new("failure");
+    for tag in ["perm_denied_scan", "rxloss"] {
+        let mut ev = build(&env, tag);
+        ev.json("meta.json", |v| {
+            v.as_object_mut().unwrap().remove("euid");
+        });
+        let (r, _) = ev.verify(&env);
+        assert_eq!(
+            result_of(&r, "ran unprivileged"),
+            INVALID,
+            "{tag} missing uid"
+        );
+        let mut ev = build(&env, tag);
+        ev.json("meta.json", |v| v["euid"] = json!(0));
+        let (r, _) = ev.verify(&env);
+        let want = if tag == "rxloss" { INVALID } else { FAIL };
+        assert_eq!(result_of(&r, "ran unprivileged"), want, "{tag} root");
+    }
+    let (r, _) = build(&env, "perm_denied_scan").verify(&env);
+    assert_eq!(result_of(&r, "ran unprivileged"), PASS);
+}
+
+#[test]
+fn the_perm_denied_counter_window_must_enclose_the_scanner_run() {
+    let env = Env::new("failure");
+    for (key, value) in [
+        ("before_utc", BASE + 0.5), // read after the scanner started
+        ("after_utc", BASE + 1.0),  // read before the scanner finished
+    ] {
+        let mut ev = build(&env, "perm_denied_scan");
+        ev.json("counters.json", |v| v[key] = json!(value));
+        let (r, _) = ev.verify(&env);
+        assert_eq!(
+            result_of(&r, "counter readings enclose the scanner run"),
+            INVALID,
+            "{key}"
+        );
+    }
+    let mut ev = build(&env, "perm_denied_scan");
+    ev.json("counters.json", |v| {
+        v.as_object_mut().unwrap().remove("before_utc");
+    });
+    assert_eq!(
+        result_of(
+            &ev.verify(&env).0,
+            "counter readings enclose the scanner run"
+        ),
+        INVALID
+    );
+    assert_eq!(
+        result_of(
+            &build(&env, "perm_denied_scan").verify(&env).0,
+            "counter readings enclose"
+        ),
+        PASS
+    );
+}
+
+#[test]
+fn x01_needs_three_kinds_from_a_clean_guard_and_never_other_ip() {
+    let env = Env::new("functional");
+    let tag = "x01_foreign_replies.run1";
+    let (r, _) = build(&env, tag).verify(&env);
+    assert_eq!(
+        result_of(&r, "all foreign injection kinds reached the wire"),
+        PASS
+    );
+    assert_eq!(result_of(&r, "the peer-side guard refused no frame"), PASS);
+    assert_eq!(result_of(&r, "no other_ip reply was written"), PASS);
+    let mut ev = build(&env, tag);
+    ev.json("injector.json", |v| v["guard_refused"] = json!(2));
+    assert_eq!(
+        result_of(&ev.verify(&env).0, "the peer-side guard refused no frame"),
+        INVALID
+    );
+    let mut ev = build(&env, tag);
+    ev.json("injector.json", |v| v["kinds"]["other_ip"] = json!(1));
+    assert_eq!(
+        result_of(&ev.verify(&env).0, "no other_ip reply was written"),
+        INVALID
+    );
+    let mut ev = build(&env, tag);
+    ev.json("injector.json", |v| v["kinds"]["wrong_cookie"] = json!(0));
+    assert_eq!(
+        result_of(
+            &ev.verify(&env).0,
+            "all foreign injection kinds reached the wire"
+        ),
+        INVALID
+    );
+    // The verdict says what x01 does not cover on macOS.
+    let v = verify_dir(&env.root);
+    assert!(v["notes"][0].as_str().unwrap().contains("other_ip"));
+}
+
+#[test]
+fn link_loss_is_judged_on_the_peer_interface_and_the_failure_class_is_provisional() {
+    let env = Env::new("failure");
+    let item = env.item("linkloss");
+    let mk = |events: Value, reason: &str, detail: &str| {
+        let mut ev = build(&env, "rxloss");
+        ev.tag = "linkloss".into();
+        ev.item = item.clone();
+        ev.json("run.json", |v| {
+            v["reason"] = json!(reason);
+            v["fail_detail"] = json!(detail);
+        });
+        ev.files
+            .insert("linkloss.json".into(), pretty(&json!({"events":events})));
+        ev
+    };
+    let down = |iface: &str| json!([{"link":"down","iface":iface,"t":BASE+1.0},{"link":"up","iface":iface,"t":BASE+5.0}]);
+    // A down of the scanner-side interface is not the user\x27s action: nothing observed.
+    let (r, _) = mk(down("feth4201"), "Failed", "TxUncertain").verify(&env);
+    assert_eq!(
+        result_of(&r, "link-down event of the peer interface observed"),
+        NOT_RUN
+    );
+    // A down of the peer side during a scan that completed, or failed for another reason, is INVALID.
+    for (reason, detail) in [
+        ("Completed", ""),
+        ("Failed", "RxLoss { kernel_drops: 7 }"),
+        ("Failed", "ConsumerTooSlow"),
+    ] {
+        let (r, _) = mk(down("feth4202"), reason, detail).verify(&env);
+        assert_eq!(
+            result_of(&r, "ends in a failure naming a TX or link class"),
+            INVALID,
+            "{reason} {detail}"
+        );
+        assert!(
+            !r.behaviour_fail(),
+            "the lab cannot be held against the scanner here"
+        );
+    }
+    // A TX failure passes the class gate and goes on to the real checks.
+    let (r, _) = mk(down("feth4202"), "Failed", "TxUncertain { sent: 30 }").verify(&env);
+    assert!(!has_check(
+        &r,
+        "ends in a failure naming a TX or link class"
+    ));
+    assert!(has_check(&r, "link loss fails the run"));
 }

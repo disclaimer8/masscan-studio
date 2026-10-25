@@ -14,6 +14,7 @@ fn good() -> Facts {
         dropped_kernel: Some(0),
         dropped_if: Some(0),
         interface_drop_delta: Some(0),
+        received_is_prefilter: false,
         pcap_frames: 100,
         pcap_error: None,
         tcpdump_exited: true,
@@ -683,4 +684,40 @@ feth4202*  1500  <Link#22>   02:ac:00:00:00:02       5     0        300        7
         assert_eq!((c.ipkts, c.opkts, c.ierrs, c.drop), (5, 7, 0, 1));
         assert!(parse_netstat(t, "feth4201").is_err());
     }
+}
+
+#[test]
+fn macos_received_by_filter_is_a_prefilter_count_and_never_a_matched_frame_count() {
+    // 57 packets reached the descriptor, 0 passed its filter: tcpdump prints 0 captured / 57 received.
+    let mut f = good();
+    f.captured = Some(100);
+    f.received = Some(157);
+    f.window_lo = Some(98);
+    // Linux and Windows semantics are untouched: received must equal the stored frames.
+    assert!(!problems(&f).is_empty());
+    // macOS: received is information only; completeness rests on captured, drops and the pcap.
+    f.received_is_prefilter = true;
+    assert!(problems(&f).is_empty(), "{:?}", problems(&f));
+    f.dropped_kernel = Some(1);
+    assert!(!problems(&f).is_empty(), "a kernel drop is still a loss");
+    f.dropped_kernel = Some(0);
+    f.captured = Some(99);
+    assert!(
+        !problems(&f).is_empty(),
+        "captured must equal the pcap frames"
+    );
+}
+
+#[test]
+fn capture_dump_on_macos_only_accepts_the_pair_and_the_default_route_uplink() {
+    assert!(mac_dump_iface_allowed("feth4201", None));
+    assert!(mac_dump_iface_allowed("feth4202", None));
+    assert!(mac_dump_iface_allowed("en0", Some("en0")));
+    for bad in ["en0", "lo0", "bridge0", "feth4203", "en1"] {
+        assert!(!mac_dump_iface_allowed(bad, Some("en5")), "{bad}");
+    }
+    assert!(
+        !mac_dump_iface_allowed("feth9999", Some("feth9999")),
+        "a feth is never the uplink"
+    );
 }

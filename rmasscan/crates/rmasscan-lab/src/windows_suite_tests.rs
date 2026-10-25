@@ -1654,6 +1654,16 @@ fn perf_timeouts_scale_with_the_run_and_both_extreme_cells_fit() {
         // The default per-run timeout of 240 s is never lowered.
         assert!(perf_run_timeout(&item, 240) >= 240);
     }
+    // Concrete values. With the documented command (default --run-timeout 240) every cell keeps 240 s
+    // guest timeouts and the 810 s dead-man bound of parts A and B; the formula alone gives 136 s and 128 s.
+    for item in crate::verify::planned(&json!({"plan":"perf"})) {
+        assert_eq!(perf_run_timeout(&item, 240), 240, "{}", item["tag"]);
+    }
+    assert_eq!(2 * capture_expected_s(240), 810);
+    assert_eq!(perf_run_timeout(&c100, 0), 136);
+    assert_eq!(perf_run_timeout(&c100k, 0), 128);
+    assert_eq!(2 * capture_expected_s(136), 602);
+    assert_eq!(2 * capture_expected_s(128), 586);
     // A stingy --run-timeout cannot cut the 100-pps cell short, and a long one is kept.
     assert!(perf_run_timeout(&c100, 10) >= 2 * (8 + PERF_OVERHEAD_S));
     assert_eq!(perf_run_timeout(&c100, 900), 900);

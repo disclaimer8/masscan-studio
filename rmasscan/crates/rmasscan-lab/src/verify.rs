@@ -690,6 +690,10 @@ struct Ctx {
 }
 /// The per-run gate (guest Verify, nonce chain, status before/after). A gate leg that did not hold is
 /// INVALID evidence for the older plans; for the perf plan it is a FAIL of the cell (ruling 7).
+/// Consequence: a perf cell with a failed gate leg is FAIL with behaviour_fail, so it is not rerunnable
+/// (`may_discard`), while the same failure in part A or B is INVALID and rerunnable. In practice only
+/// status-post can reach this: the pre-run legs abort the suite before the scanner starts, which leaves
+/// no run.json (NOT RUN, discardable).
 fn gate_leg(r: &mut Run, perf: bool, name: &str, ok: bool, detail: impl ToString) {
     if perf {
         r.beh(name, ok, detail);
@@ -1610,7 +1614,11 @@ fn rxloss_genuine(r: &mut Run, ctx: &Ctx, drops: u64, exp: &[String]) {
         got.iter().all(|v| truth.contains(s(v)))
             && distinct.len() == got.len()
             && n(&j["reply_total"]) == got.len() as i128,
-        j["replies"].to_string().chars().take(300).collect::<String>(),
+        j["replies"]
+            .to_string()
+            .chars()
+            .take(300)
+            .collect::<String>(),
     );
 }
 fn rxloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
@@ -2363,6 +2371,14 @@ pub fn verify_dir(root: &Path) -> Value {
             false,
         );
     }
+    // An unknown plan must not be planned silently as the functional one.
+    r.check(
+        "manifest.plan is functional, failure or perf (absent: historical functional)",
+        man["plan"].is_null() || matches!(s(&man["plan"]), "functional" | "failure" | "perf"),
+        man["plan"].to_string(),
+        NOT_RUN,
+        false,
+    );
     r.check(
         "manifest executable sha256 present",
         truth(&man["exe"]["sha256"]),

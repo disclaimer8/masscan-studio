@@ -222,14 +222,19 @@ the last two items.
      or duplicated on the wire; a SYN after the outcome; an outcome other than `Completed` or
      `Failed(RxLoss)`; `Failed(RxLoss)` with zero or unknown kernel drops; `Completed` with
      non-zero or unknown kernel drops; or Completed results that differ from the listener truth.
+     A gate-leg failure is FAIL here and therefore not rerunnable, while the same failure in part A or B
+     is INVALID and rerunnable; in practice only status-post can reach it (a failed pre-run leg aborts the
+     suite before the scanner starts, which leaves a discardable NOT RUN cell).
    - PASS otherwise. `Failed(RxLoss)` with measured drops above zero is a PASS (`rx_loss: true`):
      honest measured loss; its results are recorded, not compared.
 
    `perf_summary.rows` has one row per rate: PASS/FAIL/INVALID/NOT RUN/rx_loss counts and the
-   medians over the PASS cells of `steady_pps_wire` (from peer-pcap SYN timestamps),
+   medians over the Completed PASS cells (every probe went out) of `steady_pps_wire` (from peer-pcap SYN timestamps),
    `steady_pps_inprocess`, `cpu_user_ms`, `cpu_kernel_ms`, `peak_working_set_bytes`, `join_ms` and
    `drain_s`. `rate_gate` is MET when the median wire rate is within 20 percent of the requested
-   rate, OPEN otherwise, NOT RUN with fewer than 3 PASS cells. It is a measurement of the VM, not of
+   rate, OPEN otherwise, NOT RUN with fewer than 3 Completed PASS cells or no measured median. RxLoss PASS
+   cells are counted (`rx_loss`) and reported separately (`rxloss_cells`, `rxloss_steady_pps_wire_median`);
+   they never enter a median or the gate. It is a measurement of the VM, not of
    a physical NIC, and may stay OPEN until 2B-sendqueue; it never changes `overall`, which is PASS
    only if the manifest and all 20 cells are PASS. Per-cell metrics (`notes.perf` of each run in the
    verdict) also carry `transmitted_wire`, `tx_sent`, `rx_packets`, `kernel_drops`, received and

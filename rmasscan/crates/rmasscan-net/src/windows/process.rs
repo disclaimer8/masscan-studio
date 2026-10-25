@@ -5,7 +5,9 @@
 
 use std::mem::size_of;
 
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, FILETIME, GetLastError, HANDLE, INVALID_HANDLE_VALUE, SetLastError,
+};
 use windows_sys::Win32::Security::{
     GetTokenInformation, IsTokenRestricted, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
 };
@@ -127,6 +129,19 @@ pub(crate) fn process_sample() -> ProcessSample {
     s
 }
 
+/// `IsTokenRestricted` возвращает 0 и для «не ограничен», и для ошибки: отличить
+/// можно только по `GetLastError` (0 при успехе, если его обнулили заранее).
+/// Неизвестное это `None`, не `Some(false)`.
+fn restricted_from(rc: i32, last_error: u32) -> Option<bool> {
+    if rc != 0 {
+        Some(true)
+    } else if last_error == 0 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn token_flags() -> TokenFlags {
     let mut token: HANDLE = std::ptr::null_mut();
     // SAFETY: псевдо-handle процесса; token валидный выходной параметр.
@@ -145,12 +160,30 @@ pub(crate) fn token_flags() -> TokenFlags {
             &mut ret,
         )
     };
-    // SAFETY: token открыт нами с TOKEN_QUERY.
-    let restricted = unsafe { IsTokenRestricted(token) } != 0;
+    // SAFETY: SetLastError/GetLastError без предусловий; token открыт нами с
+    // TOKEN_QUERY. Код ошибки обнуляется заранее, иначе 0 не отличить от сбоя.
+    let (rc, last_error) = unsafe {
+        SetLastError(0);
+        let rc = IsTokenRestricted(token);
+        (rc, GetLastError())
+    };
     // SAFETY: token это открытый нами handle, закрывается один раз.
     unsafe { CloseHandle(token) };
     TokenFlags {
         elevated: (ok != 0).then_some(el.TokenIsElevated != 0),
-        restricted: Some(restricted),
+        restricted: restricted_from(rc, last_error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restricted_from;
+
+    #[test]
+    fn restricted_result_zero_with_an_error_is_unknown() {
+        assert_eq!(restricted_from(1, 0), Some(true));
+        assert_eq!(restricted_from(0, 0), Some(false));
+        // 0 при ненулевом GetLastError это сбой вызова, не «не ограничен».
+        assert_eq!(restricted_from(0, 5), None);
     }
 }

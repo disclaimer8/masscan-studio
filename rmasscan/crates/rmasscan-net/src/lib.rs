@@ -1,6 +1,8 @@
 //! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; Windows: Npcap. Это
 //! единственный crate, где допускается `unsafe`: весь FFI находится в
-//! private-модулях (`linux::socket`; `windows::{ffi, handle, loader, sys}`) и,
+//! private-модулях (`linux::socket`; `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
+//! телеметрия процесса (Toolhelp, токен, счётчики памяти), в продуктовой сборке она
+//! тоже присутствует) и,
 //! только с feature `lab` (включает один rmasscan-lab), в `lab_io::imp`
 //! (sigaction-флаг остановки и listener с backlog 0); остальной код безопасный и тестируется через синтетические швы
 //! (`linux::PacketIo`, `linux::IfaceInfo`; подставная таблица функций wpcap).
@@ -99,9 +101,12 @@ pub struct NetStats {
     pub rx_packets: u64,
     /// Кадры, не поместившиеся в буфер вызывающего (отброшены).
     pub rx_truncated: u64,
-    /// Кадры с PACKET_OUTGOING (наши собственные; отброшены).
+    /// Собственные кадры, отброшенные до движка. Linux: кадры с PACKET_OUTGOING.
+    /// Windows: кадры с нашим source MAC (у Npcap нет признака направления).
     pub rx_outgoing: u64,
-    /// Кадры с чужим ifindex (отброшены).
+    /// Кадры с чужим ifindex (отброшены). Linux: считается. Windows: всегда 0 и
+    /// НЕ измерено, а структурно неприменимо: handle привязан к одному
+    /// устройству, сравнивать ifindex нечего. Нуль здесь не свидетельство.
     pub rx_wrong_interface: u64,
     pub rx_errors: u64,
     pub kernel_drops: Option<u64>,

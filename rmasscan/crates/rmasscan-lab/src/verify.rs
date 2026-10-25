@@ -117,6 +117,11 @@ pub(crate) fn results_match(got: &Value, exp: &[String]) -> bool {
 /// peer interface). Missing closed results are tolerated (the OS rate-limits RSTs); invented ones are not. FAIL when
 /// the capture is proven complete, INVALID otherwise.
 pub(crate) fn results_on_wire(r: &mut Run, ctx: &Ctx, c: &Value, results: &Value) {
+    results_on_wire_ex(r, ctx, c, results, false);
+}
+/// As `results_on_wire`; with `strict` the open results must also equal the genuine in-window SYN-ACKs (a SYN-ACK
+/// the scanner did not report is a miss). Closed results stay a subset of the genuine RSTs.
+pub(crate) fn results_on_wire_ex(r: &mut Run, ctx: &Ctx, c: &Value, results: &Value, strict: bool) {
     if !mac_stand() {
         return;
     }
@@ -134,6 +139,17 @@ pub(crate) fn results_on_wire(r: &mut Run, ctx: &Ctx, c: &Value, results: &Value
         bad.is_empty(),
         format!("{bad:?} not on the wire"),
     );
+    if strict {
+        let missed: Vec<String> = answered_open(ctx, c)
+            .into_iter()
+            .filter(|x| !array(results).iter().any(|v| s(v) == x.as_str()))
+            .collect();
+        r.cap(
+            "open results equal the open replies on the wire",
+            missed.is_empty(),
+            format!("{missed:?} on the wire but not reported"),
+        );
+    }
 }
 /// `reply_total` is the number of expected replies (everywhere else), or of the results received (macOS).
 fn reply_total_ok(j: &Value, exp_len: usize) -> bool {
@@ -626,6 +642,8 @@ pub(crate) struct Tcp {
     pub(crate) dp: u16,
     pub(crate) flags: u8,
     pub(crate) id: u16,
+    pub(crate) seq: u32,
+    pub(crate) ack: u32,
 }
 pub(crate) fn tcp(b: &[u8]) -> Option<Tcp> {
     if b.len() < 54 || b[12..14] != [8, 0] || b[23] != 6 || b[14] >> 4 != 4 {
@@ -659,7 +677,35 @@ pub(crate) fn tcp(b: &[u8]) -> Option<Tcp> {
         dp: u16::from_be_bytes([b[o + 2], b[o + 3]]),
         flags: b[o + 13] & 63,
         id: u16::from_be_bytes([b[18], b[19]]),
+        seq: u32::from_be_bytes([b[o + 4], b[o + 5], b[o + 6], b[o + 7]]),
+        ack: u32::from_be_bytes([b[o + 8], b[o + 9], b[o + 10], b[o + 11]]),
     })
+}
+/// The open replies inside the scanner's receive window that answer a SYN of this run (the ack is the SYN's
+/// sequence plus one, to the SYN's port). A SYN-ACK retransmit of an earlier cell's half-open connection that
+/// lands in this window (seen live: port 5000 of perf.100000.r4 inside perf.100.r5) answers nothing of this run.
+pub(crate) fn answered_open(ctx: &Ctx, c: &Value) -> BTreeSet<String> {
+    let (Some((fr, _)), Some(win)) = (&ctx.peer, rx_window(ctx, c)) else {
+        return BTreeSet::new();
+    };
+    let asked: BTreeSet<(u16, u32)> = syns(fr, &ctx.bind, sports(c))
+        .iter()
+        .filter_map(|(_, f)| tcp(f))
+        .map(|i| (i.dp, i.seq.wrapping_add(1)))
+        .collect();
+    let b = &ctx.bind;
+    fr.iter()
+        .filter(|(t, _)| *t >= win.0 && *t <= win.1)
+        .filter_map(|(_, f)| tcp(f))
+        .filter(|i| {
+            i.sm == b.pm
+                && i.dm == b.sm
+                && i.dst == b.src
+                && i.flags & 0x12 == 0x12
+                && asked.contains(&(i.sp, i.ack))
+        })
+        .map(|i| format!("{}:{}:open", i.src, i.sp))
+        .collect()
 }
 pub(crate) fn sports(c: &Value) -> (u16, u16) {
     let p = ports(s(&c["source_port"]));
@@ -1350,16 +1396,28 @@ pub(crate) fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx:
     }
 }
 pub(crate) fn strays(fr: &Frames, b: &Binding, sp: (u16, u16)) -> usize {
-    stray_count(fr, b, sp, false)
+    stray_count(fr, b, sp, None)
 }
 /// Strays over the scanner's whole receive lifetime: the in-window ones plus every multicast or broadcast frame
 /// (destination group bit) anywhere in the capture. An mDNS frame just outside [first SYN, last SYN + 3 s] is a
 /// stray the scanner may have discarded; it is never a foreign reply. A foreign unicast reply is still counted
 /// only inside the window.
-pub(crate) fn strays_lifetime(fr: &Frames, b: &Binding, sp: (u16, u16)) -> usize {
-    stray_count(fr, b, sp, true)
+/// Mac only (elsewhere it is the in-window count), and limited to the scanner's lifetime
+/// `[guest_started_utc, guest_finished_utc]` when the evidence has it.
+pub(crate) fn strays_lifetime(fr: &Frames, b: &Binding, sp: (u16, u16), meta: &Value) -> usize {
+    if !mac_stand() {
+        return stray_count(fr, b, sp, None);
+    }
+    let life = match (
+        meta["guest_started_utc"].as_f64(),
+        meta["guest_finished_utc"].as_f64(),
+    ) {
+        (Some(a), Some(z)) => (a, z),
+        _ => (f64::NEG_INFINITY, f64::INFINITY),
+    };
+    stray_count(fr, b, sp, Some(life))
 }
-fn stray_count(fr: &Frames, b: &Binding, sp: (u16, u16), lifetime: bool) -> usize {
+fn stray_count(fr: &Frames, b: &Binding, sp: (u16, u16), life: Option<(f64, f64)>) -> usize {
     let sy = syns(fr, b, sp);
     let (Some(first), Some(last)) = (sy.first(), sy.last()) else {
         return 0;
@@ -1367,8 +1425,9 @@ fn stray_count(fr: &Frames, b: &Binding, sp: (u16, u16), lifetime: bool) -> usiz
     fr.iter()
         .filter(|(t, f)| {
             let in_window = *t >= first.0 && *t <= last.0 + 3.;
-            let group = f.first().is_some_and(|x| x & 1 != 0);
-            if f.len() < 14 || !(in_window || lifetime && group) || ether(f, [0x88, 0xb5]) {
+            let group = f.first().is_some_and(|x| x & 1 != 0)
+                && life.is_some_and(|l| *t >= l.0 && *t <= l.1);
+            if f.len() < 14 || !(in_window || group) || ether(f, [0x88, 0xb5]) {
                 return false;
             }
             let mac = |o| {
@@ -1418,10 +1477,9 @@ pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
         .peer
         .as_ref()
         .map_or(0, |(fr, _)| strays(fr, &ctx.bind, sports(c)));
-    let ns_max = ctx
-        .peer
-        .as_ref()
-        .map_or(0, |(fr, _)| strays_lifetime(fr, &ctx.bind, sports(c)));
+    let ns_max = ctx.peer.as_ref().map_or(0, |(fr, _)| {
+        strays_lifetime(fr, &ctx.bind, sports(c), &ctx.meta)
+    });
     let sent = n(&inj["sent_total"]);
     let discarded = n(&j["discarded"]);
     r.beh(
@@ -1698,7 +1756,7 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         ),
     }
     if it["scenario"] == "drain" {
-        results_on_wire(r, ctx, c, &j["replies"]);
+        results_on_wire_ex(r, ctx, c, &j["replies"], true);
     }
     workers(r, j);
     if it["scenario"] == "load" {
@@ -2249,6 +2307,8 @@ fn verify_item(
 pub(crate) fn host_listen_ports(text: &str) -> BTreeSet<u16> {
     text.lines()
         .filter(|l| l.contains("LISTEN"))
+        // tcp6-only sockets do not answer IPv4: only tcp4 and tcp46 count.
+        .filter(|l| matches!(l.split_whitespace().next(), Some("tcp4" | "tcp46")))
         .filter_map(|l| l.split_whitespace().nth(3))
         .filter_map(|a| {
             a.strip_prefix("*.")
@@ -2265,7 +2325,12 @@ pub(crate) fn host_truth(r: &mut Run, ctx: &Ctx, c: &Value, exp: Vec<String>) ->
     if !mac_stand() {
         return exp;
     }
-    let rec = |n: &str| fs::read_to_string(ctx.d.join(n)).ok();
+    // A failed netstat (rc other than 0) is "not recorded", never "no host listeners".
+    let rec = |n: &str| {
+        fs::read_to_string(ctx.d.join(n))
+            .ok()
+            .filter(|t| t.lines().next().is_some_and(|l| l.trim() == "rc 0"))
+    };
     let extra: BTreeSet<u16> = if let (Some(b), Some(a)) =
         (rec("host-listen-before.txt"), rec("host-listen-after.txt"))
     {
@@ -2287,7 +2352,7 @@ pub(crate) fn host_truth(r: &mut Run, ctx: &Ctx, c: &Value, exp: Vec<String>) ->
             "open_truth".into(),
             json!("open truth derived from the wire (host listeners not recorded)"),
         );
-        run_wire_replies(ctx, c)
+        answered_open(ctx, c)
             .iter()
             .filter_map(|x| x.strip_suffix(":open"))
             .filter_map(|x| x.rsplit(':').next()?.parse().ok())
@@ -2398,7 +2463,7 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
                 exp.len()
             ),
         );
-        results_on_wire(r, ctx, c, &j["replies"]);
+        results_on_wire_ex(r, ctx, c, &j["replies"], true);
     }
     let reps = array(&j["replies"]);
     let count = |end: &str| reps.iter().filter(|x| s(x).ends_with(end)).count();
@@ -2541,6 +2606,18 @@ pub(crate) fn groups(
                 "results are replies the peer sent (on the wire)",
                 bad.is_empty(),
                 format!("{bad:?} not on the wire"),
+                FAIL,
+                false,
+            );
+            let missed: Vec<String> = answered_open(ca, &c)
+                .union(&answered_open(cb, &c))
+                .filter(|x| !union.contains(*x))
+                .cloned()
+                .collect();
+            r.check(
+                "open results equal the open replies on the wire",
+                missed.is_empty(),
+                format!("{missed:?} on the wire but not reported"),
                 FAIL,
                 false,
             );

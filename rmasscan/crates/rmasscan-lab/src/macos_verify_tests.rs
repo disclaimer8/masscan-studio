@@ -61,6 +61,8 @@ fn reply(port: u16, open: bool) -> Vec<u8> {
         if open { 0x12 } else { 0x14 },
     );
     f[18..20].copy_from_slice(&9u16.to_be_bytes());
+    // The ack of a reply is the SYN's sequence (0) plus one.
+    f[45] = 1;
     f
 }
 fn marker(payload: &[u8]) -> Vec<u8> {
@@ -2019,13 +2021,25 @@ fn an_mdns_frame_outside_the_syn_window_is_a_stray_and_never_a_foreign_reply() {
     // The scanner discarded the injected frames and one mDNS frame received long after the last SYN + 3 s.
     let mut ev = build(&env, tag);
     let mut frames = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
-    frames.push(mdns(BASE + 6.0));
+    frames.push(mdns(BASE + 4.0));
     frames.sort_by(|a, b| a.0.total_cmp(&b.0));
     rebuild_peer(&mut ev, &frames);
+    ev.json("meta.json", |v| v["guest_finished_utc"] = json!(BASE + 5.0));
     edit_scanner_output(&mut ev, |v| v["discarded"] = json!(4));
     let (r, _) = ev.verify(&env);
     assert_eq!(result_of(&r, "no unexplained discards"), PASS);
     assert!(!r.behaviour_fail(), "{:?}", failing_checks(&r));
+    // After the scanner exited (guest_finished_utc) a multicast frame is not a discard it could have made.
+    let mut ev = build(&env, tag);
+    let mut frames = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    frames.push(mdns(BASE + 6.0));
+    frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &frames);
+    edit_scanner_output(&mut ev, |v| v["discarded"] = json!(4));
+    assert_ne!(
+        result_of(&ev.verify(&env).0, "no unexplained discards"),
+        PASS
+    );
     // A unicast frame outside the window is not explained away: that count stays inside the window.
     let mut ev = build(&env, tag);
     let mut frames = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
@@ -2194,6 +2208,139 @@ fn a_genuine_kernel_reply_with_the_injected_ip_id_is_still_a_reply() {
             f[18..20].copy_from_slice(&0xf0e1u16.to_be_bytes());
         }
     }
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+}
+
+fn netstat_listen(ports: &[(&str, u16)]) -> Vec<u8> {
+    let mut t = String::from(
+        "rc 0\nProto Recv-Q Send-Q  Local Address          Foreign Address        (state)\n",
+    );
+    for (proto, p) in ports {
+        t += &format!(
+            "{proto}      0      0  *.{p}                   *.*                    LISTEN\n"
+        );
+    }
+    t.into_bytes()
+}
+
+#[test]
+fn only_tcp4_and_tcp46_listeners_count_and_a_failed_netstat_is_not_a_record() {
+    let both = |ports: &[(&str, u16)]| (netstat_listen(ports), netstat_listen(ports));
+    // tcp6-only does not answer IPv4: 5000 is not in the open truth, so an open 5000 result is invented.
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.1000.r1");
+    host_listener_on_5000(&mut ev);
+    let (b, a) = both(&[("tcp6", 5000)]);
+    ev.files.insert("host-listen-before.txt".into(), b);
+    ev.files.insert("host-listen-after.txt".into(), a);
+    assert!(failed(&ev.verify(&env).0, "results equal listener truth"));
+    let mut ev = build(&env, "perf.1000.r1");
+    host_listener_on_5000(&mut ev);
+    let (b, a) = both(&[("tcp46", 5000)]);
+    ev.files.insert("host-listen-before.txt".into(), b);
+    ev.files.insert("host-listen-after.txt".into(), a);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    // A failed netstat falls back to the wire-derived truth (PASS here), not to "no host listeners" (FAIL).
+    let mut ev = build(&env, "perf.1000.r1");
+    host_listener_on_5000(&mut ev);
+    let bad = b"rc 1\nnetstat: failed\n".to_vec();
+    ev.files
+        .insert("host-listen-before.txt".into(), bad.clone());
+    ev.files.insert("host-listen-after.txt".into(), bad);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    assert!(
+        s(&r.notes["open_truth"]).contains("derived from the wire"),
+        "{:?}",
+        r.notes
+    );
+}
+
+#[test]
+fn an_open_reply_on_the_wire_the_scanner_did_not_report_fails_perf_drain_and_the_union() {
+    // perf with a recorded (empty) host-listen set: port 17 answers SYN-ACK on the wire but the scanner reported
+    // it closed. The closed-result subset rule alone would let that pass; equality of the open replies does not.
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (_, f) in fr.iter_mut() {
+        if tcp(f).is_some_and(|i| i.sm == PM && i.sp == 17) {
+            *f = reply(17, true);
+        }
+    }
+    rebuild_peer(&mut ev, &fr);
+    let (b, a) = (netstat_listen(&[]), netstat_listen(&[]));
+    ev.files.insert("host-listen-before.txt".into(), b);
+    ev.files.insert("host-listen-after.txt".into(), a);
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "open results equal the open replies"),
+        "{:?}",
+        failing_checks(&r)
+    );
+    // stop_drain: ports 80 and 81 are closed, so a SYN-ACK from 81 on the wire must be a result.
+    let env = Env::new("failure");
+    let mut ev = build(&env, "stop_drain");
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (_, f) in fr.iter_mut() {
+        if tcp(f).is_some_and(|i| i.sm == PM && i.sp == 81) {
+            *f = reply(81, true);
+        }
+    }
+    rebuild_peer(&mut ev, &fr);
+    assert!(failed(
+        &ev.verify(&env).0,
+        "open results equal the open replies"
+    ));
+}
+
+#[test]
+fn a_lab_synack_retransmit_after_the_last_end_marker_is_a_post_run_note() {
+    let env = Env::new("functional");
+    let mut ev = build(&env, C03);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    let last_marker = fr
+        .iter()
+        .filter(|(_, f)| ether_is_marker(f))
+        .map(|(t, _)| *t)
+        .fold(f64::NEG_INFINITY, f64::max);
+    fr.push((last_marker + 0.2, reply(8000, true)));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    assert_eq!(r.notes["post_run_synack_retransmits"]["count"], 1);
+    // Anything else after the last end marker is still an unflushed tail.
+    let mut ev = build(&env, C03);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.push((last_marker + 0.2, reply(8000, false)));
+    rebuild_peer(&mut ev, &fr);
+    assert_eq!(
+        result_of(
+            &ev.verify(&env).0,
+            "three end markers and a flushed capture tail"
+        ),
+        INVALID
+    );
+}
+
+fn ether_is_marker(f: &[u8]) -> bool {
+    f.get(12..14) == Some([0x88, 0xb5].as_slice())
+}
+
+#[test]
+fn a_stale_synack_retransmit_of_an_earlier_cell_is_not_a_missed_open_reply() {
+    // Seen live: a SYN-ACK from 5000 (half-open from perf.100000.r4) lands inside perf.100.r5. Its ack matches no
+    // SYN of this run, so the scanner rightly did not report it and the run still passes.
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    let mut stale = reply(5000, true);
+    stale[45] = 0x77;
+    fr.push((BASE + 0.2, stale));
+    fr.sort_by(|a, b| a.0.total_cmp(&b.0));
     rebuild_peer(&mut ev, &fr);
     let (r, _) = ev.verify(&env);
     assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));

@@ -6,6 +6,7 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use common::*;
 use rmasscan_core::probe::ReadyPlan;
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::fake::{BatchStep, FakeAdapter, ManualClock};
-use rmasscan_engine::io::{AdapterPair, SendStatus};
+use rmasscan_engine::io::{AdapterPair, IoError, SendStatus, Tx, TxBatch};
 use rmasscan_engine::{
     CancelHandle, Checkpoint, Engine, EngineHandle, Event, FailReason, MAX_TX_BATCH, Outcome,
     Reason,
@@ -146,7 +147,9 @@ fn a_full_batch_advances_the_cursor_by_its_size_once() {
 
 #[test]
 fn a_prefix_result_advances_only_the_prefix_and_fails_uncertain_without_checkpoint() {
-    let (j, n) = first_batch_at_least(2);
+    let (j, n) = first_batch_at_least(8);
+    // Перед ней уже есть пачки по несколько кадров: кадров больше, чем вызовов.
+    let before: usize = dry_sizes(CAP)[..j].iter().sum();
     let reference = reference_frames(&big_plan(), BIG_PROBES);
     for keep in [0, 1, n - 1] {
         let fake = quiet_fake(CAP);
@@ -164,7 +167,7 @@ fn a_prefix_result_advances_only_the_prefix_and_fails_uncertain_without_checkpoi
             Reason::Failed(FailReason::TxUncertain),
             "keep {keep}"
         );
-        let done = j + keep;
+        let done = before + keep;
         assert_eq!(out.progress.sent, done as u64, "keep {keep}");
         assert_eq!(out.progress.next_index, done as u64, "keep {keep}");
         assert_eq!(
@@ -199,6 +202,15 @@ fn an_inconsistent_batch_result_fails_uncertain_without_advancing() {
         BatchStep::Prefix {
             sent: n + 1,
             rest: SendStatus::Sent,
+        },
+        // принято больше, чем предложено, и остаток не Sent
+        BatchStep::Prefix {
+            sent: n + 1,
+            rest: SendStatus::Uncertain,
+        },
+        BatchStep::Prefix {
+            sent: n + 1,
+            rest: SendStatus::WouldBlockUnsent,
         },
     ] {
         let fake = quiet_fake(CAP);
@@ -503,4 +515,136 @@ fn progress_sent_equals_cursor_position() {
             "script {tail:?}"
         );
     }
+}
+
+/// Адаптер, принимающий любую пачку и сразу отказывающий, когда видит полную
+/// `MAX_TX_BATCH`; хранит самую большую увиденную пачку.
+struct WideTx {
+    max_seen: Arc<AtomicUsize>,
+}
+
+impl Tx for WideTx {
+    fn send(&mut self, _: &[u8], _: Duration) -> Result<SendStatus, IoError> {
+        Ok(SendStatus::Sent)
+    }
+
+    fn max_batch(&self) -> usize {
+        usize::MAX
+    }
+
+    fn send_batch(&mut self, frames: &[&[u8]], _: Duration) -> Result<TxBatch, IoError> {
+        let n = frames.len();
+        self.max_seen.fetch_max(n, Ordering::Relaxed);
+        if n >= MAX_TX_BATCH {
+            return Err(IoError::new("clamp reached"));
+        }
+        Ok(TxBatch {
+            sent: n,
+            rest: SendStatus::Sent,
+        })
+    }
+}
+
+#[test]
+fn the_engine_never_offers_more_than_max_tx_batch() {
+    // 2^20 адресов x 2 порта: throttle выдаёт окно выше 4096 раньше конца
+    // (рост 0.5% за вызов). Время двигают только сны throttle.
+    let p = plan_with("10.0.0.0/12", 1e12, 0);
+    let clock = ManualClock::new();
+    let max_seen = Arc::new(AtomicUsize::new(0));
+    let AdapterPair { rx, .. } = FakeAdapter::new().pair();
+    let pair = AdapterPair {
+        tx: Box::new(WideTx {
+            max_seen: max_seen.clone(),
+        }),
+        rx,
+    };
+    let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+    let h = Engine::start_with_clock(p, pair, opts(), c).unwrap();
+    let o = h.join().unwrap();
+    assert_eq!(
+        o.reason,
+        Reason::Failed(FailReason::TxError("clamp reached".into()))
+    );
+    // Предложена ровно скрепа, а не окно throttle и не `usize::MAX`.
+    assert_eq!(max_seen.load(Ordering::Relaxed), MAX_TX_BATCH);
+}
+
+#[test]
+fn a_command_lands_on_the_end_of_its_own_adapter_batch() {
+    // Адаптер принимает по 2 кадра, окно throttle шире: отмену надо проверять
+    // перед КАЖДОЙ пачкой, а не только перед окном.
+    const MB: usize = 2;
+    let windows = dry_sizes(64);
+    let split: Vec<usize> = windows
+        .iter()
+        .flat_map(|&w| std::iter::repeat_n(MB, w / MB).chain((w % MB > 0).then_some(w % MB)))
+        .collect();
+    assert_eq!(
+        dry_sizes(MB),
+        split,
+        "max_batch only splits throttle windows"
+    );
+    let w = windows
+        .iter()
+        .position(|&s| s >= 2 * MB)
+        .expect("a wide window");
+    let before: usize = windows[..w].iter().sum();
+    let calls_before: usize = windows[..w].iter().map(|s| s.div_ceil(MB)).sum();
+    // Команда с первого кадра окна: прогон кончается первой пачкой окна.
+    let at = before + 1;
+    let end = before + MB;
+    for cmd in [Stop, Pause] {
+        let (fake, out, _, _) = run_with_command_at_mb(at, MB, cmd);
+        assert_eq!(fake.sent_count(), end, "window {w} = {}", windows[w]);
+        assert_eq!(out.progress.next_index, end as u64);
+        assert_eq!(fake.batch_sizes().len(), calls_before + 1);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Cmd {
+    Stop,
+    Pause,
+}
+use Cmd::{Pause, Stop};
+
+fn run_with_command_at_mb(
+    at: usize,
+    max_batch: usize,
+    cmd: Cmd,
+) -> (FakeAdapter, Outcome, Vec<Event>, Option<Checkpoint>) {
+    let fake = quiet_fake(max_batch);
+    let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+    let hook_cell = cell.clone();
+    fake.set_send_hook(move |n| {
+        if n == at {
+            let c = loop {
+                if let Some(c) = hook_cell.get() {
+                    break c;
+                }
+                std::thread::yield_now();
+            };
+            match cmd {
+                Stop => c.stop(),
+                Pause => c.pause(),
+            }
+        }
+    });
+    let clock = ManualClock::new();
+    let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+    let h = Engine::start_with_clock(big_plan(), fake.pair(), opts(), c).unwrap();
+    cell.set(h.cancel_handle()).ok();
+    wait_for("outcome", || {
+        if h.outcome().is_some() {
+            return true;
+        }
+        if fake.sent_count() >= at {
+            clock.advance(Duration::from_millis(500));
+        }
+        false
+    });
+    let cp = h.checkpoint();
+    let (out, events) = h.join_drain().unwrap();
+    (fake, out, events, cp)
 }

@@ -449,7 +449,7 @@ impl Tx for HarnessTx {
     fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
         self.note_tid();
         let room = self.pause_after.map_or(usize::MAX, |p| {
-            usize::try_from(p - self.sent).unwrap_or(usize::MAX)
+            usize::try_from(p.saturating_sub(self.sent)).unwrap_or(usize::MAX)
         });
         if room == 0 {
             return Ok(TxBatch {

@@ -52,13 +52,27 @@ pub trait Tx: Send {
     }
 
     /// Один вызов адаптера на префикс `frames` (не больше `max_batch()`, не
-    /// меньше 1) не позже `timeout`. Очередь не переживает вызов: принятые
-    /// кадры это ровно первые `sent`. По умолчанию цикл `send` до первого
-    /// исхода, отличного от `Sent`. Ошибка `Err` после принятого префикса
-    /// завершает запуск `Failed` без checkpoint, поэтому префикс не считается.
+    /// меньше 1). Очередь не переживает вызов: принятые кадры это ровно первые
+    /// `sent`. `Err` означает, что из этого вызова ничего не принято; сбой после
+    /// принятого префикса сообщается как `TxBatch { sent: i, rest: Uncertain }`.
+    ///
+    /// Реализация по умолчанию это цикл `send` до первого исхода, отличного от
+    /// `Sent`, и верна только для `max_batch() == 1`: каждый кадр получает
+    /// полный `timeout`. Адаптер с `max_batch() > 1` обязан переопределить
+    /// `send_batch` и уложить весь вызов в `timeout`.
     fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
         for (i, frame) in frames.iter().enumerate() {
-            let status = self.send(frame, timeout)?;
+            let status = match self.send(frame, timeout) {
+                Ok(status) => status,
+                // Префикс уже принят: ошибка не должна его терять.
+                Err(_) if i > 0 => {
+                    return Ok(TxBatch {
+                        sent: i,
+                        rest: SendStatus::Uncertain,
+                    });
+                }
+                Err(e) => return Err(e),
+            };
             if status != SendStatus::Sent {
                 return Ok(TxBatch {
                     sent: i,

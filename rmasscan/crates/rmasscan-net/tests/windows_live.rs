@@ -173,8 +173,11 @@ impl Tx for GuardTx {
     }
 
     /// Каждый кадр пачки проверяется до проброса. `panic_at` и
-    /// `uncertain_after` режут пачку ровно на своём номере: действуют так же,
-    /// как в одиночном пути на следующем кадре.
+    /// `uncertain_after` режут пачку ровно на своём номере. Принятый префикс
+    /// всегда возвращается движку (он его засчитывает): `uncertain_after` это
+    /// `Uncertain` сразу после префикса, `panic_at` это `WouldBlockUnsent`, а
+    /// паника случается на следующем вызове, который ничего не отправил (как
+    /// в одиночном пути).
     fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
         for f in frames {
             assert_lab_frame(&self.lab, f);
@@ -195,10 +198,12 @@ impl Tx for GuardTx {
         let r = self.inner.send_batch(&frames[..take], timeout)?;
         self.n += r.sent as u64;
         if r.rest == SendStatus::Sent && take < frames.len() {
-            return Ok(TxBatch {
-                sent: r.sent,
-                rest: self.at_boundary(),
-            });
+            let rest = if self.panic_at == Some(self.n) {
+                SendStatus::WouldBlockUnsent
+            } else {
+                SendStatus::Uncertain
+            };
+            return Ok(TxBatch { sent: r.sent, rest });
         }
         Ok(r)
     }

@@ -90,7 +90,7 @@ fn alias(d: &Names, t: &str) -> String {
 fn norm(s: &str) -> String {
     s.to_ascii_lowercase().replace('-', ":")
 }
-fn overlap(s: &str) -> bool {
+pub(crate) fn overlap(s: &str) -> bool {
     let (ip, prefix) = s.split_once('/').unwrap_or((s, "32"));
     let Ok(ip) = ip.parse::<Ipv4Addr>() else {
         return false;

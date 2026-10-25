@@ -95,6 +95,25 @@ pub fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
     }
 }
 
+/// Двигает ручные часы шагами `step`, пока условие не выполнится.
+/// Поток RX читает часы в своём цикле: на медленной машине он может
+/// прочитать их уже ПОСЛЕ одиночного `advance` (старт RX, срок wait), и тогда
+/// одиночный сдвиг ничего не запускает. Повтор шага убирает эту гонку.
+pub fn advance_until(
+    clock: &ManualClock,
+    step: Duration,
+    what: &str,
+    mut cond: impl FnMut() -> bool,
+) {
+    wait_for(what, || {
+        if cond() {
+            return true;
+        }
+        clock.advance(step);
+        cond()
+    });
+}
+
 /// Читает события до `Finished` (включительно).
 pub fn drain_to_finished(h: &EngineHandle) -> Vec<Event> {
     let mut v = Vec::new();

@@ -253,7 +253,7 @@ fn frame(
     f[50..52].copy_from_slice(&c.to_be_bytes());
     f
 }
-fn foreign_frames(
+pub(crate) fn foreign_frames(
     peer: &str,
     guest: &str,
     ip: &str,
@@ -424,6 +424,46 @@ enum Cmd {
         out: String,
     },
 }
+/// `peer listen`: TCP listeners on the peer address 198.18.0.2 (it exists only on the peer side of the lab, so
+/// binding it anywhere else fails), the silent ones with a zero backlog. Linux (inside the peer namespace) and macOS.
+fn listen(open: &str, silent: &str, ready: &str) -> Result<i32, String> {
+    let open = parse_ports(open)?;
+    let silent = parse_ports(silent)?;
+    let ip = Ipv4Addr::new(198, 18, 0, 2);
+    let mut sockets = vec![];
+    let mut clients = vec![];
+    for &p in &open {
+        sockets.push(TcpListener::bind((ip, p)).map_err(|e| e.to_string())?);
+    }
+    for &p in &silent {
+        sockets.push(lab_io::silent_listener(ip, p).map_err(|e| e.to_string())?);
+        clients.push(
+            TcpStream::connect_timeout(&SocketAddr::from((ip, p)), Duration::from_secs(1))
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    let mut proven = true;
+    for &p in &silent {
+        match TcpStream::connect_timeout(&SocketAddr::from((ip, p)), Duration::from_millis(500)) {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) => {}
+            _ => proven = false,
+        }
+    }
+    save(
+        ready,
+        &json!({"open":open,"silent":silent,"silent_proven":if silent.is_empty(){Value::Null}else{json!(proven)},"ready":proven,"bind":"198.18.0.2","pid":std::process::id()}),
+    )?;
+    while !lab_io::stop_requested() {
+        thread::sleep(Duration::from_millis(100));
+    }
+    drop((sockets, clients));
+    Ok(0)
+}
+
 fn iface_guard(iface: &str) -> Result<(), String> {
     if iface != "lab0" {
         Err("only lab0 is permitted".into())
@@ -484,6 +524,44 @@ fn qmp_set_link(_path: &str, _up: bool) -> Result<Value, String> {
 pub fn run(args: &[String]) -> Result<i32, String> {
     let a = Args::try_parse_from(std::iter::once("peer".into()).chain(args.iter().cloned()))
         .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    if let Cmd::Counters { iface } = &a.cmd {
+        // The macOS lab has no namespace: the peer-side counters come from netstat.
+        if !matches!(iface.as_str(), "feth4201" | "feth4202") {
+            return Err("only the macOS lab interfaces feth4201/feth4202 are permitted".into());
+        }
+        if !link::safe_iface(iface) {
+            return Err("invalid interface".into());
+        }
+        let c = crate::dump::netstat_counters(iface)?;
+        println!("{} {}", c.ipkts, c.opkts);
+        return Ok(0);
+    }
+    #[cfg(target_os = "macos")]
+    if let Cmd::Listen {
+        open,
+        silent,
+        ready,
+    } = &a.cmd
+    {
+        // The listeners are the one peer helper the macOS lab needs: they bind 198.18.0.2, which exists
+        // only on the peer side of the stand, so they cannot serve anything anywhere else.
+        let ifc = std::process::Command::new("/sbin/ifconfig")
+            .arg("feth4202")
+            .output()
+            .map_err(|e| format!("ifconfig: {e}"))?;
+        let holds = crate::macos_lab::parse_ifconfig(&String::from_utf8_lossy(&ifc.stdout))
+            .inets
+            .iter()
+            .any(|(ip, _)| ip == "198.18.0.2");
+        if !holds {
+            return Err(
+                "refusing to listen: 198.18.0.2 is not on feth4202 (the stand is not up)".into(),
+            );
+        }
+        lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
+        return listen(open, silent, ready);
+    }
     guard()?;
     lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
     match a.cmd {
@@ -491,46 +569,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             open,
             silent,
             ready,
-        } => {
-            let open = parse_ports(&open)?;
-            let silent = parse_ports(&silent)?;
-            let ip = Ipv4Addr::new(198, 18, 0, 2);
-            let mut sockets = vec![];
-            let mut clients = vec![];
-            for &p in &open {
-                sockets.push(TcpListener::bind((ip, p)).map_err(|e| e.to_string())?);
-            }
-            for &p in &silent {
-                sockets.push(lab_io::silent_listener(ip, p).map_err(|e| e.to_string())?);
-                clients.push(
-                    TcpStream::connect_timeout(&SocketAddr::from((ip, p)), Duration::from_secs(1))
-                        .map_err(|e| e.to_string())?,
-                );
-            }
-            let mut proven = true;
-            for &p in &silent {
-                match TcpStream::connect_timeout(
-                    &SocketAddr::from((ip, p)),
-                    Duration::from_millis(500),
-                ) {
-                    Err(e)
-                        if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                        ) => {}
-                    _ => proven = false,
-                }
-            }
-            save(
-                &ready,
-                &json!({"open":open,"silent":silent,"silent_proven":if silent.is_empty(){Value::Null}else{json!(proven)},"ready":proven,"bind":"198.18.0.2","pid":std::process::id()}),
-            )?;
-            while !lab_io::stop_requested() {
-                thread::sleep(Duration::from_millis(100));
-            }
-            drop((sockets, clients));
-            Ok(0)
-        }
+        } => listen(&open, &silent, &ready),
         Cmd::Marker {
             iface,
             src,

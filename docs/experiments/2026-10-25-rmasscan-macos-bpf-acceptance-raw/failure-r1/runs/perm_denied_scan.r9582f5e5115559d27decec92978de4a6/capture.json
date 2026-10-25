@@ -1,0 +1,7 @@
+{
+  "capture_schema": 1,
+  "peer": null,
+  "status_post_raw_run_allowed": true,
+  "uplink": null,
+  "witness": "none: /dev/bpf* is denied, so no capture can run"
+}

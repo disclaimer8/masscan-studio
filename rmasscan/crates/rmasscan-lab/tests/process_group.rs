@@ -1,16 +1,21 @@
 //! Offline lifecycle check: no namespaces, root privileges or packets. Linux only: it needs
 //! `setsid` and `/proc`, so it cannot run on macOS and runs in the Linux CI job.
+
+/// A scratch-dir suffix unique in this process: the time alone can repeat between parallel tests.
+#[cfg(target_os = "linux")]
+fn unique() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
 #[cfg(target_os = "linux")]
 fn cleanup_outlives_check(driver_script: &str) -> std::process::Output {
-    use std::{fs, path::Path, process::Command, time::SystemTime};
-    let dir = std::env::temp_dir().join(format!(
-        "rmasscan-process-group-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    use std::{fs, path::Path, process::Command};
+    let dir = std::env::temp_dir().join(format!("rmasscan-process-group-{}", unique()));
     fs::create_dir(&dir).unwrap();
     let helper = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("../../scripts/lab-process-group.sh");
@@ -82,15 +87,8 @@ fn shell_cleanup_stops_descendants_that_sit_in_their_own_process_group() {
 /// Runs `body` in bash with the helper sourced and a scratch dir in `$d`.
 #[cfg(target_os = "linux")]
 fn session_script(files: &[(&str, &str)], body: &str) -> std::process::Output {
-    use std::{fs, path::Path, process::Command, time::SystemTime};
-    let dir = std::env::temp_dir().join(format!(
-        "rmasscan-session-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    use std::{fs, path::Path, process::Command};
+    let dir = std::env::temp_dir().join(format!("rmasscan-session-{}", unique()));
     fs::create_dir(&dir).unwrap();
     for (name, text) in files {
         fs::write(dir.join(name), text).unwrap();

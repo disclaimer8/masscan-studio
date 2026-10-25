@@ -1,0 +1,99 @@
+{
+  "capture_schema": 1,
+  "peer": {
+    "cmd": [
+      "tcpdump",
+      "-i",
+      "feth4202",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-s",
+      "0",
+      "-w",
+      "$SCRATCH/t7-evidence/perf-r1/.work/perf.100.r3.r22b6a3ebbedde3d4ac491428e6ee9f90/peer.pcap"
+    ],
+    "exited": true,
+    "filter": "(none: every frame on the peer interface)",
+    "iface": "feth4202",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 955,
+      "sha256": "68c5e711fc44e60f430c22b2a64b28876f0430751d73a94a3713e866630988af",
+      "size": 68914
+    },
+    "tcpdump": {
+      "captured": 955,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 955
+    },
+    "witness": {
+      "end_marker_frames": 3,
+      "iface_rxtx_delta_hi": 955,
+      "iface_rxtx_delta_lo": 951,
+      "interface_drop_delta": 0,
+      "interface_drops": null,
+      "invalid_reasons": [],
+      "kernel_drops": 0,
+      "pcap_frames": 955,
+      "pcap_sha256": "68c5e711fc44e60f430c22b2a64b28876f0430751d73a94a3713e866630988af",
+      "pcap_size_bytes": 68914,
+      "quiesced_before_stop": true,
+      "received_by_filter": 955,
+      "start_marker_frames": 3,
+      "tcpdump_argv": [
+        "tcpdump",
+        "-i",
+        "feth4202",
+        "-n",
+        "-U",
+        "--immediate-mode",
+        "-s",
+        "0",
+        "-w",
+        "$SCRATCH/t7-evidence/perf-r1/.work/perf.100.r3.r22b6a3ebbedde3d4ac491428e6ee9f90/peer.pcap"
+      ],
+      "tcpdump_captured": 955,
+      "valid": true
+    }
+  },
+  "quiet": {
+    "reached": true
+  },
+  "status_post_raw_run_allowed": true,
+  "uplink": {
+    "cmd": [
+      "/usr/sbin/tcpdump",
+      "-p",
+      "-i",
+      "en0",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-s",
+      "0",
+      "-w",
+      "$SCRATCH/t7-evidence/perf-r1/.work/perf.100.r3.r22b6a3ebbedde3d4ac491428e6ee9f90/uplink.pcap",
+      "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5"
+    ],
+    "exit_code": 0,
+    "exited": true,
+    "filter": "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5",
+    "iface": "en0",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 0,
+      "sha256": "84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a",
+      "size": 24
+    },
+    "tcpdump": {
+      "captured": 0,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 450
+    }
+  }
+}

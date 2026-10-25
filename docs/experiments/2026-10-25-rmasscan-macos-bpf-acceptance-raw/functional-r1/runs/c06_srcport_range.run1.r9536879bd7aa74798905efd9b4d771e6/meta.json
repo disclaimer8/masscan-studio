@@ -1,0 +1,14 @@
+{
+  "capture_started_utc": 1792944991.329686,
+  "capture_stopped_utc": 1792944997.361876,
+  "euid": 501,
+  "exe_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+  "guest_exit": 0,
+  "guest_finished_utc": 1792944995.142135,
+  "guest_started_utc": 1792944991.911668,
+  "icmplim": "unreadable",
+  "invocation_nonce": "r9536879bd7aa74798905efd9b4d771e6",
+  "kind": "case",
+  "syncookie": "1",
+  "tag": "c06_srcport_range.run1"
+}

@@ -100,8 +100,8 @@ CAP_NET_RAW и замкнутый стенд); обычные `cargo test` и CI
 
 Состояние на commit `27e3042` (код; evidence `8479ff2`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
 полная таблица (capability / слой / реализовано / проверка / ограничение / следующий этап)
-находится в §0.2 спеки Studio. Кратко: raw I/O есть только для Linux AF_PACKET
-(замкнутый стенд); Windows и macOS не реализованы. Дедупликация живёт в engine
+находится в §0.2 спеки Studio. Кратко: raw I/O: Linux AF_PACKET
+(замкнутый стенд); Windows (Npcap) реализован и принят на виртуальной машине (физический NIC открыт); macOS (BPF) реализован, живая приёмка выполнена на паре `feth` (части A и C PASS, часть B с одним INVALID `linkloss`), физический NIC открыт, см. `../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance.md`. Дедупликация живёт в engine
 (ограниченный FIFO), не в core. VLAN не поддержан (`Unsupported`). ARP: только кодек,
 resolver нет. Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
 контроль достоверности приёма (`Rx::health`, `RxLoss`/`RxStatsUnavailable`/`RxError`,
@@ -124,7 +124,7 @@ self-тесты C отображены на Rust (`tests/selftest_parity.rs`), �
 тестами и дифференциалами с C, генерация offline около 0.96–0.99 от C на minipc
 (см. BENCHMARKS.md), C в графе сборки нет.
 
-Статус CI относится к конкретному commit и в этом файле не фиксируется; CI собирает и гоняет offline-тесты, но не Windows/macOS raw I/O.
+Статус CI относится к конкретному commit и в этом файле не фиксируется; CI собирает и гоняет offline-тесты (в том числе на macOS), но не живой Windows/macOS raw I/O.
 
 Первые задачи этапа 2:
 

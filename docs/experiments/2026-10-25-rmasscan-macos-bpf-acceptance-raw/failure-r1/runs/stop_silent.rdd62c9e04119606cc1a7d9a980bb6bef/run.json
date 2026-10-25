@@ -1,0 +1,120 @@
+{
+  "attempt_id": "02020202020202020202020202020202",
+  "checkpoint": false,
+  "checkpoint_hex": null,
+  "checkpoint_next_index": null,
+  "discarded": 0,
+  "duplicates": 0,
+  "expected_total": 20,
+  "fail_detail": "",
+  "identity": {
+    "binary_path": "$SCRATCH/target-live/release/examples/wire_scan",
+    "binary_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+    "elevated": null,
+    "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "os": {
+      "arch": "aarch64",
+      "family": "macos",
+      "version": "27.0.1 (26A434)"
+    },
+    "raw_io_abi": "/dev/bpf* ioctl via libc; own declarations v1; aarch64",
+    "restricted_token": null,
+    "source_commit": "717e45c7c7fc1340b4dc24cb1ecb65c1c6e22e0f"
+  },
+  "invocation_nonce": "rdd62c9e04119606cc1a7d9a980bb6bef",
+  "job": {
+    "blackrock_rounds": 14,
+    "exclude": null,
+    "iface": "feth4201",
+    "job_digest": "68c4e88c1b563757ca69b209f9ca7100ad7a875f80441605b6f4c2e39c9963f1",
+    "ports": "8100-8119",
+    "rate": 1,
+    "retries": 0,
+    "router_mac": "02:ac:00:00:00:02",
+    "seed": 1,
+    "shard": "1/1",
+    "source_port": "40000",
+    "src_ip": "198.18.0.1",
+    "src_mac": "02:ac:00:00:00:01",
+    "targets": "198.18.0.2",
+    "wait": 10
+  },
+  "net": {
+    "kernel_drops": 0,
+    "rx_errors": 0,
+    "rx_outgoing": 0,
+    "rx_packets": 3,
+    "rx_truncated": 0,
+    "rx_wrong_interface": 0,
+    "tx_errors": 0,
+    "tx_sent": 3,
+    "tx_uncertain": 0,
+    "tx_would_block": 0
+  },
+  "next_index": 3,
+  "nic_mac": "masked",
+  "npcap": {
+    "unavailable": "raw packet I/O is not implemented on this platform"
+  },
+  "observe_ms": 1500,
+  "opened_adapter": true,
+  "range": 20,
+  "reason": "Stopped",
+  "received": 3,
+  "replies": [
+    "198.18.0.2:8100:closed",
+    "198.18.0.2:8108:closed",
+    "198.18.0.2:8114:closed"
+  ],
+  "reply_total": 3,
+  "reply_unique": 3,
+  "resources": {
+    "cpu_kernel_ms": 21,
+    "cpu_user_ms": 4,
+    "fds_after_join": 3,
+    "fds_before_open": 3,
+    "fds_open": 5,
+    "peak_working_set_bytes": 2441216,
+    "threads_after_join": 1,
+    "threads_after_join_immediate": 1,
+    "threads_before": 1,
+    "threads_settle_ms": 0.0,
+    "working_set_bytes_after_join": 2392064
+  },
+  "resumed_from_attempt": null,
+  "rx_health": {
+    "kernel_drops": 0
+  },
+  "scan_id": "01010101010101010101010101010101",
+  "sent": 3,
+  "src_mac": "02:ac:00:00:00:01",
+  "src_mac_check": "os-masked",
+  "start_index": 0,
+  "status": "ok",
+  "timing": {
+    "first_send_s": 0.000189,
+    "join_ms": 0.102,
+    "last_idx": 3,
+    "last_send_s": 2.000239,
+    "mark_idx": 2,
+    "steady_pps": 1.0,
+    "stop_requested": true,
+    "stop_to_outcome_ms": 34.473,
+    "total_s": 4.042644
+  },
+  "tx_sent_after_observe": 3,
+  "tx_sent_at_join": 3,
+  "wall": {
+    "join_done_utc_ms": 1792945500316,
+    "outcome_utc_ms": 1792945498810,
+    "started_utc_ms": 1792945496274,
+    "t0_utc_ms": 1792945496274
+  },
+  "workers": {
+    "rx_alive_after_join": false,
+    "rx_tid": 14607367,
+    "settle_ms": 0.007,
+    "tx_alive_after_join": false,
+    "tx_tid": 14607368
+  }
+}

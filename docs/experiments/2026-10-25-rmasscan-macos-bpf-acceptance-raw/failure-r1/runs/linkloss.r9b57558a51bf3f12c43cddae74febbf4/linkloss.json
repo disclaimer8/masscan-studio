@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "iface": "feth4202",
+      "link": "down",
+      "scanner_active": true,
+      "scanner_if": "feth4201",
+      "t": 1792947676.047863
+    },
+    {
+      "iface": "feth4202",
+      "link": "up",
+      "scanner_active": true,
+      "scanner_if": "feth4201",
+      "t": 1792947679.058475
+    }
+  ]
+}

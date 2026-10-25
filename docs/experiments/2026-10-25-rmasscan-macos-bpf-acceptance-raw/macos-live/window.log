@@ -1,0 +1,15 @@
+test rc=0
+uplink tcpdump rc=0
+status-post allowed
+uplink lab frames=0
+tcpdump: listening on en0, link-type EN10MB (Ethernet), snapshot length 524288 bytes
+0 packets captured
+820 packets received by filter
+0 packets dropped by kernel
+test a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent ... ok
+test an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends ... ok
+test pause_stops_tx_then_resume_continues_without_gaps_or_duplicates ... ok
+test per_call_latency_stays_within_the_io_budget ... ok
+test rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results ... ok
+test stop_ends_the_run_quickly_and_nothing_is_sent_afterwards ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.36s

@@ -14,6 +14,7 @@ fn good() -> Facts {
         dropped_kernel: Some(0),
         dropped_if: Some(0),
         interface_drop_delta: Some(0),
+        received_is_prefilter: false,
         pcap_frames: 100,
         pcap_error: None,
         tcpdump_exited: true,
@@ -185,7 +186,6 @@ fn a_valid_witness_meta_passes_the_comparator_gate_and_an_invalid_one_does_not()
 mod sequence {
     use super::*;
     use crate::link::marker_frame;
-    use std::time::SystemTime;
 
     pub(super) struct Scripted {
         /// counters(): the first two calls (c0, c1) return 0, every later one `total`; when
@@ -231,12 +231,11 @@ mod sequence {
         let dir = std::env::temp_dir().join(format!(
             "rmasscan-dump-{tag}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            // Random, not the time: macOS SystemTime has microsecond resolution, and
+            // create_dir_all would silently let two parallel tests share one rig.
+            crate::windows_suite::nonce()
         ));
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
         let pcap = dir.join("cap.pcap");
         fs::write(
             &pcap,
@@ -588,4 +587,137 @@ mod linux_wire_gate {
             assert!(wire_meta::capture_meta_problem(&bad).is_some(), "{bad}");
         }
     }
+}
+
+mod macos_probe {
+    use super::super::*;
+
+    // Recorded from macOS (`netstat -I IFACE -b -d -n`), values shortened.
+    const WITH_DROP: &str = "\
+Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll Drop
+en0        1500  <Link#14>   82:fe:61:f5:ac:74 51497279     3 63224918459 20542225     0 16067097062     0   7
+en0        1500  fe80::1816: fe80:e::1816:7266 51497279     - 63224918459 20542225     - 16067097062     -   -
+";
+    const NO_ADDRESS: &str = "\
+Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll Drop
+lo0        16384 <Link#1>                       1627524     1 2955813050  1627525     0 2955813050     0   2
+lo0        16384 127           127.0.0.1        1627524     - 2955813050  1627524     - 2955813050     -   -
+";
+    const NO_DROP_COLUMN: &str = "\
+Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+en0        1500  <Link#14>   82:fe:61:f5:ac:74 51497279     0 63224918459 20542225     0 16067097062     0
+";
+
+    #[test]
+    fn netstat_row_with_drop_column_is_parsed_by_header_name() {
+        let c = parse_netstat(WITH_DROP, "en0").unwrap();
+        assert_eq!(
+            c,
+            NetstatCounters {
+                ipkts: 51497279,
+                opkts: 20542225,
+                ierrs: 3,
+                drop: 7
+            }
+        );
+    }
+
+    #[test]
+    fn netstat_link_row_without_an_address_shifts_the_columns() {
+        let c = parse_netstat(NO_ADDRESS, "lo0").unwrap();
+        assert_eq!(
+            (c.ipkts, c.opkts, c.ierrs, c.drop),
+            (1627524, 1627525, 1, 2)
+        );
+    }
+
+    #[test]
+    fn netstat_without_a_drop_column_is_an_error_not_zero() {
+        let e = parse_netstat(NO_DROP_COLUMN, "en0").unwrap_err();
+        assert!(e.contains("Drop"), "{e}");
+    }
+
+    #[test]
+    fn netstat_unknown_interface_and_empty_text_are_errors() {
+        assert!(parse_netstat(WITH_DROP, "en9").is_err());
+        assert!(parse_netstat("", "en0").is_err());
+    }
+
+    #[test]
+    fn macos_tcpdump_argv_has_no_linux_only_flags_and_one_filter_argument() {
+        let plain = tcpdump_argv_macos("feth4202", "/x/p.pcap", None);
+        assert_eq!(
+            plain,
+            [
+                "tcpdump",
+                "-i",
+                "feth4202",
+                "-n",
+                "-U",
+                "--immediate-mode",
+                "-s",
+                "0",
+                "-w",
+                "/x/p.pcap"
+            ]
+        );
+        for banned in ["-Z", "-B", "--time-stamp-precision=nano"] {
+            assert!(!plain.iter().any(|a| a == banned), "{banned}");
+        }
+        let f = "net 198.18.0.0/30 or ether proto 0x88b5";
+        let with = tcpdump_argv_macos("en0", "/x/u.pcap", Some(f));
+        assert_eq!(with.last().map(String::as_str), Some(f));
+        assert_eq!(with.len(), plain.len() + 1);
+    }
+}
+
+mod macos_probe_down_interface {
+    use super::super::*;
+
+    #[test]
+    fn a_down_interface_printed_with_a_star_still_matches() {
+        let t = "\
+Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll Drop
+feth4202*  1500  <Link#22>   02:ac:00:00:00:02       5     0        300        7     0        420     0   1
+";
+        let c = parse_netstat(t, "feth4202").unwrap();
+        assert_eq!((c.ipkts, c.opkts, c.ierrs, c.drop), (5, 7, 0, 1));
+        assert!(parse_netstat(t, "feth4201").is_err());
+    }
+}
+
+#[test]
+fn macos_received_by_filter_is_a_prefilter_count_and_never_a_matched_frame_count() {
+    // 57 packets reached the descriptor, 0 passed its filter: tcpdump prints 0 captured / 57 received.
+    let mut f = good();
+    f.captured = Some(100);
+    f.received = Some(157);
+    f.window_lo = Some(98);
+    // Linux and Windows semantics are untouched: received must equal the stored frames.
+    assert!(!problems(&f).is_empty());
+    // macOS: received is information only; completeness rests on captured, drops and the pcap.
+    f.received_is_prefilter = true;
+    assert!(problems(&f).is_empty(), "{:?}", problems(&f));
+    f.dropped_kernel = Some(1);
+    assert!(!problems(&f).is_empty(), "a kernel drop is still a loss");
+    f.dropped_kernel = Some(0);
+    f.captured = Some(99);
+    assert!(
+        !problems(&f).is_empty(),
+        "captured must equal the pcap frames"
+    );
+}
+
+#[test]
+fn capture_dump_on_macos_only_accepts_the_pair_and_the_default_route_uplink() {
+    assert!(mac_dump_iface_allowed("feth4201", None));
+    assert!(mac_dump_iface_allowed("feth4202", None));
+    assert!(mac_dump_iface_allowed("en0", Some("en0")));
+    for bad in ["en0", "lo0", "bridge0", "feth4203", "en1"] {
+        assert!(!mac_dump_iface_allowed(bad, Some("en5")), "{bad}");
+    }
+    assert!(
+        !mac_dump_iface_allowed("feth9999", Some("feth9999")),
+        "a feth is never the uplink"
+    );
 }

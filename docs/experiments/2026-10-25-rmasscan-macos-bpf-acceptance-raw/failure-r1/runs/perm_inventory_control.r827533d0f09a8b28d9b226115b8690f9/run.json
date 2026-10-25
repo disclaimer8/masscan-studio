@@ -1,0 +1,448 @@
+{
+  "access_hint": "",
+  "bpf": {
+    "bpf_maxbufsize": 524288,
+    "bpf_maxdevices": 256,
+    "kernel_version": "Darwin Kernel Version 27.0.0: Tue Aug 11 21:05:48 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T6041",
+    "os_version": "27.0.1 (26A434)"
+  },
+  "devices": [
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf0",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf1",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf2",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf3",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf4",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf5",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf6",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf7",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf8",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf9",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf10",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf11",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf12",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf13",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf14",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf15",
+      "uid": 0
+    },
+    {
+      "gid": 0,
+      "mode": 384,
+      "mode_octal": "0600",
+      "path": "/dev/bpf16",
+      "uid": 0
+    }
+  ],
+  "identity": {
+    "binary_path": "$SCRATCH/target-live/release/examples/wire_scan",
+    "binary_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+    "elevated": null,
+    "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "os": {
+      "arch": "aarch64",
+      "family": "macos",
+      "version": "27.0.1 (26A434)"
+    },
+    "raw_io_abi": "/dev/bpf* ioctl via libc; own declarations v1; aarch64",
+    "restricted_token": null,
+    "source_commit": "717e45c7c7fc1340b4dc24cb1ecb65c1c6e22e0f"
+  },
+  "instant_clock": "CLOCK_UPTIME_RAW (std::time::Instant; stops during sleep)",
+  "interfaces": [
+    {
+      "ethernet": false,
+      "index": 1,
+      "ipv4": [
+        "127.0.0.1"
+      ],
+      "mac": null,
+      "mac_masked": false,
+      "name": "lo0",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 2,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "gif0",
+      "up": false
+    },
+    {
+      "ethernet": false,
+      "index": 3,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "stf0",
+      "up": false
+    },
+    {
+      "ethernet": true,
+      "index": 4,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "anpi0",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 5,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "anpi1",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 6,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "anpi2",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 7,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en4",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 8,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en5",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 9,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en6",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 10,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en1",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 11,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en2",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 12,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en3",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 15,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "bridge0",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 18,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "pktap0",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 19,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun0",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 13,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "ap1",
+      "up": false
+    },
+    {
+      "ethernet": true,
+      "index": 14,
+      "ipv4": [
+        "192.168.1.157"
+      ],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en0",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 16,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "awdl0",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 17,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "llw0",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 20,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun1",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 21,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun2",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 22,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun3",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 23,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "nan0",
+      "up": false
+    },
+    {
+      "ethernet": false,
+      "index": 24,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun4",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 25,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun5",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 26,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun6",
+      "up": true
+    },
+    {
+      "ethernet": false,
+      "index": 27,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": false,
+      "name": "utun7",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 33,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "feth4201",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 34,
+      "ipv4": [
+        "198.18.0.2"
+      ],
+      "mac": null,
+      "mac_masked": true,
+      "name": "feth4202",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 28,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en7",
+      "up": false
+    },
+    {
+      "ethernet": true,
+      "index": 29,
+      "ipv4": [],
+      "mac": null,
+      "mac_masked": true,
+      "name": "anri0",
+      "up": true
+    },
+    {
+      "ethernet": true,
+      "index": 30,
+      "ipv4": [
+        "169.254.135.106"
+      ],
+      "mac": null,
+      "mac_masked": true,
+      "name": "en8",
+      "up": true
+    }
+  ],
+  "invocation_nonce": "r827533d0f09a8b28d9b226115b8690f9",
+  "mode": "inventory",
+  "opened_adapter": false,
+  "status": "ok",
+  "tx_sent": 0
+}

@@ -1,0 +1,6 @@
+KV latency/gate scanner_if=feth4201 peer_if=feth4202 src_mac=[02, ac, 00, 00, 00, 01] peer_mac=[02, ac, 00, 00, 00, 02] mac_check=os-masked
+KV latency/max_per_call max_us_recv=143 max_us_send=55 max_us_health=85 max_us_idle_recv=34087
+KV latency/send send n=1000 p50_us=5 p95_us=11 p99_us=15 max_us=55 over50ms=0
+KV latency/recv recv n=1000 p50_us=28 p95_us=62 p99_us=72 max_us=143 over50ms=0
+KV latency/health health n=20 p50_us=17 p95_us=30 p99_us=85 max_us=85 over50ms=0
+KV latency/idle_recv idle_recv_max_us=34087

@@ -1,0 +1,9 @@
+test=live_rx_deadline_idle cond=r02-rx-deadline-idle
+poll50: calls=1000 timeouts=999 ready=1 pollerr_nval_or_error=0 max_call_us=51951.0
+poll50 overshoot (duration - 50 ms), timeouts only: n=999 p50_us=1013.7 p95_us=1047.1 max_us=1951.0
+kevent50: calls=1000 timeouts=1000 ready=0 pollerr_nval_or_error=0 max_call_us=67921.7
+kevent50 overshoot (duration - 50 ms), timeouts only: n=1000 p50_us=1021.4 p95_us=1043.4 max_us=17921.7
+poll42: calls=300 timeouts=300 ready=0 pollerr_nval_or_error=0 max_call_us=46036.7
+poll42 overshoot (duration - 42 ms), timeouts only: n=300 p50_us=1031.8 p95_us=1057.6 max_us=4036.7
+poll1: calls=1000 timeouts=1000 ready=0 pollerr_nval_or_error=0 max_call_us=4815.1
+poll1 overshoot (duration - 1 ms), timeouts only: n=1000 p50_us=141.4 p95_us=162.4 max_us=3815.1

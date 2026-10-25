@@ -1,15 +1,20 @@
-//! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; Windows: Npcap. Это
+//! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; macOS: BPF (`/dev/bpfN`); Windows: Npcap. Это
 //! единственный crate, где допускается `unsafe`: весь FFI находится в
-//! private-модулях (`linux::socket`; `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
+//! private-модулях (`linux::socket`; `macos::{sys, ifinfo, process}` (BPF ABI, sysctl, getifaddrs, метрики процесса); `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
 //! телеметрия процесса (Toolhelp, токен, счётчики памяти), в продуктовой сборке она
 //! тоже присутствует) и,
 //! только с feature `lab` (включает один rmasscan-lab), в `lab_io::imp`
 //! (sigaction-флаг остановки и listener с backlog 0); остальной код безопасный и тестируется через синтетические швы
-//! (`linux::PacketIo`, `linux::IfaceInfo`; подставная таблица функций wpcap).
+//! (`linux::PacketIo`, `linux::IfaceInfo`; `macos::adapter::BpfIo`; подставная таблица функций wpcap).
 //!
 //! Контракт: каждый вызов `recv`/`health` возвращается не позже
 //! `min(timeout, 50 мс)` (абсолютный дедлайн; на Windows внутренний бюджет
-//! 42 мс). `send` на Linux ограничен тем же дедлайном; на Windows
+//! 42 мс). `send` на Linux ограничен тем же дедлайном; на macOS дедлайн
+//! `send` держится только пока `write` на BPF не блокируется, а это НЕ доказано: XNU
+//! `bpfwrite` игнорирует `O_NONBLOCK` и выделяет mbuf с `MBUF_WAITOK`, поэтому при нехватке
+//! mbuf запись может заблокироваться на любом интерфейсе (на `feth` блокировок не
+//! наблюдалось, верхней границы нет). Бюджет `recv`/`health` на macOS 33 мс (внутренний,
+//! `IO_BUDGET`); на Windows
 //! `pcap_sendpacket` синхронный и не отменяемый (граница измерена, см.
 //! `windows::adapter`). Другие платформы и типы канала дают явную ошибку ДО
 //! любой отправки.
@@ -25,6 +30,15 @@ use rmasscan_engine::AdapterPair;
 
 #[cfg(target_os = "linux")]
 mod linux;
+
+// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}` (и в тестовом `spike`). Переносимые
+// части (`abi`, `adapter`) собираются и в тестах других платформ (seam-тесты).
+#[cfg(any(target_os = "macos", test))]
+mod macos;
+
+// Общий счётчик потерь 32-битного драйверного счётчика (Npcap, BPF).
+#[cfg(any(windows, target_os = "macos", test))]
+mod drop_counter;
 
 // Windows/Npcap: на Windows это рабочий backend; в тестах других платформ
 // собираются портабельные части (ABI, подставная таблица функций). `unsafe`
@@ -91,6 +105,57 @@ pub struct Inventory {
     pub devices: Vec<DeviceReport>,
 }
 
+/// Идентификатор ABI-слоя BPF macOS, попадающий в идентичность каждого JSON:
+/// `/dev/bpf*` через ioctl, собственные объявления поверх `libc`, aarch64.
+pub const BPF_ABI_ID: &str = "/dev/bpf* ioctl via libc; own declarations v1; aarch64";
+
+/// Узел `/dev/bpfN` (только `stat`, без открытия).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BpfDevice {
+    pub path: String,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+/// Интерфейс из `getifaddrs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IfaceReport {
+    pub name: String,
+    pub index: u32,
+    pub mac: Option<[u8; 6]>,
+    /// ОС скрыла MAC от процесса (macOS 27 отдаёт `02:00:00:00:00:00` без прав):
+    /// `mac` тогда `None`, а не плейсхолдер.
+    pub mac_masked: bool,
+    pub ethernet: bool,
+    pub up: bool,
+    pub ipv4: Vec<std::net::Ipv4Addr>,
+}
+
+/// Результат инвентаря macOS: получается без привилегий, без открытия BPF и
+/// без единой отправки.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BpfInventory {
+    pub os_version: Option<String>,
+    pub kernel_version: Option<String>,
+    pub bpf_maxbufsize: Option<u32>,
+    pub bpf_maxdevices: Option<u32>,
+    pub devices: Vec<BpfDevice>,
+    pub interfaces: Vec<IfaceReport>,
+    pub instant_clock: &'static str,
+}
+
+/// macOS: инвентарь BPF (sysctl, `stat` узлов, `getifaddrs`).
+#[cfg(target_os = "macos")]
+pub fn inventory_bpf() -> Result<BpfInventory, NetError> {
+    macos::inventory()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn inventory_bpf() -> Result<BpfInventory, NetError> {
+    Err(NetError::UnsupportedPlatform)
+}
+
 /// Накопленные счётчики. `kernel_drops == None` значит «недоступно».
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetStats {
@@ -103,8 +168,9 @@ pub struct NetStats {
     pub rx_truncated: u64,
     /// Собственные кадры, отброшенные до движка. Linux: кадры с PACKET_OUTGOING.
     /// Windows: кадры с нашим source MAC (у Npcap нет признака направления).
+    /// macOS: кадры с нашим source MAC (вторая линия после фильтра ядра).
     pub rx_outgoing: u64,
-    /// Кадры с чужим ifindex (отброшены). Linux: считается. Windows: всегда 0 и
+    /// Кадры с чужим ifindex (отброшены). Linux: считается. Windows и macOS: всегда 0 и
     /// НЕ измерено, а структурно неприменимо: handle привязан к одному
     /// устройству, сравнивать ifindex нечего. Нуль здесь не свидетельство.
     pub rx_wrong_interface: u64,
@@ -127,7 +193,10 @@ pub(crate) struct Counters {
     pub kernel_drops_known: AtomicBool,
 }
 
-#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", windows, target_os = "macos")),
+    allow(dead_code)
+)]
 impl Counters {
     pub(crate) fn bump(c: &AtomicU64) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -142,7 +211,10 @@ pub struct NetStatsHandle {
 }
 
 impl NetStatsHandle {
-    #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", windows, target_os = "macos")),
+        allow(dead_code)
+    )]
     pub(crate) fn new(counters: Arc<Counters>) -> Self {
         Self { counters }
     }
@@ -195,8 +267,14 @@ pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError
     windows::open(binding)
 }
 
+/// macOS: BPF (`/dev/bpfN`, два независимых дескриптора).
+#[cfg(target_os = "macos")]
+pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+    macos::open(binding)
+}
+
 /// Остальные платформы: явная ошибка до любой отправки.
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 pub fn open_explicit(_binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
     Err(NetError::UnsupportedPlatform)
 }
@@ -220,9 +298,43 @@ pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
     windows::inventory::nic_mac(interface_id)
 }
 
-#[cfg(not(windows))]
+/// macOS: MAC интерфейса по имени (`getifaddrs`/AF_LINK). `None`, если интерфейса нет
+/// или ОС скрыла MAC плейсхолдером `02:00:00:00:00:00` (см. `nic_mac_masked`).
+#[cfg(target_os = "macos")]
+pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
+    macos::ifinfo::nic_mac(interface_id)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn nic_mac(_interface_id: &str) -> Option<[u8; 6]> {
     None
+}
+
+/// macOS: `Some(true/false)` существует ли интерфейс (`if_nametoindex`, не зависит от MAC);
+/// `None`, если ОС не ответила или платформа не macOS.
+#[doc(hidden)]
+#[cfg(target_os = "macos")]
+pub fn iface_exists(interface_id: &str) -> Option<bool> {
+    macos::ifinfo::iface_exists(interface_id)
+}
+
+#[doc(hidden)]
+#[cfg(not(target_os = "macos"))]
+pub fn iface_exists(_interface_id: &str) -> Option<bool> {
+    None
+}
+
+/// macOS: ОС вернула плейсхолдер вместо MAC интерфейса (`nic_mac` тогда `None`).
+#[doc(hidden)]
+#[cfg(target_os = "macos")]
+pub fn nic_mac_masked(interface_id: &str) -> bool {
+    macos::ifinfo::nic_mac_masked(interface_id)
+}
+
+#[doc(hidden)]
+#[cfg(not(target_os = "macos"))]
+pub fn nic_mac_masked(_interface_id: &str) -> bool {
+    false
 }
 
 /// Версия ОС (`RtlGetVersion`, ревизия из kernel32.dll при совпадении сборки)
@@ -232,7 +344,13 @@ pub fn os_version() -> Option<String> {
     windows::inventory::os_version()
 }
 
-#[cfg(not(windows))]
+/// macOS: `kern.osproductversion (kern.osversion)`, например `27.0.1 (26A434)`.
+#[cfg(target_os = "macos")]
+pub fn os_version() -> Option<String> {
+    macos::os_version()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn os_version() -> Option<String> {
     None
 }
@@ -258,7 +376,8 @@ pub struct TokenFlags {
     pub restricted: Option<bool>,
 }
 
-/// Измерения процесса через поддерживаемые API Windows; вне Windows пусто.
+/// Измерения процесса: Windows (поддерживаемые API) и macOS (`getrusage`, `proc_pidinfo`);
+/// на других ОС пусто (Linux harness читает `/proc` сам).
 #[doc(hidden)]
 #[cfg(windows)]
 pub fn process_sample() -> ProcessSample {
@@ -266,7 +385,13 @@ pub fn process_sample() -> ProcessSample {
 }
 
 #[doc(hidden)]
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn process_sample() -> ProcessSample {
+    macos::process::process_sample()
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn process_sample() -> ProcessSample {
     ProcessSample::default()
 }
@@ -303,7 +428,13 @@ pub fn lab_current_thread_id() -> Option<u64> {
 }
 
 #[doc(hidden)]
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub fn lab_current_thread_id() -> Option<u64> {
+    macos::process::current_thread_id()
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn lab_current_thread_id() -> Option<u64> {
     None
 }
@@ -326,7 +457,13 @@ pub fn lab_thread_ids() -> Option<Vec<u64>> {
 }
 
 #[doc(hidden)]
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub fn lab_thread_ids() -> Option<Vec<u64>> {
+    macos::process::thread_ids()
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn lab_thread_ids() -> Option<Vec<u64>> {
     None
 }

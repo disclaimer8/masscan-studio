@@ -21,6 +21,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// What Darwin shows an unprivileged process descended from an ad-hoc-signed executable in
+/// `ifconfig` and `arp` output instead of an Ethernet MAC. It means "os-masked", never a MAC.
+pub const MASKED_MAC: &str = "02:00:00:00:00:00";
 pub const SCANNER_IF: &str = "feth4201";
 pub const PEER_IF: &str = "feth4202";
 pub const SCANNER_MAC: &str = "02:ac:00:00:00:01";
@@ -50,6 +53,8 @@ pub(crate) trait Host {
     fn state_owner(&self) -> u32;
     /// The state directory ([`STATE_DIR`]).
     fn state_dir(&self) -> Result<PathBuf, String>;
+    /// Whether this process is root (real MACs are visible to it; see [`MASKED_MAC`]).
+    fn is_root(&self) -> bool;
 }
 
 /// Outcome of trying to open one `/dev/bpfN`.
@@ -164,6 +169,9 @@ impl Host for RealHost {
     }
     fn state_owner(&self) -> u32 {
         0
+    }
+    fn is_root(&self) -> bool {
+        self.sh(&["id", "-u"]).is_ok_and(|o| o.trim() == "0")
     }
     fn state_dir(&self) -> Result<PathBuf, String> {
         Ok(PathBuf::from(STATE_DIR))
@@ -404,9 +412,18 @@ fn is_feth(name: &str) -> bool {
     name.starts_with("feth")
 }
 
-fn feth_ok(h: &dyn Host, name: &str, mac: &str, peer: &str) -> Result<IfInfo, String> {
+/// `mask_ok`: the placeholder MAC is accepted for this interface (non-root, against a sealed
+/// root-owned manifest). The returned flag says it was the placeholder that was seen.
+fn feth_ok(
+    h: &dyn Host,
+    name: &str,
+    mac: &str,
+    peer: &str,
+    mask_ok: bool,
+) -> Result<(IfInfo, bool), String> {
     let info = parse_ifconfig(&h.sh(&["ifconfig", name])?);
-    if info.ether.as_deref() != Some(mac) {
+    let masked = mask_ok && info.ether.as_deref() == Some(MASKED_MAC);
+    if info.ether.as_deref() != Some(mac) && !masked {
         return Err(format!("{name}: MAC {:?}, expected {mac}", info.ether));
     }
     if info.status.as_deref() != Some("active") {
@@ -415,7 +432,7 @@ fn feth_ok(h: &dyn Host, name: &str, mac: &str, peer: &str) -> Result<IfInfo, St
     if info.peer.as_deref() != Some(peer) {
         return Err(format!("{name}: peer {:?}, expected {peer}", info.peer));
     }
-    Ok(info)
+    Ok((info, masked))
 }
 
 fn default_route(h: &dyn Host) -> Result<(String, Option<String>), String> {
@@ -532,27 +549,54 @@ impl Report {
 }
 
 /// The printing rules 1..7. `recorded` is `(uplink, gateway)` from the manifest when there is one.
-pub(crate) fn run_checks(h: &dyn Host, recorded: Option<(&str, Option<&str>)>) -> Report {
+/// `stand` is the sealed, root-owned manifest when there is one. Only with it, and only for a
+/// non-root process, is the placeholder MAC accepted (as "os-masked") for the stand's own MACs;
+/// root always needs the real ones.
+pub(crate) fn run_checks(
+    h: &dyn Host,
+    recorded: Option<(&str, Option<&str>)>,
+    stand: Option<&Value>,
+) -> Report {
     let mut checks = vec![];
+    let mask_ok = stand.is_some_and(|m| {
+        m["state"] == "sealed" && m["scanner_mac"] == SCANNER_MAC && m["peer_mac"] == PEER_MAC
+    }) && !h.is_root();
+    let masked_note = |what: &str, mac: &str| {
+        format!(
+            "{what}: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified {mac} at up"
+        )
+    };
+    let mut notes: Vec<String> = vec![];
     // 1 + 2
-    let both = feth_ok(h, SCANNER_IF, SCANNER_MAC, PEER_IF)
-        .and_then(|s| {
-            if s.inets.is_empty() {
-                Ok(())
-            } else {
-                Err(format!("{SCANNER_IF} has an inet address: {:?}", s.inets))
-            }
-        })
-        .and_then(|()| feth_ok(h, PEER_IF, PEER_MAC, SCANNER_IF))
-        .and_then(|p| match p.inets.as_slice() {
+    let both = (|| -> Result<(), String> {
+        let (s, masked) = feth_ok(h, SCANNER_IF, SCANNER_MAC, PEER_IF, mask_ok)?;
+        if masked {
+            notes.push(masked_note(SCANNER_IF, SCANNER_MAC));
+        }
+        if !s.inets.is_empty() {
+            return Err(format!("{SCANNER_IF} has an inet address: {:?}", s.inets));
+        }
+        let (p, masked) = feth_ok(h, PEER_IF, PEER_MAC, SCANNER_IF, mask_ok)?;
+        if masked {
+            notes.push(masked_note(PEER_IF, PEER_MAC));
+        }
+        match p.inets.as_slice() {
             [(ip, mask)] if ip == PEER_IP && prefix_of(mask) == Some(30) => Ok(()),
             other => Err(format!(
                 "{PEER_IF} must have exactly {PEER_IP}/30, has {other:?}"
             )),
-        });
+        }
+    })();
     checks.push(check(
         "interfaces",
-        both.map(|()| format!("{SCANNER_IF} <-> {PEER_IF}, {PEER_IP}/30 on the peer only")),
+        both.map(|()| {
+            let mut d = format!("{SCANNER_IF} <-> {PEER_IF}, {PEER_IP}/30 on the peer only");
+            for n in &notes {
+                d.push_str("; ");
+                d.push_str(n);
+            }
+            d
+        }),
     ));
     // 3
     let now = default_route(h);
@@ -606,14 +650,22 @@ pub(crate) fn run_checks(h: &dyn Host, recorded: Option<(&str, Option<&str>)>) -
         "arp",
         h.sh(&["arp", "-an"]).and_then(|t| {
             let e = parse_arp(&t);
-            if e.iter().any(|a| {
-                a.ip == SOURCE_IP
-                    && a.mac.as_deref() == Some(SCANNER_MAC)
-                    && a.iface == PEER_IF
-                    && a.permanent
-            }) {
+            let entry = |mac_ok: &dyn Fn(&str) -> bool| {
+                e.iter().any(|a| {
+                    a.ip == SOURCE_IP
+                        && a.mac.as_deref().is_some_and(mac_ok)
+                        && a.iface == PEER_IF
+                        && a.permanent
+                })
+            };
+            if entry(&|m| m == SCANNER_MAC) {
                 Ok(format!(
                     "{SOURCE_IP} -> {SCANNER_MAC} on {PEER_IF} permanent"
+                ))
+            } else if mask_ok && entry(&|m| m == MASKED_MAC) {
+                Ok(format!(
+                    "{SOURCE_IP} on {PEER_IF} permanent; {}",
+                    masked_note("arp entry", SCANNER_MAC)
                 ))
             } else {
                 Err(format!(
@@ -1373,7 +1425,11 @@ fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
         return Ok(rollback(h, a, &mut m, out));
     }
     let rec = recorded_route(&m);
-    let report = run_checks(h, rec.as_ref().map(|(i, g)| (i.as_str(), g.as_deref())));
+    let report = run_checks(
+        h,
+        rec.as_ref().map(|(i, g)| (i.as_str(), g.as_deref())),
+        None,
+    );
     if !report.ok() {
         for c in report.checks.iter().filter(|c| !c.ok) {
             out.push(format!("FAILED check {}: {}", c.name, c.detail));
@@ -1405,6 +1461,7 @@ fn status(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> 
     let mut report = run_checks(
         h,
         recorded.as_ref().map(|(i, g)| (i.as_str(), g.as_deref())),
+        stand.as_ref().ok(),
     );
     report.checks.insert(
         0,

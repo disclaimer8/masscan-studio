@@ -1,0 +1,15 @@
+{
+  "capture_started_utc": 1792947673.371366,
+  "capture_stopped_utc": 1792947689.862235,
+  "checkpoint_file_exists": false,
+  "euid": 501,
+  "exe_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+  "guest_exit": 0,
+  "guest_finished_utc": 1792947687.501513,
+  "guest_started_utc": 1792947673.946202,
+  "icmplim": "unreadable",
+  "invocation_nonce": "r9b57558a51bf3f12c43cddae74febbf4",
+  "kind": "linkloss",
+  "syncookie": "1",
+  "tag": "linkloss"
+}

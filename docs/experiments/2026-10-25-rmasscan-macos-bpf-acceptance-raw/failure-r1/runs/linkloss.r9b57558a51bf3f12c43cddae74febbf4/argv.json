@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "--checkpoint-out",
+    "$SCRATCH/t7-evidence/failure-r1/.work/linkloss.r9b57558a51bf3f12c43cddae74febbf4/checkpoint.bin",
+    "--iface",
+    "feth4201",
+    "--observe-ms",
+    "500",
+    "--ports",
+    "8200-8399",
+    "--rate",
+    "20",
+    "--router-mac",
+    "02:ac:00:00:00:02",
+    "--seed",
+    "1",
+    "--source-port",
+    "40000",
+    "--src-ip",
+    "198.18.0.1",
+    "--src-mac",
+    "02:ac:00:00:00:01",
+    "--targets",
+    "198.18.0.2",
+    "--wait",
+    "3"
+  ],
+  "exe": "$SCRATCH/target-live/release/examples/wire_scan",
+  "invocation_nonce": "r9b57558a51bf3f12c43cddae74febbf4"
+}

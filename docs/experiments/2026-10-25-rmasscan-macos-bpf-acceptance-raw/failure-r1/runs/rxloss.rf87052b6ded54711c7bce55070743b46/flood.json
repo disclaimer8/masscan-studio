@@ -1,0 +1,14 @@
+{
+  "blocked": 0,
+  "errors": 0,
+  "ethertype": 34997,
+  "frames_target": 19661,
+  "guard_refused": 0,
+  "iface": "feth4202",
+  "payload_marker": "RMSP",
+  "pps_avg": 221817.51678206184,
+  "pps_target": null,
+  "sent": 19661,
+  "t_first": 1792945539.277774,
+  "t_last": 1792945539.36641
+}

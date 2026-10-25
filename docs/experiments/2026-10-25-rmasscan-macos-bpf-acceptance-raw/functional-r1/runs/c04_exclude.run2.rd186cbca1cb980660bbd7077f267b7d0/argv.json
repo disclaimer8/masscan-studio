@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "--exclude",
+    "198.18.0.0-198.18.0.1,198.18.0.3",
+    "--iface",
+    "feth4201",
+    "--ports",
+    "80,81,443,82",
+    "--rate",
+    "100",
+    "--router-mac",
+    "02:ac:00:00:00:02",
+    "--seed",
+    "1",
+    "--source-port",
+    "40000",
+    "--src-ip",
+    "198.18.0.1",
+    "--src-mac",
+    "02:ac:00:00:00:01",
+    "--targets",
+    "198.18.0.0/30",
+    "--wait",
+    "3"
+  ],
+  "exe": "$SCRATCH/target-live/release/examples/wire_scan",
+  "invocation_nonce": "rd186cbca1cb980660bbd7077f267b7d0"
+}

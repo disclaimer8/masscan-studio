@@ -1,0 +1,279 @@
+{
+  "all_valid": true,
+  "binding": {
+    "blackrock_rounds": 14,
+    "rate": "100",
+    "responder_open_ports": "8000,8001,8002,8003,8004,8005,8006,8007",
+    "retries": 0,
+    "router_mac": "02:ac:00:00:00:02",
+    "seed": "1",
+    "src_ip": "198.18.0.1",
+    "src_mac": "02:ac:00:00:00:01",
+    "wait": 3
+  },
+  "created_utc": 1792942755.116705,
+  "fixtures": {
+    "c01_one_addr_port_synack.run1": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 1,
+        "syn": 1,
+        "synack": 0
+      },
+      "file": "fixtures/c01_one_addr_port_synack.run1.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 1,
+        "rst_from_scanner": 1,
+        "syn_from_scanner": 1,
+        "synack_from_peer": 0
+      },
+      "sha256": "909d7f4fb8fcca22c3957d1119a4ccbaf8ad56933151b17cdac7d779b5d76b81"
+    },
+    "c01_one_addr_port_synack.run2": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 1,
+        "syn": 1,
+        "synack": 0
+      },
+      "file": "fixtures/c01_one_addr_port_synack.run2.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 1,
+        "rst_from_scanner": 1,
+        "syn_from_scanner": 1,
+        "synack_from_peer": 0
+      },
+      "sha256": "d140c7bb602b3ff0d2bf3a56c70f7a003d505a6817bc78c26d83689634b3d1dc"
+    },
+    "c02_one_addr_port_rst.run1": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 1,
+        "syn": 1,
+        "synack": 0
+      },
+      "file": "fixtures/c02_one_addr_port_rst.run1.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 1,
+        "rst_from_scanner": 1,
+        "syn_from_scanner": 1,
+        "synack_from_peer": 0
+      },
+      "sha256": "7a9ae283cb65977c5b6e73b41dfd05e06935af1732cbca49ca838fa796877686"
+    },
+    "c02_one_addr_port_rst.run2": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 1,
+        "syn": 1,
+        "synack": 0
+      },
+      "file": "fixtures/c02_one_addr_port_rst.run2.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 1,
+        "rst_from_scanner": 1,
+        "syn_from_scanner": 1,
+        "synack_from_peer": 0
+      },
+      "sha256": "761950c4372698bd068970539d66ce24484cb3ec6894d136c07cf52c1332306a"
+    },
+    "c03_multi_ports.run1": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 8,
+        "syn": 16,
+        "synack": 8
+      },
+      "file": "fixtures/c03_multi_ports.run1.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 8,
+        "rst_from_scanner": 16,
+        "syn_from_scanner": 16,
+        "synack_from_peer": 8
+      },
+      "sha256": "a11a78a70a43c251223b506e2747f2f85296abc7c2c9a2012e747ab93a74d6bb"
+    },
+    "c03_multi_ports.run2": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 8,
+        "syn": 16,
+        "synack": 8
+      },
+      "file": "fixtures/c03_multi_ports.run2.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 8,
+        "rst_from_scanner": 16,
+        "syn_from_scanner": 16,
+        "synack_from_peer": 8
+      },
+      "sha256": "a5eddbad5553eebd0eebbba28e8e60514ba6c4c7c152bf212bafa744e6f8c56f"
+    },
+    "c04_exclude.run1": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/c04_exclude.run1.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "861e32fe080db09105d289856919ae127306a9c2d3c4cc0656f9775d9f1f4494"
+    },
+    "c04_exclude.run2": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/c04_exclude.run2.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "031a8b9174fd02a94f904612486e2badd538564a4adc7362eca78259c2aae4ce"
+    },
+    "c05_srcport_single.run1": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/c05_srcport_single.run1.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "86e07b96b5b87a63d3ea8e7c3c7c4cbf29a58fe8339d3e49ea28ecf24f7a9bae"
+    },
+    "c05_srcport_single.run2": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/c05_srcport_single.run2.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "ca51332df71cacdc6d38e7ad23095dfc8b40246451f92ef943fbf0559f3a7566"
+    },
+    "c06_srcport_range.run1": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/c06_srcport_range.run1.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "2eddc86de38a3c5a73388a90682540dc9d05ec099c7baae2bfa0857ca63cb377"
+    },
+    "c06_srcport_range.run2": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/c06_srcport_range.run2.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "f9bc3a3e0fd60ea0baf763a4e3757927a229e3b5355616dcea98aeed0eb312ac"
+    },
+    "x01_foreign_replies.run1": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/x01_foreign_replies.run1.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "02f51d62e6d8748d7a7a202d995396b29a40bf454379fc50c41d0497dda90c04"
+    },
+    "x01_foreign_replies.run2": {
+      "capture_valid": true,
+      "expected": {
+        "rst": 4,
+        "syn": 4,
+        "synack": 0
+      },
+      "file": "fixtures/x01_foreign_replies.run2.pcap",
+      "observed": {
+        "marker": 6,
+        "other": 0,
+        "rst_from_peer": 4,
+        "rst_from_scanner": 4,
+        "syn_from_scanner": 4,
+        "synack_from_peer": 0
+      },
+      "sha256": "d7f1a404cfd6b8853b1f19bf53abc4db1116fc89c39c573643d48178d037b72c"
+    }
+  },
+  "oracle": {
+    "git_commit": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "git_tree_clean": true,
+    "host": "minipc",
+    "pinned_revision": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "variant": "original pinned binary (NOT the --offline-patched copy)",
+    "version_line": "unavailable: "
+  },
+  "schema": 1
+}

@@ -54,6 +54,10 @@ Final revision `20853d0`: all 16 tests, Clippy and fmt passed. The package at
 `C:\Users\lab\studio-integration-20261025\studio\dist\build-1792965817853`
 passed both software-rendered pause/resume and Stop-race UI smoke scenarios.
 This was an automated SSH-session smoke, not manual RDP usability acceptance.
+Revision `7177536` repeated the full verification successfully while capturing
+native subprocess output explicitly in `verification/windows-native.log`;
+its package is `dist/build-1792966064097` on the same VM. Application source is
+unchanged from the package above.
 
 ## Reproducible artifacts
 

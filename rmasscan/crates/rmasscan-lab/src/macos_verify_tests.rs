@@ -381,6 +381,11 @@ fn build(env: &Env, tag: &str) -> Ev {
         "argv.json".into(),
         pretty(&json!({"exe":"/x/wire_scan","argv":argv,"invocation_nonce":nonce})),
     );
+    // stdout.txt keeps the scanner's one JSON line byte for byte; run.json is that line plus the suite's nonce.
+    files.insert(
+        "stdout.txt".into(),
+        format!("{}\n", serde_json::to_string(&run).unwrap()).into_bytes(),
+    );
     run["invocation_nonce"] = json!(nonce);
     files.insert("run.json".into(), pretty(&run));
     let mut meta = json!({"tag":tag,"kind":kind,"invocation_nonce":nonce,"guest_exit":guest_exit,"euid":1000,
@@ -516,7 +521,7 @@ fn a_complete_synthetic_run_is_pass_and_the_baselines_hold() {
     assert_eq!(r.verdict(), PASS);
     // The OS-masked MAC value is accepted; an unknown value is not evidence.
     let mut ev = build(&env, C01);
-    ev.json("run.json", |v| v["src_mac_check"] = json!("mismatch"));
+    edit_scanner_output(&mut ev, |v| v["src_mac_check"] = json!("mismatch"));
     assert_eq!(ev.verdict(&env), INVALID);
 }
 
@@ -736,9 +741,7 @@ fn completed_with_unknown_or_nonzero_drops_is_fail() {
     let env = Env::new("functional");
     for drops in [json!(null), json!(3)] {
         let mut ev = build(&env, C01);
-        ev.json("run.json", |v| {
-            v["rx_health"]["kernel_drops"] = drops.clone()
-        });
+        edit_scanner_output(&mut ev, |v| v["rx_health"]["kernel_drops"] = drops.clone());
         let (r, _) = ev.verify(&env);
         assert!(failed(&r, "RX drops are measured zero"), "{drops}");
         assert_eq!(r.verdict(), FAIL, "{drops}");
@@ -750,16 +753,14 @@ fn rxloss_with_zero_or_unknown_drops_is_fail() {
     let env = Env::new("failure");
     for drops in [json!(null), json!(0)] {
         let mut ev = build(&env, "rxloss");
-        ev.json("run.json", |v| {
-            v["rx_health"]["kernel_drops"] = drops.clone()
-        });
+        edit_scanner_output(&mut ev, |v| v["rx_health"]["kernel_drops"] = drops.clone());
         let (r, _) = ev.verify(&env);
         assert!(failed(&r, "backed by measured kernel drops"), "{drops}");
         assert_eq!(r.verdict(), FAIL, "{drops}");
     }
     // The scan that lost nothing is "not reproduced", not a failure of the scanner.
     let mut ev = build(&env, "rxloss");
-    ev.json("run.json", |v| {
+    edit_scanner_output(&mut ev, |v| {
         v["rx_health"]["kernel_drops"] = json!(0);
         v["reason"] = json!("Completed");
         v["fail_detail"] = json!("");
@@ -812,7 +813,7 @@ fn perm_denied_run_with_any_syn_is_fail() {
     assert_eq!(ev.verdict(&env), INVALID);
     // The scanner must have refused, not merely not been seen.
     let mut ev = build(&env, "perm_denied_scan");
-    ev.json("run.json", |v| v["opened_adapter"] = json!(true));
+    edit_scanner_output(&mut ev, |v| v["opened_adapter"] = json!(true));
     assert_eq!(ev.verdict(&env), FAIL);
 }
 
@@ -1042,7 +1043,7 @@ fn macos_received_by_filter_counts_everything_the_descriptor_saw_and_is_informat
 fn a_tag_with_two_directories_is_judged_in_each_and_a_fail_is_never_hidden_as_invalid() {
     let env = Env::new("functional");
     let mut bad = build(&env, C01);
-    bad.json("run.json", |v| v["rx_health"]["kernel_drops"] = json!(3));
+    edit_scanner_output(&mut bad, |v| v["rx_health"]["kernel_drops"] = json!(3));
     bad.write(&env);
     build(&env, C01).write(&env);
     let it = env.item(C01);
@@ -1197,7 +1198,7 @@ fn link_loss_is_judged_on_the_peer_interface_and_the_failure_class_is_provisiona
         let mut ev = build(&env, "rxloss");
         ev.tag = "linkloss".into();
         ev.item = item.clone();
-        ev.json("run.json", |v| {
+        edit_scanner_output(&mut ev, |v| {
             v["reason"] = json!(reason);
             v["fail_detail"] = json!(detail);
         });
@@ -1457,7 +1458,7 @@ fn wire_scans_real_src_mac_check_values_have_one_contract() {
     let env = Env::new("functional");
     for value in emitted {
         let mut ev = build(&env, C01);
-        ev.json("run.json", |v| v["src_mac_check"] = json!(value));
+        edit_scanner_output(&mut ev, |v| v["src_mac_check"] = json!(value));
         let verdict = ev.verify(&env).0.verdict().to_owned();
         let accepted = SRC_MAC_CHECK_ACCEPTED.contains(&value);
         assert_eq!(verdict == PASS, accepted, "{value}: {verdict}");
@@ -1468,6 +1469,137 @@ fn wire_scans_real_src_mac_check_values_have_one_contract() {
     assert_eq!(SRC_MAC_CHECK_ACCEPTED, ["explicit-equal", "os-masked"]);
     // A value nobody emits is not evidence either.
     let mut ev = build(&env, C01);
-    ev.json("run.json", |v| v["src_mac_check"] = json!("matched"));
+    edit_scanner_output(&mut ev, |v| v["src_mac_check"] = json!("matched"));
     assert_eq!(ev.verdict(&env), INVALID);
+}
+
+/// Edit run.json and the scanner's stdout line together (the nonce only lives in run.json).
+fn edit_scanner_output(ev: &mut Ev, f: impl Fn(&mut Value)) {
+    ev.json("run.json", |v| f(v));
+    let mut line: Value = serde_json::from_slice(&ev.files["run.json"]).unwrap();
+    line.as_object_mut().unwrap().remove("invocation_nonce");
+    ev.files.insert(
+        "stdout.txt".into(),
+        format!("{}\n", serde_json::to_string(&line).unwrap()).into_bytes(),
+    );
+}
+
+#[test]
+fn the_manifest_binding_is_pinned_to_the_stand() {
+    let env = Env::new("functional");
+    assert_eq!(stand_binding()["iface"], "feth4201");
+    for (key, value) in [
+        ("iface", json!("en0")),
+        ("src_mac", json!("02:ac:00:00:00:09")),
+        ("peer_ip", json!("192.168.1.1")),
+    ] {
+        let mut env = Env::new("functional");
+        env.man["binding"][key] = value;
+        let (r, _) = build(&env, C01).verify(&env);
+        assert_eq!(result_of(&r, "binding is the stand's"), INVALID, "{key}");
+        assert_ne!(r.verdict(), PASS, "{key}");
+    }
+    let mut env2 = Env::new("functional");
+    env2.man["stand"]["peer_if"] = json!("en0");
+    assert_eq!(
+        result_of(&build(&env2, C01).verify(&env2).0, "binding is the stand's"),
+        INVALID
+    );
+    assert_eq!(
+        result_of(&build(&env, C01).verify(&env).0, "binding is the stand's"),
+        PASS
+    );
+    // A SYN from another address is a leak even when a hand-edited manifest vouches for that address.
+    let mut env = Env::new("functional");
+    env.man["binding"]["src_ip"] = json!("10.9.9.9");
+    let mut ev = build(&env, C01);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (_, f) in &mut fr {
+        if pcap::is_syn(f) {
+            f[26..30].copy_from_slice(&[10, 9, 9, 9]);
+        }
+    }
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert!(r.safety_trip(), "{:#?}", r.summary()["checks"]);
+    assert_eq!(r.verdict(), FAIL);
+}
+
+#[test]
+fn run_json_is_bound_to_the_scanner_output_and_to_the_run_window() {
+    let env = Env::new("functional");
+    // run.json no longer equals the scanner's stdout line.
+    let mut ev = build(&env, C01);
+    ev.json("run.json", |v| v["sent"] = json!(5));
+    let (r, _) = ev.verify(&env);
+    assert_eq!(
+        result_of(&r, "run.json is the scanner's stdout line plus the nonce"),
+        INVALID
+    );
+    let mut ev = build(&env, C01);
+    ev.remove("stdout.txt");
+    assert_ne!(ev.verdict(&env), PASS);
+    // The scanner's own clock is outside the guest window (consistent files, an old run).
+    let mut ev = build(&env, C01);
+    edit_scanner_output(&mut ev, |v| {
+        v["wall"]["t0_utc_ms"] = json!(((BASE - 3600.0) * 1000.0).round());
+        v["wall"]["outcome_utc_ms"] = json!(((BASE - 3597.0) * 1000.0).round());
+    });
+    let (r, _) = ev.verify(&env);
+    assert_eq!(
+        result_of(&r, "scanner wall clock inside the run window"),
+        INVALID
+    );
+    assert_eq!(r.verdict(), INVALID);
+    // An absent src_mac_check is not the contract either.
+    let mut ev = build(&env, C01);
+    edit_scanner_output(&mut ev, |v| {
+        v.as_object_mut().unwrap().remove("src_mac_check");
+    });
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), INVALID);
+    assert_eq!(result_of(&r, "source MAC check"), INVALID);
+    assert_eq!(
+        result_of(
+            &build(&env, C01).verify(&env).0,
+            "scanner wall clock inside the run window"
+        ),
+        PASS
+    );
+}
+
+#[test]
+fn a_work_directory_left_in_out_is_walked() {
+    // A leak in a kept work directory is a FAIL and is found by safety_trips too.
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    ev.set_frames("uplink", &vec![(BASE, syn(80))]);
+    let d = ev.write(&env);
+    fs::create_dir_all(env.root.join(".work")).unwrap();
+    fs::rename(&d, env.root.join(".work").join(d.file_name().unwrap())).unwrap();
+    assert_eq!(safety_trips(&env.root).len(), 1);
+    let v = verify_dir(&env.root);
+    assert_eq!(v["overall"], FAIL, "{v:#}");
+    assert!(
+        verify::safety_report_lines(&v)
+            .iter()
+            .any(|l| l.starts_with("safety trip: "))
+    );
+    // A leftover without a trip changes no verdict, but is reported in the notes.
+    let env = Env::new("functional");
+    let d = build(&env, C01).write(&env);
+    fs::create_dir_all(env.root.join(".work")).unwrap();
+    let leftover = env.root.join(".work").join(d.file_name().unwrap());
+    fs::rename(&d, &leftover).unwrap();
+    assert!(safety_trips(&env.root).is_empty());
+    let v = verify_dir(&env.root);
+    assert!(
+        v["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains(".work")),
+        "{}",
+        v["notes"]
+    );
 }

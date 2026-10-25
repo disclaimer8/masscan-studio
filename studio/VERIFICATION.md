@@ -38,7 +38,7 @@ adapter creation or raw scan.
 
 ## Linux (minipc, Ubuntu 26.04.1 x86_64)
 
-Revision `75b5abc`: all 16 tests, Clippy and fmt passed after installing the missing
+Revisions `75b5abc` and `20853d0`: all 16 tests, Clippy and fmt passed after installing the missing
 rustfmt component. SQLite 3.46.1 is linked dynamically. Packaged build succeeded;
 software UI in Xvfb passed both pause/resume and Stop-race smoke. This is a virtual
 display test, not manual Wayland/clipboard/accessibility acceptance.
@@ -50,7 +50,24 @@ Two 5-second test waits failed during the first parallel run with the volume tes
 both passed individually and together on repetition. The test wait was shorter
 than the product's 10-second handshake. The volume case now has its own test binary
 and startup tests allow 20 seconds; the product handshake is still 10 seconds.
-Final full Windows verification is pending.
+Final revision `20853d0`: all 16 tests, Clippy and fmt passed. The package at
+`C:\Users\lab\studio-integration-20261025\studio\dist\build-1792965817853`
+passed both software-rendered pause/resume and Stop-race UI smoke scenarios.
+This was an automated SSH-session smoke, not manual RDP usability acceptance.
+
+## Reproducible artifacts
+
+| Platform | Build revision | Package | Evidence |
+| --- | --- | --- | --- |
+| macOS arm64 | `75b5abc` | `studio/dist/build-1792965368596/Masscan Studio.app` | `studio/verification/macos/` |
+| Linux x86_64 | `75b5abc` | minipc: `~/studio-integration-20261025/studio/dist/build-1792965491343` | `studio/verification/linux/` |
+| Windows x86_64 | `20853d0` | Windows VM: path above | `studio/verification/windows/` |
+
+`20853d0` changes only the test layout/waits and documentation relative to
+`75b5abc`; application/runner source and Cargo lock are unchanged. Package
+manifests record `dirty: false` and exact binary hashes. The shared Cargo lock
+SHA-256 is `5a399e68eae927418f876059ea1ca17247f1e4b3cc97797c703683828d290f33`.
+The Studio CI workflow is added but has not run on GitHub (branch not pushed).
 
 Fault injection beyond the listed cases, authenticated privileged bootstrap and
 external-capture proof remain pending. Existing scanner Stage 2C results are not

@@ -1288,13 +1288,25 @@ pub(crate) fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx:
     }
 }
 pub(crate) fn strays(fr: &Frames, b: &Binding, sp: (u16, u16)) -> usize {
+    stray_count(fr, b, sp, false)
+}
+/// Strays over the scanner's whole receive lifetime: the in-window ones plus every multicast or broadcast frame
+/// (destination group bit) anywhere in the capture. An mDNS frame just outside [first SYN, last SYN + 3 s] is a
+/// stray the scanner may have discarded; it is never a foreign reply. A foreign unicast reply is still counted
+/// only inside the window.
+pub(crate) fn strays_lifetime(fr: &Frames, b: &Binding, sp: (u16, u16)) -> usize {
+    stray_count(fr, b, sp, true)
+}
+fn stray_count(fr: &Frames, b: &Binding, sp: (u16, u16), lifetime: bool) -> usize {
     let sy = syns(fr, b, sp);
     let (Some(first), Some(last)) = (sy.first(), sy.last()) else {
         return 0;
     };
     fr.iter()
         .filter(|(t, f)| {
-            if f.len() < 14 || *t < first.0 || *t > last.0 + 3. || ether(f, [0x88, 0xb5]) {
+            let in_window = *t >= first.0 && *t <= last.0 + 3.;
+            let group = f.first().is_some_and(|x| x & 1 != 0);
+            if f.len() < 14 || !(in_window || lifetime && group) || ether(f, [0x88, 0xb5]) {
                 return false;
             }
             let mac = |o| {
@@ -1344,6 +1356,10 @@ pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
         .peer
         .as_ref()
         .map_or(0, |(fr, _)| strays(fr, &ctx.bind, sports(c)));
+    let ns_max = ctx
+        .peer
+        .as_ref()
+        .map_or(0, |(fr, _)| strays_lifetime(fr, &ctx.bind, sports(c)));
     let sent = n(&inj["sent_total"]);
     let discarded = n(&j["discarded"]);
     r.beh(
@@ -1373,8 +1389,8 @@ pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
         r.notes.insert("injected".into(), json!(sent));
         r.cap(
             "no unexplained discards",
-            discarded <= sent + ns as i128,
-            format!("{discarded} <= {sent} + {ns}"),
+            discarded <= sent + ns_max as i128,
+            format!("{discarded} <= {sent} + {ns_max}"),
         );
         let genuine = wire_replies(fr, &ctx.bind, Some(sports(c))).len();
         r.check(

@@ -2006,3 +2006,37 @@ fn stop_silent_on_the_mac_is_judged_on_mid_tx_and_the_wire_with_the_empty_path_n
     let (r, _) = build(&Env::new("functional"), C01).verify(&Env::new("functional"));
     assert!(r.summary()["notes"].get("empty_receive_path").is_none());
 }
+
+#[test]
+fn an_mdns_frame_outside_the_syn_window_is_a_stray_and_never_a_foreign_reply() {
+    let env = Env::new("functional");
+    let tag = "x01_foreign_replies.run1";
+    let mdns = |t: f64| {
+        let mut f = vec![0u8; 60];
+        f[..6].copy_from_slice(&[0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]);
+        f[6..12].copy_from_slice(&[0x02, 0xac, 0x00, 0x00, 0x00, 0x09]);
+        f[12..14].copy_from_slice(&[0x08, 0x00]);
+        (t, f)
+    };
+    // The scanner discarded the injected frames and one mDNS frame received long after the last SYN + 3 s.
+    let mut ev = build(&env, tag);
+    let mut frames = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    frames.push(mdns(BASE + 6.0));
+    frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &frames);
+    edit_scanner_output(&mut ev, |v| v["discarded"] = json!(4));
+    let (r, _) = ev.verify(&env);
+    assert_eq!(result_of(&r, "no unexplained discards"), PASS);
+    assert!(!r.behaviour_fail(), "{:?}", failing_checks(&r));
+    // A unicast frame outside the window is not explained away: that count stays inside the window.
+    let mut ev = build(&env, tag);
+    let mut frames = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    let (t, mut f) = mdns(BASE + 6.0);
+    f[..6].copy_from_slice(&[0x02, 0xac, 0x00, 0x00, 0x00, 0x01]);
+    frames.push((t, f));
+    frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &frames);
+    edit_scanner_output(&mut ev, |v| v["discarded"] = json!(4));
+    let (r, _) = ev.verify(&env);
+    assert_ne!(result_of(&r, "no unexplained discards"), PASS);
+}

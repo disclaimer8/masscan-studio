@@ -355,3 +355,11 @@ Linux are unchanged):
   (darwin-syncookies)`; it does not change the verdict and is never a PASS claim.
 - The oracle fixtures are unchanged: the SYN bytes and case arguments are the same, and the verifier pins only
   `responder_open_ports` (8000-8007), not a build commit.
+
+### Pair-quiet windows and multicast strays (round 7)
+
+- The pair-quiet gate reads the feth4201/feth4202 counters over up to three one-second windows and refuses only if
+  every window moved (mDNS chatter on the pair moves the counters now and then). No evidence format changes.
+- x01: multicast and broadcast frames (destination group bit) anywhere in the peer capture count as strays for the
+  upper bound of discards ("no unexplained discards"); the lower bound and unicast strays stay in the
+  first-SYN to last-SYN + 3 s window. A multicast frame is never a foreign reply.

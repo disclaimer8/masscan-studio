@@ -327,16 +327,15 @@
     },
     "verifier": {
       "binary_name": "rmasscan-lab",
-      "binary_sha256": "3067832f7ca2a2172e6a307fccccf19bb757e1c49b15070a733f7b6360ab677f",
+      "binary_sha256": "77eb9e2e121eac198eace19d3f10ac78a992b005165ff86bc85b5200eb7a7be2",
       "build_commit": "unknown",
-      "errors": [
-        "git rev-parse HEAD: fatal: not a git repository (or any of the parent directories): .git",
-        "git status --porcelain --untracked-files=no: fatal: not a git repository (or any of the parent directories): .git"
-      ],
-      "git_commit": null,
-      "git_dirty": null
+      "errors": [],
+      "git_commit": "696827239357741e8e5af42072526bcf2bda08bc",
+      "git_dirty": true
     },
-    "warnings": []
+    "warnings": [
+      "verifier was built from uncommitted changes to tracked files"
+    ]
   },
   "runs": [
     {
@@ -416,6 +415,13 @@
           "detail": "8",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -827,6 +833,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -1232,6 +1245,13 @@
           "detail": "8",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -1643,6 +1663,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -2048,6 +2075,13 @@
           "detail": "58",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -2464,6 +2498,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -2877,6 +2918,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -3282,6 +3330,13 @@
           "detail": "12",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -3693,6 +3748,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -4098,6 +4160,13 @@
           "detail": "13",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -4509,6 +4578,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -4917,6 +4993,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -5322,6 +5405,13 @@
           "detail": "73",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -5807,6 +5897,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -6289,6 +6386,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -6655,6 +6759,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -7006,6 +7117,13 @@
           "detail": "11",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -7375,6 +7493,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -7726,6 +7851,13 @@
           "detail": "34",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -8095,6 +8227,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -8446,6 +8585,13 @@
           "detail": "57",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -8815,6 +8961,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -9169,6 +9322,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -9520,6 +9680,13 @@
           "detail": "6",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,

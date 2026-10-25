@@ -11,6 +11,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -69,16 +76,15 @@
     },
     "verifier": {
       "binary_name": "rmasscan-lab",
-      "binary_sha256": "95de2ec79679457efc096b46c1e9beb2855ab0406f988962b55ca88c5f0babdb",
+      "binary_sha256": "77eb9e2e121eac198eace19d3f10ac78a992b005165ff86bc85b5200eb7a7be2",
       "build_commit": "unknown",
-      "errors": [
-        "git rev-parse HEAD: fatal: not a git repository (or any of the parent directories): .git",
-        "git status --porcelain --untracked-files=no: fatal: not a git repository (or any of the parent directories): .git"
-      ],
-      "git_commit": null,
-      "git_dirty": null
+      "errors": [],
+      "git_commit": "696827239357741e8e5af42072526bcf2bda08bc",
+      "git_dirty": true
     },
-    "warnings": []
+    "warnings": [
+      "verifier was built from uncommitted changes to tracked files"
+    ]
   },
   "runs": [
     {
@@ -153,6 +159,13 @@
     {
       "behaviour_fail": false,
       "checks": [
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
         {
           "behaviour": false,
           "detail": "{\"binary_path\":\"$SCRATCH/target-live/release/examples/wire_scan\",\"binary_sha256\":\"3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951\",\"elevated\":null,\"npcap_abi\":\"wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64\",\"os\":{\"arch\":\"aarch64\",\"family\":\"macos\",\"version\":\"27.0.1 (26A434)\"},\"raw_io_abi\":\"/dev/bpf* ioctl via libc; own declarations v1; aarch64\",\"restricted_token\":null,\"source_commit\":\"717e45c7c7fc1340b4dc24cb1ecb65c1c6e22e0f\"}",
@@ -314,6 +327,13 @@
       "checks": [
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "{\"binary_path\":\"$SCRATCH/target-live/release/examples/wire_scan\",\"binary_sha256\":\"3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951\",\"elevated\":null,\"npcap_abi\":\"wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64\",\"os\":{\"arch\":\"aarch64\",\"family\":\"macos\",\"version\":\"27.0.1 (26A434)\"},\"raw_io_abi\":\"/dev/bpf* ioctl via libc; own declarations v1; aarch64\",\"restricted_token\":null,\"source_commit\":\"717e45c7c7fc1340b4dc24cb1ecb65c1c6e22e0f\"}",
           "name": "source commit matches manifest",
           "result": "PASS"
@@ -470,6 +490,13 @@
           "detail": "12",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -824,6 +851,12 @@
         },
         {
           "behaviour": true,
+          "detail": "0 on the wire but not reported: []",
+          "name": "every genuine reply on the wire well before the Stop request is a result",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
           "detail": "{\"rx_alive_after_join\":false,\"rx_tid\":14607367,\"settle_ms\":0.007,\"tx_alive_after_join\":false,\"tx_tid\":14607368}",
           "name": "TX and RX OS thread identities measured",
           "result": "PASS"
@@ -878,6 +911,13 @@
           "detail": "10",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -1300,6 +1340,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -1707,6 +1754,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -2058,6 +2112,12 @@
         },
         {
           "behaviour": true,
+          "detail": "0 on the wire but not reported: []",
+          "name": "every genuine reply on the wire well before the Stop request is a result",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
           "detail": "{\"rx_alive_after_join\":false,\"rx_tid\":14608365,\"settle_ms\":0.014,\"tx_alive_after_join\":false,\"tx_tid\":14608366}",
           "name": "TX and RX OS thread identities measured",
           "result": "PASS"
@@ -2150,6 +2210,13 @@
           "detail": "10",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -2533,6 +2600,13 @@
           "detail": "131144",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -2957,6 +3031,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -3309,6 +3390,13 @@
           "detail": "6",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -3667,6 +3755,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -4019,6 +4114,13 @@
           "detail": "6",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -4377,6 +4479,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -4729,6 +4838,13 @@
           "detail": "9",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,
@@ -5087,6 +5203,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -5442,6 +5565,13 @@
         },
         {
           "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
           "detail": "0",
           "name": "uplink.pcap complete pcap",
           "result": "PASS"
@@ -5794,6 +5924,13 @@
           "detail": "333",
           "name": "peer.pcap complete pcap",
           "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
         },
         {
           "behaviour": false,

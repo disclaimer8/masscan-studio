@@ -119,6 +119,9 @@ pub struct IfaceReport {
     pub name: String,
     pub index: u32,
     pub mac: Option<[u8; 6]>,
+    /// ОС скрыла MAC от процесса (macOS 27 отдаёт `02:00:00:00:00:00` без прав):
+    /// `mac` тогда `None`, а не плейсхолдер.
+    pub mac_masked: bool,
     pub ethernet: bool,
     pub up: bool,
     pub ipv4: Vec<std::net::Ipv4Addr>,
@@ -283,7 +286,8 @@ pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
     windows::inventory::nic_mac(interface_id)
 }
 
-/// macOS: MAC интерфейса по имени (`getifaddrs`/AF_LINK).
+/// macOS: MAC интерфейса по имени (`getifaddrs`/AF_LINK). `None`, если интерфейса нет
+/// или ОС скрыла MAC плейсхолдером `02:00:00:00:00:00` (см. `nic_mac_masked`).
 #[cfg(target_os = "macos")]
 pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
     macos::ifinfo::nic_mac(interface_id)
@@ -292,6 +296,33 @@ pub fn nic_mac(interface_id: &str) -> Option<[u8; 6]> {
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn nic_mac(_interface_id: &str) -> Option<[u8; 6]> {
     None
+}
+
+/// macOS: `Some(true/false)` существует ли интерфейс (`if_nametoindex`, не зависит от MAC);
+/// `None`, если ОС не ответила или платформа не macOS.
+#[doc(hidden)]
+#[cfg(target_os = "macos")]
+pub fn iface_exists(interface_id: &str) -> Option<bool> {
+    macos::ifinfo::iface_exists(interface_id)
+}
+
+#[doc(hidden)]
+#[cfg(not(target_os = "macos"))]
+pub fn iface_exists(_interface_id: &str) -> Option<bool> {
+    None
+}
+
+/// macOS: ОС вернула плейсхолдер вместо MAC интерфейса (`nic_mac` тогда `None`).
+#[doc(hidden)]
+#[cfg(target_os = "macos")]
+pub fn nic_mac_masked(interface_id: &str) -> bool {
+    macos::ifinfo::nic_mac_masked(interface_id)
+}
+
+#[doc(hidden)]
+#[cfg(not(target_os = "macos"))]
+pub fn nic_mac_masked(_interface_id: &str) -> bool {
+    false
 }
 
 /// Версия ОС (`RtlGetVersion`, ревизия из kernel32.dll при совпадении сборки)
@@ -333,7 +364,8 @@ pub struct TokenFlags {
     pub restricted: Option<bool>,
 }
 
-/// Измерения процесса через поддерживаемые API Windows; вне Windows пусто.
+/// Измерения процесса: Windows (поддерживаемые API) и macOS (`getrusage`, `proc_pidinfo`);
+/// на других ОС пусто (Linux harness читает `/proc` сам).
 #[doc(hidden)]
 #[cfg(windows)]
 pub fn process_sample() -> ProcessSample {

@@ -4,24 +4,24 @@
 //! Правило честности: то, что измерить не удалось, это `None`, а не 0.
 //! `handles` это число записей `/dev/fd` минус 1: сам дескриптор, открытый
 //! `read_dir` для перечисления, в списке присутствует и не является ресурсом
-//! процесса. Значение это нижняя оценка гонки (другие потоки могут открывать
-//! fd одновременно), не точный учёт.
+//! процесса. Это неатомарный снимок: пока другие потоки открывают и закрывают fd,
+//! значение может быть неточным в обе стороны; точно оно у неподвижного процесса.
+//! На Linux harness считает `/proc/self/fd` без вычитания, то есть на 1 больше.
 
 use crate::ProcessSample;
 
-/// `PROC_PIDLISTTHREADIDS` из `<sys/proc_info.h>` (в `libc` нет). Именно он, а не
-/// `PROC_PIDLISTTHREADS` (6): тот отдаёт thread handle, не совпадающий с
-/// `pthread_threadid_np` (измерено).
+/// `PROC_PIDLISTTHREADIDS`: приватный (SPI) flavor XNU `proc_info_private.h`, в
+/// публичном SDK и в `libc` его нет; поведение измерено на macOS 27.0.1. Не
+/// `PROC_PIDLISTTHREADS` (6): тот отдаёт thread handle (адрес TSD), не равный
+/// `pthread_threadid_np`. Защита от смены смысла в будущей ОС: `thread_ids()`
+/// возвращает `None`, если в списке нет текущего потока.
 const PROC_PIDLISTTHREADIDS: libc::c_int = 28;
 
-fn user_sys_ms(ru: &libc::rusage) -> (u64, u64) {
-    let ms = |t: &libc::timeval| {
-        u64::try_from(t.tv_sec)
-            .ok()
-            .zip(u64::try_from(t.tv_usec).ok())
-            .map(|(s, us)| s * 1000 + us / 1000)
-    };
-    (ms(&ru.ru_utime).unwrap_or(0), ms(&ru.ru_stime).unwrap_or(0))
+/// Миллисекунды `timeval`; `None` при отрицательных или переполняющих значениях.
+fn tv_ms(t: &libc::timeval) -> Option<u64> {
+    let s = u64::try_from(t.tv_sec).ok()?;
+    let us = u64::try_from(t.tv_usec).ok()?;
+    s.checked_mul(1000)?.checked_add(us / 1000)
 }
 
 fn rusage_self() -> Option<libc::rusage> {
@@ -41,7 +41,7 @@ fn task_info() -> Option<libc::proc_taskinfo> {
     // ядро пишет не более `size` байт и возвращает число записанных.
     let n = unsafe {
         libc::proc_pidinfo(
-            libc::getpid(),
+            getpid(),
             libc::PROC_PIDTASKINFO,
             0,
             std::ptr::from_mut(&mut ti).cast(),
@@ -65,8 +65,8 @@ pub(crate) fn process_sample() -> ProcessSample {
         working_set_bytes: ti.map(|t| t.pti_resident_size),
         // На macOS `ru_maxrss` в байтах (не в КиБ, как на Linux).
         peak_working_set_bytes: ru.and_then(|r| u64::try_from(r.ru_maxrss).ok()),
-        cpu_user_ms: ru.as_ref().map(|r| user_sys_ms(r).0),
-        cpu_kernel_ms: ru.as_ref().map(|r| user_sys_ms(r).1),
+        cpu_user_ms: ru.as_ref().and_then(|r| tv_ms(&r.ru_utime)),
+        cpu_kernel_ms: ru.as_ref().and_then(|r| tv_ms(&r.ru_stime)),
     }
 }
 
@@ -80,7 +80,7 @@ pub(crate) fn current_thread_id() -> Option<u64> {
 
 /// Идентификаторы всех потоков процесса.
 pub(crate) fn thread_ids() -> Option<Vec<u64>> {
-    let pid = unsafe_getpid();
+    let pid = getpid();
     let mut cap = 64usize;
     for _ in 0..8 {
         let mut buf = vec![0u64; cap];
@@ -103,14 +103,16 @@ pub(crate) fn thread_ids() -> Option<Vec<u64>> {
         // Заполнен весь буфер: потоков могло быть больше, расширяем.
         if n < cap {
             buf.truncate(n);
-            return (!buf.is_empty()).then_some(buf);
+            // Fail closed: SPI-flavor обязан вернуть наш собственный id.
+            let me = current_thread_id()?;
+            return buf.contains(&me).then_some(buf);
         }
         cap *= 4;
     }
     None
 }
 
-fn unsafe_getpid() -> libc::c_int {
+fn getpid() -> libc::c_int {
     // SAFETY: `getpid` не имеет предусловий и не может завершиться ошибкой.
     unsafe { libc::getpid() }
 }
@@ -149,5 +151,15 @@ mod tests {
         assert!(thread_ids().unwrap().contains(&other));
         go_tx.send(()).unwrap();
         h.join().unwrap();
+        // После join id исчезает; ядро убирает поток чуть позже, ждём ограниченно
+        // (до 1 с) без опоры на точность sleep.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while thread_ids().unwrap().contains(&other) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{other} still listed after join"
+            );
+            std::thread::yield_now();
+        }
     }
 }

@@ -66,6 +66,12 @@ pub(crate) enum Slot {
     Missing,
 }
 
+/// Fail closed: only a successful `id -u` that names a non-zero uid counts as non-root. A failed
+/// or unparseable answer counts as root, so the masked-MAC placeholder is never accepted on it.
+pub(crate) fn root_from_id(out: Result<String, String>) -> bool {
+    !matches!(out.map(|o| o.trim().parse::<u32>()), Ok(Ok(uid)) if uid != 0)
+}
+
 /// macOS creates the next `/dev/bpfN` when the highest existing node is opened. Open every
 /// node that exists (the open attempt itself makes the kernel create the next one; keeping the
 /// handles open is harmless), and repeat until `bpf0..=last`
@@ -171,7 +177,7 @@ impl Host for RealHost {
         0
     }
     fn is_root(&self) -> bool {
-        self.sh(&["id", "-u"]).is_ok_and(|o| o.trim() == "0")
+        root_from_id(self.sh(&["id", "-u"]))
     }
     fn state_dir(&self) -> Result<PathBuf, String> {
         Ok(PathBuf::from(STATE_DIR))

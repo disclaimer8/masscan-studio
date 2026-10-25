@@ -2316,3 +2316,17 @@ fn up_as_root_verifies_real_macs_before_recording_sealed() {
     assert!(out.contains("FAILED check interfaces"), "{out}");
     assert!(!s.manifest().exists());
 }
+
+#[test]
+fn a_failed_or_unparseable_id_counts_as_root() {
+    assert!(!root_from_id(Ok("501\n".into())));
+    for out in [
+        Ok("0\n".to_owned()),
+        Ok(String::new()),
+        Ok("uid=501".to_owned()),
+        Ok("-1".to_owned()),
+        Err("id -u: failed".to_owned()),
+    ] {
+        assert!(root_from_id(out.clone()), "{out:?}");
+    }
+}

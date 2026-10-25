@@ -169,20 +169,27 @@ Windows second e1000e NIC → TAP → dedicated bridge → veth → Linux peer n
 общий verifier. C-oracle генерирует эталон для тех же MAC/IP/seed/ports, без
 нормализации различий по заголовкам пакета.
 
-- [ ] Шесть классов functional cases, по два повтора; отдельно полнота Open/Closed,
+- [x] Шесть классов functional cases, по два повтора; отдельно полнота Open/Closed,
   source-port single/range, exclusions и rejection чужих ответов.
-- [ ] Для 16 probe: Pause на 0/1/8/15, продолжение == continuous == C по SYN-байтам
+  *`functional-r2`, код `9ecbe32`, evidence `dd78c4b`: 29 PASS.*
+- [x] Для 16 probe: Pause на 0/1/8/15, продолжение == continuous == C по SYN-байтам
   и порядку. Завершённое задание не возобновляется, attempt_id меняется.
-- [ ] Stop при rate=1, пустом RX, нагрузке, drain, полной очереди; NIC disconnect,
+  *`functional-r2` (группы N0/N1/N8/N15, `refuse_completed`), `9ecbe32`: PASS.*
+- [x] Stop при rate=1, пустом RX, нагрузке, drain, полной очереди; NIC disconnect,
   mismatch/corrupt checkpoint, Admin-only permissions. После исхода нет новых SYN.
-- [ ] Воспроизвести RX overflow и проверить измеренное drops>0 → RxLoss без
-  checkpoint. Unknown/error health проверять fake API; не подменять реальный
-  overflow искусственно записанным счётчиком.
-- [ ] Снять 100/1k/10k/100k pps × 5 повторов, CPU/RSS, call latency, capture
+  *`failure-r1`, `9ecbe32`: 19 PASS (stop_*, linkloss через QMP set_link, ckpt_*, perm_*). Перепроверка исправлений ревью (perm exit 5, I2) - раздел 11 отчёта, **NOT RUN**.*
+- [x] Воспроизвести RX overflow и проверить измеренное drops>0 → RxLoss без
+  checkpoint. Не подменять реальный overflow искусственно записанным счётчиком.
+  *`failure-r1/rxloss`: RxLoss, kernel_drops 67804 (нижняя граница, область очереди NPF), без checkpoint.*
+- [ ] Unknown/error health проверять fake API.
+  *Этим отчётом не проверялось (юнит-тесты крейта, не evidence этого этапа): NOT RUN здесь.*
+- [x] Снять 100/1k/10k/100k pps × 5 повторов, CPU/RSS, call latency, capture
   completeness и RX loss. VM-скорость записывать как VM-скорость; ±20% performance
   gate не отменяется успешным correctness и может остаться OPEN до sendqueue.
-- [ ] Каждый pcap хэшируется до cleanup; failed/invalid прогоны сохраняются.
+  *`perf-r1`, `847e218`, evidence `c5ee494`: 21 PASS. gate ±20% MET на 100 и 1k, **OPEN** на 10k и 100k (VM около 6.4 kpps) до 2B-sendqueue; это VM-скорость.*
+- [x] Каждый pcap хэшируется до cleanup; failed/invalid прогоны сохраняются.
   Отсутствующие результаты — NOT RUN, неполный capture — INVALID, никогда PASS.
+  *`pcap-hashes-on-home-pc.txt` в каждом прогоне; для частей A, B, C discarded нет (историческая `functional/` хранит INVALID x01 в `runs_discarded/`).*
 
 ## 5. Отчёт, review и следующий переход
 
@@ -191,10 +198,13 @@ Windows second e1000e NIC → TAP → dedicated bridge → veth → Linux peer n
 
 - [ ] Приложить точный commit, чистоту дерева, hashes, topology, версии DLL/драйвера,
   ошибки/лимиты и результат каждой проверки. Secret-free logs; source ZIP совпадает с EXE.
+  *Отчёт [Windows VM acceptance](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md). Пункт не отмечен: source ZIP не собирался (tar `git archive` есть, sha в отчёте), дистрибуция OPEN.*
 - [ ] Провести независимое review FFI/ownership, health/stop/checkpoint и самого
   harness. Зелёный CI относится к точному review HEAD. Merge — отдельное решение.
-- [ ] Явно отделить GO Windows VM correctness от physical NIC, throughput,
+  *Итоговое ревью продукта: WITH FIXES (I1, I2), исправлено (`7247688`, `68134b0`, `3d28ae3`), перепроверка и проверка закрытия APPROVED; живая перепроверка на `931f69f` (раздел 11 отчёта). Ревью лаборатории APPROVED после двух перепроверок. Open: CI на точном HEAD NOT RUN (push не разрешён).*
+- [x] Явно отделить GO Windows VM correctness от physical NIC, throughput,
   macOS BPF, runner/IPC, UI и distribution. Не заменять физическую приёмку VM.
+  *Раздел 13 отчёта: GO (VM), условно; физический NIC NOT RUN, throughput OPEN, macOS NOT STARTED, runner/IPC, UI, дистрибуция OPEN.*
 
 Далее: отдельный план macOS BPF → discovery/ARP/network identity → runner/IPC
 и durable checkpoint → реальный Scan в Slint. Изменение порядка или продуктового

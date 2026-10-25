@@ -688,6 +688,7 @@ fn the_stop_stage_verdict_needs_capture_exit_stop_and_the_rust_outcome() {
             ("capture_valid", Value::Null),
             ("rc", json!(1)),
             ("stopped_early", json!(false)),
+            ("stop_to_exit_s", Value::Null),
         ] {
             let mut s = good_stop(i);
             s[k] = v.clone();
@@ -707,16 +708,17 @@ fn an_invalid_stop_stage_is_out_of_the_stop_median_and_the_matrix_check() {
     let dir = scratch("invalid-stop");
     let mut d = driver_in(&dir);
     let mut cells = full_matrix();
+    // Three of five invalid with an outlier: without the filter the median would be the outlier.
     for c in cells
         .iter_mut()
-        .filter(|c| c["impl"] == "rust" && c["rate"] == 100 && c["rep"] == 1)
+        .filter(|c| c["impl"] == "rust" && c["rate"] == 100 && c["rep"].as_u64() <= Some(3))
     {
         c["stop"] = json!({"capture_valid":false,"valid":false,"stop_to_exit_s":99.0});
     }
     d.perf_summarize(&cells, &[100, 1000, 10000, 100000]);
     let row = &d.extra["perf_summary"][0];
     assert_eq!(row["rust_stop_s_median"], json!(0.01), "{row}");
-    assert_eq!(row["rust_stop_invalid_runs"], json!(1));
+    assert_eq!(row["rust_stop_invalid_runs"], json!(3));
     assert_eq!(row["c_stop_invalid_runs"], json!(0));
     let matrix = d
         .checks

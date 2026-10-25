@@ -2374,6 +2374,11 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     job(r, j, c, man);
     let exp = host_truth(r, ctx, c, perf_expected(c));
+    // Open truth read from the wire (no host-listen record) is only as good as the capture it comes from.
+    let wire_truth = r
+        .notes
+        .get("open_truth")
+        .is_some_and(|v| s(v).contains("derived from the wire"));
     let exp_open = exp.iter().filter(|x| x.ends_with(":open")).count();
     let completed = j["status"] == "ok" && j["reason"] == "Completed";
     let drops = j["rx_health"]["kernel_drops"].as_u64();
@@ -2454,15 +2459,26 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         wire_syns = Some(ours);
     }
     if completed {
-        r.beh(
-            "received open/closed results equal listener truth",
-            results_match(&j["replies"], &exp),
-            format!(
-                "{} results for {} expected",
-                n(&j["reply_total"]),
-                exp.len()
-            ),
+        let truth_ok = results_match(&j["replies"], &exp);
+        let detail = format!(
+            "{} results for {} expected",
+            n(&j["reply_total"]),
+            exp.len()
         );
+        if wire_truth && !r.proven() {
+            // The truth itself is unproven (missing or incomplete capture, no host record): INVALID, not a scanner FAIL.
+            r.inv(
+                "received open/closed results equal listener truth",
+                truth_ok,
+                detail,
+            );
+        } else {
+            r.beh(
+                "received open/closed results equal listener truth",
+                truth_ok,
+                detail,
+            );
+        }
         results_on_wire_ex(r, ctx, c, &j["replies"], true);
     }
     let reps = array(&j["replies"]);

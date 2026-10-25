@@ -55,3 +55,9 @@ Parts A and B were rerun with the Rust lab tool (`rmasscan-lab windows-suite`, `
 * `failure-r1/`: part B, 18 runs, overall **PASS** (19 PASS). Its two flood captures are stored as `peer.pcap.gz`, so run `gunzip -k` before re-verifying (see its README).
 eno1 shows 0 lab frames in all 43 committed runs (each `eno1.pcap` is a 24-byte header). Unlike `functional/` (capture_schema 1), these runs carry the per-run guest-gate proof.
 The root `MANIFEST.sha256` covers the files above plus each new directory's `MANIFEST.sha256`; run `shasum -a 256 -c MANIFEST.sha256` inside each new directory to check its contents.
+
+## Part C, performance (2026-10-25)
+Run with `rmasscan-lab windows-suite --plan perf` at code commit `847e218`. The guest `wire_scan.exe` was rebuilt from that commit. The same per-run raw gate applied, capture_schema 3, and the only target was 198.18.0.2.
+* `smoke-perf-847e218/`: one cell (`perf.100.r1`), cell verdict PASS; the other planned cells are NOT RUN by design.
+* `perf-r1/`: 20 cells (100/1k/10k/100k pps x 5), overall **PASS** (21 PASS), no rerun, no RxLoss, kernel drops 0. Median wire rate: 100.7 / 1006.7 / 6444.6 / 6321.1 pps. The ±20% rate gate is MET at 100 and 1000 pps and OPEN at 10k and 100k: the VM tops out at about 6.4 kpps with one `pcap_sendpacket` per frame. This is a VM measurement, not a physical-NIC one, and it stays OPEN until 2B-sendqueue. The ten 10k/100k captures are stored as `peer.pcap.gz` (see its README).
+eno1 shows 0 lab frames in all 21 part C runs.

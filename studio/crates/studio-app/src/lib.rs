@@ -28,7 +28,7 @@ pub enum Update {
     Rows(Vec<Row>),
     State(Status, String),
     Progress(String, String),
-    History(Vec<SavedScan>),
+    History(Vec<SavedScan>, Option<Id>),
     Notice(String),
 }
 pub struct Controller {
@@ -216,7 +216,7 @@ fn work(
         )?;
         emit(&out, Update::State(s.status.clone(), s.detail.clone()))?;
     }
-    emit(&out, Update::History(history))?;
+    emit(&out, Update::History(history, selected))?;
     let result = (|| {
         while !stop.load(Ordering::Acquire) {
             let step = (|| -> Result<(), String> {
@@ -367,7 +367,7 @@ fn work(
                                     .status
                                     .clone();
                                 emit(&out, Update::State(status, detail))?;
-                                emit(&out, Update::History(history))?;
+                                emit(&out, Update::History(history, selected))?;
                             }
                             _ => {}
                         }
@@ -391,7 +391,7 @@ fn work(
                 emit(&out, Update::State(status, detail))?;
                 emit(
                     &out,
-                    Update::History(db.scans().map_err(|e| e.to_string())?),
+                    Update::History(db.scans().map_err(|e| e.to_string())?, selected),
                 )?;
             }
             thread::sleep(Duration::from_millis(5));

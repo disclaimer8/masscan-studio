@@ -18,6 +18,9 @@ struct Attempt {
     sequence: u64,
     engine: Option<EngineHandle>,
     pending: Option<(u64, Instant)>,
+    rows: Vec<studio_protocol::Row>,
+    progress: Option<Event>,
+    flushed: Instant,
 }
 fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
     let plan = job.prepare()?;
@@ -107,6 +110,21 @@ fn send(
     tx.try_send(Envelope::new(session, a.scan, a.id, a.sequence, event))
         .map_err(|_| "Event pipe exceeded its bounded queue or closed".into())
 }
+fn flush(
+    tx: &mpsc::SyncSender<Envelope<Event>>,
+    session: Id,
+    a: &mut Attempt,
+) -> Result<(), String> {
+    if !a.rows.is_empty() {
+        let rows = std::mem::take(&mut a.rows);
+        send(tx, session, a, Event::Results(rows))?;
+    }
+    if let Some(progress) = a.progress.take() {
+        send(tx, session, a, progress)?;
+    }
+    a.flushed = Instant::now();
+    Ok(())
+}
 fn serve() -> Result<(), String> {
     if std::env::args().skip(1).collect::<Vec<_>>() != ["--stdio"] {
         return Err("Runner is private to Studio (--stdio); no command-line scan API".into());
@@ -176,6 +194,9 @@ fn serve() -> Result<(), String> {
                             sequence: 0,
                             engine: None,
                             pending: None,
+                            rows: Vec::new(),
+                            progress: None,
+                            flushed: Instant::now(),
                         };
                         a.order.accept(&e)?;
                         let run = (|| {
@@ -290,30 +311,23 @@ fn serve() -> Result<(), String> {
                             total: range.to_string(),
                         },
                     )?,
-                    Ok(rmasscan_engine::Event::Results { replies }) => send(
-                        &events,
-                        session,
-                        a,
-                        Event::Results(
-                            replies
-                                .into_iter()
-                                .map(|r| studio_protocol::Row {
-                                    ip: std::net::Ipv4Addr::from(r.remote_ip).to_string(),
-                                    port: r.remote_port,
-                                    open: r.status == rmasscan_core::receive::PortStatus::Open,
-                                })
-                                .collect(),
-                        ),
-                    )?,
-                    Ok(rmasscan_engine::Event::Progress(p)) => send(
-                        &events,
-                        session,
-                        a,
-                        Event::Progress {
+                    Ok(rmasscan_engine::Event::Results { replies }) => {
+                        if a.rows.len() + replies.len() > 1000 {
+                            flush(&events, session, a)?;
+                        }
+                        a.rows
+                            .extend(replies.into_iter().map(|r| studio_protocol::Row {
+                                ip: std::net::Ipv4Addr::from(r.remote_ip).to_string(),
+                                port: r.remote_port,
+                                open: r.status == rmasscan_core::receive::PortStatus::Open,
+                            }));
+                    }
+                    Ok(rmasscan_engine::Event::Progress(p)) => {
+                        a.progress = Some(Event::Progress {
                             sent: p.sent.to_string(),
                             received: p.received.to_string(),
-                        },
-                    )?,
+                        });
+                    }
                     Ok(rmasscan_engine::Event::CheckpointReady { .. }) => {}
                     Ok(rmasscan_engine::Event::Finished { reason }) => {
                         let cp = engine.checkpoint();
@@ -322,6 +336,7 @@ fn serve() -> Result<(), String> {
                             .ok_or("Engine disappeared")?
                             .join()
                             .map_err(|e| e.to_string())?;
+                        flush(&events, session, a)?;
                         if reason == Reason::Paused {
                             let cp = cp.ok_or("Paused engine supplied no checkpoint")?;
                             send(
@@ -355,6 +370,9 @@ fn serve() -> Result<(), String> {
                     Err(TryRecvError::Disconnected) => {
                         return Err("Scanner event stream closed without a terminal result".into());
                     }
+                }
+                if a.rows.len() >= 1000 || a.flushed.elapsed() >= Duration::from_millis(50) {
+                    flush(&events, session, a)?;
                 }
             } else {
                 std::thread::sleep(Duration::from_millis(2));

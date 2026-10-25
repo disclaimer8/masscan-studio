@@ -364,7 +364,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .into(),
                     ),
                     Update::Notice(text) => ui.set_action_notice(text.into()),
-                    Update::History(data) => {
+                    Update::History(data, selected) => {
                         ui.set_history_labels(ModelRc::new(slint::VecModel::from(
                             data.iter()
                                 .map(|s| {
@@ -381,6 +381,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 })
                                 .collect::<Vec<_>>(),
                         )));
+                        ui.set_history_index(
+                            data.iter()
+                                .position(|s| Some(s.scan) == selected)
+                                .map(|i| i as i32)
+                                .unwrap_or(-1),
+                        );
                         *h.borrow_mut() = data;
                     }
                     Update::State(status, detail) => {

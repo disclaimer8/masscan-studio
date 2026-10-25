@@ -5,7 +5,7 @@ Date: 2026-10-25. Studio is a separate workspace/branch; scanner source unchange
 
 ## Local Apple Silicon (development slice)
 
-- `cargo xtask test`: 15 tests passed; workspace Clippy `-D warnings` and fmt pass.
+- `cargo xtask test`: 16 tests passed; workspace Clippy `-D warnings` and fmt pass.
 - Protocol: bounded/truncated framing, wrong IDs/sequences/version, canonical u64.
 - History: instance lock, duplicate result replay, stale attempt, invalid checkpoint,
   interrupted recovery, saved pause and Resume after reopening the application.
@@ -24,6 +24,11 @@ Date: 2026-10-25. Studio is a separate workspace/branch; scanner source unchange
   test reproduced deletion before the fix; retry and app restart both pass.
 - Injected SQLite checkpoint-write failure rolls back, returns failure before ACK,
   leaves no resumable checkpoint and recovers as Interrupted.
+- Volume regression: the initial 10,000-result run overflowed the display queue.
+  Runner now batches up to 1,000 results/50 ms and coalesces progress. A 100,000
+  result simulation at 10,000 packets/s completed in 13.29 s with the application
+  polling at 20 Hz; all 100,000 rows were delivered and present after reopening
+  SQLite. This measures lifecycle/storage delivery, not displayed-frame latency.
 
 These are simulation and lifecycle results, **not raw network acceptance**.
 The fixed feth profile is **disabled**: independent review found the preliminary

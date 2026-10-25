@@ -110,6 +110,7 @@ export component MainWindow inherits Window {
     in-out property <int> backend-index: 0;
     in-out property <string> scan-backend-label: "No scan selected";
     in property <[string]> history-labels;
+    in-out property <int> history-index: -1;
     callback select-history(int);
     callback pause-scan();
     callback stop-scan();
@@ -191,7 +192,7 @@ export component MainWindow inherits Window {
                     Text { text: root.scan-backend-label; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                ComboBox { model: root.history-labels; enabled: !root.process-active; selected(value) => { root.select-history(self.current-index); } }
+                ComboBox { model: root.history-labels; current-index <=> root.history-index; enabled: !root.process-active; selected(value) => { root.select-history(self.current-index); } }
                 ActionButton { text: "New scan"; enabled: !root.process-active; clicked => { root.settings-open = true; } }
                 ActionButton { text: "Lock"; enabled: !root.process-active; clicked => { root.lock-session(); } }
                 theme-button := ActionButton { text: Theme.preference == 0 ? "Theme: System" : Theme.dark ? "Theme: Dark" : "Theme: Light"; clicked => { themes.show(); } }

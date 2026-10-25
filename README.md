@@ -2,8 +2,11 @@
 
 A Rust-only repository. It holds a pure-Rust port of the
 [masscan](https://github.com/robertdavidgraham/masscan) scanner core (`rmasscan/`),
-its laboratory and acceptance tooling, and the design record. A Rust/Slint desktop
-studio is planned as future work; nothing of it exists yet.
+its laboratory and acceptance tooling, and the design record. The separate
+[Rust/Slint Studio workspace](studio/README.md) now connects its UI to a session
+runner and SQLite history. Start/Pause/Resume/Stop work with the real engine's
+simulation adapter; raw scanning is gated off pending complete preflight and
+privileged bootstrap. See [Studio verification](studio/VERIFICATION.md).
 
 The Swift v0.3 macOS app was retired on 2026-10-24. It lives in git history; the last
 commit that contains it is `5b2f88bc949d6cdfa1a75d7122074aa22581d513`
@@ -14,6 +17,7 @@ commit that contains it is `5b2f88bc949d6cdfa1a75d7122074aa22581d513`
 | Path | Content |
 | --- | --- |
 | `rmasscan/` | Cargo workspace: `rmasscan-core`, `rmasscan-engine`, `rmasscan-net`, `rmasscan-cli`, `rmasscan-lab` |
+| `studio/` | Separate Cargo workspace: Slint UI, protocol, store, app controller, runner and packaging |
 | `rmasscan/README.md` | The port: commands, deliberate differences from masscan, the no-C-in-build check |
 | `rmasscan/docs/rust-lab.md` | Rust laboratory tools (evidence verifier, packet comparator, suites) |
 | `rmasscan/docs/windows-vm-lab.md`, `rmasscan/docs/windows-wire-lab.md` | Windows VM and wire-parity labs |

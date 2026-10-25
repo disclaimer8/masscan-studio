@@ -1,0 +1,9 @@
+test=live_rx_deadline_long cond=r10
+poll50: calls=3000 timeouts=2998 ready=2 pollerr_nval_or_error=0 max_call_us=58928.5
+poll50 overshoot (duration - 50 ms), timeouts only: n=2998 p50_us=2028.1 p95_us=2077.9 max_us=8928.5
+poll43: calls=3000 timeouts=3000 ready=0 pollerr_nval_or_error=0 max_call_us=52076.2
+poll43 overshoot (duration - 43 ms), timeouts only: n=3000 p50_us=2042.1 p95_us=2084.9 max_us=9076.2
+kevent50: calls=1500 timeouts=1500 ready=0 pollerr_nval_or_error=0 max_call_us=57977.3
+kevent50 overshoot (duration - 50 ms), timeouts only: n=1500 p50_us=2029.9 p95_us=2063.8 max_us=7977.3
+kevent43: calls=1500 timeouts=1500 ready=0 pollerr_nval_or_error=0 max_call_us=52525.3
+kevent43 overshoot (duration - 43 ms), timeouts only: n=1500 p50_us=2026.4 p95_us=2324.8 max_us=9525.3

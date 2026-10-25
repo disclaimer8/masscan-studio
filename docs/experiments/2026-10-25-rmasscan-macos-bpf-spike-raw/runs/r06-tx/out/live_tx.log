@@ -1,0 +1,28 @@
+test=live_tx cond=r06-tx
+tx_5000_back_to_back: frames=5000 full_writes=5000 EAGAIN=0 ENOBUFS=0 other=0 wall_ms=23.4 calls_over_1ms=0 over_10ms=0 over_50ms=0
+tx_5000_back_to_back write(): n=5000 p50_us=4.0 p95_us=7.3 max_us=70.3
+tx_1000_at_1khz: frames=1000 full_writes=1000 EAGAIN=0 ENOBUFS=0 other=0 wall_ms=999.0 calls_over_1ms=0 over_10ms=0 over_50ms=0
+tx_1000_at_1khz write(): n=1000 p50_us=4.2 p95_us=9.2 max_us=13.6
+tx_len_1514 -> Ok(1514)
+tx_len_1515 -> Ok(1515) (EMSGSIZE=40 EIO=5)
+tx_len_1516 -> Ok(1516) (EMSGSIZE=40 EIO=5)
+tx_len_1518 -> Ok(1518) (EMSGSIZE=40 EIO=5)
+tx_len_1600 -> Err(40) (EMSGSIZE=40 EIO=5)
+tx_len_2000 -> Err(40) (EMSGSIZE=40 EIO=5)
+tx_len_4095 -> Err(40) (EMSGSIZE=40 EIO=5)
+tx_len_4096 -> Err(40) (EMSGSIZE=40 EIO=5)
+tx_len_4097 -> Err(40) (EMSGSIZE=40 EIO=5)
+tx_len_8192 -> Err(40) (EMSGSIZE=40 EIO=5)
+tx_len_16384 -> Err(40) (EMSGSIZE=40 EIO=5)
+tx_burst_200k: frames=200000 full_writes=200000 EAGAIN=0 ENOBUFS=0 other=0 wall_ms=342.4 calls_over_1ms=0 over_10ms=0 over_50ms=0
+tx_burst_200k write(): n=200000 p50_us=1.5 p95_us=2.6 max_us=38.3
+tx_burst_200k slowest idx=186073 write_us=38.3
+tx_burst_200k slowest idx=186074 write_us=36.8
+tx_burst_200k slowest idx=70036 write_us=33.3
+tx_burst_200k slowest idx=152134 write_us=33.2
+tx_burst_200k slowest idx=69233 write_us=27.7
+tx_burst_200k slowest idx=152133 write_us=25.4
+tx_burst_200k slowest idx=69552 write_us=24.2
+tx_burst_200k slowest idx=69571 write_us=22.8
+tx_burst_200k slowest idx=69551 write_us=22.4
+tx_burst_200k slowest idx=186177 write_us=18.5

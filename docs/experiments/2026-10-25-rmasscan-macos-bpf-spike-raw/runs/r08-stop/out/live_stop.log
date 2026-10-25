@@ -1,0 +1,9 @@
+test=live_stop cond=r08-stop
+variant=idle_rx
+stop TX thread (inside write burst): n=60 p50_us=1.3 p95_us=11.5 max_us=30.5
+stop RX thread (poll 50 ms loop): n=60 p50_us=33143.4 p95_us=46703.2 max_us=50487.3
+stop join both: n=60 p50_us=33164.9 p95_us=46721.7 max_us=50503.1
+variant=rx_under_flood20k
+stop TX thread (inside write burst): n=60 p50_us=1.3 p95_us=6.5 max_us=12.2
+stop RX thread (poll 50 ms loop): n=60 p50_us=33177.4 p95_us=46649.8 max_us=47912.1
+stop join both: n=60 p50_us=33192.0 p95_us=46661.0 max_us=47930.0

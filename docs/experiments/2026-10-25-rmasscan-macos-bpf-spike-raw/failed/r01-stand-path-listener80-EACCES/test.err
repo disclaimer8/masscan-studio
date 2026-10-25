@@ -1,0 +1,12 @@
+test=live_stand_path cond=stand
+rx_buflen=4194304 (requested 4194304)
+FIRST_RECORD bh_hdrlen=18 bh_caplen=54 bh_datalen=54 off=0 frame[12..14]=0800
+RX hdrlen=18 dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=54 ip=198.18.0.2>198.18.0.1 tcp=81>40001 flags=0x14
+PEER dst=02:ac:00:00:00:02 src=02:ac:00:00:00:01 type=0x0800 len=54 ip=198.18.0.1>198.18.0.2 tcp=40000>80 flags=0x02
+PEER dst=02:ac:00:00:00:02 src=02:ac:00:00:00:01 type=0x0800 len=54 ip=198.18.0.1>198.18.0.2 tcp=40001>81 flags=0x02
+PEER dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=54 ip=198.18.0.2>198.18.0.1 tcp=81>40001 flags=0x14
+RESULT rx_synack_from_peer=0 rx_rst_from_peer=1 peer_side_arp_frames=0 peer_side_rst_with_scanner_ip_not_from_scanner_mac=0
+
+thread 'macos::spike::live_stand_path' (13149885) panicked at crates/rmasscan-net/src/macos/spike.rs:654:5:
+STOP: SYN-ACK did not reach BPF on feth4201
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

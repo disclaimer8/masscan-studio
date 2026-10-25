@@ -1,0 +1,5 @@
+test=live_rx_wakeup cond=r03-rx-wakeup
+poll: wakeups=200 misses_within_50ms=0
+poll send->ready latency: n=200 p50_us=35.0 p95_us=49.5 max_us=153.8
+kevent: wakeups=200 misses_within_50ms=0
+kevent send->ready latency: n=200 p50_us=32.0 p95_us=43.0 max_us=48.7

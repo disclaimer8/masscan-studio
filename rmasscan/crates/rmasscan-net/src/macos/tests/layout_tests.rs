@@ -163,3 +163,24 @@ fn portable_errno_and_header_constants_match_libc() {
         offset_of!(BpfHdr, bh_hdrlen) + size_of::<u16>()
     );
 }
+
+#[test]
+fn ioctl_ptr_refuses_an_argument_whose_size_differs_from_the_request() {
+    // Размер проверяется до системного вызова; дескриптор не открывается.
+    let mut wrong = 0u64;
+    assert_eq!(
+        crate::macos::sys::ioctl_ptr(-1, libc::BIOCGBLEN, &mut wrong),
+        Err(libc::EINVAL)
+    );
+    let mut right = 0u32;
+    assert_eq!(
+        crate::macos::sys::ioctl_ptr(-1, libc::BIOCGBLEN, &mut right),
+        Err(libc::EBADF),
+        "the right size reaches the kernel, which rejects the fd"
+    );
+    let mut stat = BpfStat::default();
+    assert_eq!(
+        crate::macos::sys::ioctl_ptr(-1, libc::BIOCGSTATS, &mut stat),
+        Err(libc::EBADF)
+    );
+}

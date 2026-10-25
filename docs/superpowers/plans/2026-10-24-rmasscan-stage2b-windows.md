@@ -103,7 +103,7 @@ gate → 3 — адаптер → 4 — переносимый harness → 5 —
 - Задача 4 (Linux-приёмка): закрыта, review пройдено после fix round. Код измерен на `27e3042`, evidence `8479ff2`
   (functional 141/0/0, perf 40/40 VALID, переполнение RX даёт `Failed(RxLoss)`); прогон `ee51a19`/`eb8812a`
   заменён. Результаты в [отчёте Linux](../../experiments/2026-10-23-rmasscan-stage2b-linux.md).
-  **CI на точном HEAD: NOT RUN** (push не разрешён).
+  **CI:** зелёный на `7ffa155` (PR #9) и коммите слияния `2cc2bec`, в который вошла эта база; отдельно на её HEAD CI не запускался.
 - Задача 5 (долг интеграции и поставки): закрыта, review пройдено после fix round: [перечень готовности](../../experiments/2026-10-24-rmasscan-readiness.md).
 - Итоговое review ветки: «с исправлениями»; исправления внесены.
 
@@ -293,7 +293,7 @@ owned `PcapHandle` держит Arc библиотеки до `pcap_close`. Ни
 
 ## GO и дальнейшая очередь
 
-> Статус 2026-10-25: критерий GO ниже **ещё не выполнен**: Windows VM correctness - **OPEN**; VM-приёмка PASS (части A, B, C и перепроверка на `931f69f`), но «CI зелёный» не выполнено: CI этого HEAD и CI Linux-базы Задачи 0 на её закреплённом HEAD, оба **NOT RUN** (push не разрешён). Физический NIC - отдельный пункт **NOT RUN**, в это GO не входит. Единый список условий: [отчёт](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md), разделы 1 и 13.
+> Статус 2026-10-25: критерий GO ниже **выполнен** для VM: Windows VM correctness - **GO (VM)**; VM-приёмка PASS (части A, B, C и перепроверка на `931f69f`), «CI зелёный» на точном HEAD: PR #9 на `7ffa155` и коммит слияния `2cc2bec` в `main` (Linux-база `31a729f` вошла в него; отдельно на `31a729f` CI не запускался). Физический NIC - отдельный пункт **NOT RUN**, в это GO не входит. Единый список условий: [отчёт](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md), разделы 1 и 13.
 
 **GO Windows correctness:** Linux-база Задачи 0 принята (review + CI exact HEAD); CI зелёный; Windows 11 реально
 передаёт/принимает; byte parity и pause/resume проходят; Stop ≤1 с; нет ложного

@@ -179,5 +179,5 @@ AGPL-3.0 для порта принят пользователем; Nmap ост�
 
 ## 6. Что этот документ не закрывает
 
-Windows на физическом NIC, Windows throughput, macOS на физическом NIC и его throughput, UI и licensing gates остаются открытыми (Windows correctness (VM): GO (VM); macOS correctness (feth): GO (feth), см. таблицу). Очередь дальше: Windows/Npcap физический стенд и sendqueue, macOS физический NIC, сетевая
+Windows на физическом NIC, Windows throughput, macOS на физическом NIC и его throughput, UI и licensing gates остаются открытыми (Windows correctness (VM): GO (VM); macOS correctness (feth): GO (feth) при условиях: P1–P3 исправлены, архив пересчитан исправленным верификатором с неизменёнными вердиктами, CI зелёный на точном финальном SHA ветки `fix/rmasscan-2c-review-11c6764` (**PENDING**), критерий `linkloss` изменён пользователем 2026-10-25; см. таблицу). Очередь дальше: Windows/Npcap физический стенд и sendqueue, macOS физический NIC, сетевая
 интеграция (discovery/ARP, network identity, sleep/VPN), runner/Studio, поставка.

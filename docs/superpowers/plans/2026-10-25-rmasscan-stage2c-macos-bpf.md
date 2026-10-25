@@ -27,7 +27,7 @@ C не компилируется), ioctl-константы BPF из `libc` и 
 [приёмка Windows VM](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md) (§9 ограничения, §12 дефекты CI-only),
 [перечень готовности](../../experiments/2026-10-24-rmasscan-readiness.md), [Rust-лаборатория](../../../rmasscan/docs/rust-lab.md).
 
-Репозиторий: `/Users/denyskolomiiets/masscan-studio-macos-bpf`, ветка `feat/rmasscan-stage2c-macos-bpf`
+Репозиторий: `$REPO` (рабочий worktree Mac), ветка `feat/rmasscan-stage2c-macos-bpf`
 от `main` `2cc2bec` (2B-Linux и 2B-Windows слиты 2026-10-25). Windows VM correctness GO на запечатанном
 QEMU-стенде. Репозиторий Rust-only по решению пользователя, включая лабораторные инструменты.
 

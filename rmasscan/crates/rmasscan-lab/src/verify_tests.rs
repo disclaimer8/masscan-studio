@@ -767,7 +767,7 @@ fn every_checkpoint_refusal_variant_must_name_its_reason_and_open_nothing() {
     }
 }
 #[test]
-fn a_scanner_syn_in_a_refusal_or_restricted_run_is_a_failure_only_with_a_complete_capture() {
+fn a_scanner_syn_in_a_refusal_or_restricted_run_is_a_failure_whatever_the_capture() {
     for tag in [
         "ckpt_wrong_ports",
         "perm_restricted_scan",
@@ -781,7 +781,8 @@ fn a_scanner_syn_in_a_refusal_or_restricted_run_is_a_failure_only_with_a_complet
         d.edit(&format!("runs/{tag}/capture.json"), |v| {
             v["quiet"]["reached"] = json!(false)
         });
-        assert_eq!(d.status(tag), (INVALID.into(), false), "{tag} lossy");
+        // Lab isolation does not depend on capture completeness (final review I-1): still FAIL, not discardable.
+        assert_eq!(d.status(tag), (FAIL.into(), false), "{tag} lossy");
     }
 }
 #[test]
@@ -1978,4 +1979,149 @@ fn the_verdict_reports_the_build_commit_apart_from_the_checkout_head() {
     m["orchestrator"]["build_commit"] = json!("abc");
     fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
     assert_eq!(verify_dir(&d.0)["overall"], "INVALID");
+}
+
+// ---- final review I-1 / I-2: lab-isolation (safety) checks cannot be laundered ----
+
+const C01: &str = "c01_one_addr_port_synack.run1";
+fn eno1_lab_frame() -> (f64, Vec<u8>) {
+    (fixture::BASE + 4.0, fixture::scanner_syn(80, 40000))
+}
+fn foreign_syn() -> (f64, Vec<u8>) {
+    let mut f = fixture::scanner_syn(80, 40000);
+    f[6..12].copy_from_slice(&[2, 0, 0, 0, 0, 1]);
+    (fixture::BASE + 4.0, f)
+}
+fn break_status_post(d: &Scratch, rel: &str) {
+    d.edit(&format!("{rel}/status-post.json"), |v| {
+        v["raw_run_allowed"] = json!(false)
+    });
+}
+fn safety_failed(d: &Scratch, tag: &str) -> bool {
+    let man = read_json(d.0.join("manifest.json")).unwrap();
+    let it = planned(&man).into_iter().find(|i| i["tag"] == tag).unwrap();
+    let fx = read_json(d.0.join("fixtures/manifest.json")).unwrap_or(Value::Null);
+    verify_item(&d.0, &man, &fx, &it, None).0.safety_trip()
+}
+#[test]
+fn eno1_frame_with_an_invalid_status_post_is_fail_and_not_discardable() {
+    let d = Scratch::new("functional", Some(C01));
+    // Without the frame the same status-post is a discardable INVALID.
+    break_status_post(&d, &format!("runs/{C01}"));
+    let (verdict, beh) = d.status(C01);
+    assert_eq!((verdict.as_str(), beh), (INVALID, false));
+    assert!(crate::windows_suite::may_discard(&verdict, beh));
+    rewrite_pcap(&d, C01, "eno1", |fr| fr.push(eno1_lab_frame()));
+    let (verdict, beh) = d.status(C01);
+    assert_eq!(verdict, FAIL);
+    assert!(!crate::windows_suite::may_discard(&verdict, beh));
+    assert!(safety_failed(&d, C01));
+}
+#[test]
+fn foreign_syn_with_an_incomplete_capture_is_fail_and_not_discardable() {
+    let d = Scratch::new("functional", Some(C01));
+    rewrite_pcap(&d, C01, "peer", |fr| fr.push(foreign_syn()));
+    d.edit(&format!("runs/{C01}/capture.json"), |v| {
+        v["quiet"]["reached"] = json!(false)
+    });
+    let (verdict, beh) = d.status(C01);
+    assert_eq!(verdict, FAIL);
+    assert!(!crate::windows_suite::may_discard(&verdict, beh));
+    assert!(safety_failed(&d, C01));
+}
+#[test]
+fn a_scanner_syn_in_a_refusal_run_is_fail_even_when_the_capture_is_unproven() {
+    for tag in ["ckpt_wrong_ports", "perm_restricted_scan"] {
+        let d = Scratch::new("failure", Some(tag));
+        rewrite_pcap(&d, tag, "peer", |fr| fr.push(eno1_lab_frame()));
+        d.edit(&format!("runs/{tag}/capture.json"), |v| {
+            v["quiet"]["reached"] = json!(false)
+        });
+        let (verdict, beh) = d.status(tag);
+        assert_eq!(verdict, FAIL, "{tag}");
+        assert!(!crate::windows_suite::may_discard(&verdict, beh));
+    }
+}
+#[test]
+fn a_clean_refusal_run_does_not_trip_the_safety_checks() {
+    let d = Scratch::new("failure", Some("ckpt_wrong_ports"));
+    assert!(!safety_failed(&d, "ckpt_wrong_ports"));
+    assert_eq!(d.status("ckpt_wrong_ports").0, PASS);
+}
+#[test]
+fn eno1_pcap_alone_is_judged_before_the_missing_artifacts_return_not_run() {
+    let d = Scratch::new("functional", Some(C01));
+    let run = d.0.join("runs").join(C01);
+    for f in ["meta.json", "capture.json", "run.json"] {
+        fs::remove_file(run.join(f)).unwrap();
+    }
+    // Header-only eno1: nothing seen, so the run stays NOT RUN (discardable).
+    assert_eq!(d.status(C01), (NOT_RUN.into(), false));
+    fs::write(run.join("eno1.pcap"), pcap::encode(&vec![eno1_lab_frame()])).unwrap();
+    let (verdict, beh) = d.status(C01);
+    assert_eq!(verdict, FAIL);
+    assert!(!crate::windows_suite::may_discard(&verdict, beh));
+}
+/// The reviewer's probe: a discarded attempt that saw an eno1 frame, then a clean rerun.
+#[test]
+fn a_discarded_attempt_with_an_eno1_frame_fails_the_directory_after_a_clean_rerun() {
+    let d = Scratch::new("functional-r2", None);
+    assert_eq!(verify_dir(&d.0)["overall"], PASS);
+    let disc = d.0.join("runs_discarded").join(format!("{C01}.attempt1"));
+    copy_tree(&d.0.join("runs").join(C01), &disc);
+    break_status_post(&d, &format!("runs_discarded/{C01}.attempt1"));
+    let (_, fr) = pcap::read_pcap_records(&fs::read(disc.join("peer.pcap")).unwrap()).unwrap();
+    let frame = fr.into_iter().find(|(_, f)| pcap::is_syn(f)).unwrap();
+    fs::write(disc.join("eno1.pcap"), pcap::encode(&vec![frame])).unwrap();
+    // Sanity: without the eno1 frame this discard would be a plain INVALID and a PASS directory.
+    let v = verify_dir(&d.0);
+    assert_eq!(v["overall"], FAIL, "{}", v["safety_trips"]);
+    assert_eq!(v["safety_trips"], json!([format!("{C01}.attempt1")]));
+    assert_eq!(v["discarded"][0]["verdict"], FAIL);
+}
+#[test]
+fn a_discarded_attempt_without_an_eno1_frame_is_still_a_plain_discard() {
+    let d = Scratch::new("functional-r2", None);
+    let disc = d.0.join("runs_discarded").join(format!("{C01}.attempt1"));
+    copy_tree(&d.0.join("runs").join(C01), &disc);
+    break_status_post(&d, &format!("runs_discarded/{C01}.attempt1"));
+    let v = verify_dir(&d.0);
+    assert_eq!(v["discarded"][0]["verdict"], INVALID);
+    assert_eq!(v["safety_trips"], json!([]));
+    assert_ne!(v["overall"], FAIL);
+}
+fn abort_dir(d: &Scratch, name: &str, eno1: Option<Frames>) -> PathBuf {
+    let p = d.0.join("runs_aborted").join(name);
+    fs::create_dir_all(&p).unwrap();
+    fs::write(p.join("listener.log"), "x").unwrap();
+    if let Some(fr) = eno1 {
+        fs::write(p.join("eno1.pcap"), pcap::encode(&fr)).unwrap();
+    }
+    p
+}
+#[test]
+fn an_aborted_run_with_an_eno1_frame_fails_the_directory() {
+    let d = Scratch::new("functional-r2", None);
+    abort_dir(
+        &d,
+        &format!("{C01}.20261024T000000Z"),
+        Some(vec![eno1_lab_frame()]),
+    );
+    let v = verify_dir(&d.0);
+    assert_eq!(v["overall"], FAIL);
+    assert_eq!(
+        v["safety_trips"],
+        json!([format!("{C01}.20261024T000000Z")])
+    );
+    assert_eq!(crate::verify::safety_trips(&d.0).len(), 1);
+}
+#[test]
+fn an_aborted_run_with_a_clean_eno1_or_no_pcap_changes_nothing() {
+    let d = Scratch::new("functional-r2", None);
+    abort_dir(&d, &format!("{C01}.a"), Some(Vec::new()));
+    abort_dir(&d, &format!("{C01}.b"), None);
+    let v = verify_dir(&d.0);
+    assert_eq!(v["overall"], PASS);
+    assert_eq!(v["safety_trips"], json!([]));
+    assert!(crate::verify::safety_trips(&d.0).is_empty());
 }

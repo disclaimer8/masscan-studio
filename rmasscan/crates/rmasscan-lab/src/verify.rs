@@ -1581,18 +1581,11 @@ fn linkloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
         r.add("linkloss.json present", NOT_RUN, "missing", false);
     }
 }
-fn rxloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
+/// The two checks that make a Failed(RxLoss) run genuine, shared by the failure-plan `rxloss` run and
+/// the perf cells: the failure names exactly the measured drops (exit 3, `fail_detail`, `rx_health`
+/// and `net` agree), and the retained results are a duplicate-free subset of the listener truth.
+fn rxloss_genuine(r: &mut Run, ctx: &Ctx, drops: u64, exp: &[String]) {
     let j = &ctx.rj;
-    job(r, j, c, man);
-    let Some(drops) = j["rx_health"]["kernel_drops"].as_u64().filter(|x| *x > 0) else {
-        r.add(
-            "RX overflow reproduced with measured drops",
-            NOT_RUN,
-            format!("NOT REPRODUCED: {}", j["rx_health"]),
-            false,
-        );
-        return;
-    };
     let detail = s(&j["fail_detail"]);
     let parsed = detail
         .split_once("RxLoss")
@@ -1609,21 +1602,37 @@ fn rxloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
             && j["net"]["kernel_drops"] == json!(drops),
         detail,
     );
+    let truth: BTreeSet<&str> = exp.iter().map(String::as_str).collect();
+    let got = array(&j["replies"]);
+    let distinct: BTreeSet<&str> = got.iter().map(s).collect();
+    r.beh(
+        "accepted results retained and genuine",
+        got.iter().all(|v| truth.contains(s(v)))
+            && distinct.len() == got.len()
+            && n(&j["reply_total"]) == got.len() as i128,
+        j["replies"].to_string().chars().take(300).collect::<String>(),
+    );
+}
+fn rxloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
+    let j = &ctx.rj;
+    job(r, j, c, man);
+    let Some(drops) = j["rx_health"]["kernel_drops"].as_u64().filter(|x| *x > 0) else {
+        r.add(
+            "RX overflow reproduced with measured drops",
+            NOT_RUN,
+            format!("NOT REPRODUCED: {}", j["rx_health"]),
+            false,
+        );
+        return;
+    };
+    let exp = replies(c, false);
+    rxloss_genuine(r, ctx, drops, &exp);
     r.beh(
         "RX loss has no checkpoint summary, hex or file",
         j["checkpoint"] == false
             && j["checkpoint_hex"].is_null()
             && ctx.meta["checkpoint_file_exists"] == false,
         "",
-    );
-    let exp = replies(c, false);
-    r.beh(
-        "accepted results retained and genuine",
-        array(&j["replies"])
-            .iter()
-            .all(|v| exp.iter().any(|x| v == x))
-            && n(&j["reply_total"]) == array(&j["replies"]).len() as i128,
-        j["replies"].to_string(),
     );
     r.beh(
         "TX frozen after RX failure",
@@ -1971,6 +1980,10 @@ fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
             drops.is_some_and(|d| d > 0),
             j["rx_health"].to_string(),
         );
+        if let Some(d) = drops.filter(|d| *d > 0) {
+            // Same genuineness rules as the failure-plan rxloss run; the results are not compared in full.
+            rxloss_genuine(r, ctx, d, &exp);
+        }
     } else if completed {
         r.beh(
             "Completed run has measured zero kernel drops",

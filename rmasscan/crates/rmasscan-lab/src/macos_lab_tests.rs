@@ -1284,43 +1284,54 @@ fn the_guide_states_the_grant_exposure_and_commands() {
 }
 
 #[test]
-fn revoke_narrows_mode_first_and_down_restores_recorded_modes_only_after_a_grant() {
+fn down_and_revoke_only_ever_set_0600_root_wheel_whatever_the_manifest_says() {
     let s = Scratch::new();
     let h = Fake::new();
     up_ok(&h, &s);
-    // down without any grant leaves /dev/bpf* alone.
     h.st(|st| {
         st.bpf.insert(2, (0o640, 80));
     });
-    let from = h.log().len();
     let mut g = args(&s, "bpf-access");
     g.grant = true;
     assert_eq!(go(&h, &g).0, Ok(0));
+    // A tampered manifest asks for the world to read and write.
+    let mut m = manifest_of(&s);
+    for n in 0..16 {
+        m["bpf_prev"][n.to_string()] = json!({"mode":"0666","gid":20});
+    }
+    write_manifest(&s.manifest(), &m).unwrap();
+    let from = h.log().len();
     let mut r = args(&s, "bpf-access");
     r.revoke = true;
     assert_eq!(go(&h, &r).0, Ok(0));
-    assert_eq!(h.st(|st| st.bpf[&2]), (0o600, 0), "revoke always denies");
-    assert_eq!(go(&h, &args(&s, "down")).0, Ok(0));
-    assert_eq!(
-        h.st(|st| st.bpf[&2]),
-        (0o640, 80),
-        "down restores the recorded mode"
-    );
-    assert!(
-        h.log()[from..]
-            .iter()
-            .any(|c| c.starts_with("bpf_set 2 640 80"))
-    );
+    let (r, out) = go(&h, &args(&s, "down"));
+    assert_eq!(r, Ok(0), "{out}");
+    let sets: Vec<String> = h.log()[from..]
+        .iter()
+        .filter(|c| c.starts_with("bpf_set"))
+        .cloned()
+        .collect();
+    assert!(!sets.is_empty());
+    for c in &sets {
+        assert!(
+            c.ends_with(" 600 0"),
+            "a value from the manifest reached a chmod: {c}"
+        );
+    }
+    assert!(h.st(|st| st.bpf.values().all(|v| *v == (0o600, 0))));
+    assert!(out.contains("Restore by hand"), "{out}");
+}
 
-    let s2 = Scratch::new();
-    let h2 = Fake::new();
-    up_ok(&h2, &s2);
-    let from = h2.log().len();
-    assert_eq!(go(&h2, &args(&s2, "down")).0, Ok(0));
-    assert!(
-        !h2.log()[from..].iter().any(|c| c.starts_with("bpf_set")),
-        "no grant, no bpf change"
-    );
+#[test]
+fn down_does_not_mention_modes_that_were_the_default() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    let mut g = args(&s, "bpf-access");
+    g.grant = true;
+    assert_eq!(go(&h, &g).0, Ok(0));
+    let (_, out) = go(&h, &args(&s, "down"));
+    assert!(!out.contains("Restore by hand"), "{out}");
 }
 
 #[test]
@@ -1488,5 +1499,157 @@ fn commands_without_a_stand_or_without_root_create_nothing() {
         assert!(r == Ok(0) || r.is_err(), "{cmd}");
         assert!(!s.0.join("sub").exists(), "{cmd} created the directory");
         assert!(!lock_path(&a.manifest).exists());
+    }
+}
+
+// ---- fix round 2: root actions must not be driven by user-writable state
+
+fn write_manifest_with(s: &Scratch, h: &Fake, created: Value, state: &str) {
+    up_ok(h, s);
+    let mut m = manifest_of(s);
+    m["created"] = created;
+    m["state"] = state.into();
+    write_manifest(&s.manifest(), &m).unwrap();
+}
+
+#[test]
+fn a_manifest_that_lists_foreign_interfaces_destroys_nothing() {
+    for bad in ["en0", "bridge0", "utun3", "lo0", "feth4203", ""] {
+        let s = Scratch::new();
+        let h = Fake::new();
+        h.st(|st| {
+            for n in ["bridge0", "utun3", "feth4203"] {
+                st.ifaces.insert(n.into(), FIf::default());
+            }
+        });
+        write_manifest_with(&s, &h, json!(["feth4201", bad]), "creating");
+        let from = h.log().len();
+        let (r, _) = go(&h, &args(&s, "down"));
+        assert!(r.unwrap_err().contains("not a lab interface"), "{bad}");
+        assert!(
+            !h.log()[from..]
+                .iter()
+                .any(|c| c.contains("destroy") || c.starts_with("arp -d")),
+            "{bad}: {:?}",
+            h.log()
+        );
+        assert!(s.manifest().exists());
+    }
+}
+
+#[test]
+fn a_lab_named_interface_that_is_not_ours_is_not_destroyed_even_when_unsealed() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    write_manifest_with(&s, &h, json!(["feth4201", "feth4202"]), "creating");
+    h.st(|st| {
+        let f = st.ifaces.get_mut("feth4201").unwrap();
+        f.mac = "de:ad:be:ef:00:01".into();
+        f.peer = Some("feth9".into());
+    });
+    let (r, out) = go(&h, &args(&s, "down"));
+    assert_eq!(r, Ok(10), "{out}");
+    assert!(out.contains("REFUSED"), "{out}");
+    assert!(
+        h.st(|st| st.ifaces.contains_key("feth4201")),
+        "the foreign one stays"
+    );
+    assert!(
+        !h.st(|st| st.ifaces.contains_key("feth4202")),
+        "the ours one goes"
+    );
+    assert!(s.manifest().exists());
+}
+
+#[test]
+fn a_fresh_unpeered_feth_with_a_random_mac_is_destroyed_when_unsealed() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    write_manifest_with(&s, &h, json!(["feth4201"]), "rollback-incomplete");
+    h.st(|st| {
+        let f = st.ifaces.get_mut("feth4201").unwrap();
+        f.mac = "ee:ee:ee:00:00:09".into();
+        f.peer = None;
+    });
+    assert_eq!(go(&h, &args(&s, "down")).0, Ok(0));
+    assert!(!h.st(|st| st.ifaces.contains_key("feth4201")));
+}
+
+#[cfg(unix)]
+mod lock_ownership {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    fn open(path: &Path, calls: &mut u32) -> Result<fs::File, String> {
+        let uid = test_uid();
+        open_lock_with(path, uid, None, &mut |_| {
+            *calls += 1;
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn a_file_created_by_us_is_chowned_exactly_once() {
+        let s = Scratch::new();
+        let p = s.0.join("x.lock");
+        let mut calls = 0;
+        open(&p, &mut calls).unwrap();
+        assert_eq!(calls, 1);
+        // Our own earlier lock is reused and never chowned again.
+        open(&p, &mut calls).unwrap();
+        assert_eq!(calls, 1, "a pre-existing file is never chowned");
+    }
+
+    #[test]
+    fn a_hardlinked_lock_is_refused_and_not_chowned() {
+        let s = Scratch::new();
+        let victim = s.0.join("sudoers-like");
+        fs::write(&victim, "x").unwrap();
+        let p = s.0.join("x.lock");
+        fs::hard_link(&victim, &p).unwrap();
+        let mut calls = 0;
+        let e = open(&p, &mut calls).unwrap_err();
+        assert!(e.contains("hard links"), "{e}");
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn a_symlinked_lock_is_refused_and_not_chowned() {
+        let s = Scratch::new();
+        let victim = s.0.join("victim");
+        fs::write(&victim, "x").unwrap();
+        let p = s.0.join("x.lock");
+        symlink(&victim, &p).unwrap();
+        let mut calls = 0;
+        let e = open(&p, &mut calls).unwrap_err();
+        assert!(e.contains("symlink"), "{e}");
+        assert_eq!(calls, 0);
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "x");
+    }
+
+    #[test]
+    fn a_writable_or_non_regular_existing_lock_is_refused() {
+        let s = Scratch::new();
+        let p = s.0.join("x.lock");
+        fs::write(&p, "").unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o666)).unwrap();
+        let mut calls = 0;
+        assert!(open(&p, &mut calls).unwrap_err().contains("writable"));
+        let d = s.0.join("dir.lock");
+        fs::create_dir(&d).unwrap();
+        assert!(open(&d, &mut calls).is_err());
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn existing_file_policy_table() {
+        let p = existing_file_policy;
+        assert!(p(false, true, 1, 501, 0o644, 0, Some(501)).is_ok());
+        assert!(p(false, true, 1, 0, 0o600, 501, None).is_ok());
+        assert!(p(true, true, 1, 501, 0o644, 0, Some(501)).is_err());
+        assert!(p(false, false, 1, 501, 0o644, 0, Some(501)).is_err());
+        assert!(p(false, true, 2, 501, 0o644, 0, Some(501)).is_err());
+        assert!(p(false, true, 1, 502, 0o644, 0, Some(501)).is_err());
+        assert!(p(false, true, 1, 501, 0o620, 0, Some(501)).is_err());
     }
 }

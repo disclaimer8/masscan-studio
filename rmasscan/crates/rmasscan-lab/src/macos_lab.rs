@@ -979,31 +979,107 @@ fn prepare_dir(_h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Open (creating if needed) the lock file without following a symlink, and give it to the
-/// sudo user.
-fn open_lock(path: &Path) -> Result<fs::File, String> {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(format!("{}: the lock file is a symlink", path.display()));
+/// An existing lock file is acceptable only when it is a regular file with a single link (a
+/// hardlink to a system file is refused), owned by root, this user or the sudo user, and not
+/// writable by group or others. It is never chowned.
+pub(crate) fn existing_file_policy(
+    is_symlink: bool,
+    is_file: bool,
+    nlink: u64,
+    owner: u32,
+    mode: u32,
+    euid: u32,
+    sudo_uid: Option<u32>,
+) -> Result<(), String> {
+    if is_symlink {
+        return Err("it is a symlink".into());
     }
-    let f = OpenOptions::new()
-        .create(true)
-        .truncate(false)
+    if !is_file {
+        return Err("it is not a regular file".into());
+    }
+    if nlink != 1 {
+        return Err(format!("it has {nlink} hard links"));
+    }
+    if owner != 0 && owner != euid && Some(owner) != sudo_uid {
+        return Err(format!("it is owned by uid {owner}"));
+    }
+    if mode & 0o022 != 0 {
+        return Err(format!(
+            "it is group- or world-writable (mode {:04o})",
+            mode & 0o7777
+        ));
+    }
+    Ok(())
+}
+
+/// `O_NOFOLLOW` on macOS (`<sys/fcntl.h>`), so no libc is needed.
+#[cfg(target_os = "macos")]
+const O_NOFOLLOW: i32 = 0x0100;
+
+/// Create the lock file with `create_new` (`O_EXCL`: never follows a symlink at the last
+/// component) and hand it to the sudo user through the open descriptor (`chown`). If the file
+/// already exists it is only checked ([`existing_file_policy`]) and opened without following a
+/// symlink; a pre-existing file is never chowned.
+pub(crate) fn open_lock_with(
+    path: &Path,
+    euid: u32,
+    sudo_uid: Option<u32>,
+    chown: &mut dyn FnMut(&fs::File) -> std::io::Result<()>,
+) -> Result<fs::File, String> {
+    let shown = path.display();
+    match OpenOptions::new()
         .read(true)
         .write(true)
+        .create_new(true)
         .open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    {
+        Ok(f) => {
+            chown(&f).map_err(|e| format!("{shown}: {e}"))?;
+            return Ok(f);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("{shown}: {e}")),
+    }
+    let md = fs::symlink_metadata(path).map_err(|e| format!("{shown}: {e}"))?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        let after = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        existing_file_policy(
+            md.file_type().is_symlink(),
+            md.is_file(),
+            md.nlink(),
+            md.uid(),
+            md.mode(),
+            euid,
+            sudo_uid,
+        )
+        .map_err(|e| format!("{shown}: existing lock file refused: {e}"))?;
+        let mut o = OpenOptions::new();
+        o.read(true).write(true);
+        #[cfg(target_os = "macos")]
+        o.custom_flags(O_NOFOLLOW);
+        let f = o.open(path).map_err(|e| format!("{shown}: {e}"))?;
         let mine = f.metadata().map_err(|e| e.to_string())?;
-        if after.file_type().is_symlink() || (after.dev(), after.ino()) != (mine.dev(), mine.ino())
-        {
-            return Err(format!("{}: the lock file was swapped", path.display()));
+        if (md.dev(), md.ino()) != (mine.dev(), mine.ino()) || mine.nlink() != 1 {
+            return Err(format!("{shown}: the lock file was swapped"));
         }
+        Ok(f)
     }
-    crate::vm_lab::restore_sudo_owner(&f).map_err(|e| e.to_string())?;
-    Ok(f)
+    #[cfg(not(unix))]
+    {
+        let _ = (md, euid, sudo_uid, chown);
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| format!("{shown}: {e}"))
+    }
+}
+
+fn open_lock(h: &dyn Host, path: &Path) -> Result<fs::File, String> {
+    open_lock_with(path, h.euid()?, sudo_uid(), &mut |f| {
+        crate::vm_lab::restore_sudo_owner(f)
+    })
 }
 
 // ---------------------------------------------------------------- up / rollback / down
@@ -1017,6 +1093,42 @@ fn names_of(m: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `created` comes from a user-writable manifest and decides what a root `ifconfig destroy`
+/// touches, so it may name only the two fixed lab interfaces. Anything else refuses the whole
+/// operation before any command runs.
+fn lab_names(list: &[String]) -> Result<Vec<String>, String> {
+    for n in list {
+        if n != SCANNER_IF && n != PEER_IF {
+            return Err(format!(
+                "the manifest lists {n:?}, which is not a lab interface; nothing was destroyed"
+            ));
+        }
+    }
+    Ok(list.to_vec())
+}
+
+/// A live check before destroying a lab-named interface: its MAC is the lab MAC, or its peer
+/// is the other lab feth, or it is a fresh feth with no peer yet.
+fn lab_property(h: &dyn Host, n: &str) -> Result<(), String> {
+    let (mac, other) = if n == SCANNER_IF {
+        (SCANNER_MAC, PEER_IF)
+    } else if n == PEER_IF {
+        (PEER_MAC, SCANNER_IF)
+    } else {
+        return Err(format!("{n} is not a lab interface"));
+    };
+    let info = parse_ifconfig(&h.sh(&["ifconfig", n])?);
+    let no_peer = matches!(info.peer.as_deref(), None | Some("<none>"));
+    if info.ether.as_deref() == Some(mac) || info.peer.as_deref() == Some(other) || no_peer {
+        Ok(())
+    } else {
+        Err(format!(
+            "{n} has MAC {:?} and peer {:?}: not a lab interface, left alone",
+            info.ether, info.peer
+        ))
+    }
 }
 
 /// Remove what a (possibly partial) `up` created: the ARP entry, if it was attempted and is
@@ -1047,6 +1159,11 @@ fn cleanup(h: &dyn Host, created: &[String], arp_set: bool, out: &mut Vec<String
     }
     for n in created.iter().rev() {
         if has(n) {
+            if let Err(e) = lab_property(h, n) {
+                out.push(format!("REFUSED: {e}"));
+                ok = false;
+                continue;
+            }
             out.push(format!("+ ifconfig {n} destroy"));
             if let Err(e) = h.sh(&["ifconfig", n, "destroy"]) {
                 out.push(format!("FAILED: {e}"));
@@ -1058,7 +1175,13 @@ fn cleanup(h: &dyn Host, created: &[String], arp_set: bool, out: &mut Vec<String
 }
 
 fn rollback(h: &dyn Host, a: &Args, m: &mut Value, out: &mut Vec<String>) -> i32 {
-    let ok = cleanup(h, &names_of(m, "created"), m["arp_set"] == true, out);
+    let ok = match lab_names(&names_of(m, "created")) {
+        Ok(c) => cleanup(h, &c, m["arp_set"] == true, out),
+        Err(e) => {
+            out.push(format!("REFUSED: {e}"));
+            false
+        }
+    };
     if ok {
         let _ = fs::remove_file(&a.manifest);
         let _ = fs::remove_file(marker_path(&a.manifest));
@@ -1276,26 +1399,16 @@ fn link_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String
     Ok(0)
 }
 
-/// The modes `down` puts back: those recorded by the first grant. Without a grant, nothing
-/// was changed and nothing is touched.
-fn recorded_modes(m: &Value) -> Vec<(u32, u32, u32)> {
+/// Recorded previous modes that differ from the macOS default `0600 root:wheel`, for
+/// information only (a ChmodBPF Mac). They are never applied: a user-writable manifest must not
+/// drive a root `chmod`/`chown`.
+fn differing_prev(m: &Value) -> Vec<String> {
     let Some(prev) = m["bpf_prev"].as_object() else {
         return vec![];
     };
     prev.iter()
-        .filter_map(|(k, v)| {
-            let n = k.parse::<u32>().ok().filter(|n| *n <= BPF_LAST)?;
-            let mode = v["mode"]
-                .as_str()
-                .and_then(|s| u32::from_str_radix(s, 8).ok())
-                .filter(|m| *m <= 0o7777)
-                .unwrap_or(REVOKED_MODE);
-            let gid = v["gid"]
-                .as_u64()
-                .and_then(|g| u32::try_from(g).ok())
-                .unwrap_or(0);
-            Some((n, mode, gid))
-        })
+        .filter(|(_, v)| v["mode"].as_str() != Some("0600") || v["gid"].as_u64() != Some(0))
+        .map(|(k, v)| format!("/dev/bpf{k}: mode {} gid {}", v["mode"], v["gid"]))
         .collect()
 }
 
@@ -1307,7 +1420,7 @@ fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     }
     let m = load_stand(a)?;
     let sealed = m["state"] == "sealed";
-    let mut created = names_of(&m, "created");
+    let mut created = lab_names(&names_of(&m, "created"))?;
     let mut arp_set = m["arp_set"] == true;
     if sealed && created.is_empty() {
         created = vec![SCANNER_IF.into(), PEER_IF.into()];
@@ -1329,13 +1442,20 @@ fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
         }
     }
     let mut ok = cleanup(h, &created, arp_set, out);
-    for (n, mode, gid) in recorded_modes(&m) {
+    // Always the macOS default, never a value read from the manifest.
+    for n in 0..=BPF_LAST {
         if h.bpf_stat(n).is_some()
-            && let Err(e) = h.bpf_set(n, mode, gid)
+            && let Err(e) = h.bpf_set(n, REVOKED_MODE, 0)
         {
-            out.push(format!("FAILED: restore /dev/bpf{n}: {e}"));
+            out.push(format!("FAILED: revoke /dev/bpf{n}: {e}"));
             ok = false;
         }
+    }
+    let differing = differing_prev(&m);
+    if !differing.is_empty() {
+        out.push(format!(
+            "NOTE: before the first grant these nodes were not 0600 root:wheel; down set them to 0600 root:wheel and does not restore them. Restore by hand if you need them: {differing:?}"
+        ));
     }
     if !ok {
         out.push("down incomplete: manifest kept so down can be repeated".into());
@@ -1343,7 +1463,7 @@ fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     }
     let _ = fs::remove_file(&a.manifest);
     let _ = fs::remove_file(marker_path(&a.manifest));
-    out.push("OK: stand removed, BPF modes restored, manifest deleted".into());
+    out.push("OK: stand removed, /dev/bpf* set to 0600 root:wheel, manifest deleted".into());
     Ok(0)
 }
 
@@ -1386,7 +1506,7 @@ fn dispatch(h: &dyn Host, a: &Args, wait: Duration, out: &mut Vec<String>) -> Re
         if let Some(dir) = a.manifest.parent().filter(|d| !d.as_os_str().is_empty()) {
             prepare_dir(h, dir, a.cmd == "up")?;
         }
-        let f = open_lock(&lock_path(&a.manifest))?;
+        let f = open_lock(h, &lock_path(&a.manifest))?;
         let start = Instant::now();
         loop {
             match f.try_lock() {

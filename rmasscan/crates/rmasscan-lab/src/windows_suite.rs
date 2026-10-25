@@ -1783,6 +1783,25 @@ mod tests {
         assert!(start.elapsed() >= Duration::from_millis(500));
         assert!(start.elapsed() < Duration::from_secs(3));
     }
+    #[cfg(unix)]
+    #[test]
+    fn a_descendant_holding_stderr_for_ten_seconds_is_cut_at_the_five_second_drain_ceiling() {
+        // The shared drain window is capped at 5 s: a descendant that keeps stderr open far longer turns
+        // into rc 124 after about that long, not after its own 10 s and not after the 30 s deadline.
+        let start = Instant::now();
+        let out = command(
+            &strings(&["sh", "-c", "(sleep 10 >/dev/null) & printf ok"]),
+            30,
+            false,
+        )
+        .unwrap();
+        let took = start.elapsed();
+        assert_eq!(out.rc, 124);
+        assert!(
+            took >= Duration::from_millis(4500) && took <= Duration::from_secs(7),
+            "{took:?}"
+        );
+    }
     #[test]
     fn failed_verify_never_calls_fetch_even_with_successful_old_report() {
         let fetched = std::cell::Cell::new(false);

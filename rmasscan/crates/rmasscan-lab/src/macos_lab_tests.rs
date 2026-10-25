@@ -30,6 +30,9 @@ struct State {
     populate_calls: u32,
     staff: u32,
     route_get: BTreeMap<String, String>,
+    lab_dir: Option<PathBuf>,
+    /// A foreign interface that appears when the next `create` runs (a race after preflight).
+    appear_on_create: Option<String>,
 }
 
 struct Fake(RefCell<State>);
@@ -52,6 +55,8 @@ impl Fake {
             populate_calls: 0,
             staff: 20,
             route_get: BTreeMap::new(),
+            lab_dir: None,
+            appear_on_create: None,
         }))
     }
     fn log(&self) -> Vec<String> {
@@ -149,6 +154,15 @@ impl Host for Fake {
             ["ifconfig", n, "create"] => {
                 if s.ifaces.contains_key(*n) {
                     return Err(format!("{n} exists"));
+                }
+                if let Some(x) = s.appear_on_create.take() {
+                    s.ifaces.insert(
+                        x,
+                        FIf {
+                            mac: "aa:aa:aa:aa:aa:77".into(),
+                            ..FIf::default()
+                        },
+                    );
                 }
                 let mac = format!("ee:ee:ee:00:00:{:02x}", s.ifaces.len() + 1);
                 s.ifaces.insert(
@@ -282,6 +296,13 @@ impl Host for Fake {
     fn euid(&self) -> Result<u32, String> {
         Ok(test_uid())
     }
+    fn lab_dir(&self) -> Result<PathBuf, String> {
+        self.0
+            .borrow()
+            .lab_dir
+            .clone()
+            .ok_or_else(|| "no lab dir scripted".to_string())
+    }
     fn bpf_populate(&self, last: u32) -> Result<(), String> {
         let mut s = self.0.borrow_mut();
         s.populate_calls += 1;
@@ -344,6 +365,7 @@ fn args(s: &Scratch, cmd: &str) -> Args {
 }
 
 fn go(h: &Fake, a: &Args) -> (Result<i32, String>, String) {
+    h.st(|st| st.lab_dir = a.manifest.parent().map(Path::to_path_buf));
     let mut out = vec![];
     let r = execute(h, a, &mut out);
     (r, out.join("\n"))
@@ -871,12 +893,12 @@ fn a_held_lock_is_reported_not_waited_on_forever() {
         .unwrap();
     holder.lock().unwrap();
     let mut out = vec![];
-    let e = dispatch(&h, &args(&s, "up"), Duration::ZERO, &mut out).unwrap_err();
+    let e = dispatch_in(&h, &args(&s, "up"), Duration::ZERO, &mut out).unwrap_err();
     assert!(e.contains("holds the lock"), "{e}");
     assert_eq!(h.log(), ["id -u"], "only the root probe may have run");
     // plan and status never take the lock.
     assert_eq!(
-        dispatch(&h, &args(&s, "plan"), Duration::ZERO, &mut out),
+        dispatch_in(&h, &args(&s, "plan"), Duration::ZERO, &mut out),
         Ok(0)
     );
 }
@@ -987,6 +1009,12 @@ fn populate_is_a_no_op_when_everything_exists() {
 
 // ---- fix round 1: persistence, parsers, lab routes, ownership, grant
 
+/// Like `dispatch`, with the lab directory scripted as the manifest's own directory.
+fn dispatch_in(h: &Fake, a: &Args, wait: Duration, out: &mut Vec<String>) -> Result<i32, String> {
+    h.st(|st| st.lab_dir = a.manifest.parent().map(Path::to_path_buf));
+    dispatch(h, a, wait, out)
+}
+
 fn manifest_of(s: &Scratch) -> Value {
     serde_json::from_slice(&fs::read(s.manifest()).unwrap()).unwrap()
 }
@@ -1005,7 +1033,8 @@ fn a_failed_rollback_keeps_the_manifest_and_down_finishes_it() {
     let m = manifest_of(&s);
     assert_eq!(m["state"], "rollback-incomplete");
     // The intent of the failed create was recorded before the command ran.
-    assert_eq!(m["created"], json!(["feth4201", "feth4202"]));
+    // The failed create is dropped from the record (N1); the first one stays.
+    assert_eq!(m["created"], json!(["feth4201"]));
     assert!(marker_path(&s.manifest()).exists());
     assert!(
         h.st(|st| st.ifaces.contains_key("feth4201")),
@@ -1385,7 +1414,14 @@ fn every_command_the_lab_runs_has_an_absolute_system_path() {
 fn dir_policy_table() {
     let ok = |sym, dir, owner, mode, euid, sudo| dir_policy(sym, dir, owner, mode, euid, sudo);
     assert!(ok(false, true, 501, 0o755, 0, Some(501)).is_ok());
-    assert!(ok(false, true, 0, 0o755, 501, None).is_ok());
+    assert!(ok(false, true, 501, 0o755, 501, None).is_ok());
+    // Under sudo the directory must be the invoking user's, never root's.
+    assert!(
+        ok(false, true, 0, 0o755, 0, Some(501))
+            .unwrap_err()
+            .contains("expected uid 501")
+    );
+    assert!(ok(false, true, 0, 0o755, 501, None).is_err());
     assert!(ok(false, true, 501, 0o700, 501, None).is_ok());
     assert!(
         ok(true, true, 501, 0o755, 0, Some(501))
@@ -1427,12 +1463,12 @@ fn dispatch_refuses_a_symlinked_or_group_writable_lab_directory() {
     let mut a = args(&s, "up");
     a.manifest = link.join("macos-m1.json");
     let mut out = vec![];
-    let e = dispatch(&h, &a, Duration::ZERO, &mut out).unwrap_err();
+    let e = dispatch_in(&h, &a, Duration::ZERO, &mut out).unwrap_err();
     assert!(e.contains("symlink"), "{e}");
     assert!(h.mutating().is_empty());
     fs::set_permissions(&real, fs::Permissions::from_mode(0o775)).unwrap();
     a.manifest = real.join("macos-m1.json");
-    let e = dispatch(&h, &a, Duration::ZERO, &mut out).unwrap_err();
+    let e = dispatch_in(&h, &a, Duration::ZERO, &mut out).unwrap_err();
     assert!(e.contains("writable"), "{e}");
     assert!(
         fs::read_dir(&real).unwrap().next().is_none(),
@@ -1450,7 +1486,7 @@ fn a_symlinked_lock_file_is_refused() {
     symlink(&target, lock_path(&s.manifest())).unwrap();
     let h = Fake::new();
     let mut out = vec![];
-    let e = dispatch(&h, &args(&s, "up"), Duration::ZERO, &mut out).unwrap_err();
+    let e = dispatch_in(&h, &args(&s, "up"), Duration::ZERO, &mut out).unwrap_err();
     assert!(e.contains("symlink"), "{e}");
     assert_eq!(fs::read_to_string(&target).unwrap(), "x");
 }
@@ -1462,10 +1498,18 @@ fn dispatch_creates_the_directory_for_up_and_removes_the_lock_after_down() {
     let mut a = args(&s, "up");
     a.manifest = s.0.join("sub").join("macos-m1.json");
     let mut out = vec![];
-    assert_eq!(dispatch(&h, &a, Duration::ZERO, &mut out), Ok(0), "{out:?}");
+    assert_eq!(
+        dispatch_in(&h, &a, Duration::ZERO, &mut out),
+        Ok(0),
+        "{out:?}"
+    );
     assert!(lock_path(&a.manifest).exists());
     a.cmd = "down".into();
-    assert_eq!(dispatch(&h, &a, Duration::ZERO, &mut out), Ok(0), "{out:?}");
+    assert_eq!(
+        dispatch_in(&h, &a, Duration::ZERO, &mut out),
+        Ok(0),
+        "{out:?}"
+    );
     assert!(
         !lock_path(&a.manifest).exists(),
         "the lock is removed with the stand"
@@ -1482,7 +1526,7 @@ fn commands_without_a_stand_or_without_root_create_nothing() {
     h.st(|st| st.root = false);
     let mut out = vec![];
     assert!(
-        dispatch(&h, &a, Duration::ZERO, &mut out)
+        dispatch_in(&h, &a, Duration::ZERO, &mut out)
             .unwrap_err()
             .contains("needs root")
     );
@@ -1495,7 +1539,7 @@ fn commands_without_a_stand_or_without_root_create_nothing() {
         a.cmd = cmd.into();
         a.down = cmd == "link";
         a.grant = cmd == "bpf-access";
-        let r = dispatch(&h, &a, Duration::ZERO, &mut out);
+        let r = dispatch_in(&h, &a, Duration::ZERO, &mut out);
         assert!(r == Ok(0) || r.is_err(), "{cmd}");
         assert!(!s.0.join("sub").exists(), "{cmd} created the directory");
         assert!(!lock_path(&a.manifest).exists());
@@ -1652,4 +1696,173 @@ mod lock_ownership {
         assert!(p(false, true, 1, 502, 0o644, 0, Some(501)).is_err());
         assert!(p(false, true, 1, 501, 0o620, 0, Some(501)).is_err());
     }
+}
+
+// ---- fix round 3: user-writable input must not steer root
+
+#[test]
+fn a_foreign_interface_that_appears_after_preflight_is_never_destroyed() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| st.appear_on_create = Some("feth4202".into()));
+    let (r, out) = go(&h, &args(&s, "up"));
+    assert_eq!(r, Ok(10), "{out}");
+    assert!(
+        h.st(|st| st.ifaces.contains_key("feth4202")),
+        "the foreign feth4202 must survive"
+    );
+    assert!(
+        !h.st(|st| st.ifaces.contains_key("feth4201")),
+        "ours is rolled back"
+    );
+    assert!(!h.log().contains(&"ifconfig feth4202 destroy".to_string()));
+    assert!(!s.manifest().exists());
+}
+
+#[test]
+fn manifest_shape_table() {
+    let lab = Path::new("/Users/me/.rmasscan-lab");
+    let ok = |p: &str| manifest_shape(Path::new(p), lab);
+    assert!(ok("/Users/me/.rmasscan-lab/macos-m1.json").is_ok());
+    for bad in [
+        "/etc/sudoers.d/x.json",
+        "/Library/LaunchDaemons/x.json",
+        "/Users/me/.rmasscan-lab/sub/x.json",
+        "/Users/me/.rmasscan-lab/../x.json",
+        "/Users/me/.rmasscan-lab/./x.json",
+        "/Users/me/.rmasscan-lab/x.txt",
+        "/Users/me/.rmasscan-lab/.json",
+        "/Users/me/.rmasscan-lab/a b.json",
+        "/Users/me/.rmasscan-lab",
+        "macos-m1.json",
+        "/Users/me/.rmasscan-lab2/x.json",
+    ] {
+        assert!(ok(bad).is_err(), "{bad} must be refused");
+    }
+}
+
+#[test]
+fn a_manifest_outside_the_lab_directory_is_refused_before_any_action() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| st.lab_dir = Some(s.0.join("lab")));
+    for p in [
+        s.0.join("elsewhere.json"),
+        s.0.join("lab").join("sub").join("x.json"),
+        PathBuf::from("/etc/sudoers.d/rmasscan.json"),
+    ] {
+        let mut a = args(&s, "up");
+        a.manifest = p.clone();
+        let mut out = vec![];
+        let e = dispatch(&h, &a, Duration::ZERO, &mut out).unwrap_err();
+        assert!(e.contains("refused"), "{p:?}: {e}");
+        for c in ["status", "down"] {
+            a.cmd = c.into();
+            assert!(execute(&h, &a, &mut out).is_err(), "{c} {p:?}");
+        }
+    }
+    assert!(h.log().is_empty(), "no command ran: {:?}", h.log());
+    assert!(!s.0.join("lab").exists() && !s.0.join("elsewhere.json").exists());
+}
+
+#[test]
+fn a_missing_parent_is_never_created_only_the_lab_directory_itself() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    // The lab directory's parent does not exist: refused, nothing created.
+    let mut a = args(&s, "up");
+    a.manifest =
+        s.0.join("no-home")
+            .join(".rmasscan-lab")
+            .join("macos-m1.json");
+    let mut out = vec![];
+    assert!(dispatch_in(&h, &a, Duration::ZERO, &mut out).is_err());
+    assert!(!s.0.join("no-home").exists());
+    // The parent exists: exactly the lab directory is created.
+    a.manifest = s.0.join(".rmasscan-lab").join("macos-m1.json");
+    assert_eq!(
+        dispatch_in(&h, &a, Duration::ZERO, &mut out),
+        Ok(0),
+        "{out:?}"
+    );
+    assert!(s.0.join(".rmasscan-lab").is_dir());
+}
+
+#[cfg(unix)]
+mod trusted_reads {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn symlinks_oversize_hardlinked_and_writable_files_are_not_read() {
+        let s = Scratch::new();
+        let uid = test_uid();
+        let p = s.0.join("m.json");
+        assert_eq!(read_trusted(&p, uid), Ok(None));
+        fs::write(&p, "{}").unwrap();
+        assert_eq!(read_trusted(&p, uid).unwrap().unwrap(), b"{}");
+        // A symlink to an endless file is refused, not opened.
+        let z = s.0.join("zero.json");
+        symlink("/dev/zero", &z).unwrap();
+        assert!(read_trusted(&z, uid).unwrap_err().contains("symlink"));
+        // Larger than the cap.
+        let big = s.0.join("big.json");
+        fs::write(&big, vec![b'x'; (1 << 20) + 1]).unwrap();
+        assert!(read_trusted(&big, uid).unwrap_err().contains("larger"));
+        // A hard link.
+        fs::hard_link(&p, s.0.join("m2.json")).unwrap();
+        assert!(read_trusted(&p, uid).unwrap_err().contains("hard links"));
+        // Group-writable.
+        let w = s.0.join("w.json");
+        fs::write(&w, "{}").unwrap();
+        fs::set_permissions(&w, fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(read_trusted(&w, uid).unwrap_err().contains("writable"));
+        // A directory is not a file.
+        assert!(read_trusted(&s.0, uid).is_err());
+    }
+
+    #[test]
+    fn status_with_a_symlinked_manifest_is_refused_not_followed() {
+        let s = Scratch::new();
+        let h = Fake::new();
+        symlink("/dev/zero", s.manifest()).unwrap();
+        let (rc, v) = status_json(&h, &s);
+        assert_eq!(rc, 3);
+        assert!(!check_ok(&v, "manifest"));
+    }
+}
+
+#[test]
+fn a_sealed_manifest_cannot_make_down_destroy_a_foreign_interface() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| {
+        st.ifaces.insert("bridge9".into(), FIf::default());
+    });
+    up_ok(&h, &s);
+    let mut m = manifest_of(&s);
+    m["created"] = json!(["feth4201", "feth4202", "bridge9"]);
+    write_manifest(&s.manifest(), &m).unwrap();
+    assert_eq!(m["state"], "sealed");
+    let from = h.log().len();
+    assert!(
+        go(&h, &args(&s, "down"))
+            .0
+            .unwrap_err()
+            .contains("not a lab interface")
+    );
+    assert!(!h.log()[from..].iter().any(|c| c.contains("destroy")));
+    assert!(h.st(|st| st.ifaces.contains_key("bridge9")));
+}
+
+#[test]
+fn plan_and_guide_describe_the_real_down_and_the_chmodbpf_cost() {
+    let s = Scratch::new();
+    let (_, out) = go(&Fake::new(), &args(&s, "plan"));
+    assert!(out.contains("0600 root:wheel"));
+    assert!(!out.contains("restore the recorded"));
+    let doc = include_str!("../../../docs/macos-feth-lab.md");
+    assert!(doc.contains("ChmodBPF"));
+    assert!(doc.contains("until the next reboot") || doc.contains("until reboot"));
+    assert!(!doc.contains("restore BPF modes"));
 }

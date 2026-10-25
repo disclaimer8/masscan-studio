@@ -627,3 +627,41 @@ fn perf_rows_record_the_capture_kernel_drops_of_every_cell_and_never_normalise_a
     assert_eq!(matrix["result"], "FAIL");
     let _ = fs::remove_dir_all(dir);
 }
+
+// ---- final review M-2: an interrupted perf run is partial, never a complete FAIL matrix ----
+#[test]
+fn an_interrupted_perf_run_is_partial_and_starts_no_further_cell() {
+    let out = scratch("perf-interrupted");
+    let mut d = driver_in(&out);
+    TEST_STOP.with(|s| s.set(true));
+    let r = d.perf(&[100, 1000], 5);
+    TEST_STOP.with(|s| s.set(false));
+    let e = r.unwrap_err();
+    assert!(e.contains("interrupted") && e.contains("partial"), "{e}");
+    let v: Value = serde_json::from_slice(&fs::read(out.join("results.json")).unwrap()).unwrap();
+    assert_eq!(v["partial"], true);
+    assert_eq!(v["interrupted"], true);
+    assert_eq!(
+        v["perf_cells"],
+        json!([]),
+        "no cell was started, none recorded as failed"
+    );
+    assert!(
+        v["checks"].as_array().unwrap().is_empty(),
+        "no matrix verdict is written for a partial run: {v}"
+    );
+    let _ = fs::remove_dir_all(&out);
+}
+#[test]
+fn cleanup_signals_do_not_go_through_command_and_reach_the_process() {
+    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+    signal_process("TERM", child.id());
+    let t = Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        assert!(
+            t.elapsed() < Duration::from_secs(5),
+            "the signal never arrived"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}

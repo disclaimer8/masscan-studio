@@ -330,3 +330,28 @@ and no duplicate, and must equal the replies the peer witness saw on the wire; n
 - `icmplim` must be an integer. `oracle-fixtures` picks its expected counts from the parsed `--open-ports` set.
 - Coverage note: with 80 and 443 closed, SYN-ACK handling by source port (c05, c06) and in x01 is not exercised on
   the Mac; c03, pause/resume and the perf ports 8000-8007 cover it.
+
+### No silent ports on the Mac (Darwin syncookies)
+
+`net.inet.tcp.syncookie = 1` on this Darwin: the handshake completes even when the listen queue is full (a probe
+on loopback completed 300 of 300 connects held open, at backlog 0, 1 and 2). A kernel "silent" port therefore cannot
+exist, and the lab never changes sysctl, pf or the firewall to make one. Rules for the Mac stand only (Windows and
+Linux are unchanged):
+
+- `peer listen` opens `8000-8007` only; the suite never asks for `--silent` and never requires `silent_proven`.
+  `ready` is still proven for the open listeners. `listeners.json` and the manifest record `"silent": []`,
+  `"silent_proven": null`, `"silent_unavailable": "darwin-syncookies"` and the observed
+  `sysctl -n net.inet.tcp.syncookie` (read only, absolute path; also in `meta.json`).
+- 8099 and 8100-8119 are ordinary closed ports: an RST is expected, a missing RST is tolerated (the RST rate
+  limit), they are never open.
+- x01 (ports 80, 81, 443, 8099, all closed): the injector records the sha256 of every frame it wrote
+  (`injected`); a frame on the wire marked as injected (IP id `0xf0e1`) must be one of them, and the rest is the
+  genuine reply set. Results must be a subset of the genuine wire replies, with no open entry and no duplicate; a
+  result for a port whose genuine reply is not on the wire means a foreign frame was accepted (FAIL). The
+  foreign-reject properties are unchanged.
+- `stop_silent` and `stop_load` require Stop mid-TX (`sent > 0 && sent < range`, stop within 1 s, no SYN after the
+  outcome, threads joined, no fd leak) and results that are a subset of the genuine wire replies. The "empty
+  receive path" property is recorded per run as the note `empty_receive_path: NOT RUN on macOS
+  (darwin-syncookies)`; it does not change the verdict and is never a PASS claim.
+- The oracle fixtures are unchanged: the SYN bytes and case arguments are the same, and the verifier pins only
+  `responder_open_ports` (8000-8007), not a build commit.

@@ -161,6 +161,13 @@ impl Stand for Fake {
                 stderr: String::new(),
             });
         }
+        if argv[0] == "/usr/sbin/sysctl" {
+            return Ok(Output {
+                rc: 0,
+                stdout: "250\n".into(),
+                stderr: String::new(),
+            });
+        }
         if argv[0] == "/bin/ps" {
             return Ok(Output {
                 rc: 0,
@@ -1551,5 +1558,36 @@ fn the_verifiers_pinned_binding_is_the_suites_plan() {
             &json!({"binding":plan_binding(),"stand":{"scanner_if":SCANNER_IF,"peer_if":PEER_IF}})
         ),
         None
+    );
+}
+
+#[test]
+fn the_peer_listens_on_8000_to_8007_only_and_the_rst_limit_is_recorded() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    let dest = rig
+        .suite(&st, "functional")
+        .one(&item("functional", C01), 30)
+        .unwrap();
+    let spawned = st.spawned.borrow();
+    let listen = spawned
+        .iter()
+        .find(|a| a.iter().any(|x| x == "listen"))
+        .unwrap();
+    assert_eq!(
+        after(listen, "--open"),
+        "8000-8007",
+        "no root listeners: 80 and 443 stay closed"
+    );
+    let meta = read_json(dest.join("meta.json")).unwrap();
+    assert_eq!(meta["icmplim"], "250");
+    assert!(
+        fs::read_to_string(dest.join("icmplim.txt"))
+            .unwrap()
+            .contains("250")
+    );
+    assert!(
+        !spawned.iter().any(|a| a[0] == "/usr/sbin/sysctl"),
+        "read through exec, not spawned"
     );
 }

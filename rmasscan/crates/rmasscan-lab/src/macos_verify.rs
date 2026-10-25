@@ -398,7 +398,8 @@ fn gate(
         Some(v) => {
             let mut op: Vec<_> = array(&v["open"]).iter().filter_map(Value::as_u64).collect();
             op.sort_unstable();
-            let want: Vec<u64> = [80, 443].into_iter().chain(8000..8008).collect();
+            let mut want: Vec<u64> = verify::open_ports().into_iter().map(u64::from).collect();
+            want.sort_unstable();
             let silent = if man["listeners"]["silent"].is_array() {
                 man["listeners"]["silent"].clone()
             } else {
@@ -976,6 +977,7 @@ pub(crate) fn verify_item(
     it: &Value,
     dir: Option<PathBuf>,
 ) -> (Run, Option<Ctx>) {
+    let _mac = verify::MacStandGuard::enter();
     let mut r = Run::new(s(&it["tag"]));
     let Some(d) = dir.filter(|d| d.is_dir()) else {
         r.add("run directory present", NOT_RUN, "missing", false);
@@ -1059,6 +1061,36 @@ pub(crate) fn verify_item(
     gate(&mut r, man, it, &ctx, &cap, uplink.as_ref(), &dir_nonce);
     verify_argv(&mut r, it, man, &ctx.d);
     verify::fixture_binding(&mut r, fx, &ctx.bind);
+    let open = fx["binding"]["responder_open_ports"]
+        .as_str()
+        .map(|t| {
+            t.split(',')
+                .filter_map(|x| x.trim().parse::<u16>().ok())
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| {
+            fx["binding"]["responder_open_ports"].as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_u64().map(|v| v as u16))
+                    .collect()
+            })
+        });
+    r.inv(
+        "oracle fixtures were taken with the Mac open ports (8000-8007; 80 and 443 closed)",
+        open.is_some_and(|mut o| {
+            o.sort_unstable();
+            o == verify::open_ports()
+        }),
+        fx["binding"]["responder_open_ports"].to_string(),
+    );
+    // The OS rate-limits closed-port RSTs (`net.inet.icmp.icmplim`); the limit in force is part of every run.
+    r.inv(
+        "the closed-port RST rate limit (net.inet.icmp.icmplim) is recorded",
+        ctx.meta["icmplim"]
+            .as_str()
+            .is_some_and(|v| !v.trim().is_empty()),
+        ctx.meta["icmplim"].to_string(),
+    );
     let wanted = arg_map(it, man, false);
     for (k, field) in [("--scan-id", "scan_id"), ("--attempt-id", "attempt_id")] {
         if let Some(v) = wanted.get(k) {
@@ -1289,6 +1321,7 @@ pub fn safety_trips(root: &Path) -> Vec<String> {
 
 /// The verdict of one tag (`verdict`, `behaviour_fail`), for the rerun rule.
 pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
+    let _mac = verify::MacStandGuard::enter();
     let Some(man) = read_json(root.join("manifest.json")) else {
         return (NOT_RUN.into(), false);
     };
@@ -1301,6 +1334,7 @@ pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
 }
 
 pub fn verify_dir(root: &Path) -> Value {
+    let _mac = verify::MacStandGuard::enter();
     let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[],"aborted":[]});
     let Some(man) = read_json(root.join("manifest.json")) else {
         let mut r = Run::new("manifest");

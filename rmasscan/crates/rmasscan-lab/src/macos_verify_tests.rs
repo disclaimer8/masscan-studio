@@ -72,7 +72,8 @@ fn marker(payload: &[u8]) -> Vec<u8> {
     b
 }
 fn is_open(port: u16) -> bool {
-    port == 80 || port == 443 || (8000..8008).contains(&port)
+    // The Mac stand: a non-root peer cannot bind 80 or 443, so only 8000-8007 are open.
+    (8000..8008).contains(&port)
 }
 fn hex_of(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -121,7 +122,7 @@ fn manifest(plan: &str) -> Value {
         "exe":{"sha256":EXE,"size":1,"path":"/x/wire_scan","build":"synthetic"},
         "binding":{"iface":"feth4201","src_ip":"198.18.0.1","src_mac":SM,"router_mac":PM,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},
         "stand":{"run_id":"m1","scanner_if":"feth4201","peer_if":"feth4202"},
-        "listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
+        "listeners":{"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
         "orchestrator":{"git_commit":COMMIT,"git_dirty":false,"binary_sha256":"ab".repeat(32),"errors":[]}
     })
 }
@@ -163,7 +164,7 @@ impl Env {
         }
         let fx = json!({"schema":1,"all_valid":true,
             "oracle":{"sha256":"cd","git_commit":"ef","git_tree_clean":true},
-            "binding":{"src_ip":"198.18.0.1","src_mac":SM,"router_mac":PM,"seed":1,"rate":100},
+            "binding":{"src_ip":"198.18.0.1","src_mac":SM,"router_mac":PM,"seed":1,"rate":100,"responder_open_ports":"8000,8001,8002,8003,8004,8005,8006,8007"},
             "fixtures":entries});
         fs::write(root.join("fixtures/manifest.json"), pretty(&fx)).unwrap();
         Self { root, man, fx }
@@ -389,7 +390,7 @@ fn build(env: &Env, tag: &str) -> Ev {
     run["invocation_nonce"] = json!(nonce);
     files.insert("run.json".into(), pretty(&run));
     let mut meta = json!({"tag":tag,"kind":kind,"invocation_nonce":nonce,"guest_exit":guest_exit,"euid":1000,
-        "exe_sha256":EXE,"capture_started_utc":BASE-2.0,"guest_started_utc":BASE,
+        "exe_sha256":EXE,"icmplim":"250","capture_started_utc":BASE-2.0,"guest_started_utc":BASE,
         "guest_finished_utc":BASE+3.0,"capture_stopped_utc":BASE+9.0});
     for (k, v) in exit_meta.as_object().unwrap() {
         meta[k] = v.clone();
@@ -415,7 +416,7 @@ fn build(env: &Env, tag: &str) -> Ev {
     };
     files.insert(
         "listeners.json".into(),
-        pretty(&json!({"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent,"silent_proven":true,"ready":true,"bind":"198.18.0.2"})),
+        pretty(&json!({"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent,"silent_proven":true,"ready":true,"bind":"198.18.0.2"})),
     );
     let mut ev = Ev {
         tag: tag.into(),
@@ -700,6 +701,8 @@ fn pause_resume_legs_must_equal_continuous_and_fixture() {
             cs.insert(tag.to_owned(), c.unwrap());
         }
         // `groups` looks the continuous run up under its run1 name.
+        let _mac = verify::MacStandGuard::enter();
+        let _mac = verify::MacStandGuard::enter();
         let g = verify::groups(&env.root, &env.man, &env.fx, &rs, &cs);
         g.into_iter()
             .find(|g| g["tag"] == "group_pause_resume_N8")
@@ -1601,5 +1604,110 @@ fn a_work_directory_left_in_out_is_walked() {
             .any(|n| n.as_str().unwrap().contains(".work")),
         "{}",
         v["notes"]
+    );
+}
+
+const C03: &str = "c03_multi_ports.run1";
+
+/// The peer's reply for `port` never happened: gone from the wire and from the scanner's results.
+fn lose_reply(ev: &mut Ev, port: u16) {
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == port)));
+    rebuild_peer(ev, &fr);
+    edit_scanner_output(ev, |v| {
+        let keep: Vec<Value> = v["replies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|x| !s(x).contains(&format!(":{port}:")))
+            .cloned()
+            .collect();
+        v["reply_total"] = json!(keep.len());
+        v["reply_unique"] = json!(keep.len());
+        v["received"] = json!(keep.len());
+        v["replies"] = json!(keep);
+    });
+}
+
+#[test]
+fn on_the_mac_stand_80_and_443_are_closed_and_only_8000_to_8007_answer_open() {
+    let env = Env::new("functional");
+    let (r, _) = build(&env, C01).verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:#?}", r.summary()["checks"]);
+    let run = build(&env, C01);
+    let replies: Value = serde_json::from_slice(&run.files["run.json"]).unwrap();
+    assert_eq!(replies["replies"], json!(["198.18.0.2:80:closed"]));
+    // A SYN-ACK from 80 contradicts the listeners (nobody can bind 80 without root): FAIL.
+    let mut ev = build(&env, C01);
+    edit_scanner_output(&mut ev, |v| v["replies"] = json!(["198.18.0.2:80:open"]));
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "results equal listener truth"),
+        "{:#?}",
+        r.summary()["checks"]
+    );
+    // The shared tables are untouched outside the Mac verifier.
+    assert!(verify::open_ports().contains(&80) && verify::open_ports().contains(&443));
+}
+
+#[test]
+fn a_missing_closed_port_rst_is_not_a_finding_but_a_missing_open_answer_and_invented_results_are() {
+    let env = Env::new("functional");
+    // 8008..8015 are closed: the OS rate limit may swallow an RST. Nothing on the wire, nothing in the results.
+    let mut ev = build(&env, C03);
+    lose_reply(&mut ev, 8010);
+    lose_reply(&mut ev, 8013);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:#?}", r.summary()["checks"]);
+    // An open port that did not answer is the scanner's (or the stand's) failure.
+    let mut ev = build(&env, C03);
+    lose_reply(&mut ev, 8003);
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "results equal listener truth"),
+        "{:#?}",
+        r.summary()["checks"]
+    );
+    // A result the wire never carried is not evidence.
+    let mut ev = build(&env, C03);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == 8010)));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "peer wire replies equal results"),
+        "{:#?}",
+        r.summary()["checks"]
+    );
+    // Duplicates are never allowed.
+    let mut ev = build(&env, C03);
+    edit_scanner_output(&mut ev, |v| {
+        let mut a = v["replies"].as_array().unwrap().clone();
+        a.push(a[0].clone());
+        v["replies"] = json!(a);
+        v["reply_total"] = json!(a.len());
+    });
+    assert!(failed(&ev.verify(&env).0, "results equal listener truth"));
+}
+
+#[test]
+fn the_rst_rate_limit_and_the_fixture_ports_are_part_of_the_evidence() {
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    ev.json("meta.json", |v| {
+        v.as_object_mut().unwrap().remove("icmplim");
+    });
+    let (r, _) = ev.verify(&env);
+    assert_eq!(
+        result_of(&r, "RST rate limit (net.inet.icmp.icmplim) is recorded"),
+        INVALID
+    );
+    let mut env2 = Env::new("functional");
+    env2.fx["binding"]["responder_open_ports"] =
+        json!("80,443,8000,8001,8002,8003,8004,8005,8006,8007");
+    let (r, _) = build(&env2, C01).verify(&env2);
+    assert_eq!(
+        result_of(&r, "oracle fixtures were taken with the Mac open ports"),
+        INVALID
     );
 }

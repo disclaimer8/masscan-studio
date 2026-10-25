@@ -799,3 +799,47 @@ fn one_incomplete_capture_in_the_plan_makes_overall_invalid_and_the_cell_rerunna
         (INVALID.to_owned(), false)
     );
 }
+
+// ---- fix round 1: M1 and M4, medians and the gate rest on Completed PASS cells only ------------
+#[test]
+fn medians_and_the_gate_use_completed_pass_cells_and_rxloss_cells_get_their_own_fields() {
+    // 100k: reps 1-2 are RxLoss PASS cells with a wild short-burst rate, reps 3-5 Completed and slow.
+    let cells = all_cells(|rate, rep| {
+        let rx = rate == 100000 && rep <= 2;
+        cell_summary(rate, rep, PASS, if rx { 100000.0 } else { 50000.0 + rep as f64 }, rx)
+    });
+    let r = row(&perf_summary(&cells), 100000);
+    assert_eq!(r["pass"], 5);
+    assert_eq!(r["rx_loss"], 2);
+    assert_eq!(r["completed"], 3);
+    assert_eq!(r["median"]["steady_pps_wire"], 50004.0);
+    assert_eq!(r["median"]["cpu_user_ms"], 40.0, "reps 3,4,5 only");
+    assert_eq!(r["rxloss_cells"], 2);
+    assert_eq!(r["rxloss_steady_pps_wire_median"], 100000.0);
+    assert_eq!(r["rate_gate"], "OPEN", "the burst of the RxLoss cells must not make it MET");
+}
+#[test]
+fn fewer_than_three_completed_pass_cells_leave_the_gate_not_run_even_with_rxloss_passes() {
+    let cells = all_cells(|rate, rep| {
+        let rx = rate == 100000 && rep <= 3;
+        cell_summary(rate, rep, PASS, rate as f64, rx)
+    });
+    let r = row(&perf_summary(&cells), 100000);
+    assert_eq!((r["pass"].as_u64(), r["completed"].as_u64()), (Some(5), Some(2)));
+    assert_eq!(r["rate_gate"], "NOT RUN");
+    assert_eq!(row(&perf_summary(&cells), 1000)["rate_gate"], "MET");
+}
+#[test]
+fn a_missing_median_is_not_run_never_open() {
+    let cells = all_cells(|rate, rep| {
+        let mut c = cell_summary(rate, rep, PASS, rate as f64, false);
+        if rate == 1000 {
+            c["notes"]["perf"]["steady_pps_wire"] = Value::Null;
+        }
+        c
+    });
+    let r = row(&perf_summary(&cells), 1000);
+    assert_eq!(r["completed"], 5);
+    assert!(r["median"]["steady_pps_wire"].is_null());
+    assert_eq!(r["rate_gate"], "NOT RUN");
+}

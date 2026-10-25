@@ -2277,38 +2277,57 @@ pub(crate) fn perf_summary(runs: &[Value]) -> Value {
             .filter(|r| s(&r["tag"]).starts_with(&prefix))
             .collect();
         let count = |v: &str| cells.iter().filter(|r| r["verdict"] == v).count();
-        let pass: Vec<&&Value> = cells.iter().filter(|r| r["verdict"] == PASS).collect();
+        let pass: Vec<&Value> = cells
+            .iter()
+            .copied()
+            .filter(|r| r["verdict"] == PASS)
+            .collect();
+        let is_rx = |r: &Value| r["notes"]["perf"]["rx_loss"] == true;
+        let done: Vec<&Value> = pass.iter().copied().filter(|r| !is_rx(r)).collect();
+        let rx: Vec<&Value> = pass.iter().copied().filter(|r| is_rx(r)).collect();
+        // Completed PASS cells only: an RxLoss cell is a truncated run, so its CPU, memory, drain and
+        // short-burst rate say nothing about a whole scan.
         let mut med = serde_json::Map::new();
         for k in PERF_METRICS {
-            let values = pass
+            let values = done
                 .iter()
                 .filter_map(|r| r["notes"]["perf"][k].as_f64())
                 .collect();
             med.insert(k.into(), json!(median(values)));
         }
+        let rx_wire = median(
+            rx.iter()
+                .filter_map(|r| r["notes"]["perf"]["steady_pps_wire"].as_f64())
+                .collect(),
+        );
         let wire = med["steady_pps_wire"].as_f64();
-        let gate = if pass.len() < PERF_MIN_PASS {
-            "NOT RUN"
-        } else if wire.is_some_and(|w| (w - rate as f64).abs() <= 0.2 * rate as f64) {
-            "MET"
-        } else {
-            "OPEN"
+        let gate = match wire {
+            Some(w) if done.len() >= PERF_MIN_PASS => {
+                if (w - rate as f64).abs() <= 0.2 * rate as f64 {
+                    "MET"
+                } else {
+                    "OPEN"
+                }
+            }
+            // Too few whole scans, or nothing measured: no claim either way.
+            _ => "NOT RUN",
         };
         rows.push(json!({
             "rate":rate,"planned":PERF_REPS,
-            "pass":pass.len(),"fail":count(FAIL),"invalid":count(INVALID),
+            "pass":pass.len(),"completed":done.len(),"fail":count(FAIL),"invalid":count(INVALID),
             "not_run":(PERF_REPS as usize).saturating_sub(pass.len() + count(FAIL) + count(INVALID)),
-            "rx_loss":pass.iter().filter(|r| r["notes"]["perf"]["rx_loss"] == true).count(),
+            "rx_loss":rx.len(),
             "median":med,"rate_gate":gate,
+            "rxloss_cells":rx.len(),"rxloss_steady_pps_wire_median":rx_wire,
         }));
     }
     json!({
         "rows":rows,
         "notes":[
-            "rate_gate is MET when the median steady_pps_wire of the PASS cells is within 20 percent of the requested rate, OPEN otherwise, NOT RUN with fewer than 3 PASS cells. It never changes overall.",
+            "All medians are over the Completed PASS cells (every probe went out); rate_gate is MET when the median steady_pps_wire is within 20 percent of the requested rate, OPEN otherwise, and NOT RUN with fewer than 3 Completed PASS cells or no measured median. It never changes overall.",
             "VM speed, not physical NIC; ±20% gate may stay OPEN until 2B-sendqueue",
             "Call latency here is join_ms and drain_s only. Stop latency under load is measured by the stop_* runs of failure-r1 (docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/failure-r1); per-Npcap-call latency by the spike evidence (docs/experiments/2026-10-24-rmasscan-stage2b-windows-spike-raw).",
-            "A PASS cell with rx_loss true is honest measured loss (Failed(RxLoss) with kernel drops above zero); its results are recorded, not compared, and it still counts in the medians."
+            "A PASS cell with rx_loss true is honest measured loss (Failed(RxLoss) with kernel drops above zero); its results are recorded and checked for genuineness but not compared to the full listener truth. It is counted in rx_loss and in the informational rxloss_cells and rxloss_steady_pps_wire_median, never in a median or the gate."
         ]
     })
 }

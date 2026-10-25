@@ -1,8 +1,8 @@
 # rmasscan: приёмка macOS BPF на паре feth (2C, итоговый отчёт этапа)
 
 Дата: 2026-10-25. Ветка `feat/rmasscan-stage2c-macos-bpf`, база `2cc2bec`. Документ фиксирует измеренное и открытое. Статусы: PASS /
-FAIL / INVALID / NOT RUN / OPEN / NOT STARTED / PENDING, никогда не повышаются. «GO» здесь не статус таблицы: GO по критерию плана для
-macOS correctness (feth) **не объявлен** (раздел 13). Сырые данные:
+FAIL / INVALID / NOT RUN / OPEN / NOT STARTED / PENDING, никогда не повышаются. «GO» здесь не статус таблицы: GO (feth) для macOS correctness (feth) условный: он
+зависит от исправлений P1–P3, пересчёта архива и зелёного CI на финальном SHA (разделы 1 и 13). Сырые данные:
 [`2026-10-25-rmasscan-macos-bpf-acceptance-raw/`](2026-10-25-rmasscan-macos-bpf-acceptance-raw/) (корневой
 [README](2026-10-25-rmasscan-macos-bpf-acceptance-raw/README.md); у каждого из `fixtures`, `functional-r1`, `perf-r1`, `failure-r1` свой
 `README.md`, `MANIFEST.sha256` и (кроме `fixtures`) `verdict.json`; исходные списки хэшей до копирования лежат в `original-precopy/`).
@@ -11,11 +11,12 @@ macOS correctness (feth) **не объявлен** (раздел 13). Сырые
 
 ## 1. Итог и границы
 
-**macOS correctness (feth): GO (feth).** Части A и C PASS, часть B 17 PASS и один INVALID (linkloss, класс отказа линка OPEN до этапа физического NIC); CI зелёный на точном HEAD кода `b58854d`. (`macos_live` выполнены, узкое повторное ревью серии final-fix одобрено.)
+**macOS correctness (feth): GO (feth) при условиях: P1–P3 исправлены (ветка `fix/rmasscan-2c-review-11c6764`), архив пересчитан исправленным верификатором с неизменёнными вердиктами (`2026-10-25`: [reverify-627776f](2026-10-25-rmasscan-macos-bpf-acceptance-raw/reverify-627776f/README.md), все три каталога без изменений), CI зелёный на точном финальном SHA этой ветки (**PENDING** для нового SHA, заполняет контролёр). Критерий `linkloss` изменён пользователем 2026-10-25 (поправка в плане, раздел «GO и дальнейшая очередь»); это смена критерия, не повышение статуса.**
+Части A и C PASS, часть B 17 PASS и один INVALID (linkloss, класс отказа линка OPEN до этапа физического NIC; причина: на `feth` у сканера нет события линка при падении линка на стороне пира). Evidence: код `717e45c`, вердикты `2989ace` и повторно `627776f`. (`macos_live` выполнены, узкое повторное ревью серии final-fix одобрено.) Второе независимое ревью `11c6764` подтвердило шесть прежних исправлений и нашло P1 (полнота закрытых ответов), P2 (смешанное сжатие в проходе безопасности), P3 (поток flood в спайке); исправления в этой ветке.
 Живая приёмка выполнена на запечатанной паре `feth4201`/`feth4202` на одном Mac. Физический NIC (USB/Thunderbolt Ethernet) не
 измерялся и в это GO не входит.
 
-**Решение по `linkloss`.** INVALID по `linkloss` (сканер завершился `Completed` при падении линка на стороне пира, ни одного скан-стороннего события линка на `feth` нет) **не блокирует** GO для «macOS correctness (feth)». Класс отказа линка переносится как **OPEN** на этап физического NIC. Статус не повышен: это не PASS и не FAIL.
+**Решение по `linkloss`** (пользователь, 2026-10-25, поправка в плане). INVALID по `linkloss` (сканер завершился `Completed` при падении линка на стороне пира, ни одного скан-стороннего события линка на `feth` нет) **не блокирует** GO для «macOS correctness (feth)». Класс отказа линка переносится как **OPEN** на этап физического NIC. Статус не повышен: это не PASS и не FAIL.
 
 Единый список условий (один и тот же в разделах 1 и 13, в таблице готовности):
 
@@ -74,9 +75,11 @@ macOS correctness (feth) **не объявлен** (раздел 13). Сырые
 | Задача 7, evidence | `0c6e3fb`, `a7f573a` |
 | Итоговое ревью, серия final-fix | `335a8d0` (тесты `macos_live`, `unsafe fn ioctl_ptr`, комментарии `send`, текст `npcap` в `wire_scan`), `acfd1d1` (лаборатория: `capture marker/responder` на macOS, `link`, ARP, обход каталогов), `9e53ac2` (скраб личных путей в сыром спайке и READMEs) и документы серии |
 
-Что изменилось после кода под тестом: между `717e45c` и HEAD не менялись `rmasscan-net`, `rmasscan-engine`, `rmasscan-core`
-(`git diff --stat 717e45c..HEAD` по ним пуст); менялись только `rmasscan-lab` (`macos_lab`, `macos_suite`, `macos_verify`, `verify.rs` и их
-тесты) и `rmasscan/docs/macos-feth-lab.md`. Поведение сканера в evidence относится к `717e45c`; поведение `macos-suite` в evidence
+Что изменилось после кода под тестом: между `717e45c` и `2625903` менялись `rmasscan-lab` (`macos_lab`, `macos_suite`, `macos_verify`, `verify.rs` и их
+тесты), `rmasscan/docs/macos-feth-lab.md` и, без изменения поведения продукта, `rmasscan-net` (`examples/wire_scan.rs`: текст сообщения про `npcap`;
+`src/lib.rs`, `macos/adapter.rs`, `macos/ifinfo.rs`, `macos/mod.rs`, `macos/sys.rs`: комментарии и сигнатура `unsafe fn ioctl_ptr`;
+`macos/spike.rs` и `macos/tests/layout_tests.rs`, `tests/macos_live.rs`: тестовый код), всего 9 файлов, 170 вставок и 35 удалений
+(`git diff --stat 717e45c 2625903 -- rmasscan/crates/rmasscan-net`); `rmasscan-engine` и `rmasscan-core` не менялись. Поведение сканера в evidence относится к `717e45c`; поведение `macos-suite` в evidence
 тоже `717e45c`, а вердикты вынесены верификатором `2989ace`. Изменения `097ae8e` (`link --up`) и `3b0f9a2` (раунд 9 верификатора) в
 живых прогонах не участвовали (раздел 9).
 
@@ -446,8 +449,7 @@ sleep 1; kill -INT $TD; wait $TD                                    # rc 0
 
 ## 13. Заявление о готовности
 
-**GO для macOS correctness (feth) не объявлен.** Статус: **macOS correctness (feth): PASS по частям A/C, B с одним INVALID (linkloss), GO
-ожидает зелёного CI на точном HEAD.** (`macos_live` выполнены, узкое повторное ревью серии final-fix одобрено.) Единый список условий — таблица в разделе 1. Что сделано и где доказано:
+**Статус: GO (feth) при условиях: P1–P3 исправлены (ветка `fix/rmasscan-2c-review-11c6764`), архив пересчитан исправленным верификатором с неизменёнными вердиктами (`2026-10-25`: [reverify-627776f](2026-10-25-rmasscan-macos-bpf-acceptance-raw/reverify-627776f/README.md), все три каталога без изменений), CI зелёный на точном финальном SHA этой ветки (**PENDING** для нового SHA, заполняет контролёр). Критерий `linkloss` изменён пользователем 2026-10-25 (поправка в плане, раздел «GO и дальнейшая очередь»); это смена критерия, не повышение статуса.** Статус по частям: **PASS по частям A/C, B с одним INVALID (linkloss).** (`macos_live` выполнены, узкое повторное ревью серии final-fix одобрено.) Единый список условий — таблица в разделе 1. Что сделано и где доказано:
 
 - Часть A: 29 PASS; часть C: 21 PASS, все rate gates MET; часть B: 17 PASS и один INVALID (`linkloss`) на запечатанной паре `feth`,
   код `717e45c`, вердикты `2989ace` (раздел 6).
@@ -455,7 +457,7 @@ sleep 1; kill -INT $TD; wait $TD                                    # rc 0
 - Ревью задач 0, 1, 2, 4, 5, 6 одобрены; независимое ревью `b491a17`: 6/6 исправлены; итоговое ревью ветки проведено (0 критичных, 3 важных, 8 минорных, исправлены серией final-fix, раздел 10). `macos-verify` на HEAD воспроизводит каждый закоммиченный вердикт.
 - `linkloss` (INVALID) не блокирует GO для «macOS correctness (feth)»: класс отказа линка переносится как **OPEN** на этап физического NIC, статус не повышен.
 - `macos_live`: 6 из 6 PASS, 0 кадров лаборатории на uplink; узкое повторное ревью серии final-fix **APPROVED**; ручные прогоны на `3e3886e`: Linux 1002/0, Windows 931/0, Mac 1122/0 и 23 ignored, clippy чисто (на `435301f`: 1000/928/1115).
-- CI на точном HEAD `b58854d` зелёный (rmasscan `40222680150`: macos-14, windows-2022, ubuntu-24.04, windows-x64 wire lab package; language-guard `40222680123`); ручные прогоны на `b58854d`: Linux 1003/0, Windows 932/0, Mac 1123/0 и 23 ignored, clippy чисто. Живая перепроверка `c01` и `perm_denied_scan` итоговым ревью признана ненужной (**NOT RUN**). Все условия GO выполнены: **GO для macOS correctness (feth)**.
+- CI: на `b58854d` был зелёным (rmasscan `40222680150`; language-guard `40222680123`), но этот SHA не финальный. CI на точном финальном SHA ветки `fix/rmasscan-2c-review-11c6764`: **PENDING** для нового SHA (заполняет контролёр). Ручные прогоны на `b58854d`: Linux 1003/0, Windows 932/0, Mac 1123/0 и 23 ignored, clippy чисто. Живая перепроверка `c01` и `perm_denied_scan` итоговым ревью признана ненужной (**NOT RUN**). Пересчёт архива: [reverify-627776f](2026-10-25-rmasscan-macos-bpf-acceptance-raw/reverify-627776f/README.md), вердикты не изменились.
 
 Это заявление **не** распространяется на:
 

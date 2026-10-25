@@ -1246,7 +1246,7 @@ fn cleanup(h: &dyn Host, created: &[String], arp_set: bool, out: &mut Vec<String
         }
     };
     let has = |n: &str| names.split_whitespace().any(|x| x == n);
-    if arp_set && has(PEER_IF) {
+    if arp_set && created.iter().any(|c| c == PEER_IF) && has(PEER_IF) {
         let present = h.sh(&["arp", "-an"]).map(|t| {
             parse_arp(&t)
                 .iter()
@@ -1424,8 +1424,45 @@ fn status(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> 
 /// The exposure of a grant, printed with it and written in the guide.
 pub const GRANT_WARNING: &str = "WARNING: 0660 root:staff lets every process of every local account in group staff (all regular macOS users) read AND inject raw frames on EVERY interface, including en0, without root, until --revoke, down or reboot. Revoke whenever no run is active.";
 
+/// What to run by hand if the lab cannot revoke BPF access itself.
+pub const BPF_FALLBACK: &str =
+    "manual fallback: sudo chmod 600 /dev/bpf{0..15}; sudo chgrp wheel /dev/bpf{0..15}";
+
+/// Set every existing `/dev/bpf0..15` to `0600 root:wheel`. It needs no manifest and no stand;
+/// only nodes that differ are touched, and what changed is reported. `true` when all went well.
+fn revoke_all(h: &dyn Host, out: &mut Vec<String>) -> bool {
+    let mut changed = vec![];
+    let mut ok = true;
+    for n in 0..=BPF_LAST {
+        match h.bpf_stat(n) {
+            Some((m, g)) if (m, g) == (REVOKED_MODE, 0) => {}
+            Some(_) => match h.bpf_set(n, REVOKED_MODE, 0) {
+                Ok(()) => changed.push(n),
+                Err(e) => {
+                    out.push(format!("FAILED: revoke /dev/bpf{n}: {e}"));
+                    ok = false;
+                }
+            },
+            None => {}
+        }
+    }
+    out.push(if changed.is_empty() {
+        "revoke: /dev/bpf* already 0600 root:wheel (nothing changed)".to_string()
+    } else {
+        format!("revoke: set 0600 root:wheel on /dev/bpf{changed:?}")
+    });
+    if !ok {
+        out.push(BPF_FALLBACK.into());
+    }
+    ok
+}
+
 fn bpf_access_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     require_root(h)?;
+    if a.revoke {
+        // Taking access away never depends on a stand or a readable manifest.
+        return Ok(if revoke_all(h, out) { 0 } else { 10 });
+    }
     let mut m = load_stand(h, a)?;
     if m["state"] != "sealed" {
         return Err("the stand is not sealed; run down and up again".into());
@@ -1474,20 +1511,7 @@ fn bpf_access_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, 
         out.push(GRANT_WARNING.into());
         return Ok(0);
     }
-    let mut failed = false;
-    for (n, _, _) in &nodes {
-        if let Err(e) = h.bpf_set(*n, REVOKED_MODE, 0) {
-            out.push(format!("FAILED: /dev/bpf{n}: {e}"));
-            failed = true;
-        }
-    }
-    if failed {
-        return Ok(10);
-    }
-    out.push(format!(
-        "revoked: /dev/bpf0..{BPF_LAST} -> 0600 root:wheel{note}"
-    ));
-    Ok(0)
+    Err("internal: neither --grant nor --revoke".into())
 }
 
 fn link_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
@@ -1521,6 +1545,19 @@ fn differing_prev(m: &Value) -> Vec<String> {
 
 fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     require_root(h)?;
+    // Taking BPF access away comes first and does not depend on the manifest or on the
+    // interfaces being accepted.
+    let revoked = revoke_all(h, out);
+    match down_stand(h, a, out) {
+        Ok(0) if !revoked => Ok(10),
+        Ok(rc) => Ok(rc),
+        Err(e) => Err(format!(
+            "{e}\n{BPF_FALLBACK} (already applied above if it said so)"
+        )),
+    }
+}
+
+fn down_stand(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     if !a.manifest.exists() && !marker_path(&a.manifest).exists() {
         out.push("no stand recorded; nothing to do".into());
         return Ok(0);
@@ -1548,16 +1585,7 @@ fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
             }
         }
     }
-    let mut ok = cleanup(h, &created, arp_set, out);
-    // Always the macOS default, never a value read from the manifest.
-    for n in 0..=BPF_LAST {
-        if h.bpf_stat(n).is_some()
-            && let Err(e) = h.bpf_set(n, REVOKED_MODE, 0)
-        {
-            out.push(format!("FAILED: revoke /dev/bpf{n}: {e}"));
-            ok = false;
-        }
-    }
+    let ok = cleanup(h, &created, arp_set, out);
     let differing = differing_prev(&m);
     if !differing.is_empty() {
         out.push(format!(
@@ -1591,6 +1619,20 @@ pub(crate) fn execute(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i
     }
 }
 
+/// Take the exclusive lock, polling until `wait` has passed.
+fn try_lock_for(f: fs::File, wait: Duration) -> Result<fs::File, String> {
+    let start = Instant::now();
+    loop {
+        match f.try_lock() {
+            Ok(()) => return Ok(f),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < wait => {
+                thread::sleep(Duration::from_millis(20))
+            }
+            Err(e) => return Err(format!("another macos-lab command holds the lock: {e}")),
+        }
+    }
+}
+
 fn lock_path(manifest: &Path) -> PathBuf {
     let mut n = manifest.as_os_str().to_os_string();
     n.push(".lock");
@@ -1607,26 +1649,37 @@ fn dispatch(h: &dyn Host, a: &Args, wait: Duration, out: &mut Vec<String>) -> Re
     let mut lock = None;
     let needs_lock = match a.cmd.as_str() {
         "plan" | "status" => false,
+        "bpf-access" if a.revoke => false,
         "up" => true,
         _ => a.manifest.exists() || marker_path(&a.manifest).exists(),
     };
+    // Revoking never depends on a stand: with a trustworthy state directory it takes the lock,
+    // without one (missing, refused) it still runs, because taking access away must not wait.
+    if a.cmd == "bpf-access" && a.revoke && !needs_lock {
+        require_root(h)?;
+        let dir = a
+            .manifest
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let lock = prepare_dir(h, &dir, false)
+            .and_then(|()| open_lock(h, &lock_path(&a.manifest)))
+            .and_then(|f| try_lock_for(f, wait))
+            .ok();
+        if lock.is_none() {
+            out.push("note: no usable state directory or lock; revoking without the lock".into());
+        }
+        let r = execute(h, a, out);
+        drop(lock);
+        return r;
+    }
     if needs_lock {
         require_root(h)?;
         if let Some(dir) = a.manifest.parent().filter(|d| !d.as_os_str().is_empty()) {
             prepare_dir(h, dir, a.cmd == "up")?;
         }
         let f = open_lock(h, &lock_path(&a.manifest))?;
-        let start = Instant::now();
-        loop {
-            match f.try_lock() {
-                Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < wait => {
-                    thread::sleep(Duration::from_millis(20))
-                }
-                Err(e) => return Err(format!("another macos-lab command holds the lock: {e}")),
-            }
-        }
-        lock = Some(f);
+        lock = Some(try_lock_for(f, wait)?);
     }
     let r = execute(h, a, out);
     if a.cmd == "down" && matches!(r, Ok(0)) && lock.is_some() {

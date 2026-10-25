@@ -38,18 +38,12 @@ const SOURCE_EXTENSIONS: &[&str] = &[
 const DATA_EXTENSIONS: &[&str] = &[
     "json", "pcap", "gz", "txt", "csv", "tsv", "bin", "lock", "sha256", "log", "err", "echo",
     "stdout", "stderr", "sizes", "conf", "rc", "out", "diff", "hex", "svg", "png", "jpg", "jpeg",
-    "gif", "ico", "icns", "webp", "ttf", "otf", "woff", "woff2", "pdf", "html", "plist", "pcapng",
+    "gif", "ico", "icns", "webp", "ttf", "otf", "woff", "woff2", "pdf", "plist", "pcapng",
 ];
 /// File names without a usable extension that the tree may hold (matched in lower case; a trailing `*`
 /// means prefix).
 const ALLOWED_NAMES: &[&str] = &[
-    "license*",
-    "readme*",
-    "changelog*",
     "rust-toolchain",
-    "notice*",
-    "copying*",
-    "authors*",
     "codeowners",
     "makefile*",
     "gnumakefile*",
@@ -77,6 +71,26 @@ const OTHER_STRICT: &[&str] = &[
 const NODE: &str = concat!("no", "de");
 
 fn name_allowed(rel: &str) -> bool {
+    let lower_base = rel.rsplit('/').next().unwrap_or(rel).to_ascii_lowercase();
+    // Conventional documents: the bare name, `-MIT` style suffixes, or `.md` / `.txt`; never another extension.
+    for p in [
+        "license",
+        "readme",
+        "changelog",
+        "notice",
+        "copying",
+        "authors",
+    ] {
+        if let Some(rest) = lower_base.strip_prefix(p) {
+            let rest = rest
+                .strip_suffix(".md")
+                .or_else(|| rest.strip_suffix(".txt"))
+                .unwrap_or(rest);
+            if rest.is_empty() || (rest.starts_with(['-', '_']) && !rest.contains('.')) {
+                return true;
+            }
+        }
+    }
     if rel == ".cargo/config" || rel.ends_with("/.cargo/config") {
         return true;
     }
@@ -95,8 +109,142 @@ fn name_allowed(rel: &str) -> bool {
     }
 }
 
-/// A complete quoted string that is one of the interpreters, optionally with a directory prefix.
-fn quoted_interpreter(lower: &str, names: &[&str], rust: bool) -> bool {
+/// `s` is one of the interpreters: an optional directory, the name, an optional `.exe`, version digits and dots.
+fn is_interpreter_token(s: &str, names: &[&str]) -> bool {
+    let base = s.rsplit(['/', '\\']).next().unwrap_or(s);
+    let base = base.strip_suffix(".exe").unwrap_or(base);
+    let base = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    names.contains(&base)
+}
+
+/// Words that run the next word as a command (shell keywords and wrappers, PowerShell `Start-Process`, cmd
+/// `call`, `find -exec`, a YAML `run:`), whatever their options.
+const WRAPPERS: &[&str] = &[
+    "then",
+    "do",
+    "else",
+    "elif",
+    "if",
+    "while",
+    "until",
+    "time",
+    "nohup",
+    "exec",
+    "xargs",
+    "env",
+    "command",
+    "builtin",
+    "sudo",
+    "timeout",
+    "nice",
+    "call",
+    "start-process",
+    "-exec",
+    "-execdir",
+    "run:",
+];
+
+/// Tokens of a script line: whitespace and `;&|(){}` backtick split, and a token that follows `;&|({`
+/// backtick `!` (or opens the line) starts a command.
+fn command_tokens(lower: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let (mut cur, mut starts) = (String::new(), true);
+    let mut flush = |cur: &mut String, starts: &mut bool, next_starts: bool| {
+        if !cur.is_empty() {
+            out.push((std::mem::take(cur), *starts));
+            *starts = next_starts;
+        } else if next_starts {
+            *starts = true;
+        }
+    };
+    for c in lower.chars() {
+        match c {
+            c if c.is_whitespace() => flush(&mut cur, &mut starts, false),
+            ';' | '&' | '|' | '(' | '{' | '`' | '!' => flush(&mut cur, &mut starts, true),
+            ')' | '}' => flush(&mut cur, &mut starts, false),
+            c => cur.push(c),
+        }
+    }
+    flush(&mut cur, &mut starts, false);
+    out
+}
+
+/// After a wrapper: its option words (`-n`, `-u root`, a duration, `VAR=value`, the `ip netns exec NS` words).
+fn skip_wrapper_options(t: &[(String, bool)], mut j: usize) -> usize {
+    while j < t.len() {
+        let w = t[j].0.as_str();
+        let flag = w.starts_with('-') && w != "-exec" && w != "-execdir";
+        let duration = w.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && w.chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c == 's' || c == 'm');
+        let assignment = w.contains('=') && !w.starts_with('=');
+        if flag || duration || assignment {
+            j += 1;
+        } else {
+            break;
+        }
+    }
+    j
+}
+
+/// An interpreter name where a command is expected: at the start of a command, or after one or more
+/// wrappers (`sudo -n NAME`, `timeout 5 NAME`, `env A=b NAME`, `ip netns exec NS NAME`, `then NAME`).
+fn interpreter_run_in_script(lower: &str, names: &[&str]) -> bool {
+    let t = command_tokens(lower);
+    for i in 0..t.len() {
+        let (w, starts) = (&t[i].0, t[i].1);
+        let ip_netns = w == "ip"
+            && t.get(i + 1).is_some_and(|x| x.0 == "netns")
+            && t.get(i + 2).is_some_and(|x| x.0 == "exec");
+        let wrapper = ip_netns || WRAPPERS.contains(&w.as_str());
+        if !(starts || wrapper) {
+            continue;
+        }
+        let mut j = i;
+        let mut wrapped = false;
+        loop {
+            let is_ip_netns = t[j].0 == "ip"
+                && t.get(j + 1).is_some_and(|x| x.0 == "netns")
+                && t.get(j + 2).is_some_and(|x| x.0 == "exec");
+            if is_ip_netns {
+                j += 4;
+                wrapped = true;
+            } else if WRAPPERS.contains(&t[j].0.as_str()) {
+                j = skip_wrapper_options(&t, j + 1);
+                wrapped = true;
+            } else {
+                break;
+            }
+            if j >= t.len() {
+                break;
+            }
+        }
+        if (starts || wrapped) && j < t.len() {
+            if is_interpreter_token(&t[j].0, names) {
+                return true;
+            }
+            // `sudo -u root NAME`: a plain word after an option is that option's argument
+            let flag_before = j > i && t[j - 1].0.starts_with('-');
+            let plain = t[j]
+                .0
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                && !t[j].0.starts_with('-');
+            if wrapped
+                && flag_before
+                && plain
+                && j + 1 < t.len()
+                && is_interpreter_token(&t[j + 1].0, names)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// A complete quoted string that is one of the interpreters (scripts and workflows).
+fn quoted_interpreter(lower: &str, names: &[&str]) -> bool {
     let b = lower.as_bytes();
     for (i, q) in b.iter().enumerate() {
         if *q != b'"' && *q != b'\'' {
@@ -106,55 +254,9 @@ fn quoted_interpreter(lower: &str, names: &[&str], rust: bool) -> bool {
             continue;
         };
         let content = &lower[i + 1..i + 1 + len];
-        if content.contains(' ') {
-            continue;
-        }
-        // In Rust, `v["name"]` (an index) and `"name": value` (a map key) are data, not a command.
-        if rust {
-            let before = lower[..i].chars().next_back();
-            let after = lower[i + 2 + len..].chars().next();
-            if (before == Some('[') && after == Some(']')) || after == Some(':') {
-                continue;
-            }
-        }
-        let base = content.rsplit('/').next().unwrap_or(content);
-        let base = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
-        if names.contains(&base) {
+        if !content.contains(' ') && is_interpreter_token(content, names) {
             return true;
         }
-    }
-    false
-}
-
-/// An interpreter name where a command is expected: line start, after `; & | ( { `` ` ``, after env, sudo, exec, nohup,
-/// xargs, time or a YAML `run:`.
-fn at_command_position(lower: &str, name: &str) -> bool {
-    let mut from = 0;
-    while let Some(at) = lower[from..].find(name) {
-        let end = from + at + name.len();
-        let after = lower[end..].trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
-        let after_ok = after
-            .chars()
-            .next()
-            .is_none_or(|c| c.is_whitespace() || matches!(c, ';' | ')' | '&' | '|'));
-        // the token that holds it: an optional directory prefix, then the name
-        let token_start = lower[..from + at]
-            .rfind(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | '{' | '`'))
-            .map_or(0, |i| i + 1);
-        let token_head = &lower[token_start..from + at];
-        let path_ok = token_head.is_empty() || token_head.ends_with('/');
-        let before = lower[..token_start].trim_end();
-        let last_word = before
-            .rsplit(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | '{' | '`'))
-            .next()
-            .unwrap_or("");
-        let command_position = before.is_empty()
-            || before.ends_with([';', '&', '|', '(', '{', '`'])
-            || ["env", "sudo", "exec", "nohup", "xargs", "time", "run:"].contains(&last_word);
-        if after_ok && path_ok && command_position {
-            return true;
-        }
-        from = end;
     }
     false
 }
@@ -168,10 +270,48 @@ fn quoted_command(lower: &str, names: &[&str]) -> bool {
         }
         let rest = lower[i + 1..].trim_start();
         let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        let token = &rest[..token_end];
-        let base = token.rsplit('/').next().unwrap_or(token);
-        let base = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
-        if names.contains(&base) && rest[token_end..].trim_start().starts_with('-') {
+        if is_interpreter_token(&rest[..token_end], names)
+            && rest[token_end..].trim_start().starts_with('-')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// The Rust invocation forms: `Command::new("NAME")`, `.arg("NAME")` / `.args("NAME")`, and an array literal whose
+/// first element is `"NAME"` (also a one-element array). A name used as a match pattern, an index, a map key or a
+/// compared value is none of these.
+fn rust_invocation(lower: &str, names: &[&str]) -> bool {
+    let name_at = |from: usize| -> bool {
+        let rest = lower[from..].trim_start();
+        let Some(rest) = rest.strip_prefix('"') else {
+            return false;
+        };
+        rest.find('"')
+            .is_some_and(|e| !rest[..e].contains(' ') && is_interpreter_token(&rest[..e], names))
+    };
+    for marker in ["command::new(", ".arg(", ".args("] {
+        let mut from = 0;
+        while let Some(at) = lower[from..].find(marker) {
+            let start = from + at + marker.len();
+            if name_at(start) {
+                return true;
+            }
+            from = start;
+        }
+    }
+    let b = lower.as_bytes();
+    for (i, c) in b.iter().enumerate() {
+        if *c != b'[' {
+            continue;
+        }
+        // an index follows an identifier, `)` or `]`; an array literal follows anything else
+        let before = lower[..i].chars().next_back();
+        if before.is_some_and(|p| p.is_ascii_alphanumeric() || p == '_' || p == ')' || p == ']') {
+            continue;
+        }
+        if name_at(i + 1) {
             return true;
         }
     }
@@ -188,9 +328,8 @@ fn comment_line(line: &str, rust: bool) -> bool {
     }
 }
 
-/// Another interpreter being RUN on one line of a scanned file: a complete quoted string naming it (an
-/// argument or `Command::new`; in Rust not an index or map key), a quoted command string, or - outside Rust -
-/// the name at a command position. Names in comments, prose and identifiers are not flagged.
+/// Another interpreter being RUN on one line of a scanned file (see `rust_invocation` and
+/// `interpreter_run_in_script`). Names in comments, prose, identifiers, patterns and comparisons are not flagged.
 fn other_interpreter_hit(line: &str, rust: bool) -> bool {
     if comment_line(line, rust) {
         return false;
@@ -198,9 +337,13 @@ fn other_interpreter_hit(line: &str, rust: bool) -> bool {
     let lower = line.to_ascii_lowercase();
     let mut all: Vec<&str> = OTHER_STRICT.to_vec();
     all.push(NODE);
-    quoted_interpreter(&lower, &all, rust)
-        || quoted_command(&lower, &all)
-        || (!rust && all.iter().any(|n| at_command_position(&lower, n)))
+    if rust {
+        rust_invocation(&lower, &all) || quoted_command(&lower, &all)
+    } else {
+        quoted_interpreter(&lower, &all)
+            || quoted_command(&lower, &all)
+            || interpreter_run_in_script(&lower, &all)
+    }
 }
 
 /// A shebang that names one of the other interpreters (whole word or path component).
@@ -365,6 +508,9 @@ fn violations_of(rel: &str, bytes: &[u8]) -> Vec<String> {
         found.push(format!("{rel}:1: shebang names the banned interpreter"));
     }
     let first_line = text.lines().next().unwrap_or("");
+    if ext == "svg" && text.to_ascii_lowercase().contains("<script") {
+        found.push(format!("{rel}: svg embeds a script"));
+    }
     let other_shebang = shebang_names_other(first_line);
     if other_shebang {
         found.push(format!("{rel}:1: shebang names another banned interpreter"));
@@ -973,7 +1119,6 @@ fn other_interpreters_are_scanned_like_the_first() {
             "src/a.rs",
             format!("fn f() {{ Command::new(\"{IN}\"); }}\n"),
         ),
-        ("rs-p", "src/a.rs", format!("let p = \"/usr/bin/{IB}\";\n")),
         ("sh-a", "run.sh", format!("{IA} -e 'print 1'\n")),
         ("sh-env", "run.sh", format!("env {IB} x\n")),
         ("sh-pipe", "run.sh", format!("cat x | {IC} -r 'echo 1;'\n")),
@@ -1034,7 +1179,6 @@ fn the_allowlist_accepts_ui_images_fonts_documents_and_conventional_names() {
         ("assets/a.woff", String::new()),
         ("assets/a.woff2", String::new()),
         ("docs/a.pdf", String::new()),
-        ("docs/a.html", "<p>x</p>\n".into()),
         ("macos/Info.plist", "<plist/>\n".into()),
         ("README", "x\n".into()),
         ("CHANGELOG", "x\n".into()),
@@ -1076,7 +1220,7 @@ fn identifiers_index_keys_and_comments_are_not_invocations_but_real_ones_still_a
     ];
     assert_eq!(both_guards("not-invocations", &clean), 0);
     let bad: Vec<(&str, &str, String)> = vec![
-        ("arg", "e.rs", format!("let a = [\"-c\", \"{IA}\"];\n")),
+        ("arg", "e.rs", format!("c.arg(\"{IA}\");\n")),
         ("new", "e.rs", format!("Command::new(\"{IN}\");\n")),
         (
             "qcmd-rs",
@@ -1093,4 +1237,123 @@ fn identifiers_index_keys_and_comments_are_not_invocations_but_real_ones_still_a
         let rc = both_guards(tag, &[("ok.sh", "echo ok\n".into()), (name, text)]);
         assert_eq!(rc, 1, "{tag}");
     }
+}
+
+// ---- fix round 3 (R2-2, R2-3): every invocation form, on both guards ----
+
+#[cfg(unix)]
+#[test]
+fn every_invocation_form_of_another_interpreter_fails_both_guards() {
+    let n = [IA, IB, IC, ID, IN];
+    for name in n {
+        let bad: Vec<(&str, String)> = vec![
+            ("e.sh", format!("if true; then {name} -e 1; fi\n")),
+            ("e.sh", format!("for f in a; do {name} $f; done\n")),
+            ("e.sh", format!("if x; then y; else {name} -e 1; fi\n")),
+            ("e.sh", format!("a && {name} -e 1\n")),
+            ("e.sh", format!("a || {name} -e 1\n")),
+            ("e.sh", format!("a | {name} -e 1\n")),
+            ("e.sh", format!("a; {name} -e 1\n")),
+            ("e.sh", format!("sudo -n {name} -e 1\n")),
+            ("e.sh", format!("sudo -u root {name} -e 1\n")),
+            ("e.sh", format!("timeout 5 {name} x\n")),
+            ("e.sh", format!("env A=b {name} x\n")),
+            ("e.sh", format!("nice -n 5 {name} x\n")),
+            ("e.sh", format!("exec {name} x\n")),
+            ("e.sh", format!("xargs {name} -e x\n")),
+            ("e.sh", format!("find . -exec {name} -pi -e x {{}} +\n")),
+            ("e.sh", format!("ip netns exec ns {name} -e 1\n")),
+            ("e.sh", format!("sudo -n ip netns exec ns {name} -e 1\n")),
+            ("e.sh", format!("/usr/bin/{name} -e 1\n")),
+            ("e.ps1", format!("{name}.exe -e 1\n")),
+            ("e.ps1", format!("Start-Process {name} -ArgumentList x\n")),
+            ("e.ps1", format!("& {name} x\n")),
+            ("e.cmd", format!("call {name} x\r\n")),
+            ("e.cmd", format!("{name}.exe x\r\n")),
+            ("e.yml", format!("run: {name} build\n")),
+            ("e.rs", format!("Command::new(\"{name}\");\n")),
+            ("e.rs", format!("Command::new(\"{name}.exe\");\n")),
+            ("e.rs", format!("Command::new(\"/usr/bin/{name}\");\n")),
+            ("e.rs", format!("c.arg(\"{name}\");\n")),
+            ("e.rs", format!("c.args([\"{name}\", \"x\"]);\n")),
+            ("e.rs", format!("let a = [\"{name}\", \"-e\", \"1\"];\n")),
+            ("e.rs", format!("let a = [\"{name}\"];\n")),
+            ("e.rs", format!("let a = &[\"{name}\"];\n")),
+        ];
+        for (i, (file, text)) in bad.into_iter().enumerate() {
+            let rc = both_guards(
+                &format!("form-{i}"),
+                &[("ok.sh", "echo ok\n".into()), (file, text.clone())],
+            );
+            assert_eq!(rc, 1, "both guards must refuse {file}: {text}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn match_arms_comparisons_indexes_and_prose_are_not_invocations() {
+    let clean: Vec<(&str, String)> = vec![
+        (
+            "a.rs",
+            format!("match s {{ \"{IN}\" => 1, \"{IA}\" | \"{IB}\" => 2, _ => 0 }}\n"),
+        ),
+        (
+            "b.rs",
+            format!("assert_eq!(lang, \"{ID}\");\nif x == \"{IC}\" {{ y(); }}\n"),
+        ),
+        (
+            "c.rs",
+            format!("let a = v[\"{IN}\"]; let b = w[0][\"{IA}\"]; let c = f()[\"{IB}\"];\n"),
+        ),
+        ("d.rs", format!("let m = json!({{\"{IN}\": 1}});\n")),
+        (
+            "e.sh",
+            format!("echo the {IN} is up\ngrep {IA} notes.txt\ncp {IB} out\n"),
+        ),
+        ("f.ps1", format!("Write-Output \"{IN} count\"\n")),
+        ("g.cmd", format!("echo {IA}\r\n")),
+        ("h.yml", format!("name: {IN} setup\nrun: echo {IA}\n")),
+    ];
+    assert_eq!(both_guards("not-invocations-2", &clean), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn conventional_document_names_take_no_other_extension_and_svg_takes_no_script() {
+    for name in [
+        "README.js",
+        "LICENSE.rb",
+        "docs/NOTICE.go",
+        "CHANGELOG.ts",
+        "AUTHORS.pl",
+        "COPYING.html",
+        "docs/a.html",
+    ] {
+        assert_eq!(
+            both_guards(
+                "doc-ext",
+                &[("ok.sh", "echo ok\n".into()), (name, String::new())]
+            ),
+            1,
+            "{name}"
+        );
+    }
+    let ok: Vec<(&str, String)> = vec![
+        ("README", "x\n".into()),
+        ("README.md", "x\n".into()),
+        ("LICENSE-MIT", "x\n".into()),
+        ("LICENSE-APACHE.txt", "x\n".into()),
+        ("NOTICE.txt", "x\n".into()),
+        ("a.svg", "<svg><path d=\"M0 0\"/></svg>\n".into()),
+    ];
+    assert_eq!(both_guards("doc-ok", &ok), 0);
+    let rc = both_guards(
+        "svg-script",
+        &[
+            ("ok.sh", "echo ok\n".into()),
+            ("a.svg", "<svg><script>x()</script></svg>\n".into()),
+        ],
+    );
+    assert_eq!(rc, 1);
 }

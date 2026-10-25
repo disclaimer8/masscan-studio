@@ -1,0 +1,13 @@
+test=live_tx cond=r06-tx
+tx_5000_back_to_back: frames=5000 full_writes=5000 EAGAIN=0 ENOBUFS=0 other=0 wall_ms=15.6 calls_over_1ms=0 over_10ms=0 over_50ms=0
+tx_5000_back_to_back write(): n=5000 p50_us=2.8 p95_us=4.9 max_us=20.2
+tx_1000_at_1khz: frames=1000 full_writes=1000 EAGAIN=0 ENOBUFS=0 other=0 wall_ms=999.0 calls_over_1ms=0 over_10ms=0 over_50ms=0
+tx_1000_at_1khz write(): n=1000 p50_us=5.5 p95_us=11.7 max_us=38.6
+tx_len_1514 -> Ok(1514)
+tx_len_1515 -> Ok(1515) (EMSGSIZE=40)
+
+thread 'macos::spike::live_tx' (13234317) panicked at crates/rmasscan-net/src/macos/spike.rs:992:9:
+assertion `left == right` failed: oversize frame was not refused with EMSGSIZE
+  left: Ok(1515)
+ right: Err(40)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

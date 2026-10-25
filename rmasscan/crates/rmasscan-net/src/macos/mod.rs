@@ -29,6 +29,10 @@ pub(crate) mod process;
 #[cfg(test)]
 mod tests;
 
+#[cfg(all(target_os = "macos", test))]
+#[allow(unsafe_code)]
+mod spike;
+
 #[cfg(target_os = "macos")]
 pub(crate) use adapter::open;
 

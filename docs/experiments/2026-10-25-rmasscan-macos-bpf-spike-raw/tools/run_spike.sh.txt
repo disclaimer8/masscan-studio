@@ -1,0 +1,47 @@
+#!/bin/bash
+# usage: run_spike.sh <tag> <test-fn|idle> <cond> <work-root>
+# One live run: status gate, uplink + peer captures, listeners, test, status gate, evidence files.
+set -u
+TAG=$1; TEST=$2; COND=$3; WORK=$4
+SP=/private/tmp/claude-501/-Users-denyskolomiiets-masscan/3c73b7a2-86d2-4a31-816e-712b40c2aec5/scratchpad
+L=$SP/lab-24e3f4f/target/release/rmasscan-lab
+BIN=$(cat $SP/spike/bin.path)
+export RMASSCAN_BPF_LAB_MANIFEST=/var/run/rmasscan-lab/m1.json
+R=$WORK/runs/$TAG
+mkdir -p "$R"
+FILTER='ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether host 02:ac:00:00:00:11 or net 198.18.0.0/30'
+gate() { # $1 = pre|post
+  $L macos-lab --run-id m1 status > "$R/$1-status.json" 2> "$R/$1-status.err"; echo $? > "$R/$1-status.rc"
+  local rc; rc=$(cat "$R/$1-status.rc")
+  if [ "$rc" != 0 ] || ! grep -q '"raw_run_allowed": true' "$R/$1-status.json" || ! grep -q '"bpf_access": "granted"' "$R/$1-status.json"; then
+    echo "GATE FAIL ($1) rc=$rc" | tee -a "$R/gate.txt"; return 1; fi
+  echo "gate $1 ok" >> "$R/gate.txt"; return 0
+}
+gate pre || exit 3
+date -u +%FT%TZ > "$R/start-utc.txt"
+/usr/sbin/tcpdump -p -n -i en0 -U -B 4096 -w "$R/uplink.pcap" "$FILTER" 2> "$R/uplink.err" & UP=$!
+if [ "$TEST" != idle ]; then
+  /usr/sbin/tcpdump -p -n -i feth4202 -U -B 16384 -s 128 -w "$R/peer.pcap" 2> "$R/peer.err" & PE=$!
+  $L peer listen --open 8000-8007 --ready "$R/listeners-ready.json" > "$R/listeners.out" 2> "$R/listeners.err" & LI=$!
+  for i in $(seq 1 50); do [ -s "$R/listeners-ready.json" ] && break; sleep 0.2; done
+  for i in feth4201 feth4202; do $L peer counters --iface $i > "$R/counters-before-$i.txt" 2>&1; done
+fi
+sleep 1
+if [ "$TEST" = idle ]; then
+  sleep 5
+else
+  RMASSCAN_BPF_OUT_DIR="$R/out" RMASSCAN_BPF_COND="$COND" "$BIN" --ignored --exact "macos::spike::$TEST" --nocapture > "$R/test.out" 2> "$R/test.err"; echo $? > "$R/test.rc"
+fi
+sleep 1
+if [ "$TEST" != idle ]; then
+  for i in feth4201 feth4202; do $L peer counters --iface $i > "$R/counters-after-$i.txt" 2>&1; done
+  kill -INT $LI 2>/dev/null; wait $LI 2>/dev/null; echo $? > "$R/listeners.rc"
+  kill -INT $PE; wait $PE; echo $? > "$R/peer-tcpdump.rc"
+fi
+kill -INT $UP; wait $UP; echo $? > "$R/uplink-tcpdump.rc"
+date -u +%FT%TZ > "$R/end-utc.txt"
+/usr/sbin/tcpdump -n -r "$R/uplink.pcap" 2> "$R/uplink-read.err" | wc -l | tr -d ' ' > "$R/uplink-lab-frames.txt"
+[ -f "$R/peer.pcap" ] && /usr/sbin/tcpdump -n -r "$R/peer.pcap" 2> "$R/peer-read.err" | wc -l | tr -d ' ' > "$R/peer-frames.txt"
+gate post
+echo "uplink lab frames: $(cat $R/uplink-lab-frames.txt); uplink tcpdump rc $(cat $R/uplink-tcpdump.rc)"
+[ -f "$R/test.rc" ] && echo "test rc: $(cat $R/test.rc)"

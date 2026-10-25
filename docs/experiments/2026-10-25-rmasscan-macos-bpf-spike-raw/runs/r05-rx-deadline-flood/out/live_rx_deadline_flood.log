@@ -1,0 +1,13 @@
+test=live_rx_deadline_flood cond=r05-rx-deadline-flood
+flood20k_accept_poll: calls=20000 timeouts=0 ready=20000 pollerr_nval_or_error=0 max_call_us=98.8
+flood20k_accept_poll overshoot (duration - 50 ms), timeouts only: n=0 p50_us=0.0 p95_us=0.0 max_us=0.0
+flood20k_accept_poll: peer_sent=24130 peer_write_errors=0 rx_stats=BpfStat { bs_recv: 24129, bs_drop: 0 }
+flood20k_accept_kevent: calls=20000 timeouts=0 ready=20000 pollerr_nval_or_error=0 max_call_us=113.5
+flood20k_accept_kevent overshoot (duration - 50 ms), timeouts only: n=0 p50_us=0.0 p95_us=0.0 max_us=0.0
+flood20k_accept_kevent: peer_sent=24113 peer_write_errors=0 rx_stats=BpfStat { bs_recv: 24112, bs_drop: 0 }
+flood20k_dropall_poll: calls=200 timeouts=200 ready=0 pollerr_nval_or_error=0 max_call_us=51017.8
+flood20k_dropall_poll overshoot (duration - 50 ms), timeouts only: n=200 p50_us=1008.0 p95_us=1014.3 max_us=1017.8
+flood20k_dropall_poll: peer_sent=207834 peer_write_errors=0 rx_stats=BpfStat { bs_recv: 207833, bs_drop: 0 }
+flood20k_dropall_kevent: calls=200 timeouts=200 ready=0 pollerr_nval_or_error=0 max_call_us=51020.4
+flood20k_dropall_kevent overshoot (duration - 50 ms), timeouts only: n=200 p50_us=1005.0 p95_us=1009.8 max_us=1020.4
+flood20k_dropall_kevent: peer_sent=207783 peer_write_errors=0 rx_stats=BpfStat { bs_recv: 207782, bs_drop: 0 }

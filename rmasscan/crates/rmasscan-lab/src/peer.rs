@@ -484,6 +484,16 @@ fn qmp_set_link(_path: &str, _up: bool) -> Result<Value, String> {
 pub fn run(args: &[String]) -> Result<i32, String> {
     let a = Args::try_parse_from(std::iter::once("peer".into()).chain(args.iter().cloned()))
         .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    if let Cmd::Counters { iface } = &a.cmd {
+        // The macOS lab has no namespace: the peer-side counters come from netstat.
+        if !link::safe_iface(iface) {
+            return Err("invalid interface".into());
+        }
+        let c = crate::dump::netstat_counters(iface)?;
+        println!("{} {}", c.ipkts, c.opkts);
+        return Ok(0);
+    }
     guard()?;
     lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
     match a.cmd {

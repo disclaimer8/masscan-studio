@@ -5,10 +5,9 @@
 //! Capture is not done here: the witness is the independent `tcpdump` (see `dump`).
 use rmasscan_core::{packet::LinkType, probe::AdapterBinding};
 use rmasscan_engine::{Rx, SendStatus, Tx};
-use std::{
-    fs,
-    time::{Duration, Instant},
-};
+#[cfg(not(target_os = "macos"))]
+use std::fs;
+use std::time::{Duration, Instant};
 
 /// Ethertype of the lab marker frames (IEEE 802 local experimental).
 pub const MARKER_ETHERTYPE: [u8; 2] = [0x88, 0xb5];
@@ -52,6 +51,17 @@ pub fn iface_mac(iface: &str) -> Result<[u8; 6], String> {
     if !safe_iface(iface) {
         return Err(format!("invalid interface name {iface:?}"));
     }
+    iface_mac_os(iface)
+}
+
+/// macOS: the interface's link-layer address through the product's `getifaddrs` wrapper.
+#[cfg(target_os = "macos")]
+fn iface_mac_os(iface: &str) -> Result<[u8; 6], String> {
+    rmasscan_net::nic_mac(iface).ok_or_else(|| format!("{iface}: no link-layer address"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn iface_mac_os(iface: &str) -> Result<[u8; 6], String> {
     let text = fs::read_to_string(format!("/sys/class/net/{iface}/address"))
         .map_err(|e| format!("{iface}: {e}"))?;
     parse_mac(text.trim())

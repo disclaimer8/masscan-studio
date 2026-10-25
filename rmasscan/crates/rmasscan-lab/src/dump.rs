@@ -50,6 +50,104 @@ pub fn tcpdump_argv(iface: &str, pcap: &str) -> Vec<String> {
     .collect()
 }
 
+/// The tcpdump command line of the witness on macOS. Its tcpdump has no `-Z`, `-B` or
+/// `--time-stamp-precision=nano`, so none of them is passed. `filter` is a BPF expression (one
+/// argument) such as the uplink filter of the macOS lab.
+pub fn tcpdump_argv_macos(iface: &str, pcap: &str, filter: Option<&str>) -> Vec<String> {
+    let mut v: Vec<String> = [
+        "tcpdump",
+        "-i",
+        iface,
+        "-n",
+        "-U",
+        "--immediate-mode",
+        "-s",
+        "0",
+        "-w",
+        pcap,
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    if let Some(f) = filter {
+        v.push(f.to_string());
+    }
+    v
+}
+
+/// Counters of one interface from `netstat -I IFACE -b -d -n` (the `<Link#` row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetstatCounters {
+    pub ipkts: u64,
+    pub opkts: u64,
+    pub ierrs: u64,
+    pub drop: u64,
+}
+
+/// Parse `netstat -I IFACE -b -d -n`. Columns are found by header name; a missing column is an
+/// error (the evidence is INVALID, never a silent zero). A `<Link#` row without an Address
+/// has one token fewer than the header, so columns after Address shift left by one.
+pub fn parse_netstat(text: &str, iface: &str) -> Result<NetstatCounters, String> {
+    let mut lines = text.lines();
+    let header: Vec<&str> = lines
+        .by_ref()
+        .find(|l| l.split_whitespace().next() == Some("Name"))
+        .ok_or("netstat: no header line")?
+        .split_whitespace()
+        .collect();
+    let col = |name: &str| {
+        header
+            .iter()
+            .position(|h| *h == name)
+            .ok_or_else(|| format!("netstat: no {name} column"))
+    };
+    let (ip, op, ie, dr) = (col("Ipkts")?, col("Opkts")?, col("Ierrs")?, col("Drop")?);
+    let addr = col("Address")?;
+    for line in lines {
+        let t: Vec<&str> = line.split_whitespace().collect();
+        if t.first() != Some(&iface) || !t.get(2).is_some_and(|n| n.starts_with("<Link#")) {
+            continue;
+        }
+        let shift = match header.len().checked_sub(t.len()) {
+            Some(0) => 0,
+            Some(1) => 1,
+            _ => return Err(format!("netstat: unexpected row shape {line:?}")),
+        };
+        let get = |i: usize| -> Result<u64, String> {
+            let at = if i > addr { i - shift } else { i };
+            t.get(at)
+                .ok_or("netstat: short row")?
+                .parse::<u64>()
+                .map_err(|e| format!("netstat: {} column: {e}", header[i]))
+        };
+        return Ok(NetstatCounters {
+            ipkts: get(ip)?,
+            opkts: get(op)?,
+            ierrs: get(ie)?,
+            drop: get(dr)?,
+        });
+    }
+    Err(format!("netstat: no <Link# row for {iface}"))
+}
+
+/// Run `netstat -I IFACE -b -d -n` and parse it.
+pub fn netstat_counters(iface: &str) -> Result<NetstatCounters, String> {
+    if !link::safe_iface(iface) {
+        return Err("invalid interface".into());
+    }
+    let out = Command::new("netstat")
+        .args(["-I", iface, "-b", "-d", "-n"])
+        .output()
+        .map_err(|e| format!("netstat: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "netstat: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    parse_netstat(&String::from_utf8_lossy(&out.stdout), iface)
+}
+
 /// Everything the completeness decision depends on.
 #[derive(Debug, Clone, Default)]
 pub struct Facts {
@@ -333,12 +431,14 @@ pub fn witness(cfg: &Config, probe: &mut dyn Probe) -> Result<Value, String> {
     }))
 }
 
+#[cfg(not(target_os = "macos"))]
 struct SysProbe {
     iface: String,
     tx: Box<dyn rmasscan_engine::Tx>,
     src: [u8; 6],
     dst: [u8; 6],
 }
+#[cfg(not(target_os = "macos"))]
 fn stat(iface: &str, name: &str) -> Result<u64, String> {
     if !link::safe_iface(iface) {
         return Err("invalid interface".into());
@@ -349,12 +449,44 @@ fn stat(iface: &str, name: &str) -> Result<u64, String> {
         .parse()
         .map_err(|e| format!("{iface} {name}: {e}"))
 }
+#[cfg(not(target_os = "macos"))]
 impl Probe for SysProbe {
     fn counters(&mut self) -> Result<u64, String> {
         Ok(stat(&self.iface, "rx_packets")? + stat(&self.iface, "tx_packets")?)
     }
     fn interface_drops(&mut self) -> Result<u64, String> {
         stat(&self.iface, "rx_dropped")
+    }
+    fn send_end(&mut self) -> Result<(), String> {
+        let f = link::marker_frame(self.dst, self.src, END_PAYLOAD);
+        for _ in 0..END_MARKERS_REQUIRED {
+            link::send_blocking(&mut *self.tx, &f, link::SEND_PATIENCE, &|| false)?;
+            thread::sleep(Duration::from_millis(50));
+        }
+        Ok(())
+    }
+    fn stop_requested(&self) -> bool {
+        rmasscan_net::lab_io::stop_requested()
+    }
+}
+
+/// The macOS witness probe: counters from `netstat -I IFACE -b -d -n`, end markers through the
+/// product adapter. `counters` is Ipkts + Opkts; `interface_drops` is Ierrs + Drop, so any loss
+/// the interface reports makes the witness INVALID. A missing column is an `Err`.
+pub struct MacProbe {
+    pub iface: String,
+    pub tx: Box<dyn rmasscan_engine::Tx>,
+    pub src: [u8; 6],
+    pub dst: [u8; 6],
+}
+impl Probe for MacProbe {
+    fn counters(&mut self) -> Result<u64, String> {
+        let c = netstat_counters(&self.iface)?;
+        Ok(c.ipkts + c.opkts)
+    }
+    fn interface_drops(&mut self) -> Result<u64, String> {
+        let c = netstat_counters(&self.iface)?;
+        Ok(c.ierrs + c.drop)
     }
     fn send_end(&mut self) -> Result<(), String> {
         let f = link::marker_frame(self.dst, self.src, END_PAYLOAD);
@@ -383,17 +515,30 @@ pub fn run(a: &BTreeMap<String, String>) -> Result<i32, String> {
         return Err("invalid interface".into());
     }
     let dst = link::parse_mac(get(a, "end-dst")?)?;
-    let cfg = Config::standard(
+    #[allow(unused_mut)]
+    let mut cfg = Config::standard(
         iface,
         Path::new(get(a, "pcap")?),
         Path::new(get(a, "ready")?),
         Path::new(get(a, "ack")?),
     );
+    #[cfg(target_os = "macos")]
+    {
+        cfg.argv = tcpdump_argv_macos(iface, get(a, "pcap")?, None);
+    }
     rmasscan_net::lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
     // The RX half is dropped at once; only the end markers are sent from here.
     let link::Link { tx, rx } = link::open(iface)?;
     drop(rx);
+    #[cfg(not(target_os = "macos"))]
     let mut probe = SysProbe {
+        iface: iface.to_string(),
+        tx,
+        src: link::iface_mac(iface)?,
+        dst,
+    };
+    #[cfg(target_os = "macos")]
+    let mut probe = MacProbe {
         iface: iface.to_string(),
         tx,
         src: link::iface_mac(iface)?,

@@ -5,6 +5,7 @@ pub mod capture;
 pub mod deploy;
 pub mod dump;
 pub mod link;
+pub mod macos_lab;
 pub mod oracle;
 pub mod oracle_util;
 pub mod pcap;

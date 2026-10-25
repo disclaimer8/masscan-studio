@@ -12,6 +12,7 @@ use super::ffi::*;
 use super::handle::*;
 use super::loader::*;
 use crate::NetError;
+use crate::drop_counter::DropCounter;
 use fake::*;
 
 // ---------- подставные Module/Loader ----------

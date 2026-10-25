@@ -1,0 +1,14 @@
+{
+  "capture_started_utc": 1792945422.664678,
+  "capture_stopped_utc": 1792945430.803258,
+  "euid": 501,
+  "exe_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+  "guest_exit": 0,
+  "guest_finished_utc": 1792945427.081977,
+  "guest_started_utc": 1792945423.26994,
+  "icmplim": "unreadable",
+  "invocation_nonce": "r1ae941aadb5455d9ea53f89626c731f5",
+  "kind": "perf",
+  "syncookie": "1",
+  "tag": "perf.100000.r5"
+}

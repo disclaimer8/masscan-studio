@@ -4,6 +4,7 @@ fn a_queued_outgoing_tail_missing_from_the_pcap_does_not_pass_as_complete_captur
     // The interface counted 3 frames (window 3..3) but the pcap holds 2 and tcpdump retired 2:
     // the last frame was queued and never written.
     let facts = rmasscan_lab::dump::Facts {
+        received_is_prefilter: false,
         start_markers: 1,
         end_markers: 3,
         quiesced: true,

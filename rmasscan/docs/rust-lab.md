@@ -334,3 +334,28 @@ commands in this document are parsed against the same lists by a unit test.
 Known gap (M-6, deferred to the next Linux acceptance): `oracle-fixtures` still stages the scripts that sit
 next to the checkout that built the binary (`CARGO_MANIFEST_DIR` at compile time). Build it from the
 checkout under test, in a private target directory.
+
+## macOS (`feth` stand)
+
+Build as above on the Mac. `macos-lab`, `macos-suite` and the live peer-side tools exist on macOS only (on
+other systems `macos-suite` and `macos-lab` answer "macOS-only", rc 2). `macos-verify` is portable and works
+on any host on a copied evidence directory.
+
+| Command | What it does | Exit codes |
+| --- | --- | --- |
+| `macos-lab plan\|up\|status\|bpf-access\|link\|down` | the sealed `feth4201`/`feth4202` stand (the user runs the root ones) | see `macos-feth-lab.md` |
+| `macos-suite --out DIR --suite ID --plan functional\|failure\|perf --commit SHA --repo PATH --wire-scan PATH --fixtures DIR [--run-id m1] [--manifest LAB_MANIFEST] [--reps N] [--rates CSV] [--only TAG ...] [--rerun] [--list] [--run-timeout S] [--remove-stale-lock]` | gated live runs, evidence per run in `DIR/runs/<tag>.<nonce>/` | 0 done, 2 NOT RUN, 10 abort, 11 rerun refused, 12 schema, 13 lab frame on the uplink, 130 interrupted |
+| `macos-verify --dir DIR [--out FILE]` | offline verdict per run, per pause/resume group and for the directory | 0 PASS, 1 FAIL, 2 INVALID or NOT RUN |
+| `oracle-fixtures --out DIR --peer-mac MAC [--src-mac MAC] --remote-lab /abs/path --host minipc` | independent pinned C oracle on minipc; `--src-mac` (default the Windows VM adapter MAC) sets the binding, `02:ac:00:00:00:01` for the Mac | 0 all valid |
+
+Plans: `functional` (part A, same cases as Windows), `failure` (part B: the two `perm_denied` runs need
+BPF denied and come first, the other 15 need it granted) and `perf` (part C: 100, 1000, 10000 and 100000
+pps, five repetitions each, repetition-major; `--reps` and `--rates` select a subset and the rest of the
+plan is then NOT RUN). The exact order of the commands is in `macos-feth-lab.md`.
+
+Verdicts follow the Windows verifier: an incomplete capture is INVALID, a missing result is NOT RUN, a lab
+frame on the uplink or a foreign SYN is a FAIL of the whole directory that no rerun discards, and the
+evidence (`macos_capture_schema` 1, per run `capture_schema`) must carry the hashes taken before the copy.
+`perf_summary` reports `rate_gate` MET (median within 20 percent), OPEN, or NOT RUN (fewer than three
+Completed PASS cells); on `feth` this measures the kernel pair, not a physical NIC, and a 100k pps witness
+that loses frames makes its cells INVALID rather than relaxing the gate.

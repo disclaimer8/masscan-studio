@@ -1,0 +1,9 @@
+test=live_rx_health cond=r07-rx-health
+CLEAN base=BpfStat { bs_recv: 0, bs_drop: 0 } read=74 stats=BpfStat { bs_recv: 74, bs_drop: 0 }
+CLEAN BIOCGSTATS call: n=200 p50_us=9.6 p95_us=16.3 max_us=239.0
+OVERFLOW a_buflen=524288 peer_sent=200000 peer_write_errors=0 a_base=BpfStat { bs_recv: 0, bs_drop: 0 }
+A before_read=BpfStat { bs_recv: 200000, bs_drop: 186894 } read_records=13106 after_drain=BpfStat { bs_recv: 200000, bs_drop: 186894 } again=BpfStat { bs_recv: 200000, bs_drop: 186894 } again2=BpfStat { bs_recv: 200000, bs_drop: 186894 } later=BpfStat { bs_recv: 200000, bs_drop: 186894 }
+B (continuous reader, 4 MiB) read_records=199929 stats=BpfStat { bs_recv: 199929, bs_drop: 0 }
+OVERFLOW BIOCGSTATS call during hold: n=10 p50_us=84.2 p95_us=137.3 max_us=137.3
+A delta_recv=200000 delta_drop=186894 read=13106 recv-drop-read=0
+B delta: recv=199929 drop=0 read=199929

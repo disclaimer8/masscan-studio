@@ -1,0 +1,14 @@
+{
+  "capture_started_utc": 1792945006.213745,
+  "capture_stopped_utc": 1792945012.801516,
+  "euid": 501,
+  "exe_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+  "guest_exit": 0,
+  "guest_finished_utc": 1792945010.585289,
+  "guest_started_utc": 1792945007.306388,
+  "icmplim": "unreadable",
+  "invocation_nonce": "rc9ab35dfa849db6a8469cb26e3c203f2",
+  "kind": "foreign",
+  "syncookie": "1",
+  "tag": "x01_foreign_replies.run1"
+}

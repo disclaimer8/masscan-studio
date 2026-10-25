@@ -1,0 +1,29 @@
+{
+  "end_marker_frames": 3,
+  "iface_rxtx_delta_hi": 8,
+  "iface_rxtx_delta_lo": 5,
+  "interface_drop_delta": 0,
+  "interface_drops": null,
+  "invalid_reasons": [],
+  "kernel_drops": 0,
+  "pcap_frames": 8,
+  "pcap_sha256": "9f1fe169e983aa45791c6dde13aee485c25ed676360604084f87e6ca8057096f",
+  "pcap_size_bytes": 624,
+  "quiesced_before_stop": true,
+  "received_by_filter": 8,
+  "start_marker_frames": 3,
+  "tcpdump_argv": [
+    "tcpdump",
+    "-i",
+    "feth4202",
+    "-n",
+    "-U",
+    "--immediate-mode",
+    "-s",
+    "0",
+    "-w",
+    "$SCRATCH/t7-evidence/functional-r1/.work/c01_one_addr_port_synack.run1.r5690885481933255604445e3849eeed4/peer.pcap"
+  ],
+  "tcpdump_captured": 8,
+  "valid": true
+}

@@ -96,10 +96,11 @@ fn health_error_fails_and_earlier_zero_does_not_mask_it() {
     synack_responder(&fake);
     let h = start_manual(&plan(1_000_000.0, 3600), &fake, &clock, opts());
     wait_for("tx done", || h.progress().sent == PROBES);
-    clock.advance(Duration::from_millis(250)); // периодическая: Some(0)
-    wait_for("first health", || fake.health_calls() >= 1);
-    clock.advance(Duration::from_millis(250)); // периодическая: ошибка
-    wait_for("outcome", || h.outcome().is_some());
+    let step = Duration::from_millis(250);
+    // Периодическая проверка: первая (по сценарию) Some(0).
+    advance_until(&clock, step, "first health", || fake.health_calls() >= 1);
+    // Следующая периодическая проверка: ошибка.
+    advance_until(&clock, step, "outcome", || h.outcome().is_some());
     let r = finish(h);
     assert_failed_without_checkpoint(&r, FailReason::RxError("stats read failed".into()));
     assert_eq!(r.outcome.rx_health.kernel_drops, None);
@@ -123,13 +124,14 @@ fn health_runs_periodically_without_incoming_frames() {
     std::thread::sleep(Duration::from_millis(30));
     let before = fake.health_calls();
     assert_eq!(before, 0, "frozen clock: no check before the interval");
-    clock.advance(Duration::from_millis(250));
-    wait_for("periodic health", || fake.health_calls() > before);
+    let step = Duration::from_millis(250);
+    advance_until(&clock, step, "periodic health", || {
+        fake.health_calls() > before
+    });
     assert!(h.outcome().is_none());
     // Потеря между проверками находится периодической проверкой, не ожидая wait.
     fake.set_health(HealthStep::Drops(2));
-    clock.advance(Duration::from_millis(250));
-    wait_for("outcome", || h.outcome().is_some());
+    advance_until(&clock, step, "outcome", || h.outcome().is_some());
     let r = finish(h);
     assert_failed_without_checkpoint(&r, FailReason::RxLoss { kernel_drops: 2 });
 }

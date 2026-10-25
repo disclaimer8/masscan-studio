@@ -5,10 +5,9 @@
 //! Capture is not done here: the witness is the independent `tcpdump` (see `dump`).
 use rmasscan_core::{packet::LinkType, probe::AdapterBinding};
 use rmasscan_engine::{Rx, SendStatus, Tx};
-use std::{
-    fs,
-    time::{Duration, Instant},
-};
+#[cfg(not(target_os = "macos"))]
+use std::fs;
+use std::time::{Duration, Instant};
 
 /// Ethertype of the lab marker frames (IEEE 802 local experimental).
 pub const MARKER_ETHERTYPE: [u8; 2] = [0x88, 0xb5];
@@ -52,6 +51,70 @@ pub fn iface_mac(iface: &str) -> Result<[u8; 6], String> {
     if !safe_iface(iface) {
         return Err(format!("invalid interface name {iface:?}"));
     }
+    iface_mac_os(iface)
+}
+
+#[cfg(target_os = "macos")]
+/// The MAC from `ifconfig IFACE` output (`ether xx:..`, octets without leading zeros are
+/// normalised). Unprivileged `getifaddrs` and `NET_RT_IFLIST` report the placeholder
+/// `02:00:00:00:00:00` for every Ethernet interface on recent macOS, while `ifconfig` shows the
+/// real address, so that placeholder is "unknown", never a MAC.
+pub fn mac_from_ifconfig(iface: &str, text: &str) -> Result<[u8; 6], String> {
+    let mac = crate::macos_lab::parse_ifconfig(text)
+        .ether
+        .ok_or_else(|| format!("{iface}: ifconfig shows no ether line"))?;
+    if mac == "02:00:00:00:00:00" {
+        return Err(format!(
+            "{iface}: the MAC is masked (02:00:00:00:00:00); it is unknown, not a real address"
+        ));
+    }
+    parse_mac(&mac)
+}
+
+/// macOS: the interface's link-layer address from `/sbin/ifconfig` (never from
+/// `rmasscan_net::nic_mac`, which is masked for unprivileged processes).
+#[cfg(target_os = "macos")]
+fn iface_mac_os(iface: &str) -> Result<[u8; 6], String> {
+    let out = std::process::Command::new("/sbin/ifconfig")
+        .arg(iface)
+        .output()
+        .map_err(|e| format!("ifconfig: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{iface}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    mac_or_stand_plan(iface, &String::from_utf8_lossy(&out.stdout))
+}
+
+/// Like [`mac_from_ifconfig`], except for the two stand interfaces when the OS masks the MAC
+/// (Darwin hides MACs from processes descended from an ad-hoc-signed executable): then the MAC
+/// is the stand plan's constant. The placeholder itself is never returned as a MAC; root verified
+/// the real ones at `up`, and `macos-lab status` checks the stand against the manifest.
+#[cfg(target_os = "macos")]
+pub fn mac_or_stand_plan(iface: &str, text: &str) -> Result<[u8; 6], String> {
+    use crate::macos_lab::{MASKED_MAC, PEER_IF, PEER_MAC, SCANNER_IF, SCANNER_MAC};
+    match mac_from_ifconfig(iface, text) {
+        Ok(m) => Ok(m),
+        Err(e) => {
+            let masked =
+                crate::macos_lab::parse_ifconfig(text).ether.as_deref() == Some(MASKED_MAC);
+            let plan = match iface {
+                SCANNER_IF => Some(SCANNER_MAC),
+                PEER_IF => Some(PEER_MAC),
+                _ => None,
+            };
+            match (masked, plan) {
+                (true, Some(p)) => parse_mac(p),
+                _ => Err(e),
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn iface_mac_os(iface: &str) -> Result<[u8; 6], String> {
     let text = fs::read_to_string(format!("/sys/class/net/{iface}/address"))
         .map_err(|e| format!("{iface}: {e}"))?;
     parse_mac(text.trim())
@@ -72,6 +135,50 @@ pub fn open(iface: &str) -> Result<Link, String> {
         tx: opened.io.tx,
         rx: opened.io.rx,
     })
+}
+
+/// The macOS stand MACs (scanner side, peer side) as bytes: the only addresses the guard below lets the lab write.
+pub const STAND_SCANNER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x01];
+pub const STAND_PEER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x02];
+
+/// The one rule for every frame the lab itself writes on the macOS stand: peer MAC to scanner MAC, and either the
+/// lab marker ethertype (0x88b5) or IPv4 from 198.18.0.2 to 198.18.0.1. Nothing else is ever written.
+pub fn injection_allowed(f: &[u8]) -> bool {
+    if f.len() < 14 || f[0..6] != STAND_SCANNER_MAC || f[6..12] != STAND_PEER_MAC {
+        return false;
+    }
+    match [f[12], f[13]] {
+        [0x88, 0xb5] => true,
+        [0x08, 0x00] => {
+            f.len() >= 34
+                && f[14] >> 4 == 4
+                && f[26..30] == [198, 18, 0, 2]
+                && f[30..34] == [198, 18, 0, 1]
+        }
+        _ => false,
+    }
+}
+
+/// Wraps a `Tx`; a frame outside [`injection_allowed`] is refused (an error) and counted, never written.
+pub struct GuardedTx {
+    pub inner: Box<dyn Tx>,
+    pub refused: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+impl Tx for GuardedTx {
+    fn send(
+        &mut self,
+        frame: &[u8],
+        timeout: Duration,
+    ) -> Result<SendStatus, rmasscan_engine::IoError> {
+        if !injection_allowed(frame) {
+            self.refused
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(rmasscan_engine::IoError::new(
+                "refused: the frame is outside the lab's peer-side guard",
+            ));
+        }
+        self.inner.send(frame, timeout)
+    }
 }
 
 /// A lab marker frame: `dst`, `src`, ethertype 0x88b5, `payload`, zero-padded to 60 bytes.
@@ -132,6 +239,53 @@ mod tests {
     use super::*;
     use rmasscan_engine::IoError;
     use std::collections::VecDeque;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_mac_comes_from_ifconfig_text_and_a_masked_placeholder_is_refused() {
+        let real = "feth4201: flags=8863<UP> mtu 1500\n\tether 2:ac:0:0:0:1\n\tstatus: active\n";
+        assert_eq!(
+            mac_from_ifconfig("feth4201", real).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 1]
+        );
+        let masked = "en0: flags=8863<UP>\n\tether 02:00:00:00:00:00\n";
+        assert!(
+            mac_from_ifconfig("en0", masked)
+                .unwrap_err()
+                .contains("masked")
+        );
+        let masked_short = "en0: flags=8863<UP>\n\tether 2:0:0:0:0:0\n";
+        assert!(mac_from_ifconfig("en0", masked_short).is_err());
+        assert!(mac_from_ifconfig("lo0", "lo0: flags=8049<UP>\n").is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_masked_stand_mac_is_the_plan_constant_and_nothing_else_is() {
+        let masked = "feth4201: flags=8843<UP>\n\tether 02:00:00:00:00:00\n";
+        assert_eq!(
+            mac_or_stand_plan("feth4201", masked).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 1]
+        );
+        assert_eq!(
+            mac_or_stand_plan("feth4202", masked).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 2]
+        );
+        // Any other interface keeps the strict refusal; the placeholder is never a MAC.
+        assert!(
+            mac_or_stand_plan("en0", masked)
+                .unwrap_err()
+                .contains("masked")
+        );
+        // A real MAC on a stand interface is returned as it is (so a mismatch is visible).
+        let other = "feth4201: flags=8843<UP>\n\tether 02:ac:00:00:00:09\n";
+        assert_eq!(
+            mac_or_stand_plan("feth4201", other).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 9]
+        );
+        // No ether line at all is an error, not the plan.
+        assert!(mac_or_stand_plan("feth4201", "feth4201: flags=8843<UP>\n").is_err());
+    }
 
     struct Scripted(VecDeque<Result<SendStatus, IoError>>, usize);
     impl Tx for Scripted {

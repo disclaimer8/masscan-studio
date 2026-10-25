@@ -42,8 +42,9 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
 
-use super::handle::{DropCounter, OpenParams, PcapHandle, Polled, resolve_device};
+use super::handle::{OpenParams, PcapHandle, Polled, resolve_device};
 use super::loader::NpcapApi;
+use crate::drop_counter::DropCounter;
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
 /// Внутренний бюджет одного вызова адаптера (решение контролёра по спайку).

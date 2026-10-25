@@ -1,0 +1,19 @@
+{
+  "duration_s": 2.0,
+  "first_sent_at": 1792945007.310737,
+  "first_syn_seen": true,
+  "guard_refused": 0,
+  "injected": {
+    "unscanned_port": "b14add23324b4960dfb2ebefba0910b26ca6f42c305d9d63f968a6232710b7b1",
+    "wrong_cookie": "429c6eb4d7e18d8410cee6b05d62e5832e25992e390654ee8f3e6f9e7c9adcba",
+    "wrong_dst_port": "2453cff5f363ac5d49ff76a355d2ea7a8708fb00f652fe4ac818abc7ff2fa382"
+  },
+  "interval_s": 0.1,
+  "ipid": 61665,
+  "kinds": {
+    "unscanned_port": 20,
+    "wrong_cookie": 20,
+    "wrong_dst_port": 20
+  },
+  "sent_total": 60
+}

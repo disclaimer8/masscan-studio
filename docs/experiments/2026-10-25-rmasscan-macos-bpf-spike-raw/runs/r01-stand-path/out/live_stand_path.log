@@ -1,0 +1,13 @@
+test=live_stand_path cond=stand
+rx_buflen=4194304 (requested 4194304)
+FIRST_RECORD bh_hdrlen=18 bh_caplen=58 bh_datalen=58 off=0 frame[12..14]=0800
+RX hdrlen=18 dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=58 ip=198.18.0.2>198.18.0.1 tcp=8000>40000 flags=0x12
+RX hdrlen=18 dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=54 ip=198.18.0.2>198.18.0.1 tcp=81>40001 flags=0x14
+RX hdrlen=18 dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=58 ip=198.18.0.2>198.18.0.1 tcp=8000>40000 flags=0x12
+PEER dst=02:ac:00:00:00:02 src=02:ac:00:00:00:01 type=0x0800 len=54 ip=198.18.0.1>198.18.0.2 tcp=40000>8000 flags=0x02
+PEER dst=02:ac:00:00:00:02 src=02:ac:00:00:00:01 type=0x0800 len=54 ip=198.18.0.1>198.18.0.2 tcp=40001>81 flags=0x02
+PEER dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=58 ip=198.18.0.2>198.18.0.1 tcp=8000>40000 flags=0x12
+PEER dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=54 ip=198.18.0.2>198.18.0.1 tcp=81>40001 flags=0x14
+PEER dst=02:ac:00:00:00:01 src=02:ac:00:00:00:02 type=0x0800 len=58 ip=198.18.0.2>198.18.0.1 tcp=8000>40000 flags=0x12
+RESULT rx_synack_from_peer=2 rx_rst_from_peer=1 peer_side_arp_frames=0 peer_side_rst_with_scanner_ip_not_from_scanner_mac=0
+MULTI one_read_bytes=720 records=10 hdrlens=[18, 18, 18, 18, 18, 18, 18, 18, 18, 18] stats_before=BpfStat { bs_recv: 3, bs_drop: 0 } stats_after=BpfStat { bs_recv: 13, bs_drop: 0 }

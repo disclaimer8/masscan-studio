@@ -58,6 +58,27 @@ fn exe_hash() -> (Option<String>, Option<String>) {
     (Some(path.display().to_string()), hash)
 }
 
+/// Идентификатор слоя сырого ввода-вывода текущей ОС. `npcap_abi` остаётся ради
+/// существующего верификатора Windows.
+pub fn raw_io_abi() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        rmasscan_net::BPF_ABI_ID
+    }
+    #[cfg(windows)]
+    {
+        rmasscan_net::NPCAP_ABI_ID
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "AF_PACKET via libc"
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    {
+        "none"
+    }
+}
+
 /// Часть идентичности, не зависящая от Npcap: коммит, хэш бинарника, ОС,
 /// ABI-слой и права процесса. Вычисляется один раз.
 pub fn identity_json() -> &'static str {
@@ -66,7 +87,7 @@ pub fn identity_json() -> &'static str {
         let (path, hash) = exe_hash();
         format!(
             "{{\"source_commit\":{},\"binary_sha256\":{},\"binary_path\":{},\
-\"os\":{{\"family\":{},\"arch\":{},\"version\":{}}},\"npcap_abi\":{},\"elevated\":{},\"restricted_token\":{}}}",
+\"os\":{{\"family\":{},\"arch\":{},\"version\":{}}},\"npcap_abi\":{},\"raw_io_abi\":{},\"elevated\":{},\"restricted_token\":{}}}",
             js(SOURCE_COMMIT),
             json_opt_str(hash.as_deref()),
             json_opt_str(path.as_deref()),
@@ -74,6 +95,7 @@ pub fn identity_json() -> &'static str {
             js(std::env::consts::ARCH),
             json_opt_str(rmasscan_net::os_version().as_deref()),
             js(rmasscan_net::NPCAP_ABI_ID),
+            js(raw_io_abi()),
             metrics::json_opt_bool(metrics::elevated()),
             metrics::json_opt_bool(metrics::restricted()),
         )
@@ -123,11 +145,27 @@ mod tests {
             "\"binary_sha256\":\"",
             "\"os\":{",
             "\"npcap_abi\":",
+            "\"raw_io_abi\":",
             "\"elevated\":",
             "\"restricted_token\":",
         ] {
             assert!(id.contains(k), "{k} missing from {id}");
         }
+    }
+
+    #[test]
+    fn identity_has_raw_io_abi_and_os_version() {
+        let id = identity_json();
+        let abi = format!("\"raw_io_abi\":{}", js(raw_io_abi()));
+        assert!(id.contains(&abi), "{abi} missing from {id}");
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(raw_io_abi(), rmasscan_net::BPF_ABI_ID);
+            let v = rmasscan_net::os_version().expect("kern.osproductversion");
+            assert!(id.contains(&format!("\"version\":{}", js(&v))), "{id}");
+        }
+        // npcap_abi остаётся для верификатора Windows.
+        assert!(id.contains("\"npcap_abi\":\""), "{id}");
     }
 
     #[test]

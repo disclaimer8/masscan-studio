@@ -1,0 +1,4 @@
+test=live_own_frames cond=r04-own-frames
+SEESENT0 rx_records=0 own_frames_seen=0 (sent 1020 from SCAN/SPIKE)
+SEESENT1 control rx_records=1020 own_frames_seen=1020 scan_mac=1000 spike_mac=20
+PEER_WITNESS records=1020 src_scan=1000 src_spike_0x11=20 other=0

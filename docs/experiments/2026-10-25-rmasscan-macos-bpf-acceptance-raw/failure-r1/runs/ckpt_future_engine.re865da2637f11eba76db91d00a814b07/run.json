@@ -1,0 +1,40 @@
+{
+  "error": "EngineVersionMismatch",
+  "identity": {
+    "binary_path": "$SCRATCH/target-live/release/examples/wire_scan",
+    "binary_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+    "elevated": null,
+    "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "os": {
+      "arch": "aarch64",
+      "family": "macos",
+      "version": "27.0.1 (26A434)"
+    },
+    "raw_io_abi": "/dev/bpf* ioctl via libc; own declarations v1; aarch64",
+    "restricted_token": null,
+    "source_commit": "717e45c7c7fc1340b4dc24cb1ecb65c1c6e22e0f"
+  },
+  "invocation_nonce": "re865da2637f11eba76db91d00a814b07",
+  "job": {
+    "blackrock_rounds": 14,
+    "exclude": null,
+    "iface": "feth4201",
+    "job_digest": "3748b31820df5c8a84aa6761eaff66eaf0f7b1744d802c6d0a3b423bd393006d",
+    "ports": "8000-8015",
+    "rate": 100,
+    "retries": 0,
+    "router_mac": "02:ac:00:00:00:02",
+    "seed": 1,
+    "shard": "1/1",
+    "source_port": "40000",
+    "src_ip": "198.18.0.1",
+    "src_mac": "02:ac:00:00:00:01",
+    "targets": "198.18.0.2",
+    "wait": 3
+  },
+  "message": "rejected before the adapter was opened",
+  "opened_adapter": false,
+  "stage": "resume-preflight",
+  "status": "error",
+  "tx_sent": 0
+}

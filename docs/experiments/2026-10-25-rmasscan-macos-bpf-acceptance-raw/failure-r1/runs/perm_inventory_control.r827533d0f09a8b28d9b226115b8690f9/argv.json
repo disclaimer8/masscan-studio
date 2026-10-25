@@ -1,0 +1,7 @@
+{
+  "argv": [
+    "--inventory"
+  ],
+  "exe": "$SCRATCH/target-live/release/examples/wire_scan",
+  "invocation_nonce": "r827533d0f09a8b28d9b226115b8690f9"
+}

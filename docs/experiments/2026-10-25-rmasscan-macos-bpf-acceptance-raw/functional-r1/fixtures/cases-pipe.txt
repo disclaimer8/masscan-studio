@@ -1,0 +1,7 @@
+c01_one_addr_port_synack|1|0|1|198.18.0.2 -p80 --source-port 40000
+c02_one_addr_port_rst|1|0|1|198.18.0.2 -p81 --source-port 40000
+c03_multi_ports|16|8|8|198.18.0.2 -p8000-8015 --source-port 40000
+c04_exclude|4|0|4|198.18.0.0/30 -p80,81,443,82 --source-port 40000 --exclude 198.18.0.0-198.18.0.1,198.18.0.3
+c05_srcport_single|4|0|4|198.18.0.2 -p80,81,443,82 --source-port 50123
+c06_srcport_range|4|0|4|198.18.0.2 -p80,81,443,82 --source-port 50000-50015
+x01_foreign_replies|4|0|4|198.18.0.2 -p80,81,443,8099 --source-port 40000

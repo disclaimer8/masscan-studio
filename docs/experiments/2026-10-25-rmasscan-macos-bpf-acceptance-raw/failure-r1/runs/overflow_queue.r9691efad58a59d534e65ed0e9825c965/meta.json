@@ -1,0 +1,14 @@
+{
+  "capture_started_utc": 1792945531.370106,
+  "capture_stopped_utc": 1792945536.782671,
+  "euid": 501,
+  "exe_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+  "guest_exit": 3,
+  "guest_finished_utc": 1792945534.570406,
+  "guest_started_utc": 1792945531.978159,
+  "icmplim": "unreadable",
+  "invocation_nonce": "r9691efad58a59d534e65ed0e9825c965",
+  "kind": "overflow_queue",
+  "syncookie": "1",
+  "tag": "overflow_queue"
+}

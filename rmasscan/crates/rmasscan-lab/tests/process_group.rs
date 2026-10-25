@@ -12,7 +12,8 @@ fn cleanup_outlives_check(driver_script: &str) -> std::process::Output {
             .as_nanos()
     ));
     fs::create_dir(&dir).unwrap();
-    let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/lab-process-group.sh");
+    let helper = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../scripts/lab-process-group.sh");
     let output = Command::new("bash")
         .args([
             "-c",
@@ -94,7 +95,8 @@ fn session_script(files: &[(&str, &str)], body: &str) -> std::process::Output {
     for (name, text) in files {
         fs::write(dir.join(name), text).unwrap();
     }
-    let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/lab-process-group.sh");
+    let helper = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../scripts/lab-process-group.sh");
     let output = Command::new("bash")
         .args(["-c", &format!("set -eu\nsource \"$1\"\nd=$2\n{body}")])
         .arg("session-test")
@@ -195,7 +197,8 @@ kill -KILL "$p"; wait "$p" 2>/dev/null || true
 #[test]
 fn wire_lab_cleanup_uses_session_stops_and_checks_for_strays() {
     let text = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/wire-lab.sh"),
+        std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("../../scripts/wire-lab.sh"),
     )
     .unwrap();
     let cleanup = text

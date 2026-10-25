@@ -458,7 +458,7 @@ mod linux_wire_gate {
     }
 
     pub(super) fn golden(case: &str) -> Vec<Vec<u8>> {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        let p = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join(format!("../../tests/golden/wire/{case}.run1.pcap"));
         let bytes = fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         crate::pcap::read_pcap_records(&bytes)

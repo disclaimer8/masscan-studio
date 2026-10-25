@@ -191,7 +191,8 @@ mod tests {
     use super::*;
     #[test]
     fn remote_staging_includes_every_local_sourced_script() {
-        let scripts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
+        let scripts =
+            PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../scripts");
         let argv = staging_command(&scripts, "oracle-host", "/home/lab/run-nonce");
         assert_eq!(
             argv.last().unwrap(),
@@ -220,7 +221,8 @@ mod tests {
     }
     #[test]
     fn oracle_conversion_preserves_hashes_binding_and_repeat_failures() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/wire");
+        let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("../../tests/golden/wire");
         let mut raw = read_json(dir.join("manifest.json")).unwrap();
         let converted = convert(&raw, &dir, "custom-oracle").unwrap();
         assert_eq!(converted["all_valid"], true);

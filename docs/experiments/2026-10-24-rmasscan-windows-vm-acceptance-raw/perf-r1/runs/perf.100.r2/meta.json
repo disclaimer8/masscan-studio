@@ -1,0 +1,19 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1792895698.633082,
+  "capture_stopped_utc": 1792895756.140256,
+  "end_marker_seen": true,
+  "exe_sha256": "cb44c91eb4714e5a663cb486ce1b64736436a6c5fda4c43568812d7b7fc32802",
+  "guest_exit": 0,
+  "guest_finished_utc": 1792895721.902241,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1792895704.497857,
+  "guest_times": {
+    "finished_utc": 1792895721.717,
+    "started_utc": 1792895713.579
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "rc366b6b440429116d31fdb35e369f5cd-a068a5427fb4d41b",
+  "kind": "perf",
+  "tag": "perf.100.r2"
+}

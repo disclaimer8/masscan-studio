@@ -112,6 +112,50 @@ pub fn open(iface: &str) -> Result<Link, String> {
     })
 }
 
+/// The macOS stand MACs (scanner side, peer side) as bytes: the only addresses the guard below lets the lab write.
+pub const STAND_SCANNER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x01];
+pub const STAND_PEER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x02];
+
+/// The one rule for every frame the lab itself writes on the macOS stand: peer MAC to scanner MAC, and either the
+/// lab marker ethertype (0x88b5) or IPv4 from 198.18.0.2 to 198.18.0.1. Nothing else is ever written.
+pub fn injection_allowed(f: &[u8]) -> bool {
+    if f.len() < 14 || f[0..6] != STAND_SCANNER_MAC || f[6..12] != STAND_PEER_MAC {
+        return false;
+    }
+    match [f[12], f[13]] {
+        [0x88, 0xb5] => true,
+        [0x08, 0x00] => {
+            f.len() >= 34
+                && f[14] >> 4 == 4
+                && f[26..30] == [198, 18, 0, 2]
+                && f[30..34] == [198, 18, 0, 1]
+        }
+        _ => false,
+    }
+}
+
+/// Wraps a `Tx`; a frame outside [`injection_allowed`] is refused (an error) and counted, never written.
+pub struct GuardedTx {
+    pub inner: Box<dyn Tx>,
+    pub refused: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+impl Tx for GuardedTx {
+    fn send(
+        &mut self,
+        frame: &[u8],
+        timeout: Duration,
+    ) -> Result<SendStatus, rmasscan_engine::IoError> {
+        if !injection_allowed(frame) {
+            self.refused
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(rmasscan_engine::IoError::new(
+                "refused: the frame is outside the lab's peer-side guard",
+            ));
+        }
+        self.inner.send(frame, timeout)
+    }
+}
+
 /// A lab marker frame: `dst`, `src`, ethertype 0x88b5, `payload`, zero-padded to 60 bytes.
 pub fn marker_frame(dst: [u8; 6], src: [u8; 6], payload: &[u8]) -> Vec<u8> {
     let mut f = dst.to_vec();

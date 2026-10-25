@@ -257,3 +257,35 @@ gate that did not hold.
 On this macOS the OS hides interface MACs from an unprivileged process (`02:00:00:00:00:00`); the stand MACs are
 fixed by `up` (`lladdr`) and re-read from `ifconfig`, and `wire_scan` reports `src_mac_check: "os-masked"`,
 which the verifier accepts.
+
+### Reading the captures on macOS
+
+`tcpdump` prints `packets received by filter` from the BPF descriptor's receive counter, which on macOS counts
+every packet the descriptor saw before its kernel filter. It is therefore recorded as information only and is
+never read as a count of matched frames. On the uplink a lab frame is a frame in the lab-filtered pcap, or a
+packet tcpdump `captured` (it passed the filter) without storing it; `dropped by kernel` above zero means a
+matched frame may have been lost, so the capture is unproven (INVALID); ordinary traffic on `en0` is not a
+breach. The same reading applies to the peer witness: its completeness is `captured` equal to the pcap
+frames, no kernel drops, the interface counter window and the marker rules. Linux and Windows keep their own
+(filtered `received`) rule. The uplink `tcpdump` runs without promiscuous mode (`-p`).
+
+### Other rules of the suite
+
+- Everything the lab writes, the end markers included, goes out of `feth4202` through the peer-side guard.
+  `capture dump` on macOS accepts only `feth4201`, `feth4202` and the default-route uplink; only `feth4202`
+  is ever opened for writing.
+- The scanner is stopped and reaped (INT, a few seconds, then KILL) before any witness on every error path.
+- A tag that already has a run is refused unless `--rerun` moved it to `runs_discarded` under the discard rules.
+- The macOS Application Firewall state is recorded in `alf.txt`; an enabled firewall refuses the run, because
+  it can block or prompt for the unsigned peer listeners.
+- `peer listen` on macOS binds only if `198.18.0.2` is on `feth4202`.
+- Link loss: `macos-lab link --down` takes `feth4202` down, so the suite watches `feth4202` (the media state of
+  `feth4201` is recorded next to each event). PROVISIONAL until the spike pins the Mac failure class: a down
+  during the scan must end in a failure whose detail names a TX or link class; a scan that completed anyway, or
+  failed for another reason, is INVALID.
+- `perm_denied` runs: the claim is "zero frames crossed the pair", with the counters read before and after the
+  scanner (`before_utc <= start`, `end <= after_utc`).
+- x01 exercises three foreign-reply kinds on macOS. The "other IP" kind of Linux and Windows would come from
+  `198.18.0.3`, which the guard forbids, so it is not written; it is covered by the Linux and Windows runs and
+  the reply filtering is shared core code. The verifier checks that no `other_ip` frame was sent and that the
+  guard refused nothing.

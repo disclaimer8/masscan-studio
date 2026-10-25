@@ -2312,6 +2312,8 @@ pub(crate) fn finish(mut result: Value) -> Value {
         .copied()
         .chain(disc)
         .chain(aborted)
+        // The macOS verifier adds the pcap-only findings of runs/ and runs_discarded/ when its manifest gate failed.
+        .chain(array(&result["safety_scan"]))
         .filter(|r| r["safety_trip"] == true)
         .map(|r| r["tag"].clone())
         .collect();

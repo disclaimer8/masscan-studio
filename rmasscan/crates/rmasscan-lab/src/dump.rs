@@ -168,12 +168,25 @@ pub struct Facts {
     pub dropped_kernel: Option<u64>,
     pub dropped_if: Option<u64>,
     pub interface_drop_delta: Option<u64>,
+    /// macOS: `packets received by filter` is the count before the kernel filter (xnu `bd_rcount`), so it is
+    /// not a count of matched frames and `captured` stands in for it. Linux and Windows keep `false`.
+    pub received_is_prefilter: bool,
     pub pcap_frames: u64,
     pub pcap_error: Option<String>,
     pub tcpdump_exited: bool,
     /// rx+tx counter delta from "listening" to just before the end markers, and to after stop.
     pub window_lo: Option<u64>,
     pub window_hi: Option<u64>,
+}
+
+impl Facts {
+    fn received_for_completeness(&self) -> Option<u64> {
+        if self.received_is_prefilter {
+            self.captured
+        } else {
+            self.received
+        }
+    }
 }
 
 /// Why the capture is not proven complete. Empty means valid.
@@ -209,7 +222,7 @@ pub fn problems(f: &Facts) -> Vec<String> {
     };
     if !capture_complete(
         f.captured,
-        f.received,
+        f.received_for_completeness(),
         f.dropped_kernel,
         f.dropped_if.or(f.interface_drop_delta),
         f.pcap_frames,
@@ -413,6 +426,7 @@ pub fn witness(cfg: &Config, probe: &mut dyn Probe) -> Result<Value, String> {
         dropped_kernel: stats["dropped_kernel"].as_u64(),
         dropped_if: stats["dropped_if"].as_u64(),
         interface_drop_delta: drops1.checked_sub(drops0),
+        received_is_prefilter: cfg!(target_os = "macos"),
         pcap_frames: frames.len() as u64,
         pcap_error,
         tcpdump_exited: exited,
@@ -516,6 +530,30 @@ fn get<'a>(a: &'a BTreeMap<String, String>, k: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("--{k} required"))
 }
 
+/// macOS: the interfaces `capture dump` may open: the stand pair, and the default-route uplink (never a `feth`).
+/// Only `feth4202` ever gets a writing half, and that one is behind the lab guard.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn mac_dump_iface_allowed(iface: &str, uplink: Option<&str>) -> bool {
+    matches!(iface, "feth4201" | "feth4202")
+        || (uplink == Some(iface) && !iface.starts_with("feth"))
+}
+
+/// A `Tx` that writes nothing: a capture on an interface the lab may only read.
+#[cfg(target_os = "macos")]
+struct ReadOnlyTx;
+#[cfg(target_os = "macos")]
+impl rmasscan_engine::Tx for ReadOnlyTx {
+    fn send(
+        &mut self,
+        _: &[u8],
+        _: Duration,
+    ) -> Result<rmasscan_engine::SendStatus, rmasscan_engine::IoError> {
+        Err(rmasscan_engine::IoError::new(
+            "refused: this capture interface is read-only",
+        ))
+    }
+}
+
 /// `capture dump`: run inside the peer namespace. `--ready` appears once tcpdump listens,
 /// `--ack` once the scanner-side start marker is in the pcap; SIGTERM/SIGINT finalises.
 pub fn run(a: &BTreeMap<String, String>) -> Result<i32, String> {
@@ -535,10 +573,40 @@ pub fn run(a: &BTreeMap<String, String>) -> Result<i32, String> {
     {
         cfg.argv = tcpdump_argv_macos(iface, get(a, "pcap")?, None);
     }
+    #[cfg(target_os = "macos")]
+    {
+        let route = std::process::Command::new("/sbin/route")
+            .args(["-n", "get", "default"])
+            .output()
+            .map_err(|e| format!("route: {e}"))?;
+        let uplink = crate::macos_lab::parse_route_get(&String::from_utf8_lossy(&route.stdout)).0;
+        if !mac_dump_iface_allowed(iface, uplink.as_deref()) {
+            return Err(format!(
+                "capture dump on macOS accepts only feth4201, feth4202 and the default-route uplink ({uplink:?}), not {iface}"
+            ));
+        }
+    }
     rmasscan_net::lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
     // The RX half is dropped at once; only the end markers are sent from here.
-    let link::Link { tx, rx } = link::open(iface)?;
-    drop(rx);
+    #[cfg(not(target_os = "macos"))]
+    let tx = {
+        let link::Link { tx, rx } = link::open(iface)?;
+        drop(rx);
+        tx
+    };
+    // macOS: only the peer side writes, and through the lab guard (end markers included); the other
+    // interfaces are captured read-only and are never opened for writing.
+    #[cfg(target_os = "macos")]
+    let tx: Box<dyn rmasscan_engine::Tx> = if iface == "feth4202" {
+        let link::Link { tx, rx } = link::open(iface)?;
+        drop(rx);
+        Box::new(link::GuardedTx {
+            inner: tx,
+            refused: Default::default(),
+        })
+    } else {
+        Box::new(ReadOnlyTx)
+    };
     #[cfg(not(target_os = "macos"))]
     let mut probe = SysProbe {
         iface: iface.to_string(),

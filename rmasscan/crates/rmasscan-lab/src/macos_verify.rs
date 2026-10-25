@@ -182,9 +182,12 @@ fn load_if_present(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
     p.exists().then(|| verify::load_pcap(r, p)).flatten()
 }
 
-fn received_in(dir: &Path, err: &str) -> Option<u64> {
+/// Packets tcpdump stored or tried to store, from its own statistics. On macOS `packets received by filter` is the
+/// count before the kernel filter (xnu `bd_rcount`), so it says nothing about lab frames and is never used for that:
+/// only `captured` (what passed the lab filter) is.
+fn captured_in(dir: &Path, err: &str) -> Option<u64> {
     let text = fs::read_to_string(dir.join(err)).ok()?;
-    parse_tcpdump(&text)["received"].as_u64()
+    parse_tcpdump(&text)["captured"].as_u64()
 }
 
 /// Lab-isolation checks that need nothing but the pcaps and the binding: a frame on the uplink
@@ -200,7 +203,7 @@ fn safety(r: &mut Run, man: &Value, it: &Value, d: &Path, peer: Option<&Frames>)
         &shared_kind(it),
         peer,
         uplink.as_ref().map(|u| &u.0),
-        received_in(d, "uplink.err"),
+        captured_in(d, "uplink.err"),
     );
 }
 
@@ -228,7 +231,7 @@ fn flags_of(cmd: &[&str]) -> Option<(String, Vec<String>)> {
                 av.get(i + 1)?;
                 i += 2;
             }
-            "-n" | "-U" | "--immediate-mode" => i += 1,
+            "-n" | "-U" | "-p" | "--immediate-mode" => i += 1,
             x if x.starts_with('-') => return None,
             _ => {
                 tail.extend(av[i..].iter().map(|x| (*x).to_owned()));
@@ -316,7 +319,7 @@ fn witness_stats(r: &mut Run, who: &str, d: &Path, rec: &Value, interface_delta:
             .all(|k| recorded[k] == st[k]),
         recorded.to_string(),
     );
-    let measured = ["captured", "received", "dropped_kernel"]
+    let measured = ["captured", "dropped_kernel"]
         .iter()
         .all(|k| st[k].as_u64().is_some())
         && (st["dropped_if"].as_u64().is_some() || interface_delta.as_u64().is_some());
@@ -356,17 +359,20 @@ fn gate(
             r.add(name, NOT_RUN, "missing or invalid JSON", false);
             continue;
         };
-        // The gate refused (or the stand left its sealed state): the evidence cannot show a run on a
-        // proven stand, so the run did not happen as far as the verdict goes. Rerunnable.
-        r.check(
-            &format!("{name} allows a raw run with bpf_access {want_access}"),
-            v["raw_run_allowed"] == true
-                && !truth(&v["isolation_violations"])
-                && v["bpf_access"] == want_access,
-            v.to_string(),
-            NOT_RUN,
-            false,
-        );
+        // `macos-lab status` never prints `isolation_violations` (that key is the Windows status's); absent is fine.
+        let ok = v["raw_run_allowed"] == true
+            && !truth(&v["isolation_violations"])
+            && v["bpf_access"] == want_access;
+        let label = format!("{name} allows a raw run with bpf_access {want_access}");
+        if name == "status-pre" {
+            // The gate refused: the evidence cannot show a run on a proven stand, so the run did not
+            // happen as far as the verdict goes. Rerunnable.
+            r.check(&label, ok, v.to_string(), NOT_RUN, false);
+        } else {
+            // The scanner ran; a stand that is no longer proven afterwards is INVALID (FAIL for a perf
+            // cell, which therefore cannot be discarded and rerun), as on Windows.
+            verify::gate_leg(r, man["plan"] == "perf", &label, ok, v.to_string());
+        }
     }
     match read_json(ctx.d.join("listeners.json")) {
         None => r.add("listeners", NOT_RUN, "missing or invalid JSON", false),
@@ -390,6 +396,27 @@ fn gate(
             );
         }
     }
+    // Nothing runs as root: the recorded effective uid must be there and not 0.
+    let euid = ctx.meta["euid"].as_u64();
+    let unprivileged = euid.is_some_and(|u| u != 0);
+    if denied && euid == Some(0) {
+        r.beh(
+            "the suite ran unprivileged (recorded effective uid is not 0)",
+            false,
+            "euid 0",
+        );
+    } else {
+        r.inv(
+            "the suite ran unprivileged (recorded effective uid is not 0)",
+            unprivileged,
+            ctx.meta["euid"].to_string(),
+        );
+    }
+    r.inv(
+        "run.json carries this invocation's nonce",
+        ctx.rj["invocation_nonce"].as_str() == Some(nonce_of(ctx)),
+        ctx.rj["invocation_nonce"].to_string(),
+    );
     // The invocation: directory name, argv record and meta name the same nonce, and every file is
     // the one hashed before the copy.
     let nonce = ctx.meta["invocation_nonce"].as_str().unwrap_or("");
@@ -432,10 +459,19 @@ fn gate(
             cap["peer"].is_null() && cap["uplink"].is_null(),
             cap["peer"].to_string(),
         );
+        // The counters are the only witness of this run: the readings must enclose the scanner.
+        let cj = read_json(ctx.d.join("counters.json")).unwrap_or(Value::Null);
+        let (b0, a1) = (verify::f(&cj["before_utc"]), verify::f(&cj["after_utc"]));
         r.inv(
-            "scanner window recorded in UTC",
-            ts[1].is_finite() && ts[2].is_finite() && ts[1] <= ts[2],
-            format!("{ts:?}"),
+            "the counter readings enclose the scanner run (before <= start, end <= after)",
+            ts[1].is_finite()
+                && ts[2].is_finite()
+                && ts[1] <= ts[2]
+                && b0.is_finite()
+                && a1.is_finite()
+                && b0 <= ts[1]
+                && ts[2] <= a1,
+            format!("before {b0}, scanner {} .. {}, after {a1}", ts[1], ts[2]),
         );
         return;
     }
@@ -466,8 +502,7 @@ fn gate(
             st["dropped_kernel"] == 0
                 && dropped_if == Some(0)
                 && delta.is_none_or(|d| d == 0)
-                && n(&st["captured"]) == fr.len() as i128
-                && st["captured"] == st["received"],
+                && n(&st["captured"]) == fr.len() as i128,
             format!("{st} interface_drop_delta {}", c["interface_drop_delta"]),
         );
         r.inv(
@@ -475,6 +510,13 @@ fn gate(
             c["listening"] == true,
             "",
         );
+        if who == "uplink" {
+            r.inv(
+                "uplink tcpdump is not promiscuous (the user's own NIC)",
+                array(&c["cmd"]).iter().any(|v| v == "-p"),
+                c["cmd"].to_string(),
+            );
+        }
         r.inv(
             &format!("{who} tcpdump in immediate mode"),
             array(&c["cmd"]).iter().any(|v| v == "--immediate-mode"),
@@ -492,10 +534,10 @@ fn gate(
             w.to_string(),
         );
         r.inv(
-            "peer capture complete by the shared rule",
+            "peer capture complete (captured, kernel drops, counter window; received-by-filter is information only on macOS)",
             capture_complete(
                 st["captured"].as_u64(),
-                st["received"].as_u64(),
+                st["captured"].as_u64(),
                 st["dropped_kernel"].as_u64(),
                 st["dropped_if"]
                     .as_u64()
@@ -536,6 +578,10 @@ fn gate(
             w["invalid_reasons"].to_string(),
         );
     }
+}
+
+fn nonce_of(ctx: &Ctx) -> &str {
+    ctx.meta["invocation_nonce"].as_str().unwrap_or("")
 }
 
 /// A permission run with BPF denied has no capture, so it is judged on the scanner's refusal and
@@ -661,8 +707,14 @@ fn rxloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
     }
 }
 
-/// Link loss needs the user: the suite only watches the interface. No `down` event means the user
-/// did not act, which is NOT RUN, never a failure of the scanner.
+/// Link loss needs the user: the suite only watches the peer interface, the one `macos-lab link --down`
+/// takes down (the scanner side's media state is recorded next to each event). No `down` event of the
+/// peer interface means the user did not act, which is NOT RUN, never a failure of the scanner.
+///
+/// PROVISIONAL (until the spike pins the Mac failure class, as Windows pins `TxUncertain`): a down
+/// observed during the scan must end in a failure whose detail names a TX or link class. A scan that
+/// completed anyway, or failed for another reason (RxLoss, ConsumerTooSlow, ...), is INVALID, not a
+/// verdict on the scanner.
 fn linkloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
     let j = &ctx.rj;
     verify::job(r, j, c, man);
@@ -671,27 +723,38 @@ fn linkloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
         .as_ref()
         .map(|l| array(&l["events"]).to_vec())
         .unwrap_or_default();
-    let down = events.iter().find(|v| v["link"] == "down");
-    let up = events.iter().find(|v| v["link"] == "up");
+    let peer_if = s(&man["stand"]["peer_if"]);
+    let on_peer = |e: &&Value| !peer_if.is_empty() && s(&e["iface"]) == peer_if;
+    let down = events.iter().filter(on_peer).find(|v| v["link"] == "down");
+    let up = events.iter().filter(on_peer).find(|v| v["link"] == "up");
     let (Some(down), true) = (down, ll.is_some()) else {
         r.add(
-            "link-down event observed",
+            "link-down event of the peer interface observed",
             NOT_RUN,
             "user action not performed",
             false,
         );
         return;
     };
+    let detail = s(&j["fail_detail"]);
+    let named = detail.contains("Tx") || detail.contains("TX") || detail.contains("Link");
+    if j["reason"] != "Failed" || !named {
+        r.inv(
+            "a link-down during the scan ends in a failure naming a TX or link class (provisional)",
+            false,
+            format!("reason {}, detail {detail:?}", j["reason"]),
+        );
+        return;
+    }
     r.beh(
         "link loss fails the run, partial scan, no checkpoint",
         ctx.meta["guest_exit"] == 3
-            && j["reason"] == "Failed"
             && j["checkpoint"] == false
             && j["checkpoint_hex"].is_null()
             && n(&j["sent"]) > 0
             && n(&j["sent"]) < n(&j["range"])
             && (n(&j["net"]["tx_uncertain"]) >= 1 || n(&j["net"]["tx_errors"]) >= 1),
-        j["fail_detail"].to_string(),
+        detail,
     );
     r.beh(
         "uncertain TX not retried or counted, confirmed TX frozen",
@@ -751,6 +814,28 @@ fn verify_argv(r: &mut Run, it: &Value, man: &Value, d: &Path) {
         ) && ok;
     }
     r.argv_ok = ok;
+}
+
+/// Everything the lab wrote from the peer side went through the guard: no refused frame, and (injector) no
+/// "other IP" reply, which would come from 198.18.0.3 and which the guard forbids on macOS.
+fn guard_clean(r: &mut Run, ctx: &Ctx, file: &str, injector: bool) {
+    let Some(v) = read_json(ctx.d.join(file)) else {
+        return; // a missing record is reported by the check that needs it
+    };
+    r.inv(
+        &format!("{file}: the peer-side guard refused no frame"),
+        v["guard_refused"].as_u64() == Some(0),
+        v["guard_refused"].to_string(),
+    );
+    if injector {
+        r.inv(
+            "injector.json: no other_ip reply was written (the guard forbids 198.18.0.3 on macOS)",
+            v["kinds"]
+                .get("other_ip")
+                .is_none_or(|k| k.as_u64() == Some(0)),
+            v["kinds"].to_string(),
+        );
+    }
 }
 
 /// Verify one planned item whose directory is `dir` (`None`: it is missing).
@@ -862,12 +947,21 @@ pub(crate) fn verify_item(
                     &c,
                     &["unscanned_port", "wrong_cookie", "wrong_dst_port"],
                 );
+                guard_clean(&mut r, &ctx, "injector.json", true);
             }
         }
-        "stop" => verify::stop(&mut r, &ctx, it, &c, man),
+        "stop" => {
+            verify::stop(&mut r, &ctx, it, &c, man);
+            if it["scenario"] == "load" {
+                guard_clean(&mut r, &ctx, "flood.json", false);
+            }
+        }
         "overflow_queue" => verify::overflow(&mut r, &ctx, &c, man),
         "linkloss" => linkloss(&mut r, &ctx, &c, man),
-        "rxloss" => rxloss(&mut r, &ctx, &c, man),
+        "rxloss" => {
+            rxloss(&mut r, &ctx, &c, man);
+            guard_clean(&mut r, &ctx, "flood.json", false);
+        }
         "perf" => verify::perf(&mut r, &ctx, it, &c, man),
         "ckpt_refuse" | "refuse_completed" => verify::refusal(&mut r, &ctx, it, &c, man),
         "perm_denied" => permission(&mut r, &ctx, it, man),
@@ -948,7 +1042,10 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
     for e in dirs {
         let name = e.file_name().to_string_lossy().to_string();
         let d = e.path();
-        if !d.join("uplink.pcap").exists() && !d.join("peer.pcap").exists() {
+        if !d.join("uplink.pcap").exists()
+            && !d.join("uplink.err").exists()
+            && !d.join("peer.pcap").exists()
+        {
             continue;
         }
         let tag = split_dir_name(&name).map_or(name.as_str(), |(t, _)| t);
@@ -963,6 +1060,51 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
         out.push(r.summary());
     }
     out
+}
+
+/// The pcap-only safety findings of `runs/` and `runs_discarded/`: what a failed manifest gate must not hide.
+fn scan_runs(root: &Path, man: &Value) -> Vec<Value> {
+    let mut v = dir_findings(root, "runs", man);
+    v.extend(dir_findings(root, "runs_discarded", man));
+    v
+}
+
+/// Judge every directory of a tag. One directory is judged as it is. More than one is never a blanket
+/// INVALID: each is judged, their findings (a behaviour FAIL, a safety trip) are kept under the directory's
+/// name, and the ambiguity is added on top.
+pub(crate) fn judge_tag(root: &Path, man: &Value, fx: &Value, it: &Value) -> (Run, Option<Ctx>) {
+    let tag = s(&it["tag"]).to_owned();
+    let mut dirs = run_dirs(root, "runs", &tag);
+    if dirs.len() <= 1 {
+        return verify_item(root, man, fx, it, dirs.pop());
+    }
+    let mut merged = Run::new(&tag);
+    merged.argv_ok = true;
+    let count = dirs.len();
+    for d in dirs {
+        let label = d
+            .file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let (sub, _) = verify_item(root, man, fx, it, Some(d));
+        for mut c in sub.checks {
+            c["name"] = json!(format!("[{label}] {}", s(&c["name"])));
+            if !sub.argv_ok {
+                // The same demotion `Run::verdict` applies to a run whose argv is wrong.
+                c["behaviour"] = json!(false);
+                if c["result"] == FAIL && c["safety"] != true {
+                    c["result"] = json!(INVALID);
+                }
+            }
+            merged.checks.push(c);
+        }
+    }
+    merged.add(
+        "exactly one run directory for the tag",
+        INVALID,
+        format!("{count} directories"),
+        false,
+    );
+    (merged, None)
 }
 
 /// Every run of `root` (kept, discarded or aborted) whose lab-isolation checks tripped. The suite
@@ -989,11 +1131,7 @@ pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
         return (NOT_RUN.into(), false);
     };
     let fx = read_json(root.join("fixtures/manifest.json")).unwrap_or(Value::Null);
-    let dirs = run_dirs(root, "runs", tag);
-    if dirs.len() > 1 {
-        return (INVALID.into(), false);
-    }
-    let (r, _) = verify_item(root, &man, &fx, &it, dirs.into_iter().next());
+    let (r, _) = judge_tag(root, &man, &fx, &it);
     (r.verdict().into(), r.behaviour_fail())
 }
 
@@ -1004,6 +1142,7 @@ pub fn verify_dir(root: &Path) -> Value {
         r.add("manifest present and valid JSON", NOT_RUN, "missing", false);
         result["runs"] = json!([r.summary()]);
         result["aborted"] = json!(dir_findings(root, "runs_aborted", &Value::Null));
+        result["safety_scan"] = json!(scan_runs(root, &Value::Null));
         return verify::finish(result);
     };
     let fx = read_json(root.join("fixtures/manifest.json"));
@@ -1038,6 +1177,10 @@ pub fn verify_dir(root: &Path) -> Value {
         NOT_RUN,
         false,
     );
+    result["notes"] = json!([
+        "x01 on macOS exercises three foreign-reply kinds (unscanned port, wrong cookie, wrong destination port); the other_ip kind is not written because the peer-side guard forbids a source other than 198.18.0.2. It is covered by the Linux and Windows runs; the reply filtering is shared core code.",
+        "perm_denied runs have no capture: the evidence is that zero frames crossed the pair (scanner refusal plus unchanged pair counters inside a recorded window), not 0 SYN in a capture."
+    ]);
     result["provenance"] = verify::provenance_report(&man);
     let why = crate::provenance::problem(&man["orchestrator"]);
     r.check(
@@ -1058,6 +1201,7 @@ pub fn verify_dir(root: &Path) -> Value {
     if r.verdict() != PASS {
         result["runs"] = json!(runs);
         result["aborted"] = json!(dir_findings(root, "runs_aborted", &man));
+        result["safety_scan"] = json!(scan_runs(root, &man));
         return verify::finish(result);
     }
     let fx = fx.unwrap_or(Value::Null);
@@ -1065,19 +1209,7 @@ pub fn verify_dir(root: &Path) -> Value {
     let mut cs = BTreeMap::new();
     for it in planned(&man) {
         let tag = s(&it["tag"]).to_owned();
-        let dirs = run_dirs(root, "runs", &tag);
-        let (r, c) = if dirs.len() > 1 {
-            let mut r = Run::new(&tag);
-            r.add(
-                "exactly one run directory for the tag",
-                INVALID,
-                format!("{} directories", dirs.len()),
-                false,
-            );
-            (r, None)
-        } else {
-            verify_item(root, &man, &fx, &it, dirs.into_iter().next())
-        };
+        let (r, c) = judge_tag(root, &man, &fx, &it);
         runs.push(r.summary());
         if let Some(c) = c {
             cs.insert(tag.clone(), c);

@@ -546,6 +546,19 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     {
         // The listeners are the one peer helper the macOS lab needs: they bind 198.18.0.2, which exists
         // only on the peer side of the stand, so they cannot serve anything anywhere else.
+        let ifc = std::process::Command::new("/sbin/ifconfig")
+            .arg("feth4202")
+            .output()
+            .map_err(|e| format!("ifconfig: {e}"))?;
+        let holds = crate::macos_lab::parse_ifconfig(&String::from_utf8_lossy(&ifc.stdout))
+            .inets
+            .iter()
+            .any(|(ip, _)| ip == "198.18.0.2");
+        if !holds {
+            return Err(
+                "refusing to listen: 198.18.0.2 is not on feth4202 (the stand is not up)".into(),
+            );
+        }
         lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
         return listen(open, silent, ready);
     }

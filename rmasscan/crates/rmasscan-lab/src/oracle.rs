@@ -74,10 +74,17 @@ pub(crate) fn src_mac_option(
     o: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> Result<String, String> {
     let m = opt(o, "src-mac", DEFAULT_SRC_MAC);
-    if valid_mac(&m) {
+    // Lower case only (a binding is compared without normalization) and a unicast address (group bit clear).
+    let unicast = m
+        .get(0..2)
+        .and_then(|h| u8::from_str_radix(h, 16).ok())
+        .is_some_and(|b| b & 1 == 0);
+    if valid_mac(&m) && m == m.to_lowercase() && unicast {
         Ok(m)
     } else {
-        Err(format!("invalid --src-mac {m:?}"))
+        Err(format!(
+            "invalid --src-mac {m:?} (six lower-case hex pairs, unicast)"
+        ))
     }
 }
 pub fn run(args: &[String]) -> Result<i32, String> {
@@ -335,6 +342,16 @@ mod tests {
             "02:ac:00:00:00:01"
         );
         assert!(src_mac_option(&options_of(&args(&["--src-mac", "bogus"]))).is_err());
+        for bad in [
+            "02:AC:00:00:00:01",
+            "ff:ff:ff:ff:ff:ff",
+            "03:ac:00:00:00:01",
+        ] {
+            assert!(
+                src_mac_option(&options_of(&args(&["--src-mac", bad]))).is_err(),
+                "{bad}"
+            );
+        }
     }
     fn options_of(a: &[String]) -> std::collections::BTreeMap<String, Vec<String>> {
         crate::windows_suite::options_for(

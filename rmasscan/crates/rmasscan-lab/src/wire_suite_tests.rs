@@ -653,6 +653,8 @@ fn an_interrupted_perf_run_is_partial_and_starts_no_further_cell() {
     );
     let _ = fs::remove_dir_all(&out);
 }
+// The orchestrator runs on Mac and Linux; this test relies on unix paths or tools.
+#[cfg(unix)]
 #[test]
 fn cleanup_signals_do_not_go_through_command_and_reach_the_process() {
     let mut child = Command::new("sleep").arg("30").spawn().unwrap();

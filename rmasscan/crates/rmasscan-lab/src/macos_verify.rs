@@ -224,6 +224,14 @@ fn safety(r: &mut Run, man: &Value, it: &Value, d: &Path, peer: Option<&Frames>)
         uplink.as_ref().map(|u| &u.0),
         captured_in(d, "uplink.err"),
     );
+    // Known classification gap, kept on purpose (final review M3): on macOS the descriptor's drop
+    // counter (`bd_dcount`) counts only packets that matched the lab filter, so a kernel drop on
+    // the uplink capture is a lost LAB frame, while the safety walk above does not trip on it:
+    // the capture-completeness check (`capture no drops`, further down) reports it as INVALID
+    // (unproven, never PASS), and the live interlock in `macos_suite` refuses further raw runs.
+    // That is fail-safe (the run cannot pass and nothing continues). It is practically
+    // unreachable, since a drop needs a full store buffer and a full hold buffer of matching
+    // frames, which would also be captured. `received by filter` stays informational.
 }
 
 // ------------------------------------------------------------------ evidence gate
@@ -1258,6 +1266,14 @@ pub(crate) fn verify_item(
     (r, Some(ctx))
 }
 
+/// Whether `d` holds a `*.pcap.gz` (a capture the pcap-only safety walk cannot read).
+fn has_compressed_capture(d: &Path) -> bool {
+    fs::read_dir(d).is_ok_and(|rd| {
+        rd.filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().ends_with(".pcap.gz"))
+    })
+}
+
 /// Safety findings of every run of `sub` (kept, discarded or aborted): only the pcaps are read.
 fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
     let Ok(rd) = fs::read_dir(root.join(sub)) else {
@@ -1281,6 +1297,19 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
             && !d.join("uplink.err").exists()
             && !d.join("peer.pcap").exists()
         {
+            // Only compressed captures: the verifier does not decompress, so a leak inside them
+            // cannot be seen. That is unproven isolation, not a clean directory: it trips closed.
+            if has_compressed_capture(&d) {
+                let mut r = Run::new(&name);
+                r.safety(
+                    "captures readable (no run directory holds only *.pcap.gz)",
+                    false,
+                    format!(
+                        "{name} holds only compressed captures (*.pcap.gz); isolation is unproven. Run `gunzip -k` on them in a copy and verify again"
+                    ),
+                );
+                out.push(r.summary());
+            }
             continue;
         }
         let tag = split_dir_name(&name).map_or(name.as_str(), |(t, _)| t);

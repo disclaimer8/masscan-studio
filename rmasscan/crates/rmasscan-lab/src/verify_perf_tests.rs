@@ -740,13 +740,26 @@ fn a_synthetic_plan_with_a_pass_rx_loss_cell_still_passes_overall() {
     assert_eq!(row(&v["perf_summary"], 100)["rx_loss"], 0);
 }
 #[test]
-fn a_perf_directory_is_refused_by_an_unknown_plan_name() {
-    // Plans other than functional, failure and perf plan the functional runs (no perf cells appear).
-    assert!(
-        planned(&json!({"plan":"nonsense"}))
-            .iter()
-            .all(|i| i["kind"] != "perf")
-    );
+fn the_verifier_refuses_a_manifest_with_an_unknown_plan() {
+    for bad in ["nonsense", "perfs", "Perf", ""] {
+        let d = Dir::empty();
+        fixture::build_perf_only(&d.0, 3, &[CELL], &|_| {});
+        let p = d.0.join("manifest.json");
+        let mut m = read_json(&p).unwrap();
+        m["plan"] = json!(bad);
+        fs::write(&p, serde_json::to_vec(&m).unwrap()).unwrap();
+        let (code, v) = verify_cli(&d);
+        assert_eq!(v["overall"], NOT_RUN, "{bad:?}");
+        assert_eq!(code, 2, "{bad:?}");
+        assert!(
+            array(&v["runs"][0]["checks"])
+                .iter()
+                .any(|c| c["result"] == NOT_RUN && s(&c["name"]).contains("manifest.plan")),
+            "{bad:?}"
+        );
+        // Nothing was verified as a functional plan.
+        assert_eq!(array(&v["runs"]).len(), 1);
+    }
 }
 
 // ---- fix round 1: I1, an incomplete capture is INVALID and rerunnable ---------------------------
@@ -767,7 +780,11 @@ fn a_syn_missing_from_an_incomplete_capture_is_invalid_not_a_behaviour_failure()
     assert_eq!(verdict(&v), INVALID, "{:?}", bad(&v));
     assert_eq!(v["behaviour_fail"], false, "{:?}", bad(&v));
     assert!(crate::windows_suite::may_discard(verdict(&v), false));
-    assert!(!bad(&v).iter().any(|b| b.starts_with(FAIL)), "{:?}", bad(&v));
+    assert!(
+        !bad(&v).iter().any(|b| b.starts_with(FAIL)),
+        "{:?}",
+        bad(&v)
+    );
 }
 #[test]
 fn a_syn_missing_from_a_proven_capture_is_still_a_behaviour_fail() {
@@ -806,7 +823,13 @@ fn medians_and_the_gate_use_completed_pass_cells_and_rxloss_cells_get_their_own_
     // 100k: reps 1-2 are RxLoss PASS cells with a wild short-burst rate, reps 3-5 Completed and slow.
     let cells = all_cells(|rate, rep| {
         let rx = rate == 100000 && rep <= 2;
-        cell_summary(rate, rep, PASS, if rx { 100000.0 } else { 50000.0 + rep as f64 }, rx)
+        cell_summary(
+            rate,
+            rep,
+            PASS,
+            if rx { 100000.0 } else { 50000.0 + rep as f64 },
+            rx,
+        )
     });
     let r = row(&perf_summary(&cells), 100000);
     assert_eq!(r["pass"], 5);
@@ -816,7 +839,10 @@ fn medians_and_the_gate_use_completed_pass_cells_and_rxloss_cells_get_their_own_
     assert_eq!(r["median"]["cpu_user_ms"], 40.0, "reps 3,4,5 only");
     assert_eq!(r["rxloss_cells"], 2);
     assert_eq!(r["rxloss_steady_pps_wire_median"], 100000.0);
-    assert_eq!(r["rate_gate"], "OPEN", "the burst of the RxLoss cells must not make it MET");
+    assert_eq!(
+        r["rate_gate"], "OPEN",
+        "the burst of the RxLoss cells must not make it MET"
+    );
 }
 #[test]
 fn fewer_than_three_completed_pass_cells_leave_the_gate_not_run_even_with_rxloss_passes() {
@@ -825,7 +851,10 @@ fn fewer_than_three_completed_pass_cells_leave_the_gate_not_run_even_with_rxloss
         cell_summary(rate, rep, PASS, rate as f64, rx)
     });
     let r = row(&perf_summary(&cells), 100000);
-    assert_eq!((r["pass"].as_u64(), r["completed"].as_u64()), (Some(5), Some(2)));
+    assert_eq!(
+        (r["pass"].as_u64(), r["completed"].as_u64()),
+        (Some(5), Some(2))
+    );
     assert_eq!(r["rate_gate"], "NOT RUN");
     assert_eq!(row(&perf_summary(&cells), 1000)["rate_gate"], "MET");
 }
@@ -857,7 +886,11 @@ fn rx_cell(tweak: impl Fn(&mut Built)) -> Dir {
 }
 #[test]
 fn rxloss_results_must_be_a_subset_of_the_listener_truth() {
-    for foreign in ["198.18.0.2:600:open", "198.18.0.2:8099:closed", "198.18.0.9:80:open"] {
+    for foreign in [
+        "198.18.0.2:600:open",
+        "198.18.0.2:8099:closed",
+        "198.18.0.9:80:open",
+    ] {
         let d = rx_cell(|b| b.run["replies"][0] = json!(foreign));
         let v = d.summary(CELL);
         assert_eq!(verdict(&v), FAIL, "{foreign}: {:?}", bad(&v));

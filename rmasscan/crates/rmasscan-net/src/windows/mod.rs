@@ -6,9 +6,10 @@
 //! ([`loader::Loader`]) и подставной таблицей функций. Настоящий
 //! `LoadLibraryExW` живёт только в `sys` (`cfg(windows)`).
 //!
-//! `unsafe` разрешён только в FFI-модулях `ffi`, `handle`, `loader`, `sys`
-//! (и в тестовой подставной таблице); `adapter` (логика TX/RX, фильтрация,
-//! счётчики, health) полностью безопасный и работает через `PcapHandle`.
+//! `unsafe` разрешён только в FFI-модулях `ffi`, `handle`, `loader`, `process`,
+//! `sys` (и в тестовой подставной таблице); `process` (Toolhelp, токен, память
+//! процесса) нужен лабораторному harness, но собирается и в продуктовой сборке.
+//! `adapter` (логика TX/RX, фильтрация, счётчики, health) полностью безопасный и работает через `PcapHandle`.
 
 pub(crate) mod adapter;
 #[allow(unsafe_code)]

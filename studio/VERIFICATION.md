@@ -36,9 +36,25 @@ manifest check lacks complete live route/ARP/forwarding isolation. A test verifi
 explicit refusal before adapter opening. There was no privilege elevation,
 adapter creation or raw scan.
 
-Linux/Windows builds, fault injection beyond the listed cases, authenticated
-privileged bootstrap and external-capture proof remain pending. Existing scanner
-Stage 2C results are not counted as Studio acceptance.
+## Linux (minipc, Ubuntu 26.04.1 x86_64)
+
+Revision `75b5abc`: all 16 tests, Clippy and fmt passed after installing the missing
+rustfmt component. SQLite 3.46.1 is linked dynamically. Packaged build succeeded;
+software UI in Xvfb passed both pause/resume and Stop-race smoke. This is a virtual
+display test, not manual Wayland/clipboard/accessibility acceptance.
+
+## Windows VM
+
+The external SQLite 3.50.4 DLL/import library built and the Rust workspace compiled.
+Two 5-second test waits failed during the first parallel run with the volume test;
+both passed individually and together on repetition. The test wait was shorter
+than the product's 10-second handshake. The volume case now has its own test binary
+and startup tests allow 20 seconds; the product handshake is still 10 seconds.
+Final full Windows verification is pending.
+
+Fault injection beyond the listed cases, authenticated privileged bootstrap and
+external-capture proof remain pending. Existing scanner Stage 2C results are not
+counted as Studio acceptance.
 
 Build manifests and per-machine logs/screenshots belong in `studio/verification/`
 (ignored) or an explicitly archived evidence package. Each packaged build writes

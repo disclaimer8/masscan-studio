@@ -37,6 +37,8 @@ Rust` on macOS, `%LOCALAPPDATA%/Masscan Studio` on Windows, and
   restarting Studio), Stop, and reusing/closing a runner session.
 - Bounded framed IPC with version/session/scan/attempt IDs and strict sequence
   checks. `u64` fields cross the UI boundary as decimal strings.
+- Result delivery in batches of up to 1,000 rows or 50 ms. Intermediate progress
+  updates coalesce; results do not. Queue exhaustion interrupts the attempt.
 - SQLite WAL/FULL transactions. Result batches commit before display; checkpoints
   commit before acknowledgement. A crash converts unfinished scans to Interrupted.
 - A failed launch/connection closes the runner session and allows a fresh attempt.

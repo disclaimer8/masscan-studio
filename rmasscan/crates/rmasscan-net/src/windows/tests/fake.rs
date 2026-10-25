@@ -87,9 +87,10 @@ pub(super) struct Scenario {
     // ---- sendqueue ----
     /// `pcap_sendqueue_alloc` вернёт NULL.
     pub sendqueue_alloc_null: bool,
-    /// Живые очереди: структура и реальный буфер (`len`/`maxlen` как в libpcap).
-    #[allow(clippy::vec_box)] // адрес структуры очереди обязан быть стабильным
-    pub queues: Vec<(Box<PcapSendQueue>, Vec<u8>)>,
+    /// Живые очереди: структура (`Box::into_raw`, освобождается в destroy;
+    /// запись `len` идёт через тот же сырой указатель, что в продакшене) и
+    /// реальный буфер (`len`/`maxlen` как в libpcap).
+    pub queues: Vec<(*mut PcapSendQueue, Vec<u8>)>,
     /// `pcap_sendqueue_queue` вернёт -1, когда в очереди уже n записей.
     pub queue_full_at: Option<usize>,
     pub transmit_script: VecDeque<TransmitStep>,
@@ -214,6 +215,13 @@ pub(super) fn reset(f: impl FnOnce(&mut Scenario)) {
 /// Изменяет сценарий посреди теста.
 pub(super) fn with(f: impl FnOnce(&mut Scenario)) {
     f(&mut st());
+}
+
+/// `len` очереди номер `i` (с 0) в сценарии.
+pub(super) fn queue_len(i: usize) -> u32 {
+    let s = st();
+    // SAFETY: очередь живая (в списке сценария), читаем публичное поле.
+    unsafe { (*s.queues[i].0).len }
 }
 
 pub(super) fn events() -> Vec<String> {
@@ -434,13 +442,12 @@ unsafe extern "C" fn f_sendqueue_alloc(bytes: c_uint) -> *mut PcapSendQueue {
         return std::ptr::null_mut();
     }
     let mut buf = vec![0u8; bytes as usize];
-    let mut q = Box::new(PcapSendQueue {
+    let p = Box::into_raw(Box::new(PcapSendQueue {
         maxlen: bytes,
         len: 0,
         buffer: buf.as_mut_ptr().cast(),
-    });
-    let p: *mut PcapSendQueue = &mut *q;
-    s.queues.push((q, buf));
+    }));
+    s.queues.push((p, buf));
     p
 }
 unsafe extern "C" fn f_sendqueue_queue(
@@ -450,15 +457,20 @@ unsafe extern "C" fn f_sendqueue_queue(
 ) -> c_int {
     let mut s = st();
     let full_at = s.queue_full_at;
-    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(&**b, q)) else {
-        panic!("sendqueue_queue on an unknown or destroyed queue");
+    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(*b, q)) else {
+        // Паника через границу extern "C" недопустима: журнал и код ошибки.
+        s.log
+            .push("fake_error:sendqueue_queue on an unknown queue".into());
+        return -1;
     };
     // SAFETY: вызывающий передаёт валидный заголовок.
     let h = unsafe { std::ptr::read_unaligned(hdr) };
     let need = SENDQUEUE_RECORD_HEADER + h.caplen as usize;
-    let (qs, buf) = &mut s.queues[idx];
-    let used = qs.len as usize;
-    if used + need > qs.maxlen as usize {
+    let buf = &mut s.queues[idx].1;
+    // SAFETY: q это живая очередь этого сценария (найдена выше, освобождается
+    // только destroy под тем же замком); читаем публичные поля.
+    let (used, maxlen) = unsafe { ((*q).len as usize, (*q).maxlen as usize) };
+    if used + need > maxlen {
         return -1;
     }
     if let Some(n) = full_at {
@@ -484,7 +496,9 @@ unsafe extern "C" fn f_sendqueue_queue(
             h.caplen as usize,
         );
     }
-    qs.len += need as u32;
+    // SAFETY: как выше; пишем `len` через тот же сырой указатель, что и
+    // продакшен-код (без ссылки, живущей поперёк вызова).
+    unsafe { (*q).len += need as u32 };
     0
 }
 unsafe extern "C" fn f_sendqueue_transmit(
@@ -496,12 +510,15 @@ unsafe extern "C" fn f_sendqueue_transmit(
     s.transmit_calls += 1;
     s.sync_seen.push(sync);
     bump(&mut s, "sendqueue_transmit", p);
-    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(&**b, q)) else {
-        panic!("sendqueue_transmit on an unknown or destroyed queue");
+    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(*b, q)) else {
+        s.log
+            .push("fake_error:sendqueue_transmit on an unknown queue".into());
+        return 0;
     };
     let (len, frames) = {
-        let (qs, buf) = &s.queues[idx];
-        let len = qs.len as usize;
+        let buf = &s.queues[idx].1;
+        // SAFETY: q это живая очередь этого сценария; читаем публичное поле.
+        let len = unsafe { (*q).len } as usize;
         let mut frames: Vec<(usize, Vec<u8>)> = Vec::new(); // (конец записи, кадр)
         let mut off = 0usize;
         while off < len {
@@ -512,7 +529,8 @@ unsafe extern "C" fn f_sendqueue_transmit(
         }
         (len, frames)
     };
-    s.log.push(format!("sendqueue_transmit:{}", frames.len()));
+    s.log
+        .push(format!("sendqueue_transmit_records:{}", frames.len()));
     let end_of = |k: usize| if k == 0 { 0 } else { frames[k - 1].0 };
     let step = s.transmit_script.pop_front().unwrap_or(TransmitStep::All);
     let (rc, delivered) = match step {
@@ -535,10 +553,15 @@ unsafe extern "C" fn f_sendqueue_transmit(
 unsafe extern "C" fn f_sendqueue_destroy(q: *mut PcapSendQueue) {
     let mut s = st();
     s.log.push("sendqueue_destroy".into());
-    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(&**b, q)) else {
-        panic!("sendqueue_destroy on an unknown or already destroyed queue");
+    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(*b, q)) else {
+        s.log
+            .push("fake_error:sendqueue_destroy on an unknown queue".into());
+        return;
     };
     s.queues.remove(idx);
+    // SAFETY: q получен из Box::into_raw в f_sendqueue_alloc и ещё не
+    // освобождён (запись только что удалена из списка живых очередей).
+    drop(unsafe { Box::from_raw(q) });
 }
 unsafe extern "C" fn f_datalink(_p: *mut PcapT) -> c_int {
     st().dlt

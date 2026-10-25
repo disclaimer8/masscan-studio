@@ -380,6 +380,25 @@ impl SendQueue {
         Ok(())
     }
 
+    /// Только для тестов: запись с произвольным заголовком (`caplen != len`,
+    /// ненулевой `ts`). `caplen` больше `data.len()` отвергается (-1) до вызова,
+    /// иначе библиотека читала бы за концом `data`.
+    #[cfg(test)]
+    pub(crate) fn push_raw(&mut self, hdr: &PcapPkthdr, data: &[u8]) -> Result<(), c_int> {
+        if hdr.caplen as usize > data.len() {
+            return Err(-1);
+        }
+        // SAFETY: raw валиден; hdr валиден, data читаема на caplen байт
+        // (проверено выше); библиотека копирует и не хранит указатели.
+        let rc = unsafe { (self.api.fns.sendqueue_queue)(self.raw.as_ptr(), hdr, data.as_ptr()) };
+        if rc != 0 {
+            return Err(rc);
+        }
+        self.records
+            .push(hdr.caplen.saturating_add(SENDQUEUE_RECORD_HEADER as u32));
+        Ok(())
+    }
+
     /// Занято байт (поле `len` структуры очереди).
     pub(crate) fn queued_bytes(&self) -> u32 {
         // SAFETY: raw валиден; `len` публичное поле структуры, единственный
@@ -424,9 +443,15 @@ impl PcapHandle {
     /// неотменяемый вызов. Очередь не изменяется.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn transmit_raw(&mut self, q: &mut SendQueue, sync: bool) -> c_uint {
-        // SAFETY: raw валиден и активирован; q.raw валиден (выделен той же
-        // библиотекой, что и handle: оба держат один Arc<NpcapApi>), &mut q
-        // исключает параллельный доступ; transmit не освобождает очередь.
+        // Очередь и handle обязаны принадлежать одной загрузке библиотеки.
+        debug_assert!(
+            Arc::ptr_eq(&self.api, &q.api),
+            "queue and handle come from different NpcapApi"
+        );
+        // SAFETY: raw валиден и активирован; q.raw валиден и выделен
+        // библиотекой, которую держит q.api (проверено debug_assert выше как
+        // та же, что у handle); &mut q исключает параллельный доступ;
+        // transmit не освобождает очередь.
         unsafe {
             (self.api.fns.sendqueue_transmit)(self.raw.as_ptr(), q.raw.as_ptr(), c_int::from(sync))
         }

@@ -254,3 +254,52 @@ the last two items.
 
 Cleanup after an aborted suite: `rmasscan-lab windows-suite --cleanup --suite ID` stops every
 recorded remote process (pid and start time must match) and removes the suite's scratch directory.
+
+### Safety findings, aborted runs, Ctrl-C and the suite lock
+
+**Safety checks (final review I-1).** The verifier has a class of check that no other finding can
+hide: an eno1 capture with any lab frame; any SYN that is not from the bound MAC and IP or not to
+198.18.0.2; any scanner SYN during a refusal or restricted-token run. They need nothing but the two
+pcaps, so they run before the meta, capture and run files are looked at. A tripped one makes the
+run FAIL whatever else is INVALID or NOT RUN (a failed status-post, a lab0 drop, an incomplete
+capture), so the run is never discardable, and `verdict.json` lists it in `safety_trips` and sets
+`overall` to FAIL even when the run sits in `runs_discarded/` or `runs_aborted/`. `windows-suite`
+refuses to start or `--rerun` in an `--out` that holds such a run (exit 11, the run is named); use
+a new directory.
+
+**Aborted runs (I-2).** When a run fails after the guest runner was invoked, the suite stops the
+captures, reads the eno1 frame count on home-pc and judges it with the live interlock: a lab frame
+exits 11, an unreadable or unmeasured capture exits 10 with the reason, a clean one leaves the run
+NOT RUN (discardable). The interlock requires the eno1 tcpdump counters `received` and
+`dropped_kernel` to be measured and zero as well as the frame count. The scratch is copied to
+`runs_aborted/<tag>.<run id>/` after its sha256 sums were recorded on home-pc
+(`abort-hashes-on-home-pc.txt`); the remote scratch stays and carries a `.abort-uncopied` marker
+until the copy matches. The start-of-suite sweep and `--cleanup` never remove a marked run (they
+print its path). The verifier evaluates the safety checks on every `eno1.pcap` and `peer.pcap`
+under `runs_aborted/`; an aborted run without pcaps changes nothing.
+
+**Ctrl-C (M-1).** SIGINT and SIGTERM only raise a flag. The ssh children sit in their own process
+group, so the terminal does not signal them. The suite then stops the run's remote tools through
+an exec path that ignores the flag (otherwise it would kill its own cleanup), copies the evidence
+as for any abort, TERMs every recorded process of the suite, waits 12 s (a TERMed link-loss tool needs
+up to 10 s to put lab0 back up) and KILLs what is left. The exit code is 130. If the link is still
+down afterwards (`vm-lab status` shows `raw_run_allowed` false and the next Verify fails closed),
+bring it up by hand with any QMP client on home-pc, for example
+`printf '{"execute":"qmp_capabilities"}\n{"execute":"set_link","arguments":{"name":"lab0","up":true}}\n' | socat - UNIX-CONNECT:$HOME/winvm/qmp.sock`.
+The Linux `wire-suite` records an interrupted perf run as `partial: true` (never as a complete
+matrix) and sends its stop-path signals without going through the helper that the stop flag kills.
+
+**One suite at a time (M-3).** Every `windows-suite` invocation, `--cleanup` included, holds
+`flock -n` on `~/winvm/t4-ev/.suite.lock` on home-pc for its whole run, through one ssh session whose
+stdin stays open (a dead orchestrator closes it, so the lock cannot outlive it). A second invocation
+(a smoke test during a long part, a retry from another terminal) is refused with exit 2 before it
+changes anything. Without the lock its start-of-suite sweep would TERM and KILL the other run's captures,
+listener and link-loss tool.
+
+**Options (M-5).** Each subcommand accepts only its own options. An unknown option (`--pla perf`) or a
+repeated one (`--only a --only b`; give all tags after one `--only`) exits 2 and names the option. The
+commands in this document are parsed against the same lists by a unit test.
+
+Known gap (M-6, deferred to the next Linux acceptance): `oracle-fixtures` still stages the scripts that sit
+next to the checkout that built the binary (`CARGO_MANIFEST_DIR` at compile time). Build it from the
+checkout under test, in a private target directory.

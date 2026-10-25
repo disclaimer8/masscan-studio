@@ -7,19 +7,19 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const PASS: &str = "PASS";
-const FAIL: &str = "FAIL";
-const INVALID: &str = "INVALID";
-const NOT_RUN: &str = "NOT RUN";
-const PEER: &str = "198.18.0.2";
-const PAUSE: &str = "c03_multi_ports";
-const SCAN: &str = "11111111111111111111111111111111";
-const A1: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const A2: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-fn s(v: &Value) -> &str {
+pub(crate) const PASS: &str = "PASS";
+pub(crate) const FAIL: &str = "FAIL";
+pub(crate) const INVALID: &str = "INVALID";
+pub(crate) const NOT_RUN: &str = "NOT RUN";
+pub(crate) const PEER: &str = "198.18.0.2";
+pub(crate) const PAUSE: &str = "c03_multi_ports";
+pub(crate) const SCAN: &str = "11111111111111111111111111111111";
+pub(crate) const A1: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+pub(crate) const A2: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+pub(crate) fn s(v: &Value) -> &str {
     v.as_str().unwrap_or("")
 }
-fn n(v: &Value) -> i128 {
+pub(crate) fn n(v: &Value) -> i128 {
     v.as_u64().map(i128::from).unwrap_or(-1)
 }
 // Report arithmetic uses a wider domain than the counters; unknown counters
@@ -32,13 +32,13 @@ fn integer_note(value: i128) -> Value {
         .map(Value::Number)
         .unwrap_or_else(|| json!(value.to_string()))
 }
-fn f(v: &Value) -> f64 {
+pub(crate) fn f(v: &Value) -> f64 {
     v.as_f64().unwrap_or(f64::NAN)
 }
-fn array(v: &Value) -> &[Value] {
+pub(crate) fn array(v: &Value) -> &[Value] {
     v.as_array().map(Vec::as_slice).unwrap_or(&[])
 }
-fn truth(v: &Value) -> bool {
+pub(crate) fn truth(v: &Value) -> bool {
     !v.is_null()
         && v != false
         && v != 0
@@ -46,16 +46,16 @@ fn truth(v: &Value) -> bool {
         && v.as_array().is_none_or(|x| !x.is_empty())
         && v.as_object().is_none_or(|x| !x.is_empty())
 }
-fn read_json(p: impl AsRef<Path>) -> Option<Value> {
+pub(crate) fn read_json(p: impl AsRef<Path>) -> Option<Value> {
     serde_json::from_slice(&fs::read(p).ok()?).ok()
 }
-fn sha(b: &[u8]) -> String {
+pub(crate) fn sha(b: &[u8]) -> String {
     hex(&Sha256::digest(b))
 }
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|b| format!("{b:02x}")).collect()
 }
-fn ports(spec: &str) -> Vec<u16> {
+pub(crate) fn ports(spec: &str) -> Vec<u16> {
     let mut out = Vec::new();
     for tok in spec.split(',') {
         let mut p = tok.split('-');
@@ -66,7 +66,7 @@ fn ports(spec: &str) -> Vec<u16> {
     }
     out
 }
-fn open_ports() -> Vec<u16> {
+pub(crate) fn open_ports() -> Vec<u16> {
     [vec![80, 443], (8000..8008).collect()].concat()
 }
 pub fn case_by_name(name: &str) -> Option<Value> {
@@ -90,7 +90,7 @@ pub fn case_by_name(name: &str) -> Option<Value> {
         json!({"name":name,"ports":port,"source_port":sp,"syn":count,"rate":rate,"wait":wait,"seed":1,"targets":if name=="c04_exclude"{"198.18.0.0/30"}else{PEER},"exclude":if name=="c04_exclude"{json!("198.18.0.0-198.18.0.1,198.18.0.3")}else{Value::Null}}),
     )
 }
-fn functional_cases() -> Vec<Value> {
+pub(crate) fn functional_cases() -> Vec<Value> {
     [
         "c01_one_addr_port_synack",
         "c02_one_addr_port_rst",
@@ -137,7 +137,7 @@ pub(crate) fn perf_expected(case: &Value) -> Vec<String> {
     a.sort();
     a
 }
-fn replies(case: &Value, silent: bool) -> Vec<String> {
+pub(crate) fn replies(case: &Value, silent: bool) -> Vec<String> {
     let mut a: Vec<_> = ports(s(&case["ports"]))
         .into_iter()
         .filter(|p| silent || (*p != 8099 && !(8100..8120).contains(p)))
@@ -231,7 +231,7 @@ pub fn planned(man: &Value) -> Vec<Value> {
     }
     out
 }
-fn kind_case(it: &Value) -> Option<Value> {
+pub(crate) fn kind_case(it: &Value) -> Option<Value> {
     if it["kind"] == "perf" {
         return Some(perf_case(it["rate"].as_u64()?));
     }
@@ -261,7 +261,7 @@ fn kind_case(it: &Value) -> Option<Value> {
     }
     Some(c)
 }
-fn arg_map(it: &Value, man: &Value, side: bool) -> BTreeMap<String, Value> {
+pub(crate) fn arg_map(it: &Value, man: &Value, side: bool) -> BTreeMap<String, Value> {
     let mut a = BTreeMap::new();
     let c = if side {
         case_by_name(PAUSE)
@@ -385,61 +385,68 @@ pub fn expected_args(
     Ok(out)
 }
 #[derive(Default)]
-struct Run {
-    tag: String,
-    checks: Vec<Value>,
-    notes: BTreeMap<String, Value>,
-    argv_ok: bool,
+pub(crate) struct Run {
+    pub(crate) tag: String,
+    pub(crate) checks: Vec<Value>,
+    pub(crate) notes: BTreeMap<String, Value>,
+    pub(crate) argv_ok: bool,
 }
 impl Run {
-    fn new(tag: &str) -> Self {
+    pub(crate) fn new(tag: &str) -> Self {
         Self {
             tag: tag.into(),
             ..Self::default()
         }
     }
-    fn add(&mut self, name: &str, result: &str, detail: impl ToString, beh: bool) {
+    pub(crate) fn add(&mut self, name: &str, result: &str, detail: impl ToString, beh: bool) {
         self.checks
             .push(json!({"name":name,"result":result,"detail":detail.to_string(),"behaviour":beh}));
     }
-    fn check(&mut self, name: &str, ok: bool, detail: impl ToString, bad: &str, beh: bool) -> bool {
+    pub(crate) fn check(
+        &mut self,
+        name: &str,
+        ok: bool,
+        detail: impl ToString,
+        bad: &str,
+        beh: bool,
+    ) -> bool {
         self.add(name, if ok { PASS } else { bad }, detail, beh);
         ok
     }
     /// A safety check (lab isolation). Independent of argv and of capture completeness: a tripped one
     /// makes the run FAIL whatever else is INVALID or NOT RUN, so it can never be discarded.
-    fn safety(&mut self, name: &str, ok: bool, detail: impl ToString) {
+    pub(crate) fn safety(&mut self, name: &str, ok: bool, detail: impl ToString) {
         self.checks.push(json!({"name":name,"result":if ok { PASS } else { FAIL },"detail":detail.to_string(),"behaviour":false,"safety":true}));
     }
-    fn safety_trip(&self) -> bool {
+    pub(crate) fn safety_trip(&self) -> bool {
         self.checks
             .iter()
             .any(|c| c["safety"] == true && c["result"] == FAIL)
     }
-    fn inv(&mut self, name: &str, ok: bool, detail: impl ToString) {
+    pub(crate) fn inv(&mut self, name: &str, ok: bool, detail: impl ToString) {
         self.check(name, ok, detail, INVALID, false);
     }
-    fn beh(&mut self, name: &str, ok: bool, detail: impl ToString) {
+    pub(crate) fn beh(&mut self, name: &str, ok: bool, detail: impl ToString) {
         self.check(name, ok, detail, FAIL, true);
     }
-    fn proven(&self) -> bool {
+    pub(crate) fn proven(&self) -> bool {
         !self
             .checks
             .iter()
             .any(|c| c["result"] == INVALID || c["result"] == NOT_RUN)
     }
-    fn cap(&mut self, name: &str, ok: bool, detail: impl ToString) {
+    pub(crate) fn cap(&mut self, name: &str, ok: bool, detail: impl ToString) {
         let p = self.proven();
         self.check(name, ok, detail, if p { FAIL } else { INVALID }, p);
     }
-    fn behaviour_fail(&self) -> bool {
+    pub(crate) fn behaviour_fail(&self) -> bool {
         self.argv_ok
             && self
                 .checks
                 .iter()
                 .any(|c| c["behaviour"] == true && c["result"] == FAIL)
     }
-    fn verdict(&self) -> &str {
+    pub(crate) fn verdict(&self) -> &str {
         if self.safety_trip() {
             return FAIL;
         }
@@ -456,11 +463,11 @@ impl Run {
         }
         NOT_RUN
     }
-    fn summary(&self) -> Value {
+    pub(crate) fn summary(&self) -> Value {
         json!({"tag":self.tag,"checks":self.checks,"notes":self.notes,"verdict":self.verdict(),"behaviour_fail":self.behaviour_fail(),"safety_trip":self.safety_trip()})
     }
 }
-fn parse_args(v: &Value) -> Result<BTreeMap<String, Value>, String> {
+pub(crate) fn parse_args(v: &Value) -> Result<BTreeMap<String, Value>, String> {
     let av = v["argv"].as_array().ok_or("argv not array")?;
     let mut out = BTreeMap::new();
     let mut i = 0;
@@ -511,13 +518,13 @@ fn verify_argv(r: &mut Run, it: &Value, man: &Value, d: &Path) {
     r.argv_ok = ok;
 }
 #[derive(Clone)]
-struct Binding {
-    src: String,
-    sm: String,
-    pm: String,
+pub(crate) struct Binding {
+    pub(crate) src: String,
+    pub(crate) sm: String,
+    pub(crate) pm: String,
 }
 impl Binding {
-    fn new(m: &Value) -> Self {
+    pub(crate) fn new(m: &Value) -> Self {
         Self {
             src: s(&m["src_ip"]).into(),
             sm: s(&m["src_mac"]).to_lowercase(),
@@ -525,17 +532,17 @@ impl Binding {
         }
     }
 }
-struct Tcp {
-    sm: String,
-    dm: String,
-    src: String,
-    dst: String,
-    sp: u16,
-    dp: u16,
-    flags: u8,
-    id: u16,
+pub(crate) struct Tcp {
+    pub(crate) sm: String,
+    pub(crate) dm: String,
+    pub(crate) src: String,
+    pub(crate) dst: String,
+    pub(crate) sp: u16,
+    pub(crate) dp: u16,
+    pub(crate) flags: u8,
+    pub(crate) id: u16,
 }
-fn tcp(b: &[u8]) -> Option<Tcp> {
+pub(crate) fn tcp(b: &[u8]) -> Option<Tcp> {
     if b.len() < 54 || b[12..14] != [8, 0] || b[23] != 6 || b[14] >> 4 != 4 {
         return None;
     }
@@ -569,11 +576,11 @@ fn tcp(b: &[u8]) -> Option<Tcp> {
         id: u16::from_be_bytes([b[18], b[19]]),
     })
 }
-fn sports(c: &Value) -> (u16, u16) {
+pub(crate) fn sports(c: &Value) -> (u16, u16) {
     let p = ports(s(&c["source_port"]));
     (*p.first().unwrap_or(&1), *p.last().unwrap_or(&65535))
 }
-fn syns(fr: &Frames, b: &Binding, sp: (u16, u16)) -> Frames {
+pub(crate) fn syns(fr: &Frames, b: &Binding, sp: (u16, u16)) -> Frames {
     fr.iter()
         .filter(|(_, f)| {
             pcap::is_syn(f)
@@ -588,7 +595,7 @@ fn syns(fr: &Frames, b: &Binding, sp: (u16, u16)) -> Frames {
         .cloned()
         .collect()
 }
-fn wire_replies(fr: &Frames, b: &Binding, sp: Option<(u16, u16)>) -> Vec<String> {
+pub(crate) fn wire_replies(fr: &Frames, b: &Binding, sp: Option<(u16, u16)>) -> Vec<String> {
     fr.iter()
         .filter_map(|(_, f)| tcp(f))
         .filter(|i| {
@@ -609,10 +616,10 @@ fn wire_replies(fr: &Frames, b: &Binding, sp: Option<(u16, u16)>) -> Vec<String>
         })
         .collect()
 }
-fn unique(x: Vec<String>) -> Vec<String> {
+pub(crate) fn unique(x: Vec<String>) -> Vec<String> {
     x.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
 }
-fn load_pcap(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
+pub(crate) fn load_pcap(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
     let name = p.file_name().unwrap_or_default().to_string_lossy();
     let Ok(data) = fs::read(p) else {
         r.add(&format!("{name} present"), NOT_RUN, "missing", false);
@@ -629,7 +636,7 @@ fn load_pcap(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
         }
     }
 }
-fn ether(f: &[u8], typ: [u8; 2]) -> bool {
+pub(crate) fn ether(f: &[u8], typ: [u8; 2]) -> bool {
     f.get(12..14) == Some(typ.as_slice())
 }
 fn capture_command(c: &Value, who: &str, b: &Binding, netns: &str) -> bool {
@@ -694,12 +701,12 @@ fn capture_command(c: &Value, who: &str, b: &Binding, netns: &str) -> bool {
         (filter == want || filter == format!("{want} or ether proto 0x88b6")) && actual == filter
     }
 }
-struct Ctx {
-    d: PathBuf,
-    rj: Value,
-    meta: Value,
-    peer: Option<(Frames, Vec<u8>)>,
-    bind: Binding,
+pub(crate) struct Ctx {
+    pub(crate) d: PathBuf,
+    pub(crate) rj: Value,
+    pub(crate) meta: Value,
+    pub(crate) peer: Option<(Frames, Vec<u8>)>,
+    pub(crate) bind: Binding,
 }
 /// The per-run gate (guest Verify, nonce chain, status before/after). A gate leg that did not hold is
 /// INVALID evidence for the older plans; for the perf plan it is a FAIL of the cell (ruling 7).
@@ -707,7 +714,7 @@ struct Ctx {
 /// (`may_discard`), while the same failure in part A or B is INVALID and rerunnable. In practice only
 /// status-post can reach this: the pre-run legs abort the suite before the scanner starts, which leaves
 /// no run.json (NOT RUN, discardable).
-fn gate_leg(r: &mut Run, perf: bool, name: &str, ok: bool, detail: impl ToString) {
+pub(crate) fn gate_leg(r: &mut Run, perf: bool, name: &str, ok: bool, detail: impl ToString) {
     if perf {
         r.beh(name, ok, detail);
     } else {
@@ -1021,7 +1028,7 @@ fn capture(r: &mut Run, man: &Value, ctx: &Ctx, cap: &Value, eno: &Option<(Frame
         }
     }
 }
-fn job(r: &mut Run, j: &Value, c: &Value, man: &Value) {
+pub(crate) fn job(r: &mut Run, j: &Value, c: &Value, man: &Value) {
     let mut want = json!({"iface":man["binding"]["iface"],"src_ip":man["binding"]["src_ip"],"src_mac":s(&man["binding"]["src_mac"]).to_lowercase(),"router_mac":s(&man["binding"]["router_mac"]).to_lowercase(),"retries":0,"shard":"1/1","blackrock_rounds":14});
     for k in [
         "source_port",
@@ -1045,22 +1052,22 @@ fn job(r: &mut Run, j: &Value, c: &Value, man: &Value) {
         j["job"].to_string(),
     );
 }
-fn health(j: &Value) -> bool {
+pub(crate) fn health(j: &Value) -> bool {
     j["rx_health"]["kernel_drops"].as_u64() == Some(0)
         && j["net"]["kernel_drops"].as_u64() == Some(0)
 }
-fn clean(j: &Value) -> bool {
+pub(crate) fn clean(j: &Value) -> bool {
     ["tx_uncertain", "tx_errors", "rx_errors"]
         .iter()
         .all(|k| j["net"][k].as_u64() == Some(0))
 }
-fn frozen(j: &Value) -> bool {
+pub(crate) fn frozen(j: &Value) -> bool {
     j["net"]["tx_sent"].as_u64().is_some()
         && ["tx_sent_at_join", "tx_sent_after_observe", "sent"]
             .iter()
             .all(|k| j[k] == j["net"]["tx_sent"])
 }
-fn fixture(
+pub(crate) fn fixture(
     r: &mut Run,
     root: &Path,
     fx: &Value,
@@ -1100,7 +1107,7 @@ fn fixture(
     );
     Some(p)
 }
-fn fixture_binding(r: &mut Run, fx: &Value, b: &Binding) {
+pub(crate) fn fixture_binding(r: &mut Run, fx: &Value, b: &Binding) {
     let bb = &fx["binding"];
     r.inv(
         "oracle fixture binding identical without normalization",
@@ -1120,7 +1127,7 @@ fn fixture_binding(r: &mut Run, fx: &Value, b: &Binding) {
         fx["oracle"].to_string(),
     );
 }
-fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx: &Ctx, c: &Value) {
+pub(crate) fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx: &Ctx, c: &Value) {
     let j = &ctx.rj;
     let count = n(&c["syn"]);
     let exp = replies(c, false);
@@ -1195,7 +1202,7 @@ fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx: &Ctx, c: &
         );
     }
 }
-fn strays(fr: &Frames, b: &Binding, sp: (u16, u16)) -> usize {
+pub(crate) fn strays(fr: &Frames, b: &Binding, sp: (u16, u16)) -> usize {
     let sy = syns(fr, b, sp);
     let (Some(first), Some(last)) = (sy.first(), sy.last()) else {
         return 0;
@@ -1228,7 +1235,14 @@ fn strays(fr: &Frames, b: &Binding, sp: (u16, u16)) -> usize {
         })
         .count()
 }
-fn foreign(r: &mut Run, ctx: &Ctx, c: &Value) {
+/// The four foreign-reply kinds of the Linux and Windows injector.
+pub(crate) const ALL_FOREIGN_KINDS: [&str; 4] = [
+    "other_ip",
+    "unscanned_port",
+    "wrong_cookie",
+    "wrong_dst_port",
+];
+pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
     let j = &ctx.rj;
     let exp = replies(c, false);
     r.beh(
@@ -1258,16 +1272,7 @@ fn foreign(r: &mut Run, ctx: &Ctx, c: &Value) {
             .collect();
         r.inv(
             "all foreign injection kinds reached the wire",
-            sent > 0
-                && ff.len() as i128 == sent
-                && [
-                    "other_ip",
-                    "unscanned_port",
-                    "wrong_cookie",
-                    "wrong_dst_port",
-                ]
-                .iter()
-                .all(|k| n(&inj["kinds"][k]) > 0),
+            sent > 0 && ff.len() as i128 == sent && kinds.iter().all(|k| n(&inj["kinds"][*k]) > 0),
             inj.to_string(),
         );
         let sy = syns(fr, &ctx.bind, sports(c));
@@ -1295,7 +1300,7 @@ fn foreign(r: &mut Run, ctx: &Ctx, c: &Value) {
         );
     }
 }
-fn checkpoint(r: &mut Run, ctx: &Ctx, it: &Value) {
+pub(crate) fn checkpoint(r: &mut Run, ctx: &Ctx, it: &Value) {
     let p = ctx.d.join("checkpoint.bin");
     let Ok(bytes) = fs::read(&p) else {
         r.add("checkpoint.bin present", NOT_RUN, "missing", false);
@@ -1332,7 +1337,7 @@ fn checkpoint(r: &mut Run, ctx: &Ctx, it: &Value) {
         ni,
     );
 }
-fn workers(r: &mut Run, j: &Value) {
+pub(crate) fn workers(r: &mut Run, j: &Value) {
     let w = &j["workers"];
     let res = &j["resources"];
     let ids = w["tx_tid"].as_u64().is_some() && w["rx_tid"].as_u64().is_some();
@@ -1357,7 +1362,7 @@ fn workers(r: &mut Run, j: &Value) {
         res.to_string(),
     );
 }
-fn align(r: &mut Run, ctx: &Ctx, c: &Value, uncertain: bool) -> Option<f64> {
+pub(crate) fn align(r: &mut Run, ctx: &Ctx, c: &Value, uncertain: bool) -> Option<f64> {
     let (fr, _) = ctx.peer.as_ref()?;
     let sy = syns(fr, &ctx.bind, sports(c));
     let j = &ctx.rj;
@@ -1406,13 +1411,18 @@ fn align(r: &mut Run, ctx: &Ctx, c: &Value, uncertain: bool) -> Option<f64> {
     );
     Some(outcome)
 }
-fn flood(r: &mut Run, ctx: &Ctx, c: &Value, outcome: Option<f64>, overlap: bool) {
+/// A flood frame: the Windows/Linux flood uses ethertype 0x88b6; the macOS peer-side flood uses the lab marker
+/// ethertype 0x88b5 with `RMSP` at offset 18 (a marker payload starts with `WIRELAB-`, never `RMSP` there).
+pub(crate) fn is_flood(f: &[u8]) -> bool {
+    ether(f, [0x88, 0xb6]) || (ether(f, [0x88, 0xb5]) && f.get(18..22) == Some(b"RMSP".as_slice()))
+}
+pub(crate) fn flood(r: &mut Run, ctx: &Ctx, c: &Value, outcome: Option<f64>, overlap: bool) {
     let Some(fl) = read_json(ctx.d.join("flood.json")) else {
         r.add("flood.json present", NOT_RUN, "missing", false);
         return;
     };
     if let Some((fr, _)) = &ctx.peer {
-        let count = fr.iter().filter(|(_, f)| ether(f, [0x88, 0xb6])).count();
+        let count = fr.iter().filter(|(_, f)| is_flood(f)).count();
         r.inv(
             "every flooded frame on peer wire",
             n(&fl["sent"]) > 0 && n(&fl["sent"]) == count as i128 && fl["errors"] == 0,
@@ -1431,7 +1441,7 @@ fn flood(r: &mut Run, ctx: &Ctx, c: &Value, outcome: Option<f64>, overlap: bool)
     }
     r.notes.insert("flood".into(), fl);
 }
-fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
+pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     let tm = &j["timing"];
     job(r, j, c, man);
@@ -1499,7 +1509,7 @@ fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         flood(r, ctx, c, end, true);
     }
 }
-fn overflow(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
+pub(crate) fn overflow(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
     let j = &ctx.rj;
     job(r, j, c, man);
     r.beh(
@@ -1592,7 +1602,7 @@ fn linkloss(r: &mut Run, ctx: &Ctx, c: &Value, man: &Value) {
 /// The two checks that make a Failed(RxLoss) run genuine, shared by the failure-plan `rxloss` run and
 /// the perf cells: the failure names exactly the measured drops (exit 3, `fail_detail`, `rx_health`
 /// and `net` agree), and the retained results are a duplicate-free subset of the listener truth.
-fn rxloss_genuine(r: &mut Run, ctx: &Ctx, drops: u64, exp: &[String]) {
+pub(crate) fn rxloss_genuine(r: &mut Run, ctx: &Ctx, drops: u64, exp: &[String]) {
     let j = &ctx.rj;
     let detail = s(&j["fail_detail"]);
     let parsed = detail
@@ -1735,7 +1745,7 @@ fn refusal_provenance(r: &mut Run, ctx: &Ctx, variant: &str) {
         ),
     }
 }
-fn refusal(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
+pub(crate) fn refusal(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     job(r, j, c, man);
     let want = match s(&it["variant"]) {
@@ -1821,8 +1831,9 @@ fn eno1_err_received(dir: &Path) -> Option<u64> {
     let text = fs::read_to_string(dir.join("eno1.err")).ok()?;
     crate::windows_suite::parse_tcpdump(&text)["received"].as_u64()
 }
-fn safety_checks(
+pub(crate) fn safety_checks(
     r: &mut Run,
+    lan: &str,
     man: &Value,
     kind: &str,
     peer: Option<&Frames>,
@@ -1830,13 +1841,17 @@ fn safety_checks(
     eno_received: Option<u64>,
 ) {
     if let Some(fr) = eno {
-        r.safety("eno1 saw zero lab packets", fr.is_empty(), fr.len());
+        r.safety(
+            &format!("{lan} saw zero lab packets"),
+            fr.is_empty(),
+            fr.len(),
+        );
     }
     // A frame tcpdump counted but did not store is as much a lab frame as a stored one (the live interlock
     // exits 13 on it; the offline verdict must agree, or a rerun would launder it).
     if let Some(n) = eno_received {
         r.safety(
-            "eno1 tcpdump counted zero frames matching the lab filter",
+            &format!("{lan} tcpdump counted zero frames matching the lab filter"),
             n == 0,
             n,
         );
@@ -1897,6 +1912,7 @@ fn verify_item(
     let eno = load_pcap(&mut r, &d.join("eno1.pcap"));
     safety_checks(
         &mut r,
+        "eno1",
         man,
         s(&it["kind"]),
         peer.as_ref().map(|p| &p.0),
@@ -1958,7 +1974,7 @@ fn verify_item(
         "case" | "foreign" => {
             continuous(&mut r, root, man, fx, &ctx, &c);
             if it["kind"] == "foreign" {
-                foreign(&mut r, &ctx, &c);
+                foreign(&mut r, &ctx, &c, &ALL_FOREIGN_KINDS);
             }
         }
         "stop" => stop(&mut r, &ctx, it, &c, man),
@@ -2027,7 +2043,7 @@ fn verify_item(
 }
 /// One perf cell (ruling 7). The capture-completeness rules ran in `capture` (INVALID); everything
 /// here is a behaviour or isolation finding (FAIL). The cell's metrics are recorded in `notes.perf`.
-fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
+pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     job(r, j, c, man);
     let exp = perf_expected(c);
@@ -2147,7 +2163,7 @@ fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         "outcome":outcome,"rx_loss":rx_loss,"capture_valid":r.proven(),
     }));
 }
-fn groups(
+pub(crate) fn groups(
     root: &Path,
     man: &Value,
     fx: &Value,
@@ -2255,7 +2271,7 @@ fn groups(
     }
     out
 }
-fn finish(mut result: Value) -> Value {
+pub(crate) fn finish(mut result: Value) -> Value {
     let vs: Vec<_> = array(&result["runs"])
         .iter()
         .chain(array(&result["groups"]))
@@ -2313,7 +2329,7 @@ fn finish(mut result: Value) -> Value {
 }
 /// The `provenance` block of a verdict: the build recorded at run time, this verifier's own build, and
 /// warnings (never refusals) for a dirty tree or a build from another commit than the one under test.
-fn provenance_report(man: &Value) -> Value {
+pub(crate) fn provenance_report(man: &Value) -> Value {
     let verifier = crate::provenance::collect(Path::new("."));
     let orch = man["orchestrator"].clone();
     let mut warnings = Vec::new();
@@ -2481,6 +2497,7 @@ fn pcap_dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
             .flatten();
         safety_checks(
             &mut r,
+            "eno1",
             man,
             kind,
             peer.as_ref().map(|p| &p.0),

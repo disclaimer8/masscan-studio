@@ -8,7 +8,7 @@ license.workspace = true
 # Единственный crate, где допускается unsafe (FFI к libc/ОС). Он намеренно НЕ
 # наследует workspace-линт `unsafe_code = "forbid"`: lib.rs ставит
 # `deny(unsafe_code)`, а unsafe разрешён только локально в private-модулях
-# (`linux::socket`, `windows::*`, `macos::{sys, ifinfo}`) и в `lab_io::imp` (feature `lab`, см. ниже).
+# (`linux::socket`, `windows::*`, `macos::{sys, ifinfo, process}`) и в `lab_io::imp` (feature `lab`, см. ниже).
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

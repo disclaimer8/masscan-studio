@@ -1,7 +1,7 @@
 //! Измерения процесса для harness: handle/fd, потоки, рабочий набор, CPU.
 //!
 //! Правило честности: то, что на данной ОС измерить нельзя, это `None`
-//! (в JSON `null`), а не 0. Linux читает `/proc/self`; Windows использует
+//! (в JSON `null`), а не 0. Linux читает `/proc/self`; macOS `getrusage` и `proc_pidinfo`; Windows использует
 //! поддерживаемые API (`GetProcessHandleCount`, `GetProcessTimes`,
 //! `K32GetProcessMemoryInfo`, токен процесса, снимок потоков Toolhelp); вызовы
 //! находятся в private-модуле crate net, пример их не содержит.
@@ -91,7 +91,34 @@ mod os {
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+mod os {
+    use super::Sample;
+
+    // FFI живёт в private-модуле crate net (`macos::process`); `handles` это
+    // записи `/dev/fd` минус дескриптор самого перечисления.
+    pub fn sample() -> Sample {
+        let p = rmasscan_net::process_sample();
+        Sample {
+            handles: p.handles,
+            threads: p.threads,
+            working_set_bytes: p.working_set_bytes,
+            peak_working_set_bytes: p.peak_working_set_bytes,
+            cpu_user_ms: p.cpu_user_ms,
+            cpu_kernel_ms: p.cpu_kernel_ms,
+        }
+    }
+
+    pub fn elevated() -> Option<bool> {
+        None
+    }
+
+    pub fn restricted() -> Option<bool> {
+        None
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 mod os {
     use super::Sample;
 
@@ -159,7 +186,24 @@ mod tests {
         assert_eq!(s.cpu_user_ms, None);
     }
 
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn process_sample_fields_are_some_on_macos() {
+        let s = sample();
+        assert!(s.threads.is_some_and(|t| t >= 1), "{s:?}");
+        assert!(s.handles.is_some_and(|h| h >= 3), "{s:?}");
+        assert!(s.working_set_bytes.is_some(), "{s:?}");
+        assert!(s.peak_working_set_bytes.is_some(), "{s:?}");
+        assert!(
+            s.cpu_user_ms.is_some() && s.cpu_kernel_ms.is_some(),
+            "{s:?}"
+        );
+        // Токена Windows на macOS нет: не измерено, а не false.
+        assert_eq!(elevated(), None);
+        assert_eq!(restricted(), None);
+    }
+
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     #[test]
     fn no_proc_means_all_null() {
         assert_eq!(sample(), Sample::default());

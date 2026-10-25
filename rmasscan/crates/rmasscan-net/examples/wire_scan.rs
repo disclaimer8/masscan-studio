@@ -22,6 +22,11 @@
 //! Безопасные режимы (ни один не отправляет кадры):
 //! --inventory                  перечень Npcap/адаптеров/версий/идентичности;
 //!                              адаптер не открывается.
+//!                              На macOS: sysctl BPF, stat узлов /dev/bpf*, интерфейсы
+//!                              (getifaddrs); BPF не открывается. На macOS --src-mac
+//!                              обязателен и сверяется с MAC интерфейса (код 6; нет
+//!                              интерфейса: InterfaceMismatch, код 2; EACCES на
+//!                              /dev/bpf*: код 5, подсказка про bpf-access --grant).
 //! --write-reference-pcap FILE  ожидаемые SYN-кадры для заданного binding;
 //!                              DLL не загружается, адаптер не открывается
 //!                              (нужны те же явные параметры, включая --src-mac).
@@ -60,7 +65,7 @@ use rmasscan_engine::{
     CancelHandle, Checkpoint, ENGINE_ALGORITHM_VERSION, Engine, EngineOptions, Event, Reason,
     job_digest,
 };
-use rmasscan_net::{Inventory, NetError, NetStats, open_explicit};
+use rmasscan_net::{BpfInventory, Inventory, NetError, NetStats, open_explicit};
 
 mod support;
 use support::metrics;
@@ -234,7 +239,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         ("--targets", &a.targets),
         ("--ports", &a.ports),
     ];
-    if offline {
+    // На macOS (как на Linux) MAC явный всегда: он сверяется с MAC интерфейса в `run`.
+    if offline || cfg!(target_os = "macos") {
         required.push(("--src-mac", &a.src_mac));
     }
     for (n, v) in required {
@@ -428,6 +434,8 @@ fn reply_str(r: &Reply) -> String {
 /// не доходят до адаптера.
 trait Backend {
     fn inventory(&self) -> Result<Inventory, NetError>;
+    /// macOS: перечень BPF (sysctl, stat узлов, getifaddrs), без открытия BPF.
+    fn bpf_inventory(&self) -> Result<BpfInventory, NetError>;
     fn nic_mac(&self, interface_id: &str) -> Option<[u8; 6]>;
     fn open(&self, binding: &AdapterBinding) -> Result<Opened, NetError>;
 }
@@ -444,6 +452,9 @@ struct RealBackend;
 impl Backend for RealBackend {
     fn inventory(&self) -> Result<Inventory, NetError> {
         rmasscan_net::inventory()
+    }
+    fn bpf_inventory(&self) -> Result<BpfInventory, NetError> {
+        rmasscan_net::inventory_bpf()
     }
     fn nic_mac(&self, interface_id: &str) -> Option<[u8; 6]> {
         rmasscan_net::nic_mac(interface_id)
@@ -478,7 +489,78 @@ fn net_error_code(e: &NetError) -> i32 {
     }
 }
 
+/// macOS: перечень BPF без открытия `/dev/bpf*` и без отправки. Режимы узлов
+/// выводятся и числом (`mode`, десятичное), и строкой (`mode_octal`, `0600`).
+fn bpf_inventory_mode(be: &dyn Backend) -> Out {
+    let inv = match be.bpf_inventory() {
+        Ok(i) => i,
+        Err(e) => {
+            return (
+                net_error_code(&e),
+                fail_json("inventory", &format!("{e:?}"), &e.to_string(), false),
+            );
+        }
+    };
+    let devices = inv
+        .devices
+        .iter()
+        .map(|d| {
+            format!(
+                "{{\"path\":{},\"mode\":{},\"mode_octal\":{},\"uid\":{},\"gid\":{}}}",
+                js(&d.path),
+                d.mode,
+                js(&format!("{:04o}", d.mode)),
+                d.uid,
+                d.gid
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let interfaces = inv
+        .interfaces
+        .iter()
+        .map(|i| {
+            let ips = i
+                .ipv4
+                .iter()
+                .map(|ip| js(&ip.to_string()))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{{\"name\":{},\"index\":{},\"mac\":{},\"ethernet\":{},\"up\":{},\"ipv4\":[{ips}]}}",
+                js(&i.name),
+                i.index,
+                support::json_opt_str(i.mac.as_ref().map(mac_text).as_deref()),
+                i.ethernet,
+                i.up
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let hint = if inv.devices.is_empty() {
+        "no /dev/bpf* nodes are visible"
+    } else {
+        ""
+    };
+    let json = format!(
+        "{{\"status\":\"ok\",\"mode\":\"inventory\",\"opened_adapter\":false,\"tx_sent\":0,\
+\"bpf\":{{\"os_version\":{},\"kernel_version\":{},\"bpf_maxbufsize\":{},\"bpf_maxdevices\":{}}},\
+\"instant_clock\":{},\"devices\":[{devices}],\"interfaces\":[{interfaces}],\"access_hint\":{},\"identity\":{}}}",
+        support::json_opt_str(inv.os_version.as_deref()),
+        support::json_opt_str(inv.kernel_version.as_deref()),
+        json_opt_u64(inv.bpf_maxbufsize.map(u64::from)),
+        json_opt_u64(inv.bpf_maxdevices.map(u64::from)),
+        js(inv.instant_clock),
+        js(hint),
+        identity_json()
+    );
+    (0, json)
+}
+
 fn inventory_mode(be: &dyn Backend) -> Out {
+    if cfg!(target_os = "macos") {
+        return bpf_inventory_mode(be);
+    }
     match be.inventory() {
         Ok(inv) => {
             let devices = inv
@@ -635,6 +717,19 @@ fn run(a: &Args, be: &dyn Backend) -> Out {
 
     // ---- MAC источника: у NIC или явный, но тогда сверенный с NIC ----
     let nic_mac = be.nic_mac(&a.iface);
+    // macOS: привязка проверяется ДО открытия адаптера. Интерфейс без MAC в
+    // `getifaddrs` (нет такого интерфейса, нет AF_LINK) это InterfaceMismatch:
+    // BPF не открывался, ни одного кадра не отправлено.
+    if cfg!(target_os = "macos") && nic_mac.is_none() && a.forge_next_index.is_none() {
+        let e = NetError::InterfaceMismatch(format!(
+            "interface {} was not found or has no link-layer address",
+            a.iface
+        ));
+        return (
+            net_error_code(&e),
+            fail_json("binding", "InterfaceMismatch", &e.to_string(), false),
+        );
+    }
     let (src_mac, mac_check) = if a.src_mac.is_empty() {
         match nic_mac {
             Some(m) => (m, "nic-default"),
@@ -1129,6 +1224,7 @@ mod tests {
     struct Mock {
         nic: Option<[u8; 6]>,
         devices: Vec<rmasscan_net::DeviceReport>,
+        bpf_devices: Vec<rmasscan_net::BpfDevice>,
         inventory_calls: Cell<u32>,
         open_calls: Cell<u32>,
         nic_calls: Cell<u32>,
@@ -1146,6 +1242,18 @@ mod tests {
                 dlls: vec![],
                 driver_version: Some("1.2.3.4".into()),
                 devices: self.devices.clone(),
+            })
+        }
+        fn bpf_inventory(&self) -> Result<BpfInventory, NetError> {
+            self.inventory_calls.set(self.inventory_calls.get() + 1);
+            Ok(BpfInventory {
+                os_version: Some("27.0.1 (26A434)".into()),
+                kernel_version: Some("Darwin test".into()),
+                bpf_maxbufsize: Some(524_288),
+                bpf_maxdevices: Some(256),
+                devices: self.bpf_devices.clone(),
+                interfaces: vec![],
+                instant_clock: "test clock",
             })
         }
         fn nic_mac(&self, _: &str) -> Option<[u8; 6]> {
@@ -1196,6 +1304,9 @@ mod tests {
 
     fn with(extra: &[&str]) -> Args {
         let mut v: Vec<&str> = BASE.to_vec();
+        // macOS требует явный --src-mac; последующий --src-mac из `extra` его переопределяет.
+        #[cfg(target_os = "macos")]
+        v.extend_from_slice(&["--src-mac", "02:00:00:00:00:11"]);
         v.extend_from_slice(extra);
         args(&v).unwrap()
     }
@@ -1224,6 +1335,7 @@ mod tests {
         assert!(args(&no_seed).is_err());
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn eth() -> rmasscan_net::DeviceReport {
         rmasscan_net::DeviceReport {
             name: "\\Device\\NPF_{11111111-2222-3333-4444-555555555555}".into(),
@@ -1233,6 +1345,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn inventory_with_only_hidden_or_loopback_adapters_asks_for_instructions() {
         for devices in [
@@ -1253,6 +1366,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn inventory_never_opens_the_adapter() {
         let be = Mock {
@@ -1373,6 +1487,7 @@ mod tests {
         assert_eq!(be.open_calls.get(), 0);
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn source_mac_defaults_to_the_nic_and_foreign_mac_is_refused() {
         // Без --src-mac берётся MAC NIC: открытие адаптера достигнуто (мок отказывает).
@@ -1414,6 +1529,118 @@ mod tests {
         let (code, json) = run(&with(&[]), &be);
         assert_eq!(code, 2, "{json}");
         assert_eq!(be.open_calls.get(), 0);
+    }
+
+    fn bpf_node(mode: u32) -> rmasscan_net::BpfDevice {
+        rmasscan_net::BpfDevice {
+            path: "/dev/bpf0".into(),
+            mode,
+            uid: 0,
+            gid: 0,
+        }
+    }
+
+    #[test]
+    fn inventory_mode_never_opens_bpf_or_sends() {
+        // Подставной backend: узлы 0600, адаптер не открывается ни разу.
+        #[cfg(target_os = "macos")]
+        {
+            let be = Mock {
+                bpf_devices: vec![bpf_node(0o600)],
+                ..Mock::default()
+            };
+            let (code, json) = run(&args(&["--inventory"]).unwrap(), &be);
+            assert_eq!(code, 0, "{json}");
+            assert_eq!(be.open_calls.get(), 0);
+            assert!(json.contains("\"opened_adapter\":false"), "{json}");
+            assert!(json.contains("\"tx_sent\":0"), "{json}");
+            assert!(json.contains("\"instant_clock\":\"test clock\""), "{json}");
+            assert!(
+                json.contains(
+                    "\"devices\":[{\"path\":\"/dev/bpf0\",\"mode\":384,\"mode_octal\":\"0600\""
+                ),
+                "{json}"
+            );
+            assert!(json.contains("\"raw_io_abi\":"), "{json}");
+        }
+        // Настоящий backend: перечень читает sysctl/stat/getifaddrs, BPF не открывает,
+        // поэтому проходит при любых правах на /dev/bpf* (в том числе 0600 root:wheel).
+        #[cfg(target_os = "macos")]
+        {
+            let (code, json) = run(&args(&["--inventory"]).unwrap(), &RealBackend);
+            assert_eq!(code, 0, "{json}");
+            assert!(json.contains("\"mode\":\"inventory\""), "{json}");
+            assert!(json.contains("\"opened_adapter\":false"), "{json}");
+            assert!(
+                json.contains("\"instant_clock\":\"CLOCK_UPTIME_RAW"),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn reference_pcap_mode_needs_no_bpf() {
+        let be = Mock::default();
+        let p = tmp("nobpf.pcap");
+        let a = with(&[
+            "--src-mac",
+            "02:00:00:00:00:11",
+            "--write-reference-pcap",
+            &p,
+        ]);
+        let (code, json) = run(&a, &be);
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(code, 0, "{json}");
+        assert_eq!(be.open_calls.get(), 0);
+        assert_eq!(be.inventory_calls.get(), 0);
+        assert_eq!(be.nic_calls.get(), 0, "reference mode must not ask the OS");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_requires_src_mac_and_checks_it_against_the_interface() {
+        // --src-mac обязателен как на Linux.
+        assert!(args(BASE).is_err());
+
+        // Интерфейса нет (nic_mac == None): InterfaceMismatch, rc 2, адаптер не открыт.
+        let be = Mock::default();
+        let (code, json) = run(&with(&[]), &be);
+        assert_eq!(code, 2, "{json}");
+        assert!(json.contains("InterfaceMismatch"), "{json}");
+        assert_eq!(be.open_calls.get(), 0);
+
+        // Чужой MAC без override: код 6 до открытия.
+        let be = Mock {
+            nic: Some(NIC),
+            ..Mock::default()
+        };
+        let (code, json) = run(&with(&["--src-mac", "02:aa:bb:cc:dd:ee"]), &be);
+        assert_eq!(code, 6, "{json}");
+        assert!(json.contains("SourceMacMismatch"), "{json}");
+        assert_eq!(be.open_calls.get(), 0);
+
+        // С явным разрешением идём к открытию (мок отказывает).
+        let be = Mock {
+            nic: Some(NIC),
+            ..Mock::default()
+        };
+        let (_, json) = run(
+            &with(&[
+                "--src-mac",
+                "02:aa:bb:cc:dd:ee",
+                "--allow-foreign-source-mac",
+            ]),
+            &be,
+        );
+        assert_eq!(be.open_calls.get(), 1, "{json}");
+
+        // Равный MAC: открытие достигнуто.
+        let be = Mock {
+            nic: Some(NIC),
+            ..Mock::default()
+        };
+        let _ = run(&with(&[]), &be);
+        assert_eq!(be.open_calls.get(), 1);
     }
 
     #[test]
@@ -1576,7 +1803,7 @@ mod tests {
             assert!(json.contains(k), "{k} missing: {json}");
         }
         // where the OS gives thread ids, both engine threads were seen and are gone after join
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         assert!(
             json.contains("\"tx_alive_after_join\":false")
                 && json.contains("\"rx_alive_after_join\":false"),

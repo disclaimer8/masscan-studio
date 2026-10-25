@@ -185,7 +185,6 @@ fn a_valid_witness_meta_passes_the_comparator_gate_and_an_invalid_one_does_not()
 mod sequence {
     use super::*;
     use crate::link::marker_frame;
-    use std::time::SystemTime;
 
     pub(super) struct Scripted {
         /// counters(): the first two calls (c0, c1) return 0, every later one `total`; when
@@ -231,12 +230,11 @@ mod sequence {
         let dir = std::env::temp_dir().join(format!(
             "rmasscan-dump-{tag}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            // Random, not the time: macOS SystemTime has microsecond resolution, and
+            // create_dir_all would silently let two parallel tests share one rig.
+            crate::windows_suite::nonce()
         ));
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
         let pcap = dir.join("cap.pcap");
         fs::write(
             &pcap,

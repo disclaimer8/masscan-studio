@@ -376,6 +376,19 @@ fn shebang_is_shell(first_line: &str) -> bool {
     }
 }
 
+/// A scratch-name suffix unique in this process: tags repeat across parallel tests, so a
+/// name from the tag and pid alone let one test delete another's planted repository.
+#[cfg(unix)]
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 fn repo_root() -> PathBuf {
     // Read at run time: cargo reuses a test binary between checkouts, and `env!` would pin the one that built it.
     let manifest =
@@ -729,7 +742,7 @@ fn the_guard_workflow_runs_on_every_change_and_calls_the_shell_guard() {
 /// The shell guard is a bash script that CI runs on Linux, so this helper and its tests are unix-only.
 #[cfg(unix)]
 fn guard_rc(tag: &str, files: &[(&str, String)]) -> i32 {
-    let dir = std::env::temp_dir().join(format!("rmasscan-guard-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("rmasscan-guard-{tag}-{}", unique_suffix()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     for (name, text) in files {
@@ -892,7 +905,7 @@ fn the_shell_guard_fails_on_planted_swift_c_and_cpp_sources() {
 /// returns its rc and output.
 #[cfg(unix)]
 fn guard_with_links(tag: &str, files: &[(&str, String)], links: &[(&str, &str)]) -> (i32, String) {
-    let dir = std::env::temp_dir().join(format!("rmasscan-guard-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("rmasscan-guard-{tag}-{}", unique_suffix()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     for (name, text) in files {
@@ -1053,8 +1066,7 @@ fn more_banned_extensions_and_build_files_fail_both_guards() {
 #[cfg(unix)]
 #[test]
 fn both_guards_fail_on_a_symlink_to_an_outside_file_with_the_banned_shebang() {
-    let outside =
-        std::env::temp_dir().join(format!("rmasscan-guard-target-{}", std::process::id()));
+    let outside = std::env::temp_dir().join(format!("rmasscan-guard-target-{}", unique_suffix()));
     fs::write(&outside, format!("#!/usr/bin/env {WORD}3\nprint(1)\n")).unwrap();
     let target = outside.to_string_lossy().into_owned();
     let (rc, text) = guard_with_links(

@@ -968,7 +968,12 @@ impl Suite<'_> {
             && want.iter().all(|(h, name)| {
                 safe_id(name) && hash(local.join(name)).is_ok_and(|have| have == *h)
             });
-        if copied {
+        if !self.runner_invoked.get() {
+            // No capture ever started: nothing could have been sent and there is no eno1 evidence to keep.
+            // A benign gate failure or an early Ctrl-C must not block the next start.
+            let _ = self.home(&format!("rm -f -- {}", quote(&marker)), false);
+            notes.push("no capture had started, so nothing could have been sent: the keep marker was cleared".to_owned());
+        } else if copied {
             // Only now may the next sweep remove the remote scratch.
             // Only hash-checked top-level files are proven: a sub-directory (copied unhashed) keeps the marker.
             let cleared = self.home(
@@ -1674,7 +1679,7 @@ fn refuse_kept_runs(exec: &dyn Exec, kept: &[String]) -> SuiteError {
         ));
     }
     SuiteError::Abort(format!(
-        "run evidence on home-pc was never copied and hash-matched: {list}; nothing was deleted and no run was started. {KEPT_RECOVERY}"
+        "run evidence on home-pc is not yet copied and hash-matched: {list}; nothing was deleted and no run was started. {KEPT_RECOVERY}"
     ))
 }
 const KEPT_RECOVERY: &str = "Recovery: on home-pc inspect each directory (ls -l; tcpdump -nr eno1.pcap), copy it home (scp -r home-pc:DIR OUT/runs_aborted/NAME), compare sha256sum on both sides, then rm DIR/.abort-uncopied and start again.";

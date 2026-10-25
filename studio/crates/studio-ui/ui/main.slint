@@ -1,0 +1,470 @@
+import { ListView, ScrollView, AboutSlint, Palette, ComboBox } from "std-widgets.slint";
+
+export struct ResultRow {
+    ip: string, hostname: string, port: string, protocol: string,
+    service: string, device: string, discovered: string,
+    evidence: string, chosen: bool,
+}
+
+global Theme {
+    // Keep the system palette binding live; overrides affect only this app.
+    in-out property <int> preference: 0; // System / Light / Dark
+    out property <bool> dark: preference == 0 ? Palette.color-scheme == ColorScheme.dark : preference == 2;
+    out property <color> canvas: dark ? #121a22 : #ffffff;
+    out property <color> surface: dark ? #192630 : #f1f5f8;
+    out property <color> divider: dark ? #30424f : #ccd7df;
+    out property <color> text: dark ? #e2eaf0 : #192d3c;
+    out property <color> muted: dark ? #9db0be : #526878;
+    out property <color> accent: dark ? #75bde4 : #176b9a;
+    out property <color> stripe: dark ? #15212b : #f6f8fa;
+    out property <color> hover: dark ? #263845 : #e5edf3;
+    out property <color> selected: dark ? #2d4758 : #dceef9;
+    out property <color> primary-text: dark ? #10202c : #ffffff;
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 30px;
+    min-width: label.preferred-width + 24px;
+    horizontal-stretch: 0;
+    border-radius: 5px;
+    background: root.primary ? Theme.accent : (hit.has-hover ? Theme.hover : Theme.surface);
+    border-width: focus.has-focus ? 2px : 1px;
+    border-color: focus.has-focus ? Theme.accent : (root.primary ? Theme.accent : Theme.divider);
+    opacity: root.enabled ? 1 : 0.48;
+    label := Text { text: root.text; color: root.primary ? Theme.primary-text : Theme.text; font-size: 12px; font-weight: 500; horizontal-alignment: center; vertical-alignment: center; }
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == "\n" || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    hit := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.clicked(); } }
+    accessible-role: button;
+    accessible-label: root.text;
+}
+
+component MenuAction inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    height: 30px;
+    border-radius: 4px;
+    background: hit.has-hover || focus.has-focus ? Theme.hover : transparent;
+    Text { x: 10px; width: parent.width - 20px; height: parent.height; text: root.text; color: Theme.text; font-size: 12px; vertical-alignment: center; }
+    focus := FocusScope { key-pressed(event) => { if event.text == "\n" || event.text == " " { root.clicked(); return accept; } return reject; } }
+    hit := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button;
+    accessible-label: root.text;
+}
+
+component Cell inherits Rectangle {
+    in property <string> value;
+    in property <bool> mono: false;
+    in property <bool> muted: false;
+    in property <bool> numeric: false;
+    Text {
+        x: 10px; width: parent.width - 20px; height: parent.height;
+        text: root.value; font-size: root.mono ? 12px : 13px;
+        font-family: root.mono ? "Menlo" : "";
+        color: root.muted ? Theme.muted : Theme.text;
+        horizontal-alignment: root.numeric ? right : left;
+        vertical-alignment: center; overflow: elide;
+    }
+    Tooltip { Text { text: root.value; color: #172331; max-width: 420px; wrap: word-wrap; } }
+}
+
+component JobField inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    in-out property <string> value;
+    callback edited();
+    spacing: 5px;
+    Text { text: root.label; color: Theme.text; font-size: 12px; height: 17px; }
+    Rectangle {
+        height: 32px; background: Theme.canvas; border-radius: 5px;
+        border-width: 1px; border-color: entry.has-focus ? Theme.accent : Theme.divider;
+        if root.value == "" : Text { x: 9px; width: parent.width - 18px; height: parent.height; text: root.hint; color: Theme.muted; font-size: 12px; vertical-alignment: center; overflow: elide; }
+        entry := TextInput {
+            x: 9px; y: 7px; width: parent.width - 18px; height: 18px;
+            text <=> root.value; single-line: true; color: Theme.text; font-size: 12px;
+            selection-background-color: Theme.selected;
+            accessible-label: root.label;
+            edited => { root.edited(); }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Masscan Studio";
+    preferred-width: 1160px; preferred-height: 740px; min-width: 820px; min-height: 540px;
+    background: Theme.canvas;
+    default-font-size: 13px;
+    in property <[ResultRow]> rows;
+    in property <string> summary;
+    in property <string> selection-label: "No selection";
+    in property <string> event-label: "Ready · no scan started";
+    in-out property <int> backend-index: 0;
+    in property <[string]> history-labels;
+    callback select-history(int);
+    callback pause-scan();
+    callback resume-scan();
+    callback lock-session();
+    in property <bool> can-resume: false;
+    in property <int> selection-count;
+    in property <int> stream-state;
+    in-out property <string> filter-query;
+    in-out property <int> sort-column: -1;
+    in-out property <bool> sort-descending: false;
+    in-out property <bool> inspector-open: false;
+    in property <ResultRow> details;
+    in property <ResultRow> inspector-details;
+    in property <int> active-row: -1;
+    out property <bool> dark-mode: Theme.dark;
+    in-out property <string> action-notice;
+    in-out property <bool> settings-open: false;
+    in-out property <string> job-targets;
+    in-out property <string> job-ports: "22,80,443";
+    in-out property <string> job-exclusions;
+    in-out property <string> job-adapter;
+    in-out property <string> job-rate: "100";
+    in-out property <string> job-seed;
+    in-out property <bool> job-valid: false;
+    in property <bool> job-checking: false;
+    in-out property <string> job-feedback: "Enter targets, then check the settings.";
+    in-out property <string> job-preview;
+    callback check-settings();
+    callback regenerate-seed();
+    callback run-process-test();
+    in property <bool> process-view: false;
+    in property <bool> process-active: false;
+    in-out property <bool> process-stopping: false;
+    in property <string> process-status: "Ready";
+    callback settings-edited();
+    settings-edited => {
+        root.job-valid = false;
+        root.job-preview = "";
+        root.job-feedback = "Settings changed. Check again to refresh the preview.";
+    }
+    private property <ResultRow> action-target;
+    private property <length> actions-x;
+    private property <length> actions-y;
+    private property <length> data-width: max(948px, root.width - 48px);
+    private property <[length]> column-widths: [144px, root.data-width - 768px, 72px, 80px, 116px, 160px, 196px];
+    callback filter(string);
+    callback order(int, bool);
+    callback choose(int, bool, bool);
+    callback navigate(int, bool) -> int;
+    callback select-visible();
+    callback activate(int);
+    callback stream();
+    callback reset-fixture();
+    callback row-action(ResultRow, string);
+    function show-actions(row: ResultRow, px: length, py: length) {
+        root.action-target = row;
+        root.actions-x = max(8px, min(px, root.width - 292px));
+        root.actions-y = max(8px, min(py, root.height - 342px));
+        actions.show();
+    }
+
+    Rectangle {
+      visible: !root.settings-open;
+      VerticalLayout {
+        padding: 0px; spacing: 0px;
+        // Compact application header. Demo status is distinct from scan status.
+        Rectangle {
+            height: 56px;
+            HorizontalLayout {
+                padding-left: 20px; padding-right: 20px; padding-top: 16px; padding-bottom: 16px; spacing: 10px;
+                Rectangle {
+                    width: 24px; height: 24px; border-radius: 6px; background: Theme.selected;
+                    Text { text: "M"; font-size: 14px; font-weight: 700; color: Theme.accent; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                Text { text: "Masscan Studio"; color: Theme.text; font-size: 16px; font-weight: 600; }
+                Rectangle {
+                    width: 102px; height: 22px; border-radius: 4px; background: Theme.surface;
+                    Text { text: root.backend-index == 1 ? "Simulation" : "feth lab"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                ComboBox { model: root.history-labels; enabled: !root.process-active; selected(value) => { root.select-history(self.current-index); } }
+                ActionButton { text: "New scan"; enabled: !root.process-active; clicked => { root.settings-open = true; } }
+                ActionButton { text: "Lock"; enabled: !root.process-active; clicked => { root.lock-session(); } }
+                theme-button := ActionButton { text: Theme.preference == 0 ? "Theme: System" : Theme.dark ? "Theme: Dark" : "Theme: Light"; clicked => { themes.show(); } }
+                Rectangle { width: 6px; height: 6px; border-radius: 3px; background: root.stream-state == 1 ? Theme.accent : Theme.muted; }
+                Text { text: root.process-view ? (root.process-stopping ? "Stopping…" : root.process-status) : root.stream-state == 1 ? "Streaming" : root.stream-state == 2 ? "Stream complete" : "Ready"; color: Theme.muted; font-size: 12px; }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.divider; }
+        Rectangle {
+            height: 58px;
+            HorizontalLayout {
+                padding-left: 20px; padding-right: 20px; padding-top: 13px; padding-bottom: 13px; spacing: 8px;
+                Rectangle {
+                    horizontal-stretch: 1; height: 32px; border-radius: 5px;
+                    background: Theme.surface; border-width: 1px;
+                    border-color: search.has-focus ? Theme.accent : Theme.divider;
+                    Image { x: 12px; y: 8px; width: 16px; height: 16px; source: @image-url("icons/search.svg"); }
+                    if root.filter-query == "" : Text { x: 36px; width: parent.width - 70px; height: parent.height; text: "Filter results by IP, hostname or service"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    search := TextInput {
+                        x: 36px; y: 7px; width: parent.width - 68px; height: 19px;
+                        text <=> root.filter-query; color: Theme.text; font-size: 12px;
+                        single-line: true; selection-background-color: Theme.selected;
+                        edited => { root.filter(self.text); }
+                    }
+                    if root.filter-query != "" : Rectangle {
+                        x: parent.width - 30px; width: 30px; height: parent.height;
+                        Text { text: "×"; color: Theme.muted; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.filter(""); search.focus(); } }
+                    }
+                }
+                ActionButton { text: root.inspector-open ? "Hide details" : "Details"; enabled: root.inspector-open || root.active-row >= 0; clicked => { if root.inspector-open { root.inspector-open = false; } else { root.activate(root.active-row); } } }
+                actions-button := ActionButton { text: "Actions…"; enabled: root.active-row >= 0; clicked => { root.show-actions(root.details, self.absolute-position.x, self.absolute-position.y + self.height + 4px); } }
+                Rectangle { width: 8px; }
+                if root.process-active : ActionButton { text: "Pause"; enabled: root.process-status != "Saving" && !root.process-stopping; clicked => { root.pause-scan(); } }
+                if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: !root.process-stopping; clicked => { root.process-stopping = true; } }
+                if root.can-resume : ActionButton { text: "Resume"; primary: true; clicked => { root.resume-scan(); } }
+            }
+        }
+        Rectangle {
+            height: 30px;
+            HorizontalLayout {
+                padding-left: 20px; padding-right: 20px; padding-top: 6px; padding-bottom: 6px; spacing: 8px;
+                Text { text: "Results"; color: Theme.text; font-size: 12px; font-weight: 600; }
+                Text { text: root.summary; color: Theme.muted; font-size: 12px; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.selection-label; color: root.selection-count > 0 ? Theme.accent : Theme.muted; font-size: 11px; }
+            }
+        }
+        Rectangle {
+            height: 30px; clip: true; background: Theme.surface;
+            Rectangle {
+                x: 16px + list.content-x; width: root.data-width; height: parent.height;
+                HorizontalLayout {
+                    spacing: 0px;
+                    for heading[index] in ["IP address", "Hostname", "Port", "Protocol", "Service", "Device hint", "Discovered"] : Rectangle {
+                        width: root.column-widths[index]; height: 30px;
+                        background: header-hit.has-hover ? Theme.hover : transparent;
+                        Text {
+                            x: 10px; width: parent.width - 20px; height: parent.height;
+                            text: heading + (root.sort-column == index ? (root.sort-descending ? "  ↓" : "  ↑") : "");
+                            color: root.sort-column == index ? Theme.accent : Theme.muted;
+                            font-size: 11px; font-weight: 600; horizontal-alignment: index == 2 ? right : left; vertical-alignment: center;
+                        }
+                        header-hit := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.sort-descending = root.sort-column == index ? !root.sort-descending : false; root.sort-column = index; root.order(index, root.sort-descending); }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.divider; }
+        Rectangle {
+            vertical-stretch: 1; clip: true;
+            table-focus := FocusScope {
+                key-pressed(event) => {
+                    if event.modifiers.control || event.modifiers.meta {
+                        if (event.text == "a" || event.text == "A") { root.select-visible(); return accept; }
+                        if (event.text == "f" || event.text == "F") { search.focus(); return accept; }
+                        if (event.text == "c" || event.text == "C") && root.active-row >= 0 {
+                            clipboard.text = root.details.ip; clipboard.select-all(); clipboard.copy();
+                            root.action-notice = "Copied " + root.details.ip; return accept;
+                        }
+                    }
+                    if event.text == "\n" && root.active-row >= 0 { root.activate(root.active-row); return accept; }
+                    if event.text == Key.F10 && event.modifiers.shift && root.active-row >= 0 {
+                        root.show-actions(root.details, 24px, 180px); return accept;
+                    }
+                    if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End || event.text == Key.PageUp || event.text == Key.PageDown {
+                        let step = event.text == Key.Home ? -2147483648 : event.text == Key.End ? 2147483647 : event.text == Key.UpArrow ? -1 : event.text == Key.DownArrow ? 1 : event.text == Key.PageUp ? -10 : 10;
+                        let next = root.navigate(step, event.modifiers.shift);
+                        if next >= 0 {
+                            if next * 30px < -list.content-y { list.content-y = -next * 30px; }
+                            if (next + 1) * 30px > -list.content-y + list.height { list.content-y = list.height - (next + 1) * 30px; }
+                        }
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+            list := ListView {
+                x: 16px; width: parent.width - 32px; height: parent.height;
+                content-width: root.data-width;
+                for item[index] in root.rows : Rectangle {
+                    width: root.data-width; height: 30px;
+                    background: item.chosen ? Theme.selected : row-hit.has-hover ? Theme.hover : mod(index,2) == 1 ? Theme.stripe : Theme.canvas;
+                    border-width: table-focus.has-focus && root.active-row == index ? 1px : 0px;
+                    border-color: Theme.accent;
+                    if item.chosen : Rectangle { x: 0px; y: 0px; width: 2px; height: parent.height; background: Theme.accent; }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        Cell { width: root.column-widths[0]; value: item.ip; mono: true; }
+                        Cell { width: root.column-widths[1]; value: item.hostname; }
+                        Cell { width: root.column-widths[2]; value: item.port; mono: true; numeric: true; }
+                        Cell { width: root.column-widths[3]; value: item.protocol; muted: true; }
+                        Cell { width: root.column-widths[4]; value: item.service; }
+                        Cell { width: root.column-widths[5]; value: item.device; muted: true; }
+                        Cell { width: root.column-widths[6]; value: item.discovered; muted: true; }
+                    }
+                    row-hit := TouchArea {
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
+                                // Snapshot the target: filtering/streaming must not retarget an open menu.
+                                root.show-actions(item, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                                if !item.chosen { root.choose(index, false, false); }
+                            }
+                            if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
+                                table-focus.focus();
+                                root.choose(index, event.modifiers.control || event.modifiers.meta, event.modifiers.shift);
+                            }
+                        }
+                        double-clicked => { root.activate(index); }
+                    }
+                    accessible-role: list-item;
+                    accessible-label: item.ip + " " + item.hostname + " " + item.port;
+                }
+            }
+            if root.rows.length == 0 : VerticalLayout {
+                padding: 48px; alignment: center; spacing: 12px;
+                Text { text: "No matching results"; font-size: 16px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
+                Text { text: "Try another IP, hostname or service."; font-size: 12px; color: Theme.muted; horizontal-alignment: center; }
+                HorizontalLayout { alignment: center; ActionButton { text: "Clear filter"; clicked => { root.filter(""); } } }
+            }
+        }
+        if root.action-notice != "" : Rectangle {
+            height: 38px; background: Theme.selected;
+            HorizontalLayout {
+                padding-left: 16px; padding-right: 16px; padding-top: 4px; padding-bottom: 4px; spacing: 10px;
+                Text { text: root.action-notice; color: Theme.text; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                ActionButton { text: "Dismiss"; clicked => { root.action-notice = ""; } }
+            }
+        }
+        if root.inspector-open : Rectangle {
+            height: 196px; background: Theme.surface;
+            Rectangle { x: 0px; y: 0px; height: 1px; width: parent.width; background: Theme.divider; }
+            VerticalLayout {
+                padding: 16px; spacing: 12px;
+                HorizontalLayout {
+                    height: 30px; spacing: 10px;
+                    Text { text: root.inspector-details.ip + ":" + root.inspector-details.port; color: Theme.text; font-size: 15px; font-weight: 600; }
+                    Text { text: root.inspector-details.service; color: Theme.accent; font-size: 12px; }
+                    Rectangle { horizontal-stretch: 1; }
+                    ActionButton { text: "Close details"; clicked => { root.inspector-open = false; } }
+                }
+                HorizontalLayout {
+                    height: 40px; spacing: 32px;
+                    VerticalLayout { spacing: 4px; Text { text: "Hostname"; color: Theme.muted; font-size: 11px; } Text { text: root.inspector-details.hostname; color: Theme.text; font-size: 13px; } }
+                    VerticalLayout { spacing: 4px; Text { text: "Device hint"; color: Theme.muted; font-size: 11px; } Text { text: root.inspector-details.device; color: Theme.text; font-size: 13px; } }
+                    VerticalLayout { spacing: 4px; Text { text: "Discovered"; color: Theme.muted; font-size: 11px; } Text { text: root.inspector-details.discovered; color: Theme.text; font-size: 13px; } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle { height: 1px; background: Theme.divider; }
+                ScrollView { Text { x: 0px; y: 0px; width: parent.width; text: root.inspector-details.evidence; color: Theme.muted; font-size: 12px; wrap: word-wrap; horizontal-alignment: left; vertical-alignment: top; } }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.divider; }
+        Rectangle {
+            height: 32px;
+            HorizontalLayout {
+                padding-left: 20px; padding-right: 20px; padding-top: 8px; padding-bottom: 8px;
+                Text { text: root.event-label; color: Theme.muted; font-size: 11px; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: "About Slint"; color: Theme.muted; font-size: 11px; TouchArea { mouse-cursor: pointer; clicked => { about.show(); } } }
+            }
+        }
+    }
+    }
+    if root.settings-open : Rectangle {
+        background: Theme.canvas;
+        Rectangle {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            width: min(740px, parent.width - 32px); height: min(680px, parent.height - 24px);
+            background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.divider;
+            VerticalLayout {
+                padding: 20px; spacing: 12px;
+                HorizontalLayout {
+                    height: 30px;
+                    Text { text: "Scan settings"; color: Theme.text; font-size: 18px; font-weight: 600; }
+                    ActionButton { width: 80px; text: "Done"; clicked => { root.settings-open = false; } }
+                }
+                Text { text: "IPv4 / TCP scan. Results and paused jobs are saved in history."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                ComboBox { model: ["Mac isolated feth lab", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
+                JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
+                HorizontalLayout {
+                    spacing: 12px;
+                    JobField { label: "TCP ports"; value <=> root.job-ports; edited => { root.settings-edited(); } }
+                    JobField { label: "Rate · packets/s"; value <=> root.job-rate; edited => { root.settings-edited(); } }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    JobField { label: "Exclude · optional"; hint: "IPv4 addresses or ranges"; value <=> root.job-exclusions; edited => { root.settings-edited(); } }
+                    Text { text: root.backend-index == 0 ? "Isolated peer: 198.18.0.2 on feth4201" : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    JobField { label: "Seed · exact job sequence"; value <=> root.job-seed; edited => { root.settings-edited(); } }
+                    VerticalLayout { width: 110px; padding-top: 22px; ActionButton { text: "New seed"; clicked => { root.regenerate-seed(); } } }
+                }
+                Text { text: root.job-feedback; color: root.job-valid ? Theme.accent : Theme.text; font-size: 12px; wrap: word-wrap; }
+                Text { text: "Target preview · calculated by the Rust engine"; color: Theme.muted; font-size: 11px; }
+                Rectangle {
+                    min-height: 55px; vertical-stretch: 1; background: Theme.canvas; border-width: 1px; border-color: Theme.divider; border-radius: 5px;
+                    ScrollView {
+                        x: 8px; y: 6px; width: parent.width - 16px; height: parent.height - 12px;
+                        content-width: self.visible-width;
+                        content-height: max(self.visible-height, preview-text.preferred-height);
+                        preview-text := Text { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; text: root.job-preview == "" ? "Check settings to see the effective target count and scan order." : root.job-preview; color: Theme.muted; font-size: 12px; wrap: word-wrap; horizontal-alignment: left; vertical-alignment: top; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px; height: 30px;
+                    Text { text: root.backend-index == 1 ? "Simulation sends no network packets." : "Only scan networks you are authorized to test. This build supports the isolated feth stand."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                    ActionButton { width: 130px; text: root.job-checking ? "Preparing…" : "Check settings"; enabled: !root.job-checking; primary: true; clicked => { root.check-settings(); } }
+                    ActionButton { width: 140px; text: "Start scan"; enabled: root.job-valid && !root.process-active; clicked => { root.run-process-test(); } }
+                }
+            }
+        }
+    }
+    // Clipboard works in the prototype; network actions only show their planned operation.
+    clipboard := TextInput { visible: false; width: 0px; height: 0px; }
+    themes := PopupWindow {
+        x: min(theme-button.absolute-position.x, root.width - 192px); y: 52px;
+        width: 180px; height: 116px;
+        Rectangle {
+            background: Theme.surface; border-width: 1px; border-color: Theme.divider; border-radius: 6px;
+            VerticalLayout {
+                padding: 8px; spacing: 4px;
+                MenuAction { text: "Use system theme"; clicked => { Theme.preference = 0; themes.close(); } }
+                MenuAction { text: "Light"; clicked => { Theme.preference = 1; themes.close(); } }
+                MenuAction { text: "Dark"; clicked => { Theme.preference = 2; themes.close(); } }
+            }
+        }
+    }
+    actions := PopupWindow {
+        x: root.actions-x; y: root.actions-y; width: 284px; height: 334px;
+        Rectangle {
+            background: Theme.surface; border-color: Theme.divider; border-width: 1px; border-radius: 6px;
+            VerticalLayout {
+                padding: 10px; spacing: 5px;
+                Text { text: root.action-target.ip + ":" + root.action-target.port; color: Theme.text; font-weight: 600; font-size: 13px; height: 25px; }
+                Text { text: "Actions apply to this endpoint"; color: Theme.muted; font-size: 11px; height: 18px; }
+                Rectangle { height: 1px; background: Theme.divider; }
+                MenuAction { text: "Host details"; clicked => { actions.close(); root.row-action(root.action-target, "details"); } }
+                MenuAction { text: "Hostname lookup · not connected"; clicked => { actions.close(); root.row-action(root.action-target, "dns"); } }
+                MenuAction { text: "Nmap inspection · not connected"; clicked => { actions.close(); root.row-action(root.action-target, "nmap"); } }
+                Rectangle { height: 1px; background: Theme.divider; }
+                MenuAction { text: "Copy IP address"; clicked => { clipboard.text = root.action-target.ip; clipboard.select-all(); clipboard.copy(); root.action-notice = "Copied " + root.action-target.ip; actions.close(); } }
+                MenuAction { text: "Copy IP:port"; clicked => { clipboard.text = root.action-target.ip + ":" + root.action-target.port; clipboard.select-all(); clipboard.copy(); root.action-notice = "Copied " + clipboard.text; actions.close(); } }
+                MenuAction { text: "HTTP address"; clicked => { actions.close(); root.row-action(root.action-target, "http"); } }
+                MenuAction { text: "HTTPS address"; clicked => { actions.close(); root.row-action(root.action-target, "https"); } }
+            }
+        }
+    }
+    about := PopupWindow {
+        x: root.width - 360px; y: root.height - 290px; width: 340px; height: 260px;
+        Rectangle { background: #fafafa; AboutSlint { } }
+    }
+}

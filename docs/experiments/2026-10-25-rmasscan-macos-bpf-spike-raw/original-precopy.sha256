@@ -12,7 +12,7 @@ d01581b8f3487687c18b687540e624b60bb55a05716b02f69ddd24903c846154  failed/r01-sta
 c0d68a044b37faeec59e5c9a76c93ce486583815e790aaa88c093e1a458e87df  failed/r01-stand-path-listener80-EACCES/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r01-stand-path-listener80-EACCES/peer-tcpdump-rc.txt
 b1a83b366f61d9c74749b9752909188618d29f57c47ab367667377b0de020639  failed/r01-stand-path-listener80-EACCES/peer.err
-299d6dca0d325a22f5e4e3d9be112492158f70cbbb4a573ccd067c9d7e0be2ec  failed/r01-stand-path-listener80-EACCES/peer.pcap.gz
+98c3934e788b48034509bb8de40b9597a622ff6f31a42176fe6d4ffb88f9d933  failed/r01-stand-path-listener80-EACCES/peer.pcap
 f762d4b4c6ec4d9b98cce2fdfa2d5d98162e2b071191d09704350bf10460bf7c  failed/r01-stand-path-listener80-EACCES/peer.pcap.sha256
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r01-stand-path-listener80-EACCES/post-status-rc.txt
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  failed/r01-stand-path-listener80-EACCES/post-status.err
@@ -43,7 +43,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  failed/r06-tx-
 a5de8238005f12f758187edbb9acc0450ea56f6f6b4a1ac05d819953416d6809  failed/r06-tx-emsgsize-assert/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r06-tx-emsgsize-assert/peer-tcpdump-rc.txt
 6e4be6fbe8626001c4ce87c272b4101f1261c8fa477b9dcfd17052fa9b236842  failed/r06-tx-emsgsize-assert/peer.err
-5266fb032edaabccf3f9fa50baf5c7c99312bd8461863edf8c674196f47e986c  failed/r06-tx-emsgsize-assert/peer.pcap.gz
+506a787eab31b761fae23871af00351ce46ebefabb94c5357643213126304709  failed/r06-tx-emsgsize-assert/peer.pcap
 fe3ade22f1a0947f322c2ee56bcfe6d85fc213c51ec23d7124d6491334ed75df  failed/r06-tx-emsgsize-assert/peer.pcap.sha256
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r06-tx-emsgsize-assert/post-status-rc.txt
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  failed/r06-tx-emsgsize-assert/post-status.err
@@ -216,7 +216,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r05-rx-de
 3756f426b9a4d5c1b583c913551e6aec48cd560faa344ea6a6015d6244d23e6e  runs/r05-rx-deadline-flood/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r05-rx-deadline-flood/peer-tcpdump-rc.txt
 bfd7568b013b3fc73fc402129fd4cddba860321ee21bdc5103387a094ddabca0  runs/r05-rx-deadline-flood/peer.err
-d999d41225442a51268d17cf26c12f83b9b582cbb133d8b00212c4508f8ec299  runs/r05-rx-deadline-flood/peer.pcap.gz
+df69017687aeaeee243c0ca8a4b97d9a35bd3518bd230eb0c073d3bd95c05809  runs/r05-rx-deadline-flood/peer.pcap
 3ef900d2c61b22bf3cf48dad05fde6cc6fe83ef91b0dd85751f5798375e54352  runs/r05-rx-deadline-flood/peer.pcap.sha256
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r05-rx-deadline-flood/post-status-rc.txt
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r05-rx-deadline-flood/post-status.err
@@ -249,7 +249,7 @@ a7d6710fa2a1dbc727d77b46259812ce5db0bcc89c616f8d4da97e5c7adc05ae  runs/r06-tx/pe
 a5de8238005f12f758187edbb9acc0450ea56f6f6b4a1ac05d819953416d6809  runs/r06-tx/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r06-tx/peer-tcpdump-rc.txt
 d29e8112862fc99831940599fa6a92c7dab760a8bcb141a193cc554ebcd12f2b  runs/r06-tx/peer.err
-84aad4e8deb6ea7e973bb7c504a2e3912baaa52ea0d74da3ba5b730ed8568411  runs/r06-tx/peer.pcap.gz
+6c4dd9ebe3b9efb8eb9fe3deaf4211628b5e537a1e5178b938923c106bc14ebc  runs/r06-tx/peer.pcap
 cc7defc58c137cd48c59fc392200e25cb12a68ac030a7cd18ca4595662dccaf9  runs/r06-tx/peer.pcap.sha256
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r06-tx/post-status-rc.txt
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r06-tx/post-status.err
@@ -282,7 +282,7 @@ a161fa89ae42075ff6fd8e41a8dbb92ec54e0774d920df8cdd7bce8f706eda2b  runs/r07-rx-he
 46f7932b8001d63e450d5e86e7f326d6c8058a4211c520acfa2170819ccad9cc  runs/r07-rx-health/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r07-rx-health/peer-tcpdump-rc.txt
 d2a40ddab38c76529f7385e52a0c243bfc6369a33f85e294f3d63e39aaaee054  runs/r07-rx-health/peer.err
-4ca32cc3711d616c68bf272583564795e0e22aa1d17a5e83229d2ad1d04ebd7b  runs/r07-rx-health/peer.pcap.gz
+3ca94395810336d05b66c9bbe3432471845f1b2f46f318c38e962c8f8338b16f  runs/r07-rx-health/peer.pcap
 cf4036d5c777923830d406993c05b20928050a18f152180ec12f5ba0c2daf315  runs/r07-rx-health/peer.pcap.sha256
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r07-rx-health/post-status-rc.txt
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r07-rx-health/post-status.err

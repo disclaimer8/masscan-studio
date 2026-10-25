@@ -2373,3 +2373,23 @@ fn a_run_directory_with_only_compressed_captures_is_unproven_and_fails_closed() 
     fs::write(d.join("stdout.txt"), b"x").unwrap();
     assert!(safety_trips(&env.root).is_empty());
 }
+
+// ---- scoped re-review N1: unproven open truth is INVALID, never a behaviour FAIL
+
+#[test]
+fn a_missing_peer_capture_without_a_host_record_makes_the_listener_truth_invalid_not_fail() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.1000.r1");
+    host_listener_on_5000(&mut ev);
+    // No peer.pcap and no host-listen record: the wire-derived truth is empty, so the host's 5000 looks
+    // unexpected. That is unproven truth, not a scanner fault.
+    ev.files.remove("peer.pcap");
+    let (r, _) = ev.verify(&env);
+    assert!(!r.behaviour_fail(), "{:?}", failing_checks(&r));
+    assert_eq!(
+        result_of(&r, "received open/closed results equal listener truth"),
+        INVALID
+    );
+    assert_ne!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    assert!(!failed(&r, "results equal listener truth"));
+}

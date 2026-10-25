@@ -294,6 +294,9 @@ pub struct ProbeCursor {
     stream: Box<dyn Iterator<Item = (u64, u64)> + Send>,
     /// Загруженные, ещё не подтверждённые probe, по порядку индексов.
     loaded: VecDeque<Probe>,
+    /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
+    /// пропущенный индекс не сдвинул последовательность.
+    ended: bool,
     position: u64,
 }
 
@@ -327,6 +330,7 @@ impl ProbeCursor {
             plan: plan.clone(),
             stream: Box::new(stream),
             loaded: VecDeque::new(),
+            ended: false,
             position: next_index,
         })
     }
@@ -334,7 +338,11 @@ impl ProbeCursor {
     /// Строит следующий probe потока и ставит его в хвост загруженных. `false`
     /// в конце диапазона.
     fn load_one(&mut self) -> bool {
+        if self.ended {
+            return false;
+        }
         let Some((i, x)) = self.stream.next() else {
+            self.ended = true;
             return false;
         };
         let inner = &*self.plan.inner;
@@ -347,6 +355,7 @@ impl ProbeCursor {
             self.loaded.push_back(p);
             true
         } else {
+            self.ended = true;
             false
         }
     }
@@ -363,6 +372,7 @@ impl ProbeCursor {
     /// Загружает до `n` ещё не подтверждённых probe (начиная с текущего) и
     /// отдаёт их по порядку индексов. Не продвигает `position`; повторный вызов
     /// отдаёт те же probe. Короче `n` только в конце диапазона.
+    /// Вызывающий ограничивает `n` (движок: `MAX_TX_BATCH`): внутреннего предела нет.
     pub fn preload(&mut self, n: usize) -> &[Probe] {
         while self.loaded.len() < n && self.load_one() {}
         let slice = self.loaded.make_contiguous();

@@ -197,8 +197,6 @@ impl FakeAdapter {
         lock(&self.st).tx_script.extend(steps);
     }
 
-    /// После исчерпания сценария `send` постоянно отвечает `WouldBlockUnsent`
-    /// (моделирует бесконечный backpressure).
     /// Разовые шаги `send_batch`; после их исчерпания пачка идёт по кадрам
     /// через `send` (см. [`BatchStep`]).
     pub fn script_batch(&self, steps: impl IntoIterator<Item = BatchStep>) {
@@ -220,6 +218,8 @@ impl FakeAdapter {
         lock(&self.st).batch_sizes.clone()
     }
 
+    /// После исчерпания сценария `send` постоянно отвечает `WouldBlockUnsent`
+    /// (моделирует бесконечный backpressure).
     pub fn set_would_block_forever(&self, on: bool) {
         lock(&self.st).would_block_forever = on;
     }
@@ -371,7 +371,16 @@ impl Tx for FakeTx {
             None => {
                 // Сценария пачки нет: по кадрам через `send`, как по умолчанию.
                 for (i, frame) in frames.iter().enumerate() {
-                    let status = self.send(frame, timeout)?;
+                    let status = match self.send(frame, timeout) {
+                        Ok(status) => status,
+                        Err(_) if i > 0 => {
+                            return Ok(TxBatch {
+                                sent: i,
+                                rest: SendStatus::Uncertain,
+                            });
+                        }
+                        Err(e) => return Err(e),
+                    };
                     if status != SendStatus::Sent {
                         return Ok(TxBatch {
                             sent: i,

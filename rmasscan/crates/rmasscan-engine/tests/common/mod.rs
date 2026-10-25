@@ -211,7 +211,7 @@ impl Tx for PauseTx {
     /// следующий кадр это та самая попытка, которую одиночный путь отвечает
     /// `WouldBlockUnsent` (и считает для паузы).
     fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
-        let room = self.at - self.sent;
+        let room = self.at.saturating_sub(self.sent);
         if room == 0 {
             return Ok(TxBatch {
                 sent: 0,

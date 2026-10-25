@@ -23,6 +23,23 @@ fn staging_command(scripts: &Path, host: &str, work: &str) -> Vec<String> {
 /// The listener ports of the Windows VM and Linux oracle runs, and of the Mac stand (a non-root peer cannot bind 80 or
 /// 443 there, so 80 and 443 are closed and answer RST).
 pub(crate) const DEFAULT_OPEN_PORTS: &str = "80,443,8000,8001,8002,8003,8004,8005,8006,8007";
+/// Which table of expected answers goes with a listener set: chosen from the parsed set, not the string (order and
+/// spaces do not matter). A set that is neither the Windows/Linux one nor the Mac one has no expectations to offer.
+pub(crate) fn expectations_are_mac(open_ports: &str) -> Result<bool, String> {
+    let set = |t: &str| -> Option<std::collections::BTreeSet<u16>> {
+        t.split(',').map(|p| p.trim().parse().ok()).collect()
+    };
+    let have = set(open_ports).ok_or_else(|| format!("invalid --open-ports {open_ports:?}"))?;
+    if Some(&have) == set(MAC_OPEN_PORTS).as_ref() {
+        Ok(true)
+    } else if Some(&have) == set(DEFAULT_OPEN_PORTS).as_ref() {
+        Ok(false)
+    } else {
+        Err(format!(
+            "--open-ports {open_ports:?} is neither the Windows/Linux set ({DEFAULT_OPEN_PORTS}) nor the Mac set ({MAC_OPEN_PORTS}); the expected counts of cases.psv would be wrong"
+        ))
+    }
+}
 pub(crate) const MAC_OPEN_PORTS: &str = "8000,8001,8002,8003,8004,8005,8006,8007";
 #[cfg(test)]
 fn oracle_command(work: &str, src_mac: &str, peer_mac: &str, lab: &str) -> Result<String, String> {
@@ -173,7 +190,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let localcases = out.join("cases.psv");
     // The expected open and closed counts follow the listeners the oracle is run against.
     let cases = {
-        let _mac = (open_ports == MAC_OPEN_PORTS).then(crate::verify::MacStandGuard::enter);
+        let _mac = expectations_are_mac(&open_ports)?.then(crate::verify::MacStandGuard::enter);
         crate::verify::cases_psv()
     };
     fs::write(&localcases, cases).map_err(|e| e.to_string())?;
@@ -453,5 +470,30 @@ mod open_port_tests {
             "{}",
             line(&mac)
         );
+    }
+}
+
+#[cfg(test)]
+mod expectation_tests {
+    use super::*;
+    #[test]
+    fn the_expectations_follow_the_parsed_open_port_set() {
+        assert_eq!(expectations_are_mac(MAC_OPEN_PORTS), Ok(true));
+        assert_eq!(
+            expectations_are_mac("8007,8006,8005,8004,8003,8002,8001,8000"),
+            Ok(true)
+        );
+        assert_eq!(
+            expectations_are_mac("8000, 8001,8002,8003 ,8004,8005,8006,8007"),
+            Ok(true)
+        );
+        assert_eq!(expectations_are_mac(DEFAULT_OPEN_PORTS), Ok(false));
+        assert_eq!(
+            expectations_are_mac("8007,8000,443,8001,8002,8003,8004,80,8005,8006"),
+            Ok(false)
+        );
+        for odd in ["80", "8000,8001", "", "80;id"] {
+            assert!(expectations_are_mac(odd).is_err(), "{odd:?}");
+        }
     }
 }

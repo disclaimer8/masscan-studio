@@ -314,3 +314,19 @@ macOS rate-limits closed-port RSTs (the spike saw 74 of 100 under load). A missi
 and not INVALID by itself: on the Mac stand the scanner's results must contain every open port, nothing unknown
 and no duplicate, and must equal the replies the peer witness saw on the wire; no RST count is expected.
 `sysctl -n net.inet.icmp.icmplim` is recorded in every run (`icmplim.txt`, `meta.json`).
+
+### Further gates and notes (round 5)
+
+- The `ps` gate fails closed: a non-zero `ps` exit, or a listing that does not show the suite itself, refuses the run.
+- Before each run the packet counters of `feth4201` and `feth4202` are read twice, a second apart; any movement
+  refuses the run (some other sender, such as a spike or a test binary, is active).
+- `--remove-stale-lock` names a recorded process group only while one of its members is a lab command.
+- A stop request before the scanner starts starts no scanner; the run's tools are also stopped when the run ends
+  abnormally (drop), and writes to a hung-up terminal are ignored.
+- The wall-clock and `src_mac_check` rules apply to scan summaries only; the inventory summary
+  (`mode: "inventory"`) and a refused start are exempt.
+- `stop_fullqueue` on the Mac needs two peer replies on the wire and results equal to them (fewer on the wire is
+  INVALID); for perf, `stop_drain` and the pause/resume union every result must be a reply on the wire.
+- `icmplim` must be an integer. `oracle-fixtures` picks its expected counts from the parsed `--open-ports` set.
+- Coverage note: with 80 and 443 closed, SYN-ACK handling by source port (c05, c06) and in x01 is not exercised on
+  the Mac; c03, pause/resume and the perf ports 8000-8007 cover it.

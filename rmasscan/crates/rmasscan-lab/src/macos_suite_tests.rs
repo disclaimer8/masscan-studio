@@ -89,6 +89,15 @@ struct Fake {
     link_calls: Cell<u32>,
     /// What `ps -axo pid,pgid,command` prints.
     ps_text: RefCell<String>,
+    ps_rc: Cell<i32>,
+    /// Whether the ps listing carries the suite's own pid line (a real `ps -ax` always does).
+    ps_has_self: Cell<bool>,
+    /// Every `counters` call moves the pair's packet counters.
+    pair_busy: Cell<bool>,
+    counter_reads: Cell<u64>,
+    /// `stopped` turns true from this call on (0: use `stopped`).
+    stopped_from_call: Cell<u32>,
+    stopped_calls: Cell<u32>,
     /// The lock file path, whose content is read at the moment the scanner is spawned.
     lock_file: RefCell<Option<PathBuf>>,
     lock_at_scanner: RefCell<String>,
@@ -113,6 +122,12 @@ impl Fake {
             flip_after: Cell::new(0),
             link_calls: Cell::new(0),
             ps_text: RefCell::default(),
+            ps_rc: Cell::new(0),
+            ps_has_self: Cell::new(true),
+            pair_busy: Cell::new(false),
+            counter_reads: Cell::new(0),
+            stopped_from_call: Cell::new(0),
+            stopped_calls: Cell::new(0),
             lock_file: RefCell::default(),
             lock_at_scanner: RefCell::default(),
         }
@@ -169,9 +184,15 @@ impl Stand for Fake {
             });
         }
         if argv[0] == "/bin/ps" {
+            let me = std::process::id();
+            let own = if self.ps_has_self.get() {
+                format!("{me} {me} /x/rmasscan-lab macos-suite --out x\n")
+            } else {
+                String::new()
+            };
             return Ok(Output {
-                rc: 0,
-                stdout: self.ps_text.borrow().clone(),
+                rc: self.ps_rc.get(),
+                stdout: format!("{}{own}", self.ps_text.borrow()),
                 stderr: String::new(),
             });
         }
@@ -269,8 +290,11 @@ impl Stand for Fake {
         }))
     }
     fn counters(&self, _: &str) -> Result<NetstatCounters, String> {
+        if self.pair_busy.get() {
+            self.counter_reads.set(self.counter_reads.get() + 1);
+        }
         Ok(NetstatCounters {
-            ipkts: 1,
+            ipkts: 1 + self.counter_reads.get(),
             opkts: 1,
             ierrs: 0,
             drop: 0,
@@ -313,7 +337,9 @@ impl Stand for Fake {
     }
     fn pause(&self, _: Duration) {}
     fn stopped(&self) -> bool {
-        self.stopped.get()
+        self.stopped_calls.set(self.stopped_calls.get() + 1);
+        let from = self.stopped_from_call.get();
+        self.stopped.get() || (from != 0 && self.stopped_calls.get() >= from)
     }
 }
 
@@ -970,7 +996,8 @@ fn an_error_while_the_scanner_runs_stops_and_reaps_it_before_the_witnesses() {
     let rig = Rig::new();
     let st = Fake::new(&rig.wire);
     st.scanner.set(Mode::Hangs);
-    st.stopped.set(true);
+    // stopped() is asked before the peer tasks, before the scanner, then in its supervision loop.
+    st.stopped_from_call.set(3);
     let s = rig.suite(&st, "functional");
     let e = s.one(&item("functional", C01), 30).unwrap_err();
     assert!(matches!(e, SuiteError::Interrupted(_)), "{e:?}");
@@ -1008,19 +1035,17 @@ fn a_scanner_that_ignores_int_is_killed_before_the_witnesses_stop() {
     let rig = Rig::new();
     let st = Fake::new(&rig.wire);
     let s = rig.suite(&st, "functional");
-    let mut t = Tools {
-        scanner: Some(Box::new(Stubborn(st.log.clone()))),
-        witness: Some(Box::new(FakeProc {
-            name: "witness",
-            log: st.log.clone(),
-            mode: Mode::Hangs,
-            done: false,
-            failed: false,
-            polls: 0,
-            pgid: 1,
-        })),
-        ..Tools::default()
-    };
+    let mut t = Tools::default();
+    t.scanner = Some(Box::new(Stubborn(st.log.clone())));
+    t.witness = Some(Box::new(FakeProc {
+        name: "witness",
+        log: st.log.clone(),
+        mode: Mode::Hangs,
+        done: false,
+        failed: false,
+        polls: 0,
+        pgid: 1,
+    }));
     s.stop_tools(&mut t);
     let log = st.log.borrow().clone();
     assert_eq!(
@@ -1590,4 +1615,159 @@ fn the_peer_listens_on_8000_to_8007_only_and_the_rst_limit_is_recorded() {
         !spawned.iter().any(|a| a[0] == "/usr/sbin/sysctl"),
         "read through exec, not spawned"
     );
+}
+
+#[test]
+fn the_ps_gate_fails_closed() {
+    // A failing ps, or a listing that does not even show this suite, proves nothing.
+    for (rc, has_self, text) in [
+        (1, true, ""),
+        (0, false, ""),
+        (0, false, "garbage\n\n"),
+        (2, true, "5001 5001 /bin/zsh\n"),
+    ] {
+        let rig = Rig::new();
+        let st = Fake::new(&rig.wire);
+        st.ps_rc.set(rc);
+        st.ps_has_self.set(has_self);
+        *st.ps_text.borrow_mut() = text.to_owned();
+        let s = rig.suite(&st, "functional");
+        let e = s.one(&item("functional", C01), 30).unwrap_err();
+        assert!(
+            matches!(e, SuiteError::NotRun(_)) && e.message().contains("ps"),
+            "{rc} {has_self} {text:?}: {e:?}"
+        );
+        assert!(!st.any_spawned());
+    }
+}
+
+#[test]
+fn a_pair_that_is_not_quiet_refuses_the_run() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.pair_busy.set(true); // some other sender: the counters move between the two readings
+    let s = rig.suite(&st, "functional");
+    let e = s.one(&item("functional", C01), 30).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("not quiet"),
+        "{e:?}"
+    );
+    assert!(!st.any_spawned(), "nothing starts beside another sender");
+    // Quiet pair: both readings are equal and the run goes ahead.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    rig.suite(&st, "functional")
+        .one(&item("functional", C01), 30)
+        .unwrap();
+}
+
+#[test]
+fn a_recorded_group_is_named_only_when_a_member_is_a_lab_command() {
+    let root = scratch();
+    let p = root.join("l.lock");
+    fs::write(&p, "pid=4294967290\nstart=1\nchildren=7001,7002\n").unwrap();
+    // 7001 is a lab scanner; 7002 is a pgid that was reused by an unrelated program.
+    let ps = "7001  7001 /x/wire_scan --iface feth4201\n7002  7002 /usr/bin/vim notes.txt\n";
+    let e = remove_stale_lock_with(&p, ps).unwrap_err();
+    assert!(e.contains("7001") && !e.contains("7002"), "{e}");
+    assert!(p.exists());
+    // Only the unrelated reuse is left: the lock can go, and nothing is advised against that group.
+    remove_stale_lock_with(&p, "7002  7002 /usr/bin/vim notes.txt\n").unwrap();
+    assert!(!p.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn dropping_the_tools_stops_the_scanner_first_and_sweeps_the_rest() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    {
+        let mut _t = Tools::default();
+        {
+            let st = &st;
+            _t.scanner = Some(Box::new(FakeProc {
+                name: "scanner",
+                log: st.log.clone(),
+                mode: Mode::Hangs,
+                done: false,
+                failed: false,
+                polls: 0,
+                pgid: 1,
+            }));
+            _t.witness = Some(Box::new(FakeProc {
+                name: "witness",
+                log: st.log.clone(),
+                mode: Mode::Hangs,
+                done: false,
+                failed: false,
+                polls: 0,
+                pgid: 2,
+            }));
+            _t.uplink = Some(Box::new(FakeProc {
+                name: "uplink",
+                log: st.log.clone(),
+                mode: Mode::Hangs,
+                done: false,
+                failed: false,
+                polls: 0,
+                pgid: 3,
+            }));
+            _t.listener = Some(Box::new(FakeProc {
+                name: "listener",
+                log: st.log.clone(),
+                mode: Mode::Hangs,
+                done: false,
+                failed: false,
+                polls: 0,
+                pgid: 4,
+            }));
+        }
+        // a panic or an early return drops it here
+    }
+    let log = st.log.borrow().clone();
+    let at = |x: &str| {
+        log.iter()
+            .position(|l| l == x)
+            .unwrap_or_else(|| panic!("{x} missing: {log:?}"))
+    };
+    assert!(
+        at("scanner:INT") < at("witness:INT") && at("scanner:INT") < at("uplink:INT"),
+        "{log:?}"
+    );
+    assert!(log.iter().any(|l| l == "listener:TERM"), "{log:?}");
+    // A tools set that was stopped normally does nothing more on drop.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    rig.suite(&st, "functional")
+        .one(&item("functional", C01), 30)
+        .unwrap();
+    let n = st.log.borrow().len();
+    assert!(n <= 8, "{:?}", st.log.borrow());
+}
+
+#[test]
+fn a_stop_before_the_scanner_starts_starts_no_scanner() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    st.stopped_from_call.set(1);
+    let s = rig.suite(&st, "functional");
+    let e = s.one(&item("functional", C01), 30).unwrap_err();
+    assert!(matches!(e, SuiteError::Interrupted(_)), "{e:?}");
+    assert_eq!(st.scanner_runs(), 0, "no raw sender after a hang-up");
+    let log = st.log.borrow().clone();
+    assert!(log.iter().any(|l| l == "witness:INT"), "{log:?}");
+}
+
+#[test]
+fn writes_to_a_hung_up_terminal_cannot_panic() {
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from_raw_os_error(5))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::from_raw_os_error(32))
+        }
+    }
+    say_to(&mut Broken, "ACTION REQUIRED");
 }

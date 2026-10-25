@@ -113,6 +113,28 @@ pub(crate) fn results_match(got: &Value, exp: &[String]) -> bool {
             .filter(|e| e.ends_with(":open"))
             .all(|e| set.contains(e.as_str()))
 }
+/// macOS stand only: every result the scanner reports is a reply the peer really sent (it is on the capture of the
+/// peer interface). Missing closed results are tolerated (the OS rate-limits RSTs); invented ones are not. FAIL when
+/// the capture is proven complete, INVALID otherwise.
+pub(crate) fn results_on_wire(r: &mut Run, ctx: &Ctx, c: &Value, results: &Value) {
+    if !mac_stand() {
+        return;
+    }
+    let Some((fr, _)) = &ctx.peer else { return };
+    let wire: BTreeSet<String> = unique(wire_replies(fr, &ctx.bind, Some(sports(c))))
+        .into_iter()
+        .collect();
+    let bad: Vec<&str> = array(results)
+        .iter()
+        .map(s)
+        .filter(|x| !wire.contains(*x))
+        .collect();
+    r.cap(
+        "results are replies the peer sent (on the wire)",
+        bad.is_empty(),
+        format!("{bad:?} not on the wire"),
+    );
+}
 /// `reply_total` is the number of expected replies (everywhere else), or of the results received (macOS).
 fn reply_total_ok(j: &Value, exp_len: usize) -> bool {
     if mac_stand() {
@@ -1312,6 +1334,7 @@ pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
         results_match(&j["replies"], &exp),
         j["replies"].to_string(),
     );
+    results_on_wire(r, ctx, c, &j["replies"]);
     let Some(inj) = read_json(ctx.d.join("injector.json")) else {
         r.add("injector.json present", NOT_RUN, "missing", false);
         return;
@@ -1552,6 +1575,35 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
                 && results_match(&j["replies"], &exp),
             tm.to_string(),
         ),
+        _ if mac_stand() => {
+            // Both ports are closed on the Mac, so the scenario is two RSTs from the peer, at 1 pps far below the
+            // OS limit. Fewer than two on the wire means the full queue was never exercised: INVALID, never PASS.
+            let wire: BTreeSet<String> = ctx
+                .peer
+                .as_ref()
+                .map(|(fr, _)| {
+                    unique(wire_replies(fr, &ctx.bind, Some(sports(c))))
+                        .into_iter()
+                        .collect()
+                })
+                .unwrap_or_default();
+            r.inv(
+                "two peer replies on the wire (the full-queue scenario was exercised)",
+                wire.len() >= 2,
+                format!("{wire:?}"),
+            );
+            if wire.len() >= 2 {
+                let got: BTreeSet<String> = array(&j["replies"])
+                    .iter()
+                    .map(|v| s(v).to_owned())
+                    .collect();
+                r.beh(
+                    "full result queue kept both genuine replies",
+                    got == wire && j["sent"] == c["syn"],
+                    j["replies"].to_string(),
+                );
+            }
+        }
         _ => r.beh(
             "full result queue kept both genuine replies",
             results_match(&j["replies"], &exp)
@@ -1559,6 +1611,9 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
                 && j["sent"] == c["syn"],
             j["replies"].to_string(),
         ),
+    }
+    if it["scenario"] == "drain" {
+        results_on_wire(r, ctx, c, &j["replies"]);
     }
     workers(r, j);
     if it["scenario"] == "load" {
@@ -2200,6 +2255,7 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
                 exp.len()
             ),
         );
+        results_on_wire(r, ctx, c, &j["replies"]);
     }
     let reps = array(&j["replies"]);
     let count = |end: &str| reps.iter().filter(|x| s(x).ends_with(end)).count();
@@ -2331,6 +2387,23 @@ pub(crate) fn groups(
             FAIL,
             false,
         );
+        if mac_stand() {
+            // Every result of either leg is a reply that leg's capture shows (a missing RST is tolerated).
+            let on_wire = |p: &(Frames, Vec<u8>)| -> BTreeSet<String> {
+                unique(wire_replies(&p.0, &ca.bind, Some(sports(&c))))
+                    .into_iter()
+                    .collect()
+            };
+            let wire: BTreeSet<String> = on_wire(pa).union(&on_wire(pb)).cloned().collect();
+            let bad: Vec<&String> = union.iter().filter(|x| !wire.contains(*x)).collect();
+            r.check(
+                "results are replies the peer sent (on the wire)",
+                bad.is_empty(),
+                format!("{bad:?} not on the wire"),
+                FAIL,
+                false,
+            );
+        }
         let _ = man;
         out.push(r.summary());
     }

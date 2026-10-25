@@ -205,6 +205,7 @@ fn tcpdump_kernel_drops_make_the_cell_invalid() {
     });
     let v = d.summary(CELL);
     assert_eq!(verdict(&v), INVALID, "{:?}", bad(&v));
+    assert_eq!(v["behaviour_fail"], false);
     assert!(has(
         &v,
         INVALID,
@@ -219,6 +220,7 @@ fn captured_not_equal_received_makes_the_cell_invalid() {
     });
     let v = d.summary(CELL);
     assert_eq!(verdict(&v), INVALID);
+    assert_eq!(v["behaviour_fail"], false);
     assert!(has(
         &v,
         INVALID,
@@ -233,6 +235,7 @@ fn lab0_counter_window_mismatch_makes_the_cell_invalid() {
     });
     let v = d.summary(CELL);
     assert_eq!(verdict(&v), INVALID);
+    assert_eq!(v["behaviour_fail"], false);
     assert!(has(&v, INVALID, "peer interface counter window"));
 }
 #[test]
@@ -242,6 +245,7 @@ fn frames_after_the_end_marker_make_the_cell_invalid() {
     });
     let v = d.summary(CELL);
     assert_eq!(verdict(&v), INVALID, "{:?}", bad(&v));
+    assert_eq!(v["behaviour_fail"], false);
     assert!(has(&v, INVALID, "end marker"));
 }
 fn scanner_syn_for_tail() -> Vec<u8> {
@@ -257,6 +261,7 @@ fn an_old_capture_schema_makes_the_cell_invalid() {
     d.edit(CELL, "capture.json", |c| c["capture_schema"] = json!(2));
     let v = d.summary(CELL);
     assert_eq!(verdict(&v), INVALID);
+    assert_eq!(v["behaviour_fail"], false);
     assert!(has(&v, INVALID, "capture schema not older than manifest"));
 }
 #[test]
@@ -741,5 +746,56 @@ fn a_perf_directory_is_refused_by_an_unknown_plan_name() {
         planned(&json!({"plan":"nonsense"}))
             .iter()
             .all(|i| i["kind"] != "perf")
+    );
+}
+
+// ---- fix round 1: I1, an incomplete capture is INVALID and rerunnable ---------------------------
+fn drop_one_syn(b: &mut Built) {
+    b.frames.remove(6);
+}
+fn witness_dropped(d: &Dir, tag: &str) {
+    d.edit(tag, "capture.json", |c| {
+        c["peer"]["tcpdump"]["dropped_kernel"] = json!(1)
+    });
+}
+#[test]
+fn a_syn_missing_from_an_incomplete_capture_is_invalid_not_a_behaviour_failure() {
+    // The scanner sent all 500 (tx_sent 500); tcpdump says it dropped a frame and port 7 is not in the file.
+    let d = Dir::cell(CELL, &drop_one_syn);
+    witness_dropped(&d, CELL);
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), INVALID, "{:?}", bad(&v));
+    assert_eq!(v["behaviour_fail"], false, "{:?}", bad(&v));
+    assert!(crate::windows_suite::may_discard(verdict(&v), false));
+    assert!(!bad(&v).iter().any(|b| b.starts_with(FAIL)), "{:?}", bad(&v));
+}
+#[test]
+fn a_syn_missing_from_a_proven_capture_is_still_a_behaviour_fail() {
+    let d = Dir::cell(CELL, &|b| {
+        drop_one_syn(b);
+        tx_sent(b, 499);
+    });
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert_eq!(v["behaviour_fail"], true);
+    assert!(!crate::windows_suite::may_discard(verdict(&v), true));
+}
+#[test]
+fn one_incomplete_capture_in_the_plan_makes_overall_invalid_and_the_cell_rerunnable() {
+    let d = Dir::empty();
+    fixture::build_perf_only(&d.0, 3, &[], &|b| {
+        if b.tag == "perf.1000.r3" {
+            drop_one_syn(b);
+        }
+    });
+    witness_dropped(&d, "perf.1000.r3");
+    let (code, v) = verify_cli(&d);
+    assert_eq!(v["overall"], INVALID, "{}", v["totals"]);
+    assert_eq!(code, 2);
+    assert_eq!(v["behaviour_fail"], json!([]));
+    assert_eq!(v["totals"][INVALID], 1);
+    assert_eq!(
+        crate::verify::run_status(&d.0, "perf.1000.r3"),
+        (INVALID.to_owned(), false)
     );
 }

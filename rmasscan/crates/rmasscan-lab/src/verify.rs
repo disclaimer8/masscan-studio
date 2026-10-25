@@ -2002,7 +2002,8 @@ fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
             let once = ours.len() == want.len()
                 && want.iter().all(|p| seen.get(p) == Some(&1))
                 && seen.len() == want.len();
-            r.beh(
+            // Read from the capture: FAIL only when the capture is proven complete, else INVALID (as in align).
+            r.cap(
                 "each probe exactly once on the wire",
                 once,
                 format!(

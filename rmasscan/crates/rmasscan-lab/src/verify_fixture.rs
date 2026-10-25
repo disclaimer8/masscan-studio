@@ -137,6 +137,7 @@ fn job_echo(c: &Value, man: &Value) -> Value {
     j
 }
 pub(crate) struct Built {
+    pub(crate) tag: String,
     pub(crate) frames: Frames,
     pub(crate) run: Value,
     pub(crate) guest_exit: i64,
@@ -405,6 +406,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
         }
     }
     Built {
+        tag: tag.to_owned(),
         frames,
         run,
         guest_exit,

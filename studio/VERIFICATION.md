@@ -5,7 +5,7 @@ Date: 2026-10-25. Studio is a separate workspace/branch; scanner source unchange
 
 ## Local Apple Silicon (development slice)
 
-- `cargo xtask test`: 13 tests passed; workspace Clippy `-D warnings` and fmt pass.
+- `cargo xtask test`: 15 tests passed; workspace Clippy `-D warnings` and fmt pass.
 - Protocol: bounded/truncated framing, wrong IDs/sequences/version, canonical u64.
 - History: instance lock, duplicate result replay, stale attempt, invalid checkpoint,
   interrupted recovery, saved pause and Resume after reopening the application.
@@ -17,10 +17,19 @@ Date: 2026-10-25. Studio is a separate workspace/branch; scanner source unchange
 - GUI `--smoke-pause`: Start → Scanning → Saving → Paused → Resume → Stopped.
 - Packaged `.app`: `codesign --verify --deep --strict` passed; the packaged UI and
   sibling runner repeated `--smoke-pause` successfully using software rendering.
+- Independent review found a lost Stop click when Started was already queued.
+  `--smoke-stop-race` reproduced Completed instead of Stopped, then passed after
+  Stop became a direct callback. Draft backend no longer controls the scan badge.
+- A failed Resume preflight now retains the previous checkpoint. A regression
+  test reproduced deletion before the fix; retry and app restart both pass.
+- Injected SQLite checkpoint-write failure rolls back, returns failure before ACK,
+  leaves no resumable checkpoint and recovers as Interrupted.
 
 These are simulation and lifecycle results, **not raw network acceptance**.
-The fixed feth profile remains untested through Studio: the stand was absent during
-this run. There was no privilege elevation, adapter creation or raw scan.
+The fixed feth profile is **disabled**: independent review found the preliminary
+manifest check lacks complete live route/ARP/forwarding isolation. A test verifies
+explicit refusal before adapter opening. There was no privilege elevation,
+adapter creation or raw scan.
 
 Linux/Windows builds, fault injection beyond the listed cases, authenticated
 privileged bootstrap and external-capture proof remain pending. Existing scanner

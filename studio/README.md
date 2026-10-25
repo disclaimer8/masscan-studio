@@ -45,10 +45,11 @@ Choose **Simulation · no network packets** to exercise this flow on any OS. Thi
 uses the real engine with its fake packet adapter, not a prerecorded UI animation.
 It does not prove raw packet I/O or network correctness.
 
-The only raw profile currently exposed is **Mac isolated feth lab**: exactly
-`198.18.0.2` through `feth4201`, with the existing root-owned, sealed stand manifest
-and explicit BPF access. An absent/changed stand or insufficient access fails
-before scanning. Studio does not create the stand or grant itself access.
+The reserved **Mac feth** profile is disabled at a compile-time release gate.
+The manifest/topology checks are insufficient to prove live route isolation after
+a VPN change. Start/Resume therefore refuse this profile before opening any packet
+adapter. Complete route/ARP/forwarding preflight and runner authorization are the
+next integration step. Studio does not create a stand or grant itself access.
 
 ## Deliberate current limits
 
@@ -64,11 +65,12 @@ a window or passing simulation never counts as raw acceptance.
 
 ## Repeatable UI smoke
 
-Run the packaged UI with `--smoke` or `--smoke-pause` and a fresh `STUDIO_DATA_DIR`.
-Both explicitly select Simulation. `--smoke-pause` exercises Start → Pause →
+Run the packaged UI with `--smoke`, `--smoke-pause`, or `--smoke-stop-race` and a fresh `STUDIO_DATA_DIR`.
+All explicitly select Simulation. `--smoke-pause` exercises Start → Pause →
 committed checkpoint → Resume → Stop. Set `SLINT_BACKEND=winit-software` for a VM
 and `STUDIO_SCREENSHOT` to save a PNG. Linux needs a display server (Xvfb works for
 this smoke); Windows needs an interactive desktop for UI evidence.
+`--smoke-stop-race` submits Stop while a Started event is pending in the UI queue.
 
 These checks do not measure displayed-frame latency or replace manual keyboard,
 screen reader, clipboard and context-menu acceptance.

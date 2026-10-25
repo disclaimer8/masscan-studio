@@ -68,7 +68,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS scans (id BLOB PRIMARY KEY, attempt BLOB NOT NULL, job TEXT NOT NULL, status TEXT NOT NULL, sequence TEXT NOT NULL DEFAULT '0', checkpoint BLOB, next_index TEXT, detail TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS results (scan BLOB NOT NULL REFERENCES scans(id), ip TEXT NOT NULL, port INTEGER NOT NULL, open INTEGER NOT NULL, PRIMARY KEY(scan,ip,port));
             PRAGMA user_version=1;")?;
-        db.execute("UPDATE scans SET status='\"Interrupted\"', detail='Previous attempt ended before a terminal state was saved' WHERE status IN ('\"Starting\"','\"Scanning\"','\"Saving\"')",[])?;
+        db.execute("UPDATE scans SET status=CASE WHEN status='\"Starting\"' AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END, detail='Previous attempt ended before a terminal state was saved' WHERE status IN ('\"Starting\"','\"Scanning\"','\"Saving\"')",[])?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -97,11 +97,11 @@ impl Store {
             validate_checkpoint(
                 job,
                 scan,
-                old.attempt,
+                checkpoint_origin(old.checkpoint.as_deref().ok_or("No checkpoint")?)?,
                 old.checkpoint.as_deref().ok_or("No checkpoint")?,
                 old.next_index.as_deref().ok_or("No checkpoint index")?,
             )?;
-            tx.execute("UPDATE scans SET attempt=?2,status='\"Starting\"',sequence='0',checkpoint=NULL,next_index=NULL,detail='',updated=unixepoch() WHERE id=?1",params![scan.as_slice(),attempt.as_slice()])?;
+            tx.execute("UPDATE scans SET attempt=?2,status='\"Starting\"',sequence='0',detail='',updated=unixepoch() WHERE id=?1",params![scan.as_slice(),attempt.as_slice()])?;
         } else {
             tx.execute("INSERT INTO scans(id,attempt,job,status,updated) VALUES(?1,?2,?3,'\"Starting\"',unixepoch())",params![scan.as_slice(),attempt.as_slice(),serde_json::to_string(job)?])?;
         }
@@ -203,7 +203,7 @@ impl Store {
             }
             Event::Started { .. } => {
                 tx.execute(
-                    "UPDATE scans SET status='\"Scanning\"' WHERE id=?1",
+                    "UPDATE scans SET status='\"Scanning\"',checkpoint=NULL,next_index=NULL WHERE id=?1",
                     [event.scan.as_slice()],
                 )?;
             }
@@ -211,6 +211,14 @@ impl Store {
                 if *status == Status::Paused && saved.checkpoint.is_none() {
                     return Err("Paused without durable checkpoint".into());
                 }
+                let status = if *status == Status::Failed
+                    && saved.status == Status::Starting
+                    && saved.checkpoint.is_some()
+                {
+                    &Status::Paused
+                } else {
+                    status
+                };
                 tx.execute(
                     "UPDATE scans SET status=?2,detail=?3 WHERE id=?1",
                     params![
@@ -230,7 +238,7 @@ impl Store {
         Ok(())
     }
     pub fn interrupt(&mut self, scan: Id, detail: &str) -> Result<()> {
-        self.db.execute("UPDATE scans SET status='\"Interrupted\"',detail=?2 WHERE id=?1 AND status != '\"Paused\"'",params![scan.as_slice(),detail])?;
+        self.db.execute("UPDATE scans SET status=CASE WHEN status='\"Starting\"' AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END,detail=?2 WHERE id=?1 AND status != '\"Paused\"'",params![scan.as_slice(),detail])?;
         Ok(())
     }
 }

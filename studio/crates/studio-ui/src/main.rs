@@ -109,8 +109,7 @@ fn data_dir() -> PathBuf {
     }
     #[cfg(windows)]
     {
-        PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
-            .join("Masscan Studio")
+        PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Masscan Studio")
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
@@ -130,6 +129,7 @@ fn action(app: &RefCell<Controller>, ui: &MainWindow, a: Action) {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let smoke = std::env::args().any(|s| s == "--smoke");
     let pause_smoke = std::env::args().any(|s| s == "--smoke-pause");
+    let stop_smoke = std::env::args().any(|s| s == "--smoke-stop-race");
     if std::env::var_os("SLINT_BACKEND").is_none() {
         slint::BackendSelector::new()
             .backend_name("winit".into())
@@ -211,6 +211,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_pause_scan(move || {
         if let Some(ui) = w.upgrade() {
             action(&a, &ui, Action::Pause);
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    ui.on_stop_scan(move || {
+        if let Some(ui) = w.upgrade() {
+            match a.borrow().send(Action::Stop) {
+                Ok(()) => ui.set_process_stopping(true),
+                Err(e) => ui.set_action_notice(e.into()),
+            }
         }
     });
     let w = ui.as_weak();
@@ -308,15 +318,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move || {
             let Some(ui) = w.upgrade() else { return };
             let updates = a.borrow_mut().poll();
+            if stop_smoke
+                && phase2.get() == 0
+                && updates
+                    .iter()
+                    .any(|u| matches!(u, Update::State(Status::Scanning, _)))
+            {
+                // A Stop click concurrent with an already queued Started event.
+                phase2.set(1);
+                ui.invoke_stop_scan();
+            }
             for update in updates {
                 match update {
                     Update::Reset(data, backend) => {
                         m.simulation.set(backend == Backend::Simulation);
-                        ui.set_backend_index(if backend == Backend::Simulation { 1 } else { 0 });
+                        ui.set_scan_backend_label(
+                            if backend == Backend::Simulation {
+                                "Simulation · no packets"
+                            } else {
+                                "feth lab · raw packets"
+                            }
+                            .into(),
+                        );
                         *m.table.borrow_mut() = Table::new(0);
                         m.keys.borrow_mut().clear();
                         m.add(data);
                         ui.set_filter_query("".into());
+                        ui.set_sort_column(-1);
+                        ui.set_sort_descending(false);
+                        ui.set_event_label("".into());
+                        ui.set_details(ResultRow::default());
+                        ui.set_inspector_details(ResultRow::default());
+                        ui.set_inspector_open(false);
                     }
                     Update::Rows(data) => m.add(data),
                     Update::Progress(sent, received) => ui.set_event_label(
@@ -356,7 +389,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_action_notice(detail.into());
                         ui.set_process_active(!status.terminal());
                         ui.set_can_resume(status == Status::Paused);
-                        ui.set_process_stopping(false);
+                        if status.terminal() {
+                            ui.set_process_stopping(false);
+                        }
                         if pause_smoke {
                             if status == Status::Scanning && phase2.get() == 0 {
                                 phase2.set(1);
@@ -366,7 +401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 action(&a, &ui, Action::Resume);
                             } else if status == Status::Scanning && phase2.get() == 2 {
                                 phase2.set(3);
-                                action(&a, &ui, Action::Stop);
+                                ui.invoke_stop_scan();
                             } else if status == Status::Stopped && phase2.get() == 3 {
                                 ok.set(true);
                             }
@@ -374,15 +409,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if smoke && status == Status::Completed {
                             ok.set(true);
                         }
+                        if stop_smoke && status == Status::Stopped {
+                            ok.set(true);
+                        }
                     }
                 }
             }
             m.summary(&ui);
-            if ui.get_process_stopping() {
-                action(&a, &ui, Action::Stop);
-                ui.set_process_stopping(false);
-            }
-            if (smoke || pause_smoke) && (ok.get() || started.elapsed() > Duration::from_secs(25)) {
+            if (smoke || pause_smoke || stop_smoke)
+                && (ok.get() || started.elapsed() > Duration::from_secs(25))
+            {
                 if let Some(p) = std::env::var_os("STUDIO_SCREENSHOT")
                     && let Ok(pixels) = ui.window().take_snapshot()
                 {
@@ -398,7 +434,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
     );
-    if smoke || pause_smoke {
+    if smoke || pause_smoke || stop_smoke {
         ui.set_backend_index(1);
         let mut job = Job::example(Backend::Simulation);
         if pause_smoke {
@@ -409,7 +445,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     ui.run()?;
     timer.stop();
-    if (smoke || pause_smoke) && !success.get() {
+    if (smoke || pause_smoke || stop_smoke) && !success.get() {
         return Err("UI smoke did not complete the expected lifecycle".into());
     }
     Ok(())

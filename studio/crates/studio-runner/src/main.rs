@@ -32,6 +32,12 @@ fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
             Ok(fake.pair())
         }
         Backend::MacFeth => {
+            // The scanner's stand checks also validate routes, peer addresses,
+            // ARP and forwarding. A manifest alone is insufficient after VPN
+            // changes. Keep raw I/O closed until Studio has the complete gate.
+            if !studio_protocol::RAW_SCANNING_ENABLED {
+                return Err("Raw scanning is not enabled in this Studio build: complete live isolation preflight and authenticated runner bootstrap are still required. Simulation is available.".into());
+            }
             check_feth()?;
             rmasscan_net::open_explicit(plan.binding()).map(|a|a.io).map_err(|e|format!("BPF access unavailable: {e}. The isolated feth stand and an explicit access grant are required."))
         }

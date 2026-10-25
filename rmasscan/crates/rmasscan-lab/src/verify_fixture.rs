@@ -97,10 +97,15 @@ fn put(dir: &Path, name: &str, bytes: impl AsRef<[u8]>) {
     fs::write(dir.join(name), bytes).unwrap();
 }
 fn manifest(schema: u64) -> Value {
+    manifest_for(schema, "failure")
+}
+fn manifest_for(schema: u64, plan: &str) -> Value {
     let mut silent = vec![8099u32];
-    silent.extend(8100..8120);
+    if plan == "failure" {
+        silent.extend(8100..8120);
+    }
     let mut m = json!({
-        "schema":1,"capture_schema":schema,"suite":"failure","plan":"failure",
+        "schema":1,"capture_schema":schema,"suite":plan,"plan":plan,
         "code_commit":COMMIT,
         "exe":{"sha256":EXE,"size":1,"guest_path":"C:\\x\\wire_scan.exe","build":"synthetic"},
         "binding":{"iface":NPF,"src_ip":"198.18.0.1","src_mac":SM,"router_mac":PM,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},
@@ -131,13 +136,13 @@ fn job_echo(c: &Value, man: &Value) -> Value {
     }
     j
 }
-struct Built {
-    frames: Frames,
-    run: Value,
-    guest_exit: i64,
-    outcome: f64,
-    files: Vec<(String, Vec<u8>)>,
-    meta: Value,
+pub(crate) struct Built {
+    pub(crate) frames: Frames,
+    pub(crate) run: Value,
+    pub(crate) guest_exit: i64,
+    pub(crate) outcome: f64,
+    pub(crate) files: Vec<(String, Vec<u8>)>,
+    pub(crate) meta: Value,
 }
 fn workers() -> (Value, Value) {
     (
@@ -196,6 +201,8 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
     let c = kind_case(it).unwrap_or(Value::Null);
     let exp = if c.is_null() {
         vec![]
+    } else if it["kind"] == "perf" {
+        perf_expected(&c)
     } else {
         replies(&c, false)
     };
@@ -349,6 +356,39 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             run["opened_adapter"] = json!(false);
             run["tx_sent"] = json!(0);
         }
+        "perf" => {
+            // A clean Completed cell: one SYN per port at exactly the requested pace, one reply per
+            // answering port 0.5 ms after its SYN.
+            let rate = it["rate"].as_u64().unwrap();
+            let probes = n(&c["syn"]) as usize;
+            let period = 1.0 / rate as f64;
+            let first = t0 + 0.002;
+            frames = syn_series(probes, first, period, 1, 40000);
+            for p in 1..=probes as u16 {
+                if p != 8099 {
+                    frames.push((
+                        first + f64::from(p - 1) * period + 0.0005,
+                        peer_reply(p, 40000, open_ports().contains(&p)),
+                    ));
+                }
+            }
+            let last_send = 0.002 + (probes - 1) as f64 * period;
+            outcome = t0 + last_send + 3.1;
+            run = base_run(&c, man, t0, outcome, tag);
+            set_sent(&mut run, probes as u64);
+            run["replies"] = json!(exp);
+            run["reply_total"] = json!(exp.len());
+            run["reply_unique"] = json!(exp.len());
+            run["received"] = json!(exp.len());
+            run["net"]["rx_packets"] = json!(exp.len());
+            run["timing"]["last_send_s"] = json!(last_send);
+            run["timing"]["steady_pps"] = json!(rate as f64 * 0.98);
+            run["timing"]["join_ms"] = json!(1.5);
+            run["resources"]["cpu_user_ms"] = json!(120);
+            run["resources"]["cpu_kernel_ms"] = json!(340);
+            run["resources"]["peak_working_set_bytes"] = json!(25_000_000);
+            run["resources"]["working_set_bytes_after_join"] = json!(18_000_000);
+        }
         _ => {
             // perm_elevated_control: a continuous c01 run.
             outcome = t0 + 3.5;
@@ -413,10 +453,15 @@ pub(crate) fn write_capture(
 }
 /// Write one planned run into `root/runs/<tag>`.
 fn write_run(root: &Path, man: &Value, it: &Value, schema: u64) {
+    write_run_with(root, man, it, schema, &|_| {});
+}
+/// `tweak` edits what the synthetic scanner and peer would have produced before it is written.
+fn write_run_with(root: &Path, man: &Value, it: &Value, schema: u64, tweak: &dyn Fn(&mut Built)) {
     let tag = s(&it["tag"]);
     let dir = root.join("runs").join(tag);
     fs::create_dir_all(&dir).unwrap();
-    let b = build_kind(it, man, tag);
+    let mut b = build_kind(it, man, tag);
+    tweak(&mut b);
     let t0 = BASE + 3.0;
     let finished = b.outcome + 0.5;
     let nonce = format!("nonce-{tag}");
@@ -561,4 +606,40 @@ pub(crate) fn reseal(run_dir: &Path) {
         }
     }
     fs::write(p, pretty(&proof)).unwrap();
+}
+fn write_fixtures(root: &Path, man: &Value) {
+    fs::create_dir_all(root.join("fixtures")).unwrap();
+    put(root, "manifest.json", pretty(man));
+    let fixture = pcap::encode(&vec![
+        (1.0, scanner_syn(80, 40000)),
+        (1.001, peer_reply(80, 40000, true)),
+    ]);
+    put(
+        root,
+        "fixtures/c01_one_addr_port_synack.run1.pcap",
+        &fixture,
+    );
+    put(
+        root,
+        "fixtures/manifest.json",
+        pretty(&json!({
+            "binding":man["binding"],"all_valid":true,"oracle":man["oracle"],
+            "fixtures":{"c01_one_addr_port_synack.run1":{
+                "file":"fixtures/c01_one_addr_port_synack.run1.pcap","sha256":sha(&fixture)}}
+        })),
+    );
+}
+/// Build a complete synthetic perf-plan directory: 20 clean Completed cells plus fixtures.
+pub(crate) fn build_perf(root: &Path, schema: u64) {
+    build_perf_only(root, schema, &[], &|_| {});
+}
+/// Like [`build_perf`] but only the named cells (all when `only` is empty), each edited by `tweak`.
+pub(crate) fn build_perf_only(root: &Path, schema: u64, only: &[&str], tweak: &dyn Fn(&mut Built)) {
+    let man = manifest_for(schema, "perf");
+    write_fixtures(root, &man);
+    for it in planned(&man) {
+        if only.is_empty() || only.contains(&s(&it["tag"])) {
+            write_run_with(root, &man, &it, schema, tweak);
+        }
+    }
 }

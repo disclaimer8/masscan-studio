@@ -50,8 +50,11 @@ pub fn tcpdump_argv(iface: &str, pcap: &str) -> Vec<String> {
     .collect()
 }
 
-/// The tcpdump command line of the witness on macOS. Its tcpdump has no `-Z`, `-B` or
-/// `--time-stamp-precision=nano`, so none of them is passed. `filter` is a BPF expression (one
+/// The tcpdump command line of the witness on macOS. `-Z`, `-B` and `--time-stamp-precision=nano`
+/// are left out on purpose, not because Apple's tcpdump rejects them: libpcap's default BPF
+/// buffer already equals `debug.bpf_maxbufsize` (512 KiB), `-Z` means nothing without root
+/// privileges to drop, and nanosecond precision is not offered by macOS BPF (to be confirmed
+/// by the spike). `filter` is a BPF expression (one
 /// argument) such as the uplink filter of the macOS lab.
 pub fn tcpdump_argv_macos(iface: &str, pcap: &str, filter: Option<&str>) -> Vec<String> {
     let mut v: Vec<String> = [
@@ -84,6 +87,10 @@ pub struct NetstatCounters {
     pub drop: u64,
 }
 
+/// `Drop` is the interface's send-queue drop count (`ifm_snd_drops`), not the analogue of Linux
+/// `rx_dropped`: `Ierrs + Drop` is strict on output and blind to input-queue drops, which is
+/// acceptable because the BPF tap sits before the input queue. A down interface is printed
+/// with a trailing `*` (`feth4202*`); it still matches.
 /// Parse `netstat -I IFACE -b -d -n`. Columns are found by header name; a missing column is an
 /// error (the evidence is INVALID, never a silent zero). A `<Link#` row without an Address
 /// has one token fewer than the header, so columns after Address shift left by one.
@@ -105,7 +112,9 @@ pub fn parse_netstat(text: &str, iface: &str) -> Result<NetstatCounters, String>
     let addr = col("Address")?;
     for line in lines {
         let t: Vec<&str> = line.split_whitespace().collect();
-        if t.first() != Some(&iface) || !t.get(2).is_some_and(|n| n.starts_with("<Link#")) {
+        if t.first().map(|n| n.trim_end_matches('*')) != Some(iface)
+            || !t.get(2).is_some_and(|n| n.starts_with("<Link#"))
+        {
             continue;
         }
         let shift = match header.len().checked_sub(t.len()) {
@@ -135,7 +144,7 @@ pub fn netstat_counters(iface: &str) -> Result<NetstatCounters, String> {
     if !link::safe_iface(iface) {
         return Err("invalid interface".into());
     }
-    let out = Command::new("netstat")
+    let out = Command::new("/usr/sbin/netstat")
         .args(["-I", iface, "-b", "-d", "-n"])
         .output()
         .map_err(|e| format!("netstat: {e}"))?;

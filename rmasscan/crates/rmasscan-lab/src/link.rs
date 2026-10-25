@@ -54,10 +54,37 @@ pub fn iface_mac(iface: &str) -> Result<[u8; 6], String> {
     iface_mac_os(iface)
 }
 
-/// macOS: the interface's link-layer address through the product's `getifaddrs` wrapper.
+/// The MAC from `ifconfig IFACE` output (`ether xx:..`, octets without leading zeros are
+/// normalised). Unprivileged `getifaddrs` and `NET_RT_IFLIST` report the placeholder
+/// `02:00:00:00:00:00` for every Ethernet interface on recent macOS, while `ifconfig` shows the
+/// real address, so that placeholder is "unknown", never a MAC.
+pub fn mac_from_ifconfig(iface: &str, text: &str) -> Result<[u8; 6], String> {
+    let mac = crate::macos_lab::parse_ifconfig(text)
+        .ether
+        .ok_or_else(|| format!("{iface}: ifconfig shows no ether line"))?;
+    if mac == "02:00:00:00:00:00" {
+        return Err(format!(
+            "{iface}: the MAC is masked (02:00:00:00:00:00); it is unknown, not a real address"
+        ));
+    }
+    parse_mac(&mac)
+}
+
+/// macOS: the interface's link-layer address from `/sbin/ifconfig` (never from
+/// `rmasscan_net::nic_mac`, which is masked for unprivileged processes).
 #[cfg(target_os = "macos")]
 fn iface_mac_os(iface: &str) -> Result<[u8; 6], String> {
-    rmasscan_net::nic_mac(iface).ok_or_else(|| format!("{iface}: no link-layer address"))
+    let out = std::process::Command::new("/sbin/ifconfig")
+        .arg(iface)
+        .output()
+        .map_err(|e| format!("ifconfig: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{iface}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    mac_from_ifconfig(iface, &String::from_utf8_lossy(&out.stdout))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -142,6 +169,24 @@ mod tests {
     use super::*;
     use rmasscan_engine::IoError;
     use std::collections::VecDeque;
+
+    #[test]
+    fn the_mac_comes_from_ifconfig_text_and_a_masked_placeholder_is_refused() {
+        let real = "feth4201: flags=8863<UP> mtu 1500\n\tether 2:ac:0:0:0:1\n\tstatus: active\n";
+        assert_eq!(
+            mac_from_ifconfig("feth4201", real).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 1]
+        );
+        let masked = "en0: flags=8863<UP>\n\tether 02:00:00:00:00:00\n";
+        assert!(
+            mac_from_ifconfig("en0", masked)
+                .unwrap_err()
+                .contains("masked")
+        );
+        let masked_short = "en0: flags=8863<UP>\n\tether 2:0:0:0:0:0\n";
+        assert!(mac_from_ifconfig("en0", masked_short).is_err());
+        assert!(mac_from_ifconfig("lo0", "lo0: flags=8049<UP>\n").is_err());
+    }
 
     struct Scripted(VecDeque<Result<SendStatus, IoError>>, usize);
     impl Tx for Scripted {

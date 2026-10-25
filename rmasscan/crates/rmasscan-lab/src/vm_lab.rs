@@ -374,7 +374,7 @@ pub(crate) fn write_manifest(p: &Path, m: &Value) -> Result<(), String> {
 /// group falls back to the uid. Invalid ids are an error. Only the unix `restore_sudo_owner` calls
 /// it; the logic stays compiled and tested everywhere.
 #[cfg_attr(not(unix), allow(dead_code))]
-fn sudo_target(
+pub(crate) fn sudo_target(
     owner_uid: u32,
     sudo_uid: Option<&str>,
     sudo_gid: Option<&str>,
@@ -397,7 +397,7 @@ fn sudo_target(
 /// Preserve ownership when sudo replaces an unprivileged user's report. Uses the already-open
 /// descriptor (std `fchown`), so a pathname race cannot redirect it.
 #[cfg(unix)]
-fn restore_sudo_owner(file: &fs::File) -> io::Result<()> {
+pub(crate) fn restore_sudo_owner(file: &fs::File) -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt, fchown};
     let uid = std::env::var("SUDO_UID").ok();
     let gid = std::env::var("SUDO_GID").ok();
@@ -407,7 +407,7 @@ fn restore_sudo_owner(file: &fs::File) -> io::Result<()> {
     Ok(())
 }
 #[cfg(not(unix))]
-fn restore_sudo_owner(_file: &fs::File) -> io::Result<()> {
+pub(crate) fn restore_sudo_owner(_file: &fs::File) -> io::Result<()> {
     Ok(())
 }
 pub(crate) fn atomic_write(p: &Path, b: &[u8]) -> Result<(), String> {

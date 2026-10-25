@@ -1121,3 +1121,155 @@ fn link_loss_is_recorded_on_the_peer_interface_the_user_takes_down() {
     assert_eq!(down["scanner_if"], SCANNER_IF);
     assert!(down["scanner_active"].is_boolean());
 }
+
+#[test]
+fn a_changed_binding_in_an_existing_manifest_is_refused_before_the_scanner_is_called() {
+    let mutations: [(&str, Value); 6] = [
+        ("iface", json!("en0")),
+        ("src_ip", json!("192.168.1.10")),
+        ("src_mac", json!("02:ac:00:00:00:09")),
+        ("router_mac", json!("aa:bb:cc:dd:ee:ff")),
+        ("peer_ip", json!("192.168.1.1")),
+        ("rate", json!(100000)),
+    ];
+    for (key, value) in mutations {
+        let rig = Rig::new();
+        let st = Fake::new(&rig.wire);
+        run_locked(
+            &rig.args(&["--only", C01]),
+            &st,
+            PathBuf::from("/x/l"),
+            rig.lock().as_ref(),
+        )
+        .unwrap();
+        let scans = st.scanner_runs();
+        let path = rig.out.join("manifest.json");
+        let mut m = read_json(&path).unwrap();
+        m["binding"][key] = value.clone();
+        write_json(&path, &m).unwrap();
+        let spawned = st.spawned.borrow().len();
+        let e = run_locked(
+            &rig.args(&["--only", "c01_one_addr_port_synack.run2"]),
+            &st,
+            PathBuf::from("/x/l"),
+            rig.lock().as_ref(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(e, SuiteError::NotRun(_)) && e.message().contains(&format!("binding.{key}")),
+            "{key}: {e:?}"
+        );
+        assert_eq!(
+            st.scanner_runs(),
+            scans,
+            "{key}: the scanner must not be called"
+        );
+        assert_eq!(
+            st.spawned.borrow().len(),
+            spawned,
+            "{key}: nothing at all may start"
+        );
+    }
+    // An extra network field (a gateway), and another stand interface, are refused too.
+    for edit in [
+        |m: &mut Value| m["binding"]["gateway"] = json!("192.168.1.1"),
+        |m: &mut Value| m["stand"]["peer_if"] = json!("en0"),
+        |m: &mut Value| m["binding"] = Value::Null,
+    ] {
+        let rig = Rig::new();
+        let st = Fake::new(&rig.wire);
+        run_locked(
+            &rig.args(&["--only", C01]),
+            &st,
+            PathBuf::from("/x/l"),
+            rig.lock().as_ref(),
+        )
+        .unwrap();
+        let path = rig.out.join("manifest.json");
+        let mut m = read_json(&path).unwrap();
+        edit(&mut m);
+        write_json(&path, &m).unwrap();
+        let scans = st.scanner_runs();
+        assert!(
+            run_locked(
+                &rig.args(&["--only", "c01_one_addr_port_synack.run2"]),
+                &st,
+                PathBuf::from("/x/l"),
+                rig.lock().as_ref(),
+            )
+            .is_err()
+        );
+        assert_eq!(st.scanner_runs(), scans);
+    }
+    // The scanner argv comes from the stand's constants.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    run_locked(
+        &rig.args(&["--only", C01]),
+        &st,
+        PathBuf::from("/x/l"),
+        rig.lock().as_ref(),
+    )
+    .unwrap();
+    let spawned = st.spawned.borrow();
+    let argv = spawned.iter().find(|a| a[0] == rig.wire).unwrap();
+    assert_eq!(after(argv, "--iface"), SCANNER_IF);
+    assert_eq!(after(argv, "--src-ip"), SOURCE_IP);
+    assert_eq!(after(argv, "--src-mac"), SCANNER_MAC);
+    assert_eq!(after(argv, "--router-mac"), PEER_MAC);
+}
+
+#[test]
+fn a_forced_stop_kills_the_whole_process_group_and_nothing_else() {
+    let rig = Rig::new();
+    let pidfile = rig.root.join("child.pid");
+    let st = RealStand;
+    // sh (the leader, like the witness) starts a child (like its tcpdump) and waits for it.
+    let argv = vec![
+        "/bin/sh".to_owned(),
+        "-c".into(),
+        "/bin/sleep 30 & echo $! > \"$1\"; wait".into(),
+        "x".into(),
+        p2s(&pidfile),
+    ];
+    // An unrelated process in its own group: it must survive.
+    let mut bystander = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let mut p = st
+        .spawn(&argv, &rig.root.join("p.out"), &rig.root.join("p.err"))
+        .unwrap();
+    let t0 = Instant::now();
+    while !pidfile.exists() && t0.elapsed() < Duration::from_secs(10) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let child = fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    let alive = |pid: &str| {
+        Command::new("/bin/kill")
+            .args(["-0", pid])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    // `ps` tells a zombie (waiting to be reaped by launchd) from a live process.
+    let running = |pid: &str| {
+        let o = Command::new("/bin/ps")
+            .args(["-p", pid, "-o", "stat="])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+        !stat.is_empty() && !stat.starts_with('Z')
+    };
+    assert!(alive(&child));
+    p.kill();
+    let t1 = Instant::now();
+    while running(&child) && t1.elapsed() < Duration::from_secs(10) {
+        thread::sleep(Duration::from_millis(20));
+    }
+    let survived = running(&child);
+    if survived {
+        let _ = Command::new("/bin/kill").args(["-KILL", &child]).status();
+    }
+    let by = bystander.try_wait().unwrap().is_none();
+    let _ = bystander.kill();
+    let _ = bystander.wait();
+    assert!(!survived, "the grandchild survived the forced stop");
+    assert!(by, "an unrelated process was touched");
+}

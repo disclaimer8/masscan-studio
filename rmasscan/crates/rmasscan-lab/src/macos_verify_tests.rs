@@ -1279,3 +1279,195 @@ fn the_text_report_names_a_run_tripped_while_the_manifest_gate_failed() {
     // Windows-shaped results (no safety_scan key) print exactly what they did.
     assert!(verify::safety_report_lines(&json!({"runs":[],"aborted":[]})).is_empty());
 }
+
+fn rebuild_peer(ev: &mut Ev, frames: &Frames) {
+    ev.set_frames("peer", frames);
+    let b = ev.files["peer.pcap"].clone();
+    let n = frames.len();
+    ev.json("capture.json", |v| {
+        v["peer"]["pcap"] = json!({"sha256":hex_of(&Sha256::digest(&b)),"size":b.len(),"frames":n});
+        v["peer"]["tcpdump"]["captured"] = json!(n);
+        v["peer"]["tcpdump"]["received"] = json!(n);
+        v["peer"]["witness"]["iface_rxtx_delta_hi"] = json!(n);
+        v["peer"]["witness"]["iface_rxtx_delta_lo"] = json!(n);
+    });
+}
+
+#[test]
+fn a_capture_from_another_time_window_is_invalid() {
+    let env = Env::new("functional");
+    // The whole peer capture is an hour old while the metadata window is current.
+    let mut ev = build(&env, C01);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (t, _) in &mut fr {
+        *t -= 3600.0;
+    }
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(
+        result_of(&r, "capture packets fall inside the recorded window"),
+        INVALID
+    );
+    assert_eq!(r.verdict(), INVALID);
+    // Within the documented clock tolerance (2 s) it still passes.
+    let mut ev = build(&env, C01);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (t, _) in &mut fr {
+        *t += 1.5; // the end markers at +8.0 stay below capture_stopped +9.0 + 2.0
+    }
+    rebuild_peer(&mut ev, &fr);
+    assert_eq!(ev.verdict(&env), PASS);
+    let mut ev = build(&env, C01);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (t, _) in &mut fr {
+        *t += 5.0;
+    }
+    rebuild_peer(&mut ev, &fr);
+    assert_eq!(
+        ev.verdict(&env),
+        INVALID,
+        "five seconds late is outside the tolerance"
+    );
+}
+
+#[test]
+fn start_markers_after_the_scanner_traffic_are_invalid() {
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (t, f) in &mut fr {
+        if f.get(14..14 + START_PAYLOAD.len()) == Some(START_PAYLOAD) {
+            *t = BASE + 7.0;
+        }
+    }
+    fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(
+        result_of(&r, "start markers, then scanner traffic, then end markers"),
+        INVALID
+    );
+    assert_eq!(r.verdict(), INVALID);
+    // End markers before the scanner traffic are the same kind of order violation.
+    let mut ev = build(&env, C01);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    for (t, f) in &mut fr {
+        if f.get(14..14 + END_PAYLOAD.len()) == Some(END_PAYLOAD) {
+            *t = BASE - 0.5;
+        }
+    }
+    fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), INVALID);
+}
+
+#[test]
+fn a_leak_in_an_unplanned_directory_is_fail_whatever_else_is_missing() {
+    for name in [
+        "unplanned",
+        "c01_one_addr_port_synack.run1.extra",
+        "weird name",
+    ] {
+        let env = Env::new("functional");
+        let mut ev = build(&env, C01);
+        ev.set_frames("uplink", &vec![(BASE, syn(80))]);
+        let d = ev.write(&env);
+        let leaf = if name == "weird name" {
+            name.to_owned() // no nonce at all: a malformed name
+        } else {
+            format!("{name}.{}", nonce())
+        };
+        fs::rename(&d, env.root.join("runs").join(leaf)).unwrap();
+        assert_eq!(safety_trips(&env.root).len(), 1, "{name}");
+        let v = verify_dir(&env.root);
+        assert_eq!(
+            v["safety_trips"].as_array().unwrap().len(),
+            1,
+            "{name}: {v:#}"
+        );
+        assert_eq!(v["overall"], FAIL, "{name}");
+        assert!(
+            verify::safety_report_lines(&v)
+                .iter()
+                .any(|l| l.starts_with("safety trip: "))
+        );
+    }
+    // The planned runs of a good set are not counted twice.
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    ev.set_frames("uplink", &vec![(BASE, syn(80))]);
+    ev.write(&env);
+    let v = verify_dir(&env.root);
+    assert_eq!(v["safety_trips"].as_array().unwrap().len(), 1, "{v:#}");
+}
+
+#[test]
+fn every_counter_of_the_tcpdump_stderr_is_compared_and_a_known_loss_is_invalid() {
+    let env = Env::new("functional");
+    // stderr reports interface drops, the JSON says zero.
+    let mut ev = build(&env, C01);
+    let old = String::from_utf8(ev.files["peer.err"].clone()).unwrap();
+    ev.files.insert(
+        "peer.err".into(),
+        format!("{old}3 packets dropped by interface\n").into_bytes(),
+    );
+    let (r, _) = ev.verify(&env);
+    assert_eq!(
+        result_of(&r, "recorded tcpdump statistics equal peer.err"),
+        INVALID
+    );
+    assert_eq!(r.verdict(), INVALID);
+    // Consistent JSON and stderr, but a known non-zero loss: still INVALID, for both witnesses.
+    for who in ["peer", "uplink"] {
+        let mut ev = build(&env, C01);
+        let old = String::from_utf8(ev.files[&format!("{who}.err")].clone()).unwrap();
+        ev.files.insert(
+            format!("{who}.err"),
+            format!("{old}3 packets dropped by interface\n").into_bytes(),
+        );
+        ev.json("capture.json", |v| {
+            v[who]["tcpdump"]["dropped_if"] = json!(3)
+        });
+        let (r, _) = ev.verify(&env);
+        assert_eq!(r.verdict(), INVALID, "{who}");
+        assert_eq!(
+            result_of(&r, &format!("{who} capture no drops")),
+            INVALID,
+            "{who}"
+        );
+    }
+}
+
+#[test]
+fn wire_scans_real_src_mac_check_values_have_one_contract() {
+    // Every literal wire_scan can emit, read from its source, so the contract cannot drift from it.
+    let src = include_str!("../../rmasscan-net/examples/wire_scan.rs");
+    let mut emitted: Vec<&str> = src
+        .lines()
+        .filter(|l| l.contains("(m, \"") && !l.contains("assert"))
+        .filter_map(|l| l.split("(m, \"").nth(1)?.split('"').next())
+        .collect();
+    emitted.sort_unstable();
+    emitted.dedup();
+    assert!(
+        emitted.contains(&"explicit-equal") && emitted.contains(&"os-masked"),
+        "{emitted:?}"
+    );
+    let env = Env::new("functional");
+    for value in emitted {
+        let mut ev = build(&env, C01);
+        ev.json("run.json", |v| v["src_mac_check"] = json!(value));
+        let verdict = ev.verify(&env).0.verdict().to_owned();
+        let accepted = SRC_MAC_CHECK_ACCEPTED.contains(&value);
+        assert_eq!(verdict == PASS, accepted, "{value}: {verdict}");
+        if !accepted {
+            assert_eq!(verdict, INVALID, "{value}");
+        }
+    }
+    assert_eq!(SRC_MAC_CHECK_ACCEPTED, ["explicit-equal", "os-masked"]);
+    // A value nobody emits is not evidence either.
+    let mut ev = build(&env, C01);
+    ev.json("run.json", |v| v["src_mac_check"] = json!("matched"));
+    assert_eq!(ev.verdict(&env), INVALID);
+}

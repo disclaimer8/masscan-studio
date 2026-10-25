@@ -163,6 +163,16 @@ impl Proc for RealProc {
             .status();
     }
     fn kill(&mut self) {
+        // The child leads its own process group (`process_group(0)`), so its pgid is its pid and the group
+        // holds exactly this run's descendants (the witness's tcpdump included). SIGKILL goes to the whole
+        // group first, while the leader is still unreaped (so the pgid cannot have been reused), then the
+        // leader is reaped. `/bin/kill` by absolute path: this crate stays `forbid(unsafe_code)`. Graceful
+        // signals (`signal`) go to the leader only: its own cleanup stops its children in order.
+        let _ = Command::new("/bin/kill")
+            .args(["-s", "KILL", "--", &format!("-{}", self.0.id())])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
@@ -517,6 +527,37 @@ pub(crate) fn interlock_stats(err: &str) -> Result<(), String> {
             "uplink interlock: the uplink tcpdump counters (captured, dropped by kernel) are not measured, so {UNPROVEN_MARK}; no further raw run"
         )),
     }
+}
+
+/// The binding of the sealed stand: the only thing a scan may be pointed at.
+pub(crate) fn plan_binding() -> Value {
+    json!({"iface":SCANNER_IF,"src_ip":SOURCE_IP,"src_mac":SCANNER_MAC,"router_mac":PEER_MAC,
+        "peer_ip":PEER_IP,"seed":1,"rate":100,"wait":3})
+}
+/// Why an existing manifest's binding or stand is not the sealed stand's (`None`: it is). Every key must be
+/// present and equal, and no other key may be there (a gateway or next hop of another network).
+pub(crate) fn binding_problem(man: &Value) -> Option<String> {
+    let want = plan_binding();
+    let (Some(have), Some(want)) = (man["binding"].as_object(), want.as_object()) else {
+        return Some("no binding".into());
+    };
+    for (k, w) in want {
+        if have.get(k) != Some(w) {
+            return Some(format!(
+                "binding.{k} is {} not {w}",
+                have.get(k).map_or("missing".into(), Value::to_string)
+            ));
+        }
+    }
+    if let Some(extra) = have.keys().find(|k| !want.contains_key(*k)) {
+        return Some(format!("binding.{extra} is not part of the stand plan"));
+    }
+    for (k, w) in [("scanner_if", SCANNER_IF), ("peer_if", PEER_IF)] {
+        if man["stand"][k] != w {
+            return Some(format!("stand.{k} is {} not {w}", man["stand"][k]));
+        }
+    }
+    None
 }
 
 /// Removes the work root when the suite ends if nothing is left in it (a kept run stays).
@@ -1526,6 +1567,13 @@ pub(crate) fn run_locked(
     {
         return Err("existing manifest identity differs".to_string().into());
     }
+    // A manifest from an earlier start is data, not a plan: its network-affecting fields must be the
+    // stand's own before any process starts, and the scanner argv is built from the constants below.
+    if let Some(why) = old.as_ref().and_then(binding_problem) {
+        return Err(SuiteError::NotRun(format!(
+            "the existing manifest does not describe the stand ({why}); nothing was started, use a new --out"
+        )));
+    }
     let trips = mv::safety_trips(&out);
     if !trips.is_empty() {
         return Err(SuiteError::Isolation(format!(
@@ -1594,8 +1642,7 @@ pub(crate) fn run_locked(
                 "plan":plan,"code_commit":commit,
                 "exe":{"sha256":wire_sha,"size":fs::metadata(&wire_scan).map(|m| m.len()).unwrap_or(0),
                     "path":wire_scan,"build":"cargo build --locked --release -p rmasscan-net --example wire_scan with RMASSCAN_SOURCE_COMMIT=code_commit"},
-                "binding":{"iface":SCANNER_IF,"src_ip":SOURCE_IP,"src_mac":SCANNER_MAC,"router_mac":PEER_MAC,
-                    "peer_ip":PEER_IP,"seed":1,"rate":100,"wait":3},
+                "binding":plan_binding(),
                 "stand":{"run_id":s.lab_run_id,"scanner_if":SCANNER_IF,"peer_if":PEER_IF,
                     "uplink":status0["uplink"],"gateway":status0["gateway"]},
                 "listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
@@ -1610,6 +1657,8 @@ pub(crate) fn run_locked(
             m
         }
     };
+    let mut man = man;
+    man["binding"] = plan_binding();
     s.man = man;
     for p in moves {
         let dst = out.join("runs_discarded");

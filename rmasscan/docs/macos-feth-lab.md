@@ -64,7 +64,12 @@ sudo "$BIN" macos-lab down       --run-id m1 --manifest "$M"
 ```
 
 Order for a session: `up`, then `--grant`, scans and spike, `--revoke` for the `perm_denied` runs,
-`--grant` again, and finally `down`. `down` is safe to repeat. If `up` or `down` reports a failed
+`--grant` again, and finally `down`. `down` is safe to repeat. `--manifest` must be exactly `$HOME/.rmasscan-lab/<name>.json` (absolute, no `..`, no other directory):
+anything else is refused before any action, and no directory but `$HOME/.rmasscan-lab` is ever created.
+The manifest, marker and lock are read only if they are regular single-link files of at most 1 MiB,
+owned by you or root, and not group- or world-writable.
+
+If `up` or `down` reports a failed
 rollback (exit 10), the manifest is kept with `state: "rollback-incomplete"` and the list of
 objects `up` created; run `down` again, it acts on that record.
 
@@ -85,7 +90,11 @@ stay `0600 root:wheel`. Run `--revoke` whenever no run is active.
 `--revoke` and `down` always set `0600 root:wheel` (mode first, then group); they never apply a value read
 from the user-writable manifest. The manifest keeps the modes seen before the first grant for
 information only; if any differed from `0600 root:wheel` (a ChmodBPF Mac), `down` says so and you
-restore them by hand. A grant that fails half way reverts the nodes it changed and exits 10.
+restore them by hand.
+
+**ChmodBPF cost:** on a Mac that has its own BPF access setup (Wireshark's ChmodBPF, `access_bpf`),
+`--revoke` and `down` replace it with `0600 root:wheel`. That setup stays gone until the next reboot
+(when its launch daemon re-applies it) or until you restore it by hand from the modes `down` printed. A grant that fails half way reverts the nodes it changed and exits 10.
 
 ## Printing rules (`status`; also run inside `up` before the first change and after the last)
 

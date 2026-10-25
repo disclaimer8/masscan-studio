@@ -7,7 +7,7 @@
 //!
 //! Exit codes: 0 ok; 2 NOT RUN (arguments, foreign objects, no root); 3 stand not sealed
 //! (`status`); 10 partial `up`/`down` (rolled back / manifest kept).
-use crate::vm_lab::{overlap, read_manifest, write_manifest};
+use crate::vm_lab::{overlap, write_manifest};
 use clap::Parser;
 use serde_json::{Value, json};
 use std::{
@@ -48,6 +48,8 @@ pub(crate) trait Host {
     fn bpf_populate(&self, last: u32) -> Result<(), String>;
     /// The effective uid of this process (`id -u`).
     fn euid(&self) -> Result<u32, String>;
+    /// The lab directory: `$HOME/.rmasscan-lab` of the invoking user.
+    fn lab_dir(&self) -> Result<PathBuf, String>;
 }
 
 /// Outcome of trying to open one `/dev/bpfN`.
@@ -165,6 +167,34 @@ impl Host for RealHost {
         out.trim()
             .parse()
             .map_err(|_| format!("cannot parse the uid {out:?}"))
+    }
+    fn lab_dir(&self) -> Result<PathBuf, String> {
+        let user = std::env::var("SUDO_USER").ok().filter(|u| {
+            !u.is_empty()
+                && u.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        });
+        let home = match (self.euid()?, user) {
+            // Under sudo, HOME may be root's: ask the directory service for the invoking user's.
+            (0, Some(u)) => {
+                let t = self.sh(&[
+                    "dscl",
+                    ".",
+                    "-read",
+                    &format!("/Users/{u}"),
+                    "NFSHomeDirectory",
+                ])?;
+                t.split_whitespace()
+                    .last()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("cannot read the home directory of {u}"))?
+            }
+            _ => std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?,
+        };
+        if !Path::new(&home).is_absolute() {
+            return Err(format!("home directory {home:?} is not absolute"));
+        }
+        Ok(PathBuf::from(home).join(".rmasscan-lab"))
     }
     fn bpf_populate(&self, last: u32) -> Result<(), String> {
         let mut held: Vec<fs::File> = vec![];
@@ -811,12 +841,6 @@ fn marker_path(manifest: &Path) -> PathBuf {
     PathBuf::from(n)
 }
 
-fn read_marker(manifest: &Path) -> Option<String> {
-    fs::read_to_string(marker_path(manifest))
-        .ok()
-        .map(|s| s.trim().to_owned())
-}
-
 fn random_token() -> Result<String, String> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b).map_err(|e| format!("operating system RNG unavailable: {e}"))?;
@@ -854,18 +878,133 @@ fn require_root(h: &dyn Host) -> Result<(), String> {
     }
 }
 
+/// Read a file that a root process is about to trust: it must be a regular file with one link,
+/// owned by root, this user or the sudo user, not group/world-writable, and at most 1 MiB. It is
+/// checked with `symlink_metadata` first (so a FIFO or a symlink is never opened) and again on
+/// the opened descriptor. `None` when it does not exist.
+const READ_CAP: u64 = 1 << 20;
+
+pub(crate) fn read_trusted(path: &Path, euid: u32) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    let shown = path.display();
+    let md = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{shown}: {e}")),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        existing_file_policy(
+            md.file_type().is_symlink(),
+            md.is_file(),
+            md.nlink(),
+            md.uid(),
+            md.mode(),
+            euid,
+            sudo_uid(),
+        )
+        .map_err(|e| format!("{shown}: refused: {e}"))?;
+        if md.len() > READ_CAP {
+            return Err(format!("{shown}: refused: larger than {READ_CAP} bytes"));
+        }
+        let mut o = OpenOptions::new();
+        o.read(true);
+        #[cfg(target_os = "macos")]
+        o.custom_flags(O_NOFOLLOW | O_NONBLOCK);
+        let f = o.open(path).map_err(|e| format!("{shown}: {e}"))?;
+        let mine = f.metadata().map_err(|e| e.to_string())?;
+        if !mine.is_file() || (md.dev(), md.ino()) != (mine.dev(), mine.ino()) {
+            return Err(format!("{shown}: refused: the file was swapped"));
+        }
+        let mut buf = vec![];
+        f.take(READ_CAP + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("{shown}: {e}"))?;
+        if buf.len() as u64 > READ_CAP {
+            return Err(format!("{shown}: refused: larger than {READ_CAP} bytes"));
+        }
+        Ok(Some(buf))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (md, euid);
+        fs::read(path)
+            .map(Some)
+            .map_err(|e| format!("{shown}: {e}"))
+    }
+}
+
 /// The recorded stand of this run: manifest and marker present, tokens equal, run-id equal.
-fn load_stand(a: &Args) -> Result<Value, String> {
-    let m = read_manifest(&a.manifest)?
+fn load_stand(h: &dyn Host, a: &Args) -> Result<Value, String> {
+    let euid = h.euid()?;
+    let bytes = read_trusted(&a.manifest, euid)?
         .ok_or_else(|| format!("no stand recorded at {}", a.manifest.display()))?;
+    let m: Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("manifest unreadable: {e}"))?;
     if m["run_id"] != a.run_id {
         return Err("manifest belongs to another run-id".into());
     }
     let token = m["token"].as_str().filter(|t| !t.is_empty());
-    match (token, read_marker(&a.manifest)) {
+    let marker = read_trusted(&marker_path(&a.manifest), euid)?
+        .map(|b| String::from_utf8_lossy(&b).trim().to_owned());
+    match (token, marker) {
         (Some(t), Some(mk)) if t == mk => Ok(m),
         _ => Err("marker file is missing or does not match the manifest token".into()),
     }
+}
+
+/// `--manifest` must be `<lab dir>/<name>.json`, where `<lab dir>` is exactly the lab
+/// directory the host reports (`$HOME/.rmasscan-lab`): absolute, no `.`/`..` components, a
+/// plain file name. Anything else (`/etc/sudoers.d/x`, a root-owned directory, a deeper path)
+/// is refused before any action. The directory itself is vetted by [`prepare_dir`].
+pub(crate) fn manifest_shape(manifest: &Path, lab_dir: &Path) -> Result<(), String> {
+    use std::path::Component;
+    let bad = |why: &str| {
+        Err(format!(
+            "--manifest {} refused: {why}; it must be {}/<name>.json",
+            manifest.display(),
+            lab_dir.display()
+        ))
+    };
+    if !manifest.is_absolute() {
+        return bad("not an absolute path");
+    }
+    // `Path::components` hides a `.` or `//` in the middle, so look at the raw segments.
+    let raw = manifest.to_str().unwrap_or("//");
+    if raw
+        .split('/')
+        .skip(1)
+        .any(|s| s.is_empty() || s == "." || s == "..")
+        || manifest
+            .components()
+            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+    {
+        return bad("contains ., .. or an empty segment");
+    }
+    if manifest.parent() != Some(lab_dir) {
+        return bad("not directly in the lab directory");
+    }
+    let name = manifest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let stem = name.strip_suffix(".json").unwrap_or_default();
+    if stem.is_empty()
+        || !stem
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return bad("the file name must be [A-Za-z0-9_-]+.json");
+    }
+    Ok(())
+}
+
+fn check_manifest_arg(h: &dyn Host, a: &Args) -> Result<(), String> {
+    if a.cmd == "plan" {
+        return Ok(());
+    }
+    manifest_shape(&a.manifest, &h.lab_dir()?)
 }
 
 fn recorded_route(m: &Value) -> Option<(String, Option<String>)> {
@@ -896,7 +1035,7 @@ fn plan(out: &mut Vec<String>) {
     out.push(format!("ifconfig {SCANNER_IF} destroy"));
     out.push(format!("ifconfig {PEER_IF} destroy"));
     out.push(
-        "restore the recorded BPF modes (only if a grant happened), remove the manifest, marker and lock"
+        "set /dev/bpf* to 0600 root:wheel (recorded previous modes are only printed), remove the manifest, marker and lock"
             .into(),
     );
 }
@@ -919,9 +1058,12 @@ pub(crate) fn dir_policy(
     if !is_dir {
         return Err("the lab directory path is not a directory".into());
     }
-    if owner != 0 && owner != euid && Some(owner) != sudo_uid {
+    // Under sudo the directory must belong to the invoking user (a root-owned one could be
+    // anywhere root may write); otherwise to the user running the command.
+    let expected = sudo_uid.unwrap_or(euid);
+    if owner != expected {
         return Err(format!(
-            "the lab directory is owned by uid {owner}, not by you or root"
+            "the lab directory is owned by uid {owner}, expected uid {expected}"
         ));
     }
     if mode & 0o022 != 0 {
@@ -954,7 +1096,8 @@ fn prepare_dir(h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
         )
         .map_err(|e| format!("{}: {e}", dir.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && create => {
-            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            // One level only: the parent (the home directory) must already exist.
+            fs::create_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             if euid == 0
                 && let Some((u, g)) = crate::vm_lab::sudo_target(
                     0,
@@ -974,7 +1117,7 @@ fn prepare_dir(h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
 #[cfg(not(unix))]
 fn prepare_dir(_h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
     if create {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        fs::create_dir(dir).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1015,6 +1158,9 @@ pub(crate) fn existing_file_policy(
 /// `O_NOFOLLOW` on macOS (`<sys/fcntl.h>`), so no libc is needed.
 #[cfg(target_os = "macos")]
 const O_NOFOLLOW: i32 = 0x0100;
+/// `O_NONBLOCK` on macOS, so a swapped-in FIFO can never hang a root process.
+#[cfg(target_os = "macos")]
+const O_NONBLOCK: i32 = 0x0004;
 
 /// Create the lock file with `create_new` (`O_EXCL`: never follows a symlink at the last
 /// component) and hand it to the sudo user through the open descriptor (`chown`). If the file
@@ -1257,6 +1403,14 @@ fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
         out.push(format!("+ {}", step.join(" ")));
         if let Err(e) = h.sh(&step) {
             out.push(format!("FAILED: {e}"));
+            if step[2] == "create" {
+                // A failed create makes nothing, and the name may belong to a foreign interface
+                // that appeared after the preflight: it must never reach the rollback.
+                let mut list = names_of(&m, "created");
+                list.retain(|n| n != step[1]);
+                m["created"] = list.into();
+                let _ = write_manifest(&a.manifest, &m);
+            }
             return Ok(rollback(h, a, &mut m, out));
         }
     }
@@ -1290,7 +1444,7 @@ fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
 }
 
 fn status(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
-    let stand = load_stand(a).and_then(|m| match m["state"].as_str() {
+    let stand = load_stand(h, a).and_then(|m| match m["state"].as_str() {
         Some("sealed") => Ok(m),
         other => Err(format!("the stand is not sealed (state {other:?})")),
     });
@@ -1319,7 +1473,7 @@ pub const GRANT_WARNING: &str = "WARNING: 0660 root:staff lets every process of 
 
 fn bpf_access_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     require_root(h)?;
-    let mut m = load_stand(a)?;
+    let mut m = load_stand(h, a)?;
     if m["state"] != "sealed" {
         return Err("the stand is not sealed; run down and up again".into());
     }
@@ -1385,7 +1539,7 @@ fn bpf_access_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, 
 
 fn link_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     require_root(h)?;
-    load_stand(a)?;
+    load_stand(h, a)?;
     let info = parse_ifconfig(&h.sh(&["ifconfig", PEER_IF])?);
     if info.ether.as_deref() != Some(PEER_MAC) {
         return Err(format!(
@@ -1418,7 +1572,7 @@ fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
         out.push("no stand recorded; nothing to do".into());
         return Ok(0);
     }
-    let m = load_stand(a)?;
+    let m = load_stand(h, a)?;
     let sealed = m["state"] == "sealed";
     let mut created = lab_names(&names_of(&m, "created"))?;
     let mut arp_set = m["arp_set"] == true;
@@ -1469,6 +1623,7 @@ fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
 
 pub(crate) fn execute(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     validate(a)?;
+    check_manifest_arg(h, a)?;
     match a.cmd.as_str() {
         "plan" => {
             plan(out);
@@ -1495,6 +1650,7 @@ fn lock_path(manifest: &Path) -> PathBuf {
 /// The lock is released when this returns; a successful `down` removes the file too.
 fn dispatch(h: &dyn Host, a: &Args, wait: Duration, out: &mut Vec<String>) -> Result<i32, String> {
     validate(a)?;
+    check_manifest_arg(h, a)?;
     let mut lock = None;
     let needs_lock = match a.cmd.as_str() {
         "plan" | "status" => false,

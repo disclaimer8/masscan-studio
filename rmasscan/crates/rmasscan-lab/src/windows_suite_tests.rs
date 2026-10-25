@@ -35,6 +35,8 @@ struct Knobs {
     eno1_unreadable: bool,
     /// The scratch holds a sub-directory (the marker-clearing command refuses).
     subdir_present: bool,
+    /// Raise `stopped` when the guest Verify (the gate) is invoked.
+    stop_at_verify: bool,
 }
 struct Stand {
     src: PathBuf,
@@ -267,6 +269,11 @@ impl Stand {
             return out(0, &format!("{EXE}\n42\n"));
         }
         if cmd.contains("windows-vm-lab.ps1") {
+            if k.stop_at_verify {
+                drop(k);
+                self.knobs.borrow_mut().stopped = true;
+                return out(255, "");
+            }
             let nonce = cmd
                 .split("-VerificationNonce \"")
                 .nth(1)
@@ -2359,7 +2366,7 @@ fn a_dead_orchestrator_or_failed_ssh_after_the_send_leaves_the_run_marked_and_th
     }
     let again = run_with(&only_tag(&w), &stand).unwrap_err();
     assert!(
-        matches!(&again, SuiteError::Abort(m) if m.contains("never copied") && m.contains(&stand.marker.borrow().clone().unwrap().replace("/.abort-uncopied", "")) && m.contains("Recovery")),
+        matches!(&again, SuiteError::Abort(m) if m.contains("not yet copied and hash-matched") && m.contains(&stand.marker.borrow().clone().unwrap().replace("/.abort-uncopied", "")) && m.contains("Recovery")),
         "{again:?}"
     );
     assert_eq!(again.code(), 10);
@@ -2488,4 +2495,50 @@ fn the_text_report_names_aborted_runs_and_every_safety_trip() {
             .iter()
             .any(|l| l.contains("safety trip: c01.r1 : eno1 tcpdump counted"))
     );
+}
+
+// ---- fix round 3 (R2-1): nothing could have been sent, so nothing is kept ----
+#[test]
+fn a_gate_failure_or_ctrl_c_during_the_gate_clears_the_marker_and_the_next_start_proceeds() {
+    for stop in [false, true] {
+        let w = World::new("marker-gate");
+        let stand = Stand::new(&w.src);
+        {
+            let mut k = stand.knobs.borrow_mut();
+            if stop {
+                k.stop_at_verify = true;
+            } else {
+                k.verify_rc = 1;
+            }
+        }
+        let e = run_with(&only_tag(&w), &stand).unwrap_err();
+        assert_eq!(e.code(), if stop { 130 } else { 10 }, "{e:?}");
+        assert!(
+            stand.marker.borrow().is_none(),
+            "stop={stop}: no capture ran, so no marker is kept"
+        );
+        assert_eq!(stand.count("eno1_size="), 0);
+        // The next start (a new run in the same --out is a new tag directory) is not blocked.
+        {
+            let mut k = stand.knobs.borrow_mut();
+            k.stopped = false;
+            k.stop_at_verify = false;
+            k.verify_rc = 0;
+        }
+        std::fs::remove_dir_all(w.root.join("runs")).unwrap();
+        assert_eq!(run_with(&only_tag(&w), &stand).unwrap(), 0, "stop={stop}");
+    }
+}
+#[test]
+fn an_abort_after_a_capture_started_still_keeps_the_marker_until_the_copy_matches() {
+    let w = World::new("marker-keeps");
+    let stand = Stand::new(&w.src);
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.fail_marker = true;
+        k.no_dir_copy = true;
+    }
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert_eq!(e.code(), 10);
+    assert!(stand.marker.borrow().is_some());
 }

@@ -165,24 +165,49 @@ A `down` with a refused or damaged manifest prints this line in its error output
 ## Live adapter tests: `macos_live`
 
 Six `#[ignore]` tests drive the product adapter (`open_explicit` and the engine) on the stand. They are not part of CI or of
-`cargo test`; run them in a grant window, as you (never root), with the stand up and BPF granted (`macos-lab status` must show
-`raw_run_allowed: true` and `bpf_access: granted`). Use your own private `CARGO_TARGET_DIR` and an existing output directory:
+`cargo test`; run them in a grant window, as you (never root), with the stand up and BPF granted. The window gives the same
+evidence class as the suite: status before and after, a lab-filtered capture on the uplink that must hold zero frames, and
+hashes. The procedure that was used (first run: all six tests passed, 0 uplink lab frames):
 
 ```sh
-cd rmasscan && \
-CARGO_TARGET_DIR="$TARGET" \
-RMASSCAN_BPF_LAB_MANIFEST=/var/run/rmasscan-lab/m1.json \
-RMASSCAN_BPF_OUT_DIR="$OUT" \
-cargo test --locked -p rmasscan-net --test macos_live -- --ignored --test-threads=1
+# 0. Build the test binary in your own private target directory (no network, no BPF), keep its path:
+cd "$REPO/rmasscan" && CARGO_TARGET_DIR="$TARGET" cargo test --locked -p rmasscan-net --test macos_live --no-run
+BIN=<the executable path printed by the command above>     # .../deps/macos_live-<hash>
+LAB=<path of the rmasscan-lab binary built from the same commit>
+OUT="$SCRATCH/macos-live-out"; mkdir -p "$OUT"
+FILTER='ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether host 02:ac:00:00:00:11 or net 198.18.0.0/30'
+
+# 1. Gates; stop at the first failure and run nothing:
+"$LAB" macos-lab status --run-id m1 > "$OUT/status-pre.json"       # need "raw_run_allowed": true and "bpf_access": "granted"
+/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate > "$OUT/alf.txt"   # need exactly: Firewall is disabled. (State = 0)
+/usr/sbin/lsof -nP -iTCP@198.18.0.2 -sTCP:LISTEN > "$OUT/leftover-listeners.txt"    # need an empty file
+/bin/ps -axo pid,command | grep -E 'wire_scan|tcpdump .*feth420|peer listen|capture dump' | grep -v grep \
+  > "$OUT/leftover-procs.txt"                                        # need an empty file
+
+# 2. Uplink witness for the whole window (default-route interface, here en0), then the tests:
+/usr/sbin/tcpdump -p -n -i en0 -w "$OUT/uplink.pcap" "$FILTER" 2> "$OUT/uplink.err" &  TD=$!
+sleep 2; kill -0 $TD                                                  # the witness must be running
+RMASSCAN_BPF_LAB_MANIFEST=/var/run/rmasscan-lab/m1.json RMASSCAN_BPF_OUT_DIR="$OUT" \
+  "$BIN" --ignored --test-threads=1 > "$OUT/test.log" 2>&1; echo "test rc=$?"
+
+# 3. Stop the witness (INT, rc 0), check status after, count the uplink frames:
+sleep 1; kill -INT $TD; wait $TD; echo "uplink tcpdump rc=$?"
+"$LAB" macos-lab status --run-id m1 > "$OUT/status-post.json"        # raw_run_allowed must still be true
+/usr/sbin/tcpdump -n -r "$OUT/uplink.pcap" 2>/dev/null | wc -l       # must be 0 (uplink.err: 0 captured, 0 dropped by kernel)
+grep -E '^test |test result' "$OUT/test.log"
 ```
+
+Afterwards revoke the BPF access and take the stand down (`macos-lab bpf-access --revoke`, `macos-lab down`). "Received by filter" in
+`uplink.err` is counted before the filter on macOS and is informational. Equivalent without the window script: `cargo test --locked
+-p rmasscan-net --test macos_live -- --ignored --test-threads=1` with the same two environment variables, but then the gates and the
+witness are yours to run.
 
 The manifest only confirms the stand (every value must equal the plan constants, `state` sealed). Each test writes `KV` lines to
 `$OUT/macos_live__<test>.txt`: `full_scan`, `stop`, `pause_resume`, `rx_loss`, `uncertain`, `latency`. The peer is a second adapter on
 `feth4202` plus, for `full_scan`, listeners the test itself opens on `198.18.0.2:8000-8007` (the only open ports on the Mac;
 `80` and `443` are closed, because a non-root bind to them is `EACCES`, and Darwin has no silent ports, syncookies), so a
 full scan sees exactly 8 open replies. `latency` records the maximum duration per call type (`max_us_recv`, `max_us_send`,
-`max_us_health`, `max_us_idle_recv`) and asserts each call returns within 50 ms. The uplink witness (zero lab frames on `en0`) is
-the operator's, outside the tests, as in the suite.
+`max_us_health`, `max_us_idle_recv`) and asserts each call returns within 50 ms.
 
 ## Acceptance runs: `macos-suite` and `macos-verify`
 

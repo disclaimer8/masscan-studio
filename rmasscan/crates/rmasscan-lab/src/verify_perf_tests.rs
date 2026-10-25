@@ -415,7 +415,7 @@ fn an_outcome_that_is_neither_completed_nor_rxloss_is_fail() {
 fn rxloss(b: &mut Built, drops: Value) {
     b.run["reason"] = json!("Failed");
     b.run["status"] = json!("ok");
-    b.run["fail_detail"] = json!("RxLoss { kernel_drops: 7 }");
+    b.run["fail_detail"] = json!(format!("RxLoss {{ kernel_drops: {drops} }}"));
     b.run["rx_health"]["kernel_drops"] = drops.clone();
     b.run["net"]["kernel_drops"] = drops;
     b.guest_exit = 3;
@@ -842,4 +842,60 @@ fn a_missing_median_is_not_run_never_open() {
     assert_eq!(r["completed"], 5);
     assert!(r["median"]["steady_pps_wire"].is_null());
     assert_eq!(r["rate_gate"], "NOT RUN");
+}
+
+// ---- fix round 1: M3, an RxLoss PASS cell is genuine --------------------------------------------
+fn rx_cell(tweak: impl Fn(&mut Built)) -> Dir {
+    Dir::cell(CELL, &|b| {
+        rxloss(b, json!(7));
+        let r = b.run["replies"].as_array_mut().unwrap();
+        r.truncate(100);
+        b.run["reply_total"] = json!(100);
+        b.run["reply_unique"] = json!(100);
+        tweak(b);
+    })
+}
+#[test]
+fn rxloss_results_must_be_a_subset_of_the_listener_truth() {
+    for foreign in ["198.18.0.2:600:open", "198.18.0.2:8099:closed", "198.18.0.9:80:open"] {
+        let d = rx_cell(|b| b.run["replies"][0] = json!(foreign));
+        let v = d.summary(CELL);
+        assert_eq!(verdict(&v), FAIL, "{foreign}: {:?}", bad(&v));
+        assert!(has(&v, FAIL, "retained and genuine"), "{foreign}");
+    }
+}
+#[test]
+fn rxloss_results_may_not_repeat_an_entry() {
+    let d = rx_cell(|b| {
+        let first = b.run["replies"][0].clone();
+        b.run["replies"][1] = first;
+    });
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "retained and genuine"));
+}
+#[test]
+fn rxloss_detail_must_match_the_measured_drops() {
+    // fail_detail says 7 drops, rx_health says 9 (net 9): the scanner contradicts itself.
+    let d = rx_cell(|b| {
+        b.run["rx_health"]["kernel_drops"] = json!(9);
+        b.run["net"]["kernel_drops"] = json!(9);
+    });
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "exactly measured drop count"));
+    // net and rx_health disagreeing is the same contradiction.
+    let d = rx_cell(|b| b.run["net"]["kernel_drops"] = json!(8));
+    assert_eq!(verdict(&d.summary(CELL)), FAIL);
+}
+#[test]
+fn rxloss_must_exit_three() {
+    let d = rx_cell(|b| b.guest_exit = 0);
+    assert_eq!(verdict(&d.summary(CELL)), FAIL);
+}
+#[test]
+fn a_genuine_rxloss_cell_still_passes() {
+    let d = rx_cell(|_| {});
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), PASS, "{:?}", bad(&v));
 }

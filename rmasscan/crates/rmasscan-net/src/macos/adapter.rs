@@ -48,10 +48,11 @@ use super::{Errno, errno_msg};
 use crate::drop_counter::DropCounter;
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
-/// Внутренний бюджет одного вызова адаптера. ВРЕМЕННО 50 мс (равен контракту
-/// `MAX_IO_TIMEOUT`): живой спайк (задача 3) ещё не выполнен; по его итогам
-/// значение может уменьшиться (на Windows 42 мс).
-pub(crate) const IO_BUDGET: Duration = Duration::from_millis(50);
+/// Внутренний бюджет одного вызова адаптера. ВРЕМЕННО 42 мс (как на Windows):
+/// `poll` округляется вверх, таймеры XNU опаздывают, а контракт 50 мс относится ко
+/// всему вызову. Живой спайк (задача 3) ещё не выполнен; он применит
+/// `50 − (максимальное превышение + 2 мс)`.
+pub(crate) const IO_BUDGET: Duration = Duration::from_millis(42);
 /// Ethernet-заголовок без полезной нагрузки.
 pub(crate) const MIN_TX_FRAME: usize = 14;
 /// Максимум кадра на отправку: MTU 1500 + заголовок 14, VLAN не принимается.

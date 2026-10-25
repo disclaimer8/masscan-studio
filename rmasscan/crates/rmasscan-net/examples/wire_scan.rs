@@ -752,12 +752,18 @@ fn run(a: &Args, be: &dyn Backend) -> Out {
     // InterfaceMismatch: BPF не открывался, ни одного кадра не отправлено.
     if cfg!(target_os = "macos")
         && a.forge_next_index.is_none()
-        && be.iface_exists(&a.iface) == Some(false)
+        && be.iface_exists(&a.iface) != Some(true)
     {
-        let e = NetError::InterfaceMismatch(format!(
-            "interface {} was not found (if_nametoindex); no BPF device was opened and nothing was sent",
-            a.iface
-        ));
+        let e = NetError::InterfaceMismatch(match be.iface_exists(&a.iface) {
+            Some(false) => format!(
+                "interface {} was not found (if_nametoindex); no BPF device was opened and nothing was sent",
+                a.iface
+            ),
+            _ => format!(
+                "could not determine whether interface {} exists (if_nametoindex failed); refusing to continue, no BPF device was opened and nothing was sent",
+                a.iface
+            ),
+        });
         return (
             net_error_code(&e),
             fail_json("binding", "InterfaceMismatch", &e.to_string(), false),
@@ -1281,6 +1287,8 @@ mod tests {
         bpf_devices: Vec<rmasscan_net::BpfDevice>,
         /// macOS: интерфейса нет в ОС.
         missing_iface: bool,
+        /// macOS: сам запрос `if_nametoindex` завершился ошибкой (`iface_exists` = None).
+        iface_query_error: bool,
         /// macOS: ОС скрыла MAC плейсхолдером (nic_mac None).
         masked: bool,
         inventory_calls: Cell<u32>,
@@ -1319,7 +1327,7 @@ mod tests {
             self.nic
         }
         fn iface_exists(&self, _: &str) -> Option<bool> {
-            Some(!self.missing_iface)
+            (!self.iface_query_error).then_some(!self.missing_iface)
         }
         fn nic_mac_masked(&self, _: &str) -> bool {
             self.masked
@@ -1716,6 +1724,30 @@ mod tests {
         assert!(json.contains("\"nic_mac\":\"masked\""), "{json}");
         assert!(json.contains("\"src_mac\":\"02:ac:00:00:00:01\""), "{json}");
 
+        // N1: ошибка запроса существования интерфейса отказ, а не «unverified».
+        let be = Mock {
+            iface_query_error: true,
+            ..Mock::default()
+        };
+        let (code, json) = run(&with(&["--src-mac", "02:ac:00:00:00:01"]), &be);
+        assert_eq!(code, 2, "{json}");
+        assert!(json.contains("\"stage\":\"binding\""), "{json}");
+        assert!(json.contains("could not determine"), "{json}");
+        assert_eq!(be.open_calls.get(), 0, "{json}");
+
+        // N3: MAC неизвестен и не скрыт: nic_mac это null, а не строка.
+        let be = Mock {
+            fake: Some(rmasscan_engine::fake::FakeAdapter::new()),
+            ..Mock::default()
+        };
+        let (code, json) = run(
+            &with(&["--src-mac", "02:ac:00:00:00:01", "--wait", "0"]),
+            &be,
+        );
+        assert_eq!(code, 0, "{json}");
+        assert!(json.contains("\"src_mac_check\":\"unverified\""), "{json}");
+        assert!(json.contains("\"nic_mac\":null"), "{json}");
+
         // Настоящее расхождение при видимом MAC остаётся кодом 6 (повтор для ясности).
         let be = Mock {
             nic: Some(NIC),
@@ -1925,5 +1957,19 @@ mod tests {
         let j = fail_json("args", "BadArgs", "boom", false);
         assert!(j.contains("\"identity\":{\"source_commit\":"), "{j}");
         assert!(j.contains("\"binary_sha256\":\""), "{j}");
+    }
+
+    #[test]
+    fn post_send_failure_json_carries_the_mac_identity() {
+        let fields = "\"src_mac\":\"02:ac:00:00:00:01\",\"src_mac_check\":\"os-masked\",\"nic_mac\":\"masked\"";
+        let j = fail_json_sent_mac("join", "Panicked", "x", true, None, 7, Some(fields));
+        assert!(
+            j.contains("\"tx_sent\":7,\"src_mac\":\"02:ac:00:00:00:01\""),
+            "{j}"
+        );
+        assert!(j.contains("\"src_mac_check\":\"os-masked\""), "{j}");
+        assert!(j.contains("\"nic_mac\":\"masked\""), "{j}");
+        let plain = fail_json_sent("join", "Panicked", "x", true, None, 7);
+        assert!(!plain.contains("src_mac"), "{plain}");
     }
 }

@@ -2,7 +2,7 @@
 //! `rmasscan-lab` enables. Everything the lab harness can do with the standard library lives
 //! in `rmasscan-lab` (which forbids `unsafe`); what remains here needs a libc call:
 //!
-//! * a flag-only SIGINT/SIGTERM handler installed with `sigaction` (graceful Ctrl-C for the
+//! * a flag-only SIGINT/SIGTERM/SIGHUP handler (a closed terminal or a dropped ssh session is a stop too) installed with `sigaction` (graceful Ctrl-C for the
 //!   orchestrator and cooperative stop for the peer helpers);
 //! * the backlog-0 "silent" listener the VM lab uses to prove a port that accepts one
 //!   connection and then lets further SYNs go unanswered.
@@ -14,7 +14,7 @@ use std::{
     net::{Ipv4Addr, TcpListener},
 };
 
-/// Install a flag-only handler for SIGINT and SIGTERM (unix) and clear the flag. Off unix there
+/// Install a flag-only handler for SIGINT, SIGTERM and SIGHUP (unix) and clear the flag. Off unix there
 /// is nothing to install and [`stop_requested`] stays false.
 pub fn install_signal_handlers() -> io::Result<()> {
     imp::install()
@@ -53,7 +53,7 @@ mod imp {
 
     pub fn install() -> io::Result<()> {
         STOP.store(false, Ordering::Relaxed);
-        for signal in [libc::SIGINT, libc::SIGTERM] {
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
             // SAFETY: an all-zero `sigaction` is a valid starting value; `sa_mask` is then
             // initialised by `sigemptyset` on that same live local, `on_signal` is an
             // `extern "C"` function that only stores to a static atomic, and the pointer
@@ -173,8 +173,8 @@ mod tests {
     /// The only test in this crate that touches the process-wide flag, so no race.
     #[cfg(unix)]
     #[test]
-    fn sigterm_and_sigint_set_the_flag_and_install_clears_it() {
-        for signal in ["-TERM", "-INT"] {
+    fn sigterm_sigint_and_sighup_set_the_flag_and_install_clears_it() {
+        for signal in ["-TERM", "-INT", "-HUP"] {
             install_signal_handlers().unwrap();
             assert!(!stop_requested(), "installing clears the flag");
             // `kill` runs as a child process so the test needs no unsafe code; the handler

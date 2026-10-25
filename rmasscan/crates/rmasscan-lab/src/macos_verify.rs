@@ -50,6 +50,12 @@ pub(crate) fn split_dir_name(name: &str) -> Option<(&str, &str)> {
 /// `override-foreign` (a MAC that differs from the NIC's was forced) and `unverified` (no reading at all)
 /// are emitted too, and are not evidence here.
 pub const SRC_MAC_CHECK_ACCEPTED: [&str; 2] = ["explicit-equal", "os-masked"];
+/// The binding of the sealed stand, as the verifier pins it (the same values the suite plans with; a macOS test
+/// asserts the two lists are equal, since this module must stay portable and cannot import them).
+pub fn stand_binding() -> Value {
+    json!({"iface":"feth4201","src_ip":"198.18.0.1","src_mac":"02:ac:00:00:00:01","router_mac":"02:ac:00:00:00:02",
+        "peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3})
+}
 /// Clock tolerance, in seconds, between the tcpdump packet timestamps and the suite's own wall clock
 /// (both are this host's clock; the margin covers the order of the two reads and tcpdump buffering).
 pub const CLOCK_TOLERANCE_S: f64 = 2.0;
@@ -205,10 +211,14 @@ fn captured_in(dir: &Path, err: &str) -> Option<u64> {
 /// wrong argv, and a tripped one makes the run FAIL for good.
 fn safety(r: &mut Run, man: &Value, it: &Value, d: &Path, peer: Option<&Frames>) {
     let uplink = load_if_present(r, &d.join("uplink.pcap"));
+    // Judged against the stand's own binding, never the manifest's: a hand-edited manifest cannot make a
+    // foreign SYN look like the scanner's.
+    let mut pinned = man.clone();
+    pinned["binding"] = stand_binding();
     verify::safety_checks(
         r,
         "uplink",
-        man,
+        &pinned,
         &shared_kind(it),
         peer,
         uplink.as_ref().map(|u| &u.0),
@@ -902,6 +912,62 @@ fn guard_clean(r: &mut Run, ctx: &Ctx, file: &str, injector: bool) {
     }
 }
 
+/// The manifest's binding and stand interfaces are exactly the stand's.
+fn binding_is_stand(man: &Value) -> bool {
+    man["binding"] == stand_binding()
+        && man["stand"]["scanner_if"] == "feth4201"
+        && man["stand"]["peer_if"] == "feth4202"
+}
+
+/// `run.json` is the scanner's own stdout line plus the suite's nonce, and the scanner's own wall clock (the same
+/// host clock) lies inside the window the suite recorded for the scanner, within the clock tolerance.
+fn bind_run_json(r: &mut Run, ctx: &Ctx) {
+    let line = fs::read_to_string(ctx.d.join("stdout.txt"))
+        .ok()
+        .and_then(|t| {
+            t.trim_start_matches('\u{feff}')
+                .lines()
+                .rev()
+                .find(|l| l.starts_with('{'))
+                .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        });
+    let mut bare = ctx.rj.clone();
+    if let Some(o) = bare.as_object_mut() {
+        o.remove("invocation_nonce");
+    }
+    r.inv(
+        "run.json is the scanner's stdout line plus the nonce",
+        line.as_ref() == Some(&bare),
+        "stdout.txt missing, unparseable or different from run.json",
+    );
+    let wall = &ctx.rj["wall"];
+    if wall.is_object() {
+        let (t0, t1) = (
+            verify::f(&wall["t0_utc_ms"]) / 1000.,
+            verify::f(&wall["outcome_utc_ms"]) / 1000.,
+        );
+        let (g0, g1) = (
+            verify::f(&ctx.meta["guest_started_utc"]),
+            verify::f(&ctx.meta["guest_finished_utc"]),
+        );
+        let tol = CLOCK_TOLERANCE_S;
+        r.inv(
+            "scanner wall clock inside the run window",
+            [t0, t1, g0, g1].iter().all(|x| x.is_finite())
+                && t0 >= g0 - tol
+                && t1 <= g1 + tol
+                && t0 <= t1,
+            format!("scanner {t0} .. {t1}, suite {g0} .. {g1}"),
+        );
+    } else if ctx.rj["status"] != "error" {
+        r.inv(
+            "scanner wall clock inside the run window",
+            false,
+            "no wall clock in the summary",
+        );
+    }
+}
+
 /// Verify one planned item whose directory is `dir` (`None`: it is missing).
 pub(crate) fn verify_item(
     root: &Path,
@@ -975,12 +1041,18 @@ pub(crate) fn verify_item(
         j["identity"]["os"]["family"] == "macos",
         "",
     );
+    r.inv(
+        "manifest binding is the stand's (interfaces, addresses, MACs)",
+        binding_is_stand(man),
+        man["binding"].to_string(),
+    );
+    bind_run_json(&mut r, &ctx);
     // The OS hides interface MACs from an unprivileged process; the value the scanner then reports
     // ("os-masked") is accepted, and no OS cross-check is demanded of it. The contract is the one list
     // [`SRC_MAC_CHECK_ACCEPTED`]; a test feeds every literal `wire_scan` can emit through it.
     r.inv(
         "source MAC check is explicit-equal or reported as OS-masked",
-        j.get("src_mac_check").is_none()
+        (j.get("src_mac_check").is_none() && j["status"] == "error")
             || SRC_MAC_CHECK_ACCEPTED.contains(&s(&j["src_mac_check"])),
         j["src_mac_check"].to_string(),
     );
@@ -1131,6 +1203,7 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
 fn scan_runs(root: &Path, man: &Value) -> Vec<Value> {
     let mut v = dir_findings(root, "runs", man);
     v.extend(dir_findings(root, "runs_discarded", man));
+    v.extend(dir_findings(root, ".work", man));
     v
 }
 
@@ -1141,10 +1214,24 @@ fn unplanned_scan(root: &Path, man: &Value) -> Vec<Value> {
         .iter()
         .map(|i| s(&i["tag"]).to_owned())
         .collect();
-    scan_runs(root, man)
+    let mut v: Vec<Value> = dir_findings(root, "runs", man)
         .into_iter()
+        .chain(dir_findings(root, "runs_discarded", man))
         .filter(|r| split_dir_name(s(&r["tag"])).is_none_or(|(t, _)| !planned_tags.contains(t)))
-        .collect()
+        .collect();
+    // A kept work directory is never judged by the plan: all of it is walked.
+    v.extend(dir_findings(root, ".work", man));
+    v
+}
+
+/// A work directory left in `--out` (an abort whose copy failed) is reported, not hidden.
+fn work_note(root: &Path) -> Option<String> {
+    let names: Vec<String> = fs::read_dir(root.join(".work"))
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    (!names.is_empty()).then(|| format!(".work holds {} unfinished run directory(ies) ({}); its pcaps were walked for lab frames, nothing else was judged", names.len(), names.join(", ")))
 }
 
 /// Judge every directory of a tag. One directory is judged as it is. More than one is never a blanket
@@ -1189,7 +1276,7 @@ pub(crate) fn judge_tag(root: &Path, man: &Value, fx: &Value, it: &Value) -> (Ru
 /// refuses to start or to `--rerun` in a directory where this is not empty.
 pub fn safety_trips(root: &Path) -> Vec<String> {
     let man = read_json(root.join("manifest.json")).unwrap_or(Value::Null);
-    ["runs", "runs_discarded", "runs_aborted"]
+    [".work", "runs", "runs_discarded", "runs_aborted"]
         .iter()
         .flat_map(|sub| {
             dir_findings(root, sub, &man)
@@ -1249,6 +1336,13 @@ pub fn verify_dir(root: &Path) -> Value {
         false,
     );
     r.check(
+        "manifest binding is the stand's (interfaces, addresses, MACs)",
+        binding_is_stand(&man),
+        man["binding"].to_string(),
+        INVALID,
+        false,
+    );
+    r.check(
         "manifest executable sha256 present",
         truth(&man["exe"]["sha256"]),
         "",
@@ -1259,6 +1353,9 @@ pub fn verify_dir(root: &Path) -> Value {
         "x01 on macOS exercises three foreign-reply kinds (unscanned port, wrong cookie, wrong destination port); the other_ip kind is not written because the peer-side guard forbids a source other than 198.18.0.2. It is covered by the Linux and Windows runs; the reply filtering is shared core code.",
         "perm_denied runs have no capture: the evidence is that zero frames crossed the pair (scanner refusal plus unchanged pair counters inside a recorded window), not 0 SYN in a capture."
     ]);
+    if let (Some(n), Some(a)) = (work_note(root), result["notes"].as_array_mut()) {
+        a.push(json!(n));
+    }
     result["provenance"] = verify::provenance_report(&man);
     let why = crate::provenance::problem(&man["orchestrator"]);
     r.check(

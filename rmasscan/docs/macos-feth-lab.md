@@ -289,3 +289,14 @@ frames, no kernel drops, the interface counter window and the marker rules. Linu
   `198.18.0.3`, which the guard forbids, so it is not written; it is covered by the Linux and Windows runs and
   the reply filtering is shared core code. The verifier checks that no `other_ip` frame was sent and that the
   guard refused nothing.
+
+### Leftover processes (suite death)
+
+Every run first reads `/bin/ps -axo pid,pgid,command` and refuses (NOT RUN, rc 2) while an earlier `wire_scan`, a
+`tcpdump` naming `feth4201`, `feth4202` or the lab filter, `rmasscan-lab peer listen` or `capture dump` is alive;
+the message lists their PIDs and the commands to stop them (this also stops a start while a spike `tcpdump` runs).
+SIGHUP (closed terminal, dropped ssh) is a stop like INT and TERM. The lock file records the process groups of the
+live children (`children=`); `--remove-stale-lock` refuses while one of them has a member. A leader that exits
+leaves no member of its group behind: its exit is read from `ps` (zombie row) and the group is swept (SIGINT, one
+second, SIGKILL) before the leader is reaped, so the group id cannot have been reused. A work directory left in
+`OUT/.work/` blocks the next start and is walked by the verifier (a lab frame there is FAIL).

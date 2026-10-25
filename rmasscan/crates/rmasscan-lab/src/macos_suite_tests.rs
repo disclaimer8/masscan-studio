@@ -32,8 +32,12 @@ struct FakeProc {
     done: bool,
     failed: bool,
     polls: u32,
+    pgid: u32,
 }
 impl Proc for FakeProc {
+    fn pgid(&self) -> Option<u32> {
+        Some(self.pgid)
+    }
     fn try_wait(&mut self) -> Result<Option<i32>, String> {
         match self.mode {
             Mode::Exits(rc) => Ok(Some(rc)),
@@ -83,6 +87,11 @@ struct Fake {
     /// `link_state` reports the peer down from this call on (0: never).
     flip_after: Cell<u32>,
     link_calls: Cell<u32>,
+    /// What `ps -axo pid,pgid,command` prints.
+    ps_text: RefCell<String>,
+    /// The lock file path, whose content is read at the moment the scanner is spawned.
+    lock_file: RefCell<Option<PathBuf>>,
+    lock_at_scanner: RefCell<String>,
 }
 impl Fake {
     fn new(wire: &str) -> Self {
@@ -103,6 +112,9 @@ impl Fake {
             peer_up: Cell::new(true),
             flip_after: Cell::new(0),
             link_calls: Cell::new(0),
+            ps_text: RefCell::default(),
+            lock_file: RefCell::default(),
+            lock_at_scanner: RefCell::default(),
         }
     }
     fn scanner_runs(&self) -> usize {
@@ -146,6 +158,13 @@ impl Stand for Fake {
                 stdout: json!({"raw_run_allowed":ok,"bpf_access":*self.bpf.borrow(),"uplink":"en0",
                     "gateway":"192.168.1.1","checks":[{"name":"arp","ok":ok}]})
                 .to_string(),
+                stderr: String::new(),
+            });
+        }
+        if argv[0] == "/bin/ps" {
+            return Ok(Output {
+                rc: 0,
+                stdout: self.ps_text.borrow().clone(),
                 stderr: String::new(),
             });
         }
@@ -222,6 +241,9 @@ impl Stand for Fake {
             .unwrap();
         } else if argv[0] == self.wire {
             name = "scanner";
+            if let Some(p) = self.lock_file.borrow().as_ref() {
+                *self.lock_at_scanner.borrow_mut() = fs::read_to_string(p).unwrap_or_default();
+            }
             mode = self.scanner.get();
             fs::write(
                 stdout,
@@ -236,6 +258,7 @@ impl Stand for Fake {
             done: false,
             failed: false,
             polls: 0,
+            pgid: 9000 + self.spawned.borrow().len() as u32,
         }))
     }
     fn counters(&self, _: &str) -> Result<NetstatCounters, String> {
@@ -351,6 +374,8 @@ impl Rig {
             wire_sha: hash(&self.wire).unwrap(),
             lab_run_id: "m1".into(),
             lab_manifest: None,
+            lock_path: None,
+            children: RefCell::default(),
             timeout: 30,
             man,
         }
@@ -985,6 +1010,7 @@ fn a_scanner_that_ignores_int_is_killed_before_the_witnesses_stop() {
             done: false,
             failed: false,
             polls: 0,
+            pgid: 1,
         })),
         ..Tools::default()
     };
@@ -1238,7 +1264,9 @@ fn a_forced_stop_kills_the_whole_process_group_and_nothing_else() {
         .spawn(&argv, &rig.root.join("p.out"), &rig.root.join("p.err"))
         .unwrap();
     let t0 = Instant::now();
-    while !pidfile.exists() && t0.elapsed() < Duration::from_secs(10) {
+    while fs::read_to_string(&pidfile).map_or(true, |t| t.trim().is_empty())
+        && t0.elapsed() < Duration::from_secs(10)
+    {
         thread::sleep(Duration::from_millis(10));
     }
     let child = fs::read_to_string(&pidfile).unwrap().trim().to_owned();
@@ -1272,4 +1300,256 @@ fn a_forced_stop_kills_the_whole_process_group_and_nothing_else() {
     let _ = bystander.wait();
     assert!(!survived, "the grandchild survived the forced stop");
     assert!(by, "an unrelated process was touched");
+}
+
+const PS: &str = "  PID  PGID COMMAND
+    1     1 /sbin/launchd
+ 5001  5001 /bin/zsh -l
+ 5100  5100 /usr/bin/ssh -N somewhere
+ 5200  5200 /usr/sbin/tcpdump -i en5 -n port 80
+ 5300  5300 /Users/u/rmasscan/target/release/rmasscan-lab macos-suite --list
+";
+
+#[test]
+fn leftover_lab_processes_are_found_in_a_ps_listing() {
+    let wire = "/Users/u/rmasscan/target/release/examples/wire_scan";
+    assert!(
+        lab_leftovers(PS, 1, wire).is_empty(),
+        "unrelated processes are not leftovers"
+    );
+    for (line, what) in [
+        (
+            "6001  6001 /Users/u/rmasscan/target/release/examples/wire_scan --iface feth4201 --targets 198.18.0.2",
+            "wire_scan by path",
+        ),
+        (
+            "6002  6002 ./wire_scan --iface feth4201",
+            "wire_scan by name",
+        ),
+        (
+            "6003  6003 tcpdump -i feth4202 -n -U --immediate-mode -s 0 -w /x/peer.pcap",
+            "witness tcpdump",
+        ),
+        (
+            "6004  6004 /usr/sbin/tcpdump -p -i en0 -n -U -s 0 -w u.pcap net 198.18.0.0/30 or ether proto 0x88b5",
+            "uplink tcpdump with the lab filter",
+        ),
+        (
+            "6005  6005 /x/rmasscan-lab peer listen --open 80 --silent 8099 --ready /w/l.json",
+            "peer listen",
+        ),
+        (
+            "6006  6006 /x/rmasscan-lab capture dump --iface feth4202 --end-dst 02:ac:00:00:00:01",
+            "capture dump",
+        ),
+        (
+            "6007  6007 /usr/sbin/tcpdump -i feth4201 -w /spike/a.pcap",
+            "a spike tcpdump on the pair",
+        ),
+    ] {
+        let found = lab_leftovers(&format!("{PS}{line}\n"), 1, wire);
+        assert_eq!(found.len(), 1, "{what}: {found:?}");
+        assert_eq!(
+            found[0].pid,
+            line.split_whitespace()
+                .next()
+                .unwrap()
+                .parse::<u32>()
+                .unwrap()
+        );
+    }
+    // The suite itself is not its own leftover.
+    assert!(
+        lab_leftovers(
+            "7000  7000 /x/rmasscan-lab peer listen --open 80\n",
+            7000,
+            wire
+        )
+        .is_empty()
+    );
+    assert!(lab_leftovers("garbage\n\n  x y z\n", 1, wire).is_empty());
+}
+
+#[test]
+fn a_run_is_refused_while_an_earlier_scanner_or_lab_tcpdump_is_alive() {
+    for line in [
+        "6001  6001 /x/wire_scan --iface feth4201 --targets 198.18.0.2",
+        "6003  6003 tcpdump -i feth4202 -n -U -w /spike/x.pcap",
+        "6005  6005 /x/rmasscan-lab peer listen --open 80",
+    ] {
+        let rig = Rig::new();
+        let st = Fake::new(&rig.wire);
+        *st.ps_text.borrow_mut() = format!("{PS}{line}\n");
+        let s = rig.suite(&st, "functional");
+        let e = s.one(&item("functional", C01), 30).unwrap_err();
+        assert!(matches!(e, SuiteError::NotRun(_)), "{line}: {e:?}");
+        let pid = line.split_whitespace().next().unwrap();
+        assert!(
+            e.message().contains(pid) && e.message().contains("kill"),
+            "{}",
+            e.message()
+        );
+        assert!(
+            !st.any_spawned(),
+            "{line}: nothing may start behind the gate"
+        );
+        assert!(!rig.out.join("runs_aborted").exists());
+    }
+    // Clean process list: the run goes ahead.
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    *st.ps_text.borrow_mut() = PS.to_owned();
+    rig.suite(&st, "functional")
+        .one(&item("functional", C01), 30)
+        .unwrap();
+}
+
+#[test]
+fn the_children_process_groups_are_recorded_in_the_lock_file() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    let lock = rig.root.join("suite.lock");
+    let _held = take_lock(&lock).unwrap();
+    *st.lock_file.borrow_mut() = Some(lock.clone());
+    let mut s = rig.suite(&st, "functional");
+    s.lock_path = Some(lock.clone());
+    s.one(&item("functional", C01), 30).unwrap();
+    let during = st.lock_at_scanner.borrow().clone();
+    let children = during
+        .lines()
+        .find_map(|l| l.strip_prefix("children="))
+        .unwrap_or_else(|| panic!("{during:?}"));
+    let pgids: Vec<u32> = children.split(',').map(|x| x.parse().unwrap()).collect();
+    // listener, uplink tcpdump, witness: three process groups were alive when the scanner started.
+    assert!(pgids.len() >= 3, "{pgids:?}");
+    assert!(
+        during.contains(&format!("pid={}", std::process::id())),
+        "{during}"
+    );
+    // When the run is over nothing is left to record.
+    let after = fs::read_to_string(&lock).unwrap();
+    assert!(
+        !after
+            .lines()
+            .any(|l| l.starts_with("children=") && l.len() > "children=".len()),
+        "{after}"
+    );
+}
+
+#[test]
+fn a_stale_lock_with_live_children_is_not_removed() {
+    let root = scratch();
+    let p = root.join("l.lock");
+    fs::write(&p, "pid=4294967290\nstart=1\nchildren=7001,7002\n").unwrap();
+    let ps = "7001  7001 /x/wire_scan --iface feth4201\n 9 9 /bin/sh\n";
+    assert_eq!(alive_pgids(ps, &[7001, 7002]), vec![7001]);
+    assert!(remove_stale_lock_with(&p, ps).unwrap_err().contains("7001"));
+    assert!(p.exists());
+    remove_stale_lock_with(&p, "9 9 /bin/sh\n").unwrap();
+    assert!(!p.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_leader_that_exits_leaves_no_member_of_its_group_behind() {
+    // sh (the leader) starts a child in its group and exits at once, like a witness that dies on its own.
+    let rig = Rig::new();
+    let pidfile = rig.root.join("child.pid");
+    let st = RealStand;
+    let argv = vec![
+        "/bin/sh".to_owned(),
+        "-c".into(),
+        "/bin/sleep 30 & echo $! > \"$1\"; exit 0".into(),
+        "x".into(),
+        p2s(&pidfile),
+    ];
+    let mut bystander = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let mut p = st
+        .spawn(&argv, &rig.root.join("p.out"), &rig.root.join("p.err"))
+        .unwrap();
+    let t0 = Instant::now();
+    let rc = loop {
+        if let Some(rc) = p.try_wait().unwrap() {
+            break rc;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "the leader never reported its exit"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(rc, 0);
+    let child = fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    let running = |pid: &str| {
+        let o = Command::new("/bin/ps")
+            .args(["-p", pid, "-o", "stat="])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+        !stat.is_empty() && !stat.starts_with('Z')
+    };
+    let t1 = Instant::now();
+    while running(&child) && t1.elapsed() < Duration::from_secs(10) {
+        thread::sleep(Duration::from_millis(20));
+    }
+    let survived = running(&child);
+    if survived {
+        let _ = Command::new("/bin/kill").args(["-KILL", &child]).status();
+    }
+    let by = bystander.try_wait().unwrap().is_none();
+    let _ = bystander.kill();
+    let _ = bystander.wait();
+    assert!(
+        !survived,
+        "a member of the reaped leader\x27s group survived"
+    );
+    assert!(by, "an unrelated process was touched");
+}
+
+#[test]
+fn the_group_state_is_read_from_ps_without_reaping_the_leader() {
+    let ps = "  100   100 Ss\n  101   100 S\n  102   100 Z\n  200   200 Ss\n  100000 100000 Z\n";
+    assert_eq!(group_state(ps, 100), (false, vec![101]));
+    assert_eq!(group_state(ps, 200), (false, vec![]));
+    assert_eq!(
+        group_state("  100   100 Z\n  101   100 S\n", 100),
+        (true, vec![101])
+    );
+    assert_eq!(group_state("", 100), (false, vec![]));
+    assert!(!is_gone("  100   100 Ss\n", 100) && is_gone("  1 1 S\n", 100));
+}
+
+#[test]
+fn a_work_directory_left_in_out_blocks_the_next_start() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    fs::create_dir_all(
+        rig.out
+            .join(".work/c01_one_addr_port_synack.run1.rdeadbeef"),
+    )
+    .unwrap();
+    let e = run_locked(
+        &rig.args(&["--only", C01]),
+        &st,
+        PathBuf::from("/x/l"),
+        rig.lock().as_ref(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains(".work"),
+        "{e:?}"
+    );
+    assert!(!st.any_spawned());
+    assert!(rig.out.join(".work").exists(), "nothing is deleted");
+}
+
+#[test]
+fn the_verifiers_pinned_binding_is_the_suites_plan() {
+    assert_eq!(mv::stand_binding(), plan_binding());
+    assert_eq!(
+        binding_problem(
+            &json!({"binding":plan_binding(),"stand":{"scanner_if":SCANNER_IF,"peer_if":PEER_IF}})
+        ),
+        None
+    );
 }

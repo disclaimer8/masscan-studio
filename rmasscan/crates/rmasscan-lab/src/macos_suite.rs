@@ -25,7 +25,8 @@ use crate::{
 use rmasscan_engine::{Rx, SendStatus, Tx};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -78,6 +79,10 @@ pub(crate) fn flood_frame(seq: u32) -> Vec<u8> {
 pub(crate) trait Proc {
     /// `None` while running.
     fn try_wait(&mut self) -> Result<Option<i32>, String>;
+    /// The process group this process leads, when it leads one.
+    fn pgid(&self) -> Option<u32> {
+        None
+    }
     fn signal(&mut self, sig: &str);
     fn kill(&mut self);
 }
@@ -149,10 +154,28 @@ pub(crate) trait Stand {
 
 struct RealProc(std::process::Child);
 impl Proc for RealProc {
+    fn pgid(&self) -> Option<u32> {
+        Some(self.0.id())
+    }
+    /// The leader's exit is read from `ps` (a zombie row) and not by reaping it, so that the rest of its
+    /// group can be swept while its pid, which is the group id, is still ours; only then is it reaped.
     fn try_wait(&mut self) -> Result<Option<i32>, String> {
+        let id = self.0.id();
+        let snap = ps_listing("pid=,pgid=,stat=");
+        if is_gone(&snap, id) {
+            return self
+                .0
+                .try_wait()
+                .map(|s| s.map(|s| s.code().unwrap_or(-1)))
+                .map_err(|e| e.to_string());
+        }
+        if !group_state(&snap, id).0 {
+            return Ok(None);
+        }
+        sweep_group(id);
         self.0
-            .try_wait()
-            .map(|s| s.map(|s| s.code().unwrap_or(-1)))
+            .wait()
+            .map(|s| Some(s.code().unwrap_or(-1)))
             .map_err(|e| e.to_string())
     }
     fn signal(&mut self, sig: &str) {
@@ -574,6 +597,11 @@ impl Drop for WorkRoot {
 /// time of its owner. It is removed when the suite ends; a stale one (dead owner) is only ever
 /// removed by `--remove-stale-lock`, never automatically.
 pub(crate) struct Lock(PathBuf);
+impl Lock {
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
+    }
+}
 impl Drop for Lock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
@@ -627,7 +655,13 @@ pub(crate) fn take_lock(path: &Path) -> Result<Lock, String> {
     }
 }
 /// Remove the lock only when its recorded owner is dead. Never done implicitly.
+/// [`remove_stale_lock_with`] against the live process list.
 pub(crate) fn remove_stale_lock(path: &Path) -> Result<(), String> {
+    remove_stale_lock_with(path, &ps_listing("pid,pgid,command"))
+}
+/// Remove a lock whose owner is dead, unless a process group it recorded (`children=`) still has a member:
+/// those are named, with the commands to stop them, and the lock stays.
+pub(crate) fn remove_stale_lock_with(path: &Path, ps: &str) -> Result<(), String> {
     let text = io(fs::read_to_string(path), "read lock")?;
     let pid = text
         .lines()
@@ -637,11 +671,163 @@ pub(crate) fn remove_stale_lock(path: &Path) -> Result<(), String> {
     if pid_alive(pid) {
         return Err(format!("process {pid} is alive: the lock is not stale"));
     }
+    let recorded: Vec<u32> = text
+        .lines()
+        .find_map(|l| l.strip_prefix("children="))
+        .map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect())
+        .unwrap_or_default();
+    let alive = alive_pgids(ps, &recorded);
+    if !alive.is_empty() {
+        return Err(format!(
+            "the dead suite left process group(s) {alive:?} running (raw senders and captures); stop them first: {}; the lock stays",
+            alive
+                .iter()
+                .map(|g| format!("kill -INT -- -{g}; kill -KILL -- -{g}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
     io(fs::remove_file(path), "remove lock")
 }
 fn lock_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
     Ok(PathBuf::from(home).join(".rmasscan-lab/macos-suite.lock"))
+}
+
+// ------------------------------------------------------------------ leftover processes and groups
+
+/// A process of an earlier suite (or of the spike) that still holds the stand.
+#[derive(Debug)]
+pub(crate) struct Leftover {
+    pub pid: u32,
+    pub pgid: u32,
+    pub command: String,
+}
+fn base(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+/// The processes of a `ps -axo pid,pgid,command` listing that belong to the lab: a `wire_scan`, a `tcpdump`
+/// that names a stand interface or the lab filter, `rmasscan-lab peer listen` and `rmasscan-lab capture dump`.
+/// `own` (this suite) is never a leftover.
+pub(crate) fn lab_leftovers(ps: &str, own: u32, wire_scan: &str) -> Vec<Leftover> {
+    let mut out = vec![];
+    for line in ps.lines() {
+        let mut it = line.split_whitespace();
+        let (Some(pid), Some(pgid)) = (
+            it.next().and_then(|v| v.parse::<u32>().ok()),
+            it.next().and_then(|v| v.parse::<u32>().ok()),
+        ) else {
+            continue;
+        };
+        let tokens: Vec<&str> = it.collect();
+        let Some(first) = tokens.first() else {
+            continue;
+        };
+        let joined = tokens.join(" ");
+        let has = |w: &str| tokens.contains(&w);
+        let lab = base(first) == base(wire_scan)
+            || base(first) == "wire_scan"
+            || (base(first) == "tcpdump"
+                && (has(SCANNER_IF)
+                    || has(PEER_IF)
+                    || joined.contains("198.18.0.0/30")
+                    || joined.contains("ether proto 0x88b5")))
+            || (base(first) == "rmasscan-lab"
+                && ((has("peer") && has("listen")) || (has("capture") && has("dump"))));
+        if lab && pid != own {
+            out.push(Leftover {
+                pid,
+                pgid,
+                command: joined,
+            });
+        }
+    }
+    out
+}
+/// Which of `pgids` still have a member in a `ps -axo pid,pgid,command` listing.
+pub(crate) fn alive_pgids(ps: &str, pgids: &[u32]) -> Vec<u32> {
+    let mut v: Vec<u32> = ps
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            it.next()?.parse::<u32>().ok()?;
+            it.next()?.parse::<u32>().ok()
+        })
+        .filter(|g| pgids.contains(g))
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+fn ps_listing(columns: &str) -> String {
+    Command::new("/bin/ps")
+        .args(["-axo", columns])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+/// From `ps -axo pid=,pgid=,stat=`: is the leader a zombie (exited, not yet reaped), and which live
+/// processes other than the leader are in its group?
+pub(crate) fn group_state(ps: &str, leader: u32) -> (bool, Vec<u32>) {
+    let (mut zombie, mut members) = (false, vec![]);
+    for l in ps.lines() {
+        let mut it = l.split_whitespace();
+        let (Some(pid), Some(pgid), Some(stat)) = (
+            it.next().and_then(|v| v.parse::<u32>().ok()),
+            it.next().and_then(|v| v.parse::<u32>().ok()),
+            it.next(),
+        ) else {
+            continue;
+        };
+        if pid == leader {
+            zombie = stat.starts_with('Z');
+        } else if pgid == leader && !stat.starts_with('Z') {
+            members.push(pid);
+        }
+    }
+    (zombie, members)
+}
+/// The leader has no row at all (already reaped, or `ps` gave nothing).
+pub(crate) fn is_gone(ps: &str, leader: u32) -> bool {
+    !ps.lines().any(|l| {
+        l.split_whitespace()
+            .next()
+            .and_then(|v| v.parse::<u32>().ok())
+            == Some(leader)
+    })
+}
+fn group_signal(sig: &str, pgid: u32) {
+    let _ = Command::new("/bin/kill")
+        .args(["-s", sig, "--", &format!("-{pgid}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+/// Stop the members of a group whose leader has exited but is NOT yet reaped: SIGINT, a bounded grace of
+/// one second, then SIGKILL to the group, then another bounded wait.
+///
+/// Why this never hits a reused pgid: the leader is a zombie, so its pid, which is the group id, is still
+/// allocated to it; the kernel cannot give that number to another process or group until the leader is
+/// reaped, and it is reaped only after this returns. (Sweeping after the reaping could not promise that.)
+fn sweep_group(leader: u32) {
+    let members = || group_state(&ps_listing("pid=,pgid=,stat="), leader).1;
+    if members().is_empty() {
+        return;
+    }
+    group_signal("INT", leader);
+    for _ in 0..20 {
+        if members().is_empty() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    group_signal("KILL", leader);
+    for _ in 0..20 {
+        if members().is_empty() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 // ------------------------------------------------------------------ plan, rerun, list
@@ -736,6 +922,9 @@ struct Suite<'a> {
     wire_sha: String,
     lab_run_id: String,
     lab_manifest: Option<String>,
+    /// The lock file of this suite: the process groups of the live children are recorded in it.
+    lock_path: Option<PathBuf>,
+    children: RefCell<BTreeSet<u32>>,
     timeout: u64,
     man: Value,
 }
@@ -849,11 +1038,77 @@ impl Suite<'_> {
         work: &Path,
         name: &str,
     ) -> Result<Box<dyn Proc>, String> {
-        self.st.spawn(
+        let p = self.st.spawn(
             argv,
             &work.join(format!("{name}.out.txt")),
             &work.join(format!("{name}.stderr.txt")),
-        )
+        )?;
+        self.note_child(&*p);
+        Ok(p)
+    }
+
+    /// Record a child's process group in the lock file, so that the gate and the operator can find it after
+    /// a SIGKILL of the suite.
+    fn note_child(&self, p: &dyn Proc) {
+        if let Some(g) = p.pgid() {
+            self.children.borrow_mut().insert(g);
+            self.sync_lock();
+        }
+    }
+    fn sync_lock(&self) {
+        let Some(path) = &self.lock_path else { return };
+        let Ok(text) = fs::read_to_string(path) else {
+            return;
+        };
+        let mut keep: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.starts_with("children="))
+            .collect();
+        let children = self
+            .children
+            .borrow()
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let line = format!("children={children}");
+        if !children.is_empty() {
+            keep.push(&line);
+        }
+        let _ = fs::write(path, format!("{}\n", keep.join("\n")));
+    }
+
+    /// Refuse while an earlier `wire_scan`, lab `tcpdump`, `peer listen` or `capture dump` is alive: a raw
+    /// sender without a witness would poison the next run (same seed, same cookies).
+    fn leftover_gate(&self) -> Result<(), SuiteError> {
+        let o = self.st.exec(
+            &["/bin/ps".into(), "-axo".into(), "pid,pgid,command".into()],
+            20,
+        )?;
+        let left = lab_leftovers(&o.stdout, std::process::id(), &self.wire_scan);
+        if left.is_empty() {
+            return Ok(());
+        }
+        let list = left
+            .iter()
+            .map(|l| {
+                format!(
+                    "pid {} (group {}): {}",
+                    l.pid,
+                    l.pgid,
+                    l.command.chars().take(100).collect::<String>()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let stop = left
+            .iter()
+            .map(|l| format!("kill -INT -- -{g}; sleep 2; kill -KILL -- -{g}", g = l.pgid))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Err(SuiteError::NotRun(format!(
+            "a lab process of an earlier suite or the spike is still alive: {list}. Stop them (check first that they are not a run you want): {stop}. Nothing was started"
+        )))
     }
 
     fn stop_tools(&self, t: &mut Tools) {
@@ -942,6 +1197,7 @@ impl Suite<'_> {
         if !safe_id(tag) {
             return Err("unsafe tag".to_string().into());
         }
+        self.leftover_gate()?;
         let existing = mv::run_dirs(&self.out, "runs", tag);
         if !existing.is_empty() {
             return Err(SuiteError::NotRun(format!(
@@ -954,10 +1210,15 @@ impl Suite<'_> {
         let work = self.out.join(".work").join(&name);
         io(fs::create_dir_all(&work), "work directory")?;
         let mut t = Tools::default();
-        match self.one_inner(item, kind, &name, &run_nonce, &work, run_timeout, &mut t) {
+        let result = match self.one_inner(item, kind, &name, &run_nonce, &work, run_timeout, &mut t)
+        {
             Ok(dest) => Ok(dest),
             Err(e) => Err(self.abort(&work, &name, &mut t, e)),
-        }
+        };
+        // Every child is stopped and reaped by now (or the run is an abort that said so).
+        self.children.borrow_mut().clear();
+        self.sync_lock();
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1079,6 +1340,9 @@ impl Suite<'_> {
                 &work.join("uplink.out.txt"),
                 &work.join("uplink.err"),
             )?);
+            if let Some(u) = t.uplink.as_deref() {
+                self.note_child(u);
+            }
             cap["uplink_argv"] = json!(argv);
             let witness = work.join("peer-witness.json");
             t.witness = Some(self.start_proc(
@@ -1602,10 +1866,24 @@ pub(crate) fn run_locked(
         wire_sha: wire_sha.clone(),
         lab_run_id,
         lab_manifest,
+        lock_path: Some(_lock.path().to_path_buf()),
+        children: RefCell::default(),
         timeout,
         man: Value::Null,
     };
     // The stand must be sealed before anything is written into --out.
+    if let Ok(rd) = fs::read_dir(out.join(".work")) {
+        let left: Vec<String> = rd
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        if !left.is_empty() {
+            return Err(SuiteError::NotRun(format!(
+                "{} holds unfinished run directories {left:?} (an abort whose evidence copy failed); inspect them, copy or remove them by hand, then start again. Nothing was deleted or started",
+                out.join(".work").display()
+            )));
+        }
+    }
     let probe_dir = out.join(".work");
     io(fs::create_dir_all(&probe_dir), "work root")?;
     let _work_root = WorkRoot(probe_dir.clone());

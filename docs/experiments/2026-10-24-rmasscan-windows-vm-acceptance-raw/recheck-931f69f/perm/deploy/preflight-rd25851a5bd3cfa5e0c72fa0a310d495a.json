@@ -1,0 +1,64 @@
+{
+  "checked_utc": 1792901878.8401,
+  "clock": {
+    "guest_minus_home_s": 0.5563204288482666,
+    "limits": {
+      "guest_ahead_s": 5.0,
+      "guest_behind_s": 60.0
+    },
+    "uncertainty_s": 3.286212682723999
+  },
+  "commit": "931f69fd1eaa0affd160d047b39855843c8cb152",
+  "deploy_manifest_sha256": "6303cd69e5d15bbb1b7a161c9f433f18dfbfbbb9ab28703b1764543d5ab714e8",
+  "guest_scripts": {
+    "windows-vm-lab.ps1": {
+      "guest_path": "C:\\Users\\lab\\windows-vm-lab.ps1",
+      "sha256": "71cd2d1493d61bffed99a8f3adbe6fb2b2d16d1af9b73d654def0a7a344bf4b1",
+      "size": 6184
+    },
+    "windows_wire_clock.ps1": {
+      "guest_path": "C:\\Users\\lab\\t4\\windows_wire_clock.ps1",
+      "sha256": "1f20e2abf5428c0fac01aa23baba2748378dbf45c30736b11c4dce6deded3199",
+      "size": 478
+    },
+    "windows_wire_hash.ps1": {
+      "guest_path": "C:\\Users\\lab\\t4\\windows_wire_hash.ps1",
+      "sha256": "77056cd6beca42b9488df4ae01a570728aeb7159d3c8dea0f3e40848a16d84bf",
+      "size": 299
+    },
+    "windows_wire_prepare.ps1": {
+      "guest_path": "C:\\Users\\lab\\t4\\windows_wire_prepare.ps1",
+      "sha256": "c86b138bde7855271cb3fdba90fff3f98dd3f656aecb5dee49a4abf8766af530",
+      "size": 711
+    },
+    "windows_wire_restricted.cmd": {
+      "guest_path": "C:\\Users\\lab\\t4\\windows_wire_restricted.cmd",
+      "sha256": "d495b21202257b8e4017362e75719ee691e374a0d8b017eb7743ed58ffba0416",
+      "size": 524
+    },
+    "windows_wire_run.ps1": {
+      "guest_path": "C:\\Users\\lab\\t4\\windows_wire_run.ps1",
+      "sha256": "f582af280ba1c6a6bd83fb0c28ff6dc0f08d61588a4cd4ebc725e7be718a203f",
+      "size": 2800
+    },
+    "windows_wire_runas.cmd": {
+      "guest_path": "C:\\Users\\lab\\t4\\windows_wire_runas.cmd",
+      "sha256": "1dd26e72c9997ec71bebb5c37ee8996a31a9d7eac156dc63038751b246ed7baa",
+      "size": 914
+    }
+  },
+  "orchestrator": {
+    "binary_name": "rmasscan-lab",
+    "binary_sha256": "a854f049a875f1e464aa3dffac3c52e125e25a285aa0211db00bcfb9068c985d",
+    "build_commit": "931f69fd1eaa0affd160d047b39855843c8cb152",
+    "errors": [],
+    "git_commit": "931f69fd1eaa0affd160d047b39855843c8cb152",
+    "git_dirty": false
+  },
+  "remote_lab": {
+    "path": "$HOME/winvm/lab/bin/rmasscan-lab",
+    "sha256": "be5d88a29fb14181195a9cf1ab9422f6dc1d3848d41c89b0767a3dee427df0ee"
+  },
+  "run_id": "rd25851a5bd3cfa5e0c72fa0a310d495a",
+  "suite": "recheck-perm"
+}

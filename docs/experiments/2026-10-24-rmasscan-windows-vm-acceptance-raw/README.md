@@ -61,3 +61,10 @@ Run with `rmasscan-lab windows-suite --plan perf` at code commit `847e218`. The 
 * `smoke-perf-847e218/`: one cell (`perf.100.r1`), cell verdict PASS; the other planned cells are NOT RUN by design.
 * `perf-r1/`: 20 cells (100/1k/10k/100k pps x 5), overall **PASS** (21 PASS), no rerun, no RxLoss, kernel drops 0. Median wire rate: 100.7 / 1006.7 / 6444.6 / 6321.1 pps. The ±20% rate gate is MET at 100 and 1000 pps and OPEN at 10k and 100k: the VM tops out at about 6.4 kpps with one `pcap_sendpacket` per frame. This is a VM measurement, not a physical-NIC one, and it stays OPEN until 2B-sendqueue. The ten 10k/100k captures are stored as `peer.pcap.gz` (see its README).
 eno1 shows 0 lab frames in all 21 part C runs.
+
+## Re-check after the final-review fixes (2026-10-25)
+`recheck-931f69f/` is a live re-check at code commit `931f69f` on the same stand, with the same gate and capture rules. The guest `wire_scan.exe` was built by `scripts/package-windows-wire.ps1`.
+* `perm/`: `perm_restricted_scan` is refused with guest exit 5 `PermissionDenied` and the Administrators-only hint. It opens no adapter, sends nothing, and the capture shows no scanner SYN. The run is PASS, under a manifest that records `perm_restricted_refusal: PermissionDenied`, so exit 5 is required. `perm_restricted_inventory` exits 5 and `perm_elevated_control` exits 0; both PASS. The other planned runs are NOT RUN by design.
+* `func/`: `c01_one_addr_port_synack.run1` is PASS, byte-identical to the C fixture.
+* `check-dll-search-flag.ps1` on the packaged EXE shows Dependent Load Flag `0x800`. With a non-DLL `version.dll` or `iphlpapi.dll` planted beside the EXE, it still starts normally. An elevated `--inventory` loads `wpcap.dll` and `Packet.dll` from `System32\Npcap`.
+* The suite lock refused a second `--cleanup` during a run without disturbing it. eno1 shows 0 lab frames in all 4 runs.

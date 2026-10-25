@@ -1,4 +1,4 @@
-2f8da322d01a81015d9d7def6022a5ba5161d6a60d280bc6fafd99bce3ec4ab0  ./README.md
+565370ccba41cf01181c7224b13aef10d273c76a83aa819ef57dbab7e30bb25b  ./README.md
 a143e3a2c4dbd21933ab58884570bf14a39f551689daa858601186519ad12783  ./failure-r1/MANIFEST.sha256
 24e4d8ae219384f554189463856bd2f82b09dd7a889e46db9b50d8edb19a79f5  ./functional-r1-smoke/fixtures/c01_one_addr_port_synack.echo
 9b5d46b0941d45fa8594d1a56bac4b0f33e2b9d15d04931a9b2aa27b4800ab9e  ./functional-r1-smoke/fixtures/c01_one_addr_port_synack.run1.capture.json
@@ -634,6 +634,7 @@ fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/r
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/runs_discarded/x01_foreign_replies.run1.1792853357/status-pre.json
 a30a6b0e1acbdf35a80b4cf19f056cdac6ae9cc6f75d1cbbadc2b8b7e10f71d7  ./functional/verdict.json
 666f8f3efdfc5226d4ea83e5beb05cda675c6e81f156fcc2f81a52e6f6f9aa0b  ./perf-r1/MANIFEST.sha256
+1576b3003a769f83f59dabd268e539bb2449d1704848460e8a4366020d228f2f  ./recheck-931f69f/MANIFEST.sha256
 ae644e70d70eeb30ee5aa363e789ebbf972d82828f9717f9eab2e860b9dac63f  ./smoke-perf-847e218/MANIFEST.sha256
 d65b6295c95f39e614d062e951eb61f149ca301814ab32a9c48016b9ce24a708  ./smoke-rust-9ecbe32/MANIFEST.sha256
 dc8833c124b4bcc06e9e29c5514559150ef32d3e142e1e94a4e73ebfafab3c73  ./verification/vm-clippy.log

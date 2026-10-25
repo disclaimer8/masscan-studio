@@ -20,6 +20,11 @@ fn main() {
         "macos-lab" => rmasscan_lab::macos_lab::run(rest),
         #[cfg(not(target_os = "macos"))]
         "macos-lab" => Err("macos-lab is macOS-only".into()),
+        #[cfg(target_os = "macos")]
+        "macos-suite" => rmasscan_lab::macos_suite::run(rest),
+        #[cfg(not(target_os = "macos"))]
+        "macos-suite" => Err("macos-suite is macOS-only".into()),
+        "macos-verify" => rmasscan_lab::macos_verify::run(rest),
         "peer" => rmasscan_lab::peer::run(rest),
         "capture" => rmasscan_lab::capture::run(rest),
         "deploy-manifest" => rmasscan_lab::deploy::run(rest),
@@ -39,6 +44,6 @@ fn main() {
 }
 fn help() {
     println!(
-        "rmasscan-lab — Rust laboratory tools\nCommands:\n  verify-wire       compare ordered SYN packets in classic pcap\n  windows-verify    verify saved Windows evidence (offline)\n  vm-lab            isolated Linux-hosted Windows VM network\n  macos-lab         sealed macOS feth stand (plan/up/status/down/bpf-access/link)\n  peer              Linux peer/listeners/injection\n  capture           Linux recorder and evidence manifests\n  deploy-manifest   record the commit and sha256 of an installed rmasscan-lab (run on home-pc)\n  wire-suite        Linux acceptance and performance suites\n  windows-suite     explicit Windows VM orchestration\n  oracle-fixtures   independent pinned C-oracle wire fixtures\n  oracle-util       C-oracle build metadata helpers\n\nNo command runs implicitly. Raw operations require an explicit isolated lab."
+        "rmasscan-lab — Rust laboratory tools\nCommands:\n  verify-wire       compare ordered SYN packets in classic pcap\n  windows-verify    verify saved Windows evidence (offline)\n  vm-lab            isolated Linux-hosted Windows VM network\n  macos-lab         sealed macOS feth stand (plan/up/status/down/bpf-access/link)\n  macos-suite       macOS feth live orchestration (macOS only)\n  macos-verify      verify saved macOS evidence (offline)\n  peer              Linux peer/listeners/injection\n  capture           Linux recorder and evidence manifests\n  deploy-manifest   record the commit and sha256 of an installed rmasscan-lab (run on home-pc)\n  wire-suite        Linux acceptance and performance suites\n  windows-suite     explicit Windows VM orchestration\n  oracle-fixtures   independent pinned C-oracle wire fixtures\n  oracle-util       C-oracle build metadata helpers\n\nNo command runs implicitly. Raw operations require an explicit isolated lab."
     );
 }

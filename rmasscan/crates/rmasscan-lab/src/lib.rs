@@ -7,6 +7,9 @@ pub mod dump;
 pub mod link;
 #[cfg(target_os = "macos")]
 pub mod macos_lab;
+#[cfg(target_os = "macos")]
+pub mod macos_suite;
+pub mod macos_verify;
 pub mod oracle;
 pub mod oracle_util;
 pub mod pcap;

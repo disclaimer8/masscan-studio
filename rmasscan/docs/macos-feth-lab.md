@@ -154,3 +154,106 @@ sudo chmod 600 /dev/bpf{0..15}; sudo chgrp wheel /dev/bpf{0..15}
 ```
 
 A `down` with a refused or damaged manifest prints this line in its error output.
+
+## Acceptance runs: `macos-suite` and `macos-verify`
+
+`macos-suite` is macOS only and runs entirely as you, never as root. It needs the stand up and BPF granted
+(or denied, for the two permission runs); it checks both and refuses a run it cannot prove (NOT RUN, rc 2,
+adapter not opened). It never calls `sudo`; the link-loss run asks you to run `macos-lab link` yourself.
+
+Per run it does, in this order: `macos-lab status --run-id m1` (rc 0, `raw_run_allowed`, and `bpf_access` is
+`denied` for `perm_denied_scan` and `perm_inventory_control`, `granted` for everything else); restarts the peer
+listeners (`peer listen`, ready and silent port proven); starts `tcpdump` on the default-route uplink with the
+lab filter; starts the independent witness on `feth4202` (`capture dump`); sends three start markers from the
+peer side and waits until they are in the witness pcap; only then starts `wire_scan`. After it: the peer side
+counters go quiet, three end markers, `tcpdump` statistics (`captured == received`, no kernel drops), the uplink
+interlock (any frame there is exit 13), `status-post.json`, sha256 of every file into `hashes-before-copy.txt`
+in the work directory, the copy to `OUT/runs/<tag>.<nonce>/`, and the hashes checked again on the copy. A run
+that fails after a frame may exist is kept under `OUT/runs_aborted/` the same way.
+
+The lab writes frames only from the peer side, through the same safe adapter the product uses, and a guard
+refuses everything else: source MAC `02:ac:00:00:00:02`, destination MAC `02:ac:00:00:00:01`, and either the
+lab marker ethertype `0x88b5` or IPv4 from `198.18.0.2` to `198.18.0.1`. These frames are the start and end
+markers, the foreign replies of x01 (three kinds: unscanned port, wrong cookie, wrong destination port; the
+"other IP" kind of Linux and Windows would come from `198.18.0.3` and is not written), and the loss and load
+floods of `rxloss` and `stop_load` (marker ethertype with `RMSP` at offset 18).
+
+A permission run with BPF denied has no capture: no `tcpdump` can open BPF either. Its evidence is the
+scanner's refusal (`PermissionDenied`, `opened_adapter false`, `tx_sent 0`) and the before/after interface
+counters of the pair (`counters.json`), which are readable without BPF; counters that moved make the zero
+frames unprovable (INVALID, rerunnable).
+
+The suite lock is `$HOME/.rmasscan-lab/macos-suite.lock`, created with `create_new` and holding the pid and
+start time. It is removed when the suite ends. A lock whose owner is dead is never removed automatically:
+check that nothing runs and use `--remove-stale-lock`.
+
+Build, from `rmasscan/`:
+
+```sh
+export RMASSCAN_SOURCE_COMMIT=$(git rev-parse HEAD)
+RMASSCAN_LAB_BUILD_COMMIT=$RMASSCAN_SOURCE_COMMIT cargo build --locked --release -p rmasscan-lab
+cargo build --locked --release -p rmasscan-net --example wire_scan
+BIN=$PWD/target/release/rmasscan-lab; WS=$PWD/target/release/examples/wire_scan; C=$RMASSCAN_SOURCE_COMMIT
+FIX=$PWD/../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance-raw/fixtures
+EV=$PWD/../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance-raw
+```
+
+C-oracle fixtures for the Mac binding (once per stand MACs; on this Mac, ssh to minipc; nothing here touches
+the stand; needs `sudo -n` on minipc and the Linux build of `rmasscan-lab` there):
+
+```sh
+"$BIN" oracle-fixtures --out "$FIX" --src-mac 02:ac:00:00:00:01 --peer-mac 02:ac:00:00:00:02 \
+  --remote-lab /ABSOLUTE/PATH/ON/MINIPC/rmasscan-lab --host minipc
+```
+
+Order of the live runs (your commands are the `sudo` ones):
+
+```sh
+sudo "$BIN" macos-lab up --run-id m1                # stand up; BPF is still 0600 root:wheel (denied)
+
+# failure plan, the two permission runs first: BPF must be denied
+"$BIN" macos-suite --out "$EV/failure-r1" --suite failure-r1 --plan failure --commit "$C" --repo . \
+  --wire-scan "$WS" --fixtures "$FIX" --only perm_denied_scan perm_inventory_control
+
+sudo "$BIN" macos-lab bpf-access --run-id m1 --grant   # read the risk section first
+
+# part A, functional (24 runs and the pause/resume groups)
+"$BIN" macos-suite --out "$EV/functional-r1" --suite functional-r1 --plan functional --commit "$C" --repo . \
+  --wire-scan "$WS" --fixtures "$FIX"
+"$BIN" macos-verify --dir "$EV/functional-r1" --out "$EV/functional-r1/verdict.json"
+
+# part B, the rest of the failure plan (same --out and --suite as the permission runs)
+"$BIN" macos-suite --out "$EV/failure-r1" --suite failure-r1 --plan failure --commit "$C" --repo . \
+  --wire-scan "$WS" --fixtures "$FIX" --only stop_silent stop_drain stop_fullqueue stop_load \
+  overflow_queue rxloss ckpt_wrong_ports ckpt_wrong_seed ckpt_corrupt_next_index ckpt_corrupt_checksum \
+  ckpt_truncated ckpt_empty ckpt_future_format ckpt_future_engine
+# linkloss: the suite prints the commands when the scan starts; in a root shell, at that moment:
+#   rmasscan-lab macos-lab link --run-id m1 --down ; sleep 3 ; rmasscan-lab macos-lab link --run-id m1 --up
+"$BIN" macos-suite --out "$EV/failure-r1" --suite failure-r1 --plan failure --commit "$C" --repo . \
+  --wire-scan "$WS" --fixtures "$FIX" --only linkloss
+"$BIN" macos-verify --dir "$EV/failure-r1" --out "$EV/failure-r1/verdict.json"
+
+# part C, performance: look first (20 cells), then try one repetition, then the full plan
+"$BIN" macos-suite --list --plan perf        # prints the 20 tags, starts nothing
+"$BIN" macos-suite --out "$EV/perf-r1" --suite perf-r1 --plan perf --reps 1 --commit "$C" --repo . \
+  --wire-scan "$WS" --fixtures "$FIX"
+# (a full run needs a new --out: a directory with a partial plan is extended with --only/--rerun, not re-planned)
+"$BIN" macos-suite --out "$EV/perf-r2" --suite perf-r2 --plan perf --commit "$C" --repo . \
+  --wire-scan "$WS" --fixtures "$FIX"
+"$BIN" macos-verify --dir "$EV/perf-r2" --out "$EV/perf-r2/verdict.json"
+
+sudo "$BIN" macos-lab bpf-access --run-id m1 --revoke
+sudo "$BIN" macos-lab down --run-id m1
+```
+
+`--only` takes every tag after it. `--rerun` needs explicit `--only` tags and moves a run to `runs_discarded/`
+only when the verifier judged it INVALID or NOT RUN without a behaviour failure; a FAIL, or any lab frame on
+the uplink or foreign SYN, can never be repeated and the directory must be abandoned. Exit codes of
+`macos-suite`: 0 all planned runs executed, 2 NOT RUN (refused before anything started), 10 abort, 11 rerun
+refused, 12 schema too old, 13 isolation breach (a lab frame on the uplink), 130 interrupted. `macos-verify`:
+0 PASS, 1 FAIL, 2 INVALID or NOT RUN. A verdict is never PASS while any run is missing, incomplete or has a
+gate that did not hold.
+
+On this macOS the OS hides interface MACs from an unprivileged process (`02:00:00:00:00:00`); the stand MACs are
+fixed by `up` (`lladdr`) and re-read from `ifconfig`, and `wire_scan` reports `src_mac_check: "os-masked"`,
+which the verifier accepts.

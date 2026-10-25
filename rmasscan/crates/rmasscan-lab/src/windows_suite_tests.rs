@@ -601,6 +601,11 @@ fn old_schema_and_refused_rerun_have_their_own_exit_codes_and_touch_nothing() {
     assert_eq!(e.code(), 11);
     assert!(stand.calls().is_empty());
     assert!(w.root.join("runs/stop_silent").is_dir(), "nothing moved");
+    // No isolation path may share a code with an ordinary rerun refusal.
+    assert_eq!(EXIT_ISOLATION, 13);
+    assert_eq!(SuiteError::Isolation(String::new()).code(), 13);
+    assert_eq!(SuiteError::RerunRefused(String::new()).code(), 11);
+    assert_ne!(EXIT_ISOLATION, EXIT_RERUN_REFUSED);
     assert_eq!(
         [
             EXIT_NOT_RUN,
@@ -889,8 +894,8 @@ fn eno1_lab_frames_abort_the_suite_before_the_next_raw_run() {
         matches!(&e, SuiteError::Isolation(m) if m.contains("eno1 interlock")),
         "{e:?}"
     );
-    // A lab frame on eno1 is exit 11 (an isolation breach), not the generic abort 10.
-    assert_eq!(e.code(), 11);
+    // A lab frame on eno1 is exit 13 (EXIT_ISOLATION). It was 10 before the final review; 11 is only a refused rerun.
+    assert_eq!(e.code(), 13);
     // The first run's evidence is written (so the verifier can blame it); the second never starts.
     assert!(w.root.join("runs").join(TAG).join("capture.json").is_file());
     assert_eq!(stand.count("rxloss"), 0, "{:?}", stand.calls());
@@ -1846,7 +1851,7 @@ fn only_tag(w: &World) -> Vec<String> {
     suite_args(w, &["--suite", "failure", "--only", TAG])
 }
 #[test]
-fn abort_after_send_with_an_eno1_frame_exits_11_and_the_verifier_fails_the_directory() {
+fn abort_after_send_with_an_eno1_frame_exits_13_and_the_verifier_fails_the_directory() {
     let w = World::new("abort-frame");
     let stand = Stand::new(&w.src);
     {
@@ -1859,7 +1864,7 @@ fn abort_after_send_with_an_eno1_frame_exits_11_and_the_verifier_fails_the_direc
         matches!(&e, SuiteError::Isolation(m) if m.contains(LAB_FRAME_MARK) && m.contains("aborted earlier")),
         "{e:?}"
     );
-    assert_eq!(e.code(), 11);
+    assert_eq!(e.code(), 13);
     let dirs = aborted_dirs(&w);
     assert_eq!(dirs.len(), 1, "{dirs:?}");
     assert!(dirs[0].join("eno1.pcap").is_file());
@@ -1870,7 +1875,7 @@ fn abort_after_send_with_an_eno1_frame_exits_11_and_the_verifier_fails_the_direc
     // The directory is now closed: neither a rerun nor a plain start is accepted.
     let stand2 = Stand::new(&w.src);
     let again = run_with(&only_tag(&w), &stand2).unwrap_err();
-    assert_eq!(again.code(), 11);
+    assert_eq!(again.code(), 13);
     assert!(again.message().contains("runs_aborted/"), "{again:?}");
     assert!(stand2.calls().is_empty() && stand2.locks.get() == 0);
 }
@@ -2080,7 +2085,7 @@ fn a_safety_finding_in_a_discarded_run_refuses_to_start_a_rerun() {
     let stand = Stand::new(&w.src);
     let a = suite_args(&w, &["--suite", "failure", "--rerun", "--only", TAG]);
     let e = run_with(&a, &stand).unwrap_err();
-    assert_eq!(e.code(), 11);
+    assert_eq!(e.code(), 13);
     assert!(
         e.message()
             .contains(&format!("runs_discarded/{TAG}.attempt1")),

@@ -44,7 +44,7 @@ INVALID 100k cell shows whether the witness (capture) or the scanner lost frames
 # below run from the repository root instead and say so.
 cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (no CLI self-test)
 target/release/rmasscan-lab windows-verify --dir PATH_TO_EVIDENCE
-target/release/rmasscan-lab windows-suite --list --plan failure
+target/release/rmasscan-lab windows-suite --list --plan failure   # or functional, or perf
 target/release/rmasscan-lab vm-lab plan --run-id n2 --manifest lab.json
 ```
 
@@ -183,6 +183,66 @@ the last two items.
    Caveat for part A in `functional/`: its runs predate the nonce chain, so the guest Verify leg of
    its raw-run gate is unproven per run (the verifier treats them as capture_schema 1). Only
    `functional-r2/` and `failure-r1/` carry the proof (capture_schema 3).
+
+9. **Part C: performance (`--plan perf`).** Twenty runs: the rates 100, 1000, 10000 and 100000 pps,
+   five repetitions each, ordered repetition by repetition (`perf.<rate>.r<rep>`, so slow drift of the
+   VM spreads over the rates). Every cell scans only `198.18.0.2` with the functional binding and
+   listeners, source port 40000, seed 1, wait 3, retries 0, ports `1-N` sized for about 5 s of
+   sending: `1-500`, `1-5000`, `1-50000`, `1-65535` (the last is 0.66 s nominal; the VM may not reach
+   it, which is what is measured). Each cell goes through the same raw-run gate as parts A and B
+   (guest Verify with nonce, `record-guest`, full status, `raw_run_allowed`), peer and eno1 captures
+   and capture schema 3; there is no fast mode. `--suite` is mandatory for this plan.
+
+   ```sh
+   rmasscan/target/release/rmasscan-lab windows-suite --list --plan perf   # the 20 tags, no remote action
+   rmasscan/target/release/rmasscan-lab windows-suite \
+     --out docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/perf-r1 \
+     --suite perf-r1 --plan perf --commit $COMMIT --repo . \
+     --guest-exe 'C:\Users\lab\t4\wire_scan.exe' \
+     --fixtures docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional/fixtures \
+     --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+   ```
+
+   Expected wall time: about 75 to 90 minutes. functional-r2 took 87 minutes for 24 runs, about
+   3.6 minutes per run, almost all of it gate, setup and capture quiescence; 20 runs are about 72
+   minutes, plus the sending (5 s at most per run), waits and the larger pcap transfers of the two
+   fast rates. A failed or INVALID cell can be rerun alone with `--rerun --only perf.<rate>.r<rep>`
+   (only if it is discardable, as for the other plans).
+
+   The per-run timeout and the dead-man bound of the captures follow the cell: at least twice the
+   nominal time (probes / rate + wait) plus 60 s of fixed overhead, never below `--run-timeout`
+   (default 240 s).
+
+   `windows-verify` gives each cell its own verdict and adds a `perf_summary` to `verdict.json`:
+
+   - INVALID: any capture-completeness rule (tcpdump drops, captured != received, lab0 counter
+     window, end marker, schema).
+   - FAIL: a gate leg failed; eno1 saw a lab frame; a scanner SYN to anything but 198.18.0.2 or from the
+     wrong MAC, IP or source port; SYNs on the wire != `tx_sent`; a Completed run with a probe missing
+     or duplicated on the wire; a SYN after the outcome; an outcome other than `Completed` or
+     `Failed(RxLoss)`; `Failed(RxLoss)` with zero or unknown kernel drops; `Completed` with
+     non-zero or unknown kernel drops; or Completed results that differ from the listener truth.
+   - PASS otherwise. `Failed(RxLoss)` with measured drops above zero is a PASS (`rx_loss: true`):
+     honest measured loss; its results are recorded, not compared.
+
+   `perf_summary.rows` has one row per rate: PASS/FAIL/INVALID/NOT RUN/rx_loss counts and the
+   medians over the PASS cells of `steady_pps_wire` (from peer-pcap SYN timestamps),
+   `steady_pps_inprocess`, `cpu_user_ms`, `cpu_kernel_ms`, `peak_working_set_bytes`, `join_ms` and
+   `drain_s`. `rate_gate` is MET when the median wire rate is within 20 percent of the requested
+   rate, OPEN otherwise, NOT RUN with fewer than 3 PASS cells. It is a measurement of the VM, not of
+   a physical NIC, and may stay OPEN until 2B-sendqueue; it never changes `overall`, which is PASS
+   only if the manifest and all 20 cells are PASS. Per-cell metrics (`notes.perf` of each run in the
+   verdict) also carry `transmitted_wire`, `tx_sent`, `rx_packets`, `kernel_drops`, received and
+   peer-wire reply counts and `capture_valid`. Stop latency under load is not remeasured here: it is
+   in the `stop_*` runs of `failure-r1`, and per-Npcap-call latency in the spike evidence
+   `docs/experiments/2026-10-24-rmasscan-stage2b-windows-spike-raw`.
+
+   Pcaps: the suite keeps every perf pcap in the evidence directory and never compresses or deletes a
+   VALID one; size, frame count and sha256 are taken on home-pc before the copy. The 10000 and 100000
+   pps cells have the largest pcaps (several MB each). For the repository copy, gzip the big ones
+   afterwards (`gzip -9 -n runs/<tag>/peer.pcap`, the same as `failure-r1`) and say so in the
+   README; to verify such a copy, work on a scratch copy and run `gunzip -k runs/*/peer.pcap.gz` there
+   first, because the verifier reads `peer.pcap` and the recorded sha256 is that of the uncompressed file.
 
 Cleanup after an aborted suite: `rmasscan-lab windows-suite --cleanup --suite ID` stops every
 recorded remote process (pid and start time must match) and removes the suite's scratch directory.

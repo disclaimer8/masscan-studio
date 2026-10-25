@@ -1,0 +1,16 @@
+seed = 1
+rate = 100       
+shard = 1/1
+nocapture = servername
+nocapture = servername
+
+
+adapter = veth-a
+adapter-ip = 198.18.0.1
+adapter-mac = 02-ac-00-00-00-01
+router-mac-ipv4 = 02-ac-00-00-00-02
+router-mac-ipv6 = 02-ac-00-00-00-02
+adapter-port = 40000
+# TARGET SELECTION (IP, PORTS, EXCLUDES)
+ports = 81
+range = 198.18.0.2

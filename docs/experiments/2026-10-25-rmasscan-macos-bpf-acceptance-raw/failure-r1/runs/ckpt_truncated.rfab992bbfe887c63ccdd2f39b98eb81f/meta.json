@@ -1,0 +1,14 @@
+{
+  "capture_started_utc": 1792945565.031642,
+  "capture_stopped_utc": 1792945568.111036,
+  "euid": 501,
+  "exe_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+  "guest_exit": 4,
+  "guest_finished_utc": 1792945565.810939,
+  "guest_started_utc": 1792945565.652654,
+  "icmplim": "unreadable",
+  "invocation_nonce": "rfab992bbfe887c63ccdd2f39b98eb81f",
+  "kind": "ckpt_refuse",
+  "syncookie": "1",
+  "tag": "ckpt_truncated"
+}

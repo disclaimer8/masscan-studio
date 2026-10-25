@@ -1,0 +1,14 @@
+{
+  "capture_started_utc": 1792945521.438535,
+  "capture_stopped_utc": 1792945529.983947,
+  "euid": 501,
+  "exe_sha256": "3446f3c8403028d5c3f3b5b045374cef9989023a03d5222f0bd5f95324dc7951",
+  "guest_exit": 0,
+  "guest_finished_utc": 1792945527.735453,
+  "guest_started_utc": 1792945523.557068,
+  "icmplim": "unreadable",
+  "invocation_nonce": "r8a1f53420c687c74b7839bdbd52d183b",
+  "kind": "stop",
+  "syncookie": "1",
+  "tag": "stop_load"
+}

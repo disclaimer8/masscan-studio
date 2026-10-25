@@ -12,7 +12,7 @@ created and removed by the user with `rmasscan-lab macos-lab`; agents never run 
 | Peer side | `feth4202`, MAC `02:ac:00:00:00:02`, `198.18.0.2/30`, up, peer of `feth4201` |
 | Scanner source IP | `198.18.0.1` (assigned to nobody; permanent ARP `198.18.0.1 -> 02:ac:00:00:00:01` on `feth4202`) |
 | Only scan target | `198.18.0.2` |
-| Manifest | `$HOME/.rmasscan-lab/macos-m1.json` (`--run-id m1`), marker `macos-m1.json.mark`, lock `macos-m1.json.lock` |
+| State (root-owned) | `/var/run/rmasscan-lab/<run-id>.json` (`--run-id m1`), marker `m1.json.mark`, lock `m1.json.lock`; the directory is made by `up`, is cleared at reboot, and nothing is written under `$HOME` |
 | BPF nodes | `/dev/bpf0..15` |
 | Uplink capture filter | `net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5` |
 
@@ -30,46 +30,38 @@ cannot substitute another binary.
 
 ## User commands (run by you, in your own terminal)
 
-Create the directory yourself first, so it is owned by you (otherwise root creates it and hands it
-over to you through `SUDO_UID`):
-
-```sh
-mkdir -p ~/.rmasscan-lab && chmod 700 ~/.rmasscan-lab
-```
-
-The directory must be a real directory (not a symlink), owned by you or root, and not group- or
-world-writable; `macos-lab` refuses anything else. Build once, then use the binary path (`$BIN`,
+All state (manifest, marker, lock) lives in the root-owned `/var/run/rmasscan-lab/`. `up` makes it with a
+single `mkdir` (mode 0755, owner root, no parents); every command refuses it if it is a symlink, not
+a directory, not owned by root or group/world-writable. Files in it are created with `O_EXCL` (never
+following a symlink), mode 0644, owner root, and are read only if they are regular single-link files
+owned by root, not group/world-writable, at most 1 MiB. Root never writes, renames or unlinks anything
+in a user-owned directory. `--manifest` is optional; if given it must be exactly
+`/var/run/rmasscan-lab/<run-id>.json`, anything else is refused before any action. `status` (no root)
+reads the same world-readable file. Build once, then use the binary path (`$BIN`,
 for example `$CARGO_TARGET_DIR/debug/rmasscan-lab` or `rmasscan/target/release/rmasscan-lab`):
 
 ```sh
-M="$HOME/.rmasscan-lab/macos-m1.json"
-
 # print what up/down will run, changes nothing, needs no root
-"$BIN" macos-lab plan   --run-id m1 --manifest "$M"
+"$BIN" macos-lab plan   --run-id m1
 
 # create the stand (root)
-sudo "$BIN" macos-lab up         --run-id m1 --manifest "$M"
+sudo "$BIN" macos-lab up         --run-id m1
 # let group staff open /dev/bpf0..15: 0660 root:staff for this session (root); read the risk below
-sudo "$BIN" macos-lab bpf-access --run-id m1 --manifest "$M" --grant
+sudo "$BIN" macos-lab bpf-access --run-id m1 --grant
 # check the stand (no root); prints JSON, rc 0 sealed, rc 3 not sealed
-"$BIN" macos-lab status          --run-id m1 --manifest "$M"
+"$BIN" macos-lab status          --run-id m1
 
 # take the access back at any time (root), e.g. for the perm_denied runs
-sudo "$BIN" macos-lab bpf-access --run-id m1 --manifest "$M" --revoke
+sudo "$BIN" macos-lab bpf-access --run-id m1 --revoke
 # only for part B link loss on the peer side (root)
-sudo "$BIN" macos-lab link       --run-id m1 --manifest "$M" --down    # and --up
+sudo "$BIN" macos-lab link       --run-id m1 --down    # and --up
 
 # remove everything (root): arp -d, destroy both feth, set BPF to 0600 root:wheel, delete manifest/marker/lock
-sudo "$BIN" macos-lab down       --run-id m1 --manifest "$M"
+sudo "$BIN" macos-lab down       --run-id m1
 ```
 
 Order for a session: `up`, then `--grant`, scans and spike, `--revoke` for the `perm_denied` runs,
-`--grant` again, and finally `down`. `down` is safe to repeat. `--manifest` must be exactly `$HOME/.rmasscan-lab/<name>.json` (absolute, no `..`, no other directory):
-anything else is refused before any action, and no directory but `$HOME/.rmasscan-lab` is ever created.
-The manifest, marker and lock are read only if they are regular single-link files of at most 1 MiB,
-owned by you or root, and not group- or world-writable.
-
-If `up` or `down` reports a failed
+`--grant` again, and finally `down`. `down` is safe to repeat. If `up` or `down` reports a failed
 rollback (exit 10), the manifest is kept with `state: "rollback-incomplete"` and the list of
 objects `up` created; run `down` again, it acts on that record.
 
@@ -88,7 +80,7 @@ pointed at `feth4201` and on the uplink witness. Nodes the kernel creates later 
 stay `0600 root:wheel`. Run `--revoke` whenever no run is active.
 
 `--revoke` and `down` always set `0600 root:wheel` (mode first, then group); they never apply a value read
-from the user-writable manifest. The manifest keeps the modes seen before the first grant for
+from the manifest (which only root can change). The manifest keeps the modes seen before the first grant for
 information only; if any differed from `0600 root:wheel` (a ChmodBPF Mac), `down` says so and you
 restore them by hand.
 

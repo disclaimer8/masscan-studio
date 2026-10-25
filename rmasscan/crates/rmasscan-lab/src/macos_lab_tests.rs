@@ -30,7 +30,7 @@ struct State {
     populate_calls: u32,
     staff: u32,
     route_get: BTreeMap<String, String>,
-    lab_dir: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
     /// A foreign interface that appears when the next `create` runs (a race after preflight).
     appear_on_create: Option<String>,
 }
@@ -55,7 +55,7 @@ impl Fake {
             populate_calls: 0,
             staff: 20,
             route_get: BTreeMap::new(),
-            lab_dir: None,
+            state_dir: None,
             appear_on_create: None,
         }))
     }
@@ -293,13 +293,13 @@ impl Host for Fake {
             None => Err(format!("bpf{n} missing")),
         }
     }
-    fn euid(&self) -> Result<u32, String> {
-        Ok(test_uid())
+    fn state_owner(&self) -> u32 {
+        test_uid()
     }
-    fn lab_dir(&self) -> Result<PathBuf, String> {
+    fn state_dir(&self) -> Result<PathBuf, String> {
         self.0
             .borrow()
-            .lab_dir
+            .state_dir
             .clone()
             .ok_or_else(|| "no lab dir scripted".to_string())
     }
@@ -343,7 +343,7 @@ impl Scratch {
         Scratch(d)
     }
     fn manifest(&self) -> PathBuf {
-        self.0.join("macos-m1.json")
+        self.0.join("m1.json")
     }
 }
 impl Drop for Scratch {
@@ -365,7 +365,7 @@ fn args(s: &Scratch, cmd: &str) -> Args {
 }
 
 fn go(h: &Fake, a: &Args) -> (Result<i32, String>, String) {
-    h.st(|st| st.lab_dir = a.manifest.parent().map(Path::to_path_buf));
+    h.st(|st| st.state_dir = a.manifest.parent().map(Path::to_path_buf));
     let mut out = vec![];
     let r = execute(h, a, &mut out);
     (r, out.join("\n"))
@@ -1011,7 +1011,7 @@ fn populate_is_a_no_op_when_everything_exists() {
 
 /// Like `dispatch`, with the lab directory scripted as the manifest's own directory.
 fn dispatch_in(h: &Fake, a: &Args, wait: Duration, out: &mut Vec<String>) -> Result<i32, String> {
-    h.st(|st| st.lab_dir = a.manifest.parent().map(Path::to_path_buf));
+    h.st(|st| st.state_dir = a.manifest.parent().map(Path::to_path_buf));
     dispatch(h, a, wait, out)
 }
 
@@ -1303,7 +1303,13 @@ fn grant_prints_the_real_exposure() {
 #[test]
 fn the_guide_states_the_grant_exposure_and_commands() {
     let doc = include_str!("../../../docs/macos-feth-lab.md");
-    for w in ["group staff", "inject", "en0", "mkdir -p", "revoke"] {
+    for w in [
+        "group staff",
+        "inject",
+        "en0",
+        "/var/run/rmasscan-lab",
+        "revoke",
+    ] {
         assert!(doc.contains(w), "guide lacks {w:?}");
     }
     assert!(
@@ -1412,39 +1418,29 @@ fn every_command_the_lab_runs_has_an_absolute_system_path() {
 
 #[test]
 fn dir_policy_table() {
-    let ok = |sym, dir, owner, mode, euid, sudo| dir_policy(sym, dir, owner, mode, euid, sudo);
-    assert!(ok(false, true, 501, 0o755, 0, Some(501)).is_ok());
-    assert!(ok(false, true, 501, 0o755, 501, None).is_ok());
-    // Under sudo the directory must be the invoking user's, never root's.
+    let ok = dir_policy;
+    // Owned by root (0) and not writable by others: fine.
+    assert!(ok(false, true, 0, 0o755, 0).is_ok());
+    assert!(ok(false, true, 0, 0o700, 0).is_ok());
+    assert!(ok(true, true, 0, 0o755, 0).unwrap_err().contains("symlink"));
     assert!(
-        ok(false, true, 0, 0o755, 0, Some(501))
-            .unwrap_err()
-            .contains("expected uid 501")
-    );
-    assert!(ok(false, true, 0, 0o755, 501, None).is_err());
-    assert!(ok(false, true, 501, 0o700, 501, None).is_ok());
-    assert!(
-        ok(true, true, 501, 0o755, 0, Some(501))
-            .unwrap_err()
-            .contains("symlink")
-    );
-    assert!(
-        ok(false, false, 501, 0o755, 0, Some(501))
+        ok(false, false, 0, 0o755, 0)
             .unwrap_err()
             .contains("not a directory")
     );
+    // A user-owned directory is never a state directory.
     assert!(
-        ok(false, true, 502, 0o755, 0, Some(501))
+        ok(false, true, 501, 0o755, 0)
             .unwrap_err()
-            .contains("owned by uid 502")
+            .contains("expected uid 0")
     );
     assert!(
-        ok(false, true, 501, 0o775, 0, Some(501))
+        ok(false, true, 0, 0o775, 0)
             .unwrap_err()
             .contains("writable")
     );
     assert!(
-        ok(false, true, 501, 0o757, 0, Some(501))
+        ok(false, true, 0, 0o757, 0)
             .unwrap_err()
             .contains("writable")
     );
@@ -1461,13 +1457,13 @@ fn dispatch_refuses_a_symlinked_or_group_writable_lab_directory() {
     symlink(&real, &link).unwrap();
     let h = Fake::new();
     let mut a = args(&s, "up");
-    a.manifest = link.join("macos-m1.json");
+    a.manifest = link.join("m1.json");
     let mut out = vec![];
     let e = dispatch_in(&h, &a, Duration::ZERO, &mut out).unwrap_err();
     assert!(e.contains("symlink"), "{e}");
     assert!(h.mutating().is_empty());
     fs::set_permissions(&real, fs::Permissions::from_mode(0o775)).unwrap();
-    a.manifest = real.join("macos-m1.json");
+    a.manifest = real.join("m1.json");
     let e = dispatch_in(&h, &a, Duration::ZERO, &mut out).unwrap_err();
     assert!(e.contains("writable"), "{e}");
     assert!(
@@ -1496,7 +1492,7 @@ fn dispatch_creates_the_directory_for_up_and_removes_the_lock_after_down() {
     let s = Scratch::new();
     let h = Fake::new();
     let mut a = args(&s, "up");
-    a.manifest = s.0.join("sub").join("macos-m1.json");
+    a.manifest = s.0.join("sub").join("m1.json");
     let mut out = vec![];
     assert_eq!(
         dispatch_in(&h, &a, Duration::ZERO, &mut out),
@@ -1522,7 +1518,7 @@ fn commands_without_a_stand_or_without_root_create_nothing() {
     let s = Scratch::new();
     let h = Fake::new();
     let mut a = args(&s, "up");
-    a.manifest = s.0.join("sub").join("macos-m1.json");
+    a.manifest = s.0.join("sub").join("m1.json");
     h.st(|st| st.root = false);
     let mut out = vec![];
     assert!(
@@ -1624,24 +1620,22 @@ mod lock_ownership {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    fn open(path: &Path, calls: &mut u32) -> Result<fs::File, String> {
-        let uid = test_uid();
-        open_lock_with(path, uid, None, &mut |_| {
-            *calls += 1;
-            Ok(())
-        })
+    fn open(path: &Path, _calls: &mut u32) -> Result<fs::File, String> {
+        open_lock_with(path, test_uid())
     }
 
     #[test]
-    fn a_file_created_by_us_is_chowned_exactly_once() {
+    fn a_new_lock_is_created_with_create_new_and_reused_when_it_is_ours() {
         let s = Scratch::new();
         let p = s.0.join("x.lock");
         let mut calls = 0;
         open(&p, &mut calls).unwrap();
-        assert_eq!(calls, 1);
-        // Our own earlier lock is reused and never chowned again.
+        assert_eq!(
+            fs::metadata(&p).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        // An existing lock of the right owner is accepted; nothing is ever chowned.
         open(&p, &mut calls).unwrap();
-        assert_eq!(calls, 1, "a pre-existing file is never chowned");
     }
 
     #[test]
@@ -1688,13 +1682,13 @@ mod lock_ownership {
     #[test]
     fn existing_file_policy_table() {
         let p = existing_file_policy;
-        assert!(p(false, true, 1, 501, 0o644, 0, Some(501)).is_ok());
-        assert!(p(false, true, 1, 0, 0o600, 501, None).is_ok());
-        assert!(p(true, true, 1, 501, 0o644, 0, Some(501)).is_err());
-        assert!(p(false, false, 1, 501, 0o644, 0, Some(501)).is_err());
-        assert!(p(false, true, 2, 501, 0o644, 0, Some(501)).is_err());
-        assert!(p(false, true, 1, 502, 0o644, 0, Some(501)).is_err());
-        assert!(p(false, true, 1, 501, 0o620, 0, Some(501)).is_err());
+        assert!(p(false, true, 1, 0, 0o644, 0).is_ok());
+        assert!(p(false, true, 1, 0, 0o600, 0).is_ok());
+        assert!(p(true, true, 1, 0, 0o644, 0).is_err());
+        assert!(p(false, false, 1, 0, 0o644, 0).is_err());
+        assert!(p(false, true, 2, 0, 0o644, 0).is_err());
+        assert!(p(false, true, 1, 501, 0o644, 0).is_err());
+        assert!(p(false, true, 1, 0, 0o620, 0).is_err());
     }
 }
 
@@ -1720,35 +1714,38 @@ fn a_foreign_interface_that_appears_after_preflight_is_never_destroyed() {
 }
 
 #[test]
-fn manifest_shape_table() {
-    let lab = Path::new("/Users/me/.rmasscan-lab");
-    let ok = |p: &str| manifest_shape(Path::new(p), lab);
-    assert!(ok("/Users/me/.rmasscan-lab/macos-m1.json").is_ok());
+fn the_manifest_path_is_fixed_by_the_run_id() {
+    assert_eq!(
+        expected_manifest(Path::new(STATE_DIR), "m1"),
+        Path::new("/var/run/rmasscan-lab/m1.json")
+    );
+    let h = Fake::new();
+    let s = Scratch::new();
+    h.st(|st| st.state_dir = Some(s.0.clone()));
+    let mut a = args(&s, "status");
+    assert!(check_manifest_arg(&h, &a).is_ok());
     for bad in [
         "/etc/sudoers.d/x.json",
-        "/Library/LaunchDaemons/x.json",
-        "/Users/me/.rmasscan-lab/sub/x.json",
-        "/Users/me/.rmasscan-lab/../x.json",
-        "/Users/me/.rmasscan-lab/./x.json",
-        "/Users/me/.rmasscan-lab/x.txt",
-        "/Users/me/.rmasscan-lab/.json",
-        "/Users/me/.rmasscan-lab/a b.json",
-        "/Users/me/.rmasscan-lab",
-        "macos-m1.json",
-        "/Users/me/.rmasscan-lab2/x.json",
+        "/var/run/rmasscan-lab/other.json",
+        "/var/run/rmasscan-lab/m1.json",
+        "/Users/me/.rmasscan-lab/m1.json",
     ] {
-        assert!(ok(bad).is_err(), "{bad} must be refused");
+        a.manifest = PathBuf::from(bad);
+        assert!(check_manifest_arg(&h, &a).is_err(), "{bad}");
     }
+    a.manifest = s.0.join("sub").join("..").join("m1.json");
+    assert!(check_manifest_arg(&h, &a).is_err());
 }
 
 #[test]
-fn a_manifest_outside_the_lab_directory_is_refused_before_any_action() {
+fn a_manifest_outside_the_state_directory_is_refused_for_every_command() {
     let s = Scratch::new();
     let h = Fake::new();
-    h.st(|st| st.lab_dir = Some(s.0.join("lab")));
+    h.st(|st| st.state_dir = Some(s.0.join("lab")));
     for p in [
         s.0.join("elsewhere.json"),
         s.0.join("lab").join("sub").join("x.json"),
+        s.0.join("lab").join("other.json"),
         PathBuf::from("/etc/sudoers.d/rmasscan.json"),
     ] {
         let mut a = args(&s, "up");
@@ -1771,15 +1768,12 @@ fn a_missing_parent_is_never_created_only_the_lab_directory_itself() {
     let h = Fake::new();
     // The lab directory's parent does not exist: refused, nothing created.
     let mut a = args(&s, "up");
-    a.manifest =
-        s.0.join("no-home")
-            .join(".rmasscan-lab")
-            .join("macos-m1.json");
+    a.manifest = s.0.join("no-home").join(".rmasscan-lab").join("m1.json");
     let mut out = vec![];
     assert!(dispatch_in(&h, &a, Duration::ZERO, &mut out).is_err());
     assert!(!s.0.join("no-home").exists());
     // The parent exists: exactly the lab directory is created.
-    a.manifest = s.0.join(".rmasscan-lab").join("macos-m1.json");
+    a.manifest = s.0.join(".rmasscan-lab").join("m1.json");
     assert_eq!(
         dispatch_in(&h, &a, Duration::ZERO, &mut out),
         Ok(0),
@@ -1865,4 +1859,106 @@ fn plan_and_guide_describe_the_real_down_and_the_chmodbpf_cost() {
     assert!(doc.contains("ChmodBPF"));
     assert!(doc.contains("until the next reboot") || doc.contains("until reboot"));
     assert!(!doc.contains("restore BPF modes"));
+}
+
+// ---- fix round 4: all state lives in a root-owned directory
+
+#[test]
+fn status_reads_the_root_owned_state_without_root() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    h.st(|st| st.root = false);
+    let from = h.log().len();
+    let (rc, v) = status_json(&h, &s);
+    assert_eq!(rc, 0, "{v}");
+    assert!(
+        !h.log()[from..].iter().any(|c| c == "id -u"),
+        "status asked for root"
+    );
+    assert!(check_ok(&v, "manifest"));
+}
+
+#[test]
+fn a_state_file_not_owned_by_the_state_owner_is_not_trusted() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    // The files are the test user's; the host now claims root must own them.
+    let uid = test_uid();
+    assert!(
+        read_trusted(&s.manifest(), uid + 1)
+            .unwrap_err()
+            .contains("owned by uid")
+    );
+    assert!(read_trusted(&s.manifest(), uid).unwrap().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_or_writable_state_directory_is_refused_by_every_privileged_command() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let s = Scratch::new();
+    let real = s.0.join("real");
+    fs::create_dir(&real).unwrap();
+    let link = s.0.join("link");
+    symlink(&real, &link).unwrap();
+    for cmd in ["up", "down", "link", "bpf-access"] {
+        let h = Fake::new();
+        let mut a = args(&s, cmd);
+        a.manifest = link.join("m1.json");
+        a.down = cmd == "link";
+        a.grant = cmd == "bpf-access";
+        if cmd != "up" {
+            fs::write(real.join("m1.json"), "{}").unwrap();
+        }
+        let mut out = vec![];
+        let e = dispatch_in(&h, &a, Duration::ZERO, &mut out).unwrap_err();
+        assert!(e.contains("symlink"), "{cmd}: {e}");
+        assert!(h.mutating().is_empty(), "{cmd}");
+        let _ = fs::remove_file(real.join("m1.json"));
+    }
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o777)).unwrap();
+    let h = Fake::new();
+    let mut a = args(&s, "up");
+    a.manifest = real.join("m1.json");
+    let mut out = vec![];
+    assert!(
+        dispatch_in(&h, &a, Duration::ZERO, &mut out)
+            .unwrap_err()
+            .contains("writable")
+    );
+    assert!(fs::read_dir(&real).unwrap().next().is_none());
+}
+
+#[test]
+fn nothing_the_lab_does_reads_the_environment_or_the_home_directory() {
+    let src = include_str!("macos_lab.rs");
+    for banned in [
+        "env::var",
+        "restore_sudo_owner",
+        "sudo_target",
+        "lchown",
+        "fchown",
+        "chown(",
+    ] {
+        // `chown` appears only for the /dev/bpf groups (`chown(&p, None, Some(gid))`).
+        if banned == "chown(" {
+            assert_eq!(
+                src.matches("chown(").count(),
+                1,
+                "a new chown call appeared"
+            );
+            continue;
+        }
+        assert!(!src.contains(banned), "{banned} is back in macos_lab.rs");
+    }
+}
+
+#[test]
+fn plan_names_the_root_owned_state_directory() {
+    let s = Scratch::new();
+    let (_, out) = go(&Fake::new(), &args(&s, "plan"));
+    assert!(out.contains("/var/run/rmasscan-lab"), "{out}");
+    assert!(out.contains("nothing is written under $HOME"));
 }

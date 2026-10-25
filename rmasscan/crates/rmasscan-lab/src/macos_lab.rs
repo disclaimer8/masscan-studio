@@ -7,7 +7,7 @@
 //!
 //! Exit codes: 0 ok; 2 NOT RUN (arguments, foreign objects, no root); 3 stand not sealed
 //! (`status`); 10 partial `up`/`down` (rolled back / manifest kept).
-use crate::vm_lab::{overlap, write_manifest};
+use crate::vm_lab::overlap;
 use clap::Parser;
 use serde_json::{Value, json};
 use std::{
@@ -46,10 +46,10 @@ pub(crate) trait Host {
     fn bpf_set(&self, n: u32, mode: u32, gid: u32) -> Result<(), String>;
     /// Make `/dev/bpf0..=last` exist (see [`populate`]).
     fn bpf_populate(&self, last: u32) -> Result<(), String>;
-    /// The effective uid of this process (`id -u`).
-    fn euid(&self) -> Result<u32, String>;
-    /// The lab directory: `$HOME/.rmasscan-lab` of the invoking user.
-    fn lab_dir(&self) -> Result<PathBuf, String>;
+    /// The uid that must own the state directory and its files (root; the test user in tests).
+    fn state_owner(&self) -> u32;
+    /// The state directory ([`STATE_DIR`]).
+    fn state_dir(&self) -> Result<PathBuf, String>;
 }
 
 /// Outcome of trying to open one `/dev/bpfN`.
@@ -162,39 +162,11 @@ impl Host for RealHost {
     fn bpf_set(&self, _n: u32, _mode: u32, _gid: u32) -> Result<(), String> {
         Err("BPF devices need Unix".into())
     }
-    fn euid(&self) -> Result<u32, String> {
-        let out = self.sh(&["id", "-u"])?;
-        out.trim()
-            .parse()
-            .map_err(|_| format!("cannot parse the uid {out:?}"))
+    fn state_owner(&self) -> u32 {
+        0
     }
-    fn lab_dir(&self) -> Result<PathBuf, String> {
-        let user = std::env::var("SUDO_USER").ok().filter(|u| {
-            !u.is_empty()
-                && u.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-        });
-        let home = match (self.euid()?, user) {
-            // Under sudo, HOME may be root's: ask the directory service for the invoking user's.
-            (0, Some(u)) => {
-                let t = self.sh(&[
-                    "dscl",
-                    ".",
-                    "-read",
-                    &format!("/Users/{u}"),
-                    "NFSHomeDirectory",
-                ])?;
-                t.split_whitespace()
-                    .last()
-                    .map(str::to_owned)
-                    .ok_or_else(|| format!("cannot read the home directory of {u}"))?
-            }
-            _ => std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?,
-        };
-        if !Path::new(&home).is_absolute() {
-            return Err(format!("home directory {home:?} is not absolute"));
-        }
-        Ok(PathBuf::from(home).join(".rmasscan-lab"))
+    fn state_dir(&self) -> Result<PathBuf, String> {
+        Ok(PathBuf::from(STATE_DIR))
     }
     fn bpf_populate(&self, last: u32) -> Result<(), String> {
         let mut held: Vec<fs::File> = vec![];
@@ -784,13 +756,15 @@ fn arp_delete() -> Vec<&'static str> {
 }
 
 #[derive(Parser)]
-pub(crate) struct Args {
+struct Cli {
     #[arg(value_parser=["plan","up","status","down","bpf-access","link"])]
     cmd: String,
     #[arg(long)]
     run_id: String,
+    /// Optional. The manifest is fixed at `/var/run/rmasscan-lab/<run-id>.json`; if given it
+    /// must be exactly that.
     #[arg(long)]
-    manifest: PathBuf,
+    manifest: Option<PathBuf>,
     #[arg(long)]
     grant: bool,
     #[arg(long)]
@@ -798,6 +772,17 @@ pub(crate) struct Args {
     #[arg(long)]
     down: bool,
     #[arg(long)]
+    up: bool,
+}
+
+/// The parsed command with the manifest path resolved (`manifest` is always the full path).
+pub(crate) struct Args {
+    cmd: String,
+    run_id: String,
+    manifest: PathBuf,
+    grant: bool,
+    revoke: bool,
+    down: bool,
     up: bool,
 }
 
@@ -878,13 +863,18 @@ fn require_root(h: &dyn Host) -> Result<(), String> {
     }
 }
 
-/// Read a file that a root process is about to trust: it must be a regular file with one link,
-/// owned by root, this user or the sudo user, not group/world-writable, and at most 1 MiB. It is
-/// checked with `symlink_metadata` first (so a FIFO or a symlink is never opened) and again on
-/// the opened descriptor. `None` when it does not exist.
+/// The fixed, root-owned directory of the stand's state (manifest, marker, lock). It is under
+/// `/var/run` (root-owned, cleared at reboot), never in a user-writable directory: root creates,
+/// reads for action, renames and unlinks only inside a directory only root can change.
+pub const STATE_DIR: &str = "/var/run/rmasscan-lab";
+
 const READ_CAP: u64 = 1 << 20;
 
-pub(crate) fn read_trusted(path: &Path, euid: u32) -> Result<Option<Vec<u8>>, String> {
+/// Read a state file: it must be a regular file with one link, owned by `owner` (root; in tests
+/// the test user), not group/world-writable, and at most 1 MiB. It is checked with
+/// `symlink_metadata` first (so a symlink, FIFO or device is never opened) and again on the
+/// opened descriptor. `None` when it does not exist.
+pub(crate) fn read_trusted(path: &Path, owner: u32) -> Result<Option<Vec<u8>>, String> {
     use std::io::Read;
     let shown = path.display();
     let md = match fs::symlink_metadata(path) {
@@ -901,8 +891,7 @@ pub(crate) fn read_trusted(path: &Path, euid: u32) -> Result<Option<Vec<u8>>, St
             md.nlink(),
             md.uid(),
             md.mode(),
-            euid,
-            sudo_uid(),
+            owner,
         )
         .map_err(|e| format!("{shown}: refused: {e}"))?;
         if md.len() > READ_CAP {
@@ -928,17 +917,46 @@ pub(crate) fn read_trusted(path: &Path, euid: u32) -> Result<Option<Vec<u8>>, St
     }
     #[cfg(not(unix))]
     {
-        let _ = (md, euid);
+        let _ = (md, owner);
         fs::read(path)
             .map(Some)
             .map_err(|e| format!("{shown}: {e}"))
     }
 }
 
+/// Create a new state file (`create_new`: `O_EXCL`, never follows a symlink), mode 0644. It is
+/// owned by whoever runs the command (root); nothing is ever chowned.
+pub(crate) fn create_state_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut o = OpenOptions::new();
+    o.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o644);
+    }
+    o.open(path)
+}
+
+/// Write the manifest atomically inside the state directory: a new temporary file, sync,
+/// rename. No ownership change.
+pub(crate) fn write_manifest(path: &Path, v: &Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(v).map_err(|e| e.to_string())?;
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let result = create_state_file(&tmp)
+        .and_then(|mut f| f.write_all(&bytes).and_then(|()| f.sync_all()))
+        .and_then(|()| fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result.map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// The recorded stand of this run: manifest and marker present, tokens equal, run-id equal.
 fn load_stand(h: &dyn Host, a: &Args) -> Result<Value, String> {
-    let euid = h.euid()?;
-    let bytes = read_trusted(&a.manifest, euid)?
+    let owner = h.state_owner();
+    let bytes = read_trusted(&a.manifest, owner)?
         .ok_or_else(|| format!("no stand recorded at {}", a.manifest.display()))?;
     let m: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("manifest unreadable: {e}"))?;
@@ -946,7 +964,7 @@ fn load_stand(h: &dyn Host, a: &Args) -> Result<Value, String> {
         return Err("manifest belongs to another run-id".into());
     }
     let token = m["token"].as_str().filter(|t| !t.is_empty());
-    let marker = read_trusted(&marker_path(&a.manifest), euid)?
+    let marker = read_trusted(&marker_path(&a.manifest), owner)?
         .map(|b| String::from_utf8_lossy(&b).trim().to_owned());
     match (token, marker) {
         (Some(t), Some(mk)) if t == mk => Ok(m),
@@ -954,57 +972,25 @@ fn load_stand(h: &dyn Host, a: &Args) -> Result<Value, String> {
     }
 }
 
-/// `--manifest` must be `<lab dir>/<name>.json`, where `<lab dir>` is exactly the lab
-/// directory the host reports (`$HOME/.rmasscan-lab`): absolute, no `.`/`..` components, a
-/// plain file name. Anything else (`/etc/sudoers.d/x`, a root-owned directory, a deeper path)
-/// is refused before any action. The directory itself is vetted by [`prepare_dir`].
-pub(crate) fn manifest_shape(manifest: &Path, lab_dir: &Path) -> Result<(), String> {
-    use std::path::Component;
-    let bad = |why: &str| {
-        Err(format!(
-            "--manifest {} refused: {why}; it must be {}/<name>.json",
-            manifest.display(),
-            lab_dir.display()
-        ))
-    };
-    if !manifest.is_absolute() {
-        return bad("not an absolute path");
-    }
-    // `Path::components` hides a `.` or `//` in the middle, so look at the raw segments.
-    let raw = manifest.to_str().unwrap_or("//");
-    if raw
-        .split('/')
-        .skip(1)
-        .any(|s| s.is_empty() || s == "." || s == "..")
-        || manifest
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
-    {
-        return bad("contains ., .. or an empty segment");
-    }
-    if manifest.parent() != Some(lab_dir) {
-        return bad("not directly in the lab directory");
-    }
-    let name = manifest
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    let stem = name.strip_suffix(".json").unwrap_or_default();
-    if stem.is_empty()
-        || !stem
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
-        return bad("the file name must be [A-Za-z0-9_-]+.json");
-    }
-    Ok(())
+/// The manifest of a run is fixed: `<state dir>/<run-id>.json`. `--manifest`, if given, must be
+/// exactly that; any other path is refused before any action.
+pub(crate) fn expected_manifest(state_dir: &Path, run_id: &str) -> PathBuf {
+    state_dir.join(format!("{run_id}.json"))
 }
 
 fn check_manifest_arg(h: &dyn Host, a: &Args) -> Result<(), String> {
     if a.cmd == "plan" {
         return Ok(());
     }
-    manifest_shape(&a.manifest, &h.lab_dir()?)
+    let want = expected_manifest(&h.state_dir()?, &a.run_id);
+    if a.manifest != want {
+        return Err(format!(
+            "--manifest {} refused: the manifest is fixed at {} (omit --manifest)",
+            a.manifest.display(),
+            want.display()
+        ));
+    }
+    Ok(())
 }
 
 fn recorded_route(m: &Value) -> Option<(String, Option<String>)> {
@@ -1015,6 +1001,9 @@ fn recorded_route(m: &Value) -> Option<(String, Option<String>)> {
 }
 
 fn plan(out: &mut Vec<String>) {
+    out.push(format!(
+        "# state (root-owned, cleared at reboot): {STATE_DIR}/<run-id>.json, .json.mark, .json.lock; up makes the directory with one mkdir (0755, root) and every command refuses it if it is a symlink, not owned by root or group/world-writable; nothing is written under $HOME"
+    ));
     out.push("# macos-lab up (root), in this order; plan runs nothing".into());
     for s in up_steps() {
         out.push(s.join(" "));
@@ -1040,76 +1029,61 @@ fn plan(out: &mut Vec<String>) {
     );
 }
 
-// ---------------------------------------------------------------- ownership under sudo
+// ---------------------------------------------------------------- the state directory
 
-/// The directory of the manifest is acceptable when it is a real directory, owned by root, by
-/// this user or by the invoking sudo user, and not writable by group or others.
+/// The state directory is acceptable only when it is a real directory (not a symlink), owned by
+/// `expected_owner` (root), and not writable by group or others.
 pub(crate) fn dir_policy(
     is_symlink: bool,
     is_dir: bool,
     owner: u32,
     mode: u32,
-    euid: u32,
-    sudo_uid: Option<u32>,
+    expected_owner: u32,
 ) -> Result<(), String> {
     if is_symlink {
-        return Err("the lab directory is a symlink".into());
+        return Err("the state directory is a symlink".into());
     }
     if !is_dir {
-        return Err("the lab directory path is not a directory".into());
+        return Err("the state directory path is not a directory".into());
     }
-    // Under sudo the directory must belong to the invoking user (a root-owned one could be
-    // anywhere root may write); otherwise to the user running the command.
-    let expected = sudo_uid.unwrap_or(euid);
-    if owner != expected {
+    if owner != expected_owner {
         return Err(format!(
-            "the lab directory is owned by uid {owner}, expected uid {expected}"
+            "the state directory is owned by uid {owner}, expected uid {expected_owner}"
         ));
     }
     if mode & 0o022 != 0 {
         return Err(format!(
-            "the lab directory is group- or world-writable (mode {:04o})",
+            "the state directory is group- or world-writable (mode {:04o})",
             mode & 0o7777
         ));
     }
     Ok(())
 }
 
-fn sudo_uid() -> Option<u32> {
-    std::env::var("SUDO_UID").ok()?.parse().ok()
-}
-
-/// Make sure the manifest directory exists and is trustworthy. A directory this run creates as
-/// root is handed to the sudo user (`lchown`), so no root-owned residue stays in the home.
+/// Make sure the state directory exists and is trustworthy. With `create`, a missing directory
+/// is made with a single `mkdir` (no parents, no following), mode 0755, owned by the caller
+/// (root). An existing one is only checked, never changed.
 #[cfg(unix)]
 fn prepare_dir(h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
-    use std::os::unix::fs::{MetadataExt, lchown};
-    let euid = h.euid()?;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let owner = h.state_owner();
     match fs::symlink_metadata(dir) {
         Ok(md) => dir_policy(
             md.file_type().is_symlink(),
             md.is_dir(),
             md.uid(),
             md.mode(),
-            euid,
-            sudo_uid(),
+            owner,
         )
         .map_err(|e| format!("{}: {e}", dir.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && create => {
-            // One level only: the parent (the home directory) must already exist.
-            fs::create_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            if euid == 0
-                && let Some((u, g)) = crate::vm_lab::sudo_target(
-                    0,
-                    std::env::var("SUDO_UID").ok().as_deref(),
-                    std::env::var("SUDO_GID").ok().as_deref(),
-                )
-                .map_err(|e| e.to_string())?
-                && u != 0
-            {
-                lchown(dir, Some(u), Some(g)).map_err(|e| format!("{}: {e}", dir.display()))?;
-            }
-            Ok(())
+            fs::DirBuilder::new()
+                .mode(0o755)
+                .create(dir)
+                .map_err(|e| format!("{}: {e}", dir.display()))?;
+            // The umask may have narrowed it; the mode is what the policy expects.
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("{}: {e}", dir.display()))
         }
         Err(e) => Err(format!("{}: {e}", dir.display())),
     }
@@ -1122,17 +1096,16 @@ fn prepare_dir(_h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// An existing lock file is acceptable only when it is a regular file with a single link (a
-/// hardlink to a system file is refused), owned by root, this user or the sudo user, and not
-/// writable by group or others. It is never chowned.
+/// An existing state file is acceptable only when it is a regular file with a single link (a
+/// hardlink to a system file is refused), owned by `expected_owner` (root), and not writable by
+/// group or others. It is never chowned.
 pub(crate) fn existing_file_policy(
     is_symlink: bool,
     is_file: bool,
     nlink: u64,
     owner: u32,
     mode: u32,
-    euid: u32,
-    sudo_uid: Option<u32>,
+    expected_owner: u32,
 ) -> Result<(), String> {
     if is_symlink {
         return Err("it is a symlink".into());
@@ -1143,8 +1116,10 @@ pub(crate) fn existing_file_policy(
     if nlink != 1 {
         return Err(format!("it has {nlink} hard links"));
     }
-    if owner != 0 && owner != euid && Some(owner) != sudo_uid {
-        return Err(format!("it is owned by uid {owner}"));
+    if owner != expected_owner {
+        return Err(format!(
+            "it is owned by uid {owner}, expected {expected_owner}"
+        ));
     }
     if mode & 0o022 != 0 {
         return Err(format!(
@@ -1162,27 +1137,12 @@ const O_NOFOLLOW: i32 = 0x0100;
 #[cfg(target_os = "macos")]
 const O_NONBLOCK: i32 = 0x0004;
 
-/// Create the lock file with `create_new` (`O_EXCL`: never follows a symlink at the last
-/// component) and hand it to the sudo user through the open descriptor (`chown`). If the file
-/// already exists it is only checked ([`existing_file_policy`]) and opened without following a
-/// symlink; a pre-existing file is never chowned.
-pub(crate) fn open_lock_with(
-    path: &Path,
-    euid: u32,
-    sudo_uid: Option<u32>,
-    chown: &mut dyn FnMut(&fs::File) -> std::io::Result<()>,
-) -> Result<fs::File, String> {
+/// Open the lock file: created with `create_new` (never follows a symlink); an existing one is
+/// only checked ([`existing_file_policy`]) and opened without following a symlink.
+pub(crate) fn open_lock_with(path: &Path, owner: u32) -> Result<fs::File, String> {
     let shown = path.display();
-    match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)
-    {
-        Ok(f) => {
-            chown(&f).map_err(|e| format!("{shown}: {e}"))?;
-            return Ok(f);
-        }
+    match create_state_file(path) {
+        Ok(f) => return Ok(f),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(format!("{shown}: {e}")),
     }
@@ -1196,14 +1156,13 @@ pub(crate) fn open_lock_with(
             md.nlink(),
             md.uid(),
             md.mode(),
-            euid,
-            sudo_uid,
+            owner,
         )
         .map_err(|e| format!("{shown}: existing lock file refused: {e}"))?;
         let mut o = OpenOptions::new();
         o.read(true).write(true);
         #[cfg(target_os = "macos")]
-        o.custom_flags(O_NOFOLLOW);
+        o.custom_flags(O_NOFOLLOW | O_NONBLOCK);
         let f = o.open(path).map_err(|e| format!("{shown}: {e}"))?;
         let mine = f.metadata().map_err(|e| e.to_string())?;
         if (md.dev(), md.ino()) != (mine.dev(), mine.ino()) || mine.nlink() != 1 {
@@ -1213,7 +1172,7 @@ pub(crate) fn open_lock_with(
     }
     #[cfg(not(unix))]
     {
-        let _ = (md, euid, sudo_uid, chown);
+        let _ = (md, owner);
         OpenOptions::new()
             .read(true)
             .write(true)
@@ -1223,9 +1182,7 @@ pub(crate) fn open_lock_with(
 }
 
 fn open_lock(h: &dyn Host, path: &Path) -> Result<fs::File, String> {
-    open_lock_with(path, h.euid()?, sudo_uid(), &mut |f| {
-        crate::vm_lab::restore_sudo_owner(f)
-    })
+    open_lock_with(path, h.state_owner())
 }
 
 // ---------------------------------------------------------------- up / rollback / down
@@ -1352,12 +1309,8 @@ fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     }
     let (uplink, gateway) = preflight(h)?;
     let token = random_token()?;
-    let mut mark = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(marker_path(&a.manifest))
-        .map_err(|e| format!("marker: {e}"))?;
-    crate::vm_lab::restore_sudo_owner(&mark).map_err(|e| e.to_string())?;
+    let mut mark =
+        create_state_file(&marker_path(&a.manifest)).map_err(|e| format!("marker: {e}"))?;
     writeln!(mark, "{token}").map_err(|e| e.to_string())?;
     drop(mark);
     let secs = SystemTime::now()
@@ -1684,8 +1637,21 @@ fn dispatch(h: &dyn Host, a: &Args, wait: Duration, out: &mut Vec<String>) -> Re
 }
 
 pub fn run(args: &[String]) -> Result<i32, String> {
-    let a = Args::try_parse_from(std::iter::once("macos-lab".into()).chain(args.iter().cloned()))
+    let c = Cli::try_parse_from(std::iter::once("macos-lab".into()).chain(args.iter().cloned()))
         .map_err(|e| e.to_string())?;
+    let manifest = match c.manifest {
+        Some(m) => m,
+        None => expected_manifest(Path::new(STATE_DIR), &c.run_id),
+    };
+    let a = Args {
+        cmd: c.cmd,
+        run_id: c.run_id,
+        manifest,
+        grant: c.grant,
+        revoke: c.revoke,
+        down: c.down,
+        up: c.up,
+    };
     validate(&a)?;
     if a.cmd != "plan" && !cfg!(target_os = "macos") {
         return Err("macOS only (plan works anywhere)".into());

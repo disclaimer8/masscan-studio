@@ -91,9 +91,9 @@ fn pause_with_full_queue_still_completes_the_pause() {
     // Здесь проверяем именно независимость от потребителя.
     let (h, _fake, clock) = run_with_full_queue(3);
     h.pause();
-    std::thread::sleep(Duration::from_millis(100));
-    clock.advance(Duration::from_secs(10));
-    wait_for("outcome", || h.outcome().is_some());
+    advance_until(&clock, Duration::from_secs(10), "outcome", || {
+        h.outcome().is_some()
+    });
     let events = drain_to_finished(&h);
     assert_eq!(all_replies(&events).len() as u64, PROBES);
     assert!(matches!(
@@ -120,10 +120,10 @@ fn pause_at_rate_1_with_full_queue_is_not_blocked_by_consumer() {
     });
     // Очередь (ёмкость 1) полна, потребитель молчит.
     h.pause();
-    // Дать RX увидеть конец TX и зафиксировать срок wait, потом двигать время.
-    std::thread::sleep(Duration::from_millis(100));
-    clock.advance(Duration::from_secs(5));
-    wait_for("outcome", || h.outcome().is_some());
+    // RX фиксирует срок wait, увидев конец TX; время двигается, пока не будет итога.
+    advance_until(&clock, Duration::from_secs(5), "outcome", || {
+        h.outcome().is_some()
+    });
     let (out, events) = h.join_drain().unwrap();
     assert_eq!(out.reason, Reason::Paused);
     assert!(events.contains(&Event::CheckpointReady { next_index: 1 }));

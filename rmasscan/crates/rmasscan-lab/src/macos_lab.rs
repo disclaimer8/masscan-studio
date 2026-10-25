@@ -1077,6 +1077,19 @@ fn plan(out: &mut Vec<String>) {
     out.push(format!(
         "chmod 0600 and chgrp wheel on /dev/bpf0..{BPF_LAST}"
     ));
+    out.push("# macos-lab link --down / --up (root; part B only)".into());
+    out.push(format!(
+        "ifconfig {PEER_IF} down   (Darwin drops the static ARP entry)"
+    ));
+    out.push(format!("ifconfig {PEER_IF} up, then restore the entry:"));
+    out.push(arp_delete().join(" "));
+    out.push(
+        up_steps()
+            .iter()
+            .find(|s| s[0] == "arp")
+            .map(|s| s.join(" "))
+            .unwrap_or_default(),
+    );
     out.push("# macos-lab down (root)".into());
     out.push(arp_delete().join(" "));
     out.push(format!("ifconfig {SCANNER_IF} destroy"));
@@ -1590,7 +1603,60 @@ fn link_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String
     let word = if a.down { "down" } else { "up" };
     out.push(format!("+ ifconfig {PEER_IF} {word}"));
     h.sh(&["ifconfig", PEER_IF, word])?;
-    Ok(0)
+    if a.down {
+        out.push(
+            "note: Darwin drops the static ARP entry when feth4202 goes down; link --up restores it"
+                .into(),
+        );
+        return Ok(0);
+    }
+    Ok(restore_arp(h, out))
+}
+
+/// What to run by hand when the ARP entry could not be restored.
+pub const ARP_FALLBACK: &str = "manual fallback: sudo arp -d 198.18.0.1 ifscope feth4202; sudo arp -S 198.18.0.1 02:ac:00:00:00:01 ifscope feth4202";
+
+/// After `ifconfig feth4202 up` the entry is gone or `(incomplete)`, and a plain `arp -S` over
+/// an incomplete entry does nothing. What works is deleting the constant entry (a missing one is
+/// fine) and setting it again. Only constants reach `arp`. The entry is then checked (root sees
+/// real MACs); rc 10 with the manual fallback if it is not back.
+fn restore_arp(h: &dyn Host, out: &mut Vec<String>) -> i32 {
+    out.push(format!("+ {}", arp_delete().join(" ")));
+    if let Err(e) = h.sh(&arp_delete()) {
+        out.push(format!(
+            "note: arp -d: {e} (ignored: the entry may not exist)"
+        ));
+    }
+    let set = up_steps()
+        .into_iter()
+        .find(|s| s[0] == "arp")
+        .unwrap_or_default();
+    out.push(format!("+ {}", set.join(" ")));
+    let set_ok = match h.sh(&set) {
+        Ok(_) => true,
+        Err(e) => {
+            out.push(format!("FAILED: {e}"));
+            false
+        }
+    };
+    let back = h.sh(&["arp", "-an"]).is_ok_and(|t| {
+        parse_arp(&t).iter().any(|e| {
+            e.ip == SOURCE_IP
+                && e.mac.as_deref() == Some(SCANNER_MAC)
+                && e.iface == PEER_IF
+                && e.permanent
+        })
+    });
+    if set_ok && back {
+        out.push(format!(
+            "OK: {SOURCE_IP} -> {SCANNER_MAC} on {PEER_IF} permanent again"
+        ));
+        0
+    } else {
+        out.push("FAILED: the permanent ARP entry is not back".into());
+        out.push(ARP_FALLBACK.into());
+        10
+    }
 }
 
 /// Recorded previous modes that differ from the macOS default `0600 root:wheel`, for

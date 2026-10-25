@@ -55,7 +55,11 @@ sudo "$BIN" macos-lab bpf-access --run-id m1 --grant
 
 # take the access back at any time (root), e.g. for the perm_denied runs
 sudo "$BIN" macos-lab bpf-access --run-id m1 --revoke
-# only for part B link loss on the peer side (root)
+# only for part B link loss on the peer side (root). Darwin drops the static ARP entry when
+# feth4202 goes down (it comes back "(incomplete)"); --up brings the interface up and restores the
+# entry (arp -d, then arp -S, both with the lab constants), verifies it, and exits 10 with the
+# manual fallback "sudo arp -d 198.18.0.1 ifscope feth4202; sudo arp -S 198.18.0.1
+# 02:ac:00:00:00:01 ifscope feth4202" if it is not back.
 sudo "$BIN" macos-lab link       --run-id m1 --down    # and --up
 
 # remove everything (root): arp -d, destroy both feth, set BPF to 0600 root:wheel, delete manifest/marker/lock

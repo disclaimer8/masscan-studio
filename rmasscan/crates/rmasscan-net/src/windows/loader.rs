@@ -2,8 +2,13 @@
 //! диагностика загруженных DLL.
 //!
 //! Правила:
-//! - только полный путь `<GetSystemDirectoryW>\Npcap\wpcap.dll`; cwd, PATH и
-//!   каталог EXE не участвуют (флаги поиска задаёт `sys`);
+//! - только полный путь `<GetSystemDirectoryW>\Npcap\wpcap.dll`; для самого
+//!   `wpcap.dll` cwd, PATH и каталог EXE не участвуют (флаги поиска задаёт
+//!   `sys`). Это НЕ касается статических импортов самого EXE (`version.dll`,
+//!   `iphlpapi.dll`, импорты std): их разрешает загрузчик процесса до `main`, и
+//!   каталог EXE идёт первым. Они закрыты линкерным флагом
+//!   `/DEPENDENTLOADFLAG:0x800` (`rmasscan/.cargo/config.toml`, см.
+//!   `docs/windows-wire-lab.md`, "DLL search hardening");
 //! - библиотека живёт в `Arc<NpcapApi>`; каждый [`super::handle::PcapHandle`]
 //!   держит свой `Arc`, поэтому `FreeLibrary` выполняется после `pcap_close`
 //!   последнего handle;

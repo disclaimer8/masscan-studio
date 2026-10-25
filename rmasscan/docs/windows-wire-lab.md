@@ -61,6 +61,27 @@ token still reports `TokenIsElevated` (and `IsTokenRestricted` is false for that
 `identity` is informational only). The harness therefore does not trust the flags: an inventory with no non-loopback
 adapter is exit 5 with an `access_hint`.
 
+## DLL search hardening
+
+`wire_scan.exe` imports `version.dll` and `iphlpapi.dll` statically (through `windows-sys`). Neither is a KnownDLL, so by
+default the loader would look in the EXE's own directory first, and a DLL planted next to the EXE would run in the
+(elevated) process before `main`. `wpcap.dll` itself is not affected: it is loaded by full path from
+`System32\Npcap` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`.
+
+- The workspace sets `-C link-arg=/DEPENDENTLOADFLAG:0x800` (`LOAD_LIBRARY_SEARCH_SYSTEM32`) for every
+  `windows` + `msvc` target in `rmasscan/.cargo/config.toml`. The linker writes it into the image's load config, so the
+  loader resolves the EXE's static imports from `System32` only.
+- A `RUSTFLAGS` environment variable **replaces** `[target.*] rustflags` from the config file (cargo does not merge
+  them). `scripts/package-windows-wire.ps1` sets `RUSTFLAGS` for the static CRT and therefore repeats the link-arg.
+- A crate built **outside this workspace** that links `rmasscan-net` (another repository, another `.cargo`
+  directory, or a build with its own `RUSTFLAGS`) must set the same link-arg itself. The library cannot set it for its
+  dependants.
+- The flag cannot protect against everything: extract the package into a directory that only Administrators can
+  write (for example `C:\Program Files\...` or a folder with an admin-only ACL), not into `Downloads` or a shared
+  folder, and run it from there.
+- Check on a build: `dumpbin /loadconfig wire_scan.exe` (or `link /dump /loadconfig`) lists the dependent load flag
+  `0x800`.
+
 ## `wire_scan` modes (EXE)
 
 | Mode | Opens adapter | Loads Npcap DLL | Sends |

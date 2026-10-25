@@ -23,7 +23,7 @@
 
 .PARAMETER SkipBuild
   Package an already built target\release\examples\wire_scan.exe (it must have been built
-  with RMASSCAN_SOURCE_COMMIT equal to -Commit and RUSTFLAGS='-C target-feature=+crt-static').
+  with RMASSCAN_SOURCE_COMMIT equal to -Commit and RUSTFLAGS='-C target-feature=+crt-static -C link-arg=/DEPENDENTLOADFLAG:0x800').
 #>
 [CmdletBinding()]
 param(
@@ -52,7 +52,9 @@ if (-not $SkipBuild) {
     # Redistributable on a stock Windows 11 (no C/C++ code of ours is added; this only
     # selects how the Rust runtime links Microsoft's own CRT).
     $prevFlags = $env:RUSTFLAGS
-    $env:RUSTFLAGS = '-C target-feature=+crt-static'
+    # RUSTFLAGS replaces .cargo/config.toml rustflags, so the DLL search hardening
+    # (LOAD_LIBRARY_SEARCH_SYSTEM32 for static imports) is repeated here.
+    $env:RUSTFLAGS = '-C target-feature=+crt-static -C link-arg=/DEPENDENTLOADFLAG:0x800'
     try {
         & cargo build --locked --release -p rmasscan-net --example wire_scan
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }

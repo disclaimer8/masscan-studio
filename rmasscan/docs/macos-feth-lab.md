@@ -59,7 +59,7 @@ sudo "$BIN" macos-lab bpf-access --run-id m1 --manifest "$M" --revoke
 # only for part B link loss on the peer side (root)
 sudo "$BIN" macos-lab link       --run-id m1 --manifest "$M" --down    # and --up
 
-# remove everything (root): arp -d, destroy both feth, restore BPF modes, delete manifest/marker/lock
+# remove everything (root): arp -d, destroy both feth, set BPF to 0600 root:wheel, delete manifest/marker/lock
 sudo "$BIN" macos-lab down       --run-id m1 --manifest "$M"
 ```
 
@@ -82,9 +82,10 @@ can read and inject raw frames on every interface, including `en0`, without root
 pointed at `feth4201` and on the uplink witness. Nodes the kernel creates later (`bpf16` and up)
 stay `0600 root:wheel`. Run `--revoke` whenever no run is active.
 
-`--revoke` always sets `0600 root:wheel` (mode first, then group). `down` puts back the modes the
-first grant recorded in the manifest (only if a grant happened; otherwise `/dev/bpf*` is not
-touched). A grant that fails half way reverts the nodes it changed and exits 10.
+`--revoke` and `down` always set `0600 root:wheel` (mode first, then group); they never apply a value read
+from the user-writable manifest. The manifest keeps the modes seen before the first grant for
+information only; if any differed from `0600 root:wheel` (a ChmodBPF Mac), `down` says so and you
+restore them by hand. A grant that fails half way reverts the nodes it changed and exits 10.
 
 ## Printing rules (`status`; also run inside `up` before the first change and after the last)
 

@@ -54,6 +54,7 @@ pub fn iface_mac(iface: &str) -> Result<[u8; 6], String> {
     iface_mac_os(iface)
 }
 
+#[cfg(target_os = "macos")]
 /// The MAC from `ifconfig IFACE` output (`ether xx:..`, octets without leading zeros are
 /// normalised). Unprivileged `getifaddrs` and `NET_RT_IFLIST` report the placeholder
 /// `02:00:00:00:00:00` for every Ethernet interface on recent macOS, while `ifconfig` shows the
@@ -170,6 +171,7 @@ mod tests {
     use rmasscan_engine::IoError;
     use std::collections::VecDeque;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_mac_comes_from_ifconfig_text_and_a_masked_placeholder_is_refused() {
         let real = "feth4201: flags=8863<UP> mtu 1500\n\tether 2:ac:0:0:0:1\n\tstatus: active\n";

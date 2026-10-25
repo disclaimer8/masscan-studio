@@ -1706,9 +1706,6 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         up: c.up,
     };
     validate(&a)?;
-    if a.cmd != "plan" && !cfg!(target_os = "macos") {
-        return Err("macOS only (plan works anywhere)".into());
-    }
     let mut out = vec![];
     let r = dispatch(&RealHost, &a, Duration::from_secs(30), &mut out);
     for l in out {

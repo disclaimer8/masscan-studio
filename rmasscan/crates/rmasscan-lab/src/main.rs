@@ -16,7 +16,10 @@ fn main() {
         "verify-wire" => rmasscan_lab::pcap::run(rest),
         "windows-verify" => rmasscan_lab::verify::run(rest),
         "vm-lab" => rmasscan_lab::vm_lab::run(rest),
+        #[cfg(target_os = "macos")]
         "macos-lab" => rmasscan_lab::macos_lab::run(rest),
+        #[cfg(not(target_os = "macos"))]
+        "macos-lab" => Err("macos-lab is macOS-only".into()),
         "peer" => rmasscan_lab::peer::run(rest),
         "capture" => rmasscan_lab::capture::run(rest),
         "deploy-manifest" => rmasscan_lab::deploy::run(rest),

@@ -5,7 +5,7 @@
 Cargo license-поля, релизы и spikes-дерево этой задачей не менялись.
 
 Состояние: исходная редакция (2026-10-24) — ветка `feat/rmasscan-stage2b-linux`, база `e5d6326`. Строки Windows обновлены 2026-10-25 на ветке
-`feat/rmasscan-stage2b-windows` (код `f64495c`, документы `044dc00` и позже); остальные строки не менялись. Источник перечня возможностей по слоям —
+`feat/rmasscan-stage2b-windows` (код `f64495c`, документы `044dc00` и позже). Строки macOS обновлены 2026-10-25 на ветке `feat/rmasscan-stage2c-macos-bpf` (код `717e45c`, evidence `0c6e3fb`); остальные строки не менялись. Источник перечня возможностей по слоям —
 [спецификация, §0.2](../superpowers/specs/2026-10-23-cross-platform-qt-rust-design.md);
 здесь он не дублируется. Контракты RX integrity/TX stall — там же, §0.1.
 
@@ -16,7 +16,9 @@ Cargo license-поля, релизы и spikes-дерево этой задач�
 | Linux merge readiness | **OPEN** | Код и контракты: `364ee49`, `c31ae16`; приёмка Linux измерена на коммите кода `27e3042`, evidence `8479ff2`, [раздел отчёта](2026-10-23-rmasscan-stage2b-linux.md); review Задач 1-5 и итоговое review ветки пройдены (замечания закрыты) | Остаётся только: (1) CI на точном запушенном HEAD зелёный (**NOT RUN**, push не разрешён); (2) решение о merge принимает пользователь отдельно |
 | Windows correctness (VM) | **OPEN** (VM-приёмка PASS; GO ждёт зелёного CI на точном HEAD) | Приёмка на виртуальной Windows 11 + Npcap 1.90 (Admin-only), запечатанный стенд n2: часть A 29 PASS, часть B 19 PASS (коды `9ecbe32`), часть C 21 PASS (`847e218`); перепроверка исправлений итогового ревью на `931f69f`, 4 прогона PASS (`perm_restricted_scan` exit 5, флаг поиска DLL 0x800 на EXE из пакета, подложенный файл-не-DLL рядом с EXE не ломает запуск; каталоги overall NOT RUN by design; раздел 11 отчёта). Полные A, B и C на исправленном бинаре не перезапускались (**NOT RUN**). Отчёт [Windows VM acceptance](2026-10-24-rmasscan-windows-vm-acceptance.md), сырые данные [raw](2026-10-24-rmasscan-windows-vm-acceptance-raw/) (evidence `dd78c4b`, `d2726df`, `c5ee494`, перепроверка `bfe069f`). План: [Windows](../superpowers/plans/2026-10-24-rmasscan-stage2b-windows.md) | Единый список: (1) CI на точном HEAD **NOT RUN** (push не разрешён; сборка и тесты на трёх ОС вручную прошли, но это не CI) — недостающие условия GO для VM: CI этого HEAD и CI Linux-базы Задачи 0, оба **NOT RUN**; (2) физический NIC не доказан (**NOT RUN**), вне этого GO: Windows correctness в целом требует и его; VM не заменяет физическую приёмку |
 | Windows throughput | **OPEN** | Часть C: на VM gate ±20% MET на 100 и 1000 pps, **OPEN** на 10k и 100k; потолок VM около 6.4 kpps (медиана 6444.6 / 6321.1 pps) при одном `pcap_sendpacket` на кадр; [отчёт](2026-10-24-rmasscan-windows-vm-acceptance.md), раздел 6 | 2B-sendqueue, затем замер на целевом (физическом) NIC. Измерение VM не есть физическая скорость |
-| macOS correctness | **NOT STARTED** | Нет плана и кода BPF-адаптера | Отдельный план; аппаратная проверка macOS; те же контракты потерь/остановки |
+| macOS correctness (feth) | **OPEN** (PASS по частям A/C, B с одним INVALID (linkloss); GO ожидает зелёного CI на точном HEAD и итогового ревью) | Приёмка на паре `feth4201`/`feth4202`, macOS 27.0.1, Apple M4 Pro, запечатанный стенд `m1`: часть A 29 PASS, часть C 21 PASS (медианы 100.4 / 1014.0 / 10212.6 / 93808.6 pps, rate gate MET на всех четырёх), часть B 17 PASS и 1 INVALID (`linkloss`: сканер завершился `Completed` без отказа TX/линка при падении линка на стороне пира, предварительное правило) плюс прерванная попытка `linkloss`, хранимая только для изоляции; код `717e45c`, верификатор `2989ace`, evidence `0c6e3fb`; 0 кадров лаборатории на `en0` в 60 захватах, 0 чужих SYN, `raw_run_allowed` true везде. Отчёт [macOS BPF acceptance](2026-10-25-rmasscan-macos-bpf-acceptance.md), [spike](2026-10-25-rmasscan-macos-bpf-spike.md), [raw](2026-10-25-rmasscan-macos-bpf-acceptance-raw/) | Единый список: (1) CI на точном HEAD **PENDING** (зелёный прогон `40198055873` относится только к `b491a17`); (2) итоговое ревью ветки **NOT RUN**; (3) живая перепроверка `c01` и `perm_denied_scan` на итоговом коммите **NOT RUN**; (4) ручные прогоны на трёх ОС на итоговом HEAD **NOT RUN**; (5) `linkloss` остаётся INVALID, класс отказа линка **OPEN**; (6) физический NIC вне этого GO |
+| macOS physical NIC correctness (USB/Thunderbolt Ethernet) | **NOT RUN** | Все данные сняты на паре `feth` (копирование в ядре); физического стенда нет. Риск блокировки `write()` на физическом NIC (XNU `bpfwrite`, `MBUF_WAITOK`) — **OPEN**; `bs_drop` — нижняя граница, потери ниже BPF не видны; sleep/wake **NOT RUN**; macOS 14 **NOT RUN** | Физический Ethernet-адаптер на Mac, те же контракты потерь/остановки/дедлайна, замер блокировки `write()` |
+| macOS throughput (физический NIC) | **OPEN** | На `feth` медианы 100.4 / 1014.0 / 10212.6 / 93808.6 pps, gate ±20% MET; это копирование в ядре, не скорость физического NIC | Замер на физическом NIC (USB/Thunderbolt Ethernet) |
 | Studio integration | **OPEN** (pinned engine устарел) | Раздел 2 | Обновить vendor до актуального engine/net; настоящий Scan вместо offline-preview/fake-process; runner gate (раздел 5); UI-паритет |
 | Distribution | **OPEN** | Раздел 4 | Решение по лицензиям (раздел 4.3); воспроизводимый source/binary bundle; повторная проверка ad-hoc подписи Mac |
 
@@ -101,7 +103,7 @@ INCONCLUSIVE; Windows-запуск не проверен (Wine не засчит
 
 ### 3.2. macOS
 
-BPF: не начато. Нужны отдельный план, аппаратная проверка, те же контракты потерь/остановки. Ad-hoc подпись
+BPF-адаптер реализован (этап 2C); живая приёмка выполнена на запечатанной паре `feth4201`/`feth4202` (macOS 27.0.1, один Mac): части A и C PASS, часть B с одним INVALID (`linkloss`), см. [отчёт](2026-10-25-rmasscan-macos-bpf-acceptance.md). `feth` это копирование в ядре, не физический NIC: физический Ethernet-адаптер (USB/Thunderbolt), throughput на нём, блокировка `write()` на нём, sleep/wake и macOS 14 остаются **NOT RUN**/**OPEN**; CI не выполняет живых macOS-тестов. Ad-hoc подпись
 Mac-приложения проверяется повторно перед GUI-поставкой.
 
 ## 4. Поставка и лицензии
@@ -177,5 +179,5 @@ AGPL-3.0 для порта принят пользователем; Nmap ост�
 
 ## 6. Что этот документ не закрывает
 
-Windows на физическом NIC, Windows throughput, macOS, UI и licensing gates остаются открытыми (Windows VM correctness: OPEN до зелёного CI на точном HEAD, см. таблицу). Очередь дальше: Windows/Npcap физический стенд и sendqueue, macOS BPF, сетевая
+Windows на физическом NIC, Windows throughput, macOS на физическом NIC и его throughput, UI и licensing gates остаются открытыми (Windows VM correctness и macOS correctness (feth): OPEN до зелёного CI на точном HEAD, см. таблицу). Очередь дальше: Windows/Npcap физический стенд и sendqueue, macOS физический NIC, сетевая
 интеграция (discovery/ARP, network identity, sleep/VPN), runner/Studio, поставка.

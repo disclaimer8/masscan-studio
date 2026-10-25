@@ -1,7 +1,9 @@
 # CI порта masscan на Rust: core, cli, engine, net и lab; интерпретаторы скриптов не требуются.
 # Raw-сокеты, сеть и повышение прав не используются: тесты, открывающие AF_PACKET, помечены #[ignore]
 # и идут только в замкнутом стенде (wire-lab.sh). CI не выполняет raw I/O;
-# Windows Npcap проверяется offline/fake tests, macOS raw I/O пока не реализован.
+# Windows Npcap проверяется offline/fake tests. macOS raw I/O (BPF-адаптер) реализован, но его живые тесты
+# (rmasscan-net/tests/macos_live.rs, #[ignore]) идут только на запечатанной паре feth под root-грантом
+# /dev/bpf*; CI компилирует macOS-код и гоняет offline/fake-тесты, живых macOS-тестов не выполняет.
 name: rmasscan
 
 on:

@@ -1037,13 +1037,20 @@ fn both_guards_fail_on_a_symlink_to_an_outside_file_with_the_banned_shebang() {
 // ---- final review M-4: the guards are allowlists, and other interpreters are scanned like the first ----
 
 /// Names of the other interpreters, assembled so this file does not contain them as words.
+// Every user of these runs the shell guard through bash, so they are unix-only like their tests.
+#[cfg(unix)]
 const IA: &str = concat!("pe", "rl");
+#[cfg(unix)]
 const IB: &str = concat!("ru", "by");
+#[cfg(unix)]
 const IC: &str = concat!("ph", "p");
+#[cfg(unix)]
 const ID: &str = concat!("l", "ua");
+#[cfg(unix)]
 const IN: &str = concat!("no", "de");
 
 /// Both guards on one planted tree; they must agree. Returns the exit code of the shell guard.
+#[cfg(unix)]
 fn both_guards(tag: &str, files: &[(&str, String)]) -> i32 {
     let (rc, text) = guard_with_links(tag, files, &[]);
     assert!(rc == 0 || text.contains("FAIL"), "{text}");

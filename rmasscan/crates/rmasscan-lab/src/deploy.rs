@@ -367,6 +367,8 @@ mod tests {
         assert!(StagedScripts::load(|_| Ok(Vec::new())).is_err());
     }
 
+    // The orchestrator runs on Mac and Linux; this test relies on unix paths or tools.
+    #[cfg(unix)]
     #[test]
     fn the_deploy_manifest_command_hashes_the_installed_file() {
         let dir = std::env::temp_dir().join(format!("rmasscan-deploy-{}", std::process::id()));

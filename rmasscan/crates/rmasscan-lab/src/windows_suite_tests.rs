@@ -690,6 +690,8 @@ fn old_schema_and_refused_rerun_have_their_own_exit_codes_and_touch_nothing() {
 }
 
 // ---- gate ----
+// The orchestrator runs on Mac and Linux; this test relies on unix paths or tools.
+#[cfg(unix)]
 #[test]
 fn gate_binds_the_nonce_records_the_verify_and_only_then_reports_status() {
     let w = World::new("gate-ok");
@@ -838,6 +840,8 @@ fn a_refused_gate_starts_no_listener_capture_marker_or_scanner() {
             .any(|c| c.starts_with("scp -q -r") || c.contains("home-pc:/home/a1/winvm/t4-ev"))
     );
 }
+// The orchestrator runs on Mac and Linux; this test relies on unix paths or tools.
+#[cfg(unix)]
 #[test]
 fn an_aborted_run_is_copied_from_its_own_scratch_into_runs_aborted_under_tag_and_run_id() {
     // WR N3: the copy source and destination are pinned exactly, not just "some scp -r".
@@ -1252,6 +1256,8 @@ fn a_manifest_for_another_commit_or_binary_path_or_a_missing_one_is_refused_loca
     );
     assert!(stand.calls().is_empty());
 }
+// The orchestrator runs on Mac and Linux; this test relies on unix paths or tools.
+#[cfg(unix)]
 #[test]
 fn guest_scripts_come_from_the_commit_and_their_hashes_are_evidence() {
     let w = World::new("guest-scripts");
@@ -2017,6 +2023,8 @@ fn the_remote_scratch_stays_marked_until_the_local_copy_matches_the_recorded_has
         );
     }
 }
+// The orchestrator runs on Mac and Linux; this test relies on unix paths or tools.
+#[cfg(unix)]
 #[test]
 fn the_sweep_keeps_uncopied_abort_evidence_and_removes_the_rest() {
     // Runs the generated script for real on a scratch tree (POSIX sh, GNU or BSD readlink -f).

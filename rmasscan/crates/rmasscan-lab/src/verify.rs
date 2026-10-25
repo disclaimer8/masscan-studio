@@ -2416,7 +2416,11 @@ pub(crate) fn perf_summary(runs: &[Value]) -> Value {
 /// started) are not part of the plan, but their witness captures are still lab-isolation evidence: an
 /// eno1 frame or a foreign SYN there fails the directory. A copy without any pcap is not listed.
 fn aborted_runs(root: &Path, man: &Value) -> Vec<Value> {
-    let Ok(entries) = fs::read_dir(root.join("runs_aborted")) else {
+    pcap_dir_findings(root, "runs_aborted", man)
+}
+/// The lab-isolation checks of every directory below `root/sub` that holds a witness pcap.
+fn pcap_dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
+    let Ok(entries) = fs::read_dir(root.join(sub)) else {
         return Vec::new();
     };
     let mut dirs: Vec<_> = entries
@@ -2438,7 +2442,7 @@ fn aborted_runs(root: &Path, man: &Value) -> Vec<Value> {
         }
         let kind = items
             .iter()
-            .filter(|it| name.starts_with(&format!("{}.", s(&it["tag"]))))
+            .filter(|it| name == s(&it["tag"]) || name.starts_with(&format!("{}.", s(&it["tag"]))))
             .max_by_key(|it| s(&it["tag"]).len())
             .map_or("", |it| s(&it["kind"]));
         let mut r = Run::new(&name);
@@ -2466,9 +2470,15 @@ fn aborted_runs(root: &Path, man: &Value) -> Vec<Value> {
 /// Every run of `root` (kept, discarded or aborted) whose lab-isolation checks tripped. The suite
 /// refuses to start or to `--rerun` in a directory where this is not empty.
 pub fn safety_trips(root: &Path) -> Vec<String> {
-    array(&verify_dir(root)["safety_trips"])
+    let man = read_json(root.join("manifest.json")).unwrap_or(Value::Null);
+    ["runs", "runs_discarded", "runs_aborted"]
         .iter()
-        .map(|t| s(t).to_owned())
+        .flat_map(|sub| {
+            pcap_dir_findings(root, sub, &man)
+                .into_iter()
+                .filter(|r| r["safety_trip"] == true)
+                .map(move |r| format!("{sub}/{}", s(&r["tag"])))
+        })
         .collect()
 }
 pub fn verify_dir(root: &Path) -> Value {

@@ -19,6 +19,13 @@ struct Knobs {
     guest_clock_offset: f64,
     tamper_script: Option<String>,
     missing_script: Option<String>,
+    /// The process has been asked to stop (Ctrl-C): ordinary exec calls die like `command()` does.
+    stopped: bool,
+    /// Raise `stopped` the moment the guest scanner runner is started (and let it fail).
+    stop_at_runner: bool,
+    lock_held: bool,
+    /// `scp -r remote/. local` copies nothing.
+    no_dir_copy: bool,
 }
 struct Stand {
     src: PathBuf,
@@ -29,6 +36,8 @@ struct Stand {
     nonce: RefCell<String>,
     recorded_nonce: RefCell<String>,
     commit_reads: RefCell<Vec<(String, String)>>,
+    pauses: RefCell<Vec<Duration>>,
+    locks: Cell<usize>,
 }
 /// The "installed" Linux binary of the fake stand; the default deploy manifest vouches for it.
 const LAB_BINARY: &[u8] = b"rmasscan-lab test binary";
@@ -57,6 +66,8 @@ impl Stand {
             nonce: RefCell::default(),
             recorded_nonce: RefCell::default(),
             commit_reads: RefCell::default(),
+            pauses: RefCell::default(),
+            locks: Cell::new(0),
         }
     }
     fn script_bytes(&self, name: &str) -> Option<Vec<u8>> {
@@ -145,6 +156,16 @@ impl Stand {
         if cmd.contains("rx_dropped") {
             return out(0, "0\n");
         }
+        if cmd.contains("eno1_size=") {
+            let n = self.frames("eno1");
+            let size = if n == 0 { 24 } else { 24 + 100 * n };
+            return out(
+                0,
+                &format!(
+                    "eno1_size={size} frames={n}\nlistening on x, link-type EN10MB\n{n} packets captured\n{n} packets received by filter\n0 packets dropped by kernel\n0 packets dropped by interface\n"
+                ),
+            );
+        }
         if cmd.contains("sha256sum") {
             let mut s = String::new();
             for who in ["peer", "eno1"] {
@@ -204,7 +225,11 @@ impl Stand {
                 stderr: "verify stderr".into(),
             });
         }
-        if cmd.contains("windows_wire_run.ps1") && k.fail_runner {
+        if cmd.contains("windows_wire_run.ps1") && (k.fail_runner || k.stop_at_runner) {
+            drop(k);
+            if self.knobs.borrow().stop_at_runner {
+                self.knobs.borrow_mut().stopped = true;
+            }
             return out(255, "");
         }
         out(0, "")
@@ -213,6 +238,17 @@ impl Stand {
         let name = remote.rsplit(['/', '\\']).next().unwrap_or("");
         let dir = self.run_dir();
         let k = self.knobs.borrow();
+        if name == "." {
+            if k.no_dir_copy {
+                return out(1, "");
+            }
+            fs::create_dir_all(local).map_err(|e| e.to_string())?;
+            for who in ["peer", "eno1"] {
+                fs::write(local.join(format!("{who}.pcap")), self.pcap(who))
+                    .map_err(|e| e.to_string())?;
+            }
+            return out(0, "");
+        }
         let body: Option<Vec<u8>> = if name.ends_with(".verify.json") {
             Some(
                 json!({
@@ -279,7 +315,18 @@ impl Exec for Stand {
         }
         fs::read(repo_root().join(path)).map_err(|e| e.to_string())
     }
-    fn exec(&self, argv: &[String], _timeout: u64) -> Result<Output, String> {
+    fn exec(&self, argv: &[String], timeout: u64) -> Result<Output, String> {
+        // The real `command()` kills its child as soon as the stop flag is up.
+        if self.knobs.borrow().stopped {
+            self.log.borrow_mut().push(format!(
+                "killed {}",
+                argv.last().cloned().unwrap_or_default()
+            ));
+            return out(130, "");
+        }
+        self.exec_uninterruptible(argv, timeout)
+    }
+    fn exec_uninterruptible(&self, argv: &[String], _timeout: u64) -> Result<Output, String> {
         let last = argv.last().cloned().unwrap_or_default();
         match argv[0].as_str() {
             "ssh" => {
@@ -306,7 +353,22 @@ impl Exec for Stand {
             other => Err(format!("unexpected program {other}")),
         }
     }
-    fn pause(&self, _: Duration) {}
+    fn pause(&self, d: Duration) {
+        self.pauses.borrow_mut().push(d);
+        self.log
+            .borrow_mut()
+            .push(format!("pause {}s", d.as_secs()));
+    }
+    fn stopped(&self) -> bool {
+        self.knobs.borrow().stopped
+    }
+    fn lock_suite(&self) -> Result<LockGuard, String> {
+        if self.knobs.borrow().lock_held {
+            return Err(LOCK_BUSY.into());
+        }
+        self.locks.set(self.locks.get() + 1);
+        Ok(LockGuard::none())
+    }
 }
 struct World {
     root: PathBuf,
@@ -397,6 +459,8 @@ fn suite<'a>(stand: &'a Stand, root: &Path) -> Suite<'a> {
         plan: "failure".into(),
         timeout: 240,
         pm: PM.into(),
+        cleanup: Cell::new(false),
+        runner_invoked: Cell::new(false),
     }
 }
 const TAG: &str = "perm_elevated_control";
@@ -822,10 +886,11 @@ fn eno1_lab_frames_abort_the_suite_before_the_next_raw_run() {
     let a = suite_args(&w, &["--suite", "failure", "--only", TAG, "rxloss"]);
     let e = run_with(&a, &stand).unwrap_err();
     assert!(
-        matches!(&e, SuiteError::Abort(m) if m.contains("eno1 interlock")),
+        matches!(&e, SuiteError::Isolation(m) if m.contains("eno1 interlock")),
         "{e:?}"
     );
-    assert_eq!(e.code(), 10);
+    // A lab frame on eno1 is exit 11 (an isolation breach), not the generic abort 10.
+    assert_eq!(e.code(), 11);
     // The first run's evidence is written (so the verifier can blame it); the second never starts.
     assert!(w.root.join("runs").join(TAG).join("capture.json").is_file());
     assert_eq!(stand.count("rxloss"), 0, "{:?}", stand.calls());
@@ -834,9 +899,37 @@ fn eno1_lab_frames_abort_the_suite_before_the_next_raw_run() {
 }
 #[test]
 fn eno1_interlock_treats_unreadable_captures_as_unproven() {
-    assert!(eno1_interlock(&json!({"eno1":{"pcap":{"frames":0}}})).is_ok());
-    assert!(eno1_interlock(&json!({"eno1":{"pcap":{"frames":1}}})).is_err());
-    assert!(eno1_interlock(&json!({"eno1":{"pcap":{"frames":null}}})).is_err());
+    let eno = |frames: Value, tcpdump: Value| json!({"eno1":{"pcap":{"frames":frames},"tcpdump":tcpdump}});
+    let zero = json!({"captured":0,"received":0,"dropped_kernel":0});
+    assert!(eno1_interlock(&eno(json!(0), zero.clone())).is_ok());
+    assert!(eno1_interlock(&eno(json!(1), zero.clone())).is_err());
+    assert!(eno1_interlock(&eno(json!(null), zero.clone())).is_err());
+    // Final review I-2 (e): the tcpdump counters must be measured and zero, not only the frame count.
+    for bad in [
+        json!({"captured":0,"received":0}),
+        json!({"captured":0,"dropped_kernel":0}),
+        json!({"captured":0,"received":null,"dropped_kernel":0}),
+        json!({}),
+    ] {
+        let e = eno1_interlock(&eno(json!(0), bad.clone())).unwrap_err();
+        assert!(e.contains("not measured"), "{bad}: {e}");
+        assert!(!e.contains(LAB_FRAME_MARK));
+    }
+    let e = eno1_interlock(&eno(
+        json!(0),
+        json!({"captured":0,"received":2,"dropped_kernel":0}),
+    ))
+    .unwrap_err();
+    assert!(
+        e.contains(LAB_FRAME_MARK),
+        "a counted but unstored frame is a lab frame: {e}"
+    );
+    let e = eno1_interlock(&eno(
+        json!(0),
+        json!({"captured":0,"received":0,"dropped_kernel":4}),
+    ))
+    .unwrap_err();
+    assert!(e.contains("dropped 4") && !e.contains(LAB_FRAME_MARK));
     assert!(eno1_interlock(&json!({"eno1":{}})).is_err());
     assert!(eno1_interlock(&json!({})).is_err());
 }
@@ -1735,4 +1828,257 @@ fn a_perf_cell_runs_through_the_same_gate_with_its_rate_and_ports_and_scaled_bou
         assert!(!ev.join("peer.pcap.gz").exists());
     }
     assert_eq!(stand.count("gzip"), 0);
+}
+
+// ---- final review I-1 / I-2 / M-1 / M-3: safety, aborted evidence, Ctrl-C, the suite lock ----
+fn aborted_dirs(w: &World) -> Vec<PathBuf> {
+    fs::read_dir(w.root.join("runs_aborted"))
+        .map(|d| d.filter_map(Result::ok).map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+fn only_tag(w: &World) -> Vec<String> {
+    suite_args(w, &["--suite", "failure", "--only", TAG])
+}
+#[test]
+fn abort_after_send_with_an_eno1_frame_exits_11_and_the_verifier_fails_the_directory() {
+    let w = World::new("abort-frame");
+    let stand = Stand::new(&w.src);
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.fail_runner = true;
+        k.eno1_frames = 1;
+    }
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::Isolation(m) if m.contains(LAB_FRAME_MARK) && m.contains("aborted earlier")),
+        "{e:?}"
+    );
+    assert_eq!(e.code(), 11);
+    let dirs = aborted_dirs(&w);
+    assert_eq!(dirs.len(), 1, "{dirs:?}");
+    assert!(dirs[0].join("eno1.pcap").is_file());
+    assert!(dirs[0].join("abort-hashes-on-home-pc.txt").is_file());
+    let v = crate::verify::verify_dir(&w.root);
+    assert_eq!(v["overall"], "FAIL");
+    assert_eq!(v["safety_trips"].as_array().unwrap().len(), 1);
+    // The directory is now closed: neither a rerun nor a plain start is accepted.
+    let stand2 = Stand::new(&w.src);
+    let again = run_with(&only_tag(&w), &stand2).unwrap_err();
+    assert_eq!(again.code(), 11);
+    assert!(again.message().contains("runs_aborted/"), "{again:?}");
+    assert!(stand2.calls().is_empty() && stand2.locks.get() == 0);
+}
+#[test]
+fn abort_after_send_with_a_clean_eno1_is_still_not_run_and_discardable() {
+    let w = World::new("abort-clean");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().fail_runner = true;
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::Abort(m) if m.contains("no lab frame")),
+        "{e:?}"
+    );
+    assert_eq!(e.code(), 10);
+    assert_eq!(aborted_dirs(&w).len(), 1);
+    assert!(stand.count("eno1_size=") == 1, "{:?}", stand.calls());
+    let (verdict, beh) = crate::verify::run_status(&w.root, TAG);
+    assert_eq!(verdict, "NOT RUN");
+    assert!(may_discard(&verdict, beh));
+    let v = crate::verify::verify_dir(&w.root);
+    assert_ne!(v["overall"], "FAIL");
+    assert_eq!(v["safety_trips"], json!([]));
+}
+#[test]
+fn an_abort_before_the_runner_never_reads_eno1() {
+    let w = World::new("abort-early");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().verify_rc = 1;
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert_eq!(e.code(), 10);
+    assert_eq!(stand.count("eno1_size="), 0);
+}
+#[test]
+fn the_remote_scratch_stays_marked_until_the_local_copy_matches_the_recorded_hashes() {
+    for copies in [true, false] {
+        let w = World::new("abort-marker");
+        let stand = Stand::new(&w.src);
+        {
+            let mut k = stand.knobs.borrow_mut();
+            k.fail_runner = true;
+            k.no_dir_copy = !copies;
+        }
+        let e = run_with(&only_tag(&w), &stand).unwrap_err();
+        assert_eq!(e.code(), 10);
+        let calls = stand.calls();
+        let at = |needle: &str| calls.iter().position(|c| c.contains(needle));
+        let touch = at("touch -- ").expect("the marker is set first");
+        let hashes = at("sha256sum -- *").expect("hashes are recorded on home-pc");
+        let copy = calls
+            .iter()
+            .position(|c| c.starts_with("scp home-pc:") && c.contains("/. "))
+            .expect("the copy");
+        assert!(touch < hashes && hashes < copy, "{calls:?}");
+        let cleared = calls
+            .iter()
+            .position(|c| c.contains("rm -f --") && c.contains(ABORT_MARKER));
+        assert_eq!(cleared.is_some(), copies, "{calls:?}");
+        if let Some(c) = cleared {
+            assert!(copy < c, "the marker goes only after the copy: {calls:?}");
+        }
+        assert!(
+            e.message().contains("hash-matched") == copies
+                && e.message().contains("does not match") == !copies,
+            "{e:?}"
+        );
+        assert!(
+            !calls[touch..].iter().any(|c| c.contains("rm -rf")),
+            "an aborted run's scratch is not removed by its own failure path: {calls:?}"
+        );
+    }
+}
+#[test]
+fn the_sweep_keeps_uncopied_abort_evidence_and_removes_the_rest() {
+    // Runs the generated script for real on a scratch tree (POSIX sh, GNU or BSD readlink -f).
+    let base =
+        std::env::temp_dir().join(format!("rmasscan-sweep-{}-{}", std::process::id(), nonce()));
+    let base = fs::canonicalize({
+        fs::create_dir_all(&base).unwrap();
+        base
+    })
+    .unwrap();
+    let suite_dir = base.join("t4-ev/failure");
+    for rel in ["r1/kept", "r1/gone", "r2/gone2"] {
+        fs::create_dir_all(suite_dir.join(rel)).unwrap();
+        fs::write(suite_dir.join(rel).join("peer.pcap"), "x").unwrap();
+    }
+    fs::write(suite_dir.join("r1/kept").join(ABORT_MARKER), "").unwrap();
+    // A tag directory that is a symlink out of the tree must be left alone, with its target.
+    let outside = base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("precious"), "x").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, suite_dir.join("r2/link")).unwrap();
+    let cmd = sweep_scratch_command(suite_dir.to_str().unwrap());
+    let o = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{o:?}");
+    assert!(
+        suite_dir.join("r1/kept/peer.pcap").is_file(),
+        "marked evidence survives"
+    );
+    assert!(!suite_dir.join("r1/gone").exists() && !suite_dir.join("r2/gone2").exists());
+    assert!(
+        outside.join("precious").is_file(),
+        "a symlink is not followed"
+    );
+    assert!(
+        stdout.contains("kept-uncopied") && stdout.contains("r1/kept"),
+        "{stdout}"
+    );
+    // Once the marker is gone the next sweep removes the run and the empty parents.
+    fs::remove_file(suite_dir.join("r1/kept").join(ABORT_MARKER)).unwrap();
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .unwrap();
+    assert!(!suite_dir.join("r1").exists());
+    let _ = fs::remove_dir_all(&base);
+}
+#[test]
+fn ctrl_c_during_a_run_stops_the_remote_tools_through_the_uninterruptible_path() {
+    let w = World::new("ctrl-c");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().stop_at_runner = true;
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert!(matches!(e, SuiteError::Interrupted(_)), "{e:?}");
+    assert_eq!(e.code(), 130);
+    let calls = stand.calls();
+    // The stop flag kills ordinary calls; nothing of the cleanup may be among them.
+    assert!(
+        !calls.iter().any(|c| c.starts_with("killed ")),
+        "cleanup was self-killed: {calls:?}"
+    );
+    let at = |needle: &str| calls.iter().rposition(|c| c.contains(needle)).unwrap();
+    let (term, kill) = (at("kill -TERM -- \"$pid\""), at("kill -KILL"));
+    assert!(calls.iter().filter(|c| c.contains("/*/*/*/*.pid")).count() >= 2);
+    assert!(term < kill, "{calls:?}");
+    // At least 12 s separate the suite-wide TERM from the KILL (a link-loss tool restores lab0 first).
+    let between = &calls[term..kill];
+    assert!(
+        between
+            .iter()
+            .any(|c| c == &format!("pause {TERM_GRACE_S}s"))
+            && TERM_GRACE_S >= 12,
+        "{between:?}"
+    );
+    assert!(aborted_dirs(&w).len() == 1);
+}
+#[test]
+fn a_stop_request_before_a_run_starts_exits_130_without_a_remote_run() {
+    let w = World::new("ctrl-c-early");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().stopped = true;
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert_eq!(e.code(), 130);
+    assert_eq!(stand.count("-Action Verify"), 0);
+}
+#[test]
+fn the_suite_lock_is_held_by_every_invocation_and_refuses_a_second_one() {
+    let w = World::new("lock");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().lock_held = true;
+    for args in [only_tag(&w), strings(&["--cleanup", "--suite", "failure"])] {
+        let e = run_with(&args, &stand).unwrap_err();
+        assert!(
+            matches!(&e, SuiteError::NotRun(m) if m.contains("one suite at a time")),
+            "{e:?}"
+        );
+        assert_eq!(e.code(), 2);
+    }
+    assert!(
+        stand.calls().is_empty(),
+        "refused before any remote change: {:?}",
+        stand.calls()
+    );
+    stand.knobs.borrow_mut().lock_held = false;
+    assert_eq!(
+        run_with(&strings(&["--cleanup", "--suite", "failure"]), &stand).unwrap(),
+        0
+    );
+    assert_eq!(stand.locks.get(), 1, "--cleanup takes the lock too");
+    let lock_script = SUITE_LOCK_SCRIPT;
+    assert!(lock_script.contains("flock -n 9") && lock_script.contains(".suite.lock"));
+    assert!(
+        lock_script.contains("cat > /dev/null"),
+        "held until the session's stdin closes"
+    );
+}
+#[test]
+fn a_safety_finding_in_a_discarded_run_refuses_to_start_a_rerun() {
+    let w = World::new("safety-start");
+    let disc = w
+        .root
+        .join("runs_discarded")
+        .join(format!("{TAG}.attempt1"));
+    fs::create_dir_all(&disc).unwrap();
+    fs::write(
+        disc.join("eno1.pcap"),
+        crate::pcap::encode(&vec![(fixture::BASE, fixture::scanner_syn(80, 40000))]),
+    )
+    .unwrap();
+    let stand = Stand::new(&w.src);
+    let a = suite_args(&w, &["--suite", "failure", "--rerun", "--only", TAG]);
+    let e = run_with(&a, &stand).unwrap_err();
+    assert_eq!(e.code(), 11);
+    assert!(
+        e.message()
+            .contains(&format!("runs_discarded/{TAG}.attempt1")),
+        "{e:?}"
+    );
+    assert!(stand.calls().is_empty());
 }

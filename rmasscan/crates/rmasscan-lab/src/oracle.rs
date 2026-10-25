@@ -1,6 +1,5 @@
 use crate::windows_suite::{
-    command, epoch, hash, nonce, opt, options, quote, read_json, required, strings, valid_mac,
-    write_json,
+    command, epoch, hash, nonce, opt, quote, read_json, required, strings, valid_mac, write_json,
 };
 use serde_json::{Value, json};
 use std::{
@@ -63,7 +62,11 @@ pub(crate) fn convert(raw: &Value, out: &Path, host: &str) -> Result<Value, Stri
     )
 }
 pub fn run(args: &[String]) -> Result<i32, String> {
-    let o = options(args)?;
+    let o = crate::windows_suite::options_for(
+        "oracle-fixtures",
+        args,
+        &["out", "peer-mac", "remote-lab", "host"],
+    )?;
     if o.contains_key("help") {
         println!(
             "oracle-fixtures --out DIR --peer-mac MAC --remote-lab /absolute/linux/rmasscan-lab [--host minipc]"

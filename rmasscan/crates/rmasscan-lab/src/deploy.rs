@@ -174,7 +174,11 @@ const HELP: &str = "deploy-manifest --commit SHA --binary /absolute/installed/rm
 
 /// `rmasscan-lab deploy-manifest`: write the manifest of an installed binary.
 pub fn run(args: &[String]) -> Result<i32, String> {
-    let o = crate::windows_suite::options(args)?;
+    let o = crate::windows_suite::options_for(
+        "deploy-manifest",
+        args,
+        &["commit", "binary", "out", "toolchain"],
+    )?;
     if o.contains_key("help") {
         println!("{HELP}");
         return Ok(0);

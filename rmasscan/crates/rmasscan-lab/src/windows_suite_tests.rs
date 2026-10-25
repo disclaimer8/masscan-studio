@@ -1690,10 +1690,15 @@ fn perf_item(rate: u64, rep: u64) -> Value {
         .find(|i| i["tag"] == format!("perf.{rate}.r{rep}"))
         .unwrap()
 }
+fn with_plan(mut a: Vec<String>, plan: &str) -> Vec<String> {
+    let at = a.iter().position(|x| x == "--plan").unwrap();
+    a[at + 1] = plan.into();
+    a
+}
 fn perf_args(w: &World, extra: &[&str]) -> Vec<String> {
-    let mut a = vec!["--plan", "perf", "--suite", "perf"];
+    let mut a = vec!["--suite", "perf"];
     a.extend(extra);
-    suite_args(w, &a)
+    with_plan(suite_args(w, &a), "perf")
 }
 #[test]
 fn perf_is_a_known_plan_and_other_names_are_still_refused() {
@@ -1714,7 +1719,7 @@ fn a_perf_run_needs_an_explicit_suite_id() {
     // The default suite id is "functional": a perf directory must never be mistaken for it.
     let w = World::perf("perf-needs-suite", &[]);
     let stand = Stand::new(&w.src);
-    let mut a = suite_args(&w, &["--plan", "perf"]);
+    let mut a = with_plan(suite_args(&w, &[]), "perf");
     let at = a.iter().position(|x| x == "--suite");
     assert!(at.is_none(), "suite_args must not set --suite: {a:?}");
     a.extend(strings(&["--only", "perf.100.r1"]));
@@ -2081,4 +2086,178 @@ fn a_safety_finding_in_a_discarded_run_refuses_to_start_a_rerun() {
         "{e:?}"
     );
     assert!(stand.calls().is_empty());
+}
+
+// ---- final review M-5: unknown and repeated options are refused, and the documented commands parse ----
+#[test]
+fn unknown_and_repeated_options_are_refused_by_name_before_any_remote_command() {
+    let w = World::new("options");
+    for (extra, named) in [
+        (vec!["--pla", "perf"], "--pla"),
+        (vec!["--run-timeut", "10"], "--run-timeut"),
+        (vec!["--only", "a", "--only", "b"], "--only"),
+        (vec!["--rerun", "--rerun"], "--rerun"),
+        (vec!["--repo", "x", "--repo", "y"], "--repo"),
+    ] {
+        let stand = Stand::new(&w.src);
+        let e = run_with(&suite_args(&w, &extra), &stand).unwrap_err();
+        assert!(
+            matches!(&e, SuiteError::NotRun(m) if m.contains(named)),
+            "{extra:?}: {e:?}"
+        );
+        assert_eq!(e.code(), 2);
+        assert!(stand.calls().is_empty() && stand.locks.get() == 0);
+    }
+}
+#[test]
+fn every_subcommand_refuses_unknown_and_repeated_options() {
+    let one = |v: &[&str]| strings(v);
+    assert!(
+        crate::deploy::run(&one(&["--commit", "x", "--bogus", "1"]))
+            .unwrap_err()
+            .contains("--bogus")
+    );
+    assert!(
+        crate::deploy::run(&one(&["--out", "a", "--out", "b"]))
+            .unwrap_err()
+            .contains("--out")
+    );
+    assert!(
+        crate::oracle::run(&one(&["--hots", "x"]))
+            .unwrap_err()
+            .contains("--hots")
+    );
+    assert!(
+        crate::oracle::run(&one(&["--host", "a", "--host", "b"]))
+            .unwrap_err()
+            .contains("--host")
+    );
+    assert!(
+        crate::wire_suite::run(&one(&["--rate", "100"]))
+            .unwrap_err()
+            .contains("--rate")
+    );
+    assert!(
+        crate::wire_suite::run(&one(&["--reps", "1", "--reps", "2"]))
+            .unwrap_err()
+            .contains("--reps")
+    );
+    // Every option the help text names is accepted by its own allow-list.
+    for k in [
+        "out",
+        "commit",
+        "guest-exe",
+        "fixtures",
+        "remote-lab",
+        "deploy-manifest",
+        "repo",
+        "suite",
+        "plan",
+        "only",
+        "rerun",
+        "list",
+        "cleanup",
+        "run-timeout",
+    ] {
+        assert!(WINDOWS_SUITE_OPTIONS.contains(&k), "{k}");
+    }
+}
+/// Split a documented shell command into words (single quotes, double quotes and `\"` quote; `\x` is `x`).
+fn shell_words(s: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let (mut cur, mut quote, mut any) = (String::new(), None::<char>, false);
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        match (c, quote) {
+            ('\\', _) => match it.next() {
+                Some('"') if quote != Some('\'') => {
+                    quote = if quote == Some('"') { None } else { Some('"') };
+                    any = true;
+                }
+                Some(n) => cur.push(n),
+                None => {}
+            },
+            ('\'', None) | ('"', None) => {
+                quote = Some(c);
+                any = true;
+            }
+            (q, Some(open)) if q == open => quote = None,
+            (c, None) if c.is_whitespace() => {
+                if any || !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                    any = false;
+                }
+            }
+            (c, _) => cur.push(c),
+        }
+    }
+    if any || !cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+/// `(subcommand, argument words)` of every `rmasscan-lab <sub> ...` command in the fenced `sh` blocks.
+fn documented_commands(doc: &str) -> Vec<(String, Vec<String>)> {
+    let mut found = Vec::new();
+    let (mut in_sh, mut joined) = (false, String::new());
+    for line in doc.lines() {
+        let t = line.trim();
+        if t.starts_with("```") {
+            in_sh = t == "```sh";
+            joined.clear();
+            continue;
+        }
+        if !in_sh {
+            continue;
+        }
+        if let Some(head) = t.strip_suffix('\\') {
+            joined.push_str(head);
+            joined.push(' ');
+            continue;
+        }
+        joined.push_str(t);
+        let mut cmd = std::mem::take(&mut joined);
+        if let Some(i) = cmd.find("   #") {
+            cmd.truncate(i);
+        }
+        for sub in [
+            "windows-suite",
+            "wire-suite",
+            "oracle-fixtures",
+            "deploy-manifest",
+        ] {
+            if let Some(i) = cmd.find(&format!("rmasscan-lab {sub}")) {
+                let mut rest = cmd[i + "rmasscan-lab ".len() + sub.len()..]
+                    .trim()
+                    .to_owned();
+                if rest.ends_with('"') && !rest.ends_with("\\\"") {
+                    rest.pop();
+                }
+                found.push((sub.to_owned(), shell_words(&rest)));
+            }
+        }
+    }
+    found
+}
+#[test]
+fn the_commands_documented_in_rust_lab_md_parse_with_the_option_allow_lists() {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let doc = fs::read_to_string(Path::new(&manifest).join("../../docs/rust-lab.md")).unwrap();
+    let found = documented_commands(&doc);
+    let subs: std::collections::BTreeSet<_> = found.iter().map(|(s, _)| s.as_str()).collect();
+    assert!(
+        subs.contains("windows-suite") && subs.contains("deploy-manifest"),
+        "{subs:?}"
+    );
+    assert!(found.len() >= 5, "{} commands found", found.len());
+    for (sub, args) in &found {
+        let allowed: &[&str] = match sub.as_str() {
+            "windows-suite" => WINDOWS_SUITE_OPTIONS,
+            "deploy-manifest" => &["commit", "binary", "out", "toolchain"],
+            "wire-suite" => crate::wire_suite::WIRE_SUITE_OPTIONS,
+            _ => &["out", "peer-mac", "remote-lab", "host"],
+        };
+        options_for(sub, args, allowed)
+            .unwrap_or_else(|e| panic!("rust-lab.md: {sub} {args:?}: {e}"));
+    }
 }

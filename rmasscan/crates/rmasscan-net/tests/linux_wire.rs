@@ -430,6 +430,11 @@ fn lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised() {
         !all.contains("\"valid\":false"),
         "an INVALID cell: the 40-cell gate stays open (INVALID is never normalised)"
     );
+    // `"capture_valid":false` (a Stop stage's own capture) does not contain `"valid":false`.
+    assert!(
+        !all.contains("\"capture_valid\":false"),
+        "an INVALID Stop capture: the 40-cell gate stays open"
+    );
     // ±20% — открытый gate: этот тест НЕ утверждает паритет скорости.
 }
 

@@ -46,6 +46,14 @@ pub(crate) fn capture_complete(
         && lo <= frames
         && frames <= hi
 }
+/// The Stop stage of a perf cell counts only if its own capture is valid, the scanner exited 0, the stop
+/// took effect before the last probe and, for Rust, the engine reported `Stopped`.
+pub(crate) fn stop_stage_valid(stop: &Value, implementation: &str) -> bool {
+    stop["capture_valid"] == true
+        && stop["rc"] == 0
+        && stop["stopped_early"] == true
+        && (implementation == "c" || stop["reason"] == "Stopped")
+}
 /// Scanner-side reply completeness against the capture: unique replies the peer sent to the
 /// scanner. C reports open ports only (`received_closed` is `None`); Rust must also match the
 /// RST set. Exact equality, no tolerance, and an unreported open count is never complete.
@@ -1635,6 +1643,7 @@ impl Driver {
             cell["stop"]["join_ms"] = s["timing"]["join_ms"].clone();
             cell["stop"]["tx_sent"] = s["net"]["tx_sent"].clone();
         }
+        cell["stop"]["valid"] = json!(stop_stage_valid(&cell["stop"], implementation));
         self.save(true)?;
         fs::remove_file(rec.pcap).map_err(|e| e.to_string())?;
         println!(
@@ -1731,11 +1740,16 @@ impl Driver {
                         .cloned()
                         .collect::<Vec<_>>()
                 );
+                // An INVALID Stop stage (bad capture, non-zero exit, no early stop, wrong Rust outcome) is out of the
+                // median and counted apart, like an INVALID main run.
                 row[format!("{implementation}_stop_s_median")] = json!(median(
                     cs.iter()
+                        .filter(|c| c["stop"]["valid"] == true)
                         .filter_map(|c| c["stop"]["stop_to_exit_s"].as_f64())
                         .collect()
                 ));
+                row[format!("{implementation}_stop_invalid_runs")] =
+                    json!(cs.iter().filter(|c| c["stop"]["valid"] != true).count());
                 if implementation == "rust" {
                     row["rust_kernel_drops_per_run"] = json!(
                         cs.iter()
@@ -1770,8 +1784,13 @@ impl Driver {
         self.check(
             "perf",
             "matrix complete: every cell VALID",
-            Some(!cells.is_empty() && cells.iter().all(|c| c["valid"] == true)),
-            json!({"cells":cells.len(),"valid":cells.iter().filter(|c|c["valid"]==true).count()}),
+            Some(
+                !cells.is_empty()
+                    && cells
+                        .iter()
+                        .all(|c| c["valid"] == true && c["stop"]["valid"] == true),
+            ),
+            json!({"cells":cells.len(),"valid":cells.iter().filter(|c|c["valid"]==true).count(),"stop_valid":cells.iter().filter(|c|c["stop"]["valid"]==true).count()}),
         );
         self.check(
             "perf",

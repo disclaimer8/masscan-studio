@@ -40,7 +40,7 @@ fn valid_cell(implementation: &str, rate: u64, rep: u64) -> Value {
         "capture":{"valid":true,"kernel_drops":0,"interface_drop_delta":0,"invalid_reasons":[]},"rx_complete":true,
         "transmitted_wire":512,"steady_pps_wire":rate as f64,
         "cpu_user_s":0.1,"cpu_sys_s":0.1,"max_rss_kb":1000,
-        "stop":{"stop_to_exit_s":0.01}
+        "stop":{"stop_to_exit_s":0.01,"valid":true}
     });
     if implementation == "rust" {
         c["net_kernel_drops"] = json!(0);
@@ -95,6 +95,8 @@ fn assert_linux_wire_perf_acceptance(text: &str) {
     assert_eq!(bad.len(), 4, "rust_rx_health_bad_runs per rate");
     assert!(bad.iter().all(|v| v == "0"));
     assert!(!all.contains("\"valid\":false"));
+    // review 7ffa155 P2: `"capture_valid":false` does not contain `"valid":false`.
+    assert!(!all.contains("\"capture_valid\":false"));
 }
 
 #[test]
@@ -667,4 +669,77 @@ fn cleanup_signals_do_not_go_through_command_and_reach_the_process() {
         );
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+// ---- review 7ffa155, P2: an invalid Stop stage is never accepted ----
+fn good_stop(implementation: &str) -> Value {
+    let mut s = json!({"rc":0,"capture_valid":true,"stopped_early":true,"stop_to_exit_s":0.01});
+    if implementation == "rust" {
+        s["reason"] = json!("Stopped");
+    }
+    s
+}
+#[test]
+fn the_stop_stage_verdict_needs_capture_exit_stop_and_the_rust_outcome() {
+    for i in ["c", "rust"] {
+        assert!(stop_stage_valid(&good_stop(i), i), "{i}");
+        for (k, v) in [
+            ("capture_valid", json!(false)),
+            ("capture_valid", Value::Null),
+            ("rc", json!(1)),
+            ("stopped_early", json!(false)),
+        ] {
+            let mut s = good_stop(i);
+            s[k] = v.clone();
+            assert!(!stop_stage_valid(&s, i), "{i} {k}={v}");
+        }
+    }
+    let mut s = good_stop("rust");
+    s["reason"] = json!("Completed");
+    assert!(!stop_stage_valid(&s, "rust"), "Rust must report Stopped");
+    assert!(
+        !stop_stage_valid(&json!({}), "c"),
+        "absent fields never pass"
+    );
+}
+#[test]
+fn an_invalid_stop_stage_is_out_of_the_stop_median_and_the_matrix_check() {
+    let dir = scratch("invalid-stop");
+    let mut d = driver_in(&dir);
+    let mut cells = full_matrix();
+    for c in cells
+        .iter_mut()
+        .filter(|c| c["impl"] == "rust" && c["rate"] == 100 && c["rep"] == 1)
+    {
+        c["stop"] = json!({"capture_valid":false,"valid":false,"stop_to_exit_s":99.0});
+    }
+    d.perf_summarize(&cells, &[100, 1000, 10000, 100000]);
+    let row = &d.extra["perf_summary"][0];
+    assert_eq!(row["rust_stop_s_median"], json!(0.01), "{row}");
+    assert_eq!(row["rust_stop_invalid_runs"], json!(1));
+    assert_eq!(row["c_stop_invalid_runs"], json!(0));
+    let matrix = d
+        .checks
+        .iter()
+        .find(|c| c["name"].as_str().unwrap().starts_with("matrix complete"))
+        .unwrap();
+    assert_eq!(matrix["result"], "FAIL", "{matrix}");
+    let _ = fs::remove_dir_all(dir);
+}
+#[test]
+fn the_linux_wire_acceptance_rejects_an_invalid_stop_capture_in_a_results_file() {
+    let mut cells = full_matrix();
+    cells[0]["stop"]["capture_valid"] = json!(false);
+    let dir = scratch("invalid-stop-file");
+    let mut d = driver_in(&dir);
+    d.extra["perf_cells"] = json!(cells);
+    d.perf_summarize(&cells, &[100, 1000, 10000, 100000]);
+    d.save(false).unwrap();
+    let text = fs::read_to_string(dir.join("results.json")).unwrap();
+    let r = std::panic::catch_unwind(|| assert_linux_wire_perf_acceptance(&text));
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        r.is_err(),
+        "capture_valid=false in a Stop stage must fail the acceptance"
+    );
 }

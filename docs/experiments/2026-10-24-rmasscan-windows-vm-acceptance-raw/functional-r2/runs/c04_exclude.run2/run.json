@@ -1,0 +1,134 @@
+{
+  "attempt_id": "02020202020202020202020202020202",
+  "checkpoint": false,
+  "checkpoint_hex": null,
+  "checkpoint_next_index": null,
+  "discarded": 0,
+  "duplicates": 3,
+  "expected_total": 4,
+  "fail_detail": "",
+  "identity": {
+    "binary_path": "C:\\Users\\lab\\t4\\wire_scan.exe",
+    "binary_sha256": "362632ce174395e6a77aea7a2e97420a2e1e6dcf8bd9becbc1f12f5558d34c90",
+    "elevated": true,
+    "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "os": {
+      "arch": "x86_64",
+      "family": "windows",
+      "version": "10.0.26300"
+    },
+    "restricted_token": false,
+    "source_commit": "9ecbe32f82aac77d15575c855dfaa4c10c101ab4"
+  },
+  "job": {
+    "blackrock_rounds": 14,
+    "exclude": "198.18.0.0-198.18.0.1,198.18.0.3",
+    "iface": "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "job_digest": "7485d55712aac9f157bd86040f5459054bc9305f5097761d8a3f3ae94db5d6a8",
+    "ports": "80,81,443,82",
+    "rate": 100,
+    "retries": 0,
+    "router_mac": "02:57:4c:3d:2e:9b",
+    "seed": 1,
+    "shard": "1/1",
+    "source_port": "40000",
+    "src_ip": "198.18.0.1",
+    "src_mac": "52:54:00:04:80:a9",
+    "targets": "198.18.0.0/30",
+    "wait": 3
+  },
+  "net": {
+    "kernel_drops": 0,
+    "rx_errors": 0,
+    "rx_outgoing": 0,
+    "rx_packets": 7,
+    "rx_truncated": 0,
+    "rx_wrong_interface": 0,
+    "tx_errors": 0,
+    "tx_sent": 4,
+    "tx_uncertain": 0,
+    "tx_would_block": 0
+  },
+  "next_index": 4,
+  "npcap": {
+    "dlls": [
+      {
+        "name": "wpcap.dll",
+        "path": "C:\\WINDOWS\\system32\\Npcap\\wpcap.dll",
+        "sha256": "332f81cc1671a6d12ab4d20264a00ee16d12f6883745e05c92ee4030b3896a9f",
+        "version": "1.10.7.0"
+      },
+      {
+        "name": "Packet.dll",
+        "path": "C:\\WINDOWS\\system32\\Npcap\\packet.dll",
+        "sha256": "6f9116d9747dd356db97f6dfaf02fe1b9b0859ea3214856f17ced84d790658c2",
+        "version": "5.1.90.1020"
+      }
+    ],
+    "driver_version": "5.1.90.1020",
+    "lib_version": "Npcap version 1.90, based on libpcap version 1.10.7 (64-bit time_t)",
+    "utf8_text": true
+  },
+  "observe_ms": 0,
+  "opened_adapter": true,
+  "range": 4,
+  "reason": "Completed",
+  "received": 4,
+  "replies": [
+    "198.18.0.2:443:open",
+    "198.18.0.2:80:open",
+    "198.18.0.2:81:closed",
+    "198.18.0.2:82:closed"
+  ],
+  "reply_total": 4,
+  "reply_unique": 4,
+  "resources": {
+    "cpu_kernel_ms": 250,
+    "cpu_user_ms": 31,
+    "fds_after_join": 111,
+    "fds_before_open": 110,
+    "fds_open": 141,
+    "peak_working_set_bytes": 9977856,
+    "threads_after_join": 4,
+    "threads_after_join_immediate": 4,
+    "threads_before": 4,
+    "threads_settle_ms": 0.007,
+    "working_set_bytes_after_join": 6840320
+  },
+  "resumed_from_attempt": null,
+  "rx_health": {
+    "kernel_drops": 0
+  },
+  "scan_id": "01010101010101010101010101010101",
+  "sent": 4,
+  "src_mac": "52:54:00:04:80:a9",
+  "src_mac_check": "explicit-equal",
+  "start_index": 0,
+  "status": "ok",
+  "timing": {
+    "first_send_s": 0.002357,
+    "join_ms": 0.171,
+    "last_idx": 4,
+    "last_send_s": 0.106139,
+    "mark_idx": 1,
+    "steady_pps": 28.9,
+    "stop_requested": false,
+    "stop_to_outcome_ms": null,
+    "total_s": 3.169741
+  },
+  "tx_sent_after_observe": 4,
+  "tx_sent_at_join": 4,
+  "wall": {
+    "join_done_utc_ms": 1792883241563,
+    "outcome_utc_ms": 1792883241538,
+    "started_utc_ms": 1792883238393,
+    "t0_utc_ms": 1792883238393
+  },
+  "workers": {
+    "rx_alive_after_join": false,
+    "rx_tid": 2584,
+    "settle_ms": 7.575,
+    "tx_alive_after_join": false,
+    "tx_tid": 5100
+  }
+}

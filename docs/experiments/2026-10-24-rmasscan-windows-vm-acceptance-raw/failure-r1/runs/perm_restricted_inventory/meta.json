@@ -1,0 +1,20 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1792890363.347597,
+  "capture_stopped_utc": 1792890433.81452,
+  "end_marker_seen": true,
+  "exe_sha256": "362632ce174395e6a77aea7a2e97420a2e1e6dcf8bd9becbc1f12f5558d34c90",
+  "guest_exit": 5,
+  "guest_finished_utc": 1792890399.36603,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1792890369.051456,
+  "guest_times": {
+    "finished_utc": 1792890398.893,
+    "started_utc": 1792890388.712
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r4ba81a67df548977f2dc32a8e4249c77-8eb98b1567ec5473",
+  "kind": "perm_restricted",
+  "restricted_via": "runas /trustlevel:0x20000 (windows_wire_runas.cmd)",
+  "tag": "perm_restricted_inventory"
+}

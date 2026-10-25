@@ -1,0 +1,577 @@
+# Rust masscan: этап 2B-Linux, сквозная приёмка (задача 6)
+
+> **Исторический отчёт.** Описывает базу задачи `7ce39bc` и последующие правки
+> того дня. Пометки «NOT RUN» (независимое ревью, CI трёх ОС) относятся к моменту
+> написания и не отражают текущий статус: ревью 2026-10-24 находится в
+> `docs/experiments/2026-10-24-rmasscan-stage2b-review.md` (если файл
+> присутствует в вашей ветке), CI нужно смотреть для конкретного HEAD. Контракты
+> RX integrity и TX stall (`364ee49`, `c31ae16`) в этом отчёте не проверялись;
+> перечень возможностей см. §0 спеки studio
+> `docs/superpowers/specs/2026-10-23-cross-platform-qt-rust-design.md`.
+>
+> **Заменено (superseded-by):** результаты на `98ae43e` (матрица 40/40, паритет 1.027/1.003/1.001/1.002)
+> не относятся к текущему коду. Актуальная приёмка после контрактных правок `364ee49`/`c31ae16` — раздел
+> «Повторная приёмка Linux 2026-10-24» в конце этого файла и каталог
+> `2026-10-24-rmasscan-linux-acceptance-raw/`. Старые данные сохранены без изменений.
+
+Дата: 2026-10-23. Ветка `feat/rmasscan-stage2b-linux`, база задачи `7ce39bc`. Реальный
+AF_PACKET-ввод-вывод Rust-движка против закреплённого C-oracle ТОЛЬКО в замкнутом стенде
+(две netns + veth на `minipc`, без uplink/bridge/NAT). Это приёмка Linux с явным binding; Windows,
+macOS, discovery/ARP, source-identity и sendqueue сюда не входят.
+
+## Вердикт
+
+| Критерий GO Linux | Итог | Где |
+| --- | --- | --- |
+| Исходящие SYN Rust совпадают с C по порядку и байтам | PASS: 6 кейсов x 2 прогона, 12/12 побайтно | раздел 1 |
+| Ответы дают Open/Closed без дублей, чужих ответов нет | PASS на стенде; см. находку 5 (потери ответов при 100k pps) | разделы 1, 6 |
+| pause/resume не пропускает и не добавляет SYN | PASS: N=0, 1, 8, 15 и завершённое задание; конкатенация pcap == непрерывная трасса == трасса C | раздел 2 |
+| resume с другими rate/binding/targets/seed, чужим scan_id, повтором attempt_id, битым checkpoint | PASS: 13 отказов ДО открытия адаптера, на проводе 0 кадров | раздел 3 |
+| Stop <= 1 с при тишине и нагрузке | PASS: Stop->итог 20-50 мс (rate=1: тишина, RX drain, полная очередь) | раздел 4 |
+| Нет fd/thread leaks, нет ложного checkpoint при ошибках | PASS: потоки 1->1, fd 4->4, удаление veth -> `Failed(RxError)` без checkpoint | раздел 4 |
+| Метрики скорости приложены | да; paritet +-20% по скорости отправки ДОСТИГНУТ (rust/c 1.004-1.024) | раздел 5 |
+| Независимое ревью unsafe/timeout/resume | NOT RUN (делает контроллёр) | раздел 8 |
+| CI трёх ОС зелёный | NOT RUN (откладывается до push) | раздел 8 |
+
+**Статус: находка 5 (потеря ответов при 100k pps) ИСПРАВЛЕНА в этом дереве, GO Linux после ревью.**
+Приёмка нашла реальный дефект приёма: RX-сокет получал копии собственных исходящих кадров
+(PACKET_OUTGOING), не успевал их вычитывать, и ядро роняло настоящие ответы (до 11990 `tp_drops`, потеряно
+1-42 из 1196 Closed, итог `Completed`). Исправление (`PACKET_IGNORE_OUTGOING` на RX-сокете, раздел 7)
+входит в код продукта отдельным commit; после него `tp_drops == 0` и все 1196 Closed получены в каждом из
+5 повторов. Остаются только пункты NOT RUN из раздела 8 (независимое ревью unsafe, CI трёх ОС).
+
+## 0. Стенд, привилегии, хэши
+
+- Хост `minipc`: Ubuntu 26.04.1 LTS, ядро 7.0.0-38-generic, x86_64, 4 ядра, Python 3.14.4, iproute2 6.19.0,
+  tcpdump 4.99.6 (libpcap 1.10.6, TPACKET_V3), ethtool 6.19, rustc/cargo 1.99.1.
+- Привилегии: `sudo -n` без пароля. `wire-lab.sh` перезапускает себя через `sudo -n`, всё внутри лаборатории
+  идёт от root (нужен CAP_NET_RAW). Сборка и `cargo test` идут вне netns от обычного пользователя.
+- Замкнутость: те же seal-проверки, что в задаче 4 (нет uplink, default route, bridge, NAT, `ip_forward=0`,
+  IPv6 выключен, veth создан внутри netns сканера, список линков хоста не менялся); провал проверки
+  завершает запуск ДО трафика. См. `...-linux-raw/rust-isolation.json`, `rust-topology-*.txt`.
+  Очистка трогает только namespaces/процессы/файлы этого запуска: после каждого запуска
+  `namespaces_left=0`, процессов `wire_scan|tcpdump|masscan` не осталось. Глобальных `pkill`, правил
+  firewall, route и bridge нет.
+- Изменение стенда относительно задачи 4: на ДВУХ veth-концах этого запуска выключен tx-checksum offload
+  (`ethtool -K veth-a tx off`, `veth-b tx off`, только для suite rust/perf). Причина в находке 1.
+  Фикстуры C (SYN) от этого не зависят и не перегенерировались.
+- Binding: `veth-a`, MAC `02:aa:00:00:00:01`, source IP `10.200.0.100` (не назначен интерфейсу, правило
+  «source IP явный»), router MAC `02:aa:00:00:00:02`, seed 1, rounds 14, retries 0, shard 1/1.
+  Пир владеет `10.200.0.2-5`, открыты порты 80 и 8080, остальные порты отвечают RST.
+- C-oracle: оригинальный бинарь `8e6b3b0c07a81e8ea61d557c06134a21a6881614`,
+  sha256 `8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e` (не `--offline`-копия).
+  `/etc/masscan/masscan.conf` на хосте нет.
+- Rust: `target/release/examples/wire_scan` sha256 `1b3bfde7d75bb6ec1e67a5ca0e85de012c4a72c81a1b0ad688375508645c3aca`
+  (release, rustc 1.99.1; исходники рабочего дерева этого commit).
+- Скрипты (sha256): `wire-lab.sh` `c59d6bdf51f4...b7c`, `wire_suite.py` `b6c18330549d...189c`,
+  `wire_capture.py` `62ef56f53a9f...41c3`, `verify-wire.py` `fcb06cbdc917...dcef`
+  (полные значения в `rust-env.json`).
+
+## Команды (воспроизведение)
+
+```bash
+# Mac, офлайн (lab-тесты ignored)
+cd rmasscan
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cargo deny check bans licenses sources
+
+# minipc: сборка (вне netns), затем стенд
+cargo build --locked --release -p rmasscan-net --example wire_scan
+scripts/wire-lab.sh --oracle ~/rmasscan-oracle/masscan/bin/masscan --out OUT --suite rust \
+    --rust-bin target/release/examples/wire_scan --fixtures tests/golden/wire
+scripts/wire-lab.sh --oracle ~/rmasscan-oracle/masscan/bin/masscan --out OUT-PERF --suite perf \
+    --rust-bin target/release/examples/wire_scan --reps 5
+# независимый Rust-путь к тому же вердикту (читает артефакты, привилегии не нужны)
+RMASSCAN_WIRE_RESULTS=OUT RMASSCAN_WIRE_PERF_RESULTS=OUT-PERF \
+    cargo test --locked -p rmasscan-net --test linux_wire -- --include-ignored
+python3 scripts/verify-wire.py --self-test        # 31/31
+```
+
+Результаты проверок (сырые):
+
+- Mac: fmt чисто; clippy без предупреждений; `cargo test --locked --workspace` **298 passed, 0 failed,
+  7 ignored** (1 прежний release-бенчмарк + 6 ignored lab-тестов `linux_wire`); `cargo deny check bans licenses
+  sources`: ok.
+- minipc (Linux): clippy `--workspace --all-targets -D warnings` чисто, `cargo test --locked --workspace`
+  **333 passed, 0 failed, 13 ignored** (rustfmt на minipc не установлен, fmt проверен на Mac).
+- Стенд `--suite rust`, два независимых запуска: **120 PASS, 0 FAIL, 0 NOT RUN** оба
+  (`rust-run1/2.results.json`, 136 с каждый). Rust lab-тесты `linux_wire --include-ignored`: 9/9 ok
+  (каталоги первого запуска и итоговой матрицы); без каталога результатов тест падает с «NOT RUN».
+- Раздел NOT RUN: см. раздел 8.
+
+## 1. Паритет проводной последовательности с C
+
+Harness `examples/wire_scan.rs` (`ReadyPlan` + `Engine` + `open_explicit`; движку передаётся
+`OpenedAdapter.io`, `NetStatsHandle` остаётся у harness). Каждый из 6 кейсов задачи 4 запущен дважды и
+сравнён с зафиксированным pcap C (`tests/golden/wire/<case>.run1.pcap`) через `verify-wire.py`
+(упорядоченный поток IPv4/TCP кадров с одним SYN, побайтно; захват с drops/усечением это INVALID).
+
+| кейс | SYN | Open | Closed | результат (оба прогона) |
+| --- | --- | --- | --- | --- |
+| c01_one_addr_port_synack | 1 | 1 | 0 | PASS: 1 SYN идентичен |
+| c02_one_addr_port_rst | 1 | 0 | 1 | PASS |
+| c03_multi_addr_ports | 16 | 8 | 8 | PASS: 16 SYN идентичны и в том же порядке |
+| c04_exclude | 6 | 3 | 3 | PASS |
+| c05_srcport_single | 4 | 2 | 2 | PASS |
+| c06_srcport_range | 4 | 2 | 2 | PASS |
+
+Для каждого прогона дополнительно: множество ответов Rust (`ip:port:open|closed`) == множество ответов
+пира в эталонном захвате C; результатов без дублей (`reply_total == reply_unique == received`);
+`net.tx_sent == sent`, `tx_uncertain == tx_errors == 0`; итог `Completed`. Лишние копии SYN-ACK на
+проводе (пир повторяет SYN-ACK, потому что Rust, в отличие от C, не отвечает RST) подавляются dedup и
+учтены в `duplicates` (1-8 на кейс), а не выданы дважды. Независимая проверка в Rust
+(`lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run`) даёт тот же вердикт.
+
+## 2. Настоящая пауза и продолжение
+
+Пауза делается TX-декоратором harness: после N подтверждённых `Sent` реального I/O следующий вызов
+запрашивает `Pause` и возвращает `WouldBlockUnsent`, кадр N+1 не отправляется и остаётся у курсора.
+Кейс c03 (16 probe, rate 100, wait 3). `scan_id = 11..11`, attempt 1 = `aa..aa`, attempt 2 = `bb..bb`.
+
+| N | пауза: итог / sent / checkpoint next_index | продолжение: итог / sent | pause+resume == непрерывная трасса Rust | == фикстура C |
+| --- | --- | --- | --- | --- |
+| 0 (до первой отправки) | Paused / 0 / 0 | Completed / 16 | PASS, 16 SYN | PASS |
+| 1 | Paused / 1 / 1 | Completed / 15 | PASS | PASS |
+| 8 (середина) | Paused / 8 / 8 | Completed / 8 | PASS | PASS |
+| 15 (последний pending probe) | Paused / 15 / 15 | Completed / 1 | PASS | PASS |
+| 16 (завершённое задание) | Completed, checkpoint НЕТ | resume checkpoint с `next_index == range` отвергнут: `AlreadyCompleted` | - | - |
+
+Для каждого N: `scan_id` сохранён, `attempt_id` сменился, `resumed_from_attempt` равен attempt
+checkpoint-а; объединение ответов двух ног == ответы непрерывного прогона, дублей нет; число SYN на
+проводе ног (N + 16-N) == 16, то есть ни пропусков, ни повторов на стыке. Checkpoint 120 байт.
+Независимая проверка в Rust (`lab_pause_resume_pcap_concat_equals_continuous_trace`) даёт тот же вердикт.
+Сравнитель имеет самотесты на потерю, дубль и пропуск на стыке и перестановку ног (31/31).
+
+## 3. Отказы resume (все ДО открытия адаптера)
+
+Resume запускается с настоящим checkpoint N=8 (кроме явно указанных). Для каждого: код выхода 4,
+`opened_adapter=false`, `tx_sent=0` и **0 SYN в захвате на проводе**.
+
+| сценарий | ошибка |
+| --- | --- |
+| другой rate | `JobMismatch` |
+| другой binding (source MAC) | `JobMismatch` |
+| другой binding (имя интерфейса) | `JobMismatch` |
+| другие targets | `JobMismatch` |
+| другие порты | `JobMismatch` |
+| другой seed | `JobMismatch` |
+| другой scan_id | `ScanIdMismatch` |
+| повтор attempt_id | `AttemptIdReused` |
+| завершённое задание (`next_index == range`) | `AlreadyCompleted` |
+| битый checkpoint: перевёрнут бит в `next_index` | `BadChecksum` |
+| битый checkpoint: испорчен байт суммы | `BadChecksum` |
+| усечённый checkpoint | `Malformed` |
+| пустой checkpoint | `Malformed` |
+
+Проверки сделаны в harness до `open_explicit` (разбор checkpoint, версия, `job_digest`, `scan_id`,
+`attempt_id`, `next_index`); авторитетная проверка остаётся и в `Engine::resume`. Дублирование логики
+в harness сознательное: так «до открытия отправки» наблюдаемо, а нулевой кадр на проводе это
+доказательство, а не предположение.
+
+## 4. Stop и сбои (rate=1)
+
+| сценарий | итог | Stop -> итог | join | TX после Stop |
+| --- | --- | --- | --- | --- |
+| тишина (никто не отвечает, Stop на 3-м SYN) | Stopped, checkpoint нет | 23.2 мс | 0.06 мс | нет: `tx_sent` 3 неизменен 1.5 с, SYN на проводе == 3 |
+| во время RX drain (wait 10 с, 2 SYN отправлены) | Stopped | 42.4 мс | 0.01 мс | нет (2 == 2); весь запуск 2.5 с вместо 12 с |
+| полная очередь (capacity 2, 2 ответа не прочитаны) | Stopped, оба ответа в очереди | 47.3 мс | 0.02 мс | нет (2 == 2) |
+| переполнение очереди (capacity 1) | `Failed(ConsumerTooSlow)`, checkpoint нет, TX остановлен (2 из 6) | - | - | нет |
+| внешний Pause | Paused, `tx_sent == next_index == 2` | - | - | - |
+| удаление veth посреди скана (rate 50, 400 probe) | `Failed`, `RxError("poll(POLLIN): socket error")`, код 3 | процесс завершился через 0.51 с после удаления | - | нет (52 из 400) |
+
+После каждого завершения: потоков 1 -> 1 (немедленно и после оседания), fd 4 -> (открыто 6) -> 4, то есть
+ни живых workers, ни утечек fd. При удалении veth checkpoint нет ни в summary, ни файлом, ни событием
+`CheckpointReady`. Диагноз читаем (`RxError ... socket error`).
+
+## 5. Скорость: C против Rust на 100 / 1k / 10k / 100k pps
+
+### Метод
+
+- Стенд тот же. Для каждой пары (скорость, повтор) подряд идут C и Rust (чередование), 5 повторов.
+  Цели `10.200.0.0/24` (100 pps, 512 probe) или `/22` (1k: 3072, 10k: 30720, 100k: 307200 probe), `--wait 1`,
+  seed 1, один и тот же binding. Пир отвечает только за `.2-.5`.
+- Захват: `tcpdump -B 262144` (TPACKET_V3, наносекундные метки), оба направления на `veth-b`.
+  Прогон VALID только если: нет kernel/interface drops, `captured == pcap frames == received by filter`,
+  число кадров лежит в окне счётчиков `rx_packets+tx_packets` интерфейса (читаются перед и после остановки
+  tcpdump), и на проводе ровно столько SYN, сколько probe. Иначе **INVALID**: он не нормализуется и не
+  входит в медианы.
+- **Скорость** считается по метке времени SYN на проводе: первые 10 % отправок исключены (запуск/разгон
+  throttle), в знаменателе нет хвоста `wait`: `(n - 1 - k) / (t_last - t_k)`. Для Rust в harness есть
+  вторая независимая оценка (`steady_pps_inprocess`), она совпадает с проводной в пределах 0.1 %.
+  Для наглядности смещения в данных есть и «наивная» скорость probe/wall (она включает старт и wait и для
+  C на 100k равна ~18k): она в сводку НЕ входит.
+- CPU: `wait4` rusage процесса (user+sys). RSS: пик `VmHWM` из `/proc/<pid>/status` (`ru_maxrss` дочернего
+  процесса после fork+exec включает RSS родителя и от него отказались).
+- Время остановки: отдельный запуск с длинным заданием, через 2.0 с от старта C получает SIGINT, Rust
+  получает Stop (файл-триггер); измеряется время до выхода процесса. Это ПОВЕДЕНИЕ, а не сравнение
+  равных операций: SIGINT у C означает «подождать и выйти» (см. находку 6), а Stop у Rust пропускает drain.
+
+### ТЕКУЩИЙ результат: полная матрица 40/40 VALID (после исправления завершения захвата; `perf-round3.results.json`)
+
+Матрица 4 скорости x 5 повторов x C/Rust = 40 ячеек, один прогон `--suite perf` в замкнутом стенде minipc,
+проверка полноты захвата прежняя и строгая. Итог suite: `6 PASS, 0 FAIL, 0 NOT RUN`, `perf matrix complete: every
+cell VALID ... 40/40 cells valid`. Rust-путь `lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised`
+на этих артефактах: ok.
+
+| скорость | реализация | VALID/5 | pps по повторам | медиана pps | SYN на проводе | CPU user+sys (медиана), с |
+|---|---|---|---|---|---|---|
+| 100 | C | 5 | 99, 99, 98, 99, 98 | 99 | 512 | 0.16 |
+| 100 | Rust | 5 | 100, 101, 101, 101, 101 | 101 | 512 | 0.19 |
+| 1000 | C | 5 | 1001, 999, 1002, 991, 1000 | 1000 | 3072 | 0.18 |
+| 1000 | Rust | 5 | 1003, 1002, 1011, 999, 1003 | 1003 | 3072 | 0.16 |
+| 10000 | C | 5 | 10077, 10040, 10080, 10085, 10380 | 10080 | 30720 | 0.46 |
+| 10000 | Rust | 5 | 10103, 10105, 10090, 10054, 10061 | 10090 | 30720 | 0.47 |
+| 100000 | C | 5 | 100494, 100071, 100541, 100203, 100388 | 100388 | 307200 | 1.12 |
+| 100000 | Rust | 5 | 98300, 100579, 100564, 100358, 101238 | 100564 | 307200 | 1.10 |
+
+Rust/C: 100 pps **1.027**, 1k **1.003**, 10k **1.001**, 100k **1.002** (все в пределах +-20 %). Приём ответов Rust:
+`rx_incomplete_runs=0`, kernel drops 0 во всех 20 Rust-ячейках. Все пять Rust 1k: `tcpdump_captured == pcap_frames ==
+received_by_filter == 3092`, 3072 SYN, drops 0.
+
+**Причина прежних 2 INVALID (Rust 1k) и исправление.** libpcap (TPACKET_V3) отдаёт частично заполненный блок
+кольца только по истечении таймаута захвата (у tcpdump 1000 мс), а SIGINT прерывает цикл, не обрабатывая такой блок.
+Rust не отвечает RST на SYN-ACK, поэтому пир повторяет SYN-ACK; повтор, пришедший менее чем за ~1 с до остановки,
+попадал в `received by filter`, но не в pcap (3091 против 3092). Прежнее «успокоение» требовало лишь двух подряд
+одинаковых чтений счётчиков (0.5 с), чего меньше таймаута. Теперь `DumpRec.stop()` в `wire_suite.py` останавливает
+tcpdump только после того, как счётчики пира неизменны >= 1.5 с (> 1 с), любое изменение сбрасывает окно. Условие
+валидности НЕ менялось: `cap == pcap == received_by_filter`, drops 0, и `rx_lo <= cap <= rx_hi`; неполный захват остаётся
+INVALID. Повторы не отбирались: приложен весь прогон. Дополнительно (не часть 40 ячеек) `perf-round3-1k-x10`: 10 повторов
+1k x C/Rust, 20/20 VALID.
+
+Прежние неудачные измерения сохранены без изменений в этом каталоге (`perf-final`, `perf-postfix`,
+`perf-round2` с 2 INVALID, `perf-runA/C`).
+
+### ПРЕДЫДУЩИЙ результат (раунд 2, 38/40 VALID; `perf-round2.results.json`, медианы по VALID; заменён раундом 3)
+
+| скорость | реализация | VALID/5 | pps по повторам ([ ] = INVALID) | медиана pps | SYN на проводе | CPU user+sys, с | RSS, КБ | остановка, с |
+|---|---|---|---|---|---|---|---|---|
+| 100 | C | 5 | 99, 100, 98, 99, 99 | 99 | 512 | 0.20 | 41928 | 11.663 |
+| 100 | Rust | 5 | 100, 100, 101, 101, 100 | 100 | 512 | 0.16 | 2856 | 0.039 |
+| 1000 | C | 5 | 1001, 995, 1000, 1005, 1002 | 1001 | 3072 | 0.18 | 41900 | 12.409 |
+| 1000 | Rust | 3 | [1003], [1005], 999, 1001, 1001 | 1001 | 3072 | 0.15 | 2860 | 0.036 |
+| 10000 | C | 5 | 10079, 10032, 10040, 10097, 10037 | 10040 | 30720 | 0.43 | 41936 | 12.404 |
+| 10000 | Rust | 5 | 10083, 10114, 10081, 10086, 10071 | 10083 | 30720 | 0.42 | 2888 | 0.017 |
+| 100000 | C | 5 | 100218, 102705, 100330, 100234, 100325 | 100325 | 307200 | 1.08 | 41944 | 11.915 |
+| 100000 | Rust | 5 | 100711, 100752, 100780, 103419, 100981 | 100780 | 307200 | 1.12 | 2964 | 0.059 |
+
+Rust/C по steady-state pps: 100 pps **1.011**, 1k **1.000**, 10k **1.004**, 100k **1.005** (все в пределах +-20 %).
+INVALID 2 из 40 ячеек, обе Rust 1k (повторы 1 и 2): tcpdump принял на один НЕ-SYN кадр меньше, чем видел
+фильтр; это **недостача захвата, а не потеря ответов** (все 3072 SYN на месте, ответы получены полностью).
+
+**Полнота приёма ответов Rust по повторам (GO-критичные цифры; проверяется отдельной проверкой
+`all rates: Rust received every in-job reply (0 rx-incomplete runs, 0 kernel drops)`, независимой от VALID захвата):**
+
+| скорость | `rust_rx_incomplete_runs` | `rust_kernel_drops_per_run` (повторы 1-5) | Closed получено / отправлено пиром, по повторам | capture-INVALID (Rust) |
+|---|---|---|---|---|
+| 100 | 0 | 0, 0, 0, 0, 0 | 4/4 x 5 | 0 |
+| 1000 | 0 | 0, 0, 0, 0, 0 | 8/8 x 5 | 2 |
+| 10000 | 0 | 0, 0, 0, 0, 0 | 116/116 x 5 | 0 |
+| 100000 | 0 | 0, 0, 0, 0, 0 | 1196/1196 x 5 | 0 |
+
+Open получен 4/4 во всех повторах всех скоростей. Эти цифры воспроизводятся из `perf-round2.suite.log`
+(строка проверки печатает те же значения по скоростям) и из `perf_summary` в `perf-round2.results.json`.
+Ранее такая потеря только записывалась в сводку, но не проверялась; теперь её ловят `wire_suite.py`
+(проверка перфа) и lab-тест `lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised`.
+
+### ИСТОРИЧЕСКИЕ результаты ДО исправления находки 5 (`perf-final.results.json`, НЕ текущее состояние; медианы по VALID)
+
+| скорость | реализация | VALID/5 | pps по повторам (INVALID в [ ]) | медиана pps | передано (SYN на проводе) | кадров в захвате | kernel drops tcpdump / RX-сокет Rust | CPU user+sys, с | RSS, КБ | остановка, с |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 100 | C | 5 | 99, 99, 99, 99, 98 | 99 | 512 | 528 | 0 / - | 0.19 | 41928 | 11.66 |
+| 100 | Rust | 5 | 102, 101, 101, 101, 101 | 101 | 512 | 526 | 0 / 0 | 0.20 | 2876 | 0.045 |
+| 1000 | C | 5 | 994, 1001, 997, 996, 1001 | 997 | 3072 | 3096 | 0 / - | 0.18 | 41964 | 11.66 |
+| 1000 | Rust | 2 | [997], [1004], [1005], 998, 1005 | 1001 | 3072 | 3091-3092 | 0 / 0 | 0.20 | 2856 | 0.047 |
+| 10000 | C | 5 | 10044, 10070, 10032, 10075, 10057 | 10057 | 30720 | 30960 | 0 / - | 0.44 | 41944 | 12.16 |
+| 10000 | Rust | 5 | 10089, 10117, 10049, 10103, 10100 | 10100 | 30720 | 30847 | 0 / 0 | 0.72 | 2876 | 0.025 |
+| 100000 | C | 5 | 100495, 100252, 100274, 100290, 100375 | 100290 | 307200 | 309600 | 0 / - | 1.12 | 41992 | 11.92 |
+| 100000 | Rust | 5 | 102682, 100796, 102649, 103200, 101183 | 102649 | 307200 | 308405 | 0 / 898, 0, 1021, 434, 11990 | 1.94 | 2964 | 0.046 |
+
+Отношение Rust/C по steady-state pps: 100 pps **1.023**, 1k **1.004**, 10k **1.004**, 100k **1.024**; все
+четыре в пределах +-20 %. Rust превышает заданную скорость не более чем на 3.2 %, `WouldBlock` не было ни разу.
+
+INVALID (3 из 40 ячеек, всё Rust 1k: повторы 1-3): tcpdump принял 3091 кадр при 3092 в счётчике фильтра
+и интерфейса. Все 3072 SYN присутствуют, kernel drops 0, то есть потерян один НЕ-SYN кадр (по сути
+повтор SYN-ACK пира в момент остановки захвата). По принятому правилу ячейки остаются INVALID и не
+участвуют в медиане (медиана по двум VALID = 1001; по всем пяти SYN-полным 1004, разница 0.3 %).
+Предыдущие прогоны матрицы (`perf-runA-strict-equality`: 33/40 VALID при слишком строгом равенстве счётчиков,
+`perf-runC-before-responder-restart`: 36/40) приложены; скорости в них совпадают (rust/c 1.003-1.025).
+
+Выводы по скорости: паритет отправки достигнут на minipc (loopback veth, один процесс на NIC). Оговорка:
+стенд это veth на одной машине, не физический NIC; скорость выше 100k pps не проверялась. Текущий CPU Rust
+сопоставим с C (100k: 1.12 против 1.08 с; 10k: 0.42 против 0.43 с). В ИСТОРИЧЕСКОМ прогоне до исправления CPU
+Rust был выше (10k: 0.72, 100k: 1.94 против 1.12 с) из-за чтения собственных исходящих копий (находка 5, раздел 7).
+
+### ИСТОРИЧЕСКИЙ приём ответов Rust ДО исправления (колонка drops)
+
+| скорость | прогонов с полным приёмом (Rust получил все ответы пира) | `tp_drops` RX-сокета по повторам |
+| --- | --- | --- |
+| 100 | 5/5 | 0, 0, 0, 0, 0 |
+| 1000 | 5/5 | 0, 0, 0, 0, 0 |
+| 10000 | 5/5 | 0, 0, 0, 0, 0 (в одном из ранних прогонов 433 без потери ответов) |
+| 100000 | **1/5** | **898, 0, 1021, 434, 11990**; потеряно 2, 0, 2, 1, 42 из 1196 Closed (Open 4/4 дошли) |
+
+C принял все ответы во всех прогонах (его RX читает libpcap с большим буфером). `Completed` без
+предупреждения при потерянных ответах это то, что надо исправить (находка 5).
+
+## 6. Находки приёмки
+
+1. **veth отдаёт AF_PACKET-читателям кадры с недосчитанной TCP-суммой** (CHECKSUM_PARTIAL). SYN-ACK пира
+   приходил с «плохой» суммой; Rust проверяет суммы (жёстче C, который не проверяет) и корректно отбрасывал
+   их: первый прогон дал 0 Open. Лабораторное решение: выключить tx offload на двух veth этого запуска
+   (`ethtool -K ... tx off`, записано в `commands.txt` и topology). Это артефакт veth, на реальном NIC суммы
+   валидны. Политику `Verify` движка менять не нужно.
+2. **Пир повторяет SYN-ACK около минуты** (Rust не шлёт RST, в отличие от C), и повторы прошлого прогона
+   попадали в захват следующего (те же 4-tuple и cookie). Решение: responder пира перезапускается перед
+   каждым прогоном (закрытие listener убирает half-open сокеты). dedup движка подавляет повторы внутри
+   прогона и считает их в `duplicates`.
+3. **`ru_maxrss` ребёнка после fork+exec включает RSS родителя** (драйвер держит большие захваты): первые
+   замеры RSS Rust (117-150 МБ) были артефактом. Используется `VmHWM` процесса; реальный пик Rust 2.9 МБ,
+   C 42 МБ.
+4. **tcpdump теряет кадры, оставшиеся в кольце при SIGINT**: захват останавливается только после стабильных
+   счётчиков интерфейса, а оставшееся расхождение в 1 кадр это INVALID (раздел 5), не подгонка.
+5. **Потеря ответов при высокой скорости (дефект; ИСПРАВЛЕН, раздел 7)**: RX-сокет Rust привязан к `ETH_P_ALL` и
+   получает копии собственных исходящих кадров (PACKET_OUTGOING); драйвер отбрасывает их в user space
+   (`rx_outgoing`), но на 100k pps читать приходится 100k+ кадров/с, очередь сокета переполняется и ядро
+   роняет в том числе настоящие ответы. Итог остаётся `Completed`. Раздел 7.
+6. **Поведение C при SIGINT**: C не останавливается, а ждёт `wait` и затем ещё до 10 с до принудительного
+   `exit(0)` (main.c: «Passed the wait window but still running, forcing exit»); измерено 11.6-12.4 с при
+   `--wait 1`. Он также пишет `paused.conf` в рабочий каталог (драйвер запускает C в рабочем каталоге
+   запуска, не в репозитории). Остановка Rust (Stop): 11-56 мс до итога, 18-59 мс до выхода процесса.
+7. **`/proc/self/task` задерживает запись о завершённом потоке** сразу после `join`; harness фиксирует и
+   мгновенное, и осевшее значение (в итоговых прогонах оба 1).
+
+## 7. Исправление находки 5: PACKET_IGNORE_OUTGOING (в дереве, RESOLVED)
+
+В `rmasscan-net/src/linux/socket.rs` RX-сокет (ровно тот, что открыт с `ETH_P_ALL`; TX открыт с протоколом 0
+и опцию не получает) после `bind` ставит `setsockopt(SOL_PACKET, PACKET_IGNORE_OUTGOING = 23, 1)`: ядро
+(Linux 4.20+) не ставит в очередь копии наших исходящих кадров. На старых ядрах вызов безвредно
+падает (результат игнорируется), запасным остаётся user-space фильтр PACKET_OUTGOING. Блок `unsafe`
+остаётся в `linux/socket.rs`, с комментарием SAFETY.
+
+Проверка после исправления (бинарь sha256 `ae56712ca275a79265a420d789906391ecffc5143631529901059105ac4f05f0`;
+сырые данные `perf-postfix.results.json`, `rust-postfix.results.json`), 100k pps, 5 повторов:
+
+| | до (`perf-final`) | после |
+| --- | --- | --- |
+| `tp_drops` RX-сокета | 898, 0, 1021, 434, 11990 | **0, 0, 0, 0, 0** |
+| получено Closed из 1196 | 1194, 1196, 1194, 1195, 1154 | **1196 x 5** (Open 4/4 x 5) |
+| CPU user+sys (медиана) | 1.94 с | **1.07 с** (C 1.09 с) |
+| steady pps (медиана, wire) | 102.6k | 100.7k (C 100.3k), rust/c **1.004** |
+
+Повторный полный прогон после исправления: `--suite rust` **120 PASS / 0 FAIL / 0 NOT RUN**;
+`--suite perf`: 39/40 ячеек VALID (одна INVALID: Rust 1k, повтор 1, tcpdump на 1 не-SYN кадр меньше, как
+раньше), rust/c = 1.019 (100), 1.002 (1k), 1.004 (10k), 1.004 (100k); `tp_drops` 0 на всех скоростях;
+ответы пира получены полностью на всех скоростях; CPU Rust 0.19 / 0.14 / 0.42 / 1.07 с против C
+0.20 / 0.19 / 0.41 / 1.09 с; остановка Rust 38-59 мс. Таблицы раздела 5 и находка 5 описывают состояние ДО
+исправления (`perf-final`).
+
+## 8. NOT RUN и ограничения
+
+- Независимое ревью unsafe/timeout/resume перед GO: NOT RUN (не мой этап).
+- CI трёх ОС (macOS-14, ubuntu-24.04, windows-2022): NOT RUN, ждёт push. Шаг net-crate и сборка example
+  добавлены в workflow; на macOS/Windows это проверка сборки (`open_explicit` -> `UnsupportedPlatform`).
+- Сборка net на Windows и macOS на реальных ОС: NOT RUN (только macOS-хост, Mac build/clippy/test выполнены).
+- Скорость выше 100k pps, физический NIC, несколько NIC, VPN/utun: NOT RUN. Стенд это veth.
+- Прогон от непривилегированного пользователя и PermissionDenied: покрыто тестами задачи 5, здесь не повторялось.
+- Сравнение C и Rust по времени остановки НЕ симметрично (раздел 5, «Метод»).
+- Запуск suite `rust` дважды (120/120 оба); два повтора это не статистика флейков, но проверки
+  Stop/Pause имеют запас более 20x до порога 1 с.
+
+## 9. Закрыто попутно (три мелких пункта)
+
+- `rmasscan-core/src/receive.rs`, «Отличия от C»: добавлено, что приёмный путь C не проверяет множество
+  целей (только cookie), а порт намеренно ужесточает это.
+- `docs/experiments/2026-10-23-rmasscan-stage2a.md`: цифра «282 passed» привязана к коммиту `6ce7a5d` как
+  исторический снимок.
+- `tests/golden/wire/manifest.json` и генератор (`wire_capture.py::scrub`): пути вида `/home/<user>/...`
+  заменены на `$HOME/...`, сырые имена namespace на `wl-scan-RUNID` / `wl-peer-RUNID`; происхождение oracle
+  (commit, sha256, версия) и хэши pcap не тронуты. Стадия-0 `tests/golden/manifest.json` (другой файл) всё
+  ещё содержит `/home/a1/...` в поле `command`; не входит в эту задачу.
+
+## 10. Сырые данные
+
+`docs/experiments/2026-10-23-rmasscan-stage2b-linux-raw/` (все пути очищены от имени пользователя и имён
+namespace): `rust-run1/2.results.json` + `.suite.log` (по строке на проверку), `rust-env.json`,
+`rust-isolation.json`, `rust-topology-*.txt`, `perf-final.results.json` (40 ячеек, каждая с capture-метой,
+счётчиками, CPU/RSS, остановкой), `perf-runA-*`, `perf-runC-*`, `perf-env.json`,
+`experiment-ignore-outgoing-100k.*` (черновая проверка), `perf-postfix.*`, `rust-postfix.*`, `perf-round3.*` и `perf-round3-1k-x10.*` (исправленный захват, 40/40 VALID; ТЕКУЩИЙ), `perf-round2.*`, `rust-round2.*` (после исправления находки 5; 38/40, заменён round3). Крупные pcap и бинарь oracle не включены.
+
+---
+
+## Повторная приёмка Linux 2026-10-24 (после контрактов RX integrity и TX stall)
+
+> **Superseded by «Fix round 1» ниже (код-коммит `27e3042`).** Прогон на `ee51a19` ниже сохранён как есть: в нём не
+> были записаны sha256 перфоманс-pcap и не было логов нестендовых проверок. Актуальные числа и привязка к коммиту — в разделе
+> «Fix round 1».
+
+Заменяет результаты `98ae43e` (они остаются выше как историческая запись). Сырые данные:
+[`2026-10-24-rmasscan-linux-acceptance-raw/`](2026-10-24-rmasscan-linux-acceptance-raw/) (JSON-вердикты,
+логи, topology, isolation, env, команды, sha256 бинарей и 40 pcap набора `rust`; pcap perf-матрицы по
+дизайну удаляются драйвером после проверки, остаются их вердикты и счётчики).
+
+Что проверено, а что нет (слои не смешиваются): офлайн-тесты; lab wire на netns/veth `minipc`. НЕ проверено:
+физический NIC, CI на точном HEAD, Windows, UI.
+
+### Привязка к коммиту
+
+- Код/тесты/скрипты: **`ee51a19407ffb360d0ad9a0c683bd231d579b14c`** (ветка `feat/rmasscan-stage2b-linux`; предыдущие
+  `ad85ddd` тест engine, `66902da` docs). Прогон на чистом дереве: на `minipc` развёрнут
+  `git archive ee51a19 rmasscan` (в `~/rmasscan-t4-accept`, без правок), хэш списка файлов
+  `feec6c24da3943487f5cb3cf7cfe59064c4370d54b19f15cd213e618336ebac5` совпал с Mac, git tree `rmasscan/` =
+  `844a5e3e002d1b5bfba2c0f5001411bde8a4e702`. Dirty diff на Mac: пуст (кроме неотслеживаемых планов, review-файла и `supertool`).
+  Evidence-коммит добавляет только docs/evidence.
+- Хост: Ubuntu 26.04.1 LTS, ядро 7.0.0-38-generic x86_64, Python 3.14.4, tcpdump 4.99.6 (libpcap 1.10.6,
+  TPACKET_V3), rustc 1.99.1, `/etc/masscan/masscan.conf` отсутствует.
+- `wire_scan` (release) sha256 `1565974a8bb6c3da0f84927ab0aaad77b54c1d4bf1b5aea952cbedda1217eaf3`.
+- C-oracle: `8e6b3b0c07a81e8ea61d557c06134a21a6881614`, дерево чистое, оригинальный (не `--offline`) бинарь
+  sha256 `8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e` (равен бинарю из манифеста фикстур).
+- Скрипты sha256: `wire_suite.py` `c263382fc5b6...c80c7a` (полностью в `binaries-and-host.txt`), `wire-lab.sh`
+  `c59d6bdf51f4...b7c`, `wire_capture.py` `62ef56f53a9f...41c3`, `verify-wire.py` `fcb06cbdc917...dcef`.
+
+### Команды
+
+```bash
+# Mac
+cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check bans licenses sources; cargo test --locked --workspace
+cargo test -p rmasscan-core --test no_c_in_build
+python3 scripts/verify-wire.py --self-test; python3 scripts/wire_suite.py --self-test
+# minipc (вне netns): сборка
+cargo build --locked --release -p rmasscan-net --example wire_scan
+cargo clippy --locked --workspace --all-targets -- -D warnings; cargo test --locked --workspace
+# lab (sudo -n внутри wire-lab.sh)
+scripts/wire-lab.sh --oracle ~/rmasscan-oracle/masscan/bin/masscan --out ~/t4-out/rust --suite rust \
+    --rust-bin target/release/examples/wire_scan --fixtures tests/golden/wire
+scripts/wire-lab.sh --oracle ~/rmasscan-oracle/masscan/bin/masscan --out ~/t4-out/perf --suite perf \
+    --rust-bin target/release/examples/wire_scan --fixtures tests/golden/wire --reps 5
+RMASSCAN_WIRE_RESULTS=~/t4-out/rust RMASSCAN_WIRE_PERF_RESULTS=~/t4-out/perf \
+    cargo test --locked -p rmasscan-net --test linux_wire -- --include-ignored
+bash linux_io-lab.sh      # свои netns, linux_io --ignored --test-threads=1 + непривилегированный uid
+```
+
+### Итоги
+
+| Проверка | Результат |
+| --- | --- |
+| Mac: fmt, clippy `-D warnings`, deny (bans licenses sources), `cargo test --locked --workspace`, no-C guard | чисто / ok / все тесты ok |
+| minipc: clippy workspace, `cargo test --locked --workspace` | чисто; 366 passed, 0 failed, 13 ignored |
+| minipc: `rmasscan-net --lib` | 42 passed |
+| Python self-test | `verify-wire.py` 31/31, `wire_suite.py` 43/43 |
+| Functional suite (`--suite rust`) | **141 PASS, 0 FAIL, 0 NOT RUN** (включая новые группы `oracle` и `rxloss`, и `rx_health.kernel_drops == 0` в каждом parity-прогоне) |
+| Perf matrix 4 rates x 5 x C/Rust | **40/40 VALID**, 0 неполных capture, Rust rx-incomplete 0, rx_health drops 0 (измерено, не null) в 20/20 Rust-прогонах; suite: 12 PASS, 0 FAIL |
+| `linux_wire --include-ignored` | 9/9 ok (теперь проверяет rx_health и отсутствие INVALID-ячеек) |
+| `linux_io` lab (`--ignored`) | 5/5 privileged + 1/1 unprivileged ok (при `--test-threads=1`, см. замечание) |
+| CI exact HEAD (3 ОС) | **NOT RUN (no push authorized)**. Старый run PR #8 не относится к этому HEAD |
+
+Медианы steady-state pps по проводу (5 валидных повторов каждый), критерий +-20%:
+
+| rate | C | Rust | Rust/C | в пределах +-20% |
+| --- | --- | --- | --- | --- |
+| 100 | 98.7 | 100.2 | 1.015 | да |
+| 1000 | 994.2 | 999.4 | 1.005 | да |
+| 10000 | 10072.3 | 10085.3 | 1.001 | да |
+| 100000 | 100395.4 | 100784.2 | 1.004 | да |
+
+Все 40 ячеек поштучно: `2026-10-24-rmasscan-linux-acceptance-raw/perf/cells-table.md`. Хвост capture:
+`quiesced_before_stop = true` во всех 40, ни один capture не INVALID (причина двух ранних неполных capture:
+tcpdump/libpcap TPACKET_V3 отдаёт неполный блок кольца только после ~1 с, SIGINT его не обрабатывает; драйвер
+ждёт тишины счётчиков 1,5 с; регрессия закреплена `wire_suite.py --self-test`).
+
+### Воспроизведённый RX overflow (контракт RxLoss)
+
+`wire_scan --rx-stall-ms 2500` (только harness, продуктовый API не менялся): RX-поток спит 2,5 с до первого
+чтения, TX идёт 10 000 pps по /24 x 100 портов; сокет AF_PACKET переполняется. Измерено:
+`kernel_drops = 155`, `Failed(RxLoss { kernel_drops: 155 })`, код выхода 3, checkpoint нет (ни в сводке, ни
+файла), `tx_sent` заморожен на 23672 из 25600, потоки и fd без утечек. Принятый до отказа ответ остался в
+результатах (`replies` = 1). Это PASS по критерию «drops > 0, Failed, без checkpoint». Счётчик ядра
+консервативен (может включать собственные исходящие копии), это ровно «полнота приёма не доказана».
+Сырой вердикт: `raw/rust/rx_overflow.summary.json`.
+
+### Независимость C-эталона и компараторов
+
+- Пин и чистое дерево: проверки группы `oracle` (5 PASS): ревизия == закреплённая, дерево чистое, оригинальный
+  бинарь, sha256 == бинарь из манифеста фикстур, манифест фикстур закрепляет ту же ревизию и `all_valid`.
+- Сравнение SYN побайтное и строгое; расхождения не нормализуются. Негативные случаи на реальной фикстуре C
+  (`wire_suite.py --self-test`): изменённый байт cookie, изменённый dst-port, потерянный последний SYN,
+  переставленные SYN дают FAIL; drops в meta и усечённый pcap дают INVALID. Плюс 31 кейс `verify-wire.py`.
+- Фильтрация и source tuple (ужесточено в `ee51a19`): ответы пира считаются только при `peer MAC -> scanner MAC`,
+  dst IP = adapter IP и (perf) dst-порт = 40000; SYN сканера только при scanner MAC -> peer MAC, source IP =
+  adapter IP, sport 40000. Чужие кадры не входят в счётчик передачи.
+- RX completeness: C сравнивается по множеству open (в `-oL` только open), Rust по open и closed; точное равенство
+  с уникальными ответами пира на проводе, допуска нет. Дополнительно для Rust: `rx_health.kernel_drops` обязан
+  быть целым числом 0 и итог `Completed` (null, bool, >0, отсутствие поля дают FAIL; self-test).
+
+### Тесты границ контракта (offline, engine)
+
+`ad85ddd`: `vlan_tagged_replies_are_unsupported_discarded_and_never_delivered` (корректный ответ в 802.1Q не
+становится результатом, считается discarded, скан Completed; контроль без тега доставляется) и
+`engine_dedup_is_bounded_fifo_and_redelivers_after_eviction` (ёмкость 2: A,B,A,C,A даёт 4 результата,
+повтор A после вытеснения доставляется, дубль до вытеснения подавлен). Мутация «повтор обновляет порядок (LRU)»
+валит второй тест (left 3, right 4); без мутации зелёный. VLAN остаётся неподдержанной функцией, второго dedup в core нет.
+Fake backpressure/panic тесты не являются проверкой физического NIC.
+
+### Замечания
+
+- `linux_io::lab_drop_closes_every_fd_and_stats_outlive_them` считает fd всего процесса и падает при
+  параллельном запуске lab-тестов; требует `--test-threads=1` (проверено: при параллельном запуске 1 из 5
+  падает, при последовательном 5/5). Код продукта не затронут; в тесте не исправлялось.
+- Окружение: `minipc` запущен посторонний фоновый until-цикл другой работы; не трогался. Мои namespaces/процессы
+  удалены (`namespaces_left=0` после каждого запуска), каталоги `~/rmasscan-t4-accept`, `~/t4-out`,
+  `~/t4-iolab.sh` удалены после копирования данных.
+- Время C-остановки по SIGINT 11-12 с (C дожидается `wait`); к контракту Stop <= 1 с для Rust отношения не имеет
+  (Rust: 0,02-0,06 с).
+
+### Fix round 1: повторный прогон на `27e3042` (актуальный)
+
+Причина: ревью нашло, что драйвер удалял perf-pcap без sha256+size (I1), а проверки Mac/minipc не имели логов (I2).
+`27e3042 fix(scripts): hash every capture before cleanup` записывает sha256, размер и число кадров каждого pcap
+(functional, perf и stop-probe) в `results.json` ДО удаления; для perf ещё в `capture.pcap_sha256/pcap_size_bytes`
+каждой ячейки. Хэш скрипта изменился, поэтому обе suite и вся матрица прогнаны заново на одном чистом коммите.
+Сырые данные и логи: `2026-10-24-rmasscan-linux-acceptance-raw/round1-27e3042/` (все файлы в `MANIFEST.sha256`).
+Файлы прогона `ee51a19` рядом не удалены и считаются superseded.
+
+- Код-коммит: **`27e3042a6173d8a4c3a5848d3904cc9c122ffc78`**, дерево `rmasscan/` на нём совпадает с `ee51a19:rmasscan`
+  кроме `scripts/wire_suite.py`. Dirty diff пуст (кроме неотслеживаемых `supertool` и планов/ревью-файлов).
+- Воспроизводимая привязка источника вместо прежнего «хэша списка файлов»: на minipc развёрнут ровно
+  `git archive --format=tar 27e3042 rmasscan`; sha256 tar =
+  `dd8a6bebb27d5b839f917b7198c82d6de82a844c3597e1d655d2b2cedd0b6875` (`source-archive.sha256`; команда
+  `git archive --format=tar 27e3042a6173d8a4c3a5848d3904cc9c122ffc78 rmasscan | shasum -a 256`; на minipc `sha256sum` того же файла дал то же значение).
+  Прежний хэш `feec6c24…` из раздела `ee51a19` не используйте.
+- Бинари/хосты: `minipc-build-and-hashes.log` (wire_scan `1565974a…eaf3` без изменений, oracle `8afc8ec8…`, `wire_suite.py`
+  `de52e28d…34c4`, Ubuntu 26.04.1, 7.0.0-38, rustc 1.99.1).
+
+| Проверка (логи в `round1-27e3042/`) | Результат |
+| --- | --- |
+| Mac fmt, clippy `-D warnings`, deny, no-C guard (`mac-*.log`) | rc=0 / rc=0 / «bans ok, licenses ok, sources ok» / rc=0 |
+| Mac `cargo test --locked --workspace` | 320 passed, 0 failed, 7 ignored, rc=0 |
+| Python self-test (`selftest-*.log`) | `verify-wire.py` 31/31, `wire_suite.py` 45/45 |
+| minipc clippy workspace, `--workspace` tests, `rmasscan-net --lib` | rc=0; 366 passed, 0 failed, 13 ignored; `--lib` rc=0 |
+| Functional suite `--suite rust` | **141 PASS, 0 FAIL, 0 NOT RUN**; 40 pcap, все 40 sha256 записаны и совпадают с файлами на диске |
+| Perf matrix 4x5xC/Rust | **40/40 VALID**, capture не INVALID, `quiesced_before_stop` 40/40; 80 pcap (40 основных + 40 stop-probe) с sha256+size в `perf/pcap-sha256-size.txt`; rx-incomplete 0; rx_health drops 0 (измерено) в 20/20; 12 PASS |
+| `linux_wire --include-ignored` (`minipc-linux_wire.log`) | 9/9 ok, rc=0 |
+| `linux_io` lab (`minipc-linux_io-lab.log`, свои netns, seal-вывод внутри) | параллельно: 4 ok, **1 FAILED** (`lab_drop_closes_every_fd...`); `--test-threads=1`: 5/5 ok; unprivileged uid: 1/1 ok; `namespaces_left=0` |
+| CI на точном HEAD | **NOT RUN (no push authorized)** |
+
+Медианы steady-state pps по проводу (5 валидных повторов), критерий +-20%:
+
+| rate | C | Rust | Rust/C | в пределах +-20% |
+| --- | --- | --- | --- | --- |
+| 100 | 98.7 | 100.2 | 1.016 | да |
+| 1000 | 999.9 | 1000.0 | 1.000 | да |
+| 10000 | 10078.4 | 10075.3 | 1.000 | да |
+| 100000 | 100244.6 | 100658.3 | 1.004 | да |
+
+Все 40 ячеек с префиксом sha256 их capture: `round1-27e3042/perf/cells-table.md`.
+
+RX overflow (тот же путь `wire_scan --rx-stall-ms 2500`, через изменённый драйвер): `kernel_drops = 173`,
+`Failed(RxLoss { kernel_drops: 173 })`, rc 3, без checkpoint, TX заморожен на 24969 из 25600 — PASS
+(`rust/rx_overflow.summary.json`; число дропов от запуска к запуску разное: 155 на `ee51a19`, 173 здесь).
+
+RED для теста dedup (`dedup-mutation-red.log`): мутация «повтор переносит ключ в конец очереди» (LRU) даёт
+`FAILED ... left: 3 right: 4`; на восстановленном исходнике тест зелёный.
+
+Ограничение остаётся: `lab_drop_closes_every_fd_and_stats_outlive_them` падает при параллельном запуске (наблюдение
+записано в логе), проходит последовательно. Физический NIC, CI exact HEAD, Windows, UI не проверялись.
+Очистка: `~/t4r1*` на minipc удалены, `namespaces_left=0` после каждого запуска, процессов `wire_scan|tcpdump|masscan` нет.

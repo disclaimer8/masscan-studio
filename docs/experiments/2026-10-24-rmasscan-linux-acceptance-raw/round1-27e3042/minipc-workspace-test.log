@@ -1,0 +1,597 @@
+   Compiling cfg-if v1.0.5
+   Compiling thiserror v2.0.21
+   Compiling siphasher v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling libc v0.2.191
+   Compiling typenum v1.20.0
+   Compiling rand_core v0.10.1
+   Compiling rmasscan-core v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-core)
+   Compiling serde_core v1.0.229
+   Compiling getrandom v0.4.3
+   Compiling rustix v1.1.5
+   Compiling zmij v1.0.23
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling bitflags v2.13.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
+   Compiling serde_json v1.0.154
+   Compiling serde v1.0.229
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.5.0
+   Compiling tempfile v3.27.0
+   Compiling rmasscan-engine v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-engine)
+   Compiling num-traits v0.2.19
+   Compiling wait-timeout v0.2.1
+   Compiling quick-error v1.2.3
+   Compiling fnv v1.0.7
+   Compiling bit-vec v0.10.1
+   Compiling bit-set v0.11.1
+   Compiling rusty-fork v0.3.1
+   Compiling rand v0.10.3
+   Compiling rand_xorshift v0.5.0
+   Compiling chacha20 v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling core_detect v1.0.0
+   Compiling unarray v0.1.4
+   Compiling utf8parse v0.2.2
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstream v1.0.0
+   Compiling strsim v0.11.1
+   Compiling clap_lex v1.1.1
+   Compiling clap_builder v4.6.7
+   Compiling rmasscan-net v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-net)
+   Compiling proptest v1.12.0
+   Compiling clap v4.6.7
+   Compiling rmasscan-cli v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-cli)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1m 28s
+     Running unittests src/main.rs (target/debug/deps/rmasscan-cf9d91846eb75871)
+
+running 15 tests
+test tests::echo_and_echo_all_are_identical ... ok
+test tests::echo_without_ports_adds_no_port_80 ... ok
+test tests::excludefile_applies ... ok
+test tests::list_scan_single_port_prints_ip_only ... ok
+test tests::list_scan_two_ports_prints_ip_port ... ok
+test tests::bad_inputs_are_fatal ... ok
+test tests::list_scan_with_non_terminating_retries_is_an_error_not_a_hang ... ok
+test tests::list_scan_without_ports_adds_port_80 ... ok
+test tests::packet_trace_line_format ... ok
+test tests::packet_trace_seqno_and_source_port_match_cookie_formula ... ok
+test tests::packet_trace_single_source_port_uses_plain_cookie ... ok
+test tests::packet_trace_count_is_range_times_retries_plus_one_squared ... ok
+test tests::packet_trace_requires_adapter_options ... ok
+test tests::scan_without_offline_trace_is_rejected ... ok
+test tests::unsupported_option_errors ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential.rs (target/debug/deps/differential-f02dcf5b05644f33)
+
+running 7 tests
+test help_is_plain_english ... ok
+test errors_exit_nonzero_with_message_on_stderr ... ok
+test list_scan_retries_that_cannot_terminate_fails_fast ... ok
+test seed_zero_is_rejected ... ok
+test broken_pipe_stops_work_quickly ... ok
+test echo_matches_oracle_as_set ... ok
+test list_scan_binary_matches_c_oracle_fixtures ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.74s
+
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_core-7d83293b2a902b9b)
+
+running 136 tests
+test blackrock::tests::huge_range_and_seed_do_not_panic ... ok
+test blackrock::tests::new_panics_on_zero_range - should panic ... ok
+test blackrock::tests::range_one_maps_zero_to_zero ... ok
+test blackrock::tests::rounds_64_or_more_is_rejected ... ok
+test blackrock::tests::no_overflow_panic_on_large_range_and_rounds14 ... ok
+test blackrock::tests::shuffle_unshuffle_round_trip ... ok
+test blackrock::tests::tiny_ranges_are_permutations_and_round_trip ... ok
+test blackrock::tests::zero_range_is_rejected ... ok
+test checksum::tests::checksum_ipv4_reference_vectors ... ok
+test checksum::tests::fold_and_invert_double_fold ... ok
+test checksum::tests::fold_u64_overflowing_incremental_sum ... ok
+test checksum::tests::ip_header_checksum_known_header ... ok
+test checksum::tests::ip_header_checksum_respects_ihl_and_offset ... ok
+test checksum::tests::ip_header_checksum_truncated_and_odd_max ... ok
+test checksum::tests::tcp_ipv4_partial_matches_c ... ok
+test checksum::tests::unknown_protocol_returns_all_ones ... ok
+test config::tests::defaults_match_c ... ok
+test config::tests::echo_all_prints_defaults ... ok
+test config::tests::echo_applies_excludes_and_does_not_add_port_80 ... ok
+test config::tests::echo_full_roundtrip_all_fields ... ok
+test config::tests::echo_prints_cidr_single_and_dashed_ranges ... ok
+test config::tests::echo_prints_non_tcp_ports_with_prefixes ... ok
+test config::tests::echo_roundtrips_through_paused_conf ... ok
+test config::tests::echo_zero_based_ranges_like_c_oracle ... ok
+test config::tests::effective_config_feeds_list_scan ... ok
+test config::tests::effective_keeps_normalized_source_ranges_apart_from_final_set ... ok
+test config::tests::parse_mac_cases ... ok
+test config::tests::parse_rate_differs_from_std_parse_like_c ... ok
+test config::tests::parse_rate_rejects_non_digits ... ok
+test config::tests::parse_rate_simple_values ... ok
+test config::tests::parse_shard_cases ... ok
+test config::tests::parse_source_port_cases ... ok
+test config::tests::rate_c_semantics_visible_in_list_scan_line_count ... ok
+test config::tests::rate_cast_models_cvttsd2si ... ok
+test config::tests::rate_echo_branches ... ok
+test config::tests::read_accepts_wait_rounds_exclude_and_booleans ... ok
+test blackrock::tests::shuffle_is_a_permutation ... ok
+test config::tests::read_ignores_display_only_keys_but_not_semantic_ones ... ok
+test config::tests::read_errors_have_exact_variants ... ok
+test config::tests::read_keeps_trailing_comment_in_value_like_c ... ok
+test config::tests::read_matches_names_like_c_equals ... ok
+test config::tests::read_retries_uses_strtoul_base_0 ... ok
+test config::tests::read_skips_comments_blank_and_punct_lines ... ok
+test config::tests::validate_applies_excludes_before_optimize ... ok
+test config::tests::validate_distinguishes_everything_excluded ... ok
+test config::tests::validate_echo_accepts_what_c_echo_accepts ... ok
+test config::tests::validate_list_adds_port_80_when_no_ports ... ok
+test config::tests::validate_accepts_largest_63_bit_range ... ok
+test config::tests::validate_list_readds_port_80_when_excludes_removed_all_ports ... ok
+test config::tests::validate_rejects_bad_rounds_shard_retries_rate ... ok
+test config::tests::validate_rejects_empty_targets ... ok
+test config::tests::validate_rejects_empty_ports_for_scan ... ok
+test config::tests::validate_rejects_over_63_bits ... ok
+test config::tests::validate_requires_exclude_over_1e9_addresses_for_scan_only ... ok
+test config::tests::zero_adapter_mac_is_normalized_to_none ... ok
+test config::tests::zero_seed_rejected_for_runtime_ops_but_not_echo ... ok
+test cookie::tests::siphash24_reference_vectors ... ok
+test cookie::tests::syn_cookie_assembles_four_u32_le ... ok
+test cookie::tests::syn_cookie_matches_c_values ... ok
+test massip::tests::empty_range_is_zero ... ok
+test massip::tests::excludes_then_optimize_change_counts_and_pick ... ok
+test massip::tests::excluded_port_shrinks_port_space ... ok
+test massip::tests::pick_after_add_following_optimize_panics - should panic ... ok
+test massip::tests::pick_before_optimize_panics - should panic ... ok
+test massip::tests::pick_on_empty_list_panics - should panic ... ok
+test massip::tests::pick_out_of_range_panics - should panic ... ok
+test massip::tests::ports_may_be_added_between_excludes_and_optimize ... ok
+test massip::tests::range_overflow_boundary ... ok
+test massip::tests::try_range_same_before_and_after_optimize ... ok
+test massip::tests::udp_port_is_returned_in_templ_space ... ok
+test packet::tests::default_template_is_58_bytes ... ok
+test packet::tests::null_and_raw_are_trimmed_ethernet_frames ... ok
+test packet::tests::syn_checksums_validate_when_u64_sum_exceeds_2_pow_32 ... ok
+test packet::tests::syn_frame_checksums_validate ... ok
+test packet::tests::syn_frame_fixed_fields ... ok
+test packet::tests::syn_frame_matches_c_bytes ... ok
+test packet::tests::template_proto_detection ... ok
+test ranges::tests::exclude_quirk_invalid_range_end_is_1 ... ok
+test ranges::tests::full_space_counts_2_pow_32 ... ok
+test ranges::tests::exclude_matches_reference_algorithm ... ok
+test ranges::tests::merge_and_exclude_at_top_boundary ... ok
+test ranges::tests::pick_reproduces_sorted_list ... ok
+test ranges::tests::ports_selftest ... ok
+test ranges::tests::range_is_cidr_cases ... ok
+test ranges::tests::reversed_range_does_not_panic ... ok
+test ranges::tests::removal_reference_selftest ... ok
+test scan::tests::format_line_single_vs_multi_port ... ok
+test scan::tests::list_scan_emits_every_target_once ... ok
+test ranges::tests::sort_merges_overlapping_ipv4 ... ok
+test scan::tests::list_scan_fractional_rate_matches_c_double_cast ... ok
+test scan::tests::list_scan_empty_range_is_error_before_blackrock ... ok
+test scan::tests::list_scan_rejects_zero_shard_and_bad_rounds ... ok
+test scan::tests::list_scan_resume_count_clamps_end ... ok
+test scan::tests::list_scan_indices_retries_use_max_rate_not_range ... ok
+test scan::tests::list_scan_resume_index_past_range_with_retries ... ok
+test scan::tests::list_scan_with_retries_that_cannot_terminate_errors_before_any_emit ... ok
+test scan::tests::list_scan_retries_golden_cases_still_terminate ... ok
+test scan::tests::shard_2_of_3_steps_by_three ... ok
+test scan::tests::transmit_empty_range_yields_nothing ... ok
+test scan::tests::transmit_fractional_rate_truncates ... ok
+test scan::tests::transmit_end_wraps_when_retries_times_range_overflows ... ok
+test scan::tests::transmit_scan_validates_and_matches_list_scan_order ... ok
+test scan::tests::transmit_start_with_nic_shard_and_resume ... ok
+test scan::tests::transmit_rate_above_range_uses_modulo ... ok
+test scan::tests::transmit_stream_retries2_three_offsets_per_index ... ok
+test scan::tests::transmit_stream_retries0_offsets_by_rate ... ok
+test targets::tests::add_target_string_ipv6_and_edges ... ok
+test targets::tests::add_target_string_selftest_cases ... ok
+test targets::tests::malformed_octets_rejected ... ok
+test targets::tests::parse_ipv4_rejects_bad_octets ... ok
+test targets::tests::parse_ipv4_single_cidr_dash ... ok
+test targets::tests::add_target_string_quirks_of_c ... ok
+test targets::tests::parse_ports_forms ... ok
+test targets::tests::parse_ports_tcp_and_rejects_other_protos ... ok
+test targets::tests::port_garbage_rejected_where_c_truncates ... ok
+test targets::tests::proto_offsets ... ok
+test targets::tests::reversed_ranges_rejected ... ok
+test tests::version_constant_matches_oracle ... ok
+test targets::tests::target_separators_and_host_bits ... ok
+test throttle::tests::batch_below_one_truncates_to_zero_like_c ... ok
+test throttle::tests::batch_size_grows_under_high_rate ... ok
+test throttle::tests::batch_size_is_one_at_low_rate ... ok
+test throttle::tests::batch_size_is_capped_at_10000 ... ok
+test throttle::tests::cancel_after_sleep_is_noticed_before_next_clock_read ... ok
+test throttle::tests::cancel_detected_right_before_a_sleep_starts_no_new_sleep ... ok
+test throttle::tests::cancel_during_long_sleep_stops_after_one_chunk ... ok
+test throttle::tests::cancel_is_checked_inside_the_retry_loop_without_sleeps ... ok
+test throttle::tests::cancelled_before_any_clock_read_returns_err ... ok
+test throttle::tests::index_wraps_over_256_buckets ... ok
+test throttle::tests::gap_over_one_second_resets_batch_to_one ... ok
+test throttle::tests::interruptible_without_cancel_matches_next_batch ... ok
+test throttle::tests::long_sleep_is_split_into_chunks_of_at_most_50ms ... ok
+test throttle::tests::over_rate_sleeps_with_capped_wait_and_shrinks_batch ... ok
+test throttle::tests::system_clock_is_monotonic_micros ... ok
+test blackrock::tests::c_selftest_ranges_are_permutations ... ok
+test blackrock::tests::shuffle_bounded_is_exact_for_small_ranges ... ok
+
+test result: ok. 136 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.14s
+
+     Running tests/blackrock_golden.rs (target/debug/deps/blackrock_golden-30687520c0342c28)
+
+running 1 test
+test listscan_order_matches_oracle_for_single_range_single_port ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/echo_golden.rs (target/debug/deps/echo_golden-b88cdd64cbd1cefe)
+
+running 5 tests
+test reads_c_oracle_paused_conf_fixtures ... ok
+test paused_fixtures_are_exactly_the_manifest_paused_records ... ok
+test paused_conf_fixtures_round_trip_byte_exact ... ok
+test reads_studio_flags_paused_conf ... ok
+test echo_matches_c_oracle_fixtures_exactly ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/no_c_in_build.rs (target/debug/deps/no_c_in_build-ebf7881ad4931012)
+
+running 2 tests
+test matcher_compares_whole_names ... ok
+test build_graph_has_no_c_toolchain_crates ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/offline_gen.rs (target/debug/deps/offline_gen-798625fa75210c28)
+
+running 2 tests
+test offline_generation_meets_80pct_of_oracle ... ignored, release-only, minipc: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture
+test small_workload_generates_every_target ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/probe_cursor.rs (target/debug/deps/probe_cursor-a1065e3c58ff9e80)
+
+running 11 tests
+test break_after_three_probes_stops_a_huge_range ... ok
+test callback_error_after_three_probes_stops_a_huge_range ... ok
+test current_repeats_until_advance_and_position_counts_sent ... ok
+test full_trace_matches_reference_across_matrix ... ok
+test index_boundaries ... ok
+test legacy_stream_keeps_retries_and_matches_cookie_formula ... ok
+test plan_rejects_echo_job_and_bad_source_ports_and_non_tcp_ports ... ok
+test restart_at_n_reproduces_exact_suffix ... ok
+test plan_rejects_unsupported_runtime_settings ... ok
+test plan_rejects_legacy_resume_fields ... ok
+test sixteen_wide_range_uses_several_source_ports ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_order.rs (target/debug/deps/proptest_order-7a32ef43352c740e)
+
+running 14 tests
+test list_line_round_trips ... ok
+test list_scan_visits_every_target_once ... ok
+test parse_rate_never_panics_and_reaches_deep_states ... ok
+test port_exclude_quirk_is_pinned_through_massip ... ok
+test parse_ports_never_panics_and_reaches_deep_states ... ok
+test resume_continues_the_order ... ok
+test shards_partition_list_indices ... ok
+test transmit_retries0_is_list_shifted_by_rate ... ok
+test add_target_string_never_panics_and_reaches_deep_states ... ok
+test transmit_shard_nic_partition ... ok
+test transmit_with_retries_repeats_each_index ... ok
+test transmit_scan_is_rotated_list_scan ... ok
+test read_paused_conf_never_panics_and_roundtrips_echo ... ok
+test blackrock_is_bijective_on_small_ranges ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/receive.rs (target/debug/deps/receive-282265b4eaeb4dc6)
+
+running 41 tests
+test arp_fixed_field_errors_are_typed ... ok
+test arp_and_ipv6_ethertype_yield_none ... ok
+test arp_reply_round_trips_and_resolves ... ok
+test arp_request_has_the_c_layout ... ok
+test bad_checksum_on_a_foreign_packet_is_not_an_error ... ok
+test bad_ihl_never_panics_and_small_ihl_is_rejected ... ok
+test bad_ip_version_is_rejected ... ok
+test bad_tcp_data_offset_is_rejected_without_oob ... ok
+test checksums_are_verified_by_default_and_policy_is_explicit ... ok
+test ethernet_padding_after_total_length_is_ignored ... ok
+test every_strict_prefix_of_a_valid_frame_is_an_error_not_a_panic ... ok
+test every_strict_prefix_with_options_is_an_error ... ok
+test every_truncated_arp_prefix_is_an_error ... ok
+test frame_longer_than_1514_is_rejected ... ok
+test full_address_space_target_accepts_both_extremes ... ok
+test ipv4_fragments_are_rejected ... ok
+test ipv4_options_within_ihl_are_skipped ... ok
+test arp_mutations_resolve_only_when_tuple_matches ... ok
+test non_synack_non_rst_flags_yield_none ... ok
+test own_transmitted_syn_yields_none ... ok
+test arbitrary_arp_bytes_never_panic ... ok
+test range_edges_are_inclusive ... ok
+test real_probe_from_cursor_is_answered_by_matching_synack ... ok
+test reject_excluded_port ... ok
+test reject_excluded_target ... ok
+test reject_previous_job_port_with_valid_cookie ... ok
+test reject_previous_job_target_with_valid_cookie ... ok
+test rst_with_valid_cookie_is_closed ... ok
+test rst_without_matching_ackno_is_not_a_reply ... ok
+test synack_is_open_on_every_link_type ... ok
+test target_and_port_range_boundaries_are_inclusive ... ok
+test tcp_options_with_matching_data_offset_are_accepted ... ok
+test total_length_below_header_or_beyond_frame_is_rejected ... ok
+test udp_icmp_and_other_protocols_yield_none ... ok
+test unknown_link_types_and_families ... ok
+test unsuitable_arp_replies_do_not_resolve ... ok
+test vlan_is_never_read_as_ipv4 ... ok
+test wrong_ack_wrong_tuple_wrong_destination_yield_none ... ok
+test mutated_valid_frames_only_accept_by_rule ... ok
+test random_headers_behind_valid_prefix_never_panic ... ok
+test arbitrary_bytes_never_panic ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/scan_golden.rs (target/debug/deps/scan_golden-2e5ae442605b50c8)
+
+running 1 test
+test list_scan_matches_c_oracle_fixtures ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.29s
+
+     Running tests/selftest_parity.rs (target/debug/deps/selftest_parity-74cab7376d4377d1)
+
+running 4 tests
+test map_covers_all_31_c_selftests_in_main_c_order ... ok
+test print_parity_summary ... ok
+test statuses_are_consistent_with_mappings_and_reasons ... ok
+test every_named_rust_test_exists ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sha256_vectors.rs (target/debug/deps/sha256_vectors-7cae168ceb449a84)
+
+running 1 test
+test sha256_known_vectors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_engine-d94f63929f078ffc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/backpressure.rs (target/debug/deps/backpressure-64b4ba8c1731b6fd)
+
+running 6 tests
+test overflow_fails_with_consumer_too_slow_and_keeps_received_results ... ok
+test drop_with_full_queue_joins_workers ... ok
+test stop_with_full_queue_is_fast_and_keeps_results ... ok
+test overflow_stops_tx_without_further_sends ... ok
+test pause_at_rate_1_with_full_queue_is_not_blocked_by_consumer ... ok
+test pause_with_full_queue_still_completes_the_pause ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/bounded_memory.rs (target/debug/deps/bounded_memory-d38455be2689072f)
+
+running 1 test
+test slash0_generation_and_idle_rx_stay_bounded ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+
+     Running tests/identity.rs (target/debug/deps/identity-3399bcbe5ac4a2a6)
+
+running 9 tests
+test encoding_is_framed_and_versioned ... ok
+test digest_is_pinned_for_the_reference_job ... ok
+test equivalent_spellings_normalize_to_the_same_digest ... ok
+test every_identity_field_changes_the_digest ... ok
+test retries_shard_and_rounds_are_part_of_the_encoding ... ok
+test flipping_any_byte_of_the_serialized_checkpoint_is_detected ... ok
+test every_identity_field_rejects_resume_before_the_first_send ... ok
+test scan_id_is_preserved_and_attempt_id_is_fresh ... ok
+test corrupted_checkpoint_fields_are_rejected ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-4a1748f5519d51ef)
+
+running 32 tests
+test dedup_is_fifo_bounded_and_allows_repeat_after_eviction ... ok
+test cancellation_is_checked_before_every_send_inside_a_batch ... ok
+test dropping_the_handle_while_draining_joins_workers ... ok
+test complete_scan_delivers_all_results_then_one_finished ... ok
+test duplicate_replies_are_collapsed_and_counted ... ok
+test invalid_options_are_rejected ... ok
+test engine_dedup_is_bounded_fifo_and_redelivers_after_eviction ... ok
+test dedup_never_exceeds_100k_entries ... ok
+test malformed_frames_are_dropped_and_scan_keeps_running ... ok
+test panic_does_not_duplicate_events_already_read ... ok
+test partial_send_failure_does_not_skip_unacknowledged_frames ... ok
+test observing_the_outcome_does_not_drop_received_events ... ok
+test no_sends_after_terminal_outcome ... ok
+test dropping_the_handle_stops_and_joins_both_workers ... ok
+test progress_events_coalesce_while_consumer_is_idle ... ok
+test result_batches_respect_event_batch_limit ... ok
+test persistent_would_block_waits_between_attempts_and_stop_completes ... ok
+test rx_panic_preserves_accepted_results_on_join_drain ... ok
+test rx_error_fails_the_scan_and_stops_tx ... ok
+test pause_at_rate_1_stops_tx_then_collects_final_replies_for_wait ... ok
+test stop_during_deterministic_throttle_wait ... ok
+test stop_after_pause_overrides_it_and_skips_checkpoint ... ok
+test stop_immediately_finishes_stopped_quickly ... ok
+test stop_during_drain_does_not_wait_for_wait ... ok
+test tx_panic_after_confirmed_send_preserves_results_on_join_drain ... ok
+test uncertain_send_fails_without_checkpoint_or_retry ... ok
+test stop_with_empty_rx_and_idle_consumer ... ok
+test vlan_tagged_replies_are_unsupported_discarded_and_never_delivered ... ok
+test would_block_unsent_backs_off_1ms_on_the_injected_clock ... ok
+test would_block_unsent_retries_same_frame_without_advancing ... ok
+test stop_at_rate_1_interrupts_real_throttle_wait ... ok
+test persistent_would_block_waits_between_attempts_and_pause_completes ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s
+
+     Running tests/pause_resume.rs (target/debug/deps/pause_resume-1ba02e4788f3d8a4)
+
+running 10 tests
+test full_result_queue_fails_and_never_offers_a_checkpoint ... ok
+test checkpoint_carries_scan_attempt_and_versions ... ok
+test chained_pause_resume_pause_resume_is_byte_identical ... ok
+test natural_completion_while_paused_stays_completed ... ok
+test pause_commanded_while_last_probe_is_sent_is_completion_not_checkpoint ... ok
+test pause_before_first_send_sends_nothing_and_resumes_from_zero ... ok
+test pause_on_last_pending_probe_resumes_with_exactly_that_probe ... ok
+test only_a_clean_pause_yields_a_checkpoint ... ok
+test pause_during_would_block_loses_and_duplicates_nothing ... ok
+test pause_at_every_index_then_resume_is_byte_identical ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/rx_integrity.rs (target/debug/deps/rx_integrity-44ca0adcb1c73621)
+
+running 11 tests
+test drops_fail_with_rx_loss ... ok
+test drops_seen_only_by_the_final_health_still_fail ... ok
+test drops_at_final_health_fail_pause_and_withhold_checkpoint ... ok
+test earlier_consumer_overflow_is_kept_but_last_statistics_are_recorded ... ok
+test health_is_called_within_the_adapter_call_limit ... ok
+test drops_at_final_health_fail_stop ... ok
+test panic_in_health_is_worker_panicked_without_checkpoint ... ok
+test verified_zero_drops_completes ... ok
+test unavailable_statistics_fail_and_are_not_zero ... ok
+test health_error_fails_and_earlier_zero_does_not_mask_it ... ok
+test health_runs_periodically_without_incoming_frames ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/tx_stall.rs (target/debug/deps/tx_stall-9e4595f62f20df63)
+
+running 9 tests
+test no_new_send_starts_after_deadline ... ok
+test persistent_would_block_fails_with_tx_stalled_after_ten_seconds ... ok
+test throttle_sleep_at_rate_one_does_not_trip_watchdog ... ok
+test sent_from_call_that_crosses_deadline_is_counted ... ok
+test stop_inside_long_would_block_is_fast ... ok
+test zero_stall_timeout_is_rejected_before_threads_start ... ok
+test uncertain_and_tx_error_keep_priority_over_stall ... ok
+test transient_would_block_resets_window_after_each_sent ... ok
+test pause_inside_long_would_block_is_fast_and_checkpoints ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_net-a4cb3a96808088a7)
+
+running 42 tests
+test linux::tests::binding_matching_the_os_yields_the_ifindex ... ok
+test linux::tests::drop_after_health_with_failing_read_keeps_the_total ... ok
+test linux::tests::health_after_fatal_error_reports_the_closed_adapter ... ok
+test linux::tests::health_error_never_returns_a_cached_zero ... ok
+test linux::tests::health_reports_cumulative_drops_from_resetting_deltas ... ok
+test linux::tests::hostile_interface_names_never_reach_the_os ... ok
+test linux::tests::backoff_is_capped_by_the_remaining_deadline ... ok
+test linux::tests::missing_interface_is_a_mismatch ... ok
+test linux::tests::non_ethernet_link_type_is_rejected_before_any_os_query ... ok
+test linux::tests::health_error_after_a_good_periodic_flush_is_still_an_error ... ok
+test linux::tests::rx_drops_frames_of_another_interface ... ok
+test linux::tests::kernel_drops_stay_none_when_statistics_are_unavailable ... ok
+test linux::tests::rx_drops_outgoing_frames ... ok
+test linux::tests::rx_drops_truncated_frames_and_never_exceeds_the_buffer ... ok
+test linux::tests::periodic_flush_health_and_drop_have_one_owner_without_double_counting ... ok
+test linux::tests::rx_fatal_error_closes_fd_and_later_calls_fail ... ok
+test linux::tests::kernel_drops_accumulate_and_reading_does_not_reset ... ok
+test linux::tests::rx_flood_of_dropped_frames_cannot_extend_the_deadline ... ok
+test linux::tests::rx_only_truncated_frame_yields_none_not_a_length ... ok
+test linux::tests::rx_eintr_flood_does_not_restart_the_deadline ... ok
+test linux::tests::rx_readiness_then_packet_is_delivered ... ok
+test linux::tests::rx_empty_times_out_within_the_deadline ... ok
+test linux::tests::rx_poll_eintr_flood_does_not_restart_the_deadline ... ok
+test linux::tests::rx_returns_frame_and_counts_it ... ok
+test linux::tests::rx_poll_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::source_ip_and_mac_are_not_validated_against_the_os ... ok
+test linux::tests::stats_handle_survives_the_close_and_final_drops_are_collected ... ok
+test linux::tests::rx_readiness_without_packet_keeps_waiting_until_deadline ... ok
+test linux::tests::tx_eagain_then_writable_then_sent ... ok
+test linux::tests::rx_recv_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::tx_fatal_error_closes_the_fd_and_later_calls_fail_without_syscalls ... ok
+test linux::tests::tx_full_send_is_sent ... ok
+test linux::tests::tx_partial_send_is_uncertain_and_keeps_fd_open ... ok
+test linux::tests::tx_eintr_flood_does_not_extend_the_deadline ... ok
+test linux::tests::tx_confirmed_eagain_until_deadline_is_would_block_unsent ... ok
+test linux::tests::tx_poll_failure_is_fatal ... ok
+test linux::tests::tx_poll_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::tx_poll_eintr_flood_does_not_restart_the_deadline ... ok
+test linux::tests::wrong_interface_link_type_is_unsupported_link ... ok
+test linux::tests::tx_send_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test linux::tests::rx_timeout_is_capped_at_50ms ... ok
+test linux::tests::tx_timeout_is_capped_at_50ms ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/linux_io.rs (target/debug/deps/linux_io-fdcfab6211340d16)
+
+running 10 tests
+test lab_drop_closes_every_fd_and_stats_outlive_them ... ignored, opens real AF_PACKET sockets: sealed lab only
+test lab_empty_rx_times_out_within_the_bound ... ignored, opens real AF_PACKET sockets: sealed lab only
+test lab_missing_interface_still_mismatches_with_privileges ... ignored, opens real AF_PACKET sockets: sealed lab only
+test lab_open_without_privilege_is_permission_denied ... ignored, needs an UNPRIVILEGED uid inside the sealed lab
+test lab_send_is_confirmed_and_own_frame_never_reaches_rx ... ignored, opens real AF_PACKET sockets: sealed lab only
+test lab_unassigned_source_ip_and_custom_mac_open_and_send ... ignored, opens real AF_PACKET sockets: sealed lab only
+test missing_interface_is_an_interface_mismatch ... ok
+test non_ethernet_binding_is_refused_before_any_socket ... ok
+test loopback_is_not_ethernet ... ok
+test shell_metacharacters_in_the_name_are_rejected_not_executed ... ok
+
+test result: ok. 4 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/linux_wire.rs (target/debug/deps/linux_wire-6be43e5225fe3ee3)
+
+running 9 tests
+test lab_all_recorded_checks_pass_none_failed_none_not_run ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_pause_resume_pcap_concat_equals_continuous_trace ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_PERF_RESULTS (see module docs)
+test lab_rejected_resumes_never_open_the_adapter_or_touch_the_wire ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_veth_removal_fails_diagnosably_without_a_checkpoint ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test pause_plus_resume_must_equal_continuous_and_detects_seam_defects ... ok
+test pcap_parser_is_strict ... ok
+test syn_filter_ignores_other_frames ... ok
+
+test result: ok. 3 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rmasscan_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rmasscan_engine
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rmasscan_net
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+rc=0

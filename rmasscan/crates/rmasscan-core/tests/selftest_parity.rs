@@ -75,7 +75,13 @@ const PARITY: &[Entry] = &[
         c_def: "main-dedup.c:333",
         status: Stage2,
         rust: &[],
-        reason: "Дедупликация ответов приёмной части; в этапе 1 нет приёма.",
+        reason: "Дедупликация ответов приёмной части. Не портирована буквально: в core её нет и \
+                 не будет (core остаётся stateless). Её заменяет ограниченный FIFO-кэш в \
+                 rmasscan-engine (`DedupCache`, до MAX_DEDUP_ENTRIES) с собственными тестами \
+                 (tests/lifecycle.rs: duplicate_replies_are_collapsed_and_counted, \
+                 dedup_is_fifo_bounded_and_allows_repeat_after_eviction, \
+                 dedup_never_exceeds_100k_entries). Это не полный C-паритет \
+                 `dedup_selftest`; статус не меняется по одному факту существования кэша.",
     },
     Entry {
         c_test: "checksum_selftest",

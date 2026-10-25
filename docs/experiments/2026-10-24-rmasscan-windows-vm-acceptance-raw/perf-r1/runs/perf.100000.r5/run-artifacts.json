@@ -1,0 +1,11 @@
+{
+  "files": {
+    "argv.json": "81eb6216c7b898c767f79a76e9b50d4aa8b2047b7fc1255aa7a23d65c01445b0",
+    "guest-runner.json": "0454d2e93a57947b03e0e2886ca59e2ea2acf1f49cea100bb3a8316710a2ec01",
+    "guest-verify-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-verify-stdout.txt": "366eb0b6567760d72d11e61d0784fb10d9995a3b1d4d2d8c42441f01ed34513d",
+    "guest-verify.json": "366eb0b6567760d72d11e61d0784fb10d9995a3b1d4d2d8c42441f01ed34513d",
+    "run.json": "bf1d344245413e970b092e2f39f8d7e3919e1e3eb4082f46b76a595647fca1d8"
+  },
+  "invocation_nonce": "rc366b6b440429116d31fdb35e369f5cd-6429f30b98901484"
+}

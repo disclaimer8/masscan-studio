@@ -1,0 +1,20 @@
+PASS     manifest 
+PASS     stop_silent 
+PASS     stop_drain 
+PASS     stop_fullqueue 
+PASS     stop_load 
+PASS     overflow_queue 
+PASS     linkloss 
+PASS     ckpt_wrong_ports 
+PASS     ckpt_wrong_seed 
+PASS     ckpt_corrupt_next_index 
+PASS     ckpt_corrupt_checksum 
+PASS     ckpt_truncated 
+PASS     ckpt_empty 
+PASS     ckpt_future_format 
+PASS     ckpt_future_engine 
+PASS     perm_restricted_scan 
+PASS     perm_restricted_inventory 
+PASS     perm_elevated_control 
+PASS     rxloss 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":19}

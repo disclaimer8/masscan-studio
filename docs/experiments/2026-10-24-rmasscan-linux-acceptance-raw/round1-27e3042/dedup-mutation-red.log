@@ -1,0 +1,30 @@
+# mutation: DedupCache::insert refreshes order on repeat (LRU-like). Expect RED.
+
+running 1 test
+test engine_dedup_is_bounded_fifo_and_redelivers_after_eviction ... FAILED
+
+failures:
+
+---- engine_dedup_is_bounded_fifo_and_redelivers_after_eviction stdout ----
+
+thread 'engine_dedup_is_bounded_fifo_and_redelivers_after_eviction' (3235659) panicked at crates/rmasscan-engine/tests/lifecycle.rs:612:5:
+assertion `left == right` failed: A, B, C and A again: [Reply { remote_ip: 167772162, remote_port: 443, local_ip: 184483841, local_port: 40007, status: Open, tcp_flags: 18, ttl: 64 }, Reply { remote_ip: 167772163, remote_port: 80, local_ip: 184483841, local_port: 40004, status: Open, tcp_flags: 18, ttl: 64 }, Reply { remote_ip: 167772164, remote_port: 443, local_ip: 184483841, local_port: 40011, status: Open, tcp_flags: 18, ttl: 64 }]
+  left: 3
+ right: 4
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    engine_dedup_is_bounded_fifo_and_redelivers_after_eviction
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p rmasscan-engine --test lifecycle`
+rc(mutated)=
+# restored source (GREEN)
+
+running 1 test
+test engine_dedup_is_bounded_fifo_and_redelivers_after_eviction ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.01s
+

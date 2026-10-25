@@ -1,0 +1,9 @@
+
+running 1 test
+test live_pause_stops_tx_then_resume_completes_without_duplicates ... KV plain/pause_leg1 reason=Paused sent=4 next_index=4 received=4 discarded=0 duplicates=0 rx_health=Some(0) net.tx_sent=4 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=4 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) command_to_outcome_ms=Some(3073.6085000000003) checkpoint=true
+KV plain/pause_command_to_outcome ms=3073
+KV plain/pause_leg2 reason=Completed sent=8 next_index=12 received=8 discarded=3 duplicates=0 rx_health=Some(0) net.tx_sent=8 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=11 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) command_to_outcome_ms=None checkpoint=false
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 7.15s
+

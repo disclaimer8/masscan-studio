@@ -1,0 +1,19 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1792885787.295987,
+  "capture_stopped_utc": 1792885843.08335,
+  "end_marker_seen": true,
+  "exe_sha256": "362632ce174395e6a77aea7a2e97420a2e1e6dcf8bd9becbc1f12f5558d34c90",
+  "guest_exit": 0,
+  "guest_finished_utc": 1792885806.210496,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1792885793.324644,
+  "guest_times": {
+    "finished_utc": 1792885806.031,
+    "started_utc": 1792885802.745
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "rf535a4379a9c77614c7e69b7fa9854c5-c98d5c8c2fd2270a",
+  "kind": "resume",
+  "tag": "resume_N8"
+}

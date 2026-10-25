@@ -1,0 +1,11 @@
+
+running 1 test
+test live_budgeted_calls ... KV plain/budgeted_recv_empty recv_empty n=430 p50_us=42028 p95_us=42268 p99_us=42367 max_us=42420 over50ms=0
+KV plain/budgeted_recv_frame recv_frame n=170 p50_us=22 p95_us=228 p99_us=6293 max_us=12914 over50ms=0
+KV plain/budgeted_health health n=300 p50_us=9 p95_us=14 p99_us=15 max_us=23 over50ms=0
+KV plain/budgeted_send send n=150 p50_us=215 p95_us=390 p99_us=460 max_us=512 over50ms=0
+KV plain/budgeted_stats frames_returned=170 NetStats { tx_sent: 150, tx_would_block: 0, tx_uncertain: 0, tx_errors: 0, rx_packets: 170, rx_truncated: 0, rx_outgoing: 0, rx_wrong_interface: 0, rx_errors: 0, kernel_drops: Some(0) }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 18.22s
+

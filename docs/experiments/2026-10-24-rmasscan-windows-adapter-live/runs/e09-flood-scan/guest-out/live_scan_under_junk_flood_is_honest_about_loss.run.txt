@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_scan_under_junk_flood_is_honest_about_loss
+nic_before: {"utc_ms":1792846283536,"stats":{"ReceivedBytes":134421610,"ReceivedUnicastPackets":2100348,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7959642,"SentUnicastPackets":127298,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 7021
+nic_after: {"utc_ms":1792846290633,"stats":{"ReceivedBytes":161858410,"ReceivedUnicastPackets":2529048,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7984442,"SentUnicastPackets":127698,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

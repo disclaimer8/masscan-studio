@@ -1,0 +1,2 @@
+NOT RUN: another windows-suite invocation (or --cleanup) holds ~/winvm/t4-ev/.suite.lock on home-pc; run one suite at a time. Nothing was changed.
+lockcheck-exit=2

@@ -1,0 +1,6 @@
+ip netns add wl-scan-1435846-32705; ip netns add wl-peer-1435846-32705
+ip -n wl-scan-1435846-32705 link add veth-a type veth peer name veth-b netns wl-peer-1435846-32705
+ip netns exec $NS_A ethtool -K veth-a tx off; ip netns exec $NS_B ethtool -K veth-b tx off   # veth tx-checksum offload off, this run's veth only
+ip -n $NS route show default (empty); ip -n $NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces
+(rmasscan-lab wire-suite) ip netns exec $NS_B rmasscan-lab capture responder --ports 80,8080 ...   # restarted before every run
+rmasscan-lab wire-suite --suite rust ...   # runs everything through ip netns exec $NS_A / $NS_B

@@ -1,0 +1,90 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling typenum v1.20.0
+   Compiling libc v0.2.191
+   Compiling thiserror v2.0.21
+   Compiling utf8parse v0.2.2
+   Compiling serde_core v1.0.229
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling cfg-if v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling zmij v1.0.23
+   Compiling siphasher v1.0.4
+   Compiling strsim v0.11.1
+   Compiling clap_lex v1.1.1
+   Compiling serde_json v1.0.154
+   Compiling anstyle-parse v1.0.0
+   Compiling serde v1.0.229
+   Compiling heck v0.5.0
+   Compiling anstream v1.0.0
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling clap_builder v4.6.7
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling syn v3.0.9
+   Compiling digest v0.11.3
+   Compiling cpufeatures v0.3.1
+   Compiling sha2 v0.11.1
+   Compiling thiserror-impl v2.0.21
+   Compiling clap_derive v4.6.7
+   Compiling serde_derive v1.0.229
+   Compiling clap v4.6.7
+   Compiling rmasscan-core v0.1.0 ($REPO/rmasscan/crates/rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 ($REPO/rmasscan/crates/rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
+   Compiling rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
+    Finished `release` profile [optimized] target(s) in 5.12s
+     Running unittests src/lib.rs (target/release/deps/rmasscan_lab-5132d4d5c0932434)
+
+running 43 tests
+test verify::regression_tests::eno1_isolation_failure_is_detected ... ok
+test verify::regression_tests::fresh_invocation_requires_matching_nonce_and_hash_proof ... ok
+test verify::regression_tests::argv_error_disables_behaviour_blame ... ok
+test verify::regression_tests::foreign_floor_is_a_failure_even_with_bad_capture ... ok
+test verify::regression_tests::full_failure_plan_replays_19_pass ... ok
+test verify::regression_tests::guest_transport_failure_cannot_reuse_old_success ... ok
+test verify::regression_tests::all_checkpoint_fields_must_match_report ... ok
+test verify::regression_tests::incomplete_capture_cannot_blame_unexplained_foreign_discards ... ok
+test verify::regression_tests::interface_counters_cannot_decrease_and_compensate_each_other ... ok
+test verify::regression_tests::failure_checkpoint_file_is_behaviour_fail ... ok
+test verify::regression_tests::maximum_interface_counters_neither_overflow_nor_pass ... ok
+test verify::regression_tests::maximum_receive_counters_neither_overflow_nor_pass ... ok
+test verify::regression_tests::late_tx_is_failure_only_when_capture_complete ... ok
+test verify::regression_tests::fixture_hash_binding_and_path_must_match ... ok
+test verify::regression_tests::independent_nic_unknown_fields_are_not_measured_zero ... ok
+test verify::regression_tests::missing_readiness_is_invalid ... ok
+test verify::regression_tests::malformed_exported_checkpoints_never_pass ... ok
+test verify::regression_tests::failure_plan_harness_evidence_mutations_invalid ... ok
+test verify::regression_tests::packet_truncation_and_hash_changes_are_invalid ... ok
+test verify::regression_tests::rxloss_independent_count_inputs_required ... ok
+test verify::regression_tests::bad_capture_cannot_hide_scanner_failure ... ok
+test verify::regression_tests::stale_run_binding_is_invalid ... ok
+test verify::regression_tests::exported_checkpoint_checksum_and_identity_are_verified ... ok
+test verify::regression_tests::unrelated_process_worker_count_is_not_engine_leak ... ok
+test verify::tests::duplicate_arguments_rejected ... ok
+test verify::regression_tests::syn_bytes_and_order_are_exact ... ok
+test verify::tests::missing_never_pass ... ok
+test verify::tests::plans_have_full_spec ... ok
+test verify::tests::wrong_interface_and_filter_rejected ... ok
+test windows_suite::tests::failed_verify_never_calls_fetch_even_with_successful_old_report ... ok
+test verify::tests::historical_functional_is_pass ... ok
+test verify::regression_tests::schema2_end_marker_tail_and_immediate_mode_required ... ok
+test verify::regression_tests::rxloss_unreproduced_or_unknown_is_not_run ... ok
+test verify::regression_tests::wrong_interface_is_invalid_even_when_filter_and_packet_hashes_match ... ok
+test verify::regression_tests::omitted_tcpdump_interface_drops_need_independent_measurement ... ok
+test verify::regression_tests::missing_artifacts_never_pass ... ok
+test verify::regression_tests::failure_plan_each_error_contract_enforced ... ok
+test verify::regression_tests::continuous_behaviour_checks_fail_independently_of_capture ... ok
+test verify::regression_tests::requested_scan_and_attempt_identity_cannot_be_consistently_replaced ... ok
+test verify::regression_tests::stop_latency_worker_and_resource_mutations_fail ... ok
+test verify::regression_tests::received_and_duplicate_counters_require_measured_unsigned_values ... ok
+test verify::regression_tests::capture_provenance_mutations_are_invalid ... ok
+test verify::regression_tests::discarded_pass_fail_and_unknown_are_not_hidden ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 52 filtered out; finished in 2.40s
+

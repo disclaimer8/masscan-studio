@@ -1,0 +1,5 @@
+   Compiling rmasscan-net v0.1.0 (C:\Users\lab\masscan-lab\review-rust-only-v1\rmasscan\crates\rmasscan-net)
+   Compiling rmasscan-lab v0.1.0 (C:\Users\lab\masscan-lab\review-rust-only-v1\rmasscan\crates\rmasscan-lab)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.61s
+     Running `target\debug\rmasscan-lab.exe verify-wire --self-test`
+PASS: pcap comparator self-test

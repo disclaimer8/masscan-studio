@@ -1,0 +1,13 @@
+[perf] c    100000 rep1 valid=True wire=307200/307200 steady=100366 cpu=0.27+0.82s rss=41860KB stop=11.658s
+[perf] rust 100000 rep1 valid=True wire=307200/307200 steady=103129 cpu=0.33+0.77s rss=2940KB stop=0.055s
+[perf] c    100000 rep2 valid=True wire=307200/307200 steady=100265 cpu=0.31+0.76s rss=41908KB stop=11.668s
+[perf] rust 100000 rep2 valid=True wire=307200/307200 steady=100836 cpu=0.29+0.76s rss=2980KB stop=0.049s
+[perf] c    100000 rep3 valid=True wire=307200/307200 steady=100326 cpu=0.29+0.83s rss=41980KB stop=11.906s
+[perf] rust 100000 rep3 valid=True wire=307200/307200 steady=100868 cpu=0.33+0.81s rss=2988KB stop=0.063s
+[perf] c    100000 rep4 valid=True wire=307200/307200 steady=100192 cpu=0.25+0.79s rss=41824KB stop=11.659s
+[perf] rust 100000 rep4 valid=True wire=307200/307200 steady=100563 cpu=0.32+0.75s rss=2960KB stop=0.012s
+[perf] c    100000 rep5 valid=True wire=307200/307200 steady=99970 cpu=0.29+0.92s rss=41888KB stop=11.899s
+[perf] rust 100000 rep5 valid=True wire=307200/307200 steady=100610 cpu=0.34+0.78s rss=2988KB stop=0.06s
+[perf] PASS perf matrix complete: every cell VALID (incomplete captures are INVALID, not normalised) 10/10 cells valid
+[perf] PASS 100000 pps: Rust steady-state pps within +-20% of C rust/c=1.006 (rust 100836.39326574195 vs c 100264.779774344)
+suite perf: 2 PASS, 0 FAIL, 0 NOT RUN

@@ -1,0 +1,16 @@
+{
+ "argv_file": "argv.json",
+ "capture_started_utc": 1792852973.2680478,
+ "capture_stopped_utc": 1792852983.921914,
+ "exe_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+ "guest_exit": 0,
+ "guest_finished_utc": 1792852979.966141,
+ "guest_ssh_rc": 0,
+ "guest_started_utc": 1792852976.1002638,
+ "guest_times": {
+  "finished_utc": 1792852979.793,
+  "started_utc": 1792852976.621
+ },
+ "kind": "pause",
+ "tag": "pause_N0"
+}

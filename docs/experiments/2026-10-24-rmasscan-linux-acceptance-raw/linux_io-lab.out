@@ -1,0 +1,12 @@
+bin=/home/a1/rmasscan-t4-accept/rmasscan/target/debug/deps/linux_io-7ce3647055237f37 sha=e9ff8bee84c6074063e0c494ecb7e44da68b9612cd5a5af42384545ea8005941
+== privileged lab tests (root in ns)
+test lab_drop_closes_every_fd_and_stats_outlive_them ... ok
+test lab_empty_rx_times_out_within_the_bound ... ok
+test lab_missing_interface_still_mismatches_with_privileges ... ok
+test lab_send_is_confirmed_and_own_frame_never_reaches_rx ... ok
+test lab_unassigned_source_ip_and_custom_mac_open_and_send ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.71s
+== unprivileged test (nobody in ns)
+test lab_open_without_privilege_is_permission_denied ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+namespaces_left=0

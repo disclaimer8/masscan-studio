@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_pause_stops_tx_then_resume_completes_without_duplicates
+nic_before: {"utc_ms":1792846202102,"stats":{"ReceivedBytes":123630122,"ReceivedUnicastPackets":1931731,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7946360,"SentUnicastPackets":127083,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 7169
+nic_after: {"utc_ms":1792846209344,"stats":{"ReceivedBytes":123631082,"ReceivedUnicastPackets":1931746,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7947150,"SentUnicastPackets":127096,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

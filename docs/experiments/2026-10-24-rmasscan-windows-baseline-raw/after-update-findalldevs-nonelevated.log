@@ -1,0 +1,7 @@
+captured_utc=2026-10-24T18:15:24Z (after update 26300.9711)
+elevated=False user=W-\lab
+
+Mandatory Label\High Mandatory Level                          Label            S-1-16-12288                            
+                       
+\Device\NPF_Loopback | Adapter for loopback traffic capture
+rc=0

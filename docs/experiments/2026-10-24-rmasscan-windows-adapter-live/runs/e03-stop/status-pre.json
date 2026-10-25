@@ -1,0 +1,22 @@
+{
+  "state": "up",
+  "objects": {
+    "wvb-n2": "present, owned",
+    "wvt-n2": "present, owned",
+    "wvp-n2": "present, owned",
+    "wvh-n2": "present, owned"
+  },
+  "isolation_violations": [],
+  "host_ok": true,
+  "vm": {
+    "pid": 4009645,
+    "cmdline_ok": true,
+    "fd_iff": true,
+    "start": 1792840300.22,
+    "carrier": true,
+    "attached": true
+  },
+  "guest_verify_fresh": true,
+  "raw_run_allowed": true,
+  "ok": true
+}

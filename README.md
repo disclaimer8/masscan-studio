@@ -1,80 +1,51 @@
-# Masscan Studio
+# masscan-studio
 
-Native macOS GUI for a separately installed [masscan](https://github.com/robertdavidgraham/masscan).
-Local first version: macOS 14+, Apple Silicon build, SwiftUI, no third-party app dependencies.
+A Rust-only repository. It holds a pure-Rust port of the
+[masscan](https://github.com/robertdavidgraham/masscan) scanner core (`rmasscan/`),
+its laboratory and acceptance tooling, and the design record. A Rust/Slint desktop
+studio is planned as future work; nothing of it exists yet.
 
-## Run
+The Swift v0.3 macOS app was retired on 2026-10-24. It lives in git history; the last
+commit that contains it is `5b2f88bc949d6cdfa1a75d7122074aa22581d513`
+(`git checkout 5b2f88b -- Sources Tests Package.swift` restores it).
 
-Open `~/Applications/Masscan Studio.app`. If masscan is missing, install it using
-`brew install masscan`. The app detects `/opt/homebrew/bin/masscan` and
-`/usr/local/bin/masscan`.
+## Layout
 
-Choose **New Scan**, enter IPv4 targets and TCP ports, optionally use **Validate
-Setup** (no packets sent), then **Start Scan**. macOS asks for administrator
-authorization once per app session. Later scans and resume reuse that runner.
-Quit the app or use the sidebar lock button to end authorization. If the runner
-fails, the next scan requests authorization again. Passwords are never collected
-or stored by the application.
-
-Live results, numeric IP/port sorting, filtering, CSV/JSON export, local history,
-saved profiles and pause/resume are included. The service column contains
-port-based hints, not verified service identification. Export includes the
-currently filtered results.
-
-Version 0.2 resolves hostnames in the background through the macOS DNS/mDNS
-responder (up to 512 addresses per scan, four concurrent queries, three seconds
-per query). Disable this in the scan sheet or refresh with **Look Up Names**.
-Not all devices publish a reverse name. The **Device hint** column uses hostname
-words and open ports; hover for evidence. These are guesses, not verified device
-models or operating systems. Names and evidence are included in CSV/JSON.
-
-Version 0.3 makes hostnames clickable. Web port rows open their HTTP/HTTPS URL;
-other rows prefer a discovered web port on the same host, falling back to HTTPS
-when a hostname exists. Web endpoints without a hostname have an IP link.
-
-Click a **Device hint**, or select a host and choose **Inspect Device**. The detail
-sheet runs the separately installed Nmap (`brew install nmap`) with TCP connect
-and light service detection on that single host's discovered ports. No extra
-administrator prompt is needed. It reports service product/version, reported
-names, OS/device hints and CPE identifiers with their evidence. A service name
-from the port table is distinguished from a matched response.
-
-Checks are manual, one host at a time, at most 64 discovered ports, with a
-55-second deadline and cancellation. Raw printing port 9100 is excluded.
-No OS fingerprint scan or vulnerability scripts are requested. Reports are
-saved in history and included in JSON export; CSV retains the device summary
-and evidence. Service replies can be incomplete or misleading, so a hardware
-model is not guaranteed.
-
-**Pause** sends SIGINT and waits for final replies and a checkpoint. **Resume**
-reuses the original scope, seed and resume index. Quitting during a scan stops
-the child; wait for Pause to finish before quitting if you need a resume point.
-
-History and profiles are stored in
-`~/Library/Application Support/Masscan Studio/`.
+| Path | Content |
+| --- | --- |
+| `rmasscan/` | Cargo workspace: `rmasscan-core`, `rmasscan-engine`, `rmasscan-net`, `rmasscan-cli`, `rmasscan-lab` |
+| `rmasscan/README.md` | The port: commands, deliberate differences from masscan, the no-C-in-build check |
+| `rmasscan/docs/rust-lab.md` | Rust laboratory tools (evidence verifier, packet comparator, suites) |
+| `rmasscan/docs/windows-vm-lab.md`, `rmasscan/docs/windows-wire-lab.md` | Windows VM and wire-parity labs |
+| `rmasscan/BENCHMARKS.md` | Speed measurements |
+| `docs/experiments/` | Dated experiment and acceptance records |
+| `docs/superpowers/` | Historical plans and design specs (kept as written) |
+| `docs/history/` | Retired documents, for example the Swift app's verification notes |
+| `scripts/language-guard.sh` | Repository language policy (see below) |
 
 ## Build and test
 
 ```sh
-swift test
-python3 scripts/test_helper.py
-bash scripts/package.sh
+cd rmasscan
+cargo build --locked --release
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cargo deny check
 ```
 
-Output: `dist/Masscan Studio.app`. Signing is ad-hoc for this local Mac;
-this is not a notarized public release. masscan is not bundled.
+The toolchain is pinned by `rmasscan/rust-toolchain.toml`. The build graph must not
+contain a C toolchain; `crates/rmasscan-core/tests/no_c_in_build.rs` and `cargo deny`
+check it.
 
-## Architecture
+## Language policy
 
-- `ScanCore`: validated IPv4/TCP configuration, parsers, export, local transport.
-- `ScanHelper`: dedicated runner; fixed masscan binary, argument arrays, private
-  temporary working directory; returns data over an authenticated loopback
-  stream. Accepts typed, validated scan configurations, stop and quit commands.
-  The authorized scanner executable is copied to a private session directory,
-  so later jobs use the same executable. Lost connection stops its child and
-  exits the runner.
-- `MasscanStudio`: native UI and unprivileged history/export storage.
+Tracked source files are Rust, plus thin shell and PowerShell wrappers. Swift, Python,
+C, C++ and Objective-C sources are not allowed. `bash scripts/language-guard.sh`
+enforces it (CI workflow `language-guard.yml`, no path filter), and
+`rmasscan/crates/rmasscan-lab/tests/rust_only.rs` is the same policy as a Rust test.
 
-No firewall changes, persistent privileged daemon, arbitrary CLI field, or
-automatic network scan. IPv6, UDP, huge result-set database
-storage, remote scanners and public distribution packaging are outside v0.3.
+## Licence
+
+`rmasscan/` is AGPL-3.0-only; masscan is copyright Robert David Graham. See
+`rmasscan/LICENSE` and `rmasscan/NOTICE`.

@@ -1,0 +1,21 @@
+[2026-10-24T11:38:31.897Z] tag=r02-health-error test=live_health_error cond=none sha=53fe366
+raw_run_allowed True violations []
+[2026-10-24T11:38:35.323Z] guest run begins
+[2026-10-24T11:38:36.614Z] guest run ended rc=0
+peer.pcap frames=0
+eno1.pcap frames=0
+==> /home/a1/winvm/spike-ev/r02-health-error/peer.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r02-health-error/peerjunk.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r02-health-error/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

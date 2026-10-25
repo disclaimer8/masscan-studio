@@ -1,0 +1,6 @@
+    Checking rmasscan-core v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b/rmasscan/crates/rmasscan-core)
+    Checking rmasscan-engine v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b/rmasscan/crates/rmasscan-engine)
+    Checking rmasscan-cli v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b/rmasscan/crates/rmasscan-cli)
+    Checking rmasscan-net v0.1.0 (/Users/denyskolomiiets/masscan-studio-stage2b/rmasscan/crates/rmasscan-net)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s
+rc=0

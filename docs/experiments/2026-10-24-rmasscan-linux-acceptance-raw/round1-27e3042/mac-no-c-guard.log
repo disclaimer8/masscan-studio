@@ -1,0 +1,10 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.03s
+     Running tests/no_c_in_build.rs (target/debug/deps/no_c_in_build-cab04075422d9c77)
+
+running 2 tests
+test matcher_compares_whole_names ... ok
+test build_graph_has_no_c_toolchain_crates ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+rc=0

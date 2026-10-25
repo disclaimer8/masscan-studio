@@ -1,0 +1,6 @@
+ip netns add wl-scan-883030-352; ip netns add wl-peer-883030-352
+ip -n wl-scan-883030-352 link add veth-a type veth peer name veth-b netns wl-peer-883030-352
+ip netns exec $NS_A ethtool -K veth-a tx off; ip netns exec $NS_B ethtool -K veth-b tx off   # veth tx-checksum offload off, this run's veth only
+ip -n $NS route show default (empty); ip -n $NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces
+(wire_suite.py) ip netns exec $NS_B python3 wire_capture.py responder --ports 80,8080 ...   # restarted before every run
+python3 wire_suite.py --suite perf ...   # runs everything through ip netns exec $NS_A / $NS_B

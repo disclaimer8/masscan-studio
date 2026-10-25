@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_link_loss_raw_calls
+nic_before: {"utc_ms":1792846299923,"stats":{"ReceivedBytes":162358698,"ReceivedUnicastPackets":2536865,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7984442,"SentUnicastPackets":127698,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 48079
+nic_after: {"utc_ms":1792846348095,"stats":{"ReceivedBytes":162414634,"ReceivedUnicastPackets":2537739,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":8051010,"SentUnicastPackets":128572,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

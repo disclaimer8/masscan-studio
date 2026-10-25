@@ -1,0 +1,18 @@
+   Compiling rmasscan-net v0.1.0 (/home/a1/t4r1/rmasscan/crates/rmasscan-net)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.59s
+     Running tests/linux_wire.rs (target/debug/deps/linux_wire-527017204b88facb)
+
+running 9 tests
+test lab_all_recorded_checks_pass_none_failed_none_not_run ... ok
+test lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised ... ok
+test lab_veth_removal_fails_diagnosably_without_a_checkpoint ... ok
+test pause_plus_resume_must_equal_continuous_and_detects_seam_defects ... ok
+test pcap_parser_is_strict ... ok
+test syn_filter_ignores_other_frames ... ok
+test lab_pause_resume_pcap_concat_equals_continuous_trace ... ok
+test lab_rejected_resumes_never_open_the_adapter_or_touch_the_wire ... ok
+test lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+rc=0

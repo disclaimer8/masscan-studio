@@ -1,0 +1,28 @@
+# Repo-wide language policy. No path filter on purpose: a new script anywhere in the tree,
+# including a file that only touches docs/, must run this job.
+# Fails on any tracked *.py and on any use of the banned interpreter (shebangs included) in
+# tracked shell, PowerShell, cmd, Rust or workflow files, and on any tracked Swift, C, C++ or
+# Objective-C source file. The guard itself is shell.
+name: language-guard
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: no interpreted programs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tracked sources and scripts
+        run: bash scripts/language-guard.sh
+      - name: No tracked banned source files
+        run: |
+          n=$(git ls-files "*.py" "*.swift" "*.c" "*.h" | wc -l | tr -d ' ')
+          echo "tracked banned source files: $n"
+          test "$n" = 0

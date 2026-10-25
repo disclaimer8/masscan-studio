@@ -371,7 +371,9 @@ fn write_manifest(p: &Path, m: &Value) -> Result<(), String> {
 }
 /// The owner to give a report back when sudo atomically replaced an unprivileged user's file:
 /// only when the file we just created is root-owned (we are root) and SUDO_UID is set. The
-/// group falls back to the uid. Invalid ids are an error.
+/// group falls back to the uid. Invalid ids are an error. Only the unix `restore_sudo_owner` calls
+/// it; the logic stays compiled and tested everywhere.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn sudo_target(
     owner_uid: u32,
     sudo_uid: Option<&str>,

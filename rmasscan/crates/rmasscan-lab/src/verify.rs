@@ -140,15 +140,30 @@ pub(crate) fn results_on_wire_ex(r: &mut Run, ctx: &Ctx, c: &Value, results: &Va
         format!("{bad:?} not on the wire"),
     );
     if strict {
-        let missed: Vec<String> = answered_open(ctx, c)
-            .into_iter()
-            .filter(|x| !array(results).iter().any(|v| s(v) == x.as_str()))
-            .collect();
-        r.cap(
-            "open results equal the open replies on the wire",
-            missed.is_empty(),
-            format!("{missed:?} on the wire but not reported"),
-        );
+        let have: BTreeSet<&str> = array(results).iter().map(s).collect();
+        let answered = answered_replies(ctx, c);
+        for (kind, name) in [
+            ("open", "open results equal the open replies on the wire"),
+            (
+                "closed",
+                "every genuine probe-matched RST on the wire is a closed result",
+            ),
+        ] {
+            let missed: Vec<&String> = answered
+                .iter()
+                .filter(|x| x.ends_with(&format!(":{kind}")) && !have.contains(x.as_str()))
+                .filter(|x| kind == "open" || !answered_port_open(&answered, &have, x))
+                .collect();
+            r.cap(
+                name,
+                missed.is_empty(),
+                format!(
+                    "{} on the wire but not reported: {:?}",
+                    missed.len(),
+                    missed.iter().take(5).collect::<Vec<_>>()
+                ),
+            );
+        }
     }
 }
 /// `reply_total` is the number of expected replies (everywhere else), or of the results received (macOS).
@@ -681,30 +696,66 @@ pub(crate) fn tcp(b: &[u8]) -> Option<Tcp> {
         ack: u32::from_be_bytes([b[o + 8], b[o + 9], b[o + 10], b[o + 11]]),
     })
 }
-/// The open replies inside the scanner's receive window that answer a SYN of this run (the ack is the SYN's
-/// sequence plus one, to the SYN's port). A SYN-ACK retransmit of an earlier cell's half-open connection that
-/// lands in this window (seen live: port 5000 of perf.100000.r4 inside perf.100.r5) answers nothing of this run.
-pub(crate) fn answered_open(ctx: &Ctx, c: &Value) -> BTreeSet<String> {
+/// The genuine replies inside the scanner's receive window that answer a SYN of this run: a SYN-ACK (open) or an RST
+/// (closed) whose ack is the SYN's sequence plus one, from the SYN's port, and that is not a frame the injector
+/// wrote. A SYN-ACK retransmit of an earlier cell's half-open connection that lands in the window (seen live:
+/// port 5000 of perf.100000.r4 inside perf.100.r5) answers nothing of this run.
+pub(crate) fn answered_replies(ctx: &Ctx, c: &Value) -> BTreeSet<String> {
+    answered_replies_until(ctx, c, None)
+}
+/// As `answered_replies`, but only the replies on the wire at or before `until` (when given).
+pub(crate) fn answered_replies_until(ctx: &Ctx, c: &Value, until: Option<f64>) -> BTreeSet<String> {
     let (Some((fr, _)), Some(win)) = (&ctx.peer, rx_window(ctx, c)) else {
         return BTreeSet::new();
     };
+    let win = (win.0, until.map_or(win.1, |u| u.min(win.1)));
     let asked: BTreeSet<(u16, u32)> = syns(fr, &ctx.bind, sports(c))
         .iter()
         .filter_map(|(_, f)| tcp(f))
         .map(|i| (i.dp, i.seq.wrapping_add(1)))
         .collect();
+    let injected: BTreeSet<String> = read_json(ctx.d.join("injector.json"))
+        .and_then(|v| v["injected"].as_object().cloned())
+        .map(|m| m.values().map(|v| s(v).to_owned()).collect())
+        .unwrap_or_default();
     let b = &ctx.bind;
     fr.iter()
         .filter(|(t, _)| *t >= win.0 && *t <= win.1)
+        .filter(|(_, f)| !injected.contains(&sha(f)))
         .filter_map(|(_, f)| tcp(f))
         .filter(|i| {
             i.sm == b.pm
                 && i.dm == b.sm
                 && i.dst == b.src
-                && i.flags & 0x12 == 0x12
+                && (i.flags & 0x12 == 0x12 || i.flags & 4 != 0)
                 && asked.contains(&(i.sp, i.ack))
         })
-        .map(|i| format!("{}:{}:open", i.src, i.sp))
+        .map(|i| {
+            format!(
+                "{}:{}:{}",
+                i.src,
+                i.sp,
+                if i.flags & 0x12 == 0x12 {
+                    "open"
+                } else {
+                    "closed"
+                }
+            )
+        })
+        .collect()
+}
+/// One reply per port: an RST that follows a SYN-ACK of the same port (Darwin aborting the embryonic connection of
+/// an open port, seen live for 7000 in perf.100000.r2) is not a second result; the port's open result stands for it.
+/// Also true when a result for the port exists in either state.
+fn answered_port_open(answered: &BTreeSet<String>, have: &BTreeSet<&str>, closed: &str) -> bool {
+    let open = closed.replacen(":closed", ":open", 1);
+    answered.contains(&open) || have.contains(open.as_str())
+}
+/// The open replies among `answered_replies`.
+pub(crate) fn answered_open(ctx: &Ctx, c: &Value) -> BTreeSet<String> {
+    answered_replies(ctx, c)
+        .into_iter()
+        .filter(|x| x.ends_with(":open"))
         .collect()
 }
 pub(crate) fn sports(c: &Value) -> (u16, u16) {
@@ -1468,7 +1519,7 @@ pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
         results_match(&j["replies"], &exp),
         j["replies"].to_string(),
     );
-    results_on_wire(r, ctx, c, &j["replies"]);
+    results_on_wire_ex(r, ctx, c, &j["replies"], true);
     let Some(inj) = read_json(ctx.d.join("injector.json")) else {
         r.add("injector.json present", NOT_RUN, "missing", false);
         return;
@@ -1663,6 +1714,37 @@ pub(crate) fn flood(r: &mut Run, ctx: &Ctx, c: &Value, outcome: Option<f64>, ove
     }
     r.notes.insert("flood".into(), fl);
 }
+/// Stopped scans keep partial semantics (a reply that arrived around the Stop may be lost), but a genuine, probe-matched
+/// reply on the wire well before the Stop request must be a result: `t_stop = outcome - stop_to_outcome_ms`, every
+/// reply at or before `t_stop - 0.25 s` is required (INVALID when the capture is unproven). Replies closer to the Stop
+/// are tolerated and replies after the outcome are ignored. Needs the recorded wall clock and stop timing.
+fn stopped_completeness(r: &mut Run, ctx: &Ctx, c: &Value) {
+    let j = &ctx.rj;
+    let (outcome, to_outcome) = (
+        j["wall"]["outcome_utc_ms"].as_f64(),
+        j["timing"]["stop_to_outcome_ms"].as_f64(),
+    );
+    let (Some(outcome), Some(to_outcome)) = (outcome, to_outcome) else {
+        return;
+    };
+    let t_stop = (outcome - to_outcome) / 1000.;
+    let answered = answered_replies_until(ctx, c, Some(t_stop - 0.25));
+    let have: BTreeSet<&str> = array(&j["replies"]).iter().map(s).collect();
+    let missed: Vec<&String> = answered
+        .iter()
+        .filter(|x| !have.contains(x.as_str()))
+        .filter(|x| !x.ends_with(":closed") || !answered_port_open(&answered, &have, x))
+        .collect();
+    r.cap(
+        "every genuine reply on the wire well before the Stop request is a result",
+        missed.is_empty(),
+        format!(
+            "{} on the wire but not reported: {:?}",
+            missed.len(),
+            missed.iter().take(5).collect::<Vec<_>>()
+        ),
+    );
+}
 pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     let tm = &j["timing"];
@@ -1708,6 +1790,7 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
                 j["sent"].to_string(),
             );
             results_on_wire(r, ctx, c, &j["replies"]);
+            stopped_completeness(r, ctx, c);
             r.notes.insert(
                 "empty_receive_path".into(),
                 json!("NOT RUN on macOS (darwin-syncookies)"),
@@ -2625,18 +2708,31 @@ pub(crate) fn groups(
                 FAIL,
                 false,
             );
-            let missed: Vec<String> = answered_open(ca, &c)
-                .union(&answered_open(cb, &c))
-                .filter(|x| !union.contains(*x))
+            let answered: BTreeSet<String> = answered_replies(ca, &c)
+                .union(&answered_replies(cb, &c))
                 .cloned()
                 .collect();
-            r.check(
-                "open results equal the open replies on the wire",
-                missed.is_empty(),
-                format!("{missed:?} on the wire but not reported"),
-                FAIL,
-                false,
-            );
+            for (kind, name) in [
+                ("open", "open results equal the open replies on the wire"),
+                (
+                    "closed",
+                    "every genuine probe-matched RST on the wire is a closed result",
+                ),
+            ] {
+                let have: BTreeSet<&str> = union.iter().map(String::as_str).collect();
+                let missed: Vec<&String> = answered
+                    .iter()
+                    .filter(|x| x.ends_with(&format!(":{kind}")) && !union.contains(*x))
+                    .filter(|x| kind == "open" || !answered_port_open(&answered, &have, x))
+                    .collect();
+                r.check(
+                    name,
+                    missed.is_empty(),
+                    format!("{} on the wire but not reported", missed.len()),
+                    FAIL,
+                    false,
+                );
+            }
         }
         let _ = man;
         out.push(r.summary());

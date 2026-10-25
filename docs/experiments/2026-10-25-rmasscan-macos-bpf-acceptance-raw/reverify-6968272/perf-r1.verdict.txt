@@ -1,0 +1,26 @@
+PASS     manifest 
+PASS     perf.100.r1 
+PASS     perf.1000.r1 
+PASS     perf.10000.r1 
+PASS     perf.100000.r1 
+PASS     perf.100.r2 
+PASS     perf.1000.r2 
+PASS     perf.10000.r2 
+PASS     perf.100000.r2 
+PASS     perf.100.r3 
+PASS     perf.1000.r3 
+PASS     perf.10000.r3 
+PASS     perf.100000.r3 
+PASS     perf.100.r4 
+PASS     perf.1000.r4 
+PASS     perf.10000.r4 
+PASS     perf.100000.r4 
+PASS     perf.100.r5 
+PASS     perf.1000.r5 
+PASS     perf.10000.r5 
+PASS     perf.100000.r5 
+perf 100 pps: pass 5 fail 0 invalid 0 not run 0 rx_loss 0; median wire 100.4 pps; rate gate MET
+perf 1000 pps: pass 5 fail 0 invalid 0 not run 0 rx_loss 0; median wire 1014.0 pps; rate gate MET
+perf 10000 pps: pass 5 fail 0 invalid 0 not run 0 rx_loss 0; median wire 10212.6 pps; rate gate MET
+perf 100000 pps: pass 5 fail 0 invalid 0 not run 0 rx_loss 0; median wire 93808.6 pps; rate gate MET
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":21}

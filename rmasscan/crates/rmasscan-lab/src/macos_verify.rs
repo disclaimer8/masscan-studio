@@ -210,6 +210,11 @@ fn captured_in(dir: &Path, err: &str) -> Option<u64> {
 /// SYN where none may exist. They cannot be hidden by a missing meta, an incomplete capture or a
 /// wrong argv, and a tripped one makes the run FAIL for good.
 fn safety(r: &mut Run, man: &Value, it: &Value, d: &Path, peer: Option<&Frames>) {
+    r.safety(
+        "no compressed capture in the run directory",
+        !has_compressed_capture(d),
+        "compressed capture is not allowed; store captures uncompressed",
+    );
     let uplink = load_if_present(r, &d.join("uplink.pcap"));
     // Judged against the stand's own binding, never the manifest's: a hand-edited manifest cannot make a
     // foreign SYN look like the scanner's.
@@ -1266,11 +1271,17 @@ pub(crate) fn verify_item(
     (r, Some(ctx))
 }
 
-/// Whether `d` holds a `*.pcap.gz` (a capture the pcap-only safety walk cannot read).
+/// Whether anything under `d` is a `*.gz`: captures are stored uncompressed, the verifier has no decompression.
 fn has_compressed_capture(d: &Path) -> bool {
     fs::read_dir(d).is_ok_and(|rd| {
-        rd.filter_map(Result::ok)
-            .any(|e| e.file_name().to_string_lossy().ends_with(".pcap.gz"))
+        rd.filter_map(Result::ok).any(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                has_compressed_capture(&p)
+            } else {
+                e.file_name().to_string_lossy().ends_with(".gz")
+            }
+        })
     })
 }
 
@@ -1296,20 +1307,8 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
         if !d.join("uplink.pcap").exists()
             && !d.join("uplink.err").exists()
             && !d.join("peer.pcap").exists()
+            && !has_compressed_capture(&d)
         {
-            // Only compressed captures: the verifier does not decompress, so a leak inside them
-            // cannot be seen. That is unproven isolation, not a clean directory: it trips closed.
-            if has_compressed_capture(&d) {
-                let mut r = Run::new(&name);
-                r.safety(
-                    "captures readable (no run directory holds only *.pcap.gz)",
-                    false,
-                    format!(
-                        "{name} holds only compressed captures (*.pcap.gz); isolation is unproven. Run `gunzip -k` on them in a copy and verify again"
-                    ),
-                );
-                out.push(r.summary());
-            }
             continue;
         }
         let tag = split_dir_name(&name).map_or(name.as_str(), |(t, _)| t);

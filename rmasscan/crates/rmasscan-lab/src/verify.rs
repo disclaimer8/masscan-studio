@@ -152,6 +152,7 @@ pub(crate) fn results_on_wire_ex(r: &mut Run, ctx: &Ctx, c: &Value, results: &Va
             let missed: Vec<&String> = answered
                 .iter()
                 .filter(|x| x.ends_with(&format!(":{kind}")) && !have.contains(x.as_str()))
+                .filter(|x| kind == "open" || !answered_port_open(&answered, &have, x))
                 .collect();
             r.cap(
                 name,
@@ -737,6 +738,13 @@ pub(crate) fn answered_replies(ctx: &Ctx, c: &Value) -> BTreeSet<String> {
             )
         })
         .collect()
+}
+/// One reply per port: an RST that follows a SYN-ACK of the same port (Darwin aborting the embryonic connection of
+/// an open port, seen live for 7000 in perf.100000.r2) is not a second result; the port's open result stands for it.
+/// Also true when a result for the port exists in either state.
+fn answered_port_open(answered: &BTreeSet<String>, have: &BTreeSet<&str>, closed: &str) -> bool {
+    let open = closed.replacen(":closed", ":open", 1);
+    answered.contains(&open) || have.contains(open.as_str())
 }
 /// The open replies among `answered_replies`.
 pub(crate) fn answered_open(ctx: &Ctx, c: &Value) -> BTreeSet<String> {
@@ -2674,9 +2682,11 @@ pub(crate) fn groups(
                     "every genuine probe-matched RST on the wire is a closed result",
                 ),
             ] {
+                let have: BTreeSet<&str> = union.iter().map(String::as_str).collect();
                 let missed: Vec<&String> = answered
                     .iter()
                     .filter(|x| x.ends_with(&format!(":{kind}")) && !union.contains(*x))
+                    .filter(|x| kind == "open" || !answered_port_open(&answered, &have, x))
                     .collect();
                 r.check(
                     name,

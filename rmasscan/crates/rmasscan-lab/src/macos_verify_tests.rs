@@ -2547,3 +2547,18 @@ fn a_closed_result_missing_only_because_its_rst_never_hit_the_wire_still_passes(
     let (r, _) = ev.verify(&env);
     assert_ne!(r.verdict(), PASS);
 }
+
+/// Seen live (perf.100000.r2, port 7000): a host service answers SYN-ACK and Darwin later aborts the embryonic
+/// connection with an RST,ACK whose ack still matches the SYN. The port has its open result; the RST is no second one.
+#[test]
+fn an_rst_that_follows_the_synack_of_the_same_port_needs_no_closed_result() {
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.1000.r1");
+    host_listener_on_5000(&mut ev);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.push((BASE + 5.0, reply(5000, false)));
+    fr.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+}

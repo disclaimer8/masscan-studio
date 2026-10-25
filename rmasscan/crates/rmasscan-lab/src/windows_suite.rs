@@ -191,13 +191,16 @@ pub(crate) fn command(argv: &[String], timeout: u64, check: bool) -> Result<Outp
         }
         thread::sleep(Duration::from_millis(20));
     };
-    // A descendant can inherit a pipe after the direct child has exited. Never
-    // make the command deadline depend on that descendant closing its handles.
-    let remaining = Duration::from_secs(timeout)
-        .saturating_sub(start.elapsed())
-        .min(Duration::from_secs(1));
-    let stdout = output.recv_timeout(remaining);
-    let stderr = error.recv_timeout(Duration::from_millis(250));
+    // A descendant can inherit a pipe after the direct child has exited (scp's
+    // ProxyJump helpers hold stderr briefly). Both pipes share one drain window
+    // that never extends past the command deadline, so the deadline never
+    // depends on that descendant closing its handles.
+    let drain_end = Instant::now()
+        + Duration::from_secs(timeout)
+            .saturating_sub(start.elapsed())
+            .min(Duration::from_secs(5));
+    let stdout = output.recv_timeout(drain_end.saturating_duration_since(Instant::now()));
+    let stderr = error.recv_timeout(drain_end.saturating_duration_since(Instant::now()));
     if stdout.is_err() || stderr.is_err() {
         kill_command_tree(pid);
         rc = 124;
@@ -1730,6 +1733,23 @@ mod tests {
         .unwrap();
         assert_eq!(out.stdout, "success");
         assert_eq!(out.stderr, "error");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_descendant_briefly_holding_stderr_after_exit_is_not_a_timeout() {
+        // scp leaves its ProxyJump `ssh -W` helpers holding stderr for a moment
+        // after it exits; that drain must not turn a success into rc 124.
+        let start = Instant::now();
+        let out = command(
+            &strings(&["sh", "-c", "(sleep 0.6 >/dev/null) & printf ok"]),
+            10,
+            true,
+        )
+        .unwrap();
+        assert_eq!(out.rc, 0);
+        assert_eq!(out.stdout, "ok");
+        assert!(start.elapsed() >= Duration::from_millis(500));
+        assert!(start.elapsed() < Duration::from_secs(3));
     }
     #[test]
     fn failed_verify_never_calls_fetch_even_with_successful_old_report() {

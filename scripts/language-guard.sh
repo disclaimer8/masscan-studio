@@ -12,17 +12,22 @@
 #      shebang naming the banned interpreter (the link name and every hop of the chain are checked; a target outside
 #      the repository is read for its first line only),
 #   2. a tracked file starts with a shebang that names the banned interpreter,
-#   3. a tracked script or source file (.sh .bash .zsh .ksh .fish .ps1 .cmd .bat .rs .yml
+#   3. (first interpreter) a tracked script or source file (.sh .bash .zsh .ksh .fish .ps1 .cmd .bat .rs .yml
 #      .yaml, Makefile*, GNUmakefile*, *.mk, CMakeLists.txt, *.cmake, justfile/Justfile/*.just, or any other file that starts with a shebang)
 #      mentions the interpreter as a word at all (comments included), or calls the Windows
 #      launcher (two letters, then a dash and a version digit; assembled below).
 #   4. (allowlist) a tracked file is neither a known source/script/build type (rs toml sh bash zsh ksh fish ps1 cmd bat yml yaml md mk
 #      cmake just, Makefile*, GNUmakefile*, CMakeLists.txt, justfile), nor known data (json pcap gz txt csv tsv bin lock sha256 log err
-#      echo stdout stderr sizes conf rc out diff hex svg png jpg jpeg gif ico icns webp ttf otf woff woff2 pdf html plist pcapng; slint is a source type), nor a listed name (LICENSE*, NOTICE*, COPYING*, AUTHORS*, CODEOWNERS,
-#      .gitignore, .gitattributes, .gitkeep, .editorconfig), README*, CHANGELOG*, rust-toolchain, .cargo/config, nor an extensionless script whose shebang is a shell. Any other
+#      echo stdout stderr sizes conf rc out diff hex svg png jpg jpeg gif ico icns webp ttf otf woff woff2 pdf plist pcapng; slint is a source type), nor a listed name (CODEOWNERS,
+#      .gitignore, .gitattributes, .gitkeep, .editorconfig, rust-toolchain, .cargo/config; LICENSE, README, CHANGELOG, NOTICE, COPYING, AUTHORS only bare, with a -SUFFIX, or as .md/.txt), nor an extensionless script whose shebang is a shell. Any other
 #      language source (any extension not listed above) therefore fails,
-#   5. a scanned file runs another interpreter language: the five names assembled below as whole words, a complete quoted
-#      string naming one, or the JavaScript runtime at a command position; a shebang naming any of them.
+#   5. a scanned file RUNS another interpreter language (the five names assembled below; the first interpreter above
+#      stays a whole-word rule). Comment lines and names used as identifiers, prose, patterns or compared values are
+#      not flagged. Flagged: a shebang naming one; in scripts and workflows the name at a command position, after
+#      a keyword (then do else), a wrapper (sudo [-flags], timeout N, env VAR=x, nice, exec, xargs, find -exec,
+#      ip netns exec NS, Start-Process, call, run:), or a path or .exe form; a complete quoted string naming one;
+#      a quoted command string ("NAME -e ..."); in Rust only Command::new("NAME"), .arg(s)("NAME") and an array
+#      literal whose first element is "NAME" (also a one-element array). An .svg containing a script element fails.
 # Prose (.md) and recorded evidence data (.json, .txt, .log, ...) are not scanned.
 #
 # The banned word is assembled below so that this file does not contain it and
@@ -47,11 +52,19 @@ launcher="(^|[^A-Za-z0-9_.\$-])${lau}[[:space:]]+-[0-9]"
 strict="pe""rl|ru""by|ph""p|l""ua|lu""ajit|nod""ejs"
 rt="nod""e"
 all="${strict}|${rt}"
-lit_q="[\"']([^\"' ]*/)?(${all})[0-9.]*[\"']"
-lit_any="[\"']([^\"' ]*/)?(${all})[0-9.]*[\"']"
-lit_rs="((^|[^[])${lit_q}([^:]|\$)|\\[${lit_q}([^]:]|\$))"
-quoted_cmd="[\"'][[:space:]]*(/[^[:space:]\"']*/)?(${all})[0-9.]*[[:space:]]+-"
-cmd_pos="(^|[;&|(\`{]|(^|[[:space:]])(env|sudo|exec|nohup|xargs|time)[[:space:]]+|run:[[:space:]]+)[[:space:]]*(/[^[:space:]]*/)?(${all})[0-9.]*([[:space:]]|\$|;|\\)|&|\\|)"
+nm="(${all})(\\.exe)?[0-9.]*"
+path="([^[:space:]]*[/\\\\])?"
+term="([[:space:]]|\$|[;)&|])"
+lit_any="[\"']([^\"' ]*/)?${nm}[\"']"
+quoted_cmd="[\"'][[:space:]]*${path}${nm}[[:space:]]+-"
+wrap_word="(then|do|else|elif|if|while|until|time|nohup|exec|xargs|env|command|builtin|sudo|timeout|nice|call|start-process|-exec|-execdir|run:)"
+wrap_opt="(-[^[:space:]]+[[:space:]]+([a-z_][a-z0-9_-]*[[:space:]]+)?|[0-9.]+[sm]?[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)"
+wrap="(${wrap_word}[[:space:]]+${wrap_opt}*|ip[[:space:]]+netns[[:space:]]+exec[[:space:]]+[^[:space:]]+[[:space:]]+)"
+cmd_pos="((^|[;&|(\`{!]+|run:)[[:space:]]*${wrap}*|(^|[[:space:]])${wrap}+)${path}${nm}${term}"
+# Rust: only the invocation forms (a name used as a pattern, an index, a key or a compared value is not one)
+rs_new="command::new\\([[:space:]]*\"([^\" ]*/)?${nm}\""
+rs_arg="\\.args?\\([[:space:]]*\"([^\" ]*/)?${nm}\""
+rs_arr="(^|[^]A-Za-z0-9_)])\\[[[:space:]]*\"([^\" ]*/)?${nm}\""
 shebang_other="^#!.*(${strict}|${rt})"
 
 # bash 3.2 (macOS) has nocasematch: extension and file-name tests ignore letter case
@@ -81,13 +94,17 @@ allowed_name() {
     .cargo/config | */.cargo/config) return 0 ;;
   esac
   case "$base" in
-    README* | CHANGELOG* | rust-toolchain | LICENSE* | NOTICE* | COPYING* | AUTHORS* | CODEOWNERS | makefile* | gnumakefile* | cmakelists.txt | justfile | .justfile) return 0 ;;
+    rust-toolchain | CODEOWNERS | makefile* | gnumakefile* | cmakelists.txt | justfile | .justfile) return 0 ;;
     .gitignore | .gitattributes | .gitkeep | .editorconfig) return 0 ;;
   esac
+  # conventional documents: the bare name, a -SUFFIX, or .md / .txt; never another extension
+  local lb
+  lb=$(printf '%s' "$base" | tr 'A-Z' 'a-z')
+  if [[ "$lb" =~ ^(license|readme|changelog|notice|copying|authors)([-_][^.]*)?(\.md|\.txt)?$ ]]; then return 0; fi
   case "$base" in
     ?*.rs | ?*.toml | ?*.sh | ?*.bash | ?*.zsh | ?*.ksh | ?*.fish | ?*.ps1 | ?*.cmd | ?*.bat | ?*.yml | ?*.yaml | ?*.md | ?*.mk | ?*.cmake | ?*.just | ?*.slint) return 0 ;;
     ?*.json | ?*.pcap | ?*.gz | ?*.txt | ?*.csv | ?*.tsv | ?*.bin | ?*.lock | ?*.sha256 | ?*.log | ?*.err | ?*.echo | ?*.stdout | ?*.stderr) return 0 ;;
-    ?*.sizes | ?*.conf | ?*.rc | ?*.out | ?*.diff | ?*.hex | ?*.svg | ?*.png | ?*.jpg | ?*.jpeg | ?*.gif | ?*.ico | ?*.icns | ?*.webp | ?*.ttf | ?*.otf | ?*.woff | ?*.woff2 | ?*.pdf | ?*.html | ?*.plist | ?*.pcapng) return 0 ;;
+    ?*.sizes | ?*.conf | ?*.rc | ?*.out | ?*.diff | ?*.hex | ?*.svg | ?*.png | ?*.jpg | ?*.jpeg | ?*.gif | ?*.ico | ?*.icns | ?*.webp | ?*.ttf | ?*.otf | ?*.woff | ?*.woff2 | ?*.pdf | ?*.plist | ?*.pcapng) return 0 ;;
   esac
   return 1
 }
@@ -179,6 +196,10 @@ while IFS= read -r f; do
       report "$f: file type is on neither the source nor the data allowlist (extend allowed_name here and name_allowed in rmasscan-lab/tests/rust_only.rs)"
     fi
   fi
+  case "$f" in
+    *.svg)
+      if grep -a -i -q -- '<script' "$f" 2>/dev/null; then report "$f: svg embeds a script"; fi ;;
+  esac
   scan=$has_shebang
   case "$f" in
     *.sh | *.bash | *.zsh | *.ksh | *.fish | *.ps1 | *.cmd | *.bat | *.rs | *.yml | *.yaml | *.mk | *.cmake | *.just) scan=1 ;;
@@ -195,7 +216,7 @@ while IFS= read -r f; do
     # a name in a comment, a prose line, an identifier or (in Rust) an index/map key is not a command
     case "$f" in
       *.rs)
-        ohits=$(grep -a -n -i -E -- "$lit_rs|$quoted_cmd" "$f" 2>/dev/null | grep -a -v -E -- '^[0-9]+:[[:space:]]*//' || true) ;;
+        ohits=$(grep -a -n -i -E -- "$rs_new|$rs_arg|$rs_arr|$quoted_cmd" "$f" 2>/dev/null | grep -a -v -E -- '^[0-9]+:[[:space:]]*//' || true) ;;
       *)
         ohits=$(grep -a -n -i -E -- "$lit_any|$quoted_cmd|$cmd_pos" "$f" 2>/dev/null | grep -a -v -i -E -- '^[0-9]+:[[:space:]]*(#|rem[[:space:]]|::)' || true) ;;
     esac

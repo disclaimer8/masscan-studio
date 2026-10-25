@@ -2355,17 +2355,25 @@ fn a_run_directory_with_only_compressed_captures_is_unproven_and_fails_closed() 
             let env = Env::new("functional");
             let d = env.root.join(sub).join(format!("unplanned.{}", nonce()));
             fs::create_dir_all(&d).unwrap();
-            // A foreign SYN on the uplink would sit in here; the verifier cannot read it without gunzip.
+            // A compressed capture is refused outright: the verifier has no decompression and isolation is unproven.
             fs::write(d.join(gz), b"\x1f\x8b not read").unwrap();
             assert_eq!(safety_trips(&env.root).len(), 1, "{sub}/{gz}");
             let v = verify_dir(&env.root);
             assert_eq!(v["overall"], FAIL, "{sub}/{gz}: {v:#}");
             assert!(
-                format!("{v}").contains("gunzip"),
+                format!("{v}").contains("store captures uncompressed"),
                 "{sub}/{gz}: the finding says what to do"
             );
         }
     }
+    // A planned run whose readable plain captures sit beside a compressed one is refused as well.
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    ev.files
+        .insert("peer.pcap.gz".into(), b"\x1f\x8b not read".to_vec());
+    let (r, _) = ev.verify(&env);
+    assert!(r.safety_trip(), "{:?}", failing_checks(&r));
+    assert_eq!(r.verdict(), FAIL);
     // A directory with nothing capture-like at all is still skipped, as before.
     let env = Env::new("functional");
     let d = env.root.join("runs").join(format!("plain.{}", nonce()));
@@ -2392,68 +2400,6 @@ fn a_missing_peer_capture_without_a_host_record_makes_the_listener_truth_invalid
     );
     assert_ne!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
     assert!(!failed(&r, "results equal listener truth"));
-}
-
-/// A gzip member made of stored deflate blocks only (no external tool, same bytes on every OS).
-fn gz_bytes(data: &[u8]) -> Vec<u8> {
-    let mut z = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255];
-    let chunks: Vec<&[u8]> = if data.is_empty() {
-        vec![&[][..]]
-    } else {
-        data.chunks(65535).collect()
-    };
-    for (i, c) in chunks.iter().enumerate() {
-        z.push(u8::from(i + 1 == chunks.len()));
-        z.extend_from_slice(&(c.len() as u16).to_le_bytes());
-        z.extend_from_slice(&(!(c.len() as u16)).to_le_bytes());
-        z.extend_from_slice(c);
-    }
-    z.extend_from_slice(&crate::gunzip::crc32(data).to_le_bytes());
-    z.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    z
-}
-
-/// Review P2: a readable `peer.pcap` beside a compressed uplink must not hide the uplink. Every capture is read on
-/// its own, a compressed one in memory, in kept, discarded, aborted and work directories alike.
-#[test]
-fn a_compressed_capture_beside_a_plain_one_is_read_on_its_own() {
-    let leak = pcap::encode(&vec![(BASE, syn(80))]);
-    for sub in ["runs", "runs_discarded", "runs_aborted", ".work"] {
-        // (capture that exists only compressed, its bytes, the plain one that stays readable beside it)
-        for (leaky, bytes, plain_other) in [
-            ("uplink", gz_bytes(&leak), "peer"),
-            ("peer", b"\x1f\x8b garbage".to_vec(), "uplink"),
-        ] {
-            let env = Env::new("functional");
-            let mut ev = build(&env, C01);
-            ev.files.remove(&format!("{leaky}.pcap"));
-            ev.files.remove("uplink.err");
-            ev.files.insert(format!("{leaky}.pcap.gz"), bytes);
-            assert!(ev.files.contains_key(&format!("{plain_other}.pcap")));
-            let d = ev.write(&env);
-            let target = env.root.join(sub).join(format!("unplanned.{}", nonce()));
-            fs::create_dir_all(target.parent().unwrap()).unwrap();
-            fs::rename(&d, &target).unwrap();
-            let trips = safety_trips(&env.root);
-            assert_eq!(trips.len(), 1, "{sub} {leaky}: {trips:?}");
-            assert_eq!(verify_dir(&env.root)["overall"], FAIL, "{sub} {leaky}");
-        }
-    }
-    // A clean compressed uplink beside a plain peer is read and does not trip; a corrupt one fails closed.
-    for (bytes, trips) in [
-        (gz_bytes(&pcap::encode(&vec![])), 0),
-        (b"\x1f\x8b garbage".to_vec(), 1),
-    ] {
-        let env = Env::new("functional");
-        let mut ev = build(&env, C01);
-        ev.files.remove("uplink.pcap");
-        ev.files.remove("uplink.err");
-        ev.files.insert("uplink.pcap.gz".into(), bytes);
-        let d = ev.write(&env);
-        let target = env.root.join("runs").join(format!("unplanned.{}", nonce()));
-        fs::rename(&d, &target).unwrap();
-        assert_eq!(safety_trips(&env.root).len(), trips);
-    }
 }
 
 // ---- post-merge review P1: a genuine, probe-matched, in-window RST on a proven-complete capture is a result
@@ -2563,50 +2509,6 @@ fn an_rst_that_follows_the_synack_of_the_same_port_needs_no_closed_result() {
     rebuild_peer(&mut ev, &fr);
     let (r, _) = ev.verify(&env);
     assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
-}
-
-/// Post-merge re-review B: a planned kept run whose clean `peer.pcap` sits beside a `peer.pcap.gz` holding a foreign
-/// SYN. Both forms are read and judged: the foreign SYN is a safety FAIL and the disagreement is INVALID evidence.
-#[test]
-fn a_foreign_syn_only_in_the_compressed_peer_capture_of_a_planned_run_is_a_safety_fail() {
-    let env = Env::new("functional");
-    let foreign = tcp_frame(
-        "02:ac:00:00:00:99",
-        PM,
-        [198, 18, 0, 1],
-        [198, 18, 0, 2],
-        40000,
-        80,
-        2,
-    );
-    let mut ev = build(&env, C01);
-    let mut frames = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
-    assert!(!verify_trip(&ev, &env), "baseline is clean");
-    frames.push((BASE + 1.0, foreign));
-    frames.sort_by(|a, b| a.0.total_cmp(&b.0));
-    ev.files
-        .insert("peer.pcap.gz".into(), gz_bytes(&pcap::encode(&frames)));
-    let (r, _) = ev.verify(&env);
-    assert!(r.safety_trip(), "{:?}", failing_checks(&r));
-    assert_eq!(r.verdict(), FAIL);
-    assert_eq!(result_of(&r, "peer.pcap.gz and peer.pcap agree"), INVALID);
-    // An identical compressed copy beside the plain one is not a finding.
-    let mut ev = build(&env, C01);
-    let same = ev.files["peer.pcap"].clone();
-    ev.files.insert("peer.pcap.gz".into(), gz_bytes(&same));
-    assert_eq!(ev.verify(&env).0.verdict(), PASS);
-    // The same holds for the uplink: a lab frame only in `uplink.pcap.gz`.
-    let mut ev = build(&env, C01);
-    ev.files.insert(
-        "uplink.pcap.gz".into(),
-        gz_bytes(&pcap::encode(&vec![(BASE, syn(80))])),
-    );
-    let (r, _) = ev.verify(&env);
-    assert!(r.safety_trip(), "{:?}", failing_checks(&r));
-}
-
-fn verify_trip(ev: &Ev, env: &Env) -> bool {
-    ev.verify(env).0.safety_trip()
 }
 
 /// Post-merge re-review, Stopped-leg hole: a stop_silent whose results were all dropped used to PASS.

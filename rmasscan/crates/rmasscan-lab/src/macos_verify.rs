@@ -197,6 +197,37 @@ fn load_if_present(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
     p.exists().then(|| verify::load_pcap(r, p)).flatten()
 }
 
+/// One capture of a run directory (`<stem>.pcap` and/or `<stem>.pcap.gz`), each judged on its own. A compressed
+/// capture is decompressed in memory; one that cannot be read, or that disagrees with the plain file beside it, is a
+/// tripped safety check (isolation is unproven), never a skipped one. The presence of one capture proves nothing
+/// about another.
+fn load_capture(r: &mut Run, d: &Path, stem: &str) -> Option<(Frames, Vec<u8>)> {
+    let plain = load_if_present(r, &d.join(format!("{stem}.pcap")));
+    let gz = d.join(format!("{stem}.pcap.gz"));
+    if !gz.exists() {
+        return plain;
+    }
+    let name = format!("{stem}.pcap.gz readable and consistent");
+    let read = fs::read(&gz)
+        .map_err(|e| e.to_string())
+        .and_then(|z| crate::gunzip::gunzip(&z))
+        .and_then(|b| crate::pcap::read_pcap_records(&b).map(|(_, f)| (f, b)));
+    match read {
+        Err(e) => {
+            r.safety(&name, false, format!("{} is unreadable ({e}); isolation is unproven. Run `gunzip -k` on it in a copy and verify again", gz.display()));
+            plain
+        }
+        Ok((frames, bytes)) => match plain {
+            Some(p) if p.1 != bytes => {
+                r.safety(&name, false, "the compressed and the plain capture differ");
+                Some(p)
+            }
+            Some(p) => Some(p),
+            None => Some((frames, bytes)),
+        },
+    }
+}
+
 /// Packets tcpdump stored or tried to store, from its own statistics. On macOS `packets received by filter` is the
 /// count before the kernel filter (xnu `bd_rcount`), so it says nothing about lab frames and is never used for that:
 /// only `captured` (what passed the lab filter) is.
@@ -210,7 +241,16 @@ fn captured_in(dir: &Path, err: &str) -> Option<u64> {
 /// SYN where none may exist. They cannot be hidden by a missing meta, an incomplete capture or a
 /// wrong argv, and a tripped one makes the run FAIL for good.
 fn safety(r: &mut Run, man: &Value, it: &Value, d: &Path, peer: Option<&Frames>) {
-    let uplink = load_if_present(r, &d.join("uplink.pcap"));
+    let uplink = load_capture(r, d, "uplink");
+    let gz_peer;
+    let peer = match peer {
+        Some(p) => Some(p),
+        None if d.join("peer.pcap.gz").exists() => {
+            gz_peer = load_capture(r, d, "peer");
+            gz_peer.as_ref().map(|p| &p.0)
+        }
+        None => None,
+    };
     // Judged against the stand's own binding, never the manifest's: a hand-edited manifest cannot make a
     // foreign SYN look like the scanner's.
     let mut pinned = man.clone();
@@ -1266,14 +1306,6 @@ pub(crate) fn verify_item(
     (r, Some(ctx))
 }
 
-/// Whether `d` holds a `*.pcap.gz` (a capture the pcap-only safety walk cannot read).
-fn has_compressed_capture(d: &Path) -> bool {
-    fs::read_dir(d).is_ok_and(|rd| {
-        rd.filter_map(Result::ok)
-            .any(|e| e.file_name().to_string_lossy().ends_with(".pcap.gz"))
-    })
-}
-
 /// Safety findings of every run of `sub` (kept, discarded or aborted): only the pcaps are read.
 fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
     let Ok(rd) = fs::read_dir(root.join(sub)) else {
@@ -1293,23 +1325,13 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
     for e in dirs {
         let name = e.file_name().to_string_lossy().to_string();
         let d = e.path();
-        if !d.join("uplink.pcap").exists()
-            && !d.join("uplink.err").exists()
-            && !d.join("peer.pcap").exists()
+        let has = |f: &str| d.join(f).exists();
+        if !(has("uplink.pcap")
+            || has("uplink.pcap.gz")
+            || has("uplink.err")
+            || has("peer.pcap")
+            || has("peer.pcap.gz"))
         {
-            // Only compressed captures: the verifier does not decompress, so a leak inside them
-            // cannot be seen. That is unproven isolation, not a clean directory: it trips closed.
-            if has_compressed_capture(&d) {
-                let mut r = Run::new(&name);
-                r.safety(
-                    "captures readable (no run directory holds only *.pcap.gz)",
-                    false,
-                    format!(
-                        "{name} holds only compressed captures (*.pcap.gz); isolation is unproven. Run `gunzip -k` on them in a copy and verify again"
-                    ),
-                );
-                out.push(r.summary());
-            }
             continue;
         }
         let tag = split_dir_name(&name).map_or(name.as_str(), |(t, _)| t);
@@ -1319,7 +1341,7 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
             .cloned()
             .unwrap_or_else(|| json!({"tag":tag,"kind":""}));
         let mut r = Run::new(&name);
-        let peer = load_if_present(&mut r, &d.join("peer.pcap"));
+        let peer = load_capture(&mut r, &d, "peer");
         safety(&mut r, man, &it, &d, peer.as_ref().map(|p| &p.0));
         out.push(r.summary());
     }

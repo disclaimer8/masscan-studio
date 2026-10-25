@@ -1,4 +1,4 @@
-d796e86c43149ed82431c37ef2ce94f4342b53bc041cf1744c51d81ac16915fd  ./README.md
+9c3bea91b3e95f1cc51890a6c9e21095b82a0d14db23a200bb7f1e94c4e765eb  ./README.md
 c723c5387e63f23505e190e004a151aa5b71b08dc715ec9c612d1b0744a0bd05  ./func/README.md
 74211b54d4cd73a09bcf67a536c3f0c05d222950ac4af4a0bd06e1bdb6a51633  ./func/deploy/deploy-manifest.json
 71cd2d1493d61bffed99a8f3adbe6fb2b2d16d1af9b73d654def0a7a344bf4b1  ./func/deploy/guest-scripts/windows-vm-lab.ps1

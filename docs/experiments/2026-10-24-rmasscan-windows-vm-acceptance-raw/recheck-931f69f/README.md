@@ -15,7 +15,7 @@ Code commit: `931f69fd1eaa0affd160d047b39855843c8cb152`. Evidence: `perm/` (rech
 - Guest build and test scripts (sha256): ex.ps1 ed403e22..., pkg.ps1 8d60a4df..., unz.ps1 42eea775..., plant.ps1 b14ff70a..., inv.ps1 415d8e40.... Their full content is in `guest-scripts/`.
 
 ## Raw logs (`logs/`, added in the N5 fix round)
-Text files copied from the operator and controller scratch directories. Scrubbing, nothing else changed: `/home/a1` -> `$HOME`, `/private/tmp/claude-501/<...>/scratchpad` -> `$SCRATCH`, `/Users/denyskolomiiets` -> `$USERHOME`. No `.tar` was copied. These logs are not covered by the verdicts in `perm/` and `func/`; they only show the raw output of the non-suite checks.
+Text files copied from the operator and controller scratch directories. Scrubbing, nothing else changed: the home-pc home directory -> `$HOME` (as in the other READMEs), the Mac session scratchpad directory -> `$SCRATCH`, the Mac user's home directory -> `$USERHOME`. No `.tar` was copied. These logs are not covered by the verdicts in `perm/` and `func/`; they only show the raw output of the non-suite checks.
 * `ct4.ps1`, `ct4.out`: guest clippy and test at `931f69f`, workspace without `rmasscan-lab` and `rmasscan-lab` without the `rust_only` test target (clippy rc 0 in both; test A rc 0, test B rc 101, the `rust_only.rs` compile error and 6 failing lib tests; see `full2.out`). The output is the last lines only, with ANSI colour codes.
 * `full.ps1`, `full.out`: full-tree guest run at `931f69f`: clippy and test both rc 101, E0425 `guard_with_links` in `rust_only.rs` (the failure fixed by `9b5cf3e`, `920dd25`).
 * `full2.ps1`, `full2.out`: the same tree with `--no-fail-fast` and without `rust_only`: `rmasscan-lab` lib 360 passed, 6 failed (unix-only assumptions); every other target ok.
@@ -24,7 +24,7 @@ Text files copied from the operator and controller scratch directories. Scrubbin
 * `lockcheck.out`: the refusal of a second `windows-suite --cleanup` during the func run (exit 2, suite lock held).
 * `run.sh`: the wrapper that started both suites. `perm.log`, `func.log`, `perm-start.txt`, `perm-end.txt`, `func-start.txt`, `func-end.txt`: suite stdout and wall-clock times. `perm-verify.txt`, `func-verify.txt`: `windows-verify` text output (these six were written as `perm.end`, `func.verify` and so on, and renamed to `-*.txt` for the repository file-type allowlist; content unchanged) (overall NOT RUN by design).
 * `left.ps1`: the leftovers check script on the guest. Its output was not saved.
-* `minipc-check-f64495c.sh`, `minipc-check-f64495c.log`: Linux (minipc) at `f64495c`: language guard, clippy, `cargo test --workspace --no-fail-fast`; `cargo-deny` not installed (NOT RUN); `cargo fmt` is not run by this script.
+* `minipc-check-f64495c.sh`, `minipc-check-f64495c.log`: Linux (minipc) at `f64495c` (the log prints no commit; it is tied to the commit by the archive the script extracts, `git archive --format=tar f64495c rmasscan docs/experiments scripts .github`, sha256 `801ea4617ad6e00c52f3e131731ef7636a20471ffab470b86733c249c04296b3`, reproducible from the repository): language guard, clippy, `cargo test --workspace --no-fail-fast`; `cargo-deny` not installed (NOT RUN); `cargo fmt` is not run by this script.
 * `mac-check.sh`, `mac-check-044dc00.log`: macOS at `044dc00` (clean tree): fmt, clippy, `cargo test --workspace`, `cargo deny`, language guard, all rc 0.
 
 ## Checks without a raw log

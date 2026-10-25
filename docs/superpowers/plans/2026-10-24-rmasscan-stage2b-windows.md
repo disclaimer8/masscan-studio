@@ -293,7 +293,7 @@ owned `PcapHandle` держит Arc библиотеки до `pcap_close`. Ни
 
 ## GO и дальнейшая очередь
 
-> Статус 2026-10-25: критерий GO ниже **ещё не выполнен**: Windows VM correctness - **OPEN**; VM-приёмка PASS (части A, B, C и перепроверка на `931f69f`), но «CI зелёный» (**NOT RUN**, push не разрешён) не выполнено. Физический NIC - отдельный пункт **NOT RUN**, в это GO не входит. Единый список условий: [отчёт](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md), разделы 1 и 13.
+> Статус 2026-10-25: критерий GO ниже **ещё не выполнен**: Windows VM correctness - **OPEN**; VM-приёмка PASS (части A, B, C и перепроверка на `931f69f`), но «CI зелёный» не выполнено: CI этого HEAD и CI Linux-базы Задачи 0 на её закреплённом HEAD, оба **NOT RUN** (push не разрешён). Физический NIC - отдельный пункт **NOT RUN**, в это GO не входит. Единый список условий: [отчёт](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md), разделы 1 и 13.
 
 **GO Windows correctness:** Linux-база Задачи 0 принята (review + CI exact HEAD); CI зелёный; Windows 11 реально
 передаёт/принимает; byte parity и pause/resume проходят; Stop ≤1 с; нет ложного

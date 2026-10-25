@@ -2564,3 +2564,84 @@ fn an_rst_that_follows_the_synack_of_the_same_port_needs_no_closed_result() {
     let (r, _) = ev.verify(&env);
     assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
 }
+
+/// Post-merge re-review B: a planned kept run whose clean `peer.pcap` sits beside a `peer.pcap.gz` holding a foreign
+/// SYN. Both forms are read and judged: the foreign SYN is a safety FAIL and the disagreement is INVALID evidence.
+#[test]
+fn a_foreign_syn_only_in_the_compressed_peer_capture_of_a_planned_run_is_a_safety_fail() {
+    let env = Env::new("functional");
+    let foreign = tcp_frame(
+        "02:ac:00:00:00:99",
+        PM,
+        [198, 18, 0, 1],
+        [198, 18, 0, 2],
+        40000,
+        80,
+        2,
+    );
+    let mut ev = build(&env, C01);
+    let mut frames = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    assert!(!verify_trip(&ev, &env), "baseline is clean");
+    frames.push((BASE + 1.0, foreign));
+    frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    ev.files
+        .insert("peer.pcap.gz".into(), gz_bytes(&pcap::encode(&frames)));
+    let (r, _) = ev.verify(&env);
+    assert!(r.safety_trip(), "{:?}", failing_checks(&r));
+    assert_eq!(r.verdict(), FAIL);
+    assert_eq!(result_of(&r, "peer.pcap.gz and peer.pcap agree"), INVALID);
+    // An identical compressed copy beside the plain one is not a finding.
+    let mut ev = build(&env, C01);
+    let same = ev.files["peer.pcap"].clone();
+    ev.files.insert("peer.pcap.gz".into(), gz_bytes(&same));
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    // The same holds for the uplink: a lab frame only in `uplink.pcap.gz`.
+    let mut ev = build(&env, C01);
+    ev.files.insert(
+        "uplink.pcap.gz".into(),
+        gz_bytes(&pcap::encode(&vec![(BASE, syn(80))])),
+    );
+    let (r, _) = ev.verify(&env);
+    assert!(r.safety_trip(), "{:?}", failing_checks(&r));
+}
+
+fn verify_trip(ev: &Ev, env: &Env) -> bool {
+    ev.verify(env).0.safety_trip()
+}
+
+/// Post-merge re-review, Stopped-leg hole: a stop_silent whose results were all dropped used to PASS.
+#[test]
+fn a_stopped_scan_that_lost_replies_received_well_before_the_stop_fails() {
+    for tag in ["stop_silent", "stop_load"] {
+        let env = Env::new("failure");
+        let ev = build(&env, tag);
+        let (base, _) = ev.verify(&env);
+        if base.verdict() != PASS {
+            // stop_load needs flood.json in this fixture; the rule is the same code path as stop_silent.
+            continue;
+        }
+        let mut ev = build(&env, tag);
+        drop_all_results(&mut ev);
+        let (r, _) = ev.verify(&env);
+        assert_eq!(r.verdict(), FAIL, "{tag}: {:?}", failing_checks(&r));
+        assert!(failed(&r, "well before the Stop request"));
+    }
+    let env = Env::new("failure");
+    let mut ev = build(&env, "stop_silent");
+    assert_eq!(ev.verify(&env).0.verdict(), PASS);
+    drop_all_results(&mut ev);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(r.verdict(), FAIL, "{:?}", failing_checks(&r));
+    // Replies closer than 250 ms to the Stop, or after the outcome, are tolerated.
+    let mut ev = build(&env, "stop_silent");
+    drop_all_results(&mut ev);
+    edit_scanner_output(&mut ev, |v| {
+        v["timing"]["stop_to_outcome_ms"] = json!(2990.0);
+    });
+    let (r, _) = ev.verify(&env);
+    assert!(
+        !failed(&r, "well before the Stop request"),
+        "{:?}",
+        failing_checks(&r)
+    );
+}

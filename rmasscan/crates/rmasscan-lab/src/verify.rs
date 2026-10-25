@@ -701,9 +701,14 @@ pub(crate) fn tcp(b: &[u8]) -> Option<Tcp> {
 /// wrote. A SYN-ACK retransmit of an earlier cell's half-open connection that lands in the window (seen live:
 /// port 5000 of perf.100000.r4 inside perf.100.r5) answers nothing of this run.
 pub(crate) fn answered_replies(ctx: &Ctx, c: &Value) -> BTreeSet<String> {
+    answered_replies_until(ctx, c, None)
+}
+/// As `answered_replies`, but only the replies on the wire at or before `until` (when given).
+pub(crate) fn answered_replies_until(ctx: &Ctx, c: &Value, until: Option<f64>) -> BTreeSet<String> {
     let (Some((fr, _)), Some(win)) = (&ctx.peer, rx_window(ctx, c)) else {
         return BTreeSet::new();
     };
+    let win = (win.0, until.map_or(win.1, |u| u.min(win.1)));
     let asked: BTreeSet<(u16, u32)> = syns(fr, &ctx.bind, sports(c))
         .iter()
         .filter_map(|(_, f)| tcp(f))
@@ -1709,6 +1714,37 @@ pub(crate) fn flood(r: &mut Run, ctx: &Ctx, c: &Value, outcome: Option<f64>, ove
     }
     r.notes.insert("flood".into(), fl);
 }
+/// Stopped scans keep partial semantics (a reply that arrived around the Stop may be lost), but a genuine, probe-matched
+/// reply on the wire well before the Stop request must be a result: `t_stop = outcome - stop_to_outcome_ms`, every
+/// reply at or before `t_stop - 0.25 s` is required (INVALID when the capture is unproven). Replies closer to the Stop
+/// are tolerated and replies after the outcome are ignored. Needs the recorded wall clock and stop timing.
+fn stopped_completeness(r: &mut Run, ctx: &Ctx, c: &Value) {
+    let j = &ctx.rj;
+    let (outcome, to_outcome) = (
+        j["wall"]["outcome_utc_ms"].as_f64(),
+        j["timing"]["stop_to_outcome_ms"].as_f64(),
+    );
+    let (Some(outcome), Some(to_outcome)) = (outcome, to_outcome) else {
+        return;
+    };
+    let t_stop = (outcome - to_outcome) / 1000.;
+    let answered = answered_replies_until(ctx, c, Some(t_stop - 0.25));
+    let have: BTreeSet<&str> = array(&j["replies"]).iter().map(s).collect();
+    let missed: Vec<&String> = answered
+        .iter()
+        .filter(|x| !have.contains(x.as_str()))
+        .filter(|x| !x.ends_with(":closed") || !answered_port_open(&answered, &have, x))
+        .collect();
+    r.cap(
+        "every genuine reply on the wire well before the Stop request is a result",
+        missed.is_empty(),
+        format!(
+            "{} on the wire but not reported: {:?}",
+            missed.len(),
+            missed.iter().take(5).collect::<Vec<_>>()
+        ),
+    );
+}
 pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let j = &ctx.rj;
     let tm = &j["timing"];
@@ -1754,6 +1790,7 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
                 j["sent"].to_string(),
             );
             results_on_wire(r, ctx, c, &j["replies"]);
+            stopped_completeness(r, ctx, c);
             r.notes.insert(
                 "empty_receive_path".into(),
                 json!("NOT RUN on macOS (darwin-syncookies)"),

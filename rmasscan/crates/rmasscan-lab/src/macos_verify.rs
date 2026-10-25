@@ -197,33 +197,37 @@ fn load_if_present(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
     p.exists().then(|| verify::load_pcap(r, p)).flatten()
 }
 
-/// One capture of a run directory (`<stem>.pcap` and/or `<stem>.pcap.gz`), each judged on its own. A compressed
-/// capture is decompressed in memory; one that cannot be read, or that disagrees with the plain file beside it, is a
-/// tripped safety check (isolation is unproven), never a skipped one. The presence of one capture proves nothing
-/// about another.
-fn load_capture(r: &mut Run, d: &Path, stem: &str) -> Option<(Frames, Vec<u8>)> {
-    let plain = load_if_present(r, &d.join(format!("{stem}.pcap")));
+/// The compressed copy of a capture (`<stem>.pcap.gz`), decompressed in memory, when it has to be judged on its own:
+/// there is no plain `<stem>.pcap`, or the two differ (that disagreement is INVALID evidence, and the frames of both
+/// are judged: a lab frame or a foreign SYN in either one is a FAIL). A compressed capture that cannot be read trips
+/// the safety check (isolation is unproven), it is never skipped. An identical copy adds nothing. The presence of one
+/// capture proves nothing about another.
+fn gz_extra(r: &mut Run, d: &Path, stem: &str) -> Option<Frames> {
     let gz = d.join(format!("{stem}.pcap.gz"));
     if !gz.exists() {
-        return plain;
+        return None;
     }
-    let name = format!("{stem}.pcap.gz readable and consistent");
     let read = fs::read(&gz)
         .map_err(|e| e.to_string())
         .and_then(|z| crate::gunzip::gunzip(&z))
         .and_then(|b| crate::pcap::read_pcap_records(&b).map(|(_, f)| (f, b)));
+    let name = format!("{stem}.pcap.gz readable");
     match read {
         Err(e) => {
             r.safety(&name, false, format!("{} is unreadable ({e}); isolation is unproven. Run `gunzip -k` on it in a copy and verify again", gz.display()));
-            plain
+            None
         }
-        Ok((frames, bytes)) => match plain {
-            Some(p) if p.1 != bytes => {
-                r.safety(&name, false, "the compressed and the plain capture differ");
-                Some(p)
+        Ok((frames, bytes)) => match fs::read(d.join(format!("{stem}.pcap"))) {
+            Ok(plain) if plain == bytes => None,
+            Ok(_) => {
+                r.inv(
+                    &format!("{stem}.pcap.gz and {stem}.pcap agree"),
+                    false,
+                    "the compressed and the plain capture differ; both are judged",
+                );
+                Some(frames)
             }
-            Some(p) => Some(p),
-            None => Some((frames, bytes)),
+            Err(_) => Some(frames),
         },
     }
 }
@@ -241,29 +245,30 @@ fn captured_in(dir: &Path, err: &str) -> Option<u64> {
 /// SYN where none may exist. They cannot be hidden by a missing meta, an incomplete capture or a
 /// wrong argv, and a tripped one makes the run FAIL for good.
 fn safety(r: &mut Run, man: &Value, it: &Value, d: &Path, peer: Option<&Frames>) {
-    let uplink = load_capture(r, d, "uplink");
-    let gz_peer;
-    let peer = match peer {
-        Some(p) => Some(p),
-        None if d.join("peer.pcap.gz").exists() => {
-            gz_peer = load_capture(r, d, "peer");
-            gz_peer.as_ref().map(|p| &p.0)
-        }
-        None => None,
+    let uplink_plain = load_if_present(r, &d.join("uplink.pcap"));
+    // Each capture is read in every form it exists in; the first candidate is the primary one.
+    let ups: Vec<Option<Frames>> = match (uplink_plain.map(|u| u.0), gz_extra(r, d, "uplink")) {
+        (None, None) => vec![None],
+        (p, g) => p.into_iter().chain(g).map(Some).collect(),
     };
+    let peer_extra = gz_extra(r, d, "peer");
+    let mut peers: Vec<Option<&Frames>> = peer.into_iter().map(Some).collect();
+    peers.extend(peer_extra.iter().map(Some));
+    if peers.is_empty() {
+        peers.push(None);
+    }
     // Judged against the stand's own binding, never the manifest's: a hand-edited manifest cannot make a
     // foreign SYN look like the scanner's.
     let mut pinned = man.clone();
     pinned["binding"] = stand_binding();
-    verify::safety_checks(
-        r,
-        "uplink",
-        &pinned,
-        &shared_kind(it),
-        peer,
-        uplink.as_ref().map(|u| &u.0),
-        captured_in(d, "uplink.err"),
-    );
+    let received = captured_in(d, "uplink.err");
+    let kind = shared_kind(it);
+    let mut combos: Vec<(Option<&Frames>, Option<&Frames>)> = vec![(peers[0], ups[0].as_ref())];
+    combos.extend(peers.iter().skip(1).map(|p| (*p, ups[0].as_ref())));
+    combos.extend(ups.iter().skip(1).map(|u| (peers[0], u.as_ref())));
+    for (p, u) in combos {
+        verify::safety_checks(r, "uplink", &pinned, &kind, p, u, received);
+    }
     // Known classification gap, kept on purpose (final review M3): on macOS the descriptor's drop
     // counter (`bd_dcount`) counts only packets that matched the lab filter, so a kernel drop on
     // the uplink capture is a lost LAB frame, while the safety walk above does not trip on it:
@@ -1341,7 +1346,7 @@ fn dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
             .cloned()
             .unwrap_or_else(|| json!({"tag":tag,"kind":""}));
         let mut r = Run::new(&name);
-        let peer = load_capture(&mut r, &d, "peer");
+        let peer = load_if_present(&mut r, &d.join("peer.pcap"));
         safety(&mut r, man, &it, &d, peer.as_ref().map(|p| &p.0));
         out.push(r.summary());
     }

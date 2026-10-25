@@ -123,10 +123,54 @@ pub(crate) fn options(args: &[String]) -> Result<BTreeMap<String, Vec<String>>, 
             v.push(args[i].clone());
             i += 1;
         }
-        o.insert(k.trim_start_matches("--").into(), v);
+        let key = k.trim_start_matches("--");
+        if o.insert(key.into(), v).is_some() {
+            return Err(format!(
+                "option --{key} given more than once (give all its values after one --{key})"
+            ));
+        }
     }
     Ok(o)
 }
+/// `options` for one subcommand: only the keys it knows (and `--help`) are accepted, so a misspelled
+/// option cannot silently fall back to a default. Unknown and repeated options are refused by name.
+pub(crate) fn options_for(
+    command: &str,
+    args: &[String],
+    allowed: &[&str],
+) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let o = options(args)?;
+    for k in o.keys() {
+        if k != "help" && !allowed.contains(&k.as_str()) {
+            return Err(format!(
+                "unknown option --{k} for {command} (known: {})",
+                allowed
+                    .iter()
+                    .map(|a| format!("--{a}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+        }
+    }
+    Ok(o)
+}
+/// Options of `windows-suite`.
+pub(crate) const WINDOWS_SUITE_OPTIONS: &[&str] = &[
+    "out",
+    "commit",
+    "guest-exe",
+    "fixtures",
+    "remote-lab",
+    "deploy-manifest",
+    "repo",
+    "suite",
+    "plan",
+    "only",
+    "rerun",
+    "list",
+    "cleanup",
+    "run-timeout",
+];
 pub(crate) fn opt(o: &BTreeMap<String, Vec<String>>, k: &str, d: &str) -> String {
     o.get(k)
         .and_then(|v| v.first())
@@ -1570,7 +1614,7 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
     }
 }
 fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
-    let o = options(args)?;
+    let o = options_for("windows-suite", args, WINDOWS_SUITE_OPTIONS)?;
     if o.contains_key("help") {
         println!(
             "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure|perf] [--only TAG ...] [--rerun] [--list]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old"

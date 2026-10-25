@@ -1,4 +1,4 @@
-use crate::windows_suite::{command, hash, opt, options, read_json, required, strings, write_json};
+use crate::windows_suite::{command, hash, opt, read_json, required, strings, write_json};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -1927,8 +1927,29 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
         v[m]
     })
 }
+/// Options of `wire-suite`.
+pub(crate) const WIRE_SUITE_OPTIONS: &[&str] = &[
+    "self-test",
+    "suite",
+    "reps",
+    "rates",
+    "out",
+    "work",
+    "ns-a",
+    "ns-b",
+    "iface-a",
+    "iface-b",
+    "mac-a",
+    "mac-b",
+    "ip-a",
+    "rust-bin",
+    "oracle",
+    "fixtures",
+    "conf-masked",
+    "empty-dir",
+];
 pub fn run(args: &[String]) -> Result<i32, String> {
-    let o = options(args)?;
+    let o = crate::windows_suite::options_for("wire-suite", args, WIRE_SUITE_OPTIONS)?;
     if o.contains_key("self-test") {
         return Err(
             "--self-test was removed: the suite helpers are unit tests; run cargo test -p rmasscan-lab"

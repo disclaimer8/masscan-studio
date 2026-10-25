@@ -73,6 +73,10 @@ default the loader would look in the EXE's own directory first, and a DLL plante
   loader resolves the EXE's static imports from `System32` only.
 - A `RUSTFLAGS` environment variable **replaces** `[target.*] rustflags` from the config file (cargo does not merge
   them). `scripts/package-windows-wire.ps1` sets `RUSTFLAGS` for the static CRT and therefore repeats the link-arg.
+- Cargo finds `rmasscan/.cargo/config.toml` from the **current directory**, not from the manifest: run builds from
+  `rmasscan/` (or below). `cargo build --manifest-path rmasscan/Cargo.toml` from the repository root silently drops
+  the flag. `scripts/check-dll-search-flag.ps1 -Exe PATH` fails unless the image says `0x800`; CI runs it on the
+  packaged EXE.
 - A crate built **outside this workspace** that links `rmasscan-net` (another repository, another `.cargo`
   directory, or a build with its own `RUSTFLAGS`) must set the same link-arg itself. The library cannot set it for its
   dependants.

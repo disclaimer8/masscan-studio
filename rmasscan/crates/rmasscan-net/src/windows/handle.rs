@@ -28,14 +28,13 @@ const PCAP_ERROR_PERM_DENIED: c_int = -8;
 const PCAP_ERROR_PROMISC_PERM_DENIED: c_int = -11;
 
 pub(crate) fn errbuf_text(buf: &[c_char; PCAP_ERRBUF_SIZE]) -> String {
-    // SAFETY: c_char и u8 одного размера и выравнивания, длина берётся из
-    // самого массива, поэтому срез не выходит за буфер.
-    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len()) };
+    // Побайтовая копия без unsafe; длина берётся из самого массива.
+    let bytes: [u8; PCAP_ERRBUF_SIZE] = buf.map(|c| c as u8);
     // Ограничено буфером: без NUL (библиотека исписала все 256 байт) читаем
     // весь буфер, а не уходим за его конец.
-    match CStr::from_bytes_until_nul(bytes) {
+    match CStr::from_bytes_until_nul(&bytes) {
         Ok(s) => s.to_string_lossy().into_owned(),
-        Err(_) => String::from_utf8_lossy(bytes).into_owned(),
+        Err(_) => String::from_utf8_lossy(&bytes).into_owned(),
     }
 }
 

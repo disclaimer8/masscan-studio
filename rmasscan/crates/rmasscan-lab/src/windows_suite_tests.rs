@@ -1589,6 +1589,8 @@ mod local_sweep {
             plan: "failure".into(),
             timeout: 240,
             pm: PM.into(),
+            cleanup: Cell::new(false),
+            runner_invoked: Cell::new(false),
         };
         // The real wrapper of `Suite::bg`, around a TERM-ignoring shell.
         let tool = format!(

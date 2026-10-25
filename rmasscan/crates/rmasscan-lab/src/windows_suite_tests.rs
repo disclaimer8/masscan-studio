@@ -1637,6 +1637,97 @@ mod local_sweep {
     }
 
     #[cfg(target_os = "linux")]
+    #[test]
+    fn a_lost_lock_reap_kills_only_this_runs_process_groups_and_spares_a_foreign_lab_tool() {
+        let h = LocalHome::new("lost-lock-reap");
+        let ev = h.home.join("winvm/t4-ev");
+        let own_dir = ev.join("failure/r1/tag");
+        let foreign_dir = ev.join("other/r9/tag");
+        fs::create_dir_all(&own_dir).unwrap();
+        fs::create_dir_all(&foreign_dir).unwrap();
+        let lock = LockGuard::new(|| {}, || false);
+        let w = Suite {
+            exec: &h,
+            out: h.base(),
+            suite: "failure".into(),
+            run_id: "r1".into(),
+            remote: "/unused".into(),
+            remote_ev: ev.to_string_lossy().into_owned(),
+            qmp: String::new(),
+            manifest: String::new(),
+            guest_exe: String::new(),
+            plan: "failure".into(),
+            timeout: 240,
+            pm: PM.into(),
+            cleanup: Cell::new(true),
+            runner_invoked: Cell::new(false),
+            lock: Some(&lock),
+        };
+        // Two TERM-ignoring tools in the real `Suite::bg` wrapper: ours, and one of another orchestrator's run.
+        let start = |dir: &Path| -> i32 {
+            let toolpid = dir.join("tool.pid");
+            let tool = format!(
+                "sh -c 'trap \"\" TERM; echo $$ > {}; while :; do sleep 1; done'",
+                quote(&toolpid.to_string_lossy())
+            );
+            w.bg(
+                &tool,
+                &dir.join("peer.pid").to_string_lossy(),
+                &dir.join("peer.err").to_string_lossy(),
+                120,
+            )
+            .unwrap();
+            for _ in 0..100 {
+                if fs::read_to_string(&toolpid).is_ok_and(|s| !s.trim().is_empty()) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            fs::read_to_string(&toolpid)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        };
+        let own = start(&own_dir);
+        let foreign = start(&foreign_dir);
+        let mut unrelated = Command::new("sleep").arg("60").spawn().unwrap();
+        let notes = w.reap_own_run(&own_dir.to_string_lossy());
+        for _ in 0..100 {
+            if !alive(own) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let (own_alive, foreign_alive, unrelated_alive) = (
+            alive(own),
+            alive(foreign),
+            unrelated.try_wait().unwrap().is_none(),
+        );
+        // Clean up whatever the assertions below are about to judge.
+        let wrapper: String = fs::read_to_string(foreign_dir.join("peer.pid")).unwrap();
+        let wrapper = wrapper.split_whitespace().next().unwrap().to_owned();
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{wrapper}")])
+            .status();
+        let _ = Command::new("kill")
+            .args(["-KILL", &wrapper, &own.to_string()])
+            .status();
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+        assert!(
+            !own_alive,
+            "the TERM-ignoring tool of this run must be KILLed"
+        );
+        assert!(
+            foreign_alive,
+            "a lab tool of another run must be left alone"
+        );
+        assert!(unrelated_alive, "an unrelated process must be left alone");
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[cfg(target_os = "linux")]
     fn alive(pid: i32) -> bool {
         // /proc state: a zombie is gone for our purposes.
         fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -2562,6 +2653,8 @@ struct LockWatch<'a> {
     alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The lock session dies when a remote call containing this text goes out (empty: it is dead from the start).
     die_at: &'static str,
+    /// The operator's stop request arrives together with the loss (the sweep path of a stopped suite).
+    stop_on_loss: bool,
 }
 impl Exec for LockWatch<'_> {
     fn exec(&self, a: &[String], t: u64) -> Result<Output, String> {
@@ -2575,6 +2668,7 @@ impl Exec for LockWatch<'_> {
     }
     fn stopped(&self) -> bool {
         self.stand.stopped()
+            || (self.stop_on_loss && !self.alive.load(std::sync::atomic::Ordering::SeqCst))
     }
     fn pause(&self, d: Duration) {
         self.stand.pause(d)
@@ -2599,6 +2693,7 @@ fn a_lost_lock_session_stops_the_suite_before_any_raw_run() {
             stand: &stand,
             alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(!die_at.is_empty())),
             die_at,
+            stop_on_loss: false,
         };
         let r = run_with(&only_tag(&w), &watch);
         let runners = stand.count("windows_wire_run.ps1 -ArgvFile");
@@ -2667,4 +2762,91 @@ fn unfinished_evidence_of_another_suite_is_reported_and_nothing_of_it_is_deleted
     fs::create_dir_all(&own).unwrap();
     fs::write(own.join(ABORT_MARKER), "").unwrap();
     assert_eq!(sweep_remote(&h, "new-suite").unwrap().len(), 2);
+}
+
+// ---- lost lock: no global sweep; only this run's own tools are stopped ----
+const START_SWEEP_CALLS: usize = 2; // TERM and KILL of the start-of-suite sweep, before the loss
+#[test]
+fn a_lost_lock_with_a_stop_request_runs_no_global_sweep() {
+    let w = World::new("lost-lock-no-sweep");
+    let stand = Stand::new(&w.src);
+    let watch = LockWatch {
+        stand: &stand,
+        alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        die_at: "touch -- ",
+        stop_on_loss: true,
+    };
+    let _ = run_with(&only_tag(&w), &watch);
+    assert_eq!(
+        stand.count("for pidfile in"),
+        START_SWEEP_CALLS,
+        "{:?}",
+        stand.calls()
+    );
+    assert_eq!(stand.count("windows_wire_run.ps1 -ArgvFile"), 0);
+}
+/// Answers every `ssh home-pc` with success, except that the processes of `alive_pids` never exit.
+struct Stubborn {
+    alive_pids: &'static [&'static str],
+    log: RefCell<Vec<String>>,
+}
+impl Exec for Stubborn {
+    fn exec(&self, argv: &[String], _t: u64) -> Result<Output, String> {
+        let cmd = argv.last().unwrap().clone();
+        self.log.borrow_mut().push(cmd.clone());
+        // An exit check is `owned_process_command(.., None)`: it ends in `false` for a process that is still there.
+        let probe = cmd.contains("; false; }");
+        let alive = probe && self.alive_pids.iter().any(|p| cmd.contains(p));
+        out(i32::from(alive), "")
+    }
+    fn file_at_commit(&self, _: &Path, _: &str, _: &str) -> Result<Vec<u8>, String> {
+        Err("unused".into())
+    }
+    fn pause(&self, d: Duration) {
+        thread::sleep(d.min(Duration::from_millis(50)));
+    }
+}
+#[test]
+fn a_lost_lock_abort_signals_only_this_runs_pidfiles_escalates_and_names_what_it_could_not_stop() {
+    let w = World::new("lost-lock-reap");
+    let stand = Stand::new(&w.src);
+    let stub = Stubborn {
+        alive_pids: &["/peer.pid"],
+        log: RefCell::default(),
+    };
+    let lock = LockGuard::new(|| {}, || false);
+    let mut s = suite(&stand, &w.root);
+    s.exec = &stub;
+    s.lock = Some(&lock);
+    s.cleanup.set(true);
+    let rev = "/home/a1/winvm/t4-ev/failure/r00112233445566778899aabbccddeeff/tag";
+    let note = s.abort_evidence("tag", rev, "boom".into());
+    let log = stub.log.borrow().clone();
+    assert!(
+        !log.iter().any(|c| c.contains("for pidfile in")),
+        "no global sweep: {log:?}"
+    );
+    let kills: Vec<_> = log.iter().filter(|c| c.contains("kill -KILL")).collect();
+    assert_eq!(
+        kills.len(),
+        1,
+        "only the stubborn tool is KILLed: {kills:?}"
+    );
+    assert!(
+        kills[0].contains(&format!("{rev}/peer.pid")),
+        "{}",
+        kills[0]
+    );
+    assert!(
+        log.iter()
+            .filter(|c| c.contains("kill -TERM"))
+            .all(|c| c.contains(rev)),
+        "every signal targets a pidfile of this run"
+    );
+    assert!(
+        note.contains("could not be stopped")
+            && note.contains(&format!("{rev}/peer.pid"))
+            && note.contains("kill -KILL"),
+        "manual advice names the pidfile: {note}"
+    );
 }

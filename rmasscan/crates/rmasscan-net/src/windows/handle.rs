@@ -8,14 +8,14 @@
 //! принадлежит ровно одному worker. Библиотека живёт, пока жив любой handle
 //! (`Arc<NpcapApi>` в поле), и выгружается после `pcap_close` последнего.
 
-use std::ffi::{CStr, CString, c_char, c_int};
+use std::ffi::{CStr, CString, c_char, c_int, c_uint};
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
 use super::ffi::{
     BPF_RET_K, BpfInsn, BpfProgram, DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, NEXT_EX_EOF,
     NEXT_EX_OK, NEXT_EX_TIMEOUT, PCAP_ERRBUF_SIZE, PCAP_IF_LOOPBACK, PCAP_NETMASK_UNKNOWN, PcapIf,
-    PcapPkthdr, PcapStat, PcapT,
+    PcapPkthdr, PcapSendQueue, PcapStat, PcapT, SENDQUEUE_RECORD_HEADER,
 };
 use super::loader::NpcapApi;
 use crate::NetError;
@@ -303,6 +303,133 @@ impl PcapHandle {
         // размера libpcap для Windows (ABI проверен в ffi).
         let rc = unsafe { (self.api.fns.stats)(self.raw.as_ptr(), &mut st) };
         if rc == 0 { Ok(st) } else { Err(rc) }
+    }
+}
+
+/// Владеемая очередь отправки Npcap (`pcap_send_queue`). Указатель очереди не
+/// покидает этот модуль. Освобождается в `Drop` через `pcap_sendqueue_destroy`.
+///
+/// Порядок освобождения: очередь раньше `pcap_close` handle, с которым она
+/// передавалась; владелец (`TxHalf`) обязан объявить поле очереди раньше поля
+/// handle (поля уничтожаются в порядке объявления). `Arc<NpcapApi>` держит DLL
+/// загруженной до самого конца.
+// Используется адаптером в задаче 4.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct SendQueue {
+    raw: NonNull<PcapSendQueue>,
+    capacity: u32,
+    /// Размер каждой записи (`16 + caplen`) в порядке постановки.
+    records: Vec<u32>,
+    api: Arc<NpcapApi>,
+}
+
+// SAFETY: очередь это обычный блок памяти без потоковой привязки; SendQueue
+// единственный владелец указателя и не клонируется. `Sync` намеренно не
+// реализован (NonNull уже делает тип !Sync).
+unsafe impl Send for SendQueue {}
+
+impl Drop for SendQueue {
+    fn drop(&mut self) {
+        // SAFETY: raw получен из pcap_sendqueue_alloc этой же библиотеки и
+        // ещё не освобождён (Drop выполняется один раз); api держит DLL.
+        unsafe { (self.api.fns.sendqueue_destroy)(self.raw.as_ptr()) };
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl SendQueue {
+    /// `pcap_sendqueue_alloc(bytes)`; NULL это ошибка системы.
+    pub(crate) fn alloc(api: &Arc<NpcapApi>, bytes: u32) -> Result<SendQueue, NetError> {
+        // SAFETY: функция разрешена из загруженной библиотеки (api её держит);
+        // аргумент это простое число.
+        let raw = unsafe { (api.fns.sendqueue_alloc)(bytes as c_uint) };
+        let Some(raw) = NonNull::new(raw) else {
+            return Err(NetError::System(format!(
+                "pcap_sendqueue_alloc({bytes}) returned NULL"
+            )));
+        };
+        Ok(SendQueue {
+            raw,
+            capacity: bytes,
+            records: Vec::new(),
+            api: Arc::clone(api),
+        })
+    }
+
+    /// Ставит запись `pcap_pkthdr {ts: 0, caplen = len = frame.len()}` + кадр.
+    /// `Err(-1)`: очередь полна (кадр не поставлен); длина кадра вне `u32`
+    /// отвергается тем же -1 без вызова.
+    pub(crate) fn push(&mut self, frame: &[u8]) -> Result<(), c_int> {
+        let Ok(caplen) = u32::try_from(frame.len()) else {
+            return Err(-1);
+        };
+        let hdr = PcapPkthdr {
+            caplen,
+            len: caplen,
+            ..PcapPkthdr::default()
+        };
+        // SAFETY: raw валиден (выделен alloc, не освобождён); hdr и frame
+        // читаемы на время вызова (caplen байт); pcap_sendqueue_queue
+        // копирует их в буфер очереди и не хранит указатели.
+        let rc = unsafe { (self.api.fns.sendqueue_queue)(self.raw.as_ptr(), &hdr, frame.as_ptr()) };
+        if rc != 0 {
+            return Err(rc);
+        }
+        self.records
+            .push(caplen.saturating_add(SENDQUEUE_RECORD_HEADER as u32));
+        Ok(())
+    }
+
+    /// Занято байт (поле `len` структуры очереди).
+    pub(crate) fn queued_bytes(&self) -> u32 {
+        // SAFETY: raw валиден; `len` публичное поле структуры, единственный
+        // писатель которого pcap_sendqueue_queue (и clear), одновременного
+        // доступа нет: &self исключает &mut.
+        unsafe { (*self.raw.as_ptr()).len }
+    }
+
+    /// Ёмкость очереди в байтах, заданная при `alloc`.
+    pub(crate) fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// Размеры записей (`16 + caplen`) в порядке постановки.
+    pub(crate) fn record_sizes(&self) -> &[u32] {
+        &self.records
+    }
+
+    /// Число записей.
+    pub(crate) fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Очередь пуста.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// Освобождает очередь для повторного использования: `len = 0`.
+    pub(crate) fn clear(&mut self) {
+        self.records.clear();
+        // SAFETY: raw валиден; `len` публичное поле структуры (единственный
+        // писатель pcap_sendqueue_queue, читающий только len/maxlen), &mut
+        // self исключает параллельный доступ.
+        unsafe { (*self.raw.as_ptr()).len = 0 };
+    }
+}
+
+impl PcapHandle {
+    /// `pcap_sendqueue_transmit(p, queue, sync)`: сырое число принятых
+    /// драйвером байт (меньше `queued_bytes` при ошибке). Синхронный,
+    /// неотменяемый вызов. Очередь не изменяется.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn transmit_raw(&mut self, q: &mut SendQueue, sync: bool) -> c_uint {
+        // SAFETY: raw валиден и активирован; q.raw валиден (выделен той же
+        // библиотекой, что и handle: оба держат один Arc<NpcapApi>), &mut q
+        // исключает параллельный доступ; transmit не освобождает очередь.
+        unsafe {
+            (self.api.fns.sendqueue_transmit)(self.raw.as_ptr(), q.raw.as_ptr(), c_int::from(sync))
+        }
     }
 }
 

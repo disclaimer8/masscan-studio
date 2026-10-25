@@ -1264,13 +1264,12 @@ mod ownership_tests {
         }
     }
     fn temp() -> PathBuf {
+        // A random suffix, not the time: macOS SystemTime has microsecond resolution, so two
+        // parallel tests could get the same name (EEXIST on the macos-14 CI runner).
         let p = std::env::temp_dir().join(format!(
             "rmasscan-vmlab-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            crate::windows_suite::nonce()
         ));
         fs::create_dir(&p).unwrap();
         p

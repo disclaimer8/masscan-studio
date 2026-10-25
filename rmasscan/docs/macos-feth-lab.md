@@ -55,6 +55,9 @@ sudo "$BIN" macos-lab bpf-access --run-id m1 --grant
 
 # take the access back at any time (root), e.g. for the perm_denied runs
 sudo "$BIN" macos-lab bpf-access --run-id m1 --revoke
+# link acts only on a sealed stand whose manifest lists feth4202 as created; --up rewrites the
+# ARP entry only when it is absent or (incomplete), leaves a complete permanent one alone, and
+# exits 10 (nothing overwritten) when a complete entry that is not the lab's is there.
 # only for part B link loss on the peer side (root). Darwin drops the static ARP entry when
 # feth4202 goes down (it comes back "(incomplete)"); --up brings the interface up and restores the
 # entry (arp -d, then arp -S, both with the lab constants), verifies it, and exits 10 with the
@@ -158,6 +161,28 @@ sudo chmod 600 /dev/bpf{0..15}; sudo chgrp wheel /dev/bpf{0..15}
 ```
 
 A `down` with a refused or damaged manifest prints this line in its error output.
+
+## Live adapter tests: `macos_live`
+
+Six `#[ignore]` tests drive the product adapter (`open_explicit` and the engine) on the stand. They are not part of CI or of
+`cargo test`; run them in a grant window, as you (never root), with the stand up and BPF granted (`macos-lab status` must show
+`raw_run_allowed: true` and `bpf_access: granted`). Use your own private `CARGO_TARGET_DIR` and an existing output directory:
+
+```sh
+cd rmasscan && \
+CARGO_TARGET_DIR="$TARGET" \
+RMASSCAN_BPF_LAB_MANIFEST=/var/run/rmasscan-lab/m1.json \
+RMASSCAN_BPF_OUT_DIR="$OUT" \
+cargo test --locked -p rmasscan-net --test macos_live -- --ignored --test-threads=1
+```
+
+The manifest only confirms the stand (every value must equal the plan constants, `state` sealed). Each test writes `KV` lines to
+`$OUT/macos_live__<test>.txt`: `full_scan`, `stop`, `pause_resume`, `rx_loss`, `uncertain`, `latency`. The peer is a second adapter on
+`feth4202` plus, for `full_scan`, listeners the test itself opens on `198.18.0.2:8000-8007` (the only open ports on the Mac;
+`80` and `443` are closed, because a non-root bind to them is `EACCES`, and Darwin has no silent ports, syncookies), so a
+full scan sees exactly 8 open replies. `latency` records the maximum duration per call type (`max_us_recv`, `max_us_send`,
+`max_us_health`, `max_us_idle_recv`) and asserts each call returns within 50 ms. The uplink witness (zero lab frames on `en0`) is
+the operator's, outside the tests, as in the suite.
 
 ## Acceptance runs: `macos-suite` and `macos-verify`
 
@@ -278,6 +303,8 @@ frames, no kernel drops, the interface counter window and the marker rules. Linu
 - Everything the lab writes, the end markers included, goes out of `feth4202` through the peer-side guard.
   `capture dump` on macOS accepts only `feth4201`, `feth4202` and the default-route uplink; only `feth4202`
   is ever opened for writing.
+- `capture marker` and `capture responder` are Linux-lab tools and refuse on macOS (rc 2, with an explanation): they would write
+  frames on a caller-chosen interface or bind wildcard ports outside the guard. The macOS suite uses neither.
 - The scanner is stopped and reaped (INT, a few seconds, then KILL) before any witness on every error path.
 - A tag that already has a run is refused unless `--rerun` moved it to `runs_discarded` under the discard rules.
 - The macOS Application Firewall state is recorded in `alf.txt`; an enabled firewall refuses the run, because

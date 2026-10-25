@@ -1271,7 +1271,7 @@ impl Suite<'_> {
                 "peer".into(),
                 "listen".into(),
                 "--open".into(),
-                "80,443,8000-8007".into(),
+                "8000-8007".into(),
                 "--silent".into(),
                 silent.into(),
                 "--ready".into(),
@@ -1296,6 +1296,27 @@ impl Suite<'_> {
         let mut cap = json!({"capture_schema":mv::CAPTURE_SCHEMA});
         let mut meta =
             json!({"tag":tag,"kind":kind,"invocation_nonce":run_nonce,"euid":self.st.euid()?});
+        // The OS rate-limits closed-port RSTs; the limit in force is part of every run (read only).
+        let lim = self.st.exec(
+            &[
+                "/usr/sbin/sysctl".into(),
+                "-n".into(),
+                "net.inet.icmp.icmplim".into(),
+            ],
+            20,
+        )?;
+        io(
+            fs::write(
+                work.join("icmplim.txt"),
+                format!("rc {}\n{}{}", lim.rc, lim.stdout, lim.stderr),
+            ),
+            "icmplim.txt",
+        )?;
+        meta["icmplim"] = json!(if lim.rc == 0 {
+            lim.stdout.trim()
+        } else {
+            "unreadable"
+        });
         let (mut up0, mut c0) = (None, None);
         if denied {
             // BPF is denied, so no witness can run: the interface counters are the only evidence.
@@ -1923,7 +1944,8 @@ pub(crate) fn run_locked(
                 "binding":plan_binding(),
                 "stand":{"run_id":s.lab_run_id,"scanner_if":SCANNER_IF,"peer_if":PEER_IF,
                     "uplink":status0["uplink"],"gateway":status0["gateway"]},
-                "listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
+                "listeners":{"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent,
+                    "note":"80 and 443 are closed on the Mac stand: a non-root peer cannot bind them"},
                 "euid":uid,"orchestrator":orchestrator,"created_utc":epoch()});
             if plan == "perf" {
                 m["perf"] = json!({"rates":rates.clone().unwrap_or_else(|| crate::verify::PERF_RATES.to_vec()),

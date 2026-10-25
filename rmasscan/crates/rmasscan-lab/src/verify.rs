@@ -66,8 +66,70 @@ pub(crate) fn ports(spec: &str) -> Vec<u16> {
     }
     out
 }
+thread_local! {
+    /// The macOS stand's expectations (see [`MacStandGuard`]); false everywhere else.
+    static MAC_STAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// While alive, this thread judges evidence of the macOS feth stand: a non-root peer cannot bind 80 or 443 there,
+/// so only 8000-8007 are open and 80, 443 are closed (RST); and the OS rate-limits closed-port RSTs, so a missing
+/// RST is not a finding: results are compared with what the wire shows (and with the open ports, which must all
+/// answer), not with an RST count. Everything else, Windows and Linux included, is unchanged.
+pub(crate) struct MacStandGuard(bool);
+impl MacStandGuard {
+    pub(crate) fn enter() -> Self {
+        Self(MAC_STAND.replace(true))
+    }
+}
+impl Drop for MacStandGuard {
+    fn drop(&mut self) {
+        MAC_STAND.set(self.0);
+    }
+}
+fn mac_stand() -> bool {
+    MAC_STAND.get()
+}
 pub(crate) fn open_ports() -> Vec<u16> {
-    [vec![80, 443], (8000..8008).collect()].concat()
+    if mac_stand() {
+        (8000..8008).collect()
+    } else {
+        [vec![80, 443], (8000..8008).collect()].concat()
+    }
+}
+/// Do the scanner's results match the listener truth `exp`? Exactly, except on the macOS stand, where every open
+/// port must be there, nothing may be unknown or duplicated, and a closed port's RST may be missing.
+pub(crate) fn results_match(got: &Value, exp: &[String]) -> bool {
+    if !mac_stand() {
+        return *got == json!(exp);
+    }
+    let Some(a) = got.as_array() else {
+        return false;
+    };
+    let g: Vec<&str> = a.iter().map(s).collect();
+    let set: BTreeSet<&str> = g.iter().copied().collect();
+    set.len() == g.len()
+        && g.iter().all(|x| exp.iter().any(|e| e == x))
+        && exp
+            .iter()
+            .filter(|e| e.ends_with(":open"))
+            .all(|e| set.contains(e.as_str()))
+}
+/// `reply_total` is the number of expected replies (everywhere else), or of the results received (macOS).
+fn reply_total_ok(j: &Value, exp_len: usize) -> bool {
+    if mac_stand() {
+        n(&j["reply_total"]) == array(&j["replies"]).len() as i128
+    } else {
+        n(&j["reply_total"]) == exp_len as i128
+    }
+}
+/// Do the unique replies on the wire equal the truth (everywhere else) or the scanner's own results (macOS)?
+fn wire_matches(wire: &[String], exp: &[String], results: &Value) -> bool {
+    if mac_stand() {
+        let got: BTreeSet<&str> = array(results).iter().map(s).collect();
+        let on_wire: BTreeSet<&str> = wire.iter().map(String::as_str).collect();
+        got == on_wire
+    } else {
+        wire == exp
+    }
 }
 pub fn case_by_name(name: &str) -> Option<Value> {
     let (port, sp, count, rate, wait) = match name {
@@ -1161,8 +1223,8 @@ pub(crate) fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx:
     );
     r.beh(
         "results equal listener truth with no duplicates",
-        j["replies"] == json!(exp)
-            && n(&j["reply_total"]) == exp.len() as i128
+        results_match(&j["replies"], &exp)
+            && reply_total_ok(j, exp.len())
             && j["reply_unique"] == j["reply_total"],
         j["replies"].to_string(),
     );
@@ -1194,7 +1256,7 @@ pub(crate) fn continuous(r: &mut Run, root: &Path, man: &Value, fx: &Value, ctx:
         let wire = wire_replies(fr, &ctx.bind, Some(sports(c)));
         r.check(
             "peer wire replies equal results",
-            unique(wire.clone()) == exp
+            wire_matches(&unique(wire.clone()), &exp, &j["replies"])
                 && received_with_duplicates(j).is_some_and(|count| count <= wire.len() as u128),
             wire.len(),
             FAIL,
@@ -1247,7 +1309,7 @@ pub(crate) fn foreign(r: &mut Run, ctx: &Ctx, c: &Value, kinds: &[&str]) {
     let exp = replies(c, false);
     r.beh(
         "no foreign reply became a result",
-        j["replies"] == json!(exp),
+        results_match(&j["replies"], &exp),
         j["replies"].to_string(),
     );
     let Some(inj) = read_json(ctx.d.join("injector.json")) else {
@@ -1487,12 +1549,14 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
             j["sent"] == c["syn"]
                 && j["range"] == c["syn"]
                 && f(&tm["total_s"]) < 6.
-                && j["replies"] == json!(exp),
+                && results_match(&j["replies"], &exp),
             tm.to_string(),
         ),
         _ => r.beh(
             "full result queue kept both genuine replies",
-            j["replies"] == json!(exp) && j["reply_total"] == 2 && j["sent"] == c["syn"],
+            results_match(&j["replies"], &exp)
+                && (mac_stand() || j["reply_total"] == 2)
+                && j["sent"] == c["syn"],
             j["replies"].to_string(),
         ),
     }
@@ -2129,7 +2193,7 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     if completed {
         r.beh(
             "received open/closed results equal listener truth",
-            j["replies"] == json!(exp),
+            results_match(&j["replies"], &exp),
             format!(
                 "{} results for {} expected",
                 n(&j["reply_total"]),
@@ -2261,7 +2325,8 @@ pub(crate) fn groups(
         union.sort();
         r.check(
             "reply union equals listener truth without duplicates",
-            union == replies(&c, false) && unique(union.clone()).len() == union.len(),
+            results_match(&json!(union), &replies(&c, false))
+                && unique(union.clone()).len() == union.len(),
             format!("{union:?}"),
             FAIL,
             false,

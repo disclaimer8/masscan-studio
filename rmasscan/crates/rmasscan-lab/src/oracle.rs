@@ -20,7 +20,27 @@ fn staging_command(scripts: &Path, host: &str, work: &str) -> Vec<String> {
     argv.push(format!("{host}:{work}/scripts/"));
     argv
 }
+/// The listener ports of the Windows VM and Linux oracle runs, and of the Mac stand (a non-root peer cannot bind 80 or
+/// 443 there, so 80 and 443 are closed and answer RST).
+pub(crate) const DEFAULT_OPEN_PORTS: &str = "80,443,8000,8001,8002,8003,8004,8005,8006,8007";
+pub(crate) const MAC_OPEN_PORTS: &str = "8000,8001,8002,8003,8004,8005,8006,8007";
+#[cfg(test)]
 fn oracle_command(work: &str, src_mac: &str, peer_mac: &str, lab: &str) -> Result<String, String> {
+    oracle_command_with(work, src_mac, peer_mac, lab, DEFAULT_OPEN_PORTS)
+}
+fn oracle_command_with(
+    work: &str,
+    src_mac: &str,
+    peer_mac: &str,
+    lab: &str,
+    open_ports: &str,
+) -> Result<String, String> {
+    if !open_ports
+        .split(',')
+        .all(|p| p.parse::<u16>().is_ok_and(|v| v > 0))
+    {
+        return Err(format!("invalid --open-ports {open_ports:?}"));
+    }
     if !valid_mac(src_mac)
         || !valid_mac(peer_mac)
         || !work.starts_with('/')
@@ -29,10 +49,11 @@ fn oracle_command(work: &str, src_mac: &str, peer_mac: &str, lab: &str) -> Resul
         return Err("invalid oracle binding or remote path".into());
     }
     Ok(format!(
-        "cd {} && WIRELAB_MAC_A={} WIRELAB_MAC_B={} WIRELAB_IP_ADAPTER='198.18.0.1' WIRELAB_IP_A_LINK='' WIRELAB_PEER_IPS='198.18.0.2' WIRELAB_PEER_PREFIX='30' WIRELAB_OPEN_PORTS='80,443,8000,8001,8002,8003,8004,8005,8006,8007' WIRELAB_CASES_FILE={} RMASSCAN_LAB_BIN={} bash scripts/wire-lab.sh --oracle \"$HOME/rmasscan-oracle/masscan/bin/masscan\" --out out",
+        "cd {} && WIRELAB_MAC_A={} WIRELAB_MAC_B={} WIRELAB_IP_ADAPTER='198.18.0.1' WIRELAB_IP_A_LINK='' WIRELAB_PEER_IPS='198.18.0.2' WIRELAB_PEER_PREFIX='30' WIRELAB_OPEN_PORTS={} WIRELAB_CASES_FILE={} RMASSCAN_LAB_BIN={} bash scripts/wire-lab.sh --oracle \"$HOME/rmasscan-oracle/masscan/bin/masscan\" --out out",
         quote(work),
         quote(src_mac),
         quote(peer_mac),
+        quote(open_ports),
         quote(&format!("{work}/cases.psv")),
         quote(lab)
     ))
@@ -91,11 +112,18 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let o = crate::windows_suite::options_for(
         "oracle-fixtures",
         args,
-        &["out", "peer-mac", "remote-lab", "host", "src-mac"],
+        &[
+            "out",
+            "peer-mac",
+            "remote-lab",
+            "host",
+            "src-mac",
+            "open-ports",
+        ],
     )?;
     if o.contains_key("help") {
         println!(
-            "oracle-fixtures --out DIR --peer-mac MAC [--src-mac MAC] --remote-lab /absolute/linux/rmasscan-lab [--host minipc]"
+            "oracle-fixtures --out DIR --peer-mac MAC [--src-mac MAC] [--open-ports CSV] --remote-lab /absolute/linux/rmasscan-lab [--host minipc]"
         );
         return Ok(0);
     }
@@ -105,6 +133,13 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         return Err("invalid peer MAC".into());
     }
     let src_mac = src_mac_option(&o)?;
+    let open_ports = opt(&o, "open-ports", DEFAULT_OPEN_PORTS);
+    if !open_ports
+        .split(',')
+        .all(|p| p.parse::<u16>().is_ok_and(|v| v > 0))
+    {
+        return Err(format!("invalid --open-ports {open_ports:?}"));
+    }
     let host = opt(&o, "host", "minipc");
     if host.starts_with('-') || host.chars().any(char::is_whitespace) {
         return Err("invalid SSH host".into());
@@ -136,7 +171,12 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let work = format!("{rh}/t4-fixtures-{}", nonce());
     let scripts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
     let localcases = out.join("cases.psv");
-    fs::write(&localcases, crate::verify::cases_psv()).map_err(|e| e.to_string())?;
+    // The expected open and closed counts follow the listeners the oracle is run against.
+    let cases = {
+        let _mac = (open_ports == MAC_OPEN_PORTS).then(crate::verify::MacStandGuard::enter);
+        crate::verify::cases_psv()
+    };
+    fs::write(&localcases, cases).map_err(|e| e.to_string())?;
     let result = (|| {
         ssh(
             &format!(
@@ -158,7 +198,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             180,
             true,
         )?;
-        let cmd = oracle_command(&work, &src_mac, &pm, &lab)?;
+        let cmd = oracle_command_with(&work, &src_mac, &pm, &lab, &open_ports)?;
         let r = ssh(&cmd, false)?;
         fs::write(
             out.join("wire-lab.log"),
@@ -360,5 +400,58 @@ mod tests {
             &["out", "peer-mac", "remote-lab", "host", "src-mac"],
         )
         .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod open_port_tests {
+    use super::*;
+    #[test]
+    fn oracle_plan_uses_the_given_open_ports_and_cases_follow_them() {
+        let cmd = oracle_command_with(
+            "/h/x",
+            "02:ac:00:00:00:01",
+            "02:ac:00:00:00:02",
+            "/h/l",
+            MAC_OPEN_PORTS,
+        )
+        .unwrap();
+        assert!(
+            cmd.contains(&format!("WIRELAB_OPEN_PORTS='{MAC_OPEN_PORTS}'")),
+            "{cmd}"
+        );
+        assert!(!cmd.contains("80,443"));
+        let win = oracle_command("/h/x", DEFAULT_SRC_MAC, "02:ac:00:00:00:02", "/h/l").unwrap();
+        assert!(win.contains(&format!("WIRELAB_OPEN_PORTS='{DEFAULT_OPEN_PORTS}'")));
+        for bad in ["80;id", "", "0", "80,,81", "99999"] {
+            assert!(
+                oracle_command_with(
+                    "/h/x",
+                    "02:ac:00:00:00:01",
+                    "02:ac:00:00:00:02",
+                    "/h/l",
+                    bad
+                )
+                .is_err(),
+                "{bad:?}"
+            );
+        }
+        // c01 scans port 80: open for the Windows listeners, closed (one RST) for the Mac stand.
+        let line = |t: &str| {
+            t.lines()
+                .find(|l| l.starts_with("c01_"))
+                .unwrap()
+                .to_owned()
+        };
+        assert!(line(&crate::verify::cases_psv()).starts_with("c01_one_addr_port_synack|1|1|0|"));
+        let mac = {
+            let _g = crate::verify::MacStandGuard::enter();
+            crate::verify::cases_psv()
+        };
+        assert!(
+            line(&mac).starts_with("c01_one_addr_port_synack|1|0|1|"),
+            "{}",
+            line(&mac)
+        );
     }
 }

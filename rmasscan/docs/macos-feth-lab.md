@@ -203,7 +203,7 @@ the stand; needs `sudo -n` on minipc and the Linux build of `rmasscan-lab` there
 
 ```sh
 "$BIN" oracle-fixtures --out "$FIX" --src-mac 02:ac:00:00:00:01 --peer-mac 02:ac:00:00:00:02 \
-  --remote-lab /ABSOLUTE/PATH/ON/MINIPC/rmasscan-lab --host minipc
+  --open-ports 8000,8001,8002,8003,8004,8005,8006,8007 --remote-lab /ABSOLUTE/PATH/ON/MINIPC/rmasscan-lab --host minipc
 ```
 
 Order of the live runs (your commands are the `sudo` ones):
@@ -300,3 +300,17 @@ live children (`children=`); `--remove-stale-lock` refuses while one of them has
 leaves no member of its group behind: its exit is read from `ps` (zombie row) and the group is swept (SIGINT, one
 second, SIGKILL) before the leader is reaped, so the group id cannot have been reused. A work directory left in
 `OUT/.work/` blocks the next start and is walked by the verifier (a lab frame there is FAIL).
+
+### Ports and closed-port RSTs on the Mac stand
+
+The scan port set stays `80,443,8000-8007` (parity with the C oracle), but a non-root peer cannot bind 80 or 443
+on macOS (EACCES) and there are no root listeners, ever. The peer listens on `8000-8007` only; 80 and 443 are
+CLOSED and answer RST. The oracle fixtures are taken with `--open-ports 8000,...,8007` so that their truth is the
+same, and the verifier requires that (`responder_open_ports`). The shared Windows and Linux tables are unchanged.
+SYN-ACK is therefore exercised by `c03`, the pause/resume groups and the 8000-8007 part of the perf ports, not by
+`c01`.
+
+macOS rate-limits closed-port RSTs (the spike saw 74 of 100 under load). A missing RST is not a scanner failure
+and not INVALID by itself: on the Mac stand the scanner's results must contain every open port, nothing unknown
+and no duplicate, and must equal the replies the peer witness saw on the wire; no RST count is expected.
+`sysctl -n net.inet.icmp.icmplim` is recorded in every run (`icmplim.txt`, `meta.json`).

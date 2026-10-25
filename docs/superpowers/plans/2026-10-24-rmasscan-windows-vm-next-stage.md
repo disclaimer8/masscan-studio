@@ -199,12 +199,12 @@ Windows second e1000e NIC → TAP → dedicated bridge → veth → Linux peer n
 - [ ] Приложить точный commit, чистоту дерева, hashes, topology, версии DLL/драйвера,
   ошибки/лимиты и результат каждой проверки. Secret-free logs; source ZIP совпадает с EXE.
   *Отчёт [Windows VM acceptance](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md). Пункт не отмечен: ZIP-пакет собран на `931f69f` (раздел 11 отчёта), но проверка «source ZIP совпадает с EXE» **NOT RUN**; дистрибуция OPEN.*
-- [ ] Провести независимое review FFI/ownership, health/stop/checkpoint и самого
+- [x] Провести независимое review FFI/ownership, health/stop/checkpoint и самого
   harness. Зелёный CI относится к точному review HEAD. Merge — отдельное решение.
-  *Итоговое ревью продукта: WITH FIXES (I1, I2), исправлено (`7247688`, `68134b0`, `3d28ae3`), перепроверка CHANGES REQUIRED (R1), проверка закрытия APPROVED; живая перепроверка на `931f69f` (раздел 11 отчёта). Ревью лаборатории APPROVED после двух перепроверок. Open: CI на точном HEAD NOT RUN (push не разрешён).*
+  *Итоговое ревью продукта: WITH FIXES (I1, I2), исправлено (`7247688`, `68134b0`, `3d28ae3`), перепроверка CHANGES REQUIRED (R1), проверка закрытия APPROVED; живая перепроверка на `931f69f` (раздел 11 отчёта). Ревью лаборатории APPROVED после двух перепроверок. CI зелёный на `7ffa155` (PR #9), слито merge-коммитом `2cc2bec`.*
 - [x] Явно отделить GO Windows VM correctness от physical NIC, throughput,
   macOS BPF, runner/IPC, UI и distribution. Не заменять физическую приёмку VM.
-  *Раздел 13 отчёта: GO для VM correctness не объявлен (OPEN до зелёного CI на точном HEAD); физический NIC NOT RUN, throughput OPEN, macOS NOT STARTED, runner/IPC, UI, дистрибуция OPEN.*
+  *Раздел 13 отчёта: GO (VM) для VM correctness объявлен после зелёного CI на `7ffa155` и `2cc2bec`; физический NIC NOT RUN, throughput OPEN, macOS NOT STARTED, runner/IPC, UI, дистрибуция OPEN.*
 
 Далее: отдельный план macOS BPF → discovery/ARP/network identity → runner/IPC
 и durable checkpoint → реальный Scan в Slint. Изменение порядка или продуктового

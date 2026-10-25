@@ -33,6 +33,9 @@ struct State {
     state_dir: Option<PathBuf>,
     /// A foreign interface that appears when the next `create` runs (a race after preflight).
     appear_on_create: Option<String>,
+    /// Verbatim `ifconfig NAME` output (the real, or the OS-masked, text).
+    ifconfig_override: BTreeMap<String, String>,
+    arp_override: Option<String>,
 }
 
 struct Fake(RefCell<State>);
@@ -57,6 +60,8 @@ impl Fake {
             route_get: BTreeMap::new(),
             state_dir: None,
             appear_on_create: None,
+            ifconfig_override: BTreeMap::new(),
+            arp_override: None,
         }))
     }
     fn log(&self) -> Vec<String> {
@@ -201,6 +206,9 @@ impl Host for Fake {
                 s.ifaces.get_mut(*n).ok_or("no such interface")?.up = up;
                 Ok(String::new())
             }
+            ["ifconfig", n] if s.ifconfig_override.contains_key(*n) => {
+                Ok(s.ifconfig_override[*n].clone())
+            }
             ["ifconfig", n] => s
                 .ifaces
                 .get(*n)
@@ -217,6 +225,9 @@ impl Host for Fake {
                 }
                 _ => Err("arp: delete: no entry".into()),
             },
+            ["arp", "-an"] if s.arp_override.is_some() => {
+                Ok(s.arp_override.clone().unwrap_or_default())
+            }
             ["arp", "-an"] => {
                 let mut t = String::from(
                     "? (192.168.1.1) at 84:3c:99:3d:79:ab on en0 ifscope [ethernet]\n",
@@ -295,6 +306,9 @@ impl Host for Fake {
     }
     fn state_owner(&self) -> u32 {
         test_uid()
+    }
+    fn is_root(&self) -> bool {
+        self.0.borrow().root
     }
     fn state_dir(&self) -> Result<PathBuf, String> {
         self.0
@@ -1869,13 +1883,8 @@ fn status_reads_the_root_owned_state_without_root() {
     let h = Fake::new();
     up_ok(&h, &s);
     h.st(|st| st.root = false);
-    let from = h.log().len();
     let (rc, v) = status_json(&h, &s);
     assert_eq!(rc, 0, "{v}");
-    assert!(
-        !h.log()[from..].iter().any(|c| c == "id -u"),
-        "status asked for root"
-    );
     assert!(check_ok(&v, "manifest"));
 }
 
@@ -2127,4 +2136,183 @@ fn the_guide_documents_the_fallback_and_the_reboot_behaviour() {
     assert!(doc.contains("sudo chmod 600 /dev/bpf{0..15}; sudo chgrp wheel /dev/bpf{0..15}"));
     assert!(doc.contains("after a reboot"));
     assert!(!doc.contains("readable by anyone"));
+}
+
+// ---- fix round 6: Darwin hides MACs from ad-hoc-signed processes
+
+/// Real `ifconfig` text on Darwin 27 as root or from zsh (recorded by the controller).
+fn real_ifconfig(name: &str) -> String {
+    let (mac, peer, inet) = if name == "feth4201" {
+        ("02:ac:00:00:00:01", "feth4202", "")
+    } else {
+        (
+            "02:ac:00:00:00:02",
+            "feth4201",
+            "\tinet 198.18.0.2 netmask 0xfffffffc broadcast 198.18.0.3\n",
+        )
+    };
+    format!(
+        "{name}: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\toptions=8<VLAN_HWTAGGING>\n\tether {mac}\n{inet}\tpeer: {peer}\n\tmedia: autoselect (10Gbase-T <full-duplex>)\n\tstatus: active\n"
+    )
+}
+
+/// The same text as seen by an ad-hoc-signed process: only the MAC differs.
+fn masked_ifconfig(name: &str) -> String {
+    real_ifconfig(name)
+        .replace("02:ac:00:00:00:01", "02:00:00:00:00:00")
+        .replace("02:ac:00:00:00:02", "02:00:00:00:00:00")
+}
+
+const REAL_ARP: &str = "? (192.168.1.1) at 84:3c:99:3d:79:ab on en0 ifscope [ethernet]\n? (198.18.0.1) at 2:ac:0:0:0:1 on feth4202 ifscope permanent [ethernet]\n";
+const MASKED_ARP: &str = "? (192.168.1.1) at 84:3c:99:3d:79:ab on en0 ifscope [ethernet]\n? (198.18.0.1) at 2:0:0:0:0:0 on feth4202 ifscope permanent [ethernet]\n";
+
+fn script_masked(h: &Fake) {
+    h.st(|st| {
+        for n in ["feth4201", "feth4202"] {
+            st.ifconfig_override.insert(n.into(), masked_ifconfig(n));
+        }
+        st.arp_override = Some(MASKED_ARP.into());
+    });
+}
+
+fn detail_of(v: &Value, name: &str) -> String {
+    v["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name)
+        .unwrap()["detail"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn the_real_unmasked_darwin_text_passes_for_root_and_non_root() {
+    for root in [true, false] {
+        let s = Scratch::new();
+        let h = Fake::new();
+        up_ok(&h, &s);
+        h.st(|st| {
+            for n in ["feth4201", "feth4202"] {
+                st.ifconfig_override.insert(n.into(), real_ifconfig(n));
+            }
+            st.arp_override = Some(REAL_ARP.into());
+            st.root = root;
+        });
+        let (rc, v) = status_json(&h, &s);
+        assert_eq!(rc, 0, "root={root}: {v}");
+        assert!(!detail_of(&v, "interfaces").contains("os-masked"));
+        assert!(!detail_of(&v, "arp").contains("os-masked"));
+    }
+}
+
+#[test]
+fn a_non_root_status_accepts_the_placeholder_only_against_a_sealed_manifest() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    script_masked(&h);
+    h.st(|st| st.root = false);
+    let (rc, v) = status_json(&h, &s);
+    assert_eq!(rc, 0, "{v}");
+    assert_eq!(v["raw_run_allowed"], true);
+    for what in ["interfaces", "arp"] {
+        let d = detail_of(&v, what);
+        assert!(d.contains("MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:0"), "{what}: {d}");
+    }
+}
+
+#[test]
+fn root_never_accepts_the_placeholder() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    script_masked(&h);
+    h.st(|st| st.root = true);
+    let (rc, v) = status_json(&h, &s);
+    assert_eq!(rc, 3);
+    assert!(!check_ok(&v, "interfaces") && !check_ok(&v, "arp"));
+}
+
+#[test]
+fn a_masked_mac_does_not_hide_other_deviations_or_other_macs() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    h.st(|st| st.root = false);
+    // Wrong peer line with a masked MAC.
+    script_masked(&h);
+    h.st(|st| {
+        let t = masked_ifconfig("feth4201").replace("peer: feth4202", "peer: feth9");
+        st.ifconfig_override.insert("feth4201".into(), t);
+    });
+    assert!(!check_ok(&status_json(&h, &s).1, "interfaces"));
+    // A real but wrong MAC.
+    script_masked(&h);
+    h.st(|st| {
+        let t = real_ifconfig("feth4201").replace("02:ac:00:00:00:01", "02:ac:00:00:00:99");
+        st.ifconfig_override.insert("feth4201".into(), t);
+    });
+    assert!(!check_ok(&status_json(&h, &s).1, "interfaces"));
+    // ARP with a wrong, non-placeholder MAC, or not permanent, or on the wrong interface.
+    script_masked(&h);
+    for arp in [
+        MASKED_ARP.replace("2:0:0:0:0:0", "2:ac:0:0:0:9"),
+        MASKED_ARP.replace(" permanent", ""),
+        MASKED_ARP.replace("on feth4202", "on en0"),
+    ] {
+        h.st(|st| st.arp_override = Some(arp.clone()));
+        assert!(!check_ok(&status_json(&h, &s).1, "arp"), "{arp}");
+    }
+}
+
+#[test]
+fn the_placeholder_is_not_accepted_without_a_sealed_manifest_that_records_the_plan() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    script_masked(&h);
+    h.st(|st| st.root = false);
+    for (field, val) in [
+        ("state", json!("creating")),
+        ("scanner_mac", json!("02:ac:00:00:00:77")),
+    ] {
+        let mut m = manifest_of(&s);
+        let keep = m[field].clone();
+        m[field] = val;
+        write_manifest(&s.manifest(), &m).unwrap();
+        let (rc, v) = status_json(&h, &s);
+        assert_eq!(rc, 3, "{field}: {v}");
+        assert!(!check_ok(&v, "interfaces"), "{field}");
+        m[field] = keep;
+        write_manifest(&s.manifest(), &m).unwrap();
+    }
+    assert_eq!(status_json(&h, &s).0, 0);
+    // No manifest at all: not sealed, so masked is not accepted either.
+    let s2 = Scratch::new();
+    let (rc, v) = status_json(&h, &s2);
+    assert_eq!(rc, 3);
+    assert!(!check_ok(&v, "interfaces"));
+}
+
+#[test]
+fn up_as_root_verifies_real_macs_before_recording_sealed() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    // The OS (wrongly, for root) shows the placeholder after the steps: up must roll back.
+    h.st(|st| st.root = true);
+    let h2 = h;
+    let steps_done = |h: &Fake| {
+        h.st(|st| {
+            for n in ["feth4201", "feth4202"] {
+                st.ifconfig_override.insert(n.into(), masked_ifconfig(n));
+            }
+        })
+    };
+    steps_done(&h2);
+    let (r, out) = go(&h2, &args(&s, "up"));
+    assert_eq!(r, Ok(10), "{out}");
+    assert!(out.contains("FAILED check interfaces"), "{out}");
+    assert!(!s.manifest().exists());
 }

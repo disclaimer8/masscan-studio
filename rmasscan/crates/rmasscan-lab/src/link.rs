@@ -85,7 +85,32 @@ fn iface_mac_os(iface: &str) -> Result<[u8; 6], String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    mac_from_ifconfig(iface, &String::from_utf8_lossy(&out.stdout))
+    mac_or_stand_plan(iface, &String::from_utf8_lossy(&out.stdout))
+}
+
+/// Like [`mac_from_ifconfig`], except for the two stand interfaces when the OS masks the MAC
+/// (Darwin hides MACs from processes descended from an ad-hoc-signed executable): then the MAC
+/// is the stand plan's constant. The placeholder itself is never returned as a MAC; root verified
+/// the real ones at `up`, and `macos-lab status` checks the stand against the manifest.
+#[cfg(target_os = "macos")]
+pub fn mac_or_stand_plan(iface: &str, text: &str) -> Result<[u8; 6], String> {
+    use crate::macos_lab::{MASKED_MAC, PEER_IF, PEER_MAC, SCANNER_IF, SCANNER_MAC};
+    match mac_from_ifconfig(iface, text) {
+        Ok(m) => Ok(m),
+        Err(e) => {
+            let masked =
+                crate::macos_lab::parse_ifconfig(text).ether.as_deref() == Some(MASKED_MAC);
+            let plan = match iface {
+                SCANNER_IF => Some(SCANNER_MAC),
+                PEER_IF => Some(PEER_MAC),
+                _ => None,
+            };
+            match (masked, plan) {
+                (true, Some(p)) => parse_mac(p),
+                _ => Err(e),
+            }
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -232,6 +257,34 @@ mod tests {
         let masked_short = "en0: flags=8863<UP>\n\tether 2:0:0:0:0:0\n";
         assert!(mac_from_ifconfig("en0", masked_short).is_err());
         assert!(mac_from_ifconfig("lo0", "lo0: flags=8049<UP>\n").is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_masked_stand_mac_is_the_plan_constant_and_nothing_else_is() {
+        let masked = "feth4201: flags=8843<UP>\n\tether 02:00:00:00:00:00\n";
+        assert_eq!(
+            mac_or_stand_plan("feth4201", masked).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 1]
+        );
+        assert_eq!(
+            mac_or_stand_plan("feth4202", masked).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 2]
+        );
+        // Any other interface keeps the strict refusal; the placeholder is never a MAC.
+        assert!(
+            mac_or_stand_plan("en0", masked)
+                .unwrap_err()
+                .contains("masked")
+        );
+        // A real MAC on a stand interface is returned as it is (so a mismatch is visible).
+        let other = "feth4201: flags=8843<UP>\n\tether 02:ac:00:00:00:09\n";
+        assert_eq!(
+            mac_or_stand_plan("feth4201", other).unwrap(),
+            [0x02, 0xac, 0, 0, 0, 9]
+        );
+        // No ether line at all is an error, not the plan.
+        assert!(mac_or_stand_plan("feth4201", "feth4201: flags=8843<UP>\n").is_err());
     }
 
     struct Scripted(VecDeque<Result<SendStatus, IoError>>, usize);

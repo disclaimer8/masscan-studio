@@ -1,12 +1,13 @@
 param([string]$Checkout = "$HOME\studio-integration-20261025")
 $ErrorActionPreference = 'Stop'
 function Checked([scriptblock]$Command) {
-    & $Command
+    & $Command 2>&1 | Tee-Object -FilePath verification/windows-native.log -Append
     if ($LASTEXITCODE -ne 0) { throw "Command failed: $Command (exit $LASTEXITCODE)" }
 }
 Set-Location (Join-Path $Checkout 'studio')
 . "$PSScriptRoot\windows-sqlite.ps1"
 New-Item -ItemType Directory -Force verification | Out-Null
+Set-Content -Path verification/windows-native.log -Value ''
 Start-Transcript -Path verification/windows.log -Force | Out-Null
 Checked { cargo xtask test }
 Checked { cargo xtask build }

@@ -65,8 +65,12 @@ This was an automated SSH-session smoke, not manual RDP usability acceptance.
 
 `20853d0` changes only the test layout/waits and documentation relative to
 `75b5abc`; application/runner source and Cargo lock are unchanged. Package
-manifests record `dirty: false` and exact binary hashes. The shared Cargo lock
-SHA-256 is `5a399e68eae927418f876059ea1ca17247f1e4b3cc97797c703683828d290f33`.
+manifests record `dirty: false` and exact binary hashes. Cargo lock SHA-256 is
+`5a399e68eae927418f876059ea1ca17247f1e4b3cc97797c703683828d290f33` on macOS/Linux.
+Windows Git checks it out with CRLF, producing
+`cf37b8944f39934e362057974ad53d64ce002083f5ef385a02e762566172c48d`;
+converting the LF file to CRLF reproduces that exact hash. Dependency content is
+identical; manifests deliberately hash actual file bytes.
 The Studio CI workflow is added but has not run on GitHub (branch not pushed).
 
 Fault injection beyond the listed cases, authenticated privileged bootstrap and

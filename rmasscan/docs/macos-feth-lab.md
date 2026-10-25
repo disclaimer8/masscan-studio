@@ -34,10 +34,12 @@ All state (manifest, marker, lock) lives in the root-owned `/var/run/rmasscan-la
 single `mkdir` (mode 0755, owner root, no parents); every command refuses it if it is a symlink, not
 a directory, not owned by root or group/world-writable. Files in it are created with `O_EXCL` (never
 following a symlink), mode 0644, owner root, and are read only if they are regular single-link files
-owned by root, not group/world-writable, at most 1 MiB. Root never writes, renames or unlinks anything
+owned by root (and by no one else), not group/world-writable, at most 1 MiB. Nothing in the lab chowns
+a file. Root never writes, renames or unlinks anything
 in a user-owned directory. `--manifest` is optional; if given it must be exactly
 `/var/run/rmasscan-lab/<run-id>.json`, anything else is refused before any action. `status` (no root)
-reads the same world-readable file. Build once, then use the binary path (`$BIN`,
+reads the same world-readable file. `/var/run` is cleared at reboot, so after a reboot `status`
+reports "no stand recorded" (rc 3) and the `feth` interfaces are gone too. Build once, then use the binary path (`$BIN`,
 for example `$CARGO_TARGET_DIR/debug/rmasscan-lab` or `rmasscan/target/release/rmasscan-lab`):
 
 ```sh
@@ -139,3 +141,16 @@ from `netstat -I IF -b -d -n` (the `<Link#` row; columns `Ipkts`, `Opkts`, `Ierr
 found by header name, a missing column is an error and the evidence INVALID). The interface-drop
 figure is `Ierrs + Drop`; `Drop` is the send-queue drop count, not the analogue of Linux
 `rx_dropped`. A down interface is printed as `feth4202*` and still matches.
+
+## Taking BPF access away without a stand
+
+`bpf-access --revoke` and `down` set every existing `/dev/bpf0..15` to `0600 root:wheel` first and
+do not depend on a valid manifest, a sealed stand or even a usable state directory (with root, and
+the lock when it can be taken). `down` still exits non-zero when it refused the interfaces. If the
+lab itself cannot do it, run by hand:
+
+```sh
+sudo chmod 600 /dev/bpf{0..15}; sudo chgrp wheel /dev/bpf{0..15}
+```
+
+A `down` with a refused or damaged manifest prints this line in its error output.

@@ -1962,3 +1962,169 @@ fn plan_names_the_root_owned_state_directory() {
     assert!(out.contains("/var/run/rmasscan-lab"), "{out}");
     assert!(out.contains("nothing is written under $HOME"));
 }
+
+// ---- fix round 4 addendum: revoke never depends on a stand
+
+fn all_bpf(h: &Fake, mode: u32, gid: u32) {
+    h.st(|st| st.bpf = (0..16).map(|n| (n, (mode, gid))).collect());
+}
+
+#[test]
+fn revoke_with_no_manifest_and_no_state_directory_still_applies_0600_root_wheel() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    all_bpf(&h, 0o660, 20);
+    let mut a = args(&s, "bpf-access");
+    a.revoke = true;
+    a.manifest = s.0.join("not-there").join("m1.json");
+    let mut out = vec![];
+    assert_eq!(
+        dispatch_in(&h, &a, Duration::ZERO, &mut out),
+        Ok(0),
+        "{out:?}"
+    );
+    assert!(h.st(|st| st.bpf.values().all(|v| *v == (0o600, 0))));
+    assert!(
+        !s.0.join("not-there").exists(),
+        "revoke creates no directory"
+    );
+    assert!(
+        out.iter().any(|l| l.contains("set 0600 root:wheel")),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn revoke_works_when_the_manifest_is_refused_or_the_state_directory_is_a_symlink() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    all_bpf(&h, 0o660, 20);
+    fs::write(s.manifest(), "{ not json").unwrap();
+    let mut a = args(&s, "bpf-access");
+    a.revoke = true;
+    let mut out = vec![];
+    assert_eq!(
+        dispatch_in(&h, &a, Duration::ZERO, &mut out),
+        Ok(0),
+        "{out:?}"
+    );
+    assert!(h.st(|st| st.bpf.values().all(|v| *v == (0o600, 0))));
+    #[cfg(unix)]
+    {
+        all_bpf(&h, 0o660, 20);
+        let real = s.0.join("real");
+        fs::create_dir(&real).unwrap();
+        let link = s.0.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        a.manifest = link.join("m1.json");
+        let mut out = vec![];
+        assert_eq!(
+            dispatch_in(&h, &a, Duration::ZERO, &mut out),
+            Ok(0),
+            "{out:?}"
+        );
+        assert!(h.st(|st| st.bpf.values().all(|v| *v == (0o600, 0))));
+        assert!(out.iter().any(|l| l.contains("without the lock")));
+    }
+}
+
+#[test]
+fn revoke_still_needs_root() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    all_bpf(&h, 0o660, 20);
+    h.st(|st| st.root = false);
+    let mut a = args(&s, "bpf-access");
+    a.revoke = true;
+    assert!(go(&h, &a).0.unwrap_err().contains("needs root"));
+    assert!(h.st(|st| st.bpf.values().all(|v| *v == (0o660, 20))));
+}
+
+#[test]
+fn down_revokes_bpf_even_when_the_manifest_is_refused_and_exits_non_zero() {
+    for damage in ["foreign-created", "garbage", "marker"] {
+        let s = Scratch::new();
+        let h = Fake::new();
+        up_ok(&h, &s);
+        all_bpf(&h, 0o660, 20);
+        match damage {
+            "foreign-created" => {
+                let mut m = manifest_of(&s);
+                m["created"] = json!(["feth4201", "en0"]);
+                write_manifest(&s.manifest(), &m).unwrap();
+            }
+            "garbage" => fs::write(s.manifest(), "{ not json").unwrap(),
+            _ => fs::write(marker_path(&s.manifest()), "other\n").unwrap(),
+        }
+        let (r, _) = go(&h, &args(&s, "down"));
+        let e = r.unwrap_err();
+        assert!(
+            e.contains("sudo chmod 600 /dev/bpf{0..15}"),
+            "{damage}: {e}"
+        );
+        assert!(
+            h.st(|st| st.bpf.values().all(|v| *v == (0o600, 0))),
+            "{damage}: BPF must be revoked"
+        );
+        assert!(
+            h.st(|st| st.ifaces.contains_key("feth4201")),
+            "{damage}: nothing destroyed"
+        );
+    }
+}
+
+#[test]
+fn down_with_no_stand_still_revokes() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    all_bpf(&h, 0o660, 20);
+    let (r, out) = go(&h, &args(&s, "down"));
+    assert_eq!(r, Ok(0), "{out}");
+    assert!(h.st(|st| st.bpf.values().all(|v| *v == (0o600, 0))));
+}
+
+#[test]
+fn a_partly_failed_revoke_prints_the_manual_fallback_and_down_exits_10() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    all_bpf(&h, 0o660, 20);
+    h.st(|st| st.fail.push("bpf_set 3 600 0".into()));
+    let (r, out) = go(&h, &args(&s, "down"));
+    assert_eq!(r, Ok(10), "{out}");
+    assert!(out.contains("sudo chmod 600 /dev/bpf{0..15}"), "{out}");
+}
+
+#[test]
+fn an_unsealed_down_touches_only_the_interfaces_it_recorded() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    write_manifest_with(&s, &h, json!(["feth4201"]), "creating");
+    // feth4202 is foreign now: not in `created`, random MAC, no peer.
+    h.st(|st| {
+        let f = st.ifaces.get_mut("feth4202").unwrap();
+        f.mac = "aa:aa:aa:aa:aa:42".into();
+        f.peer = None;
+        st.ifaces.get_mut("feth4201").unwrap().peer = None;
+    });
+    let from = h.log().len();
+    assert_eq!(go(&h, &args(&s, "down")).0, Ok(0));
+    let log = h.log()[from..].to_vec();
+    assert!(
+        !log.iter()
+            .any(|c| c.contains("feth4202") && c.contains("destroy")),
+        "{log:?}"
+    );
+    assert!(!log.iter().any(|c| c.starts_with("arp -d")), "{log:?}");
+    assert!(h.st(|st| st.ifaces.contains_key("feth4202")));
+    assert!(!h.st(|st| st.ifaces.contains_key("feth4201")));
+}
+
+#[test]
+fn the_guide_documents_the_fallback_and_the_reboot_behaviour() {
+    let doc = include_str!("../../../docs/macos-feth-lab.md");
+    assert!(doc.contains("sudo chmod 600 /dev/bpf{0..15}; sudo chgrp wheel /dev/bpf{0..15}"));
+    assert!(doc.contains("after a reboot"));
+    assert!(!doc.contains("readable by anyone"));
+}

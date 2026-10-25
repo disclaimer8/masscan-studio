@@ -1811,15 +1811,30 @@ fn permission(r: &mut Run, ctx: &Ctx, it: &Value, man: &Value) {
 /// Lab-isolation checks on the two witness captures. They need nothing but the pcaps, the manifest
 /// binding and the run kind, so they run before any other evidence is looked at: a missing meta, an
 /// incomplete capture, a failed gate leg or a wrong argv cannot hide them (final review I-1, I-2).
+/// `packets received by filter` of the run directory's own `eno1.err`, when it is there.
+fn eno1_err_received(dir: &Path) -> Option<u64> {
+    let text = fs::read_to_string(dir.join("eno1.err")).ok()?;
+    crate::windows_suite::parse_tcpdump(&text)["received"].as_u64()
+}
 fn safety_checks(
     r: &mut Run,
     man: &Value,
     kind: &str,
     peer: Option<&Frames>,
     eno: Option<&Frames>,
+    eno_received: Option<u64>,
 ) {
     if let Some(fr) = eno {
         r.safety("eno1 saw zero lab packets", fr.is_empty(), fr.len());
+    }
+    // A frame tcpdump counted but did not store is as much a lab frame as a stored one (the live interlock
+    // exits 13 on it; the offline verdict must agree, or a rerun would launder it).
+    if let Some(n) = eno_received {
+        r.safety(
+            "eno1 tcpdump counted zero frames matching the lab filter",
+            n == 0,
+            n,
+        );
     }
     let Some(fr) = peer else { return };
     let b = Binding::new(&man["binding"]);
@@ -1881,6 +1896,9 @@ fn verify_item(
         s(&it["kind"]),
         peer.as_ref().map(|p| &p.0),
         eno.as_ref().map(|p| &p.0),
+        cap.as_ref()
+            .and_then(|c| c["eno1"]["tcpdump"]["received"].as_u64())
+            .or_else(|| eno1_err_received(&d)),
     );
     let (Some(rj), Some(meta), Some(cap)) = (rj, meta, cap) else {
         return (r, None);
@@ -2462,6 +2480,7 @@ fn pcap_dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
             kind,
             peer.as_ref().map(|p| &p.0),
             eno.as_ref().map(|p| &p.0),
+            eno1_err_received(&d),
         );
         out.push(r.summary());
     }
@@ -2605,6 +2624,33 @@ pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
     let (r, _) = verify_item(root, &man, &fx, &it, None);
     (r.verdict().into(), r.behaviour_fail())
 }
+/// The text report lines about aborted runs and safety trips (the culprit of a FAIL that no verdict line shows).
+pub(crate) fn safety_report_lines(res: &Value) -> Vec<String> {
+    let mut lines: Vec<String> = array(&res["aborted"])
+        .iter()
+        .map(|r| format!("ABORTED  {} (kept copy of an aborted run; only its lab-isolation checks are judged)", s(&r["tag"])))
+        .collect();
+    for r in array(&res["runs"])
+        .iter()
+        .chain(array(&res["groups"]))
+        .chain(array(&res["discarded"]))
+        .chain(array(&res["aborted"]))
+        .filter(|r| r["safety_trip"] == true)
+    {
+        for c in array(&r["checks"])
+            .iter()
+            .filter(|c| c["safety"] == true && c["result"] == FAIL)
+        {
+            lines.push(format!(
+                "safety trip: {} : {} ({})",
+                s(&r["tag"]),
+                s(&c["name"]),
+                s(&c["detail"])
+            ));
+        }
+    }
+    lines
+}
 pub fn run(args: &[String]) -> Result<i32, String> {
     if args.iter().any(|x| x == "--cases-psv") {
         print!("{}", cases_psv());
@@ -2650,6 +2696,9 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             s(&r["tag"]),
             bad.join("; ")
         );
+    }
+    for line in safety_report_lines(&res) {
+        println!("{line}");
     }
     for row in array(&res["perf_summary"]["rows"]) {
         println!(

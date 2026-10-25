@@ -26,6 +26,15 @@ struct Knobs {
     lock_held: bool,
     /// `scp -r remote/. local` copies nothing.
     no_dir_copy: bool,
+    /// Every home-pc ssh/scp fails (set by `down_after_runner` once the guest runner was invoked).
+    home_down: bool,
+    down_after_runner: bool,
+    /// The peer start marker command fails.
+    fail_marker: bool,
+    /// The remote eno1.pcap cannot be read.
+    eno1_unreadable: bool,
+    /// The scratch holds a sub-directory (the marker-clearing command refuses).
+    subdir_present: bool,
 }
 struct Stand {
     src: PathBuf,
@@ -38,6 +47,10 @@ struct Stand {
     commit_reads: RefCell<Vec<(String, String)>>,
     pauses: RefCell<Vec<Duration>>,
     locks: Cell<usize>,
+    /// The remote keep marker (path) and whether a sweep deleted a scratch directory.
+    marker: RefCell<Option<String>>,
+    deleted: Cell<bool>,
+    created: Cell<bool>,
 }
 /// The "installed" Linux binary of the fake stand; the default deploy manifest vouches for it.
 const LAB_BINARY: &[u8] = b"rmasscan-lab test binary";
@@ -68,6 +81,9 @@ impl Stand {
             commit_reads: RefCell::default(),
             pauses: RefCell::default(),
             locks: Cell::new(0),
+            marker: RefCell::default(),
+            deleted: Cell::new(false),
+            created: Cell::new(false),
         }
     }
     fn script_bytes(&self, name: &str) -> Option<Vec<u8>> {
@@ -112,6 +128,39 @@ impl Stand {
     }
     fn home(&self, cmd: &str) -> Result<Output, String> {
         let k = self.knobs.borrow();
+        if k.home_down {
+            return Err("ssh: connect to host home-pc: Connection refused".into());
+        }
+        if cmd.contains("peer marker") && k.fail_marker {
+            return Err("ssh: connection reset".into());
+        }
+        if cmd.starts_with("touch -- ") && cmd.contains(ABORT_MARKER) {
+            let p = cmd.trim_start_matches("touch -- ").trim_matches('\'');
+            *self.marker.borrow_mut() = Some(p.to_owned());
+            self.created.set(true);
+            return out(0, "");
+        }
+        if cmd.contains("rm -f --") && cmd.contains(ABORT_MARKER) {
+            if cmd.contains("find .") && k.subdir_present {
+                return out(1, "");
+            }
+            *self.marker.borrow_mut() = None;
+            return out(0, "");
+        }
+        if cmd.starts_with("if test -e") && cmd.contains("rm -rf --") {
+            *self.marker.borrow_mut() = None;
+            return out(0, "");
+        }
+        if cmd.contains("kept-uncopied") {
+            if let Some(m) = self.marker.borrow().as_ref() {
+                let dir = m.trim_end_matches(&format!("/{ABORT_MARKER}"));
+                return out(0, &format!("kept-uncopied {dir}\n"));
+            }
+            if self.created.get() {
+                self.deleted.set(true);
+            }
+            return out(0, "");
+        }
         if cmd.contains("pwd -P") {
             return out(0, "/home/a1");
         }
@@ -158,7 +207,13 @@ impl Stand {
         }
         if cmd.contains("eno1_size=") {
             let n = self.frames("eno1");
-            let size = if n == 0 { 24 } else { 24 + 100 * n };
+            let size = if k.eno1_unreadable {
+                -1
+            } else if n == 0 {
+                24
+            } else {
+                24 + 100 * n as i64
+            };
             return out(
                 0,
                 &format!(
@@ -225,10 +280,15 @@ impl Stand {
                 stderr: "verify stderr".into(),
             });
         }
-        if cmd.contains("windows_wire_run.ps1") && (k.fail_runner || k.stop_at_runner) {
+        if cmd.contains("windows_wire_run.ps1")
+            && (k.fail_runner || k.stop_at_runner || k.down_after_runner)
+        {
             drop(k);
             if self.knobs.borrow().stop_at_runner {
                 self.knobs.borrow_mut().stopped = true;
+            }
+            if self.knobs.borrow().down_after_runner {
+                self.knobs.borrow_mut().home_down = true;
             }
             return out(255, "");
         }
@@ -343,6 +403,9 @@ impl Exec for Stand {
             "scp" => {
                 let src = argv[argv.len() - 2].clone();
                 self.log.borrow_mut().push(format!("scp {src} {last}"));
+                if self.knobs.borrow().home_down {
+                    return Err("scp: connect to host home-pc: Connection refused".into());
+                }
                 for prefix in ["home-pc:", "lab@127.0.0.1:"] {
                     if let Some(remote) = src.strip_prefix(prefix) {
                         return self.fetch(remote, Path::new(&last));
@@ -2266,4 +2329,163 @@ fn the_commands_documented_in_rust_lab_md_parse_with_the_option_allow_lists() {
         options_for(sub, args, allowed)
             .unwrap_or_else(|e| panic!("rust-lab.md: {sub} {args:?}: {e}"));
     }
+}
+
+// ---- fix round 2 (re-review N1, N2, N6, N8) ----
+#[test]
+fn a_dead_orchestrator_or_failed_ssh_after_the_send_leaves_the_run_marked_and_the_next_start_refuses()
+ {
+    let w = World::new("marker-dies");
+    let stand = Stand::new(&w.src);
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.fail_runner = true;
+        k.down_after_runner = true;
+    }
+    // home-pc is unreachable from the runner on: abort_evidence can do nothing (no copy, no eno1 read).
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert_eq!(e.code(), 10, "{e:?}");
+    assert!(
+        stand.marker.borrow().is_some(),
+        "the marker was written at scratch creation"
+    );
+    assert!(!stand.deleted.get());
+    // Next start: ssh works again, the sweep finds the marked run and deletes nothing.
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.home_down = false;
+        k.down_after_runner = false;
+        k.fail_runner = false;
+    }
+    let again = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert!(
+        matches!(&again, SuiteError::Abort(m) if m.contains("never copied") && m.contains(&stand.marker.borrow().clone().unwrap().replace("/.abort-uncopied", "")) && m.contains("Recovery")),
+        "{again:?}"
+    );
+    assert_eq!(again.code(), 10);
+    assert!(!stand.deleted.get(), "nothing may be deleted");
+    assert!(stand.marker.borrow().is_some());
+    assert_eq!(stand.count("-Action Verify"), 1, "no new run started");
+    // The kept eno1 shows a lab frame: that is an isolation breach.
+    stand.knobs.borrow_mut().eno1_frames = 1;
+    let again = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert_eq!(again.code(), 13, "{again:?}");
+    assert!(!stand.deleted.get());
+    // --cleanup keeps it and says so.
+    assert_eq!(
+        run_with(&strings(&["--cleanup", "--suite", "failure"]), &stand).unwrap(),
+        0
+    );
+    assert!(!stand.deleted.get() && stand.marker.borrow().is_some());
+}
+#[test]
+fn a_normal_run_sets_the_marker_before_anything_is_sent_and_clears_it_with_the_scratch() {
+    let w = World::new("marker-normal");
+    let stand = Stand::new(&w.src);
+    assert_eq!(run_with(&only_tag(&w), &stand).unwrap(), 0);
+    assert!(stand.marker.borrow().is_none());
+    let calls = stand.calls();
+    let touch = calls
+        .iter()
+        .position(|c| c.starts_with("home touch -- ") && c.contains(ABORT_MARKER))
+        .unwrap();
+    let first_raw = calls.iter().position(|c| c.contains("nohup")).unwrap();
+    let mk = calls.iter().position(|c| c.contains("mkdir --")).unwrap();
+    let rm = calls
+        .iter()
+        .rposition(|c| c.starts_with("home if test -e") && c.contains("rm -rf --"))
+        .unwrap();
+    assert!(
+        mk < touch && touch < first_raw && first_raw < rm,
+        "{calls:?}"
+    );
+}
+#[test]
+fn the_marker_is_not_cleared_while_the_scratch_has_a_subdirectory() {
+    let w = World::new("marker-subdir");
+    let stand = Stand::new(&w.src);
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.fail_runner = true;
+        k.subdir_present = true;
+    }
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert!(e.message().contains("keep marker stays"), "{e:?}");
+    assert!(stand.marker.borrow().is_some());
+}
+#[test]
+fn an_abort_between_the_captures_and_the_runner_still_reads_remote_eno1() {
+    for (frames, code) in [(0, 10), (1, 13)] {
+        let w = World::new("early-raw");
+        let stand = Stand::new(&w.src);
+        {
+            let mut k = stand.knobs.borrow_mut();
+            k.fail_marker = true;
+            k.eno1_frames = frames;
+        }
+        let e = run_with(&only_tag(&w), &stand).unwrap_err();
+        assert_eq!(e.code(), code, "{e:?}");
+        assert_eq!(stand.count("eno1_size="), 1, "{:?}", stand.calls());
+        assert_eq!(stand.count("-ArgvFile"), 0, "the runner never ran");
+    }
+}
+#[test]
+fn an_unproven_eno1_under_a_stop_is_exit_10_never_a_plain_interrupt() {
+    let w = World::new("stop-unproven");
+    let stand = Stand::new(&w.src);
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.stop_at_runner = true;
+        k.eno1_unreadable = true;
+    }
+    let e = run_with(&only_tag(&w), &stand).unwrap_err();
+    assert_eq!(e.code(), 10, "{e:?}");
+    assert!(e.message().contains(UNPROVEN_MARK));
+    // The same stop with a readable, clean eno1 stays 130.
+    let w = World::new("stop-proven");
+    let stand = Stand::new(&w.src);
+    stand.knobs.borrow_mut().stop_at_runner = true;
+    assert_eq!(run_with(&only_tag(&w), &stand).unwrap_err().code(), 130);
+}
+#[test]
+fn the_lock_session_is_kept_alive_and_a_missing_flock_is_not_busy() {
+    let a = lock_ssh_args();
+    assert!(a.windows(2).any(|p| p == ["-o", "ServerAliveInterval=15"]));
+    assert!(a.windows(2).any(|p| p == ["-o", "ServerAliveCountMax=4"]));
+    assert!(
+        SUITE_LOCK_SCRIPT.starts_with("command -v flock")
+            && SUITE_LOCK_SCRIPT.contains("echo NOFLOCK")
+    );
+    assert_ne!(LOCK_NOFLOCK, LOCK_BUSY);
+    assert_eq!(lock_error(LOCK_NOFLOCK.into()).code(), 10);
+    assert!(
+        lock_error(LOCK_NOFLOCK.into())
+            .message()
+            .contains("flock is not installed")
+    );
+    assert_eq!(lock_error(LOCK_BUSY.into()).code(), 2);
+}
+#[test]
+fn the_text_report_names_aborted_runs_and_every_safety_trip() {
+    let res = json!({
+        "runs":[{"tag":"c01","safety_trip":true,"checks":[{"safety":true,"result":"FAIL","name":"eno1 saw zero lab packets","detail":"1"}]}],
+        "aborted":[{"tag":"c01.r1","safety_trip":true,"checks":[{"safety":true,"result":"FAIL","name":"eno1 tcpdump counted zero frames matching the lab filter","detail":"2"}]}],
+        "groups":[],"discarded":[]
+    });
+    let lines = crate::verify::safety_report_lines(&res);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("ABORTED") && l.contains("c01.r1"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("safety trip: c01 : eno1 saw zero lab packets"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("safety trip: c01.r1 : eno1 tcpdump counted"))
+    );
 }

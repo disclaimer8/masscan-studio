@@ -329,8 +329,26 @@ impl Drop for LockGuard {
 /// What the lock session runs on home-pc: take `flock -n` on the suite lock file, say so, then hold the
 /// lock for as long as the session's stdin stays open. A dead orchestrator closes the pipe, so the
 /// lock can never outlive it.
-pub(crate) const SUITE_LOCK_SCRIPT: &str = "d=\"$HOME/winvm/t4-ev\"; mkdir -p -- \"$d\" && exec 9>\"$d/.suite.lock\" && { flock -n 9 || { echo BUSY; exit 0; }; echo LOCKED; cat > /dev/null; }";
+pub(crate) const SUITE_LOCK_SCRIPT: &str = "command -v flock > /dev/null 2>&1 || { echo NOFLOCK; exit 0; }; d=\"$HOME/winvm/t4-ev\"; mkdir -p -- \"$d\" && exec 9>\"$d/.suite.lock\" && { flock -n 9 || { echo BUSY; exit 0; }; echo LOCKED; cat > /dev/null; }";
+/// argv (after `ssh`) of the lock-holding session. A dead link is noticed after 15 s x 4, so a half-open
+/// session cannot hold the remote lock for long, nor keep a lock the orchestrator thinks it still has.
+pub(crate) fn lock_ssh_args() -> Vec<String> {
+    strings(&[
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=4",
+        "home-pc",
+        SUITE_LOCK_SCRIPT,
+    ])
+}
 pub(crate) const LOCK_BUSY: &str = "another windows-suite invocation (or --cleanup) holds ~/winvm/t4-ev/.suite.lock on home-pc; run one suite at a time. Nothing was changed.";
+/// The lock session found no `flock` on home-pc: not a held lock, so it is reported apart from BUSY (exit 10).
+pub(crate) const LOCK_NOFLOCK: &str = "flock is not installed on home-pc (util-linux), so the one-suite-at-a-time lock cannot be taken; install it and start again.";
 /// Every external process of the orchestrator (ssh, scp) goes through this seam, so gate and
 /// run behaviour is testable offline with a recording stand and nothing can reach a host by
 /// accident.
@@ -367,17 +385,10 @@ impl Exec for Real {
     fn lock_suite(&self) -> Result<LockGuard, String> {
         use std::io::{BufRead, BufReader};
         let mut cmd = Command::new("ssh");
-        cmd.args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=15",
-            "home-pc",
-            SUITE_LOCK_SCRIPT,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        cmd.args(lock_ssh_args())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -409,6 +420,8 @@ impl Exec for Real {
                 let _ = child.wait();
                 if other == "BUSY" {
                     Err(LOCK_BUSY.into())
+                } else if other == "NOFLOCK" {
+                    Err(LOCK_NOFLOCK.into())
                 } else {
                     Err(format!(
                         "cannot take the suite lock on home-pc (reply {other:?})"
@@ -888,6 +901,12 @@ impl Suite<'_> {
             &scratch_create(&self.remote_ev, &self.suite, &self.run_id, tag)?,
             true,
         )?;
+        // The keep marker goes on before anything can be sent and is cleared only after the evidence is
+        // copied and hash-matched: an orchestrator that dies, or an ssh that fails, cannot lose the run to a sweep.
+        self.home(
+            &format!("touch -- {}", quote(&format!("{rev}/{ABORT_MARKER}"))),
+            true,
+        )?;
         self.runner_invoked.set(false);
         let result = self.one_inner(item, &argv, forge, cp_used, &ev, &rev);
         if let Err(e) = result {
@@ -904,12 +923,11 @@ impl Suite<'_> {
     }
     /// The failure path of one run (final review I-2). It always stops the run's remote tools and brings
     /// the scratch evidence home hash-checked. Once the guest runner was invoked it also reads the eno1
-    /// frame count on home-pc: a lab frame is reported as the isolation interlock (exit 11), exactly like
+    /// frame count on home-pc: a lab frame is reported as the isolation interlock (exit 13), exactly like
     /// the live one. The remote scratch is kept either way and is protected from the next start's sweep
     /// by a marker until the local copy matches the hashes recorded on home-pc before the copy.
     fn abort_evidence(&self, tag: &str, rev: &str, err: String) -> String {
         let marker = format!("{rev}/{ABORT_MARKER}");
-        let _ = self.home(&format!("touch -- {}", quote(&marker)), false);
         let pids = ["listener", "inject", "flood", "linkloss", "peer", "eno1"];
         for n in pids {
             self.stop(&format!("{rev}/{n}.pid"), "TERM");
@@ -952,11 +970,26 @@ impl Suite<'_> {
             });
         if copied {
             // Only now may the next sweep remove the remote scratch.
-            let _ = self.home(&format!("rm -f -- {}", quote(&marker)), false);
-            notes.push(format!(
-                "evidence copied to {} (hash-matched)",
-                local.display()
-            ));
+            // Only hash-checked top-level files are proven: a sub-directory (copied unhashed) keeps the marker.
+            let cleared = self.home(
+                &format!(
+                    "cd {} && test -z \"$(find . -mindepth 1 -type d 2>/dev/null)\" && rm -f -- {}",
+                    quote(rev),
+                    quote(&marker)
+                ),
+                false,
+            );
+            if cleared.is_ok_and(|o| o.rc == 0) {
+                notes.push(format!(
+                    "evidence copied to {} (hash-matched)",
+                    local.display()
+                ));
+            } else {
+                notes.push(format!(
+                    "evidence copied to {} but the keep marker stays (sub-directory present or ssh failed): remote evidence kept in {rev}",
+                    local.display()
+                ));
+            }
         } else {
             notes.push(format!(
                 "the local copy does not match the hashes recorded on home-pc: remote evidence kept in {rev}"
@@ -973,38 +1006,46 @@ impl Suite<'_> {
     /// The eno1 witness of an aborted run, read on home-pc: pcap size (24 bytes: header only), frame
     /// count and the tcpdump counters, judged by the same interlock as a finished run.
     fn remote_eno1_interlock(&self, rev: &str) -> Result<(), String> {
-        let out = self.home(
-            &format!(
-                "cd {} && {{ sz=$(stat -c %s eno1.pcap 2>/dev/null || echo -1); n=$(tcpdump -nr eno1.pcap 2>/dev/null | wc -l); echo \"eno1_size=$sz frames=$n\"; cat eno1.err 2>/dev/null; }}",
-                quote(rev)
-            ),
-            false,
-        )?;
-        let head = out
-            .stdout
-            .lines()
-            .find(|l| l.starts_with("eno1_size="))
-            .unwrap_or("");
-        let field = |k: &str| -> Option<i64> {
-            head.split_whitespace()
-                .find_map(|w| w.strip_prefix(k))
-                .and_then(|v| v.parse().ok())
-        };
-        // 24 bytes is a pcap header and nothing else; anything larger must show at least one frame.
-        let frames = match (field("eno1_size="), field("frames=")) {
-            (Some(24), _) => Some(0),
-            (Some(s), Some(n)) if s > 24 && n >= 1 => Some(n),
-            _ => None,
-        };
-        let stats = parse_tcpdump(
-            &out.stdout
-                .lines()
-                .filter(|l| !l.starts_with("eno1_size="))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-        eno1_interlock(&json!({"eno1":{"pcap":{"frames":frames},"tcpdump":stats}}))
+        let out = self.home(&eno1_read_command(rev), false).map_err(|e| {
+            format!("eno1 interlock: the eno1 capture could not be read on home-pc ({e}), so {UNPROVEN_MARK}")
+        })?;
+        eno1_from_output(&out.stdout)
     }
+}
+/// Read-only remote command: eno1 pcap size, frame count and the tcpdump log of a run directory.
+fn eno1_read_command(dir: &str) -> String {
+    format!(
+        "cd {} && {{ sz=$(stat -c %s eno1.pcap 2>/dev/null || echo -1); n=$(tcpdump -nr eno1.pcap 2>/dev/null | wc -l); echo \"eno1_size=$sz frames=$n\"; cat eno1.err 2>/dev/null; }}",
+        quote(dir)
+    )
+}
+/// Judge the output of [`eno1_read_command`] with the live interlock.
+fn eno1_from_output(stdout: &str) -> Result<(), String> {
+    let head = stdout
+        .lines()
+        .find(|l| l.starts_with("eno1_size="))
+        .unwrap_or("");
+    let field = |k: &str| -> Option<i64> {
+        head.split_whitespace()
+            .find_map(|w| w.strip_prefix(k))
+            .and_then(|v| v.parse().ok())
+    };
+    // 24 bytes is a pcap header and nothing else; anything larger must show at least one frame.
+    let frames = match (field("eno1_size="), field("frames=")) {
+        (Some(24), _) => Some(0),
+        (Some(s), Some(n)) if s > 24 && n >= 1 => Some(n),
+        _ => None,
+    };
+    let stats = parse_tcpdump(
+        &stdout
+            .lines()
+            .filter(|l| !l.starts_with("eno1_size="))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    eno1_interlock(&json!({"eno1":{"pcap":{"frames":frames},"tcpdump":stats}}))
+}
+impl Suite<'_> {
     fn one_inner(
         &self,
         item: &Value,
@@ -1082,6 +1123,9 @@ impl Suite<'_> {
         let (peer_cmd, eno_cmd, filter) = capture_commands(NETNS, rev, &self.pm);
         let c0 = self.counters()?;
         let drops0 = (self.interface_drops(true)?, self.interface_drops(false)?);
+        // From the first capture on, frames may reach lab0 (the start marker, then injector, flood, runner):
+        // an abort from here reads the remote eno1 evidence.
+        self.runner_invoked.set(true);
         for (n, cmd) in [("peer", &peer_cmd), ("eno1", &eno_cmd)] {
             self.bg(
                 cmd,
@@ -1364,8 +1408,10 @@ impl Suite<'_> {
 /// Marker file inside an aborted run's remote scratch directory: present from the abort until the local
 /// copy has matched the hashes recorded on home-pc. The start-of-suite sweep never removes such a run.
 pub(crate) const ABORT_MARKER: &str = ".abort-uncopied";
-/// Text of every interlock message about a lab frame; the suite maps it to exit 11 (isolation breach).
+/// Text of every interlock message about a lab frame; the suite maps it to exit 13 (EXIT_ISOLATION).
 pub(crate) const LAB_FRAME_MARK: &str = "lab frame(s) captured on the host LAN interface";
+/// Text shared by every interlock message that could not prove LAN isolation (exit 10, never a plain interrupt).
+pub(crate) const UNPROVEN_MARK: &str = "LAN isolation is unproven";
 /// Isolation interlock: any lab frame on the user's LAN interface, an eno1 capture that cannot be read
 /// back, or tcpdump counters (`received`, `dropped_kernel`) that are not measured zero abort the suite
 /// before another raw run starts. A frame that tcpdump counted but did not store is as bad as a stored one.
@@ -1526,7 +1572,7 @@ pub(crate) fn mutate_checkpoint(variant: &str, data: &[u8]) -> Result<Vec<u8>, S
     Ok(d)
 }
 /// Entry point of `windows-suite`. NOT RUN refusals (exit 2) are returned as errors; once a
-/// run has begun or a directory is unusable the distinct exit codes 10/11/12 are returned.
+/// run has begun or a directory is unusable the distinct exit codes 10/11/12/13 are returned (130: interrupted).
 pub fn run(args: &[String]) -> Result<i32, String> {
     // Ctrl-C and SIGTERM only set a flag: the orchestrator then stops its remote tools through the
     // uninterruptible exec path before it exits (130). The ssh children sit in their own process group,
@@ -1574,7 +1620,7 @@ fn remote_home(exec: &dyn Exec) -> Result<String, String> {
 /// Stop every pidfile-recorded remote process (pid + start time must match), then remove the
 /// suite's scratch directory. Used by `--cleanup` and at suite start, so a dead orchestrator
 /// never blocks the next one.
-fn sweep_remote(exec: &dyn Exec, suite: &str) -> Result<(), String> {
+fn sweep_remote(exec: &dyn Exec, suite: &str) -> Result<Vec<String>, String> {
     if !safe_id(suite) {
         return Err("--suite must be a safe identifier".into());
     }
@@ -1586,15 +1632,52 @@ fn sweep_remote(exec: &dyn Exec, suite: &str) -> Result<(), String> {
     exec.pause(Duration::from_secs(TERM_GRACE_S));
     home_cmd(exec, &sweep_command(&ev, "KILL"), false)?;
     let kept = home_cmd(exec, &sweep_scratch_command(&format!("{ev}/{suite}")), true)?;
-    for line in kept.stdout.lines() {
-        if let Some(path) = line.strip_prefix("kept-uncopied ") {
-            eprintln!(
-                "NOTICE: aborted-run evidence on home-pc that has not been copied and hash-matched is kept: {path}"
-            );
+    let kept: Vec<String> = kept
+        .stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix("kept-uncopied "))
+        .map(str::to_owned)
+        .collect();
+    for path in &kept {
+        eprintln!(
+            "NOTICE: run evidence on home-pc that has not been copied and hash-matched is kept: {path}"
+        );
+    }
+    Ok(kept)
+}
+/// BUSY and other refusals are NOT RUN (2, nothing changed); a missing flock is an abort-class error (10).
+fn lock_error(m: String) -> SuiteError {
+    if m == LOCK_NOFLOCK {
+        SuiteError::Abort(m)
+    } else {
+        SuiteError::NotRun(m)
+    }
+}
+/// A start finds run directories still carrying the keep marker (an orchestrator died, or the copy never matched).
+/// Nothing is deleted. A lab frame in a kept eno1 capture is an isolation breach (13); otherwise the start is
+/// refused (10) with the run named and the manual recovery steps.
+fn refuse_kept_runs(exec: &dyn Exec, kept: &[String]) -> SuiteError {
+    let mut breach = Vec::new();
+    for dir in kept {
+        if let Ok(o) = home_cmd(exec, &eno1_read_command(dir), false)
+            && let Err(m) = eno1_from_output(&o.stdout)
+            && m.contains(LAB_FRAME_MARK)
+        {
+            breach.push(format!("{dir}: {m}"));
         }
     }
-    Ok(())
+    let list = kept.join(", ");
+    if !breach.is_empty() {
+        return SuiteError::Isolation(format!(
+            "uncopied run evidence on home-pc holds eno1 evidence of a lab frame ({}); nothing was deleted. {KEPT_RECOVERY}",
+            breach.join("; ")
+        ));
+    }
+    SuiteError::Abort(format!(
+        "run evidence on home-pc was never copied and hash-matched: {list}; nothing was deleted and no run was started. {KEPT_RECOVERY}"
+    ))
 }
+const KEPT_RECOVERY: &str = "Recovery: on home-pc inspect each directory (ls -l; tcpdump -nr eno1.pcap), copy it home (scp -r home-pc:DIR OUT/runs_aborted/NAME), compare sha256sum on both sides, then rm DIR/.abort-uncopied and start again.";
 /// `run_inner` plus the stop rule: whatever failed once the operator asked to stop is exit 130, except a
 /// safety finding (isolation breach / unusable directory), which keeps its own code.
 pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
@@ -1606,7 +1689,8 @@ pub(crate) fn run_with(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteErr
                     SuiteError::Isolation(_)
                         | SuiteError::Interrupted(_)
                         | SuiteError::SchemaTooOld(_)
-                ) =>
+                )
+                && !e.message().contains(UNPROVEN_MARK) =>
         {
             Err(SuiteError::Interrupted(format!("stopped: {}", e.message())))
         }
@@ -1647,9 +1731,12 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         return Err("--suite must be a safe identifier".to_string().into());
     }
     if o.contains_key("cleanup") {
-        let _lock = exec.lock_suite().map_err(SuiteError::NotRun)?;
-        sweep_remote(exec, &suite)?;
-        println!("remote processes stopped and scratch directory removed for suite {suite}");
+        let _lock = exec.lock_suite().map_err(lock_error)?;
+        let kept = sweep_remote(exec, &suite)?;
+        println!(
+            "remote processes stopped for suite {suite}; unmarked scratch removed; {} run(s) with uncopied evidence kept (see the NOTICE lines)",
+            kept.len()
+        );
         return Ok(0);
     }
     let out = PathBuf::from(required(&o, "out")?);
@@ -1752,7 +1839,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         cleanup: Cell::new(false),
         runner_invoked: Cell::new(false),
     };
-    let _lock = exec.lock_suite().map_err(SuiteError::NotRun)?;
+    let _lock = exec.lock_suite().map_err(lock_error)?;
     let home = remote_home(exec)?;
     s.remote_ev = format!("{home}/winvm/t4-ev");
     s.qmp = format!("{home}/winvm/qmp.sock");
@@ -1769,7 +1856,10 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     let remote_sha = crate::deploy::parse_sha256sum(&remote_sum.stdout)?;
     crate::deploy::check_remote_binary(&allowed, &remote_sha)?;
     // Nothing from a dead earlier orchestrator may still be running when this one starts.
-    sweep_remote(exec, &s.suite)?;
+    let kept = sweep_remote(exec, &s.suite)?;
+    if !kept.is_empty() {
+        return Err(refuse_kept_runs(exec, &kept));
+    }
     s.home(
         &format!(
             "test -x {} && mkdir -p -- {}",
@@ -1931,6 +2021,9 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             }
             return Err(if m.contains(LAB_FRAME_MARK) {
                 SuiteError::Isolation(m)
+            } else if m.contains(UNPROVEN_MARK) {
+                // An unproven isolation proof is never reported as a plain interrupt.
+                SuiteError::Abort(m)
             } else if stopped {
                 SuiteError::Interrupted(m)
             } else {

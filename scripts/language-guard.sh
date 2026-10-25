@@ -16,6 +16,13 @@
 #      .yaml, Makefile*, GNUmakefile*, *.mk, CMakeLists.txt, *.cmake, justfile/Justfile/*.just, or any other file that starts with a shebang)
 #      mentions the interpreter as a word at all (comments included), or calls the Windows
 #      launcher (two letters, then a dash and a version digit; assembled below).
+#   4. (allowlist) a tracked file is neither a known source/script/build type (rs toml sh bash zsh ksh fish ps1 cmd bat yml yaml md mk
+#      cmake just, Makefile*, GNUmakefile*, CMakeLists.txt, justfile), nor known data (json pcap gz txt csv tsv bin lock sha256 log err
+#      echo stdout stderr sizes conf rc out diff hex svg png), nor a listed name (LICENSE*, NOTICE*, COPYING*, AUTHORS*, CODEOWNERS,
+#      .gitignore, .gitattributes, .gitkeep, .editorconfig), nor an extensionless script whose shebang is a shell. Any other
+#      language source (any extension not listed above) therefore fails,
+#   5. a scanned file runs another interpreter language: the five names assembled below as whole words, a complete quoted
+#      string naming one, or the JavaScript runtime at a command position; a shebang naming any of them.
 # Prose (.md) and recorded evidence data (.json, .txt, .log, ...) are not scanned.
 #
 # The banned word is assembled below so that this file does not contain it and
@@ -36,6 +43,13 @@ shebang="^#!.*${word}"
 lau=p
 lau="${lau}y"
 launcher="(^|[^A-Za-z0-9_.\$-])${lau}[[:space:]]+-[0-9]"
+# the other interpreters, assembled so this file does not contain them as words
+strict="pe""rl|ru""by|ph""p|l""ua|lu""ajit|nod""ejs"
+rt="nod""e"
+other_words="(^|[^A-Za-z0-9_])(${strict})[0-9.]*([^A-Za-z0-9_]|\$)"
+other_literal="[\"']([^\"' ]*/)?(${strict}|${rt})[0-9.]*[\"']"
+rt_command="(^|[;&|(\`{]|(^|[[:space:]])(env|sudo|exec|nohup|xargs|time)[[:space:]]+|run:[[:space:]]+)[[:space:]]*(/[^[:space:]]*/)?${rt}[0-9.]*([[:space:]]|\$|;|\\)|&|\\|)"
+shebang_other="^#!.*(${strict}|${rt})"
 
 # bash 3.2 (macOS) has nocasematch: extension and file-name tests ignore letter case
 shopt -s nocasematch
@@ -57,6 +71,49 @@ banned_name() {
   return 1
 }
 
+# the allowlist (section 4): a name is allowed by its extension or by being a listed file name
+allowed_name() {
+  local base=${1##*/}
+  case "$base" in
+    LICENSE* | NOTICE* | COPYING* | AUTHORS* | CODEOWNERS | makefile* | gnumakefile* | cmakelists.txt | justfile | .justfile) return 0 ;;
+    .gitignore | .gitattributes | .gitkeep | .editorconfig) return 0 ;;
+  esac
+  case "$base" in
+    ?*.rs | ?*.toml | ?*.sh | ?*.bash | ?*.zsh | ?*.ksh | ?*.fish | ?*.ps1 | ?*.cmd | ?*.bat | ?*.yml | ?*.yaml | ?*.md | ?*.mk | ?*.cmake | ?*.just) return 0 ;;
+    ?*.json | ?*.pcap | ?*.gz | ?*.txt | ?*.csv | ?*.tsv | ?*.bin | ?*.lock | ?*.sha256 | ?*.log | ?*.err | ?*.echo | ?*.stdout | ?*.stderr) return 0 ;;
+    ?*.sizes | ?*.conf | ?*.rc | ?*.out | ?*.diff | ?*.hex | ?*.svg | ?*.png) return 0 ;;
+  esac
+  return 1
+}
+# a symlink target name that has an extension the allowlist does not know
+ext_not_allowed() {
+  local base=${1##*/}
+  case "$base" in
+    ?*.*) allowed_name "$1" && return 1 || return 0 ;;
+  esac
+  return 1
+}
+# the interpreter named by a shebang line is a shell (sh, bash, ...; also through env)
+shebang_is_shell() {
+  local line=${1#\#!} w prog
+  local -a words
+  read -r -a words <<<"$line" || true
+  [ "${#words[@]}" -gt 0 ] || return 1
+  prog=${words[0]##*/}
+  if [ "$prog" = env ]; then
+    prog=""
+    for w in "${words[@]:1}"; do
+      case "$w" in -*) continue ;; esac
+      prog=${w##*/}
+      break
+    done
+  fi
+  case "$prog" in
+    sh | bash | zsh | ksh | dash | fish | pwsh) return 0 ;;
+  esac
+  return 1
+}
+
 # 1. banned extensions and build files
 while IFS= read -r f; do
   [ -n "$f" ] || continue
@@ -68,7 +125,7 @@ check_link() {
   local f=$1 cur=$1 t hop=0 first
   while [ -L "$cur" ] && [ "$hop" -lt 16 ]; do
     t=$(readlink -- "$cur") || return 0
-    if banned_name "$t"; then report "$f: symlink to a banned source file ($t)"; fi
+    if banned_name "$t" || ext_not_allowed "$t"; then report "$f: symlink to a banned source file ($t)"; fi
     case "$t" in
       /*) cur=$t ;;
       *) cur=$(dirname -- "$cur")/$t ;;
@@ -79,7 +136,7 @@ check_link() {
     first=$(head -n 1 -- "$cur" 2>/dev/null | LC_ALL=C tr -d '\0' | head -c 512 || true)
     case "$first" in
       '#!'*)
-        if printf '%s\n' "$first" | grep -a -i -E -q -- "$shebang"; then
+        if printf '%s\n' "$first" | grep -a -i -E -q -- "$shebang|$shebang_other"; then
           report "$f: symlink to a file whose shebang names the banned interpreter ($cur)"
         fi ;;
     esac
@@ -102,6 +159,20 @@ while IFS= read -r f; do
   if [ "$has_shebang" = 1 ] && printf '%s\n' "$first" | grep -a -i -E -q -- "$shebang"; then
     report "$f:1: shebang names the banned interpreter"
   fi
+  if [ "$has_shebang" = 1 ] && printf '%s\n' "$first" | grep -a -i -E -q -- "$shebang_other"; then
+    report "$f:1: shebang names another banned interpreter"
+  fi
+  if ! allowed_name "$f"; then
+    if [ "$has_shebang" = 1 ] && shebang_is_shell "$first"; then
+      :
+    elif [ "$has_shebang" = 1 ] && printf '%s\n' "$first" | grep -a -i -E -q -- "$shebang|$shebang_other"; then
+      :
+    elif banned_name "$f"; then
+      :
+    else
+      report "$f: file type is on neither the source nor the data allowlist"
+    fi
+  fi
   scan=$has_shebang
   case "$f" in
     *.sh | *.bash | *.zsh | *.ksh | *.fish | *.ps1 | *.cmd | *.bat | *.rs | *.yml | *.yaml | *.mk | *.cmake | *.just) scan=1 ;;
@@ -114,6 +185,14 @@ while IFS= read -r f; do
     hits=$(grep -a -n -i -E -- "$pattern|$launcher" "$f" 2>/dev/null || true)
     if [ -n "$hits" ]; then
       while IFS= read -r h; do report "$f:${h%%:*}: mentions the banned interpreter"; done <<<"$hits"
+    fi
+    ohits=$(grep -a -n -i -E -- "$other_words|$other_literal" "$f" 2>/dev/null || true)
+    case "$f" in
+      *.rs) ;;
+      *) ohits="$ohits$(grep -a -n -i -E -- "$rt_command" "$f" 2>/dev/null || true)" ;;
+    esac
+    if [ -n "$ohits" ]; then
+      while IFS= read -r h; do [ -n "$h" ] && report "$f:${h%%:*}: runs another banned interpreter language"; done <<<"$ohits"
     fi
   fi
 done <<<"$tracked"

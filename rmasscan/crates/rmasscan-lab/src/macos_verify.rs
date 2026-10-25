@@ -920,6 +920,12 @@ fn binding_is_stand(man: &Value) -> bool {
         && man["stand"]["peer_if"] == "feth4202"
 }
 
+/// A scan summary (status ok, a `reason`, a job, the wall clock and the MAC check), as against the other things
+/// `wire_scan` prints: the inventory summary (`mode`), a refused start (`status` error) and a forged checkpoint.
+fn is_scan_summary(j: &Value) -> bool {
+    j["status"] == "ok" && j.get("mode").is_none() && j.get("reason").is_some()
+}
+
 /// `run.json` is the scanner's own stdout line plus the suite's nonce, and the scanner's own wall clock (the same
 /// host clock) lies inside the window the suite recorded for the scanner, within the clock tolerance.
 fn bind_run_json(r: &mut Run, ctx: &Ctx) {
@@ -960,7 +966,7 @@ fn bind_run_json(r: &mut Run, ctx: &Ctx) {
                 && t0 <= t1,
             format!("scanner {t0} .. {t1}, suite {g0} .. {g1}"),
         );
-    } else if ctx.rj["status"] != "error" {
+    } else if is_scan_summary(&ctx.rj) {
         r.inv(
             "scanner wall clock inside the run window",
             false,
@@ -1054,7 +1060,7 @@ pub(crate) fn verify_item(
     // [`SRC_MAC_CHECK_ACCEPTED`]; a test feeds every literal `wire_scan` can emit through it.
     r.inv(
         "source MAC check is explicit-equal or reported as OS-masked",
-        (j.get("src_mac_check").is_none() && j["status"] == "error")
+        (j.get("src_mac_check").is_none() && !is_scan_summary(j))
             || SRC_MAC_CHECK_ACCEPTED.contains(&s(&j["src_mac_check"])),
         j["src_mac_check"].to_string(),
     );
@@ -1088,7 +1094,7 @@ pub(crate) fn verify_item(
         "the closed-port RST rate limit (net.inet.icmp.icmplim) is recorded",
         ctx.meta["icmplim"]
             .as_str()
-            .is_some_and(|v| !v.trim().is_empty()),
+            .is_some_and(|v| v.trim().parse::<u64>().is_ok()),
         ctx.meta["icmplim"].to_string(),
     );
     let wanted = arg_map(it, man, false);

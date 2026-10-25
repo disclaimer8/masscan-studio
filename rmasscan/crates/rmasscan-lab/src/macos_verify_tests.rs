@@ -244,13 +244,14 @@ fn job_echo(c: &Value, man: &Value) -> Value {
     }
     j
 }
-fn base_run(c: &Value, man: &Value, tag: &str) -> Value {
+fn base_run(c: &Value, man: &Value, _tag: &str) -> Value {
     json!({
-        "run_id":format!("run-{tag}"),"status":"ok","reason":"Completed","fail_detail":"",
-        "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"os":{"family":"macos"}},
-        "src_mac_check":"os-masked",
+        "status":"ok","reason":"Completed","fail_detail":"","opened_adapter":true,"start_index":0,
+        "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"os":{"family":"macos"},"raw_io_abi":"bpf"},
+        "src_mac":SM,"src_mac_check":"os-masked","nic_mac":"masked",
+        "scan_id":"01010101010101010101010101010101","attempt_id":"02020202020202020202020202020202","resumed_from_attempt":null,
         "job":job_echo(c,man),
-        "net":{"kernel_drops":0,"rx_errors":0,"rx_packets":0,"tx_errors":0,"tx_sent":0,"tx_uncertain":0},
+        "net":{"tx_sent":0,"tx_would_block":0,"tx_uncertain":0,"tx_errors":0,"rx_packets":0,"rx_truncated":0,"rx_outgoing":0,"rx_wrong_interface":0,"rx_errors":0,"kernel_drops":0},
         "rx_health":{"kernel_drops":0},
         "sent":0,"next_index":0,"range":c["syn"],"expected_total":c["syn"],
         "replies":[],"reply_total":0,"reply_unique":0,"received":0,"duplicates":0,"discarded":0,
@@ -258,8 +259,8 @@ fn base_run(c: &Value, man: &Value, tag: &str) -> Value {
         "tx_sent_at_join":0,"tx_sent_after_observe":0,"observe_ms":1500,
         "workers":{"tx_tid":11,"rx_tid":12,"tx_alive_after_join":false,"rx_alive_after_join":false},
         "resources":{"fds_before_open":10,"fds_open":20,"fds_after_join":10},
-        "timing":{"first_send_s":0.002,"join_ms":0.3,"total_s":3.0},
-        "wall":{"t0_utc_ms":(BASE*1000.).round(),"outcome_utc_ms":((BASE+3.0)*1000.).round()}
+        "timing":{"first_send_s":0.002,"last_send_s":0.5,"steady_pps":100.0,"stop_requested":false,"stop_to_outcome_ms":null,"join_ms":0.3,"total_s":3.0},
+        "wall":{"t0_utc_ms":(BASE*1000.).round(),"started_utc_ms":(BASE*1000.).round(),"outcome_utc_ms":((BASE+3.0)*1000.).round(),"join_done_utc_ms":((BASE+3.1)*1000.).round()}
     })
 }
 fn set_sent(run: &mut Value, count: u64) {
@@ -288,7 +289,7 @@ fn build(env: &Env, tag: &str) -> Ev {
     // The scanner's SYNs and the peer's replies on the wire.
     let mut peer: Frames = vec![];
     let ports: Vec<u16> = match kind.as_str() {
-        "case" | "foreign" | "perf" => (0..n(&c["syn"]) as usize)
+        "case" | "foreign" | "perf" | "stop" => (0..n(&c["syn"]) as usize)
             .map(|k| {
                 let first = verify_ports(&c);
                 first[k]
@@ -300,11 +301,13 @@ fn build(env: &Env, tag: &str) -> Ev {
     };
     let denied = kind == "perm_denied";
     match kind.as_str() {
-        "case" | "foreign" | "perf" | "pause" | "resume" => {
+        "case" | "foreign" | "perf" | "stop" | "pause" | "resume" => {
             for (k, p) in ports.iter().enumerate() {
-                peer.push((BASE + 0.002 + k as f64 * 0.01, syn(*p)));
+                // A perf cell has 500 probes: 1 ms apart keeps them before the outcome.
+                let step = if kind == "perf" { 0.001 } else { 0.01 };
+                peer.push((BASE + 0.002 + k as f64 * step, syn(*p)));
                 if *p != 8099 {
-                    peer.push((BASE + 0.003 + k as f64 * 0.01, reply(*p, is_open(*p))));
+                    peer.push((BASE + 0.0025 + k as f64 * step, reply(*p, is_open(*p))));
                 }
             }
             let mut exp: Vec<String> = ports
@@ -323,6 +326,11 @@ fn build(env: &Env, tag: &str) -> Ev {
             run["reply_total"] = json!(exp.len());
             run["reply_unique"] = json!(exp.len());
             run["received"] = json!(exp.len());
+            if kind == "stop" {
+                run["reason"] = json!("Stopped");
+                run["timing"]["stop_requested"] = json!(true);
+                run["timing"]["stop_to_outcome_ms"] = json!(25.8);
+            }
             if kind == "pause" {
                 let ni = n(&item["n"]) as u64;
                 let cp = checkpoint_bytes(SCAN_ID, ATTEMPT1, ni);
@@ -348,19 +356,23 @@ fn build(env: &Env, tag: &str) -> Ev {
             }
         }
         "perm_denied" => {
-            run["status"] = json!("error");
-            run["opened_adapter"] = json!(false);
-            run["tx_sent"] = json!(0);
+            // The real shapes: an inventory summary has no job, wall clock or MAC check; a refused open is
+            // `fail_json_job("open", ..)` (status error, the job, no wall clock, no MAC fields).
             if item["variant"] == "inventory" {
-                run["mode"] = json!("inventory");
+                run = json!({"status":"ok","mode":"inventory","opened_adapter":false,"tx_sent":0,
+                    "bpf":{"os_version":"27.0","kernel_version":"Darwin","bpf_maxbufsize":524288,"bpf_maxdevices":256},
+                    "instant_clock":"x","devices":[],"interfaces":[],"access_hint":"",
+                    "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"os":{"family":"macos"}}});
             } else {
-                run["error"] = json!("PermissionDenied(/dev/bpf0: grant access)");
+                run = json!({"status":"error","stage":"open",
+                    "error":"PermissionDenied(\"/dev/bpf0: grant access\")","message":"permission denied",
+                    "opened_adapter":false,"tx_sent":0,"job":job_echo(&c,man),
+                    "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"os":{"family":"macos"}}});
                 guest_exit = 5;
             }
         }
         "rxloss" => {
             run["reason"] = json!("Failed");
-            run["status"] = json!("failed");
             run["fail_detail"] = json!("RxLoss { kernel_drops: 7 }");
             run["rx_health"]["kernel_drops"] = json!(7);
             run["net"]["kernel_drops"] = json!(7);
@@ -1710,4 +1722,144 @@ fn the_rst_rate_limit_and_the_fixture_ports_are_part_of_the_evidence() {
         result_of(&r, "oracle fixtures were taken with the Mac open ports"),
         INVALID
     );
+}
+
+fn failing_checks(r: &Run) -> Vec<String> {
+    r.summary()["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["result"] != PASS)
+        .map(|c| format!("{}: {}", s(&c["result"]), s(&c["name"])))
+        .collect()
+}
+
+#[test]
+fn the_real_inventory_summary_passes_as_the_permission_control() {
+    // wire_scan --inventory prints status ok, mode inventory: no job, no wall clock, no MAC check.
+    let env = Env::new("failure");
+    let (r, _) = build(&env, "perm_inventory_control").verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    // The scan summary still needs both.
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    edit_scanner_output(&mut ev, |v| {
+        v.as_object_mut().unwrap().remove("wall");
+    });
+    assert_eq!(ev.verdict(&env), INVALID);
+    // The real refused-open summary (status error) passes without them as well.
+    let env = Env::new("failure");
+    let (r, _) = build(&env, "perm_denied_scan").verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+}
+
+#[test]
+fn stop_fullqueue_needs_two_peer_replies_on_the_wire_and_results_equal_to_them() {
+    let env = Env::new("failure");
+    let tag = "stop_fullqueue";
+    let (r, _) = build(&env, tag).verify(&env);
+    assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+    // One RST never reached the wire (rate limit): the scenario was not exercised, whatever the results say.
+    for results_keep in [1usize, 0] {
+        let mut ev = build(&env, tag);
+        lose_reply(&mut ev, 81);
+        if results_keep == 0 {
+            lose_reply(&mut ev, 80);
+        }
+        let (r, _) = ev.verify(&env);
+        assert_ne!(r.verdict(), PASS, "{results_keep}");
+        assert_eq!(
+            result_of(&r, "two peer replies on the wire"),
+            INVALID,
+            "{results_keep}"
+        );
+    }
+    // Two replies on the wire but a lost result: the queue dropped what the scanner should have kept.
+    let mut ev = build(&env, tag);
+    edit_scanner_output(&mut ev, |v| {
+        v["replies"] = json!(["198.18.0.2:80:closed"]);
+        v["reply_total"] = json!(1);
+        v["reply_unique"] = json!(1);
+    });
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "full result queue kept both genuine replies"),
+        "{:?}",
+        failing_checks(&r)
+    );
+    assert_eq!(r.verdict(), FAIL);
+    // The other direction: a result the wire never carried.
+    let mut ev = build(&env, tag);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == 81)));
+    rebuild_peer(&mut ev, &fr);
+    assert_ne!(ev.verify(&env).0.verdict(), PASS);
+}
+
+#[test]
+fn results_must_be_replies_the_peer_really_sent_for_perf_drain_and_the_group_union() {
+    // perf: a closed-port result whose RST is not on the wire.
+    let env = Env::new("perf");
+    let mut ev = build(&env, "perf.100.r1");
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == 17)));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "results are replies the peer sent"),
+        "{:?}",
+        failing_checks(&r)
+    );
+    let (r, _) = build(&env, "perf.100.r1").verify(&env);
+    assert_eq!(result_of(&r, "results are replies the peer sent"), PASS);
+    // stop_drain
+    let env = Env::new("failure");
+    let mut ev = build(&env, "stop_drain");
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == 81)));
+    rebuild_peer(&mut ev, &fr);
+    assert!(failed(
+        &ev.verify(&env).0,
+        "results are replies the peer sent"
+    ));
+    // pause/resume: a result of the resume leg the wire never carried.
+    let env = Env::new("functional");
+    let _mac = verify::MacStandGuard::enter();
+    let mut rs = BTreeMap::new();
+    let mut cs = BTreeMap::new();
+    for tag in ["pause_N8", "resume_N8", "c03_multi_ports.run1"] {
+        let mut ev = build(&env, tag);
+        if tag == "resume_N8" {
+            let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+            fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == 8010)));
+            rebuild_peer(&mut ev, &fr);
+        }
+        let (r, c) = ev.verify(&env);
+        rs.insert(tag.to_owned(), r);
+        cs.insert(tag.to_owned(), c.unwrap());
+    }
+    let g = verify::groups(&env.root, &env.man, &env.fx, &rs, &cs);
+    let g = g
+        .into_iter()
+        .find(|g| g["tag"] == "group_pause_resume_N8")
+        .unwrap();
+    assert_eq!(g["verdict"], FAIL, "{g:#}");
+}
+
+#[test]
+fn icmplim_must_be_a_number() {
+    let env = Env::new("functional");
+    for bad in ["unreadable", "", "25x", "-1", "2.5"] {
+        let mut ev = build(&env, C01);
+        ev.json("meta.json", |v| v["icmplim"] = json!(bad));
+        let (r, _) = ev.verify(&env);
+        assert_eq!(
+            result_of(&r, "RST rate limit (net.inet.icmp.icmplim) is recorded"),
+            INVALID,
+            "{bad:?}"
+        );
+    }
+    let mut ev = build(&env, C01);
+    ev.json("meta.json", |v| v["icmplim"] = json!("250"));
+    assert_eq!(ev.verdict(&env), PASS);
 }

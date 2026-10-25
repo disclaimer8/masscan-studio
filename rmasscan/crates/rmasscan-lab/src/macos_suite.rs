@@ -161,6 +161,15 @@ impl Proc for RealProc {
     /// group can be swept while its pid, which is the group id, is still ours; only then is it reaped.
     fn try_wait(&mut self) -> Result<Option<i32>, String> {
         let id = self.0.id();
+        // The common case (still running) costs one tiny `ps -p`, not a listing of every process.
+        let one = Command::new("/bin/ps")
+            .args(["-p", &id.to_string(), "-o", "stat="])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .unwrap_or_default();
+        if !one.is_empty() && !one.starts_with('Z') {
+            return Ok(None);
+        }
         let snap = ps_listing("pid=,pgid=,stat=");
         if is_gone(&snap, id) {
             return self
@@ -694,6 +703,19 @@ fn lock_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".rmasscan-lab/macos-suite.lock"))
 }
 
+/// Print a line, ignoring a broken pipe or an I/O error: after a SIGHUP the terminal may be gone, and a write to it
+/// must not panic and orphan the children.
+pub(crate) fn say_to(w: &mut dyn Write, line: &str) {
+    let _ = writeln!(w, "{line}");
+    let _ = w.flush();
+}
+fn say(line: &str) {
+    say_to(&mut std::io::stdout(), line);
+}
+fn warn(line: &str) {
+    say_to(&mut std::io::stderr(), line);
+}
+
 // ------------------------------------------------------------------ leftover processes and groups
 
 /// A process of an earlier suite (or of the spike) that still holds the stand.
@@ -746,13 +768,11 @@ pub(crate) fn lab_leftovers(ps: &str, own: u32, wire_scan: &str) -> Vec<Leftover
 }
 /// Which of `pgids` still have a member in a `ps -axo pid,pgid,command` listing.
 pub(crate) fn alive_pgids(ps: &str, pgids: &[u32]) -> Vec<u32> {
-    let mut v: Vec<u32> = ps
-        .lines()
-        .filter_map(|l| {
-            let mut it = l.split_whitespace();
-            it.next()?.parse::<u32>().ok()?;
-            it.next()?.parse::<u32>().ok()
-        })
+    // A recorded number counts only while a member of that group is a lab command: a group id can be reused
+    // by an unrelated program long after the suite died, and nothing may be advised against that.
+    let mut v: Vec<u32> = lab_leftovers(ps, 0, "wire_scan")
+        .into_iter()
+        .map(|l| l.pgid)
         .filter(|g| pgids.contains(g))
         .collect();
     v.sort_unstable();
@@ -940,6 +960,35 @@ struct Tools {
     /// A frame may exist: the first marker is about to be written.
     frames_possible: bool,
 }
+/// A run that ends without stopping its tools (a panic, an early return) must not leave a raw sender or a
+/// capture behind: the scanner first, then the witnesses, each with a bounded grace and then SIGKILL of its group.
+impl Drop for Tools {
+    fn drop(&mut self) {
+        for (p, sig) in [
+            (self.scanner.take(), "INT"),
+            (self.witness.take(), "INT"),
+            (self.uplink.take(), "INT"),
+            (self.listener.take(), "TERM"),
+        ] {
+            let Some(mut p) = p else { continue };
+            p.signal(sig);
+            let mut gone = false;
+            for _ in 0..40 {
+                if matches!(p.try_wait(), Ok(Some(_))) {
+                    gone = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            if !gone {
+                p.kill();
+            }
+        }
+        for (_, s) in std::mem::take(&mut self.sides) {
+            let _ = s.finish();
+        }
+    }
+}
 
 fn json_line(stdout: &str) -> Option<Value> {
     stdout
@@ -1078,6 +1127,34 @@ impl Suite<'_> {
         let _ = fs::write(path, format!("{}\n", keep.join("\n")));
     }
 
+    /// The pair carries no frame of anyone else: the packet counters of feth4201 and feth4202 are read twice,
+    /// a pause apart (the seam's, not a timing the test depends on), and must not have moved. A sender the name
+    /// based gate cannot know (a test binary, a renamed tool) shows up here.
+    fn pair_quiet_gate(&self) -> Result<(), SuiteError> {
+        let read = || -> Result<Vec<(&str, NetstatCounters)>, String> {
+            [SCANNER_IF, PEER_IF]
+                .into_iter()
+                .map(|i| self.st.counters(i).map(|c| (i, c)))
+                .collect()
+        };
+        let first = read()?;
+        self.st.pause(Duration::from_secs(1));
+        let second = read()?;
+        let moved: Vec<String> = first
+            .iter()
+            .zip(&second)
+            .filter(|(a, b)| a.1 != b.1)
+            .map(|(a, b)| format!("{}: {:?} -> {:?}", a.0, a.1, b.1))
+            .collect();
+        if moved.is_empty() {
+            return Ok(());
+        }
+        Err(SuiteError::NotRun(format!(
+            "the pair is not quiet (its packet counters moved over about a second: {}): some other sender is active. Find it (a spike, a test, a forgotten tool) and stop it; nothing was started",
+            moved.join("; ")
+        )))
+    }
+
     /// Refuse while an earlier `wire_scan`, lab `tcpdump`, `peer listen` or `capture dump` is alive: a raw
     /// sender without a witness would poison the next run (same seed, same cookies).
     fn leftover_gate(&self) -> Result<(), SuiteError> {
@@ -1085,6 +1162,22 @@ impl Suite<'_> {
             &["/bin/ps".into(), "-axo".into(), "pid,pgid,command".into()],
             20,
         )?;
+        // Fail closed: a failing `ps`, or a listing that does not even show this suite, proves nothing.
+        let me = std::process::id();
+        let shows_me = o.stdout.lines().any(|l| {
+            l.split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<u32>().ok())
+                == Some(me)
+        });
+        if o.rc != 0 || !shows_me {
+            return Err(SuiteError::NotRun(format!(
+                "`ps -axo pid,pgid,command` failed or its output is unusable (rc {}, {} bytes, this suite {}), so leftover lab processes cannot be ruled out; nothing was started",
+                o.rc,
+                o.stdout.len(),
+                if shows_me { "listed" } else { "not listed" }
+            )));
+        }
         let left = lab_leftovers(&o.stdout, std::process::id(), &self.wire_scan);
         if left.is_empty() {
             return Ok(());
@@ -1198,6 +1291,7 @@ impl Suite<'_> {
             return Err("unsafe tag".to_string().into());
         }
         self.leftover_gate()?;
+        self.pair_quiet_gate()?;
         let existing = mv::run_dirs(&self.out, "runs", tag);
         if !existing.is_empty() {
             return Err(SuiteError::NotRun(format!(
@@ -1406,6 +1500,11 @@ impl Suite<'_> {
                 ));
             }
         }
+        if self.st.stopped() {
+            return Err(SuiteError::Interrupted(format!(
+                "stop requested before {tag} sent anything; no scanner was started"
+            )));
+        }
         // 3. peer-side tasks of the kind.
         match kind {
             "foreign" => {
@@ -1490,6 +1589,11 @@ impl Suite<'_> {
             )?;
         }
         // 5. the scanner.
+        if self.st.stopped() {
+            return Err(SuiteError::Interrupted(format!(
+                "stop requested before the scanner of {tag} started"
+            )));
+        }
         let argv_tail = mv::expected_args(item, &self.man, &self.paths_for(item, work))?;
         write_json(
             work.join("argv.json"),
@@ -1501,10 +1605,10 @@ impl Suite<'_> {
         meta["guest_started_utc"] = json!(epoch());
         t.scanner = Some(self.start_proc(&argv, work, "scanner")?);
         if kind == "linkloss" {
-            eprintln!(
+            warn(&format!(
                 "ACTION REQUIRED NOW (linkloss): in a root shell run\n  rmasscan-lab macos-lab link --run-id {} --down ; sleep 3 ; rmasscan-lab macos-lab link --run-id {} --up\n(that takes {PEER_IF} down and up; the suite watches {PEER_IF}). The scan lasts about 10 s; without it this run is NOT RUN (user action not performed).",
                 self.lab_run_id, self.lab_run_id
-            );
+            ));
         }
         let deadline = Instant::now() + Duration::from_secs(run_timeout);
         let mut events: Vec<Value> = vec![];
@@ -1734,7 +1838,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
                 SuiteError::Interrupted(_) => "INTERRUPTED",
                 _ => "SCHEMA TOO OLD",
             };
-            eprintln!("{label}: {}", e.message());
+            warn(&format!("{label}: {}", e.message()));
             Ok(e.code())
         }
     }
@@ -1760,8 +1864,8 @@ pub(crate) fn run_locked(
     }
     let o = options_for("macos-suite", args, OPTIONS)?;
     if o.contains_key("help") {
-        println!(
-            "macos-suite --out DIR --suite ID --plan functional|failure|perf --commit SHA --repo PATH --wire-scan PATH --fixtures DIR [--run-id m1] [--manifest LAB_MANIFEST] [--reps N] [--rates CSV] [--only TAG ...] [--rerun] [--list] [--run-timeout S] [--remove-stale-lock]"
+        say(
+            "macos-suite --out DIR --suite ID --plan functional|failure|perf --commit SHA --repo PATH --wire-scan PATH --fixtures DIR [--run-id m1] [--manifest LAB_MANIFEST] [--reps N] [--rates CSV] [--only TAG ...] [--rerun] [--list] [--run-timeout S] [--remove-stale-lock]",
         );
         return Ok(0);
     }
@@ -1792,13 +1896,13 @@ pub(crate) fn run_locked(
     let items = selected_plan(&plan, reps, rates.as_deref())?;
     if o.contains_key("list") {
         for l in list_lines(&items) {
-            println!("{l}");
+            say(&l);
         }
         return Ok(0);
     }
     if o.contains_key("remove-stale-lock") {
         remove_stale_lock(&lock_path()?)?;
-        println!("stale lock removed");
+        say("stale lock removed");
         return Ok(0);
     }
     let suite = opt(&o, "suite", "functional");
@@ -1982,12 +2086,12 @@ pub(crate) fn run_locked(
         }
         let timeout = s.timeout;
         let dest = s.one(&item, timeout)?;
-        println!("done {tag} -> {}", dest.display());
+        say(&format!("done {tag} -> {}", dest.display()));
     }
-    println!(
+    say(&format!(
         "all planned runs executed; verify offline with rmasscan-lab macos-verify --dir {}",
         out.display()
-    );
+    ));
     Ok(0)
 }
 

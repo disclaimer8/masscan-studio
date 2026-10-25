@@ -190,6 +190,11 @@ fn earlier_consumer_overflow_is_kept_but_last_statistics_are_recorded() {
     let mut o = opts();
     o.result_capacity = 1;
     let h = start_manual(&plan(1_000_000.0, 3600), &fake, &clock, o);
+    // The consumer reads nothing until the outcome, so the one-slot queue overflows
+    // deterministically. A concurrent reader could keep it from overflowing, and the full
+    // 3600-probe scan then outran the 10 s drain on Windows, where each idle RX sleep of the
+    // fake lasts a timer tick instead of 100 us.
+    wait_for("outcome", || h.outcome().is_some());
     let r = finish(h);
     assert_eq!(
         r.outcome.reason,

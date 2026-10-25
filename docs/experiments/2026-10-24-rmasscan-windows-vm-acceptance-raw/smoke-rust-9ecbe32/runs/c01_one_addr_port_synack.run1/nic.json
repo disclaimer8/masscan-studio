@@ -1,0 +1,25 @@
+{
+  "nic": "Ethernet 2",
+  "before": {
+    "utc": 1792881011.105,
+    "stats": {
+      "ReceivedUnicastPackets": 3144050,
+      "ReceivedMulticastPackets": 0,
+      "ReceivedBroadcastPackets": 6,
+      "ReceivedDiscardedPackets": 0,
+      "ReceivedPacketErrors": 0,
+      "SentUnicastPackets": 129757
+    }
+  },
+  "after": {
+    "utc": 1792881015.057,
+    "stats": {
+      "ReceivedUnicastPackets": 3144052,
+      "ReceivedMulticastPackets": 0,
+      "ReceivedBroadcastPackets": 6,
+      "ReceivedDiscardedPackets": 0,
+      "ReceivedPacketErrors": 0,
+      "SentUnicastPackets": 129758
+    }
+  }
+}

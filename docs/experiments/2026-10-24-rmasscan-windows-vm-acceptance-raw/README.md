@@ -47,3 +47,11 @@ Verdicts regenerated with the round 3 verifier (argv.json check, strays incl. br
 * Эталоны C переиспользуются: `functional/fixtures` передаётся в `--fixtures` и для части A, и для части B (binding одинаков); заново эталоны не снимаются.
 * Оговорка по части A (`functional/`): её прогоны сняты до цепочки nonce (X1), поэтому нога «гостевой Verify» шлюза raw-run для них не доказана по каждому прогону (проверяльщик читает их как capture_schema 1, без этого требования). Доказательство даёт только `functional-r2/` и `failure-r1/` (capture_schema 3: nonce, хэши, код выхода Verify обязательны).
 * Скрипты, которыми велись первые прогоны (оркестратор, проверяльщик, пир), удалены из репозитория; их история остаётся в git (до коммита `123fe76`). Исторические инструменты в других каталогах сырых данных удалены вместе с записью пути, последнего коммита и sha256 в их README.
+
+## Rust harness rerun (2026-10-25)
+Parts A and B were rerun with the Rust lab tool (`rmasscan-lab windows-suite`, `rmasscan/docs/rust-lab.md` steps 1-8). They used code commit `9ecbe32`, capture_schema 3 and the per-run raw gate (guest Verify with nonce, record-guest, full status raw_run_allowed=true). Each directory has its own `README.md`, `verdict.json` and `MANIFEST.sha256`:
+* `smoke-rust-9ecbe32/`: one smoke run (`c01_one_addr_port_synack.run1`), run verdict PASS; the other planned runs are NOT RUN by design.
+* `functional-r2/`: part A, 24 runs, overall **PASS** (29 PASS).
+* `failure-r1/`: part B, 18 runs, overall **PASS** (19 PASS). Its two flood captures are stored as `peer.pcap.gz`, so run `gunzip -k` before re-verifying (see its README).
+eno1 shows 0 lab frames in all 43 committed runs (each `eno1.pcap` is a 24-byte header). Unlike `functional/` (capture_schema 1), these runs carry the per-run guest-gate proof.
+The root `MANIFEST.sha256` covers the files above plus each new directory's `MANIFEST.sha256`; run `shasum -a 256 -c MANIFEST.sha256` inside each new directory to check its contents.

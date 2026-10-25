@@ -26,9 +26,14 @@ use rmasscan_engine::AdapterPair;
 #[cfg(target_os = "linux")]
 mod linux;
 
-// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}`.
-#[cfg(target_os = "macos")]
+// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}`. Переносимые
+// части (`abi`, `adapter`) собираются и в тестах других платформ (seam-тесты).
+#[cfg(any(target_os = "macos", test))]
 mod macos;
+
+// Общий счётчик потерь 32-битного драйверного счётчика (Npcap, BPF).
+#[cfg(any(windows, target_os = "macos", test))]
+mod drop_counter;
 
 // Windows/Npcap: на Windows это рабочий backend; в тестах других платформ
 // собираются портабельные части (ABI, подставная таблица функций). `unsafe`
@@ -156,7 +161,7 @@ pub struct NetStats {
     /// Собственные кадры, отброшенные до движка. Linux: кадры с PACKET_OUTGOING.
     /// Windows: кадры с нашим source MAC (у Npcap нет признака направления).
     pub rx_outgoing: u64,
-    /// Кадры с чужим ifindex (отброшены). Linux: считается. Windows: всегда 0 и
+    /// Кадры с чужим ifindex (отброшены). Linux: считается. Windows и macOS: всегда 0 и
     /// НЕ измерено, а структурно неприменимо: handle привязан к одному
     /// устройству, сравнивать ifindex нечего. Нуль здесь не свидетельство.
     pub rx_wrong_interface: u64,
@@ -247,12 +252,10 @@ pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError
     windows::open(binding)
 }
 
-/// macOS: адаптер BPF реализуется в задаче 4.
+/// macOS: BPF (`/dev/bpfN`, два независимых дескриптора).
 #[cfg(target_os = "macos")]
-pub fn open_explicit(_binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
-    Err(NetError::System(
-        "macOS BPF adapter: open is implemented in task 4".into(),
-    ))
+pub fn open_explicit(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+    macos::open(binding)
 }
 
 /// Остальные платформы: явная ошибка до любой отправки.

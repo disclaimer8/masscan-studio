@@ -2,6 +2,7 @@
 
 use std::mem::{align_of, offset_of, size_of};
 
+use crate::macos::abi::*;
 use crate::macos::sys::*;
 
 /// `_IOC` из sys/ioccom.h.
@@ -138,4 +139,27 @@ fn own_constants_match_the_sdk_header() {
     let tv = squashed.find("#define BPF_TIMEVAL timeval32").unwrap();
     let els = squashed[lp64..].find("#else").map(|i| i + lp64).unwrap();
     assert!(lp64 < tv && tv < els, "timeval32 is not under __LP64__");
+}
+
+#[test]
+fn portable_errno_and_header_constants_match_libc() {
+    use crate::macos::abi::errno::*;
+    assert_eq!(EPERM, libc::EPERM);
+    assert_eq!(ENOENT, libc::ENOENT);
+    assert_eq!(EINTR, libc::EINTR);
+    assert_eq!(ENXIO, libc::ENXIO);
+    assert_eq!(EACCES, libc::EACCES);
+    assert_eq!(EBUSY, libc::EBUSY);
+    assert_eq!(ENODEV, libc::ENODEV);
+    assert_eq!(EAGAIN, libc::EAGAIN);
+    assert_eq!(EAGAIN, libc::EWOULDBLOCK);
+    assert_eq!(EMSGSIZE, libc::EMSGSIZE);
+    assert_eq!(ENOBUFS, libc::ENOBUFS);
+    assert_eq!(HDR_OFF_CAPLEN, offset_of!(BpfHdr, bh_caplen));
+    assert_eq!(HDR_OFF_DATALEN, offset_of!(BpfHdr, bh_datalen));
+    assert_eq!(HDR_OFF_HDRLEN, offset_of!(BpfHdr, bh_hdrlen));
+    assert_eq!(
+        SIZEOF_BPF_HDR,
+        offset_of!(BpfHdr, bh_hdrlen) + size_of::<u16>()
+    );
 }

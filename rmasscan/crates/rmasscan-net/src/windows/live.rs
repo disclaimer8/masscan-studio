@@ -25,8 +25,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rmasscan_core::packet::{LinkType, TcpSynTemplate};
 
 use super::ffi::PcapStat;
-use super::handle::{DropCounter, NextEx, OpenParams, PcapHandle, list_devices};
+use super::handle::{NextEx, OpenParams, PcapHandle, list_devices};
 use super::loader::NpcapApi;
+use crate::drop_counter::DropCounter;
 
 const SRC_IP: u32 = 0xC612_0001; // 198.18.0.1
 const DST_IP: u32 = 0xC612_0002; // 198.18.0.2

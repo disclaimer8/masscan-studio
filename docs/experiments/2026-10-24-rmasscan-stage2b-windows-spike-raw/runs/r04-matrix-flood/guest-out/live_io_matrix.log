@@ -1,0 +1,32 @@
+
+running 1 test
+test windows::live::live_io_matrix ... KV flood/baseline recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+SUMMARY flood/rx_raw_next_ex n=3000 p50_us=6 p95_us=13 p99_us=143 max_us=1591 rc={0: 3, 1: 2997}
+KV flood/rx_raw_frames 2997
+SUMMARY flood/rx_deadline50_Spin n=60 p50_us=12 p95_us=12 p99_us=13 max_us=18 rc={1: 60}
+KV flood/rx_deadline50_Spin_frames 60
+SUMMARY flood/rx_deadline50_Sleep1ms n=60 p50_us=12 p95_us=12 p99_us=16 max_us=17 rc={1: 60}
+KV flood/rx_deadline50_Sleep1ms_frames 60
+SUMMARY flood/rx_deadline50_Hybrid n=60 p50_us=12 p95_us=13 p99_us=17 max_us=4348 rc={1: 60}
+KV flood/rx_deadline50_Hybrid_frames 60
+SUMMARY flood/health_pcap_stats n=200 p50_us=10 p95_us=68 p99_us=270 max_us=1332 rc={0: 200}
+KV flood/health_last recv=175300 drop=158891 ifdrop=0 capt=0 sent=0 netdrop=0 cum_drops=158891
+SUMMARY flood/tx_paced_1000 n=1000 p50_us=194 p95_us=1444 p99_us=2476 max_us=8148 rc={0: 1000}
+KV flood/rx_after_tx_paced junk=26310 other=0 own_tx=0
+SUMMARY flood/tx_burst_5000 n=5000 p50_us=144 p95_us=317 p99_us=1191 max_us=3441 rc={0: 5000}
+KV flood/stop_rounds_send_nonzero_rc 0
+SUMMARY flood/stop_rounds_slowest_send_per_round n=60 p50_us=1512 p95_us=2500 p99_us=2998 max_us=3569 rc={0: 60}
+SUMMARY flood/stop_rounds_slowest_recv_per_round n=60 p50_us=3290 p95_us=3571 p99_us=3848 max_us=5192 rc={0: 60}
+SUMMARY flood/stop_latency_tx_thread n=60 p50_us=157 p95_us=982 p99_us=1287 max_us=1356 rc={0: 60}
+SUMMARY flood/stop_latency_rx_thread n=60 p50_us=21 p95_us=2449 p99_us=2773 max_us=2800 rc={0: 60}
+SUMMARY flood/stop_latency_joined_both n=60 p50_us=291 p95_us=2527 p99_us=2873 max_us=2885 rc={0: 60}
+KV flood/send_empty rc=-1 dur_us=62 err="The number of bytes to be sent must be positive: No error"
+KV flood/send_9000 rc=-1 dur_us=96 err="send error: PacketSendPacket failed: The system cannot find the device specified.  (20)"
+KV flood/final_rx_stats recv=385608 drop=241444 ifdrop=0 capt=0 sent=0 netdrop=0 cum_drops=241444
+KV flood/final_tx_stats recv=385908 drop=385088 ifdrop=0 capt=0 sent=0 netdrop=0
+KV flood/frames_seen junk=26310 dupes=0 other=0 own_tx=0
+KV flood/close_after_load rx_us=43 tx_us=429
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 17.09s
+

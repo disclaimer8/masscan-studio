@@ -1,0 +1,27 @@
+{
+  "bridge": false,
+  "default_route": false,
+  "host_link_list_unchanged": true,
+  "ip_forward": 0,
+  "ipv6": "disabled",
+  "nat": false,
+  "peer_links": [
+    "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00",
+    "2: veth-b@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\\    link/ether 02:aa:00:00:00:02 brd ff:ff:ff:ff:ff:ff link-netns wl-scan-RUNID"
+  ],
+  "peer_route_get_8_8_8_8": "RTNETLINK answers: Network is unreachable",
+  "peer_routes": [
+    "10.200.0.0/24 dev veth-b proto kernel scope link src 10.200.0.2"
+  ],
+  "scanner_links": [
+    "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00",
+    "2: veth-a@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\\    link/ether 02:aa:00:00:00:01 brd ff:ff:ff:ff:ff:ff link-netns wl-peer-RUNID"
+  ],
+  "scanner_route_get_8_8_8_8": "RTNETLINK answers: Network is unreachable",
+  "scanner_routes": [
+    "10.200.0.0/24 dev veth-a proto kernel scope link src 10.200.0.1"
+  ],
+  "uplink": false,
+  "verified_by": "wire-lab.sh seal assertions (fail closed) before any traffic",
+  "veth_created_inside_scanner_ns_peer_moved_to_peer_ns": true
+}

@@ -1,0 +1,17 @@
+[2026-10-24T12:49:19.424Z] tag=e01-tx-filter bin=rmasscan_net test=live_tx_filter_keeps_the_tx_handle_empty cond=plain sha=f51be48
+raw_run_allowed True violations []
+[2026-10-24T12:49:23.553Z] guest run begins (RMASSCAN_NPCAP_NOP=1)
+[2026-10-24T12:49:25.842Z] guest run ended rc=0
+peer.pcap frames=10000
+eno1.pcap frames=0
+peer_syn_from_guest=5000
+==> /home/a1/winvm/t3-ev/e01-tx-filter/peer.err <==
+10000 packets captured
+10000 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/t3-ev/e01-tx-filter/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

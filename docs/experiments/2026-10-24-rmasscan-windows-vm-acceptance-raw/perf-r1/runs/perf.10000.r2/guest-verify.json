@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "errors": [],
+  "lab": {
+    "Name": "Ethernet 2",
+    "ifIndex": 14,
+    "MacAddress": "52-54-00-04-80-A9",
+    "Status": "Up",
+    "InterfaceGuid": "{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "Npf": "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "IPv4": [
+      "198.18.0.1/30"
+    ]
+  },
+  "npf": "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+  "verification_nonce": "rc366b6b440429116d31fdb35e369f5cd-b61bd8e0c7942a7c",
+  "verified_at": 1792896065.79
+}

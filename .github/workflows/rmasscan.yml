@@ -1,5 +1,7 @@
-# CI порта masscan на Rust (этапы 0-2A: core, cli, engine): fmt, clippy, тесты, правило «без C».
-# Raw-сокеты, сеть и повышение прав не используются.
+# CI порта masscan на Rust: core, cli, engine, net и lab; интерпретаторы скриптов не требуются.
+# Raw-сокеты, сеть и повышение прав не используются: тесты, открывающие AF_PACKET, помечены #[ignore]
+# и идут только в замкнутом стенде (wire-lab.sh). CI не выполняет raw I/O;
+# Windows Npcap проверяется offline/fake tests, macOS raw I/O пока не реализован.
 name: rmasscan
 
 on:
@@ -61,13 +63,88 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      # --workspace покрывает core, cli и engine (будущие члены тоже). Включает
-      # no_c_in_build: граф всего workspace, включая sha2 движка, на трёх ОС.
+      # --workspace покрывает core, cli, engine и net (будущие члены тоже). Включает
+      # no_c_in_build: граф всего workspace, включая sha2 движка и libc net, на трёх ОС.
       - name: Тесты
         run: cargo test --locked --workspace
+
+      # Crate net отдельно: офлайн-тесты Linux-шва и независимого pcap-сравнения, example
+      # лабораторного harness собирается на всех ОС. Ignored-тесты стенда НЕ запускаются.
+      - name: Net crate (офлайн) и сборка лабораторного harness
+        run: |
+          cargo test --locked -p rmasscan-net
+          cargo test --locked -p rmasscan-net --example wire_scan
+          cargo build --locked -p rmasscan-net --example wire_scan
+
+      - name: Rust laboratory tools (без интерпретаторов)
+        run: |
+          cargo test --locked -p rmasscan-lab
+          cargo test --locked -p rmasscan-net --features lab --lib lab_io
 
       - name: Установить cargo-deny
         run: cargo install --locked cargo-deny@0.20.2
 
       - name: cargo deny
         run: cargo deny check bans licenses sources
+
+  # Пакет для пользователя: release x64 EXE лабораторного harness + wrapper + README +
+  # SHA256SUMS + LICENSE/NOTICE + SOURCE_COMMIT. Npcap DLL/installer в ZIP не входят.
+  # Имя артефакта содержит commit, никаких «latest». Тестируется офлайн: job ничего не
+  # отправляет и не открывает адаптер. Письма и загрузки наружу не происходит.
+  package-windows-wire:
+    name: windows-x64 wire lab package
+    runs-on: windows-2022
+    needs: check
+    env:
+      # На pull_request github.sha это временный merge-коммит refs/pull/N/merge, которого
+      # нет в ветке; пакет штампуется настоящим коммитом ветки, и checkout берёт его же.
+      PACKAGE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: rmasscan
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PACKAGE_COMMIT }}
+
+      - name: Установить toolchain
+        shell: bash
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal
+          rustup default ${{ env.RUST_TOOLCHAIN }}
+          rustc --version
+
+      - name: Собрать пакет
+        run: ./scripts/package-windows-wire.ps1 -Commit "${{ env.PACKAGE_COMMIT }}" -OutDir dist
+
+      - name: Проверить пакет (хэши, состав, без Npcap)
+        run: |
+          $zip = Get-ChildItem dist -Filter '*.zip' | Select-Object -First 1
+          $want = (Get-Content "$($zip.FullName).sha256").Split(' ')[0]
+          if ((Get-FileHash $zip.FullName).Hash.ToLower() -ne $want) { throw 'zip hash mismatch' }
+          Expand-Archive $zip.FullName -DestinationPath verify
+          $dir = Get-ChildItem verify | Select-Object -First 1
+          foreach ($l in Get-Content "$($dir.FullName)/SHA256SUMS") {
+            $h, $n = $l -split ' \*', 2
+            if ((Get-FileHash "$($dir.FullName)/$n").Hash.ToLower() -ne $h) { throw "hash mismatch: $n" }
+          }
+          $names = (Get-ChildItem $dir.FullName).Name | Sort-Object
+          $want = 'LICENSE','NOTICE','README.txt','SHA256SUMS','SOURCE_COMMIT','windows-wire-lab.ps1','wire_scan.exe'
+          if (Compare-Object $names ($want | Sort-Object)) { throw "unexpected package contents: $names" }
+          if (-not (Select-String -Path "$($dir.FullName)/SOURCE_COMMIT" -Pattern '${{ env.PACKAGE_COMMIT }}' -SimpleMatch -Quiet)) { throw 'SOURCE_COMMIT mismatch' }
+
+      - name: Проверить DLL-search hardening пакета (Dependent Load Flag 0x800)
+        run: |
+          $exe = Get-ChildItem verify -Recurse -Filter wire_scan.exe | Select-Object -First 1
+          if (-not $exe) { throw 'wire_scan.exe not found in the package' }
+          ./scripts/check-dll-search-flag.ps1 -Exe $exe.FullName
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rmasscan-wire-windows-x64-${{ env.PACKAGE_COMMIT }}
+          path: |
+            rmasscan/dist/*.zip
+            rmasscan/dist/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

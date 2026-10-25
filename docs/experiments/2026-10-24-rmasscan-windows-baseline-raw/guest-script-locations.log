@@ -1,0 +1,136 @@
+
+Mode  LastWriteTime          Length  Name
+----  -------------          ------  ----
+d---- 10/24/2026 10:52:32 AM         .cargo
+d---- 10/24/2026 10:20:41 AM         .rustup
+d--h- 10/24/2026 2:51:42 AM          AppData
+l--hs 10/24/2026 2:51:42 AM          Application Data
+d---- 10/24/2026 10:37:29 AM         base
+d-r-- 10/24/2026 2:51:44 AM          Contacts
+l--hs 10/24/2026 2:51:42 AM          Cookies
+d-r-- 10/24/2026 2:51:44 AM          Desktop
+d---- 10/24/2026 10:26:39 AM         dl
+d-r-- 10/24/2026 2:51:45 AM          Documents
+d-r-- 10/24/2026 2:51:44 AM          Downloads
+d-r-- 10/24/2026 2:51:44 AM          Favorites
+d-r-- 10/24/2026 2:51:45 AM          Links
+l--hs 10/24/2026 2:51:42 AM          Local Settings
+d---- 10/24/2026 10:21:43 AM         masscan-lab
+d-r-- 10/24/2026 2:51:44 AM          Music
+l--hs 10/24/2026 2:51:42 AM          My Documents
+l--hs 10/24/2026 2:51:42 AM          NetHood
+d-r-- 10/24/2026 2:52:35 AM          OneDrive
+d-r-- 10/24/2026 2:51:44 AM          Pictures
+l--hs 10/24/2026 2:51:42 AM          PrintHood
+l--hs 10/24/2026 2:51:42 AM          Recent
+d-r-- 10/24/2026 2:51:45 AM          Saved Games
+d-r-- 10/24/2026 10:18:00 AM         Searches
+l--hs 10/24/2026 2:51:42 AM          SendTo
+d---- 10/24/2026 10:52:22 AM         src
+l--hs 10/24/2026 2:51:42 AM          Start Menu
+l--hs 10/24/2026 2:51:42 AM          Templates
+d-r-- 10/24/2026 10:18:00 AM         Videos
+-a--- 10/24/2026 10:30:51 AM 1111    base.ps1
+-a--- 10/24/2026 10:26:53 AM 332     chk.ps1
+-a--- 10/24/2026 10:27:14 AM 105     deny.ps1
+-a--- 10/24/2026 10:25:36 AM 123     disk.ps1
+-a--- 10/24/2026 10:56:12 AM 314     ev.ps1
+-a--- 10/24/2026 10:44:09 AM 1296    fd.ps1
+-a--- 10/24/2026 10:48:02 AM 349     g1.ps1
+-a--- 10/24/2026 11:10:15 AM 137     g2.ps1
+-a--- 10/24/2026 10:44:27 AM 507     inv.ps1
+-a--- 10/24/2026 3:01:41 AM  396     key.ps1
+-a--- 10/24/2026 3:01:41 AM  218     keys.txt
+-a--- 10/24/2026 3:16:22 AM  913     lib.ps1
+-a--- 10/24/2026 11:14:33 AM 591     ls.ps1
+-a--- 10/24/2026 10:19:27 AM 1394    masscan-winvm-bootstrap-continue.ps1
+-a--- 10/24/2026 3:12:43 AM  1559    masscan-winvm-bootstrap.ps1
+-a--- 10/24/2026 10:28:05 AM 1208    masscan-winvm-check-remaining.ps1
+-a--- 10/24/2026 3:04:29 AM  2659    masscan-winvm-inventory.ps1
+-a--- 10/24/2026 10:18:49 AM 728     masscan-winvm-setup-status.ps1
+-a--- 10/24/2026 10:21:33 AM 2601    masscan-winvm-verify.ps1
+-a--- 10/24/2026 11:13:03 AM 1226    n2.json
+-a--- 10/24/2026 11:13:02 AM 1201    n2.json.guest.json
+-a--- 10/24/2026 11:13:00 AM 772     n2.json.inventory.json
+-a--- 10/24/2026 11:13:04 AM 406     n2.json.verify.json
+-a--- 10/24/2026 10:36:40 AM 311     nff.ps1
+-a--- 10/24/2026 10:38:00 AM 542     np.ps1
+-a--- 10/24/2026 3:07:52 AM  372     np2.ps1
+-a--- 10/24/2026 10:38:17 AM 470     np3.ps1
+-a--- 10/24/2026 3:02:00 AM  1325256 npcap-1.90.exe
+-a-h- 10/24/2026 11:11:36 AM 2097152 NTUSER.DAT
+-a-hs 10/24/2026 2:51:41 AM  529408  ntuser.dat.LOG1
+-a-hs 10/24/2026 2:51:41 AM  524288  ntuser.dat.LOG2
+-a-hs 10/24/2026 3:16:47 AM  73728   NTUSER.DAT{e0c19198-cfca-11f1-affb-525400123456}.TM.blf
+-a-hs 10/24/2026 11:11:36 AM 4096    NTUSER.DAT{e0c19198-cfca-11f1-affb-525400123456}.TM.blf.cnpf
+-a-hs 10/24/2026 2:51:41 AM  561152  NTUSER.DAT{e0c19198-cfca-11f1-affb-525400123456}.TMContainer00000000000000000001.regtrans-ms
+-a-hs 10/24/2026 11:11:36 AM 4096    NTUSER.DAT{e0c19198-cfca-11f1-affb-525400123456}.TMContainer00000000000000000001.regtrans-ms.cnpf
+-a-hs 10/24/2026 3:16:47 AM  561152  NTUSER.DAT{e0c19198-cfca-11f1-affb-525400123456}.TMContainer00000000000000000002.regtrans-ms
+-a-hs 10/24/2026 11:11:36 AM 4096    NTUSER.DAT{e0c19198-cfca-11f1-affb-525400123456}.TMContainer00000000000000000002.regtrans-ms.cnpf
+---hs 10/24/2026 2:51:42 AM  20      ntuser.ini
+-a--- 10/24/2026 10:56:33 AM 395     probe.ps1
+-a--- 10/24/2026 10:21:23 AM 1239040 rmasscan-31a729f-windows.tar
+-a--- 10/24/2026 3:13:03 AM  1239040 rmasscan-a94fa77-windows.tar
+-a--- 10/24/2026 10:26:16 AM 533     rust.ps1
+-a--- 10/24/2026 10:40:14 AM 204     t.ps1
+-a--- 10/24/2026 3:13:00 AM  680     v.ps1
+-a--- 10/24/2026 10:25:54 AM 705     vs.ps1
+-a--- 10/24/2026 10:26:29 AM 400     vw.ps1
+-a--- 10/24/2026 11:12:56 AM 5682    windows-vm-lab.ps1
+
+
+--- masscan-lab:
+
+Name                     Length
+----                     ------
+31a729f                  
+evidence-31a729f         
+bootstrap.log            1067
+npcap-1.90.exe           1325256
+rustup-init.exe          12724224
+--- base:
+cli_echo.log             169
+clippy.log               2384
+codes.json               186
+deny.log                 34
+fmt.log                  0
+no_c_guard.log           763
+test_nofailfast.log      25913
+test.log                 26302
+tx_stall_rerun1.log      932
+tx_stall_rerun2.log      827
+tx_stall_rerun3.log      827
+verify_wire_selftest.log 1760
+wire_scan_build.log      845
+wire_suite_selftest.log  4291
+--- ps1 anywhere in profile (depth 2):
+                         1111
+                         332
+                         105
+                         123
+                         314
+                         1296
+                         349
+                         137
+                         507
+                         396
+                         913
+                         591
+                         1394
+                         1559
+                         1208
+                         2659
+                         728
+                         2601
+                         311
+                         542
+                         372
+                         470
+                         395
+                         533
+                         204
+                         680
+                         705
+                         400
+                         5682
+

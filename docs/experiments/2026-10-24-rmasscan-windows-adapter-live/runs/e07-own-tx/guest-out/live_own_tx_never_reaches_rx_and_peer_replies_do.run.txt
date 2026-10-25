@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_own_tx_never_reaches_rx_and_peer_replies_do
+nic_before: {"utc_ms":1792846241479,"stats":{"ReceivedBytes":123631722,"ReceivedUnicastPackets":1931756,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7947770,"SentUnicastPackets":127106,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 3272
+nic_after: {"utc_ms":1792846244823,"stats":{"ReceivedBytes":123635306,"ReceivedUnicastPackets":1931812,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7950250,"SentUnicastPackets":127146,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

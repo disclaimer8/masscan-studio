@@ -1,0 +1,24 @@
+[perf] c      1000 rep1 valid=True wire=3072/3072 steady=999 cpu=0.04+0.14s rss=41932KB stop=12.41s
+[perf] rust   1000 rep1 valid=True wire=3072/3072 steady=1000 cpu=0.04+0.12s rss=2868KB stop=0.04s
+[perf] c      1000 rep2 valid=True wire=3072/3072 steady=995 cpu=0.05+0.13s rss=41904KB stop=12.409s
+[perf] rust   1000 rep2 valid=True wire=3072/3072 steady=997 cpu=0.05+0.12s rss=2840KB stop=0.038s
+[perf] c      1000 rep3 valid=True wire=3072/3072 steady=999 cpu=0.05+0.13s rss=41968KB stop=12.412s
+[perf] rust   1000 rep3 valid=True wire=3072/3072 steady=995 cpu=0.05+0.11s rss=2888KB stop=0.041s
+[perf] c      1000 rep4 valid=True wire=3072/3072 steady=995 cpu=0.03+0.15s rss=41896KB stop=11.659s
+[perf] rust   1000 rep4 valid=True wire=3072/3072 steady=997 cpu=0.06+0.10s rss=2884KB stop=0.038s
+[perf] c      1000 rep5 valid=True wire=3072/3072 steady=994 cpu=0.05+0.13s rss=42008KB stop=11.658s
+[perf] rust   1000 rep5 valid=True wire=3072/3072 steady=998 cpu=0.07+0.10s rss=2884KB stop=0.031s
+[perf] c      1000 rep6 valid=True wire=3072/3072 steady=992 cpu=0.04+0.14s rss=41880KB stop=12.407s
+[perf] rust   1000 rep6 valid=True wire=3072/3072 steady=999 cpu=0.05+0.11s rss=2864KB stop=0.038s
+[perf] c      1000 rep7 valid=True wire=3072/3072 steady=997 cpu=0.04+0.13s rss=41868KB stop=12.415s
+[perf] rust   1000 rep7 valid=True wire=3072/3072 steady=1003 cpu=0.05+0.11s rss=2868KB stop=0.04s
+[perf] c      1000 rep8 valid=True wire=3072/3072 steady=993 cpu=0.04+0.15s rss=41984KB stop=12.415s
+[perf] rust   1000 rep8 valid=True wire=3072/3072 steady=999 cpu=0.05+0.11s rss=2844KB stop=0.036s
+[perf] c      1000 rep9 valid=True wire=3072/3072 steady=998 cpu=0.04+0.15s rss=41944KB stop=12.41s
+[perf] rust   1000 rep9 valid=True wire=3072/3072 steady=1004 cpu=0.06+0.10s rss=2828KB stop=0.038s
+[perf] c      1000 rep10 valid=True wire=3072/3072 steady=991 cpu=0.04+0.13s rss=41968KB stop=12.416s
+[perf] rust   1000 rep10 valid=True wire=3072/3072 steady=999 cpu=0.05+0.11s rss=2872KB stop=0.038s
+[perf] PASS perf matrix complete: every cell VALID (incomplete captures are INVALID, not normalised) 20/20 cells valid
+[perf] PASS all rates: Rust received every in-job reply (0 rx-incomplete runs, 0 kernel drops) per rate (rx_incomplete_runs, kernel_drops_per_run): 1000: 0, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[perf] PASS 1000 pps: Rust steady-state pps within +-20% of C rust/c=1.004 (rust 998.8918677997406 vs c 994.5517637788516)
+suite perf: 3 PASS, 0 FAIL, 0 NOT RUN

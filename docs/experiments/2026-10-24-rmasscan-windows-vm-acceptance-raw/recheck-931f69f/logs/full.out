@@ -1,0 +1,11 @@
+tar exit 0; tar sha F0266B9803F65F67D6F66EBFA389594D336EB4F491597B1DA575C273FDA680BE
+CLIPPY_EXIT=101
+ 862 | fn guard_with_links(tag: &str, files: &[(&str, String)], links: &[(&str, &str)]) -> (i32, String) {
+     |    ^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `rmasscan-lab` (test "rust_only") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+TEST_EXIT=101
+error[E0425]: cannot find function `guard_with_links` in this scope
+error: could not compile `rmasscan-lab` (test "rust_only") due to 1 previous error

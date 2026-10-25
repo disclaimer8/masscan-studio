@@ -1,0 +1,7 @@
+
+running 1 test
+test live_scan_under_junk_flood_is_honest_about_loss ... KV flood/scan_under_flood reason=Completed sent=400 next_index=400 received=400 discarded=418055 duplicates=0 rx_health=Some(0) net.tx_sent=400 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=418455 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) command_to_outcome_ms=None checkpoint=false
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 7.01s
+

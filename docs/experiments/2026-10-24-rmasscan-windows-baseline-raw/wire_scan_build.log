@@ -1,0 +1,19 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling typenum v1.20.0
+   Compiling thiserror v2.0.21
+   Compiling siphasher v1.0.4
+   Compiling cfg-if v1.0.5
+   Compiling cpufeatures v0.3.1
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling syn v3.0.9
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
+   Compiling thiserror-impl v2.0.21
+   Compiling rmasscan-core v0.1.0 (C:\Users\lab\src\rmasscan-31a729f\rmasscan\crates\rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 (C:\Users\lab\src\rmasscan-31a729f\rmasscan\crates\rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 (C:\Users\lab\src\rmasscan-31a729f\rmasscan\crates\rmasscan-net)
+    Finished `release` profile [optimized] target(s) in 11.99s

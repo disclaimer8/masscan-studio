@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_scan_small_with_results
+nic_before: {"utc_ms":1792846174972,"stats":{"ReceivedBytes":123600042,"ReceivedUnicastPackets":1931261,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7917716,"SentUnicastPackets":126621,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 6307
+nic_after: {"utc_ms":1792846181352,"stats":{"ReceivedBytes":123601066,"ReceivedUnicastPackets":1931277,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7918460,"SentUnicastPackets":126633,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

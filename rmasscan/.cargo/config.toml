@@ -1,0 +1,8 @@
+# DLL search hardening for Windows MSVC executables built in this workspace.
+# /DEPENDENTLOADFLAG:0x800 (LOAD_LIBRARY_SEARCH_SYSTEM32) makes the loader resolve
+# the EXE's static imports (version.dll, iphlpapi.dll and the Rust std imports)
+# from System32 only, never from the EXE's own directory.
+# NOTE: a RUSTFLAGS environment variable REPLACES this setting (cargo does not
+# merge them); anything that sets RUSTFLAGS must repeat the link-arg.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/DEPENDENTLOADFLAG:0x800"]

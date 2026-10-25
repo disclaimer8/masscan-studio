@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_link_loss_engine_stop
+nic_before: {"utc_ms":1792846357387,"stats":{"ReceivedBytes":162414634,"ReceivedUnicastPackets":2537739,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":8051136,"SentUnicastPackets":128572,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 46752
+nic_after: {"utc_ms":1792846404302,"stats":{"ReceivedBytes":162466794,"ReceivedUnicastPackets":2538554,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":8113948,"SentUnicastPackets":129387,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

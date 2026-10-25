@@ -1,0 +1,3 @@
+# commit 27e3042a6173d8a4c3a5848d3904cc9c122ffc78 (rmasscan tree 8e056a78e8ca06c5381833f465c8149d856b5c54)
+## cargo fmt --all --check
+rc=0

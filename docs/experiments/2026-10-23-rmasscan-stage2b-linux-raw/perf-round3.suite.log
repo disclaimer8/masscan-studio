@@ -1,0 +1,47 @@
+[perf] c       100 rep1 valid=True wire=512/512 steady=99 cpu=0.03+0.06s rss=41812KB stop=12.405s
+[perf] rust    100 rep1 valid=True wire=512/512 steady=100 cpu=0.03+0.08s rss=2848KB stop=0.046s
+[perf] c       100 rep2 valid=True wire=512/512 steady=99 cpu=0.04+0.08s rss=41896KB stop=11.654s
+[perf] rust    100 rep2 valid=True wire=512/512 steady=101 cpu=0.04+0.15s rss=2864KB stop=0.042s
+[perf] c       100 rep3 valid=True wire=512/512 steady=98 cpu=0.04+0.14s rss=41948KB stop=12.412s
+[perf] rust    100 rep3 valid=True wire=512/512 steady=101 cpu=0.06+0.14s rss=2860KB stop=0.046s
+[perf] c       100 rep4 valid=True wire=512/512 steady=99 cpu=0.04+0.15s rss=41940KB stop=11.655s
+[perf] rust    100 rep4 valid=True wire=512/512 steady=101 cpu=0.05+0.14s rss=2884KB stop=0.043s
+[perf] c       100 rep5 valid=True wire=512/512 steady=98 cpu=0.04+0.13s rss=41860KB stop=12.412s
+[perf] rust    100 rep5 valid=True wire=512/512 steady=101 cpu=0.05+0.14s rss=2800KB stop=0.036s
+[perf] c      1000 rep1 valid=True wire=3072/3072 steady=1001 cpu=0.02+0.12s rss=41944KB stop=11.655s
+[perf] rust   1000 rep1 valid=True wire=3072/3072 steady=1003 cpu=0.04+0.12s rss=2836KB stop=0.04s
+[perf] c      1000 rep2 valid=True wire=3072/3072 steady=999 cpu=0.03+0.16s rss=41944KB stop=12.401s
+[perf] rust   1000 rep2 valid=True wire=3072/3072 steady=1002 cpu=0.03+0.07s rss=2856KB stop=0.038s
+[perf] c      1000 rep3 valid=True wire=3072/3072 steady=1002 cpu=0.04+0.14s rss=41884KB stop=12.403s
+[perf] rust   1000 rep3 valid=True wire=3072/3072 steady=1011 cpu=0.05+0.10s rss=2876KB stop=0.035s
+[perf] c      1000 rep4 valid=True wire=3072/3072 steady=991 cpu=0.05+0.14s rss=41924KB stop=12.41s
+[perf] rust   1000 rep4 valid=True wire=3072/3072 steady=999 cpu=0.05+0.11s rss=2832KB stop=0.034s
+[perf] c      1000 rep5 valid=True wire=3072/3072 steady=1000 cpu=0.04+0.14s rss=41984KB stop=12.407s
+[perf] rust   1000 rep5 valid=True wire=3072/3072 steady=1003 cpu=0.04+0.12s rss=2888KB stop=0.045s
+[perf] c     10000 rep1 valid=True wire=30720/30720 steady=10077 cpu=0.11+0.35s rss=41964KB stop=12.163s
+[perf] rust  10000 rep1 valid=True wire=30720/30720 steady=10103 cpu=0.13+0.28s rss=2884KB stop=0.014s
+[perf] c     10000 rep2 valid=True wire=30720/30720 steady=10040 cpu=0.11+0.36s rss=41936KB stop=12.161s
+[perf] rust  10000 rep2 valid=True wire=30720/30720 steady=10105 cpu=0.15+0.32s rss=2916KB stop=0.052s
+[perf] c     10000 rep3 valid=True wire=30720/30720 steady=10080 cpu=0.07+0.19s rss=42004KB stop=12.149s
+[perf] rust  10000 rep3 valid=True wire=30720/30720 steady=10090 cpu=0.16+0.30s rss=2872KB stop=0.047s
+[perf] c     10000 rep4 valid=True wire=30720/30720 steady=10085 cpu=0.12+0.36s rss=41960KB stop=12.168s
+[perf] rust  10000 rep4 valid=True wire=30720/30720 steady=10054 cpu=0.15+0.32s rss=2868KB stop=0.018s
+[perf] c     10000 rep5 valid=True wire=30720/30720 steady=10380 cpu=0.11+0.37s rss=41960KB stop=12.166s
+[perf] rust  10000 rep5 valid=True wire=30720/30720 steady=10061 cpu=0.15+0.32s rss=2904KB stop=0.018s
+[perf] c    100000 rep1 valid=True wire=307200/307200 steady=100494 cpu=0.29+0.87s rss=41928KB stop=11.914s
+[perf] rust 100000 rep1 valid=True wire=307200/307200 steady=98300 cpu=0.35+0.81s rss=3084KB stop=0.059s
+[perf] c    100000 rep2 valid=True wire=307200/307200 steady=100071 cpu=0.28+0.84s rss=41928KB stop=11.664s
+[perf] rust 100000 rep2 valid=True wire=307200/307200 steady=100579 cpu=0.36+0.74s rss=2940KB stop=0.027s
+[perf] c    100000 rep3 valid=True wire=307200/307200 steady=100541 cpu=0.31+0.81s rss=41972KB stop=11.918s
+[perf] rust 100000 rep3 valid=True wire=307200/307200 steady=100564 cpu=0.34+0.76s rss=3244KB stop=0.057s
+[perf] c    100000 rep4 valid=True wire=307200/307200 steady=100203 cpu=0.28+0.90s rss=41964KB stop=11.91s
+[perf] rust 100000 rep4 valid=True wire=307200/307200 steady=100358 cpu=0.38+0.71s rss=2984KB stop=0.055s
+[perf] c    100000 rep5 valid=True wire=307200/307200 steady=100388 cpu=0.28+0.81s rss=41920KB stop=11.91s
+[perf] rust 100000 rep5 valid=True wire=307200/307200 steady=101238 cpu=0.37+0.81s rss=2956KB stop=0.053s
+[perf] PASS perf matrix complete: every cell VALID (incomplete captures are INVALID, not normalised) 40/40 cells valid
+[perf] PASS all rates: Rust received every in-job reply (0 rx-incomplete runs, 0 kernel drops) per rate (rx_incomplete_runs, kernel_drops_per_run): 100: 0, [0, 0, 0, 0, 0]; 1000: 0, [0, 0, 0, 0, 0]; 10000: 0, [0, 0, 0, 0, 0]; 100000: 0, [0, 0, 0, 0, 0]
+[perf] PASS 100 pps: Rust steady-state pps within +-20% of C rust/c=1.027 (rust 101.14828885178926 vs c 98.52531885611185)
+[perf] PASS 1000 pps: Rust steady-state pps within +-20% of C rust/c=1.003 (rust 1002.6433969424585 vs c 999.8557323763238)
+[perf] PASS 10000 pps: Rust steady-state pps within +-20% of C rust/c=1.001 (rust 10089.652546973342 vs c 10080.051332843412)
+[perf] PASS 100000 pps: Rust steady-state pps within +-20% of C rust/c=1.002 (rust 100563.57300590684 vs c 100387.65015171071)
+suite perf: 6 PASS, 0 FAIL, 0 NOT RUN

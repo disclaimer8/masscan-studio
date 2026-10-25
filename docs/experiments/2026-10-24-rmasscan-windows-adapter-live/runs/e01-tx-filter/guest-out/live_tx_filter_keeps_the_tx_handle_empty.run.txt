@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\rmasscan_net-31642c999a2b9642.exe
+name: windows::live::live_tx_filter_keeps_the_tx_handle_empty
+nic_before: {"utc_ms":1792846164453,"stats":{"ReceivedBytes":123279978,"ReceivedUnicastPackets":1926260,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7607670,"SentUnicastPackets":121620,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 1242
+nic_after: {"utc_ms":1792846165763,"stats":{"ReceivedBytes":123599978,"ReceivedUnicastPackets":1931260,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7917670,"SentUnicastPackets":126620,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

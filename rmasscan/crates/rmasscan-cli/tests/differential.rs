@@ -187,9 +187,43 @@ fn broken_pipe_stops_work_quickly() {
     }
 }
 
+/// Launches the CLI once (`--help`) and waits for it, outside any timed region,
+/// so the OS loader / antivirus cost of a freshly linked EXE is paid up front.
+/// Bounded: a hanging `--help` is killed and fails the test after 60 s instead of
+/// blocking forever (generous, since a cold scan can take ~15 s).
+fn warm_up_exe() {
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
+        .arg("--help")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            assert!(st.success(), "warm-up --help failed: {st:?}");
+            return;
+        }
+        if start.elapsed() > Duration::from_secs(60) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("warm-up --help still running after 60s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn list_scan_retries_that_cannot_terminate_fails_fast() {
     use std::time::{Duration, Instant};
+    // First launch of a freshly linked EXE can take 1-15 s on Windows (Defender
+    // real-time scan, serialised under parallel test load); the CLI itself needs
+    // ~15 ms. Warm the file up outside the timed region so the bound below
+    // measures the CLI, not the OS loader. A real hang is still caught: the timed
+    // run is a separate process with the same 5 s limit.
+    warm_up_exe();
     let start = Instant::now();
     let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
         .args([

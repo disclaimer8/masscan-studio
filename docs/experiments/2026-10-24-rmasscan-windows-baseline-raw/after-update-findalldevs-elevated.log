@@ -1,0 +1,20 @@
+captured_utc=2026-10-24T18:15:06Z (after update 26300.9711)
+elevated=True user=W-\lab
+
+Mandatory Label\High Mandatory Level                          Label            S-1-16-12288                            
+                                    
+\Device\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40} | Intel(R) 82574L Gigabit Network Connection #2
+\Device\NPF_{17106836-47D3-411A-97C3-BA61A925970F} | Intel(R) 82574L Gigabit Network Connection
+\Device\NPF_Loopback | Adapter for loopback traffic capture
+rc=0
+
+
+Name       InterfaceDescription                          Status
+----       --------------------                          ------
+Ethernet 2 Intel(R) 82574L Gigabit Network Connection #2 Up
+Ethernet   Intel(R) 82574L Gigabit Network Connection    Up
+
+pwsh.exe 7.6.8.0 C:\Program Files\PowerShell\7\pwsh.exe
+git.exe 2.56.0.3 C:\Program Files\Git\cmd\git.exe
+python.exe 3.13.15150.1013 C:\Users\lab\AppData\Local\Programs\Python\Python313\python.exe
+10.0.26300

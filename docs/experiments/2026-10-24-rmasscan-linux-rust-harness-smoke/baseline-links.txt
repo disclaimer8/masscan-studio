@@ -1,0 +1,4 @@
+enp2s0
+lo
+wg0
+wlp1s0

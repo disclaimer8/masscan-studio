@@ -1,0 +1,17 @@
+[2026-10-24T12:49:57.448Z] tag=e04-pause bin=windows_live test=live_pause_stops_tx_then_resume_completes_without_duplicates cond=plain sha=f51be48
+raw_run_allowed True violations []
+[2026-10-24T12:50:01.238Z] guest run begins (RMASSCAN_NPCAP_NOP=1)
+[2026-10-24T12:50:09.436Z] guest run ended rc=0
+peer.pcap frames=28
+eno1.pcap frames=0
+peer_syn_from_guest=12
+==> /home/a1/winvm/t3-ev/e04-pause/peer.err <==
+28 packets captured
+28 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/t3-ev/e04-pause/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

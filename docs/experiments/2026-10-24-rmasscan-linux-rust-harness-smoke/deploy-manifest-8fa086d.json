@@ -1,0 +1,14 @@
+{
+  "binaries": [
+    {
+      "path": "$HOME/rl-live2/rmasscan/target/release/rmasscan-lab",
+      "sha256": "38c16794002313cf5af24051ef7cf0736f22c19873d7c4f7eeab493f7c980940",
+      "size": 3127536
+    }
+  ],
+  "built_utc": 1792882114.8114364,
+  "commit": "8fa086d16eb4cfebbc624093b5ed107ea959fbaa",
+  "kind": "rmasscan-lab-deploy",
+  "schema": 1,
+  "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+}

@@ -1,0 +1,1 @@
+{"first_syn_seen": true, "sent_total": 80, "kinds": {"other_ip": 20, "unscanned_port": 20, "wrong_cookie": 20, "wrong_dst_port": 20}, "interval_s": 0.1, "duration_s": 2.0, "ipid": 61665, "first_sent_at": 1792852940.5999055}

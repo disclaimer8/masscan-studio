@@ -1,0 +1,22 @@
+[2026-10-24T11:45:16.618Z] tag=r10-unplug-flood test=live_unplug_phases cond=unplug sha=53fe366
+raw_run_allowed True violations []
+[2026-10-24T11:45:20.721Z] guest run begins
+[2026-10-24T11:46:08.148Z] guest run ended rc=0
+[2026-10-24T11:46:09.168Z] tap wvt-n2 UP (restored)
+peer.pcap frames=8012
+eno1.pcap frames=0
+==> /home/a1/winvm/spike-ev/r10-unplug-flood/peer.err <==
+8012 packets captured
+8012 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r10-unplug-flood/peerjunk.err <==
+603100 packets captured
+603100 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r10-unplug-flood/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

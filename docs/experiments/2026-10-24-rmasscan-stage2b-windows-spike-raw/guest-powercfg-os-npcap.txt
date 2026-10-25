@@ -1,0 +1,33 @@
+The following sleep states are available on this system:
+    Hibernate
+    Fast Startup
+
+The following sleep states are not available on this system:
+    Standby (S1)
+	The system firmware does not support this standby state.
+	An internal system component has disabled this standby state.
+		Graphics
+
+    Standby (S2)
+	The system firmware does not support this standby state.
+	An internal system component has disabled this standby state.
+		Graphics
+
+    Standby (S3)
+	An internal system component has disabled this standby state.
+		Graphics
+
+    Standby (S0 Low Power Idle)
+	The system firmware does not support this standby state.
+
+    Hybrid Sleep
+	Standby (S3) is not available.
+
+2026-10-24T11:46:42.9749918+00:00
+2026-10-24T11:46:42.9772033Z
+UTC{"Caption":"Microsoft Windows 11 Pro","Version":"10.0.26300","BuildNumber":"26300","OSArchitecture":"64-bit"}
+{"Status":4,"StartType":1}
+{"FileVersion":"1.90","ProductVersion":"1.90"}
+1
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+cargo 1.99.1 (5f94df478 2026-08-27)

@@ -1,0 +1,17 @@
+[2026-10-24T12:50:36.814Z] tag=e07-own-tx bin=windows_live test=live_own_tx_never_reaches_rx_and_peer_replies_do cond=plain sha=f51be48
+raw_run_allowed True violations []
+[2026-10-24T12:50:40.591Z] guest run begins (RMASSCAN_NPCAP_NOP=1)
+[2026-10-24T12:50:44.912Z] guest run ended rc=0
+peer.pcap frames=113
+eno1.pcap frames=0
+peer_syn_from_guest=40
+==> /home/a1/winvm/t3-ev/e07-own-tx/peer.err <==
+113 packets captured
+117 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/t3-ev/e07-own-tx/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

@@ -1,0 +1,103 @@
+{
+ "eno1": {
+  "cmd": [
+   "tcpdump",
+   "-i",
+   "eno1",
+   "-n",
+   "-U",
+   "-B",
+   "4096",
+   "-s",
+   "0",
+   "-Z",
+   "root",
+   "-w",
+   "$HOME/winvm/t4-ev/functional/resume_N15/eno1.pcap",
+   "'net",
+   "198.18.0.0/30",
+   "or",
+   "(arp",
+   "and",
+   "(host",
+   "198.18.0.1",
+   "or",
+   "host",
+   "198.18.0.2))",
+   "or",
+   "ether",
+   "host",
+   "52:54:00:04:80:a9",
+   "or",
+   "ether",
+   "host",
+   "02:57:4c:3d:2e:9b",
+   "or",
+   "ether",
+   "proto",
+   "0x88b5'"
+  ],
+  "exited": true,
+  "filter": "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 52:54:00:04:80:a9 or ether host 02:57:4c:3d:2e:9b or ether proto 0x88b5",
+  "listening": true,
+  "pcap": {
+   "frames": 0,
+   "sha256": "704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea",
+   "size": 24
+  },
+  "tcpdump": {
+   "captured": 0,
+   "dropped_if": 0,
+   "dropped_kernel": 0,
+   "received": 0
+  }
+ },
+ "peer": {
+  "cmd": [
+   "ip",
+   "netns",
+   "exec",
+   "wvp-n2",
+   "tcpdump",
+   "-i",
+   "lab0",
+   "-n",
+   "-U",
+   "-B",
+   "16384",
+   "-s",
+   "0",
+   "-Z",
+   "root",
+   "-w",
+   "$HOME/winvm/t4-ev/functional/resume_N15/peer.pcap"
+  ],
+  "counters": {
+   "rx_before": 92643,
+   "rx_end": 92645,
+   "rx_ready": 92643,
+   "tx_before": 2876783,
+   "tx_end": 2876788,
+   "tx_ready": 2876783
+  },
+  "exited": true,
+  "filter": "(none: every frame on lab0)",
+  "listening": true,
+  "pcap": {
+   "frames": 7,
+   "sha256": "b7fed67ca53db99d80d8632748dc2c2611a0a0095e3f294e9ca47528ec336646",
+   "size": 512
+  },
+  "tcpdump": {
+   "captured": 7,
+   "dropped_if": 0,
+   "dropped_kernel": 0,
+   "received": 7
+  }
+ },
+ "quiet": {
+  "quiet_s": 1.5,
+  "reached": true
+ },
+ "status_post_raw_run_allowed": true
+}

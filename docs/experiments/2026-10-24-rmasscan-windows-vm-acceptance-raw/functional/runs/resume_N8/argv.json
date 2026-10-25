@@ -1,0 +1,31 @@
+{
+ "exe": "C:\\Users\\lab\\src\\rmasscan-1a446c5\\rmasscan\\target\\release\\examples\\wire_scan.exe",
+ "argv": [
+  "--iface",
+  "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+  "--src-ip",
+  "198.18.0.1",
+  "--src-mac",
+  "52:54:00:04:80:a9",
+  "--router-mac",
+  "02:57:4c:3d:2e:9b",
+  "--targets",
+  "198.18.0.2",
+  "--ports",
+  "8000-8015",
+  "--seed",
+  "1",
+  "--rate",
+  "100",
+  "--wait",
+  "3",
+  "--source-port",
+  "40000",
+  "--scan-id",
+  "11111111111111111111111111111111",
+  "--attempt-id",
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "--resume-checkpoint",
+  "C:\\Users\\lab\\t4\\cp\\functional\\N8.bin"
+ ]
+}

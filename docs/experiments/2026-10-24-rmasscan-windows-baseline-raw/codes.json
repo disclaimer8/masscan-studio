@@ -1,0 +1,11 @@
+{
+  "fmt": 0,
+  "clippy": 0,
+  "test": 101,
+  "no_c_guard": 0,
+  "verify_wire_selftest": 0,
+  "wire_suite_selftest": 0,
+  "wire_scan_build": 0,
+  "deny": 0,
+  "cli_echo": 0
+}

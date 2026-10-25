@@ -1,0 +1,16 @@
+{
+ "argv_file": "argv.json",
+ "capture_started_utc": 1792852646.53432,
+ "capture_stopped_utc": 1792852658.092848,
+ "exe_sha256": "08096f115dd95e982b0c635e3ff14185493d65418ea8576ff32379dbc1d4580c",
+ "guest_exit": 0,
+ "guest_finished_utc": 1792852653.3161569,
+ "guest_ssh_rc": 0,
+ "guest_started_utc": 1792852649.3573189,
+ "guest_times": {
+  "finished_utc": 1792852653.162,
+  "started_utc": 1792852649.874
+ },
+ "kind": "case",
+ "tag": "c03_multi_ports.run2"
+}

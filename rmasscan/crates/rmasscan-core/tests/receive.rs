@@ -901,3 +901,125 @@ proptest! {
         }
     }
 }
+
+// ---------- Фильтр по итоговому набору целей текущего задания ----------
+
+fn plan_with(targets: &str, ports: &str, excl_ips: &str, excl_ports: &str) -> ReadyPlan {
+    let mut m = MassIp::new();
+    add_target_string(m.ipv4_mut(), targets).unwrap();
+    parse_ports(m.ports_mut(), ports).unwrap();
+    let mut ex = MassIp::new();
+    if !excl_ips.is_empty() {
+        add_target_string(ex.ipv4_mut(), excl_ips).unwrap();
+    }
+    if !excl_ports.is_empty() {
+        parse_ports(ex.ports_mut(), excl_ports).unwrap();
+    }
+    let cfg = ScanConfig {
+        targets: m,
+        excludes: ex,
+        seed: SEED,
+        max_rate: 100.0,
+        ..ScanConfig::default()
+    };
+    let eff = validate(&cfg, Operation::Scan).unwrap();
+    ReadyPlan::new(
+        eff,
+        AdapterBinding {
+            interface_id: "t0".into(),
+            link_type: LinkType::Ethernet,
+            source_ipv4: IP_ME,
+            source_mac: MAC_ME,
+            next_hop_mac: MAC_NH,
+            source_ports: (FIRST, LAST),
+        },
+    )
+    .unwrap()
+}
+
+fn reply_from(
+    plan: &ReadyPlan,
+    ip: u32,
+    port: u16,
+    flags: u8,
+) -> Result<Option<rmasscan_core::receive::Reply>, ParseError> {
+    let mut s = Spec::synack().with_flags(flags);
+    s.ip_them = ip;
+    s.port_them = port;
+    s.ack = cookie(ip, port, IP_ME, PORT_ME).wrapping_add(1);
+    parse_reply(&s.frame(LinkType::Ethernet), LinkType::Ethernet, plan)
+}
+
+#[test]
+fn reject_previous_job_target_with_valid_cookie() {
+    // Прошлое задание сканировало 10.0.1.5; текущее только 10.0.0.0/29.
+    let plan = plan_for(LinkType::Ethernet);
+    assert_eq!(reply_from(&plan, 0x0a00_0105, PORT_THEM, 0x12), Ok(None));
+    assert_eq!(reply_from(&plan, 0x0a00_0105, PORT_THEM, 0x04), Ok(None));
+}
+
+#[test]
+fn reject_previous_job_port_with_valid_cookie() {
+    let plan = plan_for(LinkType::Ethernet);
+    assert_eq!(reply_from(&plan, IP_THEM, 8080, 0x12), Ok(None));
+    assert_eq!(reply_from(&plan, IP_THEM, 8080, 0x04), Ok(None));
+}
+
+#[test]
+fn reject_excluded_target() {
+    let plan = plan_with("10.0.0.0/29", "80,443", "10.0.0.5", "");
+    assert_eq!(reply_from(&plan, 0x0a00_0005, 80, 0x12), Ok(None));
+    assert!(reply_from(&plan, 0x0a00_0004, 80, 0x12).unwrap().is_some());
+    assert!(reply_from(&plan, 0x0a00_0006, 80, 0x12).unwrap().is_some());
+}
+
+#[test]
+fn reject_excluded_port() {
+    let plan = plan_with("10.0.0.0/29", "80,443", "", "443");
+    assert_eq!(reply_from(&plan, IP_THEM, 443, 0x12), Ok(None));
+    assert!(reply_from(&plan, IP_THEM, 80, 0x12).unwrap().is_some());
+}
+
+#[test]
+fn target_and_port_range_boundaries_are_inclusive() {
+    let plan = plan_with("10.0.0.2-10.0.0.6,10.0.0.20", "80-82,443", "", "");
+    for ip in [0x0a00_0002u32, 0x0a00_0006, 0x0a00_0014] {
+        for port in [80u16, 82, 443] {
+            for flags in [0x12u8, 0x14] {
+                assert!(
+                    reply_from(&plan, ip, port, flags).unwrap().is_some(),
+                    "{ip:#x}:{port}"
+                );
+            }
+        }
+    }
+    for ip in [
+        0x0a00_0001u32,
+        0x0a00_0007,
+        0x0a00_0013,
+        0x0a00_0015,
+        0,
+        u32::MAX,
+    ] {
+        assert_eq!(reply_from(&plan, ip, 80, 0x12), Ok(None), "{ip:#x}");
+    }
+    for port in [0u16, 79, 83, 442, 444, u16::MAX] {
+        assert_eq!(
+            reply_from(&plan, 0x0a00_0003, port, 0x12),
+            Ok(None),
+            "{port}"
+        );
+    }
+}
+
+#[test]
+fn full_address_space_target_accepts_both_extremes() {
+    let plan = plan_with("0.0.0.0/0", "0-65535", "10.0.0.0/8", "");
+    assert!(reply_from(&plan, 0, 0, 0x12).unwrap().is_some());
+    assert!(
+        reply_from(&plan, u32::MAX, u16::MAX, 0x12)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(reply_from(&plan, 0x0a00_0001, 80, 0x12), Ok(None));
+}

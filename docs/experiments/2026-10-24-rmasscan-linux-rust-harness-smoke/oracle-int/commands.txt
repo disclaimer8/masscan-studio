@@ -1,0 +1,5 @@
+ip netns add wl-scan-1448792-30365; ip netns add wl-peer-1448792-30365
+ip -n wl-scan-1448792-30365 link add veth-a type veth peer name veth-b netns wl-peer-1448792-30365
+ip -n $NS route show default (empty); ip -n $NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces
+ip netns exec $NS_B rmasscan-lab capture responder --ports 80,8080 --ready READY
+ip netns exec $NS_A timeout 60 ORACLE 10.200.0.2 -p80 --source-port 40000 --interface veth-a --adapter-ip 10.200.0.100 --adapter-mac 02:aa:00:00:00:01 --router-mac 02:aa:00:00:00:02 --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case c01_one_addr_port_synack, 2 runs

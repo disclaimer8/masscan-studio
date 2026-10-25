@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the pinned C masscan oracle and capture golden fixtures for rmasscan.
-# Runs on the oracle host (Ubuntu x86_64, gcc, make, git, python3, sudo).
+# Runs on the oracle host (Ubuntu x86_64, gcc, make, git, sudo).
 # Re-runnable. Work dir: ~/rmasscan-oracle (override with ORACLE_DIR).
 #
 # SAFETY: every masscan invocation runs inside a fresh network namespace
@@ -9,6 +9,9 @@
 # unprivileged user namespaces, so we fall back to root + network namespace.
 # Non -sL/--echo runs always pass --offline.
 set -euo pipefail
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+LAB_BIN="${RMASSCAN_LAB_BIN:-$HERE/../target/release/rmasscan-lab}"
+[ -x "$LAB_BIN" ] || { echo "Build rmasscan-lab or set RMASSCAN_LAB_BIN" >&2; exit 2; }
 
 PIN=8e6b3b0c07a81e8ea61d557c06134a21a6881614
 ORACLE_DIR="${ORACLE_DIR:-$HOME/rmasscan-oracle}"
@@ -67,14 +70,7 @@ echo "[*] binary sha256 $BIN_SHA ; $VERSION"
 SRC_OFF="$ORACLE_DIR/masscan-offline"
 rm -rf "$SRC_OFF"; mkdir -p "$SRC_OFF"
 git -C "$SRC" archive "$PIN" | tar -x -C "$SRC_OFF"
-python3 - "$SRC_OFF/src/rawsock.c" <<'PY'
-import sys
-p=sys.argv[1]; s=open(p).read()
-old="    if (is_offline)\n        return adapter;\n"
-new="    if (is_offline) {\n        adapter->link_type = 1; /* rmasscan oracle patch: DLT_EN10MB */\n        return adapter;\n    }\n"
-assert s.count(old)==1
-open(p,"w").write(s.replace(old,new))
-PY
+"$LAB_BIN" oracle-util patch-offline "$SRC_OFF/src/rawsock.c"
 make -C "$SRC_OFF" -j4 >"$ORACLE_DIR/make-offline.log" 2>&1 || { tail -30 "$ORACLE_DIR/make-offline.log"; exit 1; }
 BIN_OFF="$SRC_OFF/bin/masscan"
 BIN_OFF_SHA=$(sha256sum "$BIN_OFF" | cut -d' ' -f1)
@@ -84,14 +80,7 @@ rm -rf "$OUT"; mkdir -p "$OUT/listscan" "$OUT/echo" "$OUT/paused"
 CASES="$OUT/.cases.jsonl"; : >"$CASES"
 
 # rec FILE MODE EXTRA_JSON ARGS... : emit one JSON manifest record (args = exact masscan arguments)
-rec() { python3 - "$@" <<'PY'
-import sys, json
-file, mode, extra = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-d = {"file": file, "mode": mode, "args": sys.argv[4:]}
-d.update(extra)
-print(json.dumps(d))
-PY
-}
+rec() { "$LAB_BIN" oracle-util record "$@"; }
 
 # run_capture DIR NAME EXT MODE ARGS... : run masscan twice under ns, compare, store stdout (or head if > 1 MiB)
 run_capture() {  # $1=dir $2=case $3=ext $4=mode ; rest = args
@@ -188,53 +177,7 @@ WALL=$(awk -F': ' '/Elapsed \(wall clock\)/{print $NF}' "$tm")
 CPU_MODEL=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -1)
 
 # ---- manifest --------------------------------------------------------------
-BIN_OFF_SHA="$BIN_OFF_SHA" python3 - "$OUT" "$PIN" "$VERSION" "$BIN_SHA" "$NS_KIND" "$WALL" "$BENCH_TOTAL" "$CPU_MODEL" "$(printf '%q ' "${BENCH_CMD[@]}")" <<'PY'
-import sys, json, subprocess, datetime, os
-out, pin, version, binsha, nskind, wall, total, cpu = sys.argv[1:9]
-bench_cmd = sys.argv[9]
-def sh(c): return subprocess.check_output(c, shell=True, text=True).strip()
-osr = dict(l.rstrip().split("=",1) for l in open("/etc/os-release") if "=" in l)
-parts = wall.split(":")
-secs = 0.0
-for p in parts: secs = secs*60 + float(p)
-cases = [json.loads(l) for l in open(os.path.join(out, ".cases.jsonl"))]
-KEYS = ["file","mode","args","binary","line_count","sha256","truncated","size_bytes","deterministic","note","signal"]
-cases = [{k: c.get(k) for k in KEYS} for c in cases]
-for c in cases:
-    assert os.path.isfile(os.path.join(out, c["file"])), c["file"]
-    if c["mode"] == "paused":
-        need = ("line_count", "sha256")
-    else:
-        need = ("line_count", "sha256", "truncated")
-    for k in need:
-        assert c[k] is not None, (c["file"], k)
-m = {
-  "masscan_git_head": pin,
-  "masscan_version": version,
-  "binary_sha256": binsha,
-  "offline_binary_sha256": os.environ["BIN_OFF_SHA"],
-  "offline_binary_note": "pinned commit + one-line patch in src/rawsock.c (offline adapter link_type = DLT_EN10MB) because --offline fails on Linux upstream ('bad packet template': AF_INET6=10 is not accepted by preprocess_frame). Used only for paused/ captures and the offline benchmark.",
-  "built_on": osr.get("PRETTY_NAME","?").strip('"'),
-  "kernel": sh("uname -r"),
-  "compiler": sh("gcc --version | head -1"),
-  "arch": sh("uname -m"),
-  "isolation": nskind + " (new network namespace; only a DOWN lo exists; no packets can leave)",
-  "built_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-  "offline_gen_pps": round(int(total)/secs),
-  "offline_gen_bench": {
-    "command": bench_cmd.strip(),
-    "targets_total": int(total),
-    "wall_seconds": secs,
-    "method": "total targets (2^28 for /4 x 1 port) divided by wall clock from /usr/bin/time -v (includes process start and exit)",
-    "cpu_model": cpu,
-    "cores": int(sh("nproc")),
-    "note": "single run; one transmit thread"
-  },
-  "cases": cases,
-}
-json.dump(m, open(os.path.join(out, "manifest.json"), "w"), indent=2)
-open(os.path.join(out,"manifest.json"),"a").write("\n")
-PY
+BIN_OFF_SHA="$BIN_OFF_SHA" "$LAB_BIN" oracle-util manifest "$OUT" "$PIN" "$VERSION" "$BIN_SHA" "$NS_KIND" "$WALL" "$BENCH_TOTAL" "$CPU_MODEL" "$(printf '%q ' "${BENCH_CMD[@]}")"
 rm -f "$CASES"
-python3 -m json.tool "$OUT/manifest.json" >/dev/null
+"$LAB_BIN" oracle-util validate-json "$OUT/manifest.json" >/dev/null
 echo "[*] done: $OUT"

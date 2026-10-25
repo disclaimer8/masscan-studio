@@ -1,0 +1,31 @@
+PASS     manifest 
+PASS     c01_one_addr_port_synack.run1 
+NOT RUN  c01_one_addr_port_synack.run2 NOT RUN: run directory present
+NOT RUN  c02_one_addr_port_rst.run1 NOT RUN: run directory present
+NOT RUN  c02_one_addr_port_rst.run2 NOT RUN: run directory present
+NOT RUN  c03_multi_ports.run1 NOT RUN: run directory present
+NOT RUN  c03_multi_ports.run2 NOT RUN: run directory present
+NOT RUN  c04_exclude.run1 NOT RUN: run directory present
+NOT RUN  c04_exclude.run2 NOT RUN: run directory present
+NOT RUN  c05_srcport_single.run1 NOT RUN: run directory present
+NOT RUN  c05_srcport_single.run2 NOT RUN: run directory present
+NOT RUN  c06_srcport_range.run1 NOT RUN: run directory present
+NOT RUN  c06_srcport_range.run2 NOT RUN: run directory present
+NOT RUN  x01_foreign_replies.run1 NOT RUN: run directory present
+NOT RUN  x01_foreign_replies.run2 NOT RUN: run directory present
+NOT RUN  pause_N0 NOT RUN: run directory present
+NOT RUN  resume_N0 NOT RUN: run directory present
+NOT RUN  pause_N1 NOT RUN: run directory present
+NOT RUN  resume_N1 NOT RUN: run directory present
+NOT RUN  pause_N8 NOT RUN: run directory present
+NOT RUN  resume_N8 NOT RUN: run directory present
+NOT RUN  pause_N15 NOT RUN: run directory present
+NOT RUN  resume_N15 NOT RUN: run directory present
+NOT RUN  complete_nopause NOT RUN: run directory present
+NOT RUN  refuse_completed NOT RUN: run directory present
+NOT RUN  group_pause_resume_N0 NOT RUN: both legs and continuous run usable
+NOT RUN  group_pause_resume_N1 NOT RUN: both legs and continuous run usable
+NOT RUN  group_pause_resume_N8 NOT RUN: both legs and continuous run usable
+NOT RUN  group_pause_resume_N15 NOT RUN: both legs and continuous run usable
+provenance: orchestrator built from 931f69fd1eaa (checkout head 931f69fd1eaa) dirty=false binary sha256 a854f049a875 (authoritative); verifier built from 931f69fd1eaa (checkout head 931f69fd1eaa) dirty=false binary sha256 a854f049a875
+overall: NOT RUN {"FAIL":0,"INVALID":0,"NOT RUN":27,"PASS":2}

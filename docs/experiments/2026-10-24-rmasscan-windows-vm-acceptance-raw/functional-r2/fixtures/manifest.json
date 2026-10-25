@@ -1,0 +1,279 @@
+{
+ "all_valid": true,
+ "binding": {
+  "blackrock_rounds": 14,
+  "rate": "100",
+  "responder_open_ports": "80,443,8000,8001,8002,8003,8004,8005,8006,8007",
+  "retries": 0,
+  "router_mac": "02:57:4c:3d:2e:9b",
+  "seed": "1",
+  "src_ip": "198.18.0.1",
+  "src_mac": "52:54:00:04:80:a9",
+  "wait": 3
+ },
+ "created_utc": "2026-10-24T14:23:55Z",
+ "fixtures": {
+  "c01_one_addr_port_synack.run1": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 0,
+    "syn": 1,
+    "synack": 1
+   },
+   "file": "fixtures/c01_one_addr_port_synack.run1.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 0,
+    "rst_from_scanner": 1,
+    "syn_from_scanner": 1,
+    "synack_from_peer": 1
+   },
+   "sha256": "beeb030cb77465b8016cf90e668443fe4a5ea6e74384f6adaa6622f044e19a3d"
+  },
+  "c01_one_addr_port_synack.run2": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 0,
+    "syn": 1,
+    "synack": 1
+   },
+   "file": "fixtures/c01_one_addr_port_synack.run2.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 0,
+    "rst_from_scanner": 1,
+    "syn_from_scanner": 1,
+    "synack_from_peer": 1
+   },
+   "sha256": "296481e97ff19d5b1989a2dc69e53edb9bc06c8c2b20b79d4eef32276ff7fe64"
+  },
+  "c02_one_addr_port_rst.run1": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 1,
+    "syn": 1,
+    "synack": 0
+   },
+   "file": "fixtures/c02_one_addr_port_rst.run1.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 1,
+    "rst_from_scanner": 1,
+    "syn_from_scanner": 1,
+    "synack_from_peer": 0
+   },
+   "sha256": "9cfa912acfe0b11da18f29f9bf7b817673f40304aef958920c52c406319d3521"
+  },
+  "c02_one_addr_port_rst.run2": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 1,
+    "syn": 1,
+    "synack": 0
+   },
+   "file": "fixtures/c02_one_addr_port_rst.run2.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 1,
+    "rst_from_scanner": 1,
+    "syn_from_scanner": 1,
+    "synack_from_peer": 0
+   },
+   "sha256": "2508eefe2698a326c91a0019ea0d67a6d9610b406aa6c32764c093ac37664b86"
+  },
+  "c03_multi_ports.run1": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 8,
+    "syn": 16,
+    "synack": 8
+   },
+   "file": "fixtures/c03_multi_ports.run1.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 8,
+    "rst_from_scanner": 16,
+    "syn_from_scanner": 16,
+    "synack_from_peer": 8
+   },
+   "sha256": "894aa3d977f6d636f8b4968ee20f35553b39d0980bea3e3b991b85047f8e82ce"
+  },
+  "c03_multi_ports.run2": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 8,
+    "syn": 16,
+    "synack": 8
+   },
+   "file": "fixtures/c03_multi_ports.run2.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 8,
+    "rst_from_scanner": 16,
+    "syn_from_scanner": 16,
+    "synack_from_peer": 8
+   },
+   "sha256": "50f5cde0d16ddcbb7134f8730540b3cda758efeb258a09955b5aad6f3d929644"
+  },
+  "c04_exclude.run1": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/c04_exclude.run1.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "31d8ac0659be987e8bb5ca53d05fb4b9e255ba1d7caf690fa196ddd3a6afca91"
+  },
+  "c04_exclude.run2": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/c04_exclude.run2.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "5ef2ae7cc67df2bb05554ba9115dc7c2e78c379001e04ef853b8539543a4c81f"
+  },
+  "c05_srcport_single.run1": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/c05_srcport_single.run1.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "242d74ac6567bafafabcc04afefb25cffdfdc4ab1d31c45306e2998f5b6d015c"
+  },
+  "c05_srcport_single.run2": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/c05_srcport_single.run2.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "be57a0bf6a79e30403d3ea650ea847690fa9dd4cdae57309ecf9962d86417d20"
+  },
+  "c06_srcport_range.run1": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/c06_srcport_range.run1.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "935c76c968df577f122ffcdd76bf90f4c6e41573781082ed3cc389fcd50dc783"
+  },
+  "c06_srcport_range.run2": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/c06_srcport_range.run2.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "62b29d04700cf255be10e40a6db5a74dc59ed769360b71e7624de895cd96fe19"
+  },
+  "x01_foreign_replies.run1": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/x01_foreign_replies.run1.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "2ccc1de64fefefe1a018dab27432ca3ccc9203eb286a5d002dadef46c5abc920"
+  },
+  "x01_foreign_replies.run2": {
+   "capture_valid": true,
+   "expected": {
+    "rst": 2,
+    "syn": 4,
+    "synack": 2
+   },
+   "file": "fixtures/x01_foreign_replies.run2.pcap",
+   "observed": {
+    "marker": 3,
+    "other": 0,
+    "rst_from_peer": 2,
+    "rst_from_scanner": 4,
+    "syn_from_scanner": 4,
+    "synack_from_peer": 2
+   },
+   "sha256": "cfe15d56335caa172c18c3bdcf4d014f99425cec92942d95be28960db7d5b46f"
+  }
+ },
+ "oracle": {
+  "git_commit": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+  "git_tree_clean": true,
+  "host": "minipc",
+  "pinned_revision": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+  "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+  "variant": "original pinned binary (NOT the --offline-patched copy)",
+  "version_line": "Masscan version 1.3.9-integration ( https://github.com/robertdavidgraham/masscan )"
+ },
+ "schema": 1
+}

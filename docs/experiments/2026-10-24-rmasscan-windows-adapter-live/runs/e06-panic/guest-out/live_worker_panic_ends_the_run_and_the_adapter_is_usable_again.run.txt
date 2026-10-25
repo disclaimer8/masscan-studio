@@ -1,0 +1,5 @@
+exe: C:\Users\lab\src\rmasscan-f51be48\rmasscan\target\debug\deps\windows_live-d3db5629704baf80.exe
+name: live_worker_panic_ends_the_run_and_the_adapter_is_usable_again
+nic_before: {"utc_ms":1792846228441,"stats":{"ReceivedBytes":123631274,"ReceivedUnicastPackets":1931749,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7947336,"SentUnicastPackets":127099,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 3802
+nic_after: {"utc_ms":1792846232315,"stats":{"ReceivedBytes":123631722,"ReceivedUnicastPackets":1931756,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":7947770,"SentUnicastPackets":127106,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

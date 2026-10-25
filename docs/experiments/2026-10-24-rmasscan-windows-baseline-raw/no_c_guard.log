@@ -1,0 +1,19 @@
+   Compiling windows-sys v0.61.2
+   Compiling syn v3.0.9
+   Compiling tempfile v3.27.0
+   Compiling rusty-fork v0.3.1
+   Compiling proptest v1.12.0
+   Compiling thiserror-impl v2.0.21
+   Compiling serde_derive v1.0.229
+   Compiling thiserror v2.0.21
+   Compiling rmasscan-core v0.1.0 (C:\Users\lab\src\rmasscan-31a729f\rmasscan\crates\rmasscan-core)
+   Compiling serde v1.0.229
+    Finished `test` profile [optimized + debuginfo] target(s) in 6.10s
+     Running tests\no_c_in_build.rs (target\debug\deps\no_c_in_build-8cde4f396bd8da95.exe)
+
+running 2 tests
+test matcher_compares_whole_names ... ok
+test build_graph_has_no_c_toolchain_crates ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

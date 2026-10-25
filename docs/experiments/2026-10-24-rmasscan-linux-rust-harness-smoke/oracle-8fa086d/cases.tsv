@@ -1,0 +1,6 @@
+c01_one_addr_port_synack	1	1	0	10.200.0.2 -p80 --source-port 40000
+c02_one_addr_port_rst	1	0	1	10.200.0.2 -p81 --source-port 40000
+c03_multi_addr_ports	16	8	8	10.200.0.2-10.200.0.5 -p80,81,443,8080 --source-port 40000
+c04_exclude	6	3	3	10.200.0.2-10.200.0.5 -p80,81 --exclude 10.200.0.3 --source-port 40000
+c05_srcport_single	4	2	2	10.200.0.2-10.200.0.3 -p80,81 --source-port 50123
+c06_srcport_range	4	2	2	10.200.0.2-10.200.0.3 -p80,81 --source-port 50000-50015

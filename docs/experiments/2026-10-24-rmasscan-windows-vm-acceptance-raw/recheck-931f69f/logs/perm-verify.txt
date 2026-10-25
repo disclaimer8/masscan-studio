@@ -1,0 +1,21 @@
+PASS     manifest 
+NOT RUN  stop_silent NOT RUN: run directory present
+NOT RUN  stop_drain NOT RUN: run directory present
+NOT RUN  stop_fullqueue NOT RUN: run directory present
+NOT RUN  stop_load NOT RUN: run directory present
+NOT RUN  overflow_queue NOT RUN: run directory present
+NOT RUN  linkloss NOT RUN: run directory present
+NOT RUN  ckpt_wrong_ports NOT RUN: run directory present
+NOT RUN  ckpt_wrong_seed NOT RUN: run directory present
+NOT RUN  ckpt_corrupt_next_index NOT RUN: run directory present
+NOT RUN  ckpt_corrupt_checksum NOT RUN: run directory present
+NOT RUN  ckpt_truncated NOT RUN: run directory present
+NOT RUN  ckpt_empty NOT RUN: run directory present
+NOT RUN  ckpt_future_format NOT RUN: run directory present
+NOT RUN  ckpt_future_engine NOT RUN: run directory present
+PASS     perm_restricted_scan 
+PASS     perm_restricted_inventory 
+PASS     perm_elevated_control 
+NOT RUN  rxloss NOT RUN: run directory present
+provenance: orchestrator built from 931f69fd1eaa (checkout head 931f69fd1eaa) dirty=false binary sha256 a854f049a875 (authoritative); verifier built from 931f69fd1eaa (checkout head 931f69fd1eaa) dirty=false binary sha256 a854f049a875
+overall: NOT RUN {"FAIL":0,"INVALID":0,"NOT RUN":15,"PASS":4}

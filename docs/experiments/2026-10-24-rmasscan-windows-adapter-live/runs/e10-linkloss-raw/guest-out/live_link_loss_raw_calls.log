@@ -1,0 +1,29 @@
+
+running 1 test
+test live_link_loss_raw_calls ... KV linkloss/link_Before_health health n=30 p50_us=10 p95_us=15 p99_us=16 max_us=16 over50ms=0
+KV linkloss/link_Before_recv recv n=358 p50_us=23 p95_us=34 p99_us=56 max_us=3137 over50ms=0
+KV linkloss/link_Before_send send n=358 p50_us=174 p95_us=272 p99_us=306 max_us=1020 over50ms=0
+KV linkloss/link_Down_health health n=40 p50_us=10 p95_us=13 p99_us=15 max_us=15 over50ms=0
+KV linkloss/link_Down_recv recv n=160 p50_us=42025 p95_us=42035 p99_us=42230 max_us=42348 over50ms=0
+KV linkloss/link_Down_send send n=160 p50_us=24 p95_us=35 p99_us=75 max_us=240 over50ms=0
+KV linkloss/link_After_health health n=45 p50_us=10 p95_us=15 p99_us=19 max_us=19 over50ms=0
+KV linkloss/link_After_recv recv n=522 p50_us=23 p95_us=39 p99_us=42018 max_us=45720 over50ms=0
+KV linkloss/link_After_send send n=522 p50_us=179 p95_us=284 p99_us=319 max_us=638 over50ms=0
+KV linkloss/link_results_Before_health Some(0)=30
+KV linkloss/link_results_Before_recv frame=358
+KV linkloss/link_results_Before_send Sent=358
+KV linkloss/link_results_Down_health Some(0)=40
+KV linkloss/link_results_Down_recv empty=158
+KV linkloss/link_results_Down_recv frame=2
+KV linkloss/link_results_Down_send Sent=1
+KV linkloss/link_results_Down_send Uncertain=159
+KV linkloss/link_results_After_health Some(0)=45
+KV linkloss/link_results_After_recv empty=8
+KV linkloss/link_results_After_recv frame=514
+KV linkloss/link_results_After_send Sent=514
+KV linkloss/link_results_After_send Uncertain=8
+KV linkloss/link_final_stats NetStats { tx_sent: 873, tx_would_block: 0, tx_uncertain: 167, tx_errors: 0, rx_packets: 874, rx_truncated: 0, rx_outgoing: 0, rx_wrong_interface: 0, rx_errors: 0, kernel_drops: Some(0) }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 48.06s
+

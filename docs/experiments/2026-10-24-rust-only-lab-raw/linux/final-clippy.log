@@ -1,0 +1,13 @@
+    Checking rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
+    Checking strsim v0.11.1
+    Checking clap_lex v1.1.1
+    Checking clap_builder v4.6.7
+    Checking core_detect v1.0.0
+    Checking unarray v0.1.4
+    Checking proptest v1.12.0
+    Checking clap v4.6.7
+    Checking rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
+    Checking rmasscan-core v0.1.0 ($REPO/rmasscan/crates/rmasscan-core)
+    Checking rmasscan-cli v0.1.0 ($REPO/rmasscan/crates/rmasscan-cli)
+    Checking rmasscan-engine v0.1.0 ($REPO/rmasscan/crates/rmasscan-engine)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.76s

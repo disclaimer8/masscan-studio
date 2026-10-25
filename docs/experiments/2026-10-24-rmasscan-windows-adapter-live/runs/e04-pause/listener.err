@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/home/a1/winvm/t3-tools/listener.py", line 17, in <module>
+    s.bind((ADDR, int(p))); s.listen(128); s.setblocking(False)
+    ~~~~~~^^^^^^^^^^^^^^^^
+OSError: [Errno 98] Address already in use

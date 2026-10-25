@@ -1,0 +1,17 @@
+[2026-10-24T12:51:16.777Z] tag=e09-flood-scan bin=windows_live test=live_scan_under_junk_flood_is_honest_about_loss cond=flood sha=f51be48
+raw_run_allowed True violations []
+[2026-10-24T12:51:22.628Z] guest run begins (RMASSCAN_NPCAP_NOP=1)
+[2026-10-24T12:51:30.718Z] guest run ended rc=0
+peer.pcap frames=800
+eno1.pcap frames=0
+peer_syn_from_guest=400
+==> /home/a1/winvm/t3-ev/e09-flood-scan/peer.err <==
+800 packets captured
+800 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/t3-ev/e09-flood-scan/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

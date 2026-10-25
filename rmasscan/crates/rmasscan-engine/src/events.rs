@@ -2,6 +2,8 @@
 
 use rmasscan_core::receive::Reply;
 
+use crate::io::RxHealth;
+
 /// Причина отказа.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
@@ -11,7 +13,21 @@ pub enum FailReason {
     /// Адаптер не знает, ушёл ли кадр. Checkpoint небезопасен.
     TxUncertain,
     TxError(String),
+    /// Кадр непрерывно не уходил (`WouldBlockUnsent`) дольше `tx_stall_timeout`.
+    /// Окно идёт от первой неудачной попытки кадра и сбрасывается только после
+    /// `Sent`. Курсор не продвинут, checkpoint не создаётся.
+    TxStalled {
+        idle_millis: u64,
+    },
     RxError(String),
+    /// Адаптер сообщил потерю приёма (`kernel_drops` > 0): полнота локального
+    /// приёма не доказана. Это не доказательство потери именно ответа цели
+    /// (счётчик может включать посторонние кадры). Принятые результаты остаются.
+    RxLoss {
+        kernel_drops: u64,
+    },
+    /// Достоверной статистики приёма нет: неизвестное не считается нулём.
+    RxStatsUnavailable,
     /// Паника рабочего потока.
     WorkerPanicked,
     /// Нарушение внутреннего инварианта (не должно случаться).
@@ -51,6 +67,9 @@ pub struct Progress {
 pub struct Outcome {
     pub reason: Reason,
     pub progress: Progress,
+    /// Последнее УСПЕШНО измеренное состояние приёма; `kernel_drops: None`,
+    /// если измерить не удалось (ошибка, нет статистики, измерения не было).
+    pub rx_health: RxHealth,
 }
 
 /// События для потребителя.

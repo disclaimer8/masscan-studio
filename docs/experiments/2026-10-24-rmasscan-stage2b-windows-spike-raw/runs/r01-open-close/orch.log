@@ -1,0 +1,21 @@
+[2026-10-24T11:38:20.677Z] tag=r01-open-close test=live_open_close cond=none sha=53fe366
+raw_run_allowed True violations []
+[2026-10-24T11:38:25.317Z] guest run begins
+[2026-10-24T11:38:26.670Z] guest run ended rc=0
+peer.pcap frames=0
+eno1.pcap frames=0
+==> /home/a1/winvm/spike-ev/r01-open-close/peer.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r01-open-close/peerjunk.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/spike-ev/r01-open-close/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
+post raw_run_allowed True violations []

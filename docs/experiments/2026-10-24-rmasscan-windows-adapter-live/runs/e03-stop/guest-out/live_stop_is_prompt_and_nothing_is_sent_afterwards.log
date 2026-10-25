@@ -1,0 +1,8 @@
+
+running 1 test
+test live_stop_is_prompt_and_nothing_is_sent_afterwards ... KV plain/stop reason=Stopped sent=450 next_index=450 received=450 discarded=0 duplicates=0 rx_health=Some(0) net.tx_sent=450 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=450 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) command_to_outcome_ms=Some(39.297560000000004) checkpoint=false
+KV plain/stop_silence tx_sent_before=450 tx_sent_after=450 window_ms=700
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 2.27s
+

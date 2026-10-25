@@ -1,0 +1,62 @@
+{
+  "collected_utc": "2026-10-24T10:04:41.5149667Z",
+  "computer": "W-",
+  "user": "W-\\lab",
+  "administrator": true,
+  "os": {
+    "caption": "Microsoft Windows 11 Pro",
+    "version": "10.0.26300",
+    "build": "26300",
+    "architecture": "64-bit"
+  },
+  "cpu": "AMD Ryzen 9 7900X3D 12-Core Processor          ",
+  "memory_gib": 7.99,
+  "powershell": "5.1.26100.9444",
+  "tools": {
+    "pwsh": null,
+    "rustc": null,
+    "cargo": null,
+    "git": null,
+    "cmake": null,
+    "cl": null,
+    "nmap": null
+  },
+  "known_install_locations": {
+    "pwsh7": false,
+    "cargo": false,
+    "git": false,
+    "vswhere": false,
+    "windows_sdk": false
+  },
+  "npcap_drivers": [],
+  "npcap_dlls": [],
+  "npcap_admin_only": null,
+  "adapters": [
+    {
+      "Name": "Ethernet",
+      "InterfaceDescription": "Intel(R) 82574L Gigabit Network Connection",
+      "Status": "Up",
+      "MacAddress": "52-54-00-12-34-56",
+      "LinkSpeed": "1 Gbps"
+    }
+  ],
+  "ipv4": [
+    {
+      "InterfaceAlias": "Ethernet",
+      "IPAddress": "10.0.2.15",
+      "PrefixLength": 24
+    },
+    {
+      "InterfaceAlias": "Loopback Pseudo-Interface 1",
+      "IPAddress": "127.0.0.1",
+      "PrefixLength": 8
+    }
+  ],
+  "disk": [
+    {
+      "DeviceID": "C:",
+      "Size": 67449647104,
+      "FreeSpace": 40843509760
+    }
+  ]
+}

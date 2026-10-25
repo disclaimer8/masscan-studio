@@ -1,0 +1,16 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.06s
+     Running tests\tx_stall.rs (target\debug\deps\tx_stall-58d1bb2ef7b53690.exe)
+
+running 9 tests
+test no_new_send_starts_after_deadline ... ok
+test persistent_would_block_fails_with_tx_stalled_after_ten_seconds ... ok
+test throttle_sleep_at_rate_one_does_not_trip_watchdog ... ok
+test zero_stall_timeout_is_rejected_before_threads_start ... ok
+test uncertain_and_tx_error_keep_priority_over_stall ... ok
+test sent_from_call_that_crosses_deadline_is_counted ... ok
+test stop_inside_long_would_block_is_fast ... ok
+test transient_would_block_resets_window_after_each_sent ... ok
+test pause_inside_long_would_block_is_fast_and_checkpoints ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.50s
+

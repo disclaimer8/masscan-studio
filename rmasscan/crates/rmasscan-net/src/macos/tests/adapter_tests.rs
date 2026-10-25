@@ -1387,6 +1387,12 @@ fn rx_record_shorter_than_an_ethernet_header_is_dropped_as_truncated() {
 
 #[test]
 fn io_budget_leaves_margin_below_the_50ms_contract() {
-    // Один вызов (poll округляется вверх, таймеры опаздывают) обязан уложиться в 50 мс.
-    assert!(IO_BUDGET <= Duration::from_millis(42), "{IO_BUDGET:?}");
+    // Один вызов (poll округляется вверх, таймеры опаздывают) обязан уложиться в 50 мс:
+    // бюджет + худшее измеренное спайком превышение (14,3 мс) + 2 мс запаса <= 50 мс.
+    let worst_overshoot = Duration::from_micros(14_300);
+    let margin = Duration::from_millis(2);
+    assert!(
+        IO_BUDGET + worst_overshoot + margin <= Duration::from_millis(50),
+        "{IO_BUDGET:?}"
+    );
 }

@@ -48,11 +48,11 @@ use super::{Errno, errno_msg};
 use crate::drop_counter::DropCounter;
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
-/// Внутренний бюджет одного вызова адаптера. ВРЕМЕННО 42 мс (как на Windows):
-/// `poll` округляется вверх, таймеры XNU опаздывают, а контракт 50 мс относится ко
-/// всему вызову. Живой спайк (задача 3) ещё не выполнен; он применит
-/// `50 − (максимальное превышение + 2 мс)`.
-pub(crate) const IO_BUDGET: Duration = Duration::from_millis(42);
+/// Внутренний бюджет одного вызова адаптера: 33 мс. `poll` округляется вверх, таймеры
+/// XNU опаздывают, а контракт 50 мс относится ко всему вызову. Живой спайк (задача 3,
+/// `docs/experiments/2026-10-25-rmasscan-macos-bpf-spike.md`) измерил худшее превышение
+/// `poll` 14,3 мс (под нагрузкой сборки; 9,1 мс на тихом Mac): 50 − (14,3 + 2) = 33.
+pub(crate) const IO_BUDGET: Duration = Duration::from_millis(33);
 /// Ethernet-заголовок без полезной нагрузки.
 pub(crate) const MIN_TX_FRAME: usize = 14;
 /// Максимум кадра на отправку: MTU 1500 + заголовок 14, VLAN не принимается.

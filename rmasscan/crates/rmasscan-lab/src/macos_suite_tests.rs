@@ -1617,11 +1617,21 @@ fn the_peer_listens_on_8000_to_8007_only_and_the_rst_limit_is_recorded() {
         "no root listeners: 80 and 443 stay closed"
     );
     let meta = read_json(dest.join("meta.json")).unwrap();
-    assert_eq!(meta["icmplim"], "250");
+    assert_eq!(meta["rst_rlc"], "250");
     assert!(
-        fs::read_to_string(dest.join("icmplim.txt"))
+        fs::read_to_string(dest.join("rst_rlc.txt"))
             .unwrap()
             .contains("250")
+    );
+    assert!(!dest.join("icmplim.txt").exists(), "Darwin has no icmplim");
+    // Raw host LISTEN sockets before and after the run, and the listener goes after the witness.
+    for f in ["host-listen-before.txt", "host-listen-after.txt"] {
+        assert!(dest.join(f).is_file(), "{f}");
+    }
+    let log = st.log.borrow();
+    assert!(
+        st.position("witness:INT").unwrap() < st.position("listener:TERM").unwrap(),
+        "teardown RSTs must not be captured: {log:?}"
     );
     assert!(
         !spawned.iter().any(|a| a[0] == "/usr/sbin/sysctl"),

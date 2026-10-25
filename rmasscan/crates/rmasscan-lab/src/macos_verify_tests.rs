@@ -2394,21 +2394,23 @@ fn a_missing_peer_capture_without_a_host_record_makes_the_listener_truth_invalid
     assert!(!failed(&r, "results equal listener truth"));
 }
 
+/// A gzip member made of stored deflate blocks only (no external tool, same bytes on every OS).
 fn gz_bytes(data: &[u8]) -> Vec<u8> {
-    use std::io::Write;
-    let mut g = std::process::Command::new("/usr/bin/gzip")
-        .arg("-c")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = g.stdin.take().unwrap();
-    let d = data.to_vec();
-    let w = std::thread::spawn(move || stdin.write_all(&d).unwrap());
-    let o = g.wait_with_output().unwrap();
-    w.join().unwrap();
-    assert!(o.status.success());
-    o.stdout
+    let mut z = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255];
+    let chunks: Vec<&[u8]> = if data.is_empty() {
+        vec![&[][..]]
+    } else {
+        data.chunks(65535).collect()
+    };
+    for (i, c) in chunks.iter().enumerate() {
+        z.push(u8::from(i + 1 == chunks.len()));
+        z.extend_from_slice(&(c.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(!(c.len() as u16)).to_le_bytes());
+        z.extend_from_slice(c);
+    }
+    z.extend_from_slice(&crate::gunzip::crc32(data).to_le_bytes());
+    z.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    z
 }
 
 /// Review P2: a readable `peer.pcap` beside a compressed uplink must not hide the uplink. Every capture is read on

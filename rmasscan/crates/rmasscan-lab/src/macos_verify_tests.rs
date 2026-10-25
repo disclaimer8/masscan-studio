@@ -473,7 +473,7 @@ fn build(env: &Env, tag: &str) -> Ev {
             "pcap":peer_rec,"interface_drop_delta":0,
             "witness":{"iface_rxtx_delta_lo":nframes-3,"iface_rxtx_delta_hi":nframes,"quiesced_before_stop":true,"valid":true,"invalid_reasons":[]}},
         "uplink":{"iface":"en0","cmd":["tcpdump","-i","en0","-p","-n","-U","--immediate-mode","-s","0","-w","/work/uplink.pcap",up_filter],
-            "filter":up_filter,"exited":true,"listening":true,
+            "filter":up_filter,"exited":true,"exit_code":0,"listening":true,
             "tcpdump":{"captured":0,"received":0,"dropped_kernel":0,"dropped_if":null},
             "pcap":up_rec,"interface_drop_delta":0},
         "quiet":{"reached":true,"quiet_s":1.5}});
@@ -1236,4 +1236,46 @@ fn link_loss_is_judged_on_the_peer_interface_and_the_failure_class_is_provisiona
         "ends in a failure naming a TX or link class"
     ));
     assert!(has_check(&r, "link loss fails the run"));
+}
+
+#[test]
+fn a_kept_run_needs_the_uplink_tcpdump_to_have_exited_cleanly() {
+    let env = Env::new("functional");
+    for bad in [json!(null), json!(1), json!(130)] {
+        let mut ev = build(&env, C01);
+        ev.json("capture.json", |v| v["uplink"]["exit_code"] = bad.clone());
+        let (r, _) = ev.verify(&env);
+        assert_eq!(
+            result_of(&r, "uplink tcpdump exited cleanly"),
+            INVALID,
+            "{bad}"
+        );
+        assert_eq!(r.verdict(), INVALID);
+    }
+    assert_eq!(
+        result_of(
+            &build(&env, C01).verify(&env).0,
+            "uplink tcpdump exited cleanly"
+        ),
+        PASS
+    );
+}
+
+#[test]
+fn the_text_report_names_a_run_tripped_while_the_manifest_gate_failed() {
+    let env = Env::new("functional");
+    let mut ev = build(&env, C01);
+    ev.set_frames("uplink", &vec![(BASE, syn(80))]);
+    ev.write(&env);
+    fs::remove_file(env.root.join("fixtures/manifest.json")).unwrap();
+    let v = verify_dir(&env.root);
+    let lines = verify::safety_report_lines(&v);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("safety trip: ") && l.contains(C01)),
+        "{lines:?}"
+    );
+    // Windows-shaped results (no safety_scan key) print exactly what they did.
+    assert!(verify::safety_report_lines(&json!({"runs":[],"aborted":[]})).is_empty());
 }

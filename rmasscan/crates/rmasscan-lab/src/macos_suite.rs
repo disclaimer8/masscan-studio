@@ -92,10 +92,10 @@ pub(crate) struct LinkState {
     pub peer_up: bool,
     pub scanner_active: bool,
 }
-/// `socketfilterfw --getglobalstate`: "Firewall is enabled. (State = 1)" or "(State = 2)"; anything else is not enabled.
-pub(crate) fn firewall_enabled(text: &str) -> bool {
-    let t = text.to_lowercase();
-    t.contains("is enabled") || t.contains("state = 1") || t.contains("state = 2")
+/// `socketfilterfw --getglobalstate` must exit 0 and print exactly "Firewall is disabled. (State = 0)"; anything
+/// else (enabled, empty, unrecognised, non-zero exit) is not proof and refuses the run.
+pub(crate) fn firewall_disabled(rc: i32, text: &str) -> bool {
+    rc == 0 && text.trim() == "Firewall is disabled. (State = 0)"
 }
 /// `UP` in the `flags=...<...>` list of an `ifconfig` listing (the administrative state).
 pub(crate) fn flags_up(text: &str) -> bool {
@@ -784,11 +784,20 @@ impl Suite<'_> {
             ],
             20,
         )?;
-        io(fs::write(work.join("alf.txt"), &o.stdout), "alf.txt")?;
-        if firewall_enabled(&o.stdout) {
-            return Err(SuiteError::NotRun(
-                "the macOS Application Firewall is enabled; it can block or prompt for the peer listeners. Turn it off for the session (System Settings, Network, Firewall) and start again; nothing was started".into(),
-            ));
+        io(
+            fs::write(
+                work.join("alf.txt"),
+                format!("rc {}\nstdout:\n{}\nstderr:\n{}", o.rc, o.stdout, o.stderr),
+            ),
+            "alf.txt",
+        )?;
+        // Fail closed: only an exit 0 that says the firewall is disabled lets the run start.
+        if !firewall_disabled(o.rc, &o.stdout) {
+            return Err(SuiteError::NotRun(format!(
+                "the macOS Application Firewall is not proven disabled (socketfilterfw rc {}, output {:?}); it can block or prompt for the peer listeners. Turn it off for the session (System Settings, Network, Firewall) and start again; alf.txt has the raw output; nothing was started",
+                o.rc,
+                o.stdout.trim()
+            )));
         }
         Ok(())
     }
@@ -1338,7 +1347,7 @@ impl Suite<'_> {
                 "pcap":rec("peer.pcap")?,"interface_drop_delta":wmeta["interface_drop_delta"],
                 "witness":wmeta});
             cap["uplink"] = json!({"iface":uplink_if,"cmd":cap["uplink_argv"],
-                "filter":mv::uplink_filter(SCANNER_MAC, PEER_MAC),"exited":urc.is_some(),
+                "filter":mv::uplink_filter(SCANNER_MAC, PEER_MAC),"exited":urc.is_some(),"exit_code":urc,
                 "listening":parse_tcpdump(&ue)["listening"],"tcpdump":strip(parse_tcpdump(&ue)),
                 "pcap":rec("uplink.pcap")?,"interface_drop_delta":up_delta});
             cap.as_object_mut()

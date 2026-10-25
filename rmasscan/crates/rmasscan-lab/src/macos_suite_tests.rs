@@ -75,6 +75,8 @@ struct Fake {
     stopped: Cell<bool>,
     euid: Cell<u32>,
     alf_enabled: Cell<bool>,
+    /// Overrides the socketfilterfw answer (exit code, stdout).
+    alf_raw: RefCell<Option<(i32, String)>>,
     scanner: Cell<Mode>,
     log: Rc<RefCell<Vec<String>>>,
     peer_up: Cell<bool>,
@@ -95,6 +97,7 @@ impl Fake {
             stopped: Cell::new(false),
             euid: Cell::new(501),
             alf_enabled: Cell::new(false),
+            alf_raw: RefCell::default(),
             scanner: Cell::new(Mode::Exits(0)),
             log: Rc::default(),
             peer_up: Cell::new(true),
@@ -147,6 +150,13 @@ impl Stand for Fake {
             });
         }
         if argv[0].ends_with("socketfilterfw") {
+            if let Some((rc, out)) = self.alf_raw.borrow().clone() {
+                return Ok(Output {
+                    rc,
+                    stdout: out,
+                    stderr: String::new(),
+                });
+            }
             let on = self.alf_enabled.get();
             return Ok(Output {
                 rc: 0,
@@ -1014,9 +1024,35 @@ fn the_uplink_capture_is_not_promiscuous_and_the_firewall_state_is_recorded() {
         e.message()
     );
     assert!(!st.any_spawned());
-    assert!(firewall_enabled("Firewall is enabled. (State = 1)"));
-    assert!(firewall_enabled("Firewall is enabled. (State = 2)"));
-    assert!(!firewall_enabled("Firewall is disabled. (State = 0)"));
+    assert!(firewall_disabled(0, "Firewall is disabled. (State = 0)\n"));
+    for (rc, out) in [
+        (0, "Firewall is enabled. (State = 1)"),
+        (0, "Firewall is enabled. (State = 2)"),
+        (0, ""),
+        (0, "something else"),
+        (1, "Firewall is disabled. (State = 0)"),
+        (0, "Firewall is disabled. (State = 1)"),
+    ] {
+        assert!(!firewall_disabled(rc, out), "{rc} {out:?}");
+    }
+    // Fail closed through the gate: each unproven answer refuses the run, with the raw output kept.
+    for (rc, out) in [
+        (0, ""),
+        (0, "garbage"),
+        (2, "Firewall is disabled. (State = 0)"),
+        (0, "Firewall is enabled. (State = 1)"),
+    ] {
+        let rig = Rig::new();
+        let st = Fake::new(&rig.wire);
+        *st.alf_raw.borrow_mut() = Some((rc, out.to_owned()));
+        let s = rig.suite(&st, "functional");
+        let e = s.one(&item("functional", C01), 30).unwrap_err();
+        assert!(
+            matches!(e, SuiteError::NotRun(_)) && e.message().contains("not proven disabled"),
+            "{rc} {out:?}: {e:?}"
+        );
+        assert!(!st.any_spawned());
+    }
 }
 
 #[test]

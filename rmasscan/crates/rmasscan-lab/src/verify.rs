@@ -2659,6 +2659,8 @@ pub(crate) fn safety_report_lines(res: &Value) -> Vec<String> {
         .chain(array(&res["groups"]))
         .chain(array(&res["discarded"]))
         .chain(array(&res["aborted"]))
+        // macOS verifier only (absent for Windows): pcap-only findings kept when its manifest gate failed.
+        .chain(array(&res["safety_scan"]))
         .filter(|r| r["safety_trip"] == true)
     {
         for c in array(&r["checks"])

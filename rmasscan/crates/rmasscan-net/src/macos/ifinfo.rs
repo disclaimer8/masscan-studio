@@ -7,8 +7,8 @@ use std::net::Ipv4Addr;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 
-use super::Errno;
 use super::sys::IFT_ETHER;
+use super::{Errno, errno_msg};
 use crate::{IfaceReport, NetError};
 
 /// Канальный уровень интерфейса (из AF_LINK).
@@ -208,7 +208,6 @@ fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {
     out
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 fn valid_ifname(name: &str) -> bool {
     !name.is_empty()
         && name.len() < libc::IFNAMSIZ
@@ -219,14 +218,8 @@ fn valid_ifname(name: &str) -> bool {
             .any(|b| b == 0 || b == b'/' || b.is_ascii_whitespace())
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // used from task 4
-fn errno_msg(op: &str, e: Errno) -> String {
-    format!("{op}: {}", std::io::Error::from_raw_os_error(e))
-}
-
 /// Проверяет binding через ОС и возвращает ifindex. Без привилегий. Source IP и
 /// MAC с ОС не сверяются (как на Linux/Windows).
-#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Result<u32, NetError> {
     if binding.link_type != LinkType::Ethernet {
         return Err(NetError::UnsupportedLink(format!(

@@ -95,12 +95,18 @@ jobs:
     name: windows-x64 wire lab package
     runs-on: windows-2022
     needs: check
+    env:
+      # На pull_request github.sha это временный merge-коммит refs/pull/N/merge, которого
+      # нет в ветке; пакет штампуется настоящим коммитом ветки, и checkout берёт его же.
+      PACKAGE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     defaults:
       run:
         shell: pwsh
         working-directory: rmasscan
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PACKAGE_COMMIT }}
 
       - name: Установить toolchain
         shell: bash
@@ -110,7 +116,7 @@ jobs:
           rustc --version
 
       - name: Собрать пакет
-        run: ./scripts/package-windows-wire.ps1 -Commit "${{ github.sha }}" -OutDir dist
+        run: ./scripts/package-windows-wire.ps1 -Commit "${{ env.PACKAGE_COMMIT }}" -OutDir dist
 
       - name: Проверить пакет (хэши, состав, без Npcap)
         run: |
@@ -126,11 +132,11 @@ jobs:
           $names = (Get-ChildItem $dir.FullName).Name | Sort-Object
           $want = 'LICENSE','NOTICE','README.txt','SHA256SUMS','SOURCE_COMMIT','windows-wire-lab.ps1','wire_scan.exe'
           if (Compare-Object $names ($want | Sort-Object)) { throw "unexpected package contents: $names" }
-          if (-not (Select-String -Path "$($dir.FullName)/SOURCE_COMMIT" -Pattern '${{ github.sha }}' -SimpleMatch -Quiet)) { throw 'SOURCE_COMMIT mismatch' }
+          if (-not (Select-String -Path "$($dir.FullName)/SOURCE_COMMIT" -Pattern '${{ env.PACKAGE_COMMIT }}' -SimpleMatch -Quiet)) { throw 'SOURCE_COMMIT mismatch' }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rmasscan-wire-windows-x64-${{ github.sha }}
+          name: rmasscan-wire-windows-x64-${{ env.PACKAGE_COMMIT }}
           path: |
             rmasscan/dist/*.zip
             rmasscan/dist/*.zip.sha256

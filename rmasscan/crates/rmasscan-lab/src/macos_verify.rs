@@ -511,6 +511,14 @@ fn gate(
             "",
         );
         if who == "uplink" {
+            // The suite stops it with SIGINT and treats only exit 0 as clean.
+            r.inv(
+                "uplink tcpdump exited cleanly after the stop (exit code 0)",
+                c["exit_code"].as_i64() == Some(0),
+                c["exit_code"].to_string(),
+            );
+        }
+        if who == "uplink" {
             r.inv(
                 "uplink tcpdump is not promiscuous (the user's own NIC)",
                 array(&c["cmd"]).iter().any(|v| v == "-p"),

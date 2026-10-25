@@ -261,14 +261,6 @@ fn assert_lab_frame(iface: &str, f: &[u8]) {
 
 // ---------------------------------------------------------------- дескриптор BPF
 
-/// Единственная точка `ioctl` спайка: обёртка над `sys::ioctl_ptr`.
-fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), i32> {
-    // SAFETY: все вызовы спайка передают `u32`, `BpfStat`, `ifreq` или `BpfProgram`;
-    // первые три допускают любой образ, а `BpfProgram::bf_insns` указывает на вектор,
-    // живущий до конца вызова и только читаемый ядром (BIOCSETF).
-    unsafe { super::sys::ioctl_ptr(fd, req, arg) }
-}
-
 struct Dev {
     fd: RawFd,
     iface: &'static str,
@@ -343,30 +335,54 @@ impl Dev {
             }
         };
         let mut blen = cfg.blen;
-        chk("BIOCSBLEN", ioctl_ptr(fd, libc::BIOCSBLEN, &mut blen));
+        // SAFETY: аргумент это `u32` (любой образ допустим), размер сверяется внутри.
+        chk("BIOCSBLEN", unsafe {
+            super::sys::ioctl_ptr(fd, libc::BIOCSBLEN, &mut blen)
+        });
         // SAFETY: `ifreq` состоит из целых и union; нулевой образ корректен.
         let mut req: libc::ifreq = unsafe { std::mem::zeroed() };
         for (dst, src) in req.ifr_name.iter_mut().zip(iface.as_bytes()) {
             *dst = *src as libc::c_char;
         }
-        chk("BIOCSETIF", ioctl_ptr(fd, libc::BIOCSETIF, &mut req));
+        // SAFETY: `req` это нулевой `ifreq` с именем интерфейса (целые и union), размер сверяется внутри.
+        chk("BIOCSETIF", unsafe {
+            super::sys::ioctl_ptr(fd, libc::BIOCSETIF, &mut req)
+        });
         let mut dlt = 0u32;
-        chk("BIOCGDLT", ioctl_ptr(fd, libc::BIOCGDLT, &mut dlt));
+        // SAFETY: аргумент это `u32` (любой образ допустим), размер сверяется внутри.
+        chk("BIOCGDLT", unsafe {
+            super::sys::ioctl_ptr(fd, libc::BIOCGDLT, &mut dlt)
+        });
         assert_eq!(dlt, 1, "DLT_EN10MB expected");
         let mut on = 1u32;
-        chk("BIOCIMMEDIATE", ioctl_ptr(fd, libc::BIOCIMMEDIATE, &mut on));
+        // SAFETY: аргумент это `u32` (любой образ допустим), размер сверяется внутри.
+        chk("BIOCIMMEDIATE", unsafe {
+            super::sys::ioctl_ptr(fd, libc::BIOCIMMEDIATE, &mut on)
+        });
         let mut v = u32::from(cfg.see_sent);
-        chk("BIOCSSEESENT", ioctl_ptr(fd, BIOCSSEESENT, &mut v));
+        // SAFETY: аргумент это `u32` (любой образ допустим), размер сверяется внутри.
+        chk("BIOCSSEESENT", unsafe {
+            super::sys::ioctl_ptr(fd, BIOCSSEESENT, &mut v)
+        });
         let mut v = u32::from(cfg.hdr_complete);
-        chk("BIOCSHDRCMPLT", ioctl_ptr(fd, libc::BIOCSHDRCMPLT, &mut v));
+        // SAFETY: аргумент это `u32` (любой образ допустим), размер сверяется внутри.
+        chk("BIOCSHDRCMPLT", unsafe {
+            super::sys::ioctl_ptr(fd, libc::BIOCSHDRCMPLT, &mut v)
+        });
         let mut insns = cfg.filter.clone();
         let mut prog = BpfProgram {
             bf_len: insns.len() as u32,
             bf_insns: insns.as_mut_ptr(),
         };
-        chk("BIOCSETF", ioctl_ptr(fd, BIOCSETF, &mut prog));
+        // SAFETY: `prog` это `BpfProgram`; `bf_insns` указывает на `insns`, живущий до конца вызова, ядро только читает.
+        chk("BIOCSETF", unsafe {
+            super::sys::ioctl_ptr(fd, BIOCSETF, &mut prog)
+        });
         let mut bl = 0u32;
-        chk("BIOCGBLEN", ioctl_ptr(fd, libc::BIOCGBLEN, &mut bl));
+        // SAFETY: аргумент это `u32` (любой образ допустим), размер сверяется внутри.
+        chk("BIOCGBLEN", unsafe {
+            super::sys::ioctl_ptr(fd, libc::BIOCGBLEN, &mut bl)
+        });
         d.buflen = bl as usize;
         d
     }
@@ -426,7 +442,8 @@ impl Dev {
 
     fn stats(&mut self) -> Result<BpfStat, i32> {
         let mut st = BpfStat::default();
-        ioctl_ptr(self.fd, libc::BIOCGSTATS, &mut st)?;
+        // SAFETY: `BpfStat` это `#[repr(C)]` из целых (любой образ допустим), размер сверяется внутри.
+        unsafe { super::sys::ioctl_ptr(self.fd, libc::BIOCGSTATS, &mut st) }?;
         Ok(st)
     }
 

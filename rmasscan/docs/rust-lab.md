@@ -255,6 +255,19 @@ the last two items.
 Cleanup after an aborted suite: `rmasscan-lab windows-suite --cleanup --suite ID` stops every
 recorded remote process (pid and start time must match) and removes the suite's scratch directory.
 
+### Exit codes of `windows-suite`
+
+| Code | Meaning |
+|---|---|
+| 0 | done |
+| 1 | reserved |
+| 2 | NOT RUN: refused before any remote change (bad option, lock held, preflight) |
+| 10 | aborted (including an unreadable or unmeasured eno1 capture) |
+| 11 | an ordinary rerun refused (the run is not discardable) |
+| 12 | directory capture schema too old |
+| 13 | isolation breach: a lab frame on eno1 (live interlock or abort path), or a safety finding in `--out` (start and `--rerun` refused) |
+| 130 | interrupted (Ctrl-C / SIGTERM) |
+
 ### Safety findings, aborted runs, Ctrl-C and the suite lock
 
 **Safety checks (final review I-1).** The verifier has a class of check that no other finding can
@@ -264,12 +277,12 @@ pcaps, so they run before the meta, capture and run files are looked at. A tripp
 run FAIL whatever else is INVALID or NOT RUN (a failed status-post, a lab0 drop, an incomplete
 capture), so the run is never discardable, and `verdict.json` lists it in `safety_trips` and sets
 `overall` to FAIL even when the run sits in `runs_discarded/` or `runs_aborted/`. `windows-suite`
-refuses to start or `--rerun` in an `--out` that holds such a run (exit 11, the run is named); use
+refuses to start or `--rerun` in an `--out` that holds such a run (exit 13, the run is named); use
 a new directory.
 
 **Aborted runs (I-2).** When a run fails after the guest runner was invoked, the suite stops the
 captures, reads the eno1 frame count on home-pc and judges it with the live interlock: a lab frame
-exits 11, an unreadable or unmeasured capture exits 10 with the reason, a clean one leaves the run
+exits 13, an unreadable or unmeasured capture exits 10 with the reason, a clean one leaves the run
 NOT RUN (discardable). The interlock requires the eno1 tcpdump counters `received` and
 `dropped_kernel` to be measured and zero as well as the frame count. The scratch is copied to
 `runs_aborted/<tag>.<run id>/` after its sha256 sums were recorded on home-pc

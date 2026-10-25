@@ -218,15 +218,18 @@ the last two items.
    - INVALID: any capture-completeness rule (tcpdump drops, captured != received, lab0 counter
      window, end marker, schema).
    - FAIL: a gate leg failed; eno1 saw a lab frame; a scanner SYN to anything but 198.18.0.2 or from the
-     wrong MAC, IP or source port; SYNs on the wire != `tx_sent`; a Completed run with a probe missing
-     or duplicated on the wire; a SYN after the outcome; an outcome other than `Completed` or
+     wrong MAC, IP or source port; on a proven-complete capture, SYNs on the wire != `tx_sent` or a
+     Completed run with a probe missing or duplicated on the wire (on an incomplete capture these two
+     are INVALID, not FAIL); a SYN after the outcome; an outcome other than `Completed` or
      `Failed(RxLoss)`; `Failed(RxLoss)` with zero or unknown kernel drops; `Completed` with
      non-zero or unknown kernel drops; or Completed results that differ from the listener truth.
      A gate-leg failure is FAIL here and therefore not rerunnable, while the same failure in part A or B
      is INVALID and rerunnable; in practice only status-post can reach it (a failed pre-run leg aborts the
      suite before the scanner starts, which leaves a discardable NOT RUN cell).
    - PASS otherwise. `Failed(RxLoss)` with measured drops above zero is a PASS (`rx_loss: true`):
-     honest measured loss; its results are recorded, not compared.
+     honest measured loss. Its results are not compared with the full listener truth, but they must be
+     genuine (a subset of it, no foreign or duplicate entries), with the drop count consistent with
+     `rx_health` and guest exit 3, the same check as the `rxloss` run of part B.
 
    `perf_summary.rows` has one row per rate: PASS/FAIL/INVALID/NOT RUN/rx_loss counts and the
    medians over the Completed PASS cells (every probe went out) of `steady_pps_wire` (from peer-pcap SYN timestamps),

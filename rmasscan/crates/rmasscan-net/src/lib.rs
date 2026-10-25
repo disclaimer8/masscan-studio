@@ -1,6 +1,6 @@
 //! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; Windows: Npcap. Это
 //! единственный crate, где допускается `unsafe`: весь FFI находится в
-//! private-модулях (`linux::socket`; `macos::{sys, ifinfo}` (BPF ABI, sysctl, getifaddrs); `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
+//! private-модулях (`linux::socket`; `macos::{sys, ifinfo, process}` (BPF ABI, sysctl, getifaddrs, метрики процесса); `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
 //! телеметрия процесса (Toolhelp, токен, счётчики памяти), в продуктовой сборке она
 //! тоже присутствует) и,
 //! только с feature `lab` (включает один rmasscan-lab), в `lab_io::imp`
@@ -26,7 +26,7 @@ use rmasscan_engine::AdapterPair;
 #[cfg(target_os = "linux")]
 mod linux;
 
-// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo}`.
+// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}`.
 #[cfg(target_os = "macos")]
 mod macos;
 
@@ -338,7 +338,13 @@ pub fn process_sample() -> ProcessSample {
 }
 
 #[doc(hidden)]
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn process_sample() -> ProcessSample {
+    macos::process::process_sample()
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn process_sample() -> ProcessSample {
     ProcessSample::default()
 }
@@ -375,7 +381,13 @@ pub fn lab_current_thread_id() -> Option<u64> {
 }
 
 #[doc(hidden)]
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub fn lab_current_thread_id() -> Option<u64> {
+    macos::process::current_thread_id()
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn lab_current_thread_id() -> Option<u64> {
     None
 }
@@ -398,7 +410,13 @@ pub fn lab_thread_ids() -> Option<Vec<u64>> {
 }
 
 #[doc(hidden)]
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub fn lab_thread_ids() -> Option<Vec<u64>> {
+    macos::process::thread_ids()
+}
+
+#[doc(hidden)]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn lab_thread_ids() -> Option<Vec<u64>> {
     None
 }

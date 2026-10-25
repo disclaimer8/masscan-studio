@@ -1,6 +1,6 @@
 //! macOS BPF: ABI-объявления, сведения об интерфейсе и инвентарь без
 //! привилегий. Адаптер (open/TX/RX) появится в задаче 4. `unsafe` только в
-//! `sys` и `ifinfo`.
+//! `sys`, `ifinfo` и `process`.
 
 use std::os::unix::fs::MetadataExt;
 
@@ -11,6 +11,9 @@ pub(crate) mod sys;
 
 #[allow(unsafe_code)]
 pub(crate) mod ifinfo;
+
+#[allow(unsafe_code)]
+pub(crate) mod process;
 
 #[cfg(test)]
 mod tests;

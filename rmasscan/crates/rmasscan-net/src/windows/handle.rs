@@ -541,6 +541,14 @@ pub(crate) fn resolve_device(api: &NpcapApi, interface_id: &str) -> Result<CStri
         // Имя из перечня не содержит NUL (получено из CStr).
         Some(d) => CString::new(d.name.as_bytes())
             .map_err(|_| NetError::InterfaceMismatch("device name contains NUL".into())),
+        // Admin-only Npcap скрывает от токена без прав все адаптеры, кроме
+        // loopback: это нехватка прав, а не неверное имя.
+        None if devices.iter().all(|d| d.flags & PCAP_IF_LOOPBACK != 0) => {
+            Err(NetError::PermissionDenied(format!(
+                "no Npcap device named {interface_id:?}: only loopback is visible: Npcap may be installed in Administrators-only mode and this process lacks rights ({} devices enumerated)",
+                devices.len()
+            )))
+        }
         None => Err(NetError::InterfaceMismatch(format!(
             "no Npcap device named {interface_id:?} ({} devices enumerated)",
             devices.len()

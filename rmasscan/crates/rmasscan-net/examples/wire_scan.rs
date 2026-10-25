@@ -1128,6 +1128,8 @@ mod tests {
         inventory_calls: Cell<u32>,
         open_calls: Cell<u32>,
         nic_calls: Cell<u32>,
+        /// `open` отвечает PermissionDenied (Admin-only Npcap без прав).
+        open_denied: bool,
         fake: Option<rmasscan_engine::fake::FakeAdapter>,
     }
 
@@ -1148,6 +1150,11 @@ mod tests {
         }
         fn open(&self, _: &AdapterBinding) -> Result<Opened, NetError> {
             self.open_calls.set(self.open_calls.get() + 1);
+            if self.open_denied {
+                return Err(NetError::PermissionDenied(
+                    "mock: only loopback is visible".into(),
+                ));
+            }
             let Some(fake) = &self.fake else {
                 return Err(NetError::System(
                     "mock: adapter must not be opened here".into(),
@@ -1494,6 +1501,19 @@ mod tests {
         let (_, j) = run(&with(&["--resume-checkpoint", &cp]), &be);
         let _ = std::fs::remove_file(&cp);
         assert!(j.contains("\"job\":null") || j.contains("\"job\":{"), "{j}");
+    }
+
+    #[test]
+    fn permission_denied_on_open_exits_5_with_the_open_stage() {
+        let be = Mock {
+            nic: Some(NIC),
+            open_denied: true,
+            ..Mock::default()
+        };
+        let (code, json) = run(&with(&[]), &be);
+        assert_eq!(be.open_calls.get(), 1, "{json}");
+        assert_eq!(code, 5, "{json}");
+        assert!(json.contains("PermissionDenied"), "{json}");
     }
 
     #[test]

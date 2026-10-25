@@ -646,3 +646,35 @@ fn npf_guid_is_extracted_only_from_a_wellformed_device_name() {
     assert_eq!(npf_guid("eth0"), None);
     assert_eq!(npf_guid("\\Device\\NPF_{abc"), None);
 }
+
+// ---------- Admin-only Npcap: имя не найдено из-за нехватки прав ----------
+
+#[test]
+fn resolve_with_only_loopback_visible_is_permission_denied() {
+    reset(|s| s.devices = vec![(LOOP.into(), None, PCAP_IF_LOOPBACK)]);
+    let api = good_api();
+    let e = resolve_device(&api, DEV1).unwrap_err();
+    assert!(
+        matches!(e, NetError::PermissionDenied(ref m) if m.contains("Administrators-only")),
+        "{e:?}"
+    );
+    with(|s| assert_eq!(s.creates, 0));
+}
+
+#[test]
+fn resolve_with_an_empty_device_list_is_permission_denied() {
+    reset(|s| s.devices.clear());
+    let api = good_api();
+    let e = resolve_device(&api, DEV1).unwrap_err();
+    assert!(matches!(e, NetError::PermissionDenied(_)), "{e:?}");
+    with(|s| assert_eq!(s.creates, 0));
+}
+
+#[test]
+fn resolve_unknown_name_among_real_adapters_stays_interface_mismatch() {
+    reset(|_| {});
+    let api = good_api();
+    let e =
+        resolve_device(&api, "\\Device\\NPF_{00000000-0000-0000-0000-000000000000}").unwrap_err();
+    assert!(matches!(e, NetError::InterfaceMismatch(_)), "{e:?}");
+}

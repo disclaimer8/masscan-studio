@@ -72,14 +72,23 @@ fn last_errno() -> Errno {
 
 /// `ioctl` с указателем на значение вызывающего. Размер `T` обязан совпадать с
 /// `IOCPARM_LEN(req)` (биты 16..29 запроса): иначе `EINVAL` до системного вызова.
-pub(crate) fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), Errno> {
+///
+/// # Safety
+///
+/// Для запросов IOR и IOWR ядро ЗАПИСЫВАЕТ в `*arg` произвольные байты, поэтому `T`
+/// обязан допускать любой битовый образ (целые, массивы целых, `#[repr(C)]`-структуры
+/// только из них); `bool`, enum и ссылки в `T` недопустимы. Для запроса, который ядро
+/// читает по указателю внутри `T` (`BIOCSETF`: `bf_insns`), указатель обязан
+/// оставаться валидным на весь вызов. Размер `T` проверяется здесь, остальное
+/// гарантирует вызывающий.
+pub(crate) unsafe fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), Errno> {
     if ((req >> 16) & 0x1fff) as usize != std::mem::size_of::<T>() {
         return Err(libc::EINVAL);
     }
     // SAFETY: любое значение `fd` безопасно для памяти (неверный даёт EBADF); `arg`
     // это исключительная ссылка на `T`, живущая весь вызов, размер `T` только что
-    // сверен с размером в `req`, а вызывающие передают лишь типы без указателей,
-    // через которые пишет ядро (`BpfProgram` только читается).
+    // сверен с размером в `req`; остальные предусловия переданы вызывающему
+    // (раздел `# Safety`).
     let rc = unsafe { libc::ioctl(fd, req, std::ptr::from_mut(arg)) };
     if rc < 0 { Err(last_errno()) } else { Ok(()) }
 }
@@ -113,7 +122,9 @@ impl BpfFd {
 
     fn set_flag(&mut self, req: libc::c_ulong, on: bool) -> Result<(), Errno> {
         let mut v = u32::from(on);
-        ioctl_ptr(self.fd.as_raw_fd(), req, &mut v)
+        // SAFETY: `v` это `u32` (любой образ допустим), запросы `set_flag` (BIOCIMMEDIATE,
+        // BIOCSSEESENT, BIOCSHDRCMPLT) принимают `u_int`; размер сверяется внутри.
+        unsafe { ioctl_ptr(self.fd.as_raw_fd(), req, &mut v) }
     }
 }
 
@@ -166,7 +177,9 @@ impl BpfIo for BpfFd {
 
     fn stats(&mut self) -> Result<BpfStat, Errno> {
         let mut st = BpfStat::default();
-        ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGSTATS, &mut st)?;
+        // SAFETY: `BpfStat` это `#[repr(C)]` из целых (любой образ допустим), BIOCGSTATS
+        // пишет `struct bpf_stat` того же размера (сверяется внутри).
+        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGSTATS, &mut st) }?;
         Ok(st)
     }
 
@@ -182,7 +195,8 @@ impl BpfIo for BpfFd {
 impl BpfSetup for BpfFd {
     fn set_buffer_len(&mut self, requested: u32) -> Result<(), Errno> {
         let mut v = requested;
-        ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCSBLEN, &mut v)
+        // SAFETY: `v` это `u32`, BIOCSBLEN принимает и возвращает `u_int`.
+        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCSBLEN, &mut v) }
     }
 
     fn bind_interface(&mut self, name: &str) -> Result<(), Errno> {
@@ -196,12 +210,15 @@ impl BpfSetup for BpfFd {
         for (dst, src) in req.ifr_name.iter_mut().zip(bytes) {
             *dst = *src as libc::c_char;
         }
-        ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCSETIF, &mut req)
+        // SAFETY: `req` это нулевой `ifreq` с именем интерфейса, BIOCSETIF читает
+        // `struct ifreq` того же размера (сверяется внутри); `ifreq` без `bool`/enum.
+        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCSETIF, &mut req) }
     }
 
     fn data_link(&mut self) -> Result<u32, Errno> {
         let mut v = 0u32;
-        ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGDLT, &mut v)?;
+        // SAFETY: `v` это `u32`, BIOCGDLT пишет `u_int`.
+        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGDLT, &mut v) }?;
         Ok(v)
     }
 
@@ -223,14 +240,16 @@ impl BpfSetup for BpfFd {
             bf_len: u32::try_from(insns.len()).map_err(|_| libc::EINVAL)?,
             bf_insns: insns.as_mut_ptr(),
         };
-        // `bf_insns` указывает на `insns`, который живёт до конца вызова;
-        // ядро копирует программу внутри `BIOCSETF`.
-        ioctl_ptr(self.fd.as_raw_fd(), BIOCSETF, &mut p)
+        // SAFETY: `BpfProgram` это пара (длина, указатель) того же размера, что у
+        // `struct bpf_program`; `bf_insns` указывает на `insns`, который живёт до
+        // конца вызова, и ядро только читает его (копирует программу внутри BIOCSETF).
+        unsafe { ioctl_ptr(self.fd.as_raw_fd(), BIOCSETF, &mut p) }
     }
 
     fn refresh_buffer_len(&mut self) -> Result<(), Errno> {
         let mut v = 0u32;
-        ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGBLEN, &mut v)?;
+        // SAFETY: `v` это `u32`, BIOCGBLEN пишет `u_int`.
+        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGBLEN, &mut v) }?;
         self.buflen = usize::try_from(v).map_err(|_| libc::EINVAL)?;
         Ok(())
     }

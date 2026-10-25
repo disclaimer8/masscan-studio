@@ -1,4 +1,10 @@
 //! Живой спайк BPF на запечатанном стенде `feth4201` <-> `feth4202` (задача 3 этапа 2C).
+//! `unsafe` здесь допускается ТОЛЬКО потому, что модуль существует лишь в тестовой сборке на
+//! macOS (`cfg(all(target_os = "macos", test))`): в продуктовую сборку он не входит. Ему нужны
+//! голые `kevent`/`kqueue` и сквозной `poll`, которых нет в `macos::sys` (адаптер использует
+//! только `poll`), поэтому переносить их в продуктовый `sys` значило бы добавить в продукт
+//! неиспользуемый `unsafe`. Решения спайка записаны в отчёте; код оставлен как воспроизводимый
+//! инструмент измерения.
 //! Временный измерительный код: открывает `/dev/bpfN` напрямую, пишет CSV/логи в
 //! `RMASSCAN_BPF_OUT_DIR`. Все тесты `#[ignore]`; без `RMASSCAN_BPF_LAB_MANIFEST`,
 //! `RMASSCAN_BPF_OUT_DIR`, `RMASSCAN_BPF_COND` тест падает с `NOT RUN`.
@@ -18,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use super::abi::{BpfInsn, BpfStat, MAX_HDRLEN, SIZEOF_BPF_HDR, bpf_wordalign, read_record_header};
 use super::adapter::{drop_all_filter, own_mac_filter};
-use super::sys::{BIOCSETF, BIOCSSEESENT, BpfProgram, ioctl_ptr};
+use super::sys::{BIOCSETF, BIOCSSEESENT, BpfProgram};
 
 const SCAN: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x01];
 const PEER: [u8; 6] = [0x02, 0xac, 0, 0, 0, 0x02];
@@ -254,6 +260,14 @@ fn assert_lab_frame(iface: &str, f: &[u8]) {
 }
 
 // ---------------------------------------------------------------- дескриптор BPF
+
+/// Единственная точка `ioctl` спайка: обёртка над `sys::ioctl_ptr`.
+fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), i32> {
+    // SAFETY: все вызовы спайка передают `u32`, `BpfStat`, `ifreq` или `BpfProgram`;
+    // первые три допускают любой образ, а `BpfProgram::bf_insns` указывает на вектор,
+    // живущий до конца вызова и только читаемый ядром (BIOCSETF).
+    unsafe { super::sys::ioctl_ptr(fd, req, arg) }
+}
 
 struct Dev {
     fd: RawFd,

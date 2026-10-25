@@ -940,7 +940,7 @@ because promiscuous mode is not enabled. {}",
 
     // Состав Npcap для идентичности (только чтение; сбой не мешает скану).
     let npcap = be.inventory().map_or_else(
-        |e| format!("{{\"unavailable\":{}}}", js(&e.to_string())),
+        |e| npcap_unavailable_json(&e, cfg!(windows)),
         |i| npcap_json(&i),
     );
 
@@ -1271,8 +1271,36 @@ because promiscuous mode is not enabled. {}",
     (if reason == "Failed" { 3 } else { 0 }, j)
 }
 
+/// Блок `npcap` в `run.json`, когда состав Npcap не прочитан. Вне Windows Npcap не
+/// используется вовсе (macOS работает через BPF, Linux через AF_PACKET), и текст
+/// `NetError::UnsupportedPlatform` («raw packet I/O is not implemented») там вводил бы в
+/// заблуждение: сырой ввод-вывод на этих платформах есть. Поле никем не проверяется
+/// как строка; ранее записанные свидетельства сохраняют прежний текст.
+fn npcap_unavailable_json(e: &NetError, windows: bool) -> String {
+    let text = if windows {
+        e.to_string()
+    } else {
+        "not applicable: Npcap is Windows-only; this platform uses its own raw backend (BPF on macOS, AF_PACKET on Linux)".to_string()
+    };
+    format!("{{\"unavailable\":{}}}", js(&text))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn npcap_block_off_windows_says_it_does_not_apply_and_never_claims_raw_io_is_missing() {
+        let e = NetError::UnsupportedPlatform;
+        let off = npcap_unavailable_json(&e, false);
+        assert!(off.contains("Npcap is Windows-only"), "{off}");
+        assert!(off.contains("BPF"), "{off}");
+        assert!(!off.contains("not implemented"), "{off}");
+        let on = npcap_unavailable_json(&e, true);
+        assert!(
+            on.contains("not implemented"),
+            "Windows keeps the driver error: {on}"
+        );
+    }
+
     use super::*;
     use std::cell::Cell;
 

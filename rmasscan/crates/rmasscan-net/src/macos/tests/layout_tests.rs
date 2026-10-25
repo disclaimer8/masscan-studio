@@ -165,22 +165,27 @@ fn portable_errno_and_header_constants_match_libc() {
 }
 
 #[test]
+#[allow(unsafe_code)] // test-only: the checks below never reach the kernel with a valid fd
 fn ioctl_ptr_refuses_an_argument_whose_size_differs_from_the_request() {
     // Размер проверяется до системного вызова; дескриптор не открывается.
     let mut wrong = 0u64;
     assert_eq!(
-        crate::macos::sys::ioctl_ptr(-1, libc::BIOCGBLEN, &mut wrong),
+        // SAFETY: fd -1 никуда не ведёт; `u64` допускает любой образ, размер не совпал
+        // и вызов до ядра не доходит.
+        unsafe { crate::macos::sys::ioctl_ptr(-1, libc::BIOCGBLEN, &mut wrong) },
         Err(libc::EINVAL)
     );
     let mut right = 0u32;
     assert_eq!(
-        crate::macos::sys::ioctl_ptr(-1, libc::BIOCGBLEN, &mut right),
+        // SAFETY: fd -1 ядро отвергает (EBADF); `u32` допускает любой образ.
+        unsafe { crate::macos::sys::ioctl_ptr(-1, libc::BIOCGBLEN, &mut right) },
         Err(libc::EBADF),
         "the right size reaches the kernel, which rejects the fd"
     );
     let mut stat = BpfStat::default();
     assert_eq!(
-        crate::macos::sys::ioctl_ptr(-1, libc::BIOCGSTATS, &mut stat),
+        // SAFETY: fd -1 ядро отвергает (EBADF); `BpfStat` из целых.
+        unsafe { crate::macos::sys::ioctl_ptr(-1, libc::BIOCGSTATS, &mut stat) },
         Err(libc::EBADF)
     );
 }

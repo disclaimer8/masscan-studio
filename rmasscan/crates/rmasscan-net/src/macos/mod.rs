@@ -6,10 +6,10 @@ use std::os::unix::fs::MetadataExt;
 
 use crate::{BpfDevice, BpfInventory, NetError};
 
-#[allow(unsafe_code, dead_code)]
+#[allow(unsafe_code)]
 pub(crate) mod sys;
 
-#[allow(unsafe_code, dead_code)]
+#[allow(unsafe_code)]
 pub(crate) mod ifinfo;
 
 #[cfg(test)]
@@ -29,9 +29,10 @@ pub(crate) fn os_version() -> Option<String> {
     }
 }
 
-/// Узлы `/dev/bpf0..`: только `stat`, пока файл существует и пока номер меньше
-/// `maxdevices`. Узлы никогда не открываются.
-fn stat_devices(max: Option<u32>) -> Vec<BpfDevice> {
+/// Узлы `/dev/bpf0..`: только `stat`, пока файл существует (`NotFound` это конец
+/// списка, любая другая ошибка это `Err`, а не молчаливое усечение) и пока номер
+/// меньше `maxdevices`. Узлы никогда не открываются.
+fn stat_devices(max: Option<u32>) -> Result<Vec<BpfDevice>, NetError> {
     let limit = max.unwrap_or(256).min(256);
     let mut out = Vec::new();
     for n in 0..limit {
@@ -43,10 +44,11 @@ fn stat_devices(max: Option<u32>) -> Vec<BpfDevice> {
                 uid: m.uid(),
                 gid: m.gid(),
             }),
-            Err(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(NetError::System(format!("stat {path}: {e}"))),
         }
     }
-    out
+    Ok(out)
 }
 
 pub(crate) fn inventory() -> Result<BpfInventory, NetError> {
@@ -62,7 +64,7 @@ pub(crate) fn inventory() -> Result<BpfInventory, NetError> {
         kernel_version: sys::sysctl_string("kern.version").ok(),
         bpf_maxbufsize: sys::sysctl_u32("debug.bpf_maxbufsize").ok(),
         bpf_maxdevices: maxdev,
-        devices: stat_devices(maxdev),
+        devices: stat_devices(maxdev)?,
         interfaces,
         instant_clock: INSTANT_CLOCK,
     })

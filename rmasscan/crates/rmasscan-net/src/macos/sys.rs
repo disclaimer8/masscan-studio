@@ -7,12 +7,16 @@ use std::ffi::CString;
 
 use super::Errno;
 
-/// `struct bpf_hdr` (net/bpf.h, `__LP64__`: `BPF_TIMEVAL = timeval32`). Размер
-/// структуры в C 20 (дополнение до 4), но поля занимают 18 байт; продвижение по
-/// буферу идёт только по `bh_hdrlen` и `BPF_WORDALIGN`, поэтому `sizeof` не
-/// используется. `packed(2)` фиксирует 18 байт без изменения смещений.
-#[repr(C, packed(2))]
+/// `struct bpf_hdr` (net/bpf.h, `__LP64__`: `BPF_TIMEVAL = timeval32`): sizeof 20 (tail
+/// padding), как `libc::bpf_hdr`. Заголовок записи, который реально пишет ядро, это
+/// [`SIZEOF_BPF_HDR`] = 18 байт, а не `size_of::<Self>()`. Задача 4 обязана
+/// читать поля из проверенного по границам байтового среза (`buf.get(off..off + 18)`,
+/// затем `from_ne_bytes` по `offset_of!`), а не читать структуру целиком: чтение
+/// 20 байт после проверки 18 выходит за буфер. Шаг по буферу только
+/// `bpf_wordalign(bh_hdrlen + bh_caplen)`, кадр начинается с `bh_hdrlen`.
+#[repr(C)]
 #[derive(Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) struct BpfHdr {
     pub bh_tstamp: libc::timeval32,
     pub bh_caplen: u32,
@@ -22,6 +26,7 @@ pub(crate) struct BpfHdr {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) struct BpfInsn {
     pub code: u16,
     pub jt: u8,
@@ -31,6 +36,7 @@ pub(crate) struct BpfInsn {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) struct BpfProgram {
     pub bf_len: u32,
     pub bf_insns: *mut BpfInsn,
@@ -38,23 +44,39 @@ pub(crate) struct BpfProgram {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) struct BpfStat {
     pub bs_recv: u32,
     pub bs_drop: u32,
 }
 
+/// Байты заголовка записи, которые пишет ядро (`SIZEOF_BPF_HDR`, bsd/net/bpf.c):
+/// нижняя граница `bh_hdrlen`; не шаг и не смещение кадра.
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
+pub(crate) const SIZEOF_BPF_HDR: usize =
+    std::mem::offset_of!(BpfHdr, bh_hdrlen) + std::mem::size_of::<u16>();
+
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const BIOCSETF: libc::c_ulong = 0x8010_4267;
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const BIOCSETFNR: libc::c_ulong = 0x8010_427e;
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const BIOCSSEESENT: libc::c_ulong = 0x8004_4277;
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const BIOCGSEESENT: libc::c_ulong = 0x4004_4276;
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const BIOCSRTIMEOUT: libc::c_ulong = 0x8010_426d;
 
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const DLT_NULL: u32 = 0;
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const DLT_EN10MB: u32 = 1;
 pub(crate) const IFT_ETHER: u8 = 0x06;
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const BPF_ALIGNMENT: usize = 4;
 
 /// `BPF_WORDALIGN`: округление вверх до кратного `BPF_ALIGNMENT`.
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) const fn bpf_wordalign(x: usize) -> usize {
     (x + (BPF_ALIGNMENT - 1)) & !(BPF_ALIGNMENT - 1)
 }

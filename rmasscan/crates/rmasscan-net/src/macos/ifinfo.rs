@@ -61,41 +61,30 @@ impl IfAddrs {
 
 impl Drop for IfAddrs {
     fn drop(&mut self) {
+        if self.0.is_null() {
+            return;
+        }
         // SAFETY: указатель получен из успешного `getifaddrs`, не копируется
         // наружу и освобождается ровно один раз (Drop вызывается один раз).
         unsafe { libc::freeifaddrs(self.0) };
     }
 }
 
-/// Разбор `sockaddr_dl`; `None` при некорректной длине.
-///
-/// # Safety
-/// `sa` указывает на валидный `sockaddr` семейства AF_LINK, занимающий
-/// `sa_len` байт.
-unsafe fn parse_link(sa: *const libc::sockaddr) -> LinkInfo {
-    let sdl = sa.cast::<libc::sockaddr_dl>();
-    // SAFETY: по контракту функции `sa` это `sockaddr_dl`.
-    let (len, ty, nlen, alen) = unsafe {
-        (
-            usize::from((*sdl).sdl_len),
-            (*sdl).sdl_type,
-            usize::from((*sdl).sdl_nlen),
-            usize::from((*sdl).sdl_alen),
-        )
-    };
-    let data_off = std::mem::offset_of!(libc::sockaddr_dl, sdl_data);
-    let mac = if alen == 6 && data_off + nlen + 6 <= len {
-        let mut m = [0u8; 6];
-        // SAFETY: проверено, что [data_off+nlen, +6) лежит внутри `sdl_len`
-        // байт, выделенных ОС под этот адрес.
-        unsafe {
-            std::ptr::copy_nonoverlapping(sa.cast::<u8>().add(data_off + nlen), m.as_mut_ptr(), 6);
-        }
-        Some(m)
+/// Разбор записи `sockaddr_dl` из ровно `sdl_len` байт. `None`, если запись
+/// короче заголовка (8 байт). `mac` только при `sdl_alen == 6` и если адрес
+/// `sdl_data[sdl_nlen..+6]` целиком лежит внутри записи.
+pub(crate) fn link_from_bytes(rec: &[u8]) -> Option<LinkInfo> {
+    const DATA_OFF: usize = std::mem::offset_of!(libc::sockaddr_dl, sdl_data);
+    if rec.len() < DATA_OFF {
+        return None;
+    }
+    let (ty, nlen, alen) = (rec[4], usize::from(rec[5]), usize::from(rec[6]));
+    let mac = if alen == 6 && DATA_OFF + nlen + 6 <= rec.len() {
+        rec[DATA_OFF + nlen..DATA_OFF + nlen + 6].try_into().ok()
     } else {
         None
     };
-    LinkInfo { sdl_type: ty, mac }
+    Some(LinkInfo { sdl_type: ty, mac })
 }
 
 /// Снимок всех записей `getifaddrs`.
@@ -106,24 +95,44 @@ pub(crate) fn raw_addrs() -> Result<Vec<RawAddr>, Errno> {
     while !cur.is_null() {
         // SAFETY: `cur` это элемент списка, живущего до конца `list`.
         let e = unsafe { &*cur };
-        // SAFETY: `ifa_name` это NUL-terminated строка внутри списка.
+        cur = e.ifa_next;
+        if e.ifa_name.is_null() {
+            continue;
+        }
+        // SAFETY: `ifa_name` не null и это NUL-terminated строка внутри списка.
         let name = unsafe { CStr::from_ptr(e.ifa_name) }
             .to_string_lossy()
             .into_owned();
         let kind = if e.ifa_addr.is_null() {
             AddrKind::Other
         } else {
-            // SAFETY: `ifa_addr` не null и указывает на `sockaddr` с корректным
-            // sa_family; ветви читают структуру того семейства, что объявлено.
-            unsafe {
-                match i32::from((*e.ifa_addr).sa_family) {
-                    libc::AF_LINK => AddrKind::Link(parse_link(e.ifa_addr)),
-                    libc::AF_INET => {
-                        let sin = e.ifa_addr.cast::<libc::sockaddr_in>();
-                        AddrKind::V4(Ipv4Addr::from(u32::from_be((*sin).sin_addr.s_addr)))
-                    }
-                    _ => AddrKind::Other,
+            // SAFETY: `ifa_addr` не null и указывает на `sockaddr`, чей первый
+            // байт `sa_len` это размер записи; заголовок sockaddr (2 байта)
+            // всегда валиден.
+            let (family, sa_len) = unsafe {
+                (
+                    i32::from((*e.ifa_addr).sa_family),
+                    usize::from((*e.ifa_addr).sa_len),
+                )
+            };
+            const SIN_MIN: usize = std::mem::offset_of!(libc::sockaddr_in, sin_addr) + 4;
+            match family {
+                libc::AF_LINK => {
+                    // SAFETY: запись занимает ровно `sa_len` байт по указателю
+                    // `ifa_addr` внутри списка, живущего до конца `list`; срез
+                    // копируется в owned-типы до выхода из итерации.
+                    let rec =
+                        unsafe { std::slice::from_raw_parts(e.ifa_addr.cast::<u8>(), sa_len) };
+                    link_from_bytes(rec).map_or(AddrKind::Other, AddrKind::Link)
                 }
+                libc::AF_INET if sa_len >= SIN_MIN => {
+                    // SAFETY: проверено `sa_len >= offsetof(sin_addr) + 4`, то
+                    // есть поле `sin_addr` целиком внутри записи.
+                    let s_addr =
+                        unsafe { (*e.ifa_addr.cast::<libc::sockaddr_in>()).sin_addr.s_addr };
+                    AddrKind::V4(Ipv4Addr::from(u32::from_be(s_addr)))
+                }
+                _ => AddrKind::Other,
             }
         };
         out.push(RawAddr {
@@ -131,7 +140,6 @@ pub(crate) fn raw_addrs() -> Result<Vec<RawAddr>, Errno> {
             flags: e.ifa_flags,
             kind,
         });
-        cur = e.ifa_next;
     }
     Ok(out)
 }
@@ -200,6 +208,7 @@ fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {
     out
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 fn valid_ifname(name: &str) -> bool {
     !name.is_empty()
         && name.len() < libc::IFNAMSIZ
@@ -210,12 +219,14 @@ fn valid_ifname(name: &str) -> bool {
             .any(|b| b == 0 || b == b'/' || b.is_ascii_whitespace())
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 fn errno_msg(op: &str, e: Errno) -> String {
     format!("{op}: {}", std::io::Error::from_raw_os_error(e))
 }
 
 /// Проверяет binding через ОС и возвращает ifindex. Без привилегий. Source IP и
 /// MAC с ОС не сверяются (как на Linux/Windows).
+#[cfg_attr(not(test), allow(dead_code))] // used from task 4
 pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Result<u32, NetError> {
     if binding.link_type != LinkType::Ethernet {
         return Err(NetError::UnsupportedLink(format!(

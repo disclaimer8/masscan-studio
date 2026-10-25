@@ -37,7 +37,7 @@ use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 use rmasscan_engine::{
     AdapterPair, CancelHandle, Checkpoint, Engine, EngineHandle, EngineOptions, Event, FailReason,
-    IoError, Outcome, Reason, SendStatus, Tx,
+    IoError, Outcome, Reason, SendStatus, Tx, TxBatch,
 };
 use rmasscan_net::{NetStats, open_explicit};
 
@@ -166,6 +166,51 @@ impl Tx for GuardTx {
             self.n += 1;
         }
         Ok(r)
+    }
+
+    fn max_batch(&self) -> usize {
+        self.inner.max_batch()
+    }
+
+    /// Каждый кадр пачки проверяется до проброса. `panic_at` и
+    /// `uncertain_after` режут пачку ровно на своём номере: действуют так же,
+    /// как в одиночном пути на следующем кадре.
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        for f in frames {
+            assert_lab_frame(&self.lab, f);
+        }
+        let room = [self.panic_at, self.uncertain_after]
+            .into_iter()
+            .flatten()
+            .filter(|&t| t >= self.n)
+            .map(|t| usize::try_from(t - self.n).unwrap_or(usize::MAX))
+            .min();
+        let take = room.map_or(frames.len(), |r| frames.len().min(r));
+        if take == 0 {
+            return Ok(TxBatch {
+                sent: 0,
+                rest: self.at_boundary(),
+            });
+        }
+        let r = self.inner.send_batch(&frames[..take], timeout)?;
+        self.n += r.sent as u64;
+        if r.rest == SendStatus::Sent && take < frames.len() {
+            return Ok(TxBatch {
+                sent: r.sent,
+                rest: self.at_boundary(),
+            });
+        }
+        Ok(r)
+    }
+}
+
+impl GuardTx {
+    /// Следующий кадр стоит на номере `panic_at` или `uncertain_after`.
+    fn at_boundary(&self) -> SendStatus {
+        if self.panic_at == Some(self.n) {
+            panic!("injected tx panic at send #{}", self.n);
+        }
+        SendStatus::Uncertain
     }
 }
 

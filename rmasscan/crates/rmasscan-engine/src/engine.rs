@@ -39,6 +39,9 @@ pub const MAX_IO_TIMEOUT: Duration = Duration::from_millis(50);
 pub const DEFAULT_TX_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Верхняя граница dedup-кэша.
 pub const MAX_DEDUP_ENTRIES: usize = 100_000;
+/// Верхняя скрепа над `Tx::max_batch()` любого адаптера: пачка живёт в памяти
+/// TX-потока и режет окно отмены.
+pub const MAX_TX_BATCH: usize = 4096;
 /// Как часто RX-поток (по часам engine) проверяет достоверность приёма.
 const RX_HEALTH_INTERVAL_MICROS: u64 = 250_000;
 /// 1514 + запас: кадр длиннее отбрасывается RX-слоем сети (MSG_TRUNC), в парсер сверхдлинным не попадает.
@@ -498,16 +501,21 @@ fn run_tx(
         // batch == 0 означает "вызвать снова".
         let mut left = batch;
         while left > 0 {
-            if cursor.current().is_none() {
+            // Не больше, чем осталось в окне throttle, `max_batch()` адаптера и
+            // общей скрепы. Загрузка не продвигает курсор.
+            let want = left
+                .min(tx.max_batch().max(1) as u64)
+                .min(MAX_TX_BATCH as u64) as usize;
+            let probes = cursor.preload(want);
+            if probes.is_empty() {
                 break 'run END_NATURAL;
             }
-            // Отмена перед КАЖДОЙ отправкой.
+            let n = probes.len();
+            // Отмена перед КАЖДОЙ пачкой (при `max_batch() == 1` это перед
+            // каждой отправкой, как раньше).
             if halted() {
                 break 'run END_HALTED;
             }
-            let Some(probe) = cursor.current() else {
-                break 'run END_NATURAL;
-            };
             // Граница окна: новая попытка после дедлайна не начинается.
             let attempt_start = clock.now_micros();
             if let Some(since) = stall_since
@@ -516,40 +524,58 @@ fn run_tx(
                 stall_fail(&shared, attempt_start.saturating_sub(since));
                 break 'run END_HALTED;
             }
-            match tx.send(&probe.frame, shared.io_timeout) {
-                Ok(SendStatus::Sent) => {
-                    // Sent из уже начатого вызова засчитывается даже после
-                    // границы окна.
-                    stall_since = None;
-                    cursor.advance_sent();
-                    shared.sent.fetch_add(1, Ordering::AcqRel);
-                    shared.position.store(cursor.position(), Ordering::Release);
-                    left -= 1;
-                }
-                // Кадр точно не ушёл: курсор стоит, предложим тот же кадр.
-                Ok(SendStatus::WouldBlockUnsent) => {
-                    let since = *stall_since.get_or_insert(attempt_start);
-                    let idle = clock.now_micros().saturating_sub(since);
-                    if idle >= stall_micros {
-                        if halted() {
-                            break 'run END_HALTED;
-                        }
-                        stall_fail(&shared, idle);
-                        break 'run END_HALTED;
-                    }
-                    // Не крутимся вхолостую: короткое ожидание по тем же
-                    // инжектируемым часам, отмена проверяется до и после.
-                    if halted() {
-                        break 'run END_HALTED;
-                    }
-                    clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
-                    if halted() {
-                        break 'run END_HALTED;
-                    }
-                }
-                Ok(SendStatus::Uncertain) => {
+            let result = if n == 1 {
+                let one: &[u8] = &probes[0].frame;
+                tx.send_batch(std::slice::from_ref(&one), shared.io_timeout)
+            } else {
+                let frames: Vec<&[u8]> = probes.iter().map(|p| p.frame.as_slice()).collect();
+                tx.send_batch(&frames, shared.io_timeout)
+            };
+            match result {
+                // Нарушение инварианта `TxBatch`: что именно ушло, неизвестно.
+                Ok(r) if r.sent > n || (r.sent == n) != (r.rest == SendStatus::Sent) => {
                     shared.fail(FailReason::TxUncertain);
                     break 'run END_HALTED;
+                }
+                Ok(r) => {
+                    if r.sent > 0 {
+                        // Sent из уже начатого вызова засчитывается даже после
+                        // границы окна; курсор идёт ровно на принятый префикс.
+                        stall_since = None;
+                        cursor.advance_sent_n(r.sent);
+                        shared.sent.fetch_add(r.sent as u64, Ordering::AcqRel);
+                        shared.position.store(cursor.position(), Ordering::Release);
+                        left -= r.sent as u64;
+                    }
+                    match r.rest {
+                        SendStatus::Sent => {}
+                        // Первый неотправленный кадр точно не ушёл: курсор
+                        // стоит, предложим тот же кадр.
+                        SendStatus::WouldBlockUnsent => {
+                            let since = *stall_since.get_or_insert(attempt_start);
+                            let idle = clock.now_micros().saturating_sub(since);
+                            if idle >= stall_micros {
+                                if halted() {
+                                    break 'run END_HALTED;
+                                }
+                                stall_fail(&shared, idle);
+                                break 'run END_HALTED;
+                            }
+                            // Не крутимся вхолостую: короткое ожидание по тем же
+                            // инжектируемым часам, отмена проверяется до и после.
+                            if halted() {
+                                break 'run END_HALTED;
+                            }
+                            clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
+                            if halted() {
+                                break 'run END_HALTED;
+                            }
+                        }
+                        SendStatus::Uncertain => {
+                            shared.fail(FailReason::TxUncertain);
+                            break 'run END_HALTED;
+                        }
+                    }
                 }
                 Err(e) => {
                     shared.fail(FailReason::TxError(e.message));

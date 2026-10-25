@@ -156,7 +156,7 @@ pub fn join_within(h: EngineHandle, limit: Duration) -> Outcome {
 
 use rmasscan_core::receive::Reply;
 use rmasscan_engine::fake::RxStep;
-use rmasscan_engine::io::{AdapterPair, IoError, SendStatus, Tx};
+use rmasscan_engine::io::{AdapterPair, IoError, SendStatus, Tx, TxBatch};
 use rmasscan_engine::{CancelHandle, Checkpoint, StartError};
 use std::sync::OnceLock;
 
@@ -173,24 +173,59 @@ pub struct PauseTx {
     pub cancel: Arc<OnceLock<CancelHandle>>,
 }
 
+impl PauseTx {
+    /// Одна попытка кадра на границе паузы: считаем WouldBlock и на
+    /// `block_calls`-м подаём Pause.
+    fn block(&mut self) -> SendStatus {
+        self.blocked += 1;
+        if self.blocked >= self.block_calls {
+            let c = loop {
+                if let Some(c) = self.cancel.get() {
+                    break c;
+                }
+                std::thread::yield_now();
+            };
+            c.pause();
+        }
+        SendStatus::WouldBlockUnsent
+    }
+}
+
 impl Tx for PauseTx {
     fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
         if self.sent == self.at {
-            self.blocked += 1;
-            if self.blocked >= self.block_calls {
-                let c = loop {
-                    if let Some(c) = self.cancel.get() {
-                        break c;
-                    }
-                    std::thread::yield_now();
-                };
-                c.pause();
-            }
-            return Ok(SendStatus::WouldBlockUnsent);
+            return Ok(self.block());
         }
         let r = self.inner.send(frame, timeout)?;
         if r == SendStatus::Sent {
             self.sent += 1;
+        }
+        Ok(r)
+    }
+
+    fn max_batch(&self) -> usize {
+        self.inner.max_batch()
+    }
+
+    /// Режет пачку ровно на границе `at`: префикс уходит во внутренний адаптер,
+    /// следующий кадр это та самая попытка, которую одиночный путь отвечает
+    /// `WouldBlockUnsent` (и считает для паузы).
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        let room = self.at - self.sent;
+        if room == 0 {
+            return Ok(TxBatch {
+                sent: 0,
+                rest: self.block(),
+            });
+        }
+        let take = frames.len().min(room);
+        let r = self.inner.send_batch(&frames[..take], timeout)?;
+        self.sent += r.sent;
+        if r.rest == SendStatus::Sent && take < frames.len() {
+            return Ok(TxBatch {
+                sent: r.sent,
+                rest: self.block(),
+            });
         }
         Ok(r)
     }

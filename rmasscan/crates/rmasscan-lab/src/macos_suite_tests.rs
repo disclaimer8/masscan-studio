@@ -832,6 +832,9 @@ fn the_lab_writes_only_peer_to_scanner_markers_and_peer_ip_frames() {
             self.0.fetch_add(1, Ordering::Relaxed);
             Ok(SendStatus::Sent)
         }
+        fn max_batch(&self) -> usize {
+            4
+        }
     }
     let written = Arc::new(AtomicU64::new(0));
     let refused = Arc::new(AtomicU64::new(0));
@@ -850,6 +853,29 @@ fn the_lab_writes_only_peer_to_scanner_markers_and_peer_ip_frames() {
             refused.load(Ordering::Relaxed)
         ),
         (1, 1)
+    );
+    // A batch goes through the same rule, frame by frame, and the guard forwards the inner batch size.
+    assert_eq!(g.max_batch(), 4);
+    let (m, b) = (marker.as_slice(), bad.as_slice());
+    assert_eq!(
+        g.send_batch(&[m, m, m], Duration::from_millis(1)).unwrap(),
+        rmasscan_engine::TxBatch {
+            sent: 3,
+            rest: SendStatus::Sent
+        }
+    );
+    // One bad frame anywhere refuses the whole batch: nothing is written, each bad frame is counted.
+    assert!(
+        g.send_batch(&[m, m, b, b], Duration::from_millis(1))
+            .is_err()
+    );
+    assert!(g.send_batch(&[b], Duration::from_millis(1)).is_err());
+    assert_eq!(
+        (
+            written.load(Ordering::Relaxed),
+            refused.load(Ordering::Relaxed)
+        ),
+        (4, 4)
     );
 }
 

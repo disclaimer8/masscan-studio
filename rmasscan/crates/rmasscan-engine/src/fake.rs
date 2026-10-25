@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rmasscan_core::throttle::Clock;
 
-use crate::io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx};
+use crate::io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx, TxBatch};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -80,6 +80,20 @@ pub enum TxStep {
     DelayThenSent(u64),
 }
 
+/// Шаг сценария пачки (по умолчанию, когда сценарий пуст, пачка уходит по одному
+/// кадру через `send` и сценарий `TxStep`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchStep {
+    /// Вся пачка принята.
+    All,
+    /// Принят префикс из `sent` кадров, остаток описан `rest`.
+    Prefix {
+        sent: usize,
+        rest: SendStatus,
+    },
+    Fail(String),
+}
+
 /// Шаг сценария приёма. Пустая очередь = таймаут (`Ok(None)`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RxStep {
@@ -103,7 +117,6 @@ pub enum HealthStep {
 type Responder = Box<dyn FnMut(&[u8]) -> Vec<Vec<u8>> + Send>;
 type SendHook = Arc<dyn Fn(usize) + Send + Sync>;
 
-#[derive(Default)]
 struct State {
     tx_script: VecDeque<TxStep>,
     rx: VecDeque<RxStep>,
@@ -111,6 +124,10 @@ struct State {
     uncertain: Vec<Vec<u8>>,
     would_block: u64,
     send_calls: u64,
+    batch_script: VecDeque<BatchStep>,
+    max_batch: usize,
+    batch_calls: u64,
+    batch_sizes: Vec<usize>,
     responder: Option<Responder>,
     hook: Option<SendHook>,
     /// Разовые ответы health; после их исчерпания действует `health`.
@@ -129,6 +146,29 @@ pub struct FakeAdapter {
     st: Arc<Mutex<State>>,
     clock: Option<Arc<ManualClock>>,
     alive: Arc<AtomicUsize>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            tx_script: VecDeque::new(),
+            rx: VecDeque::new(),
+            sent: Vec::new(),
+            uncertain: Vec::new(),
+            would_block: 0,
+            send_calls: 0,
+            batch_script: VecDeque::new(),
+            max_batch: 1,
+            batch_calls: 0,
+            batch_sizes: Vec::new(),
+            responder: None,
+            hook: None,
+            health_script: VecDeque::new(),
+            health: None,
+            health_calls: 0,
+            would_block_forever: false,
+        }
+    }
 }
 
 impl Default for FakeAdapter {
@@ -159,6 +199,27 @@ impl FakeAdapter {
 
     /// После исчерпания сценария `send` постоянно отвечает `WouldBlockUnsent`
     /// (моделирует бесконечный backpressure).
+    /// Разовые шаги `send_batch`; после их исчерпания пачка идёт по кадрам
+    /// через `send` (см. [`BatchStep`]).
+    pub fn script_batch(&self, steps: impl IntoIterator<Item = BatchStep>) {
+        lock(&self.st).batch_script.extend(steps);
+    }
+
+    /// Что вернёт `Tx::max_batch` (по умолчанию 1, не меньше 1).
+    pub fn set_max_batch(&self, n: usize) {
+        lock(&self.st).max_batch = n.max(1);
+    }
+
+    /// Сколько раз вызвали `send_batch`.
+    pub fn batch_calls(&self) -> u64 {
+        lock(&self.st).batch_calls
+    }
+
+    /// Размеры предложенных пачек, по порядку вызовов.
+    pub fn batch_sizes(&self) -> Vec<usize> {
+        lock(&self.st).batch_sizes.clone()
+    }
+
     pub fn set_would_block_forever(&self, on: bool) {
         lock(&self.st).would_block_forever = on;
     }
@@ -291,6 +352,57 @@ impl Tx for FakeTx {
             }
             TxStep::Fail(m) => return Err(IoError::new(m)),
         }
+        self.record_sent(frame);
+        Ok(SendStatus::Sent)
+    }
+
+    fn max_batch(&self) -> usize {
+        lock(&self.a.st).max_batch
+    }
+
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        let step = {
+            let mut st = lock(&self.a.st);
+            st.batch_calls += 1;
+            st.batch_sizes.push(frames.len());
+            st.batch_script.pop_front()
+        };
+        let (sent, rest) = match step {
+            None => {
+                // Сценария пачки нет: по кадрам через `send`, как по умолчанию.
+                for (i, frame) in frames.iter().enumerate() {
+                    let status = self.send(frame, timeout)?;
+                    if status != SendStatus::Sent {
+                        return Ok(TxBatch {
+                            sent: i,
+                            rest: status,
+                        });
+                    }
+                }
+                return Ok(TxBatch {
+                    sent: frames.len(),
+                    rest: SendStatus::Sent,
+                });
+            }
+            Some(BatchStep::All) => (frames.len(), SendStatus::Sent),
+            Some(BatchStep::Prefix { sent, rest }) => (sent, rest),
+            Some(BatchStep::Fail(m)) => return Err(IoError::new(m)),
+        };
+        for frame in frames.iter().take(sent) {
+            self.record_sent(frame);
+        }
+        match (rest, frames.get(sent)) {
+            (SendStatus::WouldBlockUnsent, _) => lock(&self.a.st).would_block += 1,
+            (SendStatus::Uncertain, Some(frame)) => lock(&self.a.st).uncertain.push(frame.to_vec()),
+            _ => {}
+        }
+        Ok(TxBatch { sent, rest })
+    }
+}
+
+impl FakeTx {
+    /// Записывает принятый кадр, отдаёт его ответчику и вызывает хук.
+    fn record_sent(&self, frame: &[u8]) {
         let (count, hook) = {
             let mut st = lock(&self.a.st);
             st.sent.push(frame.to_vec());
@@ -303,7 +415,6 @@ impl Tx for FakeTx {
         if let Some(h) = hook {
             h(count);
         }
-        Ok(SendStatus::Sent)
     }
 }
 

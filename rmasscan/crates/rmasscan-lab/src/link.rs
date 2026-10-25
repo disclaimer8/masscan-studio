@@ -4,7 +4,7 @@
 //!
 //! Capture is not done here: the witness is the independent `tcpdump` (see `dump`).
 use rmasscan_core::{packet::LinkType, probe::AdapterBinding};
-use rmasscan_engine::{Rx, SendStatus, Tx};
+use rmasscan_engine::{Rx, SendStatus, Tx, TxBatch};
 #[cfg(not(target_os = "macos"))]
 use std::fs;
 use std::time::{Duration, Instant};
@@ -178,6 +178,28 @@ impl Tx for GuardedTx {
             ));
         }
         self.inner.send(frame, timeout)
+    }
+
+    fn max_batch(&self) -> usize {
+        self.inner.max_batch()
+    }
+
+    /// Every frame of the batch is checked first; one outside the guard refuses the whole batch (an error, nothing
+    /// written) and counts each offending frame.
+    fn send_batch(
+        &mut self,
+        frames: &[&[u8]],
+        timeout: Duration,
+    ) -> Result<TxBatch, rmasscan_engine::IoError> {
+        let bad = frames.iter().filter(|f| !injection_allowed(f)).count();
+        if bad > 0 {
+            self.refused
+                .fetch_add(bad as u64, std::sync::atomic::Ordering::Relaxed);
+            return Err(rmasscan_engine::IoError::new(
+                "refused: a frame of the batch is outside the lab's peer-side guard",
+            ));
+        }
+        self.inner.send_batch(frames, timeout)
     }
 }
 

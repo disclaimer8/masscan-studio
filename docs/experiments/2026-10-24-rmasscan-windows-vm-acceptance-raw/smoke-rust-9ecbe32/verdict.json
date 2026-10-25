@@ -1,0 +1,832 @@
+{
+  "behaviour_fail": [],
+  "dir": "smoke-rust-9ecbe32",
+  "discarded": [],
+  "discarded_totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 0
+  },
+  "groups": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "both legs and continuous run usable",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "group_pause_resume_N0",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "both legs and continuous run usable",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "group_pause_resume_N1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "both legs and continuous run usable",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "group_pause_resume_N8",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "both legs and continuous run usable",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "group_pause_resume_N15",
+      "verdict": "NOT RUN"
+    }
+  ],
+  "overall": "NOT RUN",
+  "provenance": {
+    "orchestrator": {
+      "binary_name": "rmasscan-lab",
+      "binary_sha256": "5270672c5d748f15348c512d10d41f939aedc2f160f4293c8eebc561d11fd0a5",
+      "build_commit": "9ecbe32f82aac77d15575c855dfaa4c10c101ab4",
+      "errors": [],
+      "git_commit": "9ecbe32f82aac77d15575c855dfaa4c10c101ab4",
+      "git_dirty": false
+    },
+    "verifier": {
+      "binary_name": "rmasscan-lab",
+      "binary_sha256": "5270672c5d748f15348c512d10d41f939aedc2f160f4293c8eebc561d11fd0a5",
+      "build_commit": "9ecbe32f82aac77d15575c855dfaa4c10c101ab4",
+      "errors": [],
+      "git_commit": "9ecbe32f82aac77d15575c855dfaa4c10c101ab4",
+      "git_dirty": false
+    },
+    "warnings": []
+  },
+  "runs": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.code_commit present",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.exe present",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.binding present",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest executable sha256 present",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "orchestrator build recorded (commit, dirty flag, binary sha256)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "fixtures manifest present",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "tag": "manifest",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "eno1.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"binary_path\":\"C:\\\\Users\\\\lab\\\\t4\\\\wire_scan.exe\",\"binary_sha256\":\"362632ce174395e6a77aea7a2e97420a2e1e6dcf8bd9becbc1f12f5558d34c90\",\"elevated\":true,\"npcap_abi\":\"wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64\",\"os\":{\"arch\":\"x86_64\",\"family\":\"windows\",\"version\":\"10.0.26300\"},\"restricted_token\":false,\"source_commit\":\"9ecbe32f82aac77d15575c855dfaa4c10c101ab4\"}",
+          "name": "source commit matches manifest",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary sha256 matches manifest",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "guest hashed same executable before run",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "process is Windows",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"ip\",\"netns\",\"exec\",\"wvp-n2\",\"tcpdump\",\"-i\",\"lab0\",\"-n\",\"-U\",\"--immediate-mode\",\"-B\",\"16384\",\"-s\",\"0\",\"-Z\",\"root\",\"-w\",\"'$HOME/winvm/t4-ev/smoke-rust-9ecbe32/r5199e72cb88be21fa9c621efc035761c/c01_one_addr_port_synack.run1/peer.pcap'\"]",
+          "name": "peer capture interface and filter are exact",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"frames\":12,\"sha256\":\"6c5b6d81dfd496f84b535b0a22e62a5940079890df44f9e701cad930dd53875a\",\"size\":892}",
+          "name": "peer pcap hash, size and count",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"captured\":12,\"dropped_if\":null,\"dropped_kernel\":0,\"received\":12}",
+          "name": "peer tcpdump statistics measured",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"captured\":12,\"dropped_if\":null,\"dropped_kernel\":0,\"received\":12}",
+          "name": "peer capture no drops and all frames accounted",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "peer listening before guest",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"tcpdump\",\"-i\",\"eno1\",\"-n\",\"-U\",\"--immediate-mode\",\"-B\",\"4096\",\"-s\",\"0\",\"-Z\",\"root\",\"-w\",\"'$HOME/winvm/t4-ev/smoke-rust-9ecbe32/r5199e72cb88be21fa9c621efc035761c/c01_one_addr_port_synack.run1/eno1.pcap'\",\"'net\",\"198.18.0.0/30\",\"or\",\"(arp\",\"and\",\"(host\",\"198.18.0.1\",\"or\",\"host\",\"198.18.0.2))\",\"or\",\"ether\",\"host\",\"52:54:00:04:80:a9\",\"or\",\"ether\",\"host\",\"02:57:4c:3d:2e:9b\",\"or\",\"ether\",\"proto\",\"0x88b5\",\"or\",\"ether\",\"proto\",\"0x88b6'\"]",
+          "name": "eno1 capture interface and filter are exact",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"frames\":0,\"sha256\":\"704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea\",\"size\":24}",
+          "name": "eno1 pcap hash, size and count",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"captured\":0,\"dropped_if\":null,\"dropped_kernel\":0,\"received\":0}",
+          "name": "eno1 tcpdump statistics measured",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"captured\":0,\"dropped_if\":null,\"dropped_kernel\":0,\"received\":0}",
+          "name": "eno1 capture no drops and all frames accounted",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "eno1 listening before guest",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"rx_before\":93011,\"rx_end\":93013,\"rx_ready\":93011,\"tx_before\":3481587,\"tx_end\":3481597,\"tx_ready\":3481587}",
+          "name": "peer interface counter window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "readiness marker captured",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3",
+          "name": "capture schema not older than manifest",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "end marker and flushed capture tail",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "immediate capture mode",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"quiet_s\":1.5,\"reached\":true}",
+          "name": "capture reached quiescence",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[1792880995.655559, 1792881001.885509, 1792881015.229199, 1792881051.09953]",
+          "name": "capture encloses guest in UTC",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "eno1 saw zero lab packets",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"guest_verify_fresh\":true,\"guest_verify_nonce\":\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\",\"host_ok\":true,\"isolation_violations\":[],\"objects\":{\"wvb-n2\":\"present, owned\",\"wvh-n2\":\"present, owned\",\"wvp-n2\":\"present, owned\",\"wvt-n2\":\"present, owned\"},\"ok\":true,\"raw_run_allowed\":true,\"state\":\"up\",\"vm\":{\"attached\":true,\"carrier\":true,\"cmdline_ok\":true,\"fd_iff\":true,\"pid\":4009645,\"start\":1792840300.22}}",
+          "name": "status-pre valid before/after run",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"guest_verify_fresh\":true,\"guest_verify_nonce\":\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\",\"host_ok\":true,\"isolation_violations\":[],\"objects\":{\"wvb-n2\":\"present, owned\",\"wvh-n2\":\"present, owned\",\"wvp-n2\":\"present, owned\",\"wvt-n2\":\"present, owned\"},\"ok\":true,\"raw_run_allowed\":true,\"state\":\"up\",\"vm\":{\"attached\":true,\"carrier\":true,\"cmdline_ok\":true,\"fd_iff\":true,\"pid\":4009645,\"start\":1792840300.22}}",
+          "name": "status-post valid before/after run",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"errors\":[],\"lab\":{\"IPv4\":[\"198.18.0.1/30\"],\"InterfaceGuid\":\"{C4617223-A264-44F4-BDC8-0EA27F02CC40}\",\"MacAddress\":\"52-54-00-04-80-A9\",\"Name\":\"Ethernet 2\",\"Npf\":\"\\\\Device\\\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}\",\"Status\":\"Up\",\"ifIndex\":14},\"npf\":\"\\\\Device\\\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}\",\"ok\":true,\"verification_nonce\":\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\",\"verified_at\":1792880950.002}",
+          "name": "guest-verify valid before/after run",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"bind\":\"198.18.0.2\",\"open\":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],\"pid\":7769,\"ready\":true,\"silent\":[8099],\"silent_proven\":true}",
+          "name": "listeners valid before/after run",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\"",
+          "name": "invocation nonce recorded (capture schema 3 requires the chain)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "guest Verify exit code recorded and zero",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "guest-verify-stdout.txt",
+          "name": "guest-verify-stdout.txt recorded",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "guest-verify-stderr.txt",
+          "name": "guest-verify-stderr.txt recorded",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\"",
+          "name": "status-pre carries this invocation's guest Verify nonce",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\"",
+          "name": "guest Verify belongs to this invocation",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\"",
+          "name": "artifact hashes belong to this invocation",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "invocation proof covers result, runner, arguments and preflight",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"5486a69ce921c8e9f061a297a67614b46112d719d3a051def1155dc5d48e1288\"",
+          "name": "current invocation hash of argv.json",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"db287495ac97a14177141f3493c074a31111c761dbdfbf34dbde033290635c14\"",
+          "name": "current invocation hash of guest-runner.json",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"",
+          "name": "current invocation hash of guest-verify-stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"84ff8ec3242b4ce7fed5b48d9d4ed7d3d9f11a43d670aa817159c1d2959f88ce\"",
+          "name": "current invocation hash of guest-verify-stdout.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"84ff8ec3242b4ce7fed5b48d9d4ed7d3d9f11a43d670aa817159c1d2959f88ce\"",
+          "name": "current invocation hash of guest-verify.json",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "\"19666e186fb0980c8b907de64f60f0766fffe2865ed04cdb33525a96833b84a9\"",
+          "name": "current invocation hash of run.json",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "guest runner transport completed successfully",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"argv\":[\"--iface\",\"\\\\Device\\\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}\",\"--ports\",\"80\",\"--rate\",\"100\",\"--router-mac\",\"02:57:4c:3d:2e:9b\",\"--seed\",\"1\",\"--source-port\",\"40000\",\"--src-ip\",\"198.18.0.1\",\"--src-mac\",\"52:54:00:04:80:a9\",\"--targets\",\"198.18.0.2\",\"--wait\",\"3\"],\"exe\":\"C:\\\\Users\\\\lab\\\\t4\\\\wire_scan.exe\",\"invocation_nonce\":\"r5199e72cb88be21fa9c621efc035761c-0becdc1799e275b0\"}",
+          "name": "argv.json matches run kind definition",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"blackrock_rounds\":14,\"rate\":\"100\",\"responder_open_ports\":\"80,443,8000,8001,8002,8003,8004,8005,8006,8007\",\"retries\":0,\"router_mac\":\"02:57:4c:3d:2e:9b\",\"seed\":\"1\",\"src_ip\":\"198.18.0.1\",\"src_mac\":\"52:54:00:04:80:a9\",\"wait\":3}",
+          "name": "oracle fixture binding identical without normalization",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"git_commit\":\"8e6b3b0c07a81e8ea61d557c06134a21a6881614\",\"git_tree_clean\":true,\"host\":\"minipc\",\"pinned_revision\":\"8e6b3b0c07a81e8ea61d557c06134a21a6881614\",\"sha256\":\"8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e\",\"variant\":\"original pinned binary (NOT the --offline-patched copy)\",\"version_line\":\"Masscan version 1.3.9-integration ( https://github.com/robertdavidgraham/masscan )\"}",
+          "name": "oracle hash, pinned revision, clean tree and all fixtures valid",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "{\"blackrock_rounds\":14,\"exclude\":null,\"iface\":\"\\\\Device\\\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}\",\"job_digest\":\"9f52b417d7b73260f99db41863a7d7dc81276af4c257d3df6098b5c2a0b46d09\",\"ports\":\"80\",\"rate\":100,\"retries\":0,\"router_mac\":\"02:57:4c:3d:2e:9b\",\"seed\":1,\"shard\":\"1/1\",\"source_port\":\"40000\",\"src_ip\":\"198.18.0.1\",\"src_mac\":\"52:54:00:04:80:a9\",\"targets\":\"198.18.0.2\",\"wait\":3}",
+          "name": "job echo matches requested case and binding",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "guest exit code zero",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"Completed\"",
+          "name": "outcome Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "sent, next index, range and expected total equal expected probes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "{\"kernel_drops\":0}",
+          "name": "RX drops are measured zero",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "{\"kernel_drops\":0,\"rx_errors\":0,\"rx_outgoing\":0,\"rx_packets\":2,\"rx_truncated\":0,\"rx_wrong_interface\":0,\"tx_errors\":0,\"tx_sent\":1,\"tx_uncertain\":0,\"tx_would_block\":0}",
+          "name": "net TX count consistent and no errors",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[\"198.18.0.2:80:open\"]",
+          "name": "results equal listener truth with no duplicates",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6",
+          "name": "c01_one_addr_port_synack.run1.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"capture_valid\":true,\"expected\":{\"rst\":0,\"syn\":1,\"synack\":1},\"file\":\"fixtures/c01_one_addr_port_synack.run1.pcap\",\"observed\":{\"marker\":3,\"other\":0,\"rst_from_peer\":0,\"rst_from_scanner\":1,\"syn_from_scanner\":1,\"synack_from_peer\":1},\"sha256\":\"beeb030cb77465b8016cf90e668443fe4a5ea6e74384f6adaa6622f044e19a3d\"}",
+          "name": "oracle fixture hash",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "1",
+          "name": "every fixture SYN carries exact binding",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "1 SYN frames identical and in order",
+          "name": "SYN bytes and order equal C oracle",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "1",
+          "name": "no SYN other than scanner",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "C oracle wire replies equal listener truth",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3",
+          "name": "peer wire replies equal results",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "tag": "c01_one_addr_port_synack.run1",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c01_one_addr_port_synack.run2",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c02_one_addr_port_rst.run1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c02_one_addr_port_rst.run2",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c03_multi_ports.run1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c03_multi_ports.run2",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c04_exclude.run1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c04_exclude.run2",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c05_srcport_single.run1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c05_srcport_single.run2",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c06_srcport_range.run1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "c06_srcport_range.run2",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "x01_foreign_replies.run1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "x01_foreign_replies.run2",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "pause_N0",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "resume_N0",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "pause_N1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "resume_N1",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "pause_N8",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "resume_N8",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "pause_N15",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "resume_N15",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "complete_nopause",
+      "verdict": "NOT RUN"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "run directory present",
+          "result": "NOT RUN"
+        }
+      ],
+      "notes": {},
+      "tag": "refuse_completed",
+      "verdict": "NOT RUN"
+    }
+  ],
+  "schema": 1,
+  "totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 27,
+    "PASS": 2
+  }
+}

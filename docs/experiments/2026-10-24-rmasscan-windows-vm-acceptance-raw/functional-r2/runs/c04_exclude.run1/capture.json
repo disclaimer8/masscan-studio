@@ -1,0 +1,112 @@
+{
+  "capture_schema": 3,
+  "eno1": {
+    "cmd": [
+      "tcpdump",
+      "-i",
+      "eno1",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-B",
+      "4096",
+      "-s",
+      "0",
+      "-Z",
+      "root",
+      "-w",
+      "'$HOME/winvm/t4-ev/functional-r2/rf535a4379a9c77614c7e69b7fa9854c5/c04_exclude.run1/eno1.pcap'",
+      "'net",
+      "198.18.0.0/30",
+      "or",
+      "(arp",
+      "and",
+      "(host",
+      "198.18.0.1",
+      "or",
+      "host",
+      "198.18.0.2))",
+      "or",
+      "ether",
+      "host",
+      "52:54:00:04:80:a9",
+      "or",
+      "ether",
+      "host",
+      "02:57:4c:3d:2e:9b",
+      "or",
+      "ether",
+      "proto",
+      "0x88b5",
+      "or",
+      "ether",
+      "proto",
+      "0x88b6'"
+    ],
+    "exited": true,
+    "filter": "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 52:54:00:04:80:a9 or ether host 02:57:4c:3d:2e:9b or ether proto 0x88b5 or ether proto 0x88b6",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 0,
+      "sha256": "704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea",
+      "size": 24
+    },
+    "tcpdump": {
+      "captured": 0,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 0
+    }
+  },
+  "peer": {
+    "cmd": [
+      "ip",
+      "netns",
+      "exec",
+      "wvp-n2",
+      "tcpdump",
+      "-i",
+      "lab0",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-B",
+      "16384",
+      "-s",
+      "0",
+      "-Z",
+      "root",
+      "-w",
+      "'$HOME/winvm/t4-ev/functional-r2/rf535a4379a9c77614c7e69b7fa9854c5/c04_exclude.run1/peer.pcap'"
+    ],
+    "counters": {
+      "rx_before": 93060,
+      "rx_end": 93065,
+      "rx_ready": 93060,
+      "tx_before": 3481805,
+      "tx_end": 3481820,
+      "tx_ready": 3481805
+    },
+    "exited": true,
+    "filter": "(none: every frame on lab0)",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 20,
+      "sha256": "ed77a15515bb59f3028218a698c21ad7b48794f2e5591b4b51b40dc14bc5ecdb",
+      "size": 1476
+    },
+    "tcpdump": {
+      "captured": 20,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 20
+    }
+  },
+  "quiet": {
+    "quiet_s": 1.5,
+    "reached": true
+  },
+  "status_post_raw_run_allowed": true
+}

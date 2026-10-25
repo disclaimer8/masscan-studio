@@ -1,0 +1,32 @@
+{
+  "argv": [
+    "--attempt-id",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "--iface",
+    "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "--ports",
+    "8000-8014",
+    "--rate",
+    "100",
+    "--resume-checkpoint",
+    "C:\\Users\\lab\\t4\\cp\\failure-r1\\r4ba81a67df548977f2dc32a8e4249c77\\ckpt_wrong_ports.bin",
+    "--router-mac",
+    "02:57:4c:3d:2e:9b",
+    "--scan-id",
+    "11111111111111111111111111111111",
+    "--seed",
+    "1",
+    "--source-port",
+    "40000",
+    "--src-ip",
+    "198.18.0.1",
+    "--src-mac",
+    "52:54:00:04:80:a9",
+    "--targets",
+    "198.18.0.2",
+    "--wait",
+    "3"
+  ],
+  "exe": "C:\\Users\\lab\\t4\\wire_scan.exe",
+  "invocation_nonce": "r4ba81a67df548977f2dc32a8e4249c77-d1e38272b1156ca2"
+}

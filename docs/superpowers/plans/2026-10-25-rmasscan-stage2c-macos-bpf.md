@@ -581,7 +581,7 @@ N=0/1/8/15 для 16 probe (continuous + pause + resume, scan_id постоян�
 
 **Constraints:** выполняет оператор по правилам шлюза; код под тестом это один закреплённый коммит, собранный из чистого
 дерева (`git_dirty=false` в манифесте suite), `wire_scan` и `rmasscan-lab` из приватного `CARGO_TARGET_DIR` с
-`RMASSCAN_SOURCE_COMMIT`/`RMASSCAN_LAB_BUILD_COMMIT`; большие pcap после снятия хэшей `gzip -9 -n`; личные пути в текстах
+`RMASSCAN_SOURCE_COMMIT`/`RMASSCAN_LAB_BUILD_COMMIT`; pcap хранятся без сжатия (решение 2026-10-25: gzip убран); личные пути в текстах
 заменяются `$HOME`/`$REPO`, pcap не трогаются; никаких `--rerun` без записи причины; **никакого sudo агентом; никакого python/python3**.
 
 - [ ] Фикстуры C на minipc (команда задачи 6), `fixtures/manifest.json` с `all_valid: true`, binding `02:ac:00:00:00:01`/

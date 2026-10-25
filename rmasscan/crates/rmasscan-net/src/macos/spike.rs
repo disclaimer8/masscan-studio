@@ -586,11 +586,17 @@ struct Flood {
 
 impl Flood {
     fn start(rate: u64, max: u64) -> Flood {
+        Flood::start_with(move |stop, sent, errs| flood(rate, max, stop, sent, errs))
+    }
+    /// The worker is the only part that touches the network; a stub makes the thread control testable.
+    fn start_with(
+        worker: impl FnOnce(&AtomicBool, &AtomicU64, &AtomicU64) + Send + 'static,
+    ) -> Flood {
         let stop = Arc::new(AtomicBool::new(false));
         let sent = Arc::new(AtomicU64::new(0));
         let errs = Arc::new(AtomicU64::new(0));
         let (s, a, e) = (stop.clone(), sent.clone(), errs.clone());
-        let h = std::thread::spawn(move || flood(rate, max, &s, &a, &e));
+        let h = std::thread::spawn(move || worker(&s, &a, &e));
         Flood {
             stop,
             sent,
@@ -612,6 +618,67 @@ impl Flood {
             self.sent.load(Ordering::Relaxed),
             self.errs.load(Ordering::Relaxed),
         )
+    }
+}
+
+/// A panic between `start` and `finish` (a failing CSV write or stats call of a live test) must not leave an
+/// unbounded sender running for the rest of the process: stop it and join it, waiting a bounded time.
+impl Drop for Flood {
+    fn drop(&mut self) {
+        let Some(h) = self.h.take() else { return };
+        self.stop.store(true, Ordering::Relaxed);
+        let end = Instant::now() + Duration::from_secs(2);
+        while !h.is_finished() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        if h.is_finished() {
+            let _ = h.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod flood_tests {
+    use super::*;
+
+    /// The review's catch_unwind reproduction, with a stub sender (no network): a panic while the flood is active
+    /// must stop the worker.
+    #[test]
+    fn a_panic_while_the_flood_is_active_stops_and_joins_the_worker() {
+        let mut watch = None;
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let f = Flood::start_with(|stop, sent, _| {
+                while !stop.load(Ordering::Relaxed) {
+                    sent.fetch_add(1, Ordering::Relaxed);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            });
+            watch = Some((f.stop.clone(), f.sent.clone()));
+            panic!("simulated CSV/stats failure while the flood is active");
+        }));
+        assert!(r.is_err());
+        let (stop, sent) = watch.unwrap();
+        assert!(stop.load(Ordering::Relaxed), "the unwind must set stop");
+        let before = sent.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            before,
+            sent.load(Ordering::Relaxed),
+            "the worker is still sending"
+        );
+    }
+
+    #[test]
+    fn finish_still_returns_the_counters() {
+        let f = Flood::start_with(|stop, sent, errs| {
+            sent.fetch_add(3, Ordering::Relaxed);
+            errs.fetch_add(1, Ordering::Relaxed);
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(f.finish(), (3, 1));
     }
 }
 

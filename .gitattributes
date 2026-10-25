@@ -1,5 +1,8 @@
 # Later lines win over earlier ones, so the golden rule must stay last.
 *.sh text eol=lf
 rmasscan/** text=auto eol=lf
+# Byte-exact lab evidence: hashes were recorded on the lab hosts, so a CRLF checkout
+# (core.autocrlf=true on Windows CI) would make every committed run INVALID.
+docs/experiments/** -text
 # Byte-exact oracle fixtures: never normalise line endings.
 rmasscan/tests/golden/** -text

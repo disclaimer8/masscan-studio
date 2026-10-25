@@ -2138,7 +2138,9 @@ mod tests {
             last_change.unwrap().elapsed().as_secs_f64() >= 0.12,
             "returned before a full quiet period"
         );
-        assert!(reads >= 3 + 3, "reads={reads}");
+        // At least one unchanged read after the last change; how many fit in the quiet period
+        // depends on sleep precision (a loaded CI runner managed only two).
+        assert!(reads > 3, "reads={reads}");
         assert!(started.elapsed().as_secs_f64() < 5.0);
     }
     #[test]

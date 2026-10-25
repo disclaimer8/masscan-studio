@@ -612,6 +612,32 @@ fn policy_violations(root: &Path, files: &[String]) -> Vec<String> {
     found
 }
 
+/// Committed lab evidence is byte-exact: its hashes were taken on the lab hosts, so a CRLF
+/// checkout (core.autocrlf=true on Windows CI) turned every committed run INVALID.
+#[test]
+fn lab_evidence_is_never_line_ending_normalised() {
+    let root = repo_root();
+    let attrs = fs::read_to_string(root.join(".gitattributes")).unwrap();
+    assert!(
+        attrs
+            .lines()
+            .any(|l| l.trim() == "docs/experiments/** -text"),
+        ".gitattributes must keep docs/experiments byte-exact"
+    );
+    let probe = "docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional-r2/manifest.json";
+    if let Ok(out) = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["check-attr", "text", "--", probe])
+        .output()
+        && out.status.success()
+        && !out.stdout.is_empty()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.trim_end().ends_with("text: unset"), "{text}");
+    }
+}
+
 #[test]
 fn the_tracked_tree_has_no_interpreted_programs() {
     let root = repo_root();

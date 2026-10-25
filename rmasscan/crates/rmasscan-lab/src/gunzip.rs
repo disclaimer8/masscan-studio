@@ -258,7 +258,7 @@ pub fn gunzip(d: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn crc32(d: &[u8]) -> u32 {
+pub(crate) fn crc32(d: &[u8]) -> u32 {
     let mut c = 0xffff_ffffu32;
     for b in d {
         c ^= u32::from(*b);
@@ -276,53 +276,167 @@ fn crc32(d: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use std::process::{Command, Stdio};
+    use sha2::{Digest, Sha256};
 
-    fn gzip(data: &[u8], level: &str) -> Vec<u8> {
-        let mut g = Command::new("/usr/bin/gzip")
-            .args(["-c", level])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut stdin = g.stdin.take().unwrap();
-        let data = data.to_vec();
-        let w = std::thread::spawn(move || stdin.write_all(&data).unwrap());
-        let o = g.wait_with_output().unwrap();
-        w.join().unwrap();
-        assert!(o.status.success());
-        o.stdout
+    fn lcg(n: usize, mask: u8) -> Vec<u8> {
+        let mut x = 12345u32;
+        (0..n)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((x >> 24) as u8) & mask
+            })
+            .collect()
+    }
+
+    /// The deterministic plaintext of a vector. The `.gz` files under `testdata/gz/` were made once on the Mac from
+    /// exactly these bytes with `gzip -<level> -n` (see `dump_plaintexts`), so no test needs an external tool.
+    fn plain(kind: &str) -> Vec<u8> {
+        match kind {
+            "empty" => Vec::new(),
+            "hello" => b"hello".to_vec(),
+            "text" => {
+                let mut v = Vec::new();
+                for i in 0..400u32 {
+                    v.extend_from_slice(&(i.wrapping_mul(2654435761) >> (i % 7)).to_le_bytes());
+                    v.extend_from_slice(b"198.18.0.2 RST ACK 0xf0e1 ");
+                }
+                v
+            }
+            "random" => lcg(3000, 0xff),
+            "multi" => lcg(70000, 7),
+            _ => panic!("unknown vector {kind}"),
+        }
+    }
+
+    macro_rules! gz {
+        ($name:literal) => {
+            include_bytes!(concat!("../testdata/gz/", $name, ".gz")).as_slice()
+        };
+    }
+
+    /// (vector, plaintext kind, sha256 of the plaintext, what the deflate stream is made of)
+    fn vectors() -> Vec<(&'static str, &'static str, &'static str, &'static [u8])> {
+        vec![
+            (
+                "empty.l6",
+                "empty",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                gz!("empty.l6"),
+            ),
+            (
+                "hello.l6",
+                "hello",
+                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                gz!("hello.l6"),
+            ),
+            ("text.l1", "text", TEXT_SHA, gz!("text.l1")),
+            ("text.l6", "text", TEXT_SHA, gz!("text.l6")),
+            ("text.l9", "text", TEXT_SHA, gz!("text.l9")),
+            ("random.l1", "random", RANDOM_SHA, gz!("random.l1")),
+            ("random.l6", "random", RANDOM_SHA, gz!("random.l6")),
+            ("multi.l1", "multi", MULTI_SHA, gz!("multi.l1")),
+            ("multi.l6", "multi", MULTI_SHA, gz!("multi.l6")),
+            ("multi.l9", "multi", MULTI_SHA, gz!("multi.l9")),
+        ]
+    }
+    const TEXT_SHA: &str = "b042cff1ed566fcdff798c7e32acc33847057fbb82ab50ef40d34327aadcf696";
+    const RANDOM_SHA: &str = "75fe167f7710a81ef249b6bbf40d8291dc1a4913ab72a74ec56187b542b6ef82";
+    const MULTI_SHA: &str = "2e984bedc7104d654f130f9498324f08e196887bcce8d27dca379c51c43605a0";
+
+    fn sha(d: &[u8]) -> String {
+        Sha256::digest(d)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// The first deflate block type of a gzip member written without optional header fields (`gzip -n`).
+    fn first_block_type(z: &[u8]) -> u8 {
+        (z[10] >> 1) & 3
     }
 
     #[test]
-    fn reads_what_gzip_writes_at_every_level() {
-        let mut data = Vec::new();
-        for i in 0..20000u32 {
-            data.extend_from_slice(&(i.wrapping_mul(2654435761) >> (i % 7)).to_le_bytes());
-            data.extend_from_slice(b"198.18.0.2 RST ACK 0xf0e1 ");
+    fn reads_the_gzip_vectors_stored_fixed_dynamic_and_multi_block() {
+        let mut kinds = std::collections::BTreeSet::new();
+        for (name, kind, want_sha, z) in vectors() {
+            let out = gunzip(z).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(sha(&out), want_sha, "{name}: sha256");
+            assert_eq!(out, plain(kind), "{name}: plaintext");
+            kinds.insert(first_block_type(z));
         }
-        for level in ["-1", "-6", "-9"] {
-            assert_eq!(gunzip(&gzip(&data, level)).unwrap(), data, "{level}");
-        }
-        assert_eq!(gunzip(&gzip(b"", "-6")).unwrap(), b"");
-        let rnd: Vec<u8> = (0..70000u32)
-            .map(|i| (i.wrapping_mul(2246822519) >> 13) as u8)
-            .collect();
-        assert_eq!(gunzip(&gzip(&rnd, "-6")).unwrap(), rnd);
+        // Stored (0), fixed (1) and dynamic (2) deflate blocks are all exercised by real gzip output.
+        assert_eq!(kinds.into_iter().collect::<Vec<_>>(), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn a_vector_with_more_than_one_deflate_block_is_read() {
+        // 70000 symbols cannot fit one gzip block (32768 symbols per block): the stream continues past a non-final block.
+        let z = gz!("multi.l6");
+        assert_eq!(inflate(&z[10..z.len()]).map(|(o, _)| o.len()), Ok(70000));
+        let first_final = z[10] & 1;
+        assert_eq!(first_final, 0, "the first block must not be the last one");
     }
 
     #[test]
     fn damaged_input_is_an_error_never_a_partial_result() {
-        let z = gzip(&vec![7u8; 5000], "-6");
-        assert!(gunzip(&z[..z.len() - 3]).is_err());
+        let z = gz!("text.l6").to_vec();
+        assert!(gunzip(&z[..z.len() - 3]).is_err(), "truncated");
         let mut bad = z.clone();
         let last = bad.len() - 6;
         bad[last] ^= 1;
         assert!(gunzip(&bad).is_err(), "CRC");
+        let mut size = z.clone();
+        let n = size.len() - 1;
+        size[n] ^= 1;
+        assert!(gunzip(&size).is_err(), "size");
         let mut more = z.clone();
         more.push(0);
-        assert!(gunzip(&more).is_err());
+        assert!(gunzip(&more).is_err(), "trailing byte");
+        let mut mid = z.clone();
+        let m = mid.len() / 2;
+        mid[m] ^= 0x55;
+        assert!(
+            gunzip(&mid).is_err(),
+            "a flipped bit inside the deflate data"
+        );
+        let mut magic = z.clone();
+        magic[0] = 0;
+        assert!(gunzip(&magic).is_err());
         assert!(gunzip(b"not gzip at all, really not gzip").is_err());
+    }
+
+    /// Cross-check against the system gzip on Unix, in addition to the embedded vectors.
+    #[cfg(unix)]
+    #[test]
+    fn matches_the_system_gzip_when_there_is_one() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let Ok(mut g) = Command::new("gzip")
+            .args(["-c", "-6"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+        else {
+            return;
+        };
+        let data = plain("multi");
+        let mut stdin = g.stdin.take().unwrap();
+        let d = data.clone();
+        let w = std::thread::spawn(move || stdin.write_all(&d).unwrap());
+        let o = g.wait_with_output().unwrap();
+        w.join().unwrap();
+        assert_eq!(gunzip(&o.stdout).unwrap(), data);
+    }
+
+    /// Writes the plaintexts the `.gz` vectors were made from: `RMASSCAN_GZ_DUMP=<dir> cargo test -- --ignored
+    /// dump_plaintexts`, then `gzip -n -1 / -6 / -9 -c` each file into `testdata/gz/<kind>.l<level>.gz`.
+    #[test]
+    #[ignore = "regenerates the vector inputs"]
+    fn dump_plaintexts() {
+        let dir = std::env::var("RMASSCAN_GZ_DUMP").expect("RMASSCAN_GZ_DUMP");
+        for kind in ["empty", "hello", "text", "random", "multi"] {
+            std::fs::write(format!("{dir}/{kind}"), plain(kind)).unwrap();
+            println!("{kind} {}", sha(&plain(kind)));
+        }
     }
 }

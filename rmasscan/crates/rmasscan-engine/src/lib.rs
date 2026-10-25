@@ -28,8 +28,8 @@ pub mod io;
 pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 pub use engine::{
     CancelHandle, DEFAULT_TX_STALL_TIMEOUT, DedupCache, Engine, EngineError, EngineHandle,
-    EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT, StartError,
+    EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT, MAX_TX_BATCH, StartError,
 };
 pub use events::{Event, FailReason, Outcome, Progress, Reason};
 pub use identity::{ENGINE_ALGORITHM_VERSION, job_digest};
-pub use io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx};
+pub use io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx, TxBatch};

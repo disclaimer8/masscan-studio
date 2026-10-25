@@ -32,9 +32,45 @@ pub enum SendStatus {
     Uncertain,
 }
 
+/// Исход пачки: первые `sent` кадров приняты (как `Sent` по одному), остаток
+/// описан `rest`. Инвариант: `sent == frames.len()` тогда и только тогда, когда
+/// `rest == SendStatus::Sent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TxBatch {
+    pub sent: usize,
+    pub rest: SendStatus,
+}
+
 /// Передающая сторона.
 pub trait Tx: Send {
     fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError>;
+
+    /// Сколько кадров адаптер принимает одним `send_batch` (не меньше 1).
+    /// По умолчанию 1.
+    fn max_batch(&self) -> usize {
+        1
+    }
+
+    /// Один вызов адаптера на префикс `frames` (не больше `max_batch()`, не
+    /// меньше 1) не позже `timeout`. Очередь не переживает вызов: принятые
+    /// кадры это ровно первые `sent`. По умолчанию цикл `send` до первого
+    /// исхода, отличного от `Sent`. Ошибка `Err` после принятого префикса
+    /// завершает запуск `Failed` без checkpoint, поэтому префикс не считается.
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        for (i, frame) in frames.iter().enumerate() {
+            let status = self.send(frame, timeout)?;
+            if status != SendStatus::Sent {
+                return Ok(TxBatch {
+                    sent: i,
+                    rest: status,
+                });
+            }
+        }
+        Ok(TxBatch {
+            sent: frames.len(),
+            rest: SendStatus::Sent,
+        })
+    }
 }
 
 /// Достоверность локального приёма на момент вызова [`Rx::health`].

@@ -47,7 +47,7 @@ use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 use rmasscan_engine::{
     AdapterPair, Checkpoint, Engine, EngineHandle, EngineOptions, Event, FailReason, IoError,
-    Outcome, Reason, Rx, RxHealth, SendStatus, Tx,
+    Outcome, Reason, Rx, RxHealth, SendStatus, Tx, TxBatch,
 };
 use rmasscan_net::{
     NetStats, NetStatsHandle, OpenedAdapter, iface_exists, inventory_bpf, nic_mac, nic_mac_masked,
@@ -265,6 +265,38 @@ impl Tx for GuardTx {
         }
         Ok(r)
     }
+
+    fn max_batch(&self) -> usize {
+        self.inner.max_batch()
+    }
+
+    /// Каждый кадр пачки проверяется до проброса; `uncertain_after` режет
+    /// пачку ровно на своём номере.
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        for f in frames {
+            assert_lab_frame(f);
+        }
+        let room = self
+            .uncertain_after
+            .filter(|&t| t >= self.n)
+            .map(|t| usize::try_from(t - self.n).unwrap_or(usize::MAX));
+        let take = room.map_or(frames.len(), |r| frames.len().min(r));
+        if take == 0 {
+            return Ok(TxBatch {
+                sent: 0,
+                rest: SendStatus::Uncertain,
+            });
+        }
+        let r = self.inner.send_batch(&frames[..take], timeout)?;
+        self.n += r.sent as u64;
+        if r.rest == SendStatus::Sent && take < frames.len() {
+            return Ok(TxBatch {
+                sent: r.sent,
+                rest: SendStatus::Uncertain,
+            });
+        }
+        Ok(r)
+    }
 }
 
 /// Читатель, который окно времени не читает (кадры копятся в буфере BPF).
@@ -406,6 +438,20 @@ impl Tx for GuardPeerTx {
         assert_eq!(frame[6..12], PEER_MAC, "injector src MAC is not the peer");
         assert_eq!(frame[12..14], JUNK_ETHERTYPE, "injector ethertype");
         self.inner.send(frame, timeout)
+    }
+
+    fn max_batch(&self) -> usize {
+        self.inner.max_batch()
+    }
+
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        for frame in frames {
+            assert_eq!(frame.len(), 60, "injector frame length");
+            assert_eq!(frame[0..6], SRC_MAC, "injector dst MAC is not the scanner");
+            assert_eq!(frame[6..12], PEER_MAC, "injector src MAC is not the peer");
+            assert_eq!(frame[12..14], JUNK_ETHERTYPE, "injector ethertype");
+        }
+        self.inner.send_batch(frames, timeout)
     }
 }
 

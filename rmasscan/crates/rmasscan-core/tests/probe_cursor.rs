@@ -335,3 +335,84 @@ fn plan_rejects_echo_job_and_bad_source_ports_and_non_tcp_ports() {
         PlanError::PortNotTcp(70000)
     ));
 }
+
+// ---- batched access: preload / advance_sent_n ----
+
+fn preload_rows(cur: &mut ProbeCursor, n: usize) -> Vec<Row> {
+    cur.preload(n).iter().map(row).collect()
+}
+
+#[test]
+fn preload_then_advance_n_matches_single_steps() {
+    let e = eff(&config("10.0.0.0/29", "80,443", 7, 100.0));
+    let plan = ReadyPlan::new(e, binding(40000, 40015)).unwrap();
+    let want = drain(&mut ProbeCursor::new(&plan, 0).unwrap());
+    for chunk in [1usize, 2, 3, 5, 16, 40] {
+        let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+        let mut got = Vec::new();
+        loop {
+            let rows = preload_rows(&mut cur, chunk);
+            if rows.is_empty() {
+                break;
+            }
+            let k = rows.len();
+            got.extend(rows);
+            cur.advance_sent_n(k);
+        }
+        assert_eq!(got, want, "chunk {chunk}");
+        assert_eq!(cur.position(), plan.range());
+    }
+}
+
+#[test]
+fn preload_is_capped_by_the_range() {
+    let e = eff(&config("10.0.0.0/30", "80", 9, 1.0));
+    let plan = ReadyPlan::new(e, binding(40000, 40000)).unwrap();
+    let range = plan.range() as usize;
+    let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+    assert_eq!(cur.preload(range + 100).len(), range);
+    assert_eq!(cur.preload(0).len(), 0);
+    // the loaded probes are still the front of the cursor
+    assert_eq!(cur.current().unwrap().index, 0);
+    let mut cur = ProbeCursor::new(&plan, range as u64 - 1).unwrap();
+    assert_eq!(cur.preload(8).len(), 1);
+    let mut cur = ProbeCursor::new(&plan, range as u64).unwrap();
+    assert!(cur.preload(8).is_empty());
+}
+
+#[test]
+fn advance_n_beyond_loaded_is_rejected_by_debug_assert_and_saturates() {
+    let e = eff(&config("10.0.0.0/29", "80,443", 7, 100.0));
+    let plan = ReadyPlan::new(e, binding(40000, 40000)).unwrap();
+    let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+    assert_eq!(cur.preload(3).len(), 3);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cur.advance_sent_n(4)));
+    if cfg!(debug_assertions) {
+        assert!(r.is_err(), "debug build must reject k > loaded");
+    } else {
+        assert!(r.is_ok());
+        assert_eq!(cur.position(), 3, "release saturates at the loaded count");
+    }
+}
+
+#[test]
+fn position_moves_only_in_advance() {
+    let e = eff(&config("10.0.0.0/29", "80,443", 7, 100.0));
+    let plan = ReadyPlan::new(e, binding(40000, 40000)).unwrap();
+    let mut cur = ProbeCursor::new(&plan, 4).unwrap();
+    assert_eq!(cur.preload(5).len(), 5);
+    assert_eq!(cur.position(), 4);
+    assert_eq!(cur.current().unwrap().index, 4);
+    assert_eq!(cur.position(), 4);
+    cur.advance_sent_n(0);
+    assert_eq!(cur.position(), 4);
+    cur.advance_sent_n(2);
+    assert_eq!(cur.position(), 6);
+    // the rest of the loaded probes is still served, in order, once
+    let rows = preload_rows(&mut cur, 5);
+    assert_eq!(
+        rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+        [6, 7, 8, 9, 10]
+    );
+    assert_eq!(cur.position(), 6);
+}

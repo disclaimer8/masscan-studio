@@ -14,6 +14,7 @@
 //!   сохраняет все алгоритмы этапа 1 (retries, shard), с остановкой через
 //!   [`ControlFlow`].
 
+use std::collections::VecDeque;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -285,12 +286,14 @@ impl ReadyPlan {
     }
 }
 
-/// Курсор по probe плана: `current` не продвигает, `advance_sent` подтверждает
-/// ровно одну успешную отправку.
+/// Курсор по probe плана: `current` и `preload` не продвигают, `advance_sent`
+/// подтверждает ровно одну успешную отправку, `advance_sent_n` первые `k`
+/// загруженных.
 pub struct ProbeCursor {
     plan: ReadyPlan,
     stream: Box<dyn Iterator<Item = (u64, u64)> + Send>,
-    current: Option<Probe>,
+    /// Загруженные, ещё не подтверждённые probe, по порядку индексов.
+    loaded: VecDeque<Probe>,
     position: u64,
 }
 
@@ -323,17 +326,16 @@ impl ProbeCursor {
         Ok(ProbeCursor {
             plan: plan.clone(),
             stream: Box::new(stream),
-            current: None,
+            loaded: VecDeque::new(),
             position: next_index,
         })
     }
 
-    fn load(&mut self) {
-        if self.current.is_some() {
-            return;
-        }
+    /// Строит следующий probe потока и ставит его в хвост загруженных. `false`
+    /// в конце диапазона.
+    fn load_one(&mut self) -> bool {
         let Some((i, x)) = self.stream.next() else {
-            return;
+            return false;
         };
         let inner = &*self.plan.inner;
         let xxx = inner.blackrock.shuffle(x);
@@ -342,24 +344,51 @@ impl ProbeCursor {
         // План уже проверил, что порты помещаются в TCP; при ошибке probe не
         // выдаётся (курсор заканчивается), а не паникует.
         if inner.builder.fill(&mut p, i, 0, xxx, ip, port).is_ok() {
-            self.current = Some(p);
+            self.loaded.push_back(p);
+            true
+        } else {
+            false
         }
     }
 
     /// Текущий неподтверждённый probe; повторный вызов не продвигает.
     /// `None` в конце диапазона.
     pub fn current(&mut self) -> Option<&Probe> {
-        self.load();
-        self.current.as_ref()
+        if self.loaded.is_empty() {
+            self.load_one();
+        }
+        self.loaded.front()
+    }
+
+    /// Загружает до `n` ещё не подтверждённых probe (начиная с текущего) и
+    /// отдаёт их по порядку индексов. Не продвигает `position`; повторный вызов
+    /// отдаёт те же probe. Короче `n` только в конце диапазона.
+    pub fn preload(&mut self, n: usize) -> &[Probe] {
+        while self.loaded.len() < n && self.load_one() {}
+        let slice = self.loaded.make_contiguous();
+        &slice[..n.min(slice.len())]
     }
 
     /// Подтверждает ровно один успешно отправленный текущий probe. В конце
     /// диапазона ничего не делает.
     pub fn advance_sent(&mut self) {
-        self.load();
-        if self.current.take().is_some() {
-            self.position += 1;
+        if self.current().is_some() {
+            self.advance_sent_n(1);
         }
+    }
+
+    /// Подтверждает `k` первых загруженных probe: `position += k`. `k` больше
+    /// числа загруженных это ошибка вызывающего (debug assert); в release
+    /// подтверждается столько, сколько загружено.
+    pub fn advance_sent_n(&mut self, k: usize) {
+        debug_assert!(
+            k <= self.loaded.len(),
+            "advance_sent_n({k}) beyond the {} loaded probes",
+            self.loaded.len()
+        );
+        let k = k.min(self.loaded.len());
+        self.loaded.drain(..k);
+        self.position += k as u64;
     }
 
     /// Следующий неподтверждённый индекс.

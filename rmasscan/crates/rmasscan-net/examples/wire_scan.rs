@@ -64,7 +64,7 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{AdapterBinding, ReadyPlan};
 use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::targets::{add_target_string, parse_ports};
-use rmasscan_engine::io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx};
+use rmasscan_engine::io::{AdapterPair, IoError, Rx, RxHealth, SendStatus, Tx, TxBatch};
 use rmasscan_engine::{
     CancelHandle, Checkpoint, ENGINE_ALGORITHM_VERSION, Engine, EngineOptions, Event, Reason,
     job_digest,
@@ -388,33 +388,83 @@ struct HarnessTx {
     tid: Arc<OnceLock<u64>>,
 }
 
-impl Tx for HarnessTx {
-    fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
+impl HarnessTx {
+    fn note_tid(&self) {
         if let Some(id) = rmasscan_net::lab_current_thread_id() {
             let _ = self.tid.set(id);
         }
+    }
+
+    /// Просит Pause; кадр N+1 остаётся у курсора.
+    fn pause_now(&self) -> SendStatus {
+        let c = loop {
+            if let Some(c) = self.cancel.get() {
+                break c;
+            }
+            std::thread::yield_now();
+        };
+        c.pause();
+        SendStatus::WouldBlockUnsent
+    }
+
+    /// Учитывает `n` подтверждённых кадров одного вызова адаптера; отметки
+    /// времени относятся к его завершению.
+    fn record(&mut self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        let before = self.sent;
+        self.sent += n;
+        let ns = u64::try_from(self.timing.t0.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        if before == 0 {
+            self.timing.first_ns.store(ns, Ordering::Relaxed);
+        }
+        if before < self.timing.mark_at && self.timing.mark_at <= self.sent {
+            self.timing.mark_ns.store(ns, Ordering::Relaxed);
+        }
+        self.timing.last_ns.store(ns, Ordering::Relaxed);
+        self.timing.last_idx.store(self.sent, Ordering::Release);
+    }
+}
+
+impl Tx for HarnessTx {
+    fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
+        self.note_tid();
         if self.pause_after == Some(self.sent) {
-            let c = loop {
-                if let Some(c) = self.cancel.get() {
-                    break c;
-                }
-                std::thread::yield_now();
-            };
-            c.pause();
-            return Ok(SendStatus::WouldBlockUnsent);
+            return Ok(self.pause_now());
         }
         let r = self.inner.send(frame, timeout)?;
         if r == SendStatus::Sent {
-            self.sent += 1;
-            let ns = u64::try_from(self.timing.t0.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            if self.sent == 1 {
-                self.timing.first_ns.store(ns, Ordering::Relaxed);
-            }
-            if self.sent == self.timing.mark_at {
-                self.timing.mark_ns.store(ns, Ordering::Relaxed);
-            }
-            self.timing.last_ns.store(ns, Ordering::Relaxed);
-            self.timing.last_idx.store(self.sent, Ordering::Release);
+            self.record(1);
+        }
+        Ok(r)
+    }
+
+    fn max_batch(&self) -> usize {
+        self.inner.max_batch()
+    }
+
+    /// Режет пачку ровно на `pause_after`: префикс уходит во внутренний
+    /// адаптер, кадр N+1 не пропускается (как в одиночном пути).
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        self.note_tid();
+        let room = self.pause_after.map_or(usize::MAX, |p| {
+            usize::try_from(p - self.sent).unwrap_or(usize::MAX)
+        });
+        if room == 0 {
+            return Ok(TxBatch {
+                sent: 0,
+                rest: self.pause_now(),
+            });
+        }
+        let take = frames.len().min(room);
+        let r = self.inner.send_batch(&frames[..take], timeout)?;
+        self.record(r.sent as u64);
+        if r.rest == SendStatus::Sent && take < frames.len() {
+            return Ok(TxBatch {
+                sent: r.sent,
+                rest: self.pause_now(),
+            });
         }
         Ok(r)
     }
@@ -1999,5 +2049,128 @@ mod tests {
         assert!(j.contains("\"nic_mac\":\"masked\""), "{j}");
         let plain = fail_json_sent("join", "Panicked", "x", true, None, 7);
         assert!(!plain.contains("src_mac"), "{plain}");
+    }
+
+    fn harness_over(
+        fake: &rmasscan_engine::fake::FakeAdapter,
+        pause_after: Option<u64>,
+    ) -> (HarnessTx, Arc<OnceLock<CancelHandle>>, Arc<TxTiming>) {
+        let cancel: Arc<OnceLock<CancelHandle>> = Arc::default();
+        let timing = Arc::new(TxTiming {
+            t0: Instant::now(),
+            t0_utc_ms: 0,
+            mark_at: 3,
+            first_ns: AtomicU64::new(0),
+            mark_ns: AtomicU64::new(0),
+            last_ns: AtomicU64::new(0),
+            last_idx: AtomicU64::new(0),
+        });
+        let tx = HarnessTx {
+            inner: fake.pair().tx,
+            pause_after,
+            sent: 0,
+            cancel: cancel.clone(),
+            timing: timing.clone(),
+            tid: Arc::default(),
+        };
+        (tx, cancel, timing)
+    }
+
+    #[test]
+    fn harness_forwards_max_batch() {
+        let fake = rmasscan_engine::fake::FakeAdapter::new();
+        let (tx, _, _) = harness_over(&fake, None);
+        assert_eq!(tx.max_batch(), 1, "the default is the single path");
+        fake.set_max_batch(8);
+        assert_eq!(tx.max_batch(), 8);
+        // ... and the whole batch reaches the inner adapter in ONE call.
+        let (mut tx, _, timing) = harness_over(&fake, None);
+        let frames: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i; 60]).collect();
+        let refs: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
+        let r = tx.send_batch(&refs, Duration::from_millis(1)).unwrap();
+        assert_eq!(
+            r,
+            TxBatch {
+                sent: 8,
+                rest: SendStatus::Sent
+            }
+        );
+        assert_eq!(fake.batch_sizes(), vec![8]);
+        assert_eq!(fake.sent_frames(), frames);
+        assert_eq!(timing.last_idx.load(Ordering::Acquire), 8);
+        assert!(timing.first_ns.load(Ordering::Relaxed) <= timing.last_ns.load(Ordering::Relaxed));
+        // mark_at (3) lies inside the batch and was stamped.
+        assert_eq!(
+            timing.mark_ns.load(Ordering::Relaxed),
+            timing.last_ns.load(Ordering::Relaxed)
+        );
+    }
+
+    #[test]
+    fn pause_after_inside_a_batch_cuts_the_batch_exactly_at_n() {
+        let fake = rmasscan_engine::fake::FakeAdapter::new();
+        fake.set_max_batch(8);
+        let (mut tx, cancel, timing) = harness_over(&fake, Some(5));
+        // Pause needs a handle: a real engine is not needed, the cell is only
+        // read, so give it one from a throwaway engine handle.
+        let plan = {
+            let mut m = MassIp::new();
+            add_target_string(m.ipv4_mut(), "10.0.0.1").unwrap();
+            parse_ports(m.ports_mut(), "80").unwrap();
+            let cfg = ScanConfig {
+                targets: m,
+                seed: 1,
+                max_rate: 1.0,
+                ..ScanConfig::default()
+            };
+            ReadyPlan::new(
+                validate(&cfg, Operation::Scan).unwrap(),
+                AdapterBinding {
+                    interface_id: "fake0".into(),
+                    link_type: LinkType::Ethernet,
+                    source_ipv4: 0x0aff_0001,
+                    source_mac: [2, 0, 0, 0, 0, 1],
+                    next_hop_mac: [2, 0, 0, 0, 0, 2],
+                    source_ports: (40000, 40000),
+                },
+            )
+            .unwrap()
+        };
+        let eng = rmasscan_engine::Engine::start(
+            plan,
+            rmasscan_engine::fake::FakeAdapter::new().pair(),
+            EngineOptions::new([1; 16], [2; 16]),
+        )
+        .unwrap();
+        cancel.set(eng.cancel_handle()).ok();
+
+        let frames: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i; 60]).collect();
+        let refs: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
+        let r = tx.send_batch(&refs, Duration::from_millis(1)).unwrap();
+        // The inner adapter saw exactly 5 frames, then the pause fired and the
+        // 6th frame stayed with the cursor.
+        assert_eq!(
+            r,
+            TxBatch {
+                sent: 5,
+                rest: SendStatus::WouldBlockUnsent
+            }
+        );
+        assert_eq!(fake.batch_sizes(), vec![5]);
+        assert_eq!(fake.sent_frames(), frames[..5].to_vec());
+        assert_eq!(timing.last_idx.load(Ordering::Acquire), 5);
+        // A further call at the boundary sends nothing at all.
+        let r = tx.send_batch(&refs[5..], Duration::from_millis(1)).unwrap();
+        assert_eq!(
+            r,
+            TxBatch {
+                sent: 0,
+                rest: SendStatus::WouldBlockUnsent
+            }
+        );
+        assert_eq!(fake.batch_calls(), 1, "no inner call at the boundary");
+        assert_eq!(fake.sent_count(), 5);
+        eng.stop();
+        let _ = eng.join();
     }
 }

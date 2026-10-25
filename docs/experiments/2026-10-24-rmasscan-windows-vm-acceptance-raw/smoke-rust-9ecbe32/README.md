@@ -13,3 +13,27 @@ Run verdict PASS; overall NOT RUN by design (27 planned runs not executed): `{"F
 - Preflight clock: guest minus home-pc 0.48 s, uncertainty 3.5 s.
 - A second scratch smoke (`x01_foreign_replies.run1`, inject path) also passed, with eno1 0 frames; it is kept outside the repository.
 - NEW-4 (process group of peer tools started through sudo), sampled on home-pc with ps during a live run: the `timeout` wrapper is the group leader (pgid = its pid) and the inner `sudo -n ip netns exec`, `rmasscan-lab peer listen`/`peer inject` and both `tcpdump` processes are all in that pgid. The group KILL therefore reaches them.
+
+## Reproducibility notes (review W1: M1, M3, M4)
+- **Deploy manifest hash.** `deploy/deploy-manifest.json` was scrubbed like the other text files (`/home/a1` -> `$HOME`, one occurrence), so the stored copy hashes to `ad34159b…`, not to the recorded `deploy_manifest_sha256` `a4d070d3d60af3ef71136dd13397e1b3aa847593d6107449f3ee3b9e7d895a7d`. Reversing the substitution reproduces the recorded hash exactly: `sed 's#\$HOME#/home/a1#g' deploy/deploy-manifest.json | shasum -a 256`.
+- **Guest build of `wire_scan.exe`.** Source: `git archive --format=tar 9ecbe32 rmasscan` (sha256 `a406a16884dc9e35499a769827861b4311165403050a1d4376ef9b21745b93d2`; anyone can reproduce it from the repository), extracted to `C:\Users\lab\src\rmasscan-9ecbe32`. The operator built it with this scratch script, `build-guest.ps1` (sha256 `6e839a009667b41c31255372a029d17b747229c8e37707db7dc3621e57fede56`), because the `sync-and-test.sh` helper cannot set environment variables:
+  ```powershell
+  $ErrorActionPreference='Stop'
+  $env:RMASSCAN_SOURCE_COMMIT='9ecbe32f82aac77d15575c855dfaa4c10c101ab4'
+  $env:RUSTFLAGS='-C target-feature=+crt-static'
+  Set-Location C:\Users\lab\src\rmasscan-9ecbe32\rmasscan
+  cargo build --locked --release -p rmasscan-net --example wire_scan
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Copy-Item -Force target\release\examples\wire_scan.exe C:\Users\lab\t4\wire_scan.exe
+  (Get-FileHash C:\Users\lab\t4\wire_scan.exe -Algorithm SHA256).Hash
+  ```
+  The exe reports its own `source_commit`, taken from `RMASSCAN_SOURCE_COMMIT`; the tar sha ties the built source to the commit.
+- **scp shim.** Starting with the first successful smoke run, `scp` on the orchestrator's PATH was a pass-through logging shim (sha256 `449181547589e0ef950bd8c70e17ef4a5c1c15653c488f1aaf7e6db2099cd581`, computed on the unscrubbed file). It ran `/usr/bin/scp "$@"` unchanged and appended argv, timestamps and the exit code to a scratch log. Its content, with the scratch path replaced by `$SCRATCH`:
+  ```bash
+  #!/bin/bash
+  echo "$(date +%T.%N) START $*" >> $SCRATCH/live-win/shim.log
+  /usr/bin/scp "$@"; rc=$?
+  echo "$(date +%T.%N) END rc=$rc" >> $SCRATCH/live-win/shim.log
+  exit $rc
+  ```
+  pcaps are bound independently by the hashes taken on home-pc before the transfer (`pcap-hashes-on-home-pc.txt`). The JSON artifacts are hashed only after the transfer.

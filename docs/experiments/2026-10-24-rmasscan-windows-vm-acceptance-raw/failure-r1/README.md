@@ -15,3 +15,27 @@ Verdict: **overall PASS**, `{"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":19}` (18 ru
 - `linkloss`: `TxUncertain`, exit 3. `overflow_queue`: `ConsumerTooSlow`, exit 3. After linkloss and at the end the stand status was up, raw_run_allowed=true.
 - `perm_restricted_scan`: guest exit 2 (refused under the restricted token); `perm_restricted_inventory`: exit 5 (instructions); `perm_elevated_control`: exit 0.
 - Repository copy: the two flood captures `runs/rxloss/peer.pcap` (36492900 bytes) and `runs/stop_load/peer.pcap` (13486902 bytes) are stored as `peer.pcap.gz` (`gzip -9n`, lossless), because together they would triple the size of the repository. Their original sha256 and size are in each run's `pcap-hashes-on-home-pc.txt`. Before re-verifying, run `gunzip -k runs/rxloss/peer.pcap.gz runs/stop_load/peer.pcap.gz`; without that step `windows-verify` cannot read those two runs. The verdict above was computed on the uncompressed captures, and a re-verify after `gunzip -k` gives the same result.
+
+## Reproducibility notes (review W1: M1, M3, M4)
+- **Deploy manifest hash.** `deploy/deploy-manifest.json` was scrubbed like the other text files (`/home/a1` -> `$HOME`, one occurrence), so the stored copy hashes to `ad34159b…`, not to the recorded `deploy_manifest_sha256` `a4d070d3d60af3ef71136dd13397e1b3aa847593d6107449f3ee3b9e7d895a7d`. Reversing the substitution reproduces the recorded hash exactly: `sed 's#\$HOME#/home/a1#g' deploy/deploy-manifest.json | shasum -a 256`.
+- **Guest build of `wire_scan.exe`.** Source: `git archive --format=tar 9ecbe32 rmasscan` (sha256 `a406a16884dc9e35499a769827861b4311165403050a1d4376ef9b21745b93d2`; anyone can reproduce it from the repository), extracted to `C:\Users\lab\src\rmasscan-9ecbe32`. The operator built it with this scratch script, `build-guest.ps1` (sha256 `6e839a009667b41c31255372a029d17b747229c8e37707db7dc3621e57fede56`), because the `sync-and-test.sh` helper cannot set environment variables:
+  ```powershell
+  $ErrorActionPreference='Stop'
+  $env:RMASSCAN_SOURCE_COMMIT='9ecbe32f82aac77d15575c855dfaa4c10c101ab4'
+  $env:RUSTFLAGS='-C target-feature=+crt-static'
+  Set-Location C:\Users\lab\src\rmasscan-9ecbe32\rmasscan
+  cargo build --locked --release -p rmasscan-net --example wire_scan
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Copy-Item -Force target\release\examples\wire_scan.exe C:\Users\lab\t4\wire_scan.exe
+  (Get-FileHash C:\Users\lab\t4\wire_scan.exe -Algorithm SHA256).Hash
+  ```
+  The exe reports its own `source_commit`, taken from `RMASSCAN_SOURCE_COMMIT`; the tar sha ties the built source to the commit.
+- **scp shim.** Starting with the first successful smoke run, `scp` on the orchestrator's PATH was a pass-through logging shim (sha256 `449181547589e0ef950bd8c70e17ef4a5c1c15653c488f1aaf7e6db2099cd581`, computed on the unscrubbed file). It ran `/usr/bin/scp "$@"` unchanged and appended argv, timestamps and the exit code to a scratch log. Its content, with the scratch path replaced by `$SCRATCH`:
+  ```bash
+  #!/bin/bash
+  echo "$(date +%T.%N) START $*" >> $SCRATCH/live-win/shim.log
+  /usr/bin/scp "$@"; rc=$?
+  echo "$(date +%T.%N) END rc=$rc" >> $SCRATCH/live-win/shim.log
+  exit $rc
+  ```
+  pcaps are bound independently by the hashes taken on home-pc before the transfer (`pcap-hashes-on-home-pc.txt`). The JSON artifacts are hashed only after the transfer.

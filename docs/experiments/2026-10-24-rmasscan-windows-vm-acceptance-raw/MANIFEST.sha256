@@ -1,5 +1,5 @@
 8ada275b8705d9c79587ba533d7f4e0ac2cc06e3e11a790d63748c5ac94c4ee6  ./README.md
-c769f55a66c30f72ea690a8bed5b5bd2398cec1835d473e0cc13bb11c50f7780  ./failure-r1/MANIFEST.sha256
+5c54da2c9b26f7a748821f868fb28681b84a012bf6a457556f81ba990abd5437  ./failure-r1/MANIFEST.sha256
 24e4d8ae219384f554189463856bd2f82b09dd7a889e46db9b50d8edb19a79f5  ./functional-r1-smoke/fixtures/c01_one_addr_port_synack.echo
 9b5d46b0941d45fa8594d1a56bac4b0f33e2b9d15d04931a9b2aa27b4800ab9e  ./functional-r1-smoke/fixtures/c01_one_addr_port_synack.run1.capture.json
 e6d643d9de2e1fceb33dbd3a748441e3df6195117e0174f4d4cbe2fb3a89793b  ./functional-r1-smoke/fixtures/c01_one_addr_port_synack.run1.oracle-stderr.txt
@@ -93,7 +93,7 @@ f4726954a0660067510053ad2e37aae6d7bc7b75433e31c98c4b053bfe47f101  ./functional-r
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional-r1-smoke/runs/c02_one_addr_port_rst.run1/status-post.json
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional-r1-smoke/runs/c02_one_addr_port_rst.run1/status-pre.json
 62add637b4de3203994c83e6a2dc14c60229b8227ff0207675837b14a561575e  ./functional-r1-smoke/verdict.json
-2e68b80c1ee14fe7e137f74f8193164043d7df05f3a5567e7b9ab1852bc5238f  ./functional-r2/MANIFEST.sha256
+80eb152e4ee1d0fde2cdb9b563f6ce0ebcd9f754380f22e196ae88e3e5e3d110  ./functional-r2/MANIFEST.sha256
 24e4d8ae219384f554189463856bd2f82b09dd7a889e46db9b50d8edb19a79f5  ./functional/fixtures/c01_one_addr_port_synack.echo
 9b5d46b0941d45fa8594d1a56bac4b0f33e2b9d15d04931a9b2aa27b4800ab9e  ./functional/fixtures/c01_one_addr_port_synack.run1.capture.json
 e6d643d9de2e1fceb33dbd3a748441e3df6195117e0174f4d4cbe2fb3a89793b  ./functional/fixtures/c01_one_addr_port_synack.run1.oracle-stderr.txt
@@ -633,6 +633,6 @@ dcb8c55b8332bd4d83e1e25f892c4b8d6a80ab2c4a24fbd2331a333303028d5f  ./functional/r
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/runs_discarded/x01_foreign_replies.run1.1792853357/status-post.json
 fc2662bdcbbc35e0a523592b4611b085c98a3b0b8db477a24c6556c306a374ea  ./functional/runs_discarded/x01_foreign_replies.run1.1792853357/status-pre.json
 a30a6b0e1acbdf35a80b4cf19f056cdac6ae9cc6f75d1cbbadc2b8b7e10f71d7  ./functional/verdict.json
-27af320a576caf291c3d523bff86ee37dd004129fe6a654601088518d0dbc6a7  ./smoke-rust-9ecbe32/MANIFEST.sha256
+d65b6295c95f39e614d062e951eb61f149ca301814ab32a9c48016b9ce24a708  ./smoke-rust-9ecbe32/MANIFEST.sha256
 dc8833c124b4bcc06e9e29c5514559150ef32d3e142e1e94a4e73ebfafab3c73  ./verification/vm-clippy.log
 47bf4583722a46082366e4d90e7c204e5840447805130362fdbfca1498c49486  ./verification/vm-workspace-test.log

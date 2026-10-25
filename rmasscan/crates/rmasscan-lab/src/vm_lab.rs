@@ -2199,7 +2199,17 @@ mod ownership_tests {
         let other = lock("t2").unwrap();
         drop(other);
         drop(held);
-        assert!(lock("t1").is_ok());
+        // A child that a parallel test forks can share the open file description between fork
+        // and exec, so the flock may outlive `drop` by a moment (dispatch retries for the same
+        // reason). Released means: free again within a bounded wait.
+        let t = Instant::now();
+        while lock("t1").is_err() {
+            assert!(
+                t.elapsed() < Duration::from_secs(5),
+                "t1 lock was not released"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
         fs::remove_dir_all(p).unwrap();
         fs::remove_dir_all(dir).unwrap();
     }

@@ -291,6 +291,10 @@ impl Stand for RealStand {
                 // The "other IP" reply would come from 198.18.0.3, which the guard forbids the lab to write.
                 .filter(|(k, _)| k != "other_ip")
                 .collect();
+        // What exactly was written, by content: the verifier tells these frames from the genuine kernel replies
+        // in the witness capture by this record.
+        let injected: BTreeMap<String, String> =
+            frames.iter().map(|(k, f)| (k.clone(), hex(f))).collect();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let (duration, interval) = (spec.duration_s, spec.interval_s);
@@ -326,7 +330,7 @@ impl Stand for RealStand {
             Ok(
                 json!({"first_syn_seen":seen,"sent_total":counts.values().sum::<u64>(),
                 "kinds":counts,"interval_s":interval,"duration_s":duration,"ipid":0xf0e1,
-                "first_sent_at":first,"guard_refused":refused.load(Ordering::Relaxed)}),
+                "first_sent_at":first,"injected":injected,"guard_refused":refused.load(Ordering::Relaxed)}),
             )
         });
         Ok(Box::new(ThreadSide { stop, join }))
@@ -1352,12 +1356,9 @@ impl Suite<'_> {
                 "checkpoint of the pause leg",
             )?;
         }
-        // 2. listeners, restarted for every run.
-        let silent = if self.plan == "failure" {
-            "8099,8100-8119"
-        } else {
-            "8099"
-        };
+        // 2. listeners, restarted for every run. No silent port is asked for: Darwin completes the handshake
+        // whatever the listen queue holds (`net.inet.tcp.syncookie`), so one cannot exist; 8099 and 8100-8119 are
+        // ordinary closed ports here.
         let ready = work.join("listeners.json");
         t.listener = Some(self.start_proc(
             &[
@@ -1366,8 +1367,6 @@ impl Suite<'_> {
                 "listen".into(),
                 "--open".into(),
                 "8000-8007".into(),
-                "--silent".into(),
-                silent.into(),
                 "--ready".into(),
                 p2s(&ready),
             ],
@@ -1379,13 +1378,31 @@ impl Suite<'_> {
                 "the peer listeners did not become ready; nothing was started".into(),
             ));
         }
-        let lj = read_json(&ready)?;
-        if lj["ready"] != true || lj["silent_proven"] != true {
+        let mut lj = read_json(&ready)?;
+        if lj["ready"] != true || lj["silent"] != json!([]) {
             return Err(SuiteError::NotRun(format!(
-                "the peer listeners are not proven (ready {}, silent_proven {}); nothing was started",
-                lj["ready"], lj["silent_proven"]
+                "the peer listeners are not proven (ready {}, silent {}); nothing was started",
+                lj["ready"], lj["silent"]
             )));
         }
+        // Why there is no silent port, with the value the OS reports (read only, absolute path).
+        let cookie = self.st.exec(
+            &[
+                "/usr/sbin/sysctl".into(),
+                "-n".into(),
+                "net.inet.tcp.syncookie".into(),
+            ],
+            20,
+        )?;
+        let syncookie = if cookie.rc == 0 {
+            cookie.stdout.trim().to_owned()
+        } else {
+            "unreadable".to_owned()
+        };
+        lj["silent_proven"] = Value::Null;
+        lj["silent_unavailable"] = json!("darwin-syncookies");
+        lj["syncookie"] = json!(syncookie);
+        write_json(&ready, &lj)?;
         let uplink_if = pre["uplink"].as_str().unwrap_or("").to_owned();
         let mut cap = json!({"capture_schema":mv::CAPTURE_SCHEMA});
         let mut meta =
@@ -1406,6 +1423,7 @@ impl Suite<'_> {
             ),
             "icmplim.txt",
         )?;
+        meta["syncookie"] = lj["syncookie"].clone();
         meta["icmplim"] = json!(if lim.rc == 0 {
             lim.stdout.trim()
         } else {
@@ -2036,11 +2054,6 @@ pub(crate) fn run_locked(
     let man = match old {
         Some(m) => m,
         None => {
-            let silent: Vec<u32> = if plan == "failure" {
-                std::iter::once(8099).chain(8100..8120).collect()
-            } else {
-                vec![8099]
-            };
             let mut m = json!({"schema":1,"macos_capture_schema":mv::CAPTURE_SCHEMA,"suite":suite,
                 "plan":plan,"code_commit":commit,
                 "exe":{"sha256":wire_sha,"size":fs::metadata(&wire_scan).map(|m| m.len()).unwrap_or(0),
@@ -2048,7 +2061,7 @@ pub(crate) fn run_locked(
                 "binding":plan_binding(),
                 "stand":{"run_id":s.lab_run_id,"scanner_if":SCANNER_IF,"peer_if":PEER_IF,
                     "uplink":status0["uplink"],"gateway":status0["gateway"]},
-                "listeners":{"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent,
+                "listeners":{"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":[],"silent_unavailable":"darwin-syncookies",
                     "note":"80 and 443 are closed on the Mac stand: a non-root peer cannot bind them"},
                 "euid":uid,"orchestrator":orchestrator,"created_utc":epoch()});
             if plan == "perf" {

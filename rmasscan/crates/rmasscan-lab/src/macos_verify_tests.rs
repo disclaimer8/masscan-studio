@@ -113,16 +113,12 @@ fn checkpoint_bytes(scan: &str, attempt: &str, next: u64) -> Vec<u8> {
 }
 
 fn manifest(plan: &str) -> Value {
-    let mut silent = vec![8099u32];
-    if plan == "failure" {
-        silent.extend(8100..8120);
-    }
     json!({
         "schema":1,"macos_capture_schema":1,"suite":plan,"plan":plan,"code_commit":COMMIT,
         "exe":{"sha256":EXE,"size":1,"path":"/x/wire_scan","build":"synthetic"},
         "binding":{"iface":"feth4201","src_ip":"198.18.0.1","src_mac":SM,"router_mac":PM,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},
         "stand":{"run_id":"m1","scanner_if":"feth4201","peer_if":"feth4202"},
-        "listeners":{"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
+        "listeners":{"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":[],"silent_unavailable":"darwin-syncookies"},
         "orchestrator":{"git_commit":COMMIT,"git_dirty":false,"binary_sha256":"ab".repeat(32),"errors":[]}
     })
 }
@@ -143,6 +139,7 @@ impl Env {
         for (case, ports) in [
             ("c01_one_addr_port_synack", vec![80u16]),
             ("c03_multi_ports", (8000..8016).collect()),
+            ("x01_foreign_replies", vec![80u16, 81, 443, 8099]),
         ] {
             let frames: Frames = ports
                 .iter()
@@ -288,8 +285,14 @@ fn build(env: &Env, tag: &str) -> Ev {
     let mut exit_meta = json!({});
     // The scanner's SYNs and the peer's replies on the wire.
     let mut peer: Frames = vec![];
+    // stop_silent and stop_load stop mid-TX: only the first three probes went out.
+    let sent_limit = if kind == "stop" && matches!(s(&item["scenario"]), "silent" | "load") {
+        3
+    } else {
+        usize::MAX
+    };
     let ports: Vec<u16> = match kind.as_str() {
-        "case" | "foreign" | "perf" | "stop" => (0..n(&c["syn"]) as usize)
+        "case" | "foreign" | "perf" | "stop" => (0..(n(&c["syn"]) as usize).min(sent_limit))
             .map(|k| {
                 let first = verify_ports(&c);
                 first[k]
@@ -306,13 +309,11 @@ fn build(env: &Env, tag: &str) -> Ev {
                 // A perf cell has 500 probes: 1 ms apart keeps them before the outcome.
                 let step = if kind == "perf" { 0.001 } else { 0.01 };
                 peer.push((BASE + 0.002 + k as f64 * step, syn(*p)));
-                if *p != 8099 {
-                    peer.push((BASE + 0.0025 + k as f64 * step, reply(*p, is_open(*p))));
-                }
+                // 8099 and 8100-8119 are ordinary closed ports here: the kernel answers RST.
+                peer.push((BASE + 0.0025 + k as f64 * step, reply(*p, is_open(*p))));
             }
             let mut exp: Vec<String> = ports
                 .iter()
-                .filter(|p| **p != 8099)
                 .map(|p| {
                     format!(
                         "198.18.0.2:{p}:{}",
@@ -415,20 +416,11 @@ fn build(env: &Env, tag: &str) -> Ev {
             pretty(&json!({"raw_run_allowed":true,"bpf_access":access,"uplink":"en0","checks":[]})),
         );
     }
-    let silent = if man["plan"] == "failure" {
-        json!(
-            [8099]
-                .iter()
-                .copied()
-                .chain(8100..8120)
-                .collect::<Vec<u32>>()
-        )
-    } else {
-        json!([8099])
-    };
+    // The Mac peer has no silent ports: Darwin completes the handshake whatever the listen queue holds.
     files.insert(
         "listeners.json".into(),
-        pretty(&json!({"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent,"silent_proven":true,"ready":true,"bind":"198.18.0.2"})),
+        pretty(&json!({"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":[],"silent_proven":null,
+            "silent_unavailable":"darwin-syncookies","syncookie":"1","ready":true,"bind":"198.18.0.2"})),
     );
     let mut ev = Ev {
         tag: tag.into(),
@@ -450,6 +442,7 @@ fn build(env: &Env, tag: &str) -> Ev {
     }
     if kind == "foreign" {
         // Three kinds of foreign reply, as the macOS injector writes them (never "other_ip").
+        let mut injected = serde_json::Map::new();
         for k in 0..3u16 {
             let mut f = tcp_frame(
                 PM,
@@ -461,12 +454,17 @@ fn build(env: &Env, tag: &str) -> Ev {
                 0x12,
             );
             f[18..20].copy_from_slice(&0xf0e1u16.to_be_bytes());
+            injected.insert(
+                ["unscanned_port", "wrong_cookie", "wrong_dst_port"][k as usize].to_owned(),
+                json!(hex_of(&Sha256::digest(&f))),
+            );
             peer.push((BASE + 0.5 + f64::from(k) * 0.01, f));
         }
         ev.files.insert(
             "injector.json".into(),
             pretty(&json!({"first_syn_seen":true,"sent_total":3,
-                "kinds":{"unscanned_port":1,"wrong_cookie":1,"wrong_dst_port":1},"guard_refused":0})),
+                "kinds":{"unscanned_port":1,"wrong_cookie":1,"wrong_dst_port":1},
+                "injected":injected,"guard_refused":0})),
         );
     }
     // Peer witness: start markers, the scan, end markers.
@@ -1862,4 +1860,149 @@ fn icmplim_must_be_a_number() {
     let mut ev = build(&env, C01);
     ev.json("meta.json", |v| v["icmplim"] = json!("250"));
     assert_eq!(ev.verdict(&env), PASS);
+}
+
+#[test]
+fn the_mac_peer_has_no_silent_ports_and_the_evidence_says_why() {
+    let env = Env::new("failure");
+    let (r, _) = build(&env, "rxloss").verify(&env);
+    assert_eq!(result_of(&r, "listeners valid before/after run"), PASS);
+    // The old claim (a silent 8099 that was proven) is not evidence on the Mac.
+    for edit in [
+        |v: &mut Value| {
+            v["silent"] = json!([8099]);
+            v["silent_proven"] = json!(true);
+        },
+        |v: &mut Value| v["silent_unavailable"] = json!(null),
+        |v: &mut Value| {
+            v.as_object_mut().unwrap().remove("syncookie");
+        },
+        |v: &mut Value| v["syncookie"] = json!("on"),
+        |v: &mut Value| v["ready"] = json!(false),
+    ] {
+        let mut ev = build(&env, "rxloss");
+        ev.json("listeners.json", edit);
+        let (r, _) = ev.verify(&env);
+        assert_eq!(result_of(&r, "listeners valid before/after run"), INVALID);
+    }
+}
+
+#[test]
+fn ports_8099_and_8100_to_8119_are_ordinary_closed_ports_on_the_mac() {
+    let env = Env::new("functional");
+    let tag = "x01_foreign_replies.run1";
+    // The kernel answered 8099 with an RST like any closed port: a genuine result.
+    let (r, _) = build(&env, tag).verify(&env);
+    assert_eq!(
+        result_of(&r, "no foreign reply became a result"),
+        PASS,
+        "{:?}",
+        failing_checks(&r)
+    );
+    assert_eq!(result_of(&r, "results are replies the peer sent"), PASS);
+    assert_eq!(result_of(&r, "every frame marked as injected"), PASS);
+    let mk = |ev: &Ev| serde_json::from_slice::<Value>(&ev.files["run.json"]).unwrap();
+    assert!(
+        mk(&build(&env, tag))["replies"]
+            .to_string()
+            .contains("8099:closed")
+    );
+    // The RST rate limit may swallow it: nothing on the wire, nothing in the results.
+    let mut ev = build(&env, tag);
+    lose_reply(&mut ev, 8099);
+    let (r, _) = ev.verify(&env);
+    assert_eq!(result_of(&r, "no foreign reply became a result"), PASS);
+    assert!(!failed(&r, "results are replies the peer sent"));
+    // A result for 8099 with no genuine reply on the wire means a foreign frame was accepted: FAIL.
+    let mut ev = build(&env, tag);
+    let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+    fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == 8099)));
+    rebuild_peer(&mut ev, &fr);
+    let (r, _) = ev.verify(&env);
+    assert!(
+        failed(&r, "results are replies the peer sent"),
+        "{:?}",
+        failing_checks(&r)
+    );
+    assert_eq!(r.verdict(), FAIL);
+    // Never open: a SYN-ACK result for a closed port is a FAIL.
+    let mut ev = build(&env, tag);
+    edit_scanner_output(&mut ev, |v| {
+        let mut a = v["replies"].as_array().unwrap().clone();
+        a.push(json!("198.18.0.2:8099:open"));
+        v["replies"] = json!(a);
+        v["reply_total"] = json!(a.len());
+        v["reply_unique"] = json!(a.len());
+    });
+    assert!(failed(
+        &ev.verify(&env).0,
+        "no foreign reply became a result"
+    ));
+}
+
+#[test]
+fn injected_frames_are_told_from_genuine_replies_by_their_recorded_identity() {
+    let env = Env::new("functional");
+    let tag = "x01_foreign_replies.run1";
+    let mut ev = build(&env, tag);
+    ev.json("injector.json", |v| {
+        v.as_object_mut().unwrap().remove("injected");
+    });
+    assert_eq!(
+        result_of(&ev.verify(&env).0, "every frame marked as injected"),
+        INVALID
+    );
+    let mut ev = build(&env, tag);
+    ev.json("injector.json", |v| {
+        v["injected"]["wrong_cookie"] = json!("00".repeat(32))
+    });
+    assert_eq!(
+        result_of(&ev.verify(&env).0, "every frame marked as injected"),
+        INVALID
+    );
+}
+
+#[test]
+fn stop_silent_on_the_mac_is_judged_on_mid_tx_and_the_wire_with_the_empty_path_noted_not_run() {
+    let env = Env::new("failure");
+    {
+        let tag = "stop_silent";
+        let (r, _) = build(&env, tag).verify(&env);
+        assert_eq!(r.verdict(), PASS, "{:?}", failing_checks(&r));
+        assert_eq!(
+            r.summary()["notes"]["empty_receive_path"],
+            "NOT RUN on macOS (darwin-syncookies)"
+        );
+        // Results (RSTs of the closed 8100-8119) are fine when the wire carried them.
+        assert!(!serde_json::from_slice::<Value>(&build(&env, tag).files["run.json"]).unwrap()["replies"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        // Stop must have been mid-TX.
+        let mut ev = build(&env, tag);
+        edit_scanner_output(&mut ev, |v| {
+            for k in [
+                "sent",
+                "next_index",
+                "tx_sent_at_join",
+                "tx_sent_after_observe",
+            ] {
+                v[k] = json!(20);
+            }
+            v["net"]["tx_sent"] = json!(20);
+        });
+        assert!(failed(&ev.verify(&env).0, "Stop mid-TX"));
+        // A result the wire never carried is still a FAIL.
+        let mut ev = build(&env, tag);
+        let mut fr = pcap::read_pcap_records(&ev.files["peer.pcap"]).unwrap().1;
+        fr.retain(|(_, f)| tcp(f).is_none_or(|i| !(i.sm == PM && i.sp == 8100)));
+        rebuild_peer(&mut ev, &fr);
+        assert!(failed(
+            &ev.verify(&env).0,
+            "results are replies the peer sent"
+        ));
+    }
+    // The empty-path note is never a pass: no other plan carries it.
+    let (r, _) = build(&Env::new("functional"), C01).verify(&Env::new("functional"));
+    assert!(r.summary()["notes"].get("empty_receive_path").is_none());
 }

@@ -206,7 +206,7 @@ pub(crate) fn perf_case(rate: u64) -> Value {
 pub(crate) fn perf_expected(case: &Value) -> Vec<String> {
     let mut a: Vec<_> = ports(s(&case["ports"]))
         .into_iter()
-        .filter(|p| *p != 8099)
+        .filter(|p| *p != 8099 || mac_stand())
         .map(|p| {
             format!(
                 "{PEER}:{p}:{}",
@@ -224,7 +224,8 @@ pub(crate) fn perf_expected(case: &Value) -> Vec<String> {
 pub(crate) fn replies(case: &Value, silent: bool) -> Vec<String> {
     let mut a: Vec<_> = ports(s(&case["ports"]))
         .into_iter()
-        .filter(|p| silent || (*p != 8099 && !(8100..8120).contains(p)))
+        // The Mac stand has no silent ports (Darwin syncookies): 8099 and 8100-8119 are closed ports like the rest.
+        .filter(|p| silent || mac_stand() || (*p != 8099 && !(8100..8120).contains(p)))
         .map(|p| {
             format!(
                 "{PEER}:{p}:{}",
@@ -1562,6 +1563,20 @@ pub(crate) fn stop(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     );
     let exp = replies(c, false);
     match s(&it["scenario"]) {
+        "silent" | "load" if mac_stand() => {
+            // No silent port can exist on the Mac (Darwin syncookies), so the "empty receive path" property
+            // is not exercised: recorded, never a PASS claim, and no part of the verdict.
+            r.beh(
+                "Stop mid-TX",
+                n(&j["sent"]) > 0 && n(&j["sent"]) < n(&j["range"]),
+                j["sent"].to_string(),
+            );
+            results_on_wire(r, ctx, c, &j["replies"]);
+            r.notes.insert(
+                "empty_receive_path".into(),
+                json!("NOT RUN on macOS (darwin-syncookies)"),
+            );
+        }
         "silent" | "load" => r.beh(
             "Stop mid-TX with empty receive path",
             n(&j["sent"]) > 0 && n(&j["sent"]) < n(&j["range"]) && j["reply_total"] == 0,

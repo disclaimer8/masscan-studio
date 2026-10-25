@@ -400,18 +400,19 @@ fn gate(
             op.sort_unstable();
             let mut want: Vec<u64> = verify::open_ports().into_iter().map(u64::from).collect();
             want.sort_unstable();
-            let silent = if man["listeners"]["silent"].is_array() {
-                man["listeners"]["silent"].clone()
-            } else {
-                json!([8099])
-            };
+            // Darwin completes the handshake whatever the listen queue holds (`net.inet.tcp.syncookie`), so a
+            // silent port cannot exist on the Mac stand: none is asked for, none is claimed, and the reason and
+            // the observed sysctl value are part of the evidence. 8099 and 8100-8119 are ordinary closed ports.
             r.inv(
-                "listeners valid before/after run",
+                "listeners valid before/after run (8000-8007 ready; no silent port on the Mac)",
                 op == want
                     && v["ready"] == true
-                    && v["silent"] == silent
-                    && array(&v["silent"]).contains(&json!(8099))
-                    && v["silent_proven"] == true,
+                    && v["silent"] == json!([])
+                    && v["silent_proven"].is_null()
+                    && v["silent_unavailable"] == "darwin-syncookies"
+                    && v["syncookie"]
+                        .as_str()
+                        .is_some_and(|c| c.trim().parse::<u64>().is_ok()),
                 v.to_string(),
             );
         }
@@ -891,6 +892,29 @@ fn verify_argv(r: &mut Run, it: &Value, man: &Value, d: &Path) {
     r.argv_ok = ok;
 }
 
+/// The injected foreign frames and the genuine kernel replies are told apart by content: the injector records the
+/// sha256 of each frame it wrote, and every frame on the wire that looks like one (IP id 0xf0e1) must be one of them.
+/// What is left is the genuine reply set that the results are judged against.
+fn injected_identities(r: &mut Run, ctx: &Ctx) {
+    let (Some(inj), Some((fr, _))) = (read_json(ctx.d.join("injector.json")), &ctx.peer) else {
+        return;
+    };
+    let known: BTreeSet<String> = inj["injected"]
+        .as_object()
+        .map(|m| m.values().map(|v| s(v).to_owned()).collect())
+        .unwrap_or_default();
+    let unknown = fr
+        .iter()
+        .filter(|(_, f)| tcp(f).is_some_and(|i| i.id == 0xf0e1))
+        .filter(|(_, f)| !known.contains(&sha(f)))
+        .count();
+    r.inv(
+        "every frame marked as injected (IP id 0xf0e1) on the wire is one the injector recorded writing",
+        !known.is_empty() && unknown == 0,
+        format!("{} recorded, {unknown} unrecorded on the wire", known.len()),
+    );
+}
+
 /// Everything the lab wrote from the peer side went through the guard: no refused frame, and (injector) no
 /// "other IP" reply, which would come from 198.18.0.3 and which the guard forbids on macOS.
 fn guard_clean(r: &mut Run, ctx: &Ctx, file: &str, injector: bool) {
@@ -1123,6 +1147,7 @@ pub(crate) fn verify_item(
                     &["unscanned_port", "wrong_cookie", "wrong_dst_port"],
                 );
                 guard_clean(&mut r, &ctx, "injector.json", true);
+                injected_identities(&mut r, &ctx);
             }
         }
         "stop" => {

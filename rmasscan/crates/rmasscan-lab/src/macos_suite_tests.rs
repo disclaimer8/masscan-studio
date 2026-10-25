@@ -94,6 +94,7 @@ struct Fake {
     ps_has_self: Cell<bool>,
     /// Every `counters` call moves the pair's packet counters.
     pair_busy: Cell<bool>,
+    listener_ready: Cell<bool>,
     counter_reads: Cell<u64>,
     /// `stopped` turns true from this call on (0: use `stopped`).
     stopped_from_call: Cell<u32>,
@@ -125,6 +126,7 @@ impl Fake {
             ps_rc: Cell::new(0),
             ps_has_self: Cell::new(true),
             pair_busy: Cell::new(false),
+            listener_ready: Cell::new(true),
             counter_reads: Cell::new(0),
             stopped_from_call: Cell::new(0),
             stopped_calls: Cell::new(0),
@@ -179,7 +181,12 @@ impl Stand for Fake {
         if argv[0] == "/usr/sbin/sysctl" {
             return Ok(Output {
                 rc: 0,
-                stdout: "250\n".into(),
+                stdout: if argv.iter().any(|a| a == "net.inet.tcp.syncookie") {
+                    "1\n"
+                } else {
+                    "250\n"
+                }
+                .into(),
                 stderr: String::new(),
             });
         }
@@ -237,7 +244,7 @@ impl Stand for Fake {
             name = "listener";
             fs::write(
                 after(argv, "--ready"),
-                json!({"open":[80],"silent":[8099],"silent_proven":true,"ready":true}).to_string(),
+                json!({"open":[8000,8001,8002,8003,8004,8005,8006,8007],"silent":[],"silent_proven":null,"ready":self.listener_ready.get(),"bind":"198.18.0.2"}).to_string(),
             )
             .unwrap();
         } else if argv[0] == "/usr/sbin/tcpdump" {
@@ -1770,4 +1777,46 @@ fn writes_to_a_hung_up_terminal_cannot_panic() {
         }
     }
     say_to(&mut Broken, "ACTION REQUIRED");
+}
+
+#[test]
+fn the_manifest_records_that_the_mac_has_no_silent_ports() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    for plan_args in [
+        &["--only", C01][..],
+        &["--plan", "failure", "--suite", "f", "--only", "stop_silent"][..],
+    ] {
+        let rig = Rig::new();
+        run_locked(
+            &rig.args(plan_args),
+            &st,
+            PathBuf::from("/x/l"),
+            rig.lock().as_ref(),
+        )
+        .unwrap();
+        let man = read_json(rig.out.join("manifest.json")).unwrap();
+        assert_eq!(man["listeners"]["silent"], json!([]), "{plan_args:?}");
+        assert_eq!(man["listeners"]["silent_unavailable"], "darwin-syncookies");
+        assert_eq!(
+            man["listeners"]["open"],
+            json!([8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007])
+        );
+    }
+    drop(rig);
+}
+
+#[test]
+fn a_listener_set_that_is_not_ready_still_refuses_the_run() {
+    let rig = Rig::new();
+    let st = Fake::new(&rig.wire);
+    // ready false in the listeners file: nothing may start, as before.
+    let s = rig.suite(&st, "functional");
+    st.listener_ready.set(false);
+    let e = s.one(&item("functional", C01), 30).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("not proven"),
+        "{e:?}"
+    );
+    assert_eq!(st.scanner_runs(), 0);
 }

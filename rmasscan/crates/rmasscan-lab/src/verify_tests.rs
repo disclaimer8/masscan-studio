@@ -3,7 +3,7 @@ use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 fn evidence(plan: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("../../../docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw")
         .join(plan);
     if path.is_dir() {

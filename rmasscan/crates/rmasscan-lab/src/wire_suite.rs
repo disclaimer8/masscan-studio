@@ -2137,7 +2137,7 @@ mod tests {
         }
     }
     fn golden() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/wire")
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../tests/golden/wire")
     }
     #[test]
     fn archived_isolation_all_fields_are_required() {

@@ -48,7 +48,7 @@ use serde_json::{Value, json};
 use std::{fs, path::PathBuf};
 
 fn golden() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/wire")
+    PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../tests/golden/wire")
 }
 fn golden_manifest() -> Value {
     serde_json::from_slice(&fs::read(golden().join("manifest.json")).expect("committed manifest"))

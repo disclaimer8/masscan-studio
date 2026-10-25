@@ -43,7 +43,7 @@ struct Stand {
 const LAB_BINARY: &[u8] = b"rmasscan-lab test binary";
 const REMOTE_LAB: &str = "/home/a1/rmasscan-lab";
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+    Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../..")
 }
 fn out(rc: i32, stdout: &str) -> Result<Output, String> {
     Ok(Output {
@@ -1058,7 +1058,8 @@ fn guest_directories_are_prepared_by_a_script_file() {
         .unwrap();
     assert!(copied < prep, "the script is copied before it is run");
     let script = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/windows_wire_prepare.ps1"),
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("../../scripts/windows_wire_prepare.ps1"),
     )
     .unwrap();
     assert!(

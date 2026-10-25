@@ -2693,7 +2693,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
 mod tests {
     use super::*;
     fn historical() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join(
             "../../../docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional",
         )
     }
@@ -2710,7 +2710,7 @@ mod tests {
     }
     #[test]
     fn committed_r1_smoke_replays_as_documented() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        let dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join(
             "../../../docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional-r1-smoke",
         );
         let v = verify_dir(&dir);

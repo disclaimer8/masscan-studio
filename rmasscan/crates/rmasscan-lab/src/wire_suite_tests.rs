@@ -111,7 +111,7 @@ fn results_json_schema_is_what_linux_wire_tests_read() {
 
 #[test]
 fn committed_python_perf_results_satisfy_the_same_acceptance() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+    let path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join(
         "../../../docs/experiments/2026-10-24-rmasscan-linux-acceptance-raw/perf/results.json",
     );
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -378,7 +378,7 @@ fn record_hash_records_sha256_size_and_frames_before_the_file_is_deleted() {
 
 fn c03() -> Vec<u8> {
     fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("../../tests/golden/wire/c03_multi_addr_ports.run1.pcap"),
     )
     .expect("committed golden fixture c03_multi_addr_ports.run1.pcap")
@@ -493,7 +493,8 @@ fn only_gnu_time_with_verbose_output_satisfies_the_perf_preflight() {
 fn the_suite_comparison_carries_every_run_capture_meta_into_the_verdict() {
     let dir = scratch("compare");
     let d = driver_in(&dir);
-    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/wire");
+    let golden =
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../tests/golden/wire");
     let exp = golden.join("c03_multi_addr_ports.run1.pcap");
     let act = golden.join("c03_multi_addr_ports.run2.pcap");
     let run = |meta: Value, pcap: Option<PathBuf>| Run {

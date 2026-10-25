@@ -637,11 +637,42 @@ fn gate(
             })
             .map(|(t, _)| *t)
             .fold(f64::NEG_INFINITY, f64::max);
+        // The lab listeners are stopped only after the witness, so a SYN-ACK retransmit of a reply the scanner
+        // already had can land after the last end marker. That is a post-run note; any other frame is a tail that
+        // was not flushed (INVALID).
+        let synacked: BTreeSet<u16> = fr
+            .iter()
+            .filter(|(t, _)| *t <= end)
+            .filter_map(|(_, f)| tcp(f))
+            .filter(|i| i.sm == b.pm && i.dm == b.sm && i.dst == b.src && i.flags & 0x12 == 0x12)
+            .map(|i| i.sp)
+            .collect();
+        let (mut late, mut unexplained) = (0usize, 0usize);
+        for (t, f) in fr {
+            if *t > end && !ether(f, [0x88, 0xb5]) {
+                if tcp(f).is_some_and(|i| {
+                    i.sm == b.pm
+                        && i.dm == b.sm
+                        && i.dst == b.src
+                        && i.flags & 0x12 == 0x12
+                        && synacked.contains(&i.sp)
+                }) {
+                    late += 1;
+                } else {
+                    unexplained += 1;
+                }
+            }
+        }
+        if late > 0 {
+            r.notes.insert(
+                "post_run_synack_retransmits".into(),
+                json!({"count":late,"kind":"post-run (lab SYN-ACK retransmit after the last end marker)"}),
+            );
+        }
         r.inv(
             "three end markers and a flushed capture tail",
-            count_markers(it_(), END_PAYLOAD) >= 3
-                && !fr.iter().any(|(t, f)| !ether(f, [0x88, 0xb5]) && *t > end),
-            "",
+            count_markers(it_(), END_PAYLOAD) >= 3 && unexplained == 0,
+            format!("{unexplained} unexplained frames after the last end marker"),
         );
         r.inv(
             "capture reached quiescence",

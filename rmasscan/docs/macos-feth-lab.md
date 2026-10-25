@@ -386,3 +386,16 @@ Linux are unchanged):
   ("open truth derived from the wire (host listeners not recorded)"). A SYN-ACK without an open result is a FAIL.
 - Injected frames are told by the injector's recorded sha256, not by IP id 0xf0e1 alone: genuine kernel RSTs carry
   that id once in 65536 frames (seen in the 100000 pps cells).
+
+### Verifier tightening (round 9)
+
+- Host LISTEN parser counts only `tcp4`/`tcp46` lines (tcp6-only sockets do not answer IPv4). A record whose first
+  line is not `rc 0` (netstat failed) is "not recorded", never "no host listeners".
+- perf, `stop_drain` and the pause/resume union: open results must equal the open SYN-ACKs inside the scanner's
+  window that answer a SYN of this run (ack = SYN seq + 1, to the SYN's port); closed results stay a subset of the
+  genuine RSTs, and a missing closed result is tolerated. A SYN-ACK retransmit of an earlier cell's half-open
+  connection that lands in the window (live: port 5000 of perf.100000.r4 inside perf.100.r5) answers nothing of this
+  run and is not a miss.
+- Multicast strays (x01 upper bound) are Mac-only and limited to `[guest_started_utc, guest_finished_utc]`.
+- A lab SYN-ACK retransmit of an in-window reply after the last end marker (the listeners now stop after the
+  witness) is the note `post_run_synack_retransmits`; any other frame there is still an unflushed tail (INVALID).

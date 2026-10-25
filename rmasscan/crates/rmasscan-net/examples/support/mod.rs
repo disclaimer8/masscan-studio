@@ -69,9 +69,13 @@ pub fn raw_io_abi() -> &'static str {
     {
         rmasscan_net::NPCAP_ABI_ID
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(target_os = "linux")]
     {
         "AF_PACKET via libc"
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    {
+        "none"
     }
 }
 

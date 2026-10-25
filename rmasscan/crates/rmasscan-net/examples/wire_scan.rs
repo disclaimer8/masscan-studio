@@ -23,10 +23,8 @@
 //! --inventory                  перечень Npcap/адаптеров/версий/идентичности;
 //!                              адаптер не открывается.
 //!                              На macOS: sysctl BPF, stat узлов /dev/bpf*, интерфейсы
-//!                              (getifaddrs); BPF не открывается. На macOS --src-mac
-//!                              обязателен и сверяется с MAC интерфейса (код 6; нет
-//!                              интерфейса: InterfaceMismatch, код 2; EACCES на
-//!                              /dev/bpf*: код 5, подсказка про bpf-access --grant).
+//!                              (getifaddrs); BPF не открывается. MAC, скрытый ОС,
+//!                              выводится как null с mac_masked:true.
 //! --write-reference-pcap FILE  ожидаемые SYN-кадры для заданного binding;
 //!                              DLL не загружается, адаптер не открывается
 //!                              (нужны те же явные параметры, включая --src-mac).
@@ -44,6 +42,12 @@
 //! 5 нет Npcap или недостаточно прав (Admin-only Npcap, в том числе когда
 //! виден только loopback): нужна инструкция; 6 source MAC не совпадает с MAC
 //! выбранного NIC. Полная таблица: docs/windows-wire-lab.md.
+//!
+//! macOS: --src-mac обязателен; нет интерфейса (if_nametoindex) это InterfaceMismatch,
+//! код 2, до открытия BPF; MAC интерфейса, отличный от --src-mac, код 6; если ОС скрыла
+//! MAC (плейсхолдер 02:00:00:00:00:00), сверка пропускается: src_mac_check "os-masked",
+//! nic_mac "masked". EACCES на /dev/bpf* это код 5; подсказка про
+//! `macos-lab bpf-access --grant` приходит из текста PermissionDenied адаптера.
 
 #![forbid(unsafe_code)]
 
@@ -437,6 +441,10 @@ trait Backend {
     /// macOS: перечень BPF (sysctl, stat узлов, getifaddrs), без открытия BPF.
     fn bpf_inventory(&self) -> Result<BpfInventory, NetError>;
     fn nic_mac(&self, interface_id: &str) -> Option<[u8; 6]>;
+    /// macOS: существует ли интерфейс (не зависит от MAC); `None`: не удалось спросить.
+    fn iface_exists(&self, interface_id: &str) -> Option<bool>;
+    /// macOS: ОС скрыла MAC плейсхолдером (`nic_mac` тогда `None`).
+    fn nic_mac_masked(&self, interface_id: &str) -> bool;
     fn open(&self, binding: &AdapterBinding) -> Result<Opened, NetError>;
 }
 
@@ -458,6 +466,12 @@ impl Backend for RealBackend {
     }
     fn nic_mac(&self, interface_id: &str) -> Option<[u8; 6]> {
         rmasscan_net::nic_mac(interface_id)
+    }
+    fn iface_exists(&self, interface_id: &str) -> Option<bool> {
+        rmasscan_net::iface_exists(interface_id)
+    }
+    fn nic_mac_masked(&self, interface_id: &str) -> bool {
+        rmasscan_net::nic_mac_masked(interface_id)
     }
     fn open(&self, binding: &AdapterBinding) -> Result<Opened, NetError> {
         let o = open_explicit(binding)?;
@@ -527,10 +541,11 @@ fn bpf_inventory_mode(be: &dyn Backend) -> Out {
                 .collect::<Vec<_>>()
                 .join(",");
             format!(
-                "{{\"name\":{},\"index\":{},\"mac\":{},\"ethernet\":{},\"up\":{},\"ipv4\":[{ips}]}}",
+                "{{\"name\":{},\"index\":{},\"mac\":{},\"mac_masked\":{},\"ethernet\":{},\"up\":{},\"ipv4\":[{ips}]}}",
                 js(&i.name),
                 i.index,
                 support::json_opt_str(i.mac.as_ref().map(mac_text).as_deref()),
+                i.mac_masked,
                 i.ethernet,
                 i.up
             )
@@ -717,14 +732,14 @@ fn run(a: &Args, be: &dyn Backend) -> Out {
 
     // ---- MAC источника: у NIC или явный, но тогда сверенный с NIC ----
     let nic_mac = be.nic_mac(&a.iface);
-    // macOS: привязка проверяется ДО открытия адаптера. Интерфейс без MAC в
-    // `getifaddrs` (нет такого интерфейса, нет AF_LINK) это InterfaceMismatch:
-    // BPF не открывался, ни одного кадра не отправлено.
-    if cfg!(target_os = "macos") && nic_mac.is_none() && a.forge_next_index.is_none() {
-        let e = NetError::InterfaceMismatch(format!(
-            "interface {} was not found or has no link-layer address",
-            a.iface
-        ));
+    // macOS: привязка проверяется ДО открытия адаптера. Отсутствие интерфейса
+    // (`if_nametoindex`, не зависит от MAC, который ОС может скрыть) это
+    // InterfaceMismatch: BPF не открывался, ни одного кадра не отправлено.
+    if cfg!(target_os = "macos")
+        && a.forge_next_index.is_none()
+        && be.iface_exists(&a.iface) == Some(false)
+    {
+        let e = NetError::InterfaceMismatch(format!("interface {} was not found", a.iface));
         return (
             net_error_code(&e),
             fail_json("binding", "InterfaceMismatch", &e.to_string(), false),
@@ -761,11 +776,15 @@ fn run(a: &Args, be: &dyn Backend) -> Out {
                         "SourceMacMismatch",
                         &format!(
                             "--src-mac {} differs from the MAC of {} ({}); replies would never arrive \
-because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or pass \
---allow-foreign-source-mac to override knowingly",
+because promiscuous mode is not enabled. {}",
                             mac_text(&m),
                             a.iface,
-                            mac_text(&n)
+                            mac_text(&n),
+                            if cfg!(target_os = "macos") {
+                                "Pass the NIC MAC as --src-mac, or --allow-foreign-source-mac to override knowingly"
+                            } else {
+                                "Omit --src-mac to use the NIC MAC, or pass --allow-foreign-source-mac to override knowingly"
+                            }
                         ),
                         false,
                     ),
@@ -780,10 +799,17 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
                 (m, "override-foreign")
             }
             Some(_) => (m, "explicit-equal"),
+            // macOS 27 скрывает MAC от процесса: сверка невозможна, берём явный --src-mac.
+            None if be.nic_mac_masked(&a.iface) => (m, "os-masked"),
             None => (m, "unverified"),
         }
     };
 
+    let nic_mac_text = match nic_mac {
+        Some(n) => mac_text(&n),
+        None if mac_check == "os-masked" => "masked".to_string(),
+        None => "unknown".to_string(),
+    };
     let plan = match build_plan(a, src_mac, a.rate, a.wait) {
         Ok(p) => p,
         Err(e) => return (2, fail_json("plan", "BadPlan", &e, false)),
@@ -1116,7 +1142,7 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
 \"range\":{},\"start_index\":{start_index},\"expected_total\":{expected_total},\
 \"sent\":{},\"next_index\":{},\"received\":{},\"discarded\":{},\"duplicates\":{},\
 \"rx_health\":{{\"kernel_drops\":{}}},\
-\"scan_id\":{},\"attempt_id\":{},\"resumed_from_attempt\":{},\"src_mac\":{},\"src_mac_check\":{},",
+\"scan_id\":{},\"attempt_id\":{},\"resumed_from_attempt\":{},\"src_mac\":{},\"src_mac_check\":{},\"nic_mac\":{},",
         js(reason),
         js(&fail_detail),
         plan.range(),
@@ -1135,6 +1161,7 @@ because promiscuous mode is not enabled. Omit --src-mac to use the NIC MAC, or p
         resumed_from.map_or("null".to_string(), |r| js(&hex(&r))),
         js(&mac_text(&src_mac)),
         js(mac_check),
+        js(&nic_mac_text),
     );
     let _ = write!(
         j,
@@ -1225,6 +1252,10 @@ mod tests {
         nic: Option<[u8; 6]>,
         devices: Vec<rmasscan_net::DeviceReport>,
         bpf_devices: Vec<rmasscan_net::BpfDevice>,
+        /// macOS: интерфейса нет в ОС.
+        missing_iface: bool,
+        /// macOS: ОС скрыла MAC плейсхолдером (nic_mac None).
+        masked: bool,
         inventory_calls: Cell<u32>,
         open_calls: Cell<u32>,
         nic_calls: Cell<u32>,
@@ -1259,6 +1290,12 @@ mod tests {
         fn nic_mac(&self, _: &str) -> Option<[u8; 6]> {
             self.nic_calls.set(self.nic_calls.get() + 1);
             self.nic
+        }
+        fn iface_exists(&self, _: &str) -> Option<bool> {
+            Some(!self.missing_iface)
+        }
+        fn nic_mac_masked(&self, _: &str) -> bool {
+            self.masked
         }
         fn open(&self, _: &AdapterBinding) -> Result<Opened, NetError> {
             self.open_calls.set(self.open_calls.get() + 1);
@@ -1531,6 +1568,7 @@ mod tests {
         assert_eq!(be.open_calls.get(), 0);
     }
 
+    #[cfg(target_os = "macos")]
     fn bpf_node(mode: u32) -> rmasscan_net::BpfDevice {
         rmasscan_net::BpfDevice {
             path: "/dev/bpf0".into(),
@@ -1540,10 +1578,10 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn inventory_mode_never_opens_bpf_or_sends() {
         // Подставной backend: узлы 0600, адаптер не открывается ни разу.
-        #[cfg(target_os = "macos")]
         {
             let be = Mock {
                 bpf_devices: vec![bpf_node(0o600)],
@@ -1565,7 +1603,6 @@ mod tests {
         }
         // Настоящий backend: перечень читает sysctl/stat/getifaddrs, BPF не открывает,
         // поэтому проходит при любых правах на /dev/bpf* (в том числе 0600 root:wheel).
-        #[cfg(target_os = "macos")]
         {
             let (code, json) = run(&args(&["--inventory"]).unwrap(), &RealBackend);
             assert_eq!(code, 0, "{json}");
@@ -1602,8 +1639,11 @@ mod tests {
         // --src-mac обязателен как на Linux.
         assert!(args(BASE).is_err());
 
-        // Интерфейса нет (nic_mac == None): InterfaceMismatch, rc 2, адаптер не открыт.
-        let be = Mock::default();
+        // Интерфейса нет: InterfaceMismatch, rc 2, адаптер не открыт.
+        let be = Mock {
+            missing_iface: true,
+            ..Mock::default()
+        };
         let (code, json) = run(&with(&[]), &be);
         assert_eq!(code, 2, "{json}");
         assert!(json.contains("InterfaceMismatch"), "{json}");
@@ -1633,6 +1673,48 @@ mod tests {
             &be,
         );
         assert_eq!(be.open_calls.get(), 1, "{json}");
+
+        // ОС скрыла MAC: сверки нет (не rc 6), берётся явный --src-mac, JSON говорит masked.
+        let be = Mock {
+            masked: true,
+            fake: Some(rmasscan_engine::fake::FakeAdapter::new()),
+            ..Mock::default()
+        };
+        let (code, json) = run(
+            &with(&["--src-mac", "02:ac:00:00:00:01", "--wait", "0"]),
+            &be,
+        );
+        assert_eq!(code, 0, "{json}");
+        assert!(json.contains("\"src_mac_check\":\"os-masked\""), "{json}");
+        assert!(json.contains("\"nic_mac\":\"masked\""), "{json}");
+        assert!(json.contains("\"src_mac\":\"02:ac:00:00:00:01\""), "{json}");
+
+        // Настоящее расхождение при видимом MAC остаётся кодом 6 (повтор для ясности).
+        let be = Mock {
+            nic: Some(NIC),
+            masked: false,
+            ..Mock::default()
+        };
+        assert_eq!(run(&with(&["--src-mac", "02:ac:00:00:00:01"]), &be).0, 6);
+
+        // Offline forge не зависит от ОС: нет интерфейса, и всё равно rc 0 без открытия.
+        let be = Mock {
+            missing_iface: true,
+            ..Mock::default()
+        };
+        let cp = tmp("forge_skip.cp");
+        let (code, json) = run(
+            &with(&[
+                "--forge-checkpoint-next-index",
+                "0",
+                "--checkpoint-out",
+                &cp,
+            ]),
+            &be,
+        );
+        let _ = std::fs::remove_file(&cp);
+        assert_eq!(code, 0, "{json}");
+        assert_eq!(be.open_calls.get(), 0);
 
         // Равный MAC: открытие достигнуто.
         let be = Mock {

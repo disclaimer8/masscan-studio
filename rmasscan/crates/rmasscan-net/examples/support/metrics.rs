@@ -9,7 +9,8 @@
 /// Один снимок. Каждое поле независимо: `None` значит «недоступно».
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Sample {
-    /// Открытые fd (Linux) или handle (Windows).
+    /// Открытые fd (Linux, macOS) или handle (Windows). macOS: записи `/dev/fd` минус 1,
+    /// неатомарный снимок; Linux считает `/proc/self/fd` без вычитания (на 1 больше).
     pub handles: Option<u64>,
     pub threads: Option<u64>,
     pub working_set_bytes: Option<u64>,
@@ -96,7 +97,8 @@ mod os {
     use super::Sample;
 
     // FFI живёт в private-модуле crate net (`macos::process`); `handles` это
-    // записи `/dev/fd` минус дескриптор самого перечисления.
+    // записи `/dev/fd` минус дескриптор самого перечисления (неатомарный снимок,
+    // неточный в обе стороны, пока fd открываются и закрываются).
     pub fn sample() -> Sample {
         let p = rmasscan_net::process_sample();
         Sample {

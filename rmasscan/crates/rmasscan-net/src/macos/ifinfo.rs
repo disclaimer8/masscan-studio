@@ -18,6 +18,21 @@ pub(crate) struct LinkInfo {
     pub mac: Option<[u8; 6]>,
 }
 
+/// Плейсхолдер, который macOS 27 отдаёт непривилегированному процессу вместо MAC
+/// Ethernet-интерфейсов (измерено: `getifaddrs` и `NET_RT_IFLIST`).
+pub(crate) const MASKED_MAC: [u8; 6] = [2, 0, 0, 0, 0, 0];
+
+impl LinkInfo {
+    /// Измеренный MAC: плейсхолдер не считается значением.
+    pub(crate) fn visible_mac(&self) -> Option<[u8; 6]> {
+        self.mac.filter(|m| *m != MASKED_MAC)
+    }
+
+    pub(crate) fn masked(&self) -> bool {
+        self.mac == Some(MASKED_MAC)
+    }
+}
+
 /// Шов запросов к ОС об интерфейсе (подменяется в тестах).
 pub(crate) trait IfaceInfo {
     /// `Ok(None)`: такого интерфейса нет.
@@ -174,7 +189,7 @@ pub(crate) fn interfaces() -> Result<Vec<IfaceReport>, Errno> {
     Ok(merge(raw_addrs()?, &OsIface))
 }
 
-fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {
+pub(crate) fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {
     let mut out: Vec<IfaceReport> = Vec::new();
     for a in addrs {
         let pos = match out.iter().position(|r| r.name == a.name) {
@@ -185,6 +200,7 @@ fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {
                     name: a.name.clone(),
                     index,
                     mac: None,
+                    mac_masked: false,
                     ethernet: false,
                     up: false,
                     ipv4: Vec::new(),
@@ -199,7 +215,8 @@ fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {
         match a.kind {
             AddrKind::Link(l) => {
                 r.ethernet = l.sdl_type == IFT_ETHER;
-                r.mac = l.mac;
+                r.mac = l.visible_mac();
+                r.mac_masked = l.masked();
             }
             AddrKind::V4(ip) => r.ipv4.push(ip),
             AddrKind::Other => {}
@@ -258,7 +275,25 @@ pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Res
     Ok(ifindex)
 }
 
-/// MAC интерфейса по имени; `None`, если неизвестен.
+/// MAC интерфейса по имени; `None`, если неизвестен или скрыт ОС плейсхолдером.
 pub(crate) fn nic_mac(name: &str) -> Option<[u8; 6]> {
-    OsIface.link(name).ok().flatten().and_then(|l| l.mac)
+    OsIface
+        .link(name)
+        .ok()
+        .flatten()
+        .and_then(|l| l.visible_mac())
+}
+
+/// ОС вернула плейсхолдер вместо MAC.
+pub(crate) fn nic_mac_masked(name: &str) -> bool {
+    OsIface
+        .link(name)
+        .ok()
+        .flatten()
+        .is_some_and(|l| l.masked())
+}
+
+/// Существование интерфейса независимо от MAC (`if_nametoindex`).
+pub(crate) fn iface_exists(name: &str) -> Option<bool> {
+    OsIface.ifindex(name).ok().map(|i| i.is_some())
 }

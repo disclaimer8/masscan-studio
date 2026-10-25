@@ -32,17 +32,21 @@ const BANNED_EXTENSIONS: &[&str] = &[
 /// are scanned (see `SCANNED_EXTENSIONS`); `md` is prose and `toml` is configuration.
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "toml", "sh", "bash", "zsh", "ksh", "fish", "ps1", "cmd", "bat", "yml", "yaml", "md",
-    "mk", "cmake", "just",
+    "mk", "cmake", "just", "slint",
 ];
 /// Recorded evidence and other data. Nothing in these is executed or scanned.
 const DATA_EXTENSIONS: &[&str] = &[
     "json", "pcap", "gz", "txt", "csv", "tsv", "bin", "lock", "sha256", "log", "err", "echo",
-    "stdout", "stderr", "sizes", "conf", "rc", "out", "diff", "hex", "svg", "png",
+    "stdout", "stderr", "sizes", "conf", "rc", "out", "diff", "hex", "svg", "png", "jpg", "jpeg",
+    "gif", "ico", "icns", "webp", "ttf", "otf", "woff", "woff2", "pdf", "html", "plist", "pcapng",
 ];
 /// File names without a usable extension that the tree may hold (matched in lower case; a trailing `*`
 /// means prefix).
 const ALLOWED_NAMES: &[&str] = &[
     "license*",
+    "readme*",
+    "changelog*",
+    "rust-toolchain",
     "notice*",
     "copying*",
     "authors*",
@@ -73,6 +77,9 @@ const OTHER_STRICT: &[&str] = &[
 const NODE: &str = concat!("no", "de");
 
 fn name_allowed(rel: &str) -> bool {
+    if rel == ".cargo/config" || rel.ends_with("/.cargo/config") {
+        return true;
+    }
     let base = rel.rsplit('/').next().unwrap_or(rel).to_ascii_lowercase();
     if ALLOWED_NAMES.iter().any(|a| match a.strip_suffix('*') {
         Some(prefix) => base.starts_with(prefix),
@@ -88,27 +95,8 @@ fn name_allowed(rel: &str) -> bool {
     }
 }
 
-/// `name` as a whole word of `lower`, optionally followed by version digits and dots.
-fn has_word(lower: &str, name: &str) -> bool {
-    let mut from = 0;
-    while let Some(at) = lower[from..].find(name) {
-        let start = from + at;
-        let end = start + name.len();
-        let before_ok = lower[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !word_char(c));
-        let rest = lower[end..].trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
-        if before_ok && rest.chars().next().is_none_or(|c| !word_char(c)) {
-            return true;
-        }
-        from = end;
-    }
-    false
-}
-
 /// A complete quoted string that is one of the interpreters, optionally with a directory prefix.
-fn quoted_interpreter(lower: &str, names: &[&str]) -> bool {
+fn quoted_interpreter(lower: &str, names: &[&str], rust: bool) -> bool {
     let b = lower.as_bytes();
     for (i, q) in b.iter().enumerate() {
         if *q != b'"' && *q != b'\'' {
@@ -121,6 +109,14 @@ fn quoted_interpreter(lower: &str, names: &[&str]) -> bool {
         if content.contains(' ') {
             continue;
         }
+        // In Rust, `v["name"]` (an index) and `"name": value` (a map key) are data, not a command.
+        if rust {
+            let before = lower[..i].chars().next_back();
+            let after = lower[i + 2 + len..].chars().next();
+            if (before == Some('[') && after == Some(']')) || after == Some(':') {
+                continue;
+            }
+        }
         let base = content.rsplit('/').next().unwrap_or(content);
         let base = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
         if names.contains(&base) {
@@ -130,12 +126,12 @@ fn quoted_interpreter(lower: &str, names: &[&str]) -> bool {
     false
 }
 
-/// `node` where a command is expected: line start, after `; & | ( { `` ` ``, after env, sudo, exec, nohup,
+/// An interpreter name where a command is expected: line start, after `; & | ( { `` ` ``, after env, sudo, exec, nohup,
 /// xargs, time or a YAML `run:`.
-fn node_at_command_position(lower: &str) -> bool {
+fn at_command_position(lower: &str, name: &str) -> bool {
     let mut from = 0;
-    while let Some(at) = lower[from..].find(NODE) {
-        let end = from + at + NODE.len();
+    while let Some(at) = lower[from..].find(name) {
+        let end = from + at + name.len();
         let after = lower[end..].trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
         let after_ok = after
             .chars()
@@ -163,15 +159,48 @@ fn node_at_command_position(lower: &str) -> bool {
     false
 }
 
-/// The other interpreters on one line of a scanned file. `rust` files get only the forms that cannot
-/// be an identifier.
+/// A quoted command string that starts with an interpreter and an option: `"NAME -e ..."`.
+fn quoted_command(lower: &str, names: &[&str]) -> bool {
+    let b = lower.as_bytes();
+    for (i, q) in b.iter().enumerate() {
+        if *q != b'"' && *q != b'\'' {
+            continue;
+        }
+        let rest = lower[i + 1..].trim_start();
+        let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let token = &rest[..token_end];
+        let base = token.rsplit('/').next().unwrap_or(token);
+        let base = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        if names.contains(&base) && rest[token_end..].trim_start().starts_with('-') {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whole-line comments are prose: `//` in Rust, `#`, `rem` or `::` in scripts and workflows.
+fn comment_line(line: &str, rust: bool) -> bool {
+    let t = line.trim_start().to_ascii_lowercase();
+    if rust {
+        t.starts_with("//")
+    } else {
+        t.starts_with('#') || t.starts_with("rem ") || t.starts_with("::")
+    }
+}
+
+/// Another interpreter being RUN on one line of a scanned file: a complete quoted string naming it (an
+/// argument or `Command::new`; in Rust not an index or map key), a quoted command string, or - outside Rust -
+/// the name at a command position. Names in comments, prose and identifiers are not flagged.
 fn other_interpreter_hit(line: &str, rust: bool) -> bool {
+    if comment_line(line, rust) {
+        return false;
+    }
     let lower = line.to_ascii_lowercase();
     let mut all: Vec<&str> = OTHER_STRICT.to_vec();
     all.push(NODE);
-    OTHER_STRICT.iter().any(|w| has_word(&lower, w))
-        || quoted_interpreter(&lower, &all)
-        || (!rust && node_at_command_position(&lower))
+    quoted_interpreter(&lower, &all, rust)
+        || quoted_command(&lower, &all)
+        || (!rust && all.iter().any(|n| at_command_position(&lower, n)))
 }
 
 /// A shebang that names one of the other interpreters (whole word or path component).
@@ -349,8 +378,7 @@ fn violations_of(rel: &str, bytes: &[u8]) -> Vec<String> {
         && !BANNED_BASENAMES.contains(&base.as_str())
     {
         found.push(format!(
-            "{rel}: file type is on neither the source nor the data allowlist"
-        ));
+            "{rel}: file type is on neither the source nor the data allowlist (extend name_allowed here and allowed_name in scripts/language-guard.sh)"        ));
     }
     if has_shebang
         || makefile
@@ -946,7 +974,6 @@ fn other_interpreters_are_scanned_like_the_first() {
             format!("fn f() {{ Command::new(\"{IN}\"); }}\n"),
         ),
         ("rs-p", "src/a.rs", format!("let p = \"/usr/bin/{IB}\";\n")),
-        ("rs-d", "src/a.rs", format!("// call {ID} here\n")),
         ("sh-a", "run.sh", format!("{IA} -e 'print 1'\n")),
         ("sh-env", "run.sh", format!("env {IB} x\n")),
         ("sh-pipe", "run.sh", format!("cat x | {IC} -r 'echo 1;'\n")),
@@ -988,4 +1015,82 @@ fn everyday_uses_of_the_runtime_name_and_prose_are_not_flagged() {
         ("ev/a.json", format!("{{\"{IN}\":\"{IA}\"}}\n")),
     ];
     assert_eq!(both_guards("everyday", &files), 0);
+}
+
+// ---- fix round 2 (re-review N5): wider allowlist, fewer false positives, real invocations still caught ----
+
+#[cfg(unix)]
+#[test]
+fn the_allowlist_accepts_ui_images_fonts_documents_and_conventional_names() {
+    let files: Vec<(&str, String)> = vec![
+        ("ui/main.slint", "export component A {}\n".into()),
+        ("assets/a.jpg", String::new()),
+        ("assets/a.jpeg", String::new()),
+        ("assets/a.gif", String::new()),
+        ("assets/a.ico", String::new()),
+        ("assets/a.icns", String::new()),
+        ("assets/a.ttf", String::new()),
+        ("assets/a.otf", String::new()),
+        ("assets/a.woff", String::new()),
+        ("assets/a.woff2", String::new()),
+        ("docs/a.pdf", String::new()),
+        ("docs/a.html", "<p>x</p>\n".into()),
+        ("macos/Info.plist", "<plist/>\n".into()),
+        ("README", "x\n".into()),
+        ("CHANGELOG", "x\n".into()),
+        ("AUTHORS", "x\n".into()),
+        ("COPYING", "x\n".into()),
+        ("rust-toolchain", "1.99.1\n".into()),
+        (".cargo/config", "[build]\n".into()),
+    ];
+    assert_eq!(both_guards("allowlist-wide", &files), 0);
+    // still closed to everything else
+    for name in ["ui/a.qml", "x/a.vue", "x/a.sql", "bin/blob"] {
+        assert_eq!(
+            both_guards(
+                "still-closed",
+                &[("ok.sh", "echo ok\n".into()), (name, String::new())]
+            ),
+            1,
+            "{name}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn identifiers_index_keys_and_comments_are_not_invocations_but_real_ones_still_are() {
+    let clean: Vec<(&str, String)> = vec![
+        (
+            "a.rs",
+            format!(
+                "fn f(v: &Value) {{ let n = &v[\"{IN}\"]; let m = json!({{\"{IN}\": 1}}); }}\n"
+            ),
+        ),
+        (
+            "b.rs",
+            format!("// a {ID}-style table, {IB} on the guest, {IA} and {IC}\n"),
+        ),
+        ("c.sh", format!("# {IA} is not used here\necho {IN}\n")),
+        ("d.yml", format!("# {IN} setup\nname: x\n")),
+    ];
+    assert_eq!(both_guards("not-invocations", &clean), 0);
+    let bad: Vec<(&str, &str, String)> = vec![
+        ("arg", "e.rs", format!("let a = [\"-c\", \"{IA}\"];\n")),
+        ("new", "e.rs", format!("Command::new(\"{IN}\");\n")),
+        (
+            "qcmd-rs",
+            "e.rs",
+            format!("let c = \"{IA} -e 'print 1'\";\n"),
+        ),
+        ("qcmd-sh", "e.sh", format!("ssh host \"{IB} -e x\"\n")),
+        ("pos-sh", "e.sh", format!("x=1; {IC} -r 'echo 1;'\n")),
+        ("pipe-sh", "e.sh", format!("cat f | {IN} -p x\n")),
+        ("bat", "e.cmd", format!("{ID} script\r\n")),
+        ("shebang", "tools/t", format!("#!/usr/bin/env {IB}\n")),
+    ];
+    for (tag, name, text) in bad {
+        let rc = both_guards(tag, &[("ok.sh", "echo ok\n".into()), (name, text)]);
+        assert_eq!(rc, 1, "{tag}");
+    }
 }

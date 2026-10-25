@@ -18,8 +18,8 @@
 #      launcher (two letters, then a dash and a version digit; assembled below).
 #   4. (allowlist) a tracked file is neither a known source/script/build type (rs toml sh bash zsh ksh fish ps1 cmd bat yml yaml md mk
 #      cmake just, Makefile*, GNUmakefile*, CMakeLists.txt, justfile), nor known data (json pcap gz txt csv tsv bin lock sha256 log err
-#      echo stdout stderr sizes conf rc out diff hex svg png), nor a listed name (LICENSE*, NOTICE*, COPYING*, AUTHORS*, CODEOWNERS,
-#      .gitignore, .gitattributes, .gitkeep, .editorconfig), nor an extensionless script whose shebang is a shell. Any other
+#      echo stdout stderr sizes conf rc out diff hex svg png jpg jpeg gif ico icns webp ttf otf woff woff2 pdf html plist pcapng; slint is a source type), nor a listed name (LICENSE*, NOTICE*, COPYING*, AUTHORS*, CODEOWNERS,
+#      .gitignore, .gitattributes, .gitkeep, .editorconfig), README*, CHANGELOG*, rust-toolchain, .cargo/config, nor an extensionless script whose shebang is a shell. Any other
 #      language source (any extension not listed above) therefore fails,
 #   5. a scanned file runs another interpreter language: the five names assembled below as whole words, a complete quoted
 #      string naming one, or the JavaScript runtime at a command position; a shebang naming any of them.
@@ -46,9 +46,12 @@ launcher="(^|[^A-Za-z0-9_.\$-])${lau}[[:space:]]+-[0-9]"
 # the other interpreters, assembled so this file does not contain them as words
 strict="pe""rl|ru""by|ph""p|l""ua|lu""ajit|nod""ejs"
 rt="nod""e"
-other_words="(^|[^A-Za-z0-9_])(${strict})[0-9.]*([^A-Za-z0-9_]|\$)"
-other_literal="[\"']([^\"' ]*/)?(${strict}|${rt})[0-9.]*[\"']"
-rt_command="(^|[;&|(\`{]|(^|[[:space:]])(env|sudo|exec|nohup|xargs|time)[[:space:]]+|run:[[:space:]]+)[[:space:]]*(/[^[:space:]]*/)?${rt}[0-9.]*([[:space:]]|\$|;|\\)|&|\\|)"
+all="${strict}|${rt}"
+lit_q="[\"']([^\"' ]*/)?(${all})[0-9.]*[\"']"
+lit_any="[\"']([^\"' ]*/)?(${all})[0-9.]*[\"']"
+lit_rs="((^|[^[])${lit_q}([^:]|\$)|\\[${lit_q}([^]:]|\$))"
+quoted_cmd="[\"'][[:space:]]*(/[^[:space:]\"']*/)?(${all})[0-9.]*[[:space:]]+-"
+cmd_pos="(^|[;&|(\`{]|(^|[[:space:]])(env|sudo|exec|nohup|xargs|time)[[:space:]]+|run:[[:space:]]+)[[:space:]]*(/[^[:space:]]*/)?(${all})[0-9.]*([[:space:]]|\$|;|\\)|&|\\|)"
 shebang_other="^#!.*(${strict}|${rt})"
 
 # bash 3.2 (macOS) has nocasematch: extension and file-name tests ignore letter case
@@ -74,14 +77,17 @@ banned_name() {
 # the allowlist (section 4): a name is allowed by its extension or by being a listed file name
 allowed_name() {
   local base=${1##*/}
+  case "$1" in
+    .cargo/config | */.cargo/config) return 0 ;;
+  esac
   case "$base" in
-    LICENSE* | NOTICE* | COPYING* | AUTHORS* | CODEOWNERS | makefile* | gnumakefile* | cmakelists.txt | justfile | .justfile) return 0 ;;
+    README* | CHANGELOG* | rust-toolchain | LICENSE* | NOTICE* | COPYING* | AUTHORS* | CODEOWNERS | makefile* | gnumakefile* | cmakelists.txt | justfile | .justfile) return 0 ;;
     .gitignore | .gitattributes | .gitkeep | .editorconfig) return 0 ;;
   esac
   case "$base" in
-    ?*.rs | ?*.toml | ?*.sh | ?*.bash | ?*.zsh | ?*.ksh | ?*.fish | ?*.ps1 | ?*.cmd | ?*.bat | ?*.yml | ?*.yaml | ?*.md | ?*.mk | ?*.cmake | ?*.just) return 0 ;;
+    ?*.rs | ?*.toml | ?*.sh | ?*.bash | ?*.zsh | ?*.ksh | ?*.fish | ?*.ps1 | ?*.cmd | ?*.bat | ?*.yml | ?*.yaml | ?*.md | ?*.mk | ?*.cmake | ?*.just | ?*.slint) return 0 ;;
     ?*.json | ?*.pcap | ?*.gz | ?*.txt | ?*.csv | ?*.tsv | ?*.bin | ?*.lock | ?*.sha256 | ?*.log | ?*.err | ?*.echo | ?*.stdout | ?*.stderr) return 0 ;;
-    ?*.sizes | ?*.conf | ?*.rc | ?*.out | ?*.diff | ?*.hex | ?*.svg | ?*.png) return 0 ;;
+    ?*.sizes | ?*.conf | ?*.rc | ?*.out | ?*.diff | ?*.hex | ?*.svg | ?*.png | ?*.jpg | ?*.jpeg | ?*.gif | ?*.ico | ?*.icns | ?*.webp | ?*.ttf | ?*.otf | ?*.woff | ?*.woff2 | ?*.pdf | ?*.html | ?*.plist | ?*.pcapng) return 0 ;;
   esac
   return 1
 }
@@ -170,7 +176,7 @@ while IFS= read -r f; do
     elif banned_name "$f"; then
       :
     else
-      report "$f: file type is on neither the source nor the data allowlist"
+      report "$f: file type is on neither the source nor the data allowlist (extend allowed_name here and name_allowed in rmasscan-lab/tests/rust_only.rs)"
     fi
   fi
   scan=$has_shebang
@@ -186,10 +192,12 @@ while IFS= read -r f; do
     if [ -n "$hits" ]; then
       while IFS= read -r h; do report "$f:${h%%:*}: mentions the banned interpreter"; done <<<"$hits"
     fi
-    ohits=$(grep -a -n -i -E -- "$other_words|$other_literal" "$f" 2>/dev/null || true)
+    # a name in a comment, a prose line, an identifier or (in Rust) an index/map key is not a command
     case "$f" in
-      *.rs) ;;
-      *) ohits="$ohits$(grep -a -n -i -E -- "$rt_command" "$f" 2>/dev/null || true)" ;;
+      *.rs)
+        ohits=$(grep -a -n -i -E -- "$lit_rs|$quoted_cmd" "$f" 2>/dev/null | grep -a -v -E -- '^[0-9]+:[[:space:]]*//' || true) ;;
+      *)
+        ohits=$(grep -a -n -i -E -- "$lit_any|$quoted_cmd|$cmd_pos" "$f" 2>/dev/null | grep -a -v -i -E -- '^[0-9]+:[[:space:]]*(#|rem[[:space:]]|::)' || true) ;;
     esac
     if [ -n "$ohits" ]; then
       while IFS= read -r h; do [ -n "$h" ] && report "$f:${h%%:*}: runs another banned interpreter language"; done <<<"$ohits"

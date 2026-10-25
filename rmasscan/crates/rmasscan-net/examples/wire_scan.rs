@@ -31,10 +31,14 @@
 //! Идентичность (коммит, sha256 бинарника, ОС, Npcap/драйвер/DLL, ABI) есть
 //! в каждом JSON-выводе.
 //!
-//! Коды выхода: 0 Completed/Paused/Stopped; 2 ошибка аргументов/плана/
-//! открытия адаптера; 3 Failed; 4 resume отвергнут до открытия адаптера;
-//! 5 нет Npcap или недостаточно прав (Admin-only Npcap): нужна инструкция;
-//! 6 source MAC не совпадает с MAC выбранного NIC.
+//! Коды выхода: 0 Completed/Paused/Stopped; 2 ошибка аргументов/плана/чтения
+//! checkpoint/открытия адаптера (в том числе устаревший Npcap и недоверенный
+//! модуль) и сбой записи checkpoint после запуска (opened_adapter true);
+//! 3 Failed или сбой join; 4 resume отвергнут до открытия адаптера, а также
+//! сбой engine-start уже после открытия (opened_adapter true);
+//! 5 нет Npcap или недостаточно прав (Admin-only Npcap, в том числе когда
+//! виден только loopback): нужна инструкция; 6 source MAC не совпадает с MAC
+//! выбранного NIC. Полная таблица: docs/windows-wire-lab.md.
 
 #![forbid(unsafe_code)]
 

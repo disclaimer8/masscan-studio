@@ -98,8 +98,20 @@ parameters as a scan, including `--src-mac`. A resume checkpoint is validated be
 A resume checkpoint is fully pre-validated before the adapter is opened (format, engine version, job, scan id, attempt id,
 already-completed, next index beyond the range); `--result-capacity 0` is rejected when the arguments are parsed.
 
-Exit codes: 0 ok; 2 argument/plan/open error; 3 failed run; 4 resume rejected before open; 5 Npcap missing or access
-denied; 6 source MAC differs from the NIC MAC.
+Exit codes (the failure JSON always carries `stage`, `error`, `opened_adapter` and `tx_sent`):
+
+| Code | Meaning |
+|---|---|
+| 0 | `Completed`, `Paused` or `Stopped` run; also `--inventory`, `--write-reference-pcap` and `--forge-checkpoint-next-index` success |
+| 2 | Bad arguments or plan (stage `args`, `plan`, `forge`, `resume-read`); any adapter open or inventory error other than 5 (stage `open`/`inventory`, including an outdated Npcap with missing exports and an untrusted Npcap module); I/O error reading `--resume-checkpoint` (stage `resume-read`); `checkpoint-write` failure after a run that already sent frames (`opened_adapter: true`, real `tx_sent`) |
+| 3 | The run ended `Failed`, or the engine join failed |
+| 4 | Resume rejected before the adapter is opened (stage `resume-preflight`, `opened_adapter: false`); also an `engine-start` failure after the adapter was opened (`opened_adapter: true`) |
+| 5 | Npcap missing (`DriverUnavailable`) or access denied (`PermissionDenied`): this includes a non-elevated session under Administrators-only Npcap, where only loopback is visible, for both `--inventory` and a scan |
+| 6 | `--src-mac` differs from the NIC MAC without `--allow-foreign-source-mac` (stage `source-mac`, refused before open) |
+
+Only 2, 4, 5 and 6 with `opened_adapter: false` are "refused before open" (`NOT RUN` in the wrapper). A
+`checkpoint-write` failure carries `opened_adapter: true` and is a `FAIL`; its failure JSON does not include the
+checkpoint bytes, so a `Paused` run whose checkpoint file could not be written cannot be resumed from that output.
 
 ## Identity in every JSON
 

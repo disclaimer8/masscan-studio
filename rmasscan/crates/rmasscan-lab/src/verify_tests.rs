@@ -2125,3 +2125,29 @@ fn an_aborted_run_with_a_clean_eno1_or_no_pcap_changes_nothing() {
     assert_eq!(v["safety_trips"], json!([]));
     assert!(crate::verify::safety_trips(&d.0).is_empty());
 }
+
+// ---- re-review N3: a frame tcpdump counted on eno1 but did not store is a safety trip offline too ----
+#[test]
+fn an_eno1_frame_counted_but_not_stored_is_a_non_discardable_fail() {
+    let d = Scratch::new("functional", Some(C01));
+    d.edit(&format!("runs/{C01}/capture.json"), |v| {
+        v["eno1"]["tcpdump"]["received"] = json!(2)
+    });
+    let (verdict, beh) = d.status(C01);
+    assert_eq!(verdict, FAIL);
+    assert!(!crate::windows_suite::may_discard(&verdict, beh));
+    assert!(safety_failed(&d, C01));
+}
+#[test]
+fn an_aborted_copy_whose_eno1_log_counts_frames_fails_the_directory() {
+    let d = Scratch::new("functional-r2", None);
+    let p = abort_dir(&d, &format!("{C01}.x"), Some(Vec::new()));
+    fs::write(
+        p.join("eno1.err"),
+        "listening on eno1\n0 packets captured\n3 packets received by filter\n0 packets dropped by kernel\n",
+    )
+    .unwrap();
+    let v = verify_dir(&d.0);
+    assert_eq!(v["overall"], FAIL);
+    assert_eq!(v["safety_trips"], json!([format!("{C01}.x")]));
+}

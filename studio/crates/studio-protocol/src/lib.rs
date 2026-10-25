@@ -12,6 +12,8 @@ use std::io::{self, Read, Write};
 
 pub const VERSION: u32 = 1;
 pub const ENGINE_VERSION: u32 = rmasscan_engine::ENGINE_ALGORITHM_VERSION;
+/// Release gate, not a user-configurable escape hatch.
+pub const RAW_SCANNING_ENABLED: bool = false;
 pub const MAX_FRAME: usize = 131_072;
 pub const MAX_QUEUE: usize = 4 * 1024 * 1024;
 pub type Id = [u8; 16];
@@ -284,4 +286,12 @@ pub fn validate_checkpoint(
         return Err("Checkpoint does not match the saved job/attempt".into());
     }
     Ok(())
+}
+
+/// Origin of a previously persisted checkpoint; a failed resume attempt does
+/// not change the attempt that originally produced these bytes.
+pub fn checkpoint_origin(bytes: &[u8]) -> Result<Id, String> {
+    rmasscan_engine::Checkpoint::from_bytes(bytes)
+        .map(|cp| cp.attempt_id)
+        .map_err(|e| e.to_string())
 }

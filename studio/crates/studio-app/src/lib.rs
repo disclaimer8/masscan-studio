@@ -357,13 +357,17 @@ fn work(
                                     through: e.sequence,
                                 })?;
                             }
-                            Event::Finished { status, detail } => {
+                            Event::Finished { detail, .. } => {
                                 active = false;
+                                let history = db.scans().map_err(|e| e.to_string())?;
+                                let status = history
+                                    .iter()
+                                    .find(|s| s.scan == e.scan)
+                                    .ok_or("Saved scan disappeared")?
+                                    .status
+                                    .clone();
                                 emit(&out, Update::State(status, detail))?;
-                                emit(
-                                    &out,
-                                    Update::History(db.scans().map_err(|e| e.to_string())?),
-                                )?;
+                                emit(&out, Update::History(history))?;
                             }
                             _ => {}
                         }

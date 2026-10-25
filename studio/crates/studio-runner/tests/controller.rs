@@ -37,6 +37,30 @@ fn controller_persists_pause_before_resume_and_survives_restart() {
     assert_eq!(scans[0].status, Status::Paused);
     assert!(scans[0].checkpoint.is_some());
     drop(store);
+    // A runner may reject Resume before its adapter starts. The previously
+    // committed checkpoint must survive that attempt and remain retryable.
+    {
+        let mut store = studio_store::Store::open(&dir).unwrap();
+        let saved = store.scans().unwrap().remove(0);
+        let retry = new_id().unwrap();
+        store.begin(saved.scan, retry, &saved.job, true).unwrap();
+        assert_eq!(store.scans().unwrap()[0].checkpoint, saved.checkpoint);
+        store
+            .apply(&Envelope::new(
+                [1; 16],
+                saved.scan,
+                retry,
+                1,
+                Event::Finished {
+                    status: Status::Failed,
+                    detail: "adapter unavailable".into(),
+                },
+            ))
+            .unwrap();
+        let after = store.scans().unwrap().remove(0);
+        assert_eq!(after.status, Status::Paused);
+        assert_eq!(after.checkpoint, saved.checkpoint);
+    }
     let mut app = Controller::open(dir.clone(), runner).unwrap();
     app.send(Action::Resume).unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -99,6 +123,32 @@ fn failed_runner_launch_does_not_disable_future_scans() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(completed);
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn incomplete_raw_integration_refuses_before_opening_an_adapter() {
+    let dir = std::env::temp_dir().join(format!("studio-raw-gate-{}", id_text(new_id().unwrap())));
+    let mut app =
+        Controller::open(dir.clone(), env!("CARGO_BIN_EXE_studio-runner").into()).unwrap();
+    app.send(Action::Start(Job::example(Backend::MacFeth)))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut refused = false;
+    while Instant::now() < deadline && !refused {
+        for u in app.poll() {
+            if let Update::State(s, detail) = u {
+                assert_ne!(s, Status::Scanning, "must not start the raw adapter");
+                if s == Status::Failed {
+                    assert!(detail.contains("Raw scanning is not enabled"), "{detail}");
+                    refused = true;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(refused);
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }

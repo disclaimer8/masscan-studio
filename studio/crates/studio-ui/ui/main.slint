@@ -108,9 +108,11 @@ export component MainWindow inherits Window {
     in property <string> selection-label: "No selection";
     in property <string> event-label: "Ready · no scan started";
     in-out property <int> backend-index: 0;
+    in-out property <string> scan-backend-label: "No scan selected";
     in property <[string]> history-labels;
     callback select-history(int);
     callback pause-scan();
+    callback stop-scan();
     callback resume-scan();
     callback lock-session();
     in property <bool> can-resume: false;
@@ -185,8 +187,8 @@ export component MainWindow inherits Window {
                 }
                 Text { text: "Masscan Studio"; color: Theme.text; font-size: 16px; font-weight: 600; }
                 Rectangle {
-                    width: 102px; height: 22px; border-radius: 4px; background: Theme.surface;
-                    Text { text: root.backend-index == 1 ? "Simulation" : "feth lab"; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    width: 154px; height: 22px; border-radius: 4px; background: Theme.surface;
+                    Text { text: root.scan-backend-label; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 ComboBox { model: root.history-labels; enabled: !root.process-active; selected(value) => { root.select-history(self.current-index); } }
@@ -224,7 +226,7 @@ export component MainWindow inherits Window {
                 actions-button := ActionButton { text: "Actions…"; enabled: root.active-row >= 0; clicked => { root.show-actions(root.details, self.absolute-position.x, self.absolute-position.y + self.height + 4px); } }
                 Rectangle { width: 8px; }
                 if root.process-active : ActionButton { text: "Pause"; enabled: root.process-status != "Saving" && !root.process-stopping; clicked => { root.pause-scan(); } }
-                if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: !root.process-stopping; clicked => { root.process-stopping = true; } }
+                if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: !root.process-stopping; clicked => { root.stop-scan(); } }
                 if root.can-resume : ActionButton { text: "Resume"; primary: true; clicked => { root.resume-scan(); } }
             }
         }
@@ -391,7 +393,7 @@ export component MainWindow inherits Window {
                     ActionButton { width: 80px; text: "Done"; clicked => { root.settings-open = false; } }
                 }
                 Text { text: "IPv4 / TCP scan. Results and paused jobs are saved in history."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
-                ComboBox { model: ["Mac isolated feth lab", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
+                ComboBox { model: ["Mac feth · not enabled yet", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
                 JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
                 HorizontalLayout {
                     spacing: 12px;
@@ -401,7 +403,7 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 12px;
                     JobField { label: "Exclude · optional"; hint: "IPv4 addresses or ranges"; value <=> root.job-exclusions; edited => { root.settings-edited(); } }
-                    Text { text: root.backend-index == 0 ? "Isolated peer: 198.18.0.2 on feth4201" : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
+                    Text { text: root.backend-index == 0 ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
                 }
                 HorizontalLayout {
                     spacing: 12px;

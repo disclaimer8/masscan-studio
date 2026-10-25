@@ -29,6 +29,7 @@ struct State {
     fail: Vec<String>,
     populate_calls: u32,
     staff: u32,
+    route_get: BTreeMap<String, String>,
 }
 
 struct Fake(RefCell<State>);
@@ -50,6 +51,7 @@ impl Fake {
             fail: vec![],
             populate_calls: 0,
             staff: 20,
+            route_get: BTreeMap::new(),
         }))
     }
     fn log(&self) -> Vec<String> {
@@ -59,11 +61,15 @@ impl Fake {
         self.log()
             .into_iter()
             .filter(|c| {
-                c.starts_with("ifconfig feth")
-                    && !c.ends_with("feth4201")
-                    && !c.ends_with("feth4202")
+                let ifconfig_change = c.starts_with("ifconfig feth")
+                    && ["create", "destroy", "lladdr", "peer", "inet", "up", "down"]
+                        .iter()
+                        .any(|w| c.split(' ').any(|t| t == *w));
+                ifconfig_change
                     || c.starts_with("arp -S")
                     || c.starts_with("arp -d")
+                    || c.starts_with("bpf_set")
+                    || c.starts_with("bpf_populate")
             })
             .collect()
     }
@@ -81,7 +87,10 @@ fn mac_str(m: &str) -> String {
 }
 
 fn mask_hex(m: &str) -> String {
-    format!("0x{:08x}", u32::from(m.parse::<Ipv4Addr>().unwrap()))
+    match m.parse::<Ipv4Addr>() {
+        Ok(a) => format!("0x{:08x}", u32::from(a)),
+        Err(_) => m.into(),
+    }
 }
 
 impl Host for Fake {
@@ -210,6 +219,19 @@ impl Host for Fake {
                 "   route to: default\ndestination: default\n       mask: default\n    gateway: {}\n  interface: {}\n",
                 s.default_gw, s.default_if
             )),
+            ["route", "-n", "get", ip @ ("198.18.0.1" | "198.18.0.2")] => {
+                let paired = s.ifaces.contains_key("feth4202");
+                let iface = s
+                    .route_get
+                    .get(*ip)
+                    .cloned()
+                    .unwrap_or_else(|| match (paired, *ip) {
+                        (false, _) => s.default_if.clone(),
+                        (true, "198.18.0.1") => "feth4202".into(),
+                        (true, _) => "lo0".into(),
+                    });
+                Ok(format!("   route to: {ip}\n  interface: {iface}\n"))
+            }
             ["route", "-n", "get", "8.8.8.8"] => Ok(format!(
                 "   route to: 8.8.8.8\n    gateway: {}\n  interface: {}\n",
                 s.default_gw, s.default_if
@@ -226,6 +248,11 @@ impl Host for Fake {
                 if s.ifaces.get("feth4202").is_some_and(|f| f.inet.is_some()) {
                     t += "198.18.0/30        link#22            UCS                feth4202      !\n";
                 }
+                if s.ifaces.get("feth4202").is_some_and(|f| f.inet.is_some()) {
+                    t += "198.18.0.2/32      link#22            UCS                feth4202      !\n";
+                    t += "198.18.0.2        link#22            UHS                   lo0\n";
+                    t += "198.18.0.3        ff:ff:ff:ff:ff:ff  UHLSbW            feth4202      !\n";
+                }
                 if s.arp.is_some() {
                     t += "198.18.0.1        2:ac:0:0:0:1       UHLSW              feth4202\n";
                 }
@@ -241,6 +268,9 @@ impl Host for Fake {
     fn bpf_set(&self, n: u32, mode: u32, gid: u32) -> Result<(), String> {
         let mut s = self.0.borrow_mut();
         s.log.push(format!("bpf_set {n} {mode:o} {gid}"));
+        if s.fail.contains(&format!("bpf_set {n} {mode:o} {gid}")) {
+            return Err(format!("bpf{n}: scripted failure"));
+        }
         match s.bpf.get_mut(&n) {
             Some(v) => {
                 *v = (mode, gid);
@@ -248,6 +278,9 @@ impl Host for Fake {
             }
             None => Err(format!("bpf{n} missing")),
         }
+    }
+    fn euid(&self) -> Result<u32, String> {
+        Ok(test_uid())
     }
     fn bpf_populate(&self, last: u32) -> Result<(), String> {
         let mut s = self.0.borrow_mut();
@@ -261,6 +294,20 @@ impl Host for Fake {
         }
         Ok(())
     }
+}
+
+/// The uid that owns the files of this test process (the test binary), so the directory
+/// policy sees the scratch directories as ours.
+#[cfg(unix)]
+fn test_uid() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(std::env::current_exe().unwrap())
+        .unwrap()
+        .uid()
+}
+#[cfg(not(unix))]
+fn test_uid() -> u32 {
+    0
 }
 
 /// A unique scratch directory, removed at the end of the test.
@@ -826,7 +873,7 @@ fn a_held_lock_is_reported_not_waited_on_forever() {
     let mut out = vec![];
     let e = dispatch(&h, &args(&s, "up"), Duration::ZERO, &mut out).unwrap_err();
     assert!(e.contains("holds the lock"), "{e}");
-    assert!(h.log().is_empty());
+    assert_eq!(h.log(), ["id -u"], "only the root probe may have run");
     // plan and status never take the lock.
     assert_eq!(
         dispatch(&h, &args(&s, "plan"), Duration::ZERO, &mut out),
@@ -936,4 +983,510 @@ fn populate_is_a_no_op_when_everything_exists() {
     )
     .unwrap();
     assert_eq!(opens, 16);
+}
+
+// ---- fix round 1: persistence, parsers, lab routes, ownership, grant
+
+fn manifest_of(s: &Scratch) -> Value {
+    serde_json::from_slice(&fs::read(s.manifest()).unwrap()).unwrap()
+}
+
+#[test]
+fn a_failed_rollback_keeps_the_manifest_and_down_finishes_it() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| {
+        st.fail.push("ifconfig feth4202 create".into());
+        st.fail.push("ifconfig feth4201 destroy".into());
+    });
+    let (r, out) = go(&h, &args(&s, "up"));
+    assert_eq!(r, Ok(10), "{out}");
+    assert!(out.contains("rollback incomplete"), "{out}");
+    let m = manifest_of(&s);
+    assert_eq!(m["state"], "rollback-incomplete");
+    // The intent of the failed create was recorded before the command ran.
+    assert_eq!(m["created"], json!(["feth4201", "feth4202"]));
+    assert!(marker_path(&s.manifest()).exists());
+    assert!(
+        h.st(|st| st.ifaces.contains_key("feth4201")),
+        "the orphan is still there"
+    );
+    // A new up refuses; down acts on the record.
+    assert!(
+        go(&h, &args(&s, "up"))
+            .0
+            .unwrap_err()
+            .contains("already recorded")
+    );
+    h.st(|st| st.fail.clear());
+    let (r, out) = go(&h, &args(&s, "down"));
+    assert_eq!(r, Ok(0), "{out}");
+    assert!(h.st(|st| st.ifaces.is_empty()));
+    assert!(!s.manifest().exists() && !marker_path(&s.manifest()).exists());
+}
+
+#[test]
+fn down_destroys_a_half_made_interface_whose_mac_is_not_yet_the_lab_mac() {
+    // `up` died (or its rollback failed) after `create` but before `lladdr`.
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| {
+        st.fail
+            .push("ifconfig feth4201 lladdr 02:ac:00:00:00:01".into());
+        st.fail.push("ifconfig feth4201 destroy".into());
+    });
+    assert_eq!(go(&h, &args(&s, "up")).0, Ok(10));
+    assert_ne!(h.st(|st| st.ifaces["feth4201"].mac.clone()), SCANNER_MAC);
+    h.st(|st| st.fail.clear());
+    assert_eq!(go(&h, &args(&s, "down")).0, Ok(0));
+    assert!(h.st(|st| st.ifaces.is_empty()));
+}
+
+#[test]
+fn a_failed_arp_set_rolls_back_without_deleting_an_arp_entry() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| {
+        st.fail
+            .push("arp -S 198.18.0.1 02:ac:00:00:00:01 ifscope feth4202".into())
+    });
+    let (r, _) = go(&h, &args(&s, "up"));
+    assert_eq!(r, Ok(10));
+    assert!(
+        !h.log().iter().any(|c| c.starts_with("arp -d")),
+        "{:?}",
+        h.log()
+    );
+    assert!(h.st(|st| st.ifaces.is_empty()));
+    assert!(!s.manifest().exists());
+}
+
+#[test]
+fn a_failed_post_check_rolls_everything_back() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| {
+        st.route_get.insert("198.18.0.1".into(), "en0".into());
+    });
+    let (r, out) = go(&h, &args(&s, "up"));
+    assert_eq!(r, Ok(10), "{out}");
+    assert!(out.contains("FAILED check lab_routes"), "{out}");
+    assert!(h.st(|st| st.ifaces.is_empty() && st.arp.is_none()));
+    assert!(!s.manifest().exists() && !marker_path(&s.manifest()).exists());
+}
+
+#[test]
+fn up_refuses_a_stray_marker() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    fs::write(marker_path(&s.manifest()), "x\n").unwrap();
+    assert!(
+        go(&h, &args(&s, "up"))
+            .0
+            .unwrap_err()
+            .contains("already recorded")
+    );
+    assert!(h.mutating().is_empty());
+}
+
+#[test]
+fn up_refuses_forwarding_and_unreadable_inet() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| st.forwarding = "1".into());
+    assert!(
+        go(&h, &args(&s, "up"))
+            .0
+            .unwrap_err()
+            .contains("forwarding")
+    );
+    let h = Fake::new();
+    h.st(|st| st.extra_ifconfig = "en7: flags=8863<UP>\n\tinet 10.0.0.1 --> 10.0.0.2\n".into());
+    assert!(
+        go(&h, &args(&s, "up"))
+            .0
+            .unwrap_err()
+            .contains("cannot read the netmask")
+    );
+    assert!(h.mutating().is_empty());
+}
+
+#[test]
+fn routes_are_read_by_header_and_short_rows_are_errors() {
+    let refs = "Destination        Gateway            Flags      Refs      Use   Netif Expire\n\
+default            192.168.1.1        UGSc         12        0     en0\n\
+10.9.0/24          link#30            UCS           1        0  feth4201      !\n";
+    let r = parse_routes(refs).unwrap();
+    assert_eq!(
+        r[1],
+        Route {
+            dest: "10.9.0/24".into(),
+            netif: "feth4201".into()
+        }
+    );
+    assert!(!route_allowed(&r[1]));
+    let short = "Destination        Gateway            Flags               Netif Expire\n10.9.0/24          link#30\n";
+    assert!(parse_routes(short).unwrap_err().contains("too short"));
+    assert!(parse_routes("Destination Gateway Flags\nx y z\n").is_err());
+    assert!(parse_routes("no table here\n").is_err());
+    assert!(parse_routes("").is_err());
+}
+
+#[test]
+fn a_short_route_row_makes_status_and_up_refuse() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    h.st(|st| st.extra_routes.push("10.9.0/24          link#30".into()));
+    assert!(go(&h, &args(&s, "up")).0.unwrap_err().contains("too short"));
+    let h = Fake::new();
+    up_ok(&h, &s);
+    h.st(|st| st.extra_routes.push("10.9.0/24          link#30".into()));
+    let (rc, v) = status_json(&h, &s);
+    assert_eq!(rc, 3);
+    assert!(!check_ok(&v, "routes") && !check_ok(&v, "lab_routes"));
+}
+
+#[test]
+fn status_refuses_routes_that_would_carry_lab_replies_off_the_pair() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    assert_eq!(
+        status_json(&h, &s).0,
+        0,
+        "the realistic side rows are accepted"
+    );
+    for row in [
+        "198.18.0.1/32      link#9             UCS                   en0      !",
+        "198.18.0.0/15      198.18.0.1         UGSc                  utun4",
+        "198.18.0.0/31      link#9             UCS                  feth4201  !",
+    ] {
+        h.st(|st| st.extra_routes = vec![row.into()]);
+        let (rc, v) = status_json(&h, &s);
+        assert_eq!(rc, 3, "{row}");
+        assert!(!check_ok(&v, "lab_routes"), "{row}");
+    }
+    h.st(|st| st.extra_routes.clear());
+    h.st(|st| {
+        st.route_get.insert("198.18.0.1".into(), "utun4".into());
+    });
+    assert!(!check_ok(&status_json(&h, &s).1, "lab_routes"));
+    h.st(|st| {
+        st.route_get.clear();
+        st.route_get.insert("198.18.0.2".into(), "en0".into());
+    });
+    assert!(!check_ok(&status_json(&h, &s).1, "lab_routes"));
+    h.st(|st| st.route_get.clear());
+    assert_eq!(status_json(&h, &s).0, 0);
+}
+
+#[test]
+fn status_refuses_a_feth4202_route_outside_the_slash_30() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    for row in [
+        "198.18.0/24        link#22            UCS                feth4202      !",
+        "10.1.1.1           link#22            UHS                feth4202",
+    ] {
+        h.st(|st| st.extra_routes = vec![row.into()]);
+        assert_eq!(status_json(&h, &s).0, 3, "{row}");
+    }
+}
+
+#[test]
+fn status_refuses_a_non_permanent_arp_entry_and_an_unsealed_manifest() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    let mut m = manifest_of(&s);
+    m["state"] = "creating".into();
+    write_manifest(&s.manifest(), &m).unwrap();
+    let (rc, v) = status_json(&h, &s);
+    assert_eq!(rc, 3);
+    assert!(!check_ok(&v, "manifest"));
+    m["state"] = "sealed".into();
+    write_manifest(&s.manifest(), &m).unwrap();
+    assert_eq!(status_json(&h, &s).0, 0);
+    let e = parse_arp("? (198.18.0.1) at 2:ac:0:0:0:1 on feth4202 ifscope [ethernet]\n");
+    assert!(!e[0].permanent);
+}
+
+#[test]
+fn unreadable_inet_forms_are_kept_and_refused() {
+    let i = parse_ifconfig(
+        "\tinet 198.18.0.9 --> 198.18.0.10\n\tinet 10.0.0.1 netmask 0xff000000 broadcast 10.255.255.255\n",
+    );
+    assert_eq!(i.inets[0], ("198.18.0.9".into(), "?".into()));
+    assert_eq!(i.inets[1].1, "0xff000000");
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    h.st(|st| st.ifaces.get_mut("feth4201").unwrap().inet = Some(("10.1.1.1".into(), "?".into())));
+    assert!(!check_ok(&status_json(&h, &s).1, "interfaces"));
+}
+
+#[test]
+fn grant_saves_previous_modes_first_and_is_atomic() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    h.st(|st| {
+        st.bpf.insert(1, (0o640, 80));
+        st.fail.push("bpf_set 5 660 20".into());
+    });
+    let mut g = args(&s, "bpf-access");
+    g.grant = true;
+    let (r, out) = go(&h, &g);
+    assert_eq!(r, Ok(10), "{out}");
+    assert!(out.contains("reverting"), "{out}");
+    // Nodes 0..4 were changed and put back; the failing node never changed.
+    assert_eq!(h.st(|st| st.bpf[&1]), (0o640, 80));
+    assert!(h.st(|st| st.bpf.iter().all(|(n, v)| *n == 1 || *v == (0o600, 0))));
+    // The previous modes were persisted before anything was touched.
+    assert_eq!(
+        manifest_of(&s)["bpf_prev"]["1"],
+        json!({"mode":"0640","gid":80})
+    );
+    h.st(|st| st.fail.clear());
+    assert_eq!(go(&h, &g).0, Ok(0));
+}
+
+#[test]
+fn grant_prints_the_real_exposure() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    let mut g = args(&s, "bpf-access");
+    g.grant = true;
+    let (_, out) = go(&h, &g);
+    for w in [
+        "every local account",
+        "group staff",
+        "inject",
+        "en0",
+        "Revoke whenever no run is active",
+    ] {
+        assert!(out.contains(w), "{w} missing from {out}");
+    }
+}
+
+#[test]
+fn the_guide_states_the_grant_exposure_and_commands() {
+    let doc = include_str!("../../../docs/macos-feth-lab.md");
+    for w in ["group staff", "inject", "en0", "mkdir -p", "revoke"] {
+        assert!(doc.contains(w), "guide lacks {w:?}");
+    }
+    assert!(
+        !doc.contains("any process of your user"),
+        "the old understatement is back"
+    );
+}
+
+#[test]
+fn revoke_narrows_mode_first_and_down_restores_recorded_modes_only_after_a_grant() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    // down without any grant leaves /dev/bpf* alone.
+    h.st(|st| {
+        st.bpf.insert(2, (0o640, 80));
+    });
+    let from = h.log().len();
+    let mut g = args(&s, "bpf-access");
+    g.grant = true;
+    assert_eq!(go(&h, &g).0, Ok(0));
+    let mut r = args(&s, "bpf-access");
+    r.revoke = true;
+    assert_eq!(go(&h, &r).0, Ok(0));
+    assert_eq!(h.st(|st| st.bpf[&2]), (0o600, 0), "revoke always denies");
+    assert_eq!(go(&h, &args(&s, "down")).0, Ok(0));
+    assert_eq!(
+        h.st(|st| st.bpf[&2]),
+        (0o640, 80),
+        "down restores the recorded mode"
+    );
+    assert!(
+        h.log()[from..]
+            .iter()
+            .any(|c| c.starts_with("bpf_set 2 640 80"))
+    );
+
+    let s2 = Scratch::new();
+    let h2 = Fake::new();
+    up_ok(&h2, &s2);
+    let from = h2.log().len();
+    assert_eq!(go(&h2, &args(&s2, "down")).0, Ok(0));
+    assert!(
+        !h2.log()[from..].iter().any(|c| c.starts_with("bpf_set")),
+        "no grant, no bpf change"
+    );
+}
+
+#[test]
+fn link_refuses_a_foreign_peer_interface() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    h.st(|st| st.ifaces.get_mut("feth4202").unwrap().mac = "de:ad:be:ef:00:02".into());
+    let mut l = args(&s, "link");
+    l.down = true;
+    assert!(go(&h, &l).0.unwrap_err().contains("not ours"));
+    assert!(h.st(|st| st.ifaces["feth4202"].up));
+}
+
+#[test]
+fn plan_does_not_claim_a_chown_to_root() {
+    let s = Scratch::new();
+    let (_, out) = go(&Fake::new(), &args(&s, "plan"));
+    assert!(!out.contains("chown root"));
+    assert!(out.contains("chgrp wheel"));
+}
+
+#[test]
+fn every_command_the_lab_runs_has_an_absolute_system_path() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    up_ok(&h, &s);
+    status_json(&h, &s);
+    let mut g = args(&s, "bpf-access");
+    g.grant = true;
+    let _ = go(&h, &g);
+    let _ = go(&h, &args(&s, "down"));
+    let words: BTreeSet<String> = h
+        .log()
+        .iter()
+        .filter(|c| !c.starts_with("bpf_"))
+        .map(|c| c.split(' ').next().unwrap().to_owned())
+        .collect();
+    assert!(!words.is_empty());
+    for w in &words {
+        let p = system_path(w).unwrap_or_else(|| panic!("{w} has no absolute path"));
+        assert!(p.starts_with('/'), "{p}");
+        #[cfg(target_os = "macos")]
+        assert!(Path::new(p).exists(), "{p} does not exist on this Mac");
+    }
+    assert_eq!(system_path("curl"), None);
+    assert_eq!(system_path("sh"), None);
+}
+
+#[test]
+fn dir_policy_table() {
+    let ok = |sym, dir, owner, mode, euid, sudo| dir_policy(sym, dir, owner, mode, euid, sudo);
+    assert!(ok(false, true, 501, 0o755, 0, Some(501)).is_ok());
+    assert!(ok(false, true, 0, 0o755, 501, None).is_ok());
+    assert!(ok(false, true, 501, 0o700, 501, None).is_ok());
+    assert!(
+        ok(true, true, 501, 0o755, 0, Some(501))
+            .unwrap_err()
+            .contains("symlink")
+    );
+    assert!(
+        ok(false, false, 501, 0o755, 0, Some(501))
+            .unwrap_err()
+            .contains("not a directory")
+    );
+    assert!(
+        ok(false, true, 502, 0o755, 0, Some(501))
+            .unwrap_err()
+            .contains("owned by uid 502")
+    );
+    assert!(
+        ok(false, true, 501, 0o775, 0, Some(501))
+            .unwrap_err()
+            .contains("writable")
+    );
+    assert!(
+        ok(false, true, 501, 0o757, 0, Some(501))
+            .unwrap_err()
+            .contains("writable")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dispatch_refuses_a_symlinked_or_group_writable_lab_directory() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let s = Scratch::new();
+    let real = s.0.join("real");
+    fs::create_dir(&real).unwrap();
+    let link = s.0.join("link");
+    symlink(&real, &link).unwrap();
+    let h = Fake::new();
+    let mut a = args(&s, "up");
+    a.manifest = link.join("macos-m1.json");
+    let mut out = vec![];
+    let e = dispatch(&h, &a, Duration::ZERO, &mut out).unwrap_err();
+    assert!(e.contains("symlink"), "{e}");
+    assert!(h.mutating().is_empty());
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o775)).unwrap();
+    a.manifest = real.join("macos-m1.json");
+    let e = dispatch(&h, &a, Duration::ZERO, &mut out).unwrap_err();
+    assert!(e.contains("writable"), "{e}");
+    assert!(
+        fs::read_dir(&real).unwrap().next().is_none(),
+        "nothing was created in it"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_lock_file_is_refused() {
+    use std::os::unix::fs::symlink;
+    let s = Scratch::new();
+    let target = s.0.join("victim");
+    fs::write(&target, "x").unwrap();
+    symlink(&target, lock_path(&s.manifest())).unwrap();
+    let h = Fake::new();
+    let mut out = vec![];
+    let e = dispatch(&h, &args(&s, "up"), Duration::ZERO, &mut out).unwrap_err();
+    assert!(e.contains("symlink"), "{e}");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "x");
+}
+
+#[test]
+fn dispatch_creates_the_directory_for_up_and_removes_the_lock_after_down() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    let mut a = args(&s, "up");
+    a.manifest = s.0.join("sub").join("macos-m1.json");
+    let mut out = vec![];
+    assert_eq!(dispatch(&h, &a, Duration::ZERO, &mut out), Ok(0), "{out:?}");
+    assert!(lock_path(&a.manifest).exists());
+    a.cmd = "down".into();
+    assert_eq!(dispatch(&h, &a, Duration::ZERO, &mut out), Ok(0), "{out:?}");
+    assert!(
+        !lock_path(&a.manifest).exists(),
+        "the lock is removed with the stand"
+    );
+    assert!(!a.manifest.exists() && !marker_path(&a.manifest).exists());
+}
+
+#[test]
+fn commands_without_a_stand_or_without_root_create_nothing() {
+    let s = Scratch::new();
+    let h = Fake::new();
+    let mut a = args(&s, "up");
+    a.manifest = s.0.join("sub").join("macos-m1.json");
+    h.st(|st| st.root = false);
+    let mut out = vec![];
+    assert!(
+        dispatch(&h, &a, Duration::ZERO, &mut out)
+            .unwrap_err()
+            .contains("needs root")
+    );
+    assert!(
+        !s.0.join("sub").exists(),
+        "no directory before the root check"
+    );
+    h.st(|st| st.root = true);
+    for cmd in ["down", "link", "bpf-access"] {
+        a.cmd = cmd.into();
+        a.down = cmd == "link";
+        a.grant = cmd == "bpf-access";
+        let r = dispatch(&h, &a, Duration::ZERO, &mut out);
+        assert!(r == Ok(0) || r.is_err(), "{cmd}");
+        assert!(!s.0.join("sub").exists(), "{cmd} created the directory");
+        assert!(!lock_path(&a.manifest).exists());
+    }
 }

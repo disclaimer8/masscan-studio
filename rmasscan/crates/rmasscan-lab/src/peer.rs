@@ -487,6 +487,9 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     #[cfg(target_os = "macos")]
     if let Cmd::Counters { iface } = &a.cmd {
         // The macOS lab has no namespace: the peer-side counters come from netstat.
+        if !matches!(iface.as_str(), "feth4201" | "feth4202") {
+            return Err("only the macOS lab interfaces feth4201/feth4202 are permitted".into());
+        }
         if !link::safe_iface(iface) {
             return Err("invalid interface".into());
         }

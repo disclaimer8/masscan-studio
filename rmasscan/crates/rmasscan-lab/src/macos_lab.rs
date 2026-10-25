@@ -46,6 +46,8 @@ pub(crate) trait Host {
     fn bpf_set(&self, n: u32, mode: u32, gid: u32) -> Result<(), String>;
     /// Make `/dev/bpf0..=last` exist (see [`populate`]).
     fn bpf_populate(&self, last: u32) -> Result<(), String>;
+    /// The effective uid of this process (`id -u`).
+    fn euid(&self) -> Result<u32, String>;
 }
 
 /// Outcome of trying to open one `/dev/bpfN`.
@@ -58,7 +60,8 @@ pub(crate) enum Slot {
 }
 
 /// macOS creates the next `/dev/bpfN` when the highest existing node is opened. Open every
-/// node that exists, keep it open (`open` owns the handles), and repeat until `bpf0..=last`
+/// node that exists (the open attempt itself makes the kernel create the next one; keeping the
+/// handles open is harmless), and repeat until `bpf0..=last`
 /// all exist. A pass that finds no new node is an error: the kernel refused to create more.
 pub(crate) fn populate(
     open: &mut dyn FnMut(u32) -> Result<Slot, String>,
@@ -91,10 +94,27 @@ pub(crate) fn populate(
     }
 }
 
+/// Absolute paths of the system tools the lab runs, so a changed `PATH` (sudo keeps the
+/// caller's) can never substitute another binary.
+pub(crate) fn system_path(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "ifconfig" => "/sbin/ifconfig",
+        "route" => "/sbin/route",
+        "arp" => "/usr/sbin/arp",
+        "netstat" => "/usr/sbin/netstat",
+        "sysctl" => "/usr/sbin/sysctl",
+        "id" => "/usr/bin/id",
+        "dscl" => "/usr/bin/dscl",
+        _ => return None,
+    })
+}
+
 struct RealHost;
 impl Host for RealHost {
     fn sh(&self, args: &[&str]) -> Result<String, String> {
-        let r = Command::new(args[0])
+        let program = system_path(args[0])
+            .ok_or_else(|| format!("{}: not a command the lab may run", args[0]))?;
+        let r = Command::new(program)
             .args(&args[1..])
             .output()
             .map_err(|e| format!("{}: {e}", args[0]))?;
@@ -121,13 +141,30 @@ impl Host for RealHost {
     fn bpf_set(&self, n: u32, mode: u32, gid: u32) -> Result<(), String> {
         use std::os::unix::fs::{PermissionsExt, chown};
         let p = format!("/dev/bpf{n}");
-        chown(&p, None, Some(gid)).map_err(|e| format!("chown {p}: {e}"))?;
-        fs::set_permissions(&p, fs::Permissions::from_mode(mode))
-            .map_err(|e| format!("chmod {p}: {e}"))
+        let chmod = || {
+            fs::set_permissions(&p, fs::Permissions::from_mode(mode))
+                .map_err(|e| format!("chmod {p}: {e}"))
+        };
+        let chgrp = || chown(&p, None, Some(gid)).map_err(|e| format!("chown {p}: {e}"));
+        // Narrowing: drop the permission bits first, so there is never a moment with the old
+        // group and wider bits than the target. Widening: give the group first, then the bits.
+        if mode & 0o077 == 0 {
+            chmod()?;
+            chgrp()
+        } else {
+            chgrp()?;
+            chmod()
+        }
     }
     #[cfg(not(unix))]
     fn bpf_set(&self, _n: u32, _mode: u32, _gid: u32) -> Result<(), String> {
         Err("BPF devices need Unix".into())
+    }
+    fn euid(&self) -> Result<u32, String> {
+        let out = self.sh(&["id", "-u"])?;
+        out.trim()
+            .parse()
+            .map_err(|_| format!("cannot parse the uid {out:?}"))
     }
     fn bpf_populate(&self, last: u32) -> Result<(), String> {
         let mut held: Vec<fs::File> = vec![];
@@ -144,7 +181,7 @@ impl Host for RealHost {
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Slot::Missing),
                     // EBUSY: the node exists and someone else has it open.
-                    Err(e) if e.raw_os_error() == Some(16) => Ok(Slot::Busy),
+                    Err(e) if e.kind() == std::io::ErrorKind::ResourceBusy => Ok(Slot::Busy),
                     Err(e) => Err(format!("/dev/bpf{n}: {e}")),
                 }
             },
@@ -188,7 +225,17 @@ pub(crate) fn parse_ifconfig(text: &str) -> IfInfo {
         let t: Vec<&str> = l.split_whitespace().collect();
         match t.as_slice() {
             ["ether", mac, ..] => i.ether = norm_mac(mac),
-            ["inet", ip, "netmask", mask, ..] => i.inets.push(((*ip).into(), (*mask).into())),
+            ["inet", ip, rest @ ..] => {
+                // Every `inet` line counts. A form without a readable netmask is kept with
+                // "?" so that the checks refuse it instead of skipping it.
+                let mask = rest
+                    .iter()
+                    .position(|w| *w == "netmask")
+                    .and_then(|p| rest.get(p + 1))
+                    .copied()
+                    .unwrap_or("?");
+                i.inets.push(((*ip).into(), mask.into()));
+            }
             ["status:", s, ..] => i.status = Some((*s).into()),
             ["peer:", p, ..] => i.peer = Some((*p).into()),
             _ => {}
@@ -228,24 +275,38 @@ pub(crate) struct Route {
     pub netif: String,
 }
 
-/// Rows of `netstat -rn -f inet`: `Destination Gateway Flags Netif [Expire]`.
-pub(crate) fn parse_routes(text: &str) -> Vec<Route> {
+/// Rows of `netstat -rn -f inet`. The `Netif` column is found by its header name, so a layout
+/// with extra columns (`Refs Use`) still reads the right one. A missing header, a missing
+/// `Netif` column or a row too short to reach it is an error: the caller refuses.
+pub(crate) fn parse_routes(text: &str) -> Result<Vec<Route>, String> {
     let mut rows = vec![];
-    let mut in_table = false;
+    let mut netif_at = None;
     for l in text.lines() {
         let t: Vec<&str> = l.split_whitespace().collect();
         if t.first() == Some(&"Destination") {
-            in_table = true;
+            netif_at = Some(
+                t.iter()
+                    .position(|h| *h == "Netif")
+                    .ok_or("netstat -rn: no Netif column")?,
+            );
             continue;
         }
-        if in_table && t.len() >= 4 {
-            rows.push(Route {
-                dest: t[0].into(),
-                netif: t[3].into(),
-            });
+        let Some(at) = netif_at else { continue };
+        if t.is_empty() {
+            continue;
         }
+        let netif = t
+            .get(at)
+            .ok_or_else(|| format!("netstat -rn: row too short for the Netif column: {l:?}"))?;
+        rows.push(Route {
+            dest: t[0].into(),
+            netif: (*netif).into(),
+        });
     }
-    rows
+    if netif_at.is_none() {
+        return Err("netstat -rn: no Destination header".into());
+    }
+    Ok(rows)
 }
 
 /// A netstat destination as `(address, prefix)`: `198.18.0/30`, `127`, `169.254`,
@@ -372,6 +433,50 @@ fn route_allowed(r: &Route) -> bool {
         })
 }
 
+/// Nothing may send lab traffic anywhere but the pair. The peer kernel answers 198.18.0.1 by
+/// the route table, and only the ARP entry is `ifscope`d, so a later unscoped route for the
+/// /30 (a VPN or fake-IP tool) would carry the replies to the uplink. Checked after `up`:
+/// 198.18.0.1 must route via `feth4202`, 198.18.0.2 via `feth4202` or `lo0`, and every route
+/// overlapping the /30 must be on `feth4202` inside the /30 (or the local `lo0` host route).
+fn lab_routes(h: &dyn Host) -> Result<String, String> {
+    for (ip, ok) in [
+        (SOURCE_IP, &[PEER_IF][..]),
+        (PEER_IP, &[PEER_IF, "lo0"][..]),
+    ] {
+        let (i, _) = parse_route_get(&h.sh(&["route", "-n", "get", ip])?);
+        match i {
+            Some(i) if ok.contains(&i.as_str()) => {}
+            other => {
+                return Err(format!(
+                    "route to {ip} goes through {other:?}, not the pair"
+                ));
+            }
+        }
+    }
+    let mut bad = vec![];
+    for r in parse_routes(&h.sh(&["netstat", "-rn", "-f", "inet"])?)? {
+        let touches = match route_dest(&r.dest) {
+            Some((ip, prefix)) => overlap(&format!("{ip}/{prefix}")),
+            None => r.dest != "default" && r.dest.contains("198.18"),
+        };
+        if !touches {
+            continue;
+        }
+        let local_host = r.netif == "lo0"
+            && route_dest(&r.dest) == Some((PEER_IP.parse().unwrap_or(Ipv4Addr::UNSPECIFIED), 32));
+        if !(local_host || (r.netif == PEER_IF && route_allowed(&r))) {
+            bad.push(format!("{} via {}", r.dest, r.netif));
+        }
+    }
+    if bad.is_empty() {
+        Ok("198.18.0.0/30 is routed only by the pair".into())
+    } else {
+        Err(format!(
+            "routes touching 198.18.0.0/30 outside the pair: {bad:?}"
+        ))
+    }
+}
+
 /// Which `/dev/bpf*` modes there are: `granted` (every existing node 0660 gid staff),
 /// `denied` (every existing node 0600, or no node at all), otherwise `mixed`.
 pub(crate) fn bpf_access(h: &dyn Host) -> (String, Vec<u32>) {
@@ -473,7 +578,7 @@ pub(crate) fn run_checks(h: &dyn Host, recorded: Option<(&str, Option<&str>)>) -
         "routes",
         h.sh(&["netstat", "-rn", "-f", "inet"])
             .and_then(|t| {
-                let bad: Vec<_> = parse_routes(&t)
+                let bad: Vec<_> = parse_routes(&t)?
                     .into_iter()
                     .filter(|r| !route_allowed(r))
                     .map(|r| format!("{} via {}", r.dest, r.netif))
@@ -492,6 +597,8 @@ pub(crate) fn run_checks(h: &dyn Host, recorded: Option<(&str, Option<&str>)>) -
                 }
             }),
     ));
+    // 4b: nothing may send lab traffic anywhere but the pair
+    checks.push(check("lab_routes", lab_routes(h)));
     // 5
     checks.push(check(
         "arp",
@@ -564,25 +671,38 @@ fn preflight(h: &dyn Host) -> Result<(String, Option<String>), String> {
             problems.push(format!("{n} already exists (not ours to reuse)"));
         }
     }
-    let routes = parse_routes(&h.sh(&["netstat", "-rn", "-f", "inet"])?);
+    let routes = match parse_routes(&h.sh(&["netstat", "-rn", "-f", "inet"])?) {
+        Ok(r) => r,
+        Err(e) => return Err(format!("refusing to touch this host: {e}")),
+    };
     for r in &routes {
-        if let Some((ip, prefix)) = route_dest(&r.dest)
-            && overlap(&format!("{ip}/{prefix}"))
-        {
-            problems.push(format!(
+        match route_dest(&r.dest) {
+            Some((ip, prefix)) if overlap(&format!("{ip}/{prefix}")) => problems.push(format!(
                 "route {} via {} overlaps 198.18.0.0/30",
                 r.dest, r.netif
-            ));
+            )),
+            None if r.dest != "default" && r.dest.contains("198.18") => problems.push(format!(
+                "route {} via {} is unreadable and mentions 198.18",
+                r.dest, r.netif
+            )),
+            _ => {}
         }
     }
     let all = h.sh(&["ifconfig", "-a"])?;
     for l in all.lines() {
         let t: Vec<&str> = l.split_whitespace().collect();
-        if let ["inet", ip, "netmask", mask, ..] = t.as_slice()
-            && let Some(p) = prefix_of(mask)
-            && overlap(&format!("{ip}/{p}"))
-        {
-            problems.push(format!("address {ip}/{p} overlaps 198.18.0.0/30"));
+        if let ["inet", ip, rest @ ..] = t.as_slice() {
+            let mask = rest
+                .iter()
+                .position(|w| *w == "netmask")
+                .and_then(|p| rest.get(p + 1));
+            match mask.and_then(|m| prefix_of(m)) {
+                Some(p) if overlap(&format!("{ip}/{p}")) => {
+                    problems.push(format!("address {ip}/{p} overlaps 198.18.0.0/30"))
+                }
+                Some(_) => {}
+                None => problems.push(format!("cannot read the netmask of inet {ip}")),
+            }
         }
         if l.trim_start().starts_with("member: feth") {
             problems.push("a feth interface is already a bridge member".into());
@@ -765,40 +885,192 @@ fn plan(out: &mut Vec<String>) {
     ));
     out.push("# macos-lab bpf-access --grant".into());
     out.push(format!(
-        "chmod 0660 and chgrp staff on /dev/bpf0..{BPF_LAST}"
+        "chgrp staff and chmod 0660 on /dev/bpf0..{BPF_LAST} (previous modes go into the manifest)"
+    ));
+    out.push("# macos-lab bpf-access --revoke".into());
+    out.push(format!(
+        "chmod 0600 and chgrp wheel on /dev/bpf0..{BPF_LAST}"
     ));
     out.push("# macos-lab down (root)".into());
     out.push(arp_delete().join(" "));
     out.push(format!("ifconfig {SCANNER_IF} destroy"));
     out.push(format!("ifconfig {PEER_IF} destroy"));
-    out.push(format!(
-        "chmod 0600 and chown root:wheel on /dev/bpf0..{BPF_LAST} (--revoke)"
-    ));
-    out.push("remove the manifest and its marker".into());
+    out.push(
+        "restore the recorded BPF modes (only if a grant happened), remove the manifest, marker and lock"
+            .into(),
+    );
 }
 
-fn rollback(
-    h: &dyn Host,
-    a: &Args,
-    created: &[&'static str],
-    arp_set: bool,
-    out: &mut Vec<String>,
-) {
-    if arp_set {
-        note(out, h.sh(&arp_delete()), "arp -d");
+// ---------------------------------------------------------------- ownership under sudo
+
+/// The directory of the manifest is acceptable when it is a real directory, owned by root, by
+/// this user or by the invoking sudo user, and not writable by group or others.
+pub(crate) fn dir_policy(
+    is_symlink: bool,
+    is_dir: bool,
+    owner: u32,
+    mode: u32,
+    euid: u32,
+    sudo_uid: Option<u32>,
+) -> Result<(), String> {
+    if is_symlink {
+        return Err("the lab directory is a symlink".into());
+    }
+    if !is_dir {
+        return Err("the lab directory path is not a directory".into());
+    }
+    if owner != 0 && owner != euid && Some(owner) != sudo_uid {
+        return Err(format!(
+            "the lab directory is owned by uid {owner}, not by you or root"
+        ));
+    }
+    if mode & 0o022 != 0 {
+        return Err(format!(
+            "the lab directory is group- or world-writable (mode {:04o})",
+            mode & 0o7777
+        ));
+    }
+    Ok(())
+}
+
+fn sudo_uid() -> Option<u32> {
+    std::env::var("SUDO_UID").ok()?.parse().ok()
+}
+
+/// Make sure the manifest directory exists and is trustworthy. A directory this run creates as
+/// root is handed to the sudo user (`lchown`), so no root-owned residue stays in the home.
+#[cfg(unix)]
+fn prepare_dir(h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, lchown};
+    let euid = h.euid()?;
+    match fs::symlink_metadata(dir) {
+        Ok(md) => dir_policy(
+            md.file_type().is_symlink(),
+            md.is_dir(),
+            md.uid(),
+            md.mode(),
+            euid,
+            sudo_uid(),
+        )
+        .map_err(|e| format!("{}: {e}", dir.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && create => {
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            if euid == 0
+                && let Some((u, g)) = crate::vm_lab::sudo_target(
+                    0,
+                    std::env::var("SUDO_UID").ok().as_deref(),
+                    std::env::var("SUDO_GID").ok().as_deref(),
+                )
+                .map_err(|e| e.to_string())?
+                && u != 0
+            {
+                lchown(dir, Some(u), Some(g)).map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
+            Ok(())
+        }
+        Err(e) => Err(format!("{}: {e}", dir.display())),
+    }
+}
+#[cfg(not(unix))]
+fn prepare_dir(_h: &dyn Host, dir: &Path, create: bool) -> Result<(), String> {
+    if create {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Open (creating if needed) the lock file without following a symlink, and give it to the
+/// sudo user.
+fn open_lock(path: &Path) -> Result<fs::File, String> {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(format!("{}: the lock file is a symlink", path.display()));
+    }
+    let f = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let after = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        let mine = f.metadata().map_err(|e| e.to_string())?;
+        if after.file_type().is_symlink() || (after.dev(), after.ino()) != (mine.dev(), mine.ino())
+        {
+            return Err(format!("{}: the lock file was swapped", path.display()));
+        }
+    }
+    crate::vm_lab::restore_sudo_owner(&f).map_err(|e| e.to_string())?;
+    Ok(f)
+}
+
+// ---------------------------------------------------------------- up / rollback / down
+
+fn names_of(m: &Value, key: &str) -> Vec<String> {
+    m[key]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Remove what a (possibly partial) `up` created: the ARP entry, if it was attempted and is
+/// there, and each listed interface that exists. Returns `true` when every step succeeded.
+fn cleanup(h: &dyn Host, created: &[String], arp_set: bool, out: &mut Vec<String>) -> bool {
+    let mut ok = true;
+    let names = match h.sh(&["ifconfig", "-l"]) {
+        Ok(n) => n,
+        Err(e) => {
+            out.push(format!("FAILED: cannot list interfaces: {e}"));
+            return false;
+        }
+    };
+    let has = |n: &str| names.split_whitespace().any(|x| x == n);
+    if arp_set && has(PEER_IF) {
+        let present = h.sh(&["arp", "-an"]).map(|t| {
+            parse_arp(&t)
+                .iter()
+                .any(|e| e.ip == SOURCE_IP && e.iface == PEER_IF)
+        });
+        if present.unwrap_or(true) {
+            out.push(format!("+ {}", arp_delete().join(" ")));
+            if let Err(e) = h.sh(&arp_delete()) {
+                out.push(format!("FAILED: {e}"));
+                ok = false;
+            }
+        }
     }
     for n in created.iter().rev() {
-        note(out, h.sh(&["ifconfig", n, "destroy"]), "destroy");
+        if has(n) {
+            out.push(format!("+ ifconfig {n} destroy"));
+            if let Err(e) = h.sh(&["ifconfig", n, "destroy"]) {
+                out.push(format!("FAILED: {e}"));
+                ok = false;
+            }
+        }
     }
-    let _ = fs::remove_file(&a.manifest);
-    let _ = fs::remove_file(marker_path(&a.manifest));
-    out.push("rolled back: manifest and marker removed".into());
+    ok
 }
 
-fn note(out: &mut Vec<String>, r: Result<String, String>, what: &str) {
-    if let Err(e) = r {
-        out.push(format!("rollback {what} failed: {e}"));
+fn rollback(h: &dyn Host, a: &Args, m: &mut Value, out: &mut Vec<String>) -> i32 {
+    let ok = cleanup(h, &names_of(m, "created"), m["arp_set"] == true, out);
+    if ok {
+        let _ = fs::remove_file(&a.manifest);
+        let _ = fs::remove_file(marker_path(&a.manifest));
+        out.push("rolled back: manifest and marker removed".into());
+    } else {
+        m["state"] = "rollback-incomplete".into();
+        let _ = write_manifest(&a.manifest, m);
+        out.push(
+            "rollback incomplete: the manifest is kept; run macos-lab down to finish it".into(),
+        );
     }
+    10
 }
 
 fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
@@ -811,21 +1083,19 @@ fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     }
     let (uplink, gateway) = preflight(h)?;
     let token = random_token()?;
-    if let Some(dir) = a.manifest.parent().filter(|d| !d.as_os_str().is_empty()) {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
     let mut mark = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(marker_path(&a.manifest))
         .map_err(|e| format!("marker: {e}"))?;
+    crate::vm_lab::restore_sudo_owner(&mark).map_err(|e| e.to_string())?;
     writeln!(mark, "{token}").map_err(|e| e.to_string())?;
     drop(mark);
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let mut manifest = json!({
+    let mut m = json!({
         "run_id": a.run_id,
         "token": token,
         "created_utc": utc(secs),
@@ -833,51 +1103,62 @@ fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
         "peer_if": PEER_IF, "peer_mac": PEER_MAC, "peer_ip": PEER_IP,
         "source_ip": SOURCE_IP,
         "uplink": uplink, "gateway": gateway,
+        "created": [],
+        "arp_set": false,
         "bpf_nodes": [],
         "bpf_prev": {},
         "state": "creating",
     });
-    if let Err(e) = write_manifest(&a.manifest, &manifest) {
+    if let Err(e) = write_manifest(&a.manifest, &m) {
         let _ = fs::remove_file(marker_path(&a.manifest));
         return Err(e);
     }
-    let mut created: Vec<&'static str> = vec![];
-    let mut arp_set = false;
     for step in up_steps() {
+        // The intent is recorded before the command, so an interrupted `up` (or one whose
+        // rollback fails) leaves a manifest that `down` can act on.
+        let mut intent = false;
+        if step[2] == "create" {
+            let mut list = names_of(&m, "created");
+            list.push(step[1].to_owned());
+            m["created"] = list.into();
+            intent = true;
+        }
+        if step[0] == "arp" {
+            m["arp_set"] = true.into();
+            intent = true;
+        }
+        if intent && let Err(e) = write_manifest(&a.manifest, &m) {
+            out.push(format!("FAILED: cannot record progress: {e}"));
+            return Ok(rollback(h, a, &mut m, out));
+        }
         out.push(format!("+ {}", step.join(" ")));
         if let Err(e) = h.sh(&step) {
             out.push(format!("FAILED: {e}"));
-            rollback(h, a, &created, arp_set, out);
-            return Ok(10);
-        }
-        if step[2] == "create" {
-            created.push(step[1]);
-        }
-        if step[0] == "arp" {
-            arp_set = true;
+            return Ok(rollback(h, a, &mut m, out));
         }
     }
     out.push(format!("+ open /dev/bpf0..{BPF_LAST} together"));
     if let Err(e) = h.bpf_populate(BPF_LAST) {
         out.push(format!("FAILED: {e}"));
-        rollback(h, a, &created, arp_set, out);
-        return Ok(10);
+        return Ok(rollback(h, a, &mut m, out));
     }
-    let rec = recorded_route(&manifest);
+    let rec = recorded_route(&m);
     let report = run_checks(h, rec.as_ref().map(|(i, g)| (i.as_str(), g.as_deref())));
     if !report.ok() {
         for c in report.checks.iter().filter(|c| !c.ok) {
             out.push(format!("FAILED check {}: {}", c.name, c.detail));
         }
-        rollback(h, a, &created, arp_set, out);
-        return Ok(10);
+        return Ok(rollback(h, a, &mut m, out));
     }
-    manifest["bpf_nodes"] = (0..=BPF_LAST)
+    m["bpf_nodes"] = (0..=BPF_LAST)
         .map(|n| format!("/dev/bpf{n}"))
         .collect::<Vec<_>>()
         .into();
-    manifest["state"] = "sealed".into();
-    write_manifest(&a.manifest, &manifest)?;
+    m["state"] = "sealed".into();
+    if let Err(e) = write_manifest(&a.manifest, &m) {
+        out.push(format!("FAILED: cannot record the sealed state: {e}"));
+        return Ok(rollback(h, a, &mut m, out));
+    }
     out.push(format!(
         "OK: stand {} is up; next: macos-lab bpf-access --grant",
         a.run_id
@@ -886,7 +1167,10 @@ fn up(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
 }
 
 fn status(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
-    let stand = load_stand(a);
+    let stand = load_stand(a).and_then(|m| match m["state"].as_str() {
+        Some("sealed") => Ok(m),
+        other => Err(format!("the stand is not sealed (state {other:?})")),
+    });
     let recorded = stand.as_ref().ok().and_then(recorded_route);
     let mut report = run_checks(
         h,
@@ -907,35 +1191,71 @@ fn status(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> 
     Ok(if report.ok() { 0 } else { 3 })
 }
 
+/// The exposure of a grant, printed with it and written in the guide.
+pub const GRANT_WARNING: &str = "WARNING: 0660 root:staff lets every process of every local account in group staff (all regular macOS users) read AND inject raw frames on EVERY interface, including en0, without root, until --revoke, down or reboot. Revoke whenever no run is active.";
+
 fn bpf_access_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     require_root(h)?;
     let mut m = load_stand(a)?;
-    let (mode, gid, label) = if a.grant {
-        (GRANTED_MODE, staff_gid(h)?, "granted")
-    } else {
-        (REVOKED_MODE, 0, "revoked")
-    };
-    let mut missing = vec![];
-    for n in 0..=BPF_LAST {
-        let Some((old_mode, old_gid)) = h.bpf_stat(n) else {
-            missing.push(n);
-            continue;
-        };
-        if a.grant && m["bpf_prev"].get(n.to_string()).is_none() {
-            // The first grant records the mode the node had; later grants keep it.
-            m["bpf_prev"][n.to_string()] =
-                json!({"mode": format!("{old_mode:04o}"), "gid": old_gid});
-        }
-        h.bpf_set(n, mode, gid)?;
+    if m["state"] != "sealed" {
+        return Err("the stand is not sealed; run down and up again".into());
     }
-    write_manifest(&a.manifest, &m)?;
-    out.push(format!(
-        "{label}: /dev/bpf0..{BPF_LAST} -> {mode:04o} gid {gid}{}",
-        if missing.is_empty() {
-            String::new()
-        } else {
-            format!(" (not present yet: {missing:?}; `up` creates them)")
+    let nodes: Vec<(u32, u32, u32)> = (0..=BPF_LAST)
+        .filter_map(|n| h.bpf_stat(n).map(|(mode, gid)| (n, mode, gid)))
+        .collect();
+    let missing: Vec<u32> = (0..=BPF_LAST)
+        .filter(|n| !nodes.iter().any(|(k, _, _)| k == n))
+        .collect();
+    let note = if missing.is_empty() {
+        String::new()
+    } else {
+        format!(" (not present yet: {missing:?}; `up` creates them)")
+    };
+    if a.grant {
+        let staff = staff_gid(h)?;
+        // Previous modes are saved first (the first grant wins), so nothing is changed that the
+        // manifest cannot restore.
+        for (n, mode, gid) in &nodes {
+            if m["bpf_prev"].get(n.to_string()).is_none() {
+                m["bpf_prev"][n.to_string()] = json!({"mode": format!("{mode:04o}"), "gid": gid});
+            }
         }
+        write_manifest(&a.manifest, &m)?;
+        let mut changed: Vec<(u32, u32, u32)> = vec![];
+        for (n, mode, gid) in &nodes {
+            if let Err(e) = h.bpf_set(*n, GRANTED_MODE, staff) {
+                out.push(format!("FAILED: /dev/bpf{n}: {e}; reverting this grant"));
+                for (k, om, og) in changed
+                    .iter()
+                    .rev()
+                    .chain(std::iter::once(&(*n, *mode, *gid)))
+                {
+                    if let Err(e) = h.bpf_set(*k, *om, *og) {
+                        out.push(format!("FAILED to revert /dev/bpf{k}: {e}"));
+                    }
+                }
+                return Ok(10);
+            }
+            changed.push((*n, *mode, *gid));
+        }
+        out.push(format!(
+            "granted: /dev/bpf0..{BPF_LAST} -> 0660 gid {staff}{note}"
+        ));
+        out.push(GRANT_WARNING.into());
+        return Ok(0);
+    }
+    let mut failed = false;
+    for (n, _, _) in &nodes {
+        if let Err(e) = h.bpf_set(*n, REVOKED_MODE, 0) {
+            out.push(format!("FAILED: /dev/bpf{n}: {e}"));
+            failed = true;
+        }
+    }
+    if failed {
+        return Ok(10);
+    }
+    out.push(format!(
+        "revoked: /dev/bpf0..{BPF_LAST} -> 0600 root:wheel{note}"
     ));
     Ok(0)
 }
@@ -943,10 +1263,40 @@ fn bpf_access_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, 
 fn link_cmd(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
     require_root(h)?;
     load_stand(a)?;
+    let info = parse_ifconfig(&h.sh(&["ifconfig", PEER_IF])?);
+    if info.ether.as_deref() != Some(PEER_MAC) {
+        return Err(format!(
+            "{PEER_IF} has MAC {:?}, not the lab's {PEER_MAC}: not ours, left alone",
+            info.ether
+        ));
+    }
     let word = if a.down { "down" } else { "up" };
     out.push(format!("+ ifconfig {PEER_IF} {word}"));
     h.sh(&["ifconfig", PEER_IF, word])?;
     Ok(0)
+}
+
+/// The modes `down` puts back: those recorded by the first grant. Without a grant, nothing
+/// was changed and nothing is touched.
+fn recorded_modes(m: &Value) -> Vec<(u32, u32, u32)> {
+    let Some(prev) = m["bpf_prev"].as_object() else {
+        return vec![];
+    };
+    prev.iter()
+        .filter_map(|(k, v)| {
+            let n = k.parse::<u32>().ok().filter(|n| *n <= BPF_LAST)?;
+            let mode = v["mode"]
+                .as_str()
+                .and_then(|s| u32::from_str_radix(s, 8).ok())
+                .filter(|m| *m <= 0o7777)
+                .unwrap_or(REVOKED_MODE);
+            let gid = v["gid"]
+                .as_u64()
+                .and_then(|g| u32::try_from(g).ok())
+                .unwrap_or(0);
+            Some((n, mode, gid))
+        })
+        .collect()
 }
 
 fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
@@ -955,58 +1305,45 @@ fn down(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i32, String> {
         out.push("no stand recorded; nothing to do".into());
         return Ok(0);
     }
-    let _m = load_stand(a)?;
+    let m = load_stand(a)?;
+    let sealed = m["state"] == "sealed";
+    let mut created = names_of(&m, "created");
+    let mut arp_set = m["arp_set"] == true;
+    if sealed && created.is_empty() {
+        created = vec![SCANNER_IF.into(), PEER_IF.into()];
+        arp_set = true;
+    }
     let names = h.sh(&["ifconfig", "-l"])?;
-    let present: Vec<(&str, &str)> = [(SCANNER_IF, SCANNER_MAC), (PEER_IF, PEER_MAC)]
-        .into_iter()
-        .filter(|(n, _)| names.split_whitespace().any(|x| x == *n))
-        .collect();
-    // Foreign objects are refused before anything is touched.
-    for (n, mac) in &present {
-        let info = parse_ifconfig(&h.sh(&["ifconfig", n])?);
-        if info.ether.as_deref() != Some(mac) {
-            return Err(format!(
-                "{n} exists but its MAC is {:?}, not the lab's {mac}: not ours, left alone",
-                info.ether
-            ));
+    if sealed {
+        // A finished stand: a lab-named interface with another MAC is foreign and left alone.
+        for (n, mac) in [(SCANNER_IF, SCANNER_MAC), (PEER_IF, PEER_MAC)] {
+            if names.split_whitespace().any(|x| x == n) {
+                let info = parse_ifconfig(&h.sh(&["ifconfig", n])?);
+                if info.ether.as_deref() != Some(mac) {
+                    return Err(format!(
+                        "{n} exists but its MAC is {:?}, not the lab's {mac}: not ours, left alone",
+                        info.ether
+                    ));
+                }
+            }
         }
     }
-    let mut failed = false;
-    let mut run = |args: &[&str], out: &mut Vec<String>| {
-        out.push(format!("+ {}", args.join(" ")));
-        if let Err(e) = h.sh(args) {
-            out.push(format!("FAILED: {e}"));
-            failed = true;
-        }
-    };
-    if present.iter().any(|(n, _)| *n == PEER_IF) {
-        let arp = h.sh(&["arp", "-an"]).map(|t| {
-            parse_arp(&t)
-                .iter()
-                .any(|e| e.ip == SOURCE_IP && e.iface == PEER_IF)
-        });
-        if arp.unwrap_or(true) {
-            run(&arp_delete(), out);
-        }
-    }
-    for (n, _) in &present {
-        run(&["ifconfig", n, "destroy"], out);
-    }
-    for n in 0..=BPF_LAST {
+    let mut ok = cleanup(h, &created, arp_set, out);
+    for (n, mode, gid) in recorded_modes(&m) {
         if h.bpf_stat(n).is_some()
-            && let Err(e) = h.bpf_set(n, REVOKED_MODE, 0)
+            && let Err(e) = h.bpf_set(n, mode, gid)
         {
-            out.push(format!("FAILED: revoke /dev/bpf{n}: {e}"));
-            failed = true;
+            out.push(format!("FAILED: restore /dev/bpf{n}: {e}"));
+            ok = false;
         }
     }
-    if failed {
+    if !ok {
         out.push("down incomplete: manifest kept so down can be repeated".into());
         return Ok(10);
     }
     let _ = fs::remove_file(&a.manifest);
     let _ = fs::remove_file(marker_path(&a.manifest));
-    out.push("OK: stand removed, BPF access revoked, manifest deleted".into());
+    out.push("OK: stand removed, BPF modes restored, manifest deleted".into());
     Ok(0)
 }
 
@@ -1026,23 +1363,30 @@ pub(crate) fn execute(h: &dyn Host, a: &Args, out: &mut Vec<String>) -> Result<i
     }
 }
 
+fn lock_path(manifest: &Path) -> PathBuf {
+    let mut n = manifest.as_os_str().to_os_string();
+    n.push(".lock");
+    PathBuf::from(n)
+}
+
 /// Every command except `plan` and `status` runs under the manifest's lock file, so two lab
-/// commands on one stand never interleave. The lock is released when this returns.
+/// commands on one stand never interleave. `down`, `link` and `bpf-access` with no stand
+/// recorded touch nothing (no directory, no lock). Root is checked before anything is created.
+/// The lock is released when this returns; a successful `down` removes the file too.
 fn dispatch(h: &dyn Host, a: &Args, wait: Duration, out: &mut Vec<String>) -> Result<i32, String> {
+    validate(a)?;
     let mut lock = None;
-    if !matches!(a.cmd.as_str(), "plan" | "status") {
-        let mut name = a.manifest.as_os_str().to_os_string();
-        name.push(".lock");
+    let needs_lock = match a.cmd.as_str() {
+        "plan" | "status" => false,
+        "up" => true,
+        _ => a.manifest.exists() || marker_path(&a.manifest).exists(),
+    };
+    if needs_lock {
+        require_root(h)?;
         if let Some(dir) = a.manifest.parent().filter(|d| !d.as_os_str().is_empty()) {
-            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            prepare_dir(h, dir, a.cmd == "up")?;
         }
-        let f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(PathBuf::from(name))
-            .map_err(|e| e.to_string())?;
+        let f = open_lock(&lock_path(&a.manifest))?;
         let start = Instant::now();
         loop {
             match f.try_lock() {
@@ -1056,6 +1400,9 @@ fn dispatch(h: &dyn Host, a: &Args, wait: Duration, out: &mut Vec<String>) -> Re
         lock = Some(f);
     }
     let r = execute(h, a, out);
+    if a.cmd == "down" && matches!(r, Ok(0)) && lock.is_some() {
+        let _ = fs::remove_file(lock_path(&a.manifest));
+    }
     drop(lock);
     r
 }

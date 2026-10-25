@@ -669,3 +669,18 @@ en0        1500  <Link#14>   82:fe:61:f5:ac:74 51497279     0 63224918459 205422
         assert_eq!(with.len(), plain.len() + 1);
     }
 }
+
+mod macos_probe_down_interface {
+    use super::super::*;
+
+    #[test]
+    fn a_down_interface_printed_with_a_star_still_matches() {
+        let t = "\
+Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll Drop
+feth4202*  1500  <Link#22>   02:ac:00:00:00:02       5     0        300        7     0        420     0   1
+";
+        let c = parse_netstat(t, "feth4202").unwrap();
+        assert_eq!((c.ipkts, c.opkts, c.ierrs, c.drop), (5, 7, 0, 1));
+        assert!(parse_netstat(t, "feth4201").is_err());
+    }
+}

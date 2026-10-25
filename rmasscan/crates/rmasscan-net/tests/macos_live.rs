@@ -7,6 +7,7 @@
 //! Запуск оператором на стенде (стенд поднят пользователем `macos-lab up`,
 //! доступ к `/dev/bpf*` выдан `macos-lab bpf-access --grant`):
 //!   cargo test --locked -p rmasscan-net --test macos_live -- --ignored --test-threads=1
+//!   (тесты ещё и сериализуются статическим замком внутри процесса)
 //!
 //! Окружение (обе переменные обязательны):
 //!   RMASSCAN_BPF_LAB_MANIFEST  манифест стенда (`$HOME/.rmasscan-lab/macos-m1.json`);
@@ -28,9 +29,9 @@
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::TryRecvError;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use rmasscan_core::config::{Operation, ScanConfig, validate};
@@ -54,6 +55,20 @@ const SEED: u64 = 0x5eed_0b5e_55ed;
 /// Порты пира с listener; остальные отвечают RST ядра (с ограничением частоты).
 const OPEN_PORTS: &str = "80,443,8000-8007";
 const JUNK_ETHERTYPE: [u8; 2] = [0x88, 0xb5];
+/// Окно простоя читателя в тесте потери RX (от старта движка).
+const STALL: (Duration, Duration) = (Duration::from_millis(1800), Duration::from_millis(3400));
+/// Константы плана стенда: манифест их лишь подтверждает.
+const SCAN_IF: &str = "feth4201";
+const PEER_IF: &str = "feth4202";
+const SRC_MAC: [u8; 6] = [0x02, 0xac, 0x00, 0x00, 0x00, 0x01];
+const PEER_MAC: [u8; 6] = [0x02, 0xac, 0x00, 0x00, 0x00, 0x02];
+
+/// Живые тесты делят стенд: по одному за раз (мусор и свидетели иначе смешиваются).
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 // ---------- окружение ----------
 
@@ -97,13 +112,31 @@ fn lab(test: &'static str) -> Lab {
         .unwrap_or_else(|e| panic!("NOT RUN: cannot read the stand manifest {manifest}: {e}"));
     let field =
         |k: &str| manifest_str(&text, k).unwrap_or_else(|| panic!("NOT RUN: manifest lacks {k:?}"));
+    // Манифест подтверждает, но не задаёт стенд: каждое значение сверяется с константой.
+    for (k, want) in [
+        ("scanner_if", SCAN_IF),
+        ("peer_if", PEER_IF),
+        ("scanner_mac", "02:ac:00:00:00:01"),
+        ("peer_mac", "02:ac:00:00:00:02"),
+        ("source_ip", "198.18.0.1"),
+        ("peer_ip", "198.18.0.2"),
+        ("state", "sealed"),
+    ] {
+        let got = field(k);
+        assert_eq!(
+            got, want,
+            "REFUSING TO SEND: manifest {k} is {got:?}, the plan says {want:?}"
+        );
+    }
+    assert_eq!(parse_mac(&field("scanner_mac")), SRC_MAC);
+    assert_eq!(parse_mac(&field("peer_mac")), PEER_MAC);
     let l = Lab {
         out_dir: need("RMASSCAN_BPF_OUT_DIR"),
         test,
-        scan_if: field("scanner_if"),
-        peer_if: field("peer_if"),
-        src_mac: parse_mac(&field("scanner_mac")),
-        peer_mac: parse_mac(&field("peer_mac")),
+        scan_if: SCAN_IF.to_string(),
+        peer_if: PEER_IF.to_string(),
+        src_mac: SRC_MAC,
+        peer_mac: PEER_MAC,
     };
     for name in [&l.scan_if, &l.peer_if] {
         assert_eq!(
@@ -122,7 +155,10 @@ fn lab(test: &'static str) -> Lab {
             "os-verified"
         }
         None if nic_mac_masked(&l.scan_if) => "os-masked",
-        None => "unverified",
+        None => panic!(
+            "NOT RUN: the OS neither shows the MAC of {} nor reports it masked; the gate cannot be verified",
+            l.scan_if
+        ),
     };
     kv(
         &l,
@@ -189,14 +225,10 @@ fn plan(lab: &Lab, ports: &str, rate: f64, wait: u32) -> ReadyPlan {
 // ---------- защита и декораторы ----------
 
 /// Единственный путь кадра сканера в сеть: адреса и протокол стенда.
-fn assert_lab_frame(lab: &Lab, f: &[u8]) {
+fn assert_lab_frame(f: &[u8]) {
     assert!(f.len() >= 54, "frame too short for IPv4 + TCP");
-    assert_eq!(f[0..6], lab.peer_mac, "dst MAC is not the stand peer");
-    assert_eq!(
-        f[6..12],
-        lab.src_mac,
-        "src MAC is not the scanner interface"
-    );
+    assert_eq!(f[0..6], PEER_MAC, "dst MAC is not the stand peer");
+    assert_eq!(f[6..12], SRC_MAC, "src MAC is not the scanner interface");
     assert_eq!(f[12..14], [0x08, 0x00], "not IPv4");
     assert_eq!(f[23], 6, "not TCP");
     assert_eq!(f[26..30], SRC_IP.to_be_bytes(), "src IP is not 198.18.0.1");
@@ -204,7 +236,6 @@ fn assert_lab_frame(lab: &Lab, f: &[u8]) {
 }
 
 struct GuardTx {
-    lab: Lab,
     inner: Box<dyn Tx>,
     /// После стольких реальных отправок вернуть `Uncertain`, не вызывая
     /// адаптер (синтетический сбой для проверки runtime).
@@ -214,7 +245,7 @@ struct GuardTx {
 
 impl Tx for GuardTx {
     fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
-        assert_lab_frame(&self.lab, frame);
+        assert_lab_frame(frame);
         if self.uncertain_after == Some(self.n) {
             return Ok(SendStatus::Uncertain);
         }
@@ -250,49 +281,87 @@ impl Rx for StalledRx {
 
 // ---------- свидетель на стороне пира ----------
 
+#[derive(Default, Clone)]
+struct WState {
+    syns: u64,
+    ports: Vec<u16>,
+    alive: bool,
+    drops: Option<u64>,
+}
+
 /// RX-адаптер на `feth4202`: считает SYN сканера (src MAC сканера, IPv4/TCP,
-/// флаг SYN без ACK), пока жив. Это свидетель в процессе теста, не замена
-/// `tcpdump` оператора.
+/// флаг SYN без ACK) и запоминает порты назначения, пока жив. Это свидетель в
+/// процессе теста, не замена `tcpdump` оператора. Его показания годны только
+/// если поток жив и `kernel_drops == Some(0)`: иначе тест INVALID, не PASS.
 struct PeerWitness {
-    syns: Arc<AtomicU64>,
+    st: Arc<Mutex<WState>>,
     stop: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
 impl PeerWitness {
     fn start(lab: &Lab, mut rx: Box<dyn Rx>) -> Self {
-        let syns = Arc::new(AtomicU64::new(0));
+        let st = Arc::new(Mutex::new(WState {
+            alive: true,
+            ..WState::default()
+        }));
         let stop = Arc::new(AtomicBool::new(false));
-        let (s2, st2, src) = (Arc::clone(&syns), Arc::clone(&stop), lab.src_mac);
+        let (st2, stop2, src) = (Arc::clone(&st), Arc::clone(&stop), lab.src_mac);
         let join = std::thread::spawn(move || {
             let mut buf = vec![0u8; 2048];
-            while !st2.load(Ordering::Relaxed) {
+            while !stop2.load(Ordering::Relaxed) {
                 match rx.recv(&mut buf, Duration::from_millis(20)) {
                     Ok(Some(n)) => {
                         let f = &buf[..n];
-                        let syn = n >= 54
+                        let ihl = f.get(14).map_or(0, |b| usize::from(b & 0x0f) * 4);
+                        // Все индексы ограничены длиной кадра.
+                        let syn = ihl >= 20
+                            && n >= 14 + ihl + 14
                             && f[6..12] == src
                             && f[12..14] == [0x08, 0x00]
                             && f[23] == 6
-                            && f[14 + usize::from(f[14] & 0x0f) * 4 + 13] & 0x12 == 0x02;
+                            && f[14 + ihl + 13] & 0x12 == 0x02;
                         if syn {
-                            s2.fetch_add(1, Ordering::Relaxed);
+                            let dport = u16::from_be_bytes([f[14 + ihl + 2], f[14 + ihl + 3]]);
+                            let mut s = st2.lock().unwrap();
+                            s.syns += 1;
+                            s.ports.push(dport);
                         }
                     }
                     Ok(None) => {}
-                    Err(_) => break,
+                    Err(_) => {
+                        st2.lock().unwrap().alive = false;
+                        return;
+                    }
                 }
             }
+            let drops = rx
+                .health(Duration::from_millis(50))
+                .ok()
+                .and_then(|h| h.kernel_drops);
+            st2.lock().unwrap().drops = drops;
         });
         PeerWitness {
-            syns,
+            st,
             stop,
             join: Some(join),
         }
     }
 
     fn count(&self) -> u64 {
-        self.syns.load(Ordering::Relaxed)
+        self.st.lock().unwrap().syns
+    }
+
+    /// Останавливает поток и отдаёт показания; поток, упавший с паникой, это
+    /// `alive == false`.
+    fn finish(&mut self) -> WState {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(j) = self.join.take()
+            && j.join().is_err()
+        {
+            self.st.lock().unwrap().alive = false;
+        }
+        self.st.lock().unwrap().clone()
     }
 }
 
@@ -305,11 +374,36 @@ impl Drop for PeerWitness {
     }
 }
 
+/// Показания свидетеля годятся только живыми и без потерь.
+fn assert_witness_valid(rep: &WState) {
+    assert!(rep.alive, "INVALID: the peer-side witness thread died");
+    assert_eq!(
+        rep.drops,
+        Some(0),
+        "INVALID: the peer-side witness lost frames or could not measure loss"
+    );
+}
+
+/// Охрана инжектора: единственный разрешённый кадр это мусор пира сканеру.
+struct GuardPeerTx {
+    inner: Box<dyn Tx>,
+}
+
+impl Tx for GuardPeerTx {
+    fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
+        assert_eq!(frame.len(), 60, "injector frame length");
+        assert_eq!(frame[0..6], SRC_MAC, "injector dst MAC is not the scanner");
+        assert_eq!(frame[6..12], PEER_MAC, "injector src MAC is not the peer");
+        assert_eq!(frame[12..14], JUNK_ETHERTYPE, "injector ethertype");
+        self.inner.send(frame, timeout)
+    }
+}
+
 /// Открывает адаптер пира и отдаёт (TX, свидетель, статистика).
 fn open_peer(lab: &Lab) -> (Box<dyn Tx>, PeerWitness, NetStatsHandle) {
     let o: OpenedAdapter = open_explicit(&peer_binding(lab)).expect("open the peer-side adapter");
     let w = PeerWitness::start(lab, o.io.rx);
-    (o.io.tx, w, o.stats)
+    (Box::new(GuardPeerTx { inner: o.io.tx }), w, o.stats)
 }
 
 // ---------- запуск движка ----------
@@ -358,7 +452,7 @@ impl<'a> Spec<'a> {
     }
 }
 
-fn run_engine(lab: &Lab, mut spec: Spec<'_>) -> Run {
+fn run_engine(mut spec: Spec<'_>) -> Run {
     let opened = open_explicit(spec.plan.binding()).expect("open_explicit");
     let stats = opened.stats.clone();
     let started = Instant::now();
@@ -372,7 +466,6 @@ fn run_engine(lab: &Lab, mut spec: Spec<'_>) -> Run {
     };
     let io = AdapterPair {
         tx: Box::new(GuardTx {
-            lab: lab.clone(),
             inner: opened.io.tx,
             uncertain_after: spec.uncertain_after,
             n: 0,
@@ -470,24 +563,35 @@ fn summarize(lab: &Lab, what: &str, r: &Run) {
     );
 }
 
-/// После исхода ничего не уходит: свидетель на стороне пира (второй адаптер,
-/// читающий `feth4202`) не видит новых SYN за окно наблюдения. Сначала даём
-/// осесть кадрам, уже стоявшим в очереди, затем сравниваем два отсчёта. Счётчик
-/// TX закрытого адаптера для этого непригоден: он не может измениться.
-/// Возвращает итог свидетеля.
-fn assert_silent_on_the_wire(lab: &Lab, what: &str, w: &PeerWitness, sent: u64) -> u64 {
+/// После исхода ничего не уходит. Свидетель на стороне пира (второй адаптер на
+/// `feth4202`) живёт всё время прогона, поэтому видит каждый SYN, в том числе
+/// отправленный между командой и исходом: итог свидетеля обязан РАВНЯТЬСЯ числу
+/// отправленных рантаймом (больше значит, что после исхода что-то ушло; меньше
+/// значит, что свидетель слеп). Показания принимаются только от живого
+/// свидетеля без потерь. Возвращает итог свидетеля.
+fn assert_silent_on_the_wire(lab: &Lab, what: &str, w: &mut PeerWitness, sent: u64) -> u64 {
     std::thread::sleep(Duration::from_millis(300));
     let before = w.count();
     std::thread::sleep(Duration::from_millis(700));
-    let after = w.count();
+    let rep = w.finish();
     kv(
         lab,
         what,
-        &format!("witness_syns_settled={before} witness_syns_after={after} runtime_sent={sent}"),
+        &format!(
+            "witness_syns_settled={before} witness_syns_after={} runtime_sent={sent} witness_alive={} witness_drops={:?}",
+            rep.syns, rep.alive, rep.drops
+        ),
     );
-    assert_eq!(before, after, "a SYN reached the peer after the run ended");
-    assert!(after <= sent, "the witness saw more SYNs than were sent");
-    after
+    assert_witness_valid(&rep);
+    assert_eq!(
+        before, rep.syns,
+        "a SYN reached the peer after the run ended"
+    );
+    assert_eq!(
+        rep.syns, sent,
+        "the witness count differs from the runtime's sent"
+    );
+    rep.syns
 }
 
 // =====================================================================
@@ -497,12 +601,13 @@ fn assert_silent_on_the_wire(lab: &Lab, what: &str, w: &PeerWitness, sent: u64) 
 #[test]
 #[ignore = "live: needs the sealed feth stand (see module docs)"]
 fn a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent() {
+    let _serial = serial();
     let lab = lab("full_scan");
     let ports = format!("{OPEN_PORTS},9000-9009");
     let probes = 2 + 8 + 10;
     let p = plan(&lab, &ports, 100.0, 3);
     for round in 0..2u8 {
-        let r = run_engine(&lab, Spec::new(&p, 2 + round));
+        let r = run_engine(Spec::new(&p, 2 + round));
         summarize(&lab, &format!("round{round}"), &r);
         assert_eq!(r.outcome.reason, Reason::Completed, "{:?}", r.outcome);
         assert_eq!(r.outcome.progress.sent, probes);
@@ -547,12 +652,13 @@ fn a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent() 
 #[test]
 #[ignore = "live: needs the sealed feth stand (see module docs)"]
 fn stop_ends_the_run_quickly_and_nothing_is_sent_afterwards() {
+    let _serial = serial();
     let lab = lab("stop");
-    let (_peer_tx, witness, _) = open_peer(&lab);
+    let (_peer_tx, mut witness, _) = open_peer(&lab);
     let p = plan(&lab, "1-2000", 300.0, 3);
     let mut spec = Spec::new(&p, 2);
     spec.command = Command::StopAfter(Duration::from_millis(1500));
-    let r = run_engine(&lab, spec);
+    let r = run_engine(spec);
     summarize(&lab, "stop", &r);
     assert_eq!(r.outcome.reason, Reason::Stopped, "{:?}", r.outcome);
     let d = r.command_to_outcome.expect("stop was commanded");
@@ -562,18 +668,21 @@ fn stop_ends_the_run_quickly_and_nothing_is_sent_afterwards() {
     // TX остановился не позже, чем появился исход.
     assert_eq!(r.sent_at_outcome, r.outcome.progress.sent);
     assert_eq!(r.outcome.rx_health.kernel_drops, Some(0));
-    let seen = assert_silent_on_the_wire(&lab, "stop_silence", &witness, r.outcome.progress.sent);
+    let seen =
+        assert_silent_on_the_wire(&lab, "stop_silence", &mut witness, r.outcome.progress.sent);
     assert!(seen > 0, "the peer-side witness saw no SYN at all");
 }
 
 #[test]
 #[ignore = "live: needs the sealed feth stand (see module docs)"]
 fn pause_stops_tx_then_resume_continues_without_gaps_or_duplicates() {
+    let _serial = serial();
     let lab = lab("pause_resume");
+    let (_peer_tx, mut witness, _) = open_peer(&lab);
     let p = plan(&lab, "9000-9011", 10.0, 3);
     let mut s = Spec::new(&p, 2);
     s.command = Command::PauseAfterSent(4);
-    let leg1 = run_engine(&lab, s);
+    let leg1 = run_engine(s);
     summarize(&lab, "leg1", &leg1);
     assert_eq!(leg1.outcome.reason, Reason::Paused, "{:?}", leg1.outcome);
     let d = leg1.command_to_outcome.expect("pause was commanded");
@@ -593,7 +702,7 @@ fn pause_stops_tx_then_resume_continues_without_gaps_or_duplicates() {
 
     let mut s = Spec::new(&p, 3);
     s.resume = Some(cp);
-    let leg2 = run_engine(&lab, s);
+    let leg2 = run_engine(s);
     summarize(&lab, "leg2", &leg2);
     assert_eq!(leg2.outcome.reason, Reason::Completed, "{:?}", leg2.outcome);
     assert_eq!(
@@ -601,17 +710,24 @@ fn pause_stops_tx_then_resume_continues_without_gaps_or_duplicates() {
         12,
         "exactly one send per probe across both legs"
     );
-    let mut ports: Vec<u16> = leg1
-        .replies
-        .iter()
-        .chain(leg2.replies.iter())
-        .map(|r| r.remote_port)
-        .collect();
+    // Ни пропусков, ни дублей: свидетель на стороне пира видел SYN на каждый порт
+    // 9000..=9011 ровно один раз за обе части (RST закрытых портов могут
+    // ограничиваться ядром, поэтому доказательство идёт по SYN, а не по ответам).
+    std::thread::sleep(Duration::from_millis(300));
+    let rep = witness.finish();
+    let mut ports = rep.ports.clone();
     ports.sort_unstable();
-    ports.dedup();
-    // RST закрытых портов могут ограничиваться ядром: полнота ответов не
-    // утверждается, зато ни один порт вне диапазона и ни одного дубля SYN.
-    assert!(ports.iter().all(|p| (9000..=9011).contains(p)), "{ports:?}");
+    kv(
+        &lab,
+        "witness_ports",
+        &format!("alive={} drops={:?} ports={ports:?}", rep.alive, rep.drops),
+    );
+    assert_witness_valid(&rep);
+    assert_eq!(
+        ports,
+        (9000..=9011).collect::<Vec<u16>>(),
+        "gap or duplicate"
+    );
 }
 
 /// Сколько мусорных кадров нужно, чтобы переполнить буфер BPF сканера: больше
@@ -642,6 +758,7 @@ fn junk_frame(lab: &Lab, i: u64) -> Vec<u8> {
 #[test]
 #[ignore = "live: needs the sealed feth stand (see module docs)"]
 fn rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results() {
+    let _serial = serial();
     let lab = lab("rx_loss");
     let (buflen, needed) = junk_frames_needed();
     kv(
@@ -657,9 +774,11 @@ fn rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results() {
     let p = plan(&lab, &format!("{OPEN_PORTS},9000-9099"), 100.0, 4);
     let sent_junk = Arc::new(AtomicU64::new(0));
     let flood_lab = lab.clone();
+    let burst_end_ms = Arc::new(AtomicU64::new(u64::MAX));
+    let burst_end = Arc::clone(&burst_end_ms);
     let counter = Arc::clone(&sent_junk);
     let mut spec = Spec::new(&p, 2);
-    spec.stall = Some((Duration::from_millis(1800), Duration::from_millis(3400)));
+    spec.stall = Some((STALL.0, STALL.1));
     let flood: Arc<std::sync::Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::default();
     let flood_slot = Arc::clone(&flood);
     spec.on_start = Some(Box::new(move |started: Instant| {
@@ -669,6 +788,10 @@ fn rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results() {
             }
             let mut i = 0u64;
             while i < needed {
+                // Нагрузка обязана уложиться в окно простоя читателя.
+                if started.elapsed() > STALL.1 {
+                    break;
+                }
                 let f = junk_frame(&flood_lab, i);
                 match peer_tx
                     .send(&f, Duration::from_millis(50))
@@ -682,10 +805,11 @@ fn rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results() {
                     SendStatus::Uncertain => panic!("peer-side send was Uncertain"),
                 }
             }
+            burst_end.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
         });
         *flood_slot.lock().unwrap() = Some(h);
     }));
-    let r = run_engine(&lab, spec);
+    let r = run_engine(spec);
     if let Some(h) = flood.lock().unwrap().take() {
         h.join().expect("junk generator");
     }
@@ -706,7 +830,17 @@ fn rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results() {
     assert_eq!(
         sent_junk.load(Ordering::Relaxed),
         needed,
-        "the junk generator did not deliver its burst: the precondition failed (not a PASS)"
+        "INVALID: the junk generator did not deliver its burst inside the stall window (precondition failed, not a PASS)"
+    );
+    let end = burst_end_ms.load(Ordering::Relaxed);
+    kv(
+        &lab,
+        "burst_end",
+        &format!("burst_end_ms={end} stall_end_ms={}", STALL.1.as_millis()),
+    );
+    assert!(
+        end <= STALL.1.as_millis() as u64,
+        "INVALID: the burst ended after the stall window"
     );
     match &r.outcome.reason {
         Reason::Failed(FailReason::RxLoss { kernel_drops }) => {
@@ -725,12 +859,13 @@ fn rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results() {
 #[test]
 #[ignore = "live: needs the sealed feth stand (see module docs)"]
 fn an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends() {
+    let _serial = serial();
     let lab = lab("uncertain");
-    let (_peer_tx, witness, _) = open_peer(&lab);
+    let (_peer_tx, mut witness, _) = open_peer(&lab);
     let p = plan(&lab, "9100-9119", 100.0, 3);
     let mut s = Spec::new(&p, 2);
     s.uncertain_after = Some(3);
-    let r = run_engine(&lab, s);
+    let r = run_engine(s);
     summarize(&lab, "uncertain", &r);
     assert_eq!(
         r.outcome.reason,
@@ -741,7 +876,7 @@ fn an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends() {
     assert_eq!(r.outcome.progress.sent, 3);
     assert_eq!(r.stats_final.tx_sent, 3);
     assert!(r.checkpoint.is_none(), "Uncertain forbids a checkpoint");
-    assert_silent_on_the_wire(&lab, "uncertain_silence", &witness, 3);
+    assert_silent_on_the_wire(&lab, "uncertain_silence", &mut witness, 3);
 }
 
 // =====================================================================
@@ -790,6 +925,7 @@ impl Lat {
 #[test]
 #[ignore = "live: needs the sealed feth stand (see module docs)"]
 fn per_call_latency_stays_within_the_io_budget() {
+    let _serial = serial();
     let lab = lab("latency");
     let opened = open_explicit(&scan_binding(&lab)).expect("open_explicit");
     let AdapterPair { mut tx, mut rx } = opened.io;
@@ -807,7 +943,7 @@ fn per_call_latency_stays_within_the_io_budget() {
             0x2000 + i,
             &mut f,
         );
-        assert_lab_frame(&lab, &f);
+        assert_lab_frame(&f);
         let t = Instant::now();
         let st = tx.send(&f, Duration::from_millis(50)).expect("send");
         send_l.push(t.elapsed());

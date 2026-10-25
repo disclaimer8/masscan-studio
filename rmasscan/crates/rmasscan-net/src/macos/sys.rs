@@ -76,9 +76,10 @@ pub(crate) fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result
     if ((req >> 16) & 0x1fff) as usize != std::mem::size_of::<T>() {
         return Err(libc::EINVAL);
     }
-    // SAFETY: `fd` это открытый дескриптор владельца `OwnedFd`; `arg` это
-    // исключительная ссылка на `T`, живущая весь вызов, а размер `T` совпадает
-    // с размером, закодированным в `req` (проверено тестами раскладки).
+    // SAFETY: любое значение `fd` безопасно для памяти (неверный даёт EBADF); `arg`
+    // это исключительная ссылка на `T`, живущая весь вызов, размер `T` только что
+    // сверен с размером в `req`, а вызывающие передают лишь типы без указателей,
+    // через которые пишет ядро (`BpfProgram` только читается).
     let rc = unsafe { libc::ioctl(fd, req, std::ptr::from_mut(arg)) };
     if rc < 0 { Err(last_errno()) } else { Ok(()) }
 }

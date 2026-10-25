@@ -1384,3 +1384,9 @@ fn rx_record_shorter_than_an_ethernet_header_is_dropped_as_truncated() {
     let s = a.stats.snapshot();
     assert_eq!((s.rx_truncated, s.rx_packets, s.rx_errors), (2, 1, 0));
 }
+
+#[test]
+fn io_budget_leaves_margin_below_the_50ms_contract() {
+    // Один вызов (poll округляется вверх, таймеры опаздывают) обязан уложиться в 50 мс.
+    assert!(IO_BUDGET <= Duration::from_millis(42), "{IO_BUDGET:?}");
+}

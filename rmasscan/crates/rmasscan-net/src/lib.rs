@@ -188,6 +188,10 @@ pub(crate) struct Counters {
     pub kernel_drops_known: AtomicBool,
 }
 
+#[cfg_attr(
+    not(any(target_os = "linux", windows, target_os = "macos")),
+    allow(dead_code)
+)]
 impl Counters {
     pub(crate) fn bump(c: &AtomicU64) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -202,6 +206,10 @@ pub struct NetStatsHandle {
 }
 
 impl NetStatsHandle {
+    #[cfg_attr(
+        not(any(target_os = "linux", windows, target_os = "macos")),
+        allow(dead_code)
+    )]
     pub(crate) fn new(counters: Arc<Counters>) -> Self {
         Self { counters }
     }

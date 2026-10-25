@@ -217,9 +217,16 @@ macro_rules! pcap_api {
 
         impl PcapFns {
             /// Разрешает все символы; при отсутствии (или нулевом адресе)
-            /// возвращает ВСЕ недостающие имена. Безопасность держится на
-            /// контракте `unsafe trait Module`, через который идёт lookup.
-            pub(crate) fn resolve(
+            /// возвращает ВСЕ недостающие имена.
+            ///
+            /// # Safety
+            ///
+            /// `lookup` обязан для каждого имени возвращать либо `None`/NULL,
+            /// либо адрес реального экспорта с этим именем, чья сигнатура равна
+            /// типу соответствующего поля таблицы, и этот адрес должен оставаться
+            /// действительным всё время, пока вызывается результат. Выполняется
+            /// это через `unsafe trait Module`, из которого берётся каждый lookup.
+            pub(crate) unsafe fn resolve(
                 lookup: &mut dyn FnMut(&str) -> Option<*const c_void>,
             ) -> Result<PcapFns, Vec<&'static str>> {
                 let mut missing: Vec<&'static str> = Vec::new();

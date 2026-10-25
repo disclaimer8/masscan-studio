@@ -1,7 +1,7 @@
 //! Подставной загрузчик и таблица функций: Npcap не нужен, порядок
 //! create/close/unload фиксируется в журнале сценария (см. `fake`).
 
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::{align_of, offset_of, size_of};
 use std::sync::Arc;
 
@@ -506,7 +506,7 @@ fn missing_packet_dll_is_rejected_and_unloads() {
     };
     let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
     assert!(
-        matches!(e, NetError::DriverUnavailable(ref m) if m.contains("Packet.dll")),
+        matches!(e, NetError::System(ref m) if m.contains("untrusted Npcap module") && m.contains("Packet.dll")),
         "{e:?}"
     );
     assert_eq!(events().last().unwrap(), "unload");
@@ -523,7 +523,7 @@ fn packet_dll_from_another_directory_is_rejected() {
     };
     assert!(matches!(
         NpcapApi::load_with(&l, GOOD_PATH),
-        Err(NetError::DriverUnavailable(_))
+        Err(NetError::System(_))
     ));
 }
 
@@ -538,10 +538,30 @@ fn wpcap_loaded_from_an_unrequested_path_is_rejected() {
     };
     let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
     assert!(
-        matches!(e, NetError::DriverUnavailable(ref m) if m.contains("Evil")),
+        matches!(e, NetError::System(ref m) if m.contains("untrusted Npcap module") && m.contains("Evil")),
         "{e:?}"
     );
     assert_eq!(events().last().unwrap(), "unload");
+}
+
+#[test]
+fn untrusted_module_is_rejected_before_any_export_runs() {
+    reset(|_| {});
+    let mut d = good_diag();
+    d[0].path = "C:\\Evil\\wpcap.dll".into();
+    let l = FakeLoader {
+        diag: Some(d),
+        ..FakeLoader::ok()
+    };
+    let e = NpcapApi::load_with(&l, GOOD_PATH).unwrap_err();
+    assert!(matches!(e, NetError::System(_)), "{e:?}");
+    let ev = events();
+    assert!(
+        !ev.iter()
+            .any(|x| x.starts_with("init") || x == "lib_version"),
+        "no export may run before the provenance check: {ev:?}"
+    );
+    assert_eq!(ev.last().unwrap(), "unload");
 }
 
 #[test]
@@ -677,4 +697,24 @@ fn resolve_unknown_name_among_real_adapters_stays_interface_mismatch() {
     let e =
         resolve_device(&api, "\\Device\\NPF_{00000000-0000-0000-0000-000000000000}").unwrap_err();
     assert!(matches!(e, NetError::InterfaceMismatch(_)), "{e:?}");
+}
+
+// ---------- ограниченное чтение буфера ошибки ----------
+
+#[test]
+fn errbuf_text_is_bounded_when_the_buffer_has_no_nul() {
+    let buf = [b'x' as c_char; PCAP_ERRBUF_SIZE];
+    let s = errbuf_text(&buf);
+    assert_eq!(s.len(), PCAP_ERRBUF_SIZE);
+    assert!(s.bytes().all(|b| b == b'x'));
+}
+
+#[test]
+fn errbuf_text_stops_at_the_first_nul() {
+    let mut buf = [0 as c_char; PCAP_ERRBUF_SIZE];
+    for (i, b) in b"boom".iter().enumerate() {
+        buf[i] = *b as c_char;
+    }
+    buf[10] = b'z' as c_char;
+    assert_eq!(errbuf_text(&buf), "boom");
 }

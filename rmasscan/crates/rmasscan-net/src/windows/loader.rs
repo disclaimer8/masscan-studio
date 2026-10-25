@@ -113,6 +113,8 @@ pub(crate) fn npcap_dll_path(system_dir: &str) -> Result<String, NetError> {
     Ok(format!("{base}\\Npcap\\wpcap.dll"))
 }
 
+/// Несоответствие это `System` с пометкой "untrusted Npcap module" (код 2), а не
+/// `DriverUnavailable`: подмена модуля не лечится запуском от администратора.
 /// Требует, чтобы реально загруженный wpcap.dll лежал по запрошенному полному
 /// пути, а Packet.dll был загружен из того же каталога. Отсутствие любой из
 /// двух DLL или иной путь это отказ (подмена/неполная установка).
@@ -121,11 +123,13 @@ pub(crate) fn verify_diagnostics(requested: &str, infos: &[DllInfo]) -> Result<(
         .iter()
         .find(|d| d.name == "wpcap.dll")
         .ok_or_else(|| {
-            NetError::DriverUnavailable("wpcap.dll missing from loaded module diagnostics".into())
+            NetError::System(
+                "untrusted Npcap module: wpcap.dll missing from loaded module diagnostics".into(),
+            )
         })?;
     if !wpcap.path.eq_ignore_ascii_case(requested) {
-        return Err(NetError::DriverUnavailable(format!(
-            "wpcap.dll was loaded from {}, requested {requested}",
+        return Err(NetError::System(format!(
+            "untrusted Npcap module: wpcap.dll was loaded from {}, requested {requested}",
             wpcap.path
         )));
     }
@@ -136,13 +140,13 @@ pub(crate) fn verify_diagnostics(requested: &str, infos: &[DllInfo]) -> Result<(
         .unwrap_or_default();
     let expected = format!("{dir}\\Packet.dll");
     let packet = infos.iter().find(|d| d.name == "Packet.dll").ok_or_else(|| {
-        NetError::DriverUnavailable(format!(
-            "Packet.dll is not loaded (expected {expected}); the Npcap installation is incomplete or Packet.dll would be resolved lazily"
+        NetError::System(format!(
+            "untrusted Npcap module: Packet.dll is not loaded (expected {expected}); the Npcap installation is incomplete or Packet.dll would be resolved lazily"
         ))
     })?;
     if !packet.path.eq_ignore_ascii_case(&expected) {
-        return Err(NetError::DriverUnavailable(format!(
-            "Packet.dll was loaded from {}, expected {expected}",
+        return Err(NetError::System(format!(
+            "untrusted Npcap module: Packet.dll was loaded from {}, expected {expected}",
             packet.path
         )));
     }
@@ -178,11 +182,19 @@ impl NpcapApi {
                 NetError::DriverUnavailable(format!("cannot load {full_path}: {m}"))
             }
         })?;
+        // Происхождение модулей проверяется СРАЗУ после загрузки, до любого вызова
+        // экспорта (pcap_init, pcap_lib_version): сомнительный модуль не получает
+        // управления. Загрузка DllMain уже случилась, но ни один наш вызов нет.
+        let diagnostics = module.describe()?;
+        verify_diagnostics(full_path, &diagnostics)?;
         let mut lookup = |name: &str| -> Option<*const c_void> {
             let c = std::ffi::CString::new(name).ok()?;
             module.symbol(&c).filter(|p| !p.is_null())
         };
-        let fns = PcapFns::resolve(&mut lookup).map_err(|missing| {
+        // SAFETY: `lookup` идёт через `module.symbol`, а `Module` это `unsafe trait`:
+        // он обещает вернуть реальный экспорт с запрошенным именем и сигнатурой
+        // поля таблицы, живой, пока жив `module` (он живёт в `NpcapApi`).
+        let fns = unsafe { PcapFns::resolve(&mut lookup) }.map_err(|missing| {
             NetError::MissingCapability(format!(
                 "wpcap.dll lacks required exports: {} (of {} required)",
                 missing.join(", "),
@@ -214,8 +226,6 @@ impl NpcapApi {
         // SAFETY: p не NULL и указывает на NUL-терминированную статическую
         // строку внутри загруженной DLL, которая жива (module владеет ею).
         let version = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
-        let diagnostics = module.describe()?;
-        verify_diagnostics(full_path, &diagnostics)?;
         Ok(Arc::new(NpcapApi {
             fns,
             version,

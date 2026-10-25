@@ -1,0 +1,2 @@
+all planned runs executed; verify offline with rmasscan-lab windows-verify --dir $SCRATCH/live-win3/ev/func
+EXIT=0

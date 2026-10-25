@@ -177,16 +177,16 @@ Windows second e1000e NIC → TAP → dedicated bridge → veth → Linux peer n
   *`functional-r2` (группы N0/N1/N8/N15, `refuse_completed`), `9ecbe32`: PASS.*
 - [x] Stop при rate=1, пустом RX, нагрузке, drain, полной очереди; NIC disconnect,
   mismatch/corrupt checkpoint, Admin-only permissions. После исхода нет новых SYN.
-  *`failure-r1`, `9ecbe32`: 19 PASS (stop_*, linkloss через QMP set_link, ckpt_*, perm_*). Перепроверка исправлений ревью (perm exit 5, I2) - раздел 11 отчёта, **NOT RUN**.*
-- [x] Воспроизвести RX overflow и проверить измеренное drops>0 → RxLoss без
-  checkpoint. Не подменять реальный overflow искусственно записанным счётчиком.
+  *`failure-r1`, `9ecbe32`: 19 PASS (stop_*, linkloss через QMP set_link, ckpt_*, perm_*). Перепроверка исправлений ревью на `931f69f` (evidence `bfe069f`): `perm_restricted_scan` exit 5 `PermissionDenied` PASS, флаг 0x800 на EXE из пакета, подложенный файл-не-DLL не ломает запуск; раздел 11 отчёта. Stop, linkloss, отказы checkpoint на исправленном бинаре не повторялись (раздел 9 отчёта).*
+- [ ] Воспроизвести RX overflow и проверить измеренное drops>0 → RxLoss без
+  checkpoint. Unknown/error health проверять fake API; не подменять реальный
+  overflow искусственно записанным счётчиком.
   *`failure-r1/rxloss`: RxLoss, kernel_drops 67804 (нижняя граница, область очереди NPF), без checkpoint.*
-- [ ] Unknown/error health проверять fake API.
-  *Этим отчётом не проверялось (юнит-тесты крейта, не evidence этого этапа): NOT RUN здесь.*
-- [x] Снять 100/1k/10k/100k pps × 5 повторов, CPU/RSS, call latency, capture
+  *Часть про реальный overflow выполнена; часть про fake API этим отчётом не проверялась (юнит-тесты крейта, не evidence этого этапа): **NOT RUN** здесь. Пункт остаётся открытым.*
+- [ ] Снять 100/1k/10k/100k pps × 5 повторов, CPU/RSS, call latency, capture
   completeness и RX loss. VM-скорость записывать как VM-скорость; ±20% performance
   gate не отменяется успешным correctness и может остаться OPEN до sendqueue.
-  *`perf-r1`, `847e218`, evidence `c5ee494`: 21 PASS. gate ±20% MET на 100 и 1k, **OPEN** на 10k и 100k (VM около 6.4 kpps) до 2B-sendqueue; это VM-скорость.*
+  *`perf-r1`, `847e218`, evidence `c5ee494`: 21 PASS; CPU, peak WS (RSS), полнота и RX loss сняты, kernel drops 0. **Call latency по скоростям NOT RUN**: в perf-r1 только `join_ms`/`drain_s`; латентность одиночных вызовов Npcap - из spike (другой бинарь, до адаптера). Gate ±20% MET на 100 и 1k, **OPEN** на 10k и 100k (VM около 6.4 kpps) до 2B-sendqueue и замера на физическом NIC; это VM-скорость.*
 - [x] Каждый pcap хэшируется до cleanup; failed/invalid прогоны сохраняются.
   Отсутствующие результаты — NOT RUN, неполный capture — INVALID, никогда PASS.
   *`pcap-hashes-on-home-pc.txt` в каждом прогоне; для частей A, B, C discarded нет (историческая `functional/` хранит INVALID x01 в `runs_discarded/`).*
@@ -198,13 +198,13 @@ Windows second e1000e NIC → TAP → dedicated bridge → veth → Linux peer n
 
 - [ ] Приложить точный commit, чистоту дерева, hashes, topology, версии DLL/драйвера,
   ошибки/лимиты и результат каждой проверки. Secret-free logs; source ZIP совпадает с EXE.
-  *Отчёт [Windows VM acceptance](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md). Пункт не отмечен: source ZIP не собирался (tar `git archive` есть, sha в отчёте), дистрибуция OPEN.*
+  *Отчёт [Windows VM acceptance](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md). Пункт не отмечен: ZIP-пакет собран на `931f69f` (раздел 11 отчёта), но проверка «source ZIP совпадает с EXE» **NOT RUN**; дистрибуция OPEN.*
 - [ ] Провести независимое review FFI/ownership, health/stop/checkpoint и самого
   harness. Зелёный CI относится к точному review HEAD. Merge — отдельное решение.
-  *Итоговое ревью продукта: WITH FIXES (I1, I2), исправлено (`7247688`, `68134b0`, `3d28ae3`), перепроверка и проверка закрытия APPROVED; живая перепроверка на `931f69f` (раздел 11 отчёта). Ревью лаборатории APPROVED после двух перепроверок. Open: CI на точном HEAD NOT RUN (push не разрешён).*
+  *Итоговое ревью продукта: WITH FIXES (I1, I2), исправлено (`7247688`, `68134b0`, `3d28ae3`), перепроверка CHANGES REQUIRED (R1), проверка закрытия APPROVED; живая перепроверка на `931f69f` (раздел 11 отчёта). Ревью лаборатории APPROVED после двух перепроверок. Open: CI на точном HEAD NOT RUN (push не разрешён).*
 - [x] Явно отделить GO Windows VM correctness от physical NIC, throughput,
   macOS BPF, runner/IPC, UI и distribution. Не заменять физическую приёмку VM.
-  *Раздел 13 отчёта: GO (VM), условно; физический NIC NOT RUN, throughput OPEN, macOS NOT STARTED, runner/IPC, UI, дистрибуция OPEN.*
+  *Раздел 13 отчёта: GO для VM correctness не объявлен (OPEN до зелёного CI на точном HEAD); физический NIC NOT RUN, throughput OPEN, macOS NOT STARTED, runner/IPC, UI, дистрибуция OPEN.*
 
 Далее: отдельный план macOS BPF → discovery/ARP/network identity → runner/IPC
 и durable checkpoint → реальный Scan в Slint. Изменение порядка или продуктового

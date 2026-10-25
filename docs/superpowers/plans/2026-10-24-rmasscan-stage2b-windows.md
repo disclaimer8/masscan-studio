@@ -253,8 +253,8 @@ owned `PcapHandle` держит Arc библиотеки до `pcap_close`. Ни
 
 > **Статус 2026-10-25 (этап VM):** выполнено на виртуальном стенде n2, не на физическом NIC. Отчёт:
 > [Windows VM acceptance](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md); сырые данные
-> `docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/` (evidence `dd78c4b`, `d2726df`, `c5ee494`; код `9ecbe32` для A и B, `847e218` для C).
-> Физический NIC: **NOT RUN**. Чекбоксы Задач 1-4 в этом файле не перепроверялись и не менялись.
+> `docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/` (evidence `dd78c4b`, `d2726df`, `c5ee494`, перепроверка `bfe069f`; код `9ecbe32` для A и B, `847e218` для C, `931f69f` для перепроверки).
+> Физический NIC: **NOT RUN**. **Каждый отмеченный ниже пункт Задачи 5 выполнен только на VM**; пункты, чья цель - физический NIC, не отмечены. Чекбоксы Задач 1-4 в этом файле не перепроверялись и не менялись.
 
 **Files:** `tests/windows_wire.rs`, `scripts/windows-wire-lab.ps1`,
 `docs/experiments/2026-10-24-rmasscan-stage2b-windows.md` и каталог сырых данных.
@@ -267,7 +267,7 @@ owned `PcapHandle` держит Arc библиотеки до `pcap_close`. Ни
 - [x] Выбрать явный binding, проверяемый на этом NIC. C-oracle фикстуры для
   такого же binding снять в уже разрешённом Linux namespace-стенде; нельзя
   сравнить разные MAC/IP и скрыть разницу нормализацией SYN-байтов.
-  *`9ecbe32`: эталоны pinned masscan `8e6b3b0`, binding без нормализации (`functional/fixtures`, отчёт, разделы 3-4).*
+  *Эталоны pinned masscan `8e6b3b0` сняты раньше (историческая часть A, `functional/fixtures`) и переиспользованы в `9ecbe32`; binding без нормализации (`functional/fixtures`, отчёт, разделы 3-4).*
 - [x] Capture на независимом Linux peer с readiness ACK и строгой completeness;
   результаты сканера отдельно сверять с ожидаемыми Open/Closed и исключениями.
   Подготовка стенда/ARP здесь явная, не новая функция discovery в продукте.
@@ -279,7 +279,7 @@ owned `PcapHandle` держит Arc библиотеки до `pcap_close`. Ни
 - [x] Stop при rate=1, тишине, нагрузке, drain и полной очереди; unplug;
   mismatch/corrupt checkpoint; разрешения Admin-only. После terminal outcome
   нет дальнейших SYN, живых workers или leaked handles; ошибки не дают checkpoint.
-  *`failure-r1`, `9ecbe32`: 19 PASS; unplug = QMP set_link (TxUncertain); перепроверка исправлений ревью (I1, I2) на `931f69f`: `perm_restricted_scan` exit 5 PASS, флаг 0x800 на EXE из пакета, подложенная DLL не грузится.*
+  *`failure-r1`, `9ecbe32`: 19 PASS; unplug = QMP set_link (TxUncertain); перепроверка исправлений ревью (I1, I2) на `931f69f`: `perm_restricted_scan` exit 5 PASS, флаг 0x800 на EXE из пакета, подложенный файл-не-DLL рядом с EXE не ломает запуск (раздел 11 отчёта; сырого вывода у этой проверки нет).*
 - [ ] На целевом NIC снять baseline 100/1k/10k/100k pps, 5 повторов, capture
   drops/полноту ответов/CPU/RSS и задержки. Недостигнутые ±20% записать как
   открытый performance gate 2B-sendqueue; не скрывать их успешным low-rate scan.
@@ -288,12 +288,12 @@ owned `PcapHandle` держит Arc библиотеки до `pcap_close`. Ни
   Не хватает pcap, manifest или валидного capture — FAIL/NOT RUN, никогда PASS.
   *`rmasscan-lab windows-verify`, без Npcap; отсутствие -> NOT RUN, неполный захват -> INVALID (отчёт, раздел 7). Для `.pcap.gz` нужен `gunzip -k`.*
 - [ ] Независимое ревью Windows unsafe/lifetimes/timeout и отчёт с точным commit.
-  *Отчёт написан (коммиты в разделе 2). Итоговое ревью продукта: WITH FIXES (I1 исправлен `7247688`, I2 в работе), перепроверочного ревью нет, CI на HEAD NOT RUN - пункт остаётся открытым.*
+  *Отчёт написан (коммиты в разделе 2 отчёта). Итоговое ревью продукта: WITH FIXES (I1 → `7247688`, I2 → `68134b0`); перепроверка CHANGES REQUIRED (R1) → исправлено `3d28ae3`, `931f69f`; проверка закрытия APPROVED; живая перепроверка на `931f69f` PASS (раздел 11 отчёта). CI на точном HEAD **NOT RUN** - пункт остаётся открытым.*
   Commit: `test(net): record Windows wire and resume acceptance`.
 
 ## GO и дальнейшая очередь
 
-> Статус 2026-10-25: Windows VM correctness - GO (VM), условно (CI на точном HEAD NOT RUN; перепроверка после итогового ревью пройдена на `931f69f`); физический NIC NOT RUN. См. [отчёт](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md).
+> Статус 2026-10-25: критерий GO ниже **ещё не выполнен**: Windows VM correctness - **OPEN**; VM-приёмка PASS (части A, B, C и перепроверка на `931f69f`), но «CI зелёный» (**NOT RUN**, push не разрешён) не выполнено. Физический NIC - отдельный пункт **NOT RUN**, в это GO не входит. Единый список условий: [отчёт](../../experiments/2026-10-24-rmasscan-windows-vm-acceptance.md), разделы 1 и 13.
 
 **GO Windows correctness:** Linux-база Задачи 0 принята (review + CI exact HEAD); CI зелёный; Windows 11 реально
 передаёт/принимает; byte parity и pause/resume проходят; Stop ≤1 с; нет ложного

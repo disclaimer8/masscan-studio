@@ -3,7 +3,7 @@
 # One live run: status gate, uplink + peer captures, listeners, test, status gate, evidence files.
 set -u
 TAG=$1; TEST=$2; COND=$3; WORK=$4
-SP=/private/tmp/claude-501/-Users-denyskolomiiets-masscan/3c73b7a2-86d2-4a31-816e-712b40c2aec5/scratchpad
+SP=$SCRATCH
 L=$SP/lab-24e3f4f/target/release/rmasscan-lab
 BIN=$(cat $SP/spike/bin.path)
 export RMASSCAN_BPF_LAB_MANIFEST=/var/run/rmasscan-lab/m1.json

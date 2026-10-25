@@ -1,4 +1,4 @@
-272c79bbcbd23a0598a2650cc4f291578622e5fb58920a45e28b4a97dcd0aab2  env.txt
+fa2327bc7bb4d0e1a2668178fe28556d72213ff2a3214a526fba5fe6b46b4166  env.txt
 3e8c07c7e4135f592c6afabed857fa048a4888444450d5e5863390685802ca59  failed/r01-stand-path-listener80-EACCES/counters-after-feth4201.txt
 287fe0f45e40dcca9eb9c10f03755814cb89f590d2e7c152fa58eea03e794dec  failed/r01-stand-path-listener80-EACCES/counters-after-feth4202.txt
 2142324a0d9bbe41c764c5fa40ed1a067698fcdc0a16f679a024f398c324580a  failed/r01-stand-path-listener80-EACCES/counters-before-feth4201.txt
@@ -9,7 +9,7 @@ a26f1c9276055c921bb18e6a26d06d35ebdccb73b37aa18df9fc64e2ed0942cd  failed/r01-sta
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  failed/r01-stand-path-listener80-EACCES/listeners-stdout.txt
 d01581b8f3487687c18b687540e624b60bb55a05716b02f69ddd24903c846154  failed/r01-stand-path-listener80-EACCES/listeners.err
 7de1555df0c2700329e815b93b32c571c3ea54dc967b89e81ab73b9972b72d1d  failed/r01-stand-path-listener80-EACCES/peer-frames.txt
-c0d68a044b37faeec59e5c9a76c93ce486583815e790aaa88c093e1a458e87df  failed/r01-stand-path-listener80-EACCES/peer-read.err
+b156988bba2c06ac366ad4d51675691c73974f72da6a35d0575842e937a3ebb8  failed/r01-stand-path-listener80-EACCES/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r01-stand-path-listener80-EACCES/peer-tcpdump-rc.txt
 b1a83b366f61d9c74749b9752909188618d29f57c47ab367667377b0de020639  failed/r01-stand-path-listener80-EACCES/peer.err
 299d6dca0d325a22f5e4e3d9be112492158f70cbbb4a573ccd067c9d7e0be2ec  failed/r01-stand-path-listener80-EACCES/peer.pcap.gz
@@ -25,7 +25,7 @@ aa3b24b555e01587104824b173d73205d1e57ecf870a017352527eb106f778bd  failed/r01-sta
 1f370bd2466a62aa639c76f1420d3d12c90e4eb4992a1d47dfc9ce5b8b10202c  failed/r01-stand-path-listener80-EACCES/test-stdout.txt
 a829e0c253086054171e9afb34930160da477565df336a87fa0889c6b7e91d3b  failed/r01-stand-path-listener80-EACCES/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r01-stand-path-listener80-EACCES/uplink-lab-frames.txt
-2d08d2b12fc69d6da0bec686efe4bb97f0e8a53da6b3ab77d2756a29cefca493  failed/r01-stand-path-listener80-EACCES/uplink-read.err
+33f916c2bb0d846266ff5d1f87304622602c3050e5aa161937079b6249fd607d  failed/r01-stand-path-listener80-EACCES/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r01-stand-path-listener80-EACCES/uplink-tcpdump-rc.txt
 7097debb25ac49075bef4beb5401890841fa5cc9ba0debf4b268771c139f49f9  failed/r01-stand-path-listener80-EACCES/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  failed/r01-stand-path-listener80-EACCES/uplink.pcap
@@ -40,7 +40,7 @@ bd4d06bf8d172dd80ca58fdb35e194205ae6b522e4fe5f5de6fce3db16332859  failed/r06-tx-
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  failed/r06-tx-emsgsize-assert/listeners-stdout.txt
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  failed/r06-tx-emsgsize-assert/listeners.err
 04b1623145531448bd88260e0cbf1f5aec1948f2f29a3bf04a5dba927edf0b00  failed/r06-tx-emsgsize-assert/peer-frames.txt
-a5de8238005f12f758187edbb9acc0450ea56f6f6b4a1ac05d819953416d6809  failed/r06-tx-emsgsize-assert/peer-read.err
+8fdd06dfa046aa06a07f662a86a533b3d27e792b302a51481500bc72d1de5216  failed/r06-tx-emsgsize-assert/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r06-tx-emsgsize-assert/peer-tcpdump-rc.txt
 6e4be6fbe8626001c4ce87c272b4101f1261c8fa477b9dcfd17052fa9b236842  failed/r06-tx-emsgsize-assert/peer.err
 5266fb032edaabccf3f9fa50baf5c7c99312bd8461863edf8c674196f47e986c  failed/r06-tx-emsgsize-assert/peer.pcap.gz
@@ -56,10 +56,11 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  failed/r06-tx-
 a7a77f7b04cf3cb49c21a810fdfd6d86120c0c42e5294d3a72952c0534863f93  failed/r06-tx-emsgsize-assert/test-stdout.txt
 7e5860f2ab73abc2c39d4e3c4a6cbb3b18bcfa091ca40d03214c6b50ef8e44e9  failed/r06-tx-emsgsize-assert/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r06-tx-emsgsize-assert/uplink-lab-frames.txt
-5faa599466d72687abc10da6bc911a04362b4f4365442998257106c7b40b538b  failed/r06-tx-emsgsize-assert/uplink-read.err
+3a857dac074ba44da63dfaa93dde5ad35c7ec84d308a3605fab8d7e3da406022  failed/r06-tx-emsgsize-assert/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  failed/r06-tx-emsgsize-assert/uplink-tcpdump-rc.txt
 4d978ef41868182eb6146b75c8c01c4a3267b3a93d587f13e6e889e5bfaf8200  failed/r06-tx-emsgsize-assert/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  failed/r06-tx-emsgsize-assert/uplink.pcap
+4bdd02ebb546ca16219741cdd7a792c2aeaadcda44ca17b3d3565386166a1c02  original-precopy.sha256
 ea14b965f921585df3f4c305e3e7e05620a37ba01ffcb5ee335c80b5ea44fd53  runs/r00-idle-uplink/end-utc.txt
 099d4f7933550d3c2e78cf14e66dc8b5d9c5c6300d69560bd200c3febbaba900  runs/r00-idle-uplink/gate.txt
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r00-idle-uplink/post-status-rc.txt
@@ -70,7 +71,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r00-idle-
 c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r00-idle-uplink/pre-status.json
 4236d2dbf96d4579e6eab203c3a2fd60104b6746c4421b1748fdebf3c6ba5c7a  runs/r00-idle-uplink/start-utc.txt
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r00-idle-uplink/uplink-lab-frames.txt
-512b196fd56e7910874919da73a855f9d76027e080519ebeb5d5261579f0d006  runs/r00-idle-uplink/uplink-read.err
+58bce9a5fd60b2b528b9be6dd526d8a09dea607bf6eff96fd7c47fb73c284dee  runs/r00-idle-uplink/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r00-idle-uplink/uplink-tcpdump-rc.txt
 f7a285c85e73e1b42284322d51faf6bdf45f6c8568995782499c418c727e6cb8  runs/r00-idle-uplink/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r00-idle-uplink/uplink.pcap
@@ -86,7 +87,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r01-stand
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r01-stand-path/listeners.err
 0370c53c23c74f3ddbe6d77bcd693504eca403f6e7f36ceda35f73590154a1aa  runs/r01-stand-path/out/live_stand_path.log
 a4b2c5db15348c29451e18b8307e5ef81625ea638e807935f39ceaa8d9ac7758  runs/r01-stand-path/peer-frames.txt
-c0d68a044b37faeec59e5c9a76c93ce486583815e790aaa88c093e1a458e87df  runs/r01-stand-path/peer-read.err
+b156988bba2c06ac366ad4d51675691c73974f72da6a35d0575842e937a3ebb8  runs/r01-stand-path/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r01-stand-path/peer-tcpdump-rc.txt
 2c69bea46c34e7231d33378c7e79d257af8076f556f8df4f7a8ed7fa2342b994  runs/r01-stand-path/peer.err
 aead6af69ff6c3a0ff8453b124dd0a67d48a6bd1542de76bc102612dbb485666  runs/r01-stand-path/peer.pcap
@@ -101,7 +102,7 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r01-stand
 f596267a67f3e34b2672e510a5e0e278c2692ec1285b21e02871c1daddb8140a  runs/r01-stand-path/test-stdout.txt
 0370c53c23c74f3ddbe6d77bcd693504eca403f6e7f36ceda35f73590154a1aa  runs/r01-stand-path/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r01-stand-path/uplink-lab-frames.txt
-2d08d2b12fc69d6da0bec686efe4bb97f0e8a53da6b3ab77d2756a29cefca493  runs/r01-stand-path/uplink-read.err
+33f916c2bb0d846266ff5d1f87304622602c3050e5aa161937079b6249fd607d  runs/r01-stand-path/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r01-stand-path/uplink-tcpdump-rc.txt
 3524ca5b54506c06058ec50a8384cb222d7e790eccafc85887d765f037d6a4ba  runs/r01-stand-path/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r01-stand-path/uplink.pcap
@@ -118,7 +119,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r02-rx-de
 a343cecc9d53ccb4157681ec13ae92e4ef5a68883c60eed9aafdc2c2f530cad1  runs/r02-rx-deadline-idle/out/live_rx_deadline_idle.csv
 7e1fca553a4091e597d441c99c766eed6e5c500b7102320563c0b3a932cca208  runs/r02-rx-deadline-idle/out/live_rx_deadline_idle.log
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865  runs/r02-rx-deadline-idle/peer-frames.txt
-d1bdffb89a976dcf84eb9d26a038a1c3aa954553b9593e98bed7f5533426899c  runs/r02-rx-deadline-idle/peer-read.err
+58b167b67c7ef923ebf20b215b94495154894b522150415e4c70ca2bdd4ee2f4  runs/r02-rx-deadline-idle/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r02-rx-deadline-idle/peer-tcpdump-rc.txt
 0c488fa7f036bda8ea994de5d4bb1cc681bcc19e5e81544891793ff7076e8a73  runs/r02-rx-deadline-idle/peer.err
 30a9bf7b92e5cf3923e2e7ff129780add4dacbf51f774548b9d7431b9f074d27  runs/r02-rx-deadline-idle/peer.pcap
@@ -133,7 +134,7 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r02-rx-de
 eed329a946303c677ca963186651e6cb907ad2f794cd1ed86ce055d4d1fd7790  runs/r02-rx-deadline-idle/test-stdout.txt
 7e1fca553a4091e597d441c99c766eed6e5c500b7102320563c0b3a932cca208  runs/r02-rx-deadline-idle/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r02-rx-deadline-idle/uplink-lab-frames.txt
-f229b62f54dbe83323d029c1678f044ff9f5773bc35e0d4a3c15315175bcf5f5  runs/r02-rx-deadline-idle/uplink-read.err
+6225ff740543865ef816f31d869639c2b34f71eb265c460c36d19af3ffafff1b  runs/r02-rx-deadline-idle/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r02-rx-deadline-idle/uplink-tcpdump-rc.txt
 04938a69d1e0278c662086833ed78e8876b1052c5732f9dcad4d5450c955ca57  runs/r02-rx-deadline-idle/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r02-rx-deadline-idle/uplink.pcap
@@ -150,7 +151,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r03-rx-wa
 4e50c5c81e1b89f1ca0854c643b1341b0bf9e266d49bc334dcee5c3662784529  runs/r03-rx-wakeup/out/live_rx_wakeup.csv
 2d333f6e71dd88bd6783c97874c17b870f561c9c07398c37f55658be9c93752c  runs/r03-rx-wakeup/out/live_rx_wakeup.log
 345ebe25f0ac3f1104a2029fdf8f0885ccd9800e3ebcdbd03da014dad101a0b1  runs/r03-rx-wakeup/peer-frames.txt
-ae0898a23b565780afd521198ddd0d26a1816b68df76833b30612051768cdc87  runs/r03-rx-wakeup/peer-read.err
+7e3a4008a354b0557ca57c2a0253d7f832650bdca30ff8b52736f3ce4a2b18ab  runs/r03-rx-wakeup/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r03-rx-wakeup/peer-tcpdump-rc.txt
 e13be03ab340e0f0542df19794fa68f52385760f093bea9de00079b335717834  runs/r03-rx-wakeup/peer.err
 f318a2192047b25b8f39b098ff4122e5643c8286260c6954d61b61892f18ff38  runs/r03-rx-wakeup/peer.pcap
@@ -165,7 +166,7 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r03-rx-wa
 2ef5affdaeee43753b93edfb81256e6de01c3a4c85b4f9713a9b7c7ea3afe846  runs/r03-rx-wakeup/test-stdout.txt
 2d333f6e71dd88bd6783c97874c17b870f561c9c07398c37f55658be9c93752c  runs/r03-rx-wakeup/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r03-rx-wakeup/uplink-lab-frames.txt
-cfca07528a34d4778981f0d4f67815ad76967489c97ab3d2d9fc352d15f94bfa  runs/r03-rx-wakeup/uplink-read.err
+9fb4f57f6e85496c6f734e0673433699cee29a43d1ea38c898e3b60f38f6e1c5  runs/r03-rx-wakeup/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r03-rx-wakeup/uplink-tcpdump-rc.txt
 cc5fb9c3c578c5958ea3846f215a0cfe058592b0f35f9b2204b60982145c5fda  runs/r03-rx-wakeup/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r03-rx-wakeup/uplink.pcap
@@ -181,7 +182,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r04-own-f
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r04-own-frames/listeners.err
 b03ea395ed3675b6aba1100236350d8fc2844e281268d03b695a9bde8147fa72  runs/r04-own-frames/out/live_own_frames.log
 4e82b9d2f69e46851839ffd00bff2327248976d35bd4403cab99262e951deab5  runs/r04-own-frames/peer-frames.txt
-1963e5c986a983ca6c0a2ec4ea7971bbb1a4a92c7fdd4ca32c957b30d616dc22  runs/r04-own-frames/peer-read.err
+95d54137ad48b5fbe7861a3fc018ff18fd43e0d86aa98d19ca88fb08d33f4208  runs/r04-own-frames/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r04-own-frames/peer-tcpdump-rc.txt
 5ab0d8647e802416ee48898a05f42aadd6b184be53352bcda81500f32479c2b2  runs/r04-own-frames/peer.err
 490df2ec9d65f1445d71944c051c90a7e12f6ca297787ea419c6eab4cafb5599  runs/r04-own-frames/peer.pcap
@@ -196,7 +197,7 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r04-own-f
 43399f1eab25bc4c02e8a08c2d7a415c30d9bd431247fb2b3ac5e4ebc4814c7c  runs/r04-own-frames/test-stdout.txt
 b03ea395ed3675b6aba1100236350d8fc2844e281268d03b695a9bde8147fa72  runs/r04-own-frames/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r04-own-frames/uplink-lab-frames.txt
-f0f727e67e1ea9d924a55f2d59782f0818692bc7a9efc7a86f3beb447568ae9e  runs/r04-own-frames/uplink-read.err
+5a6cf7c7804cba1a6a055a4b2e067cc84801464cc2e4762e1a2333433c472cc7  runs/r04-own-frames/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r04-own-frames/uplink-tcpdump-rc.txt
 7d30bd8a315859a8cedbd51ddca348a63d3fc96726c862db8c74349c83a5bb18  runs/r04-own-frames/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r04-own-frames/uplink.pcap
@@ -213,7 +214,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r05-rx-de
 8b713ad5aa024e846636360272166c1f8bcb695617b15cd7b41ae2fed9c178f3  runs/r05-rx-deadline-flood/out/live_rx_deadline_flood.csv
 12e227217a9eaf67c8a8730ed9a0ec5b42a2d6c32ce8b4f032370fa32b9c29e4  runs/r05-rx-deadline-flood/out/live_rx_deadline_flood.log
 91354b45e798ffc57b3d20f74b235e6824bd550cabab99b62c96da998a63d933  runs/r05-rx-deadline-flood/peer-frames.txt
-3756f426b9a4d5c1b583c913551e6aec48cd560faa344ea6a6015d6244d23e6e  runs/r05-rx-deadline-flood/peer-read.err
+e95c0f99004d8d27939186831124607b65e72b3ace74945d28497b873a53b058  runs/r05-rx-deadline-flood/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r05-rx-deadline-flood/peer-tcpdump-rc.txt
 bfd7568b013b3fc73fc402129fd4cddba860321ee21bdc5103387a094ddabca0  runs/r05-rx-deadline-flood/peer.err
 d999d41225442a51268d17cf26c12f83b9b582cbb133d8b00212c4508f8ec299  runs/r05-rx-deadline-flood/peer.pcap.gz
@@ -229,7 +230,7 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r05-rx-de
 bae60664a253580ca6e95331a7151592699cce05d00c7b37a105af17f2ede805  runs/r05-rx-deadline-flood/test-stdout.txt
 12e227217a9eaf67c8a8730ed9a0ec5b42a2d6c32ce8b4f032370fa32b9c29e4  runs/r05-rx-deadline-flood/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r05-rx-deadline-flood/uplink-lab-frames.txt
-96e5da9f58d03c2dbd3713c047668a4f59e07b10903839b3aa8b6382fd05bc42  runs/r05-rx-deadline-flood/uplink-read.err
+74d9de3eceda2c22a3509dfd07c440f2a52dd225ac3b7d5efd4060b044c138a1  runs/r05-rx-deadline-flood/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r05-rx-deadline-flood/uplink-tcpdump-rc.txt
 cc3965ab603b7f4c05960ced292a1e8a8470942ad038f8ac7cd64fdf73db9b5e  runs/r05-rx-deadline-flood/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r05-rx-deadline-flood/uplink.pcap
@@ -246,7 +247,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r06-tx/li
 343f9148cc5faba05d3f678eb933bd17a6a81edd81b60f499547941ef5b0779b  runs/r06-tx/out/live_tx.csv
 b258bf5a40cb694ce8619fa167580b720583aeee96dfc7414a22aa3f728e9fdd  runs/r06-tx/out/live_tx.log
 a7d6710fa2a1dbc727d77b46259812ce5db0bcc89c616f8d4da97e5c7adc05ae  runs/r06-tx/peer-frames.txt
-a5de8238005f12f758187edbb9acc0450ea56f6f6b4a1ac05d819953416d6809  runs/r06-tx/peer-read.err
+8fdd06dfa046aa06a07f662a86a533b3d27e792b302a51481500bc72d1de5216  runs/r06-tx/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r06-tx/peer-tcpdump-rc.txt
 d29e8112862fc99831940599fa6a92c7dab760a8bcb141a193cc554ebcd12f2b  runs/r06-tx/peer.err
 84aad4e8deb6ea7e973bb7c504a2e3912baaa52ea0d74da3ba5b730ed8568411  runs/r06-tx/peer.pcap.gz
@@ -262,7 +263,7 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r06-tx/pr
 6afc64042b1167322e0930769987d875d4d46ef8449dfd04453309546d9c6554  runs/r06-tx/test-stdout.txt
 b258bf5a40cb694ce8619fa167580b720583aeee96dfc7414a22aa3f728e9fdd  runs/r06-tx/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r06-tx/uplink-lab-frames.txt
-5faa599466d72687abc10da6bc911a04362b4f4365442998257106c7b40b538b  runs/r06-tx/uplink-read.err
+3a857dac074ba44da63dfaa93dde5ad35c7ec84d308a3605fab8d7e3da406022  runs/r06-tx/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r06-tx/uplink-tcpdump-rc.txt
 72562aceefeeb9294c4daf64de4cfa0128416c19113e3494723fd47980045b0c  runs/r06-tx/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r06-tx/uplink.pcap
@@ -279,7 +280,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r07-rx-he
 702c98bff44d820485fa0310921ed78f231d3f355516f2e34bafcc2c88b401ac  runs/r07-rx-health/out/live_rx_health.csv
 6bb24c34dd1874b7db1a485cc8d1f87cdf56ed70b0eb08490247f791faed5010  runs/r07-rx-health/out/live_rx_health.log
 a161fa89ae42075ff6fd8e41a8dbb92ec54e0774d920df8cdd7bce8f706eda2b  runs/r07-rx-health/peer-frames.txt
-46f7932b8001d63e450d5e86e7f326d6c8058a4211c520acfa2170819ccad9cc  runs/r07-rx-health/peer-read.err
+78bb0ca4298f5a5afc2116d0863c5d9ffb8e865cc5176ff6c5dedce8f8f051ce  runs/r07-rx-health/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r07-rx-health/peer-tcpdump-rc.txt
 d2a40ddab38c76529f7385e52a0c243bfc6369a33f85e294f3d63e39aaaee054  runs/r07-rx-health/peer.err
 4ca32cc3711d616c68bf272583564795e0e22aa1d17a5e83229d2ad1d04ebd7b  runs/r07-rx-health/peer.pcap.gz
@@ -295,7 +296,7 @@ da55808cca582e10996429175ba3288f1d897c7c781c369e257ec9cbfe0d8411  runs/r07-rx-he
 768b9123cc9862d13463394b67bf8fc29dbf6ff607b4f54a7ad9c0d4d5c7707b  runs/r07-rx-health/test-stdout.txt
 6bb24c34dd1874b7db1a485cc8d1f87cdf56ed70b0eb08490247f791faed5010  runs/r07-rx-health/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r07-rx-health/uplink-lab-frames.txt
-68b2d1fd9ad0eee19fd5ce7caf3afca82945f4fa142f5e35edac9aaa442c965e  runs/r07-rx-health/uplink-read.err
+ae44e10e2dd3cae0bcc5e094062e4598b4b8e1888c940d1e65cc0daccf0e0b72  runs/r07-rx-health/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r07-rx-health/uplink-tcpdump-rc.txt
 605448333134906a1f6d69c40e7b156ad637eabc2a395d9155eb3e603332b489  runs/r07-rx-health/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r07-rx-health/uplink.pcap
@@ -312,7 +313,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r08-stop/
 3ec311e92068d9c8f6ed7da5a195584826888800f0f4468b267560b2c3b6bc85  runs/r08-stop/out/live_stop.csv
 dd389f29361b186f251bf6a095a04e21d98bdde14db67f3c97e03553d71cf7f3  runs/r08-stop/out/live_stop.log
 31b6bc8fe6fbbd93ca9e7c5dca0951828331157a5468e6fe03a6985b31dbc0d0  runs/r08-stop/peer-frames.txt
-d860c4eb8c99a8d69555416220cb953b8ca3c4c0d81fef338268991359443145  runs/r08-stop/peer-read.err
+c9ff657ba9164dbce285ac50b12767c5a5db60b0a11b501c395a1401502f6b1d  runs/r08-stop/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r08-stop/peer-tcpdump-rc.txt
 56e7b2ca080beb900e693628a62716ce595b3820f7217c3ca030cf1c5db81fed  runs/r08-stop/peer.err
 9c4f4745d8e29406d270f00bc4606bd7221de0df8fadb7ae69b32e62cf1de3b9  runs/r08-stop/peer.pcap.sha256
@@ -328,7 +329,7 @@ ac201c1017437833a217726acde5880e75db8faf684db1a7f16d28b46a9d0258  runs/r08-stop/
 05b2994a70d0ec59f6aea01d7d4058b6895a198227501f868ad695bdd368e139  runs/r08-stop/test-stdout.txt
 dd389f29361b186f251bf6a095a04e21d98bdde14db67f3c97e03553d71cf7f3  runs/r08-stop/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r08-stop/uplink-lab-frames.txt
-ab7340459d796a446277b7b85cabfe1b8e3a03cfa09aa0ae3490e2486bd257e5  runs/r08-stop/uplink-read.err
+987593a23fe8fce99249680eee13e14ca15d2197094e60062a4eaf9fe30c4f67  runs/r08-stop/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r08-stop/uplink-tcpdump-rc.txt
 3dca1ae9c84c232320bce86b4420e77b562acf61fafb87bf0619d8845bb36a5a  runs/r08-stop/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r08-stop/uplink.pcap
@@ -345,7 +346,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r09-rx-de
 71615ca54c429daa73cd426158529f35215451f027de00d20a70ed45f960d970  runs/r09-rx-deadline-long-contended/out/live_rx_deadline_long.csv
 aa92ccc15958e018b8c73df8f5fcf473201fcb8664d37393866e1722613ce3f0  runs/r09-rx-deadline-long-contended/out/live_rx_deadline_long.log
 f0b5c2c2211c8d67ed15e75e656c7862d086e9245420892a7de62cd9ec582a06  runs/r09-rx-deadline-long-contended/peer-frames.txt
-fac6f3cf3c174c46260da605017b40ca8be32ea3f3dc8016fbc0f761aa226a1e  runs/r09-rx-deadline-long-contended/peer-read.err
+ba8dca1fa7147e67f32c4c7279183ef03f1c50b23cce1363a4ad90216e17716e  runs/r09-rx-deadline-long-contended/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r09-rx-deadline-long-contended/peer-tcpdump-rc.txt
 e855f0b0f1e517ecdb1877ebfba9cf1016226e5e9d7e4955f9cd73ec629e0312  runs/r09-rx-deadline-long-contended/peer.err
 70f537b6306bc429b05f87d3cabc7f729ff3573db5832ae850cc3a72bf58ae2e  runs/r09-rx-deadline-long-contended/peer.pcap
@@ -360,7 +361,7 @@ c5e7f917f2afdb2ab2a8d34aadc493d51fdf5ff57977f98a3ff17a650f610050  runs/r09-rx-de
 2e62234f585f0e3c6ad283bcc6fda977e689fa3e5032674ead6954626b071d2c  runs/r09-rx-deadline-long-contended/test-stdout.txt
 aa92ccc15958e018b8c73df8f5fcf473201fcb8664d37393866e1722613ce3f0  runs/r09-rx-deadline-long-contended/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r09-rx-deadline-long-contended/uplink-lab-frames.txt
-2b45abad9555702e323583bce41f1b9c7050589be307b76e107e402c51bd34c1  runs/r09-rx-deadline-long-contended/uplink-read.err
+0adfbfd9f7f8e85b1fffe4b85a18e730f9ebdff9503b6b029110e9be4ceff1d3  runs/r09-rx-deadline-long-contended/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r09-rx-deadline-long-contended/uplink-tcpdump-rc.txt
 be8a35c35d9b18889fc78b23a627b1287c87bb7a725bfa8ffb0a7d50eb8a33ba  runs/r09-rx-deadline-long-contended/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r09-rx-deadline-long-contended/uplink.pcap
@@ -377,7 +378,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  runs/r10-rx-de
 cf4933477269292abcf6c857af592403e7a2ebc74d295b01b2f1bd3036f2310c  runs/r10-rx-deadline-long-quiet/out/live_rx_deadline_long.csv
 f38fcfed8df8a55dd993ee1612175c2b9b7b864503c407995e62e8c0351e3c3e  runs/r10-rx-deadline-long-quiet/out/live_rx_deadline_long.log
 53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3  runs/r10-rx-deadline-long-quiet/peer-frames.txt
-575b7c690dfd477bf16dd81e21966019ad812d5948021632d8387b121220c1fe  runs/r10-rx-deadline-long-quiet/peer-read.err
+fbcc6d0768e3f46a9ccac4276d9cb72810d265ad4e5b67bc360619d9f3391e1d  runs/r10-rx-deadline-long-quiet/peer-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r10-rx-deadline-long-quiet/peer-tcpdump-rc.txt
 062996bd045dc363e619769f5ce485394057afd7ff51d35a536f07a950809dd6  runs/r10-rx-deadline-long-quiet/peer.err
 9bac99c6bd04f2bbf227f275596197477455bc9d7a790b3d8b1fa6fde45e77ae  runs/r10-rx-deadline-long-quiet/peer.pcap
@@ -392,8 +393,8 @@ cc668bae77f5233ced9f1ba156ca903c829c6e9fc617423206a49edfb5321f3d  runs/r10-rx-de
 76c53f5ccd5dc7b9082925556fc8c2d0364a60e9552b67aecf53a9f19a4a3d51  runs/r10-rx-deadline-long-quiet/test-stdout.txt
 f38fcfed8df8a55dd993ee1612175c2b9b7b864503c407995e62e8c0351e3c3e  runs/r10-rx-deadline-long-quiet/test.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r10-rx-deadline-long-quiet/uplink-lab-frames.txt
-87c7c1c5e5a51d0994fc1379080b2259fd4411ef2d20db21ed4f93f933f1733c  runs/r10-rx-deadline-long-quiet/uplink-read.err
+5d4ca527bba82457c7a7d08fb8014ee1889ec19a77f0059c5692a9d145e92da6  runs/r10-rx-deadline-long-quiet/uplink-read.err
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  runs/r10-rx-deadline-long-quiet/uplink-tcpdump-rc.txt
 4961b7810e5efa9c60fd9e8e0f64a65fc37122c55473db5575d71263c5b334dd  runs/r10-rx-deadline-long-quiet/uplink.err
 84d574a2ce7d10abbbd59cd7c94ccb9e96ac3f5cada39fc68d15f396801ebb6a  runs/r10-rx-deadline-long-quiet/uplink.pcap
-5319e62037bcdb35391395dc468bdbb353018582c552e53a9682c7ea68db2721  tools/run_spike.sh.txt
+813dba174378bdc3097c681edeef1272d5869f1677b7e7fcc10d228849168a2b  tools/run_spike.sh.txt

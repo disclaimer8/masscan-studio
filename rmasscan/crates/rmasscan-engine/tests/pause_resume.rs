@@ -168,7 +168,9 @@ fn natural_completion_while_paused_stays_completed() {
     std::thread::sleep(Duration::from_millis(30));
     assert!(h.outcome().is_none(), "still inside wait");
     h.pause();
-    clock.advance(Duration::from_secs(10));
+    advance_until(&clock, Duration::from_secs(10), "outcome", || {
+        h.outcome().is_some()
+    });
     let events = drain_to_finished(&h);
     assert!(matches!(
         events.last(),

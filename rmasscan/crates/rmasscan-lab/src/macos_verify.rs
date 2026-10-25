@@ -45,6 +45,15 @@ pub(crate) fn split_dir_name(name: &str) -> Option<(&str, &str)> {
     (!tag.is_empty() && valid_nonce(nonce)).then_some((tag, nonce))
 }
 
+/// The `src_mac_check` values of `wire_scan` that are evidence on the sealed stand: the explicit `--src-mac`
+/// equals the NIC MAC the process could read (`explicit-equal`), or the OS hid the MAC (`os-masked`).
+/// `override-foreign` (a MAC that differs from the NIC's was forced) and `unverified` (no reading at all)
+/// are emitted too, and are not evidence here.
+pub const SRC_MAC_CHECK_ACCEPTED: [&str; 2] = ["explicit-equal", "os-masked"];
+/// Clock tolerance, in seconds, between the tcpdump packet timestamps and the suite's own wall clock
+/// (both are this host's clock; the margin covers the order of the two reads and tcpdump buffering).
+pub const CLOCK_TOLERANCE_S: f64 = 2.0;
+
 // ------------------------------------------------------------------ plan and arguments
 
 /// The planned runs. Functional and perf are the Windows plans (same tags, cases and rates); the
@@ -314,7 +323,7 @@ fn witness_stats(r: &mut Run, who: &str, d: &Path, rec: &Value, interface_delta:
     let recorded = &rec["tcpdump"];
     r.inv(
         &format!("{who} recorded tcpdump statistics equal {who}.err"),
-        ["captured", "received", "dropped_kernel"]
+        ["captured", "received", "dropped_kernel", "dropped_if"]
             .iter()
             .all(|k| recorded[k] == st[k]),
         recorded.to_string(),
@@ -555,6 +564,53 @@ fn gate(
                 hi.unwrap_or(0),
             ),
             st.to_string(),
+        );
+        // Freshness: every packet belongs to this run's capture window (start .. stop, with the clock
+        // tolerance), and the order is start markers, then scanner traffic, then end markers. A hash proves
+        // the bytes are the ones copied, not that they were captured now.
+        let (t0, t1) = (ts[0], ts[3]);
+        let outside = fr
+            .iter()
+            .filter(|(t, _)| !(t0 - CLOCK_TOLERANCE_S..=t1 + CLOCK_TOLERANCE_S).contains(t))
+            .count();
+        r.inv(
+            "capture packets fall inside the recorded window",
+            t0.is_finite() && t1.is_finite() && outside == 0,
+            format!(
+                "{outside} of {} packets outside {t0} .. {t1} (+-{CLOCK_TOLERANCE_S} s)",
+                fr.len()
+            ),
+        );
+        let marker_times = |payload: &[u8]| -> Vec<f64> {
+            fr.iter()
+                .filter(|(_, f)| {
+                    ether(f, [0x88, 0xb5]) && f.get(14..14 + payload.len()) == Some(payload)
+                })
+                .map(|(t, _)| *t)
+                .collect()
+        };
+        let (starts, ends) = (marker_times(START_PAYLOAD), marker_times(END_PAYLOAD));
+        let scanner: Vec<f64> = fr
+            .iter()
+            .filter(|(_, f)| tcp(f).is_some_and(|i| i.sm == b.sm && i.dm == b.pm))
+            .map(|(t, _)| *t)
+            .collect();
+        let min = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = |v: &[f64]| v.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        r.inv(
+            "start markers, then scanner traffic, then end markers",
+            !starts.is_empty()
+                && !ends.is_empty()
+                && (scanner.is_empty()
+                    || (max(&starts) <= min(&scanner) && max(&scanner) <= min(&ends)))
+                && max(&starts) <= min(&ends),
+            format!(
+                "start .. {}, scanner {} .. {}, end {} ..",
+                max(&starts),
+                min(&scanner),
+                max(&scanner),
+                min(&ends)
+            ),
         );
         let it_ = || fr.iter().map(|(_, f)| f.as_slice());
         r.inv(
@@ -919,12 +975,13 @@ pub(crate) fn verify_item(
         j["identity"]["os"]["family"] == "macos",
         "",
     );
-    // The OS hides interface MACs from an unprivileged process; the value the scanner then
-    // reports ("os-masked") is accepted, and no OS cross-check is demanded of it.
+    // The OS hides interface MACs from an unprivileged process; the value the scanner then reports
+    // ("os-masked") is accepted, and no OS cross-check is demanded of it. The contract is the one list
+    // [`SRC_MAC_CHECK_ACCEPTED`]; a test feeds every literal `wire_scan` can emit through it.
     r.inv(
-        "source MAC check is either matched or reported as OS-masked",
+        "source MAC check is explicit-equal or reported as OS-masked",
         j.get("src_mac_check").is_none()
-            || matches!(s(&j["src_mac_check"]), "ok" | "matched" | "os-masked"),
+            || SRC_MAC_CHECK_ACCEPTED.contains(&s(&j["src_mac_check"])),
         j["src_mac_check"].to_string(),
     );
     gate(&mut r, man, it, &ctx, &cap, uplink.as_ref(), &dir_nonce);
@@ -1075,6 +1132,19 @@ fn scan_runs(root: &Path, man: &Value) -> Vec<Value> {
     let mut v = dir_findings(root, "runs", man);
     v.extend(dir_findings(root, "runs_discarded", man));
     v
+}
+
+/// The safety findings of the directories of `runs/` and `runs_discarded/` that `verify_dir` did not judge itself:
+/// unknown tags and names that do not parse as `<tag>.<nonce>`.
+fn unplanned_scan(root: &Path, man: &Value) -> Vec<Value> {
+    let planned_tags: BTreeSet<String> = planned(man)
+        .iter()
+        .map(|i| s(&i["tag"]).to_owned())
+        .collect();
+    scan_runs(root, man)
+        .into_iter()
+        .filter(|r| split_dir_name(s(&r["tag"])).is_none_or(|(t, _)| !planned_tags.contains(t)))
+        .collect()
 }
 
 /// Judge every directory of a tag. One directory is judged as it is. More than one is never a blanket
@@ -1255,6 +1325,9 @@ pub fn verify_dir(root: &Path) -> Value {
     }
     result["discarded"] = json!(discarded);
     result["aborted"] = json!(dir_findings(root, "runs_aborted", &man));
+    // An independent full walk: a directory under runs/ or runs_discarded/ that the plan does not know (or
+    // whose name is malformed) is still evidence of a leak. Planned directories were judged above.
+    result["safety_scan"] = json!(unplanned_scan(root, &man));
     verify::finish(result)
 }
 

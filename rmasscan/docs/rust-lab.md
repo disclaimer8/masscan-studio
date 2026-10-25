@@ -112,7 +112,10 @@ the last two items.
 
 4. **Guest.** Build `wire_scan.exe` on the guest from the same commit (`git archive`,
    `RMASSCAN_SOURCE_COMMIT=$COMMIT`, release, static CRT); `run.json`'s `source_commit` is checked
-   against `--commit`. Do not copy any guest script by hand: the suite deploys all seven
+   against `--commit`. Set `RUSTFLAGS='-C target-feature=+crt-static -C link-arg=/DEPENDENTLOADFLAG:0x800'`:
+   a `RUSTFLAGS` variable replaces the DLL-search hardening in `rmasscan/.cargo/config.toml`, so it must
+   repeat the link-arg (see `windows-wire-lab.md`, DLL search hardening). Check the built EXE with
+   `dumpbin /loadconfig wire_scan.exe` (Dependent Load Flag `0x800`) and record the result. Do not copy any guest script by hand: the suite deploys all seven
    (`windows-vm-lab.ps1` to `C:\Users\lab\`, the `windows_wire_*` files to `C:\Users\lab\t4\`).
    The suite creates `~/winvm/t4-ev` on home-pc itself; `C:\Users\lab\t4` must already exist on the
    guest because the script copy targets it before `windows_wire_prepare.ps1` runs.

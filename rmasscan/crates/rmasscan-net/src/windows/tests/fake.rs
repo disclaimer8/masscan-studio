@@ -34,6 +34,21 @@ pub(super) enum NextStep {
     Eof,
 }
 
+/// Исход очередного `pcap_sendqueue_transmit`.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum TransmitStep {
+    /// Вся очередь: возвращает `len`.
+    All,
+    /// Произвольное число байт; доставлены записи, целиком лежащие в нём.
+    Bytes(u32),
+    /// Граница записи: сумма размеров первых k записей, доставлены первые k.
+    Boundary(usize),
+    /// Не на границе: граница k + 7; доставлены первые k.
+    Straddle(usize),
+    /// Больше очереди: `len + 1`; доставлена вся очередь.
+    Over,
+}
+
 pub(super) type Responder = Arc<dyn Fn(&[u8]) -> Vec<Vec<u8>> + Send + Sync>;
 
 pub(super) struct Scenario {
@@ -69,6 +84,19 @@ pub(super) struct Scenario {
     /// Каждый успешно отправленный кадр возвращается в очередь чтения (спайк:
     /// RX-handle видит собственные TX-кадры).
     pub echo_tx: bool,
+    // ---- sendqueue ----
+    /// `pcap_sendqueue_alloc` вернёт NULL.
+    pub sendqueue_alloc_null: bool,
+    /// Живые очереди: структура и реальный буфер (`len`/`maxlen` как в libpcap).
+    #[allow(clippy::vec_box)] // адрес структуры очереди обязан быть стабильным
+    pub queues: Vec<(Box<PcapSendQueue>, Vec<u8>)>,
+    /// `pcap_sendqueue_queue` вернёт -1, когда в очереди уже n записей.
+    pub queue_full_at: Option<usize>,
+    pub transmit_script: VecDeque<TransmitStep>,
+    pub transmit_calls: usize,
+    /// Кадры, доставленные каждым transmit (разобраны из буфера по заголовкам).
+    pub transmitted: Vec<Vec<Vec<u8>>>,
+    pub sync_seen: Vec<c_int>,
     // ---- статистика ----
     /// `Ok(ps_drop)` или `Err(rc)` на очередной вызов; пусто: `stats_drop`.
     pub stats_script: VecDeque<Result<u32, c_int>>,
@@ -127,6 +155,13 @@ impl Default for Scenario {
             sent: Vec::new(),
             responder: None,
             echo_tx: false,
+            sendqueue_alloc_null: false,
+            queues: Vec::new(),
+            queue_full_at: None,
+            transmit_script: VecDeque::new(),
+            transmit_calls: 0,
+            transmitted: Vec::new(),
+            sync_seen: Vec::new(),
             stats_script: VecDeque::new(),
             stats_drop: 0,
             stats_calls: 0,
@@ -374,17 +409,136 @@ unsafe extern "C" fn f_sendpacket(p: *mut PcapT, b: *const u8, n: c_int) -> c_in
     if rc == 0 {
         // SAFETY: вызывающий передаёт n читаемых байт.
         let frame = unsafe { std::slice::from_raw_parts(b, n as usize) }.to_vec();
-        if s.echo_tx {
-            s.next_script.push_back(NextStep::Frame(frame.clone()));
-        }
-        if let Some(r) = s.responder.clone() {
-            for f in r(&frame) {
-                s.next_script.push_back(NextStep::Frame(f));
-            }
-        }
-        s.sent.push(frame);
+        deliver(&mut s, frame);
     }
     rc
+}
+
+/// Доставка одного кадра: эхо, ответчик, журнал `sent` (как `pcap_sendpacket`).
+fn deliver(s: &mut Scenario, frame: Vec<u8>) {
+    if s.echo_tx {
+        s.next_script.push_back(NextStep::Frame(frame.clone()));
+    }
+    if let Some(r) = s.responder.clone() {
+        for f in r(&frame) {
+            s.next_script.push_back(NextStep::Frame(f));
+        }
+    }
+    s.sent.push(frame);
+}
+
+unsafe extern "C" fn f_sendqueue_alloc(bytes: c_uint) -> *mut PcapSendQueue {
+    let mut s = st();
+    s.log.push(format!("sendqueue_alloc:{bytes}"));
+    if s.sendqueue_alloc_null {
+        return std::ptr::null_mut();
+    }
+    let mut buf = vec![0u8; bytes as usize];
+    let mut q = Box::new(PcapSendQueue {
+        maxlen: bytes,
+        len: 0,
+        buffer: buf.as_mut_ptr().cast(),
+    });
+    let p: *mut PcapSendQueue = &mut *q;
+    s.queues.push((q, buf));
+    p
+}
+unsafe extern "C" fn f_sendqueue_queue(
+    q: *mut PcapSendQueue,
+    hdr: *const PcapPkthdr,
+    data: *const u8,
+) -> c_int {
+    let mut s = st();
+    let full_at = s.queue_full_at;
+    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(&**b, q)) else {
+        panic!("sendqueue_queue on an unknown or destroyed queue");
+    };
+    // SAFETY: вызывающий передаёт валидный заголовок.
+    let h = unsafe { std::ptr::read_unaligned(hdr) };
+    let need = SENDQUEUE_RECORD_HEADER + h.caplen as usize;
+    let (qs, buf) = &mut s.queues[idx];
+    let used = qs.len as usize;
+    if used + need > qs.maxlen as usize {
+        return -1;
+    }
+    if let Some(n) = full_at {
+        // Число записей уже в очереди: разбираем буфер по заголовкам.
+        let mut off = 0usize;
+        let mut count = 0usize;
+        while off < used {
+            let cl = u32::from_ne_bytes(buf[off + 8..off + 12].try_into().unwrap()) as usize;
+            off += SENDQUEUE_RECORD_HEADER + cl;
+            count += 1;
+        }
+        if count >= n {
+            return -1;
+        }
+    }
+    // SAFETY: заголовок читаем как есть (16 байт, без выравнивания), кадр
+    // читаем на caplen байт; запись помещается в буфер (проверено выше).
+    unsafe {
+        std::ptr::copy_nonoverlapping(hdr.cast::<u8>(), buf.as_mut_ptr().add(used), 16);
+        std::ptr::copy_nonoverlapping(
+            data,
+            buf.as_mut_ptr().add(used + SENDQUEUE_RECORD_HEADER),
+            h.caplen as usize,
+        );
+    }
+    qs.len += need as u32;
+    0
+}
+unsafe extern "C" fn f_sendqueue_transmit(
+    p: *mut PcapT,
+    q: *mut PcapSendQueue,
+    sync: c_int,
+) -> c_uint {
+    let mut s = st();
+    s.transmit_calls += 1;
+    s.sync_seen.push(sync);
+    bump(&mut s, "sendqueue_transmit", p);
+    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(&**b, q)) else {
+        panic!("sendqueue_transmit on an unknown or destroyed queue");
+    };
+    let (len, frames) = {
+        let (qs, buf) = &s.queues[idx];
+        let len = qs.len as usize;
+        let mut frames: Vec<(usize, Vec<u8>)> = Vec::new(); // (конец записи, кадр)
+        let mut off = 0usize;
+        while off < len {
+            let cl = u32::from_ne_bytes(buf[off + 8..off + 12].try_into().unwrap()) as usize;
+            let start = off + SENDQUEUE_RECORD_HEADER;
+            frames.push((start + cl, buf[start..start + cl].to_vec()));
+            off = start + cl;
+        }
+        (len, frames)
+    };
+    s.log.push(format!("sendqueue_transmit:{}", frames.len()));
+    let end_of = |k: usize| if k == 0 { 0 } else { frames[k - 1].0 };
+    let step = s.transmit_script.pop_front().unwrap_or(TransmitStep::All);
+    let (rc, delivered) = match step {
+        TransmitStep::All => (len, frames.len()),
+        TransmitStep::Over => (len + 1, frames.len()),
+        TransmitStep::Boundary(k) => (end_of(k.min(frames.len())), k.min(frames.len())),
+        TransmitStep::Straddle(k) => (end_of(k.min(frames.len())) + 7, k.min(frames.len())),
+        TransmitStep::Bytes(n) => (
+            n as usize,
+            frames.iter().take_while(|(e, _)| *e <= n as usize).count(),
+        ),
+    };
+    let out: Vec<Vec<u8>> = frames.into_iter().take(delivered).map(|(_, f)| f).collect();
+    for f in &out {
+        deliver(&mut s, f.clone());
+    }
+    s.transmitted.push(out);
+    rc as c_uint
+}
+unsafe extern "C" fn f_sendqueue_destroy(q: *mut PcapSendQueue) {
+    let mut s = st();
+    s.log.push("sendqueue_destroy".into());
+    let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(&**b, q)) else {
+        panic!("sendqueue_destroy on an unknown or already destroyed queue");
+    };
+    s.queues.remove(idx);
 }
 unsafe extern "C" fn f_datalink(_p: *mut PcapT) -> c_int {
     st().dlt
@@ -520,6 +674,10 @@ pub(super) fn symbol_addr(name: &str) -> Option<*const c_void> {
         "pcap_compile" => f_compile as *const c_void,
         "pcap_setfilter" => f_setfilter as *const c_void,
         "pcap_freecode" => f_freecode as *const c_void,
+        "pcap_sendqueue_alloc" => f_sendqueue_alloc as *const c_void,
+        "pcap_sendqueue_queue" => f_sendqueue_queue as *const c_void,
+        "pcap_sendqueue_transmit" => f_sendqueue_transmit as *const c_void,
+        "pcap_sendqueue_destroy" => f_sendqueue_destroy as *const c_void,
         _ => return None,
     })
 }

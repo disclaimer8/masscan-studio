@@ -70,8 +70,12 @@ fn last_errno() -> Errno {
         .unwrap_or(libc::EIO)
 }
 
-/// `ioctl` с указателем на значение вызывающего.
-fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), Errno> {
+/// `ioctl` с указателем на значение вызывающего. Размер `T` обязан совпадать с
+/// `IOCPARM_LEN(req)` (биты 16..29 запроса): иначе `EINVAL` до системного вызова.
+pub(crate) fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), Errno> {
+    if ((req >> 16) & 0x1fff) as usize != std::mem::size_of::<T>() {
+        return Err(libc::EINVAL);
+    }
     // SAFETY: `fd` это открытый дескриптор владельца `OwnedFd`; `arg` это
     // исключительная ссылка на `T`, живущая весь вызов, а размер `T` совпадает
     // с размером, закодированным в `req` (проверено тестами раскладки).
@@ -181,7 +185,8 @@ impl BpfSetup for BpfFd {
     }
 
     fn bind_interface(&mut self, name: &str) -> Result<(), Errno> {
-        // SAFETY: `ifreq` это набор целых и массивов целых; нулевой образ корректен.
+        // SAFETY: `ifreq` состоит из целых, массивов целых и union с целыми и
+        // указателями; нулевой образ (в том числе нулевые указатели) корректен.
         let mut req: libc::ifreq = unsafe { std::mem::zeroed() };
         let bytes = name.as_bytes();
         if bytes.is_empty() || bytes.len() >= req.ifr_name.len() || bytes.contains(&0) {

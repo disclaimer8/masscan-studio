@@ -1,15 +1,15 @@
-//! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; Windows: Npcap. Это
+//! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; macOS: BPF (`/dev/bpfN`); Windows: Npcap. Это
 //! единственный crate, где допускается `unsafe`: весь FFI находится в
 //! private-модулях (`linux::socket`; `macos::{sys, ifinfo, process}` (BPF ABI, sysctl, getifaddrs, метрики процесса); `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
 //! телеметрия процесса (Toolhelp, токен, счётчики памяти), в продуктовой сборке она
 //! тоже присутствует) и,
 //! только с feature `lab` (включает один rmasscan-lab), в `lab_io::imp`
 //! (sigaction-флаг остановки и listener с backlog 0); остальной код безопасный и тестируется через синтетические швы
-//! (`linux::PacketIo`, `linux::IfaceInfo`; подставная таблица функций wpcap).
+//! (`linux::PacketIo`, `linux::IfaceInfo`; `macos::adapter::BpfIo`; подставная таблица функций wpcap).
 //!
 //! Контракт: каждый вызов `recv`/`health` возвращается не позже
 //! `min(timeout, 50 мс)` (абсолютный дедлайн; на Windows внутренний бюджет
-//! 42 мс). `send` на Linux ограничен тем же дедлайном; на Windows
+//! 42 мс). `send` на Linux и macOS ограничен тем же дедлайном (на macOS бюджет 50 мс, предварительный до спайка); на Windows
 //! `pcap_sendpacket` синхронный и не отменяемый (граница измерена, см.
 //! `windows::adapter`). Другие платформы и типы канала дают явную ошибку ДО
 //! любой отправки.
@@ -163,6 +163,7 @@ pub struct NetStats {
     pub rx_truncated: u64,
     /// Собственные кадры, отброшенные до движка. Linux: кадры с PACKET_OUTGOING.
     /// Windows: кадры с нашим source MAC (у Npcap нет признака направления).
+    /// macOS: кадры с нашим source MAC (вторая линия после фильтра ядра).
     pub rx_outgoing: u64,
     /// Кадры с чужим ifindex (отброшены). Linux: считается. Windows и macOS: всегда 0 и
     /// НЕ измерено, а структурно неприменимо: handle привязан к одному
@@ -187,7 +188,6 @@ pub(crate) struct Counters {
     pub kernel_drops_known: AtomicBool,
 }
 
-#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 impl Counters {
     pub(crate) fn bump(c: &AtomicU64) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -202,7 +202,6 @@ pub struct NetStatsHandle {
 }
 
 impl NetStatsHandle {
-    #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
     pub(crate) fn new(counters: Arc<Counters>) -> Self {
         Self { counters }
     }

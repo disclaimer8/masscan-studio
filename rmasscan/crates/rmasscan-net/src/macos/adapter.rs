@@ -178,7 +178,7 @@ impl Deadline {
     /// Остаток в мс для poll, округление ВВЕРХ (иначе poll(0) крутится).
     fn poll_ms(&self) -> i32 {
         let left = self.0.saturating_duration_since(Instant::now());
-        let ms = left.as_micros().div_ceil(1000);
+        let ms = left.as_nanos().div_ceil(1_000_000);
         ms.min(IO_BUDGET.as_millis()) as i32
     }
 }
@@ -385,7 +385,10 @@ impl<I: BpfIo> RxHalf<I> {
                     Ok(Record::Truncated) => Counters::bump(&self.counters.rx_truncated),
                     Ok(Record::Frame { start, end }) => {
                         let frame = &self.rbuf[start..end];
-                        if frame.len() >= 12 && frame[6..12] == self.own_mac {
+                        if frame.len() < MIN_TX_FRAME {
+                            // Короче Ethernet-заголовка: не кадр, никогда не `Some(0)`.
+                            Counters::bump(&self.counters.rx_truncated);
+                        } else if frame[6..12] == self.own_mac {
                             Counters::bump(&self.counters.rx_outgoing);
                         } else if frame.len() > buffer.len() {
                             Counters::bump(&self.counters.rx_truncated);

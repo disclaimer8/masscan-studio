@@ -1368,3 +1368,19 @@ fn rx_and_stats_hit_only_the_rx_descriptor_writes_only_the_tx_descriptor_and_eac
     assert_eq!(count(&w, "1:close"), 1);
     assert_eq!(count(&w, "2:close"), 1);
 }
+
+#[test]
+fn rx_record_shorter_than_an_ethernet_header_is_dropped_as_truncated() {
+    let w = world();
+    let mut a = open_pair(&w);
+    let good = peer_frame(60);
+    let mut batch = record(SIZEOF_BPF_HDR, &[]);
+    batch.extend(record(SIZEOF_BPF_HDR, &[0xab; 13]));
+    batch.extend(record(SIZEOF_BPF_HDR, &good));
+    push_batch(&w, batch);
+    let mut b = buf();
+    let n = recv(&mut a, &mut b).unwrap().expect("the good frame");
+    assert_eq!(&b[..n], good.as_slice(), "never Some(0) and never a runt");
+    let s = a.stats.snapshot();
+    assert_eq!((s.rx_truncated, s.rx_packets, s.rx_errors), (2, 1, 0));
+}

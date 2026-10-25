@@ -316,8 +316,23 @@ fn fail_json_sent(
     job: Option<&str>,
     tx_sent: u64,
 ) -> String {
+    fail_json_sent_mac(stage, kind, msg, opened, job, tx_sent, None)
+}
+
+/// Как `fail_json_sent`, плюс `src_mac`/`src_mac_check`/`nic_mac` (готовый фрагмент JSON):
+/// отказ после отправки обязан нести ту же идентичность MAC, что и успешный отчёт.
+fn fail_json_sent_mac(
+    stage: &str,
+    kind: &str,
+    msg: &str,
+    opened: bool,
+    job: Option<&str>,
+    tx_sent: u64,
+    mac_fields: Option<&str>,
+) -> String {
+    let mac = mac_fields.map_or(String::new(), |m| format!(",{m}"));
     format!(
-        "{{\"status\":\"error\",\"stage\":{},\"error\":{},\"message\":{},\"opened_adapter\":{opened},\"tx_sent\":{tx_sent},\"job\":{},\"identity\":{}}}",
+        "{{\"status\":\"error\",\"stage\":{},\"error\":{},\"message\":{},\"opened_adapter\":{opened},\"tx_sent\":{tx_sent}{mac},\"job\":{},\"identity\":{}}}",
         js(stage),
         js(kind),
         js(msg),
@@ -739,7 +754,10 @@ fn run(a: &Args, be: &dyn Backend) -> Out {
         && a.forge_next_index.is_none()
         && be.iface_exists(&a.iface) == Some(false)
     {
-        let e = NetError::InterfaceMismatch(format!("interface {} was not found", a.iface));
+        let e = NetError::InterfaceMismatch(format!(
+            "interface {} was not found (if_nametoindex); no BPF device was opened and nothing was sent",
+            a.iface
+        ));
         return (
             net_error_code(&e),
             fail_json("binding", "InterfaceMismatch", &e.to_string(), false),
@@ -805,11 +823,18 @@ because promiscuous mode is not enabled. {}",
         }
     };
 
-    let nic_mac_text = match nic_mac {
-        Some(n) => mac_text(&n),
-        None if mac_check == "os-masked" => "masked".to_string(),
-        None => "unknown".to_string(),
+    // JSON-значение: строка с MAC, "masked" (ОС скрыла MAC) или null (неизвестен).
+    let nic_mac_json = match nic_mac {
+        Some(n) => js(&mac_text(&n)),
+        None if mac_check == "os-masked" => js("masked"),
+        None => "null".to_string(),
     };
+    let mac_fields = format!(
+        "\"src_mac\":{},\"src_mac_check\":{},\"nic_mac\":{}",
+        js(&mac_text(&src_mac)),
+        js(mac_check),
+        nic_mac_json
+    );
     let plan = match build_plan(a, src_mac, a.rate, a.wait) {
         Ok(p) => p,
         Err(e) => return (2, fail_json("plan", "BadPlan", &e, false)),
@@ -1045,13 +1070,14 @@ because promiscuous mode is not enabled. {}",
         Err(e) => {
             return (
                 3,
-                fail_json_sent(
+                fail_json_sent_mac(
                     "join",
                     &format!("{e:?}"),
                     &e.to_string(),
                     true,
                     Some(&job),
                     stats().tx_sent,
+                    Some(&mac_fields),
                 ),
             );
         }
@@ -1106,13 +1132,14 @@ because promiscuous mode is not enabled. {}",
     {
         return (
             2,
-            fail_json_sent(
+            fail_json_sent_mac(
                 "checkpoint-write",
                 "Io",
                 &e.to_string(),
                 true,
                 Some(&job),
                 stats().tx_sent,
+                Some(&mac_fields),
             ),
         );
     }
@@ -1161,7 +1188,7 @@ because promiscuous mode is not enabled. {}",
         resumed_from.map_or("null".to_string(), |r| js(&hex(&r))),
         js(&mac_text(&src_mac)),
         js(mac_check),
-        js(&nic_mac_text),
+        nic_mac_json,
     );
     let _ = write!(
         j,

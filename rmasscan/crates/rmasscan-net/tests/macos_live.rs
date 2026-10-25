@@ -15,6 +15,11 @@
 //!                              обязаны совпасть с константами плана, `state` = `sealed`
 //!   RMASSCAN_BPF_OUT_DIR       каталог для строк `KV` (`macos_live__<тест>.txt`)
 //!
+//! Пир для `full_scan`: тест сам открывает listener на 198.18.0.2:8000-8007
+//! (без root, адрес принадлежит `feth4202`) и закрывает их в конце. Порты 80 и 443
+//! закрыты (EACCES при bind без root), «тихих» портов на Darwin нет (syncookies),
+//! поэтому открытых ответов ровно 8.
+//!
 //! Защита ДО любой отправки: оба интерфейса существуют (`iface_exists`), а MAC
 //! сканера (константа плана, подтверждённая манифестом) сверяется с ОС только когда ОС его показывает; если ОС
 //! скрыла MAC плейсхолдером (Darwin 27), в KV пишется `mac_check=os-masked`, и
@@ -52,8 +57,13 @@ use rmasscan_net::{
 const SRC_IP: u32 = 0xC612_0001; // 198.18.0.1
 const DST_IP: u32 = 0xC612_0002; // 198.18.0.2
 const SEED: u64 = 0x5eed_0b5e_55ed;
-/// Порты пира с listener; остальные отвечают RST ядра (с ограничением частоты).
+/// Порты, которые сканирует тест (80 и 443 вместе с listener-портами 8000-8007).
+/// Listener на стороне пира только на 8000-8007 (`PEER_LISTEN`): bind на 80 и 443
+/// без root на macOS даёт EACCES, поэтому 80 и 443 тут ЗАКРЫТЫ (RST ядра, с
+/// ограничением частоты), как и остальные порты вне `PEER_LISTEN`.
 const OPEN_PORTS: &str = "80,443,8000-8007";
+/// Единственные открытые порты стенда Mac: listener на 198.18.0.2.
+const PEER_LISTEN: std::ops::RangeInclusive<u16> = 8000..=8007;
 const JUNK_ETHERTYPE: [u8; 2] = [0x88, 0xb5];
 /// Окно простоя читателя в тесте потери RX (от старта движка).
 const STALL: (Duration, Duration) = (Duration::from_millis(1800), Duration::from_millis(3400));
@@ -594,6 +604,25 @@ fn assert_silent_on_the_wire(lab: &Lab, what: &str, w: &mut PeerWitness, sent: u
     rep.syns
 }
 
+/// Listener пира на 198.18.0.2:8000-8007 (без root). Живут до конца теста; bind на
+/// чужой адрес или занятый порт это NOT RUN, не молчаливый пропуск.
+struct PeerListeners {
+    _held: Vec<std::net::TcpListener>,
+}
+
+impl PeerListeners {
+    fn bind() -> Self {
+        let ip = std::net::Ipv4Addr::from(DST_IP);
+        let held = PEER_LISTEN
+            .map(|p| {
+                std::net::TcpListener::bind((ip, p))
+                    .unwrap_or_else(|e| panic!("NOT RUN: cannot listen on {ip}:{p}: {e}"))
+            })
+            .collect();
+        PeerListeners { _held: held }
+    }
+}
+
 // =====================================================================
 // Полный скан через движок: ровно один advance на Sent
 // =====================================================================
@@ -605,6 +634,7 @@ fn a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent() 
     let lab = lab("full_scan");
     let ports = format!("{OPEN_PORTS},9000-9009");
     let probes = 2 + 8 + 10;
+    let _listeners = PeerListeners::bind();
     let p = plan(&lab, &ports, 100.0, 3);
     for round in 0..2u8 {
         let r = run_engine(Spec::new(&p, 2 + round));
@@ -629,7 +659,7 @@ fn a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent() 
             got.insert(rep.remote_port, rep.status);
         }
         for (port, st) in &got {
-            let open = *port == 80 || *port == 443 || (8000..=8007).contains(port);
+            let open = PEER_LISTEN.contains(port);
             let want = if open {
                 PortStatus::Open
             } else {
@@ -639,8 +669,9 @@ fn a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent() 
         }
         let open_seen = got.values().filter(|s| **s == PortStatus::Open).count();
         assert_eq!(
-            open_seen, 10,
-            "every open port must answer SYN-ACK: {got:?}"
+            open_seen,
+            PEER_LISTEN.count(),
+            "every listener port (8000-8007) must answer SYN-ACK: {got:?}"
         );
     }
 }
@@ -963,6 +994,17 @@ fn per_call_latency_stays_within_the_io_budget() {
         let _ = rx.recv(&mut buf, Duration::from_millis(50)).expect("recv");
         max_wait_recv = max_wait_recv.max(t.elapsed().as_micros() as u64);
     }
+    // Максимум на тип вызова (контракт ≤50 мс на вызов): одна строка для отчёта.
+    kv(
+        &lab,
+        "max_per_call",
+        &format!(
+            "max_us_recv={} max_us_send={} max_us_health={} max_us_idle_recv={max_wait_recv}",
+            recv_l.max(),
+            send_l.max(),
+            health_l.max()
+        ),
+    );
     kv(&lab, "send", &send_l.line("send"));
     kv(&lab, "recv", &recv_l.line("recv"));
     kv(&lab, "health", &health_l.line("health"));

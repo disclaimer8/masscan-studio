@@ -142,7 +142,9 @@ pub(crate) fn raw_addrs() -> Result<Vec<RawAddr>, Errno> {
                 }
                 libc::AF_INET if sa_len >= SIN_MIN => {
                     // SAFETY: проверено `sa_len >= offsetof(sin_addr) + 4`, то
-                    // есть поле `sin_addr` целиком внутри записи.
+                    // есть поле `sin_addr` целиком внутри записи. `ifa_addr` выровнен
+                    // как `sockaddr` (выделен `getifaddrs`), чего достаточно для `sockaddr_in`
+                    // (поля читаются по выровненным смещениям).
                     let s_addr =
                         unsafe { (*e.ifa_addr.cast::<libc::sockaddr_in>()).sin_addr.s_addr };
                     AddrKind::V4(Ipv4Addr::from(u32::from_be(s_addr)))

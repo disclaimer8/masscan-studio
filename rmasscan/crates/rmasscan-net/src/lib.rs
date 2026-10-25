@@ -9,7 +9,12 @@
 //!
 //! Контракт: каждый вызов `recv`/`health` возвращается не позже
 //! `min(timeout, 50 мс)` (абсолютный дедлайн; на Windows внутренний бюджет
-//! 42 мс). `send` на Linux и macOS ограничен тем же дедлайном (на macOS бюджет 50 мс, предварительный до спайка); на Windows
+//! 42 мс). `send` на Linux ограничен тем же дедлайном; на macOS дедлайн
+//! `send` держится только пока `write` на BPF не блокируется, а это НЕ доказано: XNU
+//! `bpfwrite` игнорирует `O_NONBLOCK` и выделяет mbuf с `MBUF_WAITOK`, поэтому при нехватке
+//! mbuf запись может заблокироваться на любом интерфейсе (на `feth` блокировок не
+//! наблюдалось, верхней границы нет). Бюджет `recv`/`health` на macOS 33 мс (внутренний,
+//! `IO_BUDGET`); на Windows
 //! `pcap_sendpacket` синхронный и не отменяемый (граница измерена, см.
 //! `windows::adapter`). Другие платформы и типы канала дают явную ошибку ДО
 //! любой отправки.
@@ -26,7 +31,7 @@ use rmasscan_engine::AdapterPair;
 #[cfg(target_os = "linux")]
 mod linux;
 
-// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}`. Переносимые
+// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}` (и в тестовом `spike`). Переносимые
 // части (`abi`, `adapter`) собираются и в тестах других платформ (seam-тесты).
 #[cfg(any(target_os = "macos", test))]
 mod macos;

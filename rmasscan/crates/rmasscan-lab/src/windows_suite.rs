@@ -310,18 +310,35 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 /// Held for a whole invocation: dropping it releases the suite lock on home-pc.
-pub(crate) struct LockGuard(Option<Box<dyn FnOnce() + Send>>);
+pub(crate) struct LockGuard {
+    release: Option<Box<dyn FnOnce() + Send>>,
+    /// Is the lock session still up? `None`: nothing to watch (no lock was taken).
+    alive: Option<Box<dyn Fn() -> bool + Send>>,
+}
 impl LockGuard {
     pub(crate) fn none() -> Self {
-        Self(None)
+        Self {
+            release: None,
+            alive: None,
+        }
     }
-    pub(crate) fn new(release: impl FnOnce() + Send + 'static) -> Self {
-        Self(Some(Box::new(release)))
+    pub(crate) fn new(
+        release: impl FnOnce() + Send + 'static,
+        alive: impl Fn() -> bool + Send + 'static,
+    ) -> Self {
+        Self {
+            release: Some(Box::new(release)),
+            alive: Some(Box::new(alive)),
+        }
+    }
+    /// The lock session is gone, so the remote flock is released and another orchestrator may hold the lock.
+    pub(crate) fn lost(&self) -> bool {
+        self.alive.as_ref().is_some_and(|alive| !alive())
     }
 }
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        if let Some(release) = self.0.take() {
+        if let Some(release) = self.release.take() {
             release();
         }
     }
@@ -383,52 +400,7 @@ impl Exec for Real {
         command_with(argv, timeout, false, false)
     }
     fn lock_suite(&self) -> Result<LockGuard, String> {
-        use std::io::{BufRead, BufReader};
-        let mut cmd = Command::new("ssh");
-        cmd.args(lock_ssh_args())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // The terminal's Ctrl-C must not drop the lock before the cleanup after it has finished.
-            cmd.process_group(0);
-        }
-        let mut child = cmd.spawn().map_err(|e| format!("ssh: {e}"))?;
-        let stdin = child.stdin.take();
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("lock session stdout unavailable")?;
-        let (tx, rx) = std::sync::mpsc::channel();
-        thread::spawn(move || {
-            let mut line = String::new();
-            let _ = BufReader::new(stdout).read_line(&mut line);
-            let _ = tx.send(line);
-        });
-        let reply = rx.recv_timeout(Duration::from_secs(45)).unwrap_or_default();
-        match reply.trim() {
-            "LOCKED" => Ok(LockGuard::new(move || {
-                drop(stdin);
-                let _ = child.kill();
-                let _ = child.wait();
-            })),
-            other => {
-                drop(stdin);
-                let _ = child.kill();
-                let _ = child.wait();
-                if other == "BUSY" {
-                    Err(LOCK_BUSY.into())
-                } else if other == "NOFLOCK" {
-                    Err(LOCK_NOFLOCK.into())
-                } else {
-                    Err(format!(
-                        "cannot take the suite lock on home-pc (reply {other:?})"
-                    ))
-                }
-            }
-        }
+        lock_session("ssh", &lock_ssh_args())
     }
     fn file_at_commit(&self, repo: &Path, commit: &str, path: &str) -> Result<Vec<u8>, String> {
         if !crate::deploy::full_commit(commit) || path.starts_with('-') || path.contains("..") {
@@ -449,6 +421,65 @@ impl Exec for Real {
                 "git show {commit}:{path} failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ))
+        }
+    }
+}
+/// Runs the lock session `program args` (ssh in production) and waits for its `LOCKED` reply.
+pub(crate) fn lock_session(program: &str, args: &[String]) -> Result<LockGuard, String> {
+    use std::io::{BufRead, BufReader};
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // The terminal's Ctrl-C must not drop the lock before the cleanup after it has finished.
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    let stdin = child.stdin.take();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("lock session stdout unavailable")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    let reply = rx.recv_timeout(Duration::from_secs(45)).unwrap_or_default();
+    match reply.trim() {
+        "LOCKED" => {
+            let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+            let watch = std::sync::Arc::clone(&child);
+            Ok(LockGuard::new(
+                move || {
+                    drop(stdin);
+                    if let Ok(mut c) = child.lock() {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                },
+                // A session that exited (or cannot be asked) no longer holds the remote flock.
+                move || matches!(watch.lock().map(|mut c| c.try_wait()), Ok(Ok(None))),
+            ))
+        }
+        other => {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            if other == "BUSY" {
+                Err(LOCK_BUSY.into())
+            } else if other == "NOFLOCK" {
+                Err(LOCK_NOFLOCK.into())
+            } else {
+                Err(format!(
+                    "cannot take the suite lock on home-pc (reply {other:?})"
+                ))
+            }
         }
     }
 }
@@ -585,7 +616,11 @@ struct Suite<'a> {
     cleanup: Cell<bool>,
     /// The guest scanner runner has been invoked for the current run, so frames may have been sent.
     runner_invoked: Cell<bool>,
+    /// The suite lock held for this invocation; once its session is gone no new remote action may start.
+    lock: Option<&'a LockGuard>,
 }
+/// Why a run stops when the lock session dies (the remote flock is released, so another orchestrator may start).
+const LOCK_LOST: &str = "the suite lock session to home-pc was lost; the lock is no longer held, so no further remote action is started. Check home-pc for leftovers, then start again.";
 /// `check` turns a non-zero exit into an error, like `command(.., check)`.
 fn checked(out: Output, argv0: &str, check: bool) -> Result<Output, String> {
     if check && out.rc != 0 {
@@ -601,6 +636,10 @@ fn checked(out: Output, argv0: &str, check: bool) -> Result<Output, String> {
 }
 impl Suite<'_> {
     fn run_cmd(&self, argv: &[String], timeout: u64, check: bool) -> Result<Output, String> {
+        // Cleanup stays possible; everything else needs the lock.
+        if !self.cleanup.get() && self.lock.is_some_and(LockGuard::lost) {
+            return Err(LOCK_LOST.into());
+        }
         let out = if self.cleanup.get() {
             self.exec.exec_uninterruptible(argv, timeout)?
         } else {
@@ -1843,8 +1882,13 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         pm: String::new(),
         cleanup: Cell::new(false),
         runner_invoked: Cell::new(false),
+        lock: None,
     };
-    let _lock = exec.lock_suite().map_err(lock_error)?;
+    let lock = exec.lock_suite().map_err(lock_error)?;
+    if lock.lost() {
+        return Err(SuiteError::Abort(LOCK_LOST.into()));
+    }
+    s.lock = Some(&lock);
     let home = remote_home(exec)?;
     s.remote_ev = format!("{home}/winvm/t4-ev");
     s.qmp = format!("{home}/winvm/qmp.sock");

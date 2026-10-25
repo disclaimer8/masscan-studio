@@ -531,6 +531,7 @@ fn suite<'a>(stand: &'a Stand, root: &Path) -> Suite<'a> {
         pm: PM.into(),
         cleanup: Cell::new(false),
         runner_invoked: Cell::new(false),
+        lock: None,
     }
 }
 const TAG: &str = "perm_elevated_control";
@@ -1591,6 +1592,7 @@ mod local_sweep {
             pm: PM.into(),
             cleanup: Cell::new(false),
             runner_invoked: Cell::new(false),
+            lock: None,
         };
         // The real wrapper of `Suite::bg`, around a TERM-ignoring shell.
         let tool = format!(
@@ -2551,4 +2553,78 @@ fn an_abort_after_a_capture_started_still_keeps_the_marker_until_the_copy_matche
     let e = run_with(&only_tag(&w), &stand).unwrap_err();
     assert_eq!(e.code(), 10);
     assert!(stand.marker.borrow().is_some());
+}
+
+// ---- review 7ffa155, P1: losing the lock session must stop the run ----
+/// The suite on a stand whose lock session can be killed: `lock_alive` is what the guard reports.
+struct LockWatch<'a> {
+    stand: &'a Stand,
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The lock session dies when a remote call containing this text goes out (empty: it is dead from the start).
+    die_at: &'static str,
+}
+impl Exec for LockWatch<'_> {
+    fn exec(&self, a: &[String], t: u64) -> Result<Output, String> {
+        if !self.die_at.is_empty() && a.iter().any(|v| v.contains(self.die_at)) {
+            self.alive.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.stand.exec(a, t)
+    }
+    fn exec_uninterruptible(&self, a: &[String], t: u64) -> Result<Output, String> {
+        self.stand.exec_uninterruptible(a, t)
+    }
+    fn stopped(&self) -> bool {
+        self.stand.stopped()
+    }
+    fn pause(&self, d: Duration) {
+        self.stand.pause(d)
+    }
+    fn file_at_commit(&self, r: &Path, c: &str, p: &str) -> Result<Vec<u8>, String> {
+        self.stand.file_at_commit(r, c, p)
+    }
+    fn lock_suite(&self) -> Result<LockGuard, String> {
+        let alive = std::sync::Arc::clone(&self.alive);
+        Ok(LockGuard::new(
+            || {},
+            move || alive.load(std::sync::atomic::Ordering::SeqCst),
+        ))
+    }
+}
+#[test]
+fn a_lost_lock_session_stops_the_suite_before_any_raw_run() {
+    for die_at in ["", "touch -- "] {
+        let w = World::new("lost-lock");
+        let stand = Stand::new(&w.src);
+        let watch = LockWatch {
+            stand: &stand,
+            alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(!die_at.is_empty())),
+            die_at,
+        };
+        let r = run_with(&only_tag(&w), &watch);
+        let runners = stand.count("windows_wire_run.ps1 -ArgvFile");
+        assert!(
+            matches!(&r, Err(SuiteError::Abort(m)) if m.contains("lock")),
+            "die_at={die_at:?}: {r:?}"
+        );
+        assert_eq!(
+            runners, 0,
+            "die_at={die_at:?}: no raw run after the lock is lost"
+        );
+    }
+}
+#[cfg(unix)]
+#[test]
+fn the_lock_guard_notices_that_its_ssh_session_died() {
+    let live = lock_session("sh", &strings(&["-c", "echo LOCKED; cat > /dev/null"])).unwrap();
+    assert!(!live.lost());
+    let dying = lock_session("sh", &strings(&["-c", "echo LOCKED; sleep 0.1; exit 255"])).unwrap();
+    for _ in 0..100 {
+        if dying.lost() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(dying.lost(), "an exited lock session is a lost lock");
+    let busy = lock_session("sh", &strings(&["-c", "echo BUSY"]));
+    assert_eq!(busy.err().as_deref(), Some(LOCK_BUSY));
 }

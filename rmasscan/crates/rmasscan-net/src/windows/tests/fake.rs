@@ -189,8 +189,10 @@ impl Default for Scenario {
 }
 
 // SAFETY: сырые указатели сценария ведут только в его собственные кучи
-// (узлы списка устройств, программы фильтров) и используются исключительно
-// под замком `STATE`.
+// (узлы списка устройств, программы фильтров, очереди sendqueue из
+// `Box::into_raw`) и используются исключительно под замком `STATE`, кроме
+// очередей: `SendQueue::clear`/`queued_bytes` читают их без замка, но одну
+// очередь в каждый момент трогает один поток.
 unsafe impl Send for Scenario {}
 
 static STATE: LazyLock<Mutex<Scenario>> = LazyLock::new(|| Mutex::new(Scenario::default()));

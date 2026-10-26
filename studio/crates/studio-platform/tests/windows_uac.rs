@@ -65,12 +65,11 @@ fn abrupt_owner_death_closes_the_only_job_handle() {
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let record = loop {
-        if let Ok(bytes) = std::fs::read(&ready) {
-            if let Ok(identity) =
+        if let Ok(bytes) = std::fs::read(&ready)
+            && let Ok(identity) =
                 serde_json::from_slice::<studio_platform::windows::Identity>(&bytes)
-            {
-                break identity;
-            }
+        {
+            break identity;
         }
         assert!(
             owner.try_wait().unwrap().is_none(),
@@ -111,6 +110,9 @@ fn job_owner() {
     )
     .unwrap();
     std::thread::sleep(Duration::from_secs(20));
+    drop(job);
+    let _ = child.kill();
+    let _ = child.wait();
     panic!("parent did not terminate fixture");
 }
 

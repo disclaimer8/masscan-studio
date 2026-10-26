@@ -1,9 +1,9 @@
 # Studio runner authorization
 
-Status: macOS and Linux session bootstrap implemented; raw scanning disabled.
-Windows simulation uses an authenticated named pipe; no Windows elevation claim
-is made. Windows trusted installation is a separate prerequisite; session UAC
-bootstrap is implemented behind the Windows UI gate and undergoing native acceptance.
+Status: macOS, Linux and Windows session bootstrap implemented; raw scanning disabled.
+Windows same-account desktop UAC and elevated runner lifetime passed native
+acceptance on 2026-10-26. Trusted installation remains a separate prerequisite.
+See VERIFICATION.md for exact package provenance and acceptance limits.
 
 ## Threat model and identity
 
@@ -126,7 +126,7 @@ re-read after observation. The checker does not create or modify the stand.
   VERIFICATION.md separately from offline tests and from engine Stage 2C.
 - Raw Start/Pause/Resume/Stop with independent packet capture and mid-scan network
   drift handling must pass before RAW_SCANNING_ENABLED can change.
-- Windows runas/session bootstrap (including other-account UAC);
+- Windows alternate-account UAC refusal still needs a real second-account test;
   Linux desktop password prompt/cancellation remains a manual acceptance item.
 - No physical NIC or three-OS raw support follows from this implementation.
 
@@ -186,8 +186,8 @@ The disposable CI VM can exercise actual installation because its job account
 already has administrative rights. Tests check executable write/rename pinning,
 no-overwrite, content tamper detection and reparse refusal. These checks do not
 exercise UAC prompting, cancellation, alternate credentials or a raw adapter.
-The Windows UI Authorize button remains unavailable until session bootstrap is
-accepted separately.
+Windows Authorize/Lock is enabled following the separately recorded desktop
+session acceptance. Installation alone never establishes session readiness.
 
 ## Windows session bootstrap
 
@@ -223,5 +223,20 @@ checks and CloseSession. It opens no packet adapter and requires no Npcap. CI us
 a restricted token of its own account for ordinary application tests; the parent
 remains administrative only for installation and lifecycle supervision. This
 restricted token is not evidence of an interactive desktop split-token session.
-Desktop allow/deny, cancellation while consent is open, and alternate credentials
-remain separate manual acceptance cases.
+Desktop allow/deny, retry, CloseSession, IPC loss, job closure, abrupt owner death
+and approval of an already-cancelled launch passed on the lab VM. Alternate
+credentials remain untested and unsupported, with same-SID rejection in code.
+
+Before privileged IPC, the dedicated runner clears normal environment entries
+and retains only SYSTEMROOT, WINDIR and PATH, derived from Windows system APIs.
+It restricts subsequent default DLL lookup to System32. This policy is never
+applied to the UI. Static imports necessarily load before Rust entry: the pinned
+administrator-owned image and Windows runtime are the startup trust boundary.
+Native tests poison PATH/an extra marker and place a benign DLL in the working
+directory, then verify the allowlist and actual System32 module path.
+
+Hosted GitHub Windows jobs cannot interact with the consent desktop: actual
+runas returned ERROR_CANCELLED (1223). CI retains native identity, environment,
+job lifetime, rejection, simulation, installer and package checks. It packages
+the exact ignored integrated cancellation test for desktop execution. Passing
+CI does not substitute for this desktop acceptance.

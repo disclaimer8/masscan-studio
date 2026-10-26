@@ -101,6 +101,15 @@ component JobField inherits VerticalLayout {
 }
 
 export component MainWindow inherits Window {
+    in property <bool> import-available: false;
+    in-out property <bool> import-open: false;
+    in-out property <bool> importing: false;
+    in-out property <string> import-report: "";
+    in property <[string]> profile-labels;
+    in-out property <int> profile-index: -1;
+    callback choose-import-folder();
+    callback import-selected(string);
+    callback load-profile(int);
     in-out property <bool> exporting: false;
     in property <bool> inspection-available: false;
     callback resolve-names();
@@ -184,7 +193,7 @@ export component MainWindow inherits Window {
     }
 
     Rectangle {
-      visible: !root.settings-open;
+      visible: !root.settings-open && !root.import-open;
       VerticalLayout {
         padding: 0px; spacing: 0px;
         // Compact application header. Demo status is distinct from scan status.
@@ -237,6 +246,7 @@ export component MainWindow inherits Window {
                 actions-button := ActionButton { text: "Actions…"; enabled: root.active-row >= 0; clicked => { root.show-actions(root.details, self.absolute-position.x, self.absolute-position.y + self.height + 4px); } }
                 ActionButton { text: "Names"; enabled: root.inspection-available; clicked => { root.resolve-names(); } Tooltip { Text { text: "Resolve selected hosts, or all visible hosts (up to 512)"; } } }
                 ActionButton { text: "Export…"; enabled: !root.exporting; clicked => { exports.show(); } }
+                if root.import-available : ActionButton { text: "Import Swift…"; enabled: !root.process-active && !root.importing; clicked => { root.import-open = true; } }
                 Rectangle { width: 8px; }
                 if root.process-active : ActionButton { text: "Pause"; enabled: root.process-status != "Saving" && !root.process-stopping; clicked => { root.pause-scan(); } }
                 if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: !root.process-stopping; clicked => { root.stop-scan(); } }
@@ -407,6 +417,12 @@ export component MainWindow inherits Window {
                     ActionButton { width: 80px; text: "Done"; clicked => { root.settings-open = false; } }
                 }
                 Text { text: "IPv4 / TCP scan. Results and paused jobs are saved in history."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                if root.profile-labels.length > 0 : HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Imported profile"; color: Theme.muted; vertical-alignment: center; }
+                    ComboBox { horizontal-stretch: 1; model: root.profile-labels; current-index <=> root.profile-index; }
+                    ActionButton { text: "Load settings"; enabled: root.profile-index >= 0 && !root.process-active; clicked => { root.load-profile(root.profile-index); } }
+                }
                 ComboBox { model: ["Mac feth · not enabled yet", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
                 JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
                 HorizontalLayout {
@@ -444,7 +460,35 @@ export component MainWindow inherits Window {
             }
         }
     }
-    // Clipboard works in the prototype; network actions only show their planned operation.
+    if root.import-open : Rectangle {
+        background: Theme.canvas;
+        Rectangle {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            width: min(700px, parent.width - 40px); height: min(520px, parent.height - 40px);
+            background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.divider;
+            VerticalLayout {
+                padding: 24px; spacing: 16px;
+                Text { text: "Import Swift history"; color: Theme.text; font-size: 20px; font-weight: 600; }
+                Text { text: "Close the old Swift app, then choose the folder containing sessions.json and profiles.json. Your original files stay unchanged."; color: Theme.text; wrap: word-wrap; }
+                Text { text: "Old results and profiles are kept. Paused Swift scans cannot resume in this engine. Repeated imports skip unchanged records; conflicts never overwrite saved history."; color: Theme.muted; wrap: word-wrap; }
+                Rectangle {
+                    background: Theme.canvas; border-radius: 5px; vertical-stretch: 1;
+                    ScrollView {
+                        x: 12px; y: 12px; width: parent.width - 24px; height: parent.height - 24px;
+                        content-width: self.visible-width;
+                        content-height: max(self.visible-height, report.preferred-height);
+                        report := Text { width: parent.width; height: self.preferred-height; text: root.importing ? "Reading and validating history…" : root.import-report == "" ? "No folder selected. Nothing has been imported." : root.import-report; color: Theme.text; wrap: word-wrap; vertical-alignment: top; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    ActionButton { text: "Close"; enabled: !root.importing; clicked => { root.import-open = false; } }
+                    Rectangle { horizontal-stretch: 1; }
+                    ActionButton { text: root.importing ? "Importing…" : "Choose folder…"; primary: true; enabled: !root.importing && !root.process-active; clicked => { root.choose-import-folder(); } }
+                }
+            }
+        }
+    }
     clipboard := TextInput { visible: false; width: 0px; height: 0px; }
     themes := PopupWindow {
         x: min(theme-button.absolute-position.x, root.width - 192px); y: 52px;

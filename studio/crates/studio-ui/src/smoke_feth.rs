@@ -1,6 +1,12 @@
 //! `--smoke-feth`: a state machine that drives the Mac feth profile through the same `Action`s a user's clicks
 //! send and records a JSON chronicle of every `Update` it sees. It is platform neutral and touches neither the UI,
 //! nor SQLite, nor the runner: the caller feeds it `Update`s and executes the `Step`s it returns.
+//!
+//! Deviation from the brief's sketch: there is no `Step::Wait`; an empty step list means "nothing to do".
+//! The caller turns `Send(Start(job))` into the form path (fill the settings fields, press Start), `Send(Stop)` into
+//! the Stop button, and the rest into `Controller::send`; the driver itself only knows `Action`s.
+//! On the failure path `Lock` is nominal: the controller ignores it while a scan is active, and the session is
+//! closed when the process exits (`Controller` and `Client` drop, the runner stops on disconnect).
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -67,13 +73,7 @@ impl Plan {
 
 pub enum Step {
     Send(Action),
-    Quit {
-        ok: bool,
-        reason: String,
-    },
-    /// Nothing to do; `Driver::step` returns an empty list instead, callers may ignore this.
-    #[allow(dead_code)]
-    Wait,
+    Quit { ok: bool, reason: String },
 }
 
 #[derive(Serialize)]
@@ -120,7 +120,7 @@ pub struct Chronicle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Phase {
     Init,
-    Authorize { granted: bool },
+    Authorize { granted: bool, busy: bool },
     Settle { next: Option<usize>, since: Instant },
     AwaitScanning(usize),
     Scanning(usize, Instant),
@@ -180,6 +180,16 @@ impl Driver {
             action_mono: 0,
         }
     }
+    /// The caller could not do what a step asked (for example the settings form did not reproduce the planned
+    /// job): ends the run with a recorded failure.
+    pub fn abort(&mut self, reason: String, now: Instant, utc: String) -> Vec<Step> {
+        let mut out = Vec::new();
+        if self.phase != Phase::Done {
+            let stop = self.scan_may_run();
+            self.fail(reason, stop, now, &utc, &mut out);
+        }
+        out
+    }
     pub fn chronicle(&self) -> &Chronicle {
         &self.chron
     }
@@ -201,7 +211,8 @@ impl Driver {
         out.push(Step::Send(a));
     }
     /// Ends the run with a failure: the session is locked and the reason is the result. `stop_first` also sends
-    /// Stop, for a scan that may still be running.
+    /// Stop, for a scan that may still be running. `Lock` is nominal here: the controller ignores it while a scan
+    /// is active, and the session really ends when the process exits.
     fn fail(
         &mut self,
         reason: String,
@@ -299,7 +310,7 @@ impl Driver {
     fn on_update(&mut self, u: &Update, now: Instant, utc: &str, out: &mut Vec<Step>) {
         match (self.phase, u) {
             (
-                Phase::Authorize { .. },
+                Phase::Authorize { granted, .. },
                 Update::Authorization {
                     busy,
                     authorized,
@@ -307,7 +318,12 @@ impl Driver {
                 },
             ) => {
                 if *busy {
-                    // The system dialog is open.
+                    // The system dialog is open; from here on a stored-scan replay can no longer be mistaken
+                    // for a failure of this run.
+                    self.phase = Phase::Authorize {
+                        granted,
+                        busy: true,
+                    };
                 } else if !*authorized {
                     self.fail(
                         format!("Authorization failed: {detail}"),
@@ -317,7 +333,10 @@ impl Driver {
                         out,
                     );
                 } else {
-                    self.phase = Phase::Authorize { granted: true };
+                    self.phase = Phase::Authorize {
+                        granted: true,
+                        busy: true,
+                    };
                 }
             }
             (Phase::Authorize { granted, .. }, Update::Notice(t)) => {
@@ -340,6 +359,12 @@ impl Driver {
                     ok: true,
                     reason: "ok".into(),
                 });
+            }
+            (
+                Phase::Authorize { busy: true, .. } | Phase::Locking,
+                Update::State(s @ (Status::Failed | Status::Interrupted), detail),
+            ) => {
+                self.fail(format!("State {s:?}: {detail}"), false, now, utc, out);
             }
             (Phase::Init | Phase::Authorize { .. } | Phase::Locking | Phase::Done, _) => {}
             (
@@ -415,16 +440,18 @@ impl Driver {
                 let next = (i + 1 < self.plan.scans.len()).then_some(i + 1);
                 self.set_phase(Phase::Settle { next, since: now }, now);
             }
-            (
-                Phase::Scanning(..)
-                | Phase::AwaitPaused(_)
-                | Phase::AwaitStopped(_)
-                | Phase::Resumed(_),
-                Update::State(s @ (Status::Completed | Status::Stopped), d),
-            ) => {
+            // Harmless repeats: the start of an attempt, a second Scanning, the pause drain, anything after the
+            // terminal state of the case.
+            (_, Update::State(Status::Starting | Status::Scanning, _))
+            | (Phase::AwaitPaused(_), Update::State(Status::Saving, _))
+            | (Phase::AwaitHistory(_) | Phase::Settle { .. }, Update::State(..)) => {}
+            // Any other state in a running case is a surprise: fail now instead of timing out.
+            (_, Update::State(s, d)) => {
+                let stop = self.scan_may_run();
+                let phase = self.phase;
                 self.fail(
-                    format!("State {s:?} came out of order: {d}"),
-                    false,
+                    format!("State {s:?} unexpected in {phase:?}: {d}"),
+                    stop,
                     now,
                     utc,
                     out,
@@ -439,7 +466,13 @@ impl Driver {
             Phase::Init => {
                 self.chron.started_utc = utc.to_owned();
                 self.act("Authorize".into(), now, utc, out, Action::Authorize);
-                self.set_phase(Phase::Authorize { granted: false }, now);
+                self.set_phase(
+                    Phase::Authorize {
+                        granted: false,
+                        busy: false,
+                    },
+                    now,
+                );
                 return;
             }
             Phase::Done => return,
@@ -627,7 +660,6 @@ mod tests {
                         self.sent.push(n);
                     }
                     Step::Quit { ok, reason } => self.quit = Some((ok, reason)),
-                    Step::Wait => {}
                 }
             }
             n
@@ -705,8 +737,13 @@ mod tests {
             self.state(2610, Status::Saving, "Pausing and draining replies…");
             self.state(2700, Status::Saving, "Checkpoint saved; confirming pause…");
             self.state(5700, Status::Paused, "Checkpoint committed by Studio");
-            self.history(5700, ID2, Status::Paused, Some("7")); // Resume
-            self.state(5710, Status::Starting, "Resuming saved scan");
+            assert_eq!(
+                self.sent.last().unwrap(),
+                "Pause",
+                "no Resume on the Paused state alone"
+            );
+            self.history(5750, ID2, Status::Paused, Some("7")); // Resume
+            self.state(5760, Status::Starting, "Resuming saved scan");
             self.state(5800, Status::Scanning, "Scanning 32 endpoints");
             self.state(9000, Status::Completed, "done");
             self.history(9000, ID2, Status::Completed, None);
@@ -759,6 +796,14 @@ mod tests {
         assert_eq!(c.plan[0].rows_seen, 3, "unique rows, not row updates");
         assert_eq!(c.plan[0].finished_status.as_deref(), Some("Completed"));
         assert_eq!(c.plan[1].paused_next_index, Some(7));
+        // From the Pause action (2600) to Paused (5700), not to the first Saving (2610).
+        assert_eq!(c.plan[1].pause_to_paused_ms, Some(3100));
+        // Resume only after the Paused History (5750).
+        let resume = c.actions.iter().find(|a| a.action == "Resume").unwrap();
+        assert_eq!(resume.mono_ms, 5750);
+        // What was sent is what was recorded.
+        let recorded: Vec<String> = c.actions.iter().map(|a| a.action.clone()).collect();
+        assert_eq!(t.sent, recorded);
         assert_eq!(c.plan[2].finished_status.as_deref(), Some("Stopped"));
         assert!(
             c.events
@@ -813,15 +858,83 @@ mod tests {
 
     #[test]
     fn failed_state_during_a_case_quits_without_the_next_case() {
+        for bad in [Status::Failed, Status::Interrupted] {
+            let mut t = T::new();
+            t.authorize();
+            t.at(200, None);
+            t.state(210, Status::Starting, "Starting scanner");
+            t.state(300, bad.clone(), "Runner refused raw");
+            assert_eq!(t.sent, ["Authorize", "Start:s1_full", "Lock"]);
+            assert!(matches!(&t.quit, Some((false, r)) if r.contains(&format!("{bad:?}"))));
+            assert!(!t.d.chronicle().result.starts_with("timeout"));
+            t.at(900, None);
+            assert_eq!(t.sent.len(), 3);
+        }
+    }
+
+    #[test]
+    fn interrupted_while_authorizing_or_locking_fails_at_once() {
+        // A stored scan replayed before the dialog is not a failure of this run ...
+        let mut t = T::new();
+        t.at(0, None);
+        t.state(5, Status::Interrupted, "old scan");
+        assert!(t.quit.is_none());
+        // ... but after the dialog was opened it is.
+        t.at(
+            10,
+            Some(Update::Authorization {
+                busy: true,
+                authorized: false,
+                detail: "Waiting".into(),
+            }),
+        );
+        t.state(20, Status::Interrupted, "runner died");
+        assert!(matches!(&t.quit, Some((false, r)) if r.contains("Interrupted")));
+        assert!(!t.d.chronicle().result.starts_with("timeout"));
+        // Locking.
+        let mut l = T::new();
+        l.authorize();
+        l.at(200, None);
+        l.state(300, Status::Scanning, "s1");
+        l.state(400, Status::Completed, "done");
+        l.history(400, ID1, Status::Completed, None);
+        l.at(500, None);
+        l.state(600, Status::Scanning, "s2");
+        l.at(2100, None);
+        l.state(2200, Status::Paused, "Checkpoint committed by Studio");
+        l.history(2200, ID2, Status::Paused, Some("3"));
+        l.state(2300, Status::Scanning, "s2");
+        l.state(2400, Status::Completed, "done");
+        l.history(2400, ID2, Status::Completed, None);
+        l.at(2500, None);
+        l.state(2600, Status::Scanning, "s3");
+        l.at(4100, None);
+        l.state(4137, Status::Stopped, "Stopped");
+        l.history(4137, ID3, Status::Stopped, None);
+        l.at(4300, None);
+        assert_eq!(l.sent.last().unwrap(), "Lock");
+        l.state(4310, Status::Interrupted, "runner gone");
+        assert!(matches!(&l.quit, Some((false, r)) if r.contains("Interrupted")));
+    }
+
+    #[test]
+    fn unexpected_states_fail_at_once_not_by_timeout() {
+        // Paused while waiting for Completed of a scan that is not to be paused.
         let mut t = T::new();
         t.authorize();
         t.at(200, None);
-        t.state(210, Status::Starting, "Starting scanner");
-        t.state(300, Status::Failed, "Runner refused raw");
-        assert_eq!(t.sent, ["Authorize", "Start:s1_full", "Lock"]);
-        assert!(matches!(&t.quit, Some((false, r)) if r.contains("Failed")));
-        t.at(900, None);
-        assert_eq!(t.sent.len(), 3);
+        t.state(300, Status::Scanning, "s1");
+        t.state(400, Status::Paused, "surprise");
+        assert!(
+            matches!(&t.quit, Some((false, r)) if r.contains("Paused") && !r.starts_with("timeout"))
+        );
+        assert_eq!(t.sent[t.sent.len() - 2..], ["Stop", "Lock"]);
+        // Completed right after Start, before Scanning.
+        let mut u = T::new();
+        u.authorize();
+        u.at(200, None);
+        u.state(250, Status::Completed, "surprise");
+        assert!(matches!(&u.quit, Some((false, r)) if r.contains("Completed")));
     }
 
     #[test]
@@ -931,7 +1044,11 @@ mod tests {
         assert!(!ok);
         assert!(reason.starts_with("timeout"), "{reason}");
         assert_eq!(t.d.chronicle().result, reason);
-        assert_eq!(t.sent.last().unwrap(), "Lock");
+        assert_eq!(
+            t.sent[t.sent.len() - 2..],
+            ["Stop", "Lock"],
+            "a running scan is stopped first"
+        );
         // Authorization may take up to 200 s.
         let mut a = T::new();
         a.at(0, None);

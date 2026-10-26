@@ -326,6 +326,19 @@ fn smoke_feth_config(
         out_dir: out.into(),
     }))
 }
+/// The chronicle directory must exist and be writable before an administrator dialog is spent on a run.
+fn check_smoke_out(dir: &std::path::Path) -> Result<(), String> {
+    if !dir.is_dir() {
+        return Err(format!(
+            "STUDIO_SMOKE_OUT {} is not a directory",
+            dir.display()
+        ));
+    }
+    let probe = dir.join(".smoke-feth-write-test");
+    std::fs::write(&probe, b"").map_err(|e| format!("STUDIO_SMOKE_OUT is not writable: {e}"))?;
+    let _ = std::fs::remove_file(probe);
+    Ok(())
+}
 fn save_screenshot(ui: &MainWindow) {
     if let Some(p) = std::env::var_os("STUDIO_SCREENSHOT")
         && let Ok(pixels) = ui.window().take_snapshot()
@@ -349,6 +362,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |k| std::env::var_os(k),
         cfg!(target_os = "macos"),
     )?;
+    if let Some(f) = &feth {
+        check_smoke_out(&f.out_dir)?;
+    }
     if std::env::var_os("SLINT_BACKEND").is_none() {
         slint::BackendSelector::new()
             .backend_name("winit".into())
@@ -1009,10 +1025,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             m.summary(&ui);
-            for step in feth_steps {
+            let mut feth_steps = std::collections::VecDeque::from(feth_steps);
+            while let Some(step) = feth_steps.pop_front() {
                 match step {
+                    // Start goes through the settings form and the Start button's callback, Stop through the Stop
+                    // button; the rest are the controller actions the other buttons send.
+                    smoke_feth::Step::Send(Action::Start(job)) => {
+                        fill_settings(&ui, &job);
+                        if draft(&ui).as_ref() == Ok(&job) {
+                            ui.invoke_run_process_test();
+                        } else if let Some(d) = &driver {
+                            let reason =
+                                "the settings form does not reproduce the planned job".to_string();
+                            feth_steps.extend(d.borrow_mut().abort(
+                                reason,
+                                Instant::now(),
+                                smoke_feth::utc_now(),
+                            ));
+                        }
+                    }
+                    smoke_feth::Step::Send(Action::Stop) => ui.invoke_stop_scan(),
                     smoke_feth::Step::Send(next) => action(&a, &ui, next),
-                    smoke_feth::Step::Wait => {}
                     smoke_feth::Step::Quit { ok, reason } => {
                         let written = match (&driver, &feth_out) {
                             (Some(d), Some(dir)) => {

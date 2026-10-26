@@ -1,0 +1,20 @@
+{
+  "error": null,
+  "events": [
+    {
+      "reply": {
+        "return": {}
+      },
+      "set_link": "down",
+      "t": 1792987965.0992558
+    },
+    {
+      "reply": {
+        "return": {}
+      },
+      "set_link": "up",
+      "t": 1792987975.1132054
+    }
+  ],
+  "first_syn_seen": true
+}

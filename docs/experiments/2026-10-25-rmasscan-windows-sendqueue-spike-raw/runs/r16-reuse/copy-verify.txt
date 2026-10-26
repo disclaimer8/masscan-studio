@@ -1,0 +1,25 @@
+./capture-filters.txt: OK
+./eno1.err: OK
+./eno1.out: OK
+./eno1.pcap: OK
+./guest-out/idle__sq_reuse_clear.csv: OK
+./guest-out/idle__sq_reuse_clear_process.csv: OK
+./guest-out/idle__sq_reuse_destroy_alloc.csv: OK
+./guest-out/idle__sq_reuse_destroy_alloc_process.csv: OK
+./guest-out/live_sendqueue_reuse_no_leak.log: OK
+./guest-out/live_sendqueue_reuse_no_leak.run.txt: OK
+./guest-run.stderr: OK
+./guest-run.stdout: OK
+./guest-verify.json: OK
+./guest-verify.stderr: OK
+./guest-verify.stdout.json: OK
+./orch.log: OK
+./pcap.sizes: OK
+./peer.err: OK
+./peer.out: OK
+./peer.pcap: OK
+./record-guest.err: OK
+./record-guest.json: OK
+./status-post.json: OK
+./status-pre.json: OK
+all 24 files match the sha256 taken on home-pc before copying

@@ -1,0 +1,5 @@
+peer.pcap not stored (size over 40 MB). Full file stays on home-pc (~/winvm/sq-ev/r05-reuse/peer.pcap).
+sha256 f817e1dfb99a33eb9e26c484f1ea89d619141376ed3507c7d2a8c98755f12566
+size_bytes 52096082
+packets 704001
+stored: peer.excerpt.pcap = first 2000 packets of that capture

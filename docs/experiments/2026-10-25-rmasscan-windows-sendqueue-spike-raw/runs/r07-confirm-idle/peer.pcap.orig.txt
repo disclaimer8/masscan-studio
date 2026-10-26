@@ -1,0 +1,5 @@
+peer.pcap not stored (size over 40 MB). Full file stays on home-pc (~/winvm/sq-ev/r07-confirm-idle/peer.pcap).
+sha256 9fd03d52d677bb52b27839ab0dd9d45e91b4c4c576d0f064736c529bd6b6019a
+size_bytes 66452140
+packets 898002
+stored: peer.excerpt.pcap = first 2000 packets of that capture

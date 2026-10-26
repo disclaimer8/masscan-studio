@@ -1,0 +1,16 @@
+[2026-10-26T03:59:08.811Z] tag=r03-partial test=live_sendqueue_partial_boundary cond=idle sha=61c1126 nonce=r27408b1432202dbf-a8382323dc1e7be2 extra=
+[2026-10-26T03:59:10.619Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T03:59:11.133Z] guest run begins
+[2026-10-26T03:59:14.457Z] guest run ended rc=0
+[2026-10-26T03:59:17.297Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=1295
+==> $HOME/winvm/sq-ev/r03-partial/peer.err <==
+1295 packets captured
+1295 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r03-partial/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

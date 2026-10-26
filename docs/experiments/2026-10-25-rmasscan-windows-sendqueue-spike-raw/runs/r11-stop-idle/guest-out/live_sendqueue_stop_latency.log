@@ -1,0 +1,11 @@
+
+running 1 test
+test windows::live::live_sendqueue_stop_latency ... SUMMARY idle/sq_stop_latency_tx n=60 p50_us=1373 p95_us=3430 p99_us=4836 max_us=5352 rc={0: 60}
+SUMMARY idle/sq_stop_latency_rx n=60 p50_us=51 p95_us=1722 p99_us=2162 max_us=2291 rc={0: 60}
+SUMMARY idle/sq_stop_latency_joined n=60 p50_us=1713 p95_us=3529 p99_us=4934 max_us=5438 rc={0: 60}
+SUMMARY idle/sq_stop_slowest_transmit_per_round n=60 p50_us=6369 p95_us=8153 p99_us=8577 max_us=9105 rc={0: 60}
+KV idle/sq_stop_verdict batch=64 rounds=60 frames=234496 max_join_us=5438 worst_tx_excess_over_slowest_transmit_us=0 short_transmits=0 rx_errors=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 179 filtered out; finished in 10.36s
+

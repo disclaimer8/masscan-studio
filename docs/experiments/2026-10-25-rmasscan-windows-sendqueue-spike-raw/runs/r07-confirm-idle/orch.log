@@ -1,0 +1,16 @@
+[2026-10-26T04:05:20.705Z] tag=r07-confirm-idle test=live_sendqueue_transmit_timing cond=idle sha=53afec8 nonce=r1ea24e92fbd7d99b-d6235e90fa11e4ae extra=RMASSCAN_NPCAP_SQ_SIZES=128,256,512;RMASSCAN_NPCAP_SQ_ROUNDS=1000
+[2026-10-26T04:05:22.492Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:05:23.747Z] guest run begins
+[2026-10-26T04:06:15.365Z] guest run ended rc=0
+[2026-10-26T04:06:17.943Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=898002
+==> $HOME/winvm/sq-ev/r07-confirm-idle/peer.err <==
+898002 packets captured
+898002 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r07-confirm-idle/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

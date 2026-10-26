@@ -1,0 +1,26 @@
+
+running 1 test
+test windows::live::live_sendqueue_transmit_timing ... KV flood/config sizes=[1, 16, 64, 256, 1024, 4096] rounds=200 pps_cap=100000
+KV flood/sq_n1 n=1 calls=200 p50_us=133 p95_us=303 p99_us=450 p999_us=491 max_us=491 sum_frames=200 sum_dur_us=30190 pps_ceiling=6625 short_transmits=0 pass=true
+KV flood/sq_n1_seq first=0 frames=200
+KV flood/sq_n16 n=16 calls=200 p50_us=1148 p95_us=1548 p99_us=1758 p999_us=1873 max_us=1873 sum_frames=3200 sum_dur_us=236345 pps_ceiling=13540 short_transmits=0 pass=true
+KV flood/sq_n16_seq first=200 frames=3200
+KV flood/sq_n64 n=64 calls=200 p50_us=3889 p95_us=4962 p99_us=5443 p999_us=5580 max_us=5580 sum_frames=12800 sum_dur_us=795026 pps_ceiling=16100 short_transmits=0 pass=true
+KV flood/sq_n64_seq first=3400 frames=12800
+KV flood/sq_n256 n=256 calls=200 p50_us=15498 p95_us=19638 p99_us=21073 p999_us=21925 max_us=21925 sum_frames=51200 sum_dur_us=3190962 pps_ceiling=16045 short_transmits=0 pass=false
+KV flood/sq_n256_seq first=16200 frames=51200
+KV flood/sq_n1024 n=1024 calls=200 p50_us=61914 p95_us=73320 p99_us=78281 p999_us=82187 max_us=82187 sum_frames=204800 sum_dur_us=11770541 pps_ceiling=17399 short_transmits=0 pass=false
+KV flood/sq_n1024_seq first=67400 frames=204800
+KV flood/sq_n4096 n=4096 calls=200 p50_us=247606 p95_us=287754 p99_us=301054 p999_us=307494 max_us=307494 sum_frames=819200 sum_dur_us=45795302 pps_ceiling=17888 short_transmits=0 pass=false
+KV flood/sq_n4096_seq first=272200 frames=819200
+SUMMARY flood/sq_cmp_sendpacket n=1000 p50_us=137 p95_us=276 p99_us=348 max_us=3083 rc={0: 1000}
+KV flood/sq_cmp_queue_n1 n=1 calls=1000 p50_us=143 p95_us=274 p99_us=366 p999_us=727 max_us=2064 sum_frames=1000 sum_dur_us=158721 pps_ceiling=6300 short_transmits=0 pass=true
+KV flood/sq_cmp_seq first=1091400 calls_each=1000
+SUMMARY flood/sq_cmp_sendpacket n=1000 p50_us=137 p95_us=276 p99_us=348 max_us=3083 rc={0: 1000}
+KV flood/sigma_frames 1093400
+KV flood/largest_passing_n 64
+KV flood/final_tx_stats recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 179 filtered out; finished in 62.29s
+

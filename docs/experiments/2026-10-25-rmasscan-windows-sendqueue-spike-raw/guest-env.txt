@@ -1,0 +1,8 @@
+os: Microsoft Windows 11 Pro 10.0.26300
+npcap.sys: 1.90
+wpcap.dll: 1.10.7 sha256 332f81cc1671a6d12ab4d20264a00ee16d12f6883745e05c92ee4030b3896a9f
+Packet.dll: 1.90
+npcap service: Running
+AdminOnly: 1
+rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+nic: Intel(R) 82574L Gigabit Network Connection #2 1 Gbps

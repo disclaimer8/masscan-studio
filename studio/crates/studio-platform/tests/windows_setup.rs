@@ -51,7 +51,7 @@ fn powershell_source_roundtrips_smart_quotes_as_data() {
     for quote in ['\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}', '\''] {
         let source = format!("C:\\x{quote};Write-Output INJECTED;#\\runner.exe");
         let script = format!(
-            "$ErrorActionPreference = 'Stop'\n$s = {}\n[Console]::Out.Write($s)\n",
+            "$ErrorActionPreference = 'Stop'\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n$s = {}\n[Console]::Out.Write($s)\n",
             powershell_quote(&source).unwrap()
         );
         let output = powershell_test(&script);

@@ -430,6 +430,29 @@ fn main() {
 fn launch() -> Result<(), String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     #[cfg(windows)]
+    if studio_platform::windows::Process::open(std::process::id())?
+        .elevation()?
+        .elevated
+        && !(args.len() == 5 && args[0] == "--authorized-pipe")
+    {
+        return Err("Elevated runner requires an authenticated UAC session".into());
+    }
+    #[cfg(windows)]
+    if args.len() == 5 && args[0] == "--authorized-pipe" {
+        use studio_platform::windows::{Identity, uac::RunnerConnection};
+        let ui: Identity = serde_json::from_str(&args[2]).map_err(|e| e.to_string())?;
+        let connection = RunnerConnection::open(&args[1], &ui, &args[3], &args[4])?;
+        let monitor = connection.stream.clone();
+        let result = serve(
+            Box::new(connection.stream.clone()),
+            Box::new(connection.stream.clone()),
+            Box::new(move || monitor.ensure_peer_alive()),
+        );
+        // Keep immutable installation handles alive until the session has ended.
+        drop(connection);
+        return result;
+    }
+    #[cfg(windows)]
     if args.len() == 3 && args[0] == "--connect-pipe" {
         use studio_platform::windows::{Identity, Stream};
         let ui: Identity = serde_json::from_str(&args[2]).map_err(|e| e.to_string())?;

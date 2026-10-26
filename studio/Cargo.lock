@@ -5913,6 +5913,7 @@ dependencies = [
  "sha2 0.10.9",
  "studio-platform",
  "studio-protocol",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

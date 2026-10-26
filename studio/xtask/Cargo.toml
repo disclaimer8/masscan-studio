@@ -6,6 +6,6 @@ license.workspace = true
 
 [dependencies]
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 studio-platform.workspace = true
 studio-protocol.workspace = true

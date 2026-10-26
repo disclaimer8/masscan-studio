@@ -1677,3 +1677,128 @@ fn expect_head_binds_the_window_to_a_commit() {
     assert_eq!(run(&args(&"f".repeat(40))), Ok(2));
     fs::remove_dir_all(d).ok();
 }
+
+// ------------------------------------------------------------------ fix round 2
+
+/// A session that ended before any Start, in the shape the committed driver writes: three plan records with null
+/// scan ids, `Authorize` (and `Lock`) as the only actions, the reason as the result, no scan in the history.
+fn ended_before_start(result: &str, events: Vec<Value>) -> Model {
+    let mut m = Model::consistent();
+    m.syns = vec![vec![], vec![], vec![]];
+    m.replies = vec![vec![], vec![], vec![]];
+    m.history = json!({"scans":[]});
+    let sm = m.smoke.as_mut().unwrap();
+    for p in sm["plan"].as_array_mut().unwrap() {
+        p["scan_id_hex"] = Value::Null;
+        p["rows_seen"] = json!(0);
+        p["finished_utc"] = Value::Null;
+        p["finished_status"] = Value::Null;
+        p["paused_next_index"] = Value::Null;
+        p["pause_to_paused_ms"] = Value::Null;
+        p["stop_to_stopped_ms"] = Value::Null;
+    }
+    sm["result"] = json!(result);
+    sm["actions"] = json!([action(0.0, "Authorize"), action(2.0, "Lock")]);
+    sm["events"] = json!(events);
+    m
+}
+fn authorization(t: f64, authorized: bool, detail: &str) -> Value {
+    let mut e = event(t, "Authorization", "", detail);
+    e["authorized"] = json!(authorized);
+    e
+}
+
+#[test]
+fn a_session_that_ends_before_any_start_is_not_run() {
+    let cases = [
+        (
+            "cancelled dialog",
+            "Authorization failed: User cancelled",
+            vec![authorization(1.0, false, "User cancelled")],
+        ),
+        (
+            "authorization timeout",
+            "timeout in phase Authorize after 200 s",
+            vec![],
+        ),
+        (
+            "preflight refused",
+            "Network preflight refused: stand is down",
+            vec![
+                authorization(0.5, true, ""),
+                event(
+                    1.0,
+                    "Notice",
+                    "",
+                    "Network preflight refused: stand is down",
+                ),
+            ],
+        ),
+    ];
+    for (name, result, events) in cases {
+        let mut m = ended_before_start(result, events);
+        let v = verdict_of(&mut m);
+        assert_eq!(overall(&v), NOT_RUN, "{name}: {:?}", bad(&v));
+        assert_eq!(exit_code(&v), 2);
+        assert!(array(&v["behaviour_fail"]).is_empty(), "{name}");
+        // the reason is the chronicle's own
+        let ch = array(&v["cases"])
+            .iter()
+            .find(|c| c["tag"] == "chronicle")
+            .unwrap();
+        assert!(
+            array(&ch["checks"]).iter().any(|k| k["detail"] == result),
+            "{name}"
+        );
+    }
+    // a safety trip still FAILs
+    let mut m = ended_before_start("timeout in phase Authorize after 200 s", vec![]);
+    m.uplink = vec![(T0 + 1.0, syn_of(80))];
+    m.uplink_err = tcpdump_err(1, 500, 0);
+    assert_eq!(overall(&verdict_of(&mut m)), FAIL);
+}
+
+#[test]
+fn the_stop_grace_is_100_ms() {
+    let stopped = |m: &Model| {
+        let a = m.smoke.as_ref().unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["status"] == "Stopped")
+            .unwrap();
+        parse_utc(s(&a["utc"])).unwrap()
+    };
+    let mut m = Model::consistent();
+    let t = stopped(&m) + 0.05;
+    m.syns[2].push((t, plan_of(2)[450].clone()));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+    let mut m = Model::consistent();
+    let t = stopped(&m) + 0.15;
+    m.syns[2].push((t, plan_of(2)[450].clone()));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    assert!(has_bad(&v, "s3_stop", "no SYN after Stopped"));
+}
+
+#[test]
+fn the_drift_cap_scales_with_the_session() {
+    assert_eq!(drift_cap_s(0.0), 0.1);
+    assert!((drift_cap_s(420.0) - 0.52).abs() < 1e-9);
+    assert_eq!(drift_cap_s(-5.0), 0.1);
+    // a 26 s session: 0.12 s of drift is inside the cap (0.126), 0.2 s is not
+    let shifted = |dt: f64| {
+        let mut m = Model::consistent();
+        let sm = m.smoke.as_mut().unwrap();
+        let n = sm["events"].as_array().unwrap().len();
+        let t = parse_utc(s(&sm["events"][n - 1]["utc"])).unwrap();
+        sm["events"][n - 1]["utc"] = json!(utc(t + dt));
+        verdict_of(&mut m)
+    };
+    let v = shifted(0.115);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+    let v = shifted(0.2);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    assert!(has_bad(&v, "chronicle", "clocks agree"));
+}

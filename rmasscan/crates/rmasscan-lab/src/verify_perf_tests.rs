@@ -647,7 +647,13 @@ fn summary_notes_name_the_latency_sources_and_the_gate_caveat() {
         "{notes}"
     );
     assert!(notes.contains("VM speed, not physical NIC"), "{notes}");
-    assert!(notes.contains("2B-sendqueue"), "{notes}");
+    assert!(
+        notes.contains(
+            "VM ceiling with sendqueue is an OPEN finding for the physical NIC stage, never a FAIL"
+        ),
+        "{notes}"
+    );
+    assert!(!notes.contains("2B-sendqueue"), "{notes}");
     assert!(
         array(&sum["rows"])
             .iter()
@@ -954,4 +960,126 @@ fn eno1_frame_with_a_lab0_drop_is_fail_and_not_discardable() {
         verdict(&v),
         v["behaviour_fail"] == true
     ));
+}
+
+// ---- sendqueue evidence (Task 5) ------------------------------------------------------------------
+const FAST: &str = "perf.10000.r1";
+fn drop_tx_mode(b: &mut Built) {
+    b.run["identity"].as_object_mut().unwrap().remove("tx_mode");
+}
+#[test]
+fn missing_tx_mode_in_a_sendqueue_directory_is_fail_not_pass() {
+    let d = Dir::cell(CELL, &drop_tx_mode);
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "harness predates sendqueue"), "{:?}", bad(&v));
+}
+#[test]
+fn tx_mode_mismatch_is_fail() {
+    let d = Dir::cell(CELL, &|b| b.run["identity"]["tx_mode"] = json!("single"));
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "tx_mode_expected"), "{:?}", bad(&v));
+}
+#[test]
+fn over_budget_calls_fail_the_run() {
+    let d = Dir::cell(CELL, &|b| b.run["net"]["tx_over_budget"] = json!(2));
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "call budget breached"), "{:?}", bad(&v));
+    // A missing counter is not zero either.
+    let d = Dir::cell(CELL, &|b| {
+        b.run["net"]
+            .as_object_mut()
+            .unwrap()
+            .remove("tx_over_budget");
+    });
+    assert_eq!(verdict(&d.summary(CELL)), FAIL);
+}
+#[test]
+fn a_single_mode_run_is_not_judged_by_unmeasured_budget_counters() {
+    // Both sides say single: its counters are not measured, so tx_over_budget proves nothing either way.
+    let d = Dir::cell(CELL, &|b| {
+        b.run["identity"]["tx_mode"] = json!("single");
+        b.run["net"]["tx_over_budget"] = json!(5);
+    });
+    let man = d.0.join("manifest.json");
+    let mut m = read_json(&man).unwrap();
+    m["tx_mode_expected"] = json!("single");
+    fs::write(&man, serde_json::to_vec(&m).unwrap()).unwrap();
+    let v = d.summary(CELL);
+    assert_eq!(verdict(&v), PASS, "{:?}", bad(&v));
+}
+#[test]
+fn a_fast_cell_without_batches_under_sendqueue_is_fail() {
+    let d = Dir::cell(FAST, &|b| b.run["net"]["tx_batches"] = json!(0));
+    let v = d.summary(FAST);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(
+        has(&v, FAIL, "sendqueue claimed but no batch was transmitted"),
+        "{:?}",
+        bad(&v)
+    );
+    // The same counters are fine below 10k pps.
+    let d = Dir::cell(CELL, &|b| b.run["net"]["tx_batches"] = json!(0));
+    assert_eq!(verdict(&d.summary(CELL)), PASS);
+    // And a clean fast cell passes.
+    let d = Dir::clean(FAST);
+    let v = d.summary(FAST);
+    assert_eq!(verdict(&v), PASS, "{:?}", bad(&v));
+}
+#[test]
+fn batch_max_above_cap_is_fail() {
+    let d = Dir::cell(FAST, &|b| b.run["net"]["tx_batch_max"] = json!(65));
+    let v = d.summary(FAST);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "sendqueue claimed"), "{:?}", bad(&v));
+}
+#[test]
+fn perf_notes_carry_batch_fields() {
+    let d = Dir::clean(FAST);
+    let m = &d.summary(FAST)["notes"]["perf"];
+    assert_eq!(m["tx_batches"], 8);
+    assert_eq!(m["tx_batch_max"], 64);
+    assert_eq!(m["tx_batch_cap"], 64);
+    assert_eq!(m["tx_over_budget"], 0);
+    let mut c = cell_summary(10000, 1, PASS, 10000.0, false);
+    c["notes"]["perf"]["tx_batch_max"] = json!(64);
+    let sum = perf_summary(&[c]);
+    assert_eq!(row(&sum, 10000)["median"]["tx_batch_max"], 64.0);
+}
+#[test]
+fn legacy_directories_without_tx_mode_expected_are_unchanged() {
+    let root = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../../docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw");
+    let mut compared = 0;
+    for plan in ["perf-r1", "failure-r1"] {
+        let dir = root.join(plan);
+        let man = read_json(dir.join("manifest.json")).unwrap();
+        assert!(man.get("tx_mode_expected").is_none(), "{plan}");
+        let committed = read_json(dir.join("verdict.json")).unwrap();
+        let now = verify_dir(&dir);
+        for run in array(&now["runs"]) {
+            let tag = s(&run["tag"]);
+            // Rules (a)-(c) are off without tx_mode_expected: no sendqueue check is even recorded.
+            assert!(
+                array(&run["checks"]).iter().all(|c| {
+                    let n = s(&c["name"]);
+                    !n.contains("tx_mode") && !n.contains("call budget") && !n.contains("sendqueue")
+                }),
+                "{plan}/{tag}"
+            );
+            // The committed pcaps of some runs are .gz (not decompressed here): those runs cannot be
+            // re-judged in place and are skipped; every run with plain pcaps must match its verdict.
+            if dir.join("runs").join(tag).join("peer.pcap").is_file() {
+                let old = array(&committed["runs"])
+                    .iter()
+                    .find(|r| r["tag"] == run["tag"])
+                    .unwrap();
+                assert_eq!(run["verdict"], old["verdict"], "{plan}/{tag}");
+                compared += 1;
+            }
+        }
+    }
+    assert!(compared >= 20, "{compared} runs compared");
 }

@@ -303,7 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_file_name(format!("studio-runner{}", std::env::consts::EXE_SUFFIX));
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
-    ui.set_authorization_available(cfg!(any(target_os = "macos", target_os = "linux")));
+    ui.set_authorization_available(cfg!(any(target_os = "macos", target_os = "linux", windows)));
     ui.set_process_view(true);
     ui.set_job_seed(
         (u32::from_ne_bytes(studio_protocol::new_id()?[..4].try_into().unwrap()).max(1))

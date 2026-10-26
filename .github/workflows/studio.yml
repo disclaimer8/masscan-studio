@@ -75,11 +75,10 @@ jobs:
       - name: Package native Windows desktop acceptance fixture
         if: runner.os == 'Windows'
         run: cargo xtask prepare-windows-uac-tests
-      - name: Windows session authorization and owner death (no packets)
-        if: runner.os == 'Windows'
-        env:
-          STUDIO_UAC_ENV_MARKER: must-be-removed-by-runner
-        run: cargo xtask verify-windows-uac
+      # Hosted runners have no interactive consent desktop: actual runas returns
+      # ERROR_CANCELLED (1223). Keep native offline/lifetime/environment tests
+      # above; run the packaged consent fixture on the Windows desktop lab.
+      # Acceptance commands, exact hashes and evidence: studio/VERIFICATION.md.
       - name: Linux software UI lifecycle (no packets)
         if: runner.os == 'Linux'
         run: |

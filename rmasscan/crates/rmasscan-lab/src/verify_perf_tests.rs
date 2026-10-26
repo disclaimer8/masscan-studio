@@ -101,6 +101,18 @@ impl Dir {
     fn clean(tag: &str) -> Self {
         Self::cell(tag, &|_| {})
     }
+    /// A functional-plan directory (optionally with a manifest rate override) with the named runs.
+    fn functional(rate_override: Option<u64>, tags: &[&str], tweak: &dyn Fn(&mut Built)) -> Self {
+        let d = Self::empty();
+        fixture::build_functional_only(&d.0, 3, rate_override, tags, tweak);
+        d
+    }
+    /// The whole synthetic failure plan.
+    fn failure() -> Self {
+        let d = Self::empty();
+        fixture::build_failure(&d.0, 3);
+        d
+    }
     fn run_dir(&self, tag: &str) -> PathBuf {
         self.0.join("runs").join(tag)
     }
@@ -1033,7 +1045,7 @@ fn batch_max_above_cap_is_fail() {
     let d = Dir::cell(FAST, &|b| b.run["net"]["tx_batch_max"] = json!(65));
     let v = d.summary(FAST);
     assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
-    assert!(has(&v, FAIL, "sendqueue claimed"), "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "within tx_batch_cap"), "{:?}", bad(&v));
 }
 #[test]
 fn perf_notes_carry_batch_fields() {
@@ -1061,6 +1073,15 @@ fn legacy_directories_without_tx_mode_expected_are_unchanged() {
         let now = verify_dir(&dir);
         for run in array(&now["runs"]) {
             let tag = s(&run["tag"]);
+            // The output shape is the old one too: no batch key in notes.perf.
+            for k in [
+                "tx_batches",
+                "tx_batch_max",
+                "tx_batch_cap",
+                "tx_over_budget",
+            ] {
+                assert!(run["notes"]["perf"].get(k).is_none(), "{plan}/{tag}: {k}");
+            }
             // Rules (a)-(c) are off without tx_mode_expected: no sendqueue check is even recorded.
             assert!(
                 array(&run["checks"]).iter().all(|c| {
@@ -1082,4 +1103,230 @@ fn legacy_directories_without_tx_mode_expected_are_unchanged() {
         }
     }
     assert!(compared >= 20, "{compared} runs compared");
+    // perf-r1: no medians key for the batch size either (a null would break byte identity).
+    let sum = &verify_dir(&root.join("perf-r1"))["perf_summary"];
+    for row in array(&sum["rows"]) {
+        assert!(row["median"].get("tx_batch_max").is_none(), "{row}");
+    }
+}
+
+// ---- fix round 1: real report shapes, rule (c) edges, the batched functional path ---------------------
+const C01: &str = "c01_one_addr_port_synack.run1";
+fn is_pass(v: &Value) -> bool {
+    verdict(v) == PASS
+}
+#[test]
+fn a_functional_run_without_tx_mode_fails_like_a_perf_cell() {
+    let d = Dir::functional(None, &[C01], &drop_tx_mode);
+    let v = d.summary(C01);
+    assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
+    assert!(has(&v, FAIL, "harness predates sendqueue"), "{:?}", bad(&v));
+    assert!(is_pass(
+        &Dir::functional(None, &[C01], &|_| {}).summary(C01)
+    ));
+}
+#[test]
+fn failed_outcomes_are_status_ok_and_still_judged_by_the_sendqueue_rules() {
+    let d = Dir::failure();
+    for tag in ["linkloss", "rxloss", "overflow_queue"] {
+        let run = read_json(d.run_dir(tag).join("run.json")).unwrap();
+        // The shape wire_scan writes for a Failed outcome.
+        assert_eq!(run["status"], "ok", "{tag}");
+        assert_eq!(run["reason"], "Failed", "{tag}");
+        assert!(run["net"].is_object(), "{tag}");
+        assert!(
+            is_pass(&d.summary(tag)),
+            "{tag}: {:?}",
+            bad(&d.summary(tag))
+        );
+        d.sealed(tag, "run.json", |r| r["net"]["tx_over_budget"] = json!(1));
+        let v = d.summary(tag);
+        assert!(
+            has(&v, FAIL, "call budget breached"),
+            "{tag}: {:?}",
+            bad(&v)
+        );
+        assert_eq!(verdict(&v), FAIL, "{tag}");
+    }
+    let d = Dir::failure();
+    d.sealed("linkloss", "run.json", |r| {
+        r["identity"].as_object_mut().unwrap().remove("tx_mode");
+    });
+    assert!(has(&d.summary("linkloss"), FAIL, "harness predates"));
+}
+#[test]
+fn refusals_carry_no_tx_mode_and_no_net_block_and_are_not_judged() {
+    let d = Dir::failure();
+    let man = read_json(d.0.join("manifest.json")).unwrap();
+    let mut seen = 0;
+    for it in planned(&man) {
+        if !["ckpt_refuse", "refuse_completed", "perm_restricted"].contains(&s(&it["kind"])) {
+            continue;
+        }
+        let tag = s(&it["tag"]);
+        let run = read_json(d.run_dir(tag).join("run.json")).unwrap();
+        assert!(run["identity"].get("tx_mode").is_none(), "{tag}");
+        if run["status"] == "error" {
+            assert!(run.get("net").is_none(), "{tag}");
+        }
+        let v = d.summary(tag);
+        assert!(is_pass(&v), "{tag}: {:?}", bad(&v));
+        assert!(
+            array(&v["checks"])
+                .iter()
+                .all(|c| !s(&c["name"]).contains("tx_mode")),
+            "{tag}"
+        );
+        seen += 1;
+    }
+    assert!(seen >= 8, "{seen}");
+}
+#[test]
+fn an_ok_report_without_a_net_block_is_not_hidden_by_the_narrowing() {
+    // status ok but no net: a scan report whose counters vanished must not skip the checks silently.
+    let d = Dir::cell(CELL, &|b| {
+        b.run.as_object_mut().unwrap().remove("net");
+    });
+    assert_ne!(verdict(&d.summary(CELL)), PASS);
+}
+#[test]
+fn rule_c_edges() {
+    // Below 10k pps a cell without batches is fine; at 10k it is not; the cap is inclusive.
+    let d = Dir::cell("perf.1000.r1", &|b| b.run["net"]["tx_batches"] = json!(0));
+    assert!(is_pass(&d.summary("perf.1000.r1")));
+    let d = Dir::cell(FAST, &|b| b.run["net"]["tx_batch_max"] = json!(64));
+    assert!(is_pass(&d.summary(FAST)));
+    let d = Dir::cell(FAST, &|b| b.run["net"]["tx_batch_max"] = json!(65));
+    let v = d.summary(FAST);
+    assert!(has(&v, FAIL, "within tx_batch_cap"), "{:?}", bad(&v));
+    assert!(!has(&v, FAIL, "a batch was transmitted"), "{:?}", bad(&v));
+    let d = Dir::cell(FAST, &|b| b.run["net"]["tx_batches"] = json!(0));
+    let v = d.summary(FAST);
+    assert!(has(&v, FAIL, "a batch was transmitted"), "{:?}", bad(&v));
+    // Missing fields are not accepted.
+    let d = Dir::cell(FAST, &|b| {
+        b.run["identity"]
+            .as_object_mut()
+            .unwrap()
+            .remove("tx_batch_cap");
+    });
+    assert_eq!(verdict(&d.summary(FAST)), FAIL);
+    let d = Dir::cell(FAST, &|b| {
+        b.run["net"].as_object_mut().unwrap().remove("tx_batch_max");
+    });
+    assert_eq!(verdict(&d.summary(FAST)), FAIL);
+}
+
+// ---- rate override (batched functional coverage) ----
+fn rate_man(plan: Value, rate: Option<u64>) -> Value {
+    let mut m = json!({"plan":plan,"tx_mode_expected":"sendqueue","binding":{"iface":"i","src_ip":"1.1.1.1","src_mac":"aa","router_mac":"bb"}});
+    if let Some(r) = rate {
+        m["rate_override"] = json!(r);
+    }
+    m
+}
+fn rate_run(reason: &str, sent: u64, batches: u64, bmax: u64) -> Value {
+    json!({"status":"ok","reason":reason,"identity":{"tx_mode":"sendqueue","tx_batch_cap":64},
+        "net":{"tx_sent":sent,"tx_over_budget":0,"tx_batches":batches,"tx_batch_max":bmax}})
+}
+fn batched(man: &Value, j: &Value) -> Run {
+    let mut r = Run::new("t");
+    r.argv_ok = true;
+    sendqueue_identity(&mut r, man, j, &json!({"kind":"case"}));
+    r
+}
+#[test]
+fn rate_override_demands_the_batched_path_from_completed_multi_frame_runs() {
+    let man = rate_man(json!("functional"), Some(20000));
+    // No batch at all, or only 1-frame batches: FAIL.
+    for (b, m) in [(0, 0), (8, 1), (3, 0)] {
+        let r = batched(&man, &rate_run("Completed", 8, b, m));
+        assert_eq!(r.verdict(), FAIL, "{b} {m}");
+        assert!(has(&r.summary(), FAIL, "batched path not exercised"));
+    }
+    assert_eq!(
+        batched(&man, &rate_run("Completed", 8, 2, 2)).verdict(),
+        PASS
+    );
+    // Two frames is the smallest run that can batch; one frame or none is exempt, with a note.
+    assert_eq!(
+        batched(&man, &rate_run("Completed", 2, 0, 0)).verdict(),
+        FAIL
+    );
+    let r = batched(&man, &rate_run("Completed", 1, 0, 0));
+    assert_eq!(r.verdict(), PASS);
+    assert!(r.notes.contains_key("batched_path"), "{:?}", r.notes);
+    assert_eq!(
+        batched(&man, &rate_run("Completed", 0, 0, 0)).verdict(),
+        PASS
+    );
+    // Not Completed (Paused, Stopped, Failed): not asked.
+    assert_eq!(batched(&man, &rate_run("Paused", 8, 0, 0)).verdict(), PASS);
+    // No override recorded: not asked. Single mode: not asked.
+    let plain = rate_man(json!("functional"), None);
+    assert_eq!(
+        batched(&plain, &rate_run("Completed", 8, 0, 0)).verdict(),
+        PASS
+    );
+    let mut single = rate_run("Completed", 8, 0, 0);
+    single["identity"]["tx_mode"] = json!("single");
+    let mut m1 = man.clone();
+    m1["tx_mode_expected"] = json!("single");
+    assert_eq!(batched(&m1, &single).verdict(), PASS);
+}
+#[test]
+fn the_rate_override_is_accepted_in_argv_and_job_only_when_the_manifest_records_it() {
+    let c = case_by_name("c03_multi_ports").unwrap();
+    let it =
+        json!({"tag":"c03_multi_ports.run1","kind":"case","case":"c03_multi_ports","repeat":1});
+    let with = rate_man(json!("functional"), Some(20000));
+    let without = rate_man(json!("functional"), None);
+    assert_eq!(arg_map(&it, &with, false)["--rate"], "20000");
+    assert_eq!(
+        arg_map(&it, &without, false)["--rate"],
+        n(&c["rate"]).to_string()
+    );
+    assert_eq!(run_rate(&c, &with), 20000);
+    // Only the functional plan honours it; the failure and perf plans keep their own rates.
+    for plan in ["failure", "perf"] {
+        let m = rate_man(json!(plan), Some(20000));
+        assert_eq!(run_rate(&c, &m), c["rate"], "{plan}");
+    }
+    // A directory built with the override verifies; the same evidence without the record does not.
+    let d = Dir::functional(Some(20000), &[C01], &|_| {});
+    assert!(is_pass(&d.summary(C01)), "{:?}", bad(&d.summary(C01)));
+    let argv = read_json(d.run_dir(C01).join("argv.json")).unwrap();
+    assert!(argv.to_string().contains("20000"));
+    let man = d.0.join("manifest.json");
+    let mut m = read_json(&man).unwrap();
+    m.as_object_mut().unwrap().remove("rate_override");
+    fs::write(&man, serde_json::to_vec(&m).unwrap()).unwrap();
+    assert_ne!(verdict(&d.summary(C01)), PASS);
+}
+#[test]
+fn a_manifest_rate_override_must_be_a_sane_number_on_a_functional_plan() {
+    for (plan, ro, ok) in [
+        ("functional", json!(20000), true),
+        ("functional", json!(0), false),
+        ("functional", json!("fast"), false),
+        ("functional", json!(100001), false),
+        ("failure", json!(20000), false),
+        ("perf", json!(20000), false),
+    ] {
+        let d = Dir::empty();
+        fixture::build_functional_only(&d.0, 3, None, &[C01], &|_| {});
+        let man = d.0.join("manifest.json");
+        let mut m = read_json(&man).unwrap();
+        m["plan"] = json!(plan);
+        m["rate_override"] = ro.clone();
+        fs::write(&man, serde_json::to_vec(&m).unwrap()).unwrap();
+        let v = verify_dir(&d.0);
+        let first = &v["runs"][0];
+        assert_eq!(
+            has(first, PASS, "rate_override"),
+            ok,
+            "{plan} {ro}: {:?}",
+            bad(first)
+        );
+    }
 }

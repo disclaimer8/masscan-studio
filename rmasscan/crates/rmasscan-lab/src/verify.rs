@@ -377,6 +377,14 @@ pub(crate) fn kind_case(it: &Value) -> Option<Value> {
     }
     Some(c)
 }
+/// The rate a case runs at: the manifest `rate_override` for a functional-plan directory that records
+/// one, else the case's own rate. Every functional run (scanner argv, forge argv, job echo) follows it.
+pub(crate) fn run_rate(c: &Value, man: &Value) -> Value {
+    match man["rate_override"].as_u64() {
+        Some(rate) if matches!(man["plan"].as_str(), None | Some("functional")) => json!(rate),
+        _ => c["rate"].clone(),
+    }
+}
 pub(crate) fn arg_map(it: &Value, man: &Value, side: bool) -> BTreeMap<String, Value> {
     let mut a = BTreeMap::new();
     let c = if side {
@@ -400,7 +408,7 @@ pub(crate) fn arg_map(it: &Value, man: &Value, side: bool) -> BTreeMap<String, V
             ("ports", c["ports"].clone()),
             ("source-port", c["source_port"].clone()),
             ("seed", json!(n(&c["seed"]).to_string())),
-            ("rate", json!(n(&c["rate"]).to_string())),
+            ("rate", json!(n(&run_rate(&c, man)).to_string())),
             ("wait", json!(n(&c["wait"]).to_string())),
         ] {
             a.insert(format!("--{k}"), v);
@@ -1284,6 +1292,7 @@ pub(crate) fn job(r: &mut Run, j: &Value, c: &Value, man: &Value) {
     ] {
         want[k] = c[k].clone();
     }
+    want["rate"] = run_rate(c, man);
     let ok = want
         .as_object()
         .unwrap()
@@ -2489,10 +2498,35 @@ fn sendqueue_identity(r: &mut Run, man: &Value, j: &Value, it: &Value) {
         let max = j["net"]["tx_batch_max"].as_u64();
         let cap = j["identity"]["tx_batch_cap"].as_u64();
         r.beh(
-            "sendqueue claimed and a batch was transmitted within tx_batch_cap (else sendqueue claimed but no batch was transmitted)",
-            batches > 0 && max.zip(cap).is_some_and(|(m, c)| m <= c),
-            format!("tx_batches {batches}, tx_batch_max {max:?}, tx_batch_cap {cap:?}"),
+            "a batch was transmitted (else sendqueue claimed but no batch was transmitted)",
+            batches > 0,
+            format!("tx_batches {batches}"),
         );
+        r.beh(
+            "largest batch within tx_batch_cap",
+            max.zip(cap).is_some_and(|(m, c)| m <= c),
+            format!("tx_batch_max {max:?}, tx_batch_cap {cap:?}"),
+        );
+    }
+    // A functional run at an overridden rate exists to push batches through the adapter.
+    if man["rate_override"].is_number() && j["reason"] == "Completed" {
+        let sent = n(&j["net"]["tx_sent"]);
+        if sent >= 2 {
+            r.beh(
+                "batched path exercised (else batched path not exercised)",
+                j["net"]["tx_batches"].as_u64().unwrap_or(0) > 0
+                    && j["net"]["tx_batch_max"].as_u64().unwrap_or(0) > 1,
+                format!(
+                    "tx_batches {}, tx_batch_max {}",
+                    j["net"]["tx_batches"], j["net"]["tx_batch_max"]
+                ),
+            );
+        } else {
+            r.notes.insert(
+                "batched_path".into(),
+                json!(format!("exempt: {sent} frame(s) sent, fewer than 2")),
+            );
+        }
     }
 }
 /// One perf cell (ruling 7). The capture-completeness rules ran in `capture` (INVALID); everything
@@ -3082,6 +3116,17 @@ pub fn verify_dir(root: &Path) -> Value {
         NOT_RUN,
         false,
     );
+    // Recorded only by a functional run at an overridden rate (batched-path coverage); absent otherwise.
+    if let Some(ro) = man.get("rate_override") {
+        r.check(
+            "manifest.rate_override is a rate from 1 to 100000 on the functional plan",
+            ro.as_u64().is_some_and(|v| (1..=100_000).contains(&v))
+                && matches!(man["plan"].as_str(), None | Some("functional")),
+            format!("{ro} on plan {}", man["plan"]),
+            NOT_RUN,
+            false,
+        );
+    }
     r.check(
         "manifest executable sha256 present",
         truth(&man["exe"]["sha256"]),

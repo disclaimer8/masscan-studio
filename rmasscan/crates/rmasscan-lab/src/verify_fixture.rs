@@ -135,6 +135,7 @@ fn job_echo(c: &Value, man: &Value) -> Value {
     ] {
         j[k] = c[k].clone();
     }
+    j["rate"] = run_rate(c, man);
     j
 }
 pub(crate) struct Built {
@@ -169,6 +170,14 @@ fn base_run(c: &Value, man: &Value, t0: f64, outcome: f64, tag: &str) -> Value {
         "timing":{"first_send_s":0.002,"join_ms":0.3,"stop_requested":false,"stop_to_outcome_ms":null,"total_s":outcome-t0},
         "wall":{"t0_utc_ms":(t0*1000.).round(),"outcome_utc_ms":(outcome*1000.).round()}
     })
+}
+/// What `wire_scan` writes when it refuses before opening the adapter: the plain build identity (no
+/// `tx_mode`, no `tx_batch_cap`) and no `net` block.
+fn refusal_shape(run: &mut Value) {
+    let id = run["identity"].as_object_mut().unwrap();
+    id.remove("tx_mode");
+    id.remove("tx_batch_cap");
+    run.as_object_mut().unwrap().remove("net");
 }
 fn set_sent(run: &mut Value, count: u64) {
     for k in [
@@ -262,7 +271,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             frames = syn_series(3, t0 + 0.002, 1.0, 80, 40000);
             run = base_run(&c, man, t0, outcome, tag);
             run["reason"] = json!("Failed");
-            run["status"] = json!("failed");
+            run["status"] = json!("ok");
             run["fail_detail"] = json!("ConsumerTooSlow { capacity: 1 }");
             set_sent(&mut run, 3);
             run["replies"] = json!(&exp[..2]);
@@ -275,7 +284,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             frames = syn_series(31, t0 + 0.002, 0.05, 8200, 40000);
             run = base_run(&c, man, t0, outcome, tag);
             run["reason"] = json!("Failed");
-            run["status"] = json!("failed");
+            run["status"] = json!("ok");
             run["fail_detail"] = json!("TxUncertain { sent: 30 }");
             set_sent(&mut run, 30);
             run["net"]["tx_uncertain"] = json!(1);
@@ -293,7 +302,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             frames = syn_series(16, t0 + 0.002, 0.01, 8000, 40000);
             run = base_run(&c, man, t0, outcome, tag);
             run["reason"] = json!("Failed");
-            run["status"] = json!("failed");
+            run["status"] = json!("ok");
             run["fail_detail"] = json!("RxLoss { kernel_drops: 7 }");
             run["rx_health"]["kernel_drops"] = json!(7);
             run["net"]["kernel_drops"] = json!(7);
@@ -333,6 +342,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             run["error"] = json!(format!("{want}: synthetic"));
             run["opened_adapter"] = json!(false);
             run["tx_sent"] = json!(0);
+            refusal_shape(&mut run);
             guest_exit = 4;
             let forged = nonempty_checkpoint(SCAN, A1, 8);
             let used = mutate_checkpoint(s(&it["variant"]), &forged).unwrap();
@@ -357,6 +367,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             }
             run["opened_adapter"] = json!(false);
             run["tx_sent"] = json!(0);
+            refusal_shape(&mut run);
         }
         "perf" => {
             // A clean Completed cell: one SYN per port at exactly the requested pace, one reply per
@@ -639,6 +650,26 @@ pub(crate) fn build_perf(root: &Path, schema: u64) {
 /// Like [`build_perf`] but only the named cells (all when `only` is empty), each edited by `tweak`.
 pub(crate) fn build_perf_only(root: &Path, schema: u64, only: &[&str], tweak: &dyn Fn(&mut Built)) {
     let man = manifest_for(schema, "perf");
+    write_fixtures(root, &man);
+    for it in planned(&man) {
+        if only.is_empty() || only.contains(&s(&it["tag"])) {
+            write_run_with(root, &man, &it, schema, tweak);
+        }
+    }
+}
+/// A functional-plan directory with the named runs (all when `only` is empty), optionally with a
+/// manifest `rate_override`; each run is edited by `tweak`.
+pub(crate) fn build_functional_only(
+    root: &Path,
+    schema: u64,
+    rate_override: Option<u64>,
+    only: &[&str],
+    tweak: &dyn Fn(&mut Built),
+) {
+    let mut man = manifest_for(schema, "functional");
+    if let Some(r) = rate_override {
+        man["rate_override"] = json!(r);
+    }
     write_fixtures(root, &man);
     for it in planned(&man) {
         if only.is_empty() || only.contains(&s(&it["tag"])) {

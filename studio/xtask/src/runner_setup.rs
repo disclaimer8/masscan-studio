@@ -182,7 +182,7 @@ pub fn probe() -> Result<()> {
     if endpoint.exists() {
         return Err("Socket endpoint survived session close".into());
     }
-    if studio_platform::unix::Identity::read(peer.pid).is_ok_and(|p| p == peer) {
+    if peer.is_alive()? {
         return Err("Root runner survived session close".into());
     }
     println!("Root runner exited; socket endpoint removed.");

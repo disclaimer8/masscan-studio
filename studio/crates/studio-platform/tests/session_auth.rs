@@ -2,6 +2,20 @@
 use std::{os::unix::net::UnixStream, time::Duration};
 use studio_platform::unix::{Endpoint, Identity, peer_identity};
 
+#[cfg(target_os = "macos")]
+#[test]
+fn audit_bound_peer_resolves_live_executable_without_bsdinfo() {
+    let endpoint = Endpoint::create().unwrap();
+    let stream = UnixStream::connect(endpoint.path()).unwrap();
+    let peer = studio_platform::audit::Peer::from_stream(&stream).unwrap();
+    let me = Identity::current().unwrap();
+    assert_eq!(peer.pid, me.pid);
+    assert_eq!(peer.uid, me.uid);
+    assert_eq!(peer.executable, me.executable);
+    assert!(peer.is_alive().unwrap());
+    peer.verify(&stream).unwrap();
+}
+
 #[test]
 fn private_endpoint_checks_live_peer_and_process_birth() {
     let me = Identity::current().unwrap();

@@ -1,6 +1,7 @@
 //! Local Windows session transport. Peer identity is bound to retained process
 //! handles. This module does not elevate, install, or authorize raw scanning.
 pub mod install;
+pub mod runner_environment;
 pub mod uac;
 use serde::{Deserialize, Serialize};
 use std::{

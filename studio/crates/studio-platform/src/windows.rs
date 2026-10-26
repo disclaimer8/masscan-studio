@@ -247,6 +247,17 @@ fn operation(
         return Err(io::Error::other("Pipe operation cancelled"));
     }
     issue(&mut overlapped)?;
+    let mut transferred = 0;
+    // SAFETY: query the issued request without waiting. Immediate completion
+    // need not signal the event; only IO_INCOMPLETE requires the wait loop.
+    // Completed requests no longer borrow the caller's buffer/OVERLAPPED.
+    if unsafe { GetOverlappedResult(handle, &overlapped, &mut transferred, 0) } != 0 {
+        return Ok(transferred);
+    }
+    let current = io::Error::last_os_error();
+    if current.raw_os_error() != Some(ERROR_IO_INCOMPLETE as i32) {
+        return Err(current);
+    }
     let deadline = timeout.map(|d| Instant::now() + d);
     let interrupted = loop {
         // SAFETY: event and OVERLAPPED remain alive; completion owns no Rust data.
@@ -272,7 +283,6 @@ fn operation(
             CancelIoEx(handle, &overlapped);
         }
     }
-    let mut transferred = 0;
     // SAFETY: same handle/OVERLAPPED as issued; TRUE drains completion even on
     // cancellation. Buffers and event remain alive until this call returns.
     let ok = unsafe { GetOverlappedResult(handle, &overlapped, &mut transferred, 1) };

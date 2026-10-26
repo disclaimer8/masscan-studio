@@ -82,6 +82,20 @@ fn accept_is_bounded_and_cancellable_without_a_client() {
 #[test]
 #[ignore = "child process fixture, invoked by foreign_process_is_rejected"]
 fn peer_fixture() {
+    if let Ok(name) = std::env::var("STUDIO_TEST_PIPE") {
+        let owner: Identity =
+            serde_json::from_str(&std::env::var("STUDIO_TEST_OWNER").unwrap()).unwrap();
+        let mut pipe = Stream::connect(
+            &name,
+            &owner,
+            Duration::from_secs(3),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        pipe.write_all(b"R").unwrap();
+        std::thread::sleep(Duration::from_secs(30));
+        return;
+    }
     std::thread::sleep(Duration::from_secs(30));
 }
 
@@ -123,4 +137,82 @@ fn foreign_process_is_rejected_and_retained_handle_detects_death() {
     other.0.wait().unwrap();
     assert!(retained.ensure_alive().is_err());
     assert!(retained.verify(retained.identity()).is_err());
+}
+
+#[test]
+fn shutdown_cancels_blocked_write_without_waiting_for_a_reader() {
+    let endpoint = Endpoint::create().unwrap();
+    let client = Stream::connect(
+        endpoint.name(),
+        &Identity::current().unwrap(),
+        Duration::from_secs(2),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let server = endpoint
+        .accept(
+            Process::open(std::process::id()).unwrap(),
+            Duration::from_secs(2),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let mut writer = server.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let _ = tx.send(writer.write_all(&vec![0u8; 4 * 1024 * 1024]));
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+        "write must be pending without a reader"
+    );
+    server.shutdown();
+    assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().is_err());
+    thread.join().unwrap();
+    drop(client);
+}
+
+#[test]
+fn peer_death_releases_an_outstanding_read() {
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let endpoint = Endpoint::create().unwrap();
+    let mut child = Child(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "peer_fixture", "--ignored"])
+            .env("STUDIO_TEST_PIPE", endpoint.name())
+            .env(
+                "STUDIO_TEST_OWNER",
+                serde_json::to_string(&Identity::current().unwrap()).unwrap(),
+            )
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut server = endpoint
+        .accept(
+            Process::open(child.0.id()).unwrap(),
+            Duration::from_secs(3),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let mut ready = [0u8];
+    server.read_exact(&mut ready).unwrap();
+    assert_eq!(&ready, b"R");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let _ = tx.send(server.read(&mut [0; 1]));
+    });
+    std::thread::sleep(Duration::from_millis(20));
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    let result = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(result.is_err() || result.unwrap() == 0);
+    thread.join().unwrap();
 }

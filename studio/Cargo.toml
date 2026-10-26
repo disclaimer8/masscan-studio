@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/studio-protocol", "crates/studio-store", "crates/studio-runner", "crates/studio-app", "crates/studio-table", "crates/studio-ui", "crates/studio-platform", "xtask"]
+members = ["crates/studio-protocol", "crates/studio-store", "crates/studio-runner", "crates/studio-app", "crates/studio-table", "crates/studio-ui", "crates/studio-platform", "crates/studio-inspection", "xtask"]
 default-members = ["crates/studio-protocol", "crates/studio-store", "crates/studio-runner", "crates/studio-app"]
 
 [workspace.package]
@@ -17,6 +17,7 @@ studio-protocol = { path = "crates/studio-protocol" }
 studio-store = { path = "crates/studio-store" }
 studio-app = { path = "crates/studio-app" }
 studio-platform = { path = "crates/studio-platform" }
+studio-inspection = { path = "crates/studio-inspection" }
 rmasscan-core = { path = "../rmasscan/crates/rmasscan-core" }
 rmasscan-engine = { path = "../rmasscan/crates/rmasscan-engine" }
 rmasscan-net = { path = "../rmasscan/crates/rmasscan-net" }

@@ -50,13 +50,15 @@ component ActionButton inherits Rectangle {
 
 component MenuAction inherits Rectangle {
     in property <string> text;
+    in property <bool> enabled: true;
+    opacity: enabled ? 1 : 0.48;
     callback clicked();
     height: 30px;
     border-radius: 4px;
     background: hit.has-hover || focus.has-focus ? Theme.hover : transparent;
     Text { x: 10px; width: parent.width - 20px; height: parent.height; text: root.text; color: Theme.text; font-size: 12px; vertical-alignment: center; }
-    focus := FocusScope { key-pressed(event) => { if event.text == "\n" || event.text == " " { root.clicked(); return accept; } return reject; } }
-    hit := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    focus := FocusScope { enabled: root.enabled; key-pressed(event) => { if event.text == "\n" || event.text == " " { root.clicked(); return accept; } return reject; } }
+    hit := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
     accessible-role: button;
     accessible-label: root.text;
 }
@@ -99,6 +101,11 @@ component JobField inherits VerticalLayout {
 }
 
 export component MainWindow inherits Window {
+    in-out property <bool> exporting: false;
+    in property <bool> inspection-available: false;
+    callback resolve-names();
+    callback cancel-inspection();
+    callback export-rows(string);
     title: "Masscan Studio";
     preferred-width: 1160px; preferred-height: 740px; min-width: 820px; min-height: 540px;
     background: Theme.canvas;
@@ -228,6 +235,8 @@ export component MainWindow inherits Window {
                 }
                 ActionButton { text: root.inspector-open ? "Hide details" : "Details"; enabled: root.inspector-open || root.active-row >= 0; clicked => { if root.inspector-open { root.inspector-open = false; } else { root.activate(root.active-row); } } }
                 actions-button := ActionButton { text: "Actions…"; enabled: root.active-row >= 0; clicked => { root.show-actions(root.details, self.absolute-position.x, self.absolute-position.y + self.height + 4px); } }
+                ActionButton { text: "Names"; enabled: root.inspection-available; clicked => { root.resolve-names(); } Tooltip { Text { text: "Resolve selected hosts, or all visible hosts (up to 512)"; } } }
+                ActionButton { text: "Export…"; enabled: !root.exporting; clicked => { exports.show(); } }
                 Rectangle { width: 8px; }
                 if root.process-active : ActionButton { text: "Pause"; enabled: root.process-status != "Saving" && !root.process-stopping; clicked => { root.pause-scan(); } }
                 if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: !root.process-stopping; clicked => { root.stop-scan(); } }
@@ -358,6 +367,7 @@ export component MainWindow inherits Window {
                     Text { text: root.inspector-details.ip + ":" + root.inspector-details.port; color: Theme.text; font-size: 15px; font-weight: 600; }
                     Text { text: root.inspector-details.service; color: Theme.accent; font-size: 12px; }
                     Rectangle { horizontal-stretch: 1; }
+                    ActionButton { text: "Cancel checks"; enabled: root.inspection-available; clicked => { root.cancel-inspection(); } }
                     ActionButton { text: "Close details"; clicked => { root.inspector-open = false; } }
                 }
                 HorizontalLayout {
@@ -459,13 +469,23 @@ export component MainWindow inherits Window {
                 Text { text: "Actions apply to this endpoint"; color: Theme.muted; font-size: 11px; height: 18px; }
                 Rectangle { height: 1px; background: Theme.divider; }
                 MenuAction { text: "Host details"; clicked => { actions.close(); root.row-action(root.action-target, "details"); } }
-                MenuAction { text: "Hostname lookup · not connected"; clicked => { actions.close(); root.row-action(root.action-target, "dns"); } }
-                MenuAction { text: "Nmap inspection · not connected"; clicked => { actions.close(); root.row-action(root.action-target, "nmap"); } }
+                MenuAction { text: "Refresh hostname"; enabled: root.inspection-available; clicked => { actions.close(); root.row-action(root.action-target, "dns"); } }
+                MenuAction { text: "Inspect host with Nmap"; enabled: root.inspection-available; clicked => { actions.close(); root.row-action(root.action-target, "nmap"); } }
                 Rectangle { height: 1px; background: Theme.divider; }
                 MenuAction { text: "Copy IP address"; clicked => { clipboard.text = root.action-target.ip; clipboard.select-all(); clipboard.copy(); root.action-notice = "Copied " + root.action-target.ip; actions.close(); } }
                 MenuAction { text: "Copy IP:port"; clicked => { clipboard.text = root.action-target.ip + ":" + root.action-target.port; clipboard.select-all(); clipboard.copy(); root.action-notice = "Copied " + clipboard.text; actions.close(); } }
                 MenuAction { text: "HTTP address"; clicked => { actions.close(); root.row-action(root.action-target, "http"); } }
                 MenuAction { text: "HTTPS address"; clicked => { actions.close(); root.row-action(root.action-target, "https"); } }
+            }
+        }
+    }
+    exports := PopupWindow {
+        x: root.width - 230px; y: 118px; width: 210px; height: 112px;
+        Rectangle { background: Theme.surface; border-color: Theme.divider; border-width: 1px; border-radius: 6px;
+            VerticalLayout { padding: 10px; spacing: 4px;
+                Text { text: "Export visible rows"; color: Theme.muted; font-size: 11px; }
+                MenuAction { text: "CSV spreadsheet"; clicked => { exports.close(); root.export-rows("csv"); } }
+                MenuAction { text: "JSON with inspection data"; clicked => { exports.close(); root.export-rows("json"); } }
             }
         }
     }

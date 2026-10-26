@@ -29,6 +29,11 @@ pub struct SavedScan {
     pub next_index: Option<String>,
     pub detail: String,
 }
+#[derive(Debug, Clone)]
+pub struct SavedRow {
+    pub row: Row,
+    pub discovered_at: Option<String>,
+}
 fn private_file(path: &Path) -> Result<File> {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err("Symlinks are not accepted for history files".into());
@@ -61,13 +66,38 @@ impl Store {
         let db = Connection::open(dir.join("history.sqlite3"))?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err("History was created by a newer Studio version".into());
         }
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
             CREATE TABLE IF NOT EXISTS scans (id BLOB PRIMARY KEY, attempt BLOB NOT NULL, job TEXT NOT NULL, status TEXT NOT NULL, sequence TEXT NOT NULL DEFAULT '0', checkpoint BLOB, next_index TEXT, detail TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS results (scan BLOB NOT NULL REFERENCES scans(id), ip TEXT NOT NULL, port INTEGER NOT NULL, open INTEGER NOT NULL, PRIMARY KEY(scan,ip,port));
-            PRAGMA user_version=1;")?;
+            CREATE TABLE IF NOT EXISTS host_details (scan BLOB NOT NULL REFERENCES scans(id),ip TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scan,ip));")?;
+        if version < 2 {
+            db.execute_batch("BEGIN IMMEDIATE; ALTER TABLE results ADD COLUMN discovered_at TEXT; PRAGMA user_version=2; COMMIT;")?;
+        }
+        let mut pending = db.prepare("SELECT scan,ip,data FROM host_details")?;
+        let saved = pending
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(pending);
+        for (scan, ip, json) in saved {
+            let mut info: studio_inspection::HostInfo = serde_json::from_str(&json)?;
+            let old = info.clone();
+            info.recover();
+            if info != old {
+                db.execute(
+                    "UPDATE host_details SET data=?3 WHERE scan=?1 AND ip=?2",
+                    params![scan, ip, serde_json::to_string(&info)?],
+                )?;
+            }
+        }
         db.execute("UPDATE scans SET status=CASE WHEN status='\"Starting\"' AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END, detail='Previous attempt ended before a terminal state was saved' WHERE status IN ('\"Starting\"','\"Scanning\"','\"Saving\"')",[])?;
         #[cfg(unix)]
         {
@@ -166,6 +196,59 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
+    pub fn observations(&self, scan: Id) -> Result<Vec<SavedRow>> {
+        let mut stmt = self.db.prepare(
+            "SELECT ip,port,open,discovered_at FROM results WHERE scan=?1 ORDER BY rowid",
+        )?;
+        Ok(stmt
+            .query_map([scan.as_slice()], |r| {
+                Ok(SavedRow {
+                    row: Row {
+                        ip: r.get(0)?,
+                        port: r.get(1)?,
+                        open: r.get(2)?,
+                    },
+                    discovered_at: r.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+    pub fn observed_batch(&self, scan: Id, rows: Vec<Row>) -> Result<Vec<SavedRow>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT discovered_at FROM results WHERE scan=?1 AND ip=?2 AND port=?3")?;
+        rows.into_iter()
+            .map(|row| {
+                let discovered_at =
+                    stmt.query_row(params![scan.as_slice(), row.ip, row.port], |r| r.get(0))?;
+                Ok(SavedRow { row, discovered_at })
+            })
+            .collect()
+    }
+    pub fn hosts(&self, scan: Id) -> Result<Vec<studio_inspection::HostInfo>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT data FROM host_details WHERE scan=?1")?;
+        let json = stmt
+            .query_map([scan.as_slice()], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        json.iter()
+            .map(|s| serde_json::from_str(s).map_err(Into::into))
+            .collect()
+    }
+    pub fn save_host(&mut self, scan: Id, info: &studio_inspection::HostInfo) -> Result<()> {
+        info.ip.parse::<std::net::Ipv4Addr>()?;
+        let exists: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM results WHERE scan=?1 AND ip=?2)",
+            params![scan.as_slice(), info.ip],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err("Host is not present in this scan".into());
+        }
+        self.db.execute("INSERT INTO host_details(scan,ip,data) VALUES(?1,?2,?3) ON CONFLICT(scan,ip) DO UPDATE SET data=excluded.data",params![scan.as_slice(),info.ip,serde_json::to_string(info)?])?;
+        Ok(())
+    }
     /// Full transaction before the controller may ACK a checkpoint or display results.
     pub fn apply(&mut self, event: &Envelope<Event>) -> Result<()> {
         if event.version != VERSION {
@@ -191,7 +274,7 @@ impl Store {
         match &event.payload {
             Event::Results(rows) => {
                 for row in rows {
-                    tx.execute("INSERT INTO results(scan,ip,port,open) VALUES(?1,?2,?3,?4) ON CONFLICT(scan,ip,port) DO UPDATE SET open=excluded.open",params![event.scan.as_slice(),row.ip,row.port,row.open])?;
+                    tx.execute("INSERT INTO results(scan,ip,port,open,discovered_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(scan,ip,port) DO UPDATE SET open=excluded.open",params![event.scan.as_slice(),row.ip,row.port,row.open,studio_inspection::now()])?;
                 }
             }
             Event::Checkpoint { bytes, next_index } => {

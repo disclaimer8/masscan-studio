@@ -1,5 +1,6 @@
 //! Application controller.
 #![forbid(unsafe_code)]
+mod hosts;
 use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::PathBuf,
@@ -13,9 +14,12 @@ use std::{
     time::{Duration, Instant},
 };
 use studio_protocol::*;
-use studio_store::{SavedScan, Store};
+use studio_store::{SavedRow, SavedScan, Store};
 
 pub enum Action {
+    LookupHosts { ips: Vec<String>, refresh: bool },
+    InspectHost(String),
+    CancelInspection,
     Authorize,
     Start(Job),
     Pause,
@@ -30,8 +34,9 @@ pub enum Update {
         authorized: bool,
         detail: String,
     },
-    Reset(Vec<Row>, Backend),
-    Rows(Vec<Row>),
+    Reset(Vec<SavedRow>, Backend),
+    Rows(Vec<SavedRow>),
+    Hosts(Vec<studio_inspection::HostInfo>),
     State(Status, String),
     Progress(String, String),
     History(Vec<SavedScan>, Option<Id>),
@@ -288,6 +293,9 @@ fn work(
     cancel_auth: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut client: Option<Client> = None;
+    let mut hosts = hosts::Hosts::new(
+        path.with_file_name(format!("studio-inspect{}", std::env::consts::EXE_SUFFIX)),
+    );
     let mut selected: Option<Id> = None;
     let mut active = false;
     let history = db.scans().map_err(|e| e.to_string())?;
@@ -295,7 +303,14 @@ fn work(
         selected = Some(s.scan);
         emit(
             &out,
-            Update::Reset(db.rows(s.scan).map_err(|e| e.to_string())?, s.job.backend),
+            Update::Reset(
+                db.observations(s.scan).map_err(|e| e.to_string())?,
+                s.job.backend,
+            ),
+        )?;
+        emit(
+            &out,
+            host_selection(&mut hosts, s.scan, s.job.backend, &mut db),
         )?;
         emit(&out, Update::State(s.status.clone(), s.detail.clone()))?;
     }
@@ -305,6 +320,20 @@ fn work(
             let step = (|| -> Result<(), String> {
                 if let Ok(action) = actions.try_recv() {
                     match action {
+                        Action::LookupHosts { ips, refresh } => {
+                            match hosts.dns(ips, refresh, &mut db) {
+                                Ok(info) => emit(&out, Update::Hosts(info))?,
+                                Err(e) => emit(&out, Update::Notice(e))?,
+                            }
+                        }
+                        Action::InspectHost(ip) => match hosts.nmap(ip, &mut db) {
+                            Ok(info) => emit(&out, Update::Hosts(info))?,
+                            Err(e) => emit(&out, Update::Notice(e))?,
+                        },
+                        Action::CancelInspection => match hosts.cancel(&mut db) {
+                            Ok(info) => emit(&out, Update::Hosts(info))?,
+                            Err(e) => emit(&out, Update::Notice(e))?,
+                        },
                         Action::Authorize if !active => {
                             client.take();
                             emit(
@@ -372,6 +401,7 @@ fn work(
                                 .unwrap()
                                 .start(scan, attempt, Command::Start(job))?;
                             emit(&out, Update::Reset(vec![], backend))?;
+                            emit(&out, host_selection(&mut hosts, scan, backend, &mut db))?;
                             emit(
                                 &out,
                                 Update::State(Status::Starting, "Starting scanner".into()),
@@ -476,10 +506,11 @@ fn work(
                                 emit(
                                     &out,
                                     Update::Reset(
-                                        db.rows(id).map_err(|e| e.to_string())?,
+                                        db.observations(id).map_err(|e| e.to_string())?,
                                         s.job.backend,
                                     ),
                                 )?;
+                                emit(&out, host_selection(&mut hosts, id, s.job.backend, &mut db))?;
                                 emit(&out, Update::State(s.status, s.detail))?;
                             }
                         }
@@ -510,7 +541,12 @@ fn work(
                                     format!("Scanning {total} endpoints"),
                                 ),
                             )?,
-                            Event::Results(rows) => emit(&out, Update::Rows(rows))?,
+                            Event::Results(rows) => emit(
+                                &out,
+                                Update::Rows(
+                                    db.observed_batch(e.scan, rows).map_err(|e| e.to_string())?,
+                                ),
+                            )?,
                             Event::Progress { sent, received } => {
                                 emit(&out, Update::Progress(sent, received))?
                             }
@@ -572,10 +608,19 @@ fn work(
                 )?;
             }
             thread::sleep(Duration::from_millis(5));
+            match hosts.poll(&mut db) {
+                Ok(info) if !info.is_empty() => emit(&out, Update::Hosts(info))?,
+                Err(e) => emit(
+                    &out,
+                    Update::Notice(format!("Inspection results could not be saved: {e}")),
+                )?,
+                _ => {}
+            }
         }
         Ok(())
     })();
     drop(client);
+    let _ = hosts.cancel(&mut db);
     if active && let Some(id) = selected {
         let detail = result
             .as_ref()
@@ -585,4 +630,11 @@ fn work(
         let _ = db.interrupt(id, detail);
     }
     result
+}
+
+fn host_selection(hosts: &mut hosts::Hosts, scan: Id, backend: Backend, db: &mut Store) -> Update {
+    match hosts.select(scan, backend, db) {
+        Ok(info) => Update::Hosts(info),
+        Err(e) => Update::Notice(format!("Host details unavailable: {e}")),
+    }
 }

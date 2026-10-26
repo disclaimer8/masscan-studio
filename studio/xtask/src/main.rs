@@ -61,6 +61,8 @@ fn main() -> Result<()> {
                 "studio-ui",
                 "-p",
                 "studio-runner",
+                "-p",
+                "studio-inspection",
             ]);
             if release {
                 cmd.arg("--release");
@@ -80,7 +82,7 @@ fn main() -> Result<()> {
                 let bundle = dist.join("Masscan Studio.app");
                 let macos = bundle.join("Contents/MacOS");
                 fs::create_dir_all(&macos)?;
-                for name in ["studio-ui", "studio-runner"] {
+                for name in ["studio-ui", "studio-runner", "studio-inspect"] {
                     let dst = macos.join(name);
                     fs::copy(target.join(name), &dst)?;
                     files.push(dst);
@@ -115,7 +117,7 @@ fn main() -> Result<()> {
                     files.push(dest);
                 }
                 // Fresh copies/inodes and signing only after every Mach-O change avoid taskgated's stale signatures.
-                for name in ["studio-runner", "studio-ui"] {
+                for name in ["studio-runner", "studio-inspect", "studio-ui"] {
                     run(Command::new("codesign")
                         .args(["--force", "--sign", "-", "--timestamp=none"])
                         .arg(macos.join(name)))?;
@@ -128,7 +130,7 @@ fn main() -> Result<()> {
                     .arg(&bundle))?;
                 println!("App: {}", bundle.display());
             } else {
-                for name in ["studio-ui", "studio-runner"] {
+                for name in ["studio-ui", "studio-runner", "studio-inspect"] {
                     let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
                     let dst = dist.join(&name);
                     fs::copy(target.join(&name), &dst)?;

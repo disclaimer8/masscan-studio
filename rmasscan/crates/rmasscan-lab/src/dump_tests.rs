@@ -300,6 +300,11 @@ mod sequence {
         }
         v
     }
+    /// How long a scripted witness may wait for the start-marker ack. The wait ends as soon as
+    /// the ack exists, so a generous bound costs nothing on a quiet machine and keeps the tests
+    /// green when a parallel build delays the fake tcpdump's start.
+    pub(super) const ACK_WAIT_MS: u64 = 60_000;
+
     pub(super) fn probe(r: &Rig, total: u64, deadline_ms: u64) -> Scripted {
         Scripted {
             total,
@@ -320,7 +325,7 @@ mod sequence {
     fn a_complete_capture_is_acknowledged_finalised_and_valid() {
         // 1 start + 10 data + 3 end = 14 frames; tcpdump reports 14; counters window [14,14].
         let r = rig("ok", LISTENING, frames(10, 3), &stats(14, 0));
-        let mut p = probe(&r, 14, 5000);
+        let mut p = probe(&r, 14, ACK_WAIT_MS);
         let meta = witness(&r.cfg, &mut p).unwrap();
         assert_eq!(meta["valid"], true, "{meta}");
         assert!(meta["invalid_reasons"].as_array().unwrap().is_empty());
@@ -345,7 +350,7 @@ mod sequence {
     #[test]
     fn missing_end_markers_make_the_tail_unproven() {
         let r = rig("noend", LISTENING, frames(10, 2), &stats(13, 0));
-        let mut p = probe(&r, 13, 5000);
+        let mut p = probe(&r, 13, ACK_WAIT_MS);
         let meta = witness(&r.cfg, &mut p).unwrap();
         assert_eq!(meta["valid"], false);
         assert!(meta["invalid_reasons"].to_string().contains("end markers"));
@@ -372,24 +377,24 @@ mod sequence {
         let bad_stats =
             "13 packets captured\n14 packets received by filter\n0 packets dropped by kernel\n";
         let r = rig("tail", LISTENING, frames(10, 3), bad_stats);
-        let mut p = probe(&r, 14, 5000);
+        let mut p = probe(&r, 14, ACK_WAIT_MS);
         assert_eq!(witness(&r.cfg, &mut p).unwrap()["valid"], false);
         done(r);
         // A kernel drop.
         let r = rig("kdrop", LISTENING, frames(10, 3), &stats(14, 1));
-        let mut p = probe(&r, 14, 5000);
+        let mut p = probe(&r, 14, ACK_WAIT_MS);
         assert_eq!(witness(&r.cfg, &mut p).unwrap()["valid"], false);
         done(r);
         // The interface carried more frames than the capture holds.
         let r = rig("gap", LISTENING, frames(10, 3), &stats(14, 0));
-        let mut p = probe(&r, 20, 5000);
+        let mut p = probe(&r, 20, ACK_WAIT_MS);
         let meta = witness(&r.cfg, &mut p).unwrap();
         assert_eq!(meta["valid"], false);
         assert!(meta["invalid_reasons"].to_string().contains("window"));
         done(r);
         // The interface dropped a frame.
         let r = rig("idrop", LISTENING, frames(10, 3), &stats(14, 0));
-        let mut p = probe(&r, 14, 5000);
+        let mut p = probe(&r, 14, ACK_WAIT_MS);
         p.drops = vec![0, 1];
         let meta = witness(&r.cfg, &mut p).unwrap();
         assert_eq!(meta["valid"], false);
@@ -400,7 +405,7 @@ mod sequence {
     #[test]
     fn endless_traffic_is_never_declared_quiet() {
         let r = rig("noisy", LISTENING, frames(10, 3), &stats(14, 0));
-        let mut p = probe(&r, 14, 5000);
+        let mut p = probe(&r, 14, ACK_WAIT_MS);
         p.drifting = true;
         let meta = witness(&r.cfg, &mut p).unwrap();
         assert_eq!(meta["quiesced_before_stop"], false);
@@ -412,7 +417,7 @@ mod sequence {
     fn a_tcpdump_that_ignores_sigint_is_invalid_and_reaped() {
         let mut r = rig("deaf", DEAF, frames(10, 3), &stats(14, 0));
         r.cfg.stop_timeout = Duration::from_millis(300);
-        let mut p = probe(&r, 14, 5000);
+        let mut p = probe(&r, 14, ACK_WAIT_MS);
         let meta = witness(&r.cfg, &mut p).unwrap();
         assert_eq!(meta["valid"], false);
         assert!(meta["invalid_reasons"].to_string().contains("did not exit"));
@@ -424,7 +429,7 @@ mod sequence {
         let mut r = rig("mute", LISTENING, frames(1, 3), &stats(5, 0));
         r.cfg.argv = vec!["sh".into(), "-c".into(), "exec sleep 5".into()];
         r.cfg.start_timeout = Duration::from_millis(300);
-        let mut p = probe(&r, 0, 5000);
+        let mut p = probe(&r, 0, ACK_WAIT_MS);
         let e = witness(&r.cfg, &mut p).unwrap_err();
         assert!(e.contains("did not start"), "{e}");
         assert!(
@@ -434,7 +439,7 @@ mod sequence {
         done(r);
         let mut r = rig("dead", LISTENING, frames(1, 3), &stats(5, 0));
         r.cfg.argv = vec!["sh".into(), "-c".into(), "echo boom >&2; exit 3".into()];
-        let mut p = probe(&r, 0, 5000);
+        let mut p = probe(&r, 0, ACK_WAIT_MS);
         let e = witness(&r.cfg, &mut p).unwrap_err();
         assert!(e.contains("exited at startup") && e.contains("boom"), "{e}");
         done(r);

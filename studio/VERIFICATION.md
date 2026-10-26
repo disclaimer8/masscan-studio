@@ -560,3 +560,70 @@ Those remain the next task. Unsupported effective ACE forms fail closed; only
 the volume root permits unprivileged creation of new directories while refusing
 modification/deletion of protected existing children. The personal-build threat
 model continues to trust administrators and exclude malicious same-account code.
+
+## 2026-10-26 — Windows UAC desktop and lifetime acceptance
+
+Scope: ordinary same-account Windows 11 desktop → exact installed runner →
+authenticated IPC. No packets, Npcap, network/lab configuration or rmasscan changes.
+The user explicitly authorized the home VM for this acceptance.
+
+Native offline CI at c84dc55 (run 40348308524, Windows job 121661128395)
+passed tests, lint, packaging, protected installation and standalone preparation
+outside a checkout. The actual consent step failed with Windows error 1223 in
+that service session. This is recorded as FAIL/unavailable interactive consent,
+not reclassified as PASS. Automatic CI retains the other checks and packages the
+native consent fixture; desktop evidence below supplies the interactive check.
+
+Downloaded artifact source: `fded3984120566856216e0603234847f54009708` (GitHub PR
+merge tree for c84dc55). Windows 11 Pro build 26300, lab desktop session 1,
+EnableLUA=1 and ConsentPromptBehaviorAdmin=5, unchanged. All executable hashes
+were checked against package manifests before installation. Exact runner:
+`6831512c2ed0a3f29b23e331b72c4776e7909530624b98ce0b96594c92ba9a6f`.
+Native test executable:
+`649fa53e69d4a33e1c82e89d4bf9a3eb724fe2c4110ef07f4fae10a6f52bb966`.
+Transport archive SHA-256:
+`6150258577d84c7f0b8366217642b0a84a0961af22b4387d5022a3e3e1829f40`.
+
+| Case | Observed result |
+| --- | --- |
+| Real UAC consent | PASS; ordinary owner kind=3, elevated=false; runner kind=2, elevated=true |
+| Split-token logon | Owner AuthenticationId `[282251,0]`, runner `[281949,0]`; same SID and exact retained launch handle accepted |
+| Hello / repeated CheckNetwork | PASS; both checks unavailable, raw remains false |
+| CloseSession | PASS twice; retained runner exited within 2 seconds |
+| Deny, then retry | PASS; denial returned 1223/exit 1, next consent completed normally |
+| IPC disconnect | PASS; retained runner exited within 2 seconds |
+| Explicit job drop | PASS; retained runner exited within 2 seconds |
+| Cancel / late approval / retry | PASS native integrated test; 1 passed, 0 failed; late runner exited within 2 seconds |
+| Abrupt established-owner death | PASS; supervisor verified held process handles, creation times and paths; runner exit observed 6 ms after terminating owner |
+| Alternate-account UAC | NOT RUN; no second account created; unsupported and rejected by same-SID contract |
+
+The integrated cancellation fixture releases a controlled launcher barrier only
+after cancellation destroyed the pipe/job, then invokes real ShellExecute and
+requires the approved late runner to exit. This proves that sequence, not elapsed
+wall time from a physical UI cancel click on the secure desktop. The 15.74-second
+test duration includes the operator's consent delay.
+
+Evidence archive: `studio/verification/windows-uac-20261026/native-evidence.zip`,
+SHA-256 `fef2e4bcd93d6b991a27f43712f8f770744158b9806bb7f27dcad1c1c37368b7`.
+It contains per-case stdout/exit files, runner/owner identities, package provenance
+and a per-file SHA-256 manifest. `uac-prompt.jpg` records the actual system prompt.
+Evidence files remain local ignored artifacts; this report records their hashes.
+No surviving studio-runner was reported after the suite.
+
+Fresh whole-branch review at 69d0cb5 found two Important issues: missing runner
+environment allowlist and missing integrated late-launch regression. Both were
+fixed at 6115a62. The environment test failed first at d2e562d (inherited marker)
+and passed natively after the fix. It also checks that a benign working-directory
+DLL cannot replace the subsequently loaded System32 module. Static image imports
+remain within the documented installed-image/OS-runtime trust boundary.
+
+Local Mac final suite after Windows UI enablement: 76 passed, 0 failed, 2 live
+inspection tests ignored; Clippy and formatting passed. Exact-head CI and the
+packaged Windows Authorize/Lock UI check are recorded separately below.
+
+An additional desktop probe was terminated by its retained, birth/path-verified
+owner handle while the real UAC prompt remained visible. Windows left that prompt
+open. Selecting Yes afterwards did not establish a session; the subsequent
+process inventory found no runner. This observation has no retained late-child
+handle and is not a separate two-second exit measurement; the integrated native
+fixture above supplies that stronger exit proof.

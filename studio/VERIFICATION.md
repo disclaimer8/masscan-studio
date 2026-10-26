@@ -3,6 +3,33 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-26 — active-attempt environment guard
+
+Base: `644f6cd16d543c56284050947f8fd8169c19074e` (PR #26).
+Scope: Studio runner only; no engine/lab edits or real packet transmission.
+Local `cargo xtask test`: 87 passed, 0 failed, 2 privileged tests ignored;
+formatting and Clippy passed. Hosted cross-platform checks gate the PR merge.
+
+Offline regression coverage:
+
+- Failed or stale observations stop the real engine with a fake adapter; errors
+  remain sticky and a late success cannot refresh an already stale interval.
+- Simulated wall-clock and monotonic gaps, including an unchanged monotonic clock
+  across a long wall-clock gap, interrupt. This is clock injection, not live sleep.
+- Worker panic and in-flight failure during terminal teardown remain errors;
+  a healthy observer cancels and joins promptly without stopping a healthy engine.
+- The actual runner loop over in-memory framed IPC delivers received results,
+  records Interrupted/no checkpoint in SQLite, survives database reopen, and
+  accepts an explicit fresh attempt on the same session.
+- Already queued Completed/Paused outcomes cannot override an observer failure;
+  the terminal publisher preserves rows and suppresses checkpoint/ACK state.
+
+No privileged observer test or network manipulation was performed. The raw gate
+is unchanged (false). Live feth drift/sleep evidence, physical NICs and platform
+observers beyond macOS remain NOT RUN here; engine Stage 2C is not evidence for
+these Studio contracts. The five/three/one-second values are policy, not measured
+wire timing.
+
 ## PR #16 integration checks
 
 Current main's lab fixes (`b6986c7`) were merged into the Studio branch without

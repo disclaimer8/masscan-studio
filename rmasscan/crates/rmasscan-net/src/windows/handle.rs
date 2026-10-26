@@ -414,6 +414,7 @@ impl SendQueue {
     }
 
     /// Размеры записей (`16 + caplen`) в порядке постановки.
+    #[cfg(test)]
     pub(crate) fn record_sizes(&self) -> &[u32] {
         &self.records
     }

@@ -873,39 +873,86 @@ fn assert_batched(r: &Run) {
     assert_eq!(s.tx_over_budget, 0, "a call exceeded 50 ms: {s:?}");
 }
 
+/// Порты `lo..=hi`, на которых пир отвечает ровно одним RST: без портов с
+/// listener (SYN-ACK пира повторяется и даёт `duplicates`) и без «немых»
+/// (никогда не отвечают). Исключения: стандартный набор стенда (80, 443,
+/// 8000-8007, немой 8099), `RMASSCAN_NPCAP_LAB_OPEN_PORTS` и необязательный
+/// `RMASSCAN_NPCAP_LAB_SILENT_PORTS` (список через запятую).
+fn closed_only_ports(lo: u16, hi: u16) -> Vec<u16> {
+    let mut skip: Vec<u16> = vec![80, 443, 8099];
+    skip.extend(8000..=8007);
+    skip.extend(ports_of(&need("RMASSCAN_NPCAP_LAB_OPEN_PORTS")));
+    if let Ok(v) = std::env::var("RMASSCAN_NPCAP_LAB_SILENT_PORTS") {
+        skip.extend(ports_of(&v));
+    }
+    (lo..=hi).filter(|p| !skip.contains(p)).collect()
+}
+
+/// Список портов в виде диапазонов для плана: `1-79,81-442,...`.
+fn port_spec(ports: &[u16]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < ports.len() {
+        let mut j = i;
+        while j + 1 < ports.len() && ports[j + 1] == ports[j] + 1 {
+            j += 1;
+        }
+        out.push(if i == j {
+            ports[i].to_string()
+        } else {
+            format!("{}-{}", ports[i], ports[j])
+        });
+        i = j + 1;
+    }
+    out.join(",")
+}
+
+/// Каждый порт списка ответил ровно одним RST: ни дублей, ни пропусков.
+fn assert_each_closed_port_answered_once(replies: &[Reply], ports: &[u16]) {
+    assert!(replies.iter().all(|r| r.status == PortStatus::Closed));
+    let mut got: Vec<u16> = replies.iter().map(|r| r.remote_port).collect();
+    got.sort_unstable();
+    assert_eq!(got, ports, "replies are not exactly the scanned ports");
+}
+
 #[test]
 #[ignore = "live: needs the lab NIC and a peer (see module docs)"]
 fn live_batched_scan_counts_exactly_once_on_the_wire() {
     let lab = lab();
-    let p = plan(&lab, "1-65535", 100_000.0, 3);
+    // Только закрытые порты: каждый SYN, дошедший до пира, даёт ровно один RST.
+    let ports = closed_only_ports(1, 65_535);
+    let total = ports.len() as u64;
+    let p = plan(&lab, &port_spec(&ports), 100_000.0, 3);
     let r = run_engine(&lab, Spec::new(&p, 2));
     summarize(&lab, "batched_scan", &r);
-    assert_eq!(r.outcome.reason, Reason::Completed, "{:?}", r.outcome);
-    assert_eq!(r.outcome.progress.sent, 65_535);
-    assert_eq!(r.outcome.progress.next_index, 65_535);
-    // tx_sent это число кадров, принятых драйвером; число SYN у пира
-    // (захват пира) оркестратор сверяет с этим значением, равенство строгое.
-    assert_eq!(r.stats_final.tx_sent, 65_535);
-    assert_eq!(r.stats_final.tx_uncertain, 0);
-    assert_eq!(r.stats_final.tx_errors, 0);
-    assert_eq!(r.outcome.progress.duplicates, 0, "duplicate replies");
-    let mut ports: Vec<u16> = r.replies.iter().map(|x| x.remote_port).collect();
-    let all = ports.len();
-    ports.sort_unstable();
-    ports.dedup();
-    assert_eq!(ports.len(), all, "a port was answered twice");
-    assert_batched(&r);
+    // tx_sent это число кадров, принятых драйвером. Оркестратор сверяет его с
+    // числом SYN в захвате пира (равенство строгое); значение печатается ВСЕГДА,
+    // до проверок, чтобы оно было в KV и при падении.
     kv(
         &lab,
         "batched_scan_wire",
         &format!(
-            "tx_sent={} tx_batches={} tx_batch_max={} replies={}",
+            "ports={total} tx_sent={} tx_uncertain={} tx_batches={} tx_batch_max={} replies={} duplicates={}",
             r.stats_final.tx_sent,
+            r.stats_final.tx_uncertain,
             r.stats_final.tx_batches,
             r.stats_final.tx_batch_max,
-            r.replies.len()
+            r.replies.len(),
+            r.outcome.progress.duplicates
         ),
     );
+    assert_eq!(r.outcome.reason, Reason::Completed, "{:?}", r.outcome);
+    assert_eq!(r.outcome.progress.sent, total);
+    assert_eq!(r.outcome.progress.next_index, total);
+    assert_eq!(r.stats_final.tx_sent, total);
+    assert_eq!(r.stats_final.tx_uncertain, 0);
+    assert_eq!(r.stats_final.tx_errors, 0);
+    assert_eq!(r.outcome.progress.duplicates, 0, "duplicate replies");
+    // Ноль потерь очереди NPF: каждый RST доставлен, значит каждый SYN ушёл один раз.
+    assert_eq!(r.outcome.rx_health.kernel_drops, Some(0));
+    assert_eq!(r.stats_final.kernel_drops, Some(0));
+    assert_each_closed_port_answered_once(&r.replies, &ports);
+    assert_batched(&r);
 }
 
 #[test]
@@ -943,7 +990,9 @@ fn live_batched_stop_is_prompt_and_nothing_is_sent_afterwards() {
 #[ignore = "live: needs the lab NIC and a peer (see module docs)"]
 fn live_batched_pause_resume_has_no_gap_or_duplicate() {
     let lab = lab();
-    let p = plan(&lab, "1-20000", 20_000.0, 3);
+    let ports = closed_only_ports(1, 20_000);
+    let total = ports.len() as u64;
+    let p = plan(&lab, &port_spec(&ports), 20_000.0, 3);
     let leg1 = run_engine(&lab, {
         let mut s = Spec::new(&p, 2);
         s.command = Command::PauseAfterSent(5_000);
@@ -961,7 +1010,7 @@ fn live_batched_pause_resume_has_no_gap_or_duplicate() {
         d < Duration::from_secs(3 + 1),
         "pause + RX drain wait=3 must finish within 4 s, took {d:?}"
     );
-    assert!(leg1.outcome.progress.sent >= 5_000 && leg1.outcome.progress.sent < 20_000);
+    assert!(leg1.outcome.progress.sent >= 5_000 && leg1.outcome.progress.sent < total);
     let cp = leg1
         .checkpoint
         .clone()
@@ -981,26 +1030,24 @@ fn live_batched_pause_resume_has_no_gap_or_duplicate() {
     assert_eq!(leg2.outcome.reason, Reason::Completed, "{:?}", leg2.outcome);
     assert_eq!(
         leg1.stats_final.tx_sent + leg2.stats_final.tx_sent,
-        20_000,
+        total,
         "exactly one send per probe across both legs"
     );
-    assert_eq!(leg2.outcome.progress.sent, 20_000 - cp.next_index);
+    assert_eq!(leg2.outcome.progress.sent, total - cp.next_index);
     assert_batched(&leg2);
-    // Нет пропусков и повторов по ответам пира (ноль потерь очереди NPF
-    // подтверждён движком, поэтому каждый порт ответил ровно раз).
+    // Нет пропусков и повторов: только закрытые порты, каждый отвечает одним RST,
+    // ноль потерь очереди NPF подтверждён движком в обеих частях.
     assert_eq!(leg1.outcome.rx_health.kernel_drops, Some(0));
     assert_eq!(leg2.outcome.rx_health.kernel_drops, Some(0));
-    let mut ports: Vec<u16> = leg1
+    assert_eq!(leg1.outcome.progress.duplicates, 0);
+    assert_eq!(leg2.outcome.progress.duplicates, 0);
+    let both: Vec<Reply> = leg1
         .replies
         .iter()
         .chain(leg2.replies.iter())
-        .map(|r| r.remote_port)
+        .copied()
         .collect();
-    let all = ports.len();
-    ports.sort_unstable();
-    ports.dedup();
-    assert_eq!(ports.len(), all, "a port was answered twice");
-    assert_eq!(ports, (1..=20_000).collect::<Vec<u16>>());
+    assert_each_closed_port_answered_once(&both, &ports);
 }
 
 #[test]

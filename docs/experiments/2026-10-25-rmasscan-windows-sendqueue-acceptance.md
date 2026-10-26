@@ -12,7 +12,7 @@ GO «Windows throughput (VM)» по критерию плана **ожидает
 
 ## 1. Итог и границы
 
-**Windows throughput (VM): GO ожидает CI на точном HEAD (итоговое ревью ветки APPROVED).** Windows TX теперь отправляет пачками через Npcap sendqueue
+**Windows throughput (VM): GO (VM).** CI зелёный на точном HEAD `b939cde`, итоговое ревью ветки APPROVED. Windows TX теперь отправляет пачками через Npcap sendqueue
 (`TX_BATCH_FRAMES` = 64). На виртуальном e1000e стенда n2 медиана на 10 000 pps выросла с 6444.6 (OPEN) до 9964.9 pps (MET), на 100 000 pps с 6321.1 до
 22532.8 pps (**OPEN**, потолок VM, честная запись по решению 8 плана). **Windows correctness (VM): перепроверена на sendqueue-коде `628fcad`: A/B PASS**
 (29 и 19); прежний статус GO (VM) этим отчётом не повышается и не пересматривается. Физический NIC: **NOT RUN / OPEN**, в это GO не входит.
@@ -37,7 +37,7 @@ GO «Windows throughput (VM)» по критерию плана **ожидает
 | Ревью задач 0-5 и повторные ревью | пройдены после раундов исправлений | раздел 10 |
 | Итоговое ревью ветки | **APPROVED** (критичных 0, важных 0, минорных 11, исправлены в раунде исправлений) | раздел 10 |
 | `cargo test --workspace` на трёх ОС (Mac, minipc, гость VM) | **PASS** (ручной прогон, не CI): minipc и гость на `a94d695`, Mac на исправленном коммите раунда | раздел 12 |
-| CI на точном HEAD (`ubuntu-24.04`, `macos-14`, `windows-2022`, `language-guard`), зелёный | **PENDING** | раздел 12 |
+| CI на точном HEAD (`ubuntu-24.04`, `macos-14`, `windows-2022`, `language-guard`), зелёный | **PASS**: `b939cde`, rmasscan `40345902178` (pull_request) и `40345890450` (push, после перезапуска отменённого macos-14) | раздел 12 |
 | Физический NIC | **NOT RUN**, вне этого GO | раздел 13 |
 
 Это измерение на одном запечатанном стенде. Слои, которые отчёт **не** закрывает:
@@ -265,11 +265,11 @@ GO «Windows throughput (VM)» по критерию плана **ожидает
 
 ## 12. CI
 
-**CI на точном HEAD: PENDING.** Таблицу ниже заполняет контролёр после push; пока она пуста, этот пункт GO не выполнен.
+**CI на точном HEAD: PASS** на `b939cde` (PR #27). В прогоне по push задание macos-14 было отменено раннером (не упало) и после перезапуска прошло. Коммит, вносящий эту запись, меняет только `docs/experiments/`: workflow `rmasscan` по фильтру путей на нём не запускается.
 
 | Событие | Коммит | ubuntu-24.04 | macos-14 | windows-2022 | language-guard | Итог |
 | --- | --- | --- | --- | --- | --- | --- |
-| push / pull_request | (HEAD, заполнить) | PENDING | PENDING | PENDING | PENDING | PENDING |
+| pull_request `40345902178` / push `40345890450` | `b939cde` | success | success | success | success | success |
 
 Ручные прогоны `cargo test --locked --workspace` на трёх ОС (это не CI). Известно на `628fcad` (`verification/`):
 

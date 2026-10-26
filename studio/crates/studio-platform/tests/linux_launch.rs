@@ -22,6 +22,7 @@ fn linux_install_is_immutable_hash_addressed_and_shell_safe() {
     let script = install_script(std::path::Path::new("/tmp/a'b/runner"), &hash).unwrap();
     assert!(script.contains("sha256sum"));
     assert!(script.contains("No overwrite"));
+    assert!(script.contains("mv -T --no-clobber"));
     assert!(!script.contains("systemctl"));
     assert!(!script.contains("polkit-1"));
     assert!(

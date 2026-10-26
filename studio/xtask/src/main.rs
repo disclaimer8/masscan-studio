@@ -159,7 +159,7 @@ fn main() -> Result<()> {
             )?;
             println!("Artifacts: {}", dist.display());
         }
-        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (runner setup: macOS only)".into()),
+        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (runner setup: macOS/Linux)".into()),
     }
     Ok(())
 }

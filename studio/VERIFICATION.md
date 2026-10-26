@@ -627,3 +627,26 @@ open. Selecting Yes afterwards did not establish a session; the subsequent
 process inventory found no runner. This observation has no retained late-child
 handle and is not a separate two-second exit measurement; the integrated native
 fixture above supplies that stronger exit proof.
+
+### Packaged Windows interface
+
+The package built from PR merge tree `be07686043bb980f2f93cb80032bd79d69f00470`
+(head 9497e73) was independently staged and hash-verified on the same VM. Its UI
+SHA-256 is `6a833352c0517c963e1f4708c457692fff04f2e7718d60ac2026b2b4469f59c2`;
+runner SHA-256 is `e6690e5ae5279d2c137b92c36589e42f8ac6ed6e4a69834f58eb89a5250b624b`.
+The matching version was installed and verified with the packaged tools outside
+any source checkout. `studio-ui.exe` ran in the ordinary desktop with a fresh
+STUDIO_DATA_DIR and winit-software backend.
+
+Authorize opened real UAC. After consent, the interface showed Lock, retained the
+installed runner and reported that Mac feth preflight is unavailable on Windows.
+Lock restored Authorize and displayed “Runner session closed”; the subsequent
+process inventory contained only the UI. No scan was started. Screenshots are
+`studio/verification/windows-uac-20261026/ui-authorized.jpg` and `ui-locked.jpg`.
+
+Denying UAC from that packaged UI returned to Ready with Authorize available and
+an explicit cancellation notice (`ui-denied.jpg`). The notice incorrectly appended
+an installation hint despite the installed runner already being valid. The final
+text-only fix attaches that hint solely to installed-image validation failure;
+cancelled/failed UAC preserves its own diagnostic. Authentication and lifecycle
+logic are unchanged. No scan or background inspection was started by these checks.

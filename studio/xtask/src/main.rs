@@ -1,4 +1,6 @@
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
+mod feth_acceptance;
 #[cfg(target_os = "linux")]
 mod linux_acceptance;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -78,6 +80,13 @@ fn main() -> Result<()> {
         "windows-uac-fixture" | "probe-windows-authorization" => windows_acceptance::uac_fixture()?,
         #[cfg(windows)]
         "windows-limited-token-fixture" => windows_acceptance::token_fixture()?,
+        #[cfg(target_os = "macos")]
+        "feth-acceptance" => {
+            let code = feth_acceptance::main_entry()?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,
         #[cfg(any(target_os="macos", target_os="linux"))]
@@ -213,7 +222,7 @@ fn main() -> Result<()> {
             )?;
             println!("Artifacts: {}", dist.display());
         }
-        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
+        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | feth-acceptance --out DIR --app APP --lab LAB [--manual] [--dry-run] (macOS) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
     }
     Ok(())
 }

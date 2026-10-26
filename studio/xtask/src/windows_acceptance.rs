@@ -183,6 +183,7 @@ pub fn verify_uac(root: &Path) -> Result<()> {
     }
     let hash = trusted::file_hash(&root.join("target/debug/studio-runner.exe"))?;
     let _pinned = Installed::open(&hash)?;
+    limited(&["windows-uac-cancel-fixture", &hash])?;
     for mode in ["close", "disconnect", "drop"] {
         limited(&["windows-uac-fixture", &hash, mode])?;
     }
@@ -315,6 +316,16 @@ pub fn uac_fixture() -> Result<()> {
     }
     println!("PASS: UAC session {mode}, raw scanning stayed disabled");
     Ok(())
+}
+
+pub fn cancel_fixture() -> Result<()> {
+    let hash = std::env::args()
+        .nth(2)
+        .ok_or("Supply installed runner hash")?;
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return Err("Requires disposable CI".into());
+    }
+    run(Command::new("cargo").args(["test", "--locked", "-p", "studio-platform", "--lib", "windows::uac::tests::cancellation_destroys_endpoints_before_late_runner_and_allows_retry", "--", "--ignored", "--exact", "--nocapture"]).env("STUDIO_TEST_UAC_HASH", hash))
 }
 pub fn token_probe() -> Result<()> {
     let me = studio_platform::windows::Process::open(std::process::id())?;

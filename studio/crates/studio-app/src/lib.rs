@@ -18,6 +18,8 @@ use std::{
 use studio_platform::linux as authorization;
 #[cfg(target_os = "macos")]
 use studio_platform::macos as authorization;
+#[cfg(windows)]
+use studio_platform::windows::uac as authorization;
 use studio_protocol::*;
 use studio_store::{SavedRow, SavedScan, Store};
 
@@ -132,7 +134,7 @@ struct Client {
     child: Option<Child>,
     #[cfg(windows)]
     pipe: Option<studio_platform::windows::Stream>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     authorized: Option<authorization::Authorized>,
     input: Option<BufWriter<Box<dyn Write + Send>>>,
     events: mpsc::Receiver<Result<Envelope<Event>, String>>,
@@ -215,7 +217,16 @@ impl Client {
         c.handshake(Some(cancelled))?;
         Ok(c)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    fn authorize(source: &std::path::Path, cancelled: &AtomicBool) -> Result<Self, String> {
+        let hash = studio_platform::trusted::file_hash(source)?;
+        let auth = authorization::Authorized::open(&hash, cancelled)?;
+        let mut c = Self::connected(Box::new(auth.stream.clone()), Box::new(auth.stream.clone()))?;
+        c.authorized = Some(auth);
+        c.handshake(Some(cancelled))?;
+        Ok(c)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     fn authorize(_: &std::path::Path, _: &AtomicBool) -> Result<Self, String> {
         Err(
             "System authorization is currently implemented on macOS and Linux; simulation is available"
@@ -223,11 +234,11 @@ impl Client {
         )
     }
     fn is_authorized(&self) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         {
             self.authorized.is_some()
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         {
             false
         }
@@ -275,7 +286,7 @@ impl Client {
             child: None,
             #[cfg(windows)]
             pipe: None,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             authorized: None,
             input: Some(BufWriter::new(input)),
             events,
@@ -376,7 +387,7 @@ impl Drop for Client {
             pipe.shutdown();
         }
         self.input.take();
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         self.authorized.take();
         let Some(child) = self.child.as_mut() else {
             return;

@@ -1,6 +1,8 @@
 //! Local Windows session transport. Peer identity is bound to retained process
 //! handles. This module does not elevate, install, or authorize raw scanning.
 pub mod install;
+pub mod runner_environment;
+pub mod uac;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::c_void,
@@ -80,6 +82,11 @@ pub struct Process {
     handle: OwnedHandle,
     identity: Identity,
 }
+#[derive(Debug)]
+pub struct Elevation {
+    pub elevated: bool,
+    pub kind: u32,
+}
 impl Process {
     pub fn open(pid: u32) -> Result<Self> {
         if pid == 0 {
@@ -89,6 +96,14 @@ impl Process {
         let handle =
             owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) })
                 .map_err(|e| e.to_string())?;
+        Self::from_handle(handle)
+    }
+    fn from_handle(handle: OwnedHandle) -> Result<Self> {
+        // SAFETY: retained process handle with query access; no PID reopening.
+        let pid = unsafe { GetProcessId(handle.as_raw_handle()) };
+        if pid == 0 {
+            return Err(error());
+        }
         let (mut birth, mut exit, mut kernel, mut user) = (
             FILETIME::default(),
             FILETIME::default(),
@@ -192,11 +207,64 @@ impl Process {
     pub fn identity(&self) -> &Identity {
         &self.identity
     }
+    pub fn elevation(&self) -> Result<Elevation> {
+        let mut token = null_mut();
+        // SAFETY: live process handle; writable unique token handle output.
+        if unsafe { OpenProcessToken(self.handle.as_raw_handle(), TOKEN_QUERY, &mut token) } == 0 {
+            return Err(error());
+        }
+        let token = owned(token).map_err(|e| e.to_string())?;
+        let (mut elevation, mut kind, mut len) = (TOKEN_ELEVATION::default(), 0u32, 0);
+        // SAFETY: output structures match requested token classes and exact sizes.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenElevation,
+                (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+                std::mem::size_of_val(&elevation) as u32,
+                &mut len,
+            )
+        } == 0
+        {
+            return Err(error());
+        }
+        // SAFETY: TokenElevationType is a 32-bit enum, sized output remains live.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenElevationType,
+                (&mut kind as *mut u32).cast(),
+                std::mem::size_of_val(&kind) as u32,
+                &mut len,
+            )
+        } == 0
+        {
+            return Err(error());
+        }
+        Ok(Elevation {
+            elevated: elevation.TokenIsElevated != 0,
+            kind,
+        })
+    }
     pub fn ensure_alive(&self) -> Result<()> {
         // SAFETY: retained process handle supports SYNCHRONIZE; zero wait is a probe.
         match unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) } {
             WAIT_TIMEOUT => Ok(()),
             WAIT_OBJECT_0 => Err("Peer process exited".into()),
+            _ => Err(error()),
+        }
+    }
+    pub fn wait_closed(&self, timeout: Duration) -> Result<()> {
+        // SAFETY: retained process supports SYNCHRONIZE. Never pass INFINITE;
+        // only WAIT_OBJECT_0 proves death, not access/inspection failures.
+        match unsafe {
+            WaitForSingleObject(
+                self.handle.as_raw_handle(),
+                timeout.as_millis().min((u32::MAX - 1) as u128) as u32,
+            )
+        } {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => Err("Process did not exit before deadline".into()),
             _ => Err(error()),
         }
     }
@@ -374,6 +442,25 @@ impl Endpoint {
         if expected.identity.sid != self.owner.sid || expected.identity.logon != self.owner.logon {
             return Err("Runner must belong to this user and logon session".into());
         }
+        self.accept_checked(expected, timeout, cancelled)
+    }
+    fn accept_elevated(
+        self,
+        expected: Process,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<Stream> {
+        if expected.identity.sid != self.owner.sid || !expected.elevation()?.elevated {
+            return Err("UAC runner must be elevated in the same account".into());
+        }
+        self.accept_checked(expected, timeout, cancelled)
+    }
+    fn accept_checked(
+        self,
+        expected: Process,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<Stream> {
         let handle = self.handle.as_raw_handle();
         operation(
             handle,
@@ -425,6 +512,23 @@ impl Stream {
         timeout: Duration,
         cancelled: &AtomicBool,
     ) -> Result<Self> {
+        Self::connect_mode(name, expected, timeout, cancelled, false)
+    }
+    fn connect_elevated(
+        name: &str,
+        expected: &Identity,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<Self> {
+        Self::connect_mode(name, expected, timeout, cancelled, true)
+    }
+    fn connect_mode(
+        name: &str,
+        expected: &Identity,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+        elevated: bool,
+    ) -> Result<Self> {
         let suffix = name
             .strip_prefix(PREFIX)
             .ok_or("Only a local Studio pipe is accepted")?;
@@ -434,8 +538,12 @@ impl Stream {
         let peer = Process::open(expected.pid)?;
         peer.verify(expected)?;
         let me = Identity::current()?;
-        if me.sid != expected.sid || me.logon != expected.logon {
+        if me.sid != expected.sid || (!elevated && me.logon != expected.logon) {
             return Err("UI must belong to this user and logon session".into());
+        }
+        if elevated && (!Process::open(me.pid)?.elevation()?.elevated || peer.elevation()?.elevated)
+        {
+            return Err("Elevated pipe requires elevated runner and ordinary UI".into());
         }
         let text = wide(name);
         let deadline = Instant::now() + timeout;

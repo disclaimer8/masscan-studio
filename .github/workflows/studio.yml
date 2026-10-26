@@ -54,6 +54,12 @@ jobs:
           key: studio-${{ runner.os }}-1.99.1-${{ hashFiles('studio/Cargo.lock') }}
           restore-keys: |
             studio-${{ runner.os }}-1.99.1-
+      - name: Windows restricted owner token probe (no packets)
+        if: runner.os == 'Windows'
+        run: cargo xtask probe-windows-token
+      - name: Windows elevated entry rejection (no packets)
+        if: runner.os == 'Windows'
+        run: cargo xtask verify-windows-elevated-entry
       - name: Offline contracts, lifecycle, persistence and lint
         env:
           STUDIO_TRACE_TIMINGS: '1'
@@ -66,12 +72,20 @@ jobs:
       - name: Windows trusted installation (no UAC or packets)
         if: runner.os == 'Windows'
         run: cargo xtask verify-windows-installation
+      - name: Package native Windows desktop acceptance fixture
+        if: runner.os == 'Windows'
+        run: cargo xtask prepare-windows-uac-tests
+      # Hosted runners have no interactive consent desktop: actual runas returns
+      # ERROR_CANCELLED (1223). Keep native offline/lifetime/environment tests
+      # above; run the packaged consent fixture on the Windows desktop lab.
+      # Acceptance commands, exact hashes and evidence: studio/VERIFICATION.md.
       - name: Linux software UI lifecycle (no packets)
         if: runner.os == 'Linux'
         run: |
           STUDIO_DATA_DIR="$RUNNER_TEMP/studio-pause" SLINT_BACKEND=winit-software xvfb-run -a target/debug/studio-ui --smoke-pause
           STUDIO_DATA_DIR="$RUNNER_TEMP/studio-stop" SLINT_BACKEND=winit-software xvfb-run -a target/debug/studio-ui --smoke-stop-race
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: studio-${{ runner.os }}-${{ github.sha }}
           path: studio/dist/

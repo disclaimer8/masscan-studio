@@ -24,7 +24,8 @@ cargo xtask build
 The last command prints the unique directory under `dist/`. On macOS it contains
 `Masscan Studio.app`, signed ad hoc after all executable changes. This is a local
 development signature, not Developer ID/notarization. Windows packages contain
-`studio-ui.exe`, `studio-runner.exe`, and `sqlite3.dll`; keep them together.
+`studio-ui.exe`, `studio-runner.exe`, `studio-inspect.exe`, `studio-tools.exe`
+and `sqlite3.dll`; keep them together.
 `manifest.json` records the source revision, dirty state, Cargo lock hash and
 binary hashes. No Npcap or Nmap is bundled.
 
@@ -104,22 +105,29 @@ Simulation uses authenticated named pipes on Windows and inherited anonymous
 pipes on macOS/Linux. Windows checks both peer processes using retained handles,
 user/logon identity and a protected pipe DACL; it does not elevate. Unix sockets
 have peer identity tests on macOS/Linux; system elevation is implemented on both.
-Do not launch the UI with sudo. Windows UAC session launch, Linux desktop
-prompt acceptance, physical NIC selection and Windows/Linux raw profiles remain open.
+Do not launch the UI with sudo or as Administrator. Linux desktop prompt
+acceptance, physical NIC selection and Windows/Linux raw profiles remain open.
 Raw scanning remains gated independently of host actions and saved profiles.
 
-Windows runner installation can be prepared separately:
+## Windows session authorization
+
+From an ordinary PowerShell, prepare the exact packaged runner:
 
 ```powershell
-cargo xtask prepare-runner 'C:\path\to\package\studio-runner.exe'
+.\studio-tools.exe prepare-runner 'C:\path\to\package\studio-runner.exe'
 # Review manifest.json and install.ps1 in the printed directory.
 # Run install.ps1 once in elevated 64-bit PowerShell 7+, then:
-cargo xtask verify-installed-runner SHA256_FROM_MANIFEST
+.\studio-tools.exe verify-installed-runner SHA256_FROM_MANIFEST
 ```
 
-This prepares a protected hash-addressed copy under system Program Files. It
-does not enable Windows Authorize, raw scanning or install a service. The UI
-continues using the unprivileged simulation runner until UAC session work passes.
+This installs a protected hash-addressed copy under system Program Files, with
+no service or driver. Run `studio-ui.exe` as an ordinary user. **Authorize** opens
+UAC for that exact installed runner; **Lock** ends the session. Use the same
+Windows account for consent. Authorizing with another account is unsupported.
+The personal build is unsigned, so UAC identifies an unknown publisher.
+Windows preflight reports unavailable; raw scanning stays disabled. Simulation
+uses an ordinary runner. Rebuilt packages require their matching installed hash.
+The tools executable works without a source checkout or Rust installation.
 
 ## Host actions and export
 

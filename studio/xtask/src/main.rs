@@ -6,6 +6,8 @@ mod runner_setup;
 #[cfg(windows)]
 #[path = "runner_setup_windows.rs"]
 mod runner_setup;
+#[cfg(windows)]
+mod windows_acceptance;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -30,12 +32,31 @@ fn digest(path: &Path) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
 }
 fn main() -> Result<()> {
+    let task = std::env::args().nth(1).unwrap_or("build".into());
+    #[cfg(windows)]
+    let packaged = std::env::current_exe()?
+        .file_name()
+        .is_some_and(|n| n == "studio-tools.exe");
+    #[cfg(not(windows))]
+    let packaged = false;
+    if packaged
+        && (!matches!(
+            task.as_str(),
+            "prepare-runner" | "verify-installed-runner" | "probe-windows-authorization"
+        ) || std::env::args().nth(2).is_none())
+    {
+        return Err("Usage: studio-tools.exe prepare-runner PATH | verify-installed-runner HASH | probe-windows-authorization HASH".into());
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_owned();
+    let root = if packaged {
+        std::env::current_dir()?
+    } else {
+        root
+    };
     std::env::set_current_dir(&root)?;
-    let task = std::env::args().nth(1).unwrap_or("build".into());
     match task.as_str() {
         #[cfg(any(target_os="macos", target_os="linux", windows))]
         "prepare-runner" => runner_setup::prepare(&root)?,
@@ -43,6 +64,20 @@ fn main() -> Result<()> {
         "verify-installed-runner" => runner_setup::verify_installed()?,
         #[cfg(windows)]
         "verify-windows-installation" => runner_setup::verify_ci(&root)?,
+        #[cfg(windows)]
+        "probe-windows-token" => windows_acceptance::token_probe()?,
+        #[cfg(windows)]
+        "verify-windows-elevated-entry" => windows_acceptance::guard_probe(&root)?,
+        #[cfg(windows)]
+        "verify-windows-uac" => windows_acceptance::verify_uac(&root)?,
+        #[cfg(windows)]
+        "prepare-windows-uac-tests" => windows_acceptance::package_tests(&root)?,
+        #[cfg(windows)]
+        "windows-uac-cancel-fixture" => windows_acceptance::cancel_fixture()?,
+        #[cfg(windows)]
+        "windows-uac-fixture" | "probe-windows-authorization" => windows_acceptance::uac_fixture()?,
+        #[cfg(windows)]
+        "windows-limited-token-fixture" => windows_acceptance::token_fixture()?,
         #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,
         #[cfg(any(target_os="macos", target_os="linux"))]
@@ -52,6 +87,13 @@ fn main() -> Result<()> {
         #[cfg(target_os="linux")]
         "linux-authorization-owner-fixture" => linux_acceptance::owner_fixture()?,
         "test" => {
+            #[cfg(windows)]
+            if studio_platform::windows::Process::open(std::process::id())?.elevation()?.elevated {
+                if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+                    return Err("Run application tests from an ordinary terminal, not as Administrator".into());
+                }
+                return windows_acceptance::limited(&["test"]);
+            }
             run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets", "--no-fail-fast"]))?;
             run(Command::new("cargo").args([
                 "clippy",
@@ -156,6 +198,11 @@ fn main() -> Result<()> {
                     let dest = dist.join("sqlite3.dll");
                     fs::copy(PathBuf::from(dir).join("sqlite3.dll"), &dest)?;
                     files.push(dest);
+                    // Standalone installation/probe utility: does not need Cargo
+                    // or the source checkout on the acceptance machine.
+                    let tool = dist.join("studio-tools.exe");
+                    fs::copy(std::env::current_exe()?, &tool)?;
+                    files.push(tool);
                 }
             }
             let file_hashes=files.iter().map(|p|Ok(serde_json::json!({"path":p.strip_prefix(&dist)?.to_string_lossy(),"sha256":digest(p)?}))).collect::<Result<Vec<_>>>()?;

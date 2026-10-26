@@ -12,7 +12,7 @@ studio-table = { path = "../studio-table" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }
 rfd = "=0.17.2"
-pollster = "0.4.0"
+pollster = "1.0.0"
 studio-inspection = { version = "0.1.0", path = "../studio-inspection" }
 
 [build-dependencies]

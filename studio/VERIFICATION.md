@@ -342,3 +342,30 @@ and possible individual checkpoint/recovery latency for less repeated index-page
 writing. Queue bounds, scan rate and test deadline were not changed. Latest-head
 hosted Windows acceptance remains required. `STUDIO_TRACE_TIMINGS=1` enables
 local aggregate IPC/commit diagnostics; it logs counts and timings, not targets.
+
+### Serialized output-budget correction
+
+Hosted Windows run 40301986347 still interrupted: individual FULL commits and
+WAL checkpoints took up to 1,970 ms. The runner's previous limit of 32 frames
+represented 4 MiB only at the maximum legal frame length. Real 500-row frames
+are much smaller, so it rejected a bounded backlog well before the agreed
+4 MiB serialized-data budget was used.
+
+The outbox now reserves the exact encoded frame length, including its length
+header, against 4 MiB. The writer's in-flight frame remains reserved until it is
+written/dropped. Send stays nonblocking; actual exhaustion still interrupts the
+scan. A separate 1,024-frame bound limits overhead for tiny control messages.
+The controller's queues, FULL commits, scan rate and volume-test deadline are
+unchanged. This is a serialized-byte budget, not a claim that all process memory
+fits in 4 MiB; allocation/channel overhead and one encoding buffer are separate.
+Tests cover byte saturation, in-flight accounting, writer/disconnect failure,
+frame-count saturation and protocol round-trip.
+
+The outbox review also found that checkpoint ACK time previously included time
+spent waiting in the output queue. A delivery receipt now starts the unchanged
+10-second ACK deadline only after the checkpoint frame has been written/flushed.
+While queued, ten seconds without writer progress is a separate transport-stall
+failure. Tests distinguish progressing backlog, stalled transport, failed writes
+and delivered-but-unacknowledged checkpoints. Full macOS suite: 58 passed,
+2 explicit live tests ignored; Clippy/formatting passed
+(`/tmp/studio-byte-budget-tests.log`).

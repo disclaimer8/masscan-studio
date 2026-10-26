@@ -301,7 +301,11 @@ mod tests {
     }
     #[test]
     fn unsupported_effective_aces_and_wrong_object_types_are_refused() {
-        for sddl in ["O:BAD:(OA;;GR;;;BU)", "O:BAD:(OD;;GW;;;BU)"] {
+        // Without an object GUID Windows normalizes OA/OD to ordinary ACEs.
+        for sddl in [
+            "O:BAD:(OA;;GR;11111111-1111-1111-1111-111111111111;;BU)",
+            "O:BAD:(OD;;GW;11111111-1111-1111-1111-111111111111;;BU)",
+        ] {
             assert!(policy(sddl, false).unwrap_err().contains("Unsupported"));
         }
         let dir = program_files().unwrap();

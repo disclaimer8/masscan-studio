@@ -158,3 +158,19 @@ and 512 bytes, and compared after Unicode lowercasing.
 Schema v4 adds native profiles after a consistent SQLite backup named
 `before-v4-*.sqlite3`. Existing history stays readable. The retired Swift importer,
 its APIs and its UI have been removed.
+
+## Manage saved scans
+
+**History…** opens saved scans with status, UTC creation time and a short ID.
+Choose a scan to view its results, rename it, repeat its settings, or delete it.
+Names may repeat; each scan retains its own identity and checkpoint. Older scans
+without creation times show **Unknown date**; Studio does not invent dates.
+
+**Repeat settings…** opens New scan with the original configuration and exact
+seed. It does not run anything or resume a checkpoint. Check the settings and
+explicitly start a new scan when ready. The original scan stays unchanged.
+
+**Delete scan…** asks for confirmation and atomically removes that scan's results,
+host inspection data and checkpoint; saved profiles and other scans are retained.
+Deleting the last scan clears the view. History changes are disabled during a
+scan. Inspection of a deleted scan is cancelled and late replies are ignored.

@@ -1,5 +1,6 @@
 //! Durable scan history owned only by the unprivileged application.
 #![forbid(unsafe_code)]
+mod history;
 mod profiles;
 pub use profiles::SavedProfile;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -168,7 +169,7 @@ impl Store {
             )?;
             tx.execute("UPDATE scans SET attempt=?2,status='\"Starting\"',sequence='0',detail='',updated=unixepoch() WHERE id=?1",params![scan.as_slice(),attempt.as_slice()])?;
         } else {
-            tx.execute("INSERT INTO scans(id,attempt,job,status,updated) VALUES(?1,?2,?3,'\"Starting\"',unixepoch())",params![scan.as_slice(),attempt.as_slice(),serde_json::to_string(job)?])?;
+            tx.execute("INSERT INTO scans(id,attempt,job,status,updated,created_at) VALUES(?1,?2,?3,'\"Starting\"',unixepoch(),?4)",params![scan.as_slice(),attempt.as_slice(),serde_json::to_string(job)?,studio_inspection::now()])?;
         }
         tx.commit()?;
         Ok(())

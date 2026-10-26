@@ -1008,3 +1008,672 @@ fn live_tx_filter_keeps_the_tx_handle_empty() {
         "the filtered TX handle still dropped captured frames"
     );
 }
+
+// =====================================================================
+// Спайк sendqueue (задача 3 этапа Windows sendqueue): тайминги по размеру
+// пачки, граница частичного transmit, повторное использование очереди,
+// Stop и потеря линка. Очередь и transmit это `SendQueue`/`transmit_raw`
+// задачи 2 напрямую (адаптера в этих тестах нет).
+//
+// Дополнительное окружение:
+//   RMASSCAN_NPCAP_SQ_SIZES   список n через запятую (по умолчанию 1,16,64,256,1024,4096)
+//   RMASSCAN_NPCAP_SQ_ROUNDS  transmit на размер (по умолчанию 200)
+//   RMASSCAN_NPCAP_SQ_BATCH   размер пачки для stop/linkdown (по умолчанию 256)
+//   RMASSCAN_NPCAP_SQ_SECS    длительность linkdown-прогона, с (по умолчанию 25)
+//   RMASSCAN_NPCAP_SQ_PPS     потолок средней скорости, кадров/с (по умолчанию 100000)
+// =====================================================================
+
+use std::sync::atomic::AtomicU64;
+
+use sha2::{Digest, Sha256};
+
+use super::ffi::PcapPkthdr;
+use super::handle::SendQueue;
+use super::process::process_sample;
+
+const SQ_RECORD_HEADER: u32 = 16;
+/// Предел кадра продукта (`MAX_TX_FRAME`): байты очереди = n × (16 + 1518).
+const SQ_MAX_FRAME: u32 = 1518;
+/// Бюджет вызова (`IO_BUDGET`) и порог выбора p99.9 (половина бюджета).
+const SQ_BUDGET_US: u64 = 42_000;
+const SQ_P999_LIMIT_US: u64 = 21_000;
+
+fn sq_sizes() -> Vec<usize> {
+    std::env::var("RMASSCAN_NPCAP_SQ_SIZES")
+        .unwrap_or_else(|_| "1,16,64,256,1024,4096".into())
+        .split(',')
+        .map(|s| s.trim().parse().expect("bad RMASSCAN_NPCAP_SQ_SIZES"))
+        .collect()
+}
+
+fn sq_pps() -> f64 {
+    env_u64("RMASSCAN_NPCAP_SQ_PPS", 100_000) as f64
+}
+
+/// TX handle продуктовой конфигурации: малые snaplen и буфер плюс фильтр
+/// `ret #0` (как `open_with` в адаптере).
+fn open_tx_product(api: &Arc<NpcapApi>, lab: &Lab) -> PcapHandle {
+    let mut h = open(
+        api,
+        lab,
+        OpenParams {
+            snaplen: 64,
+            promisc: false,
+            timeout_ms: 1,
+            immediate: true,
+            buffer_bytes: 65_536,
+        },
+    );
+    h.set_drop_all_filter().expect("drop-all filter");
+    h
+}
+
+/// SYN с порядковым номером `seq` в `seqno`; порт назначения обходит 1-65535.
+fn sq_syn(lab: &Lab, t: &TcpSynTemplate, seq: u32, out: &mut Vec<u8>) {
+    let dport = 1 + (seq % 65_535) as u16;
+    t.build_syn(
+        DST_IP,
+        dport,
+        SRC_IP,
+        40_000 + (seq % 1000) as u16,
+        seq,
+        out,
+    );
+    assert_lab_frame(lab, out);
+}
+
+/// Спит так, чтобы средняя скорость `frames` кадров с `start` не превышала `pps`.
+/// Точность сна ни на что не влияет: это только потолок скорости.
+fn pace(start: Instant, frames: u64, pps: f64) {
+    let want = Duration::from_secs_f64(frames as f64 / pps);
+    let have = start.elapsed();
+    if want > have {
+        std::thread::sleep(want - have);
+    }
+}
+
+fn pct_nr(sorted: &[u64], p: f64) -> u64 {
+    // nearest-rank: наименьшее значение, ниже которого не меньше доли p выборки
+    if sorted.is_empty() {
+        return 0;
+    }
+    let rank = (p * sorted.len() as f64).ceil() as usize;
+    sorted[rank.clamp(1, sorted.len()) - 1]
+}
+
+#[derive(Default)]
+struct TxRows {
+    t_ms: Vec<u64>,
+    n: Vec<u64>,
+    queued: Vec<u64>,
+    sent: Vec<u64>,
+    dur_us: Vec<u64>,
+}
+
+impl TxRows {
+    fn push(&mut self, t_ms: u64, n: usize, queued: u32, sent: u32, d: Duration) {
+        self.t_ms.push(t_ms);
+        self.n.push(n as u64);
+        self.queued.push(u64::from(queued));
+        self.sent.push(u64::from(sent));
+        self.dur_us.push(d.as_micros() as u64);
+    }
+
+    fn csv(&self, lab: &Lab, label: &str) {
+        let mut out = String::from("t_ms,n,bytes_queued,bytes_sent,dur_us\n");
+        for i in 0..self.t_ms.len() {
+            let _ = writeln!(
+                out,
+                "{},{},{},{},{}",
+                self.t_ms[i], self.n[i], self.queued[i], self.sent[i], self.dur_us[i]
+            );
+        }
+        let path = format!("{}\\{}__{label}.csv", lab.out_dir, lab.cond);
+        std::fs::write(&path, out).unwrap_or_else(|e| panic!("cannot write {path}: {e}"));
+    }
+
+    /// Строка KV: перцентили, потолок pps (Σn / Σdur), число неполных transmit.
+    fn summary(&self, lab: &Lab, label: &str, n: usize) -> (u64, u64, bool) {
+        let mut s = self.dur_us.clone();
+        s.sort_unstable();
+        let sum_dur: u64 = s.iter().sum();
+        let sum_n: u64 = self.n.iter().sum();
+        let short = (0..self.sent.len())
+            .filter(|&i| self.sent[i] != self.queued[i])
+            .count();
+        let p999 = pct_nr(&s, 0.999);
+        let max = s.last().copied().unwrap_or(0);
+        let pass = p999 <= SQ_P999_LIMIT_US && max <= SQ_BUDGET_US && short == 0;
+        kv(
+            lab,
+            label,
+            &format!(
+                "n={n} calls={} p50_us={} p95_us={} p99_us={} p999_us={p999} max_us={max} sum_frames={sum_n} sum_dur_us={sum_dur} pps_ceiling={:.0} short_transmits={short} pass={pass}",
+                s.len(),
+                pct_nr(&s, 0.50),
+                pct_nr(&s, 0.95),
+                pct_nr(&s, 0.99),
+                sum_n as f64 * 1e6 / sum_dur.max(1) as f64,
+            ),
+        );
+        (p999, max, pass)
+    }
+}
+
+/// Один transmit пачки из `n` SYN с последовательными номерами с `*seq`.
+/// Возвращает (поставлено байт, принято драйвером, длительность).
+fn sq_batch(
+    lab: &Lab,
+    tpl: &TcpSynTemplate,
+    tx: &mut PcapHandle,
+    q: &mut SendQueue,
+    n: usize,
+    seq: &mut u32,
+    f: &mut Vec<u8>,
+) -> (u32, u32, Duration) {
+    q.clear();
+    for _ in 0..n {
+        sq_syn(lab, tpl, *seq, f);
+        *seq = seq.wrapping_add(1);
+        q.push(f).expect("queue is full");
+    }
+    let queued = q.queued_bytes();
+    let t0 = Instant::now();
+    let sent = tx.transmit_raw(q, false);
+    (queued, sent, t0.elapsed())
+}
+
+/// Отсчёт процесса: номер вызова, рабочий набор, handles, потоки.
+type WsSample = (usize, Option<u64>, Option<u64>, Option<u64>);
+
+fn sq_queue_bytes(max_n: usize) -> u32 {
+    (max_n as u32) * (SQ_RECORD_HEADER + SQ_MAX_FRAME)
+}
+
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs)"]
+fn live_sendqueue_transmit_timing() {
+    let lab = lab();
+    let api = load();
+    let tpl = syn_frames(&lab);
+    let sizes = sq_sizes();
+    let rounds = env_u64("RMASSCAN_NPCAP_SQ_ROUNDS", 200) as usize;
+    let pps = sq_pps();
+    let mut tx = open_tx_product(&api, &lab);
+    let mut q = SendQueue::alloc(&api, sq_queue_bytes(*sizes.iter().max().unwrap())).unwrap();
+    let mut f = Vec::new();
+    let mut seq = 0u32;
+    let mut sigma = 0u64;
+    let mut chosen: Option<usize> = None;
+    kv(
+        &lab,
+        "config",
+        &format!("sizes={sizes:?} rounds={rounds} pps_cap={pps}"),
+    );
+    for &n in &sizes {
+        let mut rows = TxRows::default();
+        let seq_first = seq;
+        let start = Instant::now();
+        let mut frames = 0u64;
+        for _ in 0..rounds {
+            let t = now_ms();
+            let (queued, sent, d) = sq_batch(&lab, &tpl, &mut tx, &mut q, n, &mut seq, &mut f);
+            rows.push(t, n, queued, sent, d);
+            frames += n as u64;
+            pace(start, frames, pps);
+        }
+        sigma += frames;
+        rows.csv(&lab, &format!("sq_timing_n{n}"));
+        let (_, _, pass) = rows.summary(&lab, &format!("sq_n{n}"), n);
+        kv(
+            &lab,
+            &format!("sq_n{n}_seq"),
+            &format!("first={seq_first} frames={frames}"),
+        );
+        if pass {
+            chosen = Some(n);
+        }
+    }
+
+    // n = 1: очередь против pcap_sendpacket, по 1000 вызовов, тот же потолок скорости
+    let calls = 1000usize;
+    let mut rq = TxRows::default();
+    let mut rs = Samples::default();
+    let seq_cmp = seq;
+    let start = Instant::now();
+    for i in 0..calls {
+        let t = now_ms();
+        let (queued, sent, d) = sq_batch(&lab, &tpl, &mut tx, &mut q, 1, &mut seq, &mut f);
+        rq.push(t, 1, queued, sent, d);
+        pace(start, 2 * i as u64 + 1, pps);
+    }
+    for i in 0..calls {
+        sq_syn(&lab, &tpl, seq, &mut f);
+        seq = seq.wrapping_add(1);
+        let t = now_ms();
+        let t0 = Instant::now();
+        let rc = send_checked(&lab, &mut tx, &f);
+        rs.push(t, t0.elapsed(), i64::from(rc));
+        pace(start, 2 * i as u64 + 2, pps);
+    }
+    sigma += 2 * calls as u64;
+    rq.csv(&lab, "sq_cmp_queue_n1");
+    rs.report(&lab, "sq_cmp_sendpacket");
+    rq.summary(&lab, "sq_cmp_queue_n1", 1);
+    kv(
+        &lab,
+        "sq_cmp_seq",
+        &format!("first={seq_cmp} calls_each={calls}"),
+    );
+    println!("{}", rs.summary(&format!("{}/sq_cmp_sendpacket", lab.cond)));
+
+    kv(&lab, "sigma_frames", &sigma.to_string());
+    kv(
+        &lab,
+        "largest_passing_n",
+        &chosen.map_or("none".into(), |n| n.to_string()),
+    );
+    let s = tx.stats_raw().expect("tx stats");
+    kv(&lab, "final_tx_stats", &stat_line(&s));
+}
+
+// ---------- граница частичного transmit ----------
+
+#[derive(Clone, Copy, Debug)]
+enum Reject {
+    Frame9000,
+    Caplen0,
+    Caplen20Len60,
+}
+
+impl Reject {
+    fn name(self) -> &'static str {
+        match self {
+            Reject::Frame9000 => "frame9000",
+            Reject::Caplen0 => "caplen0",
+            Reject::Caplen20Len60 => "caplen20_len60",
+        }
+    }
+}
+
+/// seq = BASE + attempt × 512 + индекс записи в очереди: пир по seq однозначно
+/// называет попытку и позицию каждого дошедшего SYN.
+const PB_ATTEMPT_STRIDE: u32 = 512;
+
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs)"]
+fn live_sendqueue_partial_boundary() {
+    let lab = lab();
+    let api = load();
+    let tpl = syn_frames(&lab);
+    let mut tx = open_tx_product(&api, &lab);
+    let mut q = SendQueue::alloc(&api, 1 << 20).unwrap();
+    let m = 5usize;
+    let mut f = Vec::new();
+    let mut csv = String::from(
+        "attempt,reject,k,m,seq_first,records,bytes_queued,boundary_k,bytes_sent,outcome,geterr\n",
+    );
+    let mut attempt = 0u32;
+    let mut stop_reasons: Vec<String> = Vec::new();
+    for reject in [Reject::Frame9000, Reject::Caplen0, Reject::Caplen20Len60] {
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut ks: Vec<usize> = vec![7; 20];
+        ks.push(0);
+        ks.push(255);
+        for k in ks {
+            q.clear();
+            let base = attempt * PB_ATTEMPT_STRIDE;
+            for j in 0..k {
+                sq_syn(&lab, &tpl, base + j as u32, &mut f);
+                q.push(&f).unwrap();
+            }
+            // отвергаемая запись: все кадры идут только пиру (assert_lab_frame)
+            sq_syn(&lab, &tpl, base + 500, &mut f);
+            match reject {
+                Reject::Frame9000 => {
+                    let mut big = f.clone();
+                    big.resize(9000, 0);
+                    assert_lab_frame(&lab, &big);
+                    q.push(&big).unwrap();
+                }
+                Reject::Caplen0 => {
+                    let hdr = PcapPkthdr {
+                        caplen: 0,
+                        len: 0,
+                        ..PcapPkthdr::default()
+                    };
+                    q.push_raw(&hdr, &[]).unwrap();
+                }
+                Reject::Caplen20Len60 => {
+                    let hdr = PcapPkthdr {
+                        caplen: 20,
+                        len: 60,
+                        ..PcapPkthdr::default()
+                    };
+                    q.push_raw(&hdr, &f).unwrap();
+                }
+            }
+            for i in 0..m {
+                sq_syn(&lab, &tpl, base + (k + 1 + i) as u32, &mut f);
+                q.push(&f).unwrap();
+            }
+            let sizes: Vec<u32> = q.record_sizes().to_vec();
+            let boundary: u64 = sizes[..k].iter().map(|s| u64::from(*s)).sum();
+            let queued = q.queued_bytes();
+            let t0 = Instant::now();
+            let sent = tx.transmit_raw(&mut q, false);
+            let d = t0.elapsed();
+            let err = tx.last_error().replace([',', '\r', '\n'], " ");
+            let outcome = if u64::from(sent) == boundary {
+                "boundary_k"
+            } else if sent == queued {
+                "all_accepted"
+            } else if sent == 0 {
+                "zero"
+            } else {
+                // граница другой записи или середина записи
+                let mut acc = 0u64;
+                let mut on_b = false;
+                for s in &sizes {
+                    acc += u64::from(*s);
+                    if acc == u64::from(sent) {
+                        on_b = true;
+                    }
+                }
+                if on_b { "other_boundary" } else { "mid_record" }
+            };
+            *counts.entry(outcome).or_default() += 1;
+            let _ = writeln!(
+                csv,
+                "{attempt},{},{k},{m},{base},{},{queued},{boundary},{sent},{outcome},{err}",
+                reject.name(),
+                sizes.len()
+            );
+            println!(
+                "ATTEMPT {attempt} {} k={k} queued={queued} boundary={boundary} sent={sent} outcome={outcome} dur_us={} geterr={err:?}",
+                reject.name(),
+                d.as_micros()
+            );
+            attempt += 1;
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        kv(
+            &lab,
+            &format!("partial_{}", reject.name()),
+            &format!("{counts:?}"),
+        );
+        if counts.keys().any(|k| *k != "boundary_k") {
+            stop_reasons.push(format!("{}: {counts:?}", reject.name()));
+        }
+    }
+    let path = format!("{}\\{}__sq_partial.csv", lab.out_dir, lab.cond);
+    std::fs::write(&path, csv).unwrap_or_else(|e| panic!("cannot write {path}: {e}"));
+    kv(&lab, "partial_attempts", &attempt.to_string());
+    kv(&lab, "partial_nonboundary", &format!("{stop_reasons:?}"));
+}
+
+// ---------- повторное использование очереди ----------
+
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs)"]
+fn live_sendqueue_reuse_no_leak() {
+    let lab = lab();
+    let api = load();
+    let tpl = syn_frames(&lab);
+    let pps = sq_pps();
+    let reuse_calls = env_u64("RMASSCAN_NPCAP_SQ_REUSE_CALLS", 10_000) as usize;
+    let alloc_calls = env_u64("RMASSCAN_NPCAP_SQ_ALLOC_CALLS", 1_000) as usize;
+    let n = 64usize;
+    let mut tx = open_tx_product(&api, &lab);
+    let mut f = Vec::new();
+    let mut seq = 0u32;
+    let mut verdicts = Vec::new();
+    for (phase, calls) in [("clear", reuse_calls), ("destroy_alloc", alloc_calls)] {
+        let mut rows = TxRows::default();
+        let mut ws: Vec<WsSample> = Vec::new();
+        let seq_first = seq;
+        let mut q = SendQueue::alloc(&api, sq_queue_bytes(n)).unwrap();
+        let start = Instant::now();
+        let mut frames = 0u64;
+        for c in 0..calls {
+            if phase == "destroy_alloc" {
+                drop(q);
+                q = SendQueue::alloc(&api, sq_queue_bytes(n)).unwrap();
+            }
+            let t = now_ms();
+            let (queued, sent, d) = sq_batch(&lab, &tpl, &mut tx, &mut q, n, &mut seq, &mut f);
+            rows.push(t, n, queued, sent, d);
+            frames += n as u64;
+            pace(start, frames, pps);
+            if (c + 1) % (calls / 10).max(1) == 0 {
+                let s = process_sample();
+                ws.push((c + 1, s.working_set_bytes, s.handles, s.threads));
+            }
+        }
+        rows.csv(&lab, &format!("sq_reuse_{phase}"));
+        rows.summary(&lab, &format!("sq_reuse_{phase}"), n);
+        kv(
+            &lab,
+            &format!("sq_reuse_{phase}_seq"),
+            &format!("first={seq_first} frames={frames}"),
+        );
+        let mut csv = String::from("call,working_set_bytes,handles,threads\n");
+        for (c, w, h, t) in &ws {
+            let _ = writeln!(
+                csv,
+                "{c},{},{},{}",
+                w.unwrap_or(0),
+                h.unwrap_or(0),
+                t.unwrap_or(0)
+            );
+            kv(
+                &lab,
+                &format!("sq_reuse_{phase}_sample"),
+                &format!("call={c} working_set={w:?} handles={h:?} threads={t:?}"),
+            );
+        }
+        let path = format!(
+            "{}\\{}__sq_reuse_{phase}_process.csv",
+            lab.out_dir, lab.cond
+        );
+        std::fs::write(&path, csv).unwrap_or_else(|e| panic!("cannot write {path}: {e}"));
+        let first = ws.first().and_then(|x| x.1).unwrap_or(0);
+        let last = ws.last().and_then(|x| x.1).unwrap_or(0);
+        let growth = last as i64 - first as i64;
+        let short = (0..rows.sent.len())
+            .filter(|&i| rows.sent[i] != rows.queued[i])
+            .count();
+        kv(
+            &lab,
+            &format!("sq_reuse_{phase}_verdict"),
+            &format!(
+                "ws_growth_10pct_to_100pct={growth} short_transmits={short} under_1mib={}",
+                growth < (1 << 20)
+            ),
+        );
+        verdicts.push((phase, growth, short));
+        drop(q);
+    }
+    for (phase, growth, short) in verdicts {
+        assert_eq!(short, 0, "{phase}: bytes_sent != bytes_queued");
+        assert!(
+            growth < (1 << 20),
+            "{phase}: working set grew by {growth} bytes"
+        );
+    }
+}
+
+// ---------- задержка Stop ----------
+
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs)"]
+fn live_sendqueue_stop_latency() {
+    let lab = lab();
+    let api = load();
+    let tpl = syn_frames(&lab);
+    let batch = env_u64("RMASSCAN_NPCAP_SQ_BATCH", 256) as usize;
+    let pps = sq_pps();
+    let rounds = env_u64("RMASSCAN_NPCAP_STOP_ROUNDS", 60);
+    let mut tx = open_tx_product(&api, &lab);
+    let mut q = SendQueue::alloc(&api, sq_queue_bytes(batch)).unwrap();
+    let mut rx = open_rx(&api, &lab, 1 << 20);
+    let (mut tx_lat, mut rx_lat, mut join_lat, mut slow) = (
+        Samples::default(),
+        Samples::default(),
+        Samples::default(),
+        Samples::default(),
+    );
+    let seq_g = AtomicU64::new(0);
+    let total_short = AtomicU64::new(0);
+    let total_rx_err = AtomicU64::new(0);
+    let mut worst_excess_us = 0i64;
+    let mut rounds_csv = String::from(
+        "round,delay_ms,tx_exit_us,rx_exit_us,join_us,tx_slowest_transmit_us,tx_excess_over_slowest_us\n",
+    );
+    for round in 0..rounds {
+        let stop = AtomicBool::new(false);
+        // «Случайный» момент: SHA-256 от номера раунда и часов
+        let h = Sha256::digest(
+            format!(
+                "{round}:{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )
+            .as_bytes(),
+        );
+        let delay_ms = 20 + u64::from(u16::from_le_bytes([h[0], h[1]])) % 280;
+        let (t_stop, tx_seen, rx_seen, joined, tx_slowest) = std::thread::scope(|sc| {
+            let txj = sc.spawn(|| {
+                let mut f = Vec::new();
+                let mut slowest = Duration::ZERO;
+                let start = Instant::now();
+                let mut frames = 0u64;
+                while !stop.load(Ordering::Acquire) {
+                    let mut seq = seq_g.fetch_add(batch as u64, Ordering::Relaxed) as u32;
+                    let (queued, sent, d) =
+                        sq_batch(&lab, &tpl, &mut tx, &mut q, batch, &mut seq, &mut f);
+                    if queued != sent {
+                        total_short.fetch_add(1, Ordering::Relaxed);
+                    }
+                    slowest = slowest.max(d);
+                    frames += batch as u64;
+                    pace(start, frames, pps);
+                }
+                (Instant::now(), slowest)
+            });
+            let rxj = sc.spawn(|| {
+                let mut b = vec![0u8; 2048];
+                while !stop.load(Ordering::Acquire) {
+                    if recv_deadline(&mut rx, &mut b, Duration::from_millis(42), Wait::Hybrid)
+                        .is_err()
+                    {
+                        total_rx_err.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Instant::now()
+            });
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            let t_stop = Instant::now();
+            stop.store(true, Ordering::Release);
+            let (tx_seen, tx_slowest) = txj.join().unwrap();
+            let rx_seen = rxj.join().unwrap();
+            (t_stop, tx_seen, rx_seen, Instant::now(), tx_slowest)
+        });
+        let t = now_ms();
+        let txl = tx_seen.duration_since(t_stop);
+        let rxl = rx_seen.duration_since(t_stop);
+        let jl = joined.duration_since(t_stop);
+        tx_lat.push(t, txl, 0);
+        rx_lat.push(t, rxl, 0);
+        join_lat.push(t, jl, 0);
+        slow.push(t, tx_slowest, 0);
+        let excess = txl.as_micros() as i64 - tx_slowest.as_micros() as i64;
+        worst_excess_us = worst_excess_us.max(excess);
+        let _ = writeln!(
+            rounds_csv,
+            "{round},{delay_ms},{},{},{},{},{excess}",
+            txl.as_micros(),
+            rxl.as_micros(),
+            jl.as_micros(),
+            tx_slowest.as_micros()
+        );
+    }
+    let path = format!("{}\\{}__sq_stop_rounds.csv", lab.out_dir, lab.cond);
+    std::fs::write(&path, rounds_csv).unwrap_or_else(|e| panic!("cannot write {path}: {e}"));
+    tx_lat.report(&lab, "sq_stop_latency_tx");
+    rx_lat.report(&lab, "sq_stop_latency_rx");
+    join_lat.report(&lab, "sq_stop_latency_joined");
+    slow.report(&lab, "sq_stop_slowest_transmit_per_round");
+    let max_join = join_lat.dur_us.iter().copied().max().unwrap_or(0);
+    kv(
+        &lab,
+        "sq_stop_verdict",
+        &format!(
+            "batch={batch} rounds={rounds} frames={} max_join_us={max_join} worst_tx_excess_over_slowest_transmit_us={worst_excess_us} short_transmits={} rx_errors={}",
+            seq_g.load(Ordering::Relaxed),
+            total_short.load(Ordering::Relaxed),
+            total_rx_err.load(Ordering::Relaxed)
+        ),
+    );
+    assert_eq!(total_rx_err.load(Ordering::Relaxed), 0, "an RX read failed");
+    assert_eq!(
+        total_short.load(Ordering::Relaxed),
+        0,
+        "a transmit was short"
+    );
+    assert!(max_join <= 1_000_000, "join took {max_join} us (> 1 s)");
+}
+
+// ---------- потеря линка (информационно, не критерий GO) ----------
+
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs)"]
+fn live_sendqueue_linkdown() {
+    let lab = lab();
+    let api = load();
+    let tpl = syn_frames(&lab);
+    let batch = env_u64("RMASSCAN_NPCAP_SQ_BATCH", 16) as usize;
+    let secs = env_u64("RMASSCAN_NPCAP_SQ_SECS", 25);
+    let pps = env_u64("RMASSCAN_NPCAP_SQ_PPS", 5_000) as f64;
+    let mut tx = open_tx_product(&api, &lab);
+    let mut q = SendQueue::alloc(&api, sq_queue_bytes(batch)).unwrap();
+    let mut f = Vec::new();
+    let mut seq = 0u32;
+    let mut rows = TxRows::default();
+    let mut short = Vec::new();
+    let start = Instant::now();
+    let mut frames = 0u64;
+    while start.elapsed() < Duration::from_secs(secs) {
+        let t = now_ms();
+        let (queued, sent, d) = sq_batch(&lab, &tpl, &mut tx, &mut q, batch, &mut seq, &mut f);
+        rows.push(t, batch, queued, sent, d);
+        if sent != queued {
+            let sizes = q.record_sizes();
+            let mut acc = 0u32;
+            let on_b = sent == 0
+                || sizes.iter().any(|s| {
+                    acc += *s;
+                    acc == sent
+                });
+            short.push(format!(
+                "t={t} queued={queued} sent={sent} on_boundary={on_b} geterr={:?}",
+                tx.last_error()
+            ));
+        }
+        frames += batch as u64;
+        pace(start, frames, pps);
+    }
+    rows.csv(&lab, "sq_linkdown");
+    rows.summary(&lab, "sq_linkdown", batch);
+    kv(
+        &lab,
+        "sq_linkdown_frames",
+        &format!("{frames} seq_end={seq}"),
+    );
+    kv(&lab, "sq_linkdown_short_count", &short.len().to_string());
+    for s in short.iter().take(20) {
+        kv(&lab, "sq_linkdown_short", s);
+    }
+}

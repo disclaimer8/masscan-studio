@@ -4443,7 +4443,7 @@ dependencies = [
 name = "studio-platform"
 version = "0.1.0"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "libc",
  "serde",
  "serde_json",
@@ -4455,7 +4455,7 @@ dependencies = [
 name = "studio-protocol"
 version = "0.1.0"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "rmasscan-core",
  "rmasscan-engine",
  "serde",

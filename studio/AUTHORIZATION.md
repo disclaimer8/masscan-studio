@@ -103,7 +103,8 @@ engine or emits packets.
 
 Preflight commands have five-second deadlines and two-MiB output limits.
 Socket EOF cancels an outstanding command, kills/reaps it and aborts the check.
-This is a pre-start observation, not a claim of continuous network monitoring.
+CheckNetwork is a pre-start observation. The active-attempt guard below is
+separate; raw execution and its live drift acceptance are still gated.
 
 ## Fixed macOS feth preflight
 
@@ -119,6 +120,36 @@ source/peer/public route choices, no overlapping VPN route, no other lab subnet
 or bridge membership, permanent source ARP, and IPv4 forwarding off. Ambiguous,
 missing or unparseable observations refuse the scan. The manifest is bounded and
 re-read after observation. The checker does not create or modify the stand.
+
+## Active-attempt environment guard
+
+The runner checks for a scheduling/wall-clock gap over five seconds, or a
+backwards wall clock, while processing an attempt. This also applies to
+Simulation without reading the host network. It is a conservative interruption
+policy, not a native pre-sleep notification or detection of every short sleep.
+
+The gated Mac feth execution path additionally creates one observer worker per
+attempt, repeating the full read-only preflight against the original manifest.
+Checks begin immediately, then wait one second between probes. The observation
+and freshness budget is three seconds, measured from the beginning of a complete
+successful observation. A changed manifest, invalid isolation, probe failure,
+stale observation or worker panic stops the engine through its cancellation
+handle. A late successful probe cannot erase a previously stale interval.
+These timings are policy values, not measured physical-network guarantees.
+
+Observation runs off the IPC/event loop and cooperatively cancels its subprocess;
+teardown wakes and joins the worker. On an observed interruption, the runner
+drains received rows and emits Interrupted ahead of a racing Completed/Paused.
+It publishes no checkpoint for that attempt and never restarts automatically.
+Monitoring ends at engine termination; a normal pause still uses durable ACK,
+and any later resume requires a new preflight.
+
+Polling can miss transient changes between observations. OS-tool output is not
+an atomic network snapshot; this does not guarantee zero transmitted packets
+after drift or detect every interface recreation with identical configuration.
+The observer currently covers the fixed Mac feth profile only. Linux/Windows raw
+observers, physical NIC identity, native sleep hooks and live drift capture remain
+separate acceptance work. RAW_SCANNING_ENABLED remains false.
 
 ## Acceptance still required
 

@@ -1,0 +1,16 @@
+== build
+    Finished `release` profile [optimized] target(s) in 36.84s
+    Finished `release` profile [optimized] target(s) in 13.25s
+-rwxrwxr-x 2 a1 a1  883104 Oct 26 08:14 /home/a1/rmasscan-live/target/release/examples/wire_scan
+-rwxrwxr-x 2 a1 a1 3626040 Oct 26 08:14 /home/a1/rmasscan-live/target/release/rmasscan-lab
+490c91ea4dd0481fd11d6791178d3795f3a887a07053ce5c26fe361ad82740c8  /home/a1/rmasscan-live/target/release/rmasscan-lab
+718681d3b5d6651592b391b662dabfc4f4e4394f8031269e28a4e070c17c5ca2  /home/a1/rmasscan-live/target/release/examples/wire_scan
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  /home/a1/rmasscan-oracle/masscan/bin/masscan
+d1f79f6f2dbacda6bd544c784fb564b36f15e247f2252b56f6565c3c47863958  scripts/wire-lab.sh
+== suite rust
+Mon Oct 26 08:14:19 AM UTC 2026
+[wire-lab] suite rust finished rc=0 (see /home/a1/rmasscan-live/out-linux-functional-r1/suite.log, results.json)
+[wire-lab] done: /home/a1/rmasscan-live/out-linux-functional-r1/results.json
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+Mon Oct 26 08:17:44 AM UTC 2026

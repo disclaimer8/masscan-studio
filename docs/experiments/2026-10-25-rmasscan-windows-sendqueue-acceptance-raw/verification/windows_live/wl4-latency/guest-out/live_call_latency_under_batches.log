@@ -1,0 +1,13 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.04s
+     Running tests\windows_live.rs (target\debug\deps\windows_live-c23865c335cfd694.exe)
+
+running 1 test
+test live_call_latency_under_batches ... KV wl4-latency/max_per_call max_us_send_batch=4611 max_us_recv=126 max_us_health=13
+KV wl4-latency/send_batch send_batch n=120 p50_us=1615 p95_us=2304 p99_us=3893 max_us=4611 over50ms=0
+KV wl4-latency/recv recv n=120 p50_us=12 p95_us=18 p99_us=123 max_us=126 over50ms=0
+KV wl4-latency/health health n=30 p50_us=8 p95_us=12 p99_us=13 max_us=13 over50ms=0
+KV wl4-latency/latency_stats NetStats { tx_sent: 5200, tx_would_block: 0, tx_uncertain: 0, tx_errors: 0, rx_packets: 120, rx_truncated: 0, rx_outgoing: 0, rx_wrong_interface: 0, rx_errors: 0, kernel_drops: Some(0), tx_batches: 120, tx_batch_max: 64, tx_over_budget: 0 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.18s
+

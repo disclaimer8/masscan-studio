@@ -1,0 +1,16 @@
+[2026-10-26T13:35:12.413Z] tag=wl2-stop test=live_batched_stop_is_prompt_and_nothing_is_sent_afterwards cond=idle sha=628fcad7118943642dc797a0432b62851fbe6c1d nonce=r65c5d1fcfeaccd41-dbd8bedaaa0f4495 extra=
+[2026-10-26T13:35:14.156Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T13:35:14.671Z] guest run begins
+[2026-10-26T13:35:17.530Z] guest run ended rc=0
+[2026-10-26T13:35:20.107Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=19380
+==> /home/a1/winvm/wl-ev/wl2-stop/peer.err <==
+19380 packets captured
+19380 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/wl-ev/wl2-stop/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

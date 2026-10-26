@@ -1,0 +1,2 @@
+peer: sudo ip netns exec wvp-n2 tcpdump -i lab0 -n -U --immediate-mode -B 65536 -s 96 -Z root -w peer.pcap 'ether src 52:54:00:04:80:a9'
+eno1: sudo tcpdump -i eno1 -n -U --immediate-mode -B 4096 -s 0 -Z root -w eno1.pcap 'net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 52:54:00:04:80:a9 or ether host 02:57:4c:3d:2e:9b or ether proto 0x88b5 or ether proto 0x88b6'

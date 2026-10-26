@@ -1,0 +1,19 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1793013456.297851,
+  "capture_stopped_utc": 1793013510.20497,
+  "end_marker_seen": true,
+  "exe_sha256": "091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7",
+  "guest_exit": 3,
+  "guest_finished_utc": 1793013474.228625,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1793013462.160944,
+  "guest_times": {
+    "finished_utc": 1793013474.058,
+    "started_utc": 1793013471.419
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r45be5cc766021ce253eec41128aac51c-5c3f258529e49ee8",
+  "kind": "overflow_queue",
+  "tag": "overflow_queue"
+}

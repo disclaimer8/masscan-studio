@@ -1,0 +1,90 @@
+TEST_NET_EXIT=0
+CLIPPY_EXIT=0
+TEST_WS_EXIT=101
+test result: ok. 168 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 10.03s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 0 passed; 0 failed; 14 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.07s
+test result: ok. 136 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.61s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.67s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+test result_batches_respect_event_batch_limit ... ok
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.29s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.79s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test macos_verify::tests::losing_the_real_418_rsts_of_the_archived_perf_100_r1_is_a_behaviour_fail ... FAILED
+test verify::perf_tests::legacy_directories_without_tx_mode_expected_are_unchanged ... FAILED
+test verify::regression_tests::a_discarded_attempt_with_an_eno1_frame_fails_the_directory_after_a_clean_rerun ... FAILED
+test verify::regression_tests::a_discarded_attempt_without_an_eno1_frame_is_still_a_plain_discard ... FAILED
+test verify::regression_tests::a_discarded_invalid_run_with_an_accepted_foreign_result_is_overall_fail ... FAILED
+test verify::regression_tests::a_resumed_completed_job_and_a_syn_during_a_refusal_are_failures ... FAILED
+test verify::regression_tests::all_checkpoint_fields_must_match_report ... FAILED
+test verify::regression_tests::an_aborted_copy_whose_eno1_log_counts_frames_fails_the_directory ... FAILED
+test verify::regression_tests::an_aborted_run_with_a_clean_eno1_or_no_pcap_changes_nothing ... FAILED
+test verify::regression_tests::an_aborted_run_with_an_eno1_frame_fails_the_directory ... FAILED
+test verify::regression_tests::an_eno1_frame_counted_but_not_stored_is_a_non_discardable_fail ... FAILED
+test verify::regression_tests::argv_error_disables_behaviour_blame ... FAILED
+test verify::regression_tests::bad_capture_cannot_hide_scanner_failure ... FAILED
+test verify::regression_tests::capture_provenance_mutations_are_invalid ... FAILED
+test verify::regression_tests::continuous_behaviour_checks_fail_independently_of_capture ... FAILED
+test verify::regression_tests::discarded_pass_fail_and_unknown_are_not_hidden ... FAILED
+test verify::regression_tests::eno1_frame_with_an_invalid_status_post_is_fail_and_not_discardable ... FAILED
+test verify::regression_tests::eno1_isolation_failure_is_detected ... FAILED
+test verify::regression_tests::eno1_pcap_alone_is_judged_before_the_missing_artifacts_return_not_run ... FAILED
+test verify::regression_tests::exported_checkpoint_checksum_and_identity_are_verified ... FAILED
+test verify::regression_tests::fixture_hash_binding_and_path_must_match ... FAILED
+test verify::regression_tests::foreign_floor_is_a_failure_even_with_bad_capture ... FAILED
+test verify::regression_tests::foreign_frames_missing_from_the_wire_are_invalid_and_a_missing_injector_log_is_not_run ... FAILED
+test verify::regression_tests::foreign_frames_must_each_be_discarded_and_duplicates_are_genuine_retransmits_only ... FAILED
+test verify::regression_tests::foreign_reply_accepted_as_result_is_fail ... FAILED
+test verify::regression_tests::foreign_syn_with_an_incomplete_capture_is_fail_and_not_discardable ... FAILED
+test verify::regression_tests::fresh_invocation_requires_matching_nonce_and_hash_proof ... FAILED
+test verify::regression_tests::guest_transport_failure_cannot_reuse_old_success ... FAILED
+test verify::regression_tests::incomplete_capture_cannot_blame_unexplained_foreign_discards ... FAILED
+test verify::regression_tests::interface_counters_cannot_decrease_and_compensate_each_other ... FAILED
+test verify::regression_tests::malformed_exported_checkpoints_are_a_behaviour_failure_and_never_rerunnable ... FAILED
+test verify::regression_tests::maximum_interface_counters_neither_overflow_nor_pass ... FAILED
+test verify::regression_tests::maximum_receive_counters_neither_overflow_nor_pass ... FAILED
+test verify::regression_tests::missing_artifacts_never_pass ... FAILED
+test verify::regression_tests::missing_continuous_or_leg_pcap_makes_groups_not_run_without_crashing ... FAILED
+test verify::regression_tests::missing_fixture_manifest_and_planned_runs_are_not_run ... FAILED
+test verify::regression_tests::missing_readiness_is_invalid ... FAILED
+test verify::regression_tests::omitted_tcpdump_interface_drops_need_independent_measurement ... FAILED
+test verify::regression_tests::packet_truncation_and_hash_changes_are_invalid ... FAILED
+test verify::regression_tests::pause_after_must_match_n ... FAILED
+test verify::regression_tests::pause_resume_group_failures ... FAILED
+test verify::regression_tests::received_and_duplicate_counters_require_measured_unsigned_values ... FAILED
+test verify::regression_tests::requested_scan_and_attempt_identity_cannot_be_consistently_replaced ... FAILED
+test verify::regression_tests::schema_below_3_keeps_its_exemption_and_says_so ... FAILED
+test verify::regression_tests::stale_run_binding_is_invalid ... FAILED
+test verify::regression_tests::strays_in_the_receive_window_are_counted_and_required ... FAILED
+test verify::regression_tests::syn_bytes_and_order_are_exact ... FAILED
+test verify::regression_tests::the_checkpoint_magic_version_and_trailer_are_each_checked_on_their_own ... FAILED
+test verify::regression_tests::the_requested_scan_and_attempt_id_is_checked_in_each_leg_on_its_own ... FAILED
+test verify::regression_tests::wrong_interface_is_invalid_even_when_filter_and_packet_hashes_match ... FAILED
+test verify::tests::committed_r1_smoke_replays_as_documented ... FAILED
+test verify::tests::historical_functional_is_pass ... FAILED
+test verify::tests::wrong_interface_and_filter_rejected ... FAILED
+test wire_suite::suite_tests::committed_python_perf_results_satisfy_the_same_acceptance ... FAILED
+assertion `left == right` failed
+test result: FAILED. 409 passed; 54 failed; 0 ignored; 0 measured; 0 filtered out; finished in 66.58s
+error: test failed, to rerun pass `-p rmasscan-lab --lib`

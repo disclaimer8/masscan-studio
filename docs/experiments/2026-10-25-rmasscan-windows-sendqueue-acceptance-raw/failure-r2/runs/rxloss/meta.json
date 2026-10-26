@@ -1,0 +1,20 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1793016543.080447,
+  "capture_stopped_utc": 1793016614.851512,
+  "checkpoint_file_exists": false,
+  "end_marker_seen": true,
+  "exe_sha256": "091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7",
+  "guest_exit": 3,
+  "guest_finished_utc": 1793016569.510238,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1793016553.575831,
+  "guest_times": {
+    "finished_utc": 1793016569.343,
+    "started_utc": 1793016562.678
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r45be5cc766021ce253eec41128aac51c-8e47e8ff447a6c1d",
+  "kind": "rxloss",
+  "tag": "rxloss"
+}

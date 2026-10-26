@@ -1,0 +1,4 @@
+cmd: cargo test --locked -p rmasscan-net --test windows_live -- --ignored --exact live_batched_stop_is_prompt_and_nothing_is_sent_afterwards --test-threads=1 --nocapture
+nic_before: {"utc_ms":1793021715537,"stats":{"ReceivedBytes":1545351850,"ReceivedUnicastPackets":24146172,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":1000546032,"SentUnicastPackets":16134547,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 1833
+nic_after: {"utc_ms":1793021717440,"stats":{"ReceivedBytes":1546592170,"ReceivedUnicastPackets":24165552,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":1001747592,"SentUnicastPackets":16153927,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

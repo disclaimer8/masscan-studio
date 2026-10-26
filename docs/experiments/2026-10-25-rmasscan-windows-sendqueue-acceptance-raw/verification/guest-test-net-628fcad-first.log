@@ -1,0 +1,270 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling typenum v1.20.0
+   Compiling thiserror v2.0.21
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.5
+   Compiling siphasher v1.0.4
+   Compiling windows-link v0.2.1
+   Compiling windows-sys v0.61.2
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling syn v3.0.9
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
+   Compiling thiserror-impl v2.0.21
+   Compiling rmasscan-core v0.1.0 (C:\Users\lab\src\rmasscan-628fcad7118943642dc797a0432b62851fbe6c1d\rmasscan\crates\rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 (C:\Users\lab\src\rmasscan-628fcad7118943642dc797a0432b62851fbe6c1d\rmasscan\crates\rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 (C:\Users\lab\src\rmasscan-628fcad7118943642dc797a0432b62851fbe6c1d\rmasscan\crates\rmasscan-net)
+    Finished `test` profile [optimized + debuginfo] target(s) in 13.45s
+     Running unittests src\lib.rs (target\debug\deps\rmasscan_net-3d9b63e85ccd32b5.exe)
+
+running 180 tests
+test macos::tests::adapter_tests::a_failed_final_read_keeps_the_last_known_value_or_none ... ok
+test macos::tests::adapter_tests::a_stats_error_is_an_error_never_a_false_zero_or_a_cached_value ... ok
+test macos::tests::adapter_tests::bad_bindings_are_refused_before_any_descriptor_is_opened ... ok
+test macos::tests::adapter_tests::a_kernel_buffer_too_small_for_one_frame_is_refused_and_closed ... ok
+test macos::tests::adapter_tests::every_open_failure_after_the_first_fd_closes_both ... ok
+test macos::tests::adapter_tests::eacces_on_every_device_is_permission_denied_with_the_grant_hint ... ok
+test macos::tests::adapter_tests::ebusy_devices_are_skipped ... ok
+test macos::tests::adapter_tests::health_survives_the_u32_wrap ... ok
+test macos::tests::adapter_tests::health_reports_cumulative_drops_from_the_open_baseline ... ok
+test macos::tests::adapter_tests::io_budget_leaves_margin_below_the_50ms_contract ... ok
+test macos::tests::adapter_tests::net_stats_final_totals_survive_closing_the_handles ... ok
+test macos::tests::adapter_tests::no_nodes_at_all_is_a_system_error ... ok
+test macos::tests::adapter_tests::non_ethernet_dlt_is_unsupported_link_and_closes ... ok
+test macos::tests::adapter_tests::open_configures_rx_then_tx_exactly_as_documented ... ok
+test macos::tests::adapter_tests::own_mac_filter_interpreted_drops_own_and_accepts_peer ... ok
+test macos::tests::adapter_tests::own_mac_filter_program_bytes_are_exact ... ok
+test macos::tests::adapter_tests::parse_record_advances_by_wordalign_and_tolerates_a_missing_final_pad ... ok
+test macos::tests::adapter_tests::rx_and_stats_hit_only_the_rx_descriptor_writes_only_the_tx_descriptor_and_each_closes_once ... ok
+test macos::tests::adapter_tests::rx_caplen_shorter_than_datalen_is_truncated_not_returned ... ok
+test macos::tests::adapter_tests::rx_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test macos::tests::adapter_tests::rx_fatal_read_errno_closes_the_fd ... ok
+test macos::tests::adapter_tests::rx_frame_larger_than_callers_buffer_is_dropped_and_counted ... ok
+test macos::tests::adapter_tests::a_worker_panic_ends_the_run_and_closes_every_descriptor ... ok
+test macos::tests::adapter_tests::an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends ... ok
+test macos::tests::adapter_tests::rx_malformed_header_is_fatal_and_closes_the_fd ... ok
+test macos::tests::adapter_tests::rx_garbage_stream_cannot_extend_the_deadline ... ok
+test macos::tests::adapter_tests::rx_own_mac_frames_are_dropped_before_the_caller_sees_them ... ok
+test macos::tests::adapter_tests::rx_peer_syn_ack_and_rst_are_never_filtered_and_parse_as_replies ... ok
+test macos::tests::adapter_tests::rx_empty_poll_times_out_within_the_deadline ... ok
+test macos::tests::adapter_tests::rx_poll_failure_is_fatal ... ok
+test macos::tests::adapter_tests::rx_poll_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test macos::tests::adapter_tests::rx_reads_use_the_buffer_length_the_kernel_reported ... ok
+test macos::tests::adapter_tests::rx_record_shorter_than_an_ethernet_header_is_dropped_as_truncated ... ok
+test macos::tests::adapter_tests::rx_record_walk_uses_bh_hdrlen_and_wordalign ... ok
+test macos::tests::adapter_tests::setup_errors_map_to_the_documented_kinds ... ok
+test macos::tests::adapter_tests::rx_one_read_with_three_records_yields_three_frames ... ok
+test macos::tests::adapter_tests::tx_eagain_is_treated_like_enobufs ... ok
+test macos::tests::adapter_tests::rx_readiness_without_records_keeps_waiting_until_the_deadline ... ok
+test macos::tests::adapter_tests::tx_emsgsize_is_an_io_error_and_the_fd_stays_open ... ok
+test macos::tests::adapter_tests::tx_enobufs_then_success_is_sent_once ... ok
+test macos::tests::adapter_tests::tx_eintr_flood_does_not_extend_the_deadline ... ok
+test macos::tests::adapter_tests::tx_fatal_errno_closes_the_fd_and_later_calls_fail ... ok
+test macos::tests::adapter_tests::tx_frame_length_is_checked_before_any_write ... ok
+test macos::tests::adapter_tests::tx_full_write_is_sent ... ok
+test macos::tests::adapter_tests::tx_partial_write_is_uncertain_and_keeps_fd_open ... ok
+test macos::tests::adapter_tests::tx_enobufs_until_deadline_is_would_block_unsent ... ok
+test windows::live::live_health_error ... ignored, live: needs Npcap and the lab device name (no packets are sent)
+test windows::live::live_io_matrix ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_open_close ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_overflow ... ignored, live: needs the lab NIC and a peer flood (see module docs)
+test windows::live::live_sendqueue_linkdown ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_sendqueue_partial_boundary ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_sendqueue_reuse_no_leak ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_sendqueue_stop_latency ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_sendqueue_transmit_timing ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_tx_filter_keeps_the_tx_handle_empty ... ignored, live: needs the lab NIC (see module docs)
+test windows::live::live_unplug_phases ... ignored, live: needs the lab NIC and an external link-down (see module docs)
+test windows::process::tests::restricted_result_zero_with_an_error_is_unknown ... ok
+test windows::sys::tests::live_npcap_loads_resolves_and_enumerates ... ignored, needs Npcap installed
+test windows::sys::tests::load_without_or_with_npcap_never_panics_and_errors_are_expected ... ok
+test windows::sys::tests::nonexistent_full_path_is_driver_unavailable ... ok
+test windows::sys::tests::system_directory_is_absolute_and_ends_in_system32 ... ok
+test windows::tests::activate_error_codes_are_mapped ... ok
+test windows::tests::adapter_tests::a_bad_length_anywhere_in_the_batch_sends_nothing_and_is_an_io_error ... ok
+test windows::tests::adapter_tests::a_boundary_partial_is_all_uncertain_and_the_prefix_is_not_counted ... ok
+test windows::tests::adapter_tests::a_failed_final_read_keeps_the_last_known_value_or_none ... ok
+test windows::tests::adapter_tests::a_frame_is_copied_before_the_next_pcap_call ... ok
+test windows::tests::adapter_tests::a_frame_larger_than_the_callers_buffer_is_dropped_and_counted ... ok
+test macos::tests::adapter_tests::tx_timeout_is_capped_at_the_budget ... ok
+test macos::tests::adapter_tests::stop_ends_the_run_quickly_and_nothing_is_sent_afterwards ... ok
+test macos::tests::adapter_tests::rx_loss_and_stats_errors_fail_the_run_and_keep_the_results ... ok
+test macos::tests::adapter_tests::a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent ... ok
+test windows::tests::adapter_tests::a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent ... ok
+test windows::tests::adapter_tests::a_full_transmit_is_sent_exactly_n_and_counts_one_batch ... ok
+test windows::tests::adapter_tests::a_returned_frame_is_the_exact_pcap_frame_and_counted ... ok
+test windows::tests::adapter_tests::a_short_timeout_is_honoured_and_a_long_one_is_clamped ... ok
+test windows::tests::adapter_tests::a_single_send_longer_than_fifty_ms_is_counted_over_budget ... ok
+test windows::tests::adapter_tests::a_stats_error_is_an_error_never_a_false_zero_or_a_cached_value ... ok
+test windows::tests::adapter_tests::a_straddling_partial_is_all_uncertain ... ok
+test windows::tests::adapter_tests::a_stream_of_garbage_does_not_extend_the_deadline ... ok
+test windows::tests::adapter_tests::a_worker_panic_ends_the_run_and_closes_every_handle ... ok
+test windows::tests::adapter_tests::an_oversized_batch_is_refused_before_queueing ... ok
+test windows::tests::adapter_tests::an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends ... ok
+test windows::tests::adapter_tests::any_nonzero_send_rc_is_uncertain_without_a_retry_and_ignores_the_driver_text ... ok
+test windows::tests::adapter_tests::bad_bindings_are_refused_before_the_driver_is_touched ... ok
+test windows::tests::adapter_tests::bytes_over_queued_is_all_uncertain ... ok
+test windows::tests::adapter_tests::concurrent_first_loads_run_the_loader_once ... ok
+test windows::tests::adapter_tests::engine_partial_transmit_fails_uncertain_without_checkpoint_or_more_batches ... ok
+test windows::tests::adapter_tests::every_open_failure_after_the_first_handle_closes_all_handles_before_unload ... ok
+test macos::tests::adapter_tests::pause_stops_tx_then_resume_continues_without_gaps_or_duplicates ... ok
+test windows::tests::adapter_tests::engine_scan_through_fake_sendqueue_completes_with_exactly_one_advance_per_sent ... ok
+test windows::tests::adapter_tests::engine_stop_between_batches_sends_nothing_afterwards ... ok
+test windows::tests::adapter_tests::health_reports_the_cumulative_per_attempt_drop_count ... ok
+test windows::tests::adapter_tests::health_survives_the_u32_wrap ... ok
+test windows::tests::adapter_tests::idle_rx_waits_to_the_internal_budget_and_never_longer ... ok
+test windows::tests::adapter_tests::load_is_shared_while_an_owner_lives_reloaded_after_and_failure_is_not_cached ... ok
+test windows::tests::adapter_tests::malformed_library_output_is_a_fatal_error_that_closes_the_handle ... ok
+test windows::tests::adapter_tests::missing_or_failing_pcap_init_is_not_fatal_and_is_reported ... ok
+test windows::tests::adapter_tests::non_ethernet_device_is_refused_and_closed ... ok
+test windows::tests::adapter_tests::net_stats_final_totals_survive_closing_the_handles ... ok
+test windows::tests::adapter_tests::next_ex_error_and_eof_are_fatal_and_carry_the_driver_text ... ok
+test windows::tests::adapter_tests::net_stats_batches_and_max_survive_closing ... ok
+test windows::tests::adapter_tests::nothing_accepted_is_all_uncertain_and_the_driver_text_decides_nothing ... ok
+test windows::tests::adapter_tests::one_frame_batches_use_sendpacket_not_the_queue ... ok
+test windows::tests::adapter_tests::open_configures_two_handles_exactly_as_documented ... ok
+test windows::tests::adapter_tests::open_allocates_one_queue_after_the_tx_handle_and_before_rx ... ok
+test windows::tests::adapter_tests::own_transmitted_frames_are_dropped_before_the_caller_sees_them ... ok
+test windows::tests::adapter_tests::pause_resume_through_batches_has_no_gap_or_duplicate ... ok
+test windows::tests::adapter_tests::pause_stops_tx_then_resume_continues_without_gaps_or_duplicates ... ok
+test windows::tests::adapter_tests::pcap_init_utf8_runs_before_any_other_call_into_the_library ... ok
+test windows::tests::adapter_tests::peer_syn_ack_and_rst_are_never_filtered_and_parse_as_replies ... ok
+test windows::tests::adapter_tests::pre_send_validation_errors_are_io_errors_and_never_reach_the_driver ... ok
+test windows::tests::adapter_tests::rx_loss_and_stats_errors_fail_the_run_and_keep_the_results ... ok
+test windows::tests::adapter_tests::queue_is_empty_after_every_outcome ... ok
+test windows::tests::adapter_tests::runt_frames_pass_through_without_panicking ... ok
+test windows::tests::adapter_tests::rx_and_stats_hit_only_the_rx_handle_sends_only_the_tx_handle_and_each_closes_once ... ok
+test windows::tests::adapter_tests::queue_full_is_an_io_error_and_nothing_was_transmitted ... ok
+test windows::tests::adapter_tests::send_rc_zero_is_sent_exactly_once ... ok
+test windows::tests::adapter_tests::sendqueue_is_destroyed_before_the_tx_handle_closes ... ok
+test windows::tests::adapter_tests::the_outcome_is_sent_only_when_every_queued_byte_was_accepted ... ok
+test windows::tests::adapter_tests::stop_ends_the_run_quickly_and_nothing_is_sent_afterwards ... ok
+test windows::tests::adapter_tests::transmit_longer_than_fifty_ms_is_counted_over_budget ... ok
+test windows::tests::adapter_tests::truncated_frames_are_counted_and_dropped_not_returned ... ok
+test windows::tests::adapter_tests::tx_mode_is_sendqueue_with_the_cap ... ok
+test windows::tests::adapter_tests::unknown_device_name_never_creates_a_handle ... ok
+test windows::tests::clear_resets_len_and_records ... ok
+test windows::tests::close_after_partial_open_precedes_unload ... ok
+test windows::tests::create_failure_leaves_nothing_to_close ... ok
+test windows::tests::diagnostic_paths_compare_case_insensitively ... ok
+test windows::tests::dll_path_is_built_from_an_absolute_system_directory_only ... ok
+test windows::tests::dll_missing_is_driver_unavailable_and_nothing_to_unload ... ok
+test windows::tests::drop_counter_baseline_is_subtracted ... ok
+test windows::tests::drop_counter_is_cumulative_and_idempotent_on_repeated_reads ... ok
+test windows::tests::drop_counter_reset_looks_like_a_wrap_and_fails_safe ... ok
+test windows::tests::drop_counter_survives_u32_wraparound ... ok
+test windows::tests::empty_device_list_is_ok_and_not_freed ... ok
+test windows::tests::enumerates_devices_and_frees_the_list_once ... ok
+test windows::tests::errbuf_text_is_bounded_when_the_buffer_has_no_nul ... ok
+test windows::tests::errbuf_text_stops_at_the_first_nul ... ok
+test windows::tests::ethernet_is_accepted_loopback_and_monitor_are_unsupported_link ... ok
+test windows::tests::findalldevs_failure_is_reported ... ok
+test windows::tests::handle_moves_to_another_thread_and_closes_there_before_unload ... ok
+test windows::tests::inventory_lists_devices_without_opening_or_sending ... ok
+test windows::tests::init_failure_null_version_is_driver_unavailable_and_unloads ... ok
+test windows::tests::library_unloads_only_after_both_handles_close ... ok
+test windows::tests::inventory_reports_enumeration_failure ... ok
+test windows::tests::missing_packet_dll_is_rejected_and_unloads ... ok
+test windows::tests::missing_sendqueue_symbol_is_missing_capability_naming_it ... ok
+test windows::tests::missing_symbol_is_missing_capability_naming_it_and_unloads ... ok
+test windows::tests::npf_guid_is_extracted_only_from_a_wellformed_device_name ... ok
+test windows::tests::null_symbol_address_is_rejected_as_missing_not_transmuted ... ok
+test windows::tests::open_ethernet_closes_a_non_ethernet_handle ... ok
+test windows::tests::other_os_failure_is_driver_unavailable ... ok
+test windows::tests::ownership_types_have_the_intended_auto_traits ... ok
+test windows::tests::packet_dll_from_another_directory_is_rejected ... ok
+test windows::tests::positive_activate_warning_is_accepted ... ok
+test windows::tests::push_raw_records_an_arbitrary_header_and_refuses_a_short_buffer ... ok
+test windows::tests::queue_full_at_makes_the_fake_refuse_by_record_count ... ok
+test windows::tests::queue_outliving_the_handle_still_unloads_last ... ok
+test windows::tests::required_symbols_are_unique_and_prefixed ... ok
+test windows::tests::resolve_accepts_a_name_at_the_length_limit_if_enumerated ... ok
+test windows::tests::resolve_accepts_backslash_name_any_case_and_returns_canonical ... ok
+test windows::tests::resolve_refuses_the_loopback_adapter_before_any_open ... ok
+test windows::tests::resolve_rejects_nul_empty_long_and_unknown ... ok
+test windows::tests::resolve_unknown_name_among_real_adapters_stays_interface_mismatch ... ok
+test windows::tests::resolve_with_an_empty_device_list_is_permission_denied ... ok
+test windows::tests::resolve_with_only_loopback_visible_is_permission_denied ... ok
+test windows::tests::sendqueue_abi_layout_matches_the_npcap_header ... ok
+test windows::tests::sendqueue_alloc_null_is_a_system_error ... ok
+test windows::tests::sendqueue_destroy_precedes_close_and_unload ... ok
+test windows::tests::sendqueue_push_records_header_plus_frame_and_full_is_minus_one ... ok
+test windows::tests::sha256_known_vector ... ok
+test windows::tests::successful_load_exposes_version_and_diagnostics ... ok
+test windows::tests::transmit_returns_the_scripted_bytes_and_passes_sync_zero ... ok
+test windows::tests::transmit_sync_true_is_passed_as_one ... ok
+test windows::tests::transmitted_frames_reach_the_responder_and_the_echo_in_queue_order ... ok
+test windows::tests::untrusted_module_is_rejected_before_any_export_runs ... ok
+test windows::tests::windows_abi_layout_matches_the_npcap_headers ... ok
+test windows::tests::wpcap_loaded_from_an_unrequested_path_is_rejected ... ok
+test windows::tests::wrong_architecture_is_abi_mismatch ... ok
+
+test result: ok. 168 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 10.03s
+
+     Running tests\linux_io.rs (target\debug\deps\linux_io-2bf03d9e9caab0c0.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\linux_wire.rs (target\debug\deps\linux_wire-49dfef3d7a52cb9e.exe)
+
+running 12 tests
+test lab_all_recorded_checks_pass_none_failed_none_not_run ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_pause_resume_pcap_concat_equals_continuous_trace ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_PERF_RESULTS (see module docs)
+test lab_rejected_resumes_never_open_the_adapter_or_touch_the_wire ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_veth_removal_fails_diagnosably_without_a_checkpoint ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test pause_plus_resume_must_equal_continuous_and_detects_seam_defects ... ok
+test pcap_parser_is_strict ... ok
+test syn_filter_ignores_other_frames ... ok
+test rust_suite_acceptance_rejects_an_interface_drop - should panic ... ok
+test rust_suite_acceptance_rejects_a_witness_meta_with_kernel_drops - should panic ... ok
+test rust_suite_acceptance_accepts_tcpdump_witness_metas ... ok
+
+test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests\macos_live.rs (target\debug\deps\macos_live-45a4195a8630f69a.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\windows_io.rs (target\debug\deps\windows_io-f6f9f697bd65a4f8.exe)
+
+running 1 test
+test a_bogus_device_never_opens_an_adapter ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests\windows_live.rs (target\debug\deps\windows_live-c23865c335cfd694.exe)
+
+running 14 tests
+test live_batched_pause_resume_has_no_gap_or_duplicate ... ignored, live: needs the lab NIC and a peer (see module docs)
+test live_batched_scan_counts_exactly_once_on_the_wire ... ignored, live: needs the lab NIC and a peer (see module docs)
+test live_batched_stop_is_prompt_and_nothing_is_sent_afterwards ... ignored, live: needs the lab NIC and a peer (see module docs)
+test live_budgeted_calls ... ignored, live: needs the lab NIC (see module docs)
+test live_call_latency_under_batches ... ignored, live: needs the lab NIC (see module docs)
+test live_link_loss_engine_stop ... ignored, live: needs the lab NIC and an external link toggle (see module docs)
+test live_link_loss_raw_calls ... ignored, live: needs the lab NIC and an external link toggle (see module docs)
+test live_own_tx_never_reaches_rx_and_peer_replies_do ... ignored, live: needs the lab NIC and a peer with listeners (see module docs)
+test live_pause_stops_tx_then_resume_completes_without_duplicates ... ignored, live: needs the lab NIC and a peer (see module docs)
+test live_scan_small_with_results ... ignored, live: needs the lab NIC and a peer with listeners (see module docs)
+test live_scan_under_junk_flood_is_honest_about_loss ... ignored, live: needs the lab NIC, a peer and a peer-side flood (see module docs)
+test live_stop_is_prompt_and_nothing_is_sent_afterwards ... ignored, live: needs the lab NIC and a peer (see module docs)
+test live_uncertain_send_fails_without_checkpoint_or_further_sends ... ignored, live: needs the lab NIC and a peer (see module docs)
+test live_worker_panic_ends_the_run_and_the_adapter_is_usable_again ... ignored, live: needs the lab NIC and a peer (see module docs)
+
+test result: ok. 0 passed; 0 failed; 14 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rmasscan_net
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

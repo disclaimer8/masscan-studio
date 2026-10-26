@@ -254,6 +254,49 @@ impl Endpoint {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// Linux pkexec must exec the trusted runner in the exact unreaped child.
+    /// A retained Child reserves its PID even when root /proc/exe is unreadable.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn accept_root_child(
+        &self,
+        child: &mut std::process::Child,
+        timeout: Duration,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<UnixStream> {
+        let expected = child.id();
+        let deadline = Instant::now() + timeout;
+        loop {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("Authorization cancelled".into());
+            }
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                return Err(format!(
+                    "Polkit authorization cancelled, unavailable or runner exited ({status})"
+                ));
+            }
+            match self.listener.accept() {
+                Ok((stream, _)) => {
+                    let (pid, uid) = credentials(&stream)?;
+                    if pid != expected || uid != 0 {
+                        return Err("Unexpected elevated runner process".into());
+                    }
+                    if child.try_wait().map_err(|e| e.to_string())?.is_some()
+                        || cancelled.load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        return Err("Authorization ended before peer verification".into());
+                    }
+                    stream.set_nonblocking(false).map_err(|e| e.to_string())?;
+                    return Ok(stream);
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e.to_string()),
+            }
+            if Instant::now() >= deadline {
+                return Err("Authorization timed out".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     pub fn accept_trusted(
         &self,
         timeout: Duration,
@@ -343,5 +386,70 @@ impl Drop for Endpoint {
                 let _ = fs::remove_dir(p);
             }
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+    use std::{process::Command, sync::atomic::AtomicBool};
+
+    fn sleeper() -> std::process::Child {
+        Command::new("/bin/sleep").arg("10").spawn().unwrap()
+    }
+    #[test]
+    fn root_accept_refuses_wrong_process_timeout_cancel_and_exited_child() {
+        let endpoint = Endpoint::create().unwrap();
+        let mut child = sleeper();
+        let _foreign = UnixStream::connect(endpoint.path()).unwrap();
+        let err = endpoint
+            .accept_root_child(&mut child, Duration::from_secs(1), &AtomicBool::new(false))
+            .unwrap_err();
+        assert!(err.contains("Unexpected elevated"), "{err}");
+        let err = endpoint
+            .accept_root_child(
+                &mut child,
+                Duration::from_millis(20),
+                &AtomicBool::new(false),
+            )
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        let err = endpoint
+            .accept_root_child(&mut child, Duration::from_secs(1), &AtomicBool::new(true))
+            .unwrap_err();
+        assert!(err.contains("cancelled"), "{err}");
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let err = endpoint
+            .accept_root_child(&mut child, Duration::from_secs(1), &AtomicBool::new(false))
+            .unwrap_err();
+        assert!(err.contains("runner exited"), "{err}");
+    }
+    #[test]
+    fn root_accept_refuses_exact_child_with_ordinary_uid() {
+        assert_ne!(
+            Identity::current().unwrap().uid,
+            0,
+            "Run tests unprivileged"
+        );
+        let endpoint = Endpoint::create().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "unix::linux_tests::connector"])
+            .env("STUDIO_TEST_ENDPOINT", endpoint.path())
+            .spawn()
+            .unwrap();
+        let result =
+            endpoint.accept_root_child(&mut child, Duration::from_secs(5), &AtomicBool::new(false));
+        let _ = child.kill();
+        let _ = child.wait();
+        let err = result.unwrap_err();
+        assert!(err.contains("Unexpected elevated"), "{err}");
+    }
+    #[test]
+    #[ignore = "subprocess fixture invoked by root_accept_refuses_exact_child_with_ordinary_uid"]
+    fn connector() {
+        let path = std::env::var_os("STUDIO_TEST_ENDPOINT").expect("fixture endpoint");
+        let _stream = UnixStream::connect(path).unwrap();
+        std::thread::sleep(Duration::from_secs(10));
     }
 }

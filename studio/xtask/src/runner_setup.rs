@@ -1,5 +1,9 @@
 use super::*;
-use studio_platform::{macos, trusted};
+#[cfg(target_os = "linux")]
+use studio_platform::linux as platform;
+#[cfg(target_os = "macos")]
+use studio_platform::macos as platform;
+use studio_platform::trusted;
 
 pub fn prepare(root: &Path) -> Result<()> {
     let source = match std::env::args().nth(2) {
@@ -29,34 +33,25 @@ pub fn prepare(root: &Path) -> Result<()> {
                 .ok_or("Cargo did not report the runner executable")?
         }
     };
+    prepare_source(root, &source)?;
+    Ok(())
+}
+pub(super) fn prepare_source(root: &Path, source: &Path) -> Result<PathBuf> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis();
     let dir = root.join("dist").join(format!("runner-{stamp}"));
     fs::create_dir_all(&dir)?;
     let copy = dir.join("studio-runner");
-    fs::copy(&source, &copy)?;
-    // Preserve already-signed package bytes: the UI pins their exact SHA-256.
-    run(Command::new("codesign")
-        .args(["--verify", "--strict"])
-        .arg(&copy))?;
-    let deps = text(Command::new("otool").arg("-L").arg(&copy))?;
-    for line in deps.lines().skip(1) {
-        let lib = line
-            .split_whitespace()
-            .next()
-            .ok_or("Empty library dependency")?;
-        if !lib.starts_with("/usr/lib/") && !lib.starts_with("/System/Library/") {
-            return Err(format!("Privileged runner depends on non-system library: {lib}").into());
-        }
-    }
+    fs::copy(source, &copy)?;
+    validate(&copy)?;
     let hash = trusted::file_hash(&copy)?;
-    let script = macos::install_script(&copy, &hash)?;
+    let script = platform::install_script(&copy, &hash)?;
     fs::write(dir.join("install.sh"), &script)?;
     fs::write(
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "sha256":hash,"destination":macos::installed_path(&hash)?,"source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,
+            "sha256":hash,"destination":platform::installed_path(&hash)?,"source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,
             "dirty":!text(Command::new("git").args(["status","--porcelain"]))?.is_empty(),
             "cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,"raw_enabled":studio_protocol::RAW_SCANNING_ENABLED,
             "install_script_sha256":digest(&dir.join("install.sh"))?
@@ -67,6 +62,39 @@ pub fn prepare(root: &Path) -> Result<()> {
         copy.display(),
         dir.join("install.sh").display()
     );
+    Ok(dir)
+}
+#[cfg(target_os = "macos")]
+fn validate(copy: &Path) -> Result<()> {
+    // Preserve already-signed package bytes: the UI pins their exact SHA-256.
+    run(Command::new("codesign")
+        .args(["--verify", "--strict"])
+        .arg(copy))?;
+    let deps = text(Command::new("otool").arg("-L").arg(copy))?;
+    for line in deps.lines().skip(1) {
+        let lib = line
+            .split_whitespace()
+            .next()
+            .ok_or("Empty library dependency")?;
+        if !lib.starts_with("/usr/lib/") && !lib.starts_with("/System/Library/") {
+            return Err(format!("Privileged runner depends on non-system library: {lib}").into());
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate(copy: &Path) -> Result<()> {
+    let headers = text(
+        Command::new("/usr/bin/readelf")
+            .args(["--wide", "--program-headers"])
+            .arg(copy),
+    )?;
+    let dynamic = text(
+        Command::new("/usr/bin/readelf")
+            .args(["--wide", "--dynamic"])
+            .arg(copy),
+    )?;
+    platform::validate_elf(&headers, &dynamic)?;
     Ok(())
 }
 pub fn install() -> Result<()> {
@@ -81,41 +109,52 @@ pub fn install() -> Result<()> {
     if m["sha256"].as_str() != Some(&hash) {
         return Err("Prepared runner hash changed".into());
     }
-    let script = macos::install_script(&source, &hash)?;
+    validate(&source)?;
+    let script = platform::install_script(&source, &hash)?;
     if fs::read_to_string(dir.join("install.sh"))? != script {
         return Err("Reviewed installation script changed".into());
     }
-    let destination = macos::installed_path(&hash)?;
+    let destination = platform::installed_path(&hash)?;
     if destination.exists() {
         trusted::verify(&destination, &hash)?;
         println!("This runner is already installed and verified");
         return Ok(());
     }
     // Pass the reviewed text, not a mutable user-owned script path, to the OS.
+    #[cfg(target_os = "macos")]
     run(Command::new("/usr/bin/osascript")
-        .args(["-e", &macos::applescript(&script)])
+        .args(["-e", &platform::applescript(&script)])
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("LC_ALL", "C"))?;
+    #[cfg(target_os = "linux")]
+    run(Command::new("/usr/bin/pkexec")
+        .args(["--disable-internal-agent", "/bin/sh", "-c", &script])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
         .env("LC_ALL", "C"))?;
     trusted::verify(&destination, &hash)?;
     println!("Installed and hash-verified: {}", destination.display());
     Ok(())
 }
 pub fn probe() -> Result<()> {
+    let source = PathBuf::from(
+        std::env::args()
+            .nth(2)
+            .ok_or("Supply runner path from the prepared build or app bundle")?,
+    );
+    probe_source(&source)
+}
+pub(super) fn probe_source(source: &Path) -> Result<()> {
     use std::{
         io::{BufReader, BufWriter},
         sync::atomic::AtomicBool,
         time::Duration,
     };
     use studio_protocol::*;
-    let source = PathBuf::from(
-        std::env::args()
-            .nth(2)
-            .ok_or("Supply runner path from the prepared build or app bundle")?,
-    );
-    let hash = trusted::file_hash(&source)?;
-    let destination = macos::installed_path(&hash)?;
-    let auth = macos::Authorized::open(&destination, &hash, &AtomicBool::new(false))?;
+    let hash = trusted::file_hash(source)?;
+    let destination = platform::installed_path(&hash)?;
+    let auth = platform::Authorized::open(&destination, &hash, &AtomicBool::new(false))?;
     auth.stream
         .set_read_timeout(Some(Duration::from_secs(60)))?;
     auth.stream
@@ -143,9 +182,15 @@ pub fn probe() -> Result<()> {
     {
         return Err("Incompatible runner Hello".into());
     }
+    #[cfg(target_os = "macos")]
     println!(
         "Authenticated root runner: pid={}, uid={}, SHA-256={hash}; protocol={VERSION}",
         auth.peer.pid, auth.peer.uid
+    );
+    #[cfg(target_os = "linux")]
+    println!(
+        "Authenticated root runner: pid={}, SHA-256={hash}; protocol={VERSION}",
+        auth.runner_pid()
     );
     write_frame(
         &mut input,
@@ -160,6 +205,10 @@ pub fn probe() -> Result<()> {
     let reply = read_frame::<Event>(&mut output)?;
     order.accept(&reply)?;
     if let Event::NetworkChecked { ready, detail } = reply.payload {
+        #[cfg(target_os = "linux")]
+        if ready {
+            return Err("Linux preflight unexpectedly enabled".into());
+        }
         println!("Network preflight ready={ready}: {detail}");
     } else {
         return Err("Unexpected preflight response".into());
@@ -176,12 +225,18 @@ pub fn probe() -> Result<()> {
     )?;
     drop(input);
     drop(output);
+    #[cfg(target_os = "macos")]
     let peer = auth.peer.clone();
+    #[cfg(target_os = "linux")]
+    let mut auth = auth;
+    #[cfg(target_os = "linux")]
+    auth.wait_closed(Duration::from_secs(2))?;
     let endpoint = auth.endpoint_path().to_owned();
     drop(auth);
     if endpoint.exists() {
         return Err("Socket endpoint survived session close".into());
     }
+    #[cfg(target_os = "macos")]
     if peer.is_alive()? {
         return Err("Root runner survived session close".into());
     }

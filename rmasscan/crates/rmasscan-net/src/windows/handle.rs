@@ -313,10 +313,10 @@ impl PcapHandle {
 /// передавалась; владелец (`TxHalf`) обязан объявить поле очереди раньше поля
 /// handle (поля уничтожаются в порядке объявления). `Arc<NpcapApi>` держит DLL
 /// загруженной до самого конца.
-// Используется адаптером в задаче 4.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct SendQueue {
     raw: NonNull<PcapSendQueue>,
+    /// Только для проверок в тестах (`capacity()`).
+    #[cfg(test)]
     capacity: u32,
     /// Размер каждой записи (`16 + caplen`) в порядке постановки.
     records: Vec<u32>,
@@ -336,7 +336,6 @@ impl Drop for SendQueue {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl SendQueue {
     /// `pcap_sendqueue_alloc(bytes)`; NULL это ошибка системы.
     pub(crate) fn alloc(api: &Arc<NpcapApi>, bytes: u32) -> Result<SendQueue, NetError> {
@@ -350,6 +349,7 @@ impl SendQueue {
         };
         Ok(SendQueue {
             raw,
+            #[cfg(test)]
             capacity: bytes,
             records: Vec::new(),
             api: Arc::clone(api),
@@ -407,6 +407,7 @@ impl SendQueue {
         unsafe { (*self.raw.as_ptr()).len }
     }
 
+    #[cfg(test)]
     /// Ёмкость очереди в байтах, заданная при `alloc`.
     pub(crate) fn capacity(&self) -> u32 {
         self.capacity
@@ -417,11 +418,13 @@ impl SendQueue {
         &self.records
     }
 
+    #[cfg(test)]
     /// Число записей.
     pub(crate) fn len(&self) -> usize {
         self.records.len()
     }
 
+    #[cfg(test)]
     /// Очередь пуста.
     pub(crate) fn is_empty(&self) -> bool {
         self.records.is_empty()
@@ -441,7 +444,6 @@ impl PcapHandle {
     /// `pcap_sendqueue_transmit(p, queue, sync)`: сырое число принятых
     /// драйвером байт (меньше `queued_bytes` при ошибке). Синхронный,
     /// неотменяемый вызов. Очередь не изменяется.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn transmit_raw(&mut self, q: &mut SendQueue, sync: bool) -> c_uint {
         // Очередь и handle обязаны принадлежать одной загрузке библиотеки.
         debug_assert!(

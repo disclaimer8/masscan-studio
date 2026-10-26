@@ -69,7 +69,7 @@ use rmasscan_engine::{
     CancelHandle, Checkpoint, ENGINE_ALGORITHM_VERSION, Engine, EngineOptions, Event, Reason,
     job_digest,
 };
-use rmasscan_net::{BpfInventory, Inventory, NetError, NetStats, open_explicit};
+use rmasscan_net::{BpfInventory, Inventory, NetError, NetStats, TxMode, open_explicit};
 
 mod support;
 use support::metrics;
@@ -518,6 +518,19 @@ trait Backend {
 struct Opened {
     io: AdapterPair,
     stats: Box<dyn Fn() -> NetStats>,
+    tx_mode: TxMode,
+}
+
+/// Идентичность сборки плюс способ передачи, с которым открыт адаптер: по
+/// `tx_mode`/`tx_batch_cap` верификатор отличает пачечный путь от одиночного.
+fn identity_with_tx(mode: TxMode) -> String {
+    let base = identity_json();
+    let (name, cap) = match mode {
+        TxMode::Single => ("single", 1),
+        TxMode::SendQueue { max_batch } => ("sendqueue", max_batch),
+    };
+    let head = base.strip_suffix('}').unwrap_or(base);
+    format!("{head},\"tx_mode\":\"{name}\",\"tx_batch_cap\":{cap}}}")
 }
 
 struct RealBackend;
@@ -544,6 +557,7 @@ impl Backend for RealBackend {
         Ok(Opened {
             io: o.io,
             stats: Box::new(move || stats.snapshot()),
+            tx_mode: o.tx_mode,
         })
     }
 }
@@ -1006,6 +1020,7 @@ because promiscuous mode is not enabled. {}",
     };
     let during = metrics::sample();
     let stats = opened.stats;
+    let tx_mode = opened.tx_mode;
 
     let start_index = resume.as_ref().map_or(0, |c| c.next_index);
     let expected_total = plan.range() - start_index;
@@ -1263,7 +1278,8 @@ because promiscuous mode is not enabled. {}",
     let _ = write!(
         j,
         "\"net\":{{\"tx_sent\":{},\"tx_would_block\":{},\"tx_uncertain\":{},\"tx_errors\":{},\
-\"rx_packets\":{},\"rx_truncated\":{},\"rx_outgoing\":{},\"rx_wrong_interface\":{},\"rx_errors\":{},\"kernel_drops\":{}}},\
+\"rx_packets\":{},\"rx_truncated\":{},\"rx_outgoing\":{},\"rx_wrong_interface\":{},\"rx_errors\":{},\"kernel_drops\":{},\
+\"tx_batches\":{},\"tx_batch_max\":{},\"tx_over_budget\":{}}},\
 \"tx_sent_at_join\":{},\"tx_sent_after_observe\":{},\"observe_ms\":{},",
         s.tx_sent,
         s.tx_would_block,
@@ -1275,6 +1291,9 @@ because promiscuous mode is not enabled. {}",
         s.rx_wrong_interface,
         s.rx_errors,
         s.kernel_drops.map_or("null".to_string(), |d| d.to_string()),
+        s.tx_batches,
+        s.tx_batch_max,
+        s.tx_over_budget,
         stats_at_join.tx_sent,
         stats_end.tx_sent,
         a.observe_ms,
@@ -1316,7 +1335,7 @@ because promiscuous mode is not enabled. {}",
         t.t0_utc_ms,
         outcome_utc_ms,
         unix_ms(),
-        identity_json(),
+        identity_with_tx(tx_mode),
     );
     (if reason == "Failed" { 3 } else { 0 }, j)
 }
@@ -1429,6 +1448,7 @@ mod tests {
                     tx_sent: counted.sent_count() as u64,
                     ..NetStats::default()
                 }),
+                tx_mode: TxMode::Single,
             })
         }
     }
@@ -2028,6 +2048,34 @@ mod tests {
                 && json.contains("\"rx_alive_after_join\":false"),
             "{json}"
         );
+    }
+
+    #[test]
+    fn success_json_carries_the_tx_mode_and_the_batch_counters() {
+        let be = Mock {
+            nic: Some(NIC),
+            fake: Some(rmasscan_engine::fake::FakeAdapter::new()),
+            ..Mock::default()
+        };
+        let (code, json) = run(&with(&["--wait", "0"]), &be);
+        assert_eq!(code, 0, "{json}");
+        for k in [
+            "\"tx_mode\":\"single\",\"tx_batch_cap\":1}",
+            "\"tx_batches\":0,\"tx_batch_max\":0,\"tx_over_budget\":0}",
+        ] {
+            assert!(json.contains(k), "{k} missing: {json}");
+        }
+    }
+
+    #[test]
+    fn identity_names_the_sendqueue_mode_and_its_cap() {
+        let id = identity_with_tx(TxMode::SendQueue { max_batch: 256 });
+        assert!(id.starts_with("{\"source_commit\":"), "{id}");
+        assert!(
+            id.ends_with(",\"tx_mode\":\"sendqueue\",\"tx_batch_cap\":256}"),
+            "{id}"
+        );
+        assert_eq!(id.matches('{').count(), id.matches('}').count(), "{id}");
     }
 
     #[test]

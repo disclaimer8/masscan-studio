@@ -1111,15 +1111,21 @@ struct TxRows {
 }
 
 impl TxRows {
-    /// Предвыделенные столбцы: измерение рабочего набора не должно видеть
-    /// рост собственных журналов теста.
+    /// Предвыделенные и прогретые столбцы: страницы записываются сразу,
+    /// иначе рабочий набор рос бы по мере записи журнала (40 Б на вызов), и
+    /// измерение рабочего набора видело бы журнал теста вместо очереди и драйвера.
     fn with_capacity(calls: usize) -> TxRows {
+        fn warm(calls: usize) -> Vec<u64> {
+            let mut v = vec![1u64; calls];
+            v.clear();
+            v
+        }
         TxRows {
-            t_ms: Vec::with_capacity(calls),
-            n: Vec::with_capacity(calls),
-            queued: Vec::with_capacity(calls),
-            sent: Vec::with_capacity(calls),
-            dur_us: Vec::with_capacity(calls),
+            t_ms: warm(calls),
+            n: warm(calls),
+            queued: warm(calls),
+            sent: warm(calls),
+            dur_us: warm(calls),
         }
     }
 

@@ -60,7 +60,7 @@ fn prepare_source(root: &Path, source: &Path) -> Result<PathBuf> {
             "package_manifest_sha256":source.parent().map(|p|p.join("manifest.json")).filter(|p|p.is_file()).map(|p|digest(&p)).transpose()?,
             "install_script_sha256":digest(&dir.join("install.ps1"))?,
             "raw_enabled":studio_protocol::RAW_SCANNING_ENABLED,
-            "session_uac_enabled":false
+            "session_uac_enabled":true
         }))?,
     )?;
     println!(
@@ -74,7 +74,7 @@ pub fn verify_installed() -> Result<()> {
     let hash = std::env::args().nth(2).ok_or("Supply runner SHA-256")?;
     let installation = Installed::open(&hash)?;
     println!(
-        "Trusted immutable runner: {}\nSHA-256: {hash}\nUAC session launch and raw scanning remain disabled.",
+        "Trusted immutable runner: {}\nSHA-256: {hash}\nStart Studio as an ordinary user and select Authorize. Raw scanning remains disabled.",
         installation.path().display()
     );
     Ok(())

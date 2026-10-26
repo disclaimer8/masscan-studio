@@ -668,7 +668,7 @@ fn net_stats_final_totals_survive_closing_the_handles() {
     let stats = a.stats.clone();
     assert_eq!(stats.snapshot().kernel_drops, None, "nothing measured yet");
     lock(&w).stats_drop = 9;
-    let crate::OpenedAdapter { io, stats: _ } = a;
+    let crate::OpenedAdapter { io, .. } = a;
     drop(io);
     assert_eq!(count(&w, "1:close") + count(&w, "2:close"), 2);
     assert_eq!(

@@ -2,7 +2,7 @@
 //! Весь код здесь безопасный; указатели pcap не покидают `handle`.
 //!
 //! # Контракт
-//! * Два НЕЗАВИСИМЫХ handle на одно устройство: TX (только `pcap_sendpacket`) и
+//! * Два НЕЗАВИСИМЫХ handle на одно устройство: TX (`pcap_sendpacket` и sendqueue) и
 //!   RX (только чтение). Каждый принадлежит одному потоку движка.
 //! * RX явно nonblocking. Один вызов `recv` ждёт кадр до АБСОЛЮТНОГО дедлайна
 //!   `min(timeout, 50 мс, IO_BUDGET = 42 мс)`: 42 мс это решение контролёра по
@@ -12,7 +12,14 @@
 //!   `PcapHandle::poll_into` до любого следующего вызова pcap.
 //! * TX синхронный и НЕ отменяемый: `pcap_sendpacket` rc 0 → `Sent`, любой
 //!   другой rc → `Uncertain` (исход неизвестен, повтора нет, checkpoint
-//!   запрещён). `WouldBlockUnsent` НЕ выдаётся никогда: драйвер не сообщает
+//!   запрещён). Пачка из 2…`TX_BATCH_FRAMES` кадров идёт одним
+//!   `pcap_sendqueue_transmit` (`sync = 0`): `Sent` это ровно то, что драйвер
+//!   принял в этом вызове (префикс до границы записи `16 + caplen`), остаток
+//!   `Uncertain` без повтора; число байт не на границе или больше очереди даёт
+//!   `Uncertain` для всей пачки. Очередь не переживает вызов (`len == 0` после
+//!   любого исхода). Граница бюджета это размер пачки, а не `timeout`
+//!   (transmit не отменяем): длительность измеряется и счётчик
+//!   `tx_over_budget` считает вызовы дольше `MAX_IO_TIMEOUT`. `WouldBlockUnsent` НЕ выдаётся никогда: драйвер не сообщает
 //!   «точно не отправлено», а выводить его из текста `pcap_geterr` запрещено.
 //!   rc 0 не доказывает доставку (кадр мог уйти в пустоту при потере линка).
 //!   Ошибки проверки ДО отправки (длина кадра) это `IoError`.
@@ -40,12 +47,15 @@ use std::time::{Duration, Instant};
 
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
-use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
+use rmasscan_engine::{
+    AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx, TxBatch,
+};
 
-use super::handle::{OpenParams, PcapHandle, Polled, resolve_device};
+use super::ffi::SENDQUEUE_RECORD_HEADER;
+use super::handle::{OpenParams, PcapHandle, Polled, SendQueue, resolve_device};
 use super::loader::NpcapApi;
 use crate::drop_counter::DropCounter;
-use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
+use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter, TxMode};
 
 /// Внутренний бюджет одного вызова адаптера (решение контролёра по спайку).
 pub(crate) const IO_BUDGET: Duration = Duration::from_millis(42);
@@ -53,6 +63,21 @@ pub(crate) const IO_BUDGET: Duration = Duration::from_millis(42);
 pub(crate) const MIN_TX_FRAME: usize = 14;
 /// Максимум кадра на отправку (MTU 1500 + заголовок + VLAN). SYN-пробы много меньше.
 pub(crate) const MAX_TX_FRAME: usize = 1518;
+
+/// Кадров в одном `pcap_sendqueue_transmit`: верхняя граница пачки, потому что
+/// transmit синхронен и не отменяем, а вызов обязан уложиться в `IO_BUDGET`.
+/// ПРЕДВАРИТЕЛЬНО: значение задаёт спайк задачи 3 (наибольшее n из
+/// 16/64/256/1024/4096 с p99.9 <= 21 мс и max <= 42 мс); до него 256.
+pub(crate) const TX_BATCH_FRAMES: usize = 256;
+/// Байты очереди: `TX_BATCH_FRAMES` записей максимального размера, поэтому
+/// `pcap_sendqueue_queue` не может вернуть -1 на допустимой пачке.
+pub(crate) const TX_QUEUE_BYTES: u32 =
+    (TX_BATCH_FRAMES * (SENDQUEUE_RECORD_HEADER + MAX_TX_FRAME)) as u32;
+/// Решение спайка о частичном transmit. `true` (GO): граница записи даёт
+/// принятый префикс `Sent`, остаток `Uncertain`. `false` (STOP): любой
+/// частичный исход делает всю пачку `Uncertain`. ПРЕДВАРИТЕЛЬНО: значение
+/// задаёт спайк задачи 3.
+pub(crate) const PREFIX_ACCOUNTING: bool = true;
 
 const RX_SNAPLEN: i32 = 2048;
 const RX_BUFFER_BYTES: i32 = 4 << 20;
@@ -71,37 +96,169 @@ fn publish_drops(counters: &Counters, total: u64) {
     counters.kernel_drops_known.store(true, Release);
 }
 
-/// TX-половина.
+/// Что драйвер принял из пачки по числу переданных байт.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Accounted {
+    /// Число байт легло на границу записи: принято ровно столько первых записей.
+    Exact(usize),
+    /// Не на границе записи или больше поставленного: что принято, неизвестно.
+    Straddle,
+}
+
+/// Чистое сопоставление «переданные байты» ↔ «число принятых записей» по
+/// размерам записей (`16 + caplen`) в порядке постановки.
+pub(crate) fn accounted(record_sizes: &[u32], bytes_sent: u32) -> Accounted {
+    let mut end = 0u64;
+    if bytes_sent == 0 {
+        return Accounted::Exact(0);
+    }
+    for (i, size) in record_sizes.iter().enumerate() {
+        end += u64::from(*size);
+        if end == u64::from(bytes_sent) {
+            return Accounted::Exact(i + 1);
+        }
+        if end > u64::from(bytes_sent) {
+            return Accounted::Straddle;
+        }
+    }
+    // Больше, чем поставлено.
+    Accounted::Straddle
+}
+
+/// Исход пачки из `n` кадров по учёту байт. Остальное `Uncertain`, без повтора.
+pub(crate) fn batch_outcome(n: usize, acc: Accounted, prefix_accounting: bool) -> TxBatch {
+    match acc {
+        Accounted::Exact(k) if k >= n => TxBatch {
+            sent: n,
+            rest: SendStatus::Sent,
+        },
+        Accounted::Exact(k) if prefix_accounting => TxBatch {
+            sent: k,
+            rest: SendStatus::Uncertain,
+        },
+        Accounted::Exact(_) | Accounted::Straddle => TxBatch {
+            sent: 0,
+            rest: SendStatus::Uncertain,
+        },
+    }
+}
+
+/// TX-половина. Порядок полей важен: поля уничтожаются в порядке объявления,
+/// поэтому очередь освобождается раньше `pcap_close` handle, а DLL выгружается
+/// последней (`Arc<NpcapApi>` внутри обоих).
 pub(crate) struct TxHalf {
+    queue: SendQueue,
     handle: PcapHandle,
     counters: Arc<Counters>,
 }
 
 impl TxHalf {
-    pub(crate) fn new(handle: PcapHandle, counters: Arc<Counters>) -> Self {
-        Self { handle, counters }
+    pub(crate) fn new(handle: PcapHandle, queue: SendQueue, counters: Arc<Counters>) -> Self {
+        Self {
+            queue,
+            handle,
+            counters,
+        }
+    }
+
+    /// Длительность вызова в счётчик бюджета.
+    fn note_duration(&self, dur: Duration) {
+        if dur > MAX_IO_TIMEOUT {
+            Counters::bump(&self.counters.tx_over_budget);
+        }
+    }
+
+    fn check_len(&self, frame: &[u8]) -> Result<(), IoError> {
+        if (MIN_TX_FRAME..=MAX_TX_FRAME).contains(&frame.len()) {
+            return Ok(());
+        }
+        Counters::bump(&self.counters.tx_errors);
+        Err(IoError::new(format!(
+            "frame length {} is outside {MIN_TX_FRAME}..={MAX_TX_FRAME}; nothing was sent",
+            frame.len()
+        )))
     }
 }
 
 impl Tx for TxHalf {
     fn send(&mut self, frame: &[u8], _timeout: Duration) -> Result<SendStatus, IoError> {
         // Проверка ДО вызова драйвера: кадр не уходит, исход известен.
-        if !(MIN_TX_FRAME..=MAX_TX_FRAME).contains(&frame.len()) {
-            Counters::bump(&self.counters.tx_errors);
-            return Err(IoError::new(format!(
-                "frame length {} is outside {MIN_TX_FRAME}..={MAX_TX_FRAME}; nothing was sent",
-                frame.len()
-            )));
-        }
+        self.check_len(frame)?;
         // Ровно один синхронный вызов, без повторов; `timeout` не применим:
         // pcap_sendpacket нельзя отменить (граница измерена в спайке).
-        if self.handle.send_raw(frame) == 0 {
+        let t = Instant::now();
+        let rc = self.handle.send_raw(frame);
+        self.note_duration(t.elapsed());
+        if rc == 0 {
             Counters::bump(&self.counters.tx_sent);
             Ok(SendStatus::Sent)
         } else {
             Counters::bump(&self.counters.tx_uncertain);
             Ok(SendStatus::Uncertain)
         }
+    }
+
+    fn max_batch(&self) -> usize {
+        TX_BATCH_FRAMES
+    }
+
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        if frames.is_empty() {
+            return Err(IoError::new(
+                "send_batch called with no frames; nothing was sent",
+            ));
+        }
+        if frames.len() > TX_BATCH_FRAMES {
+            return Err(IoError::new(format!(
+                "send_batch called with {} frames, more than {TX_BATCH_FRAMES}; nothing was sent",
+                frames.len()
+            )));
+        }
+        // Все длины проверяются ДО постановки первого кадра.
+        for frame in frames {
+            self.check_len(frame)?;
+        }
+        if let [one] = frames {
+            // Один кадр: принятый путь `pcap_sendpacket`, очередь не нужна.
+            let rest = self.send(one, timeout)?;
+            return Ok(TxBatch {
+                sent: usize::from(rest == SendStatus::Sent),
+                rest,
+            });
+        }
+        let n = frames.len();
+        self.queue.clear();
+        for frame in frames {
+            if self.queue.push(frame).is_err() {
+                self.queue.clear();
+                Counters::bump(&self.counters.tx_errors);
+                return Err(IoError::new(
+                    "sendqueue refused a frame that fits the allocated queue; nothing was sent",
+                ));
+            }
+        }
+        // Один синхронный неотменяемый вызов, `sync = 0`, без повтора остатка.
+        let queued = self.queue.queued_bytes();
+        let t = Instant::now();
+        let bytes = self.handle.transmit_raw(&mut self.queue, false);
+        let dur = t.elapsed();
+        Counters::bump(&self.counters.tx_batches);
+        self.counters.tx_batch_max.fetch_max(n as u64, Relaxed);
+        self.note_duration(dur);
+        // Больше поставленного: принятое неизвестно (accounted даёт то же).
+        let acc = if bytes > queued {
+            Accounted::Straddle
+        } else {
+            accounted(self.queue.record_sizes(), bytes)
+        };
+        let out = batch_outcome(n, acc, PREFIX_ACCOUNTING);
+        // Очередь не переживает вызов, в любом исходе.
+        self.queue.clear();
+        self.counters.tx_sent.fetch_add(out.sent as u64, Relaxed);
+        self.counters
+            .tx_uncertain
+            .fetch_add((n - out.sent) as u64, Relaxed);
+        Ok(out)
     }
 }
 
@@ -279,6 +436,9 @@ pub(crate) fn open_with(
         },
     )?;
     tx.set_drop_all_filter()?;
+    // Очередь выделяется один раз, после TX handle и до RX. При ошибке дальше
+    // `queue` уничтожается раньше `tx` (обратный порядок объявления).
+    let queue = SendQueue::alloc(api, TX_QUEUE_BYTES)?;
 
     let mut rx = PcapHandle::open_ethernet(
         api,
@@ -312,7 +472,7 @@ pub(crate) fn open_with(
     let counters = Arc::new(Counters::default());
     Ok(OpenedAdapter {
         io: AdapterPair {
-            tx: Box::new(TxHalf::new(tx, Arc::clone(&counters))),
+            tx: Box::new(TxHalf::new(tx, queue, Arc::clone(&counters))),
             rx: Box::new(RxHalf::new(
                 rx,
                 binding.source_mac,
@@ -321,6 +481,9 @@ pub(crate) fn open_with(
             )),
         },
         stats: NetStatsHandle::new(counters),
+        tx_mode: TxMode::SendQueue {
+            max_batch: TX_BATCH_FRAMES,
+        },
     })
 }
 

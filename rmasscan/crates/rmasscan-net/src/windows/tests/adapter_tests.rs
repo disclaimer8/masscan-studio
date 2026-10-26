@@ -14,15 +14,18 @@ use rmasscan_core::receive::{PortStatus, parse_reply};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 use rmasscan_engine::fake::reply_to_syn;
 use rmasscan_engine::{
-    AdapterPair, Engine, EngineOptions, Event, FailReason, IoError, Reason, SendStatus, Tx,
+    AdapterPair, Engine, EngineOptions, Event, FailReason, IoError, Reason, SendStatus, Tx, TxBatch,
 };
 
 use super::fake::*;
 use super::good_api;
 use crate::NetError;
+use crate::TxMode;
 use crate::windows::adapter::{
-    IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, check_binding, mac_text, open_with,
+    Accounted, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, PREFIX_ACCOUNTING, TX_BATCH_FRAMES,
+    TX_QUEUE_BYTES, accounted, batch_outcome, check_binding, mac_text, open_with,
 };
+use crate::windows::ffi::SENDQUEUE_RECORD_HEADER;
 use crate::windows::loader::{ApiSlot, NpcapApi};
 
 const OUR_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x04, 0x80, 0xa9];
@@ -275,6 +278,11 @@ fn every_open_failure_after_the_first_handle_closes_all_handles_before_unload() 
         ),
         ("setnonblock fails", |s| s.setnonblock_rc = -1, 2),
         (
+            "sendqueue alloc fails",
+            |s| s.sendqueue_alloc_null = true,
+            1,
+        ),
+        (
             "nonblock does not stick",
             |s| s.getnonblock_override = Some(0),
             2,
@@ -304,6 +312,22 @@ fn every_open_failure_after_the_first_handle_closes_all_handles_before_unload() 
             )
         });
         assert_eq!(freed, compiled_ok, "{label}: compiled program leaked");
+        assert_eq!(
+            with_ret(|s| s.queues.len()),
+            0,
+            "{label}: send queue leaked"
+        );
+        let ev = events();
+        if let (Some(a), Some(d)) = (
+            ev.iter().position(|e| e.starts_with("sendqueue_alloc")),
+            ev.iter().position(|e| e == "sendqueue_destroy"),
+        ) {
+            let first_close = pos(&ev, "close:1");
+            assert!(
+                a < d && d < first_close,
+                "{label}: queue outlived the TX handle"
+            );
+        }
         drop(api);
         let ev = events();
         assert!(
@@ -778,7 +802,7 @@ fn net_stats_final_totals_survive_closing_the_handles() {
     let stats = a.stats.clone();
     assert_eq!(stats.snapshot().kernel_drops, None, "nothing measured yet");
     with(|s| s.stats_drop = 9);
-    let crate::OpenedAdapter { io, stats: _ } = a;
+    let crate::OpenedAdapter { io, .. } = a;
     drop(io);
     assert_eq!(count("close"), 2);
     assert_eq!(
@@ -1113,4 +1137,601 @@ fn rx_and_stats_hit_only_the_rx_handle_sends_only_the_tx_handle_and_each_closes_
     let ev = events();
     let unload = pos(&ev, "unload");
     assert!(pos(&ev, "close:1") < unload && pos(&ev, "close:2") < unload);
+}
+
+// ---------- пачки через sendqueue ----------
+
+fn frames_of(n: usize) -> Vec<Vec<u8>> {
+    // Разные длины: каждая запись имеет свой размер, граница видна.
+    (0..n).map(|i| own_frame(60 + i)).collect()
+}
+
+fn refs(v: &[Vec<u8>]) -> Vec<&[u8]> {
+    v.iter().map(Vec::as_slice).collect()
+}
+
+const T50: Duration = Duration::from_millis(50);
+
+fn sizes_of(n: usize) -> Vec<u32> {
+    (0..n)
+        .map(|i| (SENDQUEUE_RECORD_HEADER + 60 + i) as u32)
+        .collect()
+}
+
+#[test]
+fn accounted_exact_boundaries_and_straddles() {
+    let sizes = sizes_of(4);
+    let end = |k: usize| sizes[..k].iter().sum::<u32>();
+    let total = end(4);
+    assert_eq!(accounted(&sizes, 0), Accounted::Exact(0));
+    for k in 1..=4 {
+        assert_eq!(accounted(&sizes, end(k)), Accounted::Exact(k), "k {k}");
+    }
+    assert_eq!(accounted(&sizes, total), Accounted::Exact(4));
+    for k in 0..4 {
+        assert_eq!(
+            accounted(&sizes, end(k) + 7),
+            Accounted::Straddle,
+            "k+7 {k}"
+        );
+        assert_eq!(
+            accounted(&sizes, end(k) + 1),
+            Accounted::Straddle,
+            "k+1 {k}"
+        );
+    }
+    assert_eq!(accounted(&sizes, total + 1), Accounted::Straddle);
+    assert_eq!(accounted(&sizes, u32::MAX), Accounted::Straddle);
+    assert_eq!(accounted(&[], 0), Accounted::Exact(0));
+    assert_eq!(accounted(&[], 1), Accounted::Straddle);
+}
+
+#[test]
+fn the_outcome_mapping_follows_the_prefix_switch_in_both_settings() {
+    let sent = |sent, rest| TxBatch { sent, rest };
+    for prefix in [true, false] {
+        // Полный приём не зависит от переключателя.
+        assert_eq!(
+            batch_outcome(5, Accounted::Exact(5), prefix),
+            sent(5, SendStatus::Sent)
+        );
+        // Straddle всегда вся пачка Uncertain.
+        assert_eq!(
+            batch_outcome(5, Accounted::Straddle, prefix),
+            sent(0, SendStatus::Uncertain)
+        );
+        // Ничего не принято: Uncertain в обоих режимах.
+        assert_eq!(
+            batch_outcome(5, Accounted::Exact(0), prefix),
+            sent(0, SendStatus::Uncertain)
+        );
+    }
+    assert_eq!(
+        batch_outcome(5, Accounted::Exact(3), true),
+        sent(3, SendStatus::Uncertain),
+        "GO: prefix is Sent"
+    );
+    assert_eq!(
+        batch_outcome(5, Accounted::Exact(3), false),
+        sent(0, SendStatus::Uncertain),
+        "STOP: the whole batch is Uncertain"
+    );
+}
+
+#[test]
+fn a_full_transmit_is_sent_exactly_n_and_counts_one_batch() {
+    reset(|_| {});
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(5);
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(
+        out,
+        TxBatch {
+            sent: 5,
+            rest: SendStatus::Sent
+        }
+    );
+    let s = a.stats.snapshot();
+    assert_eq!(
+        (s.tx_sent, s.tx_uncertain, s.tx_errors, s.tx_would_block),
+        (5, 0, 0, 0)
+    );
+    assert_eq!((s.tx_batches, s.tx_batch_max), (1, 5));
+    with(|s| {
+        assert_eq!(s.transmit_calls, 1);
+        assert_eq!(s.send_calls, 0, "the queue path never uses pcap_sendpacket");
+        assert_eq!(s.sync_seen, vec![0], "sync is never requested");
+        assert_eq!(s.sent, fr, "every frame once, in queue order");
+    });
+    assert_eq!(with_ret(|s| s.per_handle["sendqueue_transmit:1"]), 1);
+    assert_eq!(queue_len(0), 0);
+}
+
+#[test]
+fn a_boundary_partial_is_prefix_sent_and_rest_uncertain_with_counts() {
+    reset(|s| s.transmit_script.push_back(TransmitStep::Boundary(3)));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(5);
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    // Переключатель спайка: GO даёт префикс, STOP всю пачку Uncertain.
+    let kept = if PREFIX_ACCOUNTING { 3 } else { 0 };
+    assert_eq!(
+        out,
+        TxBatch {
+            sent: kept,
+            rest: SendStatus::Uncertain
+        }
+    );
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_sent, s.tx_uncertain), (kept as u64, 5 - kept as u64));
+    assert_eq!((s.tx_batches, s.tx_batch_max), (1, 5));
+    // Остаток не повторялся: драйвер получил одну передачу.
+    with(|s| assert_eq!((s.transmit_calls, s.send_calls), (1, 0)));
+    assert_eq!(queue_len(0), 0);
+}
+
+#[test]
+fn a_straddling_partial_is_all_uncertain() {
+    reset(|s| s.transmit_script.push_back(TransmitStep::Straddle(2)));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(5);
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(
+        out,
+        TxBatch {
+            sent: 0,
+            rest: SendStatus::Uncertain
+        }
+    );
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_sent, s.tx_uncertain, s.tx_errors), (0, 5, 0));
+    assert_eq!(queue_len(0), 0);
+}
+
+#[test]
+fn bytes_over_queued_is_all_uncertain() {
+    reset(|s| s.transmit_script.push_back(TransmitStep::Over));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(4);
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(
+        out,
+        TxBatch {
+            sent: 0,
+            rest: SendStatus::Uncertain
+        }
+    );
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_sent, s.tx_uncertain), (0, 4));
+    assert_eq!(queue_len(0), 0);
+}
+
+#[test]
+fn nothing_accepted_is_all_uncertain_and_the_driver_text_decides_nothing() {
+    reset(|s| {
+        s.transmit_script.push_back(TransmitStep::Bytes(0));
+        s.geterr = std::ffi::CString::new("send buffer is full, would block").unwrap();
+    });
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(3);
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(
+        out,
+        TxBatch {
+            sent: 0,
+            rest: SendStatus::Uncertain
+        }
+    );
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_uncertain, s.tx_would_block), (3, 0));
+}
+
+#[test]
+fn one_frame_batches_use_sendpacket_not_the_queue() {
+    reset(|_| {});
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(1);
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(
+        out,
+        TxBatch {
+            sent: 1,
+            rest: SendStatus::Sent
+        }
+    );
+    with(|s| {
+        assert_eq!((s.send_calls, s.transmit_calls), (1, 0));
+        assert_eq!(s.sent, fr);
+    });
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_sent, s.tx_batches, s.tx_batch_max), (1, 0, 0));
+
+    // Отказ драйвера на одном кадре: Uncertain, sent 0, без повтора.
+    with(|s| s.send_rcs.push_back(-1));
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(
+        out,
+        TxBatch {
+            sent: 0,
+            rest: SendStatus::Uncertain
+        }
+    );
+    assert_eq!(with_ret(|s| (s.send_calls, s.transmit_calls)), (2, 0));
+    assert_eq!(a.stats.snapshot().tx_uncertain, 1);
+}
+
+#[test]
+fn a_bad_length_anywhere_in_the_batch_sends_nothing_and_is_an_io_error() {
+    reset(|_| {});
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let good = own_frame(60);
+    let mut errors = 0;
+    for bad in [0usize, MIN_TX_FRAME - 1, MAX_TX_FRAME + 1, 9000] {
+        let bad_frame = vec![0u8; bad];
+        for at in [0usize, 1, 2] {
+            let mut batch: Vec<&[u8]> = vec![&good, &good, &good];
+            batch[at] = &bad_frame;
+            let e = a.io.tx.send_batch(&batch, T50).unwrap_err();
+            errors += 1;
+            assert!(e.message.contains("nothing was sent"), "{bad}@{at}: {e:?}");
+        }
+    }
+    with(|s| {
+        assert_eq!((s.send_calls, s.transmit_calls), (0, 0));
+        assert!(s.sent.is_empty());
+    });
+    // Ничего не поставлено в очередь: длины проверены раньше постановки.
+    assert_eq!(queue_len(0), 0);
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_errors, s.tx_sent, s.tx_batches), (errors, 0, 0));
+    // Пустая пачка это тоже IoError, адаптер остался рабочим.
+    assert!(a.io.tx.send_batch(&[], T50).is_err());
+    let fr = frames_of(2);
+    assert_eq!(a.io.tx.send_batch(&refs(&fr), T50).unwrap().sent, 2);
+}
+
+#[test]
+fn an_oversized_batch_is_refused_before_queueing() {
+    reset(|_| {});
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(TX_BATCH_FRAMES + 1);
+    let e = a.io.tx.send_batch(&refs(&fr), T50).unwrap_err();
+    assert!(e.message.contains("nothing was sent"), "{e:?}");
+    with(|s| assert_eq!((s.send_calls, s.transmit_calls), (0, 0)));
+    assert_eq!(queue_len(0), 0);
+    // Ровно TX_BATCH_FRAMES максимальных кадров помещается в очередь.
+    let big = vec![own_frame(MAX_TX_FRAME); TX_BATCH_FRAMES];
+    let out = a.io.tx.send_batch(&refs(&big), T50).unwrap();
+    assert_eq!(out.sent, TX_BATCH_FRAMES);
+    assert_eq!(with_ret(|s| s.transmit_calls), 1);
+    assert_eq!(
+        TX_QUEUE_BYTES as usize,
+        TX_BATCH_FRAMES * (SENDQUEUE_RECORD_HEADER + MAX_TX_FRAME)
+    );
+}
+
+#[test]
+fn queue_full_is_an_io_error_and_nothing_was_transmitted() {
+    reset(|s| s.queue_full_at = Some(3));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(5);
+    let e = a.io.tx.send_batch(&refs(&fr), T50).unwrap_err();
+    assert!(
+        e.message
+            .contains("sendqueue refused a frame that fits the allocated queue"),
+        "{e:?}"
+    );
+    with(|s| assert_eq!((s.transmit_calls, s.send_calls), (0, 0)));
+    assert_eq!(queue_len(0), 0, "the partly filled queue was emptied");
+    let s = a.stats.snapshot();
+    assert_eq!(
+        (s.tx_errors, s.tx_sent, s.tx_uncertain, s.tx_batches),
+        (1, 0, 0, 0)
+    );
+}
+
+#[test]
+fn queue_is_empty_after_every_outcome() {
+    use TransmitStep::*;
+    let steps = [All, Boundary(2), Straddle(2), Over, Bytes(0), Bytes(1)];
+    reset(|s| s.transmit_script.extend(steps));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(5);
+    for step in steps {
+        a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+        assert_eq!(queue_len(0), 0, "after {step:?}");
+    }
+    // Ошибочные исходы тоже.
+    assert!(a.io.tx.send_batch(&[], T50).is_err());
+    assert_eq!(queue_len(0), 0);
+    with(|s| s.queue_full_at = Some(1));
+    assert!(a.io.tx.send_batch(&refs(&fr), T50).is_err());
+    assert_eq!(queue_len(0), 0);
+}
+
+#[test]
+fn open_allocates_one_queue_after_the_tx_handle_and_before_rx() {
+    reset(|_| {});
+    let api = good_api();
+    let a = open_pair(&api);
+    let ev = events();
+    let creates: Vec<usize> = ev
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| *e == "create")
+        .map(|(i, _)| i)
+        .collect();
+    let alloc = pos(&ev, &format!("sendqueue_alloc:{TX_QUEUE_BYTES}"));
+    assert!(creates[0] < alloc && alloc < creates[1], "{ev:?}");
+    assert_eq!(
+        ev.iter()
+            .filter(|e| e.starts_with("sendqueue_alloc"))
+            .count(),
+        1
+    );
+    drop(a);
+}
+
+#[test]
+fn sendqueue_is_destroyed_before_the_tx_handle_closes() {
+    reset(|_| {});
+    let api = good_api();
+    let a = open_pair(&api);
+    drop(a);
+    drop(api);
+    let ev = events();
+    let destroy = pos(&ev, "sendqueue_destroy");
+    let close_tx = pos(&ev, "close:1");
+    assert!(destroy < close_tx, "{ev:?}");
+    assert!(close_tx < pos(&ev, "unload"), "{ev:?}");
+    assert_eq!(count("sendqueue_destroy"), 1);
+}
+
+#[test]
+fn transmit_longer_than_fifty_ms_is_counted_over_budget() {
+    reset(|s| s.transmit_sleep = Duration::from_millis(60));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let fr = frames_of(3);
+    // Результат не меняется: transmit не отменяем, длительность только считается.
+    let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(out.sent, 3);
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_over_budget, s.tx_batches), (1, 1));
+    with(|s| s.transmit_sleep = Duration::from_millis(70));
+    a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    assert_eq!(a.stats.snapshot().tx_over_budget, 2);
+}
+
+#[test]
+fn net_stats_batches_and_max_survive_closing() {
+    reset(|_| {});
+    let api = good_api();
+    let mut a = open_pair(&api);
+    let stats = a.stats.clone();
+    for n in [3, 7, 2] {
+        let fr = frames_of(n);
+        a.io.tx.send_batch(&refs(&fr), T50).unwrap();
+    }
+    // Один кадр это не пачка.
+    let one = frames_of(1);
+    a.io.tx.send_batch(&refs(&one), T50).unwrap();
+    drop(a);
+    let s = stats.snapshot();
+    assert_eq!((s.tx_batches, s.tx_batch_max, s.tx_sent), (3, 7, 13));
+    assert_eq!(s.tx_over_budget, 0);
+}
+
+#[test]
+fn tx_mode_is_sendqueue_with_the_cap() {
+    reset(|_| {});
+    let api = good_api();
+    let a = open_pair(&api);
+    assert_eq!(
+        a.tx_mode,
+        TxMode::SendQueue {
+            max_batch: TX_BATCH_FRAMES
+        }
+    );
+    assert_eq!(a.io.tx.max_batch(), TX_BATCH_FRAMES);
+}
+
+/// Кадры плана по порядку курсора.
+fn plan_frames(p: &ReadyPlan) -> Vec<Vec<u8>> {
+    let mut c = ProbeCursor::new(p, 0).unwrap();
+    let mut v = Vec::new();
+    while let Some(probe) = c.current() {
+        v.push(probe.frame.clone());
+        c.advance_sent();
+    }
+    v
+}
+
+fn big_plan(rate: f64, cidr: &str) -> ReadyPlan {
+    let mut m = MassIp::new();
+    add_target_string(m.ipv4_mut(), cidr).unwrap();
+    parse_ports(m.ports_mut(), "80,443").unwrap();
+    let cfg = ScanConfig {
+        targets: m,
+        seed: 0x1234_5678_9abc,
+        max_rate: rate,
+        wait_secs: 1,
+        ..ScanConfig::default()
+    };
+    let eff = validate(&cfg, Operation::Scan).unwrap();
+    ReadyPlan::new(eff, binding()).unwrap()
+}
+
+#[test]
+fn engine_scan_through_fake_sendqueue_completes_with_exactly_one_advance_per_sent() {
+    reset(|_| {});
+    syn_ack_responder();
+    let api = good_api();
+    let p = big_plan(1e6, "10.0.0.0/22"); // 2048 проб: несколько пачек
+    let total = plan_frames(&p).len() as u64;
+    let (io, stats) = engine_pair(open_pair(&api));
+    let (out, events) = finish(start(&p, io, 2));
+    assert_eq!(out.reason, Reason::Completed, "{out:?}");
+    assert_eq!(out.progress.sent, total);
+    assert_eq!(out.progress.next_index, total);
+    assert_eq!(replies(&events).len() as u64, total);
+    let s = stats.snapshot();
+    assert_eq!((s.tx_sent, s.tx_uncertain, s.tx_errors), (total, 0, 0));
+    assert!(s.tx_batches > 0, "the batched path was used: {s:?}");
+    assert!(s.tx_batch_max as usize <= TX_BATCH_FRAMES);
+    assert_eq!(s.tx_over_budget, 0);
+    with(|st| {
+        assert_eq!(st.sent, plan_frames(&p), "plan order, each once");
+        assert_eq!(
+            st.send_calls as u64 + st.transmitted.iter().map(|b| b.len() as u64).sum::<u64>(),
+            total
+        );
+        assert!(st.queues.is_empty(), "no queue outlives the adapter");
+    });
+}
+
+#[test]
+fn engine_partial_transmit_fails_uncertain_without_checkpoint_or_more_batches() {
+    // Первая же передача пачкой принимает 1 запись и обрывается на границе.
+    reset(|s| {
+        s.transmit_script
+            .extend(std::iter::repeat_n(TransmitStep::Boundary(1), 64))
+    });
+    let api = good_api();
+    let p = big_plan(1e6, "10.0.0.0/22");
+    let (io, stats) = engine_pair(open_pair(&api));
+    let (out, events) = finish(start(&p, io, 2));
+    assert_eq!(
+        out.reason,
+        Reason::Failed(FailReason::TxUncertain),
+        "{out:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::CheckpointReady { .. }))
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    let (calls, delivered, singles) = with_ret(|s| {
+        (
+            s.transmit_calls,
+            s.transmitted.iter().map(Vec::len).sum::<usize>(),
+            s.send_calls,
+        )
+    });
+    // Ровно одна неудачная передача и ничего после неё.
+    assert_eq!(calls, 1, "no more batches after the partial one");
+    let s = stats.snapshot();
+    assert_eq!(s.tx_batches, 1);
+    // Одиночные отправки до пачки (разгон троттлера) допустимы.
+    assert_eq!(
+        out.progress.sent as usize,
+        singles + if PREFIX_ACCOUNTING { delivered } else { 0 }
+    );
+    assert_eq!(s.tx_sent, out.progress.sent);
+    assert_eq!(out.progress.next_index, out.progress.sent);
+    assert!(s.tx_uncertain > 0);
+}
+
+#[test]
+fn engine_stop_between_batches_sends_nothing_afterwards() {
+    reset(|s| s.transmit_sleep = Duration::from_millis(10));
+    let api = good_api();
+    let p = big_plan(1e6, "10.0.0.0/16"); // 131072 проб: заведомо не закончится
+    let (io, stats) = engine_pair(open_pair(&api));
+    let h = start(&p, io, 2);
+    while h.progress().sent < 2 {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let t = Instant::now();
+    h.stop();
+    let (out, _) = finish(h);
+    assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    assert_eq!(out.reason, Reason::Stopped, "{out:?}");
+    let at_join = with_ret(|s| (s.transmit_calls, s.send_calls));
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        with_ret(|s| (s.transmit_calls, s.send_calls)),
+        at_join,
+        "a worker sent after Stop"
+    );
+    let delivered = with_ret(|s| s.sent.len() as u64);
+    assert_eq!(
+        delivered, out.progress.sent,
+        "the cursor equals what the driver took"
+    );
+    assert_eq!(stats.snapshot().tx_sent, delivered);
+    assert_eq!(with_ret(|s| s.queues.len()), 0);
+}
+
+/// Только `send`: `max_batch() == 1`, как у прежнего одиночного пути.
+struct SingleOnly(Box<dyn Tx>);
+impl Tx for SingleOnly {
+    fn send(&mut self, frame: &[u8], t: Duration) -> Result<SendStatus, IoError> {
+        self.0.send(frame, t)
+    }
+}
+
+#[test]
+fn pause_resume_through_batches_has_no_gap_or_duplicate() {
+    // Базовая линия: тот же план по одному кадру (max_batch 1).
+    reset(|_| {});
+    let api = good_api();
+    let p = big_plan(1e6, "10.0.0.0/20"); // 8192 пробы
+    let expected = plan_frames(&p);
+    let io = engine_pair(open_pair(&api)).0;
+    let io = AdapterPair {
+        tx: Box::new(SingleOnly(io.tx)),
+        rx: io.rx,
+    };
+    let (out, _) = finish(start(&p, io, 2));
+    assert_eq!(out.reason, Reason::Completed, "{out:?}");
+    let baseline = with_ret(|s| s.sent.clone());
+    assert_eq!(baseline, expected);
+    assert_eq!(with_ret(|s| s.transmit_calls), 0);
+
+    // Пачками, с паузой посередине.
+    reset(|s| s.transmit_sleep = Duration::from_millis(20));
+    let (io, _) = engine_pair(open_pair(&api));
+    let h = start(&p, io, 3);
+    while h.progress().sent < 1 {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    h.pause();
+    while h.outcome().is_none() {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let cp = h.checkpoint().expect("a paused run carries a checkpoint");
+    let (out, _) = finish(h);
+    assert_eq!(out.reason, Reason::Paused, "{out:?}");
+    let first_leg = with_ret(|s| s.sent.clone());
+    assert_eq!(first_leg.len() as u64, cp.next_index);
+    assert!(first_leg.len() < expected.len(), "paused before the end");
+    assert_eq!(cp.next_index, out.progress.sent);
+
+    with(|s| s.transmit_sleep = Duration::ZERO);
+    let (io2, _) = engine_pair(open_pair(&api));
+    let h2 = Engine::resume(p.clone(), cp, io2, EngineOptions::new([1; 16], [4; 16])).unwrap();
+    let (out2, _) = finish(h2);
+    assert_eq!(out2.reason, Reason::Completed, "{out2:?}");
+    let all = with_ret(|s| s.sent.clone());
+    assert_eq!(
+        all.len(),
+        expected.len(),
+        "one send per probe over both legs"
+    );
+    assert!(
+        all == baseline,
+        "batched order differs from the max_batch 1 order"
+    );
 }

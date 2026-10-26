@@ -95,6 +95,8 @@ pub(super) struct Scenario {
     pub queue_full_at: Option<usize>,
     pub transmit_script: VecDeque<TransmitStep>,
     pub transmit_calls: usize,
+    /// Сон внутри `pcap_sendqueue_transmit` (моделирует долгий синхронный вызов).
+    pub transmit_sleep: std::time::Duration,
     /// Кадры, доставленные каждым transmit (разобраны из буфера по заголовкам).
     pub transmitted: Vec<Vec<Vec<u8>>>,
     pub sync_seen: Vec<c_int>,
@@ -161,6 +163,7 @@ impl Default for Scenario {
             queue_full_at: None,
             transmit_script: VecDeque::new(),
             transmit_calls: 0,
+            transmit_sleep: std::time::Duration::ZERO,
             transmitted: Vec::new(),
             sync_seen: Vec::new(),
             stats_script: VecDeque::new(),
@@ -508,6 +511,10 @@ unsafe extern "C" fn f_sendqueue_transmit(
 ) -> c_uint {
     let mut s = st();
     s.transmit_calls += 1;
+    if !s.transmit_sleep.is_zero() {
+        // Под замком сценария: тест однопоточный на этом пути.
+        std::thread::sleep(s.transmit_sleep);
+    }
     s.sync_seen.push(sync);
     bump(&mut s, "sendqueue_transmit", p);
     let Some(idx) = s.queues.iter().position(|(b, _)| std::ptr::eq(*b, q)) else {

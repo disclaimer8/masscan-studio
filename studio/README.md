@@ -169,6 +169,17 @@ a window or passing simulation never counts as raw acceptance.
 
 ## Repeatable UI smoke
 
+In the results table, Cmd/Ctrl+C copies the unique IPs of visible selected rows,
+one per line in the current sort order. Filtered-out selected rows are excluded;
+their count is shown in the selection label. Copying an empty selection preserves
+the clipboard. Escape clears selection while retaining the keyboard focus row.
+Page Up/Down move by the visible page height; Shift extends the selection.
+Text fields and open menus retain their own keyboard behavior.
+
+An empty table distinguishes a first scan, waiting for results, a saved scan with
+no results, and an unmatched filter. New scan opens settings; it never starts one.
+Clear filter appears only when a filter is active.
+
 Run the packaged UI with `--smoke`, `--smoke-pause`, or `--smoke-stop-race` and a fresh `STUDIO_DATA_DIR`.
 All explicitly select Simulation. `--smoke-pause` exercises Start → Pause →
 committed checkpoint → Resume → Stop. Set `SLINT_BACKEND=winit-software` for a VM
@@ -178,6 +189,12 @@ this smoke); Windows needs an interactive desktop for UI evidence.
 
 These checks do not measure displayed-frame latency or replace manual keyboard,
 screen reader, clipboard and context-menu acceptance.
+
+`cargo test -p studio-ui table_controls::tests` exercises the generated Slint UI
+and the application's table callbacks through the pinned headless test backend.
+It dispatches key events and uses a private test clipboard without opening native
+windows. This covers application behavior, not native OS shortcut mapping, IME,
+screen-reader integration, or the system clipboard.
 
 ## Saved scan profiles
 

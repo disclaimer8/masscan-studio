@@ -3,6 +3,27 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-26 — table keyboard and empty-state behavior
+
+Base: `12c4daa56671634261965e75cb89f971dbad1d23` (PR #28).
+Scope: table model and Slint UI. Engine, runner, raw gate and labs are unchanged.
+The concurrent live feth acceptance in another worktree was left untouched.
+Local `cargo xtask test`: 95 passed, 0 failed, 2 privileged tests ignored;
+formatting and Clippy passed. Hosted CI remains the merge gate.
+
+Three model tests cover unique selected IPs in sorted order, filtering without
+hidden/focused-row fallback, and resetting the Shift-range anchor after Escape.
+Five headless tests instantiate the real generated MainWindow and the extracted
+production callback wiring. They dispatch keyboard events and check multiline
+clipboard contents, empty-copy preservation, filter exclusions, text-input and
+context-menu shortcut isolation, viewport-dependent paging with Shift/Home/End,
+and first-use/waiting/history/filter empty states.
+
+The original single-IP copy, fixed ten-row paging and misleading first-use state
+all failed these tests before the fixes. Slint's pinned 1.18.1 testing backend is
+a dev-dependency only. Tests use its private clipboard and no native window;
+they are not proof of native Command mapping, Wayland clipboard, IME or a11y.
+
 ## 2026-10-26 — active-attempt environment guard
 
 Base: `644f6cd16d543c56284050947f8fd8169c19074e` (PR #26).

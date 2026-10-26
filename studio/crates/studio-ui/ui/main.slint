@@ -133,6 +133,9 @@ export component MainWindow inherits Window {
     default-font-size: 13px;
     in property <[ResultRow]> rows;
     in property <string> summary;
+    out property <string> empty-title: root.filter-query != "" ? "No matching results" : root.process-active ? "Waiting for results" : root.history-index >= 0 ? "No results saved" : "Start your first scan";
+    out property <string> empty-action: root.filter-query != "" ? "Clear filter" : root.process-active ? "" : "New scan";
+    private property <string> empty-description: root.filter-query != "" ? "Try another IP, hostname or service." : root.process-active ? "Results will appear here as they are saved." : root.history-index >= 0 ? "Choose another scan in History or start a new scan." : "Configure targets and ports to begin. Results are saved in History.";
     in property <string> selection-label: "No selection";
     in property <string> event-label: "Ready · no scan started";
     in-out property <int> backend-index: 0;
@@ -193,6 +196,9 @@ export component MainWindow inherits Window {
     callback choose(int, bool, bool);
     callback navigate(int, bool) -> int;
     callback select-visible();
+    callback clear-selection();
+    callback copy-selection() -> string;
+    public function focus-results() { table-focus.focus(); }
     callback activate(int);
     callback stream();
     callback reset-fixture();
@@ -305,17 +311,20 @@ export component MainWindow inherits Window {
                     if event.modifiers.control || event.modifiers.meta {
                         if (event.text == "a" || event.text == "A") { root.select-visible(); return accept; }
                         if (event.text == "f" || event.text == "F") { search.focus(); return accept; }
-                        if (event.text == "c" || event.text == "C") && root.active-row >= 0 {
-                            clipboard.text = root.details.ip; clipboard.select-all(); clipboard.copy();
-                            root.action-notice = "Copied " + root.details.ip; return accept;
+                        if (event.text == "c" || event.text == "C") {
+                            let text = root.copy-selection();
+                            if text != "" { clipboard.text = text; clipboard.select-all(); clipboard.copy(); }
+                            return accept;
                         }
                     }
+                    if event.text == Key.Escape { root.clear-selection(); return accept; }
                     if event.text == "\n" && root.active-row >= 0 { root.activate(root.active-row); return accept; }
                     if event.text == Key.F10 && event.modifiers.shift && root.active-row >= 0 {
                         root.show-actions(root.details, 24px, 180px); return accept;
                     }
                     if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End || event.text == Key.PageUp || event.text == Key.PageDown {
-                        let step = event.text == Key.Home ? -2147483648 : event.text == Key.End ? 2147483647 : event.text == Key.UpArrow ? -1 : event.text == Key.DownArrow ? 1 : event.text == Key.PageUp ? -10 : 10;
+                        let page = max(1, floor(list.height / 30px));
+                        let step = event.text == Key.Home ? -2147483648 : event.text == Key.End ? 2147483647 : event.text == Key.UpArrow ? -1 : event.text == Key.DownArrow ? 1 : event.text == Key.PageUp ? -page : page;
                         let next = root.navigate(step, event.modifiers.shift);
                         if next >= 0 {
                             if next * 30px < -list.content-y { list.content-y = -next * 30px; }
@@ -365,9 +374,15 @@ export component MainWindow inherits Window {
             }
             if root.rows.length == 0 : VerticalLayout {
                 padding: 48px; alignment: center; spacing: 12px;
-                Text { text: "No matching results"; font-size: 16px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
-                Text { text: "Try another IP, hostname or service."; font-size: 12px; color: Theme.muted; horizontal-alignment: center; }
-                HorizontalLayout { alignment: center; ActionButton { text: "Clear filter"; clicked => { root.filter(""); } } }
+                Text { text: root.empty-title; font-size: 16px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
+                Text { text: root.empty-description; font-size: 12px; color: Theme.muted; horizontal-alignment: center; wrap: word-wrap; }
+                if root.empty-action != "" : HorizontalLayout {
+                    alignment: center;
+                    ActionButton { text: root.empty-action; clicked => {
+                        if root.filter-query != "" { root.filter(""); search.focus(); }
+                        else if !root.process-active { root.settings-open = true; }
+                    } }
+                }
             }
         }
         if root.action-notice != "" : Rectangle {
@@ -532,7 +547,7 @@ export component MainWindow inherits Window {
             }
         }
     }
-    clipboard := TextInput { visible: false; width: 0px; height: 0px; }
+    clipboard := TextInput { visible: false; width: 0px; height: 0px; single-line: false; }
     themes := PopupWindow {
         x: min(theme-button.absolute-position.x, root.width - 192px); y: 52px;
         width: 180px; height: 116px;

@@ -175,6 +175,9 @@ their count is shown in the selection label. Copying an empty selection preserve
 the clipboard. Escape clears selection while retaining the keyboard focus row.
 Page Up/Down move by the visible page height; Shift extends the selection.
 Text fields and open menus retain their own keyboard behavior.
+Paging and bottom-edge scrolling use the content viewport rather than the outer
+widget bounds. Table summaries refresh on model/selection changes; an idle timer
+tick does not traverse the saved results again.
 
 An empty table distinguishes a first scan, waiting for results, a saved scan with
 no results, and an unmatched filter. New scan opens settings; it never starts one.

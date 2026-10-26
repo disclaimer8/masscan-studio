@@ -199,6 +199,8 @@ export component MainWindow inherits Window {
     callback clear-selection();
     callback copy-selection() -> string;
     public function focus-results() { table-focus.focus(); }
+    out property <length> results-viewport-height: list.visible-height;
+    out property <length> results-scroll-y: list.content-y;
     callback activate(int);
     callback stream();
     callback reset-fixture();
@@ -323,12 +325,12 @@ export component MainWindow inherits Window {
                         root.show-actions(root.details, 24px, 180px); return accept;
                     }
                     if event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.Home || event.text == Key.End || event.text == Key.PageUp || event.text == Key.PageDown {
-                        let page = max(1, floor(list.height / 30px));
+                        let page = max(1, floor(list.visible-height / 30px));
                         let step = event.text == Key.Home ? -2147483648 : event.text == Key.End ? 2147483647 : event.text == Key.UpArrow ? -1 : event.text == Key.DownArrow ? 1 : event.text == Key.PageUp ? -page : page;
                         let next = root.navigate(step, event.modifiers.shift);
                         if next >= 0 {
                             if next * 30px < -list.content-y { list.content-y = -next * 30px; }
-                            if (next + 1) * 30px > -list.content-y + list.height { list.content-y = list.height - (next + 1) * 30px; }
+                            if (next + 1) * 30px > -list.content-y + list.visible-height { list.content-y = list.visible-height - (next + 1) * 30px; }
                         }
                         return accept;
                     }

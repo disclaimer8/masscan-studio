@@ -1473,8 +1473,10 @@ fn the_files_of_the_orchestrator_are_judged() {
         (
             "leftover listeners",
             Box::new(|m| {
-                m.extra
-                    .insert("leftover-listeners.txt".into(), b"some-process 123\n".to_vec());
+                m.extra.insert(
+                    "leftover-listeners.txt".into(),
+                    b"some-process 123\n".to_vec(),
+                );
             }),
             INVALID,
         ),

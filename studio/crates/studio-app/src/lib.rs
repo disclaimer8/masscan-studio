@@ -126,6 +126,8 @@ impl Drop for Controller {
 
 struct Client {
     child: Option<Child>,
+    #[cfg(windows)]
+    pipe: Option<studio_platform::windows::Stream>,
     #[cfg(target_os = "macos")]
     authorized: Option<studio_platform::macos::Authorized>,
     input: Option<BufWriter<Box<dyn Write + Send>>>,
@@ -139,6 +141,7 @@ struct Client {
     deferred: Option<Envelope<Event>>,
 }
 impl Client {
+    #[cfg(not(windows))]
     fn open(path: &PathBuf) -> Result<Self, String> {
         let mut child = Process::new(path)
             .arg("--stdio")
@@ -150,6 +153,46 @@ impl Client {
         let input = child.stdin.take().ok_or("Runner stdin missing")?;
         let stdout = child.stdout.take().ok_or("Runner stdout missing")?;
         let mut c = Self::connected(Box::new(input), Box::new(stdout))?;
+        c.child = Some(child);
+        c.handshake(None)?;
+        Ok(c)
+    }
+    #[cfg(windows)]
+    fn open(path: &PathBuf) -> Result<Self, String> {
+        use studio_platform::windows::{Endpoint, Identity, Process as Peer};
+        let endpoint = Endpoint::create()?;
+        let owner = serde_json::to_string(&Identity::current()?).map_err(|e| e.to_string())?;
+        let mut child = Process::new(path)
+            .arg("--connect-pipe")
+            .arg(endpoint.name())
+            .arg(owner)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("Cannot start Studio runner: {e}"))?;
+        let connection = (|| {
+            let peer = Peer::open(child.id())?;
+            let stream = endpoint.accept(peer, Duration::from_secs(10), &AtomicBool::new(false))?;
+            match Self::connected(Box::new(stream.clone()), Box::new(stream.clone())) {
+                Ok(mut c) => {
+                    c.pipe = Some(stream);
+                    Ok(c)
+                }
+                Err(e) => {
+                    stream.shutdown();
+                    Err(e)
+                }
+            }
+        })();
+        let mut c = match connection {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
         c.child = Some(child);
         c.handshake(None)?;
         Ok(c)
@@ -227,6 +270,8 @@ impl Client {
         });
         Ok(Self {
             child: None,
+            #[cfg(windows)]
+            pipe: None,
             #[cfg(target_os = "macos")]
             authorized: None,
             input: Some(BufWriter::new(input)),
@@ -323,6 +368,10 @@ impl Client {
 }
 impl Drop for Client {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(pipe) = self.pipe.take() {
+            pipe.shutdown();
+        }
         self.input.take();
         #[cfg(target_os = "macos")]
         self.authorized.take();

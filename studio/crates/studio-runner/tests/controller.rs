@@ -158,7 +158,7 @@ fn incomplete_raw_integration_refuses_before_opening_an_adapter() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(refused);
-    // The controller and its client survive the refusal.
+    // The controller survives the refusal.
     app.send(Action::Start(Job::example(Backend::Simulation)))
         .expect("controller must survive a refused raw start");
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -185,7 +185,9 @@ fn retry<T, E: std::fmt::Debug>(mut open: impl FnMut() -> Result<T, E>) -> T {
     loop {
         match open() {
             Ok(v) => return v,
-            Err(e) if Instant::now() >= deadline => panic!("{e:?}"),
+            Err(e) if Instant::now() >= deadline || !format!("{e:?}").contains("already using") => {
+                panic!("{e:?}")
+            }
             Err(_) => std::thread::sleep(Duration::from_millis(20)),
         }
     }

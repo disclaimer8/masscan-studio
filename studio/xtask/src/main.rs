@@ -42,6 +42,8 @@ fn main() -> Result<()> {
         "probe-authorization" => runner_setup::probe()?,
         #[cfg(target_os="linux")]
         "verify-linux-authorization" => linux_acceptance::verify(&root)?,
+        #[cfg(target_os="linux")]
+        "linux-authorization-owner-fixture" => linux_acceptance::owner_fixture()?,
         "test" => {
             run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets"]))?;
             run(Command::new("cargo").args([

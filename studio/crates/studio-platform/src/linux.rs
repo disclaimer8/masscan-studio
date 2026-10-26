@@ -128,7 +128,16 @@ mod launcher {
         }
         // SAFETY: PR_SET_PDEATHSIG takes a signal number, no pointers. SIGKILL
         // affects only this process if its spawning parent thread disappears.
-        if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } != 0 {
+        if unsafe {
+            libc::prctl(
+                libc::PR_SET_PDEATHSIG,
+                libc::SIGKILL as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            )
+        } != 0
+        {
             return Err(std::io::Error::last_os_error().to_string());
         }
         // SAFETY: re-check closes the death/reparenting race before prctl armed.

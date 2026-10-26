@@ -12,7 +12,11 @@ fn fixture() -> &'static PathBuf {
         let dir=std::env::temp_dir().join(format!("studio-child-contract-{}",std::process::id()));std::fs::create_dir_all(&dir).unwrap();
         let source=dir.join("child.rs");let binary=dir.join(format!("child{}",std::env::consts::EXE_SUFFIX));
         std::fs::write(&source,r#"use std::io::Write;fn main(){let arg=std::env::args().nth(1);match arg.as_deref(){Some("descendant"|"descendant-wait")=>{let _child=std::process::Command::new(std::env::current_exe().unwrap()).arg("sleep").spawn().unwrap();if arg.as_deref()==Some("descendant-wait"){std::thread::sleep(std::time::Duration::from_secs(20));}},Some("sleep"|"--reverse"|"--unprivileged")=>std::thread::sleep(std::time::Duration::from_secs(20)),Some("flood")=>{let _=std::io::stdout().write_all(&vec![b'x';100000]);},_=>print!("ok")}}"#).unwrap();
-        assert!(std::process::Command::new("rustc").arg(&source).arg("-o").arg(&binary).status().unwrap().success());binary
+        assert!(std::process::Command::new("rustc").arg(&source).arg("-o").arg(&binary).status().unwrap().success());
+        // First execution of a freshly compiled EXE can spend seconds in OS
+        // image validation. Measure cancellation/draining, not that cold start.
+        assert!(std::process::Command::new(&binary).arg("ok").output().unwrap().status.success());
+        binary
     })
 }
 #[test]

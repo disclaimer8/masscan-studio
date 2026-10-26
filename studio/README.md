@@ -91,10 +91,12 @@ for the threat model, cancellation rules and remaining acceptance work.
 
 ## Deliberate current limits
 
-Simulation uses inherited anonymous pipes as the current user. Unix sockets have
-peer identity tests on macOS/Linux; system elevation is implemented on macOS
-only. Do not launch the UI with sudo. Windows named-pipe/UAC and Linux pkexec
-bootstrap, physical NIC selection and Windows/Linux raw profiles remain open.
+Simulation uses authenticated named pipes on Windows and inherited anonymous
+pipes on macOS/Linux. Windows checks both peer processes using retained handles,
+user/logon identity and a protected pipe DACL; it does not elevate. Unix sockets
+have peer identity tests on macOS/Linux; system elevation is implemented on macOS
+only. Do not launch the UI with sudo. Windows UAC/trusted installation and Linux
+pkexec bootstrap, physical NIC selection and Windows/Linux raw profiles remain open.
 Raw scanning remains gated independently of host actions and saved profiles.
 
 ## Host actions and export

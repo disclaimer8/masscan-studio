@@ -98,7 +98,8 @@ trap '/usr/bin/rm -f "$stage/studio-runner"; /usr/bin/rmdir "$stage" 2>/dev/null
 /usr/bin/chmod 0755 "$stage/studio-runner" "$stage"
 actual=$(/usr/bin/sha256sum "$stage/studio-runner")
 [ "${{actual%% *}}" = '{hash}' ] || exit 75
-/usr/bin/mv -T "$stage" "$dest"
+/usr/bin/mv -T --no-clobber "$stage" "$dest"
+[ ! -e "$stage" ] || exit 74
 echo "Installed $dest/studio-runner"
 "#
     ))

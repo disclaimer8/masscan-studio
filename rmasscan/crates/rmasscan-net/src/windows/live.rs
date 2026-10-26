@@ -1111,6 +1111,18 @@ struct TxRows {
 }
 
 impl TxRows {
+    /// Предвыделенные столбцы: измерение рабочего набора не должно видеть
+    /// рост собственных журналов теста.
+    fn with_capacity(calls: usize) -> TxRows {
+        TxRows {
+            t_ms: Vec::with_capacity(calls),
+            n: Vec::with_capacity(calls),
+            queued: Vec::with_capacity(calls),
+            sent: Vec::with_capacity(calls),
+            dur_us: Vec::with_capacity(calls),
+        }
+    }
+
     fn push(&mut self, t_ms: u64, n: usize, queued: u32, sent: u32, d: Duration) {
         self.t_ms.push(t_ms);
         self.n.push(n as u64);
@@ -1429,8 +1441,8 @@ fn live_sendqueue_reuse_no_leak() {
     let mut seq = 0u32;
     let mut verdicts = Vec::new();
     for (phase, calls) in [("clear", reuse_calls), ("destroy_alloc", alloc_calls)] {
-        let mut rows = TxRows::default();
-        let mut ws: Vec<WsSample> = Vec::new();
+        let mut rows = TxRows::with_capacity(calls);
+        let mut ws: Vec<WsSample> = Vec::with_capacity(16);
         let seq_first = seq;
         let mut q = SendQueue::alloc(&api, sq_queue_bytes(n)).unwrap();
         let start = Instant::now();

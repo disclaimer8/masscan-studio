@@ -427,6 +427,25 @@ impl Endpoint {
         if expected.identity.sid != self.owner.sid || expected.identity.logon != self.owner.logon {
             return Err("Runner must belong to this user and logon session".into());
         }
+        self.accept_checked(expected, timeout, cancelled)
+    }
+    fn accept_elevated(
+        self,
+        expected: Process,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<Stream> {
+        if expected.identity.sid != self.owner.sid || !expected.elevation()?.elevated {
+            return Err("UAC runner must be elevated in the same account".into());
+        }
+        self.accept_checked(expected, timeout, cancelled)
+    }
+    fn accept_checked(
+        self,
+        expected: Process,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<Stream> {
         let handle = self.handle.as_raw_handle();
         operation(
             handle,
@@ -478,6 +497,23 @@ impl Stream {
         timeout: Duration,
         cancelled: &AtomicBool,
     ) -> Result<Self> {
+        Self::connect_mode(name, expected, timeout, cancelled, false)
+    }
+    fn connect_elevated(
+        name: &str,
+        expected: &Identity,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<Self> {
+        Self::connect_mode(name, expected, timeout, cancelled, true)
+    }
+    fn connect_mode(
+        name: &str,
+        expected: &Identity,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+        elevated: bool,
+    ) -> Result<Self> {
         let suffix = name
             .strip_prefix(PREFIX)
             .ok_or("Only a local Studio pipe is accepted")?;
@@ -487,8 +523,12 @@ impl Stream {
         let peer = Process::open(expected.pid)?;
         peer.verify(expected)?;
         let me = Identity::current()?;
-        if me.sid != expected.sid || me.logon != expected.logon {
+        if me.sid != expected.sid || (!elevated && me.logon != expected.logon) {
             return Err("UI must belong to this user and logon session".into());
+        }
+        if elevated && (!Process::open(me.pid)?.elevation()?.elevated || peer.elevation()?.elevated)
+        {
+            return Err("Elevated pipe requires elevated runner and ordinary UI".into());
         }
         let text = wide(name);
         let deadline = Instant::now() + timeout;

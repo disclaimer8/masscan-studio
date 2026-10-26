@@ -171,7 +171,6 @@ pub(crate) const WINDOWS_SUITE_OPTIONS: &[&str] = &[
     "cleanup",
     "run-timeout",
     "tx-mode",
-    "rate-override",
 ];
 pub(crate) fn opt(o: &BTreeMap<String, Vec<String>>, k: &str, d: &str) -> String {
     o.get(k)
@@ -613,7 +612,6 @@ struct Suite<'a> {
     guest_exe: String,
     plan: String,
     tx_mode: String,
-    rate_override: Value,
     timeout: u64,
     pm: String,
     /// Set once the failure path has started: every remote call then ignores the process stop flag.
@@ -1780,7 +1778,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     let o = options_for("windows-suite", args, WINDOWS_SUITE_OPTIONS)?;
     if o.contains_key("help") {
         println!(
-            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure|perf] [--only TAG ...] [--rerun] [--list] [--tx-mode sendqueue|single] [--rate-override PPS]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old, 13 isolation breach (a lab frame on eno1, or a lab-isolation finding in --out), 130 interrupted (Ctrl-C)"
+            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure|perf] [--only TAG ...] [--rerun] [--list] [--tx-mode sendqueue|single]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old, 13 isolation breach (a lab frame on eno1, or a lab-isolation finding in --out), 130 interrupted (Ctrl-C)"
         );
         return Ok(0);
     }
@@ -1806,23 +1804,6 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             "--tx-mode must be sendqueue or single".into(),
         ));
     }
-    // Functional plan only: every case runs at this rate so batches form (the plan's own 1 to 100 pps
-    // never do). Recorded in the manifest; the verifier then accepts it in argv and in the job echo.
-    let rate_override = match o.get("rate-override") {
-        None => Value::Null,
-        Some(v) => {
-            let rate = v.first().and_then(|x| x.parse::<u64>().ok());
-            match rate {
-                Some(r) if (1..=100_000).contains(&r) && plan == "functional" => json!(r),
-                _ => {
-                    return Err(SuiteError::NotRun(
-                        "--rate-override takes a rate from 1 to 100000 and is valid only with --plan functional"
-                            .into(),
-                    ));
-                }
-            }
-        }
-    };
     let suite = opt(&o, "suite", "functional");
     if plan == "perf" && !o.contains_key("suite") {
         return Err(SuiteError::NotRun(
@@ -1877,9 +1858,6 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         || old
             .as_ref()
             .is_some_and(|m| m.get("tx_mode_expected").is_some_and(|v| *v != tx_mode))
-        || old
-            .as_ref()
-            .is_some_and(|m| m["rate_override"] != rate_override)
     {
         return Err("existing manifest identity differs".to_string().into());
     }
@@ -1942,7 +1920,6 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         guest_exe,
         plan,
         tx_mode,
-        rate_override,
         timeout: opt(&o, "run-timeout", "240")
             .parse()
             .map_err(|_| "bad run timeout".to_string())?,
@@ -2064,7 +2041,6 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             || old["plan"] != s.plan
             || old["suite"] != s.suite
             || old.get("tx_mode_expected").is_some_and(|v| *v != s.tx_mode)
-            || old["rate_override"] != s.rate_override
         {
             return Err("existing manifest identity differs".to_string().into());
         }
@@ -2084,9 +2060,6 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             return Err("invalid executable hash response".to_string().into());
         }
         let mut man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"tx_mode_expected":s.tx_mode,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"orchestrator":orchestrator,"created_utc":epoch()});
-        if !s.rate_override.is_null() {
-            man["rate_override"] = s.rate_override.clone();
-        }
         if s.plan == "perf" {
             man["perf"] = json!({"rates":crate::verify::PERF_RATES,"reps":crate::verify::PERF_REPS,"order":"rep-major","target":"198.18.0.2"});
         }

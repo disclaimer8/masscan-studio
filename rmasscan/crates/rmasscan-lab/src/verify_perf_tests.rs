@@ -102,9 +102,9 @@ impl Dir {
         Self::cell(tag, &|_| {})
     }
     /// A functional-plan directory (optionally with a manifest rate override) with the named runs.
-    fn functional(rate_override: Option<u64>, tags: &[&str], tweak: &dyn Fn(&mut Built)) -> Self {
+    fn functional(tags: &[&str], tweak: &dyn Fn(&mut Built)) -> Self {
         let d = Self::empty();
-        fixture::build_functional_only(&d.0, 3, rate_override, tags, tweak);
+        fixture::build_functional_only(&d.0, 3, tags, tweak);
         d
     }
     /// The whole synthetic failure plan.
@@ -168,7 +168,12 @@ fn has(v: &Value, result: &str, part: &str) -> bool {
 }
 /// Mutate the scanner SYN of `port` (frames 0.. are SYNs in port order).
 fn syn_of(b: &mut Built, port: usize) -> &mut Vec<u8> {
-    &mut b.frames[port - 1].1
+    let at = b
+        .frames
+        .iter()
+        .position(|(_, f)| pcap::is_syn(f) && tcp(f).is_some_and(|t| usize::from(t.dp) == port))
+        .unwrap();
+    &mut b.frames[at].1
 }
 fn tx_sent(b: &mut Built, count: u64) {
     b.run["net"]["tx_sent"] = json!(count);
@@ -1051,7 +1056,7 @@ fn batch_max_above_cap_is_fail() {
 fn perf_notes_carry_batch_fields() {
     let d = Dir::clean(FAST);
     let m = &d.summary(FAST)["notes"]["perf"];
-    assert_eq!(m["tx_batches"], 8);
+    assert_eq!(m["tx_batches"], 782); // 50000 probes in batches of at most 64
     assert_eq!(m["tx_batch_max"], 64);
     assert_eq!(m["tx_batch_cap"], 64);
     assert_eq!(m["tx_over_budget"], 0);
@@ -1098,6 +1103,14 @@ fn legacy_directories_without_tx_mode_expected_are_unchanged() {
                     .find(|r| r["tag"] == run["tag"])
                     .unwrap();
                 assert_eq!(run["verdict"], old["verdict"], "{plan}/{tag}");
+                // Report-only on legacy evidence: the real cells (kept as C-ordered captures of the
+                // Rust scanner at their own rate) match the generated plan sequence.
+                if plan == "perf-r1" {
+                    assert_eq!(
+                        run["notes"]["perf"]["wire_order_matches_plan"], true,
+                        "{plan}/{tag}"
+                    );
+                }
                 compared += 1;
             }
         }
@@ -1110,20 +1123,18 @@ fn legacy_directories_without_tx_mode_expected_are_unchanged() {
     }
 }
 
-// ---- fix round 1: real report shapes, rule (c) edges, the batched functional path ---------------------
+// ---- fix round 1: real report shapes, rule (c) edges, rule (c) edges ---------------------
 const C01: &str = "c01_one_addr_port_synack.run1";
 fn is_pass(v: &Value) -> bool {
     verdict(v) == PASS
 }
 #[test]
 fn a_functional_run_without_tx_mode_fails_like_a_perf_cell() {
-    let d = Dir::functional(None, &[C01], &drop_tx_mode);
+    let d = Dir::functional(&[C01], &drop_tx_mode);
     let v = d.summary(C01);
     assert_eq!(verdict(&v), FAIL, "{:?}", bad(&v));
     assert!(has(&v, FAIL, "harness predates sendqueue"), "{:?}", bad(&v));
-    assert!(is_pass(
-        &Dir::functional(None, &[C01], &|_| {}).summary(C01)
-    ));
+    assert!(is_pass(&Dir::functional(&[C01], &|_| {}).summary(C01)));
 }
 #[test]
 fn failed_outcomes_are_status_ok_and_still_judged_by_the_sendqueue_rules() {
@@ -1217,116 +1228,160 @@ fn rule_c_edges() {
     assert_eq!(verdict(&d.summary(FAST)), FAIL);
 }
 
-// ---- rate override (batched functional coverage) ----
-fn rate_man(plan: Value, rate: Option<u64>) -> Value {
-    let mut m = json!({"plan":plan,"tx_mode_expected":"sendqueue","binding":{"iface":"i","src_ip":"1.1.1.1","src_mac":"aa","router_mac":"bb"}});
-    if let Some(r) = rate {
-        m["rate_override"] = json!(r);
-    }
-    m
+// ---- fix round 2: the wire SYN sequence equals the plan's probe sequence ---------------------------------
+const ORDER: &str = "wire SYN sequence equals the plan's probe sequence";
+fn syn_positions(b: &Built) -> Vec<usize> {
+    (0..b.frames.len())
+        .filter(|i| pcap::is_syn(&b.frames[*i].1))
+        .collect()
 }
-fn rate_run(reason: &str, sent: u64, batches: u64, bmax: u64) -> Value {
-    json!({"status":"ok","reason":reason,"identity":{"tx_mode":"sendqueue","tx_batch_cap":64},
-        "net":{"tx_sent":sent,"tx_over_budget":0,"tx_batches":batches,"tx_batch_max":bmax}})
+fn order_note(v: &Value) -> Value {
+    v["notes"]["perf"]["wire_order_matches_plan"].clone()
 }
-fn batched(man: &Value, j: &Value) -> Run {
-    let mut r = Run::new("t");
-    r.argv_ok = true;
-    sendqueue_identity(&mut r, man, j, &json!({"kind":"case"}));
-    r
-}
-#[test]
-fn rate_override_demands_the_batched_path_from_completed_multi_frame_runs() {
-    let man = rate_man(json!("functional"), Some(20000));
-    // No batch at all, or only 1-frame batches: FAIL.
-    for (b, m) in [(0, 0), (8, 1), (3, 0)] {
-        let r = batched(&man, &rate_run("Completed", 8, b, m));
-        assert_eq!(r.verdict(), FAIL, "{b} {m}");
-        assert!(has(&r.summary(), FAIL, "batched path not exercised"));
-    }
-    assert_eq!(
-        batched(&man, &rate_run("Completed", 8, 2, 2)).verdict(),
-        PASS
-    );
-    // Two frames is the smallest run that can batch; one frame or none is exempt, with a note.
-    assert_eq!(
-        batched(&man, &rate_run("Completed", 2, 0, 0)).verdict(),
-        FAIL
-    );
-    let r = batched(&man, &rate_run("Completed", 1, 0, 0));
-    assert_eq!(r.verdict(), PASS);
-    assert!(r.notes.contains_key("batched_path"), "{:?}", r.notes);
-    assert_eq!(
-        batched(&man, &rate_run("Completed", 0, 0, 0)).verdict(),
-        PASS
-    );
-    // Not Completed (Paused, Stopped, Failed): not asked.
-    assert_eq!(batched(&man, &rate_run("Paused", 8, 0, 0)).verdict(), PASS);
-    // No override recorded: not asked. Single mode: not asked.
-    let plain = rate_man(json!("functional"), None);
-    assert_eq!(
-        batched(&plain, &rate_run("Completed", 8, 0, 0)).verdict(),
-        PASS
-    );
-    let mut single = rate_run("Completed", 8, 0, 0);
-    single["identity"]["tx_mode"] = json!("single");
-    let mut m1 = man.clone();
-    m1["tx_mode_expected"] = json!("single");
-    assert_eq!(batched(&m1, &single).verdict(), PASS);
+/// Exchange the frames (not the timestamps) of two SYNs: the capture order changes.
+fn swap_syn_bytes(b: &mut Built) {
+    let p = syn_positions(b);
+    let (x, y) = (b.frames[p[10]].1.clone(), b.frames[p[11]].1.clone());
+    b.frames[p[10]].1 = y;
+    b.frames[p[11]].1 = x;
 }
 #[test]
-fn the_rate_override_is_accepted_in_argv_and_job_only_when_the_manifest_records_it() {
-    let c = case_by_name("c03_multi_ports").unwrap();
-    let it =
-        json!({"tag":"c03_multi_ports.run1","kind":"case","case":"c03_multi_ports","repeat":1});
-    let with = rate_man(json!("functional"), Some(20000));
-    let without = rate_man(json!("functional"), None);
-    assert_eq!(arg_map(&it, &with, false)["--rate"], "20000");
-    assert_eq!(
-        arg_map(&it, &without, false)["--rate"],
-        n(&c["rate"]).to_string()
-    );
-    assert_eq!(run_rate(&c, &with), 20000);
-    // Only the functional plan honours it; the failure and perf plans keep their own rates.
-    for plan in ["failure", "perf"] {
-        let m = rate_man(json!(plan), Some(20000));
-        assert_eq!(run_rate(&c, &m), c["rate"], "{plan}");
+fn a_clean_cell_sends_exactly_the_plan_sequence() {
+    for tag in [CELL, "perf.1000.r1", FAST] {
+        let d = Dir::clean(tag);
+        let v = d.summary(tag);
+        assert_eq!(verdict(&v), PASS, "{tag}: {:?}", bad(&v));
+        assert!(has(&v, PASS, ORDER), "{tag}");
+        assert_eq!(order_note(&v), true, "{tag}");
     }
-    // A directory built with the override verifies; the same evidence without the record does not.
-    let d = Dir::functional(Some(20000), &[C01], &|_| {});
-    assert!(is_pass(&d.summary(C01)), "{:?}", bad(&d.summary(C01)));
-    let argv = read_json(d.run_dir(C01).join("argv.json")).unwrap();
-    assert!(argv.to_string().contains("20000"));
-    let man = d.0.join("manifest.json");
-    let mut m = read_json(&man).unwrap();
-    m.as_object_mut().unwrap().remove("rate_override");
-    fs::write(&man, serde_json::to_vec(&m).unwrap()).unwrap();
-    assert_ne!(verdict(&d.summary(C01)), PASS);
 }
 #[test]
-fn a_manifest_rate_override_must_be_a_sane_number_on_a_functional_plan() {
-    for (plan, ro, ok) in [
-        ("functional", json!(20000), true),
-        ("functional", json!(0), false),
-        ("functional", json!("fast"), false),
-        ("functional", json!(100001), false),
-        ("failure", json!(20000), false),
-        ("perf", json!(20000), false),
-    ] {
-        let d = Dir::empty();
-        fixture::build_functional_only(&d.0, 3, None, &[C01], &|_| {});
+fn the_generated_sequence_depends_on_the_rate_the_scanner_used() {
+    let man = read_json(Dir::clean(CELL).0.join("manifest.json")).unwrap();
+    let it = json!({"tag":CELL,"kind":"perf","rate":100,"rep":1});
+    let mut args = arg_map(&it, &man, false);
+    let a = plan_frames(&args).unwrap();
+    assert_eq!(a.len(), 500);
+    args.insert("--rate".into(), json!("200"));
+    let b = plan_frames(&args).unwrap();
+    assert_ne!(a, b);
+    let mut sa = a.clone();
+    let mut sb = b;
+    sa.sort();
+    sb.sort();
+    assert_eq!(sa, sb, "same probes, other order");
+}
+#[test]
+fn reordered_altered_duplicated_or_missing_syns_are_fail() {
+    type Tweak = fn(&mut Built);
+    let cases: [(&str, Tweak); 4] = [
+        ("swapped", |b| {
+            let p = syn_positions(b);
+            let (x, y) = (b.frames[p[10]].1.clone(), b.frames[p[11]].1.clone());
+            b.frames[p[10]].1 = y;
+            b.frames[p[11]].1 = x;
+        }),
+        ("altered byte", |b| {
+            let p = syn_positions(b);
+            b.frames[p[20]].1[18] ^= 1; // IP id: still a SYN from the binding, but not the planned frame
+        }),
+        ("duplicated", |b| {
+            let p = syn_positions(b);
+            let f = b.frames[p[30]].1.clone();
+            b.frames[p[31]].1 = f;
+        }),
+        ("missing", |b| {
+            let p = syn_positions(b);
+            b.frames.remove(p[40]);
+            tx_sent(b, 499);
+        }),
+    ];
+    for (name, tweak) in cases {
+        let d = Dir::cell(CELL, &|b| tweak(b));
+        let v = d.summary(CELL);
+        assert_eq!(verdict(&v), FAIL, "{name}: {:?}", bad(&v));
+        assert!(has(&v, FAIL, ORDER), "{name}: {:?}", bad(&v));
+        assert_eq!(order_note(&v), false, "{name}");
+    }
+}
+#[test]
+fn a_sequence_built_with_another_rate_is_fail() {
+    let d = Dir::cell(CELL, &|b| {
+        let mut args = arg_map(
+            &json!({"kind":"perf","rate":100}),
+            &read_json_manifest(),
+            false,
+        );
+        args.insert("--rate".into(), json!("200"));
+        let other = plan_frames(&args).unwrap();
+        let p = syn_positions(b);
+        for (slot, f) in p.into_iter().zip(other) {
+            b.frames[slot].1 = f;
+        }
+    });
+    let v = d.summary(CELL);
+    assert!(has(&v, FAIL, ORDER), "{:?}", bad(&v));
+}
+fn read_json_manifest() -> Value {
+    read_json(Dir::clean(CELL).0.join("manifest.json")).unwrap()
+}
+#[test]
+fn an_incomplete_capture_makes_the_order_check_invalid_not_fail() {
+    let d = Dir::cell(CELL, &|b| {
+        swap_syn_bytes(b);
+    });
+    witness_dropped(&d, CELL);
+    let v = d.summary(CELL);
+    assert!(has(&v, INVALID, ORDER), "{:?}", bad(&v));
+    assert!(!has(&v, FAIL, ORDER), "{:?}", bad(&v));
+}
+#[test]
+fn an_rx_loss_cell_must_send_a_prefix_of_the_plan() {
+    let d = Dir::cell(CELL, &|b| {
+        rxloss(b, json!(7));
+        let p = syn_positions(b);
+        let keep = 300;
+        let cut: Vec<usize> = p[keep..].to_vec();
+        for i in cut.into_iter().rev() {
+            b.frames.remove(i);
+        }
+        tx_sent(b, keep as u64);
+    });
+    let v = d.summary(CELL);
+    assert!(has(&v, PASS, ORDER), "{:?}", bad(&v));
+    // A completed cell with the same cut is missing probes.
+    let d = Dir::cell(CELL, &|b| {
+        let p = syn_positions(b);
+        for i in p[300..].iter().rev() {
+            b.frames.remove(*i);
+        }
+        tx_sent(b, 300);
+    });
+    assert!(has(&d.summary(CELL), FAIL, ORDER));
+}
+#[test]
+fn without_tx_mode_expected_the_order_is_a_report_only_note() {
+    for (swap, want) in [(false, true), (true, false)] {
+        let d = Dir::cell(CELL, &|b| {
+            if swap {
+                swap_syn_bytes(b);
+            }
+        });
         let man = d.0.join("manifest.json");
         let mut m = read_json(&man).unwrap();
-        m["plan"] = json!(plan);
-        m["rate_override"] = ro.clone();
+        m.as_object_mut().unwrap().remove("tx_mode_expected");
         fs::write(&man, serde_json::to_vec(&m).unwrap()).unwrap();
-        let v = verify_dir(&d.0);
-        let first = &v["runs"][0];
-        assert_eq!(
-            has(first, PASS, "rate_override"),
-            ok,
-            "{plan} {ro}: {:?}",
-            bad(first)
+        let v = d.summary(CELL);
+        assert_eq!(order_note(&v), want);
+        assert!(
+            !has(&v, FAIL, ORDER) && !has(&v, INVALID, ORDER),
+            "{:?}",
+            bad(&v)
+        );
+        assert!(
+            array(&v["checks"])
+                .iter()
+                .all(|c| !s(&c["name"]).contains(ORDER))
         );
     }
 }

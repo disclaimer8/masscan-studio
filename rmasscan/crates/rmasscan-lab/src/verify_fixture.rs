@@ -135,7 +135,6 @@ fn job_echo(c: &Value, man: &Value) -> Value {
     ] {
         j[k] = c[k].clone();
     }
-    j["rate"] = run_rate(c, man);
     j
 }
 pub(crate) struct Built {
@@ -160,7 +159,7 @@ fn base_run(c: &Value, man: &Value, t0: f64, outcome: f64, tag: &str) -> Value {
         "run_id":format!("run-{tag}"),"status":"ok","reason":"Completed","fail_detail":"",
         "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"elevated":true,"restricted_token":false,"os":{"family":"windows"},"tx_mode":"sendqueue","tx_batch_cap":64},
         "job":job_echo(c,man),
-        "net":{"kernel_drops":0,"rx_errors":0,"rx_packets":0,"tx_errors":0,"tx_sent":0,"tx_uncertain":0,"tx_batches":8,"tx_batch_max":64,"tx_over_budget":0},
+        "net":{"kernel_drops":0,"rx_errors":0,"rx_packets":0,"tx_errors":0,"tx_sent":0,"tx_uncertain":0,"tx_batches":0,"tx_batch_max":0,"tx_over_budget":0},
         "rx_health":{"kernel_drops":0},
         "sent":0,"next_index":0,"range":n(&c["syn"]),"expected_total":n(&c["syn"]),
         "replies":[],"reply_total":0,"reply_unique":0,"received":0,"duplicates":0,"discarded":0,
@@ -376,19 +375,30 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             let probes = n(&c["syn"]) as usize;
             let period = 1.0 / rate as f64;
             let first = t0 + 0.002;
-            frames = syn_series(probes, first, period, 1, 40000);
-            for p in 1..=probes as u16 {
+            // The SYNs are the real frames of the plan, in the plan's (shuffled) order.
+            let sequence = plan_frames(&arg_map(it, man, false)).unwrap();
+            assert_eq!(sequence.len(), probes);
+            frames = Vec::new();
+            let mut replies = Vec::new();
+            for (k, f) in sequence.into_iter().enumerate() {
+                let at = first + k as f64 * period;
+                let p = tcp(&f).unwrap().dp;
                 if p != 8099 {
-                    frames.push((
-                        first + f64::from(p - 1) * period + 0.0005,
-                        peer_reply(p, 40000, open_ports().contains(&p)),
-                    ));
+                    replies.push((at + 0.0005, peer_reply(p, 40000, open_ports().contains(&p))));
                 }
+                frames.push((at, f));
             }
+            frames.extend(replies);
             let last_send = 0.002 + (probes - 1) as f64 * period;
             outcome = t0 + last_send + 3.1;
             run = base_run(&c, man, t0, outcome, tag);
             set_sent(&mut run, probes as u64);
+            // The throttler batches only from about 1000 pps on; below that every call is one frame.
+            if rate >= 1000 {
+                let max = if rate >= 10000 { 64 } else { 16 };
+                run["net"]["tx_batch_max"] = json!(max);
+                run["net"]["tx_batches"] = json!((probes as u64).div_ceil(max));
+            }
             run["replies"] = json!(exp);
             run["reply_total"] = json!(exp.len());
             run["reply_unique"] = json!(exp.len());
@@ -657,19 +667,14 @@ pub(crate) fn build_perf_only(root: &Path, schema: u64, only: &[&str], tweak: &d
         }
     }
 }
-/// A functional-plan directory with the named runs (all when `only` is empty), optionally with a
-/// manifest `rate_override`; each run is edited by `tweak`.
+/// A functional-plan directory with the named runs (all when `only` is empty); each run is edited by `tweak`.
 pub(crate) fn build_functional_only(
     root: &Path,
     schema: u64,
-    rate_override: Option<u64>,
     only: &[&str],
     tweak: &dyn Fn(&mut Built),
 ) {
-    let mut man = manifest_for(schema, "functional");
-    if let Some(r) = rate_override {
-        man["rate_override"] = json!(r);
-    }
+    let man = manifest_for(schema, "functional");
     write_fixtures(root, &man);
     for it in planned(&man) {
         if only.is_empty() || only.contains(&s(&it["tag"])) {

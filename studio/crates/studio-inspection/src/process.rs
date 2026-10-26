@@ -1,9 +1,10 @@
 //! Bounded, cancellable subprocess execution. No shell or privileged runner.
 use crate::{Request, Result};
+use command_group::{CommandGroup, GroupChild};
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,7 +12,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-struct OwnedChild(Child);
+struct OwnedChild(GroupChild);
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -51,10 +52,13 @@ pub fn capture(
         .stderr(Stdio::piped());
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
+        // The group builder applies CREATE_SUSPENDED as well, assigning the
+        // process to its Job Object before it can create descendants.
     }
-    let mut child = OwnedChild(cmd.spawn().map_err(|e| {
+    let mut group = cmd.group();
+    #[cfg(windows)]
+    group.creation_flags(0x08000000).kill_on_drop(true);
+    let mut child = OwnedChild(group.spawn().map_err(|e| {
         format!(
             "Cannot start {}: {e}",
             path.file_name().unwrap_or_default().to_string_lossy()
@@ -62,12 +66,12 @@ pub fn capture(
     })?);
     let overflow = Arc::new(AtomicBool::new(false));
     let stdout = reader(
-        child.0.stdout.take().ok_or("Missing stdout")?,
+        child.0.inner().stdout.take().ok_or("Missing stdout")?,
         limit,
         overflow.clone(),
     );
     let stderr = reader(
-        child.0.stderr.take().ok_or("Missing stderr")?,
+        child.0.inner().stderr.take().ok_or("Missing stderr")?,
         16384,
         overflow.clone(),
     );
@@ -102,6 +106,9 @@ pub fn capture(
         }
         thread::sleep(Duration::from_millis(10));
     };
+    // No descendant may retain the pipes once the requested tool has exited.
+    // kill targets its dedicated Unix process group / Windows Job Object.
+    let _ = child.0.kill();
     let out = stdout
         .join()
         .map_err(|_| "Output reader failed")?

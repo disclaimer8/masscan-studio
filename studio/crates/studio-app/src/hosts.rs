@@ -61,9 +61,6 @@ impl Hosts {
         }
     }
     fn launch(&mut self, ip: Ipv4Addr, kind: Kind, request: Option<Request>) -> Result<()> {
-        if let Some(old) = self.pending.remove(&(ip, kind)) {
-            old.cancel.store(true, Ordering::Release);
-        }
         self.next = self
             .next
             .checked_add(1)
@@ -78,13 +75,15 @@ impl Hosts {
                 cancel: cancel.clone(),
             },
         )?;
-        self.pending.insert(
+        if let Some(old) = self.pending.insert(
             (ip, kind),
             Pending {
                 id: self.next,
                 cancel,
             },
-        );
+        ) {
+            old.cancel.store(true, Ordering::Release);
+        }
         Ok(())
     }
     pub fn dns(
@@ -230,6 +229,7 @@ impl Hosts {
             let Some(info) = self.info.get_mut(&event.ip.to_string()) else {
                 continue;
             };
+            let previous = info.clone();
             match event.outcome {
                 Outcome::Dns(result) => {
                     info.dns_checked_at = Some(studio_inspection::now());
@@ -242,7 +242,6 @@ impl Hosts {
                                 CheckState::NotFound
                             };
                             info.dns_error.clear();
-                            self.tasks.remember(event.ip, name);
                         }
                         Err(e) => {
                             info.dns_state = if e == "Cancelled" {
@@ -270,7 +269,28 @@ impl Hosts {
                     }
                 },
             }
-            db.save_host(scan, info).map_err(|e| e.to_string())?;
+            if let Err(e) = db.save_host(scan, info) {
+                // Every drained completion must reach a terminal state, even
+                // if another host failed to persist. Keep the last saved data
+                // and expose the write failure without interrupting scanning.
+                match event.kind {
+                    Kind::Dns => {
+                        info.hostname = previous.hostname;
+                        info.dns_checked_at = previous.dns_checked_at;
+                        info.dns_state = CheckState::Failed;
+                        info.dns_error = format!("Cannot save hostname result: {e}");
+                    }
+                    Kind::Nmap => {
+                        info.inspection = previous.inspection;
+                        info.nmap_state = CheckState::Failed;
+                        info.nmap_error = format!("Cannot save inspection result: {e}");
+                    }
+                }
+            } else if event.kind == Kind::Dns
+                && matches!(info.dns_state, CheckState::Complete | CheckState::NotFound)
+            {
+                self.tasks.remember(event.ip, info.hostname.clone());
+            }
             updated.push(info.clone());
         }
         Ok(updated)
@@ -398,6 +418,138 @@ mod tests {
         h.cancel(&mut db).unwrap();
         assert!(h.pending.is_empty());
         assert!(h.dns(vec!["198.18.0.99".into()], true, &mut db).is_err());
+        drop(h);
+        drop(db);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod queue_regression {
+    use super::*;
+    #[test]
+    fn queue_full_preserves_existing_request_for_cancel_and_completion() {
+        let mut h = Hosts::new(PathBuf::from("nonexistent"));
+        let ip = "127.0.0.1".parse().unwrap();
+        // Fill the completion channel (5), block the worker's sixth completion,
+        // and leave the seventh request queued. No tool or network is started.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut sent = 0;
+        while sent < 7 && std::time::Instant::now() < deadline {
+            if h.tasks
+                .submit(
+                    Kind::Nmap,
+                    Task {
+                        id: sent,
+                        ip,
+                        request: None,
+                        cancel: Arc::new(AtomicBool::new(false)),
+                    },
+                )
+                .is_ok()
+            {
+                sent += 1;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        assert_eq!(sent, 7);
+        let old = Arc::new(AtomicBool::new(false));
+        h.pending.insert(
+            (ip, Kind::Nmap),
+            Pending {
+                id: 100,
+                cancel: old.clone(),
+            },
+        );
+        assert!(
+            h.launch(
+                ip,
+                Kind::Nmap,
+                Some(Request::new("127.0.0.1", vec![80]).unwrap())
+            )
+            .is_err()
+        );
+        assert!(
+            h.pending.contains_key(&(ip, Kind::Nmap)),
+            "old request lost on queue-full"
+        );
+        assert!(!old.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(test)]
+mod persistence_regression {
+    use super::*;
+    use studio_inspection::tasks::Completion;
+    use studio_protocol::*;
+    #[test]
+    fn failed_save_does_not_discard_other_host_completions() {
+        let dir =
+            std::env::temp_dir().join(format!("studio-host-save-{}", id_text(new_id().unwrap())));
+        let mut db = Store::open(&dir).unwrap();
+        let scan = [1; 16];
+        db.begin(scan, [2; 16], &Job::example(Backend::Simulation), false)
+            .unwrap();
+        let ips = ["198.18.0.2", "198.18.0.3"];
+        db.apply(&Envelope::new(
+            [3; 16],
+            scan,
+            [2; 16],
+            1,
+            Event::Results(
+                ips.iter()
+                    .map(|s| Row {
+                        ip: s.to_string(),
+                        port: 8000,
+                        open: true,
+                    })
+                    .collect(),
+            ),
+        ))
+        .unwrap();
+        let mut h = Hosts::new(dir.join("missing"));
+        h.select(scan, Backend::MacFeth, &mut db).unwrap();
+        let mut events = Vec::new();
+        for (i, ip) in ips.iter().enumerate() {
+            let ip: Ipv4Addr = ip.parse().unwrap();
+            let mut info = HostInfo::new(ip.to_string());
+            info.dns_state = CheckState::Pending;
+            db.save_host(scan, &info).unwrap();
+            h.info.insert(ip.to_string(), info);
+            h.pending.insert(
+                (ip, Kind::Dns),
+                Pending {
+                    id: i as u64,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                },
+            );
+            events.push(Completion {
+                id: i as u64,
+                ip,
+                kind: Kind::Dns,
+                outcome: Outcome::Dns(Ok(Some(format!("host{i}.local")))),
+            });
+        }
+        let sql = rusqlite::Connection::open(dir.join("history.sqlite3")).unwrap();
+        sql.execute_batch("CREATE TRIGGER fail_first_host BEFORE INSERT ON host_details WHEN NEW.ip='198.18.0.2' BEGIN SELECT RAISE(ABORT,'injected disk failure'); END;").unwrap();
+        let result = h.receive(events, &mut db).unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(h.pending.is_empty());
+        assert_eq!(result[0].dns_state, CheckState::Failed);
+        assert!(result[0].dns_error.contains("save"));
+        assert_eq!(result[0].hostname, None);
+        assert_eq!(result[1].dns_state, CheckState::Complete);
+        assert_eq!(
+            db.hosts(scan)
+                .unwrap()
+                .into_iter()
+                .find(|h| h.ip == ips[1])
+                .unwrap()
+                .hostname,
+            Some("host1.local".into())
+        );
+        drop(sql);
         drop(h);
         drop(db);
         std::fs::remove_dir_all(dir).unwrap();

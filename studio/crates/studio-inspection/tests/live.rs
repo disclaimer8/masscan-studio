@@ -25,12 +25,18 @@ fn real_unprivileged_nmap_inspects_owned_loopback_http_server() {
                     s.set_nonblocking(true).unwrap();
                     let deadline = std::time::Instant::now() + Duration::from_millis(150);
                     loop {
-                        match s.read(&mut [0;4096]) {
-                            Err(e) if e.kind()==std::io::ErrorKind::WouldBlock && std::time::Instant::now()<deadline => std::thread::sleep(Duration::from_millis(5)),
+                        match s.read(&mut [0; 4096]) {
+                            Err(e)
+                                if e.kind() == std::io::ErrorKind::WouldBlock
+                                    && std::time::Instant::now() < deadline =>
+                            {
+                                std::thread::sleep(Duration::from_millis(5))
+                            }
                             _ => break,
                         }
                     }
-                    let _=s.write_all(b"HTTP/1.0 200 OK\r\nServer: StudioFixture/1.0\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK");
+                    let reply=s.write_all(b"HTTP/1.0 200 OK\r\nServer: nginx/1.24.0\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK");
+                    eprintln!("fixture reply: {reply:?}");
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(10))
@@ -44,6 +50,7 @@ fn real_unprivileged_nmap_inspects_owned_loopback_http_server() {
     stop.store(true, Ordering::Release);
     server.join().unwrap();
     let result = result.unwrap();
+    eprintln!("inspection: {result:?}");
     assert_eq!(result.services.len(), 1);
     assert_eq!(result.services[0].port, port);
     assert_eq!(result.services[0].state, "open");

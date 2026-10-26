@@ -534,6 +534,26 @@ impl Write for Stream {
 mod tests {
     use super::*;
     #[test]
+    fn synchronous_completion_does_not_require_event_signaling() {
+        let endpoint = Endpoint::create().unwrap();
+        // Model the documented synchronous completion case: completed status
+        // and byte count are available, but no event was signaled.
+        let bytes = operation(
+            endpoint.handle.as_raw_handle(),
+            Some(Duration::from_millis(30)),
+            || false,
+            |overlapped| {
+                // SAFETY: operation supplies its live writable OVERLAPPED.
+                unsafe {
+                    (*overlapped).InternalHigh = 7;
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(bytes, 7);
+    }
+    #[test]
     fn endpoint_has_one_explicit_owner_ace_and_rejects_second_instance() {
         let endpoint = Endpoint::create().unwrap();
         let mut descriptor = null_mut();

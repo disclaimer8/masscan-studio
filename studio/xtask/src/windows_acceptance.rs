@@ -174,3 +174,33 @@ pub fn token_fixture() -> Result<()> {
     }
     Ok(())
 }
+
+pub fn guard_probe(root: &Path) -> Result<()> {
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
+        || !studio_platform::windows::Process::open(std::process::id())?
+            .elevation()?
+            .elevated
+    {
+        return Err("Guard probe requires disposable elevated Windows CI".into());
+    }
+    run(Command::new("cargo").args(["build", "--locked", "-p", "studio-runner"]))?;
+    if std::env::var_os("CARGO_TARGET_DIR").is_some() {
+        return Err("Guard probe requires default target directory".into());
+    }
+    for args in [vec!["--stdio"], vec!["--connect-pipe", "invalid", "{}"]] {
+        let output = Command::new(root.join("target/debug/studio-runner.exe"))
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        let error = String::from_utf8_lossy(&output.stderr);
+        if output.status.success()
+            || !error.contains("Elevated runner requires an authenticated UAC session")
+        {
+            return Err(
+                format!("Privileged launch bypass was not rejected at entry: {error}").into(),
+            );
+        }
+    }
+    println!("PASS: elevated stdio and ordinary pipe entry points refused");
+    Ok(())
+}

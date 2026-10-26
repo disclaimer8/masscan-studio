@@ -48,6 +48,8 @@ fn main() -> Result<()> {
         #[cfg(windows)]
         "probe-windows-token" => windows_acceptance::token_probe()?,
         #[cfg(windows)]
+        "verify-windows-elevated-entry" => windows_acceptance::guard_probe(&root)?,
+        #[cfg(windows)]
         "windows-limited-token-fixture" => windows_acceptance::token_fixture()?,
         #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,

@@ -369,3 +369,41 @@ failure. Tests distinguish progressing backlog, stalled transport, failed writes
 and delivered-but-unacknowledged checkpoints. Full macOS suite: 58 passed,
 2 explicit live tests ignored; Clippy/formatting passed
 (`/tmp/studio-byte-budget-tests.log`).
+
+## 2026-10-26 — manual Swift history and profile import
+
+Implementation `da3c0cf`, PR #19, baseline main `6ea6efd`. Studio-only changes;
+no rmasscan changes, root helper installation or raw gate changes.
+
+Local Mac arm64: `cargo xtask test` passed 77 tests, 0 failed, 3 explicitly
+ignored (two live inspection tests and the real-source import test); Clippy with
+`-D warnings` and formatting passed. Separately, the ignored real-source import
+check read both existing Swift files into a disposable destination: 2 sessions,
+1 profile, 971 source results. Reimport skipped existing records. Before/after
+source bytes matched exactly; no real source records are included in fixtures.
+
+Store tests cover Swift epoch/fractions, u64 maxima and arbitrary-precision unknown
+numbers, strict full-file validation, status recovery, historical PTR names,
+unknown fields, per-endpoint dedup with full original archive, moved-source and
+UUID-case idempotency, conflicts, transaction rollback, active-scan rejection,
+v2 backup including live WAL data, source symlinks and durable import reports.
+Controller tests cover no runner launch for import/legacy Resume, active-scan
+rejection before reading sources, platform gate and reopen+immediate import.
+
+Manual packaged Mac UI acceptance used a synthetic documentation-range source
+and a separate data directory: one session and one profile imported, repeat
+reported 0 imported/2 unchanged, table displayed historical hostname/device/time,
+legacy Paused had no Resume button, profile loading filled targets/ports/rate/seed
+without starting a scan. Native folder picker worked. Fresh independent review
+found Ready busy-state, legacy PTR grammar and stale startup report delivery;
+all three received failing-before/fixed-after regressions and were re-reviewed
+with no important findings remaining. The last report now has a distinct startup
+event and cannot complete a pending import.
+
+Clean Mac package at implementation commit:
+`studio/dist/build-1793012322083/Masscan Studio.app`. Ad-hoc signature and nested
+SQLite dylib verification passed; manifest records all hashes and source state.
+Local evidence logs: `studio/verification/swift-import-20261026/` (gitignored).
+Hosted three-OS checks are linked on PR #19; their completion is recorded by CI,
+not inferred from this local test result. The previously installed root runner
+is unchanged and is not needed to import, inspect saved data or run simulation.

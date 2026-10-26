@@ -8,4 +8,5 @@ license.workspace = true
 studio-protocol.workspace = true
 studio-store.workspace = true
 studio-platform.workspace = true
+studio-inspection.workspace = true
 serde_json.workspace = true

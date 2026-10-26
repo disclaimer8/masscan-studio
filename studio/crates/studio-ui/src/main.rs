@@ -12,6 +12,8 @@ use studio_table::{Change, Table};
 slint::include_modules!();
 
 struct Rows {
+    observations: RefCell<HashMap<(String, u16), studio_store::SavedRow>>,
+    hosts: RefCell<HashMap<String, studio_inspection::HostInfo>>,
     table: RefCell<Table>,
     keys: RefCell<HashMap<(String, u16), u64>>,
     notify: ModelNotify,
@@ -45,16 +47,54 @@ impl Model for Rows {
     }
 }
 impl Rows {
-    fn add(&self, rows: Vec<studio_protocol::Row>) {
+    fn add(&self, rows: Vec<studio_store::SavedRow>) {
         let mut changes = Vec::new();
         let mut keys = self.keys.borrow_mut();
-        for r in rows {
+        for saved in rows {
+            let r = &saved.row;
             let Ok(ip) = r.ip.parse() else { continue };
-            let key = (r.ip, r.port);
+            let key = (r.ip.clone(), r.port);
             let exists = keys.get(&key).copied();
             let id = exists.unwrap_or(keys.len() as u64);
-            keys.insert(key, id);
-            let row = studio_table::Row::observation(id, ip, r.port, r.open, self.simulation.get());
+            keys.insert(key.clone(), id);
+            let mut row =
+                studio_table::Row::observation(id, ip, r.port, r.open, self.simulation.get());
+            row.cells[6] = saved
+                .discovered_at
+                .clone()
+                .unwrap_or_else(|| "Unknown (older history)".into());
+            if let Some(info) = self.hosts.borrow().get(&r.ip) {
+                row.cells[1] = if info.dns_state == studio_inspection::CheckState::Pending {
+                    "Looking up…".into()
+                } else {
+                    info.hostname.clone().unwrap_or_else(|| {
+                        match info.dns_state {
+                            studio_inspection::CheckState::NotFound => "No hostname",
+                            studio_inspection::CheckState::Failed => "Lookup failed",
+                            _ => "Not resolved",
+                        }
+                        .into()
+                    })
+                };
+                if let Some(service) = info.service(r.port) {
+                    row.cells[4] = service.summary();
+                    row.service = row.cells[4].clone();
+                    if let Some(hint) = service.device_hint() {
+                        row.cells[5] = hint;
+                    }
+                }
+                row.evidence = format!(
+                    "{}\n\n{}",
+                    if self.simulation.get() {
+                        "Simulation · no network evidence"
+                    } else {
+                        "Saved scan observation"
+                    },
+                    info.evidence(r.port)
+                );
+            }
+            row.refresh_search();
+            self.observations.borrow_mut().insert(key, saved);
             changes.push(if exists.is_some() {
                 Change::Update(row)
             } else {
@@ -63,6 +103,54 @@ impl Rows {
         }
         self.table.borrow_mut().apply(changes);
         self.notify.reset();
+    }
+    fn enrich(&self, values: Vec<studio_inspection::HostInfo>) {
+        let ips: std::collections::HashSet<_> = values.iter().map(|h| h.ip.clone()).collect();
+        for h in values {
+            self.hosts.borrow_mut().insert(h.ip.clone(), h);
+        }
+        let rows = self
+            .observations
+            .borrow()
+            .values()
+            .filter(|s| ips.contains(&s.row.ip))
+            .cloned()
+            .collect();
+        self.add(rows);
+    }
+    fn export_rows(&self) -> Vec<studio_inspection::ExportRow> {
+        let table = self.table.borrow();
+        let hosts = self.hosts.borrow();
+        let observations = self.observations.borrow();
+        table
+            .view
+            .iter()
+            .filter_map(|i| {
+                let row = &table.rows[*i];
+                let key = (row.cells[0].clone(), row.port);
+                let saved = observations.get(&key)?;
+                let host = hosts.get(&key.0);
+                Some(studio_inspection::ExportRow {
+                    ip: key.0.clone(),
+                    port: row.port,
+                    open: saved.row.open,
+                    hostname: host.and_then(|h| h.hostname.clone()),
+                    service: row.cells[4].clone(),
+                    device_hint: row.cells[5].clone(),
+                    discovered_at: saved.discovered_at.clone(),
+                    source: if self.simulation.get() {
+                        "Simulation"
+                    } else {
+                        "rmasscan"
+                    }
+                    .into(),
+                    inspection: host.and_then(|h| h.service(row.port)).cloned(),
+                    inspection_checked_at: host
+                        .and_then(|h| h.inspection.as_ref())
+                        .map(|i| i.checked_at.clone()),
+                })
+            })
+            .collect()
     }
     fn summary(&self, ui: &MainWindow) {
         let t = self.table.borrow();
@@ -147,6 +235,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into(),
     );
     let rows = Rc::new(Rows {
+        observations: RefCell::new(HashMap::new()),
+        hosts: RefCell::new(HashMap::new()),
         table: RefCell::new(Table::new(0)),
         keys: RefCell::new(HashMap::new()),
         notify: ModelNotify::default(),
@@ -310,7 +400,109 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let w = ui.as_weak();
-    ui.on_row_action(move|mut row,kind|{if let Some(ui)=w.upgrade(){match kind.as_str(){"dns"|"nmap"=>row.evidence="Hostname and Nmap inspection are not connected yet. No lookup or scan was started.".into(),"http"|"https"=>row.evidence=format!("{}://{}:{}",kind,row.ip,row.port).into(),_=>{}}ui.set_inspector_details(row);ui.set_inspector_open(true);}});
+    let a = app.clone();
+    ui.on_row_action(move |mut row, kind| {
+        if let Some(ui) = w.upgrade() {
+            match kind.as_str() {
+                "dns" => action(
+                    &a,
+                    &ui,
+                    Action::LookupHosts {
+                        ips: vec![row.ip.to_string()],
+                        refresh: true,
+                    },
+                ),
+                "nmap" => action(&a, &ui, Action::InspectHost(row.ip.to_string())),
+                "http" | "https" => {
+                    if let (Ok(ip), Ok(port)) = (
+                        row.ip.parse::<std::net::Ipv4Addr>(),
+                        row.port.parse::<u16>(),
+                    ) {
+                        row.evidence =
+                            format!("{}\n\nAddress: {}://{}:{}/", row.evidence, kind, ip, port)
+                                .into();
+                    }
+                }
+                _ => {}
+            }
+            ui.set_inspector_details(row);
+            ui.set_inspector_open(true);
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    ui.on_cancel_inspection(move || {
+        if let Some(ui) = w.upgrade() {
+            action(&a, &ui, Action::CancelInspection);
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    let r = rows.clone();
+    ui.on_resolve_names(move || {
+        if let Some(ui) = w.upgrade() {
+            let t = r.table.borrow();
+            let ips: std::collections::BTreeSet<_> = t
+                .view
+                .iter()
+                .map(|i| &t.rows[*i])
+                .filter(|row| t.selected.is_empty() || t.selected.contains(&row.id))
+                .map(|row| row.cells[0].clone())
+                .collect();
+            action(
+                &a,
+                &ui,
+                Action::LookupHosts {
+                    ips: ips.into_iter().collect(),
+                    refresh: false,
+                },
+            );
+        }
+    });
+    let w = ui.as_weak();
+    let r = rows.clone();
+    ui.on_export_rows(move |format| {
+        if let Some(ui) = w.upgrade() {
+            if ui.get_exporting() {
+                return;
+            }
+            let snapshot = r.export_rows();
+            if snapshot.is_empty() {
+                ui.set_action_notice("No visible rows to export".into());
+                return;
+            }
+            let json = format == "json";
+            ui.set_exporting(true);
+            let dialog = rfd::AsyncFileDialog::new()
+                .set_file_name(if json {
+                    "masscan-results.json"
+                } else {
+                    "masscan-results.csv"
+                })
+                .add_filter(
+                    if json { "JSON" } else { "CSV" },
+                    &[if json { "json" } else { "csv" }],
+                )
+                .save_file();
+            let w = w.clone();
+            std::thread::spawn(move || {
+                let result = if let Some(file) = pollster::block_on(dialog) {
+                    studio_inspection::write_export(file.path(), &snapshot, json)
+                        .map(|_| format!("Exported {} visible rows", snapshot.len()))
+                } else {
+                    Ok("Export cancelled".into())
+                };
+                let _ = w.upgrade_in_event_loop(move |ui| {
+                    ui.set_exporting(false);
+                    ui.set_action_notice(
+                        result
+                            .unwrap_or_else(|e| format!("Export failed: {e}"))
+                            .into(),
+                    );
+                });
+            });
+        }
+    });
     let timer = slint::Timer::default();
     let w = ui.as_weak();
     let a = app.clone();
@@ -340,6 +532,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for update in updates {
                 match update {
                     Update::Reset(data, backend) => {
+                        ui.set_inspection_available(backend != Backend::Simulation);
                         m.simulation.set(backend == Backend::Simulation);
                         ui.set_scan_backend_label(
                             if backend == Backend::Simulation {
@@ -351,6 +544,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         *m.table.borrow_mut() = Table::new(0);
                         m.keys.borrow_mut().clear();
+                        m.observations.borrow_mut().clear();
+                        m.hosts.borrow_mut().clear();
                         m.add(data);
                         ui.set_filter_query("".into());
                         ui.set_sort_column(-1);
@@ -361,6 +556,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_inspector_open(false);
                     }
                     Update::Rows(data) => m.add(data),
+                    Update::Hosts(values) => {
+                        m.enrich(values);
+                        if ui.get_inspector_open() {
+                            let previous = ui.get_inspector_details();
+                            let table = m.table.borrow();
+                            if let Some(row) = table.rows.iter().find(|r| {
+                                r.cells[0] == previous.ip.as_str()
+                                    && r.cells[2] == previous.port.as_str()
+                            }) {
+                                ui.set_inspector_details(ResultRow {
+                                    ip: row.cells[0].clone().into(),
+                                    hostname: row.cells[1].clone().into(),
+                                    port: row.cells[2].clone().into(),
+                                    protocol: row.cells[3].clone().into(),
+                                    service: row.cells[4].clone().into(),
+                                    device: row.cells[5].clone().into(),
+                                    discovered: row.cells[6].clone().into(),
+                                    evidence: row.evidence.clone().into(),
+                                    chosen: table.selected.contains(&row.id),
+                                });
+                            }
+                        }
+                    }
                     Update::Progress(sent, received) => ui.set_event_label(
                         format!(
                             "{} · sent {sent} · received {received} · saved to history",
@@ -476,4 +694,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("UI smoke did not complete the expected lifecycle".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn export_uses_filtered_sorted_view_and_never_leaks_hidden_port_details() {
+        let rows = Rows {
+            observations: RefCell::new(HashMap::new()),
+            hosts: RefCell::new(HashMap::new()),
+            table: RefCell::new(Table::new(0)),
+            keys: RefCell::new(HashMap::new()),
+            notify: ModelNotify::default(),
+            simulation: Cell::new(false),
+        };
+        rows.add(
+            [("198.18.0.2", 80), ("198.18.0.2", 443), ("198.18.0.10", 80)]
+                .into_iter()
+                .map(|(ip, port)| studio_store::SavedRow {
+                    row: studio_protocol::Row {
+                        ip: ip.into(),
+                        port,
+                        open: true,
+                    },
+                    discovered_at: None,
+                })
+                .collect(),
+        );
+        let mut h = studio_inspection::HostInfo::new("198.18.0.2".into());
+        h.hostname = Some("fixture.local".into());
+        h.inspection = Some(studio_inspection::Inspection {
+            ip: h.ip.clone(),
+            ports: vec![80, 443],
+            checked_at: "2026-10-26T00:00:00Z".into(),
+            services: vec![
+                studio_inspection::Service {
+                    port: 80,
+                    name: "http".into(),
+                    ..Default::default()
+                },
+                studio_inspection::Service {
+                    port: 443,
+                    name: "secret-hidden-port".into(),
+                    ..Default::default()
+                },
+            ],
+        });
+        rows.enrich(vec![h]);
+        rows.table.borrow_mut().filter("80");
+        rows.table.borrow_mut().sort(0, true);
+        let snapshot = rows.export_rows();
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].ip, "198.18.0.10");
+        assert_eq!(snapshot[1].hostname, Some("fixture.local".into()));
+        let json = studio_inspection::json(&snapshot).unwrap();
+        assert!(!json.contains("secret-hidden-port"));
+        assert!(!json.contains("443"));
+        assert!(snapshot.iter().all(|r| r.discovered_at.is_none()));
+    }
 }

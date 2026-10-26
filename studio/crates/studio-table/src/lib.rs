@@ -28,6 +28,9 @@ pub struct Row {
 }
 
 impl Row {
+    pub fn refresh_search(&mut self) {
+        self.search = format!("{} {}", self.cells.join(" "), self.evidence).to_lowercase();
+    }
     /// A persisted engine observation. Simulation is explicitly labelled by the caller.
     pub fn observation(id: u64, ip: Ipv4Addr, port: u16, open: bool, simulation: bool) -> Self {
         let status = if open { "Open" } else { "Closed" };

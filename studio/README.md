@@ -87,9 +87,33 @@ for the threat model, cancellation rules and remaining acceptance work.
 Simulation uses inherited anonymous pipes as the current user. Unix sockets have
 peer identity tests on macOS/Linux; system elevation is implemented on macOS
 only. Do not launch the UI with sudo. Windows named-pipe/UAC and Linux pkexec
-bootstrap, physical NIC selection, Windows/Linux raw profiles, DNS/Nmap inspection,
-export and Swift-history import remain open. Context actions state when inspection
-is unavailable.
+bootstrap, physical NIC selection, Windows/Linux raw profiles and Swift-history
+import remain open. Raw scanning remains gated independently of host actions.
+
+## Host actions and export
+
+For saved real observations, use **Actions…** or the row context menu to refresh
+a hostname or inspect the host with your separately installed Nmap. **Names**
+resolves selected visible hosts (or all visible hosts when nothing is selected),
+up to 512 per scan selection. The details pane shows progress, errors and evidence;
+**Cancel checks** cancels all current host checks. Changing history or closing
+Studio also cancels them. Simulation cannot trigger DNS or Nmap requests.
+
+DNS uses four workers, a three-second process deadline and a five-minute cache;
+explicit refresh bypasses that cache. On macOS the separate `studio-inspect`
+worker uses system DNS-SD, including mDNS; Windows/Linux use the system resolver
+inside the cancellable worker. Nmap runs without elevation, checks only discovered
+open TCP ports (at most 64, excluding printer port 9100) and has a 55-second
+deadline. Install Nmap separately, or set `STUDIO_NMAP_PATH` before launching.
+Service/device hints retain their method, confidence and time; they do not certify
+hardware identity. All inspection data belongs to its original saved scan.
+
+**Export…** writes the visible filtered rows in their current sort order, using a
+snapshot taken before the native save dialog. CSV neutralizes spreadsheet formulas;
+JSON includes inspection details only for exported ports. Export runs in the
+background. Existing exports are replaced only after the full new file is written.
+Old history rows without discovery times remain unknown. Pending host checks are
+marked cancelled after an interrupted application run.
 
 No auto-scan, auto-update, telemetry, firewall changes or driver installation.
 Raw acceptance requires the isolated lab and independent packet evidence; opening

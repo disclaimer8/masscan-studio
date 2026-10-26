@@ -528,6 +528,7 @@ fn suite<'a>(stand: &'a Stand, root: &Path) -> Suite<'a> {
         guest_exe: "C:\\x\\wire_scan.exe".into(),
         plan: "failure".into(),
         tx_mode: "sendqueue".into(),
+        rate_override: Value::Null,
         timeout: 240,
         pm: PM.into(),
         cleanup: Cell::new(false),
@@ -2339,6 +2340,7 @@ fn every_subcommand_refuses_unknown_and_repeated_options() {
         "cleanup",
         "run-timeout",
         "tx-mode",
+        "rate-override",
     ] {
         assert!(WINDOWS_SUITE_OPTIONS.contains(&k), "{k}");
     }
@@ -2906,4 +2908,108 @@ fn tx_mode_option_is_validated_and_recorded_in_the_manifest() {
         e.message().contains("existing manifest identity differs"),
         "{e:?}"
     );
+    assert!(stand.calls().is_empty(), "refused only after remote calls");
+}
+
+// ---- fix round 1: --rate-override (batched functional coverage) ----
+const FUNC_TAG: &str = "c01_one_addr_port_synack.run1";
+fn func_world(name: &str, rate: Option<u64>) -> World {
+    World::build(name, |src| {
+        fixture::build_functional_only(src, 3, rate, &[FUNC_TAG], &|_| {})
+    })
+}
+fn func_args(w: &World, out: &Path, extra: &[&str]) -> Vec<String> {
+    let mut a = vec!["--suite", "functional", "--only", FUNC_TAG];
+    a.extend(extra);
+    let mut a = with_plan(suite_args(w, &a), "functional");
+    a[1] = out.to_str().unwrap().into();
+    a
+}
+fn fresh_dir(w: &World, name: &str) -> PathBuf {
+    let p = w.root.parent().unwrap().join(name);
+    fs::create_dir_all(&p).unwrap();
+    p
+}
+#[test]
+fn rate_override_is_functional_only_validated_and_recorded() {
+    let w = func_world("rate-override", Some(20000));
+    // Bad values and other plans are refused before any remote command.
+    for bad in ["", "0", "abc", "-5", "100001", "1.5"] {
+        let stand = Stand::new(&w.src);
+        let out = fresh_dir(&w, "bad");
+        let r = run_with(&func_args(&w, &out, &["--rate-override", bad]), &stand);
+        assert!(matches!(r, Err(SuiteError::NotRun(_))), "{bad:?}: {r:?}");
+        assert!(stand.calls().is_empty(), "{bad:?} reached a remote command");
+    }
+    for plan in ["failure", "perf"] {
+        let stand = Stand::new(&w.src);
+        let out = fresh_dir(&w, "other");
+        let a = with_plan(func_args(&w, &out, &["--rate-override", "20000"]), plan);
+        let r = run_with(&a, &stand);
+        assert!(
+            matches!(&r, Err(SuiteError::NotRun(m)) if m.contains("--rate-override")),
+            "{plan}: {r:?}"
+        );
+        assert!(stand.calls().is_empty(), "{plan}");
+    }
+    // Recorded as a number, carried by the scanner argv, and the evidence verifies.
+    let out = fresh_dir(&w, "ok");
+    let stand = Stand::new(&w.src);
+    run_with(&func_args(&w, &out, &["--rate-override", "20000"]), &stand).unwrap();
+    let man = read_json(out.join("manifest.json")).unwrap();
+    assert_eq!(man["rate_override"], 20000);
+    assert_eq!(man["plan"], "functional");
+    let argv = read_json(out.join("runs").join(FUNC_TAG).join("argv.json")).unwrap();
+    let av: Vec<String> = argv["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(arg_value(&av, "--rate"), Some("20000"));
+    assert_eq!(crate::verify::run_status(&out, FUNC_TAG).0, "PASS");
+    // Without the option nothing is recorded and the case keeps its own rate.
+    let w0 = func_world("rate-none", None);
+    let out0 = fresh_dir(&w0, "plain");
+    let stand = Stand::new(&w0.src);
+    run_with(&func_args(&w0, &out0, &[]), &stand).unwrap();
+    let man0 = read_json(out0.join("manifest.json")).unwrap();
+    assert!(man0.get("rate_override").is_none(), "{man0}");
+    let argv0 = read_json(out0.join("runs").join(FUNC_TAG).join("argv.json")).unwrap();
+    assert!(!argv0.to_string().contains("20000"));
+}
+#[test]
+fn a_directory_never_mixes_rates_across_reruns() {
+    let w = func_world("rate-mix", Some(20000));
+    let out = fresh_dir(&w, "mix");
+    let stand = Stand::new(&w.src);
+    run_with(&func_args(&w, &out, &["--rate-override", "20000"]), &stand).unwrap();
+    for extra in [&[][..], &["--rate-override", "5000"][..]] {
+        let stand = Stand::new(&w.src);
+        let e = run_with(&func_args(&w, &out, extra), &stand).unwrap_err();
+        assert!(
+            e.message().contains("existing manifest identity differs"),
+            "{extra:?}: {e:?}"
+        );
+        assert!(
+            stand.calls().is_empty(),
+            "{extra:?}: refused after remote calls"
+        );
+    }
+    // The other way round: a plain directory refuses an override.
+    let w0 = func_world("rate-mix0", None);
+    let out0 = fresh_dir(&w0, "mix0");
+    let stand = Stand::new(&w0.src);
+    run_with(&func_args(&w0, &out0, &[]), &stand).unwrap();
+    let stand = Stand::new(&w0.src);
+    let e = run_with(
+        &func_args(&w0, &out0, &["--rate-override", "20000"]),
+        &stand,
+    )
+    .unwrap_err();
+    assert!(
+        e.message().contains("existing manifest identity differs"),
+        "{e:?}"
+    );
+    assert!(stand.calls().is_empty());
 }

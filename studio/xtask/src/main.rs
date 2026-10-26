@@ -52,7 +52,7 @@ fn main() -> Result<()> {
         #[cfg(target_os="linux")]
         "linux-authorization-owner-fixture" => linux_acceptance::owner_fixture()?,
         "test" => {
-            run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets"]))?;
+            run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets", "--no-fail-fast"]))?;
             run(Command::new("cargo").args([
                 "clippy",
                 "--locked",

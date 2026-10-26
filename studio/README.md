@@ -48,18 +48,48 @@ uses the real engine with its fake packet adapter, not a prerecorded UI animatio
 It does not prove raw packet I/O or network correctness.
 
 The reserved **Mac feth** profile is disabled at a compile-time release gate.
-The manifest/topology checks are insufficient to prove live route isolation after
-a VPN change. Start/Resume therefore refuse this profile before opening any packet
-adapter. Complete route/ARP/forwarding preflight and runner authorization are the
-next integration step. Studio does not create a stand or grant itself access.
+Start/Resume refuse this profile before opening any packet adapter. The new
+read-only preflight checks route/VPN overlap, bridge membership, addresses/MACs,
+permanent ARP and forwarding. A live isolated scan with independent capture is
+still required before opening the release gate. Studio does not create a stand.
+
+## macOS session authorization
+
+The **Authorize** button opens the system administrator dialog, connects to the
+installed runner and runs the read-only preflight. It sends no packets. Cancel
+or Stop cancels the wait; **Lock** closes the session. The password never enters
+Studio. Switching to Simulation closes the elevated session and uses an
+unprivileged runner.
+
+Prepare a copy of the runner from the exact app bundle you will run:
+
+```sh
+cargo xtask prepare-runner '/absolute/path/Masscan Studio.app/Contents/MacOS/studio-runner'
+```
+
+Review the printed directory's `manifest.json` and `install.sh`, then install it:
+
+```sh
+cargo xtask install-runner '/absolute/path/studio/dist/runner-TIMESTAMP'
+cargo xtask probe-authorization '/absolute/path/Masscan Studio.app/Contents/MacOS/studio-runner'
+```
+
+Installation copies one immutable version under
+`/Library/PrivilegedHelperTools/MasscanStudio/<sha256>/studio-runner`. It registers
+no service. Each build has a separate directory; existing versions are never
+overwritten. The UI verifies root ownership, permissions, absence of extended
+ACLs/symlinks, and the exact bundled binary hash before launching it. Build-tree
+binaries are never executed as root. See [AUTHORIZATION.md](AUTHORIZATION.md)
+for the threat model, cancellation rules and remaining acceptance work.
 
 ## Deliberate current limits
 
-The runner uses inherited anonymous pipes and runs as the current user. There is
-no elevated bootstrap yet. Do not launch the whole UI with sudo. Authenticated
-OS elevation/admin-owned runner installation, physical NIC selection, Windows
-and Linux raw profiles, DNS/Nmap inspection, export and Swift-history import are
-not implemented in this slice. Context actions state when inspection is unavailable.
+Simulation uses inherited anonymous pipes as the current user. Unix sockets have
+peer identity tests on macOS/Linux; system elevation is implemented on macOS
+only. Do not launch the UI with sudo. Windows named-pipe/UAC and Linux pkexec
+bootstrap, physical NIC selection, Windows/Linux raw profiles, DNS/Nmap inspection,
+export and Swift-history import remain open. Context actions state when inspection
+is unavailable.
 
 No auto-scan, auto-update, telemetry, firewall changes or driver installation.
 Raw acceptance requires the isolated lab and independent packet evidence; opening

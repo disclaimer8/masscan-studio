@@ -10,7 +10,7 @@ use rmasscan_core::{
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const ENGINE_VERSION: u32 = rmasscan_engine::ENGINE_ALGORITHM_VERSION;
 /// Release gate, not a user-configurable escape hatch.
 pub const RAW_SCANNING_ENABLED: bool = false;
@@ -147,6 +147,7 @@ impl Job {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Hello,
+    CheckNetwork,
     Start(Job),
     Resume { job: Job, checkpoint: Vec<u8> },
     Pause,
@@ -182,6 +183,7 @@ pub struct Row {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Event {
     Hello { engine: u32 },
+    NetworkChecked { ready: bool, detail: String },
     Started { total: String },
     Results(Vec<Row>),
     Progress { sent: String, received: String },

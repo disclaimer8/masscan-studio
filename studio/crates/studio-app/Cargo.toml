@@ -7,4 +7,5 @@ license.workspace = true
 [dependencies]
 studio-protocol.workspace = true
 studio-store.workspace = true
+studio-platform.workspace = true
 serde_json.workspace = true

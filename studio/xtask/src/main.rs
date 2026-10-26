@@ -1,4 +1,6 @@
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
+mod runner_setup;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -30,6 +32,12 @@ fn main() -> Result<()> {
     std::env::set_current_dir(&root)?;
     let task = std::env::args().nth(1).unwrap_or("build".into());
     match task.as_str() {
+        #[cfg(target_os="macos")]
+        "prepare-runner" => runner_setup::prepare(&root)?,
+        #[cfg(target_os="macos")]
+        "install-runner" => runner_setup::install()?,
+        #[cfg(target_os="macos")]
+        "probe-authorization" => runner_setup::probe()?,
         "test" => {
             run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets"]))?;
             run(Command::new("cargo").args([
@@ -143,7 +151,7 @@ fn main() -> Result<()> {
             )?;
             println!("Artifacts: {}", dist.display());
         }
-        _ => return Err("Usage: cargo xtask build [--release] | test".into()),
+        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (runner setup: macOS only)".into()),
     }
     Ok(())
 }

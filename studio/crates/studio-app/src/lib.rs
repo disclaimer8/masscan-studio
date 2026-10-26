@@ -1,9 +1,9 @@
 //! Application controller.
 #![forbid(unsafe_code)]
 use std::{
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Read, Write},
     path::PathBuf,
-    process::{Child, ChildStdin, Command as Process, Stdio},
+    process::{Child, Command as Process, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -16,6 +16,7 @@ use studio_protocol::*;
 use studio_store::{SavedScan, Store};
 
 pub enum Action {
+    Authorize,
     Start(Job),
     Pause,
     Stop,
@@ -24,6 +25,11 @@ pub enum Action {
     Lock,
 }
 pub enum Update {
+    Authorization {
+        busy: bool,
+        authorized: bool,
+        detail: String,
+    },
     Reset(Vec<Row>, Backend),
     Rows(Vec<Row>),
     State(Status, String),
@@ -35,6 +41,7 @@ pub struct Controller {
     commands: mpsc::SyncSender<Action>,
     updates: mpsc::Receiver<Update>,
     stop: Arc<AtomicBool>,
+    cancel_auth: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -45,10 +52,12 @@ impl Controller {
         let (out, updates) = mpsc::sync_channel(32);
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        let cancel_auth = Arc::new(AtomicBool::new(false));
+        let cancel = cancel_auth.clone();
         let error = Arc::new(Mutex::new(None));
         let errors = error.clone();
         let worker = thread::spawn(move || {
-            if let Err(e) = work(store, runner, rx, out, flag) {
+            if let Err(e) = work(store, runner, rx, out, flag, cancel) {
                 *errors.lock().unwrap() = Some(e);
             }
         });
@@ -56,11 +65,19 @@ impl Controller {
             commands,
             updates,
             stop,
+            cancel_auth,
             error,
             worker: Some(worker),
         })
     }
     pub fn send(&self, a: Action) -> Result<(), String> {
+        if matches!(a, Action::Authorize) {
+            self.cancel_auth.store(false, Ordering::Release);
+        }
+        // Interrupt a pending OS prompt without waiting for the worker queue.
+        if matches!(a, Action::Stop | Action::Lock) {
+            self.cancel_auth.store(true, Ordering::Release);
+        }
         self.commands
             .try_send(a)
             .map_err(|_| "Application command queue is busy or closed".into())
@@ -76,6 +93,7 @@ impl Controller {
 impl Drop for Controller {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.cancel_auth.store(true, Ordering::Release);
         if let Some(h) = self.worker.take() {
             let _ = h.join();
         }
@@ -83,8 +101,10 @@ impl Drop for Controller {
 }
 
 struct Client {
-    child: Child,
-    input: Option<BufWriter<ChildStdin>>,
+    child: Option<Child>,
+    #[cfg(target_os = "macos")]
+    authorized: Option<studio_platform::macos::Authorized>,
+    input: Option<BufWriter<Box<dyn Write + Send>>>,
     events: mpsc::Receiver<Result<Envelope<Event>, String>>,
     session: Id,
     scan: Id,
@@ -94,7 +114,6 @@ struct Client {
 }
 impl Client {
     fn open(path: &PathBuf) -> Result<Self, String> {
-        let session = new_id()?;
         let mut child = Process::new(path)
             .arg("--stdio")
             .stdin(Stdio::piped())
@@ -102,8 +121,50 @@ impl Client {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| format!("Cannot start Studio runner: {e}"))?;
-        let input = BufWriter::new(child.stdin.take().ok_or("Runner stdin missing")?);
+        let input = child.stdin.take().ok_or("Runner stdin missing")?;
         let stdout = child.stdout.take().ok_or("Runner stdout missing")?;
+        let mut c = Self::connected(Box::new(input), Box::new(stdout))?;
+        c.child = Some(child);
+        c.handshake(None)?;
+        Ok(c)
+    }
+    #[cfg(target_os = "macos")]
+    fn authorize(source: &std::path::Path, cancelled: &AtomicBool) -> Result<Self, String> {
+        let hash = studio_platform::trusted::file_hash(source)?;
+        let path = studio_platform::macos::installed_path(&hash)?;
+        let auth =
+            studio_platform::macos::Authorized::open(&path, &hash, cancelled).map_err(|e| {
+                format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
+            })?;
+        let input = auth.stream.try_clone().map_err(|e| e.to_string())?;
+        let output = auth.stream.try_clone().map_err(|e| e.to_string())?;
+        let mut c = Self::connected(Box::new(input), Box::new(output))?;
+        c.authorized = Some(auth);
+        c.handshake(Some(cancelled))?;
+        Ok(c)
+    }
+    #[cfg(not(target_os = "macos"))]
+    fn authorize(_: &std::path::Path, _: &AtomicBool) -> Result<Self, String> {
+        Err(
+            "System authorization is currently implemented only on macOS; simulation is available"
+                .into(),
+        )
+    }
+    fn is_authorized(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.authorized.is_some()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+    fn connected(
+        input: Box<dyn Write + Send>,
+        stdout: Box<dyn Read + Send>,
+    ) -> Result<Self, String> {
+        let session = new_id()?;
         let (tx, events) = mpsc::sync_channel(32);
         thread::spawn(move || {
             let mut out = BufReader::new(stdout);
@@ -116,22 +177,38 @@ impl Client {
                 }
             }
         });
-        let mut c = Self {
-            child,
-            input: Some(input),
+        Ok(Self {
+            child: None,
+            #[cfg(target_os = "macos")]
+            authorized: None,
+            input: Some(BufWriter::new(input)),
             events,
             session,
             scan: [0; 16],
             attempt: [0; 16],
             sequence: 0,
             order: ReceiveOrder::new(session, [0; 16], [0; 16]),
+        })
+    }
+    fn handshake(&mut self, cancelled: Option<&AtomicBool>) -> Result<(), String> {
+        self.send(Command::Hello)?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let hello = loop {
+            if cancelled.is_some_and(|c| c.load(Ordering::Acquire)) {
+                return Err("Authorization cancelled during handshake".into());
+            }
+            match self.events.recv_timeout(Duration::from_millis(20)) {
+                Ok(e) => break e?,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("Runner disconnected during handshake".into());
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if Instant::now() >= deadline {
+                return Err("Runner handshake timed out".into());
+            }
         };
-        c.send(Command::Hello)?;
-        let hello = c
-            .events
-            .recv_timeout(Duration::from_secs(10))
-            .map_err(|_| "Runner handshake timed out")??;
-        c.order.accept(&hello)?;
+        self.order.accept(&hello)?;
         if !matches!(
             hello.payload,
             Event::Hello {
@@ -140,7 +217,7 @@ impl Client {
         ) {
             return Err("Runner handshake incompatible".into());
         }
-        Ok(c)
+        Ok(())
     }
     fn start(&mut self, scan: Id, attempt: Id, command: Command) -> Result<(), String> {
         self.scan = scan;
@@ -178,14 +255,19 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         self.input.take();
+        #[cfg(target_os = "macos")]
+        self.authorized.take();
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
         let deadline = Instant::now() + Duration::from_millis(700);
         loop {
-            if self.child.try_wait().ok().flatten().is_some() {
+            if child.try_wait().ok().flatten().is_some() {
                 break;
             }
             if Instant::now() >= deadline {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                let _ = child.kill();
+                let _ = child.wait();
                 break;
             }
             thread::sleep(Duration::from_millis(10));
@@ -203,6 +285,7 @@ fn work(
     actions: mpsc::Receiver<Action>,
     out: mpsc::SyncSender<Update>,
     stop: Arc<AtomicBool>,
+    cancel_auth: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut client: Option<Client> = None;
     let mut selected: Option<Id> = None;
@@ -222,11 +305,58 @@ fn work(
             let step = (|| -> Result<(), String> {
                 if let Ok(action) = actions.try_recv() {
                     match action {
+                        Action::Authorize if !active => {
+                            client.take();
+                            emit(
+                                &out,
+                                Update::Authorization {
+                                    busy: true,
+                                    authorized: false,
+                                    detail: "Waiting for system authorization…".into(),
+                                },
+                            )?;
+                            match Client::authorize(&path, &cancel_auth) {
+                                Ok(mut c) => {
+                                    emit(&out,Update::Authorization {busy:false,authorized:true,detail:"Runner authorized for this session; checking isolated network…".into()})?;
+                                    c.send(Command::CheckNetwork)?;
+                                    client = Some(c);
+                                }
+                                Err(e) => emit(
+                                    &out,
+                                    Update::Authorization {
+                                        busy: false,
+                                        authorized: false,
+                                        detail: e,
+                                    },
+                                )?,
+                            }
+                        }
                         Action::Start(_) | Action::Resume if active => {
                             emit(&out, Update::Notice("A scan is already active".into()))?
                         }
                         Action::Start(job) => {
                             job.prepare()?;
+                            if job.backend != Backend::Simulation {
+                                if !RAW_SCANNING_ENABLED {
+                                    emit(&out,Update::State(Status::Failed,"Raw scanning is not enabled in this build. Authorization can be checked separately without sending packets.".into()))?;
+                                    return Ok(());
+                                }
+                                if !client.as_ref().is_some_and(Client::is_authorized) {
+                                    return Err(
+                                        "Authorize the runner before starting a raw scan".into()
+                                    );
+                                }
+                            } else if client.as_ref().is_some_and(Client::is_authorized) {
+                                client.take();
+                                emit(
+                                    &out,
+                                    Update::Authorization {
+                                        busy: false,
+                                        authorized: false,
+                                        detail: "Simulation uses an unprivileged runner".into(),
+                                    },
+                                )?;
+                            }
                             let scan = new_id()?;
                             let attempt = new_id()?;
                             if client.is_none() {
@@ -262,6 +392,27 @@ fn work(
                                 return Ok(());
                             }
                             let checkpoint = s.checkpoint.ok_or("Checkpoint unavailable")?;
+                            if s.job.backend != Backend::Simulation
+                                && (!RAW_SCANNING_ENABLED
+                                    || !client.as_ref().is_some_and(Client::is_authorized))
+                            {
+                                return Err(
+                                    "Raw resume is gated; saved checkpoint is unchanged".into()
+                                );
+                            }
+                            if s.job.backend == Backend::Simulation
+                                && client.as_ref().is_some_and(Client::is_authorized)
+                            {
+                                client.take();
+                                emit(
+                                    &out,
+                                    Update::Authorization {
+                                        busy: false,
+                                        authorized: false,
+                                        detail: "Simulation uses an unprivileged runner".into(),
+                                    },
+                                )?;
+                            }
                             let attempt = new_id()?;
                             if client.is_none() {
                                 client = Some(Client::open(&path)?);
@@ -304,6 +455,14 @@ fn work(
                         }
                         Action::Lock if !active => {
                             client.take();
+                            emit(
+                                &out,
+                                Update::Authorization {
+                                    busy: false,
+                                    authorized: false,
+                                    detail: "Runner session closed".into(),
+                                },
+                            )?;
                             emit(&out, Update::Notice("Runner session closed".into()))?;
                         }
                         Action::Select(id) if !active => {
@@ -332,6 +491,16 @@ fn work(
                         let Some(e) = c.poll()? else {
                             break;
                         };
+                        if let Event::NetworkChecked { ready, detail } = &e.payload {
+                            emit(
+                                &out,
+                                Update::Notice(format!(
+                                    "Network preflight {}: {detail}",
+                                    if *ready { "passed" } else { "refused" }
+                                )),
+                            )?;
+                            continue;
+                        }
                         db.apply(&e).map_err(|e| e.to_string())?;
                         match e.payload {
                             Event::Started { total } => emit(
@@ -379,6 +548,14 @@ fn work(
                 // A broken runner session is recoverable. Close its inherited pipes
                 // before accepting another scan; committed history remains intact.
                 client.take();
+                emit(
+                    &out,
+                    Update::Authorization {
+                        busy: false,
+                        authorized: false,
+                        detail: "Runner session closed".into(),
+                    },
+                )?;
                 let mut status = Status::Interrupted;
                 if active && let Some(scan) = selected {
                     db.interrupt(scan, &detail).map_err(|e| e.to_string())?;

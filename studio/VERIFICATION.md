@@ -3,6 +3,31 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-26 — confirmed elevated session
+
+The user approved the new system authorization request. Client fix `068a94d`
+successfully authenticated the installed `1b397f…` runner as UID 0 (PID 18317),
+checked the exact installed executable/hash and exchanged protocol-v2 Hello.
+CheckNetwork returned `ready=false` because the stand manifest is absent.
+CloseSession completed, the audited process was gone and the socket endpoint was
+removed. An independent `ps -p 18317` also found no process afterward.
+
+This proves the system-launch/authenticated-channel/cleanup path against the
+installed helper. It does **not** prove acceptance of a configured feth network,
+raw scanning, packet isolation or physical NIC support. No packets were sent;
+the compile-time raw gate remains closed. Evidence is saved under
+`studio/verification/auth-confirmed-20261026/`.
+Archive: `studio/verification/studio-auth-confirmed-20261026.tar.gz`, SHA-256
+`4990ad2bbb375eced40d4bafd6a85a20dce5c989c3387a599a569be006daf1bc`;
+individual file hashes were checked against the enclosed SHA256SUMS.
+
+The user then approved installation of helper `3b1acf…` from the updated Mac
+package. Installation, root ownership, permission/ACL checks and exact SHA-256
+validation passed. The package and installed helper now match. The elevated
+session proof above used the previously installed `1b397f…` helper with the fixed
+client; the new helper was not separately subjected to another elevated session
+probe. Its packaged unprivileged lifecycle smoke is recorded below.
+
 ## 2026-10-26 — root installation and audit-token correction
 
 The user confirmed the administrator dialog. The `1b397f…` runner below is now
@@ -19,14 +44,14 @@ fresh review verified FFI layout/signatures against the SDK and Apple source.
 All 29 macOS workspace tests, Clippy and formatting pass. Linux/Windows results
 below remain at `fa0e625`; this macOS-specific fix was not rerun there.
 
-The retry with the fixed client and previously installed runner expired at the
-180-second OS-authorization deadline without confirmation. No successful elevated
-Hello, root-session cleanup probe or live feth preflight is claimed yet. No runner
-or launcher remained after the timeout. The isolated stand manifest is absent.
+The first retry with the fixed client expired at the 180-second OS-authorization
+deadline without confirmation. No runner or launcher remained after that timeout.
+The later approved retry passed Hello and cleanup as recorded above. The isolated
+stand manifest is absent, so live stand acceptance is still pending.
 
 Updated clean Mac package: `studio/dist/build-1792998323580/Masscan Studio.app`.
 Its packaged Start/Pause/Resume/Stop simulation smoke passed.
-Its newly built helper is prepared, **not installed**, in
+Its newly built helper was prepared and subsequently **installed and verified** from
 `studio/dist/runner-1792998393567`; SHA-256
 `3b1acf74399c2a4e49e43f885e465b82993a8de983f28ef4bf897f1da5f520aa`.
 Evidence: `studio/verification/auth-root-20261026/`.
@@ -81,7 +106,8 @@ Runner SHA-256: `1b397fccdcd01a9fbd58d5caebd0af574533dbbecae55855a306eb1f1654883
 Installation script SHA-256: `74f4e35effcf52fe310db7edd36fef8a3a5df1a6365b7306b7df878f84119a1b`.
 System installation was confirmed by the user and passed hash/ownership
 verification. The subsequent probe exposed the access failure described above.
-Successful elevated Hello and live preflight are **NOT YET VERIFIED**.
+Elevated Hello and cleanup were subsequently verified with the fixed client;
+acceptance of a configured isolated stand remains **NOT YET VERIFIED**.
 `RAW_SCANNING_ENABLED=false`;
 no raw packets, route changes, lab creation or scanner acceptance run occurred.
 

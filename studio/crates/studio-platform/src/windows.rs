@@ -1,5 +1,6 @@
 //! Local Windows session transport. Peer identity is bound to retained process
 //! handles. This module does not elevate, install, or authorize raw scanning.
+pub mod install;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::c_void,

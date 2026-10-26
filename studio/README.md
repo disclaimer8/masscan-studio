@@ -104,9 +104,22 @@ Simulation uses authenticated named pipes on Windows and inherited anonymous
 pipes on macOS/Linux. Windows checks both peer processes using retained handles,
 user/logon identity and a protected pipe DACL; it does not elevate. Unix sockets
 have peer identity tests on macOS/Linux; system elevation is implemented on both.
-Do not launch the UI with sudo. Windows UAC/trusted installation, Linux desktop
+Do not launch the UI with sudo. Windows UAC session launch, Linux desktop
 prompt acceptance, physical NIC selection and Windows/Linux raw profiles remain open.
 Raw scanning remains gated independently of host actions and saved profiles.
+
+Windows runner installation can be prepared separately:
+
+```powershell
+cargo xtask prepare-runner 'C:\path\to\package\studio-runner.exe'
+# Review manifest.json and install.ps1 in the printed directory.
+# Run install.ps1 once in elevated 64-bit PowerShell 7+, then:
+cargo xtask verify-installed-runner SHA256_FROM_MANIFEST
+```
+
+This prepares a protected hash-addressed copy under system Program Files. It
+does not enable Windows Authorize, raw scanning or install a service. The UI
+continues using the unprivileged simulation runner until UAC session work passes.
 
 ## Host actions and export
 

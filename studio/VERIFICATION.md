@@ -407,3 +407,30 @@ Local evidence logs: `studio/verification/swift-import-20261026/` (gitignored).
 Hosted three-OS checks are linked on PR #19; their completion is recorded by CI,
 not inferred from this local test result. The previously installed root runner
 is unchanged and is not needed to import, inspect saved data or run simulation.
+
+## 2026-10-26 — Swift import cancelled; native Studio profiles
+
+User correction supersedes the import stage above: Swift is permanently retired.
+The importer/parser, import controller actions, file chooser/report and imported
+profile flow are removed. The spec's decisions 5/7, data section and transition
+requirements now describe one Rust/Slint product. Existing schema-v3 observations
+and inert metadata are preserved; the old serialized backend tag is accepted
+only to read existing archives and cannot start or resume an engine.
+
+Native profiles support Save new / Load / Update loaded / confirmed Delete on
+all OSs. Store validates configuration, exact seed, bounded names, duplicate names,
+existing IDs and a 100-profile limit. Schema v4 adds profiles after a consistent
+backup. Tests verify update/delete never remove scans and preserve v3 results,
+archive metadata and backup contents even with a live WAL connection.
+
+Mac arm64: `cargo xtask test` passed 64 tests, 0 failed, 2 live inspection tests
+ignored; clippy -D warnings and fmt passed. Controller tests use a nonexistent
+runner and verify profile operations create no scans or authorization events.
+Manual packaged UI acceptance in a disposable data directory: create, update,
+load (restores saved ports), reopen/persistence, deletion confirmation/cancel,
+and absence of import controls. Actual deletion is covered by automated tests.
+The settings form now scrolls; exact minimum-window-size behavior was not
+confirmed manually. Fresh review found no remaining issues after layout and
+error-message adjustments. rmasscan source and raw gate are unchanged; no live
+lab or root operations were performed. Local logs are under
+`studio/verification/native-profiles-20261026/` (ignored).

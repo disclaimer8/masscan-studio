@@ -101,14 +101,15 @@ component JobField inherits VerticalLayout {
 }
 
 export component MainWindow inherits Window {
-    in property <bool> import-available: false;
-    in-out property <bool> import-open: false;
-    in-out property <bool> importing: false;
-    in-out property <string> import-report: "";
     in property <[string]> profile-labels;
     in-out property <int> profile-index: -1;
-    callback choose-import-folder();
-    callback import-selected(string);
+    in-out property <string> profile-name;
+    in-out property <string> profile-feedback: "Save reusable settings; profiles never start a scan automatically.";
+    in-out property <bool> profile-loaded: false;
+    in-out property <bool> profile-busy: false;
+    in-out property <bool> confirm-profile-delete: false;
+    callback save-profile(bool);
+    callback delete-profile();
     callback load-profile(int);
     in-out property <bool> exporting: false;
     in property <bool> inspection-available: false;
@@ -193,7 +194,7 @@ export component MainWindow inherits Window {
     }
 
     Rectangle {
-      visible: !root.settings-open && !root.import-open;
+      visible: !root.settings-open;
       VerticalLayout {
         padding: 0px; spacing: 0px;
         // Compact application header. Demo status is distinct from scan status.
@@ -246,7 +247,6 @@ export component MainWindow inherits Window {
                 actions-button := ActionButton { text: "Actions…"; enabled: root.active-row >= 0; clicked => { root.show-actions(root.details, self.absolute-position.x, self.absolute-position.y + self.height + 4px); } }
                 ActionButton { text: "Names"; enabled: root.inspection-available; clicked => { root.resolve-names(); } Tooltip { Text { text: "Resolve selected hosts, or all visible hosts (up to 512)"; } } }
                 ActionButton { text: "Export…"; enabled: !root.exporting; clicked => { exports.show(); } }
-                if root.import-available : ActionButton { text: "Import Swift…"; enabled: !root.process-active && !root.importing; clicked => { root.import-open = true; } }
                 Rectangle { width: 8px; }
                 if root.process-active : ActionButton { text: "Pause"; enabled: root.process-status != "Saving" && !root.process-stopping; clicked => { root.pause-scan(); } }
                 if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: !root.process-stopping; clicked => { root.stop-scan(); } }
@@ -407,9 +407,14 @@ export component MainWindow inherits Window {
         background: Theme.canvas;
         Rectangle {
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-            width: min(740px, parent.width - 32px); height: min(680px, parent.height - 24px);
+            width: min(740px, parent.width - 32px); height: parent.height - 24px;
             background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.divider;
-            VerticalLayout {
+            settings-scroll := ScrollView {
+                content-width: self.visible-width;
+                content-height: max(self.visible-height, settings-form.min-height);
+            settings-form := VerticalLayout {
+                width: settings-scroll.visible-width;
+                height: max(settings-scroll.visible-height, self.min-height);
                 padding: 20px; spacing: 12px;
                 HorizontalLayout {
                     height: 30px;
@@ -419,9 +424,16 @@ export component MainWindow inherits Window {
                 Text { text: "IPv4 / TCP scan. Results and paused jobs are saved in history."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
                 if root.profile-labels.length > 0 : HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "Imported profile"; color: Theme.muted; vertical-alignment: center; }
-                    ComboBox { horizontal-stretch: 1; model: root.profile-labels; current-index <=> root.profile-index; }
-                    ActionButton { text: "Load settings"; enabled: root.profile-index >= 0 && !root.process-active; clicked => { root.load-profile(root.profile-index); } }
+                    Text { text: "Saved profile"; color: Theme.muted; vertical-alignment: center; }
+                    ComboBox { horizontal-stretch: 1; enabled: !root.profile-busy; model: root.profile-labels; current-index <=> root.profile-index; selected(value) => { root.profile-loaded = false; root.confirm-profile-delete = false; } }
+                    ActionButton { text: "Load"; enabled: root.profile-index >= 0 && !root.profile-busy; clicked => { root.load-profile(root.profile-index); } }
+                    ActionButton { text: "Delete…"; enabled: root.profile-index >= 0 && !root.profile-busy; clicked => { root.confirm-profile-delete = true; } }
+                }
+                if root.confirm-profile-delete : HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Delete selected profile? Saved scans will stay."; color: Theme.text; wrap: word-wrap; }
+                    ActionButton { text: "Cancel"; enabled: !root.profile-busy; clicked => { root.confirm-profile-delete = false; } }
+                    ActionButton { text: "Delete profile"; enabled: !root.profile-busy; clicked => { root.delete-profile(); } }
                 }
                 ComboBox { model: ["Mac feth · not enabled yet", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
                 JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
@@ -440,6 +452,13 @@ export component MainWindow inherits Window {
                     JobField { label: "Seed · exact job sequence"; value <=> root.job-seed; edited => { root.settings-edited(); } }
                     VerticalLayout { width: 110px; padding-top: 22px; ActionButton { text: "New seed"; clicked => { root.regenerate-seed(); } } }
                 }
+                HorizontalLayout {
+                    spacing: 10px;
+                    JobField { label: "Profile name"; hint: "Name these settings"; value <=> root.profile-name; }
+                    VerticalLayout { padding-top: 22px; ActionButton { text: "Save new"; enabled: !root.profile-busy; clicked => { root.save-profile(false); } } }
+                    VerticalLayout { padding-top: 22px; ActionButton { text: "Update loaded"; enabled: root.profile-loaded && !root.profile-busy; clicked => { root.save-profile(true); } } }
+                }
+                Text { text: root.profile-feedback; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                 Text { text: root.job-feedback; color: root.job-valid ? Theme.accent : Theme.text; font-size: 12px; wrap: word-wrap; }
                 Text { text: "Target preview · calculated by the Rust engine"; color: Theme.muted; font-size: 11px; }
                 Rectangle {
@@ -458,34 +477,6 @@ export component MainWindow inherits Window {
                     ActionButton { width: 140px; text: "Start scan"; enabled: root.job-valid && !root.process-active; clicked => { root.run-process-test(); } }
                 }
             }
-        }
-    }
-    if root.import-open : Rectangle {
-        background: Theme.canvas;
-        Rectangle {
-            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-            width: min(700px, parent.width - 40px); height: min(520px, parent.height - 40px);
-            background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.divider;
-            VerticalLayout {
-                padding: 24px; spacing: 16px;
-                Text { text: "Import Swift history"; color: Theme.text; font-size: 20px; font-weight: 600; }
-                Text { text: "Close the old Swift app, then choose the folder containing sessions.json and profiles.json. Your original files stay unchanged."; color: Theme.text; wrap: word-wrap; }
-                Text { text: "Old results and profiles are kept. Paused Swift scans cannot resume in this engine. Repeated imports skip unchanged records; conflicts never overwrite saved history."; color: Theme.muted; wrap: word-wrap; }
-                Rectangle {
-                    background: Theme.canvas; border-radius: 5px; vertical-stretch: 1;
-                    ScrollView {
-                        x: 12px; y: 12px; width: parent.width - 24px; height: parent.height - 24px;
-                        content-width: self.visible-width;
-                        content-height: max(self.visible-height, report.preferred-height);
-                        report := Text { width: parent.width; height: self.preferred-height; text: root.importing ? "Reading and validating history…" : root.import-report == "" ? "No folder selected. Nothing has been imported." : root.import-report; color: Theme.text; wrap: word-wrap; vertical-alignment: top; }
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 12px;
-                    ActionButton { text: "Close"; enabled: !root.importing; clicked => { root.import-open = false; } }
-                    Rectangle { horizontal-stretch: 1; }
-                    ActionButton { text: root.importing ? "Importing…" : "Choose folder…"; primary: true; enabled: !root.importing && !root.process-active; clicked => { root.choose-import-folder(); } }
-                }
             }
         }
     }

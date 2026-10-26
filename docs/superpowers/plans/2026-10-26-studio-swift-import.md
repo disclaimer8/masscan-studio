@@ -1,4 +1,7 @@
-# Studio: manual Swift-history import
+# Historical plan — CANCELLED: Swift-history import
+
+Superseded by the user on 2026-10-26. Swift is permanently retired. Do not restore
+this importer. See 2026-10-26-studio-native-profiles.md.
 
 Authorized continuation after PR #16. Work in `masscan-studio-app`, branch
 `feat/studio-swift-import`, baseline `6ea6efd`. Claude owns rmasscan; no engine,

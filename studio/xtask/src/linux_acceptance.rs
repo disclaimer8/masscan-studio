@@ -19,7 +19,9 @@ pub fn verify(root: &Path) -> Result<()> {
             "Acceptance requires an unprivileged user in a disposable GitHub Actions VM".into(),
         );
     }
-    if studio_protocol::RAW_SCANNING_ENABLED {
+    if studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacFeth)
+        || !studio_protocol::RAW_PROFILES.is_empty()
+    {
         return Err("Raw scanning must remain disabled".into());
     }
     run(Command::new("cargo").args(["build", "--locked", "-p", "studio-runner"]))?;

@@ -52,6 +52,8 @@ jobs:
             ~/.cargo/registry/cache
             studio/target
           key: studio-${{ runner.os }}-1.99.1-${{ hashFiles('studio/Cargo.lock') }}
+          restore-keys: |
+            studio-${{ runner.os }}-1.99.1-
       - name: Offline contracts, lifecycle, persistence and lint
         env:
           STUDIO_TRACE_TIMINGS: '1'

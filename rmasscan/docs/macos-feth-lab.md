@@ -480,7 +480,7 @@ All of these are top-level files of `DIR`, except `data/`. Every file is listed 
 | `history.json` | SQLite dump taken after the UI exited: `{"scans":[{scan_id_hex, attempt_hex, job, status, detail, next_index, checkpoint_len, sequence, created_at, rows:[{ip, port, open, discovered_at}]}]}`. `status` is the plain name (`Completed`, `Stopped`); `checkpoint_len` is an **integer** (0 when no checkpoint, never null); `next_index` is null or an integer | NOT RUN (absent or not JSON) |
 | `peer.pcap`, `peer.err` | uncompressed `tcpdump` on `feth4202`, no filter, and its stderr (banner `listening on feth4202,` and the exit statistics lines `N packets captured`, `N packets dropped by kernel`, which tcpdump prints on a clean exit) | NOT RUN if the pcap is missing, INVALID otherwise |
 | `uplink.pcap`, `uplink.err` | the same on the uplink with the exact lab filter; banner `listening on <uplink>,` | as above; a stored frame, or `captured > 0`, is a safety FAIL |
-| `peer.cmd.json`, `uplink.cmd.json` | one record per witness: `{cmd:[argv...], interface, filter, start_utc, stop_utc, exit_code, listening}`. `cmd` is the tcpdump argv, e.g. `["/usr/sbin/tcpdump","-p","-n","-U","-s","0","-i","en0","-w","uplink.pcap","<lab filter>"]` (the filter is one argument, the last). `start_utc` is taken before the witness is started, `stop_utc` after it exited, `exit_code` is its exit status after SIGINT (0), `listening` is true when it was reading before the UI started | INVALID |
+| `peer.cmd.json`, `uplink.cmd.json` | one record per witness: `{cmd:[argv...], interface, filter, start_utc, stop_utc, exit_code, listening}`. `cmd` is the tcpdump argv, e.g. `["/usr/sbin/tcpdump","-p","-n","-U","-s","0","-i","en0","-w","uplink.pcap","<lab filter>"]` (the filter is one argument, the last). `start_utc` is taken before the witness is started, `stop_utc` after it exited, both with millisecond precision (`...SS.fffZ`; the coverage margin is 1 s), `exit_code` is its exit status after SIGINT (0), `listening` is true when it was reading before the UI started | INVALID |
 | `status-pre.json`, `status-post.json` | `macos-lab status`: `raw_run_allowed: true`; before also `bpf_access: "granted"` and `uplink` (the default-route interface, not `feth*`) | INVALID (NOT RUN if missing) |
 | `window.json` | `{schema:1, started_utc, ended_utc, uplink, ui_rc, invalid_marks:[text...]}`; `uplink` equals `status-pre.uplink`; `ui_rc` is the UI exit code (0); every INVALID mark the orchestrator sets (e.g. `status-post` not allowed, `history not closed cleanly`) goes into `invalid_marks` | NOT RUN if absent, INVALID if a mark, `ui_rc != 0` or another uplink |
 | `provenance.json` | `git_head` (40 hex), `dirty` (false), `ui_sha256`, `runner_sha256` (the bundle's runner bytes), `installed_runner_sha256` (sha256 of the bytes of the installed file under `/Library/PrivilegedHelperTools/MasscanStudio/<hash>/studio-runner`, read as the user, not a `stat`), all 64 hex. `dirty` is computed from `git status --porcelain --untracked-files=no`: tracked changes only, so an untracked `.superpowers/` does not matter. `--expect-head SHA` also requires `git_head == SHA` | INVALID (NOT RUN if absent) |
@@ -489,7 +489,7 @@ All of these are top-level files of `DIR`, except `data/`. Every file is listed 
 | `pair-quiet.txt` | free text; presence only | NOT RUN if absent |
 | `listeners-ready.txt` | written by `peer listen --ready` | INVALID if absent |
 | `host-listen-before.txt`, `host-listen-after.txt` | `netstat -an -p tcp`, optionally preceded by a `rc N` line (N must be 0) | INVALID |
-| `data.sha256` | `<sha256>  history.sqlite3` of `data/history.sqlite3`; when `data/` is present its file must hash to it and must have no `-wal`/`-shm` next to it | NOT RUN if absent, INVALID on a mismatch or a journal |
+| `data.sha256` | `<sha256>  history.sqlite3` of `data/history.sqlite3`, taken after the UI exited and the history dump closed the store (so no journal is left); when `data/` is present its file must hash to it and must have no `-wal`/`-shm` next to it | NOT RUN if absent, INVALID on a mismatch or a journal |
 | `ISOLATION-BREACH.txt` | written by the orchestrator's interlock | present = safety FAIL |
 | `hashes-before-copy.txt` | `sha256sum` format of every top-level file except itself and `verdict.json` (the directory `data/` is neither listed nor read); an unlisted file, a listed entry that cannot be read, or a mismatch | INVALID |
 | other files | `ui.log`, `final.png`, listener logs ...: only hashed | |
@@ -521,9 +521,11 @@ RUN, then any INVALID gives INVALID, and PASS only when every check passed. Noth
     listed in the table.
 - `chronicle`: actions are exactly `Authorize, Start:s1_full, Start:s2_pause, Pause, Resume, Start:s3_stop, Stop, Lock`;
   one `Authorization` with `authorized: true`; a `Network preflight passed` notice before the first Start and a
-  `Runner session closed` notice after `Lock`; `result == "ok"`. A `timeout` before the first Start is NOT RUN (nothing
-  ran); a `timeout` or any failure text after it is a FAIL (the UI/runner contract was broken). UTC and `mono_ms` must not
-  drift apart by more than 100 ms (a wall-clock step shifts the windows), and each case's `finished_utc` must equal its
+  `Runner session closed` notice after `Lock`; `result == "ok"`. A session that ends before any `Start:` action (authorization timeout, cancelled dialog, preflight refusal) is
+  NOT RUN whatever the plan records say (the driver writes them with null `scan_id_hex`), with the chronicle's `result`
+  as the reason; a safety trip there still FAILs. A `timeout` or any failure text after a Start is a FAIL (the UI/runner
+  contract was broken). UTC and `mono_ms` must not drift apart by more than 100 ms plus 1 ms per second of session
+  (a wall-clock step shifts the windows), and each case's `finished_utc` must equal its
   terminal State within 50 ms.
 - `history`: exactly the three planned `scan_id_hex` of the chronicle (no unplanned scan, none twice).
 - per scan:
@@ -544,7 +546,7 @@ RUN, then any INVALID gives INVALID, and PASS only when every check passed. Noth
   equals the SYNs sent before the Resume action; the first leg is the first `k` planned ports, the second leg the rest;
   `0 < k < 32`, otherwise INVALID (the pause did not split the probe stream); after Resume the history has
   `checkpoint_len == 0` and `next_index` null.
-- `s3_stop`: Stop action to `Stopped` at most 1000 ms; `0 < SYN < 2000`; no SYN later than `Stopped + 250 ms`;
+- `s3_stop`: Stop action to `Stopped` at most 1000 ms; `0 < SYN < 2000`; no SYN later than `Stopped + 100 ms` (the runner joins the engine before it reports Finished);
   `checkpoint_len == 0`, `next_index` null.
 - `--manual`: no `smoke.json`, no plan. `safety` and the orchestrator's files; a settled history status (`Completed`,
   `Stopped`, `Failed`, `Paused`, `Interrupted`); no duplicate rows; rows backed by a reply to a SYN of the scanner

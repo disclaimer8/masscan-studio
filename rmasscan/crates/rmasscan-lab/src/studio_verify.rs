@@ -53,8 +53,8 @@ pub const ACTION_ORDER: [&str; 8] = [
 ];
 pub const PAUSE_TO_PAUSED_MAX_MS: i64 = 5000;
 pub const STOP_TO_STOPPED_MAX_MS: i64 = 1000;
-/// The last SYN of a stopped scan may trail the observed `Stopped` state by the UI poll (50 ms) plus margin.
-pub const STOP_SYN_GRACE_S: f64 = 0.25;
+/// The runner joins the engine before it reports Finished, so no SYN may trail the observed `Stopped` by more than the clock tolerance (tied to the drift cap).
+pub const STOP_SYN_GRACE_S: f64 = 0.10;
 const HASHES: &str = "hashes-before-copy.txt";
 const VERDICT: &str = "verdict.json";
 const LAB_OPEN_PORTS: std::ops::RangeInclusive<u16> = 8000..=8007;
@@ -416,12 +416,18 @@ fn load_chronicle(r: &mut Run, sm: &Value) -> Option<Chronicle> {
     actions.sort_by_key(|a| a.mono);
     let has_start = actions.iter().any(|a| a.name.starts_with("Start:"));
     let result = s(&sm["result"]);
-    let timeout = result.starts_with("timeout");
+    let aborted_early = !has_start && result != "ok";
     if result == "ok" {
         r.beh("smoke.json result is ok", true, "ok");
-    } else if timeout && !has_start {
-        // The authorization phase never finished: no scan ran, nothing can be judged.
-        r.add("smoke.json result is ok", NOT_RUN, result, false);
+    } else if aborted_early {
+        // The session ended before any Start (authorization timeout, cancelled dialog, preflight refusal): no scan
+        // ran, nothing can be judged. The reason is the chronicle's own.
+        r.add(
+            "smoke.json: the session ended before any Start",
+            NOT_RUN,
+            result,
+            false,
+        );
     } else {
         // A failed run, or a Studio that hung after a Start: the UI/runner contract was broken.
         r.beh("smoke.json result is ok", false, result);
@@ -429,7 +435,7 @@ fn load_chronicle(r: &mut Run, sm: &Value) -> Option<Chronicle> {
     Some(Chronicle {
         events,
         actions,
-        aborted_early: timeout && !has_start,
+        aborted_early,
     })
 }
 fn chronicle_checks(r: &mut Run, c: &Chronicle) {
@@ -482,11 +488,17 @@ fn chronicle_checks(r: &mut Run, c: &Chronicle) {
         .collect();
     let spread = drift.iter().copied().fold(f64::MIN, f64::max)
         - drift.iter().copied().fold(f64::MAX, f64::min);
+    let session = chronicle_span(c).map_or(0.0, |(a, b)| b - a);
     r.inv(
-        "chronicle UTC and monotonic clocks agree (no wall-clock step, 100 ms)",
-        drift.is_empty() || spread <= 0.1,
-        format!("spread {spread:.3} s"),
+        "chronicle UTC and monotonic clocks agree (no wall-clock step; 100 ms plus 1 ms per second of session)",
+        drift.is_empty() || spread <= drift_cap_s(session),
+        format!("spread {spread:.3} s, cap {:.3} s", drift_cap_s(session)),
     );
+}
+/// How far UTC and the monotonic clock may drift apart over a session of this length: 100 ms plus 1 ms per second
+/// (an NTP slew of 1000 ppm), so a 420 s session cannot be a false INVALID.
+pub fn drift_cap_s(session_s: f64) -> f64 {
+    0.1 + 0.001 * session_s.max(0.0)
 }
 /// The first and last instant the chronicle knows (UTC).
 fn chronicle_span(c: &Chronicle) -> Option<(f64, f64)> {
@@ -1315,6 +1327,7 @@ fn planned_cases(
                     .iter()
                     .filter_map(|c| record(c.tag))
                     .map(|p| s(&p["scan_id_hex"]).to_owned())
+                    .filter(|x| !x.is_empty())
                     .collect();
                 let got: Vec<String> = scans_of(h)
                     .iter()
@@ -1738,9 +1751,9 @@ fn stop_checks(r: &mut Run, rec: Option<&Value>, t: &CaseTimeline, mine: &[&Syn]
         .map(|y| y.t - t_stopped)
         .collect();
     r.beh(
-        "no SYN after Stopped (250 ms for the UI poll)",
+        "no SYN after Stopped (100 ms)",
         late.is_empty(),
-        format!("{} SYN later than Stopped + 250 ms: {late:?}", late.len()),
+        format!("{} SYN later than Stopped + 100 ms: {late:?}", late.len()),
     );
 }
 

@@ -3,6 +3,38 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-26 — root installation and audit-token correction
+
+The user confirmed the administrator dialog. The `1b397f…` runner below is now
+installed; installer ownership/ACL/hash validation succeeded. The first live
+probe then failed closed with `PROC_PIDTBSDINFO: EPERM` while the unprivileged UI
+inspected the root peer. No Hello/engine start or packets followed; the runner
+exited. A standalone read-only diagnostic reproduced the same denied lookup
+against PID 1 while PID-path lookup remained available.
+
+Fix `068a94d` uses the kernel socket audit token and `proc_pidpath_audittoken` for
+the root-peer lookup, retaining root UID, exact path, immutable installation and
+hash checks. A wrong PID-generation regression is rejected by the kernel. A
+fresh review verified FFI layout/signatures against the SDK and Apple source.
+All 29 macOS workspace tests, Clippy and formatting pass. Linux/Windows results
+below remain at `fa0e625`; this macOS-specific fix was not rerun there.
+
+The retry with the fixed client and previously installed runner expired at the
+180-second OS-authorization deadline without confirmation. No successful elevated
+Hello, root-session cleanup probe or live feth preflight is claimed yet. No runner
+or launcher remained after the timeout. The isolated stand manifest is absent.
+
+Updated clean Mac package: `studio/dist/build-1792998323580/Masscan Studio.app`.
+Its packaged Start/Pause/Resume/Stop simulation smoke passed.
+Its newly built helper is prepared, **not installed**, in
+`studio/dist/runner-1792998393567`; SHA-256
+`3b1acf74399c2a4e49e43f885e465b82993a8de983f28ef4bf897f1da5f520aa`.
+Evidence: `studio/verification/auth-root-20261026/`.
+Archive `studio/verification/studio-root-evidence-20261026.tar.gz`, SHA-256:
+`6976870c9d15a82dae8537b7caef1ebb70caa1d892dd6a0ebd0182164ee7c1d8`.
+Raw scanning remains disabled. Installing the original helper did not open that
+gate and does not establish Studio's raw-scanning acceptance.
+
 ## 2026-10-26 — session authorization and complete preflight implementation
 
 Implementation revision: `fa0e6254b94757cd0eb444d6c689efa698be16fa`.
@@ -47,10 +79,10 @@ Individual evidence hashes were verified from the enclosed SHA256SUMS.
 Prepared macOS install directory: `studio/dist/runner-1792987801550`.
 Runner SHA-256: `1b397fccdcd01a9fbd58d5caebd0af574533dbbecae55855a306eb1f16548838`.
 Installation script SHA-256: `74f4e35effcf52fe310db7edd36fef8a3a5df1a6365b7306b7df878f84119a1b`.
-System installation was requested through the macOS administrator dialog and is
-waiting for user interaction. Successful elevated Hello, root-runner exit and
-live preflight are **NOT YET VERIFIED**. The installer is not counted as installed
-until its hash/ownership verification succeeds. `RAW_SCANNING_ENABLED=false`;
+System installation was confirmed by the user and passed hash/ownership
+verification. The subsequent probe exposed the access failure described above.
+Successful elevated Hello and live preflight are **NOT YET VERIFIED**.
+`RAW_SCANNING_ENABLED=false`;
 no raw packets, route changes, lab creation or scanner acceptance run occurred.
 
 Cargo lock SHA-256 on macOS/Linux:

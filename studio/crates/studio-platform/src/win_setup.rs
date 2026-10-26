@@ -1,5 +1,36 @@
 //! Reviewable, one-time Windows operating-system installation. No UAC launcher.
 type Result<T> = std::result::Result<T, String>;
+/// Windows CRT argv quoting, not cmd.exe or PowerShell syntax.
+pub fn command_line(args: &[&str]) -> Result<String> {
+    let mut result = Vec::new();
+    for arg in args {
+        if arg.contains('\0') {
+            return Err("NUL in runner argument".into());
+        }
+        let mut value = String::from("\"");
+        let mut slashes = 0;
+        for c in arg.chars() {
+            if c == '\\' {
+                slashes += 1;
+                continue;
+            }
+            value.extend(std::iter::repeat_n(
+                '\\',
+                if c == '\"' { slashes * 2 + 1 } else { slashes },
+            ));
+            slashes = 0;
+            value.push(c);
+        }
+        value.extend(std::iter::repeat_n('\\', slashes * 2));
+        value.push('\"');
+        result.push(value);
+    }
+    let result = result.join(" ");
+    if result.encode_utf16().count() > 30000 {
+        return Err("Runner arguments too long".into());
+    }
+    Ok(result)
+}
 pub fn validate_hash(hash: &str) -> Result<()> {
     if hash.len() != 64
         || !hash

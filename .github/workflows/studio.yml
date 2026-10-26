@@ -66,6 +66,9 @@ jobs:
       - name: Windows trusted installation (no UAC or packets)
         if: runner.os == 'Windows'
         run: cargo xtask verify-windows-installation
+      - name: Windows restricted owner token probe (no packets)
+        if: runner.os == 'Windows'
+        run: cargo xtask probe-windows-token
       - name: Linux software UI lifecycle (no packets)
         if: runner.os == 'Linux'
         run: |

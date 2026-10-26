@@ -1,6 +1,7 @@
 //! Local Windows session transport. Peer identity is bound to retained process
 //! handles. This module does not elevate, install, or authorize raw scanning.
 pub mod install;
+pub mod uac;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::c_void,
@@ -80,6 +81,11 @@ pub struct Process {
     handle: OwnedHandle,
     identity: Identity,
 }
+#[derive(Debug)]
+pub struct Elevation {
+    pub elevated: bool,
+    pub kind: u32,
+}
 impl Process {
     pub fn open(pid: u32) -> Result<Self> {
         if pid == 0 {
@@ -89,6 +95,14 @@ impl Process {
         let handle =
             owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) })
                 .map_err(|e| e.to_string())?;
+        Self::from_handle(handle)
+    }
+    fn from_handle(handle: OwnedHandle) -> Result<Self> {
+        // SAFETY: retained process handle with query access; no PID reopening.
+        let pid = unsafe { GetProcessId(handle.as_raw_handle()) };
+        if pid == 0 {
+            return Err(error());
+        }
         let (mut birth, mut exit, mut kernel, mut user) = (
             FILETIME::default(),
             FILETIME::default(),
@@ -191,6 +205,45 @@ impl Process {
     }
     pub fn identity(&self) -> &Identity {
         &self.identity
+    }
+    pub fn elevation(&self) -> Result<Elevation> {
+        let mut token = null_mut();
+        // SAFETY: live process handle; writable unique token handle output.
+        if unsafe { OpenProcessToken(self.handle.as_raw_handle(), TOKEN_QUERY, &mut token) } == 0 {
+            return Err(error());
+        }
+        let token = owned(token).map_err(|e| e.to_string())?;
+        let (mut elevation, mut kind, mut len) = (TOKEN_ELEVATION::default(), 0u32, 0);
+        // SAFETY: output structures match requested token classes and exact sizes.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenElevation,
+                (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+                std::mem::size_of_val(&elevation) as u32,
+                &mut len,
+            )
+        } == 0
+        {
+            return Err(error());
+        }
+        // SAFETY: TokenElevationType is a 32-bit enum, sized output remains live.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenElevationType,
+                (&mut kind as *mut u32).cast(),
+                std::mem::size_of_val(&kind) as u32,
+                &mut len,
+            )
+        } == 0
+        {
+            return Err(error());
+        }
+        Ok(Elevation {
+            elevated: elevation.TokenIsElevated != 0,
+            kind,
+        })
     }
     pub fn ensure_alive(&self) -> Result<()> {
         // SAFETY: retained process handle supports SYNCHRONIZE; zero wait is a probe.

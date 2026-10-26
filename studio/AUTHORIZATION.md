@@ -2,7 +2,8 @@
 
 Status: macOS session bootstrap implemented; raw scanning disabled. Linux peer
 transport is separate from the still-unimplemented Linux elevated launcher.
-Windows simulation remains available; no Windows elevation claim is made.
+Windows simulation uses an authenticated named pipe; no Windows elevation claim
+is made. UAC and trusted installation remain separate acceptance work.
 
 ## Threat model and identity
 
@@ -89,6 +90,32 @@ re-read after observation. The checker does not create or modify the stand.
   VERIFICATION.md separately from offline tests and from engine Stage 2C.
 - Raw Start/Pause/Resume/Stop with independent packet capture and mid-scan network
   drift handling must pass before RAW_SCANNING_ENABLED can change.
-- Windows named pipe, retained process handles, DACL, runas and installation;
+- Windows runas and trusted installation (including other-account UAC);
   Linux pkexec/install policy and elevated peer visibility remain separate work.
 - No physical NIC or three-OS raw support follows from this implementation.
+
+## Windows simulation session transport
+
+The UI creates a random `\\.\pipe\MasscanStudio-<nonce>` with one instance,
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, non-inherited
+handles and a protected DACL granting access only to the current user SID.
+It starts the ordinary child with `--connect-pipe`, then compares the pipe's
+client PID with a retained handle to that launched process. The child verifies
+the pipe's server PID against an independently opened, retained UI process handle.
+Identity also includes creation time, executable path, SID and AuthenticationId.
+Both sides require the same account and logon session; no cross-account elevation
+support is implied. Endpoint and identity in argv are public, not secrets.
+The client selects identification-only SQOS, preventing server impersonation.
+
+Connect is bounded to ten seconds; the existing protocol handshake has its own
+ten-second deadline. Close cancels pending I/O and disconnects the server end.
+Operations observe peer death through retained process handles. The runner also
+checks the UI handle during its normal lifecycle loop. A failed connection or
+handshake closes the pipe and reaps the spawned child. No services, policies,
+drivers or system files are installed by this transport.
+
+Overlapped reads/writes query immediate completion before waiting on an event.
+Cancellation always drains completion before releasing the operation buffer,
+event or OVERLAPPED. `flush` adds no separate kernel wait: each Write already
+waits for its own completion. Existing frame/queue bounds remain in effect.
+See the [implementation plan and Win32 references](../docs/superpowers/plans/2026-10-26-studio-windows-pipe.md).

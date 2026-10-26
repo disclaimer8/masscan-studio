@@ -524,3 +524,39 @@ Evidence: `/tmp/studio-linux-authorization-ci.log` (GitHub job above),
 established by the CI allow policy and remains a Linux release gate. System loader
 configuration/runtime and administrators are trusted. Other Linux architectures,
 raw network scanning and Claude's engine/lab acceptance are outside this change.
+
+## 2026-10-26 — Windows trusted installation prerequisite
+
+This implements Task 1 of the Windows authorization plan, not session UAC.
+The prepare command emits an exact-runner hash manifest and one-time installer;
+native Rust checks/pins the installed file and its ancestry. Windows Authorize
+and raw scanning remain disabled. No home VM, live lab or rmasscan changes.
+
+Fresh review found three defects in the initial branch. At e7a3b32, Windows job
+121602826577/run 40331795184 reproduced all three: a smart quote caused the
+PowerShell value test to print INJECTED; a deterministic pre-hardening observation
+found inherited unprivileged write access in the staging directory; a metadata-only
+directory handle allowed a second open requesting DELETE. These are regressions
+observed on Windows, not inferred from passing string assertions.
+
+Fixes use ASCII numeric UTF-16 data expressions, atomic protected DirectorySecurity
+creation (PowerShell 7+), and FILE_LIST_DIRECTORY access for sharing protection.
+SID bounds inside allow ACEs are checked explicitly. Object-ACE fixtures include
+GUIDs because Windows normalizes GUID-less OA/OD into ordinary ACEs.
+
+At e979a08, run 40333613604 passed all three OS jobs and language guards. Windows
+job 121609447136 passed 77 tests (three ignored: two live inspection checks and
+one separately invoked pipe fixture), lint, packaging and actual protected
+Program Files installation. Native checks verified executable write/rename
+pinning, no-overwrite, modified-content rejection and version-directory reparse
+rejection. All three review regressions passed. Local Mac: 75 passed, two live
+checks ignored, fmt/Clippy passed. Evidence logs:
+`/tmp/studio-windows-install-red.log`, `/tmp/studio-windows-install-green.log`,
+`/tmp/studio-windows-install-fixed-mac.log`. Exact final-head CI gates merge.
+
+CI's Windows account is already administrative. These tests do not establish
+UAC consent, alternate credentials, cancellation or elevated runner lifetime.
+Those remain the next task. Unsupported effective ACE forms fail closed; only
+the volume root permits unprivileged creation of new directories while refusing
+modification/deletion of protected existing children. The personal-build threat
+model continues to trust administrators and exclude malicious same-account code.

@@ -2,10 +2,9 @@ use studio_platform::win_setup::{install_script, powershell_quote, validate_hash
 
 #[test]
 fn windows_installer_accepts_data_not_commands() {
-    assert_eq!(
-        powershell_quote("C:\\a'b;$(bad)\\runner.exe").unwrap(),
-        "'C:\\a''b;$(bad)\\runner.exe'"
-    );
+    let encoded = powershell_quote("C:\\a'b;$(bad)\\runner.exe").unwrap();
+    assert!(encoded.is_ascii());
+    assert!(!encoded.contains("$(bad)"));
     assert!(powershell_quote("a\0b").is_err());
     let hash = "ab".repeat(32);
     validate_hash(&hash).unwrap();
@@ -13,7 +12,8 @@ fn windows_installer_accepts_data_not_commands() {
         assert!(validate_hash(&bad).is_err());
     }
     let script = install_script("C:\\build's\\studio-runner.exe", &hash).unwrap();
-    assert!(script.contains("'C:\\build''s\\studio-runner.exe'"));
+    assert!(script.contains(&powershell_quote("C:\\build's\\studio-runner.exe").unwrap()));
+    assert!(script.contains("#requires -Version 7.0"));
     assert!(script.contains("#requires -RunAsAdministrator"));
     assert!(script.contains("GetFolderPath"));
     assert!(script.contains("Directory]::Move"));

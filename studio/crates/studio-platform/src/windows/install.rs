@@ -104,8 +104,15 @@ fn check_descriptor(owner: PSID, dacl: *const ACL, volume_root: bool) -> Result<
         if header.AceType != 0 || header.AceSize < 16 {
             return Err("Unsupported installation DACL entry".into());
         }
-        // SAFETY: an ACCESS_ALLOWED_ACE begins with header + mask + SID. Size
-        // checked above; validated ACL guarantees SID storage within this ACE.
+        // Check SID bounds explicitly: IsValidAcl alone does not establish them.
+        // SAFETY: GetAce returned this complete ACE from an OS-owned descriptor.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), header.AceSize as usize) };
+        if bytes[8] != 1 || bytes[9] > 15 || 16 + 4 * bytes[9] as usize > bytes.len() {
+            return Err("Invalid SID bounds in installation DACL".into());
+        }
+        // SAFETY: an ACCESS_ALLOWED_ACE begins with header + mask + SID. Both
+        // the fixed header and revision/count-sized SID fit within this ACE.
         let ace = unsafe { &*ptr.cast::<ACCESS_ALLOWED_ACE>() };
         let sid = std::ptr::addr_of!(ace.SidStart).cast_mut().cast();
         let principal = sid_string(sid)?;
@@ -162,7 +169,7 @@ fn open_object(path: &Path, directory: bool) -> Result<OwnedHandle> {
             path.as_ptr(),
             READ_CONTROL
                 | if directory {
-                    FILE_READ_ATTRIBUTES
+                    FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY
                 } else {
                     FILE_GENERIC_READ
                 },
@@ -291,5 +298,23 @@ mod tests {
         assert!(Installed::open("../bad").is_err());
         assert!(Installed::open(&"0".repeat(64)).is_err());
         assert!(program_files().unwrap().is_absolute());
+    }
+    #[test]
+    fn unsupported_effective_aces_and_wrong_object_types_are_refused() {
+        for sddl in ["O:BAD:(OA;;GR;;;BU)", "O:BAD:(OD;;GW;;;BU)"] {
+            assert!(policy(sddl, false).unwrap_err().contains("Unsupported"));
+        }
+        let dir = program_files().unwrap();
+        assert!(
+            pin(&dir, false, false)
+                .err()
+                .unwrap()
+                .contains("wrong object type")
+        );
+        let file = std::env::temp_dir().join(format!("studio-type-{}", std::process::id()));
+        std::fs::write(&file, b"fixture").unwrap();
+        let result = pin(&file, true, false);
+        std::fs::remove_file(file).unwrap();
+        assert!(result.err().unwrap().contains("wrong object type"));
     }
 }

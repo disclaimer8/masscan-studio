@@ -18,7 +18,7 @@ struct Rows {
     keys: RefCell<HashMap<(String, u16), u64>>,
     notify: ModelNotify,
     simulation: Cell<bool>,
-    imported: Cell<bool>,
+    archived: Cell<bool>,
 }
 impl Model for Rows {
     type Data = ResultRow;
@@ -144,8 +144,8 @@ impl Rows {
                     discovered_at: saved.discovered_at.clone(),
                     source: if self.simulation.get() {
                         "Simulation"
-                    } else if self.imported.get() {
-                        "Imported Swift history"
+                    } else if self.archived.get() {
+                        "Archived history"
                     } else {
                         "rmasscan"
                     }
@@ -237,7 +237,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
     ui.set_authorization_available(cfg!(target_os = "macos"));
-    ui.set_import_available(cfg!(target_os = "macos"));
     ui.set_process_view(true);
     ui.set_job_seed(
         (u32::from_ne_bytes(studio_protocol::new_id()?[..4].try_into().unwrap()).max(1))
@@ -251,10 +250,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         keys: RefCell::new(HashMap::new()),
         notify: ModelNotify::default(),
         simulation: Cell::new(false),
-        imported: Cell::new(false),
+        archived: Cell::new(false),
     });
     let history = Rc::new(RefCell::new(Vec::<studio_store::SavedScan>::new()));
-    let profiles = Rc::new(RefCell::new(Vec::<studio_store::legacy::Profile>::new()));
+    let profiles = Rc::new(RefCell::new(Vec::<studio_store::SavedProfile>::new()));
     ui.set_rows(ModelRc::from(rows.clone()));
     rows.summary(&ui);
     let w = ui.as_weak();
@@ -365,58 +364,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_job_exclusions(profile.job.exclusions.clone().into());
             ui.set_job_rate(profile.job.rate.to_string().into());
             ui.set_job_seed(profile.job.seed.clone().into());
+            ui.set_backend_index(if profile.job.backend == Backend::Simulation {
+                1
+            } else {
+                0
+            });
+            ui.set_profile_name(profile.name.clone().into());
+            ui.set_profile_loaded(true);
+            ui.set_confirm_profile_delete(false);
             ui.invoke_settings_edited();
-            ui.set_job_feedback(format!("Loaded {}. Check settings before starting. Legacy interface: {}; checkpoint: {} (archive only).", profile.name,
-                if profile.interface.is_empty() { "automatic" } else { &profile.interface },
-                profile.resume_index.as_deref().unwrap_or("none")).into());
+            ui.set_profile_feedback(
+                format!("Loaded {}. Check settings before starting.", profile.name).into(),
+            );
         }
     });
     let w = ui.as_weak();
     let a = app.clone();
-    ui.on_import_selected(move |path| {
+    let p = profiles.clone();
+    ui.on_save_profile(move |update| {
         if let Some(ui) = w.upgrade() {
-            ui.set_importing(true);
-            if let Err(e) = a
-                .borrow()
-                .send(Action::ImportSwift(PathBuf::from(path.as_str())))
-            {
-                ui.set_importing(false);
-                ui.set_import_report(e.into());
+            if ui.get_profile_busy() {
+                return;
+            }
+            let id = if update {
+                if !ui.get_profile_loaded() {
+                    return;
+                }
+                let profiles = p.borrow();
+                let Some(profile) = profiles.get(ui.get_profile_index() as usize) else {
+                    return;
+                };
+                Some(profile.id)
+            } else {
+                None
+            };
+            let result = draft(&ui).and_then(|job| {
+                a.borrow().send(Action::SaveProfile {
+                    id,
+                    name: ui.get_profile_name().to_string(),
+                    job,
+                })
+            });
+            match result {
+                Ok(()) => ui.set_profile_busy(true),
+                Err(e) => ui.set_profile_feedback(e.into()),
             }
         }
     });
     let w = ui.as_weak();
-    ui.on_choose_import_folder(move || {
+    let a = app.clone();
+    let p = profiles.clone();
+    ui.on_delete_profile(move || {
         if let Some(ui) = w.upgrade() {
-            if ui.get_importing() {
+            if ui.get_profile_busy() {
                 return;
             }
-            ui.set_importing(true);
-            let mut dialog =
-                rfd::AsyncFileDialog::new().set_title("Choose the old Swift data folder");
-            if let Some(home) = std::env::var_os("HOME") {
-                dialog = dialog.set_directory(
-                    PathBuf::from(home).join("Library/Application Support/Masscan Studio"),
-                );
+            if let Some(profile) = p.borrow().get(ui.get_profile_index() as usize) {
+                match a.borrow().send(Action::DeleteProfile(profile.id)) {
+                    Ok(()) => ui.set_profile_busy(true),
+                    Err(e) => ui.set_profile_feedback(e.into()),
+                }
             }
-            let selection = dialog.pick_folder();
-            let w = w.clone();
-            std::thread::spawn(move || {
-                let selected = pollster::block_on(selection);
-                let _ = w.upgrade_in_event_loop(move |ui| {
-                    if let Some(folder) = selected {
-                        if let Some(path) = folder.path().to_str() {
-                            ui.invoke_import_selected(path.into());
-                        } else {
-                            ui.set_importing(false);
-                            ui.set_import_report("Folder path is not valid UTF-8".into());
-                        }
-                    } else {
-                        ui.set_importing(false);
-                        ui.set_import_report("Import cancelled. Nothing changed.".into());
-                    }
-                });
-            });
         }
     });
     let w = ui.as_weak();
@@ -607,41 +615,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for update in updates {
                 match update {
-                    Update::LastImportReport(report) => {
-                        if !ui.get_importing() {
-                            ui.set_import_report(report.summary().into());
-                        }
-                    }
-                    Update::ImportFinished(result) => {
-                        ui.set_importing(false);
-                        ui.set_import_report(
+                    Update::ProfileResult(result) => {
+                        ui.set_profile_busy(false);
+                        ui.set_confirm_profile_delete(false);
+                        ui.set_profile_feedback(
                             result
-                                .map(|r| r.summary())
-                                .unwrap_or_else(|e| {
-                                    format!("Import failed: {e}\nNo records were imported.")
-                                })
+                                .unwrap_or_else(|e| format!("Profile change failed: {e}"))
                                 .into(),
                         );
                     }
-                    Update::Profiles(values) => {
+                    Update::Profiles(values, selected) => {
                         ui.set_profile_labels(ModelRc::new(slint::VecModel::from(
                             values
                                 .iter()
                                 .map(|p| slint::SharedString::from(p.name.as_str()))
                                 .collect::<Vec<_>>(),
                         )));
-                        ui.set_profile_index(if values.is_empty() { -1 } else { 0 });
+                        ui.set_profile_index(
+                            values
+                                .iter()
+                                .position(|p| Some(p.id) == selected)
+                                .map(|i| i as i32)
+                                .unwrap_or(-1),
+                        );
+                        ui.set_profile_loaded(selected.is_some());
                         *p.borrow_mut() = values;
                     }
                     Update::Reset(data, backend) => {
                         ui.set_inspection_available(backend != Backend::Simulation);
                         m.simulation.set(backend == Backend::Simulation);
-                        m.imported.set(backend == Backend::SwiftImport);
+                        m.archived.set(backend == Backend::Archived);
                         ui.set_scan_backend_label(
                             if backend == Backend::Simulation {
                                 "Simulation · no packets"
-                            } else if backend == Backend::SwiftImport {
-                                "Imported Swift history"
+                            } else if backend == Backend::Archived {
+                                "Archived history"
                             } else {
                                 "feth lab · raw packets"
                             }
@@ -700,10 +708,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_history_labels(ModelRc::new(slint::VecModel::from(
                             data.iter()
                                 .map(|s| {
-                                    if s.job.backend == Backend::SwiftImport {
+                                    if s.job.backend == Backend::Archived {
                                         return slint::SharedString::from(format!(
                                             "{} · {:?} · {}",
-                                            s.name.as_deref().unwrap_or("Swift history"),
+                                            s.name.as_deref().unwrap_or("Archived history"),
                                             s.status,
                                             s.created_at.as_deref().unwrap_or("Unknown date")
                                         ));
@@ -746,7 +754,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_process_status(format!("{status:?}").into());
                         ui.set_action_notice(detail.into());
                         ui.set_process_active(process_active(&status));
-                        ui.set_can_resume(status == Status::Paused && !m.imported.get());
+                        ui.set_can_resume(status == Status::Paused && !m.archived.get());
                         if !process_active(&status) {
                             ui.set_process_stopping(false);
                         }
@@ -813,7 +821,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     #[test]
-    fn imported_ready_history_does_not_lock_the_ui_as_an_active_scan() {
+    fn archived_ready_history_does_not_lock_the_ui_as_an_active_scan() {
         assert!(!process_active(&Status::Ready));
         for status in [Status::Starting, Status::Scanning, Status::Saving] {
             assert!(process_active(&status));
@@ -828,7 +836,7 @@ mod tests {
             keys: RefCell::new(HashMap::new()),
             notify: ModelNotify::default(),
             simulation: Cell::new(false),
-            imported: Cell::new(false),
+            archived: Cell::new(false),
         };
         rows.add(
             [("198.18.0.2", 80), ("198.18.0.2", 443), ("198.18.0.10", 80)]

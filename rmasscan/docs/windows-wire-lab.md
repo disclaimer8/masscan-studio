@@ -126,6 +126,21 @@ version, loaded DLL paths, versions and SHA-256). Scan, reference, forge and pos
 targets, exclude, ports, seed, rate, wait, retries/shard/BlackRock rounds and the job digest. The wrapper logs the exact
 argument array of every EXE call in `run.log`.
 
+## Sending path (sendqueue)
+
+The Windows adapter hands frames to Npcap with `pcap_sendqueue_transmit` (`sync = 0`), one transmit per
+engine batch of at most `TX_BATCH_FRAMES` (64) frames, chosen by the spike so that one synchronous,
+non-cancellable transmit fits the 42 ms internal budget (`IO_BUDGET`) under the 50 ms contract. A batch of
+one frame goes through `pcap_sendpacket`. The `pcap_sendqueue_*` exports are required; there is no silent
+fallback. `Sent` is exactly what the driver accepted in the same call and no queue outlives it. A transmit
+that stops early makes the whole batch `Uncertain` (the run fails with `TxUncertain`, no checkpoint, no
+retry), because the byte count alone does not prove which frames reached the wire. Calls that exceed the
+budget are counted in `net.tx_over_budget`, and any non-zero count fails acceptance; the counter is
+measured only on the sendqueue path. `identity.tx_mode` (`sendqueue` or `single`) and
+`identity.tx_batch_cap`, and `net.tx_batches`, `net.tx_batch_max`, `net.tx_over_budget`, tell the verifier
+which path ran. On a run with uncertain frames the wire check is `tx_sent <= SYN on wire <= tx_sent +
+tx_uncertain`; everywhere else `tx_sent` equals the SYN count on the wire.
+
 ## Metrics
 
 `resources` in `run.json`: handle/fd counts, thread counts, working set, CPU times. Whatever the OS cannot measure is

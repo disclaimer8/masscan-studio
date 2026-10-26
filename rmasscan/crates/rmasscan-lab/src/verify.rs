@@ -2297,6 +2297,7 @@ fn verify_item(
         j["identity"]["os"]["family"] == "windows",
         "",
     );
+    sendqueue_identity(&mut r, man, j, it);
     capture(&mut r, man, &ctx, &cap, &eno);
     verify_argv(&mut r, it, man, &ctx.d);
     fixture_binding(&mut r, fx, &ctx.bind);
@@ -2451,6 +2452,49 @@ pub(crate) fn host_truth(r: &mut Run, ctx: &Ctx, c: &Value, exp: Vec<String>) ->
         })
         .collect()
 }
+/// Sendqueue evidence rules (a)-(c). They apply only to a directory whose manifest records
+/// `tx_mode_expected` (older directories are left as they were) and only to a scan report
+/// (`status` ok with a `net` block): refusals and inventories never reach the adapter and carry
+/// no `tx_mode`. `net.tx_over_budget` is a measured counter only under sendqueue; a `single`
+/// run does not measure it, so zero there would prove nothing and is not asked for.
+fn sendqueue_identity(r: &mut Run, man: &Value, j: &Value, it: &Value) {
+    let Some(expected) = man["tx_mode_expected"].as_str() else {
+        return;
+    };
+    if j["status"] != "ok" || !j["net"].is_object() {
+        return;
+    }
+    let mode = j["identity"]["tx_mode"].as_str();
+    r.beh(
+        "identity.tx_mode present (absent: harness predates sendqueue)",
+        mode.is_some(),
+        j["identity"].to_string(),
+    );
+    let Some(mode) = mode else { return };
+    r.beh(
+        "identity.tx_mode equals manifest tx_mode_expected",
+        mode == expected,
+        format!("{mode} vs {expected}"),
+    );
+    if mode != "sendqueue" {
+        return;
+    }
+    r.beh(
+        "net.tx_over_budget is 0 (else call budget breached)",
+        j["net"]["tx_over_budget"].as_u64() == Some(0),
+        j["net"]["tx_over_budget"].to_string(),
+    );
+    if it["kind"] == "perf" && n(&it["rate"]) >= 10000 {
+        let batches = j["net"]["tx_batches"].as_u64().unwrap_or(0);
+        let max = j["net"]["tx_batch_max"].as_u64();
+        let cap = j["identity"]["tx_batch_cap"].as_u64();
+        r.beh(
+            "sendqueue claimed and a batch was transmitted within tx_batch_cap (else sendqueue claimed but no batch was transmitted)",
+            batches > 0 && max.zip(cap).is_some_and(|(m, c)| m <= c),
+            format!("tx_batches {batches}, tx_batch_max {max:?}, tx_batch_cap {cap:?}"),
+        );
+    }
+}
 /// One perf cell (ruling 7). The capture-completeness rules ran in `capture` (INVALID); everything
 /// here is a behaviour or isolation finding (FAIL). The cell's metrics are recorded in `notes.perf`.
 pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
@@ -2585,10 +2629,23 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         "join_ms":j["timing"]["join_ms"],
         "drain_s":total_s.zip(last_send).map(|(t, l)| t - l),
         "rx_packets":j["net"]["rx_packets"],"kernel_drops":j["rx_health"]["kernel_drops"],
-        "received_open":count(":open"),"received_closed":count(":closed"),
+                "received_open":count(":open"),"received_closed":count(":closed"),
         "peer_replies_on_wire":wire_replies_n,
         "outcome":outcome,"rx_loss":rx_loss,"capture_valid":r.proven(),
     }));
+    // Batch evidence of the sendqueue path; a run from a harness without it records none of these.
+    if let Some(m) = r.notes.get_mut("perf").and_then(Value::as_object_mut) {
+        for (k, v) in [
+            ("tx_batches", &j["net"]["tx_batches"]),
+            ("tx_batch_max", &j["net"]["tx_batch_max"]),
+            ("tx_batch_cap", &j["identity"]["tx_batch_cap"]),
+            ("tx_over_budget", &j["net"]["tx_over_budget"]),
+        ] {
+            if !v.is_null() {
+                m.insert(k.into(), v.clone());
+            }
+        }
+    }
 }
 pub(crate) fn groups(
     root: &Path,
@@ -2835,7 +2892,7 @@ pub(crate) fn provenance_report(man: &Value) -> Value {
     }
     json!({"orchestrator":orch,"verifier":verifier,"warnings":warnings})
 }
-const PERF_METRICS: [&str; 7] = [
+const PERF_METRICS: [&str; 8] = [
     "steady_pps_wire",
     "steady_pps_inprocess",
     "cpu_user_ms",
@@ -2843,6 +2900,7 @@ const PERF_METRICS: [&str; 7] = [
     "peak_working_set_bytes",
     "join_ms",
     "drain_s",
+    "tx_batch_max",
 ];
 /// Fewer PASS cells than this at a rate leave its gate NOT RUN (ruling 8).
 const PERF_MIN_PASS: usize = 3;
@@ -2883,7 +2941,11 @@ pub(crate) fn perf_summary(runs: &[Value]) -> Value {
                 .iter()
                 .filter_map(|r| r["notes"]["perf"][k].as_f64())
                 .collect();
-            med.insert(k.into(), json!(median(values)));
+            let m = median(values);
+            // tx_batch_max exists only in sendqueue-era evidence: no key, no null, for older cells.
+            if k != "tx_batch_max" || m.is_some() {
+                med.insert(k.into(), json!(m));
+            }
         }
         let rx_wire = median(
             rx.iter()
@@ -2915,7 +2977,7 @@ pub(crate) fn perf_summary(runs: &[Value]) -> Value {
         "rows":rows,
         "notes":[
             "All medians are over the Completed PASS cells (every probe went out); rate_gate is MET when the median steady_pps_wire is within 20 percent of the requested rate, OPEN otherwise, and NOT RUN with fewer than 3 Completed PASS cells or no measured median. It never changes overall.",
-            "VM speed, not physical NIC; ±20% gate may stay OPEN until 2B-sendqueue",
+            "VM speed, not physical NIC; the VM ceiling with sendqueue is an OPEN finding for the physical NIC stage, never a FAIL",
             "Call latency here is join_ms and drain_s only. Stop latency under load is measured by the stop_* runs of failure-r1 (docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/failure-r1); per-Npcap-call latency by the spike evidence (docs/experiments/2026-10-24-rmasscan-stage2b-windows-spike-raw).",
             "A PASS cell with rx_loss true is honest measured loss (Failed(RxLoss) with kernel drops above zero); its results are recorded and checked for genuineness but not compared to the full listener truth. It is counted in rx_loss and in the informational rxloss_cells and rxloss_steady_pps_wire_median, never in a median or the gate."
         ]

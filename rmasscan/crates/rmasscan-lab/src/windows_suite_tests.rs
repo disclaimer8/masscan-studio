@@ -527,6 +527,7 @@ fn suite<'a>(stand: &'a Stand, root: &Path) -> Suite<'a> {
         manifest: "/home/a1/winvm/lab/n2.json".into(),
         guest_exe: "C:\\x\\wire_scan.exe".into(),
         plan: "failure".into(),
+        tx_mode: "sendqueue".into(),
         timeout: 240,
         pm: PM.into(),
         cleanup: Cell::new(false),
@@ -2337,6 +2338,7 @@ fn every_subcommand_refuses_unknown_and_repeated_options() {
         "list",
         "cleanup",
         "run-timeout",
+        "tx-mode",
     ] {
         assert!(WINDOWS_SUITE_OPTIONS.contains(&k), "{k}");
     }
@@ -2848,5 +2850,60 @@ fn a_lost_lock_abort_signals_only_this_runs_pidfiles_escalates_and_names_what_it
             && note.contains(&format!("{rev}/peer.pid"))
             && note.contains("kill -KILL"),
         "manual advice names the pidfile: {note}"
+    );
+}
+
+// ---- Task 5: --tx-mode ----
+#[test]
+fn options_list_includes_tx_mode() {
+    assert!(WINDOWS_SUITE_OPTIONS.contains(&"tx-mode"));
+    let args = strings(&["--tx-mode", "single"]);
+    assert!(options_for("windows-suite", &args, WINDOWS_SUITE_OPTIONS).is_ok());
+    let dup = strings(&["--tx-mode", "single", "--tx-mode", "sendqueue"]);
+    assert!(
+        options_for("windows-suite", &dup, WINDOWS_SUITE_OPTIONS)
+            .unwrap_err()
+            .contains("--tx-mode")
+    );
+}
+#[test]
+fn tx_mode_option_is_validated_and_recorded_in_the_manifest() {
+    let w = World::new("tx-mode");
+    let fresh = |n: &str| {
+        let p = w.root.parent().unwrap().join(n);
+        fs::create_dir_all(&p).unwrap();
+        p
+    };
+    let with_out = |out: &Path, extra: &[&str]| {
+        let mut a = suite_args(&w, &["--suite", "failure", "--only", TAG]);
+        a[1] = out.to_str().unwrap().into();
+        a.extend(strings(extra));
+        a
+    };
+    // Anything but sendqueue|single is refused before any remote command.
+    for bad in ["", "batch", "SENDQUEUE", "sendqueue,single"] {
+        let stand = Stand::new(&w.src);
+        let r = run_with(&with_out(&fresh("bad"), &["--tx-mode", bad]), &stand);
+        assert!(matches!(r, Err(SuiteError::NotRun(_))), "{bad:?}: {r:?}");
+        assert!(stand.calls().is_empty(), "{bad:?} reached a remote command");
+    }
+    // Recorded as given; sendqueue by default.
+    for (name, extra, want) in [
+        ("dflt", &[][..], "sendqueue"),
+        ("sq", &["--tx-mode", "sendqueue"][..], "sendqueue"),
+        ("single", &["--tx-mode", "single"][..], "single"),
+    ] {
+        let out = fresh(name);
+        let stand = Stand::new(&w.src);
+        run_with(&with_out(&out, extra), &stand).unwrap();
+        let man = read_json(out.join("manifest.json")).unwrap();
+        assert_eq!(man["tx_mode_expected"], want, "{name}");
+    }
+    // A directory keeps the mode it was started with.
+    let stand = Stand::new(&w.src);
+    let e = run_with(&with_out(&w.root, &["--tx-mode", "single"]), &stand).unwrap_err();
+    assert!(
+        e.message().contains("existing manifest identity differs"),
+        "{e:?}"
     );
 }

@@ -112,7 +112,8 @@ fn manifest_for(schema: u64, plan: &str) -> Value {
         "stand":{"run_id":"n2","netns":NETNS,"manifest":"$HOME/winvm/lab/n2.json"},
         "listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
         "oracle":{"sha256":"cd","git_commit":"ef","git_tree_clean":true},
-        "pause":{"case":"c03_multi_ports","n":[0,1,8,15]}
+        "pause":{"case":"c03_multi_ports","n":[0,1,8,15]},
+        "tx_mode_expected":"sendqueue"
     });
     if schema >= 3 {
         // What the suite records for the Mac-side build that ran it (provenance.rs).
@@ -156,9 +157,9 @@ fn base_run(c: &Value, man: &Value, t0: f64, outcome: f64, tag: &str) -> Value {
     let (w, res) = workers();
     json!({
         "run_id":format!("run-{tag}"),"status":"ok","reason":"Completed","fail_detail":"",
-        "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"elevated":true,"restricted_token":false,"os":{"family":"windows"}},
+        "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"elevated":true,"restricted_token":false,"os":{"family":"windows"},"tx_mode":"sendqueue","tx_batch_cap":64},
         "job":job_echo(c,man),
-        "net":{"kernel_drops":0,"rx_errors":0,"rx_packets":0,"tx_errors":0,"tx_sent":0,"tx_uncertain":0},
+        "net":{"kernel_drops":0,"rx_errors":0,"rx_packets":0,"tx_errors":0,"tx_sent":0,"tx_uncertain":0,"tx_batches":8,"tx_batch_max":64,"tx_over_budget":0},
         "rx_health":{"kernel_drops":0},
         "sent":0,"next_index":0,"range":n(&c["syn"]),"expected_total":n(&c["syn"]),
         "replies":[],"reply_total":0,"reply_unique":0,"received":0,"duplicates":0,"discarded":0,

@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+mod guard;
+#[cfg(test)]
+mod guard_tests;
 mod outbox;
 use rmasscan_engine::{Checkpoint, Engine, EngineHandle, EngineOptions, Reason};
 use std::{
@@ -16,6 +19,7 @@ struct Attempt {
     order: ReceiveOrder,
     sequence: u64,
     engine: Option<EngineHandle>,
+    guard: Option<guard::Guard>,
     pending: Option<CheckpointAck>,
     rows: Vec<studio_protocol::Row>,
     progress: Option<Event>,
@@ -40,7 +44,8 @@ impl CheckpointAck {
         }
     }
 }
-fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
+type PreparedAdapter = (rmasscan_engine::AdapterPair, Option<guard::Inspector>);
+fn raw_adapter(job: &Job) -> Result<PreparedAdapter, String> {
     let plan = job.prepare()?;
     match job.backend {
         Backend::Archived => Err("Archived history cannot start a scanner".into()),
@@ -51,7 +56,7 @@ fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
                     .into_iter()
                     .collect()
             });
-            Ok(fake.pair())
+            Ok((fake.pair(), None))
         }
         Backend::MacFeth => {
             // The scanner's stand checks also validate routes, peer addresses,
@@ -60,14 +65,36 @@ fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
             if !studio_protocol::RAW_SCANNING_ENABLED {
                 return Err("Raw scanning is not enabled in this Studio build: complete live isolation preflight and authenticated runner bootstrap are still required. Simulation is available.".into());
             }
-            check_feth()?;
-            rmasscan_net::open_explicit(plan.binding()).map(|a|a.io).map_err(|e|format!("BPF access unavailable: {e}. The isolated feth stand and an explicit access grant are required."))
+            let inspector = feth_inspector()?;
+            let pair = rmasscan_net::open_explicit(plan.binding()).map(|a|a.io).map_err(|e|format!("BPF access unavailable: {e}. The isolated feth stand and an explicit access grant are required."))?;
+            Ok((pair, Some(inspector)))
         }
     }
 }
 #[cfg(target_os = "macos")]
-fn check_feth() -> Result<(), String> {
-    studio_platform::network::inspect_mac_feth().map(|_| ())
+fn feth_inspector() -> Result<guard::Inspector, String> {
+    let manifest = studio_platform::network::inspect_mac_feth()?.manifest;
+    Ok(Box::new(move |cancelled| {
+        let cancellation_seen = std::cell::Cell::new(false);
+        let check_cancel = || {
+            let stop = cancelled();
+            cancellation_seen.set(cancellation_seen.get() || stop);
+            stop
+        };
+        let observed = match studio_platform::network::inspect_mac_feth_cancellable(&check_cancel) {
+            Ok(observed) => observed,
+            Err(_) if cancellation_seen.get() => return Ok(guard::Observation::Cancelled),
+            Err(error) => return Err(error),
+        };
+        if observed.manifest != manifest {
+            return Err("Stand manifest changed during this attempt".into());
+        }
+        Ok(guard::Observation::Valid)
+    }))
+}
+#[cfg(not(target_os = "macos"))]
+fn feth_inspector() -> Result<guard::Inspector, String> {
+    Err("Mac feth observer is only available on macOS".into())
 }
 #[cfg(not(target_os = "macos"))]
 fn check_feth() -> Result<(), String> {
@@ -89,10 +116,73 @@ fn flush(tx: &outbox::Sender, session: Id, a: &mut Attempt) -> Result<(), String
     a.flushed = Instant::now();
     Ok(())
 }
+fn publish_finish(
+    events: &outbox::Sender,
+    session: Id,
+    a: &mut Attempt,
+    reason: Reason,
+    cp: Option<Checkpoint>,
+) -> Result<(), String> {
+    flush(events, session, a)?;
+    let interrupted = a.guard.take().and_then(guard::Guard::finish);
+    if let Some(detail) = interrupted {
+        send(
+            events,
+            session,
+            a,
+            Event::Finished {
+                status: Status::Interrupted,
+                detail,
+            },
+        )?;
+    } else if reason == Reason::Paused {
+        let cp = cp.ok_or("Paused engine supplied no checkpoint")?;
+        a.sequence += 1;
+        let receipt = events.try_send_tracked(Envelope::new(
+            session,
+            a.scan,
+            a.id,
+            a.sequence,
+            Event::Checkpoint {
+                bytes: cp.to_bytes(),
+                next_index: cp.next_index.to_string(),
+            },
+        ))?;
+        a.pending = Some(CheckpointAck {
+            sequence: a.sequence,
+            queued: Instant::now(),
+            receipt,
+        });
+    } else {
+        let status = match reason {
+            Reason::Completed => Status::Completed,
+            Reason::Stopped => Status::Stopped,
+            _ => Status::Failed,
+        };
+        send(
+            events,
+            session,
+            a,
+            Event::Finished {
+                status,
+                detail: format!("{reason:?}"),
+            },
+        )?;
+    }
+    Ok(())
+}
 fn serve(
     input: Box<dyn Read + Send>,
     output_stream: Box<dyn Write + Send>,
     live: Box<dyn Fn() -> Result<(), String>>,
+) -> Result<(), String> {
+    serve_with_adapter(input, output_stream, live, raw_adapter)
+}
+fn serve_with_adapter(
+    input: Box<dyn Read + Send>,
+    output_stream: Box<dyn Write + Send>,
+    live: Box<dyn Fn() -> Result<(), String>>,
+    mut adapter: impl FnMut(&Job) -> Result<PreparedAdapter, String>,
 ) -> Result<(), String> {
     let (commands, rx) = mpsc::sync_channel(8);
     let disconnected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -155,6 +245,13 @@ fn serve(
     let mut active: Option<Attempt> = None;
     let mut checked = Instant::now();
     loop {
+        if let Some(a) = active.as_mut()
+            && let Some(guard) = a.guard.as_mut()
+        {
+            // This is nonblocking, including while inspection is in progress.
+            // The guard owns cancellation; keep draining already received rows.
+            guard.poll();
+        }
         if checked.elapsed() >= Duration::from_millis(250) {
             live()?;
             checked = Instant::now();
@@ -218,6 +315,7 @@ fn serve(
                             order: ReceiveOrder::new(session, e.scan, e.attempt),
                             sequence: 0,
                             engine: None,
+                            guard: None,
                             pending: None,
                             rows: Vec::new(),
                             progress: None,
@@ -247,7 +345,7 @@ fn serve(
                                     return Err("Resume needs a fresh attempt".into());
                                 }
                             }
-                            let pair = raw_adapter(job)?;
+                            let (pair, inspect) = adapter(job)?;
                             let mut opts = EngineOptions::new(e.scan, e.attempt);
                             opts.event_batch_limit = 128;
                             let engine = match cp {
@@ -255,10 +353,14 @@ fn serve(
                                 None => Engine::start(plan, pair, opts),
                             }
                             .map_err(|e| e.to_string())?;
-                            Ok::<_, String>(engine)
+                            let guard = guard::Guard::new(engine.cancel_handle(), inspect)?;
+                            Ok::<_, String>((engine, guard))
                         })();
                         match run {
-                            Ok(engine) => a.engine = Some(engine),
+                            Ok((engine, guard)) => {
+                                a.engine = Some(engine);
+                                a.guard = Some(guard);
+                            }
                             Err(error) => send(
                                 &events,
                                 session,
@@ -363,41 +465,7 @@ fn serve(
                             .ok_or("Engine disappeared")?
                             .join()
                             .map_err(|e| e.to_string())?;
-                        flush(&events, session, a)?;
-                        if reason == Reason::Paused {
-                            let cp = cp.ok_or("Paused engine supplied no checkpoint")?;
-                            a.sequence += 1;
-                            let receipt = events.try_send_tracked(Envelope::new(
-                                session,
-                                a.scan,
-                                a.id,
-                                a.sequence,
-                                Event::Checkpoint {
-                                    bytes: cp.to_bytes(),
-                                    next_index: cp.next_index.to_string(),
-                                },
-                            ))?;
-                            a.pending = Some(CheckpointAck {
-                                sequence: a.sequence,
-                                queued: Instant::now(),
-                                receipt,
-                            });
-                        } else {
-                            let status = match reason {
-                                Reason::Completed => Status::Completed,
-                                Reason::Stopped => Status::Stopped,
-                                _ => Status::Failed,
-                            };
-                            send(
-                                &events,
-                                session,
-                                a,
-                                Event::Finished {
-                                    status,
-                                    detail: format!("{reason:?}"),
-                                },
-                            )?;
-                        }
+                        publish_finish(&events, session, a, reason, cp)?;
                     }
                     Err(TryRecvError::Empty) => {}
                     Err(TryRecvError::Disconnected) => {

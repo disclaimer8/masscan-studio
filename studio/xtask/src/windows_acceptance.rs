@@ -200,12 +200,11 @@ pub fn verify_uac(root: &Path) -> Result<()> {
         |owner| {
             let deadline = Instant::now() + Duration::from_secs(190);
             let identity = loop {
-                if let Ok(bytes) = fs::read(&ready) {
-                    if let Ok(value) =
+                if let Ok(bytes) = fs::read(&ready)
+                    && let Ok(value) =
                         serde_json::from_slice::<studio_platform::windows::Identity>(&bytes)
-                    {
-                        break value;
-                    }
+                {
+                    break value;
                 }
                 // SAFETY: retained fixture process; nonblocking liveness check.
                 if unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } != WAIT_TIMEOUT {

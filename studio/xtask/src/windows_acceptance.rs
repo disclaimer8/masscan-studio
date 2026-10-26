@@ -202,8 +202,10 @@ pub fn verify_uac(root: &Path) -> Result<()> {
             let deadline = Instant::now() + Duration::from_secs(190);
             let identity = loop {
                 if let Ok(bytes) = fs::read(&ready)
-                    && let Ok(value) =
-                        serde_json::from_slice::<studio_platform::windows::Identity>(&bytes)
+                    && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    && let Ok(value) = serde_json::from_value::<studio_platform::windows::Identity>(
+                        value["runner"].clone(),
+                    )
                 {
                     break value;
                 }
@@ -239,7 +241,10 @@ pub fn uac_fixture() -> Result<()> {
         .nth(2)
         .ok_or("Supply installed runner SHA-256")?;
     let mode = std::env::args().nth(3).unwrap_or("close".into());
-    if mode != "close" && std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+    if mode != "close"
+        && std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
+        && std::env::var("STUDIO_UAC_LAB_ACCEPTANCE").as_deref() != Ok("1")
+    {
         return Err("Destructive fixture modes require disposable CI".into());
     }
     use std::{sync::atomic::AtomicBool, time::Duration};
@@ -308,7 +313,7 @@ pub fn uac_fixture() -> Result<()> {
                 .write(true)
                 .create_new(true)
                 .open(path)?
-                .write_all(&serde_json::to_vec(runner.identity())?)?;
+                .write_all(&serde_json::to_vec(&serde_json::json!({"runner":runner.identity(),"owner":Process::open(std::process::id())?.identity()}))?)?;
             std::thread::sleep(Duration::from_secs(15));
             return Err("CI did not terminate UAC owner fixture".into());
         }
@@ -326,6 +331,47 @@ pub fn cancel_fixture() -> Result<()> {
         return Err("Requires disposable CI".into());
     }
     run(Command::new("cargo").args(["test", "--locked", "-p", "studio-platform", "--lib", "windows::uac::tests::cancellation_destroys_endpoints_before_late_runner_and_allows_retry", "--", "--ignored", "--exact", "--nocapture"]).env("STUDIO_TEST_UAC_HASH", hash))
+}
+
+pub fn package_tests(root: &Path) -> Result<()> {
+    let output = Command::new("cargo")
+        .args([
+            "test",
+            "--locked",
+            "-p",
+            "studio-platform",
+            "--lib",
+            "--no-run",
+            "--message-format=json-render-diagnostics",
+        ])
+        .output()?;
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    if !output.status.success() {
+        return Err("Native acceptance fixture build failed".into());
+    }
+    let exe = String::from_utf8(output.stdout)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|v| {
+            v["reason"] == "compiler-artifact"
+                && v["target"]["name"] == "studio_platform"
+                && v["profile"]["test"] == true
+        })
+        .filter_map(|v| v["executable"].as_str().map(PathBuf::from))
+        .next_back()
+        .ok_or("Native fixture executable missing")?;
+    let dir = root.join("dist").join("uac-acceptance");
+    fs::create_dir_all(&dir)?;
+    let target = dir.join("studio-uac-tests.exe");
+    fs::copy(exe, &target)?;
+    fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_vec_pretty(
+            &serde_json::json!({"sha256":digest(&target)?,"source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,"cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,"raw_enabled":studio_protocol::RAW_SCANNING_ENABLED}),
+        )?,
+    )?;
+    println!("Native acceptance fixture: {}", target.display());
+    Ok(())
 }
 pub fn token_probe() -> Result<()> {
     let me = studio_platform::windows::Process::open(std::process::id())?;

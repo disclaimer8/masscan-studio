@@ -1,0 +1,69 @@
+name: Studio
+on:
+  push:
+    branches: [main]
+    paths: ['studio/**', 'rmasscan/**', '.github/workflows/studio.yml']
+  pull_request:
+    paths: ['studio/**', 'rmasscan/**', '.github/workflows/studio.yml']
+permissions:
+  contents: read
+concurrency:
+  group: studio-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  application:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: studio
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.1
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libsqlite3-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb-xkb1 libwayland-dev libx11-xcb-dev libegl1-mesa-dev xvfb
+      - name: Windows external SQLite
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          . ./scripts/windows-sqlite.ps1
+          "SQLITE3_LIB_DIR=$env:SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
+          "$env:SQLITE3_LIB_DIR" >> $env:GITHUB_PATH
+      - name: macOS external SQLite
+        if: runner.os == 'macOS'
+        run: |
+          brew install sqlite
+          echo "SQLITE3_LIB_DIR=$(brew --prefix sqlite)/lib" >> "$GITHUB_ENV"
+          echo "SQLITE3_INCLUDE_DIR=$(brew --prefix sqlite)/include" >> "$GITHUB_ENV"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            studio/target
+          key: studio-${{ runner.os }}-1.99.1-${{ hashFiles('studio/Cargo.lock') }}
+      - name: Offline contracts, lifecycle, persistence and lint
+        env:
+          STUDIO_TRACE_TIMINGS: '1'
+        run: cargo xtask test
+      - name: Package UI and runner
+        run: cargo xtask build
+      - name: Linux software UI lifecycle (no packets)
+        if: runner.os == 'Linux'
+        run: |
+          STUDIO_DATA_DIR="$RUNNER_TEMP/studio-pause" SLINT_BACKEND=winit-software xvfb-run -a target/debug/studio-ui --smoke-pause
+          STUDIO_DATA_DIR="$RUNNER_TEMP/studio-stop" SLINT_BACKEND=winit-software xvfb-run -a target/debug/studio-ui --smoke-stop-race
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-${{ runner.os }}-${{ github.sha }}
+          path: studio/dist/

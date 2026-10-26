@@ -1,0 +1,17 @@
+[package]
+name = "studio-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+studio-protocol.workspace = true
+studio-platform.workspace = true
+rmasscan-core.workspace = true
+rmasscan-engine.workspace = true
+rmasscan-net.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+studio-app.workspace = true
+studio-store.workspace = true

@@ -5,7 +5,7 @@ Provenance: code commit `628fcad7118943642dc797a0432b62851fbe6c1d` (pinned, clea
 `8eb4c633096ac871f3eed072fc066fb5716d1250ecbc26427be5929fa0456d44` from `git archive` (deploy manifest in `deploy/`); guest `wire_scan.exe` sha256
 `091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7` built from `git archive` on the guest (static CRT, `/DEPENDENTLOADFLAG:0x800`, dumpbin shows `0800 Dependent Load Flag`, see `../verification/guest-build-dumpbin-628fcad.log`).
 Stand n2 (sealed), binding `\Device\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}` 198.18.0.1 -> 198.18.0.2 only, fixtures of masscan `8e6b3b0` reused unchanged. `--tx-mode sendqueue`.
-Verdicts: `verdict-628fcad.json` is the verdict as produced by the 628fcad verifier; `verdict.json` is the FINAL verdict from the newer verifier `bbda664` (adds the perf wire-order-equals-plan check), run on this scrubbed copy. Both agree on every run.
+Verdicts: `verdict-628fcad.json` is the verdict as produced by the 628fcad verifier; `verdict.json` is the FINAL verdict, regenerated on this scrubbed copy by the verifier built from commit `fb36d0cc682b` (final fix round; `bbda664` added the perf wire-order-equals-plan check, `fb36d0c` only neutralises the `perf_summary` latency note text). Against the `bbda664` verdict overall, totals and every per-run verdict are unchanged; only `provenance.verifier` and, in `perf-r2`, `perf_summary.notes` differ. Both agree on every run.
 Safety statement: every run was preceded and followed by a full `vm-lab status` with `raw_run_allowed: true`, guest Verify with nonce, peer capture on lab0 and an `eno1` capture with the lab filter. `eno1` showed 0 lab frames in every run; no safety trip, no exit 13. No firewall, route, DNS or NIC change; Npcap not touched; stand and VM not restarted.
 Scrub: no personal paths occurred in this directory's text files (only `/home/a1` and `C:\Users\lab`, as in earlier rounds). Pcaps are uncompressed.
 
@@ -17,4 +17,8 @@ Scrub: no personal paths occurred in this directory's text files (only `/home/a1
 ## NOT RUN / restarts
 
 - First suite start: `stop_load` aborted before any capture started (Mac network error during the pre-run Verify: `scp failed (255): Read from remote host ... Can't assign requested address`; nothing sent). Evidence of that attempt in `runs_aborted/stop_load.r5ea61dc2fb7fad38dc39b889ce05cf31/`. A stale suite lock on home-pc (dead orchestrator's half-open `sh`+`cat`) was cleared by PID as documented; the stale partial dir was discarded with `--rerun --only stop_load` (`runs_discarded/stop_load.r2262d53c726507c9cc6f572a4bd159ca`, NOT RUN). Remaining tags were then run with `--only`.
-- `linkloss` first attempt INVALID (end marker and flushed capture tail; tcpdump 177/177, 0 drops, eno1 0, status-post allowed). Reran alone with `--rerun --only linkloss`; first attempt in `runs_discarded/`. Reasons: `../failure-r2-rerun-reason.txt`.
+- `linkloss` first attempt INVALID (end marker and flushed capture tail; tcpdump 177/177, 0 drops, eno1 0, status-post allowed). Reran alone with `--rerun --only linkloss`; first attempt in `runs_discarded/`. Reasons: `rerun-reason.txt` of this directory.
+
+## Language-guard renames
+
+For the language-guard allowlist two files of the aborted `stop_load` copy (`runs_aborted/stop_load.r5ea61dc2fb7fad38dc39b889ce05cf31/`) were renamed after the copy, content unchanged: `listener.pid` -> `listener.pid.txt` (its sha256 equals the entry in `abort-hashes-on-home-pc.txt`) and the suite marker `.abort-uncopied` -> `abort-uncopied-marker.txt` (empty). Other guard renames of this stage (`.pid` -> `.pid.txt` and similar) follow the same rule.

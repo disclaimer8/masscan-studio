@@ -15,7 +15,7 @@
     "notes": [
       "All medians are over the Completed PASS cells (every probe went out); rate_gate is MET when the median steady_pps_wire is within 20 percent of the requested rate, OPEN otherwise, and NOT RUN with fewer than 3 Completed PASS cells or no measured median. It never changes overall.",
       "VM speed, not physical NIC; the VM ceiling with sendqueue is an OPEN finding for the physical NIC stage, never a FAIL",
-      "Call latency here is join_ms and drain_s only. Stop latency under load is measured by the stop_* runs of failure-r1 (docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/failure-r1); per-Npcap-call latency by the spike evidence (docs/experiments/2026-10-24-rmasscan-stage2b-windows-spike-raw).",
+      "Call latency here is join_ms and drain_s only. Stop latency is measured by the stop_* runs of the failure suite of the same stage; per-call latency by the spike and the live adapter tests of that stage, not by this summary.",
       "A PASS cell with rx_loss true is honest measured loss (Failed(RxLoss) with kernel drops above zero); its results are recorded and checked for genuineness but not compared to the full listener truth. It is counted in rx_loss and in the informational rxloss_cells and rxloss_steady_pps_wire_median, never in a median or the gate."
     ],
     "rows": [
@@ -124,14 +124,11 @@
     },
     "verifier": {
       "binary_name": "rmasscan-lab",
-      "binary_sha256": "f777b3fb9df4fc862e21fe2f4fec7f14b7ead86e22b35172be5d79e12f4c2605",
-      "build_commit": "bbda664687cf77aef3b912eba6e20a9057467915",
-      "errors": [
-        "git rev-parse HEAD: fatal: not a git repository (or any of the parent directories): .git",
-        "git status --porcelain --untracked-files=no: fatal: not a git repository (or any of the parent directories): .git"
-      ],
-      "git_commit": null,
-      "git_dirty": null
+      "binary_sha256": "9c67068a633f6b99316165e1fe088e684258b560dbea485f1204e54da2b532ce",
+      "build_commit": "fb36d0cc682be042c131ae15f73213c4f0802c12",
+      "errors": [],
+      "git_commit": "fb36d0cc682be042c131ae15f73213c4f0802c12",
+      "git_dirty": false
     },
     "warnings": []
   },

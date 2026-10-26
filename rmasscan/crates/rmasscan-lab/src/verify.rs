@@ -819,7 +819,11 @@ pub(crate) fn answered_replies_until(ctx: &Ctx, c: &Value, until: Option<f64>) -
 /// One reply per port: an RST that follows a SYN-ACK of the same port (Darwin aborting the embryonic connection of
 /// an open port, seen live for 7000 in perf.100000.r2) is not a second result; the port's open result stands for it.
 /// Also true when a result for the port exists in either state.
-fn answered_port_open(answered: &BTreeSet<String>, have: &BTreeSet<&str>, closed: &str) -> bool {
+pub(crate) fn answered_port_open(
+    answered: &BTreeSet<String>,
+    have: &BTreeSet<&str>,
+    closed: &str,
+) -> bool {
     let open = closed.replacen(":closed", ":open", 1);
     answered.contains(&open) || have.contains(open.as_str())
 }

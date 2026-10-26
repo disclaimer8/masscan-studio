@@ -89,8 +89,11 @@ fn utc(t: f64) -> String {
     )
 }
 fn tcpdump_err(captured: usize, received: usize, dropped: usize) -> String {
+    tcpdump_err_on("en0", captured, received, dropped)
+}
+fn tcpdump_err_on(iface: &str, captured: usize, received: usize, dropped: usize) -> String {
     format!(
-        "tcpdump: listening on x, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n{captured} packets captured\n{received} packets received by filter\n{dropped} packets dropped by kernel\n"
+        "tcpdump: listening on {iface}, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n{captured} packets captured\n{received} packets received by filter\n{dropped} packets dropped by kernel\n"
     )
 }
 fn pretty(v: &Value) -> Vec<u8> {
@@ -122,6 +125,8 @@ struct Model {
     host_before: String,
     host_after: String,
     extra: BTreeMap<String, Vec<u8>>,
+    /// Files left out of the directory (and of the hashes).
+    skip: Vec<&'static str>,
 }
 fn event(t: f64, kind: &str, status: &str, detail: &str) -> Value {
     json!({"utc":utc(T0 + t),"mono_ms":(t * 1000.0).round() as i64,"kind":kind,"status":status,"detail":detail,"rows":0})
@@ -255,7 +260,54 @@ impl Model {
         let netstat = "rc 0\ntcp4       0      0  *.5000                 *.*                    LISTEN\ntcp46      0      0  *.7000                 *.*                    LISTEN\ntcp4       0      0  198.18.0.2.8000        *.*                    LISTEN\n".to_owned();
         let mut extra = BTreeMap::new();
         extra.insert("ui.log".into(), b"studio-ui log\n".to_vec());
-        extra.insert("window.json".into(), pretty(&json!({"ui_rc":0})));
+        let cmd = |iface: &str, filter: &str, out: &str, p: bool, start: f64, stop: f64| {
+            let mut argv = vec![
+                "/usr/sbin/tcpdump",
+                if p { "-p" } else { "-n" },
+                "-n",
+                "-U",
+                "-s",
+                "0",
+                "-i",
+                iface,
+                "-w",
+                out,
+            ];
+            if !filter.is_empty() {
+                argv.push(filter);
+            }
+            pretty(
+                &json!({"cmd":argv,"interface":iface,"filter":filter,"start_utc":utc(T0 + start),"stop_utc":utc(T0 + stop),"exit_code":0,"listening":true}),
+            )
+        };
+        extra.insert(
+            "peer.cmd.json".into(),
+            cmd("feth4202", "", "peer.pcap", true, -5.0, lock + 5.0),
+        );
+        extra.insert(
+            "uplink.cmd.json".into(),
+            cmd(
+                "en0",
+                &crate::macos_verify::uplink_filter(SCANNER_MAC, NEXT_HOP_MAC),
+                "uplink.pcap",
+                true,
+                -5.0,
+                lock + 5.0,
+            ),
+        );
+        extra.insert("window.json".into(), pretty(&json!({"schema":1,"started_utc":utc(T0 - 5.0),"ended_utc":utc(T0 + lock + 5.0),"uplink":"en0","ui_rc":0,"invalid_marks":[]})));
+        extra.insert(
+            "alf.txt".into(),
+            b"Firewall is disabled. (State = 0)\n".to_vec(),
+        );
+        extra.insert("leftover-listeners.txt".into(), vec![]);
+        extra.insert("leftover-procs.txt".into(), vec![]);
+        extra.insert("pair-quiet.txt".into(), b"quiet\n".to_vec());
+        extra.insert("listeners-ready.txt".into(), b"ready\n".to_vec());
+        extra.insert(
+            "data.sha256".into(),
+            format!("{}  history.sqlite3\n", sha(b"not hashed")).into_bytes(),
+        );
         Self {
             syns,
             replies,
@@ -273,6 +325,7 @@ impl Model {
             host_before: netstat.clone(),
             host_after: netstat,
             extra,
+            skip: vec![],
         }
     }
     fn peer_frames(&self) -> Frames {
@@ -293,10 +346,16 @@ impl Model {
     fn sync_rows_seen(&mut self) {
         for c in 0..self.history["scans"].as_array().unwrap().len() {
             let n = self.history["scans"][c]["rows"].as_array().unwrap().len();
-            if let Some(sm) = self.smoke.as_mut() {
-                sm["plan"][c]["rows_seen"] = json!(n);
+            if let Some(p) = self.smoke.as_mut().and_then(|sm| sm["plan"].get_mut(c)) {
+                p["rows_seen"] = json!(n);
             }
         }
+    }
+    /// Edits one JSON file of the extra files.
+    fn edit(&mut self, name: &str, f: impl FnOnce(&mut Value)) {
+        let mut v: Value = serde_json::from_slice(&self.extra[name]).unwrap();
+        f(&mut v);
+        self.extra.insert(name.into(), pretty(&v));
     }
     fn paused_event(&mut self) -> &mut Value {
         self.smoke.as_mut().unwrap()["events"]
@@ -318,7 +377,7 @@ impl Model {
             "peer.err".into(),
             self.peer_err
                 .clone()
-                .unwrap_or_else(|| tcpdump_err(peer.len(), peer.len() + 50, 0))
+                .unwrap_or_else(|| tcpdump_err_on("feth4202", peer.len(), peer.len() + 50, 0))
                 .into_bytes(),
         );
         files.insert("uplink.pcap".into(), pcap::encode(&self.uplink));
@@ -338,6 +397,9 @@ impl Model {
             "host-listen-after.txt".into(),
             self.host_after.clone().into_bytes(),
         );
+        for k in &self.skip {
+            files.remove(*k);
+        }
         let mut hashes = String::new();
         for (name, bytes) in &files {
             fs::write(d.join(name), bytes).unwrap();
@@ -643,7 +705,7 @@ fn a_syn_after_stop_is_fail() {
     // far later, outside every window
     let mut m = Model::consistent();
     let last = m.syns[2].last().unwrap().0;
-    m.syns[2].push((last + 30.0, plan[450].clone()));
+    m.syns[2].push((last + 4.0, plan[450].clone()));
     let v = verdict_of(&mut m);
     assert_eq!(overall(&v), FAIL);
     assert!(has_bad(&v, "wire", "outside the windows"));
@@ -869,7 +931,8 @@ fn the_chronicle_must_follow_the_plan() {
     assert!(has_bad(&v, "chronicle", "result is ok"));
     let mut m = Model::consistent();
     m.smoke.as_mut().unwrap()["result"] = json!("timeout in phase Scanning");
-    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    // a Studio that hung after a Start broke the contract: FAIL (fix round 1, I5)
+    assert_eq!(overall(&verdict_of(&mut m)), FAIL);
     let mut m = Model::consistent();
     m.smoke.as_mut().unwrap()["schema"] = json!(2);
     assert_ne!(overall(&verdict_of(&mut m)), PASS);
@@ -938,7 +1001,7 @@ fn manual_mode_skips_the_plan_but_keeps_safety_and_results() {
     let d = m.write();
     let v = verify_dir(&d, false);
     fs::remove_dir_all(d).ok();
-    assert_eq!(overall(&v), NOT_RUN);
+    assert_eq!(overall(&v), NOT_RUN, "{:?}", bad(&v));
 }
 
 #[test]
@@ -1008,5 +1071,607 @@ fn run_writes_the_verdict_and_returns_the_code() {
         .is_err()
     );
     assert!(run(&["--dir".into(), d.to_str().unwrap().into()]).is_err());
+    fs::remove_dir_all(d).ok();
+}
+
+// ------------------------------------------------------------------ fix round 1 (review of dd4cfe6)
+
+fn write_file(d: &Path, name: &str, bytes: &[u8]) {
+    fs::write(d.join(name), bytes).unwrap();
+}
+/// Re-hashes one file in `hashes-before-copy.txt` after a test edited it, so only the rule under test fails.
+fn rehash(d: &Path, name: &str) {
+    let list = fs::read_to_string(d.join(HASHES)).unwrap();
+    let suffix = format!("  {name}");
+    let old = list
+        .lines()
+        .find(|l| l.ends_with(&suffix))
+        .unwrap()
+        .to_owned();
+    let new = format!("{}{suffix}", sha(&fs::read(d.join(name)).unwrap()));
+    fs::write(d.join(HASHES), list.replace(&old, &new)).unwrap();
+}
+fn plan_of(case: usize) -> Vec<Vec<u8>> {
+    plan_frames_for_job(&spec_job(&CASES[case])).unwrap()
+}
+fn action_time(m: &Model, name: &str) -> f64 {
+    let a = m.smoke.as_ref().unwrap()["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["action"] == name)
+        .unwrap();
+    parse_utc(s(&a["utc"])).unwrap()
+}
+
+#[test]
+fn an_extra_syn_from_another_source_port_is_fail() {
+    let mut m = Model::consistent();
+    let port = tcp(&plan_of(0)[3]).unwrap().dp;
+    let f = tcp_frame(
+        SCANNER_MAC,
+        NEXT_HOP_MAC,
+        [198, 18, 0, 1],
+        [198, 18, 0, 2],
+        40001,
+        port,
+        2,
+    );
+    m.syns[0].push((T0 + 6.35, f));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    assert!(has_bad(&v, "wire", "from the scanner"), "{:?}", bad(&v));
+}
+
+#[test]
+fn a_non_syn_from_the_scanner_is_fail() {
+    let mut m = Model::consistent();
+    let f = tcp_frame(
+        SCANNER_MAC,
+        NEXT_HOP_MAC,
+        [198, 18, 0, 1],
+        [198, 18, 0, 2],
+        SOURCE_PORT,
+        8003,
+        4,
+    );
+    m.syns[0].push((T0 + 6.35, f));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    assert!(has_bad(&v, "wire", "from the scanner"), "{:?}", bad(&v));
+    // the same frame in manual mode
+    let mut m = Model::consistent();
+    let f = tcp_frame(
+        SCANNER_MAC,
+        NEXT_HOP_MAC,
+        [198, 18, 0, 1],
+        [198, 18, 0, 2],
+        SOURCE_PORT,
+        8003,
+        4,
+    );
+    m.syns[0].push((T0 + 6.35, f));
+    m.smoke = None;
+    let d = m.write();
+    let v = verify_dir(&d, true);
+    fs::remove_dir_all(d).ok();
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+}
+
+#[test]
+fn the_uplink_witness_must_be_the_default_route_interface_with_the_lab_filter() {
+    // another interface (M04c)
+    let mut m = Model::consistent();
+    m.edit("uplink.cmd.json", |v| {
+        v["cmd"][7] = json!("en7");
+        v["interface"] = json!("en7");
+    });
+    m.uplink_err = tcpdump_err_on("en7", 0, 100, 0);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    assert!(has_bad(&v, "safety", "uplink capture interface and filter"));
+    // a narrower filter
+    let mut m = Model::consistent();
+    m.edit("uplink.cmd.json", |v| {
+        v["cmd"][10] = json!("net 198.18.0.0/30");
+        v["filter"] = json!("net 198.18.0.0/30");
+    });
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    // promiscuous (no -p)
+    let mut m = Model::consistent();
+    m.edit("uplink.cmd.json", |v| v["cmd"][1] = json!("-n"));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID);
+    assert!(has_bad(&v, "safety", "not promiscuous"));
+    // a feth uplink is the pair, not the user's NIC
+    let mut m = Model::consistent();
+    m.pre["uplink"] = json!("feth4201");
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    // the banner of the .err must name the interface too
+    let mut m = Model::consistent();
+    m.uplink_err = tcpdump_err_on("en5", 0, 100, 0);
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+}
+
+#[test]
+fn the_peer_witness_must_be_the_peer_interface_without_a_filter() {
+    let mut m = Model::consistent();
+    m.edit("peer.cmd.json", |v| v["cmd"][7] = json!("feth4201"));
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    let mut m = Model::consistent();
+    m.edit("peer.cmd.json", |v| {
+        v["cmd"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("tcp port 8000"));
+        v["filter"] = json!("tcp port 8000");
+    });
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+}
+
+#[test]
+fn a_witness_must_cover_the_session_and_exit_cleanly() {
+    // stopped before the last scan ended
+    let mut m = Model::consistent();
+    m.edit("uplink.cmd.json", |v| v["stop_utc"] = json!(utc(T0 + 20.0)));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    assert!(has_bad(&v, "safety", "covers the session"));
+    // started after the first Start
+    let mut m = Model::consistent();
+    m.edit("uplink.cmd.json", |v| v["start_utc"] = json!(utc(T0 + 6.5)));
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    // not listening before the first action
+    let mut m = Model::consistent();
+    m.edit("peer.cmd.json", |v| v["listening"] = json!(false));
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    // killed, not interrupted
+    let mut m = Model::consistent();
+    m.edit("uplink.cmd.json", |v| v["exit_code"] = json!(137));
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    // no capture record at all
+    for name in ["uplink.cmd.json", "peer.cmd.json"] {
+        let mut m = Model::consistent();
+        m.skip.push(if name == "uplink.cmd.json" {
+            "uplink.cmd.json"
+        } else {
+            "peer.cmd.json"
+        });
+        let v = verdict_of(&mut m);
+        assert_eq!(overall(&v), INVALID, "{name}: {:?}", bad(&v));
+    }
+}
+
+#[test]
+fn a_late_peer_witness_is_invalid_not_fail() {
+    // M04e: the peer capture started after s1 ran; its frames are missing
+    let mut m = Model::consistent();
+    m.syns[0].clear();
+    m.replies[0].clear();
+    m.edit("peer.cmd.json", |v| v["start_utc"] = json!(utc(T0 + 8.0)));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+}
+
+#[test]
+fn frames_outside_the_capture_window_make_it_invalid() {
+    let mut m = Model::consistent();
+    let syn = plan_of(0)[0].clone();
+    m.replies[0].push((T0 - 100.0, reply_to(&syn, false)));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    assert!(has_bad(&v, "safety", "inside the recorded window"));
+}
+
+#[test]
+fn a_behaviour_fail_is_not_laundered_by_unproven_evidence() {
+    // M08a: a SYN after Stop, plus a file nobody hashed
+    let mut m = Model::consistent();
+    let last = m.syns[2].last().unwrap().0;
+    m.syns[2].push((last + 0.01 + KNOBS.stop_lat + 0.5, plan_of(2)[450].clone()));
+    let d = m.write();
+    write_file(&d, "stray.txt", b"x");
+    let v = verify_dir(&d, false);
+    fs::remove_dir_all(&d).ok();
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    assert_eq!(exit_code(&v), 1);
+    assert!(array(&v["behaviour_fail"]).iter().any(|t| t == "s3_stop"));
+    // M08b: a 5.5 s pause plus a recorded figure that is off by 100 ms
+    let mut m = Model::with(Knobs {
+        pause_wait: 5.5,
+        ..KNOBS
+    });
+    m.smoke.as_mut().unwrap()["plan"][1]["pause_to_paused_ms"] = json!(5400);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    // an unproven window without a behaviour failure stays INVALID
+    let mut m = Model::consistent();
+    m.uplink_err = tcpdump_err(0, 500, 3);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID);
+    assert!(array(&v["behaviour_fail"]).is_empty());
+}
+
+#[test]
+fn provenance_is_bound_to_a_commit_and_to_real_hashes() {
+    for key in [
+        "git_head",
+        "ui_sha256",
+        "runner_sha256",
+        "installed_runner_sha256",
+    ] {
+        let mut m = Model::consistent();
+        m.prov.as_object_mut().unwrap().remove(key);
+        let v = verdict_of(&mut m);
+        assert_eq!(overall(&v), INVALID, "{key}: {:?}", bad(&v));
+    }
+    let mut m = Model::consistent();
+    m.prov["runner_sha256"] = json!("z".repeat(64));
+    m.prov["installed_runner_sha256"] = json!("z".repeat(64));
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    let mut m = Model::consistent();
+    m.prov["git_head"] = json!("main");
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+}
+
+#[test]
+fn a_pause_that_does_not_split_the_probes_is_invalid() {
+    for k in [0usize, 32] {
+        let mut m = Model::consistent();
+        let resume = action_time(&m, "Resume");
+        let pause = action_time(&m, "Pause");
+        for i in 0..32 {
+            // k = 0: every probe after Resume; k = 32: every probe before Pause (a fast first leg)
+            let t = if k == 0 {
+                resume + 0.2 + i as f64 * 0.25
+            } else {
+                pause - 1.5 + i as f64 * 0.01
+            };
+            m.syns[1][i].0 = t;
+            m.replies[1][i].0 = t + 0.0005;
+        }
+        m.smoke.as_mut().unwrap()["plan"][1]["paused_next_index"] = json!(k);
+        let v = verdict_of(&mut m);
+        assert_eq!(overall(&v), INVALID, "k {k}: {:?}", bad(&v));
+        assert!(has_bad(&v, "s2_pause", "split"), "{:?}", bad(&v));
+    }
+}
+
+#[test]
+fn a_missing_history_is_not_run() {
+    let mut m = Model::consistent();
+    m.skip.push("history.json");
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), NOT_RUN, "{:?}", bad(&v));
+    assert_eq!(exit_code(&v), 2);
+    let mut m = Model::consistent();
+    let d = m.write();
+    write_file(&d, "history.json", b"not json");
+    rehash(&d, "history.json");
+    let v = verify_dir(&d, false);
+    fs::remove_dir_all(&d).ok();
+    assert_eq!(overall(&v), NOT_RUN, "{:?}", bad(&v));
+}
+
+#[test]
+fn a_hang_after_the_first_start_is_fail_and_before_it_is_not_run() {
+    let mut m = Model::consistent();
+    m.smoke.as_mut().unwrap()["result"] = json!("timeout in phase Scanning");
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    // authorization never finished: nothing ran
+    let mut m = Model::consistent();
+    m.syns = vec![vec![], vec![], vec![]];
+    m.replies = vec![vec![], vec![], vec![]];
+    m.history = json!({"scans":[]});
+    let sm = m.smoke.as_mut().unwrap();
+    sm["result"] = json!("timeout in phase Authorization");
+    sm["actions"] = json!([action(0.0, "Authorize")]);
+    sm["events"] = json!([]);
+    sm["plan"] = json!([]);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), NOT_RUN, "{:?}", bad(&v));
+}
+
+#[test]
+fn a_darwin_synack_then_rst_is_one_result() {
+    // Darwin aborts the embryonic connection of an open port with an RST; Studio keeps one row per port
+    let mut m = Model::consistent();
+    let syn = m.syns[0]
+        .iter()
+        .find(|(_, f)| tcp(f).unwrap().dp == 8003)
+        .unwrap()
+        .clone();
+    m.replies[0].push((syn.0 + 0.002, reply_to(&syn.1, false)));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+}
+
+#[test]
+fn an_unplanned_scan_in_the_history_is_fail() {
+    let mut m = Model::consistent();
+    let mut extra = m.history["scans"][0].clone();
+    extra["scan_id_hex"] = json!("44444444444444444444444444444444");
+    m.history["scans"].as_array_mut().unwrap().push(extra);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    assert!(
+        has_bad(&v, "chronicle", "exactly the planned scans")
+            || bad(&v)
+                .iter()
+                .any(|b| b.contains("exactly the planned scans"))
+    );
+}
+
+#[test]
+fn a_listed_entry_that_cannot_be_read_is_invalid() {
+    let mut m = Model::consistent();
+    let d = m.write();
+    fs::create_dir_all(d.join("sub")).unwrap();
+    let list = fs::read_to_string(d.join(HASHES)).unwrap();
+    fs::write(d.join(HASHES), format!("{list}{}  sub\n", "0".repeat(64))).unwrap();
+    let v = verify_dir(&d, false);
+    fs::remove_dir_all(&d).ok();
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+}
+
+#[test]
+fn chronicle_times_must_agree_with_themselves() {
+    // finished_utc of the case record is a second after the terminal State
+    let mut m = Model::consistent();
+    let t = parse_utc(s(&m.smoke.as_ref().unwrap()["plan"][2]["finished_utc"])).unwrap();
+    m.smoke.as_mut().unwrap()["plan"][2]["finished_utc"] = json!(utc(t + 1.0));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    // the wall clock stepped between two events
+    let mut m = Model::consistent();
+    let sm = m.smoke.as_mut().unwrap();
+    let t = parse_utc(s(&sm["events"][14]["utc"])).unwrap();
+    sm["events"][14]["utc"] = json!(utc(t + 0.5));
+    let v = verdict_of(&mut m);
+    assert_ne!(overall(&v), PASS, "{:?}", bad(&v));
+}
+
+#[test]
+fn the_files_of_the_orchestrator_are_judged() {
+    type Mutation = Box<dyn Fn(&mut Model)>;
+    let cases: Vec<(&str, Mutation, &str)> = vec![
+        (
+            "invalid mark",
+            Box::new(|m| {
+                m.edit("window.json", |v| {
+                    v["invalid_marks"] = json!(["history not closed cleanly"])
+                })
+            }),
+            INVALID,
+        ),
+        (
+            "ui_rc",
+            Box::new(|m| m.edit("window.json", |v| v["ui_rc"] = json!(1))),
+            INVALID,
+        ),
+        (
+            "window uplink",
+            Box::new(|m| m.edit("window.json", |v| v["uplink"] = json!("en9"))),
+            INVALID,
+        ),
+        (
+            "no window.json",
+            Box::new(|m| m.skip.push("window.json")),
+            NOT_RUN,
+        ),
+        (
+            "alf",
+            Box::new(|m| {
+                m.extra.insert(
+                    "alf.txt".into(),
+                    b"Firewall is enabled. (State = 1)\n".to_vec(),
+                );
+            }),
+            INVALID,
+        ),
+        (
+            "leftover listeners",
+            Box::new(|m| {
+                m.extra
+                    .insert("leftover-listeners.txt".into(), b"some-process 123\n".to_vec());
+            }),
+            INVALID,
+        ),
+        (
+            "leftover procs",
+            Box::new(|m| {
+                m.extra.insert(
+                    "leftover-procs.txt".into(),
+                    b"tcpdump -i feth4202\n".to_vec(),
+                );
+            }),
+            INVALID,
+        ),
+        (
+            "no pair-quiet",
+            Box::new(|m| m.skip.push("pair-quiet.txt")),
+            NOT_RUN,
+        ),
+        (
+            "listeners not ready",
+            Box::new(|m| m.skip.push("listeners-ready.txt")),
+            INVALID,
+        ),
+        (
+            "data hash",
+            Box::new(|m| {
+                m.extra.insert(
+                    "data.sha256".into(),
+                    format!("{}  history.sqlite3\n", "1".repeat(64)).into_bytes(),
+                );
+            }),
+            INVALID,
+        ),
+        (
+            "no data hash",
+            Box::new(|m| m.skip.push("data.sha256")),
+            NOT_RUN,
+        ),
+        (
+            "isolation breach",
+            Box::new(|m| {
+                m.extra
+                    .insert("ISOLATION-BREACH.txt".into(), b"frame on en0\n".to_vec());
+            }),
+            FAIL,
+        ),
+    ];
+    for (name, f, want) in cases {
+        let mut m = Model::consistent();
+        f(&mut m);
+        let v = verdict_of(&mut m);
+        assert_eq!(overall(&v), want, "{name}: {:?}", bad(&v));
+    }
+    // the SQLite store left a journal behind: not closed cleanly
+    let mut m = Model::consistent();
+    let d = m.write();
+    write_file(&d, "data/history.sqlite3-wal", b"x");
+    let v = verify_dir(&d, false);
+    fs::remove_dir_all(&d).ok();
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    // and the real file must hash to data.sha256
+    let mut m = Model::consistent();
+    let d = m.write();
+    write_file(&d, "data/history.sqlite3", b"changed");
+    let v = verify_dir(&d, false);
+    fs::remove_dir_all(&d).ok();
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+}
+
+#[test]
+fn late_replies_before_a_stop_need_no_row() {
+    // the last replies before the Stop action may not have reached the results
+    let mut m = Model::consistent();
+    let n = m.syns[2].len();
+    let late: Vec<u16> = m.syns[2][n - 5..]
+        .iter()
+        .map(|(_, f)| tcp(f).unwrap().dp)
+        .collect();
+    m.rows_mut(2)
+        .retain(|r| !late.contains(&(r["port"].as_u64().unwrap() as u16)));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+    // but a reply from the middle of the scan without a row is a failure
+    let mut m = Model::consistent();
+    let mid = tcp(&m.syns[2][100].1).unwrap().dp;
+    m.rows_mut(2).retain(|r| r["port"] != mid);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL);
+}
+
+#[test]
+fn host_wildcard_listeners_make_scanned_ports_open() {
+    let open_9003 = |m: &mut Model| {
+        let (t, f) = m.syns[0]
+            .iter()
+            .find(|(_, f)| tcp(f).unwrap().dp == 9003)
+            .unwrap()
+            .clone();
+        m.replies[0].retain(|(_, r)| tcp(r).unwrap().sp != 9003);
+        m.replies[0].push((t + 0.0005, reply_to(&f, true)));
+        for r in m.rows_mut(0) {
+            if r["port"] == 9003 {
+                r["open"] = json!(true);
+            }
+        }
+    };
+    let listen =
+        "rc 0\ntcp4       0      0  *.9003                 *.*                    LISTEN\n";
+    let mut m = Model::consistent();
+    open_9003(&mut m);
+    m.host_before = listen.into();
+    m.host_after = listen.into();
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+    // not recorded as a listener: the extra open port is not a lab listener
+    let mut m = Model::consistent();
+    open_9003(&mut m);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    assert!(has_bad(&v, "s1_full", "open rows are the lab listeners"));
+    // a netstat that failed is not a record
+    let mut m = Model::consistent();
+    m.host_before = "rc 1\n".into();
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+}
+
+#[test]
+fn the_peer_capture_must_be_complete() {
+    let n = Model::consistent().peer_frames().len();
+    let mut m = Model::consistent();
+    m.peer_err = Some(tcpdump_err_on("feth4202", n - 1, n, 0));
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    let mut m = Model::consistent();
+    m.peer_err = Some(tcpdump_err_on("feth4202", n, n + 5, 2));
+    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    // the uplink statistics must be there
+    let mut m = Model::consistent();
+    m.uplink_err = "tcpdump: listening on en0\n".into();
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+}
+
+#[test]
+fn manual_mode_accepts_an_interrupted_scan() {
+    let mut m = Model::consistent();
+    m.smoke = None;
+    m.history["scans"][0]["status"] = json!("Interrupted");
+    let d = m.write();
+    let v = verify_dir(&d, true);
+    fs::remove_dir_all(&d).ok();
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+}
+
+#[test]
+fn the_verdict_carries_the_facts_the_rerun_rule_needs() {
+    let v = verdict_of(&mut Model::consistent());
+    assert!(array(&v["behaviour_fail"]).is_empty());
+    assert!(array(&v["safety_trips"]).is_empty());
+    assert_eq!(v["isolation"]["uplink_exit_code"], 0);
+    assert_eq!(v["isolation"]["peer_exit_code"], 0);
+    let c = array(&v["cases"])
+        .iter()
+        .find(|c| c["tag"] == "s3_stop")
+        .unwrap();
+    assert!(
+        array(&c["checks"])
+            .iter()
+            .all(|k| k["behaviour"].is_boolean())
+    );
+    assert!(array(&c["checks"]).iter().any(|k| k["behaviour"] == true));
+    let sf = array(&v["cases"])
+        .iter()
+        .find(|c| c["tag"] == "safety")
+        .unwrap();
+    assert!(array(&sf["checks"]).iter().any(|k| k["safety"] == true));
+}
+
+#[test]
+fn expect_head_binds_the_window_to_a_commit() {
+    let mut m = Model::consistent();
+    let d = m.write();
+    let out = d.join("verdict.json");
+    let head = "0123456789abcdef0123456789abcdef01234567";
+    let args = |h: &str| -> Vec<String> {
+        [
+            "--dir",
+            d.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--expect-head",
+            h,
+        ]
+        .iter()
+        .map(|x| x.to_string())
+        .collect()
+    };
+    assert_eq!(run(&args(head)), Ok(0));
+    assert_eq!(run(&args(&"f".repeat(40))), Ok(2));
     fs::remove_dir_all(d).ok();
 }

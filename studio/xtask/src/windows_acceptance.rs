@@ -60,7 +60,7 @@ fn limited_observed(args: &[&str], observe: impl FnOnce(&OwnedHandle) -> Result<
     let label = TOKEN_MANDATORY_LABEL {
         Label: SID_AND_ATTRIBUTES {
             Sid: sid,
-            Attributes: SE_GROUP_INTEGRITY,
+            Attributes: SE_GROUP_INTEGRITY as u32,
         },
     };
     // SAFETY: SID and sized mandatory-label structure live through synchronous call.

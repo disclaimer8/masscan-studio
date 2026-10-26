@@ -6,7 +6,7 @@ pub(super) fn connect(ui: &MainWindow, rows: Rc<Rows>) {
     let m = rows.clone();
     ui.on_filter(move |s| {
         m.table.borrow_mut().filter(&s);
-        m.notify.reset();
+        m.changed();
         if let Some(ui) = w.upgrade() {
             ui.set_filter_query(s);
             m.summary(&ui);
@@ -16,7 +16,7 @@ pub(super) fn connect(ui: &MainWindow, rows: Rc<Rows>) {
     let m = rows.clone();
     ui.on_order(move |c, d| {
         m.table.borrow_mut().sort(c as usize, d);
-        m.notify.reset();
+        m.changed();
         if let Some(ui) = w.upgrade() {
             m.summary(&ui);
         }
@@ -25,7 +25,7 @@ pub(super) fn connect(ui: &MainWindow, rows: Rc<Rows>) {
     let m = rows.clone();
     ui.on_choose(move |i, e, r| {
         m.table.borrow_mut().select_with_modifiers(i as usize, e, r);
-        m.notify.reset();
+        m.changed();
         if let Some(ui) = w.upgrade() {
             m.summary(&ui);
         }
@@ -34,7 +34,7 @@ pub(super) fn connect(ui: &MainWindow, rows: Rc<Rows>) {
     let m = rows.clone();
     ui.on_navigate(move |d, r| {
         let n = m.table.borrow_mut().navigate(d, r);
-        m.notify.reset();
+        m.changed();
         if let Some(ui) = w.upgrade() {
             m.summary(&ui);
         }
@@ -44,7 +44,7 @@ pub(super) fn connect(ui: &MainWindow, rows: Rc<Rows>) {
     let m = rows.clone();
     ui.on_select_visible(move || {
         m.table.borrow_mut().select_visible();
-        m.notify.reset();
+        m.changed();
         if let Some(ui) = w.upgrade() {
             m.summary(&ui);
         }
@@ -53,7 +53,7 @@ pub(super) fn connect(ui: &MainWindow, rows: Rc<Rows>) {
     let m = rows.clone();
     ui.on_clear_selection(move || {
         m.table.borrow_mut().clear_selection();
-        m.notify.reset();
+        m.changed();
         if let Some(ui) = w.upgrade() {
             m.summary(&ui);
         }
@@ -108,6 +108,7 @@ mod tests {
             table: RefCell::new(Table::new(0)),
             keys: RefCell::new(HashMap::new()),
             notify: ModelNotify::default(),
+            summary_dirty: Cell::new(true),
             simulation: Cell::new(true),
             archived: Cell::new(false),
         });
@@ -199,6 +200,93 @@ mod tests {
     }
 
     #[test]
+    fn page_boundaries_use_content_viewport_and_keep_focused_row_fully_visible() {
+        let (ui, _) = setup();
+        for width in [820., 1160.] {
+            for height in 740..775 {
+                ui.window()
+                    .set_size(slint::LogicalSize::new(width, height as f32));
+                key(&ui, Key::Home);
+                let viewport = ui.get_results_viewport_height();
+                let expected = (viewport / 30.).floor().max(1.) as i32;
+                key(&ui, Key::PageDown);
+                assert_eq!(
+                    ui.get_active_row(),
+                    expected,
+                    "width={width}, height={height}, viewport={viewport}"
+                );
+                let bottom = (ui.get_active_row() + 1) as f32 * 30. + ui.get_results_scroll_y();
+                assert!(
+                    bottom <= viewport + 0.1,
+                    "focused row clipped: bottom={bottom}, viewport={viewport}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn idle_summary_never_borrows_or_walks_the_unchanged_table() {
+        let (ui, rows) = setup();
+        let _table = rows.table.borrow_mut();
+        // A clean summary has no reason to read the model, at any row count.
+        for _ in 0..20 {
+            rows.summary(&ui);
+        }
+    }
+
+    #[test]
+    fn summary_refreshes_after_sort_enrichment_batches_and_history_replacement() {
+        let (ui, rows) = setup();
+        ui.invoke_order(0, true);
+        assert_eq!(ui.get_active_row(), 59);
+        ui.invoke_filter("printer.local".into());
+        assert_eq!(ui.get_active_row(), -1);
+        assert_eq!(ui.get_selection_label(), "1 selected · 1 hidden");
+
+        let mut host = studio_inspection::HostInfo::new("198.18.0.2".into());
+        host.hostname = Some("printer.local".into());
+        rows.enrich(vec![host]);
+        rows.summary(&ui);
+        assert_eq!(ui.get_summary(), "1 of 60 saved results");
+        assert_eq!(ui.get_active_row(), 0);
+        assert_eq!(ui.get_details().hostname, "printer.local");
+        assert_eq!(ui.get_selection_label(), "1 selected");
+
+        let saved = |ip: &str| studio_store::SavedRow {
+            row: studio_protocol::Row {
+                ip: ip.into(),
+                port: 80,
+                open: true,
+            },
+            discovered_at: None,
+        };
+        rows.add(vec![saved("198.18.0.63")]);
+        rows.add(vec![saved("198.18.0.64")]);
+        rows.summary(&ui);
+        assert_eq!(ui.get_summary(), "1 of 62 saved results");
+        {
+            let _table = rows.table.borrow_mut();
+            rows.summary(&ui);
+        }
+
+        clear_view(&rows, &ui);
+        rows.summary(&ui);
+        assert_eq!(ui.get_summary(), "0 of 0 saved results");
+        assert_eq!(ui.get_selection_count(), 0);
+        assert_eq!(ui.get_active_row(), -1);
+        assert_eq!(ui.get_details().ip, "");
+        rows.add(vec![saved("198.18.0.9")]);
+        rows.summary(&ui);
+        assert_eq!(ui.get_summary(), "1 of 1 saved results");
+        ui.invoke_choose(0, false, false);
+        assert_eq!(ui.get_details().ip, "198.18.0.9");
+        ui.invoke_select_visible();
+        assert_eq!(ui.get_selection_count(), 1);
+        ui.invoke_clear_selection();
+        assert_eq!(ui.get_selection_count(), 0);
+    }
+
+    #[test]
     fn filter_hides_selected_addresses_and_text_input_keeps_its_shortcuts() {
         let (ui, rows) = setup();
         let probe = ClipboardProbe::new().unwrap();
@@ -223,7 +311,7 @@ mod tests {
     fn empty_states_distinguish_first_use_waiting_history_and_filter() {
         let (ui, rows) = setup();
         *rows.table.borrow_mut() = Table::new(0);
-        rows.notify.reset();
+        rows.changed();
         rows.summary(&ui);
         assert_eq!(ui.get_empty_title(), "Start your first scan");
         assert_eq!(ui.get_empty_action(), "New scan");

@@ -18,6 +18,7 @@ struct Rows {
     table: RefCell<Table>,
     keys: RefCell<HashMap<(String, u16), u64>>,
     notify: ModelNotify,
+    summary_dirty: Cell<bool>,
     simulation: Cell<bool>,
     archived: Cell<bool>,
 }
@@ -49,6 +50,11 @@ impl Model for Rows {
     }
 }
 impl Rows {
+    /// Invalidate both the rendered model and its summary after a table mutation.
+    fn changed(&self) {
+        self.summary_dirty.set(true);
+        self.notify.reset();
+    }
     fn add(&self, rows: Vec<studio_store::SavedRow>) {
         let mut changes = Vec::new();
         let mut keys = self.keys.borrow_mut();
@@ -107,7 +113,7 @@ impl Rows {
             });
         }
         self.table.borrow_mut().apply(changes);
-        self.notify.reset();
+        self.changed();
     }
     fn enrich(&self, values: Vec<studio_inspection::HostInfo>) {
         let ips: std::collections::HashSet<_> = values.iter().map(|h| h.ip.clone()).collect();
@@ -160,6 +166,9 @@ impl Rows {
             .collect()
     }
     fn summary(&self, ui: &MainWindow) {
+        if !self.summary_dirty.replace(false) {
+            return;
+        }
         let t = self.table.borrow();
         ui.set_summary(format!("{} of {} saved results", t.view.len(), t.rows.len()).into());
         ui.set_selection_count(t.selected.len() as i32);
@@ -295,7 +304,7 @@ fn clear_view(rows: &Rows, ui: &MainWindow) {
     rows.keys.borrow_mut().clear();
     rows.observations.borrow_mut().clear();
     rows.hosts.borrow_mut().clear();
-    rows.notify.reset();
+    rows.changed();
     ui.set_filter_query("".into());
     ui.set_sort_column(-1);
     ui.set_sort_descending(false);
@@ -330,6 +339,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         table: RefCell::new(Table::new(0)),
         keys: RefCell::new(HashMap::new()),
         notify: ModelNotify::default(),
+        summary_dirty: Cell::new(true),
         simulation: Cell::new(false),
         archived: Cell::new(false),
     });
@@ -968,6 +978,7 @@ mod tests {
             table: RefCell::new(Table::new(0)),
             keys: RefCell::new(HashMap::new()),
             notify: ModelNotify::default(),
+            summary_dirty: Cell::new(true),
             simulation: Cell::new(false),
             archived: Cell::new(false),
         };

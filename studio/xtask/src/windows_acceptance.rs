@@ -7,7 +7,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
-    System::Threading::*,
+    System::{SystemServices::SE_GROUP_INTEGRITY, Threading::*},
 };
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
@@ -20,6 +20,9 @@ fn handle(raw: HANDLE) -> Result<OwnedHandle> {
     Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 pub fn limited(args: &[&str]) -> Result<()> {
+    limited_observed(args, |_| Ok(()))
+}
+fn limited_observed(args: &[&str], observe: impl FnOnce(&OwnedHandle) -> Result<()>) -> Result<()> {
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
         return Err("Restricted fixtures require disposable GitHub VM".into());
     }
@@ -134,6 +137,13 @@ pub fn limited(args: &[&str]) -> Result<()> {
     }
     let process = handle(info.hProcess)?;
     let _thread = handle(info.hThread)?;
+    let observed = observe(&process);
+    if observed.is_err() {
+        // SAFETY: only this disposable fixture child is terminated on failure.
+        unsafe {
+            TerminateProcess(process.as_raw_handle(), 1);
+        }
+    }
     // SAFETY: retained process supports wait; bounded fixture deadline.
     if unsafe { WaitForSingleObject(process.as_raw_handle(), 600000) } != WAIT_OBJECT_0 {
         // SAFETY: only the newly created disposable fixture is terminated.
@@ -150,9 +160,173 @@ pub fn limited(args: &[&str]) -> Result<()> {
     drop(log);
     print!("{}", fs::read_to_string(&log_path)?);
     fs::remove_file(log_path)?;
+    observed?;
     if exit != 0 {
         return Err(format!("Restricted fixture failed with {exit}").into());
     }
+    Ok(())
+}
+
+pub fn verify_uac(root: &Path) -> Result<()> {
+    use std::time::{Duration, Instant};
+    use studio_platform::{
+        trusted,
+        windows::{Process, install::Installed},
+    };
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
+        || studio_protocol::RAW_SCANNING_ENABLED
+    {
+        return Err("Requires disposable Windows CI with raw scanning disabled".into());
+    }
+    if std::env::var_os("CARGO_TARGET_DIR").is_some() {
+        return Err("CI probe requires default target directory".into());
+    }
+    let hash = trusted::file_hash(&root.join("target/debug/studio-runner.exe"))?;
+    let _pinned = Installed::open(&hash)?;
+    for mode in ["close", "disconnect", "drop"] {
+        limited(&["windows-uac-fixture", &hash, mode])?;
+    }
+    let ready = std::env::temp_dir().join(format!(
+        "studio-uac-owner-{}.json",
+        studio_protocol::id_text(studio_protocol::new_id()?)
+    ));
+    let result = limited_observed(
+        &[
+            "windows-uac-fixture",
+            &hash,
+            "owner",
+            ready.to_str().ok_or("Non-Unicode ready path")?,
+        ],
+        |owner| {
+            let deadline = Instant::now() + Duration::from_secs(190);
+            let identity = loop {
+                if let Ok(bytes) = fs::read(&ready) {
+                    if let Ok(value) =
+                        serde_json::from_slice::<studio_platform::windows::Identity>(&bytes)
+                    {
+                        break value;
+                    }
+                }
+                // SAFETY: retained fixture process; nonblocking liveness check.
+                if unsafe { WaitForSingleObject(owner.as_raw_handle(), 0) } != WAIT_TIMEOUT {
+                    return Err("UAC owner exited before readiness".into());
+                }
+                if Instant::now() >= deadline {
+                    return Err("UAC owner readiness timed out".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let runner = Process::open(identity.pid)?;
+            runner.verify(&identity)?;
+            // SAFETY: terminate only the exact retained disposable UI fixture.
+            if unsafe { TerminateProcess(owner.as_raw_handle(), 0) } == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while runner.ensure_alive().is_ok() {
+                if Instant::now() >= deadline {
+                    return Err("Elevated runner survived abrupt owner death".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(())
+        },
+    );
+    let _ = fs::remove_file(ready);
+    result?;
+    println!(
+        "PASS: actual runas from restricted same-account owner, pinned image, Hello, repeated preflight, CloseSession, IPC loss, job drop and abrupt owner death. No desktop consent or packet claim."
+    );
+    Ok(())
+}
+
+pub fn uac_fixture() -> Result<()> {
+    let hash = std::env::args()
+        .nth(2)
+        .ok_or("Supply installed runner SHA-256")?;
+    let mode = std::env::args().nth(3).unwrap_or("close".into());
+    if mode != "close" && std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return Err("Destructive fixture modes require disposable CI".into());
+    }
+    use std::{sync::atomic::AtomicBool, time::Duration};
+    use studio_platform::windows::{Process, uac::Authorized};
+    use studio_protocol::{Command as Message, *};
+    let auth = Authorized::open(&hash, &AtomicBool::new(false))?;
+    let runner = Process::open(auth.runner_pid())?;
+    println!(
+        "Owner token={:?}, logon={:?}; runner token={:?}, logon={:?}",
+        Process::open(std::process::id())?.elevation()?,
+        Process::open(std::process::id())?.identity().logon,
+        runner.elevation()?,
+        runner.identity().logon
+    );
+    let session = new_id()?;
+    let mut order = ReceiveOrder::new(session, [0; 16], [0; 16]);
+    for (i, command) in [Message::Hello, Message::CheckNetwork, Message::CheckNetwork]
+        .into_iter()
+        .enumerate()
+    {
+        let stream = auth.stream.clone();
+        let (done, wait) = std::sync::mpsc::channel();
+        let watchdog = std::thread::spawn(move || {
+            if wait.recv_timeout(Duration::from_secs(10)).is_err() {
+                stream.shutdown();
+            }
+        });
+        let result = (|| -> Result<()> {
+            write_frame(
+                &mut auth.stream.clone(),
+                &Envelope::new(session, [0; 16], [0; 16], i as u64 + 1, command),
+            )?;
+            let reply = read_frame::<Event>(&mut auth.stream.clone())?;
+            order.accept(&reply)?;
+            match (i, reply.payload) {
+                (0, Event::Hello { engine }) if engine == ENGINE_VERSION => {}
+                (1 | 2, Event::NetworkChecked { ready: false, .. }) => {}
+                _ => return Err("Unexpected UAC protocol reply or raw readiness".into()),
+            }
+            Ok(())
+        })();
+        let _ = done.send(());
+        let _ = watchdog.join();
+        result?;
+    }
+    match mode.as_str() {
+        "close" => {
+            write_frame(
+                &mut auth.stream.clone(),
+                &Envelope::new(session, [0; 16], [0; 16], 4, Message::CloseSession),
+            )?;
+            auth.wait_closed(Duration::from_secs(2))?;
+        }
+        "disconnect" => {
+            auth.stream.shutdown();
+            auth.wait_closed(Duration::from_secs(2))?;
+        }
+        "drop" => {
+            drop(auth);
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while runner.ensure_alive().is_ok() {
+                if std::time::Instant::now() >= deadline {
+                    return Err("Runner survived job close".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        "owner" => {
+            let path = std::env::args().nth(4).ok_or("Missing readiness path")?;
+            use std::io::Write;
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?
+                .write_all(&serde_json::to_vec(runner.identity())?)?;
+            std::thread::sleep(Duration::from_secs(15));
+            return Err("CI did not terminate UAC owner fixture".into());
+        }
+        _ => return Err("Unknown fixture mode".into()),
+    }
+    println!("PASS: UAC session {mode}, raw scanning stayed disabled");
     Ok(())
 }
 pub fn token_probe() -> Result<()> {

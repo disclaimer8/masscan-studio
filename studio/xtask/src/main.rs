@@ -50,6 +50,10 @@ fn main() -> Result<()> {
         #[cfg(windows)]
         "verify-windows-elevated-entry" => windows_acceptance::guard_probe(&root)?,
         #[cfg(windows)]
+        "verify-windows-uac" => windows_acceptance::verify_uac(&root)?,
+        #[cfg(windows)]
+        "windows-uac-fixture" | "probe-windows-authorization" => windows_acceptance::uac_fixture()?,
+        #[cfg(windows)]
         "windows-limited-token-fixture" => windows_acceptance::token_fixture()?,
         #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,

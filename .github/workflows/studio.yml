@@ -72,6 +72,9 @@ jobs:
       - name: Windows trusted installation (no UAC or packets)
         if: runner.os == 'Windows'
         run: cargo xtask verify-windows-installation
+      - name: Windows session authorization and owner death (no packets)
+        if: runner.os == 'Windows'
+        run: cargo xtask verify-windows-uac
       - name: Linux software UI lifecycle (no packets)
         if: runner.os == 'Linux'
         run: |

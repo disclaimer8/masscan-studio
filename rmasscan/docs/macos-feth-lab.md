@@ -451,3 +451,70 @@ Linux are unchanged):
 - Multicast strays (x01 upper bound) are Mac-only and limited to `[guest_started_utc, guest_finished_utc]`.
 - A lab SYN-ACK retransmit of an in-window reply after the last end marker (the listeners now stop after the
   witness) is the note `post_run_synack_retransmits`; any other frame there is still an unflushed tail (INVALID).
+
+## Studio acceptance (`studio-verify`)
+
+A Masscan Studio window on the stand is one authorized session of the packaged `studio-ui --smoke-feth` (three scans:
+`s1_full`, `s2_pause`, `s3_stop`), recorded by `cargo xtask feth-acceptance --out DIR --app '/abs/Masscan Studio.app'
+--lab /abs/rmasscan-lab [--manual]` in `studio/`. The orchestrator writes the window directory and never reads a pcap;
+`rmasscan-lab studio-verify` judges it offline:
+
+```sh
+rmasscan-lab studio-verify --dir DIR --out DIR/verdict.json [--manual]   # rc 0 PASS, 1 FAIL, 2 INVALID or NOT RUN
+```
+
+The verifier reads only `DIR`, starts no process and opens no network or BPF device. It pins the Studio binding
+(`198.18.0.1`, `02:ac:00:00:00:01`, next hop `02:ac:00:00:00:02`, source port 40000, wait 3 s, adapter `feth4201`) and
+the three jobs in `studio_verify.rs` instead of importing `studio-protocol`, and rebuilds the probe order with the same
+`plan_frames` (engine `ProbeCursor`) the Windows and macOS verifiers use.
+
+### Window directory
+
+| File | Content |
+| --- | --- |
+| `smoke.json` | UI chronicle, schema 1: `result` (`"ok"`), `plan[]` (`tag job scan_id_hex rows_seen started_utc finished_utc finished_status paused_next_index pause_to_paused_ms stop_to_stopped_ms`), `events[]` (`utc mono_ms kind status detail`, `authorized` on `Authorization`), `actions[]` (`utc mono_ms action`). UTC is `YYYY-MM-DDTHH:MM:SS[.fff]Z`; `mono_ms` is the UI's monotonic clock. Not needed with `--manual` |
+| `history.json` | SQLite dump taken after the UI exited: `{"scans":[{scan_id_hex attempt_hex job status detail next_index checkpoint_len sequence created_at rows[{ip port open discovered_at}]}]}`; `status` is the plain name (`Completed`, `Stopped`), `job` has `targets ports exclusions seed rate backend` |
+| `peer.pcap`, `peer.err` | uncompressed `tcpdump -p -n -U -s 0 -i feth4202` and its exit statistics |
+| `uplink.pcap`, `uplink.err` | the same on the uplink (`en0`) with the lab filter; 0 frames |
+| `status-pre.json`, `status-post.json` | `macos-lab status` before and after: `raw_run_allowed: true`; `bpf_access: "granted"` before |
+| `provenance.json` | `git_head`, `dirty` (false), `ui_sha256`, `runner_sha256` (the bundle's runner), `installed_runner_sha256` (the hash the installed runner lives under) |
+| `host-listen-before.txt`, `host-listen-after.txt` | `netstat -an -p tcp`, optionally preceded by a `rc N` line (N must be 0) |
+| `hashes-before-copy.txt` | `sha256sum` format of every file of the directory except itself, `verdict.json` and `data/` |
+| other files | `ui.log`, `window.json`, listener logs, `final.png`, ...: only hashed |
+| `data/` | the SQLite store; never read or hashed (it is represented by `history.json`) |
+
+### Rules
+
+Every check is named in `verdict.json` (`cases[].checks[] {name, ok, result, detail}`); `cases` holds the pseudo-cases
+`safety`, `chronicle`, `wire` and one case per scan. `overall` is the worst result (NOT RUN, then INVALID, then FAIL,
+then PASS), except that a safety FAIL makes the whole window FAIL. Nothing is ever promoted.
+
+- `safety`: any `*.gz` is a FAIL; `uplink.pcap` parses completely and holds 0 frames, `uplink.err` shows `0 packets
+  captured` (a frame tcpdump counted as passing the filter is a lab frame even if not stored) and `0 packets dropped by
+  kernel` (a drop is INVALID); `peer.pcap` parses, its `captured` equals the frames and has 0 kernel drops; both `.err`
+  files carry tcpdump's exit statistics (they are only printed on a clean exit); `packets received by filter` is
+  pre-filter on macOS and informational. A scanner SYN to anything but `198.18.0.2` is a FAIL. The status gates, the
+  hashes and `runner_sha256 == installed_runner_sha256`, `dirty == false` are INVALID when they fail.
+- `chronicle`: actions are exactly `Authorize, Start:s1_full, Start:s2_pause, Pause, Resume, Start:s3_stop, Stop, Lock`;
+  one `Authorization` with `authorized: true`; a `Network preflight passed` notice before the first Start and a
+  `Runner session closed` notice after `Lock`; `result == "ok"` (a `timeout...` result is INVALID).
+- per scan: `history` (found by `scan_id_hex`, job equals the plan, status `Completed`/`Completed`/`Stopped`, no duplicate
+  `(ip, port)`, all `198.18.0.2`, `rows_seen` equals the rows); `wire` (SYNs of the scanner inside the case window
+  `[Starting - 1 s, finished + 1 s)`, cut where neighbours overlap; each port once; order equals the plan, the whole
+  plan if Completed, a prefix if Stopped; a SYN outside every window is a FAIL); `results` (every row has a reply on the
+  wire with the same open flag, every SYN-ACK and every RST that answers a SYN of the case before the scanner exit is a
+  row; a missing RST is tolerated because of the closed-port rate limit; replies after the exit, listener teardown, are
+  only `notes.post_run_replies.<tag>`; in `s1_full` the open rows are `8000-8007` plus the host wildcard listeners
+  present in both `host-listen-*` records).
+- `s2_pause`: states `Scanning, Saving, Paused, Scanning, Completed`; Pause action to `Paused` at most 5000 ms (the
+  recorded figure must equal the chronicle); `Paused.detail == "Checkpoint committed by Studio"`; `paused_next_index = k`
+  equals the SYNs sent before the Resume action; the first leg is the first `k` planned ports, the second leg the rest;
+  after Resume the history has `checkpoint_len == 0` and `next_index` null.
+- `s3_stop`: Stop action to `Stopped` at most 1000 ms; `0 < SYN < 2000`; no SYN later than `Stopped + 250 ms`;
+  `checkpoint_len == 0`, `next_index` null.
+- `--manual`: no `smoke.json`, no plan. `safety`, a settled history status (`Completed`, `Stopped`, `Failed`, `Paused`),
+  no duplicate rows and rows backed by replies to scanner SYNs on the wire; `notes.manual` is `true`.
+
+`verdict.json` also records `provenance` (`verifier_sha256`, `window_sha`, `ui_sha256`, `runner_sha256`,
+`installed_runner_sha256`), `isolation` (`uplink_frames`, `uplink_captured`, `uplink_dropped`, `status_pre`,
+`status_post`), `totals` and `notes`. A tripped isolation check makes the window FAIL for good; there is no rerun.

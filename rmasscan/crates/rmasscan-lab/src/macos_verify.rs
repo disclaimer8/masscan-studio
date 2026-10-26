@@ -1272,7 +1272,7 @@ pub(crate) fn verify_item(
 }
 
 /// Whether anything under `d` is a `*.gz`: captures are stored uncompressed, the verifier has no decompression.
-fn has_compressed_capture(d: &Path) -> bool {
+pub(crate) fn has_compressed_capture(d: &Path) -> bool {
     fs::read_dir(d).is_ok_and(|rd| {
         rd.filter_map(Result::ok).any(|e| {
             let p = e.path();

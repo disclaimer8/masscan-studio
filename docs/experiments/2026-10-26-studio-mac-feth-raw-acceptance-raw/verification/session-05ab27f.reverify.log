@@ -1,4 +1,4 @@
-NOT RUN  safety NOT RUN: peer.pcap present; INVALID: hashes-before-copy.txt matches the files; INVALID: window.json carries INVALID mark(s) or no mark list
+NOT RUN  safety NOT RUN: peer.pcap missing; INVALID: hashes-before-copy.txt does not match the files; INVALID: window.json carries INVALID mark(s) or no mark list
 NOT RUN  chronicle NOT RUN: smoke.json: the session ended before any Start
 INVALID  host-listeners INVALID: host listeners not recorded (no netstat header): the open truth derived from the wire needs a complete peer capture
 PASS     history 

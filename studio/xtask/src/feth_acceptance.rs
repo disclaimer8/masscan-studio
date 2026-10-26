@@ -447,10 +447,35 @@ pub fn check_bundle_manifest(text: Option<&str>, head: &str) -> std::result::Res
 }
 
 /// lsof exits 0 or 1; anything else (it could not run) is not "no listeners".
-/// An lsof that exits 1 with nothing on stdout but something on stderr was blinded (process info denied), so it
-/// proved nothing: that is "not checked", not "no listeners".
-pub fn lsof_ok(rc: i32, stdout: &str, stderr: &str) -> bool {
-    matches!(rc, 0 | 1) && stdout.trim().is_empty() && !(rc == 1 && !stderr.trim().is_empty())
+/// lsof run as the user sees only the user's own sockets and can be blinded without any message, so an empty
+/// result proves nothing; it is extra information. A listener it does show is a finding.
+pub fn lsof_ok(rc: i32, stdout: &str) -> bool {
+    matches!(rc, 0 | 1) && stdout.trim().is_empty()
+}
+
+/// Lab listener ports of the peer (`peer listen --open 8000-8007`).
+const LAB_LISTEN_PORTS: std::ops::RangeInclusive<u16> = 8000..=8007;
+
+/// Leftover listeners found in a `netstat -an -p tcp` record: any LISTEN on `198.18.0.2.<port>`, or on `*.<port>`
+/// of a lab port (the wildcard also answers on 198.18.0.2). Other wildcard services of the host are not leftovers.
+pub fn leftover_listeners(netstat: &str) -> Vec<String> {
+    netstat
+        .lines()
+        .filter(|l| l.contains("LISTEN"))
+        .filter(|l| matches!(l.split_whitespace().next(), Some("tcp4" | "tcp46")))
+        .filter_map(|l| {
+            let a = l.split_whitespace().nth(3)?;
+            let hit = if let Some(p) = a.strip_prefix("198.18.0.2.") {
+                p.parse::<u16>().is_ok()
+            } else if let Some(p) = a.strip_prefix("*.") {
+                p.parse::<u16>()
+                    .is_ok_and(|p| LAB_LISTEN_PORTS.contains(&p))
+            } else {
+                false
+            };
+            hit.then(|| l.trim().to_owned())
+        })
+        .collect()
 }
 
 /// What `host-listen-*.txt` holds and whether it is a record. A blinded `netstat -an -p tcp` exits 0 with empty
@@ -1278,15 +1303,11 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     }
     let ls = c.run(&["/usr/sbin/lsof", "-nP", "-iTCP@198.18.0.2", "-sTCP:LISTEN"]);
     c.put("leftover-listeners.txt", &ls.stdout)?;
-    if !lsof_ok(ls.rc, &ls.stdout, &ls.stderr) {
-        reasons.push(if ls.rc == 1 && ls.stdout.trim().is_empty() {
-            format!(
-                "listeners on 198.18.0.2 were not checked (lsof rc 1, empty stdout, stderr {:?})",
-                ls.stderr.trim()
-            )
-        } else {
-            format!("a listener on 198.18.0.2 is left over (lsof rc {})", ls.rc)
-        });
+    if !lsof_ok(ls.rc, &ls.stdout) {
+        reasons.push(format!(
+            "a listener on 198.18.0.2 is left over (lsof rc {})",
+            ls.rc
+        ));
     }
     let ps = ps_text(c);
     let left = leftover_procs(&ps.stdout, &own_pids());
@@ -1322,6 +1343,13 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
             "host listeners not recorded: netstat -an -p tcp failed, was empty or wrote to stderr"
                 .into(),
         );
+    }
+    // The leftover-listener check comes from this record, which lists every user's sockets; lsof above is extra.
+    let left = leftover_listeners(&ns.stdout);
+    if !left.is_empty() {
+        reasons.push(format!(
+            "a listener on 198.18.0.2 or a lab port is left over (netstat): {left:?}"
+        ));
     }
     let mut sys = String::new();
     for k in [
@@ -2005,7 +2033,7 @@ mod tests {
         block_name: Option<String>,
         otool_out: Option<String>,
         blind_netstat: bool,
-        blind_lsof: bool,
+        netstat_out: Option<String>,
         log: Vec<String>,
         status: Option<(i32, String)>,
         installed: Option<String>,
@@ -2056,11 +2084,7 @@ mod tests {
                 ("lsof", _) => Ok(Done {
                     rc: 1,
                     stdout: String::new(),
-                    stderr: if self.blind_lsof {
-                        "lsof: process information denied\n".into()
-                    } else {
-                        String::new()
-                    },
+                    stderr: String::new(),
                 }),
                 ("ps", _) => ok(" 1 /bin/zsh\n"),
                 ("netstat", Some("-I")) => ok(&format!("{} 0\n", a[2])),
@@ -2069,7 +2093,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: "netstat: sysctl: net.inet.tcp.pcblist_n: Operation not permitted\n".into(),
                 }),
-                ("netstat", _) => ok("Active Internet connections (including servers)\ntcp4 0 0 *.22 *.* LISTEN\n"),
+                ("netstat", _) => ok(self.netstat_out.as_deref().unwrap_or("Active Internet connections (including servers)\ntcp4 0 0 *.22 *.* LISTEN\n")),
                 ("sysctl", _) => ok("k: 1\n"),
                 ("sw_vers", _) => ok("macOS\n"),
                 ("otool", _) => ok(self.otool_out.as_deref().unwrap_or("x:\n\t/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib (compat)\n\t/usr/lib/libSystem.B.dylib\n")),
@@ -2523,11 +2547,23 @@ mod tests {
         assert!(check_bundle_manifest(None, &head).is_err());
         assert!(check_bundle_manifest(Some("{}"), &head).is_err());
         // lsof that could not run is not "no listeners"
-        assert!(lsof_ok(0, "", "") && lsof_ok(1, "", ""));
-        assert!(!lsof_ok(-1, "", "") && !lsof_ok(2, "", "") && !lsof_ok(1, "x LISTEN", ""));
-        // blinded lsof: rc 1, nothing on stdout, a reason on stderr
-        assert!(!lsof_ok(1, "", "lsof: WARNING: can't stat() fs\n"));
-        assert!(lsof_ok(0, "", "lsof: WARNING: can't stat() fs\n"));
+        assert!(lsof_ok(0, "") && lsof_ok(1, ""));
+        assert!(!lsof_ok(-1, "") && !lsof_ok(2, "") && !lsof_ok(1, "x LISTEN"));
+        // leftover listeners come from the netstat record: 198.18.0.2 or a lab port on the wildcard
+        let ns = "Active Internet connections (including servers)\n\
+tcp4       0      0  *.5000                 *.*                    LISTEN\n\
+tcp46      0      0  *.7000                 *.*                    LISTEN\n\
+tcp6       0      0  *.8001                 *.*                    LISTEN\n\
+tcp4       0      0  192.168.1.5.8002       *.*                    ESTABLISHED\n";
+        assert!(leftover_listeners(ns).is_empty());
+        assert_eq!(
+            leftover_listeners(&format!("{ns}tcp4 0 0 198.18.0.2.9999 *.* LISTEN\n")).len(),
+            1
+        );
+        assert_eq!(
+            leftover_listeners(&format!("{ns}tcp46 0 0 *.8003 *.* LISTEN\n")).len(),
+            1
+        );
         // a blinded netstat (rc 0, empty stdout, reason on stderr) is not a record; a real one is
         let hdr = "Active Internet connections (including servers)\ntcp4 0 0 *.5000 *.* LISTEN\n";
         let done = |rc: i32, out: &str, err: &str| Done {
@@ -2654,12 +2690,15 @@ mod tests {
             "{rec}"
         );
         fs::remove_dir_all(root).unwrap();
-        let (root, o, mut f, _) = setup("blindlsof");
-        f.blind_lsof = true;
+        // a leftover lab listener seen in the netstat record refuses the window, whatever a blind lsof says
+        let (root, o, mut f, _) = setup("leftnet");
+        f.netstat_out = Some(
+            "Active Internet connections (including servers)\ntcp4 0 0 *.8003 *.* LISTEN\n".into(),
+        );
         assert_eq!(run(&mut f, &o).unwrap(), 2);
         assert!(spawned(&f).is_empty());
         let t = fs::read_to_string(o.out.join("NOT-RUN.txt")).unwrap();
-        assert!(t.contains("were not checked"), "{t}");
+        assert!(t.contains("left over (netstat)"), "{t}");
         fs::remove_dir_all(root).unwrap();
     }
 

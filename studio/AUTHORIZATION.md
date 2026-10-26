@@ -1,7 +1,6 @@
 # Studio runner authorization
 
-Status: macOS session bootstrap implemented; raw scanning disabled. Linux peer
-transport is separate from the still-unimplemented Linux elevated launcher.
+Status: macOS and Linux session bootstrap implemented; raw scanning disabled.
 Windows simulation uses an authenticated named pipe; no Windows elevation claim
 is made. UAC and trusted installation remain separate acceptance work.
 
@@ -16,7 +15,10 @@ The UI creates a random socket in a new 0700 directory, socket 0600. macOS also
 rejects extended ACLs on that directory/socket. The path and process identity are
 public argv values; there is no argv/env session secret. Both sides validate OS
 peer credentials and process incarnation. Linux uses SO_PEERCRED and process
-start time. On macOS the runner validates the unprivileged UI through
+start time for the UI identity. The Linux UI authenticates root using SO_PEERCRED
+and the exact unreaped pkexec Child PID, without reading root's `/proc/<pid>/exe`.
+Direct exec must retain that PID; a forking launcher is refused.
+On macOS the runner validates the unprivileged UI through
 getpeereid/LOCAL_PEERPID and libproc start time (checked before/after path lookup).
 The UI validates the root peer through LOCAL_PEERTOKEN and
 proc_pidpath_audittoken, which binds the executable lookup to the kernel PID
@@ -34,7 +36,7 @@ The endpoint is removed when the session closes; removal checks its saved
 device/inode. The protocol has separate version, session/attempt IDs and strictly
 ordered frames. Protocol v2 adds a read-only CheckNetwork command before any scan.
 
-## Installation and launch
+## macOS installation and launch
 
 `cargo xtask prepare-runner` without a path builds the runner and reads the actual
 executable path from Cargo JSON (including custom target directories). A supplied
@@ -54,6 +56,39 @@ commands and a cleared runner environment. Source/UI identity and socket path ar
 quoted arguments. Authorization is bounded to 180 seconds; protocol handshake to
 10 seconds. The runner rejects root stdio mode and a root UI. The whole UI stays
 unprivileged. A session can serve successive scans; Lock closes it.
+
+## Linux installation and launch
+
+The same prepare/install/probe commands apply to the exact Linux package's
+`studio-runner`. Preparation uses readelf (binutils) to require the system x86-64
+glibc interpreter and a small system runtime dependency set. Custom RPATH,
+RUNPATH, loader audit/filter hooks and non-system dependency names are refused.
+The administrator-managed loader, cache and system runtime remain trusted.
+Other Linux architectures/libcs are not offered by this initial installer.
+
+Installation stages the exact SHA-256 under
+`/usr/local/libexec/masscan-studio/<sha256>/studio-runner`, checks root ownership
+and non-writable canonical ancestors, and never replaces an installed version.
+The reviewed installer text runs once with administrator authorization; each
+session subsequently invokes only the hash-pinned installed runner.
+`/usr/bin/pkexec --disable-internal-agent` receives an argv array and a cleared
+environment. A desktop polkit authentication agent must be running. No password
+passes through Studio and no textual stdin fallback is used. Generic polkit
+administrator authentication applies; no product policy, daemon or service is
+installed. Authorization/handshake deadlines remain 180/10 seconds.
+
+After elevation, the runner sets PR_SET_PDEATHSIG(SIGKILL), checking its parent
+PID before and after. The spawning controller thread stays alive for the session.
+Socket closure ends the session; if credentials prevent the UI from killing a
+root child, bounded cleanup delegates only reaping to a waiter. The runner's
+disconnect/UI checks and parent-death signal govern exit. Linux preflight currently
+reports unavailable and cannot enable raw scanning.
+
+CI uses a temporary XML policy granting only its exact hash-addressed runner in
+a disposable GitHub VM. It removes the policy after the probe and never bundles
+it in artifacts. This verifies pkexec bootstrap and owner-death behavior; it does
+not prove a desktop's password dialog or cancellation UX.
+See the [pkexec contract](https://www.freedesktop.org/software/polkit/docs/latest/pkexec.1.html).
 
 ## Closing and cancellation
 
@@ -91,7 +126,7 @@ re-read after observation. The checker does not create or modify the stand.
 - Raw Start/Pause/Resume/Stop with independent packet capture and mid-scan network
   drift handling must pass before RAW_SCANNING_ENABLED can change.
 - Windows runas and trusted installation (including other-account UAC);
-  Linux pkexec/install policy and elevated peer visibility remain separate work.
+  Linux desktop password prompt/cancellation remains a manual acceptance item.
 - No physical NIC or three-OS raw support follows from this implementation.
 
 ## Windows simulation session transport

@@ -3,6 +3,21 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-26 — DNS error classification corrected
+
+The deferred DNS review finding is closed. macOS DNS-SD now requests intermediate
+negative responses and distinguishes NoSuchName/NoSuchRecord from daemon errors,
+invalid PTR data, disconnected sockets and the query deadline. Windows/Linux
+classify the system resolver's NoName/NoData as absence; all other errors exit the
+unprivileged worker unsuccessfully. The parent reports Failed and does not cache
+the error as a missing hostname.
+
+New tests cover DNS-SD failure/absence/valid and invalid PTR/deadline, system
+resolver error kinds (Windows/Linux), and controller cache behavior. macOS:
+47 offline tests passed, Clippy/fmt passed, explicit loopback resolver test passed.
+The previously recorded packages below predate this correction; their hashes and
+evidence remain historical rather than being silently replaced.
+
 ## 2026-10-26 — host actions and filtered export
 
 Implementation `7770743`, reviewed fixes `7e17e3b`. Test-only follow-ups
@@ -55,9 +70,8 @@ The new packaged runner hash is `6a8e43…`; the installed root helper is still
 Authorize in this new package therefore requires its own matching installation;
 the previous elevated-session acceptance below is unchanged.
 
-Deferred minor from review: resolver operational failures can currently appear
-as "No hostname" and be cached for 300 seconds; manual refresh bypasses this
-cache. Distinguishing missing PTR from resolver failure remains open.
+The minor resolver-error classification finding from this review was subsequently
+fixed; see the DNS correction section above.
 
 Evidence directory: `studio/verification/host-actions-20261026/` (ignored local
 artifact archive; includes tests, review regressions, package manifests, UI check

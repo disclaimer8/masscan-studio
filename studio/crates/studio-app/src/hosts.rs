@@ -422,6 +422,44 @@ mod tests {
         drop(db);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn failed_dns_is_not_cached_but_authoritative_absence_is() {
+        let (dir, mut db, mut h) = setup();
+        h.select([1; 16], Backend::MacFeth, &mut db).unwrap();
+        let ip: Ipv4Addr = "198.18.0.2".parse().unwrap();
+        h.info.insert(ip.to_string(), HostInfo::new(ip.to_string()));
+        for (id, outcome) in [(1, Err("System DNS resolver failed".into())), (2, Ok(None))] {
+            h.pending.insert(
+                (ip, Kind::Dns),
+                Pending {
+                    id,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                },
+            );
+            let result = h
+                .receive(
+                    vec![Completion {
+                        id,
+                        ip,
+                        kind: Kind::Dns,
+                        outcome: Outcome::Dns(outcome),
+                    }],
+                    &mut db,
+                )
+                .unwrap();
+            if id == 1 {
+                assert_eq!(result[0].dns_state, CheckState::Failed);
+                assert_eq!(h.tasks.cached(ip), None);
+                assert!(result[0].dns_error.contains("resolver failed"));
+            } else {
+                assert_eq!(result[0].dns_state, CheckState::NotFound);
+                assert_eq!(h.tasks.cached(ip), Some(None));
+            }
+        }
+        drop(h);
+        drop(db);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(test)]

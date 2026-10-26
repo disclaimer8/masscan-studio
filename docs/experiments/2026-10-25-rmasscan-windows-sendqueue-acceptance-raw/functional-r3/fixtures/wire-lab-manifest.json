@@ -1,0 +1,659 @@
+{
+  "all_valid": true,
+  "binding": {
+    "adapter_ip": "198.18.0.1",
+    "adapter_mac": "52:54:00:04:80:a9",
+    "blackrock_rounds": 14,
+    "peer_iface": "veth-b",
+    "peer_ips": "198.18.0.2",
+    "rate": "100",
+    "responder_open_ports": "80,443,8000,8001,8002,8003,8004,8005,8006,8007",
+    "retries": 0,
+    "router_mac": "02:57:4c:3d:2e:9b",
+    "scanner_iface": "veth-a",
+    "seed": "1",
+    "wait": 3
+  },
+  "cases": [
+    {
+      "effective_echo_file": "c01_one_addr_port_synack.echo",
+      "effective_echo_sha256": "24e4d8ae219384f554189463856bd2f82b09dd7a889e46db9b50d8edb19a79f5",
+      "expected": {
+        "rst": 0,
+        "syn": 1,
+        "synack": 1
+      },
+      "fixture_pcap": "c01_one_addr_port_synack.run1.pcap",
+      "masscan_args": [
+        "198.18.0.2",
+        "-p80",
+        "--source-port",
+        "40000"
+      ],
+      "name": "c01_one_addr_port_synack",
+      "repeat_compare": {
+        "detail": "1 SYN frames identical and in order",
+        "result": "PASS"
+      },
+      "runs": [
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 5,
+            "frames_out": 1,
+            "iface": "veth-b",
+            "iface_rx_delta": 5,
+            "kernel_tp_packets": 6,
+            "marker_acked": true,
+            "pcap": "c01_one_addr_port_synack.run1.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 0,
+            "rst_from_scanner": 1,
+            "syn_from_scanner": 1,
+            "synack_from_peer": 1
+          },
+          "pcap": "c01_one_addr_port_synack.run1.pcap",
+          "pcap_bytes": 476,
+          "pcap_sha256": "beeb030cb77465b8016cf90e668443fe4a5ea6e74384f6adaa6622f044e19a3d",
+          "valid": true
+        },
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 5,
+            "frames_out": 1,
+            "iface": "veth-b",
+            "iface_rx_delta": 5,
+            "kernel_tp_packets": 6,
+            "marker_acked": true,
+            "pcap": "c01_one_addr_port_synack.run2.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 0,
+            "rst_from_scanner": 1,
+            "syn_from_scanner": 1,
+            "synack_from_peer": 1
+          },
+          "pcap": "c01_one_addr_port_synack.run2.pcap",
+          "pcap_bytes": 476,
+          "pcap_sha256": "296481e97ff19d5b1989a2dc69e53edb9bc06c8c2b20b79d4eef32276ff7fe64",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "effective_echo_file": "c02_one_addr_port_rst.echo",
+      "effective_echo_sha256": "7a8fcf514e1a23315ea02956ce6916e4c1bbee4a350592a686dbb60c9516191d",
+      "expected": {
+        "rst": 1,
+        "syn": 1,
+        "synack": 0
+      },
+      "fixture_pcap": "c02_one_addr_port_rst.run1.pcap",
+      "masscan_args": [
+        "198.18.0.2",
+        "-p81",
+        "--source-port",
+        "40000"
+      ],
+      "name": "c02_one_addr_port_rst",
+      "repeat_compare": {
+        "detail": "1 SYN frames identical and in order",
+        "result": "PASS"
+      },
+      "runs": [
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 5,
+            "frames_out": 1,
+            "iface": "veth-b",
+            "iface_rx_delta": 5,
+            "kernel_tp_packets": 6,
+            "marker_acked": true,
+            "pcap": "c02_one_addr_port_rst.run1.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 1,
+            "rst_from_scanner": 1,
+            "syn_from_scanner": 1,
+            "synack_from_peer": 0
+          },
+          "pcap": "c02_one_addr_port_rst.run1.pcap",
+          "pcap_bytes": 472,
+          "pcap_sha256": "9cfa912acfe0b11da18f29f9bf7b817673f40304aef958920c52c406319d3521",
+          "valid": true
+        },
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 5,
+            "frames_out": 1,
+            "iface": "veth-b",
+            "iface_rx_delta": 5,
+            "kernel_tp_packets": 6,
+            "marker_acked": true,
+            "pcap": "c02_one_addr_port_rst.run2.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 1,
+            "rst_from_scanner": 1,
+            "syn_from_scanner": 1,
+            "synack_from_peer": 0
+          },
+          "pcap": "c02_one_addr_port_rst.run2.pcap",
+          "pcap_bytes": 472,
+          "pcap_sha256": "2508eefe2698a326c91a0019ea0d67a6d9610b406aa6c32764c093ac37664b86",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "effective_echo_file": "c03_multi_ports.echo",
+      "effective_echo_sha256": "8bfe13dd78340b9fde84df64024aa99bb77c83f4be293384563de9951971d8cf",
+      "expected": {
+        "rst": 8,
+        "syn": 16,
+        "synack": 8
+      },
+      "fixture_pcap": "c03_multi_ports.run1.pcap",
+      "masscan_args": [
+        "198.18.0.2",
+        "-p8000-8015",
+        "--source-port",
+        "40000"
+      ],
+      "name": "c03_multi_ports",
+      "repeat_compare": {
+        "detail": "16 SYN frames identical and in order",
+        "result": "PASS"
+      },
+      "runs": [
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 35,
+            "frames_out": 16,
+            "iface": "veth-b",
+            "iface_rx_delta": 35,
+            "kernel_tp_packets": 51,
+            "marker_acked": true,
+            "pcap": "c03_multi_ports.run1.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 8,
+            "rst_from_scanner": 16,
+            "syn_from_scanner": 16,
+            "synack_from_peer": 8
+          },
+          "pcap": "c03_multi_ports.run1.pcap",
+          "pcap_bytes": 3804,
+          "pcap_sha256": "894aa3d977f6d636f8b4968ee20f35553b39d0980bea3e3b991b85047f8e82ce",
+          "valid": true
+        },
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 35,
+            "frames_out": 16,
+            "iface": "veth-b",
+            "iface_rx_delta": 35,
+            "kernel_tp_packets": 51,
+            "marker_acked": true,
+            "pcap": "c03_multi_ports.run2.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 8,
+            "rst_from_scanner": 16,
+            "syn_from_scanner": 16,
+            "synack_from_peer": 8
+          },
+          "pcap": "c03_multi_ports.run2.pcap",
+          "pcap_bytes": 3804,
+          "pcap_sha256": "50f5cde0d16ddcbb7134f8730540b3cda758efeb258a09955b5aad6f3d929644",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "effective_echo_file": "c04_exclude.echo",
+      "effective_echo_sha256": "0792b2d447b6acbdf095214edd2766225775950e12c89c1a177b65447fac6033",
+      "expected": {
+        "rst": 2,
+        "syn": 4,
+        "synack": 2
+      },
+      "fixture_pcap": "c04_exclude.run1.pcap",
+      "masscan_args": [
+        "198.18.0.0/30",
+        "-p80,81,443,82",
+        "--source-port",
+        "40000",
+        "--exclude",
+        "198.18.0.0-198.18.0.1,198.18.0.3"
+      ],
+      "name": "c04_exclude",
+      "repeat_compare": {
+        "detail": "4 SYN frames identical and in order",
+        "result": "PASS"
+      },
+      "runs": [
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "c04_exclude.run1.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "c04_exclude.run1.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "31d8ac0659be987e8bb5ca53d05fb4b9e255ba1d7caf690fa196ddd3a6afca91",
+          "valid": true
+        },
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "c04_exclude.run2.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "c04_exclude.run2.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "5ef2ae7cc67df2bb05554ba9115dc7c2e78c379001e04ef853b8539543a4c81f",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "effective_echo_file": "c05_srcport_single.echo",
+      "effective_echo_sha256": "30daefd93f052543b3980d1eb350c1ce085ec6e654d20868709227b9c99ffd79",
+      "expected": {
+        "rst": 2,
+        "syn": 4,
+        "synack": 2
+      },
+      "fixture_pcap": "c05_srcport_single.run1.pcap",
+      "masscan_args": [
+        "198.18.0.2",
+        "-p80,81,443,82",
+        "--source-port",
+        "50123"
+      ],
+      "name": "c05_srcport_single",
+      "repeat_compare": {
+        "detail": "4 SYN frames identical and in order",
+        "result": "PASS"
+      },
+      "runs": [
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "c05_srcport_single.run1.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "c05_srcport_single.run1.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "242d74ac6567bafafabcc04afefb25cffdfdc4ab1d31c45306e2998f5b6d015c",
+          "valid": true
+        },
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "c05_srcport_single.run2.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "c05_srcport_single.run2.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "be57a0bf6a79e30403d3ea650ea847690fa9dd4cdae57309ecf9962d86417d20",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "effective_echo_file": "c06_srcport_range.echo",
+      "effective_echo_sha256": "5da6654c5af5dc5ad513235757915bb9db58f87f42c80444ca8e88c6d64b7c29",
+      "expected": {
+        "rst": 2,
+        "syn": 4,
+        "synack": 2
+      },
+      "fixture_pcap": "c06_srcport_range.run1.pcap",
+      "masscan_args": [
+        "198.18.0.2",
+        "-p80,81,443,82",
+        "--source-port",
+        "50000-50015"
+      ],
+      "name": "c06_srcport_range",
+      "repeat_compare": {
+        "detail": "4 SYN frames identical and in order",
+        "result": "PASS"
+      },
+      "runs": [
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "c06_srcport_range.run1.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "c06_srcport_range.run1.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "935c76c968df577f122ffcdd76bf90f4c6e41573781082ed3cc389fcd50dc783",
+          "valid": true
+        },
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "c06_srcport_range.run2.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "c06_srcport_range.run2.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "62b29d04700cf255be10e40a6db5a74dc59ed769360b71e7624de895cd96fe19",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "effective_echo_file": "x01_foreign_replies.echo",
+      "effective_echo_sha256": "bb3af18d78c4f41cd5e2cb96c31e07b1cd4469915eaa93cf502885f007cee817",
+      "expected": {
+        "rst": 2,
+        "syn": 4,
+        "synack": 2
+      },
+      "fixture_pcap": "x01_foreign_replies.run1.pcap",
+      "masscan_args": [
+        "198.18.0.2",
+        "-p80,81,443,8099",
+        "--source-port",
+        "40000"
+      ],
+      "name": "x01_foreign_replies",
+      "repeat_compare": {
+        "detail": "4 SYN frames identical and in order",
+        "result": "PASS"
+      },
+      "runs": [
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "x01_foreign_replies.run1.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "x01_foreign_replies.run1.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "2ccc1de64fefefe1a018dab27432ca3ccc9203eb286a5d002dadef46c5abc920",
+          "valid": true
+        },
+        {
+          "capture": {
+            "drops": 0,
+            "frames_in": 11,
+            "frames_out": 4,
+            "iface": "veth-b",
+            "iface_rx_delta": 11,
+            "kernel_tp_packets": 15,
+            "marker_acked": true,
+            "pcap": "x01_foreign_replies.run2.pcap",
+            "rx_counter_mismatch": false,
+            "snaplen": 65535,
+            "truncated_frames": 0,
+            "valid": true
+          },
+          "counts_match_expected": true,
+          "observed": {
+            "marker": 3,
+            "other": 0,
+            "rst_from_peer": 2,
+            "rst_from_scanner": 4,
+            "syn_from_scanner": 4,
+            "synack_from_peer": 2
+          },
+          "pcap": "x01_foreign_replies.run2.pcap",
+          "pcap_bytes": 1140,
+          "pcap_sha256": "cfe15d56335caa172c18c3bdcf4d014f99425cec92942d95be28960db7d5b46f",
+          "valid": true
+        }
+      ]
+    }
+  ],
+  "commands": [
+    "ip netns add wl-scan-RUNID; ip netns add wl-peer-RUNID",
+    "ip -n wl-scan-RUNID link add veth-a type veth peer name veth-b netns wl-peer-RUNID",
+    "ip -n $NS route show default (empty); ip -n $NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces",
+    "ip netns exec $NS_B python3 wire_capture.py responder --ports 80,443,8000,8001,8002,8003,8004,8005,8006,8007 --ready READY",
+    "ip netns exec $NS_A timeout 60 ORACLE 198.18.0.2 -p80 --source-port 40000 --interface veth-a --adapter-ip 198.18.0.1 --adapter-mac 52:54:00:04:80:a9 --router-mac 02:57:4c:3d:2e:9b --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case c01_one_addr_port_synack, 2 runs",
+    "ip netns exec $NS_A timeout 60 ORACLE 198.18.0.2 -p81 --source-port 40000 --interface veth-a --adapter-ip 198.18.0.1 --adapter-mac 52:54:00:04:80:a9 --router-mac 02:57:4c:3d:2e:9b --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case c02_one_addr_port_rst, 2 runs",
+    "ip netns exec $NS_A timeout 60 ORACLE 198.18.0.2 -p8000-8015 --source-port 40000 --interface veth-a --adapter-ip 198.18.0.1 --adapter-mac 52:54:00:04:80:a9 --router-mac 02:57:4c:3d:2e:9b --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case c03_multi_ports, 2 runs",
+    "ip netns exec $NS_A timeout 60 ORACLE 198.18.0.0/30 -p80,81,443,82 --source-port 40000 --exclude 198.18.0.0-198.18.0.1,198.18.0.3 --interface veth-a --adapter-ip 198.18.0.1 --adapter-mac 52:54:00:04:80:a9 --router-mac 02:57:4c:3d:2e:9b --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case c04_exclude, 2 runs",
+    "ip netns exec $NS_A timeout 60 ORACLE 198.18.0.2 -p80,81,443,82 --source-port 50123 --interface veth-a --adapter-ip 198.18.0.1 --adapter-mac 52:54:00:04:80:a9 --router-mac 02:57:4c:3d:2e:9b --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case c05_srcport_single, 2 runs",
+    "ip netns exec $NS_A timeout 60 ORACLE 198.18.0.2 -p80,81,443,82 --source-port 50000-50015 --interface veth-a --adapter-ip 198.18.0.1 --adapter-mac 52:54:00:04:80:a9 --router-mac 02:57:4c:3d:2e:9b --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case c06_srcport_range, 2 runs",
+    "ip netns exec $NS_A timeout 60 ORACLE 198.18.0.2 -p80,81,443,8099 --source-port 40000 --interface veth-a --adapter-ip 198.18.0.1 --adapter-mac 52:54:00:04:80:a9 --router-mac 02:57:4c:3d:2e:9b --seed 1 --rate 100 --blackrock-rounds 14 --retries 0 --wait 3 -oL CASE.scan.txt   # case x01_foreign_replies, 2 runs"
+  ],
+  "comparison_rule": "verify-wire.py: byte-compare the ordered list of IPv4/TCP frames with only SYN set; capture drops, truncation, rx-counter mismatch or truncated pcap => INVALID (never PASS)",
+  "created_utc": "2026-10-24T14:19:17Z",
+  "harness": {
+    "verify-wire.py": "fcb06cbdc917cba187bec5633a04f2e0b3360ed1b8900fc9fa309c0b2b64dcef",
+    "wire-lab.sh": "9819a1ad16759e09d058e4576674627afb9ed0b98d1bf6fe8a89811f828139ed",
+    "wire_capture.py": "62ef56f53a9ffd385a9f7cd34ace851716dad7bb62bc1923e3d631ef983a41c3"
+  },
+  "host": {
+    "arch": "x86_64",
+    "iproute2": "ip utility, iproute2-6.19.0, libbpf 1.6.3",
+    "kernel": "7.0.0-38-generic",
+    "os_pretty": "Ubuntu 26.04.1 LTS",
+    "python": "3.14.4"
+  },
+  "isolation": {
+    "bridge": false,
+    "default_route": false,
+    "host_link_list_unchanged": true,
+    "ip_forward": 0,
+    "ipv6": "disabled",
+    "nat": false,
+    "peer_links": [
+      "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00",
+      "2: veth-b@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\\    link/ether 02:57:4c:3d:2e:9b brd ff:ff:ff:ff:ff:ff link-netns wl-scan-RUNID"
+    ],
+    "peer_route_get_8_8_8_8": "RTNETLINK answers: Network is unreachable",
+    "peer_routes": [
+      "198.18.0.0/30 dev veth-b proto kernel scope link src 198.18.0.2"
+    ],
+    "scanner_links": [
+      "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00",
+      "2: veth-a@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\\    link/ether 52:54:00:04:80:a9 brd ff:ff:ff:ff:ff:ff link-netns wl-peer-RUNID"
+    ],
+    "scanner_route_get_8_8_8_8": "RTNETLINK answers: Network is unreachable",
+    "scanner_routes": [],
+    "uplink": false,
+    "verified_by": "wire-lab.sh seal assertions (fail closed) before any traffic",
+    "veth_created_inside_scanner_ns_peer_moved_to_peer_ns": true
+  },
+  "masscan_conf": {
+    "exists": false,
+    "masked_in_lab": false,
+    "path": "/etc/masscan/masscan.conf"
+  },
+  "namespaces": {
+    "peer": "wl-peer-RUNID",
+    "scanner": "wl-scan-RUNID"
+  },
+  "oracle": {
+    "git_commit": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "git_tree_clean": true,
+    "path": "$HOME/rmasscan-oracle/masscan/bin/masscan",
+    "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "variant": "original pinned binary (NOT the --offline-patched copy)",
+    "version_line": "Masscan version 1.3.9-integration ( https://github.com/robertdavidgraham/masscan )"
+  },
+  "purpose": "Ordered outgoing-SYN stream of the original pinned C masscan on an isolated veth lab; the Rust engine must reproduce it byte for byte. Timestamps, ARP, RST and replies are not compared.",
+  "schema": "rmasscan-wire-manifest/1"
+}

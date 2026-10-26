@@ -1,0 +1,19 @@
+[wire-lab] c01_one_addr_port_synack.run1 done: valid=True in=5 out=1 drops=0
+[wire-lab] c01_one_addr_port_synack.run2 done: valid=True in=5 out=1 drops=0
+[wire-lab] c02_one_addr_port_rst.run1 done: valid=True in=5 out=1 drops=0
+[wire-lab] c02_one_addr_port_rst.run2 done: valid=True in=5 out=1 drops=0
+[wire-lab] c03_multi_ports.run1 done: valid=True in=35 out=16 drops=0
+[wire-lab] c03_multi_ports.run2 done: valid=True in=35 out=16 drops=0
+[wire-lab] c04_exclude.run1 done: valid=True in=11 out=4 drops=0
+[wire-lab] c04_exclude.run2 done: valid=True in=11 out=4 drops=0
+[wire-lab] c05_srcport_single.run1 done: valid=True in=11 out=4 drops=0
+[wire-lab] c05_srcport_single.run2 done: valid=True in=11 out=4 drops=0
+[wire-lab] c06_srcport_range.run1 done: valid=True in=11 out=4 drops=0
+[wire-lab] c06_srcport_range.run2 done: valid=True in=11 out=4 drops=0
+[wire-lab] x01_foreign_replies.run1 done: valid=True in=11 out=4 drops=0
+[wire-lab] x01_foreign_replies.run2 done: valid=True in=11 out=4 drops=0
+manifest: 7 cases, all_valid=True
+[wire-lab] done: $HOME/t4-fixtures-1792851546/out/manifest.json
+[wire-lab] cleanup: rc=0 own_pids=29 namespaces_left=0
+
+--- stderr ---

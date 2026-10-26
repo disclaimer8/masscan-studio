@@ -90,6 +90,17 @@ pub(crate) struct PcapIf {
     pub flags: u32,
 }
 
+/// `struct pcap_send_queue` (Npcap `pcap-win32-ext`): `maxlen` ёмкость буфера,
+/// `len` занято байт (единственный писатель `pcap_sendqueue_queue`), `buffer`
+/// записи `pcap_pkthdr` + кадр подряд.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct PcapSendQueue {
+    pub maxlen: c_uint,
+    pub len: c_uint,
+    pub buffer: *mut c_char,
+}
+
 /// `struct bpf_insn` (классический BPF, 8 байт).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +119,8 @@ pub(crate) struct BpfProgram {
     pub bf_insns: *mut BpfInsn,
 }
 
+/// Заголовок записи sendqueue: `pcap_pkthdr` (16 байт), затем `caplen` байт.
+pub(crate) const SENDQUEUE_RECORD_HEADER: usize = size_of::<PcapPkthdr>();
 pub(crate) const PCAP_ERRBUF_SIZE: usize = 256;
 /// `BPF_RET | BPF_K`: «вернуть k байт»; при k = 0 кадр отбрасывается.
 pub(crate) const BPF_RET_K: u16 = 0x06;
@@ -132,6 +145,7 @@ const _: () = assert!(size_of::<PcapPkthdr>() == 16 && align_of::<PcapPkthdr>() 
 const _: () = assert!(offset_of!(PcapPkthdr, ts) == 0);
 const _: () = assert!(offset_of!(PcapPkthdr, caplen) == 8);
 const _: () = assert!(offset_of!(PcapPkthdr, len) == 12);
+const _: () = assert!(SENDQUEUE_RECORD_HEADER == 16);
 const _: () = assert!(size_of::<PcapStat>() == 24 && align_of::<PcapStat>() == 4);
 const _: () = assert!(offset_of!(PcapStat, ps_recv) == 0);
 const _: () = assert!(offset_of!(PcapStat, ps_drop) == 4);
@@ -146,6 +160,9 @@ const _: () = assert!(size_of::<SockAddr>() == 16 && align_of::<SockAddr>() == 2
 const _: () = assert!(offset_of!(SockAddr, sa_data) == 2);
 #[cfg(target_pointer_width = "64")]
 const _: () = {
+    assert!(size_of::<PcapSendQueue>() == 16 && align_of::<PcapSendQueue>() == 8);
+    assert!(offset_of!(PcapSendQueue, maxlen) == 0);
+    assert!(offset_of!(PcapSendQueue, len) == 4 && offset_of!(PcapSendQueue, buffer) == 8);
     assert!(size_of::<PcapAddr>() == 40 && align_of::<PcapAddr>() == 8);
     assert!(offset_of!(PcapAddr, next) == 0);
     assert!(offset_of!(PcapAddr, addr) == 8);
@@ -189,6 +206,15 @@ pub(crate) type SetNonblockFn = unsafe extern "C" fn(*mut PcapT, c_int, *mut c_c
 /// `pcap_getnonblock(p, errbuf)`: 0/1, -1 при ошибке.
 pub(crate) type GetNonblockFn = unsafe extern "C" fn(*mut PcapT, *mut c_char) -> c_int;
 pub(crate) type StatsFn = unsafe extern "C" fn(*mut PcapT, *mut PcapStat) -> c_int;
+/// `pcap_sendqueue_alloc(memsize)`: NULL при нехватке памяти.
+pub(crate) type SendQueueAllocFn = unsafe extern "C" fn(c_uint) -> *mut PcapSendQueue;
+/// `pcap_sendqueue_queue(queue, hdr, data)`: 0 или -1 (очередь полна).
+pub(crate) type SendQueueQueueFn =
+    unsafe extern "C" fn(*mut PcapSendQueue, *const PcapPkthdr, *const u8) -> c_int;
+/// `pcap_sendqueue_transmit(p, queue, sync)`: число отправленных байт.
+pub(crate) type SendQueueTransmitFn =
+    unsafe extern "C" fn(*mut PcapT, *mut PcapSendQueue, c_int) -> c_uint;
+pub(crate) type SendQueueDestroyFn = unsafe extern "C" fn(*mut PcapSendQueue);
 pub(crate) type CloseFn = unsafe extern "C" fn(*mut PcapT);
 /// `pcap_compile(p, prog, expr, optimize, netmask)`: 0 или -1.
 pub(crate) type CompileFn =
@@ -281,4 +307,8 @@ pcap_api! {
     compile: CompileFn = "pcap_compile",
     setfilter: SetFilterFn = "pcap_setfilter",
     freecode: FreeCodeFn = "pcap_freecode",
+    sendqueue_alloc: SendQueueAllocFn = "pcap_sendqueue_alloc",
+    sendqueue_queue: SendQueueQueueFn = "pcap_sendqueue_queue",
+    sendqueue_transmit: SendQueueTransmitFn = "pcap_sendqueue_transmit",
+    sendqueue_destroy: SendQueueDestroyFn = "pcap_sendqueue_destroy",
 }

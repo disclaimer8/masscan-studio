@@ -1,0 +1,19 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1793012029.845107,
+  "capture_stopped_utc": 1793012088.590033,
+  "end_marker_seen": true,
+  "exe_sha256": "091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7",
+  "guest_exit": 0,
+  "guest_finished_utc": 1793012050.698878,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1793012036.276651,
+  "guest_times": {
+    "finished_utc": 1793012050.533,
+    "started_utc": 1793012047.84
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r5ea61dc2fb7fad38dc39b889ce05cf31-03443c91ae648f1e",
+  "kind": "stop",
+  "tag": "stop_drain"
+}

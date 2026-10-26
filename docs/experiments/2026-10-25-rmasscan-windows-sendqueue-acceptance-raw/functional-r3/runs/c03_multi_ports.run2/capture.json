@@ -1,0 +1,112 @@
+{
+  "capture_schema": 3,
+  "eno1": {
+    "cmd": [
+      "tcpdump",
+      "-i",
+      "eno1",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-B",
+      "4096",
+      "-s",
+      "0",
+      "-Z",
+      "root",
+      "-w",
+      "'/home/a1/winvm/t4-ev/functional-r3/rf8ad32969d7a3a0655027813e05efd75/c03_multi_ports.run2/eno1.pcap'",
+      "'net",
+      "198.18.0.0/30",
+      "or",
+      "(arp",
+      "and",
+      "(host",
+      "198.18.0.1",
+      "or",
+      "host",
+      "198.18.0.2))",
+      "or",
+      "ether",
+      "host",
+      "52:54:00:04:80:a9",
+      "or",
+      "ether",
+      "host",
+      "02:57:4c:3d:2e:9b",
+      "or",
+      "ether",
+      "proto",
+      "0x88b5",
+      "or",
+      "ether",
+      "proto",
+      "0x88b6'"
+    ],
+    "exited": true,
+    "filter": "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 52:54:00:04:80:a9 or ether host 02:57:4c:3d:2e:9b or ether proto 0x88b5 or ether proto 0x88b6",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 0,
+      "sha256": "704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea",
+      "size": 24
+    },
+    "tcpdump": {
+      "captured": 0,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 0
+    }
+  },
+  "peer": {
+    "cmd": [
+      "ip",
+      "netns",
+      "exec",
+      "wvp-n2",
+      "tcpdump",
+      "-i",
+      "lab0",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-B",
+      "16384",
+      "-s",
+      "0",
+      "-Z",
+      "root",
+      "-w",
+      "'/home/a1/winvm/t4-ev/functional-r3/rf8ad32969d7a3a0655027813e05efd75/c03_multi_ports.run2/peer.pcap'"
+    ],
+    "counters": {
+      "rx_before": 15427115,
+      "rx_end": 15427132,
+      "rx_ready": 15427115,
+      "tx_before": 23146148,
+      "tx_end": 23146187,
+      "tx_ready": 23146148
+    },
+    "exited": true,
+    "filter": "(none: every frame on lab0)",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 56,
+      "sha256": "292823be659ab1643f31b2888592994ddfe4895a7359df8040b8051d2f933e92",
+      "size": 4116
+    },
+    "tcpdump": {
+      "captured": 56,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 56
+    }
+  },
+  "quiet": {
+    "quiet_s": 1.5,
+    "reached": true
+  },
+  "status_post_raw_run_allowed": true
+}

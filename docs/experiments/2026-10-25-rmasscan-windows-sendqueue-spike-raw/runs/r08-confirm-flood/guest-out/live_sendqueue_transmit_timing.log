@@ -1,0 +1,20 @@
+
+running 1 test
+test windows::live::live_sendqueue_transmit_timing ... KV flood/config sizes=[128, 256, 512] rounds=1000 pps_cap=100000
+KV flood/sq_n128 n=128 calls=1000 p50_us=7601 p95_us=9935 p99_us=11192 p999_us=12433 max_us=15407 sum_frames=128000 sum_dur_us=7323779 pps_ceiling=17477 short_transmits=0 pass=true
+KV flood/sq_n128_seq first=0 frames=128000
+KV flood/sq_n256 n=256 calls=1000 p50_us=6643 p95_us=8939 p99_us=9515 p999_us=9863 max_us=10020 sum_frames=256000 sum_dur_us=6993351 pps_ceiling=36606 short_transmits=0 pass=true
+KV flood/sq_n256_seq first=128000 frames=256000
+KV flood/sq_n512 n=512 calls=1000 p50_us=13168 p95_us=17346 p99_us=18711 p999_us=19993 max_us=21954 sum_frames=512000 sum_dur_us=13773382 pps_ceiling=37173 short_transmits=0 pass=true
+KV flood/sq_n512_seq first=384000 frames=512000
+SUMMARY flood/sq_cmp_sendpacket n=1000 p50_us=132 p95_us=287 p99_us=474 max_us=636 rc={0: 1000}
+KV flood/sq_cmp_queue_n1 n=1 calls=1000 p50_us=132 p95_us=256 p99_us=350 p999_us=465 max_us=518 sum_frames=1000 sum_dur_us=147680 pps_ceiling=6771 short_transmits=0 pass=true
+KV flood/sq_cmp_seq first=896000 calls_each=1000
+SUMMARY flood/sq_cmp_sendpacket n=1000 p50_us=132 p95_us=287 p99_us=474 max_us=636 rc={0: 1000}
+KV flood/sigma_frames 898000
+KV flood/largest_passing_n 512
+KV flood/final_tx_stats recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 179 filtered out; finished in 28.56s
+

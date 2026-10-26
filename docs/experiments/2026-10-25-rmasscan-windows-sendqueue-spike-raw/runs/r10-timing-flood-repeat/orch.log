@@ -1,0 +1,16 @@
+[2026-10-26T04:08:21.990Z] tag=r10-timing-flood-repeat test=live_sendqueue_transmit_timing cond=flood sha=53afec8 nonce=r2a436255c6cab01d-cd6a98a810d6a309 extra=
+[2026-10-26T04:08:23.798Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:08:27.323Z] guest run begins
+[2026-10-26T04:09:30.742Z] guest run ended rc=0
+[2026-10-26T04:09:33.842Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=1093402
+==> $HOME/winvm/sq-ev/r10-timing-flood-repeat/peer.err <==
+1093402 packets captured
+1093402 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r10-timing-flood-repeat/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

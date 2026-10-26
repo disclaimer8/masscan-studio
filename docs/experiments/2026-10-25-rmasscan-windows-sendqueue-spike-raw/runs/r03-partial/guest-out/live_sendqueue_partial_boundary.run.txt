@@ -1,0 +1,6 @@
+exe: C:\Users\lab\src\rmasscan-61c1126\rmasscan\target\debug\deps\rmasscan_net-3d9b63e85ccd32b5.exe
+exe_sha256: 907f1f4ca20f1ec1a06fc99a52d7fd915403bd0833bad8eb1ad6ec727bd72b64
+extra: 
+nic_before: {"utc_ms":1792987152043,"stats":{"ReceivedBytes":465710954,"ReceivedUnicastPackets":7276751,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":181597814,"SentUnicastPackets":2926135,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}
+exit_code: 0 elapsed_ms: 2261
+nic_after: {"utc_ms":1792987154374,"stats":{"ReceivedBytes":465793834,"ReceivedUnicastPackets":7278046,"ReceivedDiscardedPackets":0,"ReceivedPacketErrors":0,"SentBytes":181678104,"SentUnicastPackets":2927430,"OutboundDiscardedPackets":0,"OutboundPacketErrors":0},"adapter":{"Status":"Up","LinkSpeed":"1 Gbps","MediaConnectionState":1}}

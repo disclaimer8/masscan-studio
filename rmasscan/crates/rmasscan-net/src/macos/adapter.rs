@@ -661,6 +661,7 @@ pub(crate) fn open_with<O: BpfOpener>(
             )),
         },
         stats: NetStatsHandle::new(counters),
+        tx_mode: crate::TxMode::Single,
     })
 }
 

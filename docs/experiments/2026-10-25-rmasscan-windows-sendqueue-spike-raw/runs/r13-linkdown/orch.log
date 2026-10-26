@@ -1,0 +1,17 @@
+[2026-10-26T04:12:38.660Z] tag=r13-linkdown test=live_sendqueue_linkdown cond=linkloss sha=53afec8 nonce=r9044957d3461c0c9-5fe2aafd3f0db58f extra=RMASSCAN_NPCAP_SQ_BATCH=64;RMASSCAN_NPCAP_SQ_SECS=30
+[2026-10-26T04:12:40.572Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:12:42.884Z] guest run begins
+[2026-10-26T04:13:13.256Z] guest run ended rc=0
+[2026-10-26T04:13:13.299Z] link restored, raw_run_allowed true
+[2026-10-26T04:13:15.876Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=97484
+==> $HOME/winvm/sq-ev/r13-linkdown/peer.err <==
+97484 packets captured
+97484 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r13-linkdown/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

@@ -1,0 +1,39 @@
+{
+  "error": "Malformed(\"wrong length\")",
+  "identity": {
+    "binary_path": "C:\\Users\\lab\\t4\\wire_scan.exe",
+    "binary_sha256": "091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7",
+    "elevated": true,
+    "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "os": {
+      "arch": "x86_64",
+      "family": "windows",
+      "version": "10.0.26300"
+    },
+    "raw_io_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "restricted_token": false,
+    "source_commit": "628fcad7118943642dc797a0432b62851fbe6c1d"
+  },
+  "job": {
+    "blackrock_rounds": 14,
+    "exclude": null,
+    "iface": "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "job_digest": "5ac5f6e35f058294621f96a6d251f7774d7cc02d7bbbc2f9938df5ed6fa378d4",
+    "ports": "8000-8015",
+    "rate": 100,
+    "retries": 0,
+    "router_mac": "02:57:4c:3d:2e:9b",
+    "seed": 1,
+    "shard": "1/1",
+    "source_port": "40000",
+    "src_ip": "198.18.0.1",
+    "src_mac": "52:54:00:04:80:a9",
+    "targets": "198.18.0.2",
+    "wait": 3
+  },
+  "message": "checkpoint is malformed: wrong length",
+  "opened_adapter": false,
+  "stage": "resume-preflight",
+  "status": "error",
+  "tx_sent": 0
+}

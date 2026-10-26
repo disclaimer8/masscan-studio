@@ -1,0 +1,26 @@
+
+running 1 test
+test windows::live::live_sendqueue_transmit_timing ... KV idle/config sizes=[1, 16, 64, 256, 1024, 4096] rounds=200 pps_cap=100000
+KV idle/sq_n1 n=1 calls=200 p50_us=125 p95_us=209 p99_us=284 p999_us=318 max_us=318 sum_frames=200 sum_dur_us=26781 pps_ceiling=7468 short_transmits=0 pass=true
+KV idle/sq_n1_seq first=0 frames=200
+KV idle/sq_n16 n=16 calls=200 p50_us=1096 p95_us=1454 p99_us=1661 p999_us=1865 max_us=1865 sum_frames=3200 sum_dur_us=224092 pps_ceiling=14280 short_transmits=0 pass=true
+KV idle/sq_n16_seq first=200 frames=3200
+KV idle/sq_n64 n=64 calls=200 p50_us=3548 p95_us=3864 p99_us=4217 p999_us=4462 max_us=4462 sum_frames=12800 sum_dur_us=717150 pps_ceiling=17848 short_transmits=0 pass=true
+KV idle/sq_n64_seq first=3400 frames=12800
+KV idle/sq_n256 n=256 calls=200 p50_us=14081 p95_us=17750 p99_us=19662 p999_us=19953 max_us=19953 sum_frames=51200 sum_dur_us=2864570 pps_ceiling=17874 short_transmits=0 pass=true
+KV idle/sq_n256_seq first=16200 frames=51200
+KV idle/sq_n1024 n=1024 calls=200 p50_us=58162 p95_us=69001 p99_us=74195 p999_us=77111 max_us=77111 sum_frames=204800 sum_dur_us=10033113 pps_ceiling=20412 short_transmits=0 pass=false
+KV idle/sq_n1024_seq first=67400 frames=204800
+KV idle/sq_n4096 n=4096 calls=200 p50_us=226344 p95_us=273254 p99_us=290042 p999_us=319622 max_us=319622 sum_frames=819200 sum_dur_us=41421640 pps_ceiling=19777 short_transmits=0 pass=false
+KV idle/sq_n4096_seq first=272200 frames=819200
+SUMMARY idle/sq_cmp_sendpacket n=1000 p50_us=144 p95_us=261 p99_us=328 max_us=1289 rc={0: 1000}
+KV idle/sq_cmp_queue_n1 n=1 calls=1000 p50_us=148 p95_us=260 p99_us=316 p999_us=353 max_us=473 sum_frames=1000 sum_dur_us=159410 pps_ceiling=6273 short_transmits=0 pass=true
+KV idle/sq_cmp_seq first=1091400 calls_each=1000
+SUMMARY idle/sq_cmp_sendpacket n=1000 p50_us=144 p95_us=261 p99_us=328 max_us=1289 rc={0: 1000}
+KV idle/sigma_frames 1093400
+KV idle/largest_passing_n 256
+KV idle/final_tx_stats recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 158 filtered out; finished in 55.76s
+

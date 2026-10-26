@@ -1,0 +1,17 @@
+removed rmasscan-5c3c422
+tar sha256 B713F14B752739FE2788241A1C4EC827E3FE9EE4D20786F53CF8AB0CD999B40A
+tar exit 0
+[31;1m   Compiling thiserror-impl v2.0.21[0m
+[31;1m   Compiling rmasscan-core v0.1.0 (C:\Users\lab\src\rmasscan-628fcad7118943642dc797a0432b62851fbe6c1d\rmasscan\crates\rmasscan-core)[0m
+[31;1m   Compiling rmasscan-engine v0.1.0 (C:\Users\lab\src\rmasscan-628fcad7118943642dc797a0432b62851fbe6c1d\rmasscan\crates\rmasscan-engine)[0m
+[31;1m   Compiling rmasscan-net v0.1.0 (C:\Users\lab\src\rmasscan-628fcad7118943642dc797a0432b62851fbe6c1d\rmasscan\crates\rmasscan-net)[0m
+[31;1m    Finished `release` profile [optimized] target(s) in 12.54s[0m
+BUILD_EXIT=0
+wire_scan sha256 091E834514D726F647678E802DCAAD30A30AAE43DEDDCD83167CA99CF08E8AE7
+OK C:\Users\lab\t4\wire_scan.exe : 0800 Dependent Load Flag
+CHECK_EXIT=0
+
+[7mFile Type[0m: EXECUTABLE IMAGE
+                0800 [7mDependent Load Flag[0m
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+

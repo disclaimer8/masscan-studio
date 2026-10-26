@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.04s
+     Running tests\windows_live.rs (target\debug\deps\windows_live-c23865c335cfd694.exe)
+
+running 1 test
+test live_batched_pause_resume_has_no_gap_or_duplicate ... KV wl3-pause/batched_pause_leg1 reason=Paused sent=5052 next_index=5052 received=5052 discarded=0 duplicates=0 rx_health=Some(0) net.tx_sent=5052 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=5052 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) net.tx_batches=528 net.tx_batch_max=27 net.tx_over_budget=0 command_to_outcome_ms=Some(3032.4348200000004) checkpoint=true
+KV wl3-pause/batched_pause_command_to_outcome ms=3032
+KV wl3-pause/batched_pause_leg2 reason=Completed sent=14937 next_index=19989 received=14937 discarded=0 duplicates=0 rx_health=Some(0) net.tx_sent=14937 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=14937 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) net.tx_batches=766 net.tx_batch_max=64 net.tx_over_budget=0 command_to_outcome_ms=None checkpoint=false
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 7.67s
+

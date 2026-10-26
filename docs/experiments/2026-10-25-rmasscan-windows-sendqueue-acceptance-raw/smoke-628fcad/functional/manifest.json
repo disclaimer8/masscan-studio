@@ -1,0 +1,74 @@
+{
+  "binding": {
+    "iface": "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "peer_ip": "198.18.0.2",
+    "rate": 100,
+    "router_mac": "02:57:4c:3d:2e:9b",
+    "seed": 1,
+    "src_ip": "198.18.0.1",
+    "src_mac": "52:54:00:04:80:a9",
+    "wait": 3
+  },
+  "capture_schema": 3,
+  "code_commit": "628fcad7118943642dc797a0432b62851fbe6c1d",
+  "created_utc": 1793001654.522585,
+  "exe": {
+    "build": "Rust static CRT wire_scan from code_commit",
+    "guest_path": "C:\\Users\\lab\\t4\\wire_scan.exe",
+    "sha256": "091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7",
+    "size": 644608
+  },
+  "listeners": {
+    "open": [
+      80,
+      443,
+      8000,
+      8001,
+      8002,
+      8003,
+      8004,
+      8005,
+      8006,
+      8007
+    ],
+    "silent": [
+      8099
+    ]
+  },
+  "oracle": {
+    "git_commit": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "git_tree_clean": true,
+    "host": "minipc",
+    "pinned_revision": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "variant": "original pinned binary (NOT the --offline-patched copy)",
+    "version_line": "Masscan version 1.3.9-integration ( https://github.com/robertdavidgraham/masscan )"
+  },
+  "orchestrator": {
+    "binary_name": "rmasscan-lab",
+    "binary_sha256": "cd9990bdc12e1d0792772013e016381fdded520d70dcd747516625a28df50433",
+    "build_commit": "628fcad7118943642dc797a0432b62851fbe6c1d",
+    "errors": [],
+    "git_commit": "628fcad7118943642dc797a0432b62851fbe6c1d",
+    "git_dirty": false
+  },
+  "pause": {
+    "case": "c03_multi_ports",
+    "n": [
+      0,
+      1,
+      8,
+      15
+    ]
+  },
+  "perm_restricted_refusal": "PermissionDenied",
+  "plan": "functional",
+  "schema": 1,
+  "stand": {
+    "manifest": "/home/a1/winvm/lab/n2.json",
+    "netns": "wvp-n2",
+    "run_id": "n2"
+  },
+  "suite": "smoke-628fcad-functional",
+  "tx_mode_expected": "sendqueue"
+}

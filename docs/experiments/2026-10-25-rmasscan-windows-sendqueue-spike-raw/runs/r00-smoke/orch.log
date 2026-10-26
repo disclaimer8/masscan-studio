@@ -1,0 +1,16 @@
+[2026-10-26T03:56:28.283Z] tag=r00-smoke test=live_sendqueue_transmit_timing cond=idle sha=61c1126 nonce=rca7982c34435d775-a99533a8ec561d07 extra=RMASSCAN_NPCAP_SQ_SIZES=1,16,64;RMASSCAN_NPCAP_SQ_ROUNDS=20
+[2026-10-26T03:56:31.982Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T03:56:32.495Z] guest run begins
+[2026-10-26T03:56:34.227Z] guest run ended rc=0
+[2026-10-26T03:56:36.804Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=3620
+==> $HOME/winvm/sq-ev/r00-smoke/peer.err <==
+3620 packets captured
+3620 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r00-smoke/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

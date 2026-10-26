@@ -112,7 +112,8 @@ fn manifest_for(schema: u64, plan: &str) -> Value {
         "stand":{"run_id":"n2","netns":NETNS,"manifest":"$HOME/winvm/lab/n2.json"},
         "listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":silent},
         "oracle":{"sha256":"cd","git_commit":"ef","git_tree_clean":true},
-        "pause":{"case":"c03_multi_ports","n":[0,1,8,15]}
+        "pause":{"case":"c03_multi_ports","n":[0,1,8,15]},
+        "tx_mode_expected":"sendqueue"
     });
     if schema >= 3 {
         // What the suite records for the Mac-side build that ran it (provenance.rs).
@@ -156,9 +157,9 @@ fn base_run(c: &Value, man: &Value, t0: f64, outcome: f64, tag: &str) -> Value {
     let (w, res) = workers();
     json!({
         "run_id":format!("run-{tag}"),"status":"ok","reason":"Completed","fail_detail":"",
-        "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"elevated":true,"restricted_token":false,"os":{"family":"windows"}},
+        "identity":{"source_commit":COMMIT,"binary_sha256":EXE,"elevated":true,"restricted_token":false,"os":{"family":"windows"},"tx_mode":"sendqueue","tx_batch_cap":64},
         "job":job_echo(c,man),
-        "net":{"kernel_drops":0,"rx_errors":0,"rx_packets":0,"tx_errors":0,"tx_sent":0,"tx_uncertain":0},
+        "net":{"kernel_drops":0,"rx_errors":0,"rx_packets":0,"tx_errors":0,"tx_sent":0,"tx_uncertain":0,"tx_batches":0,"tx_batch_max":0,"tx_over_budget":0},
         "rx_health":{"kernel_drops":0},
         "sent":0,"next_index":0,"range":n(&c["syn"]),"expected_total":n(&c["syn"]),
         "replies":[],"reply_total":0,"reply_unique":0,"received":0,"duplicates":0,"discarded":0,
@@ -168,6 +169,14 @@ fn base_run(c: &Value, man: &Value, t0: f64, outcome: f64, tag: &str) -> Value {
         "timing":{"first_send_s":0.002,"join_ms":0.3,"stop_requested":false,"stop_to_outcome_ms":null,"total_s":outcome-t0},
         "wall":{"t0_utc_ms":(t0*1000.).round(),"outcome_utc_ms":(outcome*1000.).round()}
     })
+}
+/// What `wire_scan` writes when it refuses before opening the adapter: the plain build identity (no
+/// `tx_mode`, no `tx_batch_cap`) and no `net` block.
+fn refusal_shape(run: &mut Value) {
+    let id = run["identity"].as_object_mut().unwrap();
+    id.remove("tx_mode");
+    id.remove("tx_batch_cap");
+    run.as_object_mut().unwrap().remove("net");
 }
 fn set_sent(run: &mut Value, count: u64) {
     for k in [
@@ -261,7 +270,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             frames = syn_series(3, t0 + 0.002, 1.0, 80, 40000);
             run = base_run(&c, man, t0, outcome, tag);
             run["reason"] = json!("Failed");
-            run["status"] = json!("failed");
+            run["status"] = json!("ok");
             run["fail_detail"] = json!("ConsumerTooSlow { capacity: 1 }");
             set_sent(&mut run, 3);
             run["replies"] = json!(&exp[..2]);
@@ -274,7 +283,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             frames = syn_series(31, t0 + 0.002, 0.05, 8200, 40000);
             run = base_run(&c, man, t0, outcome, tag);
             run["reason"] = json!("Failed");
-            run["status"] = json!("failed");
+            run["status"] = json!("ok");
             run["fail_detail"] = json!("TxUncertain { sent: 30 }");
             set_sent(&mut run, 30);
             run["net"]["tx_uncertain"] = json!(1);
@@ -292,7 +301,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             frames = syn_series(16, t0 + 0.002, 0.01, 8000, 40000);
             run = base_run(&c, man, t0, outcome, tag);
             run["reason"] = json!("Failed");
-            run["status"] = json!("failed");
+            run["status"] = json!("ok");
             run["fail_detail"] = json!("RxLoss { kernel_drops: 7 }");
             run["rx_health"]["kernel_drops"] = json!(7);
             run["net"]["kernel_drops"] = json!(7);
@@ -332,6 +341,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             run["error"] = json!(format!("{want}: synthetic"));
             run["opened_adapter"] = json!(false);
             run["tx_sent"] = json!(0);
+            refusal_shape(&mut run);
             guest_exit = 4;
             let forged = nonempty_checkpoint(SCAN, A1, 8);
             let used = mutate_checkpoint(s(&it["variant"]), &forged).unwrap();
@@ -356,6 +366,7 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             }
             run["opened_adapter"] = json!(false);
             run["tx_sent"] = json!(0);
+            refusal_shape(&mut run);
         }
         "perf" => {
             // A clean Completed cell: one SYN per port at exactly the requested pace, one reply per
@@ -364,19 +375,30 @@ fn build_kind(it: &Value, man: &Value, tag: &str) -> Built {
             let probes = n(&c["syn"]) as usize;
             let period = 1.0 / rate as f64;
             let first = t0 + 0.002;
-            frames = syn_series(probes, first, period, 1, 40000);
-            for p in 1..=probes as u16 {
+            // The SYNs are the real frames of the plan, in the plan's (shuffled) order.
+            let sequence = plan_frames(&arg_map(it, man, false)).unwrap();
+            assert_eq!(sequence.len(), probes);
+            frames = Vec::new();
+            let mut replies = Vec::new();
+            for (k, f) in sequence.into_iter().enumerate() {
+                let at = first + k as f64 * period;
+                let p = tcp(&f).unwrap().dp;
                 if p != 8099 {
-                    frames.push((
-                        first + f64::from(p - 1) * period + 0.0005,
-                        peer_reply(p, 40000, open_ports().contains(&p)),
-                    ));
+                    replies.push((at + 0.0005, peer_reply(p, 40000, open_ports().contains(&p))));
                 }
+                frames.push((at, f));
             }
+            frames.extend(replies);
             let last_send = 0.002 + (probes - 1) as f64 * period;
             outcome = t0 + last_send + 3.1;
             run = base_run(&c, man, t0, outcome, tag);
             set_sent(&mut run, probes as u64);
+            // The throttler batches only from about 1000 pps on; below that every call is one frame.
+            if rate >= 1000 {
+                let max = if rate >= 10000 { 64 } else { 16 };
+                run["net"]["tx_batch_max"] = json!(max);
+                run["net"]["tx_batches"] = json!((probes as u64).div_ceil(max));
+            }
             run["replies"] = json!(exp);
             run["reply_total"] = json!(exp.len());
             run["reply_unique"] = json!(exp.len());
@@ -638,6 +660,21 @@ pub(crate) fn build_perf(root: &Path, schema: u64) {
 /// Like [`build_perf`] but only the named cells (all when `only` is empty), each edited by `tweak`.
 pub(crate) fn build_perf_only(root: &Path, schema: u64, only: &[&str], tweak: &dyn Fn(&mut Built)) {
     let man = manifest_for(schema, "perf");
+    write_fixtures(root, &man);
+    for it in planned(&man) {
+        if only.is_empty() || only.contains(&s(&it["tag"])) {
+            write_run_with(root, &man, &it, schema, tweak);
+        }
+    }
+}
+/// A functional-plan directory with the named runs (all when `only` is empty); each run is edited by `tweak`.
+pub(crate) fn build_functional_only(
+    root: &Path,
+    schema: u64,
+    only: &[&str],
+    tweak: &dyn Fn(&mut Built),
+) {
+    let man = manifest_for(schema, "functional");
     write_fixtures(root, &man);
     for it in planned(&man) {
         if only.is_empty() || only.contains(&s(&it["tag"])) {

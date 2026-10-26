@@ -1,0 +1,32 @@
+
+running 1 test
+test windows::live::live_sendqueue_reuse_no_leak ... KV idle/sq_reuse_clear n=64 calls=40000 p50_us=1664 p95_us=3395 p99_us=4197 p999_us=5159 max_us=9844 sum_frames=2560000 sum_dur_us=73655058 pps_ceiling=34757 short_transmits=0 pass=true
+KV idle/sq_reuse_clear_seq first=0 frames=2560000
+KV idle/sq_reuse_clear_sample call=4000 working_set=Some(10838016) handles=Some(139) threads=Some(5)
+KV idle/sq_reuse_clear_sample call=8000 working_set=Some(10846208) handles=Some(139) threads=Some(5)
+KV idle/sq_reuse_clear_sample call=12000 working_set=Some(10846208) handles=Some(139) threads=Some(5)
+KV idle/sq_reuse_clear_sample call=16000 working_set=Some(10821632) handles=Some(141) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=20000 working_set=Some(10821632) handles=Some(141) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=24000 working_set=Some(10821632) handles=Some(141) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=28000 working_set=Some(10821632) handles=Some(141) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=32000 working_set=Some(10821632) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=36000 working_set=Some(10821632) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=40000 working_set=Some(10821632) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_verdict ws_growth_10pct_to_100pct=-16384 short_transmits=0 under_1mib=true
+KV idle/sq_reuse_destroy_alloc n=64 calls=1000 p50_us=1654 p95_us=2339 p99_us=2536 p999_us=4059 max_us=5467 sum_frames=64000 sum_dur_us=1741150 pps_ceiling=36757 short_transmits=0 pass=true
+KV idle/sq_reuse_destroy_alloc_seq first=2560000 frames=64000
+KV idle/sq_reuse_destroy_alloc_sample call=100 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=200 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=300 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=400 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=500 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=600 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=700 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=800 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=900 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_sample call=1000 working_set=Some(9318400) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_destroy_alloc_verdict ws_growth_10pct_to_100pct=0 short_transmits=0 under_1mib=true
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 179 filtered out; finished in 76.55s
+

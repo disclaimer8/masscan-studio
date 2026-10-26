@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.04s
+     Running tests\windows_live.rs (target\debug\deps\windows_live-c23865c335cfd694.exe)
+
+running 1 test
+test live_batched_stop_is_prompt_and_nothing_is_sent_afterwards ... KV wl2-stop/batched_stop reason=Stopped sent=19380 next_index=19380 received=19288 discarded=0 duplicates=0 rx_health=Some(0) net.tx_sent=19380 net.tx_uncertain=0 net.tx_errors=0 net.rx_packets=19288 net.rx_outgoing=0 net.rx_truncated=0 net.rx_errors=0 net.kernel_drops=Some(0) net.tx_batches=874 net.tx_batch_max=64 net.tx_over_budget=0 command_to_outcome_ms=Some(3.44956) checkpoint=false
+KV wl2-stop/batched_stop_to_outcome ms=3
+KV wl2-stop/batched_stop_silence tx_sent_before=19380 tx_sent_after=19380 window_ms=700
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.73s
+

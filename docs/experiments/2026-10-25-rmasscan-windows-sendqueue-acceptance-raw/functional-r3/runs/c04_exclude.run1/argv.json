@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "--exclude",
+    "198.18.0.0-198.18.0.1,198.18.0.3",
+    "--iface",
+    "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+    "--ports",
+    "80,81,443,82",
+    "--rate",
+    "100",
+    "--router-mac",
+    "02:57:4c:3d:2e:9b",
+    "--seed",
+    "1",
+    "--source-port",
+    "40000",
+    "--src-ip",
+    "198.18.0.1",
+    "--src-mac",
+    "52:54:00:04:80:a9",
+    "--targets",
+    "198.18.0.0/30",
+    "--wait",
+    "3"
+  ],
+  "exe": "C:\\Users\\lab\\t4\\wire_scan.exe",
+  "invocation_nonce": "rf8ad32969d7a3a0655027813e05efd75-ea94538f89553d47"
+}

@@ -1,0 +1,19 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1793002958.889306,
+  "capture_stopped_utc": 1793003013.59785,
+  "end_marker_seen": true,
+  "exe_sha256": "091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7",
+  "guest_exit": 0,
+  "guest_finished_utc": 1793002977.359326,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1793002964.853924,
+  "guest_times": {
+    "finished_utc": 1793002977.143,
+    "started_utc": 1793002973.98
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "rf8ad32969d7a3a0655027813e05efd75-273bf69237a01013",
+  "kind": "case",
+  "tag": "c01_one_addr_port_synack.run2"
+}

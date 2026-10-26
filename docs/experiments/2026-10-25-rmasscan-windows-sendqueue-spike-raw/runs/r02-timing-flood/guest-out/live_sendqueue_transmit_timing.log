@@ -1,0 +1,26 @@
+
+running 1 test
+test windows::live::live_sendqueue_transmit_timing ... KV flood/config sizes=[1, 16, 64, 256, 1024, 4096] rounds=200 pps_cap=100000
+KV flood/sq_n1 n=1 calls=200 p50_us=142 p95_us=268 p99_us=341 p999_us=412 max_us=412 sum_frames=200 sum_dur_us=30950 pps_ceiling=6462 short_transmits=0 pass=true
+KV flood/sq_n1_seq first=0 frames=200
+KV flood/sq_n16 n=16 calls=200 p50_us=553 p95_us=770 p99_us=892 p999_us=2744 max_us=2744 sum_frames=3200 sum_dur_us=117411 pps_ceiling=27255 short_transmits=0 pass=true
+KV flood/sq_n16_seq first=200 frames=3200
+KV flood/sq_n64 n=64 calls=200 p50_us=1749 p95_us=2326 p99_us=2539 p999_us=3010 max_us=3010 sum_frames=12800 sum_dur_us=359743 pps_ceiling=35581 short_transmits=0 pass=true
+KV flood/sq_n64_seq first=3400 frames=12800
+KV flood/sq_n256 n=256 calls=200 p50_us=6630 p95_us=8987 p99_us=9490 p999_us=9956 max_us=9956 sum_frames=51200 sum_dur_us=1390720 pps_ceiling=36815 short_transmits=0 pass=true
+KV flood/sq_n256_seq first=16200 frames=51200
+KV flood/sq_n1024 n=1024 calls=200 p50_us=26873 p95_us=33379 p99_us=36707 p999_us=37210 max_us=37210 sum_frames=204800 sum_dur_us=5512025 pps_ceiling=37155 short_transmits=0 pass=false
+KV flood/sq_n1024_seq first=67400 frames=204800
+KV flood/sq_n4096 n=4096 calls=200 p50_us=108605 p95_us=120616 p99_us=128868 p999_us=138256 max_us=138256 sum_frames=819200 sum_dur_us=21960264 pps_ceiling=37304 short_transmits=0 pass=false
+KV flood/sq_n4096_seq first=272200 frames=819200
+SUMMARY flood/sq_cmp_sendpacket n=1000 p50_us=141 p95_us=271 p99_us=411 max_us=699 rc={0: 1000}
+KV flood/sq_cmp_queue_n1 n=1 calls=1000 p50_us=137 p95_us=250 p99_us=328 p999_us=374 max_us=445 sum_frames=1000 sum_dur_us=148000 pps_ceiling=6757 short_transmits=0 pass=true
+KV flood/sq_cmp_seq first=1091400 calls_each=1000
+SUMMARY flood/sq_cmp_sendpacket n=1000 p50_us=141 p95_us=271 p99_us=411 max_us=699 rc={0: 1000}
+KV flood/sigma_frames 1093400
+KV flood/largest_passing_n 256
+KV flood/final_tx_stats recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 158 filtered out; finished in 29.82s
+

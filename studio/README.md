@@ -43,6 +43,8 @@ Rust` on macOS, `%LOCALAPPDATA%/Masscan Studio` on Windows, and
   checks. `u64` fields cross the UI boundary as decimal strings.
 - Result delivery in batches of up to 1,000 rows or 50 ms. Intermediate progress
   updates coalesce; results do not. Queue exhaustion interrupts the attempt.
+  The runner outbox counts actual serialized bytes against 4 MiB, including the
+  frame being written; tiny frames also have a 1,024-frame overhead bound.
 - SQLite WAL/FULL transactions, grouped at 250 ms or 1,000 results (bounded to
   16 frames). Lifecycle/checkpoint events flush immediately. Result batches commit before display; checkpoints
   commit before acknowledgement. A crash converts unfinished scans to Interrupted.

@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod outbox;
 use rmasscan_engine::{Checkpoint, Engine, EngineHandle, EngineOptions, Reason};
 use std::{
     io::{BufReader, BufWriter, Read, Write},
@@ -6,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 use studio_protocol::{
-    Backend, Command, Envelope, Event, Id, Job, ReceiveOrder, Status, read_frame, write_frame,
+    Backend, Command, Envelope, Event, Id, Job, ReceiveOrder, Status, read_frame,
 };
 
 struct Attempt {
@@ -15,10 +16,29 @@ struct Attempt {
     order: ReceiveOrder,
     sequence: u64,
     engine: Option<EngineHandle>,
-    pending: Option<(u64, Instant)>,
+    pending: Option<CheckpointAck>,
     rows: Vec<studio_protocol::Row>,
     progress: Option<Event>,
     flushed: Instant,
+}
+struct CheckpointAck {
+    sequence: u64,
+    queued: Instant,
+    receipt: outbox::Receipt,
+}
+impl CheckpointAck {
+    fn timeout(&self, now: Instant, writer_idle: Duration) -> Option<&'static str> {
+        let limit = Duration::from_secs(10);
+        match self.receipt.delivered() {
+            Some(delivered) if now.saturating_duration_since(delivered) > limit => {
+                Some("Checkpoint ACK timeout")
+            }
+            None if now.saturating_duration_since(self.queued) > limit && writer_idle > limit => {
+                Some("Checkpoint delivery stalled")
+            }
+            _ => None,
+        }
+    }
 }
 fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
     let plan = job.prepare()?;
@@ -53,21 +73,11 @@ fn check_feth() -> Result<(), String> {
     Err("Mac feth profile is only available on macOS. Use explicit Simulation to test the application.".into())
 }
 
-fn send(
-    tx: &mpsc::SyncSender<Envelope<Event>>,
-    session: Id,
-    a: &mut Attempt,
-    event: Event,
-) -> Result<(), String> {
+fn send(tx: &outbox::Sender, session: Id, a: &mut Attempt, event: Event) -> Result<(), String> {
     a.sequence += 1;
     tx.try_send(Envelope::new(session, a.scan, a.id, a.sequence, event))
-        .map_err(|_| "Event pipe exceeded its bounded queue or closed".into())
 }
-fn flush(
-    tx: &mpsc::SyncSender<Envelope<Event>>,
-    session: Id,
-    a: &mut Attempt,
-) -> Result<(), String> {
+fn flush(tx: &outbox::Sender, session: Id, a: &mut Attempt) -> Result<(), String> {
     if !a.rows.is_empty() {
         let rows = std::mem::take(&mut a.rows);
         send(tx, session, a, Event::Results(rows))?;
@@ -105,8 +115,8 @@ fn serve(
     if hello.payload != Command::Hello {
         return Err("Hello required".into());
     }
-    // At most 32 bounded frames = 4 MiB, writer never blocks the control/engine loop.
-    let (events, output) = mpsc::sync_channel::<Envelope<Event>>(32);
+    // Four MiB of actual serialized bytes; sender never waits for a slow writer.
+    let (events, output) = outbox::channel();
     let writer = std::thread::spawn(move || {
         let mut out = BufWriter::new(output_stream);
         let trace = std::env::var_os("STUDIO_TRACE_TIMINGS").is_some();
@@ -115,11 +125,9 @@ fn serve(
         let mut elapsed = Duration::ZERO;
         let mut rows = 0usize;
         for e in output {
-            if let Event::Results(batch) = &e.payload {
-                rows += batch.len();
-            }
+            rows += e.rows;
             let began = Instant::now();
-            write_frame(&mut out, &e)?;
+            e.write(&mut out)?;
             elapsed += began.elapsed();
             if trace && logged.elapsed() >= Duration::from_secs(1) {
                 eprintln!(
@@ -133,7 +141,7 @@ fn serve(
         Ok::<_, std::io::Error>(())
     });
     events
-        .send(Envelope::new(
+        .try_send(Envelope::new(
             session,
             [0; 16],
             [0; 16],
@@ -288,7 +296,7 @@ fn serve(
                                 }
                             }
                             Command::AckCheckpoint { through } => {
-                                if a.pending.map(|p| p.0) != Some(through) {
+                                if a.pending.as_ref().map(|p| p.sequence) != Some(through) {
                                     return Err("Checkpoint ACK does not match".into());
                                 }
                                 a.pending = None;
@@ -312,10 +320,12 @@ fn serve(
             Err(TryRecvError::Empty) => {}
         }
         if let Some(a) = active.as_mut() {
-            if a.pending
-                .is_some_and(|p| p.1.elapsed() > Duration::from_secs(10))
+            if let Some(error) = a
+                .pending
+                .as_ref()
+                .and_then(|p| p.timeout(Instant::now(), events.idle_for()))
             {
-                return Err("Checkpoint ACK timeout".into());
+                return Err(error.into());
             }
             if let Some(engine) = &a.engine {
                 match engine.recv_event_timeout(Duration::from_millis(2)) {
@@ -355,16 +365,22 @@ fn serve(
                         flush(&events, session, a)?;
                         if reason == Reason::Paused {
                             let cp = cp.ok_or("Paused engine supplied no checkpoint")?;
-                            send(
-                                &events,
+                            a.sequence += 1;
+                            let receipt = events.try_send_tracked(Envelope::new(
                                 session,
-                                a,
+                                a.scan,
+                                a.id,
+                                a.sequence,
                                 Event::Checkpoint {
                                     bytes: cp.to_bytes(),
                                     next_index: cp.next_index.to_string(),
                                 },
-                            )?;
-                            a.pending = Some((a.sequence, Instant::now()));
+                            ))?;
+                            a.pending = Some(CheckpointAck {
+                                sequence: a.sequence,
+                                queued: Instant::now(),
+                                receipt,
+                            });
                         } else {
                             let status = match reason {
                                 Reason::Completed => Status::Completed,
@@ -450,4 +466,48 @@ fn launch() -> Result<(), String> {
         return serve(Box::new(stream), Box::new(writer), live);
     }
     Err("Runner requires --stdio or an authenticated --connect endpoint".into())
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    #[test]
+    fn backlog_does_not_consume_the_ack_deadline_but_a_stalled_writer_times_out() {
+        let (tx, rx) = outbox::channel();
+        let receipt = tx
+            .try_send_tracked(Envelope::new(
+                [1; 16],
+                [2; 16],
+                [3; 16],
+                1,
+                Event::Checkpoint {
+                    bytes: vec![],
+                    next_index: "1".into(),
+                },
+            ))
+            .unwrap();
+        let pending = CheckpointAck {
+            sequence: 1,
+            queued: Instant::now() - Duration::from_secs(60),
+            receipt,
+        };
+        assert_eq!(
+            pending.timeout(Instant::now(), Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            pending.timeout(Instant::now(), Duration::from_secs(11)),
+            Some("Checkpoint delivery stalled")
+        );
+        rx.recv().unwrap().write(&mut Vec::new()).unwrap();
+        let delivered = pending.receipt.delivered().unwrap();
+        assert_eq!(
+            pending.timeout(delivered + Duration::from_secs(9), Duration::ZERO),
+            None
+        );
+        assert_eq!(
+            pending.timeout(delivered + Duration::from_secs(11), Duration::ZERO),
+            Some("Checkpoint ACK timeout")
+        );
+    }
 }

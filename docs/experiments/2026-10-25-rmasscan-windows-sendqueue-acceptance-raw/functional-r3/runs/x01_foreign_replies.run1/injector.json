@@ -1,0 +1,14 @@
+{
+  "duration_s": 2.0,
+  "first_sent_at": 1793005322.5854142,
+  "first_syn_seen": true,
+  "interval_s": 0.1,
+  "ipid": 61665,
+  "kinds": {
+    "other_ip": 20,
+    "unscanned_port": 20,
+    "wrong_cookie": 20,
+    "wrong_dst_port": 20
+  },
+  "sent_total": 80
+}

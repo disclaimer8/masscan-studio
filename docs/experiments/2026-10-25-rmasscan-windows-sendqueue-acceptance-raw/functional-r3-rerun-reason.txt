@@ -1,0 +1,1 @@
+functional-r3 resume_N15 INVALID (peer interface counter window; end marker and flushed capture tail), eno1 0 frames, no safety trip: capture-completeness only, rerun that leg alone

@@ -1,0 +1,71 @@
+   Compiling cfg-if v1.0.5
+   Compiling thiserror v2.0.21
+   Compiling siphasher v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling libc v0.2.191
+   Compiling typenum v1.20.0
+   Compiling rand_core v0.10.1
+   Compiling rmasscan-core v0.1.0 (/home/a1/rmasscan-live/full/rmasscan/crates/rmasscan-core)
+   Compiling serde_core v1.0.229
+   Compiling getrandom v0.4.3
+   Compiling zmij v1.0.23
+   Compiling hybrid-array v0.4.15
+   Compiling serde_json v1.0.154
+   Compiling serde v1.0.229
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
+   Compiling rmasscan-engine v0.1.0 (/home/a1/rmasscan-live/full/rmasscan/crates/rmasscan-engine)
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling rmasscan-net v0.1.0 (/home/a1/rmasscan-live/full/rmasscan/crates/rmasscan-net)
+   Compiling rustix v1.1.5
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling bitflags v2.13.2
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling linux-raw-sys v0.12.1
+   Compiling colorchoice v1.0.5
+   Compiling anstream v1.0.0
+   Compiling strsim v0.11.1
+   Compiling clap_lex v1.1.1
+   Compiling fastrand v2.5.0
+   Compiling once_cell v1.21.4
+   Compiling clap_builder v4.6.7
+   Compiling num-traits v0.2.19
+   Compiling wait-timeout v0.2.1
+   Compiling bit-vec v0.10.1
+   Compiling tempfile v3.27.0
+   Compiling quick-error v1.2.3
+   Compiling fnv v1.0.7
+   Compiling rusty-fork v0.3.1
+   Compiling bit-set v0.11.1
+   Compiling rand v0.10.3
+   Compiling clap v4.6.7
+   Compiling chacha20 v0.10.2
+   Compiling rand_xorshift v0.5.0
+   Compiling unarray v0.1.4
+   Compiling regex-syntax v0.8.11
+   Compiling core_detect v1.0.0
+   Compiling rmasscan-lab v0.1.0 (/home/a1/rmasscan-live/full/rmasscan/crates/rmasscan-lab)
+   Compiling proptest v1.12.0
+   Compiling rmasscan-cli v0.1.0 (/home/a1/rmasscan-live/full/rmasscan/crates/rmasscan-cli)
+error[E0063]: missing fields `rate_override` and `tx_mode` in initializer of `windows_suite::Suite<'_>`
+    --> crates/rmasscan-lab/src/windows_suite_tests.rs:1582:17
+     |
+1582 |         let w = Suite {
+     |                 ^^^^^ missing `rate_override` and `tx_mode`
+
+error[E0063]: missing fields `rate_override` and `tx_mode` in initializer of `windows_suite::Suite<'_>`
+    --> crates/rmasscan-lab/src/windows_suite_tests.rs:1651:17
+     |
+1651 |         let w = Suite {
+     |                 ^^^^^ missing `rate_override` and `tx_mode`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `rmasscan-lab` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+test rc=101

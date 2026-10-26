@@ -1,0 +1,8 @@
+     Running unittests src/lib.rs ($SCRATCH/target-live-test/debug/deps/rmasscan_lab-c5c59f790afaa7a6)
+
+running 2 tests
+test dump::tests::sequence::a_complete_capture_is_acknowledged_finalised_and_valid ... ok
+test dump::tests::linux_wire_gate::real_witness_metas_over_every_golden_case_pass_the_linux_wire_gate ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 640 filtered out; finished in 1.37s
+

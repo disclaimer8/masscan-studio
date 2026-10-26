@@ -1,0 +1,2 @@
+failure-r2 stop_load: ssh/scp transport drop (Mac network 'Can't assign requested address') during pre-run Verify, no capture started, nothing sent, eno1 untouched; run dir held guest-verify files only -> NOT RUN, rerun that tag alone
+failure-r2 linkloss: INVALID end marker and flushed capture tail (peer capture completeness; tcpdump 177/177, 0 drops, eno1 0 frames, status-post raw_run_allowed true); no safety trip; rerun that tag alone

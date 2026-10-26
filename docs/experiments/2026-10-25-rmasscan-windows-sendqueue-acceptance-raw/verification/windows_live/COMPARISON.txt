@@ -1,0 +1,13 @@
+windows_live adapter tests, commit 628fcad, run ONE AT A TIME (--ignored --exact NAME --test-threads=1 --nocapture) through cargo test on the guest,
+each with the orchestration of the spike (guest Verify with nonce, record-guest, full vm-lab status pre/post raw_run_allowed true, peer capture
+`ether src 52:54:00:04:80:a9` on lab0, eno1 capture with the lab filter, sha256 on home-pc before copy: home-pc-SHA256SUMS.sha256 in each directory).
+Env: RMASSCAN_NPCAP_LAB_{DEVICE,SRC_MAC,PEER_MAC}, OPEN_PORTS=80,443,8000,8001,...,8007, SILENT_PORTS=8099. eno1: 0 lab frames in all four.
+
+wl1-scan   live_batched_scan_counts_exactly_once_on_the_wire : PASS. KV tx_sent=65524 ports=65524 tx_uncertain=0 tx_batches=2248 tx_batch_max=64 duplicates=0
+           SYN 198.18.0.1 -> 198.18.0.2 in peer.pcap = 65524 = tx_sent (peer.pcap has 65525 frames: one extra ARP reply from the guest).
+wl2-stop   live_batched_stop_is_prompt_and_nothing_is_sent_afterwards : PASS. command_to_outcome 3 ms; KV batched_stop sent=19380; batched_stop_silence
+           tx_sent_before=19380 tx_sent_after=19380 (700 ms window); SYN at peer = 19380 = sent; none after the outcome.
+wl3-pause  live_batched_pause_resume_has_no_gap_or_duplicate : PASS. pause command_to_outcome 3032 ms (bound 4 s: includes wait=3 RX drain); SYN at peer = 19989 =
+           ports 1-20000 minus the 11 excluded ports, one per port; duplicates 0 in both legs; kernel_drops 0.
+wl4-latency live_call_latency_under_batches : PASS. KV max_per_call max_us_send_batch=4611 max_us_recv=126 max_us_health=13; send_batch p50 1615 us, p99 3893 us, n=120,
+           over50ms=0; NetStats tx_over_budget=0, tx_sent=5200 = SYN at peer 5200.

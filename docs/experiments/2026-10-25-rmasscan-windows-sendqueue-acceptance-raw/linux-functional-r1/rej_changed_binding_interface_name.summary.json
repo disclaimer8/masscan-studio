@@ -1,0 +1,39 @@
+{
+  "error": "JobMismatch",
+  "identity": {
+    "binary_path": "/home/a1/rmasscan-live/target/release/examples/wire_scan",
+    "binary_sha256": "718681d3b5d6651592b391b662dabfc4f4e4394f8031269e28a4e070c17c5ca2",
+    "elevated": null,
+    "npcap_abi": "wpcap.dll dynamic load by full path; own ffi declarations v1; x86_64",
+    "os": {
+      "arch": "x86_64",
+      "family": "linux",
+      "version": null
+    },
+    "raw_io_abi": "AF_PACKET via libc",
+    "restricted_token": null,
+    "source_commit": "628fcad7118943642dc797a0432b62851fbe6c1d"
+  },
+  "job": {
+    "blackrock_rounds": 14,
+    "exclude": null,
+    "iface": "veth-x",
+    "job_digest": "2b901756e43b609da75676a89b272781fe73c6257737a9e455d9b900b2eb12c5",
+    "ports": "80,81,443,8080",
+    "rate": 100,
+    "retries": 0,
+    "router_mac": "02:aa:00:00:00:02",
+    "seed": 1,
+    "shard": "1/1",
+    "source_port": "40000",
+    "src_ip": "10.200.0.100",
+    "src_mac": "02:aa:00:00:00:01",
+    "targets": "10.200.0.2-10.200.0.5",
+    "wait": 3
+  },
+  "message": "rejected before the adapter was opened",
+  "opened_adapter": false,
+  "stage": "resume-preflight",
+  "status": "error",
+  "tx_sent": 0
+}

@@ -1,0 +1,145 @@
+[oracle] PASS oracle built from pinned revision
+[oracle] PASS oracle source tree clean
+[oracle] PASS original binary, not offline patched
+[oracle] PASS lab oracle binary hash equals fixture oracle
+[oracle] PASS fixture revision pinned and captures all valid
+[parity] PASS rust.c01_one_addr_port_synack.run1 SYN stream vs C oracle
+[parity] PASS rust.c01_one_addr_port_synack.run1 replies equal C reply set
+[parity] PASS rust.c01_one_addr_port_synack.run1 dedup and exact wire results
+[parity] PASS rust.c01_one_addr_port_synack.run1 expected SYN/open/closed counts
+[parity] PASS rust.c01_one_addr_port_synack.run1 measured zero RX drops
+[parity] PASS rust.c01_one_addr_port_synack.run1 no TX beyond Sent
+[parity] PASS rust.c01_one_addr_port_synack.run2 SYN stream vs C oracle
+[parity] PASS rust.c01_one_addr_port_synack.run2 replies equal C reply set
+[parity] PASS rust.c01_one_addr_port_synack.run2 dedup and exact wire results
+[parity] PASS rust.c01_one_addr_port_synack.run2 expected SYN/open/closed counts
+[parity] PASS rust.c01_one_addr_port_synack.run2 measured zero RX drops
+[parity] PASS rust.c01_one_addr_port_synack.run2 no TX beyond Sent
+[parity] PASS rust.c02_one_addr_port_rst.run1 SYN stream vs C oracle
+[parity] PASS rust.c02_one_addr_port_rst.run1 replies equal C reply set
+[parity] PASS rust.c02_one_addr_port_rst.run1 dedup and exact wire results
+[parity] PASS rust.c02_one_addr_port_rst.run1 expected SYN/open/closed counts
+[parity] PASS rust.c02_one_addr_port_rst.run1 measured zero RX drops
+[parity] PASS rust.c02_one_addr_port_rst.run1 no TX beyond Sent
+[parity] PASS rust.c02_one_addr_port_rst.run2 SYN stream vs C oracle
+[parity] PASS rust.c02_one_addr_port_rst.run2 replies equal C reply set
+[parity] PASS rust.c02_one_addr_port_rst.run2 dedup and exact wire results
+[parity] PASS rust.c02_one_addr_port_rst.run2 expected SYN/open/closed counts
+[parity] PASS rust.c02_one_addr_port_rst.run2 measured zero RX drops
+[parity] PASS rust.c02_one_addr_port_rst.run2 no TX beyond Sent
+[parity] PASS rust.c03_multi_addr_ports.run1 SYN stream vs C oracle
+[parity] PASS rust.c03_multi_addr_ports.run1 replies equal C reply set
+[parity] PASS rust.c03_multi_addr_ports.run1 dedup and exact wire results
+[parity] PASS rust.c03_multi_addr_ports.run1 expected SYN/open/closed counts
+[parity] PASS rust.c03_multi_addr_ports.run1 measured zero RX drops
+[parity] PASS rust.c03_multi_addr_ports.run1 no TX beyond Sent
+[parity] PASS rust.c03_multi_addr_ports.run2 SYN stream vs C oracle
+[parity] PASS rust.c03_multi_addr_ports.run2 replies equal C reply set
+[parity] PASS rust.c03_multi_addr_ports.run2 dedup and exact wire results
+[parity] PASS rust.c03_multi_addr_ports.run2 expected SYN/open/closed counts
+[parity] PASS rust.c03_multi_addr_ports.run2 measured zero RX drops
+[parity] PASS rust.c03_multi_addr_ports.run2 no TX beyond Sent
+[parity] PASS rust.c04_exclude.run1 SYN stream vs C oracle
+[parity] PASS rust.c04_exclude.run1 replies equal C reply set
+[parity] PASS rust.c04_exclude.run1 dedup and exact wire results
+[parity] PASS rust.c04_exclude.run1 expected SYN/open/closed counts
+[parity] PASS rust.c04_exclude.run1 measured zero RX drops
+[parity] PASS rust.c04_exclude.run1 no TX beyond Sent
+[parity] PASS rust.c04_exclude.run2 SYN stream vs C oracle
+[parity] PASS rust.c04_exclude.run2 replies equal C reply set
+[parity] PASS rust.c04_exclude.run2 dedup and exact wire results
+[parity] PASS rust.c04_exclude.run2 expected SYN/open/closed counts
+[parity] PASS rust.c04_exclude.run2 measured zero RX drops
+[parity] PASS rust.c04_exclude.run2 no TX beyond Sent
+[parity] PASS rust.c05_srcport_single.run1 SYN stream vs C oracle
+[parity] PASS rust.c05_srcport_single.run1 replies equal C reply set
+[parity] PASS rust.c05_srcport_single.run1 dedup and exact wire results
+[parity] PASS rust.c05_srcport_single.run1 expected SYN/open/closed counts
+[parity] PASS rust.c05_srcport_single.run1 measured zero RX drops
+[parity] PASS rust.c05_srcport_single.run1 no TX beyond Sent
+[parity] PASS rust.c05_srcport_single.run2 SYN stream vs C oracle
+[parity] PASS rust.c05_srcport_single.run2 replies equal C reply set
+[parity] PASS rust.c05_srcport_single.run2 dedup and exact wire results
+[parity] PASS rust.c05_srcport_single.run2 expected SYN/open/closed counts
+[parity] PASS rust.c05_srcport_single.run2 measured zero RX drops
+[parity] PASS rust.c05_srcport_single.run2 no TX beyond Sent
+[parity] PASS rust.c06_srcport_range.run1 SYN stream vs C oracle
+[parity] PASS rust.c06_srcport_range.run1 replies equal C reply set
+[parity] PASS rust.c06_srcport_range.run1 dedup and exact wire results
+[parity] PASS rust.c06_srcport_range.run1 expected SYN/open/closed counts
+[parity] PASS rust.c06_srcport_range.run1 measured zero RX drops
+[parity] PASS rust.c06_srcport_range.run1 no TX beyond Sent
+[parity] PASS rust.c06_srcport_range.run2 SYN stream vs C oracle
+[parity] PASS rust.c06_srcport_range.run2 replies equal C reply set
+[parity] PASS rust.c06_srcport_range.run2 dedup and exact wire results
+[parity] PASS rust.c06_srcport_range.run2 expected SYN/open/closed counts
+[parity] PASS rust.c06_srcport_range.run2 measured zero RX drops
+[parity] PASS rust.c06_srcport_range.run2 no TX beyond Sent
+[pause] PASS N=0 pause confirmed boundary
+[pause] PASS N=0 checkpoint bytes match summary
+[pause] PASS N=0 resume Completed
+[pause] PASS N=0 concatenated captures == continuous Rust
+[pause] PASS N=0 concatenated captures == C oracle
+[pause] PASS N=0 scan identity and changed attempt
+[pause] PASS N=0 reply union equals continuous without duplicates
+[pause] PASS N=0 no lost or added probe across seam
+[pause] PASS N=1 pause confirmed boundary
+[pause] PASS N=1 checkpoint bytes match summary
+[pause] PASS N=1 resume Completed
+[pause] PASS N=1 concatenated captures == continuous Rust
+[pause] PASS N=1 concatenated captures == C oracle
+[pause] PASS N=1 scan identity and changed attempt
+[pause] PASS N=1 reply union equals continuous without duplicates
+[pause] PASS N=1 no lost or added probe across seam
+[pause] PASS N=8 pause confirmed boundary
+[pause] PASS N=8 checkpoint bytes match summary
+[pause] PASS N=8 resume Completed
+[pause] PASS N=8 concatenated captures == continuous Rust
+[pause] PASS N=8 concatenated captures == C oracle
+[pause] PASS N=8 scan identity and changed attempt
+[pause] PASS N=8 reply union equals continuous without duplicates
+[pause] PASS N=8 no lost or added probe across seam
+[pause] PASS N=15 pause confirmed boundary
+[pause] PASS N=15 checkpoint bytes match summary
+[pause] PASS N=15 resume Completed
+[pause] PASS N=15 concatenated captures == continuous Rust
+[pause] PASS N=15 concatenated captures == C oracle
+[pause] PASS N=15 scan identity and changed attempt
+[pause] PASS N=15 reply union equals continuous without duplicates
+[pause] PASS N=15 no lost or added probe across seam
+[pause] PASS pause-after=range ends Completed without checkpoint
+[reject] PASS completed checkpoint rejected before adapter
+[reject] PASS changed_rate
+[reject] PASS changed_binding_source_MAC
+[reject] PASS changed_binding_interface_name
+[reject] PASS changed_targets
+[reject] PASS changed_ports
+[reject] PASS changed_seed
+[reject] PASS different_scan_id
+[reject] PASS attempt_id_reused
+[reject] PASS corrupt_next_index
+[reject] PASS corrupt_checksum
+[reject] PASS truncated
+[reject] PASS empty
+[stop] PASS stop_silence: bounded Stop and join, no checkpoint
+[stop] PASS stop_silence: TX frozen after Stop and wire matches
+[stop] PASS stop_silence: no leaked workers or descriptors
+[stop] PASS stop_silence: scenario exercised
+[stop] PASS stop_drain: bounded Stop and join, no checkpoint
+[stop] PASS stop_drain: TX frozen after Stop and wire matches
+[stop] PASS stop_drain: no leaked workers or descriptors
+[stop] PASS stop_drain: scenario exercised
+[stop] PASS stop_fullqueue: bounded Stop and join, no checkpoint
+[stop] PASS stop_fullqueue: TX frozen after Stop and wire matches
+[stop] PASS stop_fullqueue: no leaked workers or descriptors
+[stop] PASS stop_fullqueue: scenario exercised
+[stop] PASS queue overflow Failed(ConsumerTooSlow), no checkpoint, TX halted, no leaks
+[stop] PASS rate=1 external Pause checkpoint at confirmed boundary
+[rxloss] PASS RX overflow reproduced: measured kernel drops > 0
+[rxloss] PASS overflow Failed(RxLoss) with nonzero exit
+[rxloss] PASS overflow no checkpoint file or hex
+[rxloss] PASS overflow TX halted, no leaked workers/descriptors
+[veth] PASS removed link fails with diagnosable TX/RX error and exit 3
+[veth] PASS removed link: no checkpoint
+[veth] PASS removed link: partial scan, frozen TX, no leaks
+[veth] PASS removed link: process exits under 5s

@@ -1,0 +1,10 @@
+# verification (commit 628fcad)
+
+- `guest-build-dumpbin-628fcad.log`: guest build of `wire_scan.exe` (static CRT, `RUSTFLAGS` with `/DEPENDENTLOADFLAG:0x800`), sha256, `check-dll-search-flag.ps1` OK and `dumpbin /loadconfig` showing `0800 Dependent Load Flag`.
+- `guest-test-net-628fcad-first.log`, `guest-clippy-628fcad-first.log`: guest `cargo test --locked -p rmasscan-net` (exit 0) and `cargo clippy --workspace --all-targets -D warnings` (exit 0). `guest-test-ws-628fcad-first.log` / `guest-gtest-summary-first.txt`: first workspace test attempt on a guest tree extracted WITHOUT `docs/` (the lab crate's replay tests read committed evidence): 54 lab tests failed for that reason. Kept for honesty; superseded by the full run.
+- `guest-clippyF-628fcad.log`, `guest-testF-628fcad.log`: guest clippy (clean) and `cargo test --locked --workspace --all-targets` on the full `git archive` tree: 37 test binaries, 1019 passed, 0 failed, 34 ignored.
+- `mac-clippy-628fcad.log`: clean. `mac-test-628fcad.log`: 640 passed, 2 failed (`dump::tests::...` timing-sensitive under parallel load; the same two tests pass alone, `mac-test-628fcad-rerun-2-dump-tests.log`; known flake from earlier tasks).
+- `minipc-*-628fcad.log`: **DEFECT FOUND**: on Linux `cargo clippy/test --workspace` fails to compile `rmasscan-lab` tests: `error[E0063]: missing fields rate_override and tx_mode in initializer of windows_suite::Suite` at `windows_suite_tests.rs:1582` and `:1651` (the `#[cfg(target_os = "linux")]` test). `minipc-test-excl-lab-628fcad.log`: all other crates on minipc, 551 passed, 0 failed, 13 ignored. The same lines are unchanged at bbda664. The lab suites themselves (linux-functional-r1) ran fine because the release build does not compile test code.
+- `windows_live/`: the four live tests with peer/eno1 captures, see `windows_live/COMPARISON.txt`.
+- `lab-binaries/README.txt`: hashes of the binaries used. `deploy-manifest.json`: deploy manifest for 628fcad.
+- Scrub: Mac logs had `$HOME`/`$SCRATCH` substituted for personal paths; nothing else was changed.

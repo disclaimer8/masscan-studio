@@ -1,0 +1,20 @@
+{
+  "argv_file": "argv.json",
+  "capture_started_utc": 1793016934.313542,
+  "capture_stopped_utc": 1793017007.214578,
+  "checkpoint_file_exists": false,
+  "end_marker_seen": true,
+  "exe_sha256": "091e834514d726f647678e802dcaad30a30aae43deddcd83167ca99cf08e8ae7",
+  "guest_exit": 3,
+  "guest_finished_utc": 1793016955.615135,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1793016943.628899,
+  "guest_times": {
+    "finished_utc": 1793016955.448,
+    "started_utc": 1793016952.764
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r45e86b1f229b90560ced2abfd901a46c-6cf7b1173d5bad22",
+  "kind": "linkloss",
+  "tag": "linkloss"
+}

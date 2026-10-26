@@ -4502,6 +4502,8 @@ dependencies = [
  "image",
  "pollster",
  "rfd",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "studio-app",

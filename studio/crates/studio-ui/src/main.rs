@@ -9,6 +9,7 @@ use std::{
 use studio_app::{Action, Controller, Update};
 use studio_protocol::{Backend, Job, Status};
 use studio_table::{Change, Table};
+mod smoke_feth;
 slint::include_modules!();
 
 struct Rows {
@@ -290,10 +291,64 @@ fn clear_view(rows: &Rows, ui: &MainWindow) {
     ui.set_inspector_details(ResultRow::default());
     ui.set_inspector_open(false);
 }
+#[derive(Debug)]
+struct SmokeFeth {
+    out_dir: PathBuf,
+}
+/// Parses `--smoke-feth`: `Ok(None)` without the flag, an error unless this is macOS and both
+/// `STUDIO_DATA_DIR` and `STUDIO_SMOKE_OUT` are set.
+fn smoke_feth_config(
+    args: &[String],
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    macos: bool,
+) -> Result<Option<SmokeFeth>, String> {
+    if !args.iter().any(|a| a == "--smoke-feth") {
+        return Ok(None);
+    }
+    if args.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "--smoke" | "--smoke-pause" | "--smoke-stop-race"
+        )
+    }) {
+        return Err("--smoke-feth cannot be combined with another smoke mode".into());
+    }
+    if !macos {
+        return Err("--smoke-feth drives the Mac feth profile and runs on macOS only".into());
+    }
+    if env("STUDIO_DATA_DIR").is_none_or(|v| v.is_empty()) {
+        return Err("--smoke-feth needs STUDIO_DATA_DIR (a private data directory)".into());
+    }
+    let Some(out) = env("STUDIO_SMOKE_OUT").filter(|v| !v.is_empty()) else {
+        return Err("--smoke-feth needs STUDIO_SMOKE_OUT (the directory for smoke.json)".into());
+    };
+    Ok(Some(SmokeFeth {
+        out_dir: out.into(),
+    }))
+}
+fn save_screenshot(ui: &MainWindow) {
+    if let Some(p) = std::env::var_os("STUDIO_SCREENSHOT")
+        && let Ok(pixels) = ui.window().take_snapshot()
+    {
+        let _ = image::save_buffer(
+            p,
+            pixels.as_bytes(),
+            pixels.width(),
+            pixels.height(),
+            image::ColorType::Rgba8,
+        );
+    }
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let smoke = std::env::args().any(|s| s == "--smoke");
     let pause_smoke = std::env::args().any(|s| s == "--smoke-pause");
     let stop_smoke = std::env::args().any(|s| s == "--smoke-stop-race");
+    // Refused before any controller exists: no data directory is touched, no runner is started.
+    let feth = smoke_feth_config(
+        &std::env::args().collect::<Vec<_>>(),
+        |k| std::env::var_os(k),
+        cfg!(target_os = "macos"),
+    )?;
     if std::env::var_os("SLINT_BACKEND").is_none() {
         slint::BackendSelector::new()
             .backend_name("winit".into())
@@ -751,12 +806,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ok = success.clone();
     let phase = Rc::new(Cell::new(0));
     let phase2 = phase.clone();
+    let driver = feth.as_ref().map(|_| {
+        Rc::new(RefCell::new(smoke_feth::Driver::new(
+            smoke_feth::Plan::feth(),
+            Instant::now(),
+        )))
+    });
+    let feth_out = feth.map(|f| f.out_dir);
+    let outcome = Rc::new(RefCell::new(None::<(bool, String)>));
+    let finished = outcome.clone();
+    let driver_active = driver.is_some();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(50),
         move || {
             let Some(ui) = w.upgrade() else { return };
             let updates = a.borrow_mut().poll();
+            // The `--smoke-feth` driver sees every update first, in order, and answers with the steps a user's
+            // clicks would have produced; they run through `action` below, the same path as the buttons.
+            let mut feth_steps = Vec::new();
+            if let Some(d) = &driver {
+                let mut d = d.borrow_mut();
+                for u in &updates {
+                    feth_steps.extend(d.step(Some(u), Instant::now(), smoke_feth::utc_now()));
+                }
+                feth_steps.extend(d.step(None, Instant::now(), smoke_feth::utc_now()));
+            }
             if stop_smoke
                 && phase2.get() == 0
                 && updates
@@ -934,6 +1009,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             m.summary(&ui);
+            for step in feth_steps {
+                match step {
+                    smoke_feth::Step::Send(next) => action(&a, &ui, next),
+                    smoke_feth::Step::Wait => {}
+                    smoke_feth::Step::Quit { ok, reason } => {
+                        let written = match (&driver, &feth_out) {
+                            (Some(d), Some(dir)) => {
+                                serde_json::to_string_pretty(d.borrow().chronicle())
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|text| {
+                                        std::fs::write(dir.join("smoke.json"), text)
+                                            .map_err(|e| format!("cannot write smoke.json: {e}"))
+                                    })
+                            }
+                            _ => Ok(()),
+                        };
+                        save_screenshot(&ui);
+                        *finished.borrow_mut() = Some(match written {
+                            Ok(()) => (ok, reason),
+                            Err(e) => (false, e),
+                        });
+                        let _ = slint::quit_event_loop();
+                    }
+                }
+            }
             if (smoke || pause_smoke || stop_smoke)
                 && (ok.get() || started.elapsed() > Duration::from_secs(25))
             {
@@ -952,6 +1052,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
     );
+    if driver_active {
+        ui.set_backend_index(0);
+    }
     if smoke || pause_smoke || stop_smoke {
         ui.set_backend_index(1);
         let mut job = Job::example(Backend::Simulation);
@@ -963,6 +1066,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     ui.run()?;
     timer.stop();
+    if driver_active {
+        match outcome.borrow().as_ref() {
+            Some((true, _)) => {}
+            Some((false, reason)) => return Err(format!("--smoke-feth failed: {reason}").into()),
+            None => return Err("--smoke-feth: the window closed before the run finished".into()),
+        }
+    }
     if (smoke || pause_smoke || stop_smoke) && !success.get() {
         return Err("UI smoke did not complete the expected lifecycle".into());
     }
@@ -972,6 +1082,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn smoke_feth_requires_macos_data_dir_and_out_dir() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let env = |data: bool, out: bool| {
+            move |k: &str| match k {
+                "STUDIO_DATA_DIR" if data => Some("/d".into()),
+                "STUDIO_SMOKE_OUT" if out => Some("/o".into()),
+                _ => None,
+            }
+        };
+        let flag = args(&["studio-ui", "--smoke-feth"]);
+        assert!(
+            smoke_feth_config(&args(&["studio-ui"]), env(false, false), false)
+                .unwrap()
+                .is_none()
+        );
+        let ok = smoke_feth_config(&flag, env(true, true), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ok.out_dir, PathBuf::from("/o"));
+        assert!(
+            smoke_feth_config(&flag, env(true, true), false)
+                .unwrap_err()
+                .contains("macOS")
+        );
+        assert!(
+            smoke_feth_config(&flag, env(false, true), true)
+                .unwrap_err()
+                .contains("STUDIO_DATA_DIR")
+        );
+        assert!(
+            smoke_feth_config(&flag, env(true, false), true)
+                .unwrap_err()
+                .contains("STUDIO_SMOKE_OUT")
+        );
+        let both = args(&["studio-ui", "--smoke-feth", "--smoke"]);
+        assert!(smoke_feth_config(&both, env(true, true), true).is_err());
+    }
     #[test]
     fn repeat_is_exact_configuration_without_checkpoint_or_archived_execution() {
         let mut saved = studio_store::SavedScan {

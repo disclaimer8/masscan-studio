@@ -114,9 +114,10 @@ fn dropping_pool_cancels_active_and_queued_children() {
 
 #[test]
 fn descendant_holding_pipes_cannot_outlive_deadline_or_pool_shutdown() {
+    let exe = fixture(); // Compiling the fixture is outside the process deadline.
     let start = Instant::now();
     let result = studio_inspection::process::capture(
-        fixture(),
+        exe,
         &["descendant".into()],
         Duration::from_millis(100),
         4096,
@@ -128,7 +129,7 @@ fn descendant_holding_pipes_cannot_outlive_deadline_or_pool_shutdown() {
     );
     let start = Instant::now();
     let result = studio_inspection::process::capture(
-        fixture(),
+        exe,
         &["descendant-wait".into()],
         Duration::from_millis(100),
         4096,

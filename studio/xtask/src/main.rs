@@ -6,6 +6,8 @@ mod runner_setup;
 #[cfg(windows)]
 #[path = "runner_setup_windows.rs"]
 mod runner_setup;
+#[cfg(windows)]
+mod windows_acceptance;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -43,6 +45,10 @@ fn main() -> Result<()> {
         "verify-installed-runner" => runner_setup::verify_installed()?,
         #[cfg(windows)]
         "verify-windows-installation" => runner_setup::verify_ci(&root)?,
+        #[cfg(windows)]
+        "probe-windows-token" => windows_acceptance::token_probe()?,
+        #[cfg(windows)]
+        "windows-limited-token-fixture" => windows_acceptance::token_fixture()?,
         #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,
         #[cfg(any(target_os="macos", target_os="linux"))]

@@ -275,7 +275,13 @@ fn flags_of(cmd: &[&str]) -> Option<(String, Vec<String>)> {
 }
 /// `who` is `peer` (every frame of the peer interface, no filter) or `uplink` (the default-route
 /// interface of the status gate, the lab filter).
-fn capture_command(c: &Value, who: &str, man: &Value, uplink: &str, b: &Binding) -> bool {
+pub(crate) fn capture_command(
+    c: &Value,
+    who: &str,
+    man: &Value,
+    uplink: &str,
+    b: &Binding,
+) -> bool {
     let all: Vec<&str> = array(&c["cmd"]).iter().filter_map(Value::as_str).collect();
     let Some((iface, tail)) = flags_of(&all) else {
         return false;

@@ -1,11 +1,15 @@
 name: Studio
 on:
   push:
+    branches: [main]
     paths: ['studio/**', 'rmasscan/**', '.github/workflows/studio.yml']
   pull_request:
     paths: ['studio/**', 'rmasscan/**', '.github/workflows/studio.yml']
 permissions:
   contents: read
+concurrency:
+  group: studio-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   application:
     strategy:

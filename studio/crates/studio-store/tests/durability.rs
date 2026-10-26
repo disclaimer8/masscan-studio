@@ -164,3 +164,81 @@ fn metadata_and_observation_dates_survive_restart_without_fabricating_legacy_dat
     drop(db);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn committed_batch_returns_saved_dates_without_requerying_each_result() {
+    let dir = std::env::temp_dir().join(format!("studio-batch-{}", id_text(new_id().unwrap())));
+    let mut db = Store::open(&dir).unwrap();
+    let scan = [1; 16];
+    let attempt = [2; 16];
+    db.begin(scan, attempt, &Job::example(Backend::Simulation), false)
+        .unwrap();
+    let rows = vec![
+        Row {
+            ip: "198.18.0.2".into(),
+            port: 80,
+            open: true,
+        },
+        Row {
+            ip: "198.18.0.2".into(),
+            port: 443,
+            open: true,
+        },
+    ];
+    let event = Envelope::new([3; 16], scan, attempt, 1, Event::Results(rows.clone()));
+    let saved = db.apply(&event).unwrap();
+    assert_eq!(saved.len(), 2);
+    assert_eq!(saved[0].row, rows[0]);
+    assert!(saved[0].discovered_at.is_some());
+    let first = saved[0].discovered_at.clone();
+    assert!(db.apply(&event).unwrap().is_empty());
+    let changed = Row {
+        open: false,
+        ..rows[0].clone()
+    };
+    let updated = db
+        .apply(&Envelope::new(
+            [3; 16],
+            scan,
+            attempt,
+            2,
+            Event::Results(vec![changed.clone()]),
+        ))
+        .unwrap();
+    assert_eq!(updated[0].row, changed);
+    assert_eq!(updated[0].discovered_at, first);
+    assert_eq!(db.observations(scan).unwrap()[0].discovered_at, first);
+    drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn failed_result_transaction_exposes_no_uncommitted_rows() {
+    let dir =
+        std::env::temp_dir().join(format!("studio-batch-fail-{}", id_text(new_id().unwrap())));
+    let mut db = Store::open(&dir).unwrap();
+    let scan = [1; 16];
+    let attempt = [2; 16];
+    db.begin(scan, attempt, &Job::example(Backend::Simulation), false)
+        .unwrap();
+    let sql = rusqlite::Connection::open(dir.join("history.sqlite3")).unwrap();
+    sql.execute_batch("CREATE TRIGGER fail_sequence BEFORE UPDATE OF sequence ON scans BEGIN SELECT RAISE(ABORT,'injected commit failure'); END;").unwrap();
+    assert!(
+        db.apply(&Envelope::new(
+            [3; 16],
+            scan,
+            attempt,
+            1,
+            Event::Results(vec![Row {
+                ip: "198.18.0.2".into(),
+                port: 80,
+                open: true
+            }])
+        ))
+        .is_err()
+    );
+    assert!(db.rows(scan).unwrap().is_empty());
+    drop(sql);
+    drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}

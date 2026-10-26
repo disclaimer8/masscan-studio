@@ -213,18 +213,6 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
-    pub fn observed_batch(&self, scan: Id, rows: Vec<Row>) -> Result<Vec<SavedRow>> {
-        let mut stmt = self
-            .db
-            .prepare("SELECT discovered_at FROM results WHERE scan=?1 AND ip=?2 AND port=?3")?;
-        rows.into_iter()
-            .map(|row| {
-                let discovered_at =
-                    stmt.query_row(params![scan.as_slice(), row.ip, row.port], |r| r.get(0))?;
-                Ok(SavedRow { row, discovered_at })
-            })
-            .collect()
-    }
     pub fn hosts(&self, scan: Id) -> Result<Vec<studio_inspection::HostInfo>> {
         let mut stmt = self
             .db
@@ -250,7 +238,7 @@ impl Store {
         Ok(())
     }
     /// Full transaction before the controller may ACK a checkpoint or display results.
-    pub fn apply(&mut self, event: &Envelope<Event>) -> Result<()> {
+    pub fn apply(&mut self, event: &Envelope<Event>) -> Result<Vec<SavedRow>> {
         if event.version != VERSION {
             return Err("Unsupported protocol".into());
         }
@@ -266,15 +254,28 @@ impl Store {
         )?;
         let previous = decimal(&seq)?;
         if event.sequence <= previous {
-            return Ok(());
+            return Ok(Vec::new());
         }
         if event.sequence != previous + 1 {
             return Err("Missing event sequence".into());
         }
+        let mut observed = Vec::new();
         match &event.payload {
             Event::Results(rows) => {
+                // One prepared write inside one transaction. RETURNING retains
+                // the original discovery date on conflict, including legacy NULL.
+                // Avoid a separate autocommit read/lock cycle for every UI row.
+                let now = studio_inspection::now();
+                let mut insert = tx.prepare("INSERT INTO results(scan,ip,port,open,discovered_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(scan,ip,port) DO UPDATE SET open=excluded.open RETURNING discovered_at")?;
                 for row in rows {
-                    tx.execute("INSERT INTO results(scan,ip,port,open,discovered_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(scan,ip,port) DO UPDATE SET open=excluded.open",params![event.scan.as_slice(),row.ip,row.port,row.open,studio_inspection::now()])?;
+                    let discovered_at = insert.query_row(
+                        params![event.scan.as_slice(), row.ip, row.port, row.open, now],
+                        |r| r.get(0),
+                    )?;
+                    observed.push(SavedRow {
+                        row: row.clone(),
+                        discovered_at,
+                    });
                 }
             }
             Event::Checkpoint { bytes, next_index } => {
@@ -318,7 +319,7 @@ impl Store {
             params![event.scan.as_slice(), event.sequence.to_string()],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(observed)
     }
     pub fn interrupt(&mut self, scan: Id, detail: &str) -> Result<()> {
         self.db.execute("UPDATE scans SET status=CASE WHEN status='\"Starting\"' AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END,detail=?2 WHERE id=?1 AND status != '\"Paused\"'",params![scan.as_slice(),detail])?;

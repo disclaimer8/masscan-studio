@@ -3,6 +3,9 @@ use sha2::{Digest, Sha256};
 mod linux_acceptance;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod runner_setup;
+#[cfg(windows)]
+#[path = "runner_setup_windows.rs"]
+mod runner_setup;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -34,8 +37,12 @@ fn main() -> Result<()> {
     std::env::set_current_dir(&root)?;
     let task = std::env::args().nth(1).unwrap_or("build".into());
     match task.as_str() {
-        #[cfg(any(target_os="macos", target_os="linux"))]
+        #[cfg(any(target_os="macos", target_os="linux", windows))]
         "prepare-runner" => runner_setup::prepare(&root)?,
+        #[cfg(windows)]
+        "verify-installed-runner" => runner_setup::verify_installed()?,
+        #[cfg(windows)]
+        "verify-windows-installation" => runner_setup::verify_ci(&root)?,
         #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,
         #[cfg(any(target_os="macos", target_os="linux"))]
@@ -45,7 +52,7 @@ fn main() -> Result<()> {
         #[cfg(target_os="linux")]
         "linux-authorization-owner-fixture" => linux_acceptance::owner_fixture()?,
         "test" => {
-            run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets"]))?;
+            run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets", "--no-fail-fast"]))?;
             run(Command::new("cargo").args([
                 "clippy",
                 "--locked",
@@ -159,7 +166,7 @@ fn main() -> Result<()> {
             )?;
             println!("Artifacts: {}", dist.display());
         }
-        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (runner setup: macOS/Linux)".into()),
+        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
     }
     Ok(())
 }

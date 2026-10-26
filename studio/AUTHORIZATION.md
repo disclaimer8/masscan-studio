@@ -2,7 +2,8 @@
 
 Status: macOS and Linux session bootstrap implemented; raw scanning disabled.
 Windows simulation uses an authenticated named pipe; no Windows elevation claim
-is made. UAC and trusted installation remain separate acceptance work.
+is made. Windows trusted installation is a separate prerequisite; session UAC
+bootstrap remains subsequent acceptance work.
 
 ## Threat model and identity
 
@@ -125,7 +126,7 @@ re-read after observation. The checker does not create or modify the stand.
   VERIFICATION.md separately from offline tests and from engine Stage 2C.
 - Raw Start/Pause/Resume/Stop with independent packet capture and mid-scan network
   drift handling must pass before RAW_SCANNING_ENABLED can change.
-- Windows runas and trusted installation (including other-account UAC);
+- Windows runas/session bootstrap (including other-account UAC);
   Linux desktop password prompt/cancellation remains a manual acceptance item.
 - No physical NIC or three-OS raw support follows from this implementation.
 
@@ -154,3 +155,36 @@ Cancellation always drains completion before releasing the operation buffer,
 event or OVERLAPPED. `flush` adds no separate kernel wait: each Write already
 waits for its own completion. Existing frame/queue bounds remain in effect.
 See the [implementation plan and Win32 references](../docs/superpowers/plans/2026-10-26-studio-windows-pipe.md).
+
+## Windows trusted installation prerequisite
+
+`prepare-runner` copies the exact package runner and emits `manifest.json` plus a
+reviewable `install.ps1`. Run that script once from elevated 64-bit PowerShell 7+.
+This is a manual installation step, not application session authorization. No
+service, driver, firewall change or UAC bypass is installed.
+
+The destination is the system Known Folder Program Files followed by
+`Masscan Studio\Runner\<sha256>\studio-runner.exe`; an environment variable cannot
+redirect it. The installer checks ancestor types/owners/DACLs, stages a fresh
+version with protected administrator-owned ACLs supplied atomically when each
+directory is created, and ordinary-user read/execute,
+verifies SHA-256, then publishes with a no-overwrite directory move.
+Source paths are encoded as ASCII numeric UTF-16 expressions: PowerShell's
+typographic quotation marks never become syntax. No path is evaluated as code.
+
+`cargo xtask verify-installed-runner <sha256>` opens and retains handles to the
+actual executable and every ancestor without write/delete sharing. Directory
+handles request FILE_LIST_DIRECTORY so they participate in sharing checks. It rejects
+reparse points, wrong object types, untrusted owners, null DACLs and unprivileged
+write/delete/ACL/ownership grants, then hashes the retained file handle. Trusted
+owners are SYSTEM, builtin Administrators and Windows TrustedInstaller. Effective
+ACE forms other than ordinary allow/deny fail closed; inherited-only entries do
+not govern the current object. Only the volume root may grant directory creation
+without granting deletion/modification of existing protected children.
+
+The disposable CI VM can exercise actual installation because its job account
+already has administrative rights. Tests check executable write/rename pinning,
+no-overwrite, content tamper detection and reparse refusal. These checks do not
+exercise UAC prompting, cancellation, alternate credentials or a raw adapter.
+The Windows UI Authorize button remains unavailable until session bootstrap is
+implemented and accepted separately.

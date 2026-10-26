@@ -38,6 +38,7 @@ pub fn decimal(s: &str) -> Result<u64, String> {
 pub enum Backend {
     Simulation,
     MacFeth,
+    SwiftImport,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +62,11 @@ impl Job {
         }
     }
     pub fn prepare(&self) -> Result<ReadyPlan, String> {
+        if self.backend == Backend::SwiftImport {
+            return Err(
+                "Imported Swift history is read-only; its checkpoint cannot run in rmasscan".into(),
+            );
+        }
         let seed = decimal(&self.seed)?;
         if seed == 0 || !(1..=10_000_000).contains(&self.rate) {
             return Err("Seed must be nonzero; rate must be 1–10000000".into());
@@ -157,6 +163,7 @@ pub enum Command {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Status {
+    Ready,
     Starting,
     Scanning,
     Saving,

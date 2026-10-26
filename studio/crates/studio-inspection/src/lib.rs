@@ -160,6 +160,11 @@ pub enum CheckState {
     Cancelled,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LegacyEvidence {
+    pub device_hint: String,
+    pub evidence: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostInfo {
     pub ip: String,
     pub hostname: Option<String>,
@@ -169,6 +174,8 @@ pub struct HostInfo {
     pub inspection: Option<Inspection>,
     pub nmap_state: CheckState,
     pub nmap_error: String,
+    #[serde(default)]
+    pub legacy: std::collections::BTreeMap<u16, LegacyEvidence>,
 }
 impl HostInfo {
     pub fn new(ip: String) -> Self {
@@ -201,6 +208,12 @@ impl HostInfo {
         );
         if let Some(at) = &self.dns_checked_at {
             out.push_str(&format!("\nHostname checked: {at}"));
+        }
+        if let Some(legacy) = self.legacy.get(&port) {
+            out.push_str(&format!(
+                "\nImported Swift evidence (historical): {}\n{}",
+                legacy.device_hint, legacy.evidence
+            ));
         }
         if let Some(s) = self.service(port) {
             out.push_str(&format!("\nNmap: {}\nState: {} · method: {} · confidence: {}\nReported hostname: {}\nCPE: {}\nDevice/OS hints are estimates from service responses, not verified hardware.",s.summary(),s.state,s.method,s.confidence,s.reported_hostname,s.cpes.join(", ")));

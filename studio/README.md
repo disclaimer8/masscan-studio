@@ -94,8 +94,8 @@ for the threat model, cancellation rules and remaining acceptance work.
 Simulation uses inherited anonymous pipes as the current user. Unix sockets have
 peer identity tests on macOS/Linux; system elevation is implemented on macOS
 only. Do not launch the UI with sudo. Windows named-pipe/UAC and Linux pkexec
-bootstrap, physical NIC selection, Windows/Linux raw profiles and Swift-history
-import remain open. Raw scanning remains gated independently of host actions.
+bootstrap, physical NIC selection and Windows/Linux raw profiles remain open.
+Raw scanning remains gated independently of host actions and history import.
 
 ## Host actions and export
 
@@ -140,3 +140,31 @@ this smoke); Windows needs an interactive desktop for UI evidence.
 
 These checks do not measure displayed-frame latency or replace manual keyboard,
 screen reader, clipboard and context-menu acceptance.
+
+## Import old Swift history (macOS)
+
+Close the Swift application, then choose **Import Swift… → Choose folder…**.
+Select its data directory (normally `~/Library/Application Support/Masscan Studio`)
+containing both `sessions.json` and `profiles.json`. Import reads these files only;
+it validates the entire snapshot before committing any records to the Rust history.
+The last successful import report remains available after restarting Studio.
+
+Dates retain Swift's 2001 epoch and fractional seconds. Original record JSON,
+logs, unknown fields, exact seed/resume-index, inspection evidence and profile
+settings are archived. The table keeps one row per IPv4/TCP endpoint and reports
+source duplicates. Existing UUIDs with unchanged contents are skipped even when
+the source folder moves; changed contents produce conflicts without overwriting.
+An active old scan becomes Interrupted. A paused old scan stays Paused but has no
+Resume action: external masscan checkpoints cannot run in rmasscan.
+
+Imported profiles appear in **New scan → Imported profile → Load settings**.
+Loading fills fields only; review and check settings before explicitly starting.
+The old interface and checkpoint remain archive metadata, not current bindings.
+Import and profile loading perform no scan, DNS lookup, Nmap check or elevation.
+
+This initial importer accepts at most 32 MiB of sessions, 4 MiB of profiles,
+10,000 combined records and 100,000 source result rows. Unsupported non-IPv4/TCP
+records or invalid files reject the whole import. Before upgrading an existing
+v1/v2 Rust history to schema v3, Studio saves a consistent SQLite backup named
+`before-v3-*.sqlite3` in the Rust data directory. Keep that backup when reverting
+to an older Studio build; old builds cannot open schema v3 directly.

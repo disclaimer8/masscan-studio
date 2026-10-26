@@ -18,6 +18,7 @@ struct Rows {
     keys: RefCell<HashMap<(String, u16), u64>>,
     notify: ModelNotify,
     simulation: Cell<bool>,
+    imported: Cell<bool>,
 }
 impl Model for Rows {
     type Data = ResultRow;
@@ -76,6 +77,9 @@ impl Rows {
                         .into()
                     })
                 };
+                if let Some(legacy) = info.legacy.get(&r.port) {
+                    row.cells[5] = legacy.device_hint.clone();
+                }
                 if let Some(service) = info.service(r.port) {
                     row.cells[4] = service.summary();
                     row.service = row.cells[4].clone();
@@ -140,6 +144,8 @@ impl Rows {
                     discovered_at: saved.discovered_at.clone(),
                     source: if self.simulation.get() {
                         "Simulation"
+                    } else if self.imported.get() {
+                        "Imported Swift history"
                     } else {
                         "rmasscan"
                     }
@@ -214,6 +220,9 @@ fn action(app: &RefCell<Controller>, ui: &MainWindow, a: Action) {
         ui.set_action_notice(e.into());
     }
 }
+fn process_active(status: &Status) -> bool {
+    matches!(status, Status::Starting | Status::Scanning | Status::Saving)
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let smoke = std::env::args().any(|s| s == "--smoke");
     let pause_smoke = std::env::args().any(|s| s == "--smoke-pause");
@@ -228,6 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
     ui.set_authorization_available(cfg!(target_os = "macos"));
+    ui.set_import_available(cfg!(target_os = "macos"));
     ui.set_process_view(true);
     ui.set_job_seed(
         (u32::from_ne_bytes(studio_protocol::new_id()?[..4].try_into().unwrap()).max(1))
@@ -241,8 +251,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         keys: RefCell::new(HashMap::new()),
         notify: ModelNotify::default(),
         simulation: Cell::new(false),
+        imported: Cell::new(false),
     });
     let history = Rc::new(RefCell::new(Vec::<studio_store::SavedScan>::new()));
+    let profiles = Rc::new(RefCell::new(Vec::<studio_store::legacy::Profile>::new()));
     ui.set_rows(ModelRc::from(rows.clone()));
     rows.summary(&ui);
     let w = ui.as_weak();
@@ -342,6 +354,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_select_history(move |i| {
         if let (Some(ui), Some(s)) = (w.upgrade(), h.borrow().get(i as usize)) {
             action(&a, &ui, Action::Select(s.scan));
+        }
+    });
+    let w = ui.as_weak();
+    let p = profiles.clone();
+    ui.on_load_profile(move |i| {
+        if let (Some(ui), Some(profile)) = (w.upgrade(), p.borrow().get(i as usize)) {
+            ui.set_job_targets(profile.job.targets.clone().into());
+            ui.set_job_ports(profile.job.ports.clone().into());
+            ui.set_job_exclusions(profile.job.exclusions.clone().into());
+            ui.set_job_rate(profile.job.rate.to_string().into());
+            ui.set_job_seed(profile.job.seed.clone().into());
+            ui.invoke_settings_edited();
+            ui.set_job_feedback(format!("Loaded {}. Check settings before starting. Legacy interface: {}; checkpoint: {} (archive only).", profile.name,
+                if profile.interface.is_empty() { "automatic" } else { &profile.interface },
+                profile.resume_index.as_deref().unwrap_or("none")).into());
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    ui.on_import_selected(move |path| {
+        if let Some(ui) = w.upgrade() {
+            ui.set_importing(true);
+            if let Err(e) = a
+                .borrow()
+                .send(Action::ImportSwift(PathBuf::from(path.as_str())))
+            {
+                ui.set_importing(false);
+                ui.set_import_report(e.into());
+            }
+        }
+    });
+    let w = ui.as_weak();
+    ui.on_choose_import_folder(move || {
+        if let Some(ui) = w.upgrade() {
+            if ui.get_importing() {
+                return;
+            }
+            ui.set_importing(true);
+            let mut dialog =
+                rfd::AsyncFileDialog::new().set_title("Choose the old Swift data folder");
+            if let Some(home) = std::env::var_os("HOME") {
+                dialog = dialog.set_directory(
+                    PathBuf::from(home).join("Library/Application Support/Masscan Studio"),
+                );
+            }
+            let selection = dialog.pick_folder();
+            let w = w.clone();
+            std::thread::spawn(move || {
+                let selected = pollster::block_on(selection);
+                let _ = w.upgrade_in_event_loop(move |ui| {
+                    if let Some(folder) = selected {
+                        if let Some(path) = folder.path().to_str() {
+                            ui.invoke_import_selected(path.into());
+                        } else {
+                            ui.set_importing(false);
+                            ui.set_import_report("Folder path is not valid UTF-8".into());
+                        }
+                    } else {
+                        ui.set_importing(false);
+                        ui.set_import_report("Import cancelled. Nothing changed.".into());
+                    }
+                });
+            });
         }
     });
     let w = ui.as_weak();
@@ -508,6 +583,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = app.clone();
     let m = rows.clone();
     let h = history.clone();
+    let p = profiles.clone();
     let started = Instant::now();
     let success = Rc::new(Cell::new(false));
     let ok = success.clone();
@@ -531,12 +607,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for update in updates {
                 match update {
+                    Update::LastImportReport(report) => {
+                        if !ui.get_importing() {
+                            ui.set_import_report(report.summary().into());
+                        }
+                    }
+                    Update::ImportFinished(result) => {
+                        ui.set_importing(false);
+                        ui.set_import_report(
+                            result
+                                .map(|r| r.summary())
+                                .unwrap_or_else(|e| {
+                                    format!("Import failed: {e}\nNo records were imported.")
+                                })
+                                .into(),
+                        );
+                    }
+                    Update::Profiles(values) => {
+                        ui.set_profile_labels(ModelRc::new(slint::VecModel::from(
+                            values
+                                .iter()
+                                .map(|p| slint::SharedString::from(p.name.as_str()))
+                                .collect::<Vec<_>>(),
+                        )));
+                        ui.set_profile_index(if values.is_empty() { -1 } else { 0 });
+                        *p.borrow_mut() = values;
+                    }
                     Update::Reset(data, backend) => {
                         ui.set_inspection_available(backend != Backend::Simulation);
                         m.simulation.set(backend == Backend::Simulation);
+                        m.imported.set(backend == Backend::SwiftImport);
                         ui.set_scan_backend_label(
                             if backend == Backend::Simulation {
                                 "Simulation · no packets"
+                            } else if backend == Backend::SwiftImport {
+                                "Imported Swift history"
                             } else {
                                 "feth lab · raw packets"
                             }
@@ -595,6 +700,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_history_labels(ModelRc::new(slint::VecModel::from(
                             data.iter()
                                 .map(|s| {
+                                    if s.job.backend == Backend::SwiftImport {
+                                        return slint::SharedString::from(format!(
+                                            "{} · {:?} · {}",
+                                            s.name.as_deref().unwrap_or("Swift history"),
+                                            s.status,
+                                            s.created_at.as_deref().unwrap_or("Unknown date")
+                                        ));
+                                    }
                                     slint::SharedString::from(format!(
                                         "{} · {:?} · {}",
                                         if s.job.backend == Backend::Simulation {
@@ -632,9 +745,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("Studio: {status:?}: {detail}");
                         ui.set_process_status(format!("{status:?}").into());
                         ui.set_action_notice(detail.into());
-                        ui.set_process_active(!status.terminal());
-                        ui.set_can_resume(status == Status::Paused);
-                        if status.terminal() {
+                        ui.set_process_active(process_active(&status));
+                        ui.set_can_resume(status == Status::Paused && !m.imported.get());
+                        if !process_active(&status) {
                             ui.set_process_stopping(false);
                         }
                         if pause_smoke {
@@ -700,6 +813,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     #[test]
+    fn imported_ready_history_does_not_lock_the_ui_as_an_active_scan() {
+        assert!(!process_active(&Status::Ready));
+        for status in [Status::Starting, Status::Scanning, Status::Saving] {
+            assert!(process_active(&status));
+        }
+    }
+    #[test]
     fn export_uses_filtered_sorted_view_and_never_leaks_hidden_port_details() {
         let rows = Rows {
             observations: RefCell::new(HashMap::new()),
@@ -708,6 +828,7 @@ mod tests {
             keys: RefCell::new(HashMap::new()),
             notify: ModelNotify::default(),
             simulation: Cell::new(false),
+            imported: Cell::new(false),
         };
         rows.add(
             [("198.18.0.2", 80), ("198.18.0.2", 443), ("198.18.0.10", 80)]

@@ -38,7 +38,9 @@ pub fn decimal(s: &str) -> Result<u64, String> {
 pub enum Backend {
     Simulation,
     MacFeth,
-    SwiftImport,
+    // Read compatibility for schema-v3 archives only; prepare() rejects execution.
+    #[serde(rename = "SwiftImport")]
+    Archived,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -62,9 +64,9 @@ impl Job {
         }
     }
     pub fn prepare(&self) -> Result<ReadyPlan, String> {
-        if self.backend == Backend::SwiftImport {
+        if self.backend == Backend::Archived {
             return Err(
-                "Imported Swift history is read-only; its checkpoint cannot run in rmasscan".into(),
+                "Archived history is read-only; its checkpoint cannot run in rmasscan".into(),
             );
         }
         let seed = decimal(&self.seed)?;

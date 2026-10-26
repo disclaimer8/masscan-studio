@@ -159,18 +159,22 @@ See the [implementation plan and Win32 references](../docs/superpowers/plans/202
 ## Windows trusted installation prerequisite
 
 `prepare-runner` copies the exact package runner and emits `manifest.json` plus a
-reviewable `install.ps1`. Run that script once from an elevated 64-bit PowerShell.
+reviewable `install.ps1`. Run that script once from elevated 64-bit PowerShell 7+.
 This is a manual installation step, not application session authorization. No
 service, driver, firewall change or UAC bypass is installed.
 
 The destination is the system Known Folder Program Files followed by
 `Masscan Studio\Runner\<sha256>\studio-runner.exe`; an environment variable cannot
 redirect it. The installer checks ancestor types/owners/DACLs, stages a fresh
-version with protected administrator-owned ACLs and ordinary-user read/execute,
+version with protected administrator-owned ACLs supplied atomically when each
+directory is created, and ordinary-user read/execute,
 verifies SHA-256, then publishes with a no-overwrite directory move.
+Source paths are encoded as ASCII numeric UTF-16 expressions: PowerShell's
+typographic quotation marks never become syntax. No path is evaluated as code.
 
 `cargo xtask verify-installed-runner <sha256>` opens and retains handles to the
-actual executable and every ancestor without write/delete sharing. It rejects
+actual executable and every ancestor without write/delete sharing. Directory
+handles request FILE_LIST_DIRECTORY so they participate in sharing checks. It rejects
 reparse points, wrong object types, untrusted owners, null DACLs and unprivileged
 write/delete/ACL/ownership grants, then hashes the retained file handle. Trusted
 owners are SYSTEM, builtin Administrators and Windows TrustedInstaller. Effective

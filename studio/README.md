@@ -113,7 +113,7 @@ Windows runner installation can be prepared separately:
 ```powershell
 cargo xtask prepare-runner 'C:\path\to\package\studio-runner.exe'
 # Review manifest.json and install.ps1 in the printed directory.
-# Run install.ps1 once in an elevated 64-bit PowerShell, then:
+# Run install.ps1 once in elevated 64-bit PowerShell 7+, then:
 cargo xtask verify-installed-runner SHA256_FROM_MANIFEST
 ```
 

@@ -14,7 +14,14 @@ pub fn powershell_quote(value: &str) -> Result<String> {
     if value.contains('\0') {
         return Err("NUL in installation argument".into());
     }
-    Ok(format!("'{}'", value.replace('\'', "''")))
+    // PowerShell recognizes smart quotes as delimiters too. Emit only ASCII
+    // numeric UTF-16 code units; no source-path character becomes script syntax.
+    let units = value
+        .encode_utf16()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!("[string]::new([char[]]@({units}))"))
 }
 pub fn install_script(source: &str, hash: &str) -> Result<String> {
     validate_hash(hash)?;
@@ -28,7 +35,8 @@ pub fn install_script(source: &str, hash: &str) -> Result<String> {
     }
     let source = powershell_quote(source)?;
     Ok(format!(
-        r#"#requires -RunAsAdministrator
+        r#"#requires -Version 7.0
+#requires -RunAsAdministrator
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ([IntPtr]::Size -ne 8) {{ throw 'Use 64-bit PowerShell' }}
@@ -55,7 +63,7 @@ function Assert-TrustedDirectory([string] $path) {{
 function Protect-Directory([string] $path) {{
     $acl = [Security.AccessControl.DirectorySecurity]::new()
     $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)')
-    Set-Acl -LiteralPath $path -AclObject $acl
+    [IO.FileSystemAclExtensions]::CreateDirectory($acl, $path) | Out-Null
     Assert-TrustedDirectory $path
 }}
 $base = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
@@ -65,12 +73,11 @@ while ($null -ne $cursor) {{ Assert-TrustedDirectory $cursor.FullName; $cursor =
 foreach ($part in @('Masscan Studio', 'Runner')) {{
     $base = Join-Path $base $part
     if (Test-Path -LiteralPath $base) {{ Assert-TrustedDirectory $base }}
-    else {{ [IO.Directory]::CreateDirectory($base) | Out-Null; Protect-Directory $base }}
+    else {{ Protect-Directory $base }}
 }}
 $destination = Join-Path $base $hash
 if (Test-Path -LiteralPath $destination) {{ throw 'Version already exists. No overwrite.' }}
 $stage = Join-Path $base ('.install-' + [Guid]::NewGuid().ToString('N'))
-[IO.Directory]::CreateDirectory($stage) | Out-Null
 try {{
     Protect-Directory $stage
     $copy = Join-Path $stage 'studio-runner.exe'

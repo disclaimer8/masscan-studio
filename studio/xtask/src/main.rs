@@ -32,12 +32,31 @@ fn digest(path: &Path) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
 }
 fn main() -> Result<()> {
+    let task = std::env::args().nth(1).unwrap_or("build".into());
+    #[cfg(windows)]
+    let packaged = std::env::current_exe()?
+        .file_name()
+        .is_some_and(|n| n == "studio-tools.exe");
+    #[cfg(not(windows))]
+    let packaged = false;
+    if packaged
+        && (!matches!(
+            task.as_str(),
+            "prepare-runner" | "verify-installed-runner" | "probe-windows-authorization"
+        ) || std::env::args().nth(2).is_none())
+    {
+        return Err("Usage: studio-tools.exe prepare-runner PATH | verify-installed-runner HASH | probe-windows-authorization HASH".into());
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_owned();
+    let root = if packaged {
+        std::env::current_dir()?
+    } else {
+        root
+    };
     std::env::set_current_dir(&root)?;
-    let task = std::env::args().nth(1).unwrap_or("build".into());
     match task.as_str() {
         #[cfg(any(target_os="macos", target_os="linux", windows))]
         "prepare-runner" => runner_setup::prepare(&root)?,
@@ -177,6 +196,11 @@ fn main() -> Result<()> {
                     let dest = dist.join("sqlite3.dll");
                     fs::copy(PathBuf::from(dir).join("sqlite3.dll"), &dest)?;
                     files.push(dest);
+                    // Standalone installation/probe utility: does not need Cargo
+                    // or the source checkout on the acceptance machine.
+                    let tool = dist.join("studio-tools.exe");
+                    fs::copy(std::env::current_exe()?, &tool)?;
+                    files.push(tool);
                 }
             }
             let file_hashes=files.iter().map(|p|Ok(serde_json::json!({"path":p.strip_prefix(&dist)?.to_string_lossy(),"sha256":digest(p)?}))).collect::<Result<Vec<_>>>()?;

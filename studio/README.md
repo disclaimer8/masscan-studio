@@ -55,11 +55,17 @@ Choose **Simulation · no network packets** to exercise this flow on any OS. Thi
 uses the real engine with its fake packet adapter, not a prerecorded UI animation.
 It does not prove raw packet I/O or network correctness.
 
-The reserved **Mac feth** profile is disabled at a compile-time release gate.
-Start/Resume refuse this profile before opening any packet adapter. The new
-read-only preflight checks route/VPN overlap, bridge membership, addresses/MACs,
-permanent ARP and forwarding. A live isolated scan with independent capture is
-still required before opening the release gate. Studio does not create a stand.
+The **Mac feth** profile is open at a compile-time per-profile gate
+(`raw_profile_enabled`) on macOS only; Windows and Linux builds keep it closed,
+and Simulation never touches the network. Raw Start/Resume requires an
+authorized session (**Authorize**), then a strict read-only preflight (route/VPN
+overlap, bridge membership, addresses/MACs, permanent ARP, forwarding) before the
+root runner opens the adapter. Studio does not create the stand: the user brings
+it up with `rmasscan-lab macos-lab up` and takes it down again. The profile scans
+only the sealed pair (`198.18.0.2`); it is not a physical NIC. Acceptance through
+Studio (one Mac, one macOS version, debug build) is recorded in
+`docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`; its status
+words there govern.
 
 ## macOS and Linux session authorization
 
@@ -95,7 +101,7 @@ commands. Install `pkexec`, `polkitd` and `binutils`, and run a desktop polkit
 authentication agent. The installed path is
 `/usr/local/libexec/masscan-studio/<sha256>/studio-runner`. No custom polkit policy
 or service is installed. **Authorize** establishes the session; Linux network
-preflight reports unavailable and raw scanning stays disabled. CI tests actual
+preflight reports unavailable and raw scanning stays closed on Linux. CI tests actual
 pkexec with a temporary policy in its disposable VM; desktop prompt interaction
 still needs manual verification.
 
@@ -107,7 +113,9 @@ user/logon identity and a protected pipe DACL; it does not elevate. Unix sockets
 have peer identity tests on macOS/Linux; system elevation is implemented on both.
 Do not launch the UI with sudo or as Administrator. Linux desktop prompt
 acceptance, physical NIC selection and Windows/Linux raw profiles remain open.
-Raw scanning remains gated independently of host actions and saved profiles.
+Raw scanning is gated per profile, independently of host actions and saved
+profiles: open for Mac feth on macOS, closed for every Windows and Linux raw
+profile and for physical NICs.
 
 ## Windows session authorization
 
@@ -125,7 +133,7 @@ no service or driver. Run `studio-ui.exe` as an ordinary user. **Authorize** ope
 UAC for that exact installed runner; **Lock** ends the session. Use the same
 Windows account for consent. Authorizing with another account is unsupported.
 The personal build is unsigned, so UAC identifies an unknown publisher.
-Windows preflight reports unavailable; raw scanning stays disabled. Simulation
+Windows preflight reports unavailable; raw scanning stays closed on Windows. Simulation
 uses an ordinary runner. Rebuilt packages require their matching installed hash.
 The tools executable works without a source checkout or Rust installation.
 

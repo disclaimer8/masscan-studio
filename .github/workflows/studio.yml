@@ -10,6 +10,10 @@ permissions:
 concurrency:
   group: studio-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+# Live feth raw windows are not run here: the live feth window is user-run (stand, BPF grant and
+# the Authorize dialog are user actions); see docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md.
+# CI builds and runs the offline tests only; the per-profile raw gate is compile-time (open for Mac feth on
+# macOS, closed on Windows and Linux).
 jobs:
   application:
     strategy:

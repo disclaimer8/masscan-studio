@@ -1,5 +1,8 @@
 # Studio integration evidence
 
+Note (2026-10-26): entries dated before the Mac feth raw acceptance describe the raw gate as it stood then. The current
+gate is per profile: open for Mac feth on macOS, closed on Windows and Linux (see the last section).
+
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
@@ -650,3 +653,27 @@ an installation hint despite the installed runner already being valid. The final
 text-only fix attaches that hint solely to installed-image validation failure;
 cancelled/failed UAC preserves its own diagnostic. Authentication and lifecycle
 logic are unchanged. No scan or background inspection was started by these checks.
+
+## 2026-10-26 — Mac feth raw through Studio
+
+Current gate: `raw_profile_enabled` (compile-time, per profile) is true only for the Mac feth profile on macOS. Windows
+and Linux raw profiles, physical NICs and Simulation-as-raw stay closed. The "disabled" and `RAW_SCANNING_ENABLED=false`
+statements in the dated entries above are historical: they describe the gate as it stood on those dates.
+
+Live acceptance through Studio on the sealed `feth4201`/`feth4202` pair, one Mac (macOS 27.0.1, arm64), debug-profile
+bundle `studio/dist/build-1793039025527`, frozen commit `05ab27fb631da440539344cf8c600308149d4671` (manifest `dirty: false`).
+
+- `studio-ui` sha256 `eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86`.
+- `studio-runner` (bundle = installed) sha256 `e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb`.
+- `rmasscan-lab` (witnesses, `studio-verify`) sha256 `e0e2f5170218763b51ed22045516a738efbafae4e0a54eaa9570b047d460733b`.
+- Attempt 1 (`session-05ab27f`): **NOT RUN**. The Authorize dialog stayed unanswered for 180 s; no scan started.
+- Attempt 2 (`session-05ab27f-r2`): **PASS** 7/7. `s1_full` 20 rows, 8 open, Completed; `s2_pause` paused at `next_index` 7
+  after 3090 ms with the runner text "Checkpoint committed by Studio", then Completed with 32 rows; `s3_stop` Stopped in
+  50 ms with 439 rows and no SYN after Stop. Uplink `en0`: 0 lab frames; peer: 1046 frames.
+- Studio tests on the Mac at that commit: 121 passed, 0 failed; rmasscan 1268 passed, 0 failed.
+- NOT RUN: manual UI pass, Resume after a Studio restart on raw, sleep/wake, VPN, release-profile build, physical NIC,
+  Windows and Linux raw.
+
+Evidence: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance-raw/` (hashes in `MANIFEST.sha256`). Report and
+status words: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`. GO (feth) there is conditional on green CI
+on the exact HEAD and an APPROVED final review.

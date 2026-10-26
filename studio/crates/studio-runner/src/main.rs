@@ -109,8 +109,26 @@ fn serve(
     let (events, output) = mpsc::sync_channel::<Envelope<Event>>(32);
     let writer = std::thread::spawn(move || {
         let mut out = BufWriter::new(output_stream);
+        let trace = std::env::var_os("STUDIO_TRACE_TIMINGS").is_some();
+        let start = Instant::now();
+        let mut logged = start;
+        let mut elapsed = Duration::ZERO;
+        let mut rows = 0usize;
         for e in output {
+            if let Event::Results(batch) = &e.payload {
+                rows += batch.len();
+            }
+            let began = Instant::now();
             write_frame(&mut out, &e)?;
+            elapsed += began.elapsed();
+            if trace && logged.elapsed() >= Duration::from_secs(1) {
+                eprintln!(
+                    "runner writer: rows={rows} write_ms={} age_ms={}",
+                    elapsed.as_millis(),
+                    start.elapsed().as_millis()
+                );
+                logged = Instant::now();
+            }
         }
         Ok::<_, std::io::Error>(())
     });

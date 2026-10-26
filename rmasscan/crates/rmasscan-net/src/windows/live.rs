@@ -12,9 +12,13 @@
 //!
 //! Safety rails: frames are built only for 198.18.0.1 -> 198.18.0.2 and every
 //! send passes `assert_lab_frame` (dst MAC = peer, src MAC = lab NIC, dst IP =
-//! 198.18.0.2). The management NIC is never named. One frame per
-//! `pcap_sendpacket`: no sendqueue, no detached thread; stop is observed
-//! between calls only.
+//! 198.18.0.2). The management NIC is never named. The 2B tests send one frame
+//! per `pcap_sendpacket`; the `live_sendqueue_*` tests (task 3 of the sendqueue
+//! stage) use `SendQueue`/`transmit_raw`. Neither has a detached thread; stop
+//! is observed between calls only.
+//! Sendqueue tests also read RMASSCAN_NPCAP_SQ_SIZES / _SQ_ROUNDS / _SQ_BATCH /
+//! _SQ_SECS / _SQ_PPS / _SQ_REUSE_CALLS / _SQ_ALLOC_CALLS and
+//! RMASSCAN_NPCAP_STOP_ROUNDS (defaults documented at the sendqueue section).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -1018,7 +1022,7 @@ fn live_tx_filter_keeps_the_tx_handle_empty() {
 // Дополнительное окружение:
 //   RMASSCAN_NPCAP_SQ_SIZES   список n через запятую (по умолчанию 1,16,64,256,1024,4096)
 //   RMASSCAN_NPCAP_SQ_ROUNDS  transmit на размер (по умолчанию 200)
-//   RMASSCAN_NPCAP_SQ_BATCH   размер пачки для stop/linkdown (по умолчанию 256)
+//   RMASSCAN_NPCAP_SQ_BATCH   размер пачки для stop/linkdown (по умолчанию 64 = TX_BATCH_FRAMES)
 //   RMASSCAN_NPCAP_SQ_SECS    длительность linkdown-прогона, с (по умолчанию 25)
 //   RMASSCAN_NPCAP_SQ_PPS     потолок средней скорости, кадров/с (по умолчанию 100000)
 // =====================================================================
@@ -1529,7 +1533,7 @@ fn live_sendqueue_stop_latency() {
     let lab = lab();
     let api = load();
     let tpl = syn_frames(&lab);
-    let batch = env_u64("RMASSCAN_NPCAP_SQ_BATCH", 256) as usize;
+    let batch = env_u64("RMASSCAN_NPCAP_SQ_BATCH", 64) as usize;
     let pps = sq_pps();
     let rounds = env_u64("RMASSCAN_NPCAP_STOP_ROUNDS", 60);
     let mut tx = open_tx_product(&api, &lab);

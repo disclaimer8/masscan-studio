@@ -278,8 +278,8 @@ New `windows-verify` checks, all FAIL (behaviour) and applied only when the mani
 their verdicts) and only to scan reports (`status` ok with a `net` block):
 
 - `identity.tx_mode` is present (absent: "harness predates sendqueue") and equals `tx_mode_expected`.
-- `net.tx_over_budget == 0`, else "call budget breached". This counter is measured only on the
-  sendqueue path; a `single` run does not measure it, so zero there is not evidence and is not asked for.
+- `net.tx_over_budget == 0`, else "call budget breached". The counter counts driver calls over the 50 ms
+  contract (`MAX_IO_TIMEOUT`), not over the 42 ms `IO_BUDGET`. It is measured by the Windows adapter; a `single` run does not measure it, so zero there is not evidence and is not asked for.
 - For `perf.<rate>` cells with `rate >= 10000` under sendqueue: `net.tx_batches > 0` and
   `net.tx_batch_max <= identity.tx_batch_cap`, else "sendqueue claimed but no batch was transmitted".
 - Wire sequence (perf cells, offline on the kept full pcaps): the SYNs in capture order must equal, byte for

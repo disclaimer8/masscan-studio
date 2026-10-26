@@ -3087,7 +3087,7 @@ pub(crate) fn perf_summary(runs: &[Value]) -> Value {
         "notes":[
             "All medians are over the Completed PASS cells (every probe went out); rate_gate is MET when the median steady_pps_wire is within 20 percent of the requested rate, OPEN otherwise, and NOT RUN with fewer than 3 Completed PASS cells or no measured median. It never changes overall.",
             "VM speed, not physical NIC; the VM ceiling with sendqueue is an OPEN finding for the physical NIC stage, never a FAIL",
-            "Call latency here is join_ms and drain_s only. Stop latency under load is measured by the stop_* runs of failure-r1 (docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/failure-r1); per-Npcap-call latency by the spike evidence (docs/experiments/2026-10-24-rmasscan-stage2b-windows-spike-raw).",
+            "Call latency here is join_ms and drain_s only. Stop latency is measured by the stop_* runs of the failure suite of the same stage; per-call latency by the spike and the live adapter tests of that stage, not by this summary.",
             "A PASS cell with rx_loss true is honest measured loss (Failed(RxLoss) with kernel drops above zero); its results are recorded and checked for genuineness but not compared to the full listener truth. It is counted in rx_loss and in the informational rxloss_cells and rxloss_steady_pps_wire_median, never in a median or the gate."
         ]
     })

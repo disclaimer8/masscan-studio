@@ -657,10 +657,10 @@ fn rate_gate_needs_three_pass_cells_else_not_run() {
 fn summary_notes_name_the_latency_sources_and_the_gate_caveat() {
     let sum = perf_summary(&[]);
     let notes = sum["notes"].to_string();
-    assert!(notes.contains("failure-r1"), "{notes}");
+    assert!(notes.contains("failure suite of the same stage"), "{notes}");
     assert!(notes.contains("stop_"), "{notes}");
     assert!(
-        notes.contains("2026-10-24-rmasscan-stage2b-windows-spike-raw"),
+        notes.contains("the spike and the live adapter tests of that stage"),
         "{notes}"
     );
     assert!(notes.contains("VM speed, not physical NIC"), "{notes}");

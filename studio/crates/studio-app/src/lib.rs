@@ -18,6 +18,7 @@ use studio_protocol::*;
 use studio_store::{SavedRow, SavedScan, Store};
 
 pub enum Action {
+    ImportSwift(PathBuf),
     LookupHosts { ips: Vec<String>, refresh: bool },
     InspectHost(String),
     CancelInspection,
@@ -30,6 +31,9 @@ pub enum Action {
     Lock,
 }
 pub enum Update {
+    ImportFinished(Result<studio_store::ImportReport, String>),
+    LastImportReport(studio_store::ImportReport),
+    Profiles(Vec<studio_store::legacy::Profile>),
     Authorization {
         busy: bool,
         authorized: bool,
@@ -366,11 +370,56 @@ fn work(
         emit(&out, Update::State(s.status.clone(), s.detail.clone()))?;
     }
     emit(&out, Update::History(history, selected))?;
+    emit(
+        &out,
+        Update::Profiles(db.profiles().map_err(|e| e.to_string())?),
+    )?;
+    if let Some(report) = db.last_import_report().map_err(|e| e.to_string())? {
+        emit(&out, Update::LastImportReport(report))?;
+    }
     let result = (|| {
         while !stop.load(Ordering::Acquire) {
             let step = (|| -> Result<(), String> {
                 if let Ok(action) = actions.try_recv() {
                     match action {
+                        Action::ImportSwift(source) => {
+                            let result = if active {
+                                Err("Finish the active scan before importing Swift history".into())
+                            } else if !cfg!(target_os = "macos") {
+                                Err("Manual Swift import is available only on macOS".into())
+                            } else {
+                                studio_store::legacy::read_directory(&source).and_then(|archive| {
+                                    db.import_swift(&archive).map_err(|e| e.to_string())
+                                })
+                            };
+                            if result.is_ok() {
+                                let history = db.scans().map_err(|e| e.to_string())?;
+                                if selected.is_none()
+                                    && let Some(s) = history.first()
+                                {
+                                    selected = Some(s.scan);
+                                    emit(
+                                        &out,
+                                        Update::Reset(
+                                            db.observations(s.scan).map_err(|e| e.to_string())?,
+                                            s.job.backend,
+                                        ),
+                                    )?;
+                                    emit(
+                                        &out,
+                                        host_selection(&mut hosts, s.scan, s.job.backend, &mut db),
+                                    )?;
+                                    emit(&out, Update::State(s.status.clone(), s.detail.clone()))?;
+                                }
+                                emit(&out, Update::History(history, selected))?;
+                                emit(
+                                    &out,
+                                    Update::Profiles(db.profiles().map_err(|e| e.to_string())?),
+                                )?;
+                            }
+                            // Import errors do not alter the selected scan or runner session.
+                            emit(&out, Update::ImportFinished(result))?;
+                        }
                         Action::LookupHosts { ips, refresh } => {
                             match hosts.dns(ips, refresh, &mut db) {
                                 Ok(info) => emit(&out, Update::Hosts(info))?,
@@ -465,6 +514,10 @@ fn work(
                                 .into_iter()
                                 .find(|s| Some(s.scan) == selected)
                                 .ok_or("Select a paused scan")?;
+                            if s.job.backend == Backend::SwiftImport {
+                                emit(&out, Update::Notice("Imported Swift history is read-only; its checkpoint cannot resume in rmasscan".into()))?;
+                                return Ok(());
+                            }
                             if s.status != Status::Paused {
                                 emit(
                                     &out,

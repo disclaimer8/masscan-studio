@@ -469,6 +469,8 @@ fn launch() -> Result<(), String> {
         }
         let me = Identity::current()?;
         if me.uid == 0 {
+            #[cfg(target_os = "linux")]
+            studio_platform::linux::arm_parent_death(ui.pid)?;
             studio_platform::trusted::verify(
                 &me.executable,
                 &studio_platform::trusted::file_hash(&me.executable)?,

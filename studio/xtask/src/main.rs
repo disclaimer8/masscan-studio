@@ -1,5 +1,7 @@
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "macos")]
+#[cfg(target_os = "linux")]
+mod linux_acceptance;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod runner_setup;
 use std::{
     fs,
@@ -32,12 +34,14 @@ fn main() -> Result<()> {
     std::env::set_current_dir(&root)?;
     let task = std::env::args().nth(1).unwrap_or("build".into());
     match task.as_str() {
-        #[cfg(target_os="macos")]
+        #[cfg(any(target_os="macos", target_os="linux"))]
         "prepare-runner" => runner_setup::prepare(&root)?,
-        #[cfg(target_os="macos")]
+        #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,
-        #[cfg(target_os="macos")]
+        #[cfg(any(target_os="macos", target_os="linux"))]
         "probe-authorization" => runner_setup::probe()?,
+        #[cfg(target_os="linux")]
+        "verify-linux-authorization" => linux_acceptance::verify(&root)?,
         "test" => {
             run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets"]))?;
             run(Command::new("cargo").args([

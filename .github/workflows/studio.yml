@@ -31,7 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libsqlite3-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb-xkb1 libwayland-dev libx11-xcb-dev libegl1-mesa-dev xvfb
+          sudo apt-get install -y libsqlite3-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb-xkb1 libwayland-dev libx11-xcb-dev libegl1-mesa-dev xvfb pkexec polkitd binutils
       - name: Windows external SQLite
         if: runner.os == 'Windows'
         shell: pwsh
@@ -60,6 +60,9 @@ jobs:
         run: cargo xtask test
       - name: Package UI and runner
         run: cargo xtask build
+      - name: Linux actual polkit session (no packets)
+        if: runner.os == 'Linux'
+        run: cargo xtask verify-linux-authorization
       - name: Linux software UI lifecycle (no packets)
         if: runner.os == 'Linux'
         run: |

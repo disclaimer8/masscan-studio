@@ -62,7 +62,7 @@ xtask Windows preparation/probe, AUTHORIZATION.md and verification report.
   fail closed. UI shutdown must not wait for the desktop dialog indefinitely.
 - [x] Prove runner exit on UI death/IPC loss. Evaluate Job Object ownership across
   elevation; do not infer assignability of an elevated child from simulation.
-- [ ] Enable Windows Authorize/Lock only after the above contracts pass. Raw gate
+- [x] Enable Windows Authorize/Lock only after the above contracts pass. Raw gate
   and unavailable Windows network preflight remain unchanged.
 
 ## Task 3 — acceptance
@@ -73,7 +73,9 @@ xtask Windows preparation/probe, AUTHORIZATION.md and verification report.
   are explicitly distinct from CI service-session tests. User authorized home VM
   UAC/lifetime checks on 2026-10-26, without packets or lab changes. Same-account
   acceptance passed; alternate-account remains unsupported and NOT RUN.
-- [ ] Package provenance, exact-head three-OS CI and fresh whole-branch review.
+- [x] Package provenance and fresh whole-branch review; both review findings
+  addressed. Exact-head three-OS CI remains a required external merge gate on
+  PR26, whose check status records the final result.
 
 ## Review focus
 

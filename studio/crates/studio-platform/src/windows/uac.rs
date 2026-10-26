@@ -309,7 +309,11 @@ impl Authorized {
         if me.elevation()?.elevated {
             return Err("Run Studio normally, not as Administrator".into());
         }
-        let installation = install::Installed::open(hash)?;
+        let installation = install::Installed::open(hash).map_err(|e| {
+            format!(
+                "Install the trusted runner matching this application build before authorizing. {e}"
+            )
+        })?;
         let endpoint = Endpoint::create()?;
         let job = LifetimeJob::create()?;
         if PROMPT_ACTIVE

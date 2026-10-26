@@ -220,9 +220,7 @@ impl Client {
     #[cfg(windows)]
     fn authorize(source: &std::path::Path, cancelled: &AtomicBool) -> Result<Self, String> {
         let hash = studio_platform::trusted::file_hash(source)?;
-        let auth = authorization::Authorized::open(&hash, cancelled).map_err(|e| {
-            format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
-        })?;
+        let auth = authorization::Authorized::open(&hash, cancelled)?;
         let mut c = Self::connected(Box::new(auth.stream.clone()), Box::new(auth.stream.clone()))?;
         c.authorized = Some(auth);
         c.handshake(Some(cancelled))?;

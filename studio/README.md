@@ -61,6 +61,12 @@ read-only preflight checks route/VPN overlap, bridge membership, addresses/MACs,
 permanent ARP and forwarding. A live isolated scan with independent capture is
 still required before opening the release gate. Studio does not create a stand.
 
+Active attempts interrupt after a long scheduling/clock gap instead of silently
+resuming. The gated Mac feth path also repeats isolation checks in a background
+worker; a failed or stale check stops the attempt, retains received results, and
+cannot become Completed or a resumable pause. See AUTHORIZATION.md for polling
+limits. These contracts are tested offline; live mid-scan drift is still pending.
+
 ## macOS and Linux session authorization
 
 The **Authorize** button opens the system administrator dialog, connects to the

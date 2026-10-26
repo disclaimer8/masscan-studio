@@ -83,6 +83,7 @@ jobs:
           STUDIO_DATA_DIR="$RUNNER_TEMP/studio-pause" SLINT_BACKEND=winit-software xvfb-run -a target/debug/studio-ui --smoke-pause
           STUDIO_DATA_DIR="$RUNNER_TEMP/studio-stop" SLINT_BACKEND=winit-software xvfb-run -a target/debug/studio-ui --smoke-stop-race
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: studio-${{ runner.os }}-${{ github.sha }}
           path: studio/dist/

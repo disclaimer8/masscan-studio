@@ -3,6 +3,9 @@ use sha2::{Digest, Sha256};
 mod linux_acceptance;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod runner_setup;
+#[cfg(windows)]
+#[path = "runner_setup_windows.rs"]
+mod runner_setup;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -34,8 +37,12 @@ fn main() -> Result<()> {
     std::env::set_current_dir(&root)?;
     let task = std::env::args().nth(1).unwrap_or("build".into());
     match task.as_str() {
-        #[cfg(any(target_os="macos", target_os="linux"))]
+        #[cfg(any(target_os="macos", target_os="linux", windows))]
         "prepare-runner" => runner_setup::prepare(&root)?,
+        #[cfg(windows)]
+        "verify-installed-runner" => runner_setup::verify_installed()?,
+        #[cfg(windows)]
+        "verify-windows-installation" => runner_setup::verify_ci(&root)?,
         #[cfg(any(target_os="macos", target_os="linux"))]
         "install-runner" => runner_setup::install()?,
         #[cfg(any(target_os="macos", target_os="linux"))]

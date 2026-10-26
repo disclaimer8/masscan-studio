@@ -1223,7 +1223,10 @@ fn pause_stops_tx_then_resume_continues_without_gaps_or_duplicates() {
     h.pause();
     while h.outcome().is_none() {
         // Liveness only (wait = 1 s plus a slow CI runner); the Pause contract is measured elsewhere.
-        assert!(t.elapsed() < Duration::from_secs(30), "pause did not finish");
+        assert!(
+            t.elapsed() < Duration::from_secs(30),
+            "pause did not finish"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     let cp = h.checkpoint().expect("a paused run carries a checkpoint");

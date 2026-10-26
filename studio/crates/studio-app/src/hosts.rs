@@ -51,6 +51,16 @@ impl Hosts {
             .collect();
         Ok(self.info.values().cloned().collect())
     }
+    /// The selected scan was deleted transactionally. Cancel in-flight work
+    /// without attempting to write its terminal state into the removed scan.
+    pub fn forget(&mut self) {
+        for pending in self.pending.drain().map(|(_, p)| p) {
+            pending.cancel.store(true, Ordering::Release);
+        }
+        self.selected = None;
+        self.info.clear();
+        self.queried.clear();
+    }
     fn target(&self) -> Result<Id> {
         match self.selected {
             Some((_, Backend::Simulation)) => {
@@ -339,6 +349,59 @@ mod tests {
                 .contains("Simulation")
         );
         assert!(h.pending.is_empty());
+        drop(h);
+        drop(db);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn deleting_selection_cancels_requests_and_ignores_late_completions() {
+        let (dir, mut db, mut h) = setup();
+        let scan = [1; 16];
+        h.select(scan, Backend::MacFeth, &mut db).unwrap();
+        let ip: Ipv4Addr = "198.18.0.2".parse().unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        h.pending.insert(
+            (ip, Kind::Dns),
+            Pending {
+                id: 1,
+                cancel: cancel.clone(),
+            },
+        );
+        h.info.insert(ip.to_string(), HostInfo::new(ip.to_string()));
+        db.interrupt(scan, "test").unwrap();
+        db.delete_scan(scan).unwrap();
+        h.forget();
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(
+            h.receive(
+                vec![Completion {
+                    id: 1,
+                    ip,
+                    kind: Kind::Dns,
+                    outcome: Outcome::Dns(Ok(Some("late.local".into()))),
+                }],
+                &mut db
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(h.target().is_err());
+        assert!(db.hosts(scan).unwrap().is_empty());
+        h.select([2; 16], Backend::MacFeth, &mut db).unwrap();
+        assert!(
+            h.receive(
+                vec![Completion {
+                    id: 1,
+                    ip,
+                    kind: Kind::Dns,
+                    outcome: Outcome::Dns(Ok(Some("late.local".into()))),
+                }],
+                &mut db
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(db.hosts([2; 16]).unwrap().is_empty());
         drop(h);
         drop(db);
         std::fs::remove_dir_all(dir).unwrap();

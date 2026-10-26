@@ -18,6 +18,11 @@ use studio_protocol::*;
 use studio_store::{SavedRow, SavedScan, Store};
 
 pub enum Action {
+    RenameScan {
+        id: Id,
+        name: String,
+    },
+    DeleteScan(Id),
     SaveProfile {
         id: Option<Id>,
         name: String,
@@ -39,6 +44,8 @@ pub enum Action {
     Lock,
 }
 pub enum Update {
+    HistoryResult(Result<String, String>),
+    Clear,
     ProfileResult(Result<String, String>),
     Profiles(Vec<studio_store::SavedProfile>, Option<Id>),
     Authorization {
@@ -386,6 +393,81 @@ fn work(
             let step = (|| -> Result<(), String> {
                 if let Ok(action) = actions.try_recv() {
                     match action {
+                        Action::RenameScan { .. } | Action::DeleteScan(_) if active => {
+                            emit(
+                                &out,
+                                Update::HistoryResult(Err(
+                                    "Wait for the active scan to stop before editing history"
+                                        .into(),
+                                )),
+                            )?;
+                        }
+                        Action::RenameScan { id, name } => {
+                            let result = db.rename_scan(id, &name).map_err(|e| e.to_string());
+                            if result.is_ok() {
+                                emit(
+                                    &out,
+                                    Update::History(
+                                        db.scans().map_err(|e| e.to_string())?,
+                                        selected,
+                                    ),
+                                )?;
+                            }
+                            emit(
+                                &out,
+                                Update::HistoryResult(result.map(|_| "Scan renamed".into())),
+                            )?;
+                        }
+                        Action::DeleteScan(id) => {
+                            let result = db.delete_scan(id).map_err(|e| e.to_string());
+                            if result.is_ok() {
+                                let history = db.scans().map_err(|e| e.to_string())?;
+                                if selected == Some(id) {
+                                    // No completion can be processed between the commit and
+                                    // forget: both run on this controller thread.
+                                    hosts.forget();
+                                    selected = history.first().map(|s| s.scan);
+                                    if let Some(s) = history.first() {
+                                        emit(
+                                            &out,
+                                            Update::Reset(
+                                                db.observations(s.scan)
+                                                    .map_err(|e| e.to_string())?,
+                                                s.job.backend,
+                                            ),
+                                        )?;
+                                        emit(
+                                            &out,
+                                            host_selection(
+                                                &mut hosts,
+                                                s.scan,
+                                                s.job.backend,
+                                                &mut db,
+                                            ),
+                                        )?;
+                                        emit(
+                                            &out,
+                                            Update::State(s.status.clone(), s.detail.clone()),
+                                        )?;
+                                    } else {
+                                        emit(&out, Update::Clear)?;
+                                        emit(
+                                            &out,
+                                            Update::State(Status::Ready, "No saved scans".into()),
+                                        )?;
+                                    }
+                                }
+                                emit(&out, Update::History(history, selected))?;
+                            }
+                            emit(
+                                &out,
+                                Update::HistoryResult(
+                                    result.map(|_| {
+                                        "Scan deleted. Saved profiles are unchanged.".into()
+                                    }),
+                                ),
+                            )?;
+                        }
                         Action::SaveProfile { id, name, job } => {
                             let result =
                                 db.save_profile(id, &name, &job).map_err(|e| e.to_string());

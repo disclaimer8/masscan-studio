@@ -434,3 +434,30 @@ confirmed manually. Fresh review found no remaining issues after layout and
 error-message adjustments. rmasscan source and raw gate are unchanged; no live
 lab or root operations were performed. Local logs are under
 `studio/verification/native-profiles-20261026/` (ignored).
+
+## 2026-10-26 — saved scan management
+
+Studio adds History with rename, repeat settings and confirmed deletion. New
+scans record UTC creation time; old unknown dates stay unknown. Repeat copies
+only the exact configuration/seed into an unchecked draft, not a checkpoint.
+The original scan is preserved and no scan or authorization starts implicitly.
+
+Local Mac arm64: `cargo xtask test` passed 72 tests, 0 failed, 2 explicit live
+inspection tests ignored; formatting and Clippy `-D warnings` passed. Evidence:
+`/tmp/studio-history-final.log`. Store tests cover active/stale/invalid refusal,
+transaction rollback after child deletion, other scans/profiles retained,
+checkpoint identity on rename, old FK metadata cleanup and reopen persistence.
+Controller tests cover selected/last-scan deletion, clearing host state, no
+runner invocation for saved history, and active-scan refusal using simulation.
+A host test verifies cancellation and ignores completion after deletion and
+after selecting another scan. UI unit coverage checks exact repeat settings and
+the archived backend refusal.
+
+Packaged Mac `--smoke` completed a simulation in an isolated data directory.
+Manual UI checks covered empty-name error recovery, rename, deletion confirmation
+and Cancel, and Repeat opening settings with the exact original seed/ports/backend.
+Actual deletion was exercised in automated store/controller tests, not manually
+against user data. The history form scrolls to keep controls reachable. Manual
+screen-reader/IME and Windows/Linux desktop interaction are not claimed by these
+checks; hosted CI provides separate offline and Linux software-UI coverage.
+rmasscan, raw gate, root installation and live labs are unchanged.

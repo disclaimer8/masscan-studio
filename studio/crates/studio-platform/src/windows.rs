@@ -253,6 +253,20 @@ impl Process {
             _ => Err(error()),
         }
     }
+    pub fn wait_closed(&self, timeout: Duration) -> Result<()> {
+        // SAFETY: retained process supports SYNCHRONIZE. Never pass INFINITE;
+        // only WAIT_OBJECT_0 proves death, not access/inspection failures.
+        match unsafe {
+            WaitForSingleObject(
+                self.handle.as_raw_handle(),
+                timeout.as_millis().min((u32::MAX - 1) as u128) as u32,
+            )
+        } {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => Err("Process did not exit before deadline".into()),
+            _ => Err(error()),
+        }
+    }
     pub fn verify(&self, expected: &Identity) -> Result<()> {
         self.ensure_alive()?;
         if self.identity != *expected {

@@ -346,17 +346,7 @@ impl Authorized {
         self.stream.0.peer.identity.pid
     }
     pub fn wait_closed(&self, timeout: Duration) -> Result<()> {
-        // SAFETY: retained process handle supports SYNCHRONIZE, bounded duration.
-        if unsafe {
-            WaitForSingleObject(
-                self.stream.0.peer.handle.as_raw_handle(),
-                timeout.as_millis().min(u32::MAX as u128) as u32,
-            )
-        } != WAIT_OBJECT_0
-        {
-            return Err("Runner did not exit before deadline".into());
-        }
-        Ok(())
+        self.stream.0.peer.wait_closed(timeout)
     }
 }
 impl Drop for Authorized {

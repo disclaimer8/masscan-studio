@@ -33,7 +33,7 @@ root-runner (установленная hash-адресуемая копия, з
 (2026-10-26: подтверждённый elevated session, установленный helper `3b1acf…`, `CheckNetwork ready=false` без манифеста),
 `studio/README.md` («Repeatable UI smoke», «macOS and Linux session authorization»).
 
-Репозиторий: `$REPO`, worktree `/Users/denyskolomiiets/masscan-studio-feth-raw`, ветка `feat/studio-mac-feth-raw` от
+Репозиторий: `$REPO`, worktree `$REPO`, ветка `feat/studio-mac-feth-raw` от
 `main` `0bb9767`. Репозиторий Rust-only.
 
 ## Исходное состояние и порядок

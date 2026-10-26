@@ -257,7 +257,7 @@ impl Model {
             "rows": rows[c],
         })).collect::<Vec<_>>()});
         // Lab listeners are not in this netstat sample; the wildcard host services are not scanned ports.
-        let netstat = "rc 0\ntcp4       0      0  *.5000                 *.*                    LISTEN\ntcp46      0      0  *.7000                 *.*                    LISTEN\ntcp4       0      0  198.18.0.2.8000        *.*                    LISTEN\n".to_owned();
+        let netstat = "rc 0\nActive Internet connections (including servers)\nProto Recv-Q Send-Q  Local Address          Foreign Address        (state)\ntcp4       0      0  *.5000                 *.*                    LISTEN\ntcp46      0      0  *.7000                 *.*                    LISTEN\ntcp4       0      0  198.18.0.2.8000        *.*                    LISTEN\n".to_owned();
         let mut extra = BTreeMap::new();
         extra.insert("ui.log".into(), b"studio-ui log\n".to_vec());
         let cmd = |iface: &str, filter: &str, out: &str, p: bool, start: f64, stop: f64| {
@@ -1583,8 +1583,7 @@ fn host_wildcard_listeners_make_scanned_ports_open() {
             }
         }
     };
-    let listen =
-        "rc 0\ntcp4       0      0  *.9003                 *.*                    LISTEN\n";
+    let listen = "rc 0\nActive Internet connections (including servers)\nProto Recv-Q Send-Q  Local Address          Foreign Address        (state)\ntcp4       0      0  *.9003                 *.*                    LISTEN\n";
     let mut m = Model::consistent();
     open_9003(&mut m);
     m.host_before = listen.into();
@@ -1597,10 +1596,12 @@ fn host_wildcard_listeners_make_scanned_ports_open() {
     let v = verdict_of(&mut m);
     assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
     assert!(has_bad(&v, "s1_full", "open rows are the lab listeners"));
-    // a netstat that failed is not a record
+    // a netstat that failed is not a record: the wire decides while the peer capture is complete
     let mut m = Model::consistent();
     m.host_before = "rc 1\n".into();
-    assert_eq!(overall(&verdict_of(&mut m)), INVALID);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+    assert!(s(&v["notes"]["open_truth"]).contains("derived from the wire"));
 }
 
 #[test]
@@ -1801,4 +1802,102 @@ fn the_drift_cap_scales_with_the_session() {
     let v = shifted(0.2);
     assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
     assert!(has_bad(&v, "chronicle", "clocks agree"));
+}
+
+#[test]
+fn an_empty_netstat_record_is_not_recorded_and_the_wire_decides() {
+    // `rc 0` and nothing after it is what a blinded netstat leaves: never "no host listeners".
+    let blind = "rc 0\n";
+    let mut m = Model::consistent();
+    m.host_before = blind.into();
+    m.host_after = blind.into();
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+    assert!(
+        s(&v["notes"]["open_truth"]).contains("derived from the wire"),
+        "{}",
+        v["notes"]
+    );
+    assert!(v["notes"].get("host_listen_ports").is_none());
+    // the wire decides: a row that claims open without a SYN-ACK on the wire is still a FAIL
+    let mut m = Model::consistent();
+    m.host_before = blind.into();
+    m.host_after = blind.into();
+    for r in m.rows_mut(0) {
+        if r["port"] == 9003 {
+            r["open"] = json!(true);
+        }
+    }
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    // without a complete peer capture the missing record cannot be replaced by the wire
+    let n = Model::consistent().peer_frames().len();
+    let mut m = Model::consistent();
+    m.host_before = blind.into();
+    m.host_after = blind.into();
+    m.peer_err = Some(tcpdump_err_on("feth4202", n - 1, n, 0));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    assert!(has_bad(&v, "host-listeners", "host listeners not recorded"));
+}
+
+#[test]
+fn failing_messages_state_the_finding() {
+    let mut m = Model::consistent();
+    m.extra.insert(
+        "window.json".into(),
+        pretty(&json!({"invalid_marks":["the UI exited with Some(1)"],"ui_rc":1,"uplink":"en0"})),
+    );
+    let v = verdict_of(&mut m);
+    let names = bad(&v);
+    assert!(
+        names.iter().any(|n| n.contains("carries INVALID mark")),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|n| n.contains("exited with code 1, not 0")),
+        "{names:?}"
+    );
+    assert!(!names.iter().any(|n| n.contains("has no INVALID mark")));
+    let m = ended_before_start("Authorization failed: timed out", vec![]);
+    let v = verdict_of(&mut { m });
+    assert!(
+        bad(&v)
+            .iter()
+            .any(|n| n.contains("Start action of the case is not in the chronicle")),
+        "{:?}",
+        bad(&v)
+    );
+}
+
+#[test]
+fn the_bundle_manifest_must_agree_with_the_provenance() {
+    let manifest = |ui: &str, runner: &str, commit: &str| {
+        pretty(&json!({"source_commit":commit,"files":[
+            {"path":"Masscan Studio.app/Contents/MacOS/studio-ui","sha256":ui},
+            {"path":"Masscan Studio.app/Contents/MacOS/studio-runner","sha256":runner}]}))
+    };
+    let base = Model::consistent();
+    let (ui, head) = (
+        s(&base.prov["ui_sha256"]).to_owned(),
+        s(&base.prov["git_head"]).to_owned(),
+    );
+    let mut m = Model::consistent();
+    m.extra
+        .insert("bundle-manifest.json".into(), manifest(&ui, RUNNER, &head));
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), PASS, "{:?}", bad(&v));
+    for (u, r, c) in [
+        ("cd".repeat(32), RUNNER.to_owned(), head.clone()),
+        (ui.clone(), "ef".repeat(32), head.clone()),
+        (ui.clone(), RUNNER.to_owned(), "1".repeat(40)),
+    ] {
+        let mut m = Model::consistent();
+        m.extra
+            .insert("bundle-manifest.json".into(), manifest(&u, &r, &c));
+        let v = verdict_of(&mut m);
+        assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
+    }
 }

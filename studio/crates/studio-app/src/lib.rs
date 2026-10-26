@@ -207,8 +207,15 @@ impl Client {
     fn authorize(source: &std::path::Path, cancelled: &AtomicBool) -> Result<Self, String> {
         let hash = studio_platform::trusted::file_hash(source)?;
         let path = authorization::installed_path(&hash)?;
+        // The installation hint belongs to a missing or unverifiable installed image only; a timeout or a
+        // cancelled dialog keeps its own diagnostic.
+        let installed = studio_platform::trusted::verify(&path, &hash);
         let auth = authorization::Authorized::open(&path, &hash, cancelled).map_err(|e| {
-            format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
+            if installed.is_err() {
+                format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
+            } else {
+                e
+            }
         })?;
         let input = auth.stream.try_clone().map_err(|e| e.to_string())?;
         let output = auth.stream.try_clone().map_err(|e| e.to_string())?;

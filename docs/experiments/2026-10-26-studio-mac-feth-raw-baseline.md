@@ -14,7 +14,7 @@
 | rustc / cargo | 1.99.1 (58cf8f9c3 2026-10-13) / 1.99.1 (5f94df478 2026-08-27), Homebrew | `rustc --version`, `cargo --version` |
 | SQLite | `/opt/homebrew/opt/sqlite` | `brew --prefix sqlite` |
 | tcpdump | 4.99.1 (Apple version 161), libpcap 1.10.1; `-rwxr-xr-x root:wheel` (без setuid) | `/usr/sbin/tcpdump --version`, `ls -l /usr/sbin/tcpdump` |
-| Пользователь | `denyskolomiiets` uid 501, в группе `staff` | `id` |
+| Пользователь | пользователь сеанса, uid 501, в группе `staff` | `id` |
 | `net.inet.tcp.syncookie` / `rst_rlc_enable` | `1` / `1` | `sysctl -n net.inet.tcp.syncookie net.inet.tcp.rst_rlc_enable` |
 | Интерфейсы `ifconfig -l` | `feth4201`/`feth4202` отсутствуют (стенд не поднят) | `ifconfig -l` |
 | Каталог стенда | `/var/run/rmasscan-lab/` отсутствует | `ls /var/run/rmasscan-lab` |

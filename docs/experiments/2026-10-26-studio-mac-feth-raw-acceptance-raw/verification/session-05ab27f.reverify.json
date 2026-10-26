@@ -1,0 +1,613 @@
+{
+  "behaviour_fail": [],
+  "cases": [
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the window directory",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "missing",
+          "name": "peer.pcap present",
+          "ok": false,
+          "result": "NOT RUN",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink.pcap complete pcap",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink saw zero lab packets",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink tcpdump counted zero frames matching the lab filter",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "uplink.err has tcpdump's exit statistics (clean exit)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "Some(0)",
+          "name": "uplink tcpdump dropped 0 packets by kernel",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "status-pre.json raw_run_allowed is true",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"granted\"",
+          "name": "status-pre.json bpf_access is granted",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "status-post.json raw_run_allowed is true",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "en0",
+          "name": "status-pre.json names the uplink (default-route interface, not feth)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"/usr/sbin/tcpdump\",\"-p\",\"-n\",\"-U\",\"-s\",\"0\",\"-i\",\"feth4202\",\"-w\",\"peer.pcap\"]",
+          "name": "peer capture interface and filter are exact",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "peer.err banner names the interface feth4202",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "peer listening before the first action",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "peer tcpdump exited cleanly after the stop (exit code 0)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"2026-10-26T20:27:10.420Z\" .. \"2026-10-26T20:30:15.100Z\"",
+          "name": "peer start_utc and stop_utc are recorded",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"/usr/sbin/tcpdump\",\"-p\",\"-n\",\"-U\",\"-s\",\"0\",\"-i\",\"en0\",\"-w\",\"uplink.pcap\",\"net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5\"]",
+          "name": "uplink capture interface and filter are exact",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "uplink.err banner names the interface en0",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "uplink listening before the first action",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink tcpdump exited cleanly after the stop (exit code 0)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"/usr/sbin/tcpdump\",\"-p\",\"-n\",\"-U\",\"-s\",\"0\",\"-i\",\"en0\",\"-w\",\"uplink.pcap\",\"net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5\"]",
+          "name": "uplink tcpdump is not promiscuous (the user's own NIC)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"2026-10-26T20:27:10.422Z\" .. \"2026-10-26T20:30:15.127Z\"",
+          "name": "uplink start_utc and stop_utc are recorded",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0 of 0 packets outside the recorded window",
+          "name": "uplink capture packets fall inside the recorded window",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "unlisted [], missing [\"peer.pcap\"]; peer.pcap cannot be read: No such file or directory (os error 2)",
+          "name": "hashes-before-copy.txt matches the files",
+          "ok": false,
+          "result": "INVALID",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"05ab27fb631da440539344cf8c600308149d4671\"",
+          "name": "git_head is a 40-hex commit",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "ui \"eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86\" runner \"e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb\" installed \"e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb\"",
+          "name": "ui, bundle runner and installed runner hashes are 64-hex",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "bundle e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb installed e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
+          "name": "bundle runner hash equals the installed runner hash",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "false",
+          "name": "working tree was clean (dirty is false)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86 provenance eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86",
+          "name": "bundle-manifest.json ui hash equals provenance ui_sha256",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb provenance e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
+          "name": "bundle-manifest.json runner hash equals provenance runner_sha256",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest 05ab27fb631da440539344cf8c600308149d4671 provenance 05ab27fb631da440539344cf8c600308149d4671",
+          "name": "bundle-manifest.json source_commit equals provenance git_head",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"the UI exited with Some(1)\"]",
+          "name": "window.json carries INVALID mark(s) or no mark list",
+          "ok": false,
+          "result": "INVALID",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "1",
+          "name": "the UI exited with code 1, not 0 (window.json ui_rc)",
+          "ok": false,
+          "result": "INVALID",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"en0\" vs en0",
+          "name": "window.json uplink equals status-pre.json uplink",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "Firewall is disabled. (State = 0)",
+          "name": "the application firewall was disabled",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "leftover-listeners.txt is empty (nothing left over from an earlier run)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "leftover-procs.txt is empty (nothing left over from an earlier run)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the lab listeners were ready (listeners-ready.txt)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "9d02339e89b9f5046b696e13d4b399b09d87dbde5befc1629ba778519d6d15b3  history.sqlite3",
+          "name": "data.sha256 holds a 64-hex hash",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the history store was closed cleanly (no -wal or -shm left)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no ISOLATION-BREACH.txt: the orchestrator's interlock did not trip",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "capture Some(1793046430.42) .. Some(1793046615.1), session 1793046432.938 .. 1793046613.454",
+          "name": "peer capture covers the session (first action to last event, 1 s margin)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "capture Some(1793046430.422) .. Some(1793046615.127), session 1793046432.938 .. 1793046613.454",
+          "name": "uplink capture covers the session (first action to last event, 1 s margin)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        }
+      ],
+      "scan_id": null,
+      "status": "NOT RUN",
+      "tag": "safety"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "1",
+          "name": "smoke.json schema 1",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "chronicle times parse (UTC and mono_ms)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "Authorization failed: Authorization timed out. Install this build's runner with cargo xtask prepare-runner first.",
+          "name": "smoke.json: the session ended before any Start",
+          "ok": false,
+          "result": "NOT RUN",
+          "safety": false
+        }
+      ],
+      "scan_id": null,
+      "status": "NOT RUN",
+      "tag": "chronicle"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "host-listen-before.txt or host-listen-after.txt is missing, failed or empty",
+          "name": "host listeners not recorded (no netstat header): the open truth derived from the wire needs a complete peer capture",
+          "ok": false,
+          "result": "INVALID",
+          "safety": false
+        }
+      ],
+      "scan_id": null,
+      "status": "INVALID",
+      "tag": "host-listeners"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": true,
+          "detail": "planned {} history []",
+          "name": "history holds exactly the planned scans (no other scan, none twice)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        }
+      ],
+      "scan_id": null,
+      "status": "PASS",
+      "tag": "history"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "s1_full",
+          "name": "the Start action of the case is not in the chronicle",
+          "ok": false,
+          "result": "NOT RUN",
+          "safety": false
+        }
+      ],
+      "scan_id": "",
+      "status": "NOT RUN",
+      "tag": "s1_full"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "s2_pause",
+          "name": "the Start action of the case is not in the chronicle",
+          "ok": false,
+          "result": "NOT RUN",
+          "safety": false
+        }
+      ],
+      "scan_id": "",
+      "status": "NOT RUN",
+      "tag": "s2_pause"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "s3_stop",
+          "name": "the Start action of the case is not in the chronicle",
+          "ok": false,
+          "result": "NOT RUN",
+          "safety": false
+        }
+      ],
+      "scan_id": "",
+      "status": "NOT RUN",
+      "tag": "s3_stop"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "SYN outside the case windows needs the chronicle times of every case",
+          "ok": false,
+          "result": "NOT RUN",
+          "safety": false
+        }
+      ],
+      "scan_id": null,
+      "status": "NOT RUN",
+      "tag": "wire"
+    }
+  ],
+  "isolation": {
+    "peer_exit_code": 0,
+    "status_post": {
+      "bpf_access": "granted",
+      "checks": [
+        {
+          "detail": "run \"m1\" created \"2026-10-26T20:26:37Z\"",
+          "name": "manifest",
+          "ok": true
+        },
+        {
+          "detail": "feth4201 <-> feth4202, 198.18.0.2/30 on the peer only; feth4201: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up; feth4202: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:02 at up",
+          "name": "interfaces",
+          "ok": true
+        },
+        {
+          "detail": "en0 via Some(\"192.168.1.1\"), unchanged",
+          "name": "default_route",
+          "ok": true
+        },
+        {
+          "detail": "8.8.8.8 via en0",
+          "name": "routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.0/30 is routed only by the pair",
+          "name": "lab_routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.1 on feth4202 permanent; arp entry: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up",
+          "name": "arp",
+          "ok": true
+        },
+        {
+          "detail": "no bridge has a feth member",
+          "name": "bridges",
+          "ok": true
+        },
+        {
+          "detail": "net.inet.ip.forwarding = 0",
+          "name": "forwarding",
+          "ok": true
+        },
+        {
+          "detail": "/dev/bpf0..15 exist",
+          "name": "bpf_nodes",
+          "ok": true
+        }
+      ],
+      "gateway": "192.168.1.1",
+      "manifest": "/var/run/rmasscan-lab/m1.json",
+      "raw_run_allowed": true,
+      "run_id": "m1",
+      "uplink": "en0"
+    },
+    "status_pre": {
+      "bpf_access": "granted",
+      "checks": [
+        {
+          "detail": "run \"m1\" created \"2026-10-26T20:26:37Z\"",
+          "name": "manifest",
+          "ok": true
+        },
+        {
+          "detail": "feth4201 <-> feth4202, 198.18.0.2/30 on the peer only; feth4201: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up; feth4202: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:02 at up",
+          "name": "interfaces",
+          "ok": true
+        },
+        {
+          "detail": "en0 via Some(\"192.168.1.1\"), unchanged",
+          "name": "default_route",
+          "ok": true
+        },
+        {
+          "detail": "8.8.8.8 via en0",
+          "name": "routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.0/30 is routed only by the pair",
+          "name": "lab_routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.1 on feth4202 permanent; arp entry: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up",
+          "name": "arp",
+          "ok": true
+        },
+        {
+          "detail": "no bridge has a feth member",
+          "name": "bridges",
+          "ok": true
+        },
+        {
+          "detail": "net.inet.ip.forwarding = 0",
+          "name": "forwarding",
+          "ok": true
+        },
+        {
+          "detail": "/dev/bpf0..15 exist",
+          "name": "bpf_nodes",
+          "ok": true
+        }
+      ],
+      "gateway": "192.168.1.1",
+      "manifest": "/var/run/rmasscan-lab/m1.json",
+      "raw_run_allowed": true,
+      "run_id": "m1",
+      "uplink": "en0"
+    },
+    "uplink_captured": 0,
+    "uplink_dropped": 0,
+    "uplink_exit_code": 0,
+    "uplink_frames": 0
+  },
+  "notes": {
+    "manual": false,
+    "open_truth": "derived from the wire (host listeners not recorded)"
+  },
+  "overall": "NOT RUN",
+  "provenance": {
+    "installed_runner_sha256": "e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
+    "runner_sha256": "e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
+    "ui_sha256": "eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86",
+    "verifier_sha256": "f6d1bf4ba340c1bed2ee2e0b772fe874889057a9325a0f8a0b81df0263f9d2c2",
+    "window_sha": "05ab27fb631da440539344cf8c600308149d4671"
+  },
+  "safety_trips": [],
+  "totals": {
+    "fail": 0,
+    "invalid": 1,
+    "not_run": 6,
+    "pass": 1
+  }
+}

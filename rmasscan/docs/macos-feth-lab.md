@@ -488,7 +488,7 @@ All of these are top-level files of `DIR`, except `data/`. Every file is listed 
 | `leftover-listeners.txt`, `leftover-procs.txt` | empty (whitespace only) | INVALID (NOT RUN if absent) |
 | `pair-quiet.txt` | free text; presence only | NOT RUN if absent |
 | `listeners-ready.txt` | written by `peer listen --ready` | INVALID if absent |
-| `host-listen-before.txt`, `host-listen-after.txt` | `netstat -an -p tcp`, optionally preceded by a `rc N` line (N must be 0) | INVALID |
+| `host-listen-before.txt`, `host-listen-after.txt` | `rc 0` line, then `netstat -an -p tcp` including its `Active Internet connections` header; stderr lines as `# stderr:`. A file with `rc 0` and no header (a blinded netstat) is "not recorded", never "no listeners": the orchestrator refuses the window (NOT RUN), the verifier judges the replies from the wire alone when the peer capture is complete (note `open_truth`), else INVALID | INVALID unless the wire decides |
 | `data.sha256` | `<sha256>  history.sqlite3` of `data/history.sqlite3`, taken after the UI exited and the history dump closed the store (so no journal is left); when `data/` is present its file must hash to it and must have no `-wal`/`-shm` next to it | NOT RUN if absent, INVALID on a mismatch or a journal |
 | `ISOLATION-BREACH.txt` | written by the orchestrator's interlock | present = safety FAIL |
 | `hashes-before-copy.txt` | `sha256sum` format of every top-level file except itself and `verdict.json` (the directory `data/` is neither listed nor read); an unlisted file, a listed entry that cannot be read, or a mismatch | INVALID |

@@ -1,0 +1,9 @@
+NOT RUN  safety NOT RUN: peer.pcap present; INVALID: hashes-before-copy.txt matches the files; INVALID: window.json carries INVALID mark(s) or no mark list
+NOT RUN  chronicle NOT RUN: smoke.json: the session ended before any Start
+INVALID  host-listeners INVALID: host listeners not recorded (no netstat header): the open truth derived from the wire needs a complete peer capture
+PASS     history 
+NOT RUN  s1_full NOT RUN: the Start action of the case is not in the chronicle
+NOT RUN  s2_pause NOT RUN: the Start action of the case is not in the chronicle
+NOT RUN  s3_stop NOT RUN: the Start action of the case is not in the chronicle
+NOT RUN  wire NOT RUN: SYN outside the case windows needs the chronicle times of every case
+overall: NOT RUN {"fail":0,"invalid":1,"not_run":6,"pass":1}

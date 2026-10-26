@@ -4,7 +4,7 @@
 закрывает: ни Windows, ни macOS, ни Studio, ни лицензионный gate. Исходники,
 Cargo license-поля, релизы и spikes-дерево этой задачей не менялись.
 
-Состояние: строки Windows throughput обновлены 2026-10-26 на ветке `feat/rmasscan-windows-sendqueue` (код `628fcad`, evidence `84c581b`). Исходная редакция (2026-10-24) — ветка `feat/rmasscan-stage2b-linux`, база `e5d6326`. Строки Windows обновлены 2026-10-25 на ветке
+Состояние: строки «Studio raw (Mac feth)» и «Studio raw (Windows/Linux, physical NIC)» и таблица раздела 5 обновлены 2026-10-26 на ветке `feat/studio-mac-feth-raw` (код `05ab27f`, [отчёт](2026-10-26-studio-mac-feth-raw-acceptance.md)); строки Windows throughput обновлены 2026-10-26 на ветке `feat/rmasscan-windows-sendqueue` (код `628fcad`, evidence `84c581b`). Исходная редакция (2026-10-24) — ветка `feat/rmasscan-stage2b-linux`, база `e5d6326`. Строки Windows обновлены 2026-10-25 на ветке
 `feat/rmasscan-stage2b-windows` (код `f64495c`, документы `044dc00` и позже). Строки macOS обновлены 2026-10-25 на ветке `feat/rmasscan-stage2c-macos-bpf` (код `717e45c`, evidence `0c6e3fb`); остальные строки не менялись. Источник перечня возможностей по слоям —
 [спецификация, §0.2](../superpowers/specs/2026-10-23-cross-platform-qt-rust-design.md);
 здесь он не дублируется. Контракты RX integrity/TX stall — там же, §0.1.
@@ -182,13 +182,13 @@ AGPL-3.0 для порта принят пользователем; Nmap ост�
 
 | Пункт | Статус | Основание |
 | --- | --- | --- |
-| bootstrap macOS (сессия, hash-pin, cleanup) | **PASS** | один диалог администратора установки, один Authorize; runner бандла = установленный `e369e29d…`; Lock закрыл сессию |
+| bootstrap macOS (сессия, hash-pin) | **PASS** | runner бандла = установленный `e369e29d…`, Authorize принят во втором диалоге (первый остался без ответа, NOT RUN), Lock показал «Runner session closed». Выход root-runner после Lock в этом окне `ps` не фиксировался; cleanup подтверждён прежними пробами авторизации (`studio/VERIFICATION.md`) |
 | durable checkpoint ACK вживую на raw (Mac feth) | **PASS** | `s2_pause`: «Checkpoint committed by Studio», `next_index` 7, Resume без пропусков и дублей |
 | raw Start/Pause/Resume/Stop через Studio на `feth` | **PASS** (GO (feth) условно, см. строку «Studio raw (Mac feth)») | `studio-verify` PASS 7/7, 0 кадров на uplink |
 | смерть scanner/runner, объём кода под повышенными правами, privilege-drop по ОС | **OPEN** | не измерялось этим окном |
-| raw на Windows/Linux в Studio | **NOT RUN / OPEN** | шлюз закрыт вне macOS (bootstrap Windows/Linux принят отдельными этапами, см. `studio/VERIFICATION.md`); живое окно user-run, см. `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md` |
+| raw на Windows/Linux в Studio | **NOT RUN / OPEN** | шлюз закрыт вне macOS; bootstrap Windows/Linux принят отдельными этапами, см. `studio/VERIFICATION.md` |
 
 ## 6. Что этот документ не закрывает
 
 Windows на физическом NIC, Windows throughput (physical NIC; Windows throughput (VM): GO (VM)), macOS на физическом NIC и его throughput, UI и licensing gates остаются открытыми (Windows correctness (VM): GO (VM); macOS correctness (feth): GO (feth): P1–P3 исправлены (PR #14 влит), архив пересчитан исправленным верификатором с неизменёнными вердиктами, CI зелёный (main `baa5cc7`, прогон `40232921797`), критерий `linkloss` изменён пользователем 2026-10-25; см. таблицу). Очередь дальше: Windows/Npcap физический стенд (sendqueue на VM реализован, см. отчёт), macOS физический NIC, сетевая
-интеграция (discovery/ARP, network identity, sleep/VPN), runner/Studio, поставка.
+интеграция (discovery/ARP, network identity, sleep/VPN), runner/Studio (Studio raw на Mac feth: GO (feth) условно, см. строку в таблице; Windows/Linux и физический NIC открыты), поставка.

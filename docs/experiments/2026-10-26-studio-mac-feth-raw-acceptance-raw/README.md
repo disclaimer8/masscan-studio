@@ -62,6 +62,12 @@ directory). Check with `shasum -a 256 -c MANIFEST.sha256`.
 - `studio-verify` wording: for a missing Start it prints "the Start action of the case is in the chronicle" and for
   a UI that exited with rc 1 it prints "INVALID: the UI exited with code 0". The messages state the expectation, not
   the finding; the verdict words (NOT RUN, INVALID) are correct. Follow-up, not fixed in this stage.
-- The dry-run verdict in `verification/dryrun-05ab27f.verify.log` also shows an INVALID host-listeners line: the
-  dry run recorded no host listeners, so it is correctly not evidence.
-- `shasum -a 256 -c hashes-before-copy.txt` in `session-05ab27f/` reports the withheld `peer.pcap` as missing (the only expected miss); all other lines match.
+- Host listeners were NOT recorded in either window: `host-listen-before.txt` and `host-listen-after.txt` hold only `rc 0`
+  (netstat exited 0 with empty output, the reason was not kept), and `leftover-listeners.txt` is the empty output of a
+  user-level `lsof` that sees only the user's own sockets. Do not read them as "no host listeners". The verifier now treats
+  such a file as "not recorded" and judges the replies from the wire capture alone (complete peer capture required).
+- `verification/*.reverify.json` and `.log` are the archives re-verified with the fixed verifier: r2 stays PASS 7/7, attempt 1
+  stays NOT RUN (the withheld `peer.pcap` adds INVALID/NOT RUN reasons). The window directories are hash-pinned and were not
+  changed; the old `verdict.json` and `verification/session-05ab27f.verdict.json` keep the original wording.
+- The dry-run verdict in `verification/dryrun-05ab27f.verify.log` shows an INVALID host-listeners line for the same
+  reason: the dry run records no host listeners.

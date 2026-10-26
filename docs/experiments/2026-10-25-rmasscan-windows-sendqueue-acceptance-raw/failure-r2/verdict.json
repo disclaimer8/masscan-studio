@@ -459,14 +459,11 @@
     },
     "verifier": {
       "binary_name": "rmasscan-lab",
-      "binary_sha256": "f777b3fb9df4fc862e21fe2f4fec7f14b7ead86e22b35172be5d79e12f4c2605",
-      "build_commit": "bbda664687cf77aef3b912eba6e20a9057467915",
-      "errors": [
-        "git rev-parse HEAD: fatal: not a git repository (or any of the parent directories): .git",
-        "git status --porcelain --untracked-files=no: fatal: not a git repository (or any of the parent directories): .git"
-      ],
-      "git_commit": null,
-      "git_dirty": null
+      "binary_sha256": "9c67068a633f6b99316165e1fe088e684258b560dbea485f1204e54da2b532ce",
+      "build_commit": "fb36d0cc682be042c131ae15f73213c4f0802c12",
+      "errors": [],
+      "git_commit": "fb36d0cc682be042c131ae15f73213c4f0802c12",
+      "git_dirty": false
     },
     "warnings": []
   },

@@ -69,7 +69,11 @@ impl Store {
         if version > 2 {
             return Err("History was created by a newer Studio version".into());
         }
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
+        // Permuted scan keys dirty many index pages. The default 1,000-page
+        // checkpoint repeatedly rewrites them on the commit thread on Windows.
+        // This 4,096-page trigger (~16 MiB at 4 KiB/page, not a size cap) reduces
+        // that write amplification. FULL still syncs every WAL commit.
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=4096;
             CREATE TABLE IF NOT EXISTS scans (id BLOB PRIMARY KEY, attempt BLOB NOT NULL, job TEXT NOT NULL, status TEXT NOT NULL, sequence TEXT NOT NULL DEFAULT '0', checkpoint BLOB, next_index TEXT, detail TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS results (scan BLOB NOT NULL REFERENCES scans(id), ip TEXT NOT NULL, port INTEGER NOT NULL, open INTEGER NOT NULL, PRIMARY KEY(scan,ip,port));
             CREATE TABLE IF NOT EXISTS host_details (scan BLOB NOT NULL REFERENCES scans(id),ip TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scan,ip));")?;
@@ -243,12 +247,23 @@ impl Store {
     }
     /// Ordered frames share one FULL commit. No rows escape on partial failure.
     pub fn apply_batch(&mut self, events: &[Envelope<Event>]) -> Result<Vec<Vec<SavedRow>>> {
+        let began = std::time::Instant::now();
         let tx = self.db.transaction()?;
         let observed = events
             .iter()
             .map(|event| Self::apply_event(&tx, event))
             .collect::<Result<Vec<_>>>()?;
+        let applied = began.elapsed();
+        let committing = std::time::Instant::now();
         tx.commit()?;
+        if std::env::var_os("STUDIO_TRACE_TIMINGS").is_some() && began.elapsed().as_millis() >= 50 {
+            eprintln!(
+                "sqlite batch: rows={} apply_ms={} commit_ms={}",
+                observed.iter().map(Vec::len).sum::<usize>(),
+                applied.as_millis(),
+                committing.elapsed().as_millis()
+            );
+        }
         Ok(observed)
     }
     fn apply_event(tx: &Connection, event: &Envelope<Event>) -> Result<Vec<SavedRow>> {

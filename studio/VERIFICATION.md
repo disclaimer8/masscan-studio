@@ -319,3 +319,26 @@ Local full workspace tests after these corrections: 52 passed, 2 explicit live
 tests ignored; clippy with warnings denied and formatting passed. Log:
 `/tmp/studio-group-tests.log`. Hosted CI must pass on the updated PR head before
 merge; a passing local run alone is not merge acceptance.
+
+### Windows WAL checkpoint diagnosis
+
+The 250 ms/1,000-row transaction grouping alone did not close hosted Windows
+acceptance. Instrumented run 40300793387 localized the backlog: 53,380 committed
+rows spent 15,368 ms in storage, while the reader eventually waited for the
+controller and blocked the runner's bounded writer queue. No rows were reported
+as Completed after that interruption.
+
+A native Windows split measurement showed row insertion taking 2–9 ms per batch,
+while automatic WAL-to-database checkpoints during commit took 50–135 ms and grew
+with the result index. Changing only `wal_autocheckpoint` from its default 1,000
+pages to 4,096 reduced cumulative storage time for the same 100,000-row, 10k/s test
+from 6,103 ms to 2,879 ms. Both native runs preserved every row and completed.
+Local comparison logs: `/tmp/studio-wal-1000.log`, `/tmp/studio-wal-4096.log`.
+
+`FULL` still synchronizes each WAL commit before display or checkpoint ACK. The
+new setting triggers consolidation at roughly 16 MiB with 4 KiB pages; it is not
+a hard WAL-size limit, because readers may pin WAL frames. It trades a larger WAL
+and possible individual checkpoint/recovery latency for less repeated index-page
+writing. Queue bounds, scan rate and test deadline were not changed. Latest-head
+hosted Windows acceptance remains required. `STUDIO_TRACE_TIMINGS=1` enables
+local aggregate IPC/commit diagnostics; it logs counts and timings, not targets.

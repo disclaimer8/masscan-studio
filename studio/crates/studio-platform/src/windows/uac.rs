@@ -184,6 +184,29 @@ fn launch(
     job: String,
     hash: String,
 ) -> Result<Launched> {
+    let process = Process::from_handle(execute(&installation, &owner, &pipe, &job, &hash)?)?;
+    if process.identity.sid != owner.sid {
+        return Err(
+            "Use the same Windows account for UAC; alternate-account authorization is unsupported"
+                .into(),
+        );
+    }
+    if !process.elevation()?.elevated {
+        return Err("Windows did not elevate the runner".into());
+    }
+    same_executable(&process.identity.executable, installation.path())?;
+    Ok(Launched {
+        process,
+        installation,
+    })
+}
+fn execute(
+    installation: &install::Installed,
+    owner: &Identity,
+    pipe: &str,
+    job: &str,
+    hash: &str,
+) -> Result<OwnedHandle> {
     // SAFETY: called only on a fresh launcher thread; no apartment existed there.
     let hr = unsafe {
         CoInitializeEx(
@@ -204,9 +227,9 @@ fn launch(
         .parent()
         .and_then(Path::to_str)
         .ok_or("Installed runner directory missing")?;
-    let identity = serde_json::to_string(&owner).map_err(|e| e.to_string())?;
+    let identity = serde_json::to_string(owner).map_err(|e| e.to_string())?;
     let parameters =
-        crate::win_setup::command_line(&["--authorized-pipe", &pipe, &identity, &job, &hash])?;
+        crate::win_setup::command_line(&["--authorized-pipe", pipe, &identity, job, hash])?;
     let (verb, file, cwd, args) = (
         wide("runas"),
         wide(executable),
@@ -231,21 +254,7 @@ fn launch(
             error()
         ));
     }
-    let process = Process::from_handle(owned(info.hProcess).map_err(|e| e.to_string())?)?;
-    if process.identity.sid != owner.sid {
-        return Err(
-            "Use the same Windows account for UAC; alternate-account authorization is unsupported"
-                .into(),
-        );
-    }
-    if !process.elevation()?.elevated {
-        return Err("Windows did not elevate the runner".into());
-    }
-    same_executable(&process.identity.executable, installation.path())?;
-    Ok(Launched {
-        process,
-        installation,
-    })
+    owned(info.hProcess).map_err(|e| e.to_string())
 }
 fn same_executable(actual: &Path, expected: &Path) -> Result<()> {
     if std::fs::canonicalize(actual).map_err(|e| e.to_string())?
@@ -285,6 +294,14 @@ pub struct Authorized {
 }
 impl Authorized {
     pub fn open(hash: &str, cancelled: &AtomicBool) -> Result<Self> {
+        Self::open_with(hash, cancelled, launch)
+    }
+    fn open_with<F>(hash: &str, cancelled: &AtomicBool, launcher: F) -> Result<Self>
+    where
+        F: FnOnce(install::Installed, Identity, String, String, String) -> Result<Launched>
+            + Send
+            + 'static,
+    {
         if cancelled.load(Ordering::Acquire) {
             return Err("Authorization cancelled".into());
         }
@@ -318,7 +335,7 @@ impl Authorized {
             .name("studio-uac-launch".into())
             .spawn(move || {
                 let _prompt = prompt;
-                let _ = tx.send(launch(installation, owner, pipe, name, hash));
+                let _ = tx.send(launcher(installation, owner, pipe, name, hash));
             })
             .map_err(|e| e.to_string())?;
         let deadline = Instant::now() + Duration::from_secs(180);
@@ -365,6 +382,7 @@ impl RunnerConnection {
         if !me.elevation()?.elevated || me.identity.sid != ui.sid {
             return Err("Runner requires same-account UAC elevation".into());
         }
+        runner_environment::initialize()?;
         let owner = Process::open(ui.pid)?;
         owner.verify(ui)?;
         if owner.elevation()?.elevated {
@@ -401,5 +419,85 @@ mod tests {
                 .unwrap()
                 .contains("cancelled")
         );
+    }
+
+    #[test]
+    #[ignore = "requires installed runner and disposable native UAC CI"]
+    fn cancellation_destroys_endpoints_before_late_runner_and_allows_retry() {
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        let hash = std::env::var("STUDIO_TEST_UAC_HASH").unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (resources_tx, resources_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let (flag, copy) = (cancelled.clone(), hash.clone());
+        let owner = std::thread::spawn(move || {
+            let result =
+                Authorized::open_with(&copy, &flag, move |installation, owner, pipe, job, hash| {
+                    resources_tx.send((pipe.clone(), job.clone())).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    let exit = (|| -> Result<()> {
+                        let process = execute(&installation, &owner, &pipe, &job, &hash)?;
+                        // SAFETY: exact ShellExecute process handle; only a signalled
+                        // retained handle proves the late runner terminated.
+                        if unsafe { WaitForSingleObject(process.as_raw_handle(), 2000) }
+                            != WAIT_OBJECT_0
+                        {
+                            return Err("Late runner survived cancelled authorization".into());
+                        }
+                        Ok(())
+                    })();
+                    exit_tx.send(exit).unwrap();
+                    Err("Late launch fixture completed".into())
+                });
+            result_tx.send(result.err().unwrap()).unwrap();
+        });
+        let (pipe, job) = resources_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        cancelled.store(true, Ordering::Release);
+        assert!(
+            result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .contains("cancelled")
+        );
+        owner.join().unwrap();
+        // While the fake OS prompt is blocked, a second launch must not start.
+        let pending = Authorized::open_with(&hash, &AtomicBool::new(false), |_, _, _, _, _| {
+            panic!("second prompt started")
+        })
+        .err()
+        .unwrap();
+        assert!(pending.contains("still pending"), "{pending}");
+        // SAFETY: validated local name from this fixture, no handle inheritance.
+        assert!(
+            owned(unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, wide(&job).as_ptr()) }).is_err(),
+            "cancelled job remains live"
+        );
+        assert_eq!(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(pipe)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(ERROR_FILE_NOT_FOUND as i32)
+        );
+        release_tx.send(()).unwrap();
+        exit_rx
+            .recv_timeout(Duration::from_secs(190))
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while PROMPT_ACTIVE.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let retry = Authorized::open_with(&hash, &AtomicBool::new(false), |_, _, _, _, _| {
+            Err("retry reached launcher".into())
+        })
+        .err()
+        .unwrap();
+        assert_eq!(retry, "retry reached launcher");
     }
 }

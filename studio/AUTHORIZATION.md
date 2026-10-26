@@ -3,7 +3,7 @@
 Status: macOS and Linux session bootstrap implemented; raw scanning disabled.
 Windows simulation uses an authenticated named pipe; no Windows elevation claim
 is made. Windows trusted installation is a separate prerequisite; session UAC
-bootstrap remains subsequent acceptance work.
+bootstrap is implemented behind the Windows UI gate and undergoing native acceptance.
 
 ## Threat model and identity
 
@@ -187,4 +187,41 @@ already has administrative rights. Tests check executable write/rename pinning,
 no-overwrite, content tamper detection and reparse refusal. These checks do not
 exercise UAC prompting, cancellation, alternate credentials or a raw adapter.
 The Windows UI Authorize button remains unavailable until session bootstrap is
-implemented and accepted separately.
+accepted separately.
+
+## Windows session bootstrap
+
+The ordinary UI pins the exact installed runner and starts a fresh COM-initialized
+worker thread for `ShellExecuteExW` with `runas` and `SEE_MASK_NOCLOSEPROCESS`.
+Arguments use Windows argv quoting, not PowerShell or cmd. The returned process
+handle is retained through the session: PID, account SID, elevation and executable
+must match this launch and installation. The pipe kernel peer PID must match that
+handle. The runner validates the original UI's retained process identity/birth and
+requires an unelevated UI in the same account. Alternate-account UAC is refused.
+AuthenticationId equality remains mandatory for ordinary simulation; it is not
+assumed across UAC. Neither an arbitrary same-account PID nor just an elevated
+token is sufficient to authenticate a launched runner.
+
+Before launch, the UI creates an owner-only random named Job Object with
+KILL_ON_JOB_CLOSE. The elevated runner joins it and closes its temporary job handle
+before connecting to the pipe. The UI then verifies membership against the exact
+retained process handle. Its handle is the sole persistent job handle: closing it,
+including abrupt UI process death, terminates the runner. This does not require
+the ordinary UI to obtain PROCESS_TERMINATE on an elevated child. Existing jobs
+that prevent nested membership produce an error; there is no service fallback.
+
+Authorization waiting is bounded to 180 seconds, Hello to 10 seconds. Cancellation
+destroys the endpoint and job without joining a blocked Windows prompt thread;
+late approval cannot activate that session. Only one launcher prompt can remain
+pending in this Studio process. Dismiss a still-open system dialog before retrying.
+Both peers retain installation pins until the session ends. Privileged `--stdio`
+and ordinary `--connect-pipe` entry points are refused before message parsing.
+
+After installing this exact build, an ordinary terminal can run
+`cargo xtask probe-windows-authorization <sha256>` for Hello, two read-only network
+checks and CloseSession. It opens no packet adapter and requires no Npcap. CI uses
+a restricted token of its own account for ordinary application tests; the parent
+remains administrative only for installation and lifecycle supervision. This
+restricted token is not evidence of an interactive desktop split-token session.
+Desktop allow/deny, cancellation while consent is open, and alternate credentials
+remain separate manual acceptance cases.

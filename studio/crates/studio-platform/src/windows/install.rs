@@ -147,12 +147,17 @@ fn check_handle(handle: HANDLE, directory: bool, volume_root: bool) -> Result<()
     check_descriptor(owner, dacl, volume_root)
 }
 fn pin(path: &Path, directory: bool, volume_root: bool) -> Result<OwnedHandle> {
+    let handle = open_object(path, directory)?;
+    check_handle(handle.as_raw_handle(), directory, volume_root)?;
+    Ok(handle)
+}
+fn open_object(path: &Path, directory: bool) -> Result<OwnedHandle> {
     use std::os::windows::ffi::OsStrExt;
     let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     // SAFETY: terminated path, no inherited handle, existing object only. Opening
     // the reparse point itself lets check_handle reject it. No write/delete
     // sharing keeps the verified object pinned until the launch completes.
-    let handle = owned(unsafe {
+    owned(unsafe {
         CreateFileW(
             path.as_ptr(),
             READ_CONTROL
@@ -168,9 +173,7 @@ fn pin(path: &Path, directory: bool, volume_root: bool) -> Result<OwnedHandle> {
             null_mut(),
         )
     })
-    .map_err(|e| e.to_string())?;
-    check_handle(handle.as_raw_handle(), directory, volume_root)?;
-    Ok(handle)
+    .map_err(|e| e.to_string())
 }
 
 pub struct Installed {
@@ -216,6 +219,26 @@ impl Installed {
 mod tests {
     use super::super::wide;
     use super::*;
+    #[test]
+    fn retained_directory_handle_refuses_delete_access() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("studio-pin-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let pinned = open_object(&dir, true).unwrap();
+        let deleting = std::fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&dir);
+        let denied = deleting.is_err();
+        drop(deleting);
+        drop(pinned);
+        std::fs::remove_dir(dir).unwrap();
+        assert!(
+            denied,
+            "metadata-only handle failed to pin directory against deletion"
+        );
+    }
     fn policy(sddl: &str, root: bool) -> Result<()> {
         let mut descriptor = null_mut();
         // SAFETY: terminated fixed fixture, writable LocalAlloc descriptor output.

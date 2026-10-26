@@ -3,6 +3,69 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-26 — host actions and filtered export
+
+Implementation `7770743`, reviewed fixes `7e17e3b`. Test-only follow-ups
+`af9ec60` and `34e173a` exclude compilation/cold fixture startup from cancellation
+timing. No scanner source or privileged IPC API changed. Raw remains disabled.
+
+| Host | Offline tests | Clippy / fmt | Packaged UI |
+| --- | --- | --- | --- |
+| macOS arm64 | 44 passed, 2 explicit live tests skipped | passed | Pause/Resume/Stop and Stop-race passed |
+| Linux minipc x86_64 | 38 passed, 2 explicit live tests skipped | passed | Xvfb/software Pause/Resume/Stop passed |
+| Windows VM x86_64 | 33 passed, 2 explicit live tests skipped | passed | software Pause/Resume/Stop passed |
+
+The two explicit live tests additionally passed on Mac: system resolver returned
+`localhost`; unprivileged Nmap 7.992 inspected a Rust HTTP fixture bound only to
+`127.0.0.1` on a dynamically assigned port. Nmap recognized its deliberately known
+nginx response, including method/confidence/CPE. This is inspection acceptance,
+not evidence of raw scanning or physical NIC performance.
+
+Fresh review found and reproduced three important defects: queue-full lost the
+old pending request, inherited child pipes escaped the deadline, and a failed
+metadata write discarded subsequent completions. Each has a RED-to-GREEN
+regression. Children now belong to a Unix process group / Windows Job Object;
+queue rejection preserves the previous request; failed writes keep previously
+saved evidence and report an error while other host replies continue.
+
+The Windows timing investigation measured 1.594 seconds in the first creation of
+a fresh fixture EXE, then process exit/tree termination/pipe draining by 1.620
+seconds. The test warms the generated executable before timing cancellation;
+the 1-second/2-second assertions remain unchanged. This does not establish a
+hard bound on operating-system cold process creation.
+
+Native Mac UI acceptance used a separate simulation history: filtering port
+8003 showed one of eight results, and native Save dialogs produced CSV and JSON
+containing exactly that one row. CSV permissions were 0600. Simulation inspection
+actions were disabled; controller tests independently reject network requests.
+Late replies, explicit refresh/cache, cancellation, v1 SQLite migration, pending
+recovery, observation dates, XML limits and filtered-export privacy are tested.
+
+Clean Mac package: `studio/dist/build-1793002438127/Masscan Studio.app` at `7e17e3b`.
+Linux package: `~/studio-integration-20261025/studio/dist/build-1793002645883` on
+minipc, same implementation revision. Windows package at test revision `34e173a`:
+`C:\Users\lab\studio-integration-20261025\studio\dist\build-1793004670738`.
+Only process-test setup changed after `7e17e3b`; production sources are identical.
+Windows and Linux GUI smoke ran in test sessions, not a manual RDP/Wayland
+usability review; native Save dialogs were exercised only on Mac.
+Manifests include all three executables
+(`studio-ui`, `studio-runner`, unprivileged `studio-inspect`) and SHA-256 hashes.
+The new packaged runner hash is `6a8e43…`; the installed root helper is still
+`3b1acf…`. This block did not require installing another privileged helper.
+Authorize in this new package therefore requires its own matching installation;
+the previous elevated-session acceptance below is unchanged.
+
+Deferred minor from review: resolver operational failures can currently appear
+as "No hostname" and be cached for 300 seconds; manual refresh bypasses this
+cache. Distinguishing missing PTR from resolver failure remains open.
+
+Evidence directory: `studio/verification/host-actions-20261026/` (ignored local
+artifact archive; includes tests, review regressions, package manifests, UI check
+notes and actual CSV/JSON exports). No remote push or merge performed.
+Archive: `studio/verification/studio-host-actions-20261026.tar.gz`, SHA-256
+`bf2a5a885355b074f6d8eba3199025c77cfd3a71aec6b11d6e1b2252a661aaac`.
+All 26 enclosed files passed their SHA256SUMS verification.
+
 ## 2026-10-26 — confirmed elevated session
 
 The user approved the new system authorization request. Client fix `068a94d`

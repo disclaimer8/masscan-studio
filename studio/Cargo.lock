@@ -4499,6 +4499,7 @@ dependencies = [
 name = "studio-ui"
 version = "0.1.0"
 dependencies = [
+ "i-slint-backend-testing",
  "image",
  "pollster",
  "rfd",

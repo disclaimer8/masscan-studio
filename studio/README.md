@@ -2,7 +2,7 @@
 
 This workspace connects the selected Slint interface to the current `rmasscan`
 engine through a separate Rust runner. Engine/core/net remain in `../rmasscan`;
-there is no vendored second engine. The original Swift application is untouched.
+there is no vendored second engine. Studio is a Rust/Slint application.
 
 ## Build and run
 
@@ -28,7 +28,7 @@ development signature, not Developer ID/notarization. Windows packages contain
 `manifest.json` records the source revision, dirty state, Cargo lock hash and
 binary hashes. No Npcap or Nmap is bundled.
 
-History lives separately from Swift: `~/Library/Application Support/Masscan Studio
+History lives in `~/Library/Application Support/Masscan Studio
 Rust` on macOS, `%LOCALAPPDATA%/Masscan Studio` on Windows, and
 `$XDG_DATA_HOME/masscan-studio` (or `~/.local/share/masscan-studio`) on Linux.
 `STUDIO_DATA_DIR` overrides this for tests. Only one instance can own a directory.
@@ -95,7 +95,7 @@ Simulation uses inherited anonymous pipes as the current user. Unix sockets have
 peer identity tests on macOS/Linux; system elevation is implemented on macOS
 only. Do not launch the UI with sudo. Windows named-pipe/UAC and Linux pkexec
 bootstrap, physical NIC selection and Windows/Linux raw profiles remain open.
-Raw scanning remains gated independently of host actions and history import.
+Raw scanning remains gated independently of host actions and saved profiles.
 
 ## Host actions and export
 
@@ -141,30 +141,20 @@ this smoke); Windows needs an interactive desktop for UI evidence.
 These checks do not measure displayed-frame latency or replace manual keyboard,
 screen reader, clipboard and context-menu acceptance.
 
-## Import old Swift history (macOS)
+## Saved scan profiles
 
-Close the Swift application, then choose **Import Swift… → Choose folder…**.
-Select its data directory (normally `~/Library/Application Support/Masscan Studio`)
-containing both `sessions.json` and `profiles.json`. Import reads these files only;
-it validates the entire snapshot before committing any records to the Rust history.
-The last successful import report remains available after restarting Studio.
+In **New scan**, enter settings and a profile name, then choose **Save new**.
+Select a saved profile and **Load** to fill the form; **Update loaded** saves your
+edits. **Delete…** asks for confirmation and deletes only the profile, never scans.
+These controls are available on all platforms.
 
-Dates retain Swift's 2001 epoch and fractional seconds. Original record JSON,
-logs, unknown fields, exact seed/resume-index, inspection evidence and profile
-settings are archived. The table keeps one row per IPv4/TCP endpoint and reports
-source duplicates. Existing UUIDs with unchanged contents are skipped even when
-the source folder moves; changed contents produce conflicts without overwriting.
-An active old scan becomes Interrupted. A paused old scan stays Paused but has no
-Resume action: external masscan checkpoints cannot run in rmasscan.
+Saving/loading never start a scan or request administrator access. Review and
+check settings before explicitly starting. A profile stores backend, targets,
+exclusions, TCP ports, rate and exact seed; it contains no checkpoint. Invalid
+input, duplicate names and stale IDs leave existing profiles unchanged.
+Up to 100 profiles are supported. Names are trimmed, limited to 128 characters
+and 512 bytes, and compared after Unicode lowercasing.
 
-Imported profiles appear in **New scan → Imported profile → Load settings**.
-Loading fills fields only; review and check settings before explicitly starting.
-The old interface and checkpoint remain archive metadata, not current bindings.
-Import and profile loading perform no scan, DNS lookup, Nmap check or elevation.
-
-This initial importer accepts at most 32 MiB of sessions, 4 MiB of profiles,
-10,000 combined records and 100,000 source result rows. Unsupported non-IPv4/TCP
-records or invalid files reject the whole import. Before upgrading an existing
-v1/v2 Rust history to schema v3, Studio saves a consistent SQLite backup named
-`before-v3-*.sqlite3` in the Rust data directory. Keep that backup when reverting
-to an older Studio build; old builds cannot open schema v3 directly.
+Schema v4 adds native profiles after a consistent SQLite backup named
+`before-v4-*.sqlite3`. Existing history stays readable. The retired Swift importer,
+its APIs and its UI have been removed.

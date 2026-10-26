@@ -211,7 +211,7 @@ impl HostInfo {
         }
         if let Some(legacy) = self.legacy.get(&port) {
             out.push_str(&format!(
-                "\nImported Swift evidence (historical): {}\n{}",
+                "\nArchived evidence (historical): {}\n{}",
                 legacy.device_hint, legacy.evidence
             ));
         }

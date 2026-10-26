@@ -1,14 +1,13 @@
 //! Durable scan history owned only by the unprivileged application.
 #![forbid(unsafe_code)]
-pub mod legacy;
-mod swift_store;
+mod profiles;
+pub use profiles::SavedProfile;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     fs::{self, File, OpenOptions},
     path::Path,
 };
 use studio_protocol::*;
-pub use swift_store::ImportReport;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type StoredFields = (
     Vec<u8>,
@@ -73,7 +72,7 @@ impl Store {
         let mut db = Connection::open(dir.join("history.sqlite3"))?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err("History was created by a newer Studio version".into());
         }
         // Permuted scan keys dirty many index pages. The default 1,000-page
@@ -81,8 +80,8 @@ impl Store {
         // This 4,096-page trigger (~16 MiB at 4 KiB/page, not a size cap) reduces
         // that write amplification. FULL still syncs every WAL commit.
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=4096;")?;
-        if version > 0 && version < 3 {
-            let backup = dir.join(format!("before-v3-{}.sqlite3", id_text(new_id()?)));
+        if version > 0 && version < 4 {
+            let backup = dir.join(format!("before-v4-{}.sqlite3", id_text(new_id()?)));
             let partial = backup.with_extension("partial");
             let file = private_file(&partial)?;
             let mut destination = Connection::open(&partial)?;
@@ -103,14 +102,14 @@ impl Store {
             CREATE TABLE IF NOT EXISTS scans (id BLOB PRIMARY KEY, attempt BLOB NOT NULL, job TEXT NOT NULL, status TEXT NOT NULL, sequence TEXT NOT NULL DEFAULT '0', checkpoint BLOB, next_index TEXT, detail TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS results (scan BLOB NOT NULL REFERENCES scans(id), ip TEXT NOT NULL, port INTEGER NOT NULL, open INTEGER NOT NULL, PRIMARY KEY(scan,ip,port));
             CREATE TABLE IF NOT EXISTS host_details (scan BLOB NOT NULL REFERENCES scans(id),ip TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scan,ip));
-            CREATE TABLE IF NOT EXISTS legacy_records (origin TEXT NOT NULL,kind TEXT NOT NULL,source_id BLOB NOT NULL,fingerprint TEXT NOT NULL,data TEXT NOT NULL,scan BLOB REFERENCES scans(id),PRIMARY KEY(origin,kind,source_id));
-            CREATE TABLE IF NOT EXISTS import_reports (id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL);")?;
+            CREATE TABLE IF NOT EXISTS profiles (id BLOB PRIMARY KEY,name TEXT NOT NULL,name_key TEXT NOT NULL UNIQUE,job TEXT NOT NULL);")?;
         if version < 2 {
             migration.execute_batch("ALTER TABLE results ADD COLUMN discovered_at TEXT;")?;
         }
         if version < 3 {
-            migration.execute_batch("ALTER TABLE scans ADD COLUMN name TEXT; ALTER TABLE scans ADD COLUMN created_at TEXT; PRAGMA user_version=3;")?;
+            migration.execute_batch("ALTER TABLE scans ADD COLUMN name TEXT; ALTER TABLE scans ADD COLUMN created_at TEXT;")?;
         }
+        migration.execute_batch("PRAGMA user_version=4;")?;
         migration.commit()?;
         let mut pending = db.prepare("SELECT scan,ip,data FROM host_details")?;
         let saved = pending

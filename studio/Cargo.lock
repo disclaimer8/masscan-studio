@@ -4479,12 +4479,9 @@ dependencies = [
 name = "studio-store"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "rmasscan-engine",
  "rusqlite",
- "serde",
  "serde_json",
- "sha2 0.10.9",
  "studio-inspection",
  "studio-protocol",
 ]

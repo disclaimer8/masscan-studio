@@ -63,6 +63,9 @@ jobs:
       - name: Linux actual polkit session (no packets)
         if: runner.os == 'Linux'
         run: cargo xtask verify-linux-authorization
+      - name: Windows trusted installation (no UAC or packets)
+        if: runner.os == 'Windows'
+        run: cargo xtask verify-windows-installation
       - name: Linux software UI lifecycle (no packets)
         if: runner.os == 'Linux'
         run: |

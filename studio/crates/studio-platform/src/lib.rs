@@ -8,5 +8,6 @@ pub mod network;
 pub mod trusted;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod unix;
+pub mod win_setup;
 #[cfg(windows)]
 pub mod windows;

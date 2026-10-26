@@ -8,6 +8,7 @@
 //!
 //! Exit codes: 0 window closed and clean, 2 NOT RUN (nothing ran), 10 abort or an unclean window (directory kept),
 //! 13 isolation breach (a lab frame on the uplink).
+#![forbid(unsafe_code)]
 use super::Result;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -152,11 +153,22 @@ pub fn status_pre(rc: i32, text: &str) -> StatusVerdict {
         ));
         return v;
     };
+    // `up` is needed only when no stand is recorded (the manifest check fails); a recorded stand that fails
+    // other checks has drifted and `up` would refuse it.
+    let manifest_ok = j["checks"]
+        .as_array()
+        .is_some_and(|c| c.iter().any(|x| x["name"] == "manifest" && x["ok"] == true));
+    v.stand_missing = !manifest_ok;
     if rc != 0 {
-        v.stand_missing = rc == 3;
         v.reasons.push(format!(
-            "macos-lab status exited rc {rc} (rc 3: the stand is not sealed)"
+            "macos-lab status exited rc {rc} (rc 3: a check failed)"
         ));
+    }
+    if manifest_ok && j["raw_run_allowed"] != true {
+        v.reasons.push(
+            "the recorded stand has drifted (a check other than the manifest fails): take it down (user action F) and bring it up again; `up` is not offered for a recorded stand"
+                .into(),
+        );
     }
     if j["raw_run_allowed"] != true {
         let failed: Vec<String> = j["checks"]
@@ -200,13 +212,17 @@ pub fn firewall_ok(text: &str) -> bool {
 }
 
 /// A process line of `ps` that is left over from an earlier run, or is Studio's own binary.
-pub fn is_leftover_proc(line: &str) -> bool {
-    // The orchestrator and the `cargo xtask` wrapper carry the subcommand name; `ps` itself is not listed.
-    if line.contains("feth-acceptance") {
+pub fn is_leftover_proc(line: &str, own: &[u32]) -> bool {
+    // Only this orchestrator and its `cargo xtask` parent are exempt; a second orchestrator is a leftover.
+    let pid = line
+        .split_whitespace()
+        .next()
+        .and_then(|p| p.parse::<u32>().ok());
+    if line.contains("feth-acceptance") && pid.is_some_and(|p| own.contains(&p)) {
         return false;
     }
     line.contains("wire_scan")
-        || (line.contains("tcpdump") && line.contains("feth420"))
+        || (line.contains("tcpdump") && (line.contains("feth420") || line.contains("uplink.pcap")))
         || line.contains("peer listen")
         || line.contains("capture dump")
         || line.contains("studio-ui")
@@ -214,9 +230,9 @@ pub fn is_leftover_proc(line: &str) -> bool {
 }
 
 /// The matching lines of `ps -axo pid=,command=` (empty text means nothing is left over).
-pub fn leftover_procs(ps: &str) -> String {
+pub fn leftover_procs(ps: &str, own: &[u32]) -> String {
     let mut out = String::new();
-    for l in ps.lines().filter(|l| is_leftover_proc(l)) {
+    for l in ps.lines().filter(|l| is_leftover_proc(l, own)) {
         out.push_str(l);
         out.push('\n');
     }
@@ -369,7 +385,7 @@ pub fn check_installed(
 
 /// Action B for the user: one Terminal line, only the pieces that are missing.
 pub fn user_action_b(
-    studio_dir: &str,
+    exe: &str,
     runner_dir: Option<&str>,
     lab: &str,
     up: bool,
@@ -377,11 +393,7 @@ pub fn user_action_b(
 ) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(d) = runner_dir {
-        parts.push(format!(
-            "cd {} && cargo xtask install-runner {}",
-            sh_quote(studio_dir),
-            sh_quote(d)
-        ));
+        parts.push(format!("{} install-runner {}", sh_quote(exe), sh_quote(d)));
     }
     if up {
         parts.push(format!(
@@ -401,6 +413,42 @@ pub fn user_action_b(
 /// Action F: the end of the window (it also takes the BPF grant back).
 pub fn user_action_f(lab: &str) -> String {
     format!("sudo {} macos-lab down --run-id {RUN_ID}", sh_quote(lab))
+}
+
+/// Apple's SQLite keeps `-wal`/`-shm` after close, which makes a window INVALID.
+pub fn links_apple_sqlite(otool: &str) -> bool {
+    otool
+        .lines()
+        .any(|l| l.trim_start().starts_with("/usr/lib/libsqlite3"))
+}
+
+const SQLITE_HINT: &str = "rebuild with the Homebrew SQLite: SQLITE3_LIB_DIR=/opt/homebrew/opt/sqlite/lib (the bundle: `cd studio && SQLITE3_LIB_DIR=/opt/homebrew/opt/sqlite/lib cargo xtask build --release`; this orchestrator: run it as `SQLITE3_LIB_DIR=/opt/homebrew/opt/sqlite/lib cargo xtask feth-acceptance ...` after `touch xtask/src/main.rs`, or build xtask with that variable)";
+
+/// The bundle must come from the commit that is recorded as `git_head`. Returns the manifest's dirty flag
+/// (information only: the build counts untracked files, the verifier's `dirty` does not).
+pub fn check_bundle_manifest(text: Option<&str>, head: &str) -> std::result::Result<bool, String> {
+    let Some(text) = text else {
+        return Err(
+            "manifest.json next to the .app is missing: the bundle cannot be bound to the git HEAD"
+                .into(),
+        );
+    };
+    let j: Value = serde_json::from_str(text)
+        .map_err(|e| format!("manifest.json next to the .app is not JSON: {e}"))?;
+    let Some(commit) = j["source_commit"].as_str() else {
+        return Err("manifest.json has no source_commit".into());
+    };
+    if commit != head {
+        return Err(format!(
+            "bundle manifest source_commit {commit} differs from the git HEAD {head}: rebuild the bundle from HEAD"
+        ));
+    }
+    Ok(j["dirty"] == true)
+}
+
+/// lsof exits 0 or 1; anything else (it could not run) is not "no listeners".
+pub fn lsof_ok(rc: i32, stdout: &str) -> bool {
+    matches!(rc, 0 | 1) && stdout.trim().is_empty()
 }
 
 pub fn dirty(porcelain: &str) -> bool {
@@ -663,6 +711,11 @@ struct Ctx<'a, H: Host> {
     dir: PathBuf,
     rules: Vec<(String, String)>,
     marks: Vec<String>,
+    /// Every spawned child (name, process): the guard of the cleanup path.
+    children: Vec<(&'static str, Proc)>,
+    started: String,
+    uplink: Option<String>,
+    breach: Option<String>,
 }
 
 fn s(p: &Path) -> String {
@@ -701,13 +754,42 @@ impl<H: Host> Ctx<'_, H> {
             );
         }
     }
+    fn spawn(&mut self, name: &'static str, sp: &Spawn) -> Result<Proc> {
+        let p = self.h.spawn(sp)?;
+        self.children.push((name, p));
+        Ok(p)
+    }
+    /// The uplink saw a lab frame: the file comes before anything else is stopped or written.
+    fn record_breach(&mut self, why: &str) {
+        let text = format!(
+            "ISOLATION BREACH: a lab frame reached the uplink. There is no rerun.\n{why}\n"
+        );
+        let _ = fs::write(self.dir.join("ISOLATION-BREACH.txt"), &text);
+        eprintln!(
+            "\n*** ISOLATION BREACH: do not rerun this window; verify it and take the stand down. ***\n{why}"
+        );
+        self.breach = Some(why.to_owned());
+    }
     fn not_run(&self, reasons: &[String], actions: &[String]) -> Result<i32> {
-        let mut t = String::from("NOT RUN: nothing was started by the orchestrator.\n");
+        let mut t = if self.children.is_empty() {
+            String::from("NOT RUN: nothing was started by the orchestrator.\n")
+        } else {
+            format!(
+                "NOT RUN: the orchestrator started {} process(es) and stopped them again. The stand is still up with the BPF grant open: user action F is below.\n",
+                self.children.len()
+            )
+        };
         for r in reasons {
             t.push_str(&format!("- {r}\n"));
         }
         for a in actions {
             t.push_str(&format!("\n{a}\n"));
+        }
+        if !self.children.is_empty() {
+            t.push_str(&format!(
+                "\nUser action F:\n{}\n",
+                user_action_f(&s(&self.o.lab))
+            ));
         }
         t.push_str("\nThe orchestrator never runs sudo itself. Use a fresh, empty --out directory for the next attempt.\n");
         eprint!("{t}");
@@ -725,6 +807,10 @@ type Witness = (
     String,
     Proc,
 );
+
+fn own_pids() -> Vec<u32> {
+    vec![std::process::id(), std::os::unix::process::parent_id()]
+}
 
 fn ps_text<H: Host>(c: &mut Ctx<'_, H>) -> Done {
     c.run(&["/bin/ps", "-axo", "pid=,command="])
@@ -765,7 +851,8 @@ struct Git {
 
 fn git<H: Host>(c: &mut Ctx<'_, H>) -> std::result::Result<Git, String> {
     let g = |c: &mut Ctx<'_, H>, a: &[&str]| -> std::result::Result<String, String> {
-        let mut argv = vec!["/usr/bin/git"];
+        let studio = studio_dir();
+        let mut argv = vec!["/usr/bin/git", "-C", studio.as_str()];
         argv.extend_from_slice(a);
         let d = c.run(&argv);
         if d.rc != 0 {
@@ -783,6 +870,10 @@ fn git<H: Host>(c: &mut Ctx<'_, H>) -> std::result::Result<Git, String> {
         dirty: dirty(&g(c, &["status", "--porcelain", "--untracked-files=no"])?),
         toplevel: g(c, &["rev-parse", "--show-toplevel"])?.trim().to_owned(),
     })
+}
+
+fn exe_path() -> String {
+    std::env::current_exe().map(|p| s(&p)).unwrap_or_default()
 }
 
 fn studio_dir() -> String {
@@ -864,6 +955,10 @@ pub fn run<H: Host>(h: &mut H, o: &Opts) -> Result<i32> {
         rules: vec![(s(&dir), "$OUT".into())],
         dir,
         marks: Vec::new(),
+        children: Vec::new(),
+        started: String::new(),
+        uplink: None,
+        breach: None,
     };
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
         c.rules.push((home, "$HOME".into()));
@@ -893,6 +988,24 @@ pub fn run<H: Host>(h: &mut H, o: &Opts) -> Result<i32> {
     let (Some(b), Some(g)) = (b, g) else {
         return c.not_run(&early, &[]);
     };
+    // The SQLite of the orchestrator and of the bundle must not be Apple's.
+    let exe = std::env::current_exe().map(|p| s(&p)).unwrap_or_default();
+    for (label, path) in [
+        ("this orchestrator", exe),
+        ("the bundle's studio-ui", s(&b.ui)),
+    ] {
+        let d = c.run(&["/usr/bin/otool", "-L", &path]);
+        if d.rc != 0 {
+            early.push(format!("otool -L {label} failed (rc {})", d.rc));
+        } else if links_apple_sqlite(&d.stdout) {
+            early.push(format!("{label} links Apple's /usr/lib/libsqlite3, which leaves -wal/-shm behind: {SQLITE_HINT}"));
+        }
+    }
+    let manifest = o.app.parent().map(|p| p.join("manifest.json"));
+    let manifest_text = manifest.and_then(|m| fs::read_to_string(m).ok());
+    if let Err(e) = check_bundle_manifest(manifest_text.as_deref(), &g.head) {
+        early.push(e);
+    }
     if !early.is_empty() {
         return c.not_run(&early, &[]);
     }
@@ -921,9 +1034,13 @@ fn provenance<H: Host>(
 ) -> Result<()> {
     let (lab_sha, lab_version) = lab_info(c)?;
     let manifest = c.o.app.parent().map(|p| p.join("manifest.json"));
+    let mut bundle_dirty = Value::Null;
     let manifest_sha = match manifest.filter(|m| m.is_file()) {
         Some(m) => {
             let t = fs::read_to_string(&m)?;
+            bundle_dirty = serde_json::from_str::<Value>(&t)
+                .map(|j| j["dirty"].clone())
+                .unwrap_or(Value::Null);
             c.put("bundle-manifest.json", &t)?;
             Some(sha_bytes(t.as_bytes()))
         }
@@ -935,23 +1052,33 @@ fn provenance<H: Host>(
             "git_head": g.head, "dirty": g.dirty,
             "ui_sha256": b.ui_sha, "runner_sha256": b.runner_sha, "installed_runner_sha256": installed,
             "inspect_sha256": b.inspect_sha, "lab_sha256": lab_sha, "lab_version": lab_version,
-            "bundle_manifest_sha256": manifest_sha,
+            "bundle_manifest_sha256": manifest_sha, "bundle_manifest_dirty": bundle_dirty,
         }),
     )
 }
 
-/// The common end: the history dump, the data hash, the interlock, `window.json` and the hashes. Returns the exit code.
-#[allow(clippy::too_many_arguments)]
+/// The common end: the interlock, the history dump, the data hash, `window.json` and the hashes. Returns the exit code.
 fn close<H: Host>(
     c: &mut Ctx<'_, H>,
-    started: &str,
     ended: &str,
-    uplink: Option<&str>,
     ui_rc: Option<i32>,
     extra: Value,
-    breach: Option<String>,
     aborted: bool,
 ) -> Result<i32> {
+    // Interlock first (live runs only): tcpdump's statistics and the size of the pcap, never a parse of it.
+    if c.uplink.is_some() {
+        let uerr = fs::read_to_string(c.dir.join("uplink.err")).unwrap_or_default();
+        match interlock(&uerr, uplink_len(&c.dir)) {
+            Interlock::Breach(w) if c.breach.is_none() => c.record_breach(&w),
+            Interlock::Unproven(w) if c.breach.is_none() => {
+                c.mark(format!("uplink interlock unproven: {w}"))
+            }
+            _ => {}
+        }
+        if let Some(why) = c.breach.clone() {
+            c.mark(format!("isolation breach: {why}"));
+        }
+    }
     let data = c.dir.join("data");
     let journal = |d: &Path| {
         ["history.sqlite3-wal", "history.sqlite3-shm"]
@@ -961,6 +1088,9 @@ fn close<H: Host>(
     if journal(&data) {
         c.mark("history not closed cleanly");
     }
+    let before_dump = fs::read(data.join("history.sqlite3"))
+        .ok()
+        .map(|b| sha_bytes(&b));
     if data.is_dir() {
         match Store::open(&data).and_then(|st| history_json(&st)) {
             Ok(h) => c.put_json("history.json", &h)?,
@@ -978,34 +1108,14 @@ fn close<H: Host>(
     } else {
         c.mark("the UI left no data directory: history.json not written");
     }
-    // Interlock: tcpdump's statistics and the size of the pcap, never a parse of it.
-    let uerr = fs::read_to_string(c.dir.join("uplink.err")).unwrap_or_default();
-    let verdict = interlock(&uerr, uplink_len(&c.dir));
-    let tripped = match (&breach, verdict) {
-        (Some(b), v) => Some(format!("{b}; at the end: {v:?}")),
-        (None, Interlock::Breach(w)) => Some(w),
-        (None, Interlock::Unproven(w)) => {
-            c.mark(format!("uplink interlock unproven: {w}"));
-            None
-        }
-        (None, Interlock::Clean) => None,
-    };
-    if let Some(why) = &tripped {
-        c.put(
-            "ISOLATION-BREACH.txt",
-            &format!(
-                "ISOLATION BREACH: a lab frame reached the uplink. There is no rerun.\n{why}\n"
-            ),
-        )?;
-        c.mark(format!("isolation breach: {why}"));
-    }
     if let Some(rc) = ui_rc {
         c.put("ui_rc.txt", &format!("{rc}\n"))?;
     }
     let mut w = json!({
-        "schema": 1, "started_utc": started, "ended_utc": ended, "uplink": uplink,
+        "schema": 1, "started_utc": c.started, "ended_utc": ended, "uplink": c.uplink,
         "ui_rc": ui_rc, "invalid_marks": c.marks,
         "manual": c.o.manual, "dry_run": c.o.dry_run,
+        "data_sha256_before_dump": before_dump,
         "thresholds": {"pause_to_paused_ms": 5000, "stop_to_stopped_ms": 1000, "smoke_deadline_s": 420},
     });
     if let (Some(o), Some(e)) = (w.as_object_mut(), extra.as_object()) {
@@ -1014,13 +1124,45 @@ fn close<H: Host>(
     c.put_json("window.json", &w)?;
     let list = hashes_text(&c.dir)?;
     fs::write(c.dir.join("hashes-before-copy.txt"), list)?;
-    Ok(if tripped.is_some() {
+    Ok(if c.breach.is_some() {
         13
     } else if aborted || !c.marks.is_empty() || ui_rc != Some(0) {
         10
     } else {
         0
     })
+}
+
+/// Any error after children started: breach file first when the uplink holds a frame, every child stopped,
+/// then a best-effort `window.json` with an INVALID mark naming the failure. rc 13 on a breach, otherwise 10.
+fn cleanup_after_error<H: Host>(c: &mut Ctx<'_, H>, err: &str) -> i32 {
+    eprintln!("ABORT: {err}");
+    if c.breach.is_none() && uplink_len(&c.dir).is_some_and(|n| n > PCAP_HEADER) {
+        c.record_breach("uplink.pcap holds a frame (found while aborting)");
+    }
+    for (name, p) in c.children.clone() {
+        stop(c, p, if name == "ui" { "TERM" } else { "INT" });
+    }
+    c.mark(format!("aborted: {err}"));
+    if let Some(why) = c.breach.clone() {
+        c.mark(format!("isolation breach: {why}"));
+    }
+    let ended = c.h.utc();
+    for who in ["peer", "uplink"] {
+        c.scrub_file(&format!("{who}.err"));
+    }
+    c.scrub_file("ui.log");
+    c.scrub_file("listeners.log");
+    let w = json!({
+        "schema": 1, "started_utc": c.started, "ended_utc": ended, "uplink": c.uplink,
+        "ui_rc": Value::Null, "invalid_marks": c.marks, "manual": c.o.manual, "dry_run": c.o.dry_run,
+        "aborted": true,
+    });
+    let _ = c.put_json("window.json", &w);
+    if let Ok(list) = hashes_text(&c.dir) {
+        let _ = fs::write(c.dir.join("hashes-before-copy.txt"), list);
+    }
+    if c.breach.is_some() { 13 } else { 10 }
 }
 
 fn dry_run<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
@@ -1032,8 +1174,11 @@ fn dry_run<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
         ));
     }
     let ps = ps_text(c);
-    c.put("leftover-procs.txt", &leftover_procs(&ps.stdout))?;
-    if !leftover_procs(&ps.stdout).trim().is_empty() {
+    c.put(
+        "leftover-procs.txt",
+        &leftover_procs(&ps.stdout, &own_pids()),
+    )?;
+    if !leftover_procs(&ps.stdout, &own_pids()).trim().is_empty() {
         reasons.push("leftover processes (see leftover-procs.txt)".into());
     }
     if !reasons.is_empty() {
@@ -1078,14 +1223,12 @@ fn dry_run<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     c.marks
         .push("NOT RUN: dry run, no stand and no installed runner".into());
     // `close` returns 10 for a window that is not clean, which a dry run always is; its verdict decides here.
+    c.started = started;
     let _ = close(
         c,
-        &started,
         &ended,
-        None,
         ui_rc,
         json!({"result":"NOT RUN","dry_run_problems":problems}),
-        None,
         false,
     )?;
     Ok(if problems.is_empty() { 0 } else { 10 })
@@ -1113,14 +1256,14 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     }
     let ls = c.run(&["/usr/sbin/lsof", "-nP", "-iTCP@198.18.0.2", "-sTCP:LISTEN"]);
     c.put("leftover-listeners.txt", &ls.stdout)?;
-    if !ls.stdout.trim().is_empty() || ls.rc > 1 {
+    if !lsof_ok(ls.rc, &ls.stdout) {
         reasons.push(format!(
             "a listener on 198.18.0.2 is left over (lsof rc {})",
             ls.rc
         ));
     }
     let ps = ps_text(c);
-    let left = leftover_procs(&ps.stdout);
+    let left = leftover_procs(&ps.stdout, &own_pids());
     c.put("leftover-procs.txt", &left)?;
     if ps.rc != 0 || !left.trim().is_empty() {
         reasons.push("leftover processes (see leftover-procs.txt)".into());
@@ -1190,7 +1333,7 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     }
     if !reasons.is_empty() {
         let line = user_action_b(
-            &studio_dir(),
+            &exe_path(),
             runner_dir.as_deref().filter(|_| need_install),
             &lab,
             verdict.stand_missing,
@@ -1207,25 +1350,60 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     }
     let uplink = verdict.uplink.clone().unwrap_or_default();
     provenance(c, b, g, installed.as_deref())?;
+    c.uplink = Some(uplink.clone());
+    c.started = c.h.utc();
+    let code = match window(c, b, &lab, &uplink) {
+        Ok(code) => code,
+        Err(e) => cleanup_after_error(c, &e.to_string()),
+    };
+    if code == 2 {
+        // NOT RUN after children were started and stopped: NOT-RUN.txt holds the reasons and action F.
+        return Ok(2);
+    }
+    if code == 13 {
+        println!(
+            "*** ISOLATION BREACH (rc 13): a lab frame reached the uplink. Do not rerun this window. See ISOLATION-BREACH.txt. ***"
+        );
+    }
+    println!(
+        "feth-acceptance: window {} closed with rc {code} (0 clean, 10 abort or unclean, 13 isolation breach)",
+        c.dir.display()
+    );
+    println!(
+        "Next, you: verify the window with `{} studio-verify --dir {} --out {}`.",
+        sh_quote(&lab),
+        sh_quote(&s(&c.dir)),
+        sh_quote(&s(&c.dir.join("verdict.json")))
+    );
+    println!(
+        "User action F (end of the window, takes the BPF grant back):\n{}",
+        user_action_f(&lab)
+    );
+    Ok(code)
+}
 
+/// From the peer listeners to the closed window. An `Err` here is handled by `cleanup_after_error`.
+fn window<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, lab: &str, uplink: &str) -> Result<i32> {
     // 3. peer listeners
-    let started = c.h.utc();
     let ready = c.dir.join("listeners-ready.txt");
-    let listen = c.h.spawn(&Spawn {
-        argv: vec![
-            lab.clone(),
-            "peer".into(),
-            "listen".into(),
-            "--open".into(),
-            "8000-8007".into(),
-            "--ready".into(),
-            s(&ready),
-        ],
-        env: vec![],
-        cwd: c.dir.clone(),
-        stdout: c.dir.join("listeners.log"),
-        stderr: None,
-    })?;
+    let listen = c.spawn(
+        "peer-listen",
+        &Spawn {
+            argv: vec![
+                lab.to_owned(),
+                "peer".into(),
+                "listen".into(),
+                "--open".into(),
+                "8000-8007".into(),
+                "--ready".into(),
+                s(&ready),
+            ],
+            env: vec![],
+            cwd: c.dir.clone(),
+            stdout: c.dir.join("listeners.log"),
+            stderr: None,
+        },
+    )?;
     let mut ready_ok = false;
     for _ in 0..100 {
         if ready.is_file() {
@@ -1249,23 +1427,24 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     let mut cmds: Vec<Witness> = Vec::new();
     for (who, iface, filter) in [
         ("peer", PEER_IF.to_owned(), None),
-        ("uplink", uplink.clone(), Some(UPLINK_FILTER)),
+        ("uplink", uplink.to_owned(), Some(UPLINK_FILTER)),
     ] {
         let argv = capture_argv(&iface, &format!("{who}.pcap"), filter);
         let start = c.h.utc();
-        match c.h.spawn(&Spawn {
+        let sp = Spawn {
             argv: argv.clone(),
             env: vec![],
             cwd: c.dir.clone(),
             stdout: c.dir.join(format!("{who}.log")),
             stderr: Some(c.dir.join(format!("{who}.err"))),
-        }) {
+        };
+        match c.spawn(who, &sp) {
             Ok(p) => cmds.push((who, iface, argv, filter, start, p)),
             Err(e) => {
-                for (_, _, _, _, _, p) in &cmds {
-                    stop(c, *p, "INT");
+                let children = c.children.clone();
+                for (_, p) in children {
+                    stop(c, p, "INT");
                 }
-                stop(c, listen, "INT");
                 return c.not_run(&[format!("cannot start the {who} witness: {e}")], &[]);
             }
         }
@@ -1279,10 +1458,10 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
         listening.push(alive && banner);
     }
     if listening.iter().any(|l| !l) {
-        for (_, _, _, _, _, p) in &cmds {
-            stop(c, *p, "INT");
+        let children = c.children.clone();
+        for (_, p) in children {
+            stop(c, p, "INT");
         }
-        stop(c, listen, "INT");
         for who in ["peer", "uplink"] {
             c.scrub_file(&format!("{who}.err"));
         }
@@ -1291,17 +1470,20 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
 
     // 5. the UI
     let ui_started = c.h.utc();
-    let ui = c.h.spawn(&Spawn {
-        argv: if c.o.manual {
-            vec![s(&b.ui)]
-        } else {
-            vec![s(&b.ui), "--smoke-feth".into()]
+    let ui = c.spawn(
+        "ui",
+        &Spawn {
+            argv: if c.o.manual {
+                vec![s(&b.ui)]
+            } else {
+                vec![s(&b.ui), "--smoke-feth".into()]
+            },
+            env: ui_env(c, !c.o.manual),
+            cwd: c.dir.clone(),
+            stdout: c.dir.join("ui.log"),
+            stderr: None,
         },
-        env: ui_env(c, !c.o.manual),
-        cwd: c.dir.clone(),
-        stdout: c.dir.join("ui.log"),
-        stderr: None,
-    })?;
+    )?;
     let watch: Vec<(&'static str, Proc)> = cmds.iter().map(|(w, _, _, _, _, p)| (*w, *p)).collect();
     let end = supervise(
         c,
@@ -1313,14 +1495,12 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
             UI_SECONDS
         },
     );
-    let mut breach = None;
     let mut aborted = false;
     let ui_rc = match end {
         UiEnd::Exited(rc) => Some(rc),
         UiEnd::Breach => {
-            breach = Some(
-                "a frame appeared in uplink.pcap while the UI ran; the UI was stopped".to_owned(),
-            );
+            // The file comes first, before the UI or anything else is stopped.
+            c.record_breach("a frame appeared in uplink.pcap while the UI ran; the UI was stopped");
             stop(c, ui, "TERM");
             None
         }
@@ -1337,6 +1517,17 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
             None
         }
     };
+    if ui_rc.is_none() {
+        // A stopped UI may leave its administrator dialog behind.
+        let ps = ps_text(c);
+        if ps
+            .stdout
+            .lines()
+            .any(|l| l.contains("with administrator privileges") && !l.contains("feth-acceptance"))
+        {
+            c.mark("an administrator dialog (osascript) is left over after the UI was stopped");
+        }
+    }
 
     // 6. stop: a second of quiet, SIGINT to the witnesses, wait
     c.h.sleep(Duration::from_secs(1));
@@ -1352,13 +1543,14 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
             cmd_record(argv, iface, filter.unwrap_or(""), start, &stop_utc, rc, *l),
         ));
     }
-    for (who, rec) in &records {
-        c.put_json(&format!("{who}.cmd.json"), rec)?;
-        c.scrub_file(&format!("{who}.err"));
-    }
     let lrc = stop(c, listen, "INT");
     if lrc != 0 {
         c.mark(format!("peer listen exited with {lrc}"));
+    }
+    // Every child is stopped; the writes below may fail without leaving anything running.
+    for (who, rec) in &records {
+        c.put_json(&format!("{who}.cmd.json"), rec)?;
+        c.scrub_file(&format!("{who}.err"));
     }
     let ended = c.h.utc();
     c.scrub_file("ui.log");
@@ -1368,12 +1560,12 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
         "host-listen-after.txt",
         &format!("rc {}\n{}", ns.rc, ns.stdout),
     )?;
-    let post = c.run(&[&lab, "macos-lab", "status", "--run-id", RUN_ID]);
+    let post = c.run(&[lab, "macos-lab", "status", "--run-id", RUN_ID]);
     c.put("status-post.json", &post.stdout)?;
     if !status_post_allowed(&post.stdout) {
         c.mark("status-post.json: raw_run_allowed is not true");
     }
-    if ui_rc != Some(0) && breach.is_none() && !aborted {
+    if ui_rc != Some(0) && c.breach.is_none() && !aborted {
         c.mark(format!("the UI exited with {ui_rc:?}"));
     }
     let pids: Vec<Value> = std::iter::once(("peer-listen", listen))
@@ -1382,30 +1574,13 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
         .map(|(n, p)| json!({"name": n, "pid": p.pid}))
         .collect();
     let (lab_sha, lab_version) = lab_info(c)?;
-    let code = close(
+    close(
         c,
-        &started,
         &ended,
-        Some(&uplink),
         ui_rc,
         json!({"pids": pids, "ui_started_utc": ui_started, "lab_sha256": lab_sha, "lab_version": lab_version, "result": "closed"}),
-        breach,
         aborted,
-    )?;
-    println!(
-        "feth-acceptance: window {} closed with rc {code} (0 clean, 10 abort or unclean, 13 isolation breach)",
-        c.dir.display()
-    );
-    println!(
-        "Next, you: verify the window with `rmasscan-lab studio-verify --dir {} --out {}/verdict.json`.",
-        sh_quote(&s(&c.dir)),
-        s(&c.dir)
-    );
-    println!(
-        "User action F (end of the window, takes the BPF grant back):\n{}",
-        user_action_f(&lab)
-    );
-    Ok(code)
+    )
 }
 
 /// Entry for `cargo xtask feth-acceptance ...`.
@@ -1428,7 +1603,7 @@ mod tests {
         fs::create_dir_all(&d).unwrap();
         d
     }
-    const GOOD: &str = r#"{"raw_run_allowed":true,"bpf_access":"granted","uplink":"en0","gateway":"192.168.1.1","checks":[]}"#;
+    const GOOD: &str = r#"{"raw_run_allowed":true,"bpf_access":"granted","uplink":"en0","gateway":"192.168.1.1","checks":[{"name":"manifest","ok":true,"detail":""}]}"#;
 
     #[test]
     fn gates_require_granted_sealed_stand_and_a_real_uplink() {
@@ -1474,19 +1649,28 @@ mod tests {
             " 12 /x/rmasscan-lab capture dump",
             " 12 /x/Masscan Studio.app/Contents/MacOS/studio-ui --smoke-feth",
             " 12 /Library/PrivilegedHelperTools/MasscanStudio/ab/studio-runner",
+            " 12 /usr/sbin/tcpdump -p -n -U -s 0 -i en0 -w uplink.pcap net 198.18.0.0/30",
         ] {
-            assert!(is_leftover_proc(l), "{l}");
+            assert!(is_leftover_proc(l, &[]), "{l}");
         }
-        for l in [
-            " 12 /usr/sbin/tcpdump -i en0",
+        for l in [" 12 /usr/sbin/tcpdump -i en0", " 12 /bin/zsh"] {
+            assert!(!is_leftover_proc(l, &[]), "{l}");
+        }
+        // only the orchestrator itself and its cargo parent are exempt, a second orchestrator is not
+        assert!(!is_leftover_proc(
             " 12 /x/xtask feth-acceptance --app studio-ui",
-            " 12 cargo xtask feth-acceptance --app studio-runner",
-            " 12 /bin/zsh",
-        ] {
-            assert!(!is_leftover_proc(l), "{l}");
-        }
+            &[12]
+        ));
+        assert!(!is_leftover_proc(
+            " 7 cargo xtask feth-acceptance --app studio-runner",
+            &[12, 7]
+        ));
+        assert!(is_leftover_proc(
+            " 99 /x/xtask feth-acceptance --app studio-ui",
+            &[12, 7]
+        ));
         assert_eq!(
-            leftover_procs(" 1 /bin/zsh\n 2 studio-ui\n"),
+            leftover_procs(" 1 /bin/zsh\n 2 studio-ui\n", &[]),
             " 2 studio-ui\n"
         );
         assert!(
@@ -1588,7 +1772,7 @@ mod tests {
     #[test]
     fn user_action_lines_are_one_chain_with_only_what_is_missing() {
         let b = user_action_b(
-            "/r/studio",
+            "/r/xtask",
             Some("/r/studio/dist/runner-1"),
             "/l/rmasscan-lab",
             true,
@@ -1597,7 +1781,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             b,
-            "cd '/r/studio' && cargo xtask install-runner '/r/studio/dist/runner-1' && sudo '/l/rmasscan-lab' macos-lab up --run-id m1 && sudo '/l/rmasscan-lab' macos-lab bpf-access --run-id m1 --grant"
+            "'/r/xtask' install-runner '/r/studio/dist/runner-1' && sudo '/l/rmasscan-lab' macos-lab up --run-id m1 && sudo '/l/rmasscan-lab' macos-lab bpf-access --run-id m1 --grant"
         );
         assert_eq!(
             user_action_b("/s", None, "/l", false, true).unwrap(),
@@ -1787,6 +1971,11 @@ mod tests {
 
     #[derive(Default)]
     struct Fake {
+        ui_dead: bool,
+        fail_ui_spawn: bool,
+        poison_on_term: Option<String>,
+        block_name: Option<String>,
+        otool_out: Option<String>,
         log: Vec<String>,
         status: Option<(i32, String)>,
         installed: Option<String>,
@@ -1802,6 +1991,13 @@ mod tests {
     }
     impl Host for Fake {
         fn run(&mut self, a: &[String]) -> Result<Done> {
+            let a: &[String] = &if a.get(1).map(String::as_str) == Some("-C") {
+                let mut v = a.to_vec();
+                v.drain(1..3);
+                v
+            } else {
+                a.to_vec()
+            };
             self.log.push(format!("run {}", a.join(" ")));
             let ok = |o: &str| {
                 Ok(Done {
@@ -1837,12 +2033,16 @@ mod tests {
                 ("netstat", _) => ok("tcp4 0 0 *.22 *.* LISTEN\n"),
                 ("sysctl", _) => ok("k: 1\n"),
                 ("sw_vers", _) => ok("macOS\n"),
+                ("otool", _) => ok(self.otool_out.as_deref().unwrap_or("x:\n\t/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib (compat)\n\t/usr/lib/libSystem.B.dylib\n")),
                 _ => Err(format!("unexpected {a:?}").into()),
             }
         }
         fn spawn(&mut self, s: &Spawn) -> Result<Proc> {
             self.log.push(format!("spawn {}", s.argv.join(" ")));
             let name = s.argv[0].rsplit('/').next().unwrap();
+            if let Some(n) = self.block_name.take() {
+                fs::create_dir_all(self.dir.join(n))?;
+            }
             if name == "rmasscan-lab" {
                 fs::write(self.dir.join("listeners-ready.txt"), "{}")?;
             } else if name == "tcpdump" {
@@ -1873,6 +2073,9 @@ mod tests {
                     format!("tcpdump: listening on {iface}, link-type EN10MB\n{tail}"),
                 )?;
             } else if name == "studio-ui" {
+                if self.fail_ui_spawn {
+                    return Err("cannot spawn studio-ui".into());
+                }
                 if let Some(t) = &self.smoke {
                     fs::write(self.dir.join("smoke.json"), t)?;
                 }
@@ -1895,10 +2098,14 @@ mod tests {
                 .to_owned();
             match name.as_str() {
                 "studio-ui" => {
+                    if self.ui_dead {
+                        return Some(self.ui_rc);
+                    }
                     if t.is_zero() {
                         return None;
                     }
                     if self.ui_polls.pop_front().unwrap_or(true) {
+                        self.ui_dead = true;
                         Some(self.ui_rc)
                     } else {
                         None
@@ -1914,6 +2121,13 @@ mod tests {
         }
         fn signal(&mut self, p: Proc, sig: &str) -> Result<()> {
             self.log.push(format!("signal {} {sig}", p.pid));
+            if sig == "TERM" {
+                let breach = self.dir.join("ISOLATION-BREACH.txt").exists();
+                self.log.push(format!("breach-file-exists={breach}"));
+                if let Some(n) = &self.poison_on_term {
+                    fs::create_dir_all(self.dir.join(n))?;
+                }
+            }
             Ok(())
         }
         fn sleep(&mut self, d: Duration) {
@@ -1940,7 +2154,11 @@ mod tests {
         for n in ["studio-ui", "studio-runner", "studio-inspect"] {
             fs::write(macos.join(n), n).unwrap();
         }
-        fs::write(root.join("manifest.json"), "{}").unwrap();
+        fs::write(
+            root.join("manifest.json"),
+            format!(r#"{{"source_commit":"{}","dirty":false}}"#, "c".repeat(40)),
+        )
+        .unwrap();
         let lab = root.join("rmasscan-lab");
         fs::write(&lab, "lab").unwrap();
         let out = root.join("out");
@@ -1991,7 +2209,7 @@ mod tests {
         );
         let t = fs::read_to_string(o.out.join("NOT-RUN.txt")).unwrap();
         assert!(
-            t.contains("cargo xtask install-runner '/r/studio/dist/runner-1' && sudo")
+            t.contains("install-runner '/r/studio/dist/runner-1' && sudo")
                 && t.contains("macos-lab up --run-id m1 && sudo")
         );
         assert!(t.contains("bpf-access --run-id m1 --grant"));
@@ -2237,6 +2455,163 @@ mod tests {
         o.dry_run = true;
         assert_eq!(run(&mut f, &o).unwrap(), 2);
         assert!(spawned(&f).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // ---- fix round 1
+
+    #[test]
+    fn pure_gates_of_round_one() {
+        // the sqlite preflight
+        assert!(links_apple_sqlite(
+            "x:\n\t/usr/lib/libsqlite3.dylib (compat)\n"
+        ));
+        assert!(!links_apple_sqlite(
+            "x:\n\t/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib (c)\n\t/usr/lib/libSystem.B.dylib\n"
+        ));
+        // the bundle is bound to HEAD
+        let head = "c".repeat(40);
+        let m = |c: &str, d: bool| format!(r#"{{"source_commit":"{c}","dirty":{d}}}"#);
+        assert_eq!(
+            check_bundle_manifest(Some(&m(&head, false)), &head),
+            Ok(false)
+        );
+        assert_eq!(
+            check_bundle_manifest(Some(&m(&head, true)), &head),
+            Ok(true)
+        );
+        assert!(check_bundle_manifest(Some(&m(&"d".repeat(40), false)), &head).is_err());
+        assert!(check_bundle_manifest(None, &head).is_err());
+        assert!(check_bundle_manifest(Some("{}"), &head).is_err());
+        // lsof that could not run is not "no listeners"
+        assert!(lsof_ok(0, "") && lsof_ok(1, ""));
+        assert!(!lsof_ok(-1, "") && !lsof_ok(2, "") && !lsof_ok(1, "x LISTEN"));
+        // a recorded stand that drifted needs no `up`
+        let drift = status_pre(
+            3,
+            &GOOD
+                .replace("true", "false")
+                .replacen("\"ok\":false", "\"ok\":true", 1),
+        );
+        assert!(!drift.stand_missing, "{drift:?}");
+        assert!(drift.reasons.iter().any(|r| r.contains("drift")));
+    }
+
+    #[test]
+    fn action_b_uses_the_built_binary() {
+        let b = user_action_b("/t/xtask", Some("/r/dist/runner-1"), "/l/lab", true, true).unwrap();
+        assert!(b.starts_with(
+            "'/t/xtask' install-runner '/r/dist/runner-1' && sudo '/l/lab' macos-lab up"
+        ));
+        assert!(!b.contains("cargo"));
+    }
+
+    #[test]
+    fn a_failed_ui_spawn_stops_every_child_and_still_writes_the_window() {
+        let (root, o, mut f, _) = setup("uifail");
+        f.fail_ui_spawn = true;
+        let rc = run(&mut f, &o).unwrap();
+        assert_eq!(rc, 10, "{:?}", f.log);
+        assert_eq!(f.procs.len(), 3);
+        for (i, p) in f.procs.iter().enumerate() {
+            let pid = 101 + i;
+            assert!(
+                f.log
+                    .iter()
+                    .any(|l| l.starts_with(&format!("signal {pid} INT"))),
+                "{} left running",
+                p.argv[0]
+            );
+        }
+        let w: Value =
+            serde_json::from_slice(&fs::read(o.out.join("window.json")).unwrap()).unwrap();
+        assert!(
+            w["invalid_marks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m.as_str().unwrap().contains("cannot spawn studio-ui"))
+        );
+        assert!(o.out.join("hashes-before-copy.txt").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_write_after_the_children_started_still_cleans_up() {
+        let (root, o, mut f, _) = setup("writefail");
+        f.smoke = Some(r#"{"result":"ok"}"#.into());
+        f.block_name = Some("peer.cmd.json".into());
+        let mut g = f;
+        let rc = run(&mut g, &o).unwrap();
+        assert_eq!(rc, 10, "{:?}", g.log);
+        assert!(o.out.join("window.json").is_file());
+        assert_eq!(
+            g.log
+                .iter()
+                .filter(|l| l.starts_with("signal ") && l.ends_with(" INT"))
+                .count(),
+            3
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_breach_file_comes_first_and_rc_13_survives_a_failed_write() {
+        let (root, o, mut f, _) = setup("breachfirst");
+        f.smoke = Some(r#"{"result":"ok"}"#.into());
+        f.uplink_pcap_len = 24 + 60;
+        f.uplink_err = "1 packet captured\n0 packets dropped by kernel\n".into();
+        f.ui_polls = VecDeque::from([false, false]);
+        f.poison_on_term = Some("peer.cmd.json".into());
+        let rc = run(&mut f, &o).unwrap();
+        assert_eq!(rc, 13);
+        let at = f.log.iter().position(|l| l.ends_with(" TERM")).unwrap();
+        assert_eq!(f.log[at + 1], "breach-file-exists=true", "{:?}", f.log);
+        assert!(o.out.join("ISOLATION-BREACH.txt").is_file());
+        assert!(o.out.join("window.json").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn apple_sqlite_is_not_run_before_anything_starts() {
+        let (root, o, mut f, _) = setup("applesql");
+        f.otool_out = Some("x:\n\t/usr/lib/libsqlite3.dylib (c)\n".into());
+        assert_eq!(run(&mut f, &o).unwrap(), 2);
+        assert!(spawned(&f).is_empty());
+        let t = fs::read_to_string(o.out.join("NOT-RUN.txt")).unwrap();
+        assert!(t.contains("SQLITE3_LIB_DIR=/opt/homebrew/opt/sqlite/lib"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_from_another_commit_is_not_run() {
+        let (root, o, mut f, _) = setup("oldbundle");
+        fs::write(
+            root.join("manifest.json"),
+            format!(r#"{{"source_commit":"{}","dirty":false}}"#, "d".repeat(40)),
+        )
+        .unwrap();
+        assert_eq!(run(&mut f, &o).unwrap(), 2);
+        assert!(spawned(&f).is_empty());
+        assert!(
+            fs::read_to_string(o.out.join("NOT-RUN.txt"))
+                .unwrap()
+                .contains("source_commit")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_sealed_but_drifted_stand_does_not_print_up() {
+        let (root, o, mut f, _) = setup("drift");
+        f.status = Some((
+            3,
+            GOOD.replace("\"raw_run_allowed\":true", "\"raw_run_allowed\":false"),
+        ));
+        f.installed = None;
+        assert_eq!(run(&mut f, &o).unwrap(), 2);
+        let t = fs::read_to_string(o.out.join("NOT-RUN.txt")).unwrap();
+        assert!(!t.contains("macos-lab up"), "{t}");
         fs::remove_dir_all(root).unwrap();
     }
 }

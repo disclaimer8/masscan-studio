@@ -64,7 +64,13 @@ fn unprivileged_runner_fails_mac_feth_before_any_adapter() {
     };
     assert_eq!(status, Status::Failed);
     if cfg!(target_os = "macos") {
-        assert!(detail.contains("authorized root runner"), "{detail}");
+        // Unique to the root check: the masked-MAC and manifest refusals of the
+        // preflight must not satisfy this, or reordering would go unnoticed.
+        assert!(detail.contains("Authorize first"), "{detail}");
+        assert!(
+            !detail.contains("os-masked") && !detail.contains("stand manifest"),
+            "{detail}"
+        );
     } else {
         assert!(
             detail.contains("only available on macOS")

@@ -58,6 +58,8 @@ fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
             if !studio_protocol::raw_profile_enabled(job.backend) {
                 return Err("Raw scanning is not enabled for this profile in this Studio build: complete live isolation preflight and authenticated runner bootstrap are still required. Simulation is available.".into());
             }
+            // Invariant: a root process here was started by `--connect` after
+            // `trusted::verify`; `--stdio` refuses root at launch.
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             if studio_platform::unix::Identity::current()?.uid != 0 {
                 return Err(

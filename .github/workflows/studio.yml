@@ -53,6 +53,8 @@ jobs:
             studio/target
           key: studio-${{ runner.os }}-1.99.1-${{ hashFiles('studio/Cargo.lock') }}
       - name: Offline contracts, lifecycle, persistence and lint
+        env:
+          STUDIO_TRACE_TIMINGS: '1'
         run: cargo xtask test
       - name: Package UI and runner
         run: cargo xtask build

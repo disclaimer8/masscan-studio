@@ -176,12 +176,34 @@ impl Client {
         let (tx, events) = mpsc::sync_channel(32);
         thread::spawn(move || {
             let mut out = BufReader::new(stdout);
+            let trace = std::env::var_os("STUDIO_TRACE_TIMINGS").is_some();
+            let start = Instant::now();
+            let mut logged = start;
+            let mut blocked = Duration::ZERO;
+            let mut rows = 0usize;
             loop {
                 let e = read_frame::<Event>(&mut out)
                     .map_err(|e| format!("Runner connection closed: {e}"));
+                if let Ok(Envelope {
+                    payload: Event::Results(batch),
+                    ..
+                }) = &e
+                {
+                    rows += batch.len();
+                }
                 let done = e.is_err();
+                let began = Instant::now();
                 if tx.send(e).is_err() || done {
                     break;
+                }
+                blocked += began.elapsed();
+                if trace && logged.elapsed() >= Duration::from_secs(1) {
+                    eprintln!(
+                        "controller reader: rows={rows} queue_wait_ms={} age_ms={}",
+                        blocked.as_millis(),
+                        start.elapsed().as_millis()
+                    );
+                    logged = Instant::now();
                 }
             }
         });
@@ -322,6 +344,11 @@ fn work(
     );
     let mut selected: Option<Id> = None;
     let mut active = false;
+    let trace = std::env::var_os("STUDIO_TRACE_TIMINGS").is_some();
+    let started = Instant::now();
+    let mut logged = started;
+    let mut commits = Duration::ZERO;
+    let mut saved_rows = 0usize;
     let history = db.scans().map_err(|e| e.to_string())?;
     if let Some(s) = history.first() {
         selected = Some(s.scan);
@@ -557,11 +584,22 @@ fn work(
                         }
                         durable.push(e);
                     }
+                    let began = Instant::now();
                     let committed = if durable.is_empty() {
                         Vec::new()
                     } else {
                         db.apply_batch(&durable).map_err(|e| e.to_string())?
                     };
+                    commits += began.elapsed();
+                    saved_rows += committed.iter().map(Vec::len).sum::<usize>();
+                    if trace && logged.elapsed() >= Duration::from_secs(1) {
+                        eprintln!(
+                            "controller store: rows={saved_rows} commit_ms={} age_ms={}",
+                            commits.as_millis(),
+                            started.elapsed().as_millis()
+                        );
+                        logged = Instant::now();
+                    }
                     for (e, observed) in durable.into_iter().zip(committed) {
                         match e.payload {
                             Event::Started { total } => emit(

@@ -64,6 +64,13 @@ fn main() -> Result<()> {
         #[cfg(target_os="linux")]
         "linux-authorization-owner-fixture" => linux_acceptance::owner_fixture()?,
         "test" => {
+            #[cfg(windows)]
+            if studio_platform::windows::Process::open(std::process::id())?.elevation()?.elevated {
+                if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+                    return Err("Run application tests from an ordinary terminal, not as Administrator".into());
+                }
+                return windows_acceptance::limited(&["test"]);
+            }
             run(Command::new("cargo").args(["test", "--locked", "--workspace", "--all-targets", "--no-fail-fast"]))?;
             run(Command::new("cargo").args([
                 "clippy",

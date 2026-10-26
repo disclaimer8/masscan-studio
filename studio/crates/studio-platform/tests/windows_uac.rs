@@ -83,11 +83,9 @@ fn abrupt_owner_death_closes_the_only_job_handle() {
     runner.verify(&record).unwrap();
     owner.kill().unwrap();
     owner.wait().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while runner.ensure_alive().is_ok() {
-        assert!(Instant::now() < deadline, "runner survived abrupt UI death");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    runner
+        .wait_closed(Duration::from_secs(2))
+        .expect("runner survived abrupt UI death");
     std::fs::remove_file(ready).unwrap();
 }
 

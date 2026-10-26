@@ -222,13 +222,7 @@ pub fn verify_uac(root: &Path) -> Result<()> {
             if unsafe { TerminateProcess(owner.as_raw_handle(), 0) } == 0 {
                 return Err(std::io::Error::last_os_error().into());
             }
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while runner.ensure_alive().is_ok() {
-                if Instant::now() >= deadline {
-                    return Err("Elevated runner survived abrupt owner death".into());
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            runner.wait_closed(Duration::from_secs(2))?;
             Ok(())
         },
     );
@@ -305,13 +299,7 @@ pub fn uac_fixture() -> Result<()> {
         }
         "drop" => {
             drop(auth);
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while runner.ensure_alive().is_ok() {
-                if std::time::Instant::now() >= deadline {
-                    return Err("Runner survived job close".into());
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            runner.wait_closed(Duration::from_secs(2))?;
         }
         "owner" => {
             let path = std::env::args().nth(4).ok_or("Missing readiness path")?;

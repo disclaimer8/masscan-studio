@@ -166,7 +166,7 @@ fn main() -> Result<()> {
             )?;
             println!("Artifacts: {}", dist.display());
         }
-        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (runner setup: macOS/Linux)".into()),
+        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
     }
     Ok(())
 }

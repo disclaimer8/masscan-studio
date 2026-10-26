@@ -78,3 +78,49 @@ fn accept_is_bounded_and_cancellable_without_a_client() {
         assert!(start.elapsed() < Duration::from_secs(2));
     }
 }
+
+#[test]
+#[ignore = "child process fixture, invoked by foreign_process_is_rejected"]
+fn peer_fixture() {
+    std::thread::sleep(Duration::from_secs(30));
+}
+
+#[test]
+fn foreign_process_is_rejected_and_retained_handle_detects_death() {
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut other = Child(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "peer_fixture", "--ignored"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let process = Process::open(other.0.id()).unwrap();
+    let retained = Process::open(other.0.id()).unwrap();
+    let endpoint = Endpoint::create().unwrap();
+    // The client belongs to the same SID, but is not the launched expected process.
+    let client = Stream::connect(
+        endpoint.name(),
+        &Identity::current().unwrap(),
+        Duration::from_secs(2),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(
+        endpoint
+            .accept(process, Duration::from_secs(2), &AtomicBool::new(false))
+            .is_err()
+    );
+    drop(client);
+    other.0.kill().unwrap();
+    other.0.wait().unwrap();
+    assert!(retained.ensure_alive().is_err());
+    assert!(retained.verify(retained.identity()).is_err());
+}

@@ -529,3 +529,76 @@ impl Write for Stream {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn endpoint_has_one_explicit_owner_ace_and_rejects_second_instance() {
+        let endpoint = Endpoint::create().unwrap();
+        let mut descriptor = null_mut();
+        let mut acl = null_mut();
+        // SAFETY: valid pipe handle, correctly typed writable pointer outputs.
+        let status = unsafe {
+            GetSecurityInfo(
+                endpoint.handle.as_raw_handle(),
+                SE_KERNEL_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                &mut acl,
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        assert_eq!(status, ERROR_SUCCESS);
+        let descriptor = Local(descriptor);
+        assert!(!acl.is_null(), "a NULL DACL grants everyone access");
+        // SAFETY: GetSecurityInfo returned an ACL within the live descriptor.
+        assert_eq!(unsafe { (*acl).AceCount }, 1);
+        let mut ace = null_mut();
+        // SAFETY: index zero exists; output points within live ACL allocation.
+        assert_ne!(unsafe { GetAce(acl, 0, &mut ace) }, 0);
+        let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
+        // SAFETY: inspect ACE header before interpreting its SID layout.
+        assert_eq!(unsafe { (*ace).Header.AceType }, 0); // ACCESS_ALLOWED_ACE_TYPE
+        let mut text = null_mut();
+        // SAFETY: access-allowed ACE SID starts at SidStart, variable length
+        // resides within the descriptor, which remains live during conversion.
+        assert_ne!(
+            unsafe {
+                ConvertSidToStringSidW(
+                    std::ptr::addr_of!((*ace).SidStart).cast_mut().cast(),
+                    &mut text,
+                )
+            },
+            0
+        );
+        // SAFETY: successful Win32 conversion owns a terminated LocalAlloc string.
+        assert_eq!(unsafe { local_string(text) }.unwrap(), endpoint.owner.sid);
+        let mut control = 0;
+        let mut revision = 0;
+        // SAFETY: valid descriptor and scalar output pointers.
+        assert_ne!(
+            unsafe { GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision) },
+            0
+        );
+        assert_ne!(control & SE_DACL_PROTECTED, 0);
+        let name = wide(endpoint.name());
+        // SAFETY: attempt another first instance with the same bounded name;
+        // a valid unexpected handle is still transferred to RAII before panic.
+        let duplicate = owned(unsafe {
+            CreateNamedPipeW(
+                name.as_ptr(),
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                4096,
+                4096,
+                0,
+                null(),
+            )
+        });
+        assert!(duplicate.is_err());
+    }
+}

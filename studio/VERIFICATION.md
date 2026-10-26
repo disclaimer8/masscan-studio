@@ -3,6 +3,24 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-26 — PR #30 viewport and idle-summary follow-up
+
+Base: `4413e113165e9eb6dbed04ae5d9448d89318e0da`. Both deferred minor findings
+are addressed. Paging and bottom-edge scrolling use ListView.visible-height.
+Local `cargo xtask test`: 98 passed, 0 failed, 2 privileged tests ignored;
+formatting and Clippy passed. Hosted CI gates merging.
+Summary invalidation shares the existing model-change notification, so unchanged
+timer ticks return before borrowing the result table. Changes in selection,
+filter/order, results, enrichment and history clear still refresh it.
+
+The boundary regression reproduced a focused-row bottom of 531px outside a
+527px viewport before the fix. It now checks every pixel of a 35px height range
+at both 820px and 1160px window widths. A separate idle regression holds a mutable
+model borrow across 20 summary calls, proving that clean ticks do not access the
+model at all. An integration test checks sorting, hostname-driven filter changes,
+batched results, clear/replacement and selection changes for stale summaries.
+These are headless Slint tests, not native UI or network acceptance.
+
 ## 2026-10-26 — table keyboard and empty-state behavior
 
 Base: `12c4daa56671634261965e75cb89f971dbad1d23` (PR #28).

@@ -46,32 +46,33 @@ xtask Windows preparation/probe, AUTHORIZATION.md and verification report.
   can be invoked manually from an elevated PowerShell for this prerequisite.
 - [x] Disposable Windows CI install verifies actual Program Files ancestry and
   trusted copy. No UAC/password claim follows from an already-admin CI session.
-- [ ] Fresh review, all-OS CI, document evidence and merge this prerequisite.
+- [x] Fresh review, all-OS CI, document evidence and merge this prerequisite (PR25).
 
 ## Task 2 — UAC bootstrap and session lifetime
 
-- [ ] Resolve same-account split-token behavior using a native prototype before
+- [x] Resolve same-account split-token behavior using a native prototype before
   deciding whether AuthenticationId matching must change. Do not silently allow
   foreign processes or relax the existing simulation pipe authentication.
-- [ ] ShellExecuteExW runas with SEE_MASK_NOCLOSEPROCESS; require a process handle,
+- [x] ShellExecuteExW runas with SEE_MASK_NOCLOSEPROCESS; require a process handle,
   authenticate its pipe PID and executable against the pinned installation.
-- [ ] Runner authenticates original UI. Account-switch UAC is a separate explicit
+- [x] Runner authenticates original UI. Account-switch UAC is a separate explicit
   acceptance case; if unsupported, fail clearly before scanning.
-- [ ] Bound authorization/handshake to 180/10 seconds. UAC may block the calling
+- [x] Bound authorization/handshake to 180/10 seconds. UAC may block the calling
   thread: cancellation must invalidate the endpoint, and late authorization must
   fail closed. UI shutdown must not wait for the desktop dialog indefinitely.
-- [ ] Prove runner exit on UI death/IPC loss. Evaluate Job Object ownership across
+- [x] Prove runner exit on UI death/IPC loss. Evaluate Job Object ownership across
   elevation; do not infer assignability of an elevated child from simulation.
 - [ ] Enable Windows Authorize/Lock only after the above contracts pass. Raw gate
   and unavailable Windows network preflight remain unchanged.
 
 ## Task 3 — acceptance
 
-- [ ] CI protocol/lifecycle failures, wrong peers, stale handles, timeout and late
+- [x] CI protocol/lifecycle failures, wrong peers, stale handles, timeout and late
   completion; no privileged stdio bypass.
-- [ ] Actual Windows desktop UAC allow/deny/cancel and same/other-account behavior
-  are explicitly distinct from CI service-session tests. No home VM use while
-  Claude owns the engine/lab work.
+- [x] Actual Windows desktop UAC allow/deny/cancel and same/other-account behavior
+  are explicitly distinct from CI service-session tests. User authorized home VM
+  UAC/lifetime checks on 2026-10-26, without packets or lab changes. Same-account
+  acceptance passed; alternate-account remains unsupported and NOT RUN.
 - [ ] Package provenance, exact-head three-OS CI and fresh whole-branch review.
 
 ## Review focus

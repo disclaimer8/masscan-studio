@@ -1,8 +1,9 @@
 # Windows desktop authorization acceptance
 
 This checklist is separate from Windows Server CI. It uses no packet adapters,
-Npcap, engine labs or network scans. Windows Authorize remains gated until native
-bootstrap acceptance passes; these CLI checks are available independently.
+Npcap, engine labs or network scans. Windows Authorize/Lock was enabled after
+the desktop acceptance recorded in VERIFICATION.md. Repeat this checklist after
+changes to bootstrap, IPC identity, cancellation or lifetime ownership.
 
 Record the exact commit, Windows version, runner SHA-256, and whether the original
 account belongs to Administrators. The supported model is an ordinary process of
@@ -37,10 +38,32 @@ and the bounded authorization probe when distributed as `studio-tools.exe`.
    credentials. Expected: explicit alternate-account refusal, no session, no scan.
    Record NOT RUN when that account is unavailable; do not create one for this test.
 
-The controlled CI cancellation fixture separately proves cancellation while the
-owner remains alive, prompt exclusion until late completion, destroyed endpoints,
-late installed-runner exit and retry. Desktop testing establishes the real consent
-interaction; neither result substitutes for the other.
+6. For IPC loss and explicit Job Object closure, set
+   `$env:STUDIO_UAC_LAB_ACCEPTANCE='1'`, then run the same probe with `disconnect`
+   and `drop` as the last argument, consenting to each prompt. Each must report
+   PASS and verify runner exit through a retained process handle within two seconds.
+7. CI packages `uac-acceptance/studio-uac-tests.exe` and its hash/source manifest.
+   Verify both against the package. From an ordinary terminal, set
+   `$env:STUDIO_TEST_UAC_HASH` to the installed hash and the lab flag above, then run:
+
+   ```powershell
+   .\studio-uac-tests.exe --ignored --exact windows::uac::tests::cancellation_destroys_endpoints_before_late_runner_and_allows_retry --nocapture
+   ```
+
+   Consent to the deliberately late runner. The controlled launcher barrier
+   proves cancellation while the owner stays alive, prompt exclusion until late
+   completion, destroyed endpoints, late installed-runner exit and retry. This
+   test cancels before releasing the ShellExecute call; case 4 separately covers
+   actual owner death while the secure-desktop consent prompt is visible.
+8. For abrupt death of an established owner, the lab-only `owner <ready-file>`
+   probe writes retained runner/owner identities after Hello and repeated preflight.
+   A supervisor must retain both process handles, compare creation times and
+   executable paths, then terminate only that owner and wait at most two seconds
+   for the retained runner. The fixture times out after 15 seconds if no supervisor
+   intervenes. Never select processes by a broad name pattern.
+
+Hosted Windows CI cannot answer UAC consent and returned ERROR_CANCELLED (1223).
+It builds the fixture but does not mark these interactive checks passed.
 
 Record PASS/FAIL/NOT RUN for each case with commit/hash and diagnostics. A green
 offline test suite is not evidence that the desktop consent cases were performed.

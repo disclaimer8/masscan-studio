@@ -223,6 +223,73 @@ fn action(app: &RefCell<Controller>, ui: &MainWindow, a: Action) {
 fn process_active(status: &Status) -> bool {
     matches!(status, Status::Starting | Status::Scanning | Status::Saving)
 }
+fn repeat_job(saved: &studio_store::SavedScan) -> Result<Job, String> {
+    saved.job.prepare()?;
+    Ok(saved.job.clone())
+}
+fn fill_settings(ui: &MainWindow, job: &Job) {
+    ui.set_job_targets(job.targets.clone().into());
+    ui.set_job_ports(job.ports.clone().into());
+    ui.set_job_exclusions(job.exclusions.clone().into());
+    ui.set_job_rate(job.rate.to_string().into());
+    ui.set_job_seed(job.seed.clone().into());
+    ui.set_backend_index(if job.backend == Backend::Simulation {
+        1
+    } else {
+        0
+    });
+    ui.invoke_settings_edited();
+}
+fn history_label(s: &studio_store::SavedScan) -> String {
+    let kind = match s.job.backend {
+        Backend::Simulation => "Simulation",
+        Backend::MacFeth => "feth",
+        Backend::Archived => "Archived history",
+    };
+    format!(
+        "{} · {:?} · {} · {}",
+        s.name.as_deref().unwrap_or(kind),
+        s.status,
+        s.created_at.as_deref().unwrap_or("Unknown date"),
+        &studio_protocol::id_text(s.scan)[..8]
+    )
+}
+fn history_target(ui: &MainWindow, s: &studio_store::SavedScan) {
+    ui.set_history_name(s.name.clone().unwrap_or_default().into());
+    let preview = |value: &str| {
+        let mut text: String = value.chars().take(160).collect();
+        if text.len() < value.len() {
+            text.push('…');
+        }
+        text
+    };
+    ui.set_history_description(
+        format!(
+            "{}\nTargets: {}\nTCP ports: {}",
+            history_label(s),
+            preview(&s.job.targets),
+            preview(&s.job.ports)
+        )
+        .into(),
+    );
+    ui.set_history_can_repeat(repeat_job(s).is_ok());
+    ui.set_history_confirm_delete(false);
+    ui.set_history_feedback("".into());
+}
+fn clear_view(rows: &Rows, ui: &MainWindow) {
+    *rows.table.borrow_mut() = Table::new(0);
+    rows.keys.borrow_mut().clear();
+    rows.observations.borrow_mut().clear();
+    rows.hosts.borrow_mut().clear();
+    rows.notify.reset();
+    ui.set_filter_query("".into());
+    ui.set_sort_column(-1);
+    ui.set_sort_descending(false);
+    ui.set_event_label("".into());
+    ui.set_details(ResultRow::default());
+    ui.set_inspector_details(ResultRow::default());
+    ui.set_inspector_open(false);
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let smoke = std::env::args().any(|s| s == "--smoke");
     let pause_smoke = std::env::args().any(|s| s == "--smoke-pause");
@@ -253,6 +320,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         archived: Cell::new(false),
     });
     let history = Rc::new(RefCell::new(Vec::<studio_store::SavedScan>::new()));
+    let history_edit = Rc::new(RefCell::new(None::<studio_store::SavedScan>));
     let profiles = Rc::new(RefCell::new(Vec::<studio_store::SavedProfile>::new()));
     ui.set_rows(ModelRc::from(rows.clone()));
     rows.summary(&ui);
@@ -350,9 +418,94 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let w = ui.as_weak();
     let a = app.clone();
     let h = history.clone();
+    let edit = history_edit.clone();
     ui.on_select_history(move |i| {
         if let (Some(ui), Some(s)) = (w.upgrade(), h.borrow().get(i as usize)) {
-            action(&a, &ui, Action::Select(s.scan));
+            if ui.get_process_active() || ui.get_history_busy() || ui.get_history_confirm_delete() {
+                return;
+            }
+            match a.borrow().send(Action::Select(s.scan)) {
+                Ok(()) => {
+                    history_target(&ui, s);
+                    *edit.borrow_mut() = Some(s.clone());
+                }
+                Err(e) => ui.set_history_feedback(e.into()),
+            }
+        }
+    });
+    let w = ui.as_weak();
+    let h = history.clone();
+    let edit = history_edit.clone();
+    ui.on_manage_history(move || {
+        if let Some(ui) = w.upgrade() {
+            if ui.get_process_active() || ui.get_history_busy() {
+                return;
+            }
+            if let Some(s) = h.borrow().get(ui.get_history_index() as usize) {
+                history_target(&ui, s);
+                *edit.borrow_mut() = Some(s.clone());
+                ui.set_history_open(true);
+            }
+        }
+    });
+    for deleting in [false, true] {
+        let w = ui.as_weak();
+        let a = app.clone();
+        let edit = history_edit.clone();
+        let callback = move || {
+            let Some(ui) = w.upgrade() else { return };
+            if ui.get_history_busy() || ui.get_process_active() {
+                return;
+            }
+            if deleting && !ui.get_history_confirm_delete() {
+                return;
+            }
+            let Some(s) = edit.borrow().clone() else {
+                return;
+            };
+            let command = if deleting {
+                Action::DeleteScan(s.scan)
+            } else {
+                Action::RenameScan {
+                    id: s.scan,
+                    name: ui.get_history_name().to_string(),
+                }
+            };
+            match a.borrow().send(command) {
+                Ok(()) => ui.set_history_busy(true),
+                Err(e) => ui.set_history_feedback(e.into()),
+            }
+        };
+        if deleting {
+            ui.on_delete_history(callback);
+        } else {
+            ui.on_rename_history(callback);
+        }
+    }
+    let w = ui.as_weak();
+    let edit = history_edit.clone();
+    ui.on_repeat_history(move || {
+        let Some(ui) = w.upgrade() else { return };
+        if ui.get_history_busy() || ui.get_process_active() || ui.get_history_confirm_delete() {
+            return;
+        }
+        let Some(s) = edit.borrow().clone() else {
+            return;
+        };
+        match repeat_job(&s) {
+            Ok(job) => {
+                fill_settings(&ui, &job);
+                ui.set_profile_index(-1);
+                ui.set_profile_name("".into());
+                ui.set_profile_loaded(false);
+                ui.set_confirm_profile_delete(false);
+                ui.set_profile_feedback(
+                    "Repeated settings. The original scan is unchanged.".into(),
+                );
+                ui.set_history_open(false);
+                ui.set_settings_open(true);
+            }
+            Err(e) => ui.set_history_feedback(e.into()),
         }
     });
     let w = ui.as_weak();
@@ -592,6 +745,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let m = rows.clone();
     let h = history.clone();
     let p = profiles.clone();
+    let edit = history_edit.clone();
     let started = Instant::now();
     let success = Rc::new(Cell::new(false));
     let ok = success.clone();
@@ -615,6 +769,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for update in updates {
                 match update {
+                    Update::HistoryResult(result) => {
+                        ui.set_history_busy(false);
+                        if result.is_ok() {
+                            ui.set_history_confirm_delete(false);
+                            if let Some(target) = edit.borrow_mut().as_mut() {
+                                if let Some(saved) =
+                                    h.borrow().iter().find(|s| s.scan == target.scan)
+                                {
+                                    *target = saved.clone();
+                                    history_target(&ui, saved);
+                                } else {
+                                    ui.set_history_open(false);
+                                }
+                            }
+                        }
+                        let text = result.unwrap_or_else(|e| format!("History change failed: {e}"));
+                        ui.set_history_feedback(text.clone().into());
+                        ui.set_action_notice(text.into());
+                    }
+                    Update::Clear => {
+                        clear_view(&m, &ui);
+                        m.simulation.set(false);
+                        m.archived.set(false);
+                        ui.set_inspection_available(false);
+                        ui.set_can_resume(false);
+                        ui.set_scan_backend_label("No scan selected".into());
+                    }
                     Update::ProfileResult(result) => {
                         ui.set_profile_busy(false);
                         ui.set_confirm_profile_delete(false);
@@ -655,18 +836,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             .into(),
                         );
-                        *m.table.borrow_mut() = Table::new(0);
-                        m.keys.borrow_mut().clear();
-                        m.observations.borrow_mut().clear();
-                        m.hosts.borrow_mut().clear();
+                        clear_view(&m, &ui);
                         m.add(data);
-                        ui.set_filter_query("".into());
-                        ui.set_sort_column(-1);
-                        ui.set_sort_descending(false);
-                        ui.set_event_label("".into());
-                        ui.set_details(ResultRow::default());
-                        ui.set_inspector_details(ResultRow::default());
-                        ui.set_inspector_open(false);
                     }
                     Update::Rows(data) => m.add(data),
                     Update::Hosts(values) => {
@@ -707,26 +878,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Update::History(data, selected) => {
                         ui.set_history_labels(ModelRc::new(slint::VecModel::from(
                             data.iter()
-                                .map(|s| {
-                                    if s.job.backend == Backend::Archived {
-                                        return slint::SharedString::from(format!(
-                                            "{} · {:?} · {}",
-                                            s.name.as_deref().unwrap_or("Archived history"),
-                                            s.status,
-                                            s.created_at.as_deref().unwrap_or("Unknown date")
-                                        ));
-                                    }
-                                    slint::SharedString::from(format!(
-                                        "{} · {:?} · {}",
-                                        if s.job.backend == Backend::Simulation {
-                                            "Simulation"
-                                        } else {
-                                            "feth"
-                                        },
-                                        s.status,
-                                        s.job.ports
-                                    ))
-                                })
+                                .map(|s| slint::SharedString::from(history_label(s)))
                                 .collect::<Vec<_>>(),
                         )));
                         ui.set_history_index(
@@ -820,6 +972,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeat_is_exact_configuration_without_checkpoint_or_archived_execution() {
+        let mut saved = studio_store::SavedScan {
+            scan: [1; 16],
+            attempt: [2; 16],
+            job: Job::example(Backend::Simulation),
+            status: Status::Paused,
+            checkpoint: Some(vec![1, 2, 3]),
+            next_index: Some("42".into()),
+            detail: "paused".into(),
+            name: Some("Office".into()),
+            created_at: None,
+        };
+        saved.job.seed = u64::MAX.to_string();
+        assert_eq!(repeat_job(&saved).unwrap(), saved.job);
+        assert_eq!(saved.checkpoint, Some(vec![1, 2, 3]));
+        assert!(history_label(&saved).contains("Office"));
+        assert!(history_label(&saved).contains("Unknown date"));
+        saved.job.backend = Backend::Archived;
+        assert!(repeat_job(&saved).is_err());
+    }
     #[test]
     fn archived_ready_history_does_not_lock_the_ui_as_an_active_scan() {
         assert!(!process_active(&Status::Ready));

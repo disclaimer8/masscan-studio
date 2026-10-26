@@ -17,6 +17,9 @@ pub struct Snapshot {
     pub forwarding: String,
 }
 type Result<T> = std::result::Result<T, String>;
+/// Placeholder Darwin shows instead of the real MAC to unprivileged processes.
+/// It is never accepted; it only changes the wording of the refusal.
+const MASKED_MAC: [u8; 6] = [2, 0, 0, 0, 0, 0];
 const BASE: u32 = u32::from_be_bytes([198, 18, 0, 0]);
 
 fn field<'a>(text: &'a str, key: &str) -> Result<Option<&'a str>> {
@@ -92,7 +95,13 @@ fn iface(
         return Err(format!("{name}: link/peer changed"));
     }
     let mut ethers = text.lines().filter_map(|l| l.trim().strip_prefix("ether "));
-    if ethers.next().and_then(mac) != Some(expected_mac) || ethers.next().is_some() {
+    let observed = ethers.next();
+    if observed.and_then(mac) != Some(expected_mac) || ethers.next().is_some() {
+        if observed.and_then(mac) == Some(MASKED_MAC) {
+            return Err(format!(
+                "{name}: MAC os-masked (Darwin hides MACs from unprivileged processes); the preflight needs the authorized root runner"
+            ));
+        }
         return Err(format!("{name}: MAC changed or unavailable"));
     }
     let inets = text
@@ -315,7 +324,8 @@ fn manifest() -> Result<Vec<u8>> {
     };
     let path = std::path::Path::new("/private/var/run/rmasscan-lab/m1.json");
     for (i, p) in path.ancestors().enumerate() {
-        let m = fs::symlink_metadata(p).map_err(|e| e.to_string())?;
+        let m = fs::symlink_metadata(p)
+            .map_err(|e| format!("Cannot read stand manifest {}: {e}", p.display()))?;
         // macOS ships this fixed system ancestor root:daemon 0775. The
         // dedicated lab directory and manifest still require root-only writes.
         let system_run = p == std::path::Path::new("/private/var/run") && m.gid() == 1;
@@ -380,6 +390,35 @@ pub fn inspect_mac_feth_cancellable(cancelled: &dyn Fn() -> bool) -> Result<Snap
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    use super::*;
+    #[test]
+    fn masked_mac_is_refused_with_the_root_hint() {
+        let masked = "feth4201: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
+            \tether 02:00:00:00:00:00\n\tpeer: feth4202\n\tstatus: active\n";
+        let peer = "feth4202: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
+            \tether 02:ac:00:00:00:02\n\tinet 198.18.0.2 netmask 0xfffffffc broadcast 198.18.0.3\n\
+            \tpeer: feth4201\n\tstatus: active\n";
+        let snapshot = Snapshot {
+            manifest: serde_json::json!({
+                "state":"sealed","scanner_if":"feth4201","peer_if":"feth4202",
+                "scanner_mac":"02:ac:00:00:00:01","peer_mac":"02:ac:00:00:00:02",
+                "source_ip":"198.18.0.1","peer_ip":"198.18.0.2"
+            }),
+            scanner: masked.into(),
+            peer: peer.into(),
+            interfaces: String::new(),
+            default_route: String::new(),
+            source_route: String::new(),
+            peer_route: String::new(),
+            public_route: String::new(),
+            routes: String::new(),
+            arp: String::new(),
+            forwarding: String::new(),
+        };
+        let error = validate(&snapshot).unwrap_err();
+        assert!(error.contains("os-masked"), "{error}");
+        assert!(error.contains("authorized root runner"), "{error}");
+    }
     #[test]
     fn cancelled_preflight_reaps_its_command_without_waiting_for_timeout() {
         let start = std::time::Instant::now();

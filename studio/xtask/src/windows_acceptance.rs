@@ -174,7 +174,8 @@ pub fn verify_uac(root: &Path) -> Result<()> {
         windows::{Process, install::Installed},
     };
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
-        || studio_protocol::RAW_SCANNING_ENABLED
+        || studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacFeth)
+        || !studio_protocol::RAW_PROFILES.is_empty()
     {
         return Err("Requires disposable Windows CI with raw scanning disabled".into());
     }
@@ -367,7 +368,7 @@ pub fn package_tests(root: &Path) -> Result<()> {
     fs::write(
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"sha256":digest(&target)?,"source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,"cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,"raw_enabled":studio_protocol::RAW_SCANNING_ENABLED}),
+            &serde_json::json!({"sha256":digest(&target)?,"source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,"cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,"raw_profiles":studio_protocol::RAW_PROFILES}),
         )?,
     )?;
     println!("Native acceptance fixture: {}", target.display());

@@ -532,7 +532,7 @@ fn work(
                             )?;
                             continue;
                         }
-                        db.apply(&e).map_err(|e| e.to_string())?;
+                        let observed = db.apply(&e).map_err(|e| e.to_string())?;
                         match e.payload {
                             Event::Started { total } => emit(
                                 &out,
@@ -541,12 +541,7 @@ fn work(
                                     format!("Scanning {total} endpoints"),
                                 ),
                             )?,
-                            Event::Results(rows) => emit(
-                                &out,
-                                Update::Rows(
-                                    db.observed_batch(e.scan, rows).map_err(|e| e.to_string())?,
-                                ),
-                            )?,
+                            Event::Results(_) => emit(&out, Update::Rows(observed))?,
                             Event::Progress { sent, received } => {
                                 emit(&out, Update::Progress(sent, received))?
                             }

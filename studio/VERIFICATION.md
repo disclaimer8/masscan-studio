@@ -3,6 +3,21 @@
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## PR #16 integration checks
+
+Current main's lab fixes (`b6986c7`) were merged into the Studio branch without
+conflicts or changes to rmasscan relative to main. The first hosted Windows run
+exposed an event-queue overflow in the unchanged 100k-result acceptance test.
+The history path was performing a separate autocommit read for every result's
+discovery time. It now uses a prepared UPSERT with RETURNING inside the original
+write transaction and returns observations only after successful commit. No queue
+capacity, scan rate, timeout or row-count assertion was relaxed.
+
+New durability tests cover returned first-discovery dates, duplicate event replay
+and full rollback when committing a result batch fails. macOS after this fix:
+49 offline tests, Clippy and formatting passed. Hosted revalidation gates merging.
+Studio CI runs on PRs and main pushes; superseded PR runs are cancelled.
+
 ## 2026-10-26 — DNS error classification corrected
 
 The deferred DNS review finding is closed. macOS DNS-SD now requests intermediate
@@ -15,6 +30,12 @@ the error as a missing hostname.
 New tests cover DNS-SD failure/absence/valid and invalid PTR/deadline, system
 resolver error kinds (Windows/Linux), and controller cache behavior. macOS:
 47 offline tests passed, Clippy/fmt passed, explicit loopback resolver test passed.
+Linux native DNS/controller tests and the loopback resolver check also passed.
+Windows native tests passed; its live loopback query returned the configured
+computer name `W-`, which is invalid under the hostname validator and is now
+correctly reported as an error (not a negative cached response). A packaged Mac
+query reported a transient deadline, and the next query resolved `localhost`;
+the failed request was not reported as absence.
 The previously recorded packages below predate this correction; their hashes and
 evidence remain historical rather than being silently replaced.
 

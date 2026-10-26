@@ -377,12 +377,76 @@ pub(crate) fn kind_case(it: &Value) -> Option<Value> {
     }
     Some(c)
 }
-/// The rate a case runs at: the manifest `rate_override` for a functional-plan directory that records
-/// one, else the case's own rate. Every functional run (scanner argv, forge argv, job echo) follows it.
-pub(crate) fn run_rate(c: &Value, man: &Value) -> Value {
-    match man["rate_override"].as_u64() {
-        Some(rate) if matches!(man["plan"].as_str(), None | Some("functional")) => json!(rate),
-        _ => c["rate"].clone(),
+/// The frames a scan with these arguments puts on the wire, in the order the engine sends them: the
+/// plan is built exactly as `wire_scan` builds it (same parsers, same rate, which enters the probe
+/// order through `i + r * rate`) and walked with the engine's own `ProbeCursor`. Byte parity of this
+/// generator with the C scanner is proven by the functional cases against the C fixtures; what it
+/// adds here is the sequence a batched path must reproduce.
+pub(crate) fn plan_frames(args: &BTreeMap<String, Value>) -> Result<Vec<Vec<u8>>, String> {
+    use rmasscan_core::config::{
+        Operation, ScanConfig, parse_mac, parse_rate, parse_source_port, validate,
+    };
+    use rmasscan_core::massip::MassIp;
+    use rmasscan_core::packet::LinkType;
+    use rmasscan_core::probe::{AdapterBinding, ProbeCursor, ReadyPlan};
+    use rmasscan_core::targets::{add_target_string, parse_ports};
+    let get = |k: &str| -> Result<&str, String> {
+        args.get(&format!("--{k}"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("--{k} missing"))
+    };
+    let ip: std::net::Ipv4Addr = get("src-ip")?
+        .parse()
+        .map_err(|e| format!("--src-ip: {e}"))?;
+    let src_mac = parse_mac(get("src-mac")?).map_err(|e| e.to_string())?;
+    let router_mac = parse_mac(get("router-mac")?).map_err(|e| e.to_string())?;
+    let sp = parse_source_port(get("source-port")?).map_err(|e| e.to_string())?;
+    let mut targets = MassIp::new();
+    add_target_string(targets.ipv4_mut(), get("targets")?).map_err(|e| e.to_string())?;
+    parse_ports(targets.ports_mut(), get("ports")?).map_err(|e| e.to_string())?;
+    let mut excludes = MassIp::new();
+    if let Ok(x) = get("exclude") {
+        add_target_string(excludes.ipv4_mut(), x).map_err(|e| e.to_string())?;
+    }
+    let cfg = ScanConfig {
+        targets,
+        excludes,
+        seed: get("seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
+        max_rate: parse_rate(get("rate")?).map_err(|e| e.to_string())?,
+        wait_secs: get("wait")?.parse().map_err(|e| format!("--wait: {e}"))?,
+        adapter_ip: Some(u32::from(ip)),
+        adapter_mac: Some(src_mac),
+        router_mac: Some(router_mac),
+        source_port: Some(sp),
+        adapter_name: Some(get("iface")?.to_owned()),
+        ..ScanConfig::default()
+    };
+    let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
+    let plan = ReadyPlan::new(
+        eff,
+        AdapterBinding {
+            interface_id: get("iface")?.to_owned(),
+            link_type: LinkType::Ethernet,
+            source_ipv4: u32::from(ip),
+            source_mac: src_mac,
+            next_hop_mac: router_mac,
+            source_ports: sp,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let mut cursor = ProbeCursor::new(&plan, 0).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(plan.range().min(1 << 20) as usize);
+    loop {
+        let batch: Vec<Vec<u8>> = cursor
+            .preload(256)
+            .iter()
+            .map(|p| p.frame.clone())
+            .collect();
+        if batch.is_empty() {
+            return Ok(out);
+        }
+        cursor.advance_sent_n(batch.len());
+        out.extend(batch);
     }
 }
 pub(crate) fn arg_map(it: &Value, man: &Value, side: bool) -> BTreeMap<String, Value> {
@@ -408,7 +472,7 @@ pub(crate) fn arg_map(it: &Value, man: &Value, side: bool) -> BTreeMap<String, V
             ("ports", c["ports"].clone()),
             ("source-port", c["source_port"].clone()),
             ("seed", json!(n(&c["seed"]).to_string())),
-            ("rate", json!(n(&run_rate(&c, man)).to_string())),
+            ("rate", json!(n(&c["rate"]).to_string())),
             ("wait", json!(n(&c["wait"]).to_string())),
         ] {
             a.insert(format!("--{k}"), v);
@@ -1292,7 +1356,6 @@ pub(crate) fn job(r: &mut Run, j: &Value, c: &Value, man: &Value) {
     ] {
         want[k] = c[k].clone();
     }
-    want["rate"] = run_rate(c, man);
     let ok = want
         .as_object()
         .unwrap()
@@ -2508,26 +2571,6 @@ fn sendqueue_identity(r: &mut Run, man: &Value, j: &Value, it: &Value) {
             format!("tx_batch_max {max:?}, tx_batch_cap {cap:?}"),
         );
     }
-    // A functional run at an overridden rate exists to push batches through the adapter.
-    if man["rate_override"].is_number() && j["reason"] == "Completed" {
-        let sent = n(&j["net"]["tx_sent"]);
-        if sent >= 2 {
-            r.beh(
-                "batched path exercised (else batched path not exercised)",
-                j["net"]["tx_batches"].as_u64().unwrap_or(0) > 0
-                    && j["net"]["tx_batch_max"].as_u64().unwrap_or(0) > 1,
-                format!(
-                    "tx_batches {}, tx_batch_max {}",
-                    j["net"]["tx_batches"], j["net"]["tx_batch_max"]
-                ),
-            );
-        } else {
-            r.notes.insert(
-                "batched_path".into(),
-                json!(format!("exempt: {sent} frame(s) sent, fewer than 2")),
-            );
-        }
-    }
 }
 /// One perf cell (ruling 7). The capture-completeness rules ran in `capture` (INVALID); everything
 /// here is a behaviour or isolation finding (FAIL). The cell's metrics are recorded in `notes.perf`.
@@ -2583,6 +2626,7 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
     let sp = sports(c);
     let mut wire_syns = None;
     let mut wire_replies_n = None;
+    let mut order_ok = None;
     if let Some((fr, _)) = &ctx.peer {
         let all = fr.iter().filter(|(_, f)| pcap::is_syn(f)).count();
         let ours = syns(fr, &ctx.bind, sp);
@@ -2593,6 +2637,34 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
         );
         // Wire count equals tx_sent, and no SYN after the outcome (both FAIL when the capture is proven).
         align(r, ctx, c, false);
+        // The batched path may not reorder, drop, duplicate or alter a frame: the SYNs in capture order
+        // are the plan's probe sequence (a prefix of it when the run ended early), byte for byte. A
+        // directory without `tx_mode_expected` gets the result as a note only.
+        let (same, detail) = match plan_frames(&arg_map(it, man, false)) {
+            Err(e) => (false, format!("cannot build the plan sequence: {e}")),
+            Ok(want) => {
+                let off = ours.iter().zip(&want).position(|((_, g), w)| g != w);
+                let ok = off.is_none()
+                    && ours.len() <= want.len()
+                    && (!completed || ours.len() == want.len());
+                (
+                    ok,
+                    format!(
+                        "{} SYN on the wire, {} planned, first difference at {off:?}",
+                        ours.len(),
+                        want.len()
+                    ),
+                )
+            }
+        };
+        order_ok = Some(same);
+        if man["tx_mode_expected"].is_string() {
+            r.cap(
+                "wire SYN sequence equals the plan's probe sequence (bytes and order)",
+                same,
+                detail,
+            );
+        }
         if completed {
             let mut seen = BTreeMap::<u16, usize>::new();
             for (_, f) in &ours {
@@ -2678,6 +2750,9 @@ pub(crate) fn perf(r: &mut Run, ctx: &Ctx, it: &Value, c: &Value, man: &Value) {
             if !v.is_null() {
                 m.insert(k.into(), v.clone());
             }
+        }
+        if let Some(ok) = order_ok {
+            m.insert("wire_order_matches_plan".into(), json!(ok));
         }
     }
 }
@@ -3116,17 +3191,6 @@ pub fn verify_dir(root: &Path) -> Value {
         NOT_RUN,
         false,
     );
-    // Recorded only by a functional run at an overridden rate (batched-path coverage); absent otherwise.
-    if let Some(ro) = man.get("rate_override") {
-        r.check(
-            "manifest.rate_override is a rate from 1 to 100000 on the functional plan",
-            ro.as_u64().is_some_and(|v| (1..=100_000).contains(&v))
-                && matches!(man["plan"].as_str(), None | Some("functional")),
-            format!("{ro} on plan {}", man["plan"]),
-            NOT_RUN,
-            false,
-        );
-    }
     r.check(
         "manifest executable sha256 present",
         truth(&man["exe"]["sha256"]),

@@ -282,6 +282,18 @@ their verdicts) and only to scan reports (`status` ok with a `net` block):
   sendqueue path; a `single` run does not measure it, so zero there is not evidence and is not asked for.
 - For `perf.<rate>` cells with `rate >= 10000` under sendqueue: `net.tx_batches > 0` and
   `net.tx_batch_max <= identity.tx_batch_cap`, else "sendqueue claimed but no batch was transmitted".
+- Wire sequence (perf cells, offline on the kept full pcaps): the SYNs in capture order must equal, byte for
+  byte and in order, the frames of the cell's plan ("wire SYN sequence equals the plan's probe sequence").
+  The expected sequence is generated with `rmasscan-core`'s `ProbeCursor` from the cell's own arguments
+  (ports, targets, seed, source port, MACs, IPs and the same `--rate`, because the probe order rotates by
+  the rate: `xXx = i + r * rate`). A Completed cell must match in full; a cell that ended early (RxLoss)
+  must match a prefix. A difference is a behaviour FAIL; a missing or incomplete capture makes it INVALID.
+  A directory without `tx_mode_expected` gets the result only as `notes.perf.wire_order_matches_plan`
+  (report-only; `perf-r1` matches on every cell whose pcap is plain). This is the GO evidence that the
+  batched sendqueue path neither reorders, drops, duplicates nor alters a frame. The rate-100 functional
+  cases form only one-frame batches (no batch forms before about the 139th frame of a scan), so they do
+  not exercise the batched path: perf proves the batching path, the functional cases against the C
+  fixtures prove the bytes (and the order) of the generator.
 - Unchanged: `tx_sent` equals the SYN count on the wire, order equals the fixture, exactly once.
   On a run with `tx_uncertain > 0` the wire rule is `tx_sent <= SYN on wire <= tx_sent + tx_uncertain`.
 
@@ -293,38 +305,6 @@ GO rule for throughput (VM): `rate_gate` MET at 100, 1000 and 10000 pps, and the
 as measured. The VM ceiling with sendqueue (about 16k to 37k pps in the spike, two VM speed modes)
 does not reach 100k; that is an OPEN finding for the physical NIC stage, never a FAIL, and it never
 changes `overall`.
-
-#### Batched functional coverage (`functional-batched-r1`)
-
-At the functional plan's own rates (1 to 100 pps) the engine forms only one-frame batches, which take
-the `pcap_sendpacket` path, so parts A and B alone never exercise `pcap_sendqueue_transmit`. The batched
-rerun repeats the functional plan with every case at one higher rate:
-`--rate-override <pps>` (functional plan only, 1 to 100000; recommended 20000). It is recorded in
-`manifest.json` as `rate_override`, the scanner argv and the job echo of every run carry it, and a
-directory never mixes rates (a rerun without the option, or with another value, is refused). Everything
-else is unchanged and compared against the same C fixtures: SYN bytes and order equal the fixture
-without normalisation, each probe exactly once, replies equal listener truth. The SYN bytes and order do
-not depend on the rate (same seed, same BlackRock permutation), so the fixtures stay valid; the pause
-groups still cut exactly at N because the harness cuts a batch at `--pause-after`.
-
-```sh
-rmasscan/target/release/rmasscan-lab windows-suite \
-  --out docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/functional-batched-r1 \
-  --suite functional-batched-r1 --plan functional --rate-override 20000 --tx-mode sendqueue \
-  --commit $COMMIT --repo . \
-  --guest-exe 'C:\Users\lab\t4\wire_scan.exe' \
-  --fixtures docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional/fixtures \
-  --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
-rmasscan/target/release/rmasscan-lab windows-verify \
-  --dir docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/functional-batched-r1 \
-  --out docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/functional-batched-r1/verdict.json
-```
-
-New `windows-verify` rule, only when the manifest records `rate_override` and `tx_mode` is `sendqueue`:
-every Completed run that sent more than one frame must have `net.tx_batches > 0` and
-`net.tx_batch_max > 1`, else FAIL "batched path not exercised". A run that sent fewer than two frames
-(for example `c01`, one probe) is exempt and carries a `batched_path` note. Paused, Stopped and Failed runs
-are not asked. Record `tx_batches` and `tx_batch_max` of the runs in the README.
 
 Cleanup after an aborted suite: `rmasscan-lab windows-suite --cleanup --suite ID` stops every
 recorded remote process (pid and start time must match) and removes the suite's scratch directories except runs that still carry the keep marker (see below); those are reported.

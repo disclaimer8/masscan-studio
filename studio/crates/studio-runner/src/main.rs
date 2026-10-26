@@ -429,6 +429,24 @@ fn main() {
 
 fn launch() -> Result<(), String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    #[cfg(windows)]
+    if args.len() == 3 && args[0] == "--connect-pipe" {
+        use studio_platform::windows::{Identity, Stream};
+        let ui: Identity = serde_json::from_str(&args[2]).map_err(|e| e.to_string())?;
+        let stream = Stream::connect(
+            &args[1],
+            &ui,
+            Duration::from_secs(10),
+            &std::sync::atomic::AtomicBool::new(false),
+        )?;
+        let writer = stream.clone();
+        let monitor = stream.clone();
+        return serve(
+            Box::new(stream),
+            Box::new(writer),
+            Box::new(move || monitor.ensure_peer_alive()),
+        );
+    }
     if args == ["--stdio"] {
         #[cfg(unix)]
         if studio_platform::unix::Identity::current()?.uid == 0 {

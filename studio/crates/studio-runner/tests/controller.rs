@@ -154,3 +154,52 @@ fn incomplete_raw_integration_refuses_before_opening_an_adapter() {
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn failed_authorization_leaves_simulation_and_history_usable() {
+    let dir = std::env::temp_dir().join(format!(
+        "studio-auth-recover-{}",
+        id_text(new_id().unwrap())
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let runner = dir.join(format!("runner{}", std::env::consts::EXE_SUFFIX));
+    let mut app = Controller::open(dir.join("data"), runner.clone()).unwrap();
+    app.send(Action::Authorize).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut refused = false;
+    while Instant::now() < deadline && !refused {
+        for u in app.poll() {
+            if let Update::Authorization {
+                busy: false,
+                authorized: false,
+                detail,
+            } = u
+            {
+                assert!(!detail.is_empty());
+                refused = true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        refused,
+        "uninstalled/unsupported authorization must fail without OS prompt"
+    );
+    std::fs::copy(env!("CARGO_BIN_EXE_studio-runner"), runner).unwrap();
+    app.send(Action::Start(Job::example(Backend::Simulation)))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut completed = false;
+    while Instant::now() < deadline && !completed {
+        for u in app.poll() {
+            if let Update::State(status, detail) = u {
+                assert_ne!(status, Status::Interrupted, "{detail}");
+                completed |= status == Status::Completed;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(completed);
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
-#[cfg(any(target_os = "macos", test))]
-mod stand;
 use rmasscan_engine::{Checkpoint, Engine, EngineHandle, EngineOptions, Reason};
 use std::{
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Read, Write},
     sync::mpsc::{self, TryRecvError},
     time::{Duration, Instant},
 };
@@ -48,52 +46,7 @@ fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
 }
 #[cfg(target_os = "macos")]
 fn check_feth() -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    let path = "/var/run/rmasscan-lab/m1.json";
-    let parent = std::fs::symlink_metadata("/var/run/rmasscan-lab")
-        .map_err(|_| "The isolated feth stand is not installed")?;
-    if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
-        return Err("Untrusted stand manifest directory".into());
-    }
-    let md =
-        std::fs::symlink_metadata(path).map_err(|_| "The isolated feth stand is not installed")?;
-    if !md.is_file() || md.uid() != 0 || md.mode() & 0o022 != 0 {
-        return Err("Untrusted stand manifest".into());
-    }
-    if md.len() > 65536 {
-        return Err("Stand manifest is too large".into());
-    }
-    stand::validate_manifest(&std::fs::read(path).map_err(|e| e.to_string())?)?;
-    for (name, peer) in [("feth4201", "feth4202"), ("feth4202", "feth4201")] {
-        let out = std::process::Command::new("/sbin/ifconfig")
-            .arg(name)
-            .env_clear()
-            .env("LC_ALL", "C")
-            .output()
-            .map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&out.stdout);
-        if !out.status.success()
-            || !text.contains(&format!("peer: {peer}"))
-            || !text.contains("status: active")
-            || (name == "feth4201" && text.lines().any(|l| l.trim_start().starts_with("inet ")))
-        {
-            return Err("The isolated feth pair is not active or its topology changed".into());
-        }
-    }
-    let all = std::process::Command::new("/sbin/ifconfig")
-        .arg("-a")
-        .env_clear()
-        .env("LC_ALL", "C")
-        .output()
-        .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&all.stdout);
-    if !all.status.success()
-        || text.contains("member: feth4201")
-        || text.contains("member: feth4202")
-    {
-        return Err("The feth pair may not belong to a bridge".into());
-    }
-    Ok(())
+    studio_platform::network::inspect_mac_feth().map(|_| ())
 }
 #[cfg(not(target_os = "macos"))]
 fn check_feth() -> Result<(), String> {
@@ -125,31 +78,37 @@ fn flush(
     a.flushed = Instant::now();
     Ok(())
 }
-fn serve() -> Result<(), String> {
-    if std::env::args().skip(1).collect::<Vec<_>>() != ["--stdio"] {
-        return Err("Runner is private to Studio (--stdio); no command-line scan API".into());
-    }
+fn serve(
+    input: Box<dyn Read + Send>,
+    output_stream: Box<dyn Write + Send>,
+    live: Box<dyn Fn() -> Result<(), String>>,
+) -> Result<(), String> {
     let (commands, rx) = mpsc::sync_channel(8);
+    let disconnected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let closed = disconnected.clone();
     std::thread::spawn(move || {
-        let mut input = BufReader::new(std::io::stdin());
+        let mut input = BufReader::new(input);
         while let Ok(e) = read_frame::<Command>(&mut input) {
             if commands.send(e).is_err() {
                 break;
             }
         }
+        closed.store(true, std::sync::atomic::Ordering::Release);
     });
     let hello = rx
         .recv_timeout(Duration::from_secs(10))
         .map_err(|_| "Handshake timeout/disconnected")?;
     let session = hello.session;
-    ReceiveOrder::new(session, [0; 16], [0; 16]).accept(&hello)?;
+    let mut session_order = ReceiveOrder::new(session, [0; 16], [0; 16]);
+    session_order.accept(&hello)?;
+    let mut session_sequence = 1u64;
     if hello.payload != Command::Hello {
         return Err("Hello required".into());
     }
     // At most 32 bounded frames = 4 MiB, writer never blocks the control/engine loop.
     let (events, output) = mpsc::sync_channel::<Envelope<Event>>(32);
     let writer = std::thread::spawn(move || {
-        let mut out = BufWriter::new(std::io::stdout());
+        let mut out = BufWriter::new(output_stream);
         for e in output {
             write_frame(&mut out, &e)?;
         }
@@ -167,7 +126,12 @@ fn serve() -> Result<(), String> {
         ))
         .map_err(|e| e.to_string())?;
     let mut active: Option<Attempt> = None;
+    let mut checked = Instant::now();
     loop {
+        if checked.elapsed() >= Duration::from_millis(250) {
+            live()?;
+            checked = Instant::now();
+        }
         if writer.is_finished() {
             return Err("Application event pipe closed".into());
         }
@@ -177,6 +141,40 @@ fn serve() -> Result<(), String> {
                     return Err("Session mismatch".into());
                 }
                 match &e.payload {
+                    Command::CheckNetwork if active.is_none() => {
+                        session_order.accept(&e)?;
+                        #[cfg(target_os = "macos")]
+                        let preflight =
+                            studio_platform::network::inspect_mac_feth_cancellable(&|| {
+                                disconnected.load(std::sync::atomic::Ordering::Acquire)
+                            })
+                            .map(|_| ());
+                        #[cfg(not(target_os = "macos"))]
+                        let preflight = check_feth();
+                        let (ready, detail) = match preflight {
+                            Ok(()) => (
+                                true,
+                                "Isolated feth preflight passed; no packets sent".into(),
+                            ),
+                            Err(e) => (false, e),
+                        };
+                        session_sequence = session_sequence
+                            .checked_add(1)
+                            .ok_or("Sequence exhausted")?;
+                        events
+                            .try_send(Envelope::new(
+                                session,
+                                [0; 16],
+                                [0; 16],
+                                session_sequence,
+                                Event::NetworkChecked { ready, detail },
+                            ))
+                            .map_err(|e| e.to_string())?;
+                    }
+                    Command::CloseSession if active.is_none() => {
+                        session_order.accept(&e)?;
+                        break;
+                    }
                     Command::Start(job) | Command::Resume { job, .. } => {
                         if active
                             .as_ref()
@@ -388,8 +386,50 @@ fn serve() -> Result<(), String> {
     Ok(())
 }
 fn main() {
-    if let Err(e) = serve() {
+    if let Err(e) = launch() {
         eprintln!("Studio runner: {e}");
         std::process::exit(1);
     }
+}
+
+fn launch() -> Result<(), String> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args == ["--stdio"] {
+        #[cfg(unix)]
+        if studio_platform::unix::Identity::current()?.uid == 0 {
+            return Err(
+                "Root runner requires an authenticated socket; stdio is unprivileged only".into(),
+            );
+        }
+        return serve(
+            Box::new(std::io::stdin()),
+            Box::new(std::io::stdout()),
+            Box::new(|| Ok(())),
+        );
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if args.len() == 3 && args[0] == "--connect" {
+        use studio_platform::unix::{Endpoint, Identity};
+        let ui: Identity = serde_json::from_str(&args[2]).map_err(|e| e.to_string())?;
+        if ui.uid == 0 {
+            return Err("Studio UI must run without root privileges".into());
+        }
+        let me = Identity::current()?;
+        if me.uid == 0 {
+            studio_platform::trusted::verify(
+                &me.executable,
+                &studio_platform::trusted::file_hash(&me.executable)?,
+            )?;
+        }
+        let stream = Endpoint::connect(std::path::Path::new(&args[1]), &ui)?;
+        let writer = stream.try_clone().map_err(|e| e.to_string())?;
+        let live = Box::new(move || {
+            if Identity::read(ui.pid)? != ui {
+                return Err("UI process exited or changed identity".into());
+            }
+            Ok(())
+        });
+        return serve(Box::new(stream), Box::new(writer), live);
+    }
+    Err("Runner requires --stdio or an authenticated --connect endpoint".into())
 }

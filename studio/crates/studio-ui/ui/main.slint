@@ -116,6 +116,9 @@ export component MainWindow inherits Window {
     callback stop-scan();
     callback resume-scan();
     callback lock-session();
+    in property <bool> authorization-available: false;
+    in property <bool> authorizing: false;
+    in property <bool> authorized: false;
     in property <bool> can-resume: false;
     in property <int> selection-count;
     in property <int> stream-state;
@@ -194,7 +197,7 @@ export component MainWindow inherits Window {
                 Rectangle { horizontal-stretch: 1; }
                 ComboBox { model: root.history-labels; current-index <=> root.history-index; enabled: !root.process-active; selected(value) => { root.select-history(self.current-index); } }
                 ActionButton { text: "New scan"; enabled: !root.process-active; clicked => { root.settings-open = true; } }
-                ActionButton { text: "Lock"; enabled: !root.process-active; clicked => { root.lock-session(); } }
+                ActionButton { text: root.authorizing ? "Cancel authorization" : root.authorized || !root.authorization-available ? "Lock" : "Authorize"; enabled: root.authorizing || !root.process-active; clicked => { root.lock-session(); } }
                 theme-button := ActionButton { text: Theme.preference == 0 ? "Theme: System" : Theme.dark ? "Theme: Dark" : "Theme: Light"; clicked => { themes.show(); } }
                 Rectangle { width: 6px; height: 6px; border-radius: 3px; background: root.stream-state == 1 ? Theme.accent : Theme.muted; }
                 Text { text: root.process-view ? (root.process-stopping ? "Stopping…" : root.process-status) : root.stream-state == 1 ? "Streaming" : root.stream-state == 2 ? "Stream complete" : "Ready"; color: Theme.muted; font-size: 12px; }

@@ -139,6 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_file_name(format!("studio-runner{}", std::env::consts::EXE_SUFFIX));
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
+    ui.set_authorization_available(cfg!(target_os = "macos"));
     ui.set_process_view(true);
     ui.set_job_seed(
         (u32::from_ne_bytes(studio_protocol::new_id()?[..4].try_into().unwrap()).max(1))
@@ -234,7 +235,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = app.clone();
     ui.on_lock_session(move || {
         if let Some(ui) = w.upgrade() {
-            action(&a, &ui, Action::Lock);
+            let request = if ui.get_authorization_available()
+                && !ui.get_authorized()
+                && !ui.get_authorizing()
+            {
+                Action::Authorize
+            } else {
+                Action::Lock
+            };
+            action(&a, &ui, request);
         }
     });
     let w = ui.as_weak();
@@ -388,6 +397,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .unwrap_or(-1),
                         );
                         *h.borrow_mut() = data;
+                    }
+                    Update::Authorization {
+                        busy,
+                        authorized,
+                        detail,
+                    } => {
+                        ui.set_authorizing(busy);
+                        ui.set_authorized(authorized);
+                        ui.set_process_active(busy);
+                        ui.set_process_stopping(false);
+                        ui.set_process_status(if busy { "Authorizing" } else { "Ready" }.into());
+                        ui.set_action_notice(detail.into());
                     }
                     Update::State(status, detail) => {
                         eprintln!("Studio: {status:?}: {detail}");

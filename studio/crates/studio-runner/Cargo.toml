@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 studio-protocol.workspace = true
+studio-platform.workspace = true
 rmasscan-core.workspace = true
 rmasscan-engine.workspace = true
 rmasscan-net.workspace = true

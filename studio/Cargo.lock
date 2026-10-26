@@ -4339,8 +4339,20 @@ name = "studio-app"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "studio-platform",
  "studio-protocol",
  "studio-store",
+]
+
+[[package]]
+name = "studio-platform"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -4363,6 +4375,7 @@ dependencies = [
  "rmasscan-net",
  "serde_json",
  "studio-app",
+ "studio-platform",
  "studio-protocol",
  "studio-store",
 ]
@@ -5776,6 +5789,8 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
+ "studio-platform",
+ "studio-protocol",
 ]
 
 [[package]]

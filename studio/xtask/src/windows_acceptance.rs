@@ -69,12 +69,13 @@ pub fn limited(args: &[&str]) -> Result<()> {
             std::mem::size_of_val(&label) as u32 + GetLengthSid(sid),
         )
     };
+    let label_error = std::io::Error::last_os_error();
     // SAFETY: ConvertStringSidToSidW allocated this SID with LocalAlloc.
     unsafe {
         LocalFree(sid);
     }
     if ok == 0 {
-        return Err(std::io::Error::last_os_error().into());
+        return Err(label_error.into());
     }
     let exe = std::env::current_exe()?;
     let exe = exe
@@ -83,13 +84,36 @@ pub fn limited(args: &[&str]) -> Result<()> {
     let mut argv = vec![exe];
     argv.extend_from_slice(args);
     let mut line = wide(&studio_platform::win_setup::command_line(&argv)?);
+    let log_path = std::env::temp_dir().join(format!(
+        "studio-limited-{}.log",
+        studio_protocol::new_id()?
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    ));
+    let log = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .read(true)
+        .open(&log_path)?;
+    let input = fs::File::open("NUL")?;
+    for h in [log.as_raw_handle(), input.as_raw_handle()] {
+        // SAFETY: retained fixture-only file handles; no concurrent child launch.
+        if unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
     let startup = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        dwFlags: STARTF_USESTDHANDLES,
+        hStdInput: input.as_raw_handle(),
+        hStdOutput: log.as_raw_handle(),
+        hStdError: log.as_raw_handle(),
         ..Default::default()
     };
     let mut info = PROCESS_INFORMATION::default();
-    // SAFETY: explicit executable, mutable terminated command line, no inherited
-    // handles. Current environment is inherited; restricted token is our own.
+    // SAFETY: explicit executable, mutable terminated command line; only the
+    // fixture log/NUL are inheritable. Current environment and own limited token.
     if unsafe {
         CreateProcessAsUserW(
             restricted.as_raw_handle(),
@@ -97,7 +121,7 @@ pub fn limited(args: &[&str]) -> Result<()> {
             line.as_mut_ptr(),
             null(),
             null(),
-            0,
+            1,
             CREATE_NO_WINDOW,
             null(),
             null(),
@@ -111,7 +135,7 @@ pub fn limited(args: &[&str]) -> Result<()> {
     let process = handle(info.hProcess)?;
     let _thread = handle(info.hThread)?;
     // SAFETY: retained process supports wait; bounded fixture deadline.
-    if unsafe { WaitForSingleObject(process.as_raw_handle(), 60000) } != WAIT_OBJECT_0 {
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), 600000) } != WAIT_OBJECT_0 {
         // SAFETY: only the newly created disposable fixture is terminated.
         unsafe {
             TerminateProcess(process.as_raw_handle(), 1);
@@ -123,6 +147,9 @@ pub fn limited(args: &[&str]) -> Result<()> {
     if unsafe { GetExitCodeProcess(process.as_raw_handle(), &mut exit) } == 0 {
         return Err(std::io::Error::last_os_error().into());
     }
+    drop(log);
+    print!("{}", fs::read_to_string(&log_path)?);
+    fs::remove_file(log_path)?;
     if exit != 0 {
         return Err(format!("Restricted fixture failed with {exit}").into());
     }

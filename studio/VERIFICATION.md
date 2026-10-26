@@ -487,5 +487,40 @@ Further tests cover shutdown during a blocked write and peer death during a read
 The follow-up review found no new issues. Latest-head CI must pass these added
 checks before merge; earlier green evidence is not a substitute.
 
+Final Windows run 40323404385 passed all three OS jobs and language guards before
+PR23 merged as 8e76a3a. Windows: 70 passed, three ignored (two live inspection
+checks and one separately invoked child fixture).
+
 No cross-account/UAC, Windows interactive desktop, physical NIC or network-packet
 claim follows from these tests. The home lab and rmasscan source were not used.
+
+## 2026-10-26 — Linux session authorization
+
+Linux controller/UI now use a session-only pkexec runner installed under its
+SHA-256. Parent/peer identities, trusted installation and the independent raw
+gate remain mandatory. Initial Linux support is x86-64/glibc. No product polkit
+policy, service or privileged daemon is installed.
+
+At 4f514b1, Ubuntu job 121584669177 in run 40326496452 passed 71 tests (four
+ignored: two live inspection checks and two separately invoked fixtures),
+Clippy/format, packaging and both software UI lifecycle checks. The actual
+polkit probe installed a root-owned runner, authenticated the exact elevated
+child, completed Hello/CheckNetwork/CloseSession, verified that preflight remained
+unavailable, and checked runner exit/socket removal. A second actual elevated
+session terminated within two seconds after its UI-owner fixture was SIGKILLed.
+The temporary exact-binary XML policy was removed and is excluded from artifacts.
+No packet adapter was opened.
+
+Local Mac `cargo xtask test`: 74 passed, two live inspection checks ignored;
+Clippy and formatting passed. Portable installer/ELF tests were observed failing
+on the missing APIs before implementation and passing afterwards. Linux tests
+cover foreign peer, exact child with wrong UID, cancellation, timeout, child exit,
+wrong parent and parent death. Fresh whole-branch review found no confirmed
+defects. Publication additionally uses no-clobber rename for simultaneous installs;
+the exact final HEAD still requires three-OS green CI before merge.
+
+Evidence: `/tmp/studio-linux-authorization-ci.log` (GitHub job above),
+`/tmp/studio-linux-mac-tests.log`. Desktop password prompting/cancellation is not
+established by the CI allow policy and remains a Linux release gate. System loader
+configuration/runtime and administrators are trusted. Other Linux architectures,
+raw network scanning and Claude's engine/lab acceptance are outside this change.

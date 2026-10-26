@@ -216,6 +216,22 @@ impl Table {
     pub fn select(&mut self, visual: usize, extend: bool) {
         self.select_with_modifiers(visual, extend, false);
     }
+    /// Unique selected IPs in visible order. Never copy hidden or merely focused rows.
+    pub fn selected_ips(&self) -> String {
+        let mut seen = HashSet::new();
+        self.view
+            .iter()
+            .map(|&i| &self.rows[i])
+            .filter(|r| self.selected.contains(&r.id) && seen.insert(r.ip))
+            .map(|r| r.cells[0].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    /// Deselect without losing the focus position used by the next arrow key.
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.anchor = None;
+    }
     /// Navigate the current view, resolving focus by stable ID after sort/filter.
     pub fn navigate(&mut self, delta: i32, range: bool) -> Option<usize> {
         let last = self.view.len().checked_sub(1)?;
@@ -246,12 +262,13 @@ impl Table {
         let Some(id) = self.row(visual).map(|r| r.id) else {
             return;
         };
+        let anchor_id = self.anchor.or(self.focused);
         self.focused = Some(id);
         if range {
-            let anchor = self
-                .anchor
+            let anchor = anchor_id
                 .and_then(|id| self.view.iter().position(|&i| self.rows[i].id == id))
                 .unwrap_or(visual);
+            self.anchor = Some(self.rows[self.view[anchor]].id);
             if !extend {
                 self.selected.clear();
             }

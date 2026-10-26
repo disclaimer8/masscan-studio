@@ -9,6 +9,7 @@ use std::{
 use studio_app::{Action, Controller, Update};
 use studio_protocol::{Backend, Job, Status};
 use studio_table::{Change, Table};
+mod table_controls;
 slint::include_modules!();
 
 struct Rows {
@@ -162,7 +163,20 @@ impl Rows {
         let t = self.table.borrow();
         ui.set_summary(format!("{} of {} saved results", t.view.len(), t.rows.len()).into());
         ui.set_selection_count(t.selected.len() as i32);
-        ui.set_selection_label(format!("{} selected", t.selected.len()).into());
+        let visible = t
+            .view
+            .iter()
+            .filter(|&&i| t.selected.contains(&t.rows[i].id))
+            .count();
+        let hidden = t.selected.len() - visible;
+        ui.set_selection_label(
+            if hidden == 0 {
+                format!("{} selected", t.selected.len())
+            } else {
+                format!("{} selected · {hidden} hidden", t.selected.len())
+            }
+            .into(),
+        );
         let active = t
             .focused
             .and_then(|id| t.view.iter().position(|&i| t.rows[i].id == id));
@@ -580,61 +594,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-    let w = ui.as_weak();
-    let m = rows.clone();
-    ui.on_filter(move |s| {
-        m.table.borrow_mut().filter(&s);
-        m.notify.reset();
-        if let Some(ui) = w.upgrade() {
-            ui.set_filter_query(s);
-            m.summary(&ui);
-        }
-    });
-    let w = ui.as_weak();
-    let m = rows.clone();
-    ui.on_order(move |c, d| {
-        m.table.borrow_mut().sort(c as usize, d);
-        m.notify.reset();
-        if let Some(ui) = w.upgrade() {
-            m.summary(&ui);
-        }
-    });
-    let w = ui.as_weak();
-    let m = rows.clone();
-    ui.on_choose(move |i, e, r| {
-        m.table.borrow_mut().select_with_modifiers(i as usize, e, r);
-        m.notify.reset();
-        if let Some(ui) = w.upgrade() {
-            m.summary(&ui);
-        }
-    });
-    let w = ui.as_weak();
-    let m = rows.clone();
-    ui.on_navigate(move |d, r| {
-        let n = m.table.borrow_mut().navigate(d, r);
-        m.notify.reset();
-        if let Some(ui) = w.upgrade() {
-            m.summary(&ui);
-        }
-        n.map(|n| n as i32).unwrap_or(-1)
-    });
-    let w = ui.as_weak();
-    let m = rows.clone();
-    ui.on_select_visible(move || {
-        m.table.borrow_mut().select_visible();
-        m.notify.reset();
-        if let Some(ui) = w.upgrade() {
-            m.summary(&ui);
-        }
-    });
-    let w = ui.as_weak();
-    let m = rows.clone();
-    ui.on_activate(move |i| {
-        if let (Some(ui), Some(row)) = (w.upgrade(), m.row_data(i as usize)) {
-            ui.set_inspector_details(row);
-            ui.set_inspector_open(true);
-        }
-    });
+    table_controls::connect(&ui, rows.clone());
     let w = ui.as_weak();
     let a = app.clone();
     ui.on_row_action(move |mut row, kind| {

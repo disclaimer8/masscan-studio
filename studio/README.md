@@ -60,7 +60,7 @@ read-only preflight checks route/VPN overlap, bridge membership, addresses/MACs,
 permanent ARP and forwarding. A live isolated scan with independent capture is
 still required before opening the release gate. Studio does not create a stand.
 
-## macOS session authorization
+## macOS and Linux session authorization
 
 The **Authorize** button opens the system administrator dialog, connects to the
 installed runner and runs the read-only preflight. It sends no packets. Cancel
@@ -89,14 +89,23 @@ ACLs/symlinks, and the exact bundled binary hash before launching it. Build-tree
 binaries are never executed as root. See [AUTHORIZATION.md](AUTHORIZATION.md)
 for the threat model, cancellation rules and remaining acceptance work.
 
+On Linux x86-64/glibc, supply the package's `studio-runner` path to those same
+commands. Install `pkexec`, `polkitd` and `binutils`, and run a desktop polkit
+authentication agent. The installed path is
+`/usr/local/libexec/masscan-studio/<sha256>/studio-runner`. No custom polkit policy
+or service is installed. **Authorize** establishes the session; Linux network
+preflight reports unavailable and raw scanning stays disabled. CI tests actual
+pkexec with a temporary policy in its disposable VM; desktop prompt interaction
+still needs manual verification.
+
 ## Deliberate current limits
 
 Simulation uses authenticated named pipes on Windows and inherited anonymous
 pipes on macOS/Linux. Windows checks both peer processes using retained handles,
 user/logon identity and a protected pipe DACL; it does not elevate. Unix sockets
-have peer identity tests on macOS/Linux; system elevation is implemented on macOS
-only. Do not launch the UI with sudo. Windows UAC/trusted installation and Linux
-pkexec bootstrap, physical NIC selection and Windows/Linux raw profiles remain open.
+have peer identity tests on macOS/Linux; system elevation is implemented on both.
+Do not launch the UI with sudo. Windows UAC/trusted installation, Linux desktop
+prompt acceptance, physical NIC selection and Windows/Linux raw profiles remain open.
 Raw scanning remains gated independently of host actions and saved profiles.
 
 ## Host actions and export

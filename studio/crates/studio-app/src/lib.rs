@@ -14,6 +14,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
+use studio_platform::linux as authorization;
+#[cfg(target_os = "macos")]
+use studio_platform::macos as authorization;
 use studio_protocol::*;
 use studio_store::{SavedRow, SavedScan, Store};
 
@@ -128,8 +132,8 @@ struct Client {
     child: Option<Child>,
     #[cfg(windows)]
     pipe: Option<studio_platform::windows::Stream>,
-    #[cfg(target_os = "macos")]
-    authorized: Option<studio_platform::macos::Authorized>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    authorized: Option<authorization::Authorized>,
     input: Option<BufWriter<Box<dyn Write + Send>>>,
     events: mpsc::Receiver<Result<Envelope<Event>, String>>,
     session: Id,
@@ -197,14 +201,13 @@ impl Client {
         c.handshake(None)?;
         Ok(c)
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn authorize(source: &std::path::Path, cancelled: &AtomicBool) -> Result<Self, String> {
         let hash = studio_platform::trusted::file_hash(source)?;
-        let path = studio_platform::macos::installed_path(&hash)?;
-        let auth =
-            studio_platform::macos::Authorized::open(&path, &hash, cancelled).map_err(|e| {
-                format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
-            })?;
+        let path = authorization::installed_path(&hash)?;
+        let auth = authorization::Authorized::open(&path, &hash, cancelled).map_err(|e| {
+            format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
+        })?;
         let input = auth.stream.try_clone().map_err(|e| e.to_string())?;
         let output = auth.stream.try_clone().map_err(|e| e.to_string())?;
         let mut c = Self::connected(Box::new(input), Box::new(output))?;
@@ -212,19 +215,19 @@ impl Client {
         c.handshake(Some(cancelled))?;
         Ok(c)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn authorize(_: &std::path::Path, _: &AtomicBool) -> Result<Self, String> {
         Err(
-            "System authorization is currently implemented only on macOS; simulation is available"
+            "System authorization is currently implemented on macOS and Linux; simulation is available"
                 .into(),
         )
     }
     fn is_authorized(&self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             self.authorized.is_some()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             false
         }
@@ -272,7 +275,7 @@ impl Client {
             child: None,
             #[cfg(windows)]
             pipe: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             authorized: None,
             input: Some(BufWriter::new(input)),
             events,
@@ -373,7 +376,7 @@ impl Drop for Client {
             pipe.shutdown();
         }
         self.input.take();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         self.authorized.take();
         let Some(child) = self.child.as_mut() else {
             return;

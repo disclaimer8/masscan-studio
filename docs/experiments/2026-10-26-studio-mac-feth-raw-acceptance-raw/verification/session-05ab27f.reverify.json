@@ -13,8 +13,8 @@
         },
         {
           "behaviour": false,
-          "detail": "missing",
-          "name": "peer.pcap present",
+          "detail": "listed in hashes-before-copy.txt",
+          "name": "peer.pcap missing",
           "ok": false,
           "result": "NOT RUN",
           "safety": false
@@ -190,7 +190,7 @@
         {
           "behaviour": false,
           "detail": "unlisted [], missing [\"peer.pcap\"]; peer.pcap cannot be read: No such file or directory (os error 2)",
-          "name": "hashes-before-copy.txt matches the files",
+          "name": "hashes-before-copy.txt does not match the files",
           "ok": false,
           "result": "INVALID",
           "safety": false
@@ -592,6 +592,7 @@
     "uplink_frames": 0
   },
   "notes": {
+    "data_binding": "data/ is not in this archive; the binding was checked in the window, see its committed verdict",
     "manual": false,
     "open_truth": "derived from the wire (host listeners not recorded)"
   },
@@ -600,7 +601,7 @@
     "installed_runner_sha256": "e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
     "runner_sha256": "e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
     "ui_sha256": "eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86",
-    "verifier_sha256": "f6d1bf4ba340c1bed2ee2e0b772fe874889057a9325a0f8a0b81df0263f9d2c2",
+    "verifier_sha256": "84656c7659294c16381714db73e219fefa9b1023e37963d1dcdd7c37721f7d85",
     "window_sha": "05ab27fb631da440539344cf8c600308149d4671"
   },
   "safety_trips": [],

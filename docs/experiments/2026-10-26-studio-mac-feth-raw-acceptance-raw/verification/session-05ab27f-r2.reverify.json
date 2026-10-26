@@ -587,7 +587,7 @@
         {
           "behaviour": true,
           "detail": "want {8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007} got {8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007}",
-          "name": "open rows equal the ports with a SYN-ACK on the wire (host listeners not recorded)",
+          "name": "open rows are the lab listeners 8000-8007 plus the ports with a SYN-ACK on the wire (host listeners not recorded)",
           "ok": true,
           "result": "PASS",
           "safety": false
@@ -1105,6 +1105,7 @@
     "uplink_frames": 0
   },
   "notes": {
+    "data_binding": "data/ is not in this archive; the binding was checked in the window, see its committed verdict",
     "manual": false,
     "open_truth": "derived from the wire (host listeners not recorded)",
     "post_run_replies.s1_full": [
@@ -1195,7 +1196,7 @@
     "installed_runner_sha256": "e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
     "runner_sha256": "e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb",
     "ui_sha256": "eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86",
-    "verifier_sha256": "f6d1bf4ba340c1bed2ee2e0b772fe874889057a9325a0f8a0b81df0263f9d2c2",
+    "verifier_sha256": "84656c7659294c16381714db73e219fefa9b1023e37963d1dcdd7c37721f7d85",
     "window_sha": "05ab27fb631da440539344cf8c600308149d4671"
   },
   "safety_trips": [],

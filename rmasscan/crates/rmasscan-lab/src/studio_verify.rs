@@ -616,7 +616,11 @@ fn hashes_check(r: &mut Run, d: &Path) {
         }
     }
     r.inv(
-        "hashes-before-copy.txt matches the files",
+        if problems.is_empty() {
+            "hashes-before-copy.txt matches the files"
+        } else {
+            "hashes-before-copy.txt does not match the files"
+        },
         problems.is_empty(),
         problems.join("; "),
     );
@@ -899,7 +903,18 @@ fn safety(d: &Path, expect_head: Option<&str>) -> (Run, Safe, Value) {
         if d.join(name).exists() {
             verify::load_pcap(r, &d.join(name)).map(|x| x.0)
         } else {
-            r.add(&format!("{name} present"), NOT_RUN, "missing", false);
+            let listed = text_in(d, HASHES)
+                .is_some_and(|h| h.lines().any(|l| l.ends_with(&format!("  {name}"))));
+            r.add(
+                &format!("{name} missing"),
+                NOT_RUN,
+                if listed {
+                    "listed in hashes-before-copy.txt"
+                } else {
+                    "not in the window directory and not listed"
+                },
+                false,
+            );
             None
         }
     };
@@ -1636,19 +1651,23 @@ fn planned_cases(
             if spec.tag == "s1_full" {
                 let want = match &host {
                     Some(host) => lab_open(&plan, host),
-                    // Not recorded: the open set is what the wire answered with a SYN-ACK to this case's SYNs.
+                    // Not recorded: the open set is what the wire answered with a SYN-ACK to this case's SYNs, and
+                    // the lab listeners of the plan are in it whatever the wire says: a silent lab listener is a
+                    // FAIL exactly as it is when the record exists.
                     None => {
                         let keys: BTreeSet<(u16, u32)> = own
                             .iter()
                             .map(|y| (y.port, y.seq.wrapping_add(1)))
                             .collect();
-                        case_replies
+                        let mut open: BTreeSet<u16> = case_replies
                             .iter()
                             .filter(|p| {
                                 p.open && p.t <= finished && keys.contains(&(p.port, p.ack))
                             })
                             .map(|p| p.port)
-                            .collect()
+                            .collect();
+                        open.extend(lab_open(&plan, &BTreeSet::new()));
+                        open
                     }
                 };
                 let got: BTreeSet<u16> = rows.iter().filter(|w| w.open).map(|w| w.port).collect();
@@ -1656,7 +1675,7 @@ fn planned_cases(
                     if host.is_some() {
                         "open rows are the lab listeners 8000-8007 plus host wildcard listeners"
                     } else {
-                        "open rows equal the ports with a SYN-ACK on the wire (host listeners not recorded)"
+                        "open rows are the lab listeners 8000-8007 plus the ports with a SYN-ACK on the wire (host listeners not recorded)"
                     },
                     got == want,
                     format!("want {want:?} got {got:?}"),
@@ -1866,6 +1885,12 @@ fn finish(
         })
         .collect();
     let mut notes = notes;
+    // Notes a run recorded (for example `data_binding`) reach the verdict, without overriding a window-level one.
+    for (r, _) in &runs {
+        for (k, v) in &r.notes {
+            notes.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
     notes.insert("manual".into(), json!(manual));
     let prov = &extra["provenance"];
     let provenance = json!({

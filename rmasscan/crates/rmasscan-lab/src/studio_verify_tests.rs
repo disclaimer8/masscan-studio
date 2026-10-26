@@ -629,7 +629,11 @@ fn a_changed_hash_is_invalid() {
     let v = verify_dir(&d, false);
     fs::remove_dir_all(&d).ok();
     assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
-    assert!(has_bad(&v, "safety", "hashes-before-copy.txt matches"));
+    assert!(has_bad(
+        &v,
+        "safety",
+        "hashes-before-copy.txt does not match"
+    ));
     // an unlisted file is the same finding; the data directory and verdict.json are outside the hashes
     let mut m = Model::consistent();
     let d = m.write();
@@ -1900,4 +1904,77 @@ fn the_bundle_manifest_must_agree_with_the_provenance() {
         let v = verdict_of(&mut m);
         assert_eq!(overall(&v), INVALID, "{:?}", bad(&v));
     }
+}
+
+#[test]
+fn silent_lab_listeners_fail_even_when_the_host_listeners_are_not_recorded() {
+    let silence = |m: &mut Model| {
+        // every lab listener answers with an RST and every one of its rows is closed
+        let syns = m.syns[0].clone();
+        for (t, r) in m.replies[0].iter_mut() {
+            let sp = tcp(r).unwrap().sp;
+            if (8000..=8007).contains(&sp) {
+                let (_, f) = syns.iter().find(|(_, f)| tcp(f).unwrap().dp == sp).unwrap();
+                *r = reply_to(f, false);
+                *t += 0.0;
+            }
+        }
+        for row in m.rows_mut(0) {
+            if (8000..=8007).contains(&row["port"].as_u64().unwrap()) {
+                row["open"] = json!(false);
+            }
+        }
+    };
+    // recorded host listeners: FAIL (the existing rule)
+    let mut m = Model::consistent();
+    silence(&mut m);
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    // not recorded: the same window still FAILs
+    let mut m = Model::consistent();
+    silence(&mut m);
+    m.host_before = "rc 0\n".into();
+    m.host_after = "rc 0\n".into();
+    let v = verdict_of(&mut m);
+    assert_eq!(overall(&v), FAIL, "{:?}", bad(&v));
+    assert!(has_bad(&v, "s1_full", "open rows"), "{:?}", bad(&v));
+}
+
+#[test]
+fn the_data_binding_note_reaches_the_verdict_and_missing_files_are_named() {
+    // data/ absent from the archive: a note in verdict.json says the binding was checked in the window
+    let mut m = Model::consistent();
+    let d = m.write();
+    fs::remove_file(d.join("data").join("history.sqlite3")).unwrap();
+    let v = verify_dir(&d, false);
+    assert!(
+        s(&v["notes"]["data_binding"]).contains("not in this archive"),
+        "{}",
+        v["notes"]
+    );
+    fs::remove_dir_all(&d).ok();
+    // a listed file that is gone is named as a finding, not as an expectation
+    let mut m = Model::consistent();
+    let d = m.write();
+    fs::remove_file(d.join("peer.pcap")).unwrap();
+    let v = verify_dir(&d, false);
+    let names: Vec<String> = array(&v["cases"])
+        .iter()
+        .flat_map(|c| array(&c["checks"]).to_vec())
+        .filter(|k| k["result"] != PASS)
+        .map(|k| format!("{}: {}", s(&k["name"]), s(&k["detail"])))
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n == "peer.pcap missing: listed in hashes-before-copy.txt"),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|n| n.starts_with("hashes-before-copy.txt does not match the files")),
+        "{names:?}"
+    );
+    fs::remove_dir_all(&d).ok();
 }

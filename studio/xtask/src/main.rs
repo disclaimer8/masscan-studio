@@ -71,6 +71,8 @@ fn main() -> Result<()> {
         #[cfg(windows)]
         "verify-windows-uac" => windows_acceptance::verify_uac(&root)?,
         #[cfg(windows)]
+        "prepare-windows-uac-tests" => windows_acceptance::package_tests(&root)?,
+        #[cfg(windows)]
         "windows-uac-cancel-fixture" => windows_acceptance::cancel_fixture()?,
         #[cfg(windows)]
         "windows-uac-fixture" | "probe-windows-authorization" => windows_acceptance::uac_fixture()?,

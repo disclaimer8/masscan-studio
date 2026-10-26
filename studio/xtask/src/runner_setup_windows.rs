@@ -54,9 +54,10 @@ fn prepare_source(root: &Path, source: &Path) -> Result<PathBuf> {
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "sha256":hash,"destination":installed_path(&hash)?,
-            "source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,
-            "dirty":!text(Command::new("git").args(["status","--porcelain"]))?.is_empty(),
-            "cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,
+            "source_commit":text(Command::new("git").args(["rev-parse","HEAD"])).ok(),
+            "dirty":text(Command::new("git").args(["status","--porcelain"])).ok().map(|s|!s.is_empty()),
+            "cargo_lock_sha256":root.join("Cargo.lock").is_file().then(||digest(&root.join("Cargo.lock"))).transpose()?,
+            "package_manifest_sha256":source.parent().map(|p|p.join("manifest.json")).filter(|p|p.is_file()).map(|p|digest(&p)).transpose()?,
             "install_script_sha256":digest(&dir.join("install.ps1"))?,
             "raw_enabled":studio_protocol::RAW_SCANNING_ENABLED,
             "session_uac_enabled":false
@@ -88,6 +89,30 @@ pub fn verify_ci(root: &Path) -> Result<()> {
     let dir = prepare_source(root, &build_runner()?)?;
     let source = dir.join("studio-runner.exe");
     let hash = trusted::file_hash(&source)?;
+    let outside = std::env::temp_dir().join(format!(
+        "studio-standalone-{}",
+        studio_protocol::id_text(studio_protocol::new_id()?)
+    ));
+    fs::create_dir(&outside)?;
+    let tool = outside.join("studio-tools.exe");
+    fs::copy(std::env::current_exe()?, &tool)?;
+    run(Command::new(&tool)
+        .arg("prepare-runner")
+        .arg(fs::canonicalize(&source)?)
+        .current_dir(&outside))?;
+    let prepared = fs::read_dir(outside.join("dist"))?
+        .next()
+        .ok_or("Standalone preparation missing")??
+        .path();
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(prepared.join("manifest.json"))?)?;
+    if metadata["sha256"] != hash
+        || !metadata["source_commit"].is_null()
+        || !metadata["cargo_lock_sha256"].is_null()
+    {
+        return Err("Standalone preparation fabricated checkout provenance".into());
+    }
+    fs::remove_dir_all(outside)?;
     let destination = installed_path(&hash)?;
     if destination.exists() {
         return Err("CI installation already exists; refusing replacement".into());

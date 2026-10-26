@@ -424,7 +424,10 @@ mod tests {
     #[test]
     #[ignore = "requires installed runner and disposable native UAC CI"]
     fn cancellation_destroys_endpoints_before_late_runner_and_allows_retry() {
-        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        assert!(
+            std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+                || std::env::var("STUDIO_UAC_LAB_ACCEPTANCE").as_deref() == Ok("1")
+        );
         let hash = std::env::var("STUDIO_TEST_UAC_HASH").unwrap();
         let cancelled = Arc::new(AtomicBool::new(false));
         let (resources_tx, resources_rx) = mpsc::channel();

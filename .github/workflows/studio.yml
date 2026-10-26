@@ -72,6 +72,9 @@ jobs:
       - name: Windows trusted installation (no UAC or packets)
         if: runner.os == 'Windows'
         run: cargo xtask verify-windows-installation
+      - name: Package native Windows desktop acceptance fixture
+        if: runner.os == 'Windows'
+        run: cargo xtask prepare-windows-uac-tests
       - name: Windows session authorization and owner death (no packets)
         if: runner.os == 'Windows'
         env:

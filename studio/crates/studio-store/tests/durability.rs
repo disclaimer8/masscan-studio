@@ -2,6 +2,62 @@ use studio_protocol::*;
 use studio_store::Store;
 
 #[test]
+fn event_batch_commits_in_order_and_rolls_back_all_rows_on_a_gap() {
+    let dir = std::env::temp_dir().join(format!("studio-batch-{}", id_text(new_id().unwrap())));
+    let mut db = Store::open(&dir).unwrap();
+    let scan = [3; 16];
+    let attempt = [4; 16];
+    db.begin(scan, attempt, &Job::example(Backend::Simulation), false)
+        .unwrap();
+    let row = Envelope::new(
+        [1; 16],
+        scan,
+        attempt,
+        1,
+        Event::Results(vec![Row {
+            ip: "198.18.0.2".into(),
+            port: 8000,
+            open: true,
+        }]),
+    );
+    let mut progress = Envelope::new(
+        [1; 16],
+        scan,
+        attempt,
+        3,
+        Event::Progress {
+            sent: "1".into(),
+            received: "1".into(),
+        },
+    );
+    assert!(db.apply_batch(&[row.clone(), progress.clone()]).is_err());
+    assert!(db.rows(scan).unwrap().is_empty());
+    progress.sequence = 2;
+    let terminal = Envelope::new(
+        [1; 16],
+        scan,
+        attempt,
+        3,
+        Event::Finished {
+            status: Status::Completed,
+            detail: "complete".into(),
+        },
+    );
+    let committed = db.apply_batch(&[row, progress, terminal]).unwrap();
+    assert_eq!(
+        committed.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![1, 0, 0]
+    );
+    assert_eq!(db.scans().unwrap()[0].status, Status::Completed);
+    drop(db);
+    let db = Store::open(&dir).unwrap();
+    assert_eq!(db.rows(scan).unwrap().len(), 1);
+    assert_eq!(db.scans().unwrap()[0].status, Status::Completed);
+    drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn restart_preserves_rows_and_marks_inflight_interrupted() {
     let dir = std::env::temp_dir().join(format!("studio-store-{}", id_text(new_id().unwrap())));
     let scan = [3; 16];

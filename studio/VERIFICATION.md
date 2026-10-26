@@ -299,3 +299,23 @@ counted as Studio acceptance.
 Build manifests and per-machine logs/screenshots belong in `studio/verification/`
 (ignored) or an explicitly archived evidence package. Each packaged build writes
 its own manifest; a dirty source tree is reported as dirty, never as a clean release.
+
+### PR #16 CI follow-up: grouped commits and macOS SQLite
+
+The second hosted Windows volume run still exhausted the event queue after the
+per-row read fix; the same revision passed on the home Windows VM. The controller
+now groups ordered frames into one WAL/FULL transaction at 250 ms or 1,000 results,
+with a 16-frame bound. Lifecycle and checkpoint frames force an immediate flush.
+The controller keeps handling commands while collecting the batch; rows and ACKs
+are exposed only after commit. A sequence gap rolls back the whole batch. Runner
+queue limits, scan rate and the 100,000-row test deadline are unchanged.
+
+macOS 14 CI exposed a separate link failure: its system SQLite lacks
+`sqlite3_set_clientdata`. CI now explicitly links Homebrew SQLite; the existing
+packager includes the dylib in the signed bundle. This is a build dependency,
+not a change to the history format or engine.
+
+Local full workspace tests after these corrections: 52 passed, 2 explicit live
+tests ignored; clippy with warnings denied and formatting passed. Log:
+`/tmp/studio-group-tests.log`. Hosted CI must pass on the updated PR head before
+merge; a passing local run alone is not merge acceptance.

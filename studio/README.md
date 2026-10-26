@@ -10,6 +10,10 @@ Use Rust 1.99.1 and a system SQLite development library. SQLite is dynamically
 linked; `bundled` and `buildtime_bindgen` are not enabled. On Windows, run
 `. ./scripts/windows-sqlite.ps1` in PowerShell first. It downloads the pinned
 official SQLite DLL, checks its SHA-256, and creates an MSVC import library.
+On macOS, use Homebrew SQLite (the macOS 14 system library lacks APIs required
+by rusqlite): `brew install sqlite`, then export
+`SQLITE3_LIB_DIR="$(brew --prefix sqlite)/lib"` before the commands below.
+The packager copies that library into the app and fixes its load path before signing.
 
 ```sh
 cd studio
@@ -39,7 +43,8 @@ Rust` on macOS, `%LOCALAPPDATA%/Masscan Studio` on Windows, and
   checks. `u64` fields cross the UI boundary as decimal strings.
 - Result delivery in batches of up to 1,000 rows or 50 ms. Intermediate progress
   updates coalesce; results do not. Queue exhaustion interrupts the attempt.
-- SQLite WAL/FULL transactions. Result batches commit before display; checkpoints
+- SQLite WAL/FULL transactions, grouped at 250 ms or 1,000 results (bounded to
+  16 frames). Lifecycle/checkpoint events flush immediately. Result batches commit before display; checkpoints
   commit before acknowledgement. A crash converts unfinished scans to Interrupted.
 - A failed launch/connection closes the runner session and allows a fresh attempt.
 

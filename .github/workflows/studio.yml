@@ -39,6 +39,12 @@ jobs:
           . ./scripts/windows-sqlite.ps1
           "SQLITE3_LIB_DIR=$env:SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
           "$env:SQLITE3_LIB_DIR" >> $env:GITHUB_PATH
+      - name: macOS external SQLite
+        if: runner.os == 'macOS'
+        run: |
+          brew install sqlite
+          echo "SQLITE3_LIB_DIR=$(brew --prefix sqlite)/lib" >> "$GITHUB_ENV"
+          echo "SQLITE3_INCLUDE_DIR=$(brew --prefix sqlite)/include" >> "$GITHUB_ENV"
       - uses: actions/cache@v6
         with:
           path: |

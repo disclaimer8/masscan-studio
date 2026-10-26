@@ -239,11 +239,23 @@ impl Store {
     }
     /// Full transaction before the controller may ACK a checkpoint or display results.
     pub fn apply(&mut self, event: &Envelope<Event>) -> Result<Vec<SavedRow>> {
+        Ok(self.apply_batch(std::slice::from_ref(event))?.remove(0))
+    }
+    /// Ordered frames share one FULL commit. No rows escape on partial failure.
+    pub fn apply_batch(&mut self, events: &[Envelope<Event>]) -> Result<Vec<Vec<SavedRow>>> {
+        let tx = self.db.transaction()?;
+        let observed = events
+            .iter()
+            .map(|event| Self::apply_event(&tx, event))
+            .collect::<Result<Vec<_>>>()?;
+        tx.commit()?;
+        Ok(observed)
+    }
+    fn apply_event(tx: &Connection, event: &Envelope<Event>) -> Result<Vec<SavedRow>> {
         if event.version != VERSION {
             return Err("Unsupported protocol".into());
         }
-        let tx = self.db.transaction()?;
-        let saved = Self::find(&tx, event.scan)?.ok_or("Unknown scan")?;
+        let saved = Self::find(tx, event.scan)?.ok_or("Unknown scan")?;
         if saved.attempt != event.attempt {
             return Err("Stale attempt".into());
         }
@@ -318,7 +330,6 @@ impl Store {
             "UPDATE scans SET sequence=?2,updated=unixepoch() WHERE id=?1",
             params![event.scan.as_slice(), event.sequence.to_string()],
         )?;
-        tx.commit()?;
         Ok(observed)
     }
     pub fn interrupt(&mut self, scan: Id, detail: &str) -> Result<()> {

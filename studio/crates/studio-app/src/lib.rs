@@ -1,6 +1,7 @@
 //! Application controller.
 #![forbid(unsafe_code)]
 mod hosts;
+mod persistence;
 use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::PathBuf,
@@ -116,6 +117,8 @@ struct Client {
     attempt: Id,
     sequence: u64,
     order: ReceiveOrder,
+    pending: persistence::Pending,
+    deferred: Option<Envelope<Event>>,
 }
 impl Client {
     fn open(path: &PathBuf) -> Result<Self, String> {
@@ -193,6 +196,27 @@ impl Client {
             attempt: [0; 16],
             sequence: 0,
             order: ReceiveOrder::new(session, [0; 16], [0; 16]),
+            pending: persistence::Pending::default(),
+            deferred: None,
+        })
+    }
+    fn poll_batch(&mut self) -> Result<Vec<Envelope<Event>>, String> {
+        while !self.pending.ready(Instant::now()) {
+            let event = match self.deferred.take() {
+                Some(e) => Some(e),
+                None => self.poll()?,
+            };
+            let Some(event) = event else { break };
+            if !self.pending.can_fit(&event) {
+                self.deferred = Some(event);
+                return Ok(self.pending.take());
+            }
+            self.pending.push(event, Instant::now());
+        }
+        Ok(if self.pending.ready(Instant::now()) {
+            self.pending.take()
+        } else {
+            Vec::new()
         })
     }
     fn handshake(&mut self, cancelled: Option<&AtomicBool>) -> Result<(), String> {
@@ -518,10 +542,9 @@ fn work(
                     }
                 }
                 if let Some(c) = client.as_mut() {
-                    for _ in 0..32 {
-                        let Some(e) = c.poll()? else {
-                            break;
-                        };
+                    let events = c.poll_batch()?;
+                    let mut durable = Vec::new();
+                    for e in events {
                         if let Event::NetworkChecked { ready, detail } = &e.payload {
                             emit(
                                 &out,
@@ -532,7 +555,14 @@ fn work(
                             )?;
                             continue;
                         }
-                        let observed = db.apply(&e).map_err(|e| e.to_string())?;
+                        durable.push(e);
+                    }
+                    let committed = if durable.is_empty() {
+                        Vec::new()
+                    } else {
+                        db.apply_batch(&durable).map_err(|e| e.to_string())?
+                    };
+                    for (e, observed) in durable.into_iter().zip(committed) {
                         match e.payload {
                             Event::Started { total } => emit(
                                 &out,

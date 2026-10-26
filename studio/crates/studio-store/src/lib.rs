@@ -1,11 +1,14 @@
 //! Durable scan history owned only by the unprivileged application.
 #![forbid(unsafe_code)]
+pub mod legacy;
+mod swift_store;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     fs::{self, File, OpenOptions},
     path::Path,
 };
 use studio_protocol::*;
+pub use swift_store::ImportReport;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type StoredFields = (
     Vec<u8>,
@@ -14,6 +17,8 @@ type StoredFields = (
     Option<Vec<u8>>,
     Option<String>,
     String,
+    Option<String>,
+    Option<String>,
 );
 pub struct Store {
     db: Connection,
@@ -28,6 +33,8 @@ pub struct SavedScan {
     pub checkpoint: Option<Vec<u8>>,
     pub next_index: Option<String>,
     pub detail: String,
+    pub name: Option<String>,
+    pub created_at: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub struct SavedRow {
@@ -63,23 +70,48 @@ impl Store {
         lock.try_lock()
             .map_err(|_| "Studio is already using this history directory")?;
         drop(private_file(&dir.join("history.sqlite3"))?);
-        let db = Connection::open(dir.join("history.sqlite3"))?;
+        let mut db = Connection::open(dir.join("history.sqlite3"))?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err("History was created by a newer Studio version".into());
         }
         // Permuted scan keys dirty many index pages. The default 1,000-page
         // checkpoint repeatedly rewrites them on the commit thread on Windows.
         // This 4,096-page trigger (~16 MiB at 4 KiB/page, not a size cap) reduces
         // that write amplification. FULL still syncs every WAL commit.
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=4096;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=4096;")?;
+        if version > 0 && version < 3 {
+            let backup = dir.join(format!("before-v3-{}.sqlite3", id_text(new_id()?)));
+            let partial = backup.with_extension("partial");
+            let file = private_file(&partial)?;
+            let mut destination = Connection::open(&partial)?;
+            {
+                let copy = rusqlite::backup::Backup::new(&db, &mut destination)?;
+                if copy.step(-1)? != rusqlite::backup::StepResult::Done {
+                    return Err("History backup is busy; migration was not started".into());
+                }
+            }
+            destination.pragma_update(None, "journal_mode", "DELETE")?;
+            destination.close().map_err(|(_, e)| e)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(partial, backup)?;
+        }
+        let migration = db.transaction()?;
+        migration.execute_batch("
             CREATE TABLE IF NOT EXISTS scans (id BLOB PRIMARY KEY, attempt BLOB NOT NULL, job TEXT NOT NULL, status TEXT NOT NULL, sequence TEXT NOT NULL DEFAULT '0', checkpoint BLOB, next_index TEXT, detail TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS results (scan BLOB NOT NULL REFERENCES scans(id), ip TEXT NOT NULL, port INTEGER NOT NULL, open INTEGER NOT NULL, PRIMARY KEY(scan,ip,port));
-            CREATE TABLE IF NOT EXISTS host_details (scan BLOB NOT NULL REFERENCES scans(id),ip TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scan,ip));")?;
+            CREATE TABLE IF NOT EXISTS host_details (scan BLOB NOT NULL REFERENCES scans(id),ip TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scan,ip));
+            CREATE TABLE IF NOT EXISTS legacy_records (origin TEXT NOT NULL,kind TEXT NOT NULL,source_id BLOB NOT NULL,fingerprint TEXT NOT NULL,data TEXT NOT NULL,scan BLOB REFERENCES scans(id),PRIMARY KEY(origin,kind,source_id));
+            CREATE TABLE IF NOT EXISTS import_reports (id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL);")?;
         if version < 2 {
-            db.execute_batch("BEGIN IMMEDIATE; ALTER TABLE results ADD COLUMN discovered_at TEXT; PRAGMA user_version=2; COMMIT;")?;
+            migration.execute_batch("ALTER TABLE results ADD COLUMN discovered_at TEXT;")?;
         }
+        if version < 3 {
+            migration.execute_batch("ALTER TABLE scans ADD COLUMN name TEXT; ALTER TABLE scans ADD COLUMN created_at TEXT; PRAGMA user_version=3;")?;
+        }
+        migration.commit()?;
         let mut pending = db.prepare("SELECT scan,ip,data FROM host_details")?;
         let saved = pending
             .query_map([], |r| {
@@ -145,7 +177,7 @@ impl Store {
     fn find(db: &Connection, scan: Id) -> Result<Option<SavedScan>> {
         let raw: Option<StoredFields> = db
             .query_row(
-                "SELECT attempt,job,status,checkpoint,next_index,detail FROM scans WHERE id=?1",
+                "SELECT attempt,job,status,checkpoint,next_index,detail,name,created_at FROM scans WHERE id=?1",
                 [scan.as_slice()],
                 |r| {
                     Ok((
@@ -155,21 +187,27 @@ impl Store {
                         r.get(3)?,
                         r.get(4)?,
                         r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
                     ))
                 },
             )
             .optional()?;
-        raw.map(|(attempt, job, status, checkpoint, next_index, detail)| {
-            Ok(SavedScan {
-                scan,
-                attempt: attempt.try_into().map_err(|_| "Invalid attempt id")?,
-                job: serde_json::from_str(&job)?,
-                status: serde_json::from_str(&status)?,
-                checkpoint,
-                next_index,
-                detail,
-            })
-        })
+        raw.map(
+            |(attempt, job, status, checkpoint, next_index, detail, name, created_at)| {
+                Ok(SavedScan {
+                    scan,
+                    attempt: attempt.try_into().map_err(|_| "Invalid attempt id")?,
+                    job: serde_json::from_str(&job)?,
+                    status: serde_json::from_str(&status)?,
+                    checkpoint,
+                    next_index,
+                    detail,
+                    name,
+                    created_at,
+                })
+            },
+        )
         .transpose()
     }
     pub fn scans(&self) -> Result<Vec<SavedScan>> {

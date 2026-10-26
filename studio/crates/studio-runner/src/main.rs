@@ -43,6 +43,7 @@ impl CheckpointAck {
 fn raw_adapter(job: &Job) -> Result<rmasscan_engine::AdapterPair, String> {
     let plan = job.prepare()?;
     match job.backend {
+        Backend::SwiftImport => Err("Imported Swift history cannot start a scanner".into()),
         Backend::Simulation => {
             let fake = rmasscan_engine::fake::FakeAdapter::new();
             fake.set_responder(|f| {

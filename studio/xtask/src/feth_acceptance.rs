@@ -447,8 +447,30 @@ pub fn check_bundle_manifest(text: Option<&str>, head: &str) -> std::result::Res
 }
 
 /// lsof exits 0 or 1; anything else (it could not run) is not "no listeners".
-pub fn lsof_ok(rc: i32, stdout: &str) -> bool {
-    matches!(rc, 0 | 1) && stdout.trim().is_empty()
+/// An lsof that exits 1 with nothing on stdout but something on stderr was blinded (process info denied), so it
+/// proved nothing: that is "not checked", not "no listeners".
+pub fn lsof_ok(rc: i32, stdout: &str, stderr: &str) -> bool {
+    matches!(rc, 0 | 1) && stdout.trim().is_empty() && !(rc == 1 && !stderr.trim().is_empty())
+}
+
+/// What `host-listen-*.txt` holds and whether it is a record. A blinded `netstat -an -p tcp` exits 0 with empty
+/// stdout and the reason on stderr; that is "not recorded", never "no host listeners". The record needs rc 0, the
+/// netstat header and an empty stderr; stderr is kept in the file as `# stderr:` lines.
+pub fn netstat_record(ns: &Done) -> (String, bool) {
+    let mut text = format!("rc {}\n{}", ns.rc, ns.stdout);
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    for l in ns.stderr.lines() {
+        text.push_str(&format!("# stderr: {l}\n"));
+    }
+    let ok = ns.rc == 0
+        && ns
+            .stdout
+            .lines()
+            .any(|l| l.starts_with("Active Internet connections"))
+        && ns.stderr.trim().is_empty();
+    (text, ok)
 }
 
 pub fn dirty(porcelain: &str) -> bool {
@@ -1256,11 +1278,15 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     }
     let ls = c.run(&["/usr/sbin/lsof", "-nP", "-iTCP@198.18.0.2", "-sTCP:LISTEN"]);
     c.put("leftover-listeners.txt", &ls.stdout)?;
-    if !lsof_ok(ls.rc, &ls.stdout) {
-        reasons.push(format!(
-            "a listener on 198.18.0.2 is left over (lsof rc {})",
-            ls.rc
-        ));
+    if !lsof_ok(ls.rc, &ls.stdout, &ls.stderr) {
+        reasons.push(if ls.rc == 1 && ls.stdout.trim().is_empty() {
+            format!(
+                "listeners on 198.18.0.2 were not checked (lsof rc 1, empty stdout, stderr {:?})",
+                ls.stderr.trim()
+            )
+        } else {
+            format!("a listener on 198.18.0.2 is left over (lsof rc {})", ls.rc)
+        });
     }
     let ps = ps_text(c);
     let left = leftover_procs(&ps.stdout, &own_pids());
@@ -1289,12 +1315,13 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
         reasons.push("the feth pair is not quiet (see pair-quiet.txt)".into());
     }
     let ns = c.run(&["/usr/sbin/netstat", "-an", "-p", "tcp"]);
-    c.put(
-        "host-listen-before.txt",
-        &format!("rc {}\n{}", ns.rc, ns.stdout),
-    )?;
-    if ns.rc != 0 {
-        reasons.push("netstat -an -p tcp failed".into());
+    let (rec, recorded) = netstat_record(&ns);
+    c.put("host-listen-before.txt", &rec)?;
+    if !recorded {
+        reasons.push(
+            "host listeners not recorded: netstat -an -p tcp failed, was empty or wrote to stderr"
+                .into(),
+        );
     }
     let mut sys = String::new();
     for k in [
@@ -1556,10 +1583,11 @@ fn window<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, lab: &str, uplink: &str) -> R
     c.scrub_file("ui.log");
     c.scrub_file("listeners.log");
     let ns = c.run(&["/usr/sbin/netstat", "-an", "-p", "tcp"]);
-    c.put(
-        "host-listen-after.txt",
-        &format!("rc {}\n{}", ns.rc, ns.stdout),
-    )?;
+    let (rec, recorded) = netstat_record(&ns);
+    c.put("host-listen-after.txt", &rec)?;
+    if !recorded {
+        c.mark("host listeners not recorded");
+    }
     let post = c.run(&[lab, "macos-lab", "status", "--run-id", RUN_ID]);
     c.put("status-post.json", &post.stdout)?;
     if !status_post_allowed(&post.stdout) {
@@ -1976,6 +2004,8 @@ mod tests {
         poison_on_term: Option<String>,
         block_name: Option<String>,
         otool_out: Option<String>,
+        blind_netstat: bool,
+        blind_lsof: bool,
         log: Vec<String>,
         status: Option<(i32, String)>,
         installed: Option<String>,
@@ -2026,11 +2056,20 @@ mod tests {
                 ("lsof", _) => Ok(Done {
                     rc: 1,
                     stdout: String::new(),
-                    stderr: String::new(),
+                    stderr: if self.blind_lsof {
+                        "lsof: process information denied\n".into()
+                    } else {
+                        String::new()
+                    },
                 }),
                 ("ps", _) => ok(" 1 /bin/zsh\n"),
                 ("netstat", Some("-I")) => ok(&format!("{} 0\n", a[2])),
-                ("netstat", _) => ok("tcp4 0 0 *.22 *.* LISTEN\n"),
+                ("netstat", _) if self.blind_netstat => Ok(Done {
+                    rc: 0,
+                    stdout: String::new(),
+                    stderr: "netstat: sysctl: net.inet.tcp.pcblist_n: Operation not permitted\n".into(),
+                }),
+                ("netstat", _) => ok("Active Internet connections (including servers)\ntcp4 0 0 *.22 *.* LISTEN\n"),
                 ("sysctl", _) => ok("k: 1\n"),
                 ("sw_vers", _) => ok("macOS\n"),
                 ("otool", _) => ok(self.otool_out.as_deref().unwrap_or("x:\n\t/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib (compat)\n\t/usr/lib/libSystem.B.dylib\n")),
@@ -2484,8 +2523,26 @@ mod tests {
         assert!(check_bundle_manifest(None, &head).is_err());
         assert!(check_bundle_manifest(Some("{}"), &head).is_err());
         // lsof that could not run is not "no listeners"
-        assert!(lsof_ok(0, "") && lsof_ok(1, ""));
-        assert!(!lsof_ok(-1, "") && !lsof_ok(2, "") && !lsof_ok(1, "x LISTEN"));
+        assert!(lsof_ok(0, "", "") && lsof_ok(1, "", ""));
+        assert!(!lsof_ok(-1, "", "") && !lsof_ok(2, "", "") && !lsof_ok(1, "x LISTEN", ""));
+        // blinded lsof: rc 1, nothing on stdout, a reason on stderr
+        assert!(!lsof_ok(1, "", "lsof: WARNING: can't stat() fs\n"));
+        assert!(lsof_ok(0, "", "lsof: WARNING: can't stat() fs\n"));
+        // a blinded netstat (rc 0, empty stdout, reason on stderr) is not a record; a real one is
+        let hdr = "Active Internet connections (including servers)\ntcp4 0 0 *.5000 *.* LISTEN\n";
+        let done = |rc: i32, out: &str, err: &str| Done {
+            rc,
+            stdout: out.into(),
+            stderr: err.into(),
+        };
+        assert!(netstat_record(&done(0, hdr, "")).1);
+        assert!(!netstat_record(&done(0, "", "netstat: sysctl: Operation not permitted\n")).1);
+        assert!(!netstat_record(&done(0, "", "")).1);
+        assert!(!netstat_record(&done(0, "tcp4 0 0 *.22 *.* LISTEN\n", "")).1);
+        assert!(!netstat_record(&done(1, hdr, "")).1);
+        assert!(!netstat_record(&done(0, hdr, "boom\n")).1);
+        let (text, _) = netstat_record(&done(0, "", "netstat: denied\n"));
+        assert_eq!(text, "rc 0\n# stderr: netstat: denied\n");
         // a recorded stand that drifted needs no `up`
         let drift = status_pre(
             3,
@@ -2580,6 +2637,29 @@ mod tests {
         assert!(spawned(&f).is_empty());
         let t = fs::read_to_string(o.out.join("NOT-RUN.txt")).unwrap();
         assert!(t.contains("SQLITE3_LIB_DIR=/opt/homebrew/opt/sqlite/lib"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_blinded_netstat_or_lsof_is_not_run_not_no_listeners() {
+        let (root, o, mut f, _) = setup("blindnet");
+        f.blind_netstat = true;
+        assert_eq!(run(&mut f, &o).unwrap(), 2);
+        assert!(spawned(&f).is_empty());
+        let t = fs::read_to_string(o.out.join("NOT-RUN.txt")).unwrap();
+        assert!(t.contains("host listeners not recorded"), "{t}");
+        let rec = fs::read_to_string(o.out.join("host-listen-before.txt")).unwrap();
+        assert!(
+            rec.starts_with("rc 0\n") && rec.contains("# stderr: netstat: sysctl"),
+            "{rec}"
+        );
+        fs::remove_dir_all(root).unwrap();
+        let (root, o, mut f, _) = setup("blindlsof");
+        f.blind_lsof = true;
+        assert_eq!(run(&mut f, &o).unwrap(), 2);
+        assert!(spawned(&f).is_empty());
+        let t = fs::read_to_string(o.out.join("NOT-RUN.txt")).unwrap();
+        assert!(t.contains("were not checked"), "{t}");
         fs::remove_dir_all(root).unwrap();
     }
 

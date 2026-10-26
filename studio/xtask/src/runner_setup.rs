@@ -241,6 +241,9 @@ pub(super) fn probe_source(source: &Path) -> Result<()> {
         return Err("Root runner survived session close".into());
     }
     println!("Root runner exited; socket endpoint removed.");
-    println!("Authorization probe complete. No packets sent; raw gate remains closed.");
+    println!(
+        "Authorization probe complete. No packets sent. Raw profiles open in this build: {:?} (empty means every raw profile is closed on this OS; an open one still needs Authorize and the stand preflight).",
+        studio_protocol::RAW_PROFILES
+    );
     Ok(())
 }

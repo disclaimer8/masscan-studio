@@ -689,6 +689,31 @@ fn provenance_checks(r: &mut Run, d: &Path, expect_head: Option<&str>) -> Value 
             format!("expected {want} recorded {head}"),
         );
     }
+    // The bundle manifest the orchestrator copied must agree with the provenance it recorded.
+    if let Some(bm) = read_json(d.join("bundle-manifest.json")) {
+        let file_sha = |suffix: &str| {
+            array(&bm["files"])
+                .iter()
+                .find(|f| s(&f["path"]).ends_with(suffix))
+                .map(|f| s(&f["sha256"]).to_owned())
+                .unwrap_or_default()
+        };
+        r.inv(
+            "bundle-manifest.json ui hash equals provenance ui_sha256",
+            !ui.is_empty() && file_sha("/studio-ui") == ui,
+            format!("manifest {} provenance {ui}", file_sha("/studio-ui")),
+        );
+        r.inv(
+            "bundle-manifest.json runner hash equals provenance runner_sha256",
+            !run.is_empty() && file_sha("/studio-runner") == run,
+            format!("manifest {} provenance {run}", file_sha("/studio-runner")),
+        );
+        r.inv(
+            "bundle-manifest.json source_commit equals provenance git_head",
+            !head.is_empty() && s(&bm["source_commit"]) == head,
+            format!("manifest {} provenance {head}", s(&bm["source_commit"])),
+        );
+    }
     p
 }
 /// The record `<who>.cmd.json` of one witness: its command, timing and exit. The command is judged by the check
@@ -778,14 +803,25 @@ fn capture_record(r: &mut Run, d: &Path, who: &str, uplink_if: &str, err: Option
 fn gate_files(r: &mut Run, d: &Path, pre_uplink: &str) {
     if let Some(w) = read_json(d.join("window.json")) {
         let marks = array(&w["invalid_marks"]);
+        let clean = w["invalid_marks"].is_array() && marks.is_empty();
+        // The name states the finding, so a failing line reads as what was found.
         r.inv(
-            "window.json has no INVALID mark",
-            w["invalid_marks"].is_array() && marks.is_empty(),
+            if clean {
+                "window.json has no INVALID mark"
+            } else {
+                "window.json carries INVALID mark(s) or no mark list"
+            },
+            clean,
             Value::Array(marks.to_vec()).to_string(),
         );
+        let ui_rc = w["ui_rc"].as_i64();
         r.inv(
-            "the UI exited with code 0 (window.json ui_rc)",
-            w["ui_rc"].as_i64() == Some(0),
+            &match ui_rc {
+                Some(0) => "the UI exited with code 0 (window.json ui_rc)".to_owned(),
+                Some(c) => format!("the UI exited with code {c}, not 0 (window.json ui_rc)"),
+                None => "window.json ui_rc is missing, so the UI exit code is unknown".to_owned(),
+            },
+            ui_rc == Some(0),
             w["ui_rc"].to_string(),
         );
         r.inv(
@@ -830,6 +866,11 @@ fn gate_files(r: &mut Run, d: &Path, pre_uplink: &str) {
                 "data/history.sqlite3 equals data.sha256",
                 sha(&b) == first,
                 "",
+            );
+        } else {
+            r.notes.insert(
+                "data_binding".into(),
+                json!("data/ is not in this archive; the binding was checked in the window, see its committed verdict"),
             );
         }
     }
@@ -1074,20 +1115,27 @@ fn open_ports_from_host(
     d: &Path,
     r: &mut Run,
     notes: &mut Map<String, Value>,
+    wire_complete: bool,
 ) -> Option<BTreeSet<u16>> {
-    // A netstat that did not exit 0 is "not recorded", never "no host listeners".
+    // A record counts only when netstat exited 0 AND printed its header. A file holding `rc 0` and nothing after
+    // it is what a blinded netstat leaves (exit 0, empty stdout, the reason on stderr): that is "not recorded",
+    // never "no host listeners".
     let rec = |n: &str| {
         text_in(d, n).filter(|t| {
-            t.lines()
-                .next()
-                .is_none_or(|l| !l.starts_with("rc ") || l.trim() == "rc 0")
+            t.lines().next().is_some_and(|l| l.trim() == "rc 0")
+                && t.lines().any(|l| l.starts_with(NETSTAT_HEADER))
         })
     };
     let (Some(b), Some(a)) = (rec("host-listen-before.txt"), rec("host-listen-after.txt")) else {
+        // The replies are then judged from the wire alone, which needs a complete peer capture.
         r.inv(
-            "host listeners recorded before and after (wildcard listeners answer on 198.18.0.2)",
-            false,
-            "host-listen-before.txt or host-listen-after.txt missing",
+            "host listeners not recorded (no netstat header): the open truth derived from the wire needs a complete peer capture",
+            wire_complete,
+            "host-listen-before.txt or host-listen-after.txt is missing, failed or empty",
+        );
+        notes.insert(
+            "open_truth".into(),
+            json!("derived from the wire (host listeners not recorded)"),
         );
         return None;
     };
@@ -1140,6 +1188,7 @@ fn history_checks(r: &mut Run, scan: &Value) -> Vec<Row> {
     );
     rows
 }
+const NETSTAT_HEADER: &str = "Active Internet connections";
 fn lab_open(ports: &[u16], host: &BTreeSet<u16>) -> BTreeSet<u16> {
     ports
         .iter()
@@ -1300,7 +1349,7 @@ fn planned_cases(
     let (syns, replies) = (&wire.syns, &wire.replies);
     let host = {
         let mut r = run_of("host-listeners");
-        let h = open_ports_from_host(d, &mut r, notes);
+        let h = open_ports_from_host(d, &mut r, notes, peer_ok);
         if r.checks.iter().any(|c| c["result"] != PASS) {
             runs.push((r, None));
         }
@@ -1383,7 +1432,7 @@ fn planned_cases(
         };
         let Some(tl) = chron.and_then(|ch| case_timeline(ch, spec.tag)) else {
             r.add(
-                "the Start action of the case is in the chronicle",
+                "the Start action of the case is not in the chronicle",
                 NOT_RUN,
                 spec.tag,
                 false,
@@ -1584,13 +1633,31 @@ fn planned_cases(
             if let Some(v) = cn.remove("post_run_replies") {
                 notes.insert(format!("post_run_replies.{}", spec.tag), v);
             }
-            if spec.tag == "s1_full"
-                && let Some(host) = &host
-            {
-                let want = lab_open(&plan, host);
+            if spec.tag == "s1_full" {
+                let want = match &host {
+                    Some(host) => lab_open(&plan, host),
+                    // Not recorded: the open set is what the wire answered with a SYN-ACK to this case's SYNs.
+                    None => {
+                        let keys: BTreeSet<(u16, u32)> = own
+                            .iter()
+                            .map(|y| (y.port, y.seq.wrapping_add(1)))
+                            .collect();
+                        case_replies
+                            .iter()
+                            .filter(|p| {
+                                p.open && p.t <= finished && keys.contains(&(p.port, p.ack))
+                            })
+                            .map(|p| p.port)
+                            .collect()
+                    }
+                };
                 let got: BTreeSet<u16> = rows.iter().filter(|w| w.open).map(|w| w.port).collect();
                 r.beh(
-                    "open rows are the lab listeners 8000-8007 plus host wildcard listeners",
+                    if host.is_some() {
+                        "open rows are the lab listeners 8000-8007 plus host wildcard listeners"
+                    } else {
+                        "open rows equal the ports with a SYN-ACK on the wire (host listeners not recorded)"
+                    },
                     got == want,
                     format!("want {want:?} got {got:?}"),
                 );
@@ -1676,7 +1743,15 @@ fn pause_resume(r: &mut Run, rec: Option<&Value>, t: &CaseTimeline, mine: &[&Syn
         format!("{k:?}"),
     );
     let (Some(k), Some(resume)) = (k, resume) else {
-        r.beh("Resume action is in the chronicle", resume.is_some(), "");
+        r.beh(
+            if resume.is_some() {
+                "Resume action is in the chronicle"
+            } else {
+                "Resume action is missing from the chronicle"
+            },
+            resume.is_some(),
+            "",
+        );
         return;
     };
     let k = k as usize;

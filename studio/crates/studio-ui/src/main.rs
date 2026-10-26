@@ -374,6 +374,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_file_name(format!("studio-runner{}", std::env::consts::EXE_SUFFIX));
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
+    ui.set_mac_feth_open(studio_protocol::raw_profile_enabled(Backend::MacFeth));
     ui.set_authorization_available(cfg!(any(target_os = "macos", target_os = "linux", windows)));
     ui.set_process_view(true);
     ui.set_job_seed(

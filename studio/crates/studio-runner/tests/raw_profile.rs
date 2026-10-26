@@ -72,11 +72,8 @@ fn unprivileged_runner_fails_mac_feth_before_any_adapter() {
             "{detail}"
         );
     } else {
-        assert!(
-            detail.contains("only available on macOS")
-                || detail.contains("not enabled for this profile"),
-            "{detail}"
-        );
+        // Off macOS the gate itself must refuse; `check_feth` must not be what stops it.
+        assert!(detail.contains("not enabled for this profile"), "{detail}");
     }
     // The runner stays alive after the refusal and accepts CloseSession.
     write_frame(

@@ -178,6 +178,9 @@ and `STUDIO_SCREENSHOT` to save a PNG. Linux needs a display server (Xvfb works 
 this smoke); Windows needs an interactive desktop for UI evidence.
 `--smoke-stop-race` submits Stop while a Started event is pending in the UI queue.
 
+`--smoke-feth` drives the Mac feth profile through the same actions on a sealed `feth` stand; it is run by
+`cargo xtask feth-acceptance` (macOS only, user-run, see `rmasscan/docs/macos-feth-lab.md`, "Studio acceptance").
+
 These checks do not measure displayed-frame latency or replace manual keyboard,
 screen reader, clipboard and context-menu acceptance.
 

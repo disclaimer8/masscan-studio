@@ -1,0 +1,20 @@
+{
+  "cmd": [
+    "/usr/sbin/tcpdump",
+    "-p",
+    "-n",
+    "-U",
+    "-s",
+    "0",
+    "-i",
+    "feth4202",
+    "-w",
+    "peer.pcap"
+  ],
+  "exit_code": 0,
+  "filter": "",
+  "interface": "feth4202",
+  "listening": true,
+  "start_utc": "2026-10-26T20:33:28.558Z",
+  "stop_utc": "2026-10-26T20:34:04.811Z"
+}

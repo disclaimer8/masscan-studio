@@ -1,0 +1,1264 @@
+{
+  "schema": 1,
+  "started_utc": "2026-10-26T20:33:31.020Z",
+  "result": "ok",
+  "plan": [
+    {
+      "tag": "s1_full",
+      "job": {
+        "targets": "198.18.0.2",
+        "ports": "80,443,8000-8007,9000-9009",
+        "exclusions": "",
+        "seed": "1",
+        "rate": 100,
+        "backend": "MacFeth"
+      },
+      "scan_id_hex": "e7df1be001bf500eeee2dae3cb412b8d",
+      "rows_seen": 20,
+      "started_utc": "2026-10-26T20:33:43.602Z",
+      "finished_utc": "2026-10-26T20:33:46.965Z",
+      "finished_status": "Completed",
+      "paused_next_index": null,
+      "pause_to_paused_ms": null,
+      "stop_to_stopped_ms": null
+    },
+    {
+      "tag": "s2_pause",
+      "job": {
+        "targets": "198.18.0.2",
+        "ports": "9000-9031",
+        "exclusions": "",
+        "seed": "2",
+        "rate": 4,
+        "backend": "MacFeth"
+      },
+      "scan_id_hex": "80e7fa23d91843e100fd1826d55c886b",
+      "rows_seen": 32,
+      "started_utc": "2026-10-26T20:33:47.067Z",
+      "finished_utc": "2026-10-26T20:34:00.984Z",
+      "finished_status": "Completed",
+      "paused_next_index": 7,
+      "pause_to_paused_ms": 3090,
+      "stop_to_stopped_ms": null
+    },
+    {
+      "tag": "s3_stop",
+      "job": {
+        "targets": "198.18.0.2",
+        "ports": "1-2000",
+        "exclusions": "",
+        "seed": "3",
+        "rate": 300,
+        "backend": "MacFeth"
+      },
+      "scan_id_hex": "c55bd5b7cd3fb04967e09c0cb041cd3d",
+      "rows_seen": 439,
+      "started_utc": "2026-10-26T20:34:01.135Z",
+      "finished_utc": "2026-10-26T20:34:02.861Z",
+      "finished_status": "Stopped",
+      "paused_next_index": null,
+      "pause_to_paused_ms": null,
+      "stop_to_stopped_ms": 50
+    }
+  ],
+  "events": [
+    {
+      "utc": "2026-10-26T20:33:31.020Z",
+      "mono_ms": 371,
+      "kind": "History",
+      "status": "",
+      "detail": "0 scans, selected none"
+    },
+    {
+      "utc": "2026-10-26T20:33:31.071Z",
+      "mono_ms": 423,
+      "kind": "Authorization",
+      "status": "busy",
+      "detail": "Waiting for system authorization…",
+      "authorized": false
+    },
+    {
+      "utc": "2026-10-26T20:33:43.399Z",
+      "mono_ms": 12750,
+      "kind": "Authorization",
+      "status": "idle",
+      "detail": "Runner authorized for this session; checking isolated network…",
+      "authorized": true
+    },
+    {
+      "utc": "2026-10-26T20:33:43.501Z",
+      "mono_ms": 12852,
+      "kind": "Notice",
+      "status": "",
+      "detail": "Network preflight passed: Isolated feth preflight passed; no packets sent"
+    },
+    {
+      "utc": "2026-10-26T20:33:43.653Z",
+      "mono_ms": 13004,
+      "kind": "State",
+      "status": "Starting",
+      "detail": "Starting scanner"
+    },
+    {
+      "utc": "2026-10-26T20:33:43.754Z",
+      "mono_ms": 13105,
+      "kind": "State",
+      "status": "Scanning",
+      "detail": "Scanning 20 endpoints"
+    },
+    {
+      "utc": "2026-10-26T20:33:44.058Z",
+      "mono_ms": 13409,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:44.058Z",
+      "mono_ms": 13409,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 15
+    },
+    {
+      "utc": "2026-10-26T20:33:44.058Z",
+      "mono_ms": 13409,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 4
+    },
+    {
+      "utc": "2026-10-26T20:33:44.321Z",
+      "mono_ms": 13672,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:44.577Z",
+      "mono_ms": 13928,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:44.832Z",
+      "mono_ms": 14183,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:45.086Z",
+      "mono_ms": 14437,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:45.392Z",
+      "mono_ms": 14743,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:45.645Z",
+      "mono_ms": 14996,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:45.949Z",
+      "mono_ms": 15300,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:46.203Z",
+      "mono_ms": 15555,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:46.511Z",
+      "mono_ms": 15862,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:46.766Z",
+      "mono_ms": 16117,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:46.965Z",
+      "mono_ms": 16317,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:46.965Z",
+      "mono_ms": 16317,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:46.965Z",
+      "mono_ms": 16317,
+      "kind": "State",
+      "status": "Completed",
+      "detail": "Completed"
+    },
+    {
+      "utc": "2026-10-26T20:33:46.965Z",
+      "mono_ms": 16317,
+      "kind": "History",
+      "status": "",
+      "detail": "1 scans, selected e7df1be001bf500eeee2dae3cb412b8d"
+    },
+    {
+      "utc": "2026-10-26T20:33:47.118Z",
+      "mono_ms": 16469,
+      "kind": "State",
+      "status": "Starting",
+      "detail": "Starting scanner"
+    },
+    {
+      "utc": "2026-10-26T20:33:47.218Z",
+      "mono_ms": 16569,
+      "kind": "State",
+      "status": "Scanning",
+      "detail": "Scanning 32 endpoints"
+    },
+    {
+      "utc": "2026-10-26T20:33:47.518Z",
+      "mono_ms": 16869,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:47.518Z",
+      "mono_ms": 16869,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:47.518Z",
+      "mono_ms": 16869,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 2 received 2"
+    },
+    {
+      "utc": "2026-10-26T20:33:47.970Z",
+      "mono_ms": 17321,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:47.970Z",
+      "mono_ms": 17321,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 3 received 3"
+    },
+    {
+      "utc": "2026-10-26T20:33:48.221Z",
+      "mono_ms": 17572,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:48.221Z",
+      "mono_ms": 17572,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 4 received 4"
+    },
+    {
+      "utc": "2026-10-26T20:33:48.221Z",
+      "mono_ms": 17572,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:48.525Z",
+      "mono_ms": 17876,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 5 received 5"
+    },
+    {
+      "utc": "2026-10-26T20:33:48.525Z",
+      "mono_ms": 17876,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:48.779Z",
+      "mono_ms": 18130,
+      "kind": "State",
+      "status": "Saving",
+      "detail": "Pausing and draining replies…"
+    },
+    {
+      "utc": "2026-10-26T20:33:48.829Z",
+      "mono_ms": 18180,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 6 received 6"
+    },
+    {
+      "utc": "2026-10-26T20:33:48.829Z",
+      "mono_ms": 18180,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:49.129Z",
+      "mono_ms": 18480,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:49.433Z",
+      "mono_ms": 18784,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:49.688Z",
+      "mono_ms": 19039,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:49.942Z",
+      "mono_ms": 19293,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:50.195Z",
+      "mono_ms": 19546,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:50.498Z",
+      "mono_ms": 19849,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:50.753Z",
+      "mono_ms": 20104,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.008Z",
+      "mono_ms": 20359,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.261Z",
+      "mono_ms": 20612,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.565Z",
+      "mono_ms": 20916,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.767Z",
+      "mono_ms": 21118,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.767Z",
+      "mono_ms": 21118,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.767Z",
+      "mono_ms": 21118,
+      "kind": "State",
+      "status": "Saving",
+      "detail": "Checkpoint saved; confirming pause…"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.818Z",
+      "mono_ms": 21169,
+      "kind": "State",
+      "status": "Paused",
+      "detail": "Checkpoint committed by Studio"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.818Z",
+      "mono_ms": 21169,
+      "kind": "History",
+      "status": "",
+      "detail": "2 scans, selected 80e7fa23d91843e100fd1826d55c886b"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.868Z",
+      "mono_ms": 21219,
+      "kind": "State",
+      "status": "Starting",
+      "detail": "Resuming saved scan"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.971Z",
+      "mono_ms": 21322,
+      "kind": "State",
+      "status": "Scanning",
+      "detail": "Scanning 32 endpoints"
+    },
+    {
+      "utc": "2026-10-26T20:33:52.276Z",
+      "mono_ms": 21628,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:52.277Z",
+      "mono_ms": 21628,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:52.277Z",
+      "mono_ms": 21628,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 2 received 2"
+    },
+    {
+      "utc": "2026-10-26T20:33:52.735Z",
+      "mono_ms": 22086,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:52.735Z",
+      "mono_ms": 22086,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 3 received 3"
+    },
+    {
+      "utc": "2026-10-26T20:33:52.988Z",
+      "mono_ms": 22339,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:52.988Z",
+      "mono_ms": 22339,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 4 received 4"
+    },
+    {
+      "utc": "2026-10-26T20:33:53.240Z",
+      "mono_ms": 22592,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:53.240Z",
+      "mono_ms": 22592,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 5 received 5"
+    },
+    {
+      "utc": "2026-10-26T20:33:53.240Z",
+      "mono_ms": 22592,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:53.595Z",
+      "mono_ms": 22946,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 6 received 6"
+    },
+    {
+      "utc": "2026-10-26T20:33:53.595Z",
+      "mono_ms": 22946,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:53.845Z",
+      "mono_ms": 23196,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-26T20:33:53.845Z",
+      "mono_ms": 23196,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:53.845Z",
+      "mono_ms": 23196,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 8 received 8"
+    },
+    {
+      "utc": "2026-10-26T20:33:54.250Z",
+      "mono_ms": 23602,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:54.250Z",
+      "mono_ms": 23602,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 9 received 9"
+    },
+    {
+      "utc": "2026-10-26T20:33:54.504Z",
+      "mono_ms": 23856,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:54.505Z",
+      "mono_ms": 23856,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 10 received 10"
+    },
+    {
+      "utc": "2026-10-26T20:33:54.764Z",
+      "mono_ms": 24115,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:54.764Z",
+      "mono_ms": 24115,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 11 received 11"
+    },
+    {
+      "utc": "2026-10-26T20:33:54.764Z",
+      "mono_ms": 24115,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:55.168Z",
+      "mono_ms": 24520,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 12 received 12"
+    },
+    {
+      "utc": "2026-10-26T20:33:55.168Z",
+      "mono_ms": 24520,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:55.475Z",
+      "mono_ms": 24826,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 13 received 13"
+    },
+    {
+      "utc": "2026-10-26T20:33:55.475Z",
+      "mono_ms": 24826,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:55.689Z",
+      "mono_ms": 25040,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 14 received 14"
+    },
+    {
+      "utc": "2026-10-26T20:33:55.689Z",
+      "mono_ms": 25040,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:55.993Z",
+      "mono_ms": 25345,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:55.993Z",
+      "mono_ms": 25345,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 15 received 15"
+    },
+    {
+      "utc": "2026-10-26T20:33:55.993Z",
+      "mono_ms": 25345,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:56.249Z",
+      "mono_ms": 25600,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 17 received 17"
+    },
+    {
+      "utc": "2026-10-26T20:33:56.502Z",
+      "mono_ms": 25853,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:56.502Z",
+      "mono_ms": 25853,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 18 received 18"
+    },
+    {
+      "utc": "2026-10-26T20:33:56.756Z",
+      "mono_ms": 26107,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:56.756Z",
+      "mono_ms": 26107,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 19 received 19"
+    },
+    {
+      "utc": "2026-10-26T20:33:56.756Z",
+      "mono_ms": 26107,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:57.008Z",
+      "mono_ms": 26359,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 20 received 20"
+    },
+    {
+      "utc": "2026-10-26T20:33:57.008Z",
+      "mono_ms": 26359,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:57.308Z",
+      "mono_ms": 26659,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 21 received 21"
+    },
+    {
+      "utc": "2026-10-26T20:33:57.308Z",
+      "mono_ms": 26659,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:57.558Z",
+      "mono_ms": 26909,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 22 received 22"
+    },
+    {
+      "utc": "2026-10-26T20:33:57.558Z",
+      "mono_ms": 26909,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:57.858Z",
+      "mono_ms": 27209,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 23 received 23"
+    },
+    {
+      "utc": "2026-10-26T20:33:57.858Z",
+      "mono_ms": 27209,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:57.858Z",
+      "mono_ms": 27209,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 24 received 24"
+    },
+    {
+      "utc": "2026-10-26T20:33:58.258Z",
+      "mono_ms": 27609,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:33:58.258Z",
+      "mono_ms": 27609,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:33:58.658Z",
+      "mono_ms": 28009,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:33:58.908Z",
+      "mono_ms": 28259,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:33:59.158Z",
+      "mono_ms": 28509,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:33:59.459Z",
+      "mono_ms": 28810,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:33:59.764Z",
+      "mono_ms": 29115,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.019Z",
+      "mono_ms": 29370,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.271Z",
+      "mono_ms": 29623,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.526Z",
+      "mono_ms": 29878,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.832Z",
+      "mono_ms": 30183,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.984Z",
+      "mono_ms": 30335,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.984Z",
+      "mono_ms": 30335,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 25 received 25"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.984Z",
+      "mono_ms": 30335,
+      "kind": "State",
+      "status": "Completed",
+      "detail": "Completed"
+    },
+    {
+      "utc": "2026-10-26T20:34:00.984Z",
+      "mono_ms": 30335,
+      "kind": "History",
+      "status": "",
+      "detail": "2 scans, selected 80e7fa23d91843e100fd1826d55c886b"
+    },
+    {
+      "utc": "2026-10-26T20:34:01.186Z",
+      "mono_ms": 30537,
+      "kind": "State",
+      "status": "Starting",
+      "detail": "Starting scanner"
+    },
+    {
+      "utc": "2026-10-26T20:34:01.287Z",
+      "mono_ms": 30638,
+      "kind": "State",
+      "status": "Scanning",
+      "detail": "Scanning 2000 endpoints"
+    },
+    {
+      "utc": "2026-10-26T20:34:01.589Z",
+      "mono_ms": 30940,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-26T20:34:01.589Z",
+      "mono_ms": 30940,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 44
+    },
+    {
+      "utc": "2026-10-26T20:34:01.589Z",
+      "mono_ms": 30940,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 16
+    },
+    {
+      "utc": "2026-10-26T20:34:01.589Z",
+      "mono_ms": 30940,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 10
+    },
+    {
+      "utc": "2026-10-26T20:34:01.841Z",
+      "mono_ms": 31193,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 72 received 71"
+    },
+    {
+      "utc": "2026-10-26T20:34:01.841Z",
+      "mono_ms": 31193,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 36
+    },
+    {
+      "utc": "2026-10-26T20:34:01.841Z",
+      "mono_ms": 31193,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 15
+    },
+    {
+      "utc": "2026-10-26T20:34:01.841Z",
+      "mono_ms": 31193,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 16
+    },
+    {
+      "utc": "2026-10-26T20:34:01.841Z",
+      "mono_ms": 31193,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 3
+    },
+    {
+      "utc": "2026-10-26T20:34:02.100Z",
+      "mono_ms": 31451,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 142 received 141"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.100Z",
+      "mono_ms": 31452,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 42
+    },
+    {
+      "utc": "2026-10-26T20:34:02.100Z",
+      "mono_ms": 31452,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 15
+    },
+    {
+      "utc": "2026-10-26T20:34:02.100Z",
+      "mono_ms": 31452,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 10
+    },
+    {
+      "utc": "2026-10-26T20:34:02.357Z",
+      "mono_ms": 31708,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 35
+    },
+    {
+      "utc": "2026-10-26T20:34:02.357Z",
+      "mono_ms": 31708,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 216 received 209"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.357Z",
+      "mono_ms": 31708,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 15
+    },
+    {
+      "utc": "2026-10-26T20:34:02.357Z",
+      "mono_ms": 31708,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 15
+    },
+    {
+      "utc": "2026-10-26T20:34:02.357Z",
+      "mono_ms": 31708,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 3
+    },
+    {
+      "utc": "2026-10-26T20:34:02.357Z",
+      "mono_ms": 31708,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 30
+    },
+    {
+      "utc": "2026-10-26T20:34:02.607Z",
+      "mono_ms": 31959,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 12
+    },
+    {
+      "utc": "2026-10-26T20:34:02.607Z",
+      "mono_ms": 31959,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 319 received 313"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.607Z",
+      "mono_ms": 31959,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 11
+    },
+    {
+      "utc": "2026-10-26T20:34:02.607Z",
+      "mono_ms": 31959,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 12
+    },
+    {
+      "utc": "2026-10-26T20:34:02.607Z",
+      "mono_ms": 31959,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 12
+    },
+    {
+      "utc": "2026-10-26T20:34:02.607Z",
+      "mono_ms": 31959,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 10
+    },
+    {
+      "utc": "2026-10-26T20:34:02.607Z",
+      "mono_ms": 31959,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 383 received 363"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Notice",
+      "status": "",
+      "detail": "Stopping…"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 33
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 12
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 12
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 12
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 7
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 469 received 437"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 471 received 439"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "State",
+      "status": "Stopped",
+      "detail": "Stopped"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.861Z",
+      "mono_ms": 32212,
+      "kind": "History",
+      "status": "",
+      "detail": "3 scans, selected c55bd5b7cd3fb04967e09c0cb041cd3d"
+    },
+    {
+      "utc": "2026-10-26T20:34:03.014Z",
+      "mono_ms": 32365,
+      "kind": "Authorization",
+      "status": "idle",
+      "detail": "Runner session closed",
+      "authorized": false
+    },
+    {
+      "utc": "2026-10-26T20:34:03.014Z",
+      "mono_ms": 32365,
+      "kind": "Notice",
+      "status": "",
+      "detail": "Runner session closed"
+    }
+  ],
+  "actions": [
+    {
+      "utc": "2026-10-26T20:33:31.020Z",
+      "mono_ms": 371,
+      "action": "Authorize"
+    },
+    {
+      "utc": "2026-10-26T20:33:43.602Z",
+      "mono_ms": 12953,
+      "action": "Start:s1_full"
+    },
+    {
+      "utc": "2026-10-26T20:33:47.067Z",
+      "mono_ms": 16418,
+      "action": "Start:s2_pause"
+    },
+    {
+      "utc": "2026-10-26T20:33:48.728Z",
+      "mono_ms": 18079,
+      "action": "Pause"
+    },
+    {
+      "utc": "2026-10-26T20:33:51.818Z",
+      "mono_ms": 21169,
+      "action": "Resume"
+    },
+    {
+      "utc": "2026-10-26T20:34:01.135Z",
+      "mono_ms": 30486,
+      "action": "Start:s3_stop"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.811Z",
+      "mono_ms": 32162,
+      "action": "Stop"
+    },
+    {
+      "utc": "2026-10-26T20:34:02.963Z",
+      "mono_ms": 32314,
+      "action": "Lock"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "data_sha256_before_dump": "12edac7ba848893d51613db83b4111dc6db0428b674700078bce4c0adc93c96c",
+  "dry_run": false,
+  "ended_utc": "2026-10-26T20:34:04.861Z",
+  "invalid_marks": [],
+  "lab_sha256": "e0e2f5170218763b51ed22045516a738efbafae4e0a54eaa9570b047d460733b",
+  "lab_version": "rmasscan-lab 0.1.0 (Rust)",
+  "manual": false,
+  "pids": [
+    {
+      "name": "peer-listen",
+      "pid": 68259
+    },
+    {
+      "name": "peer",
+      "pid": 68262
+    },
+    {
+      "name": "uplink",
+      "pid": 68263
+    },
+    {
+      "name": "ui",
+      "pid": 68268
+    }
+  ],
+  "result": "closed",
+  "schema": 1,
+  "started_utc": "2026-10-26T20:33:28.438Z",
+  "thresholds": {
+    "pause_to_paused_ms": 5000,
+    "smoke_deadline_s": 420,
+    "stop_to_stopped_ms": 1000
+  },
+  "ui_rc": 0,
+  "ui_started_utc": "2026-10-26T20:33:30.559Z",
+  "uplink": "en0"
+}

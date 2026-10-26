@@ -102,7 +102,10 @@ Studio also cancels them. Simulation cannot trigger DNS or Nmap requests.
 DNS uses four workers, a three-second process deadline and a five-minute cache;
 explicit refresh bypasses that cache. On macOS the separate `studio-inspect`
 worker uses system DNS-SD, including mDNS; Windows/Linux use the system resolver
-inside the cancellable worker. Nmap runs without elevation, checks only discovered
+inside the cancellable worker. Only an authoritative missing name/record is
+displayed as "No hostname" and negatively cached. Resolver failures, malformed
+answers and deadlines are errors and do not enter that cache.
+Nmap runs without elevation, checks only discovered
 open TCP ports (at most 64, excluding printer port 9100) and has a 55-second
 deadline. Install Nmap separately, or set `STUDIO_NMAP_PATH` before launching.
 Service/device hints retain their method, confidence and time; they do not certify

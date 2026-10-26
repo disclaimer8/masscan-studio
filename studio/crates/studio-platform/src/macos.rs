@@ -106,7 +106,7 @@ echo "Installed $dest/studio-runner"
 
 pub struct Authorized {
     pub stream: UnixStream,
-    pub peer: Identity,
+    pub peer: crate::audit::Peer,
     _endpoint: Endpoint,
     launcher: Child,
 }

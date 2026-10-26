@@ -22,6 +22,10 @@ pub struct Identity {
     pub executable: PathBuf,
 }
 type Result<T> = std::result::Result<T, String>;
+#[cfg(target_os = "macos")]
+pub type TrustedPeer = crate::audit::Peer;
+#[cfg(target_os = "linux")]
+pub type TrustedPeer = Identity;
 impl Identity {
     pub fn current() -> Result<Self> {
         Self::read(std::process::id())
@@ -257,7 +261,7 @@ impl Endpoint {
         hash: &str,
         cancelled: &std::sync::atomic::AtomicBool,
         mut check_launcher: impl FnMut() -> Result<()>,
-    ) -> Result<(UnixStream, Identity)> {
+    ) -> Result<(UnixStream, TrustedPeer)> {
         crate::trusted::verify(path, hash)?;
         let deadline = Instant::now() + timeout;
         loop {
@@ -268,6 +272,9 @@ impl Endpoint {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     stream.set_nonblocking(false).map_err(|e| e.to_string())?;
+                    #[cfg(target_os = "macos")]
+                    let peer = TrustedPeer::from_stream(&stream)?;
+                    #[cfg(target_os = "linux")]
                     let peer = peer_identity(&stream)?;
                     if peer.uid != 0 || peer.executable != path {
                         return Err("Unexpected elevated runner process".into());

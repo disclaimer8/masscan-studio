@@ -14,10 +14,20 @@ model. Unsigned local software cannot prove that same-account code is benign.
 The UI creates a random socket in a new 0700 directory, socket 0600. macOS also
 rejects extended ACLs on that directory/socket. The path and process identity are
 public argv values; there is no argv/env session secret. Both sides validate OS
-peer credentials, live PID, account, birth time and executable. Linux uses
-SO_PEERCRED; macOS uses getpeereid/LOCAL_PEERPID and libproc. Birth is checked
-before and after executable lookup. The root peer additionally must run the
+peer credentials and process incarnation. Linux uses SO_PEERCRED and process
+start time. On macOS the runner validates the unprivileged UI through
+getpeereid/LOCAL_PEERPID and libproc start time (checked before/after path lookup).
+The UI validates the root peer through LOCAL_PEERTOKEN and
+proc_pidpath_audittoken, which binds the executable lookup to the kernel PID
+generation. Reading root PROC_PIDTBSDINFO as a regular user fails with EPERM on
+the development Mac; the audit-token API avoids that access requirement without
+accepting an unbound numeric PID. The root peer additionally must run the
 versioned, administrator-owned binary matching the UI's SHA-256.
+
+API contract checked against the macOS SDK `libproc.h`, `mach/message.h`,
+`bsm/libbsm.h` and [Apple's libproc implementation](https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c).
+The exit probe propagates unknown inspection errors rather than treating them as
+proof of process death.
 
 The endpoint is removed when the session closes; removal checks its saved
 device/inode. The protocol has separate version, session/attempt IDs and strictly

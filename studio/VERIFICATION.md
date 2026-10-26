@@ -461,3 +461,31 @@ against user data. The history form scrolls to keep controls reachable. Manual
 screen-reader/IME and Windows/Linux desktop interaction are not claimed by these
 checks; hosted CI provides separate offline and Linux software-UI coverage.
 rmasscan, raw gate, root installation and live labs are unchanged.
+
+## 2026-10-26 — Windows named-pipe session transport
+
+Windows simulation now exercises Studio controller → authenticated local named
+pipe → runner. No UAC, installation or raw adapter is introduced. macOS/Linux
+retain their existing transport. The platform uses protected owner-only DACLs,
+local first-instance pipes, retained peer process handles, creation times,
+SID/logon identity and identification-only SQOS. Frame and queue limits stay intact.
+
+Test-first Windows run 40321001151 failed on the missing Windows module. At
+09ccf8a, Windows run 40322310909 passed 67 tests, with two live inspection tests
+and one explicitly invoked child-process fixture ignored in the ordinary run.
+This includes real Win32 DACL inspection, duplicate-instance refusal, wrong/stale
+peer identity, timeouts/cancellation, duplex roundtrip, blocked-read shutdown,
+runner handshake/disconnect and the full simulation lifecycle/100k-row suite.
+Mac `cargo xtask test` passed 72 tests, two live checks ignored; fmt/Clippy passed.
+
+A fresh review identified an API-contract ambiguity around immediate overlapped
+completion without an event signal. A controlled native OVERLAPPED-state test
+failed with TimedOut in Windows run 40322875715, then the implementation was
+changed to query completion before waiting. The fixture models this state; it
+does not claim that a real ReadFile/WriteFile reproduced it on the CI host.
+Further tests cover shutdown during a blocked write and peer death during a read.
+The follow-up review found no new issues. Latest-head CI must pass these added
+checks before merge; earlier green evidence is not a substitute.
+
+No cross-account/UAC, Windows interactive desktop, physical NIC or network-packet
+claim follows from these tests. The home lab and rmasscan source were not used.

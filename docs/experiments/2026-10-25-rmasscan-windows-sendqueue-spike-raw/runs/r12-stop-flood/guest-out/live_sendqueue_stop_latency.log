@@ -1,0 +1,11 @@
+
+running 1 test
+test windows::live::live_sendqueue_stop_latency ... SUMMARY flood/sq_stop_latency_tx n=60 p50_us=1408 p95_us=5086 p99_us=6088 max_us=6290 rc={0: 60}
+SUMMARY flood/sq_stop_latency_rx n=60 p50_us=41 p95_us=2139 p99_us=2789 max_us=8244 rc={0: 60}
+SUMMARY flood/sq_stop_latency_joined n=60 p50_us=1884 p95_us=5551 p99_us=6415 max_us=9709 rc={0: 60}
+SUMMARY flood/sq_stop_slowest_transmit_per_round n=60 p50_us=7033 p95_us=13325 p99_us=19542 max_us=44421 rc={0: 60}
+KV flood/sq_stop_verdict batch=64 rounds=60 frames=199232 max_join_us=9709 worst_tx_excess_over_slowest_transmit_us=0 short_transmits=0 rx_errors=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 179 filtered out; finished in 10.05s
+

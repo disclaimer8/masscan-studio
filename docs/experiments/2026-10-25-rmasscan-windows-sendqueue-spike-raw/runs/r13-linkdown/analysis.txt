@@ -1,0 +1,9 @@
+# derived from r13-linkdown/peer.pcap (full capture, before trimming) by an ad-hoc script; method: classify frames with src MAC 52:54:00:04:80:a9, IPv4/TCP, 198.18.0.1->198.18.0.2, flags==SYN; seq field = frame index
+calls 2344 frames 150016 arrived 97408 missing 52608 non-syn 76
+calls with loss 822 of which partially delivered 0
+first loss t-down = 0.016 s, last loss t-up = 0.499 s
+down at 1792987965.0992558 up at 1792987975.1132054 hold 10.013949632644653
+max transmit dur during window us 6551
+sent!=queued calls 0
+guest NIC ReceivedUnicastPackets delta during run: 97408
+eno1.pcap size bytes: 24 (24 = pcap header only, 0 frames)

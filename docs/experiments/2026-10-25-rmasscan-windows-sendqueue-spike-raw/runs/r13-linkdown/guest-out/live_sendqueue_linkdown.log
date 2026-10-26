@@ -1,0 +1,9 @@
+
+running 1 test
+test windows::live::live_sendqueue_linkdown ... KV linkloss/sq_linkdown n=64 calls=2344 p50_us=1962 p95_us=4756 p99_us=5609 p999_us=8147 max_us=10637 sum_frames=150016 sum_dur_us=4059122 pps_ceiling=36958 short_transmits=0 pass=true
+KV linkloss/sq_linkdown_frames 150016 seq_end=150016
+KV linkloss/sq_linkdown_short_count 0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 179 filtered out; finished in 30.03s
+

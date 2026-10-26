@@ -1,0 +1,16 @@
+[2026-10-26T04:27:42.870Z] tag=r17-reuse-long test=live_sendqueue_reuse_no_leak cond=idle sha=3954b14 nonce=r3db854243bee4124-fbcf920577f9b57b extra=RMASSCAN_NPCAP_SQ_REUSE_CALLS=40000;RMASSCAN_NPCAP_SQ_ALLOC_CALLS=1000
+[2026-10-26T04:27:44.613Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:27:45.126Z] guest run begins
+[2026-10-26T04:29:02.851Z] guest run ended rc=0
+[2026-10-26T04:29:05.427Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=2624004
+==> $HOME/winvm/sq-ev/r17-reuse-long/peer.err <==
+2624004 packets captured
+2624004 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r17-reuse-long/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

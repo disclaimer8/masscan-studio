@@ -1,0 +1,41 @@
+
+running 1 test
+test windows::live::live_sendqueue_reuse_no_leak ... KV idle/sq_reuse_clear n=64 calls=40000 p50_us=3579 p95_us=4588 p99_us=5182 p999_us=6121 max_us=9140 sum_frames=2560000 sum_dur_us=141448935 pps_ceiling=18098 short_transmits=0 pass=true
+KV idle/sq_reuse_clear_seq first=0 frames=2560000
+KV idle/sq_reuse_clear_sample call=4000 working_set=Some(9388032) handles=Some(139) threads=Some(5)
+KV idle/sq_reuse_clear_sample call=8000 working_set=Some(9555968) handles=Some(139) threads=Some(5)
+KV idle/sq_reuse_clear_sample call=12000 working_set=Some(9818112) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=16000 working_set=Some(9883648) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=20000 working_set=Some(10014720) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=24000 working_set=Some(10170368) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=28000 working_set=Some(10539008) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=32000 working_set=Some(10539008) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=36000 working_set=Some(10649600) handles=Some(140) threads=Some(4)
+KV idle/sq_reuse_clear_sample call=40000 working_set=Some(10776576) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_clear_verdict ws_growth_10pct_to_100pct=1388544 short_transmits=0 under_1mib=false
+KV idle/sq_reuse_destroy_alloc n=64 calls=1000 p50_us=1866 p95_us=4404 p99_us=4652 p999_us=4952 max_us=6780 sum_frames=64000 sum_dur_us=2581588 pps_ceiling=24791 short_transmits=0 pass=true
+KV idle/sq_reuse_destroy_alloc_seq first=2560000 frames=64000
+KV idle/sq_reuse_destroy_alloc_sample call=100 working_set=Some(9252864) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=200 working_set=Some(9256960) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=300 working_set=Some(9256960) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=400 working_set=Some(9261056) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=500 working_set=Some(9261056) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=600 working_set=Some(9261056) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=700 working_set=Some(9261056) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=800 working_set=Some(9261056) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=900 working_set=Some(9261056) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_sample call=1000 working_set=Some(9261056) handles=Some(136) threads=Some(2)
+KV idle/sq_reuse_destroy_alloc_verdict ws_growth_10pct_to_100pct=8192 short_transmits=0 under_1mib=true
+
+thread 'windows::live::live_sendqueue_reuse_no_leak' (8136) panicked at crates\rmasscan-net\src\windows\live.rs:1511:9:
+clear: working set grew by 1388544 bytes
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    windows::live::live_sendqueue_reuse_no_leak
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 179 filtered out; finished in 145.18s
+

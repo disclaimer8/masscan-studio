@@ -1,0 +1,13 @@
+# derived from r03-partial/peer.pcap (full capture, before trimming) by an ad-hoc script; method: classify frames with src MAC 52:54:00:04:80:a9, IPv4/TCP, 198.18.0.1->198.18.0.2, flags==SYN; seq field = frame index
+syn unique 1295 dups 0 other frames 0 {}
+('caplen0', 0) {('sent=0', 'pre=0/0', 'post=0/5'): 1}
+('caplen0', 7) {('sent=0', 'pre=7/7', 'post=0/5'): 20}
+('caplen0', 255) {('sent=0', 'pre=255/255', 'post=0/5'): 1}
+('caplen20_len60', 0) {('sent=all', 'pre=0/0', 'post=5/5'): 1}
+('caplen20_len60', 7) {('sent=all', 'pre=7/7', 'post=5/5'): 20}
+('caplen20_len60', 255) {('sent=all', 'pre=255/255', 'post=5/5'): 1}
+('frame9000', 0) {('sent=0', 'pre=0/0', 'post=0/5'): 1}
+('frame9000', 7) {('sent=0', 'pre=7/7', 'post=0/5'): 20}
+('frame9000', 255) {('sent=0', 'pre=255/255', 'post=0/5'): 1}
+guest NIC ReceivedUnicastPackets delta during run: 1295
+eno1.pcap size bytes: 24 (24 = pcap header only, 0 frames)

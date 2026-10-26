@@ -1,0 +1,14 @@
+{
+  "dst_mac": "52:54:00:04:80:a9",
+  "errors": 0,
+  "ethertype": 34998,
+  "fatal_error": null,
+  "iface": "lab0",
+  "pps_avg": 19999.938746735304,
+  "pps_target": 20000,
+  "sent": 730450,
+  "size": 60,
+  "t_first": 1792988127.289338,
+  "t_last": 1792988163.81195,
+  "would_block": 0
+}

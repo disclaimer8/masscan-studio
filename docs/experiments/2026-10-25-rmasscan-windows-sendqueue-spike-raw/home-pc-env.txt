@@ -1,0 +1,6 @@
+7.0.0-38-generic
+model name	: AMD Ryzen 9 7900X3D 12-Core Processor
+rmasscan-lab 0.1.0 (Rust)
+be5d88a29fb14181195a9cf1ab9422f6dc1d3848d41c89b0767a3dee427df0ee  $HOME/winvm/lab/bin/rmasscan-lab
+tcpdump version 4.99.6
+libpcap version 1.10.6 (64-bit time_t, with TPACKET_V3)

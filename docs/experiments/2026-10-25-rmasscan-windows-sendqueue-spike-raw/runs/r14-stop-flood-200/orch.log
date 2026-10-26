@@ -1,0 +1,16 @@
+[2026-10-26T04:15:24.654Z] tag=r14-stop-flood-200 test=live_sendqueue_stop_latency cond=flood sha=53afec8 nonce=r3a8b3bbf5ddbabd8-a04440b77f93baed extra=RMASSCAN_NPCAP_SQ_BATCH=64;RMASSCAN_NPCAP_STOP_ROUNDS=200
+[2026-10-26T04:15:26.769Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:15:30.290Z] guest run begins
+[2026-10-26T04:16:03.801Z] guest run ended rc=0
+[2026-10-26T04:16:06.902Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=660353
+==> $HOME/winvm/sq-ev/r14-stop-flood-200/peer.err <==
+660353 packets captured
+660353 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r14-stop-flood-200/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

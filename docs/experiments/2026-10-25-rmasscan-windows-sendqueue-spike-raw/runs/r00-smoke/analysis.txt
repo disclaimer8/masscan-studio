@@ -1,0 +1,5 @@
+# derived from r00-smoke/peer.pcap (full capture, before trimming) by an ad-hoc script; method: classify frames with src MAC 52:54:00:04:80:a9, IPv4/TCP, 198.18.0.1->198.18.0.2, flags==SYN; seq field = frame index
+expected SYN frames: 3620
+frames=3620 syn_unique_seq=3620 expected=3620 missing=0 out_of_range=0 dup_seq=0 dup_sha256=0 non_syn=0
+guest NIC ReceivedUnicastPackets delta during run: 3620
+eno1.pcap size bytes: 24 (24 = pcap header only, 0 frames)

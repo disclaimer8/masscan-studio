@@ -1,0 +1,20 @@
+
+running 1 test
+test windows::live::live_sendqueue_transmit_timing ... KV idle/config sizes=[128, 256, 512] rounds=1000 pps_cap=100000
+KV idle/sq_n128 n=128 calls=1000 p50_us=7342 p95_us=9046 p99_us=10046 p999_us=11087 max_us=11695 sum_frames=128000 sum_dur_us=7454795 pps_ceiling=17170 short_transmits=0 pass=true
+KV idle/sq_n128_seq first=0 frames=128000
+KV idle/sq_n256 n=256 calls=1000 p50_us=14087 p95_us=17869 p99_us=19714 p999_us=21042 max_us=22777 sum_frames=256000 sum_dur_us=14587461 pps_ceiling=17549 short_transmits=0 pass=false
+KV idle/sq_n256_seq first=128000 frames=256000
+KV idle/sq_n512 n=512 calls=1000 p50_us=28031 p95_us=33464 p99_us=37014 p999_us=41329 max_us=41331 sum_frames=512000 sum_dur_us=28710974 pps_ceiling=17833 short_transmits=0 pass=false
+KV idle/sq_n512_seq first=384000 frames=512000
+SUMMARY idle/sq_cmp_sendpacket n=1000 p50_us=140 p95_us=256 p99_us=338 max_us=432 rc={0: 1000}
+KV idle/sq_cmp_queue_n1 n=1 calls=1000 p50_us=130 p95_us=224 p99_us=315 p999_us=346 max_us=367 sum_frames=1000 sum_dur_us=143806 pps_ceiling=6954 short_transmits=0 pass=true
+KV idle/sq_cmp_seq first=896000 calls_each=1000
+SUMMARY idle/sq_cmp_sendpacket n=1000 p50_us=140 p95_us=256 p99_us=338 max_us=432 rc={0: 1000}
+KV idle/sigma_frames 898000
+KV idle/largest_passing_n 128
+KV idle/final_tx_stats recv=0 drop=0 ifdrop=0 capt=0 sent=0 netdrop=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 179 filtered out; finished in 51.22s
+

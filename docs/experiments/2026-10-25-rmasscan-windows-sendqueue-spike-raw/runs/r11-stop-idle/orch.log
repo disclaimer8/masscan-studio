@@ -1,0 +1,16 @@
+[2026-10-26T04:11:28.801Z] tag=r11-stop-idle test=live_sendqueue_stop_latency cond=idle sha=53afec8 nonce=r06b09a53336aa854-660fd855b95ec8cc extra=RMASSCAN_NPCAP_SQ_BATCH=64
+[2026-10-26T04:11:30.921Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:11:31.434Z] guest run begins
+[2026-10-26T04:11:42.903Z] guest run ended rc=0
+[2026-10-26T04:11:45.477Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=234497
+==> $HOME/winvm/sq-ev/r11-stop-idle/peer.err <==
+234497 packets captured
+234497 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r11-stop-idle/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

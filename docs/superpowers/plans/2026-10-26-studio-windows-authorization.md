@@ -38,13 +38,13 @@ Files: platform win_setup.rs (portable script/argument validation),
 windows/install.rs (Known Folder, handle-bound file/ACL trust), platform tests,
 xtask Windows preparation/probe, AUTHORIZATION.md and verification report.
 
-- [ ] RED tests for quoting, hash/path rejection, immutable installer and trust
+- [x] RED tests for quoting, hash/path rejection, immutable installer and trust
   policy; then implement with documented unsafe boundaries.
-- [ ] Windows native tests for owner/null-DACL/write grants, retained handles,
+- [x] Windows native tests for owner/null-DACL/write grants, retained handles,
   wrong hash, directory/file confusion and reparse rejection.
-- [ ] Prepare an exact package runner and reviewable install script. Installation
+- [x] Prepare an exact package runner and reviewable install script. Installation
   can be invoked manually from an elevated PowerShell for this prerequisite.
-- [ ] Disposable Windows CI install verifies actual Program Files ancestry and
+- [x] Disposable Windows CI install verifies actual Program Files ancestry and
   trusted copy. No UAC/password claim follows from an already-admin CI session.
 - [ ] Fresh review, all-OS CI, document evidence and merge this prerequisite.
 

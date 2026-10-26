@@ -22,8 +22,8 @@ use super::good_api;
 use crate::NetError;
 use crate::TxMode;
 use crate::windows::adapter::{
-    Accounted, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, PREFIX_ACCOUNTING, TX_BATCH_FRAMES,
-    TX_QUEUE_BYTES, accounted, batch_outcome, check_binding, mac_text, open_with,
+    IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, TX_BATCH_FRAMES, TX_QUEUE_BYTES, batch_outcome,
+    check_binding, mac_text, open_with,
 };
 use crate::windows::ffi::SENDQUEUE_RECORD_HEADER;
 use crate::windows::loader::{ApiSlot, NpcapApi};
@@ -1152,70 +1152,21 @@ fn refs(v: &[Vec<u8>]) -> Vec<&[u8]> {
 
 const T50: Duration = Duration::from_millis(50);
 
-fn sizes_of(n: usize) -> Vec<u32> {
-    (0..n)
-        .map(|i| (SENDQUEUE_RECORD_HEADER + 60 + i) as u32)
-        .collect()
-}
-
 #[test]
-fn accounted_exact_boundaries_and_straddles() {
-    let sizes = sizes_of(4);
-    let end = |k: usize| sizes[..k].iter().sum::<u32>();
-    let total = end(4);
-    assert_eq!(accounted(&sizes, 0), Accounted::Exact(0));
-    for k in 1..=4 {
-        assert_eq!(accounted(&sizes, end(k)), Accounted::Exact(k), "k {k}");
+fn the_outcome_is_sent_only_when_every_queued_byte_was_accepted() {
+    let all = TxBatch {
+        sent: 5,
+        rest: SendStatus::Sent,
+    };
+    let none = TxBatch {
+        sent: 0,
+        rest: SendStatus::Uncertain,
+    };
+    assert_eq!(batch_outcome(5, 400, 400), all, "full");
+    // Меньше, ноль (НЕ «ничего не отправлено»), больше: вся пачка Uncertain.
+    for bytes in [399, 300, 1, 0, 401, u32::MAX] {
+        assert_eq!(batch_outcome(5, 400, bytes), none, "bytes {bytes}");
     }
-    assert_eq!(accounted(&sizes, total), Accounted::Exact(4));
-    for k in 0..4 {
-        assert_eq!(
-            accounted(&sizes, end(k) + 7),
-            Accounted::Straddle,
-            "k+7 {k}"
-        );
-        assert_eq!(
-            accounted(&sizes, end(k) + 1),
-            Accounted::Straddle,
-            "k+1 {k}"
-        );
-    }
-    assert_eq!(accounted(&sizes, total + 1), Accounted::Straddle);
-    assert_eq!(accounted(&sizes, u32::MAX), Accounted::Straddle);
-    assert_eq!(accounted(&[], 0), Accounted::Exact(0));
-    assert_eq!(accounted(&[], 1), Accounted::Straddle);
-}
-
-#[test]
-fn the_outcome_mapping_follows_the_prefix_switch_in_both_settings() {
-    let sent = |sent, rest| TxBatch { sent, rest };
-    for prefix in [true, false] {
-        // Полный приём не зависит от переключателя.
-        assert_eq!(
-            batch_outcome(5, Accounted::Exact(5), prefix),
-            sent(5, SendStatus::Sent)
-        );
-        // Straddle всегда вся пачка Uncertain.
-        assert_eq!(
-            batch_outcome(5, Accounted::Straddle, prefix),
-            sent(0, SendStatus::Uncertain)
-        );
-        // Ничего не принято: Uncertain в обоих режимах.
-        assert_eq!(
-            batch_outcome(5, Accounted::Exact(0), prefix),
-            sent(0, SendStatus::Uncertain)
-        );
-    }
-    assert_eq!(
-        batch_outcome(5, Accounted::Exact(3), true),
-        sent(3, SendStatus::Uncertain),
-        "GO: prefix is Sent"
-    );
-    assert_eq!(
-        batch_outcome(5, Accounted::Exact(3), false),
-        sent(0, SendStatus::Uncertain),
-        "STOP: the whole batch is Uncertain"
-    );
 }
 
 #[test]
@@ -1249,26 +1200,29 @@ fn a_full_transmit_is_sent_exactly_n_and_counts_one_batch() {
 }
 
 #[test]
-fn a_boundary_partial_is_prefix_sent_and_rest_uncertain_with_counts() {
+fn a_boundary_partial_is_all_uncertain_and_the_prefix_is_not_counted() {
+    // Спайк: драйвер принимает префикс по границе, но счёт байт ему не верен
+    // (при отвергнутой записи он возвращает 0), поэтому префикс не засчитывается.
     reset(|s| s.transmit_script.push_back(TransmitStep::Boundary(3)));
     let api = good_api();
     let mut a = open_pair(&api);
     let fr = frames_of(5);
     let out = a.io.tx.send_batch(&refs(&fr), T50).unwrap();
-    // Переключатель спайка: GO даёт префикс, STOP всю пачку Uncertain.
-    let kept = if PREFIX_ACCOUNTING { 3 } else { 0 };
     assert_eq!(
         out,
         TxBatch {
-            sent: kept,
+            sent: 0,
             rest: SendStatus::Uncertain
         }
     );
     let s = a.stats.snapshot();
-    assert_eq!((s.tx_sent, s.tx_uncertain), (kept as u64, 5 - kept as u64));
+    // tx_sent <= кадров на проводе <= tx_sent + tx_uncertain: здесь 0 <= 3 <= 5.
+    assert_eq!((s.tx_sent, s.tx_uncertain), (0, 5));
     assert_eq!((s.tx_batches, s.tx_batch_max), (1, 5));
-    // Остаток не повторялся: драйвер получил одну передачу.
-    with(|s| assert_eq!((s.transmit_calls, s.send_calls), (1, 0)));
+    with(|s| {
+        assert_eq!((s.transmit_calls, s.send_calls), (1, 0), "no retry");
+        assert_eq!(s.sent.len(), 3, "the fake delivered the prefix");
+    });
     assert_eq!(queue_len(0), 0);
 }
 
@@ -1514,6 +1468,16 @@ fn transmit_longer_than_fifty_ms_is_counted_over_budget() {
 }
 
 #[test]
+fn a_single_send_longer_than_fifty_ms_is_counted_over_budget() {
+    reset(|s| s.send_sleep = Duration::from_millis(60));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    assert_eq!(a.io.tx.send(&own_frame(60), T50).unwrap(), SendStatus::Sent);
+    let s = a.stats.snapshot();
+    assert_eq!((s.tx_over_budget, s.tx_batches, s.tx_sent), (1, 0, 1));
+}
+
+#[test]
 fn net_stats_batches_and_max_survive_closing() {
     reset(|_| {});
     let api = good_api();
@@ -1529,7 +1493,6 @@ fn net_stats_batches_and_max_survive_closing() {
     drop(a);
     let s = stats.snapshot();
     assert_eq!((s.tx_batches, s.tx_batch_max, s.tx_sent), (3, 7, 13));
-    assert_eq!(s.tx_over_budget, 0);
 }
 
 #[test]
@@ -1589,7 +1552,6 @@ fn engine_scan_through_fake_sendqueue_completes_with_exactly_one_advance_per_sen
     assert_eq!((s.tx_sent, s.tx_uncertain, s.tx_errors), (total, 0, 0));
     assert!(s.tx_batches > 0, "the batched path was used: {s:?}");
     assert!(s.tx_batch_max as usize <= TX_BATCH_FRAMES);
-    assert_eq!(s.tx_over_budget, 0);
     with(|st| {
         assert_eq!(st.sent, plan_frames(&p), "plan order, each once");
         assert_eq!(
@@ -1633,11 +1595,10 @@ fn engine_partial_transmit_fails_uncertain_without_checkpoint_or_more_batches() 
     assert_eq!(calls, 1, "no more batches after the partial one");
     let s = stats.snapshot();
     assert_eq!(s.tx_batches, 1);
-    // Одиночные отправки до пачки (разгон троттлера) допустимы.
-    assert_eq!(
-        out.progress.sent as usize,
-        singles + if PREFIX_ACCOUNTING { delivered } else { 0 }
-    );
+    // Одиночные отправки до пачки (разгон троттлера) допустимы; префикс
+    // пачки (доставленный фейком) не засчитан.
+    assert!(delivered > 0);
+    assert_eq!(out.progress.sent as usize, singles);
     assert_eq!(s.tx_sent, out.progress.sent);
     assert_eq!(out.progress.next_index, out.progress.sent);
     assert!(s.tx_uncertain > 0);

@@ -97,6 +97,8 @@ pub(super) struct Scenario {
     pub transmit_calls: usize,
     /// Сон внутри `pcap_sendqueue_transmit` (моделирует долгий синхронный вызов).
     pub transmit_sleep: std::time::Duration,
+    /// Сон внутри `pcap_sendpacket`.
+    pub send_sleep: std::time::Duration,
     /// Кадры, доставленные каждым transmit (разобраны из буфера по заголовкам).
     pub transmitted: Vec<Vec<Vec<u8>>>,
     pub sync_seen: Vec<c_int>,
@@ -164,6 +166,7 @@ impl Default for Scenario {
             transmit_script: VecDeque::new(),
             transmit_calls: 0,
             transmit_sleep: std::time::Duration::ZERO,
+            send_sleep: std::time::Duration::ZERO,
             transmitted: Vec::new(),
             sync_seen: Vec::new(),
             stats_script: VecDeque::new(),
@@ -414,6 +417,9 @@ unsafe extern "C" fn f_next_ex(p: *mut PcapT, h: *mut *mut PcapPkthdr, d: *mut *
 unsafe extern "C" fn f_sendpacket(p: *mut PcapT, b: *const u8, n: c_int) -> c_int {
     let mut s = st();
     s.send_calls += 1;
+    if !s.send_sleep.is_zero() {
+        std::thread::sleep(s.send_sleep);
+    }
     bump(&mut s, "send", p);
     s.log.push("sendpacket".into());
     let rc = s.send_rcs.pop_front().unwrap_or(0);
@@ -512,7 +518,8 @@ unsafe extern "C" fn f_sendqueue_transmit(
     let mut s = st();
     s.transmit_calls += 1;
     if !s.transmit_sleep.is_zero() {
-        // Под замком сценария: тест однопоточный на этом пути.
+        // Под замком сценария: RX-поток движка в это время ждёт замок (его
+        // дедлайн 42 мс), это безвредно для тестов.
         std::thread::sleep(s.transmit_sleep);
     }
     s.sync_seen.push(sync);

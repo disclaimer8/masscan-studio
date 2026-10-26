@@ -1446,6 +1446,10 @@ mod tests {
                 io: fake.pair(),
                 stats: Box::new(move || NetStats {
                     tx_sent: counted.sent_count() as u64,
+                    // Разные значения: порядок полей в JSON закреплён тестом.
+                    tx_batches: 3,
+                    tx_batch_max: 7,
+                    tx_over_budget: 1,
                     ..NetStats::default()
                 }),
                 tx_mode: TxMode::Single,
@@ -2061,7 +2065,7 @@ mod tests {
         assert_eq!(code, 0, "{json}");
         for k in [
             "\"tx_mode\":\"single\",\"tx_batch_cap\":1}",
-            "\"tx_batches\":0,\"tx_batch_max\":0,\"tx_over_budget\":0}",
+            "\"tx_batches\":3,\"tx_batch_max\":7,\"tx_over_budget\":1}",
         ] {
             assert!(json.contains(k), "{k} missing: {json}");
         }

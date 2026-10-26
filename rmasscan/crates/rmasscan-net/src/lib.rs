@@ -181,7 +181,8 @@ pub struct NetStats {
     pub tx_batches: u64,
     /// Наибольшая пачка (кадров) среди этих вызовов; 0, если пачек не было.
     pub tx_batch_max: u64,
-    /// Вызовы `send`/`send_batch` дольше `MAX_IO_TIMEOUT` (50 мс) по `Instant`.
+    /// Вызовы драйвера (`pcap_sendpacket`/`pcap_sendqueue_transmit`) дольше
+    /// `MAX_IO_TIMEOUT` (50 мс) по `Instant`.
     /// Измеряет только Windows (там передача синхронна и не отменяема). Linux и
     /// macOS: всегда 0 и НЕ измерено, а структурно не наблюдается; нуль там не
     /// свидетельство соблюдения бюджета.

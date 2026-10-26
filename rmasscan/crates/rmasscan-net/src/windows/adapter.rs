@@ -13,13 +13,14 @@
 //! * TX синхронный и НЕ отменяемый: `pcap_sendpacket` rc 0 → `Sent`, любой
 //!   другой rc → `Uncertain` (исход неизвестен, повтора нет, checkpoint
 //!   запрещён). Пачка из 2…`TX_BATCH_FRAMES` кадров идёт одним
-//!   `pcap_sendqueue_transmit` (`sync = 0`): `Sent` это ровно то, что драйвер
-//!   принял в этом вызове (префикс до границы записи `16 + caplen`), остаток
-//!   `Uncertain` без повтора; число байт не на границе или больше очереди даёт
-//!   `Uncertain` для всей пачки. Очередь не переживает вызов (`len == 0` после
-//!   любого исхода). Граница бюджета это размер пачки, а не `timeout`
-//!   (transmit не отменяем): длительность измеряется и счётчик
-//!   `tx_over_budget` считает вызовы дольше `MAX_IO_TIMEOUT`. `WouldBlockUnsent` НЕ выдаётся никогда: драйвер не сообщает
+//!   `pcap_sendqueue_transmit` (`sync = 0`): `Sent` только если драйвер принял
+//!   ВСЕ поставленные байты. Любой другой счёт (меньше, больше, 0) делает всю
+//!   пачку `Uncertain` без префикса и без повтора: при отвергнутой записи драйвер
+//!   возвращает 0, хотя первые кадры уже ушли (спайк), поэтому 0 не значит «ничего
+//!   не отправлено». Очередь не переживает вызов (`len == 0` после любого исхода).
+//!   Граница бюджета это размер пачки, а не `timeout` (transmit не отменяем):
+//!   длительность вызова драйвера измеряется, `tx_over_budget` считает вызовы
+//!   дольше `MAX_IO_TIMEOUT`. `WouldBlockUnsent` НЕ выдаётся никогда: драйвер не сообщает
 //!   «точно не отправлено», а выводить его из текста `pcap_geterr` запрещено.
 //!   rc 0 не доказывает доставку (кадр мог уйти в пустоту при потере линка).
 //!   Ошибки проверки ДО отправки (длина кадра) это `IoError`.
@@ -66,18 +67,15 @@ pub(crate) const MAX_TX_FRAME: usize = 1518;
 
 /// Кадров в одном `pcap_sendqueue_transmit`: верхняя граница пачки, потому что
 /// transmit синхронен и не отменяем, а вызов обязан уложиться в `IO_BUDGET`.
-/// ПРЕДВАРИТЕЛЬНО: значение задаёт спайк задачи 3 (наибольшее n из
-/// 16/64/256/1024/4096 с p99.9 <= 21 мс и max <= 42 мс); до него 256.
-pub(crate) const TX_BATCH_FRAMES: usize = 256;
+/// Выбрано спайком (`docs/experiments/2026-10-25-rmasscan-windows-sendqueue-spike.md`):
+/// наибольшее n ряда 16/64/256/1024/4096 с p99.9 <= 21 мс и max <= 42 мс в обоих
+/// условиях (idle, под потоком мусора) на повторах. n = 64: p99.9 и max <= 6.27 мс;
+/// n = 256 провалил 2 из 6 ячеек (p99.9 21.93 и 21.04 мс), n >= 1024 проваливает всегда.
+pub(crate) const TX_BATCH_FRAMES: usize = 64;
 /// Байты очереди: `TX_BATCH_FRAMES` записей максимального размера, поэтому
 /// `pcap_sendqueue_queue` не может вернуть -1 на допустимой пачке.
 pub(crate) const TX_QUEUE_BYTES: u32 =
     (TX_BATCH_FRAMES * (SENDQUEUE_RECORD_HEADER + MAX_TX_FRAME)) as u32;
-/// Решение спайка о частичном transmit. `true` (GO): граница записи даёт
-/// принятый префикс `Sent`, остаток `Uncertain`. `false` (STOP): любой
-/// частичный исход делает всю пачку `Uncertain`. ПРЕДВАРИТЕЛЬНО: значение
-/// задаёт спайк задачи 3.
-pub(crate) const PREFIX_ACCOUNTING: bool = true;
 
 const RX_SNAPLEN: i32 = 2048;
 const RX_BUFFER_BYTES: i32 = 4 << 20;
@@ -96,50 +94,23 @@ fn publish_drops(counters: &Counters, total: u64) {
     counters.kernel_drops_known.store(true, Release);
 }
 
-/// Что драйвер принял из пачки по числу переданных байт.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Accounted {
-    /// Число байт легло на границу записи: принято ровно столько первых записей.
-    Exact(usize),
-    /// Не на границе записи или больше поставленного: что принято, неизвестно.
-    Straddle,
-}
-
-/// Чистое сопоставление «переданные байты» ↔ «число принятых записей» по
-/// размерам записей (`16 + caplen`) в порядке постановки.
-pub(crate) fn accounted(record_sizes: &[u32], bytes_sent: u32) -> Accounted {
-    let mut end = 0u64;
-    if bytes_sent == 0 {
-        return Accounted::Exact(0);
-    }
-    for (i, size) in record_sizes.iter().enumerate() {
-        end += u64::from(*size);
-        if end == u64::from(bytes_sent) {
-            return Accounted::Exact(i + 1);
-        }
-        if end > u64::from(bytes_sent) {
-            return Accounted::Straddle;
-        }
-    }
-    // Больше, чем поставлено.
-    Accounted::Straddle
-}
-
-/// Исход пачки из `n` кадров по учёту байт. Остальное `Uncertain`, без повтора.
-pub(crate) fn batch_outcome(n: usize, acc: Accounted, prefix_accounting: bool) -> TxBatch {
-    match acc {
-        Accounted::Exact(k) if k >= n => TxBatch {
+/// Исход пачки из `n` кадров по числу байт, принятых `pcap_sendqueue_transmit`.
+/// Только `bytes_sent == queued` означает «принято всё». Любое другое число
+/// (меньше, больше, 0) даёт `sent: 0, rest: Uncertain`: спайк показал, что при
+/// отвергнутой записи драйвер возвращает 0, хотя первые k кадров уже дошли до
+/// пира, поэтому `bytes_sent == 0` НЕ значит «ничего не отправлено», а префикс
+/// по числу байт не учитывается. Остаток не повторяется.
+pub(crate) fn batch_outcome(n: usize, queued: u32, bytes_sent: u32) -> TxBatch {
+    if bytes_sent == queued {
+        TxBatch {
             sent: n,
             rest: SendStatus::Sent,
-        },
-        Accounted::Exact(k) if prefix_accounting => TxBatch {
-            sent: k,
-            rest: SendStatus::Uncertain,
-        },
-        Accounted::Exact(_) | Accounted::Straddle => TxBatch {
+        }
+    } else {
+        TxBatch {
             sent: 0,
             rest: SendStatus::Uncertain,
-        },
+        }
     }
 }
 
@@ -245,13 +216,7 @@ impl Tx for TxHalf {
         Counters::bump(&self.counters.tx_batches);
         self.counters.tx_batch_max.fetch_max(n as u64, Relaxed);
         self.note_duration(dur);
-        // Больше поставленного: принятое неизвестно (accounted даёт то же).
-        let acc = if bytes > queued {
-            Accounted::Straddle
-        } else {
-            accounted(self.queue.record_sizes(), bytes)
-        };
-        let out = batch_outcome(n, acc, PREFIX_ACCOUNTING);
+        let out = batch_outcome(n, queued, bytes);
         // Очередь не переживает вызов, в любом исходе.
         self.queue.clear();
         self.counters.tx_sent.fetch_add(out.sent as u64, Relaxed);

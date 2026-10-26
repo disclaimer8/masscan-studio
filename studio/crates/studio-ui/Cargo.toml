@@ -17,3 +17,6 @@ studio-inspection = { version = "0.1.0", path = "../studio-inspection" }
 
 [build-dependencies]
 slint-build = "=1.18.1"
+
+[dev-dependencies]
+i-slint-backend-testing = "=1.18.1"

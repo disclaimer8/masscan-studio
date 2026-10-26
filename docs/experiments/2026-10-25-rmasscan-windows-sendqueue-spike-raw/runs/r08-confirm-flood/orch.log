@@ -1,0 +1,16 @@
+[2026-10-26T04:06:26.998Z] tag=r08-confirm-flood test=live_sendqueue_transmit_timing cond=flood sha=53afec8 nonce=r57a6a09195e8ec7f-4d0860bf336c1334 extra=RMASSCAN_NPCAP_SQ_SIZES=128,256,512;RMASSCAN_NPCAP_SQ_ROUNDS=1000
+[2026-10-26T04:06:28.840Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:06:32.364Z] guest run begins
+[2026-10-26T04:07:01.949Z] guest run ended rc=0
+[2026-10-26T04:07:05.488Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=898001
+==> $HOME/winvm/sq-ev/r08-confirm-flood/peer.err <==
+898001 packets captured
+898001 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r08-confirm-flood/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

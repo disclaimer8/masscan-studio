@@ -1,0 +1,16 @@
+[2026-10-26T04:00:10.319Z] tag=r04-reuse test=live_sendqueue_reuse_no_leak cond=idle sha=61c1126 nonce=r65be3a821e682f85-81e65795fac9519a extra=
+[2026-10-26T04:00:12.251Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T04:00:12.764Z] guest run begins
+[2026-10-26T04:00:33.278Z] guest run ended rc=0
+[2026-10-26T04:00:35.857Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=704001
+==> $HOME/winvm/sq-ev/r04-reuse/peer.err <==
+704001 packets captured
+704001 packets received by filter
+0 packets dropped by kernel
+
+==> $HOME/winvm/sq-ev/r04-reuse/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

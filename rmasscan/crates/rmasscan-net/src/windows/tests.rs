@@ -298,6 +298,7 @@ fn ownership_types_have_the_intended_auto_traits() {
     fn send<T: Send>() {}
     fn send_sync<T: Send + Sync>() {}
     send::<PcapHandle>();
+    send::<SendQueue>();
     send_sync::<NpcapApi>();
     send_sync::<PcapFns>();
 }
@@ -468,6 +469,14 @@ fn required_symbols_are_unique_and_prefixed() {
     v.dedup();
     assert_eq!(v.len(), REQUIRED_SYMBOLS.len());
     assert!(REQUIRED_SYMBOLS.iter().all(|s| s.starts_with("pcap_")));
+    for name in [
+        "pcap_sendqueue_alloc",
+        "pcap_sendqueue_queue",
+        "pcap_sendqueue_transmit",
+        "pcap_sendqueue_destroy",
+    ] {
+        assert!(REQUIRED_SYMBOLS.contains(&name), "{name} must be required");
+    }
     for s in REQUIRED_SYMBOLS {
         assert!(symbol_addr(s).is_some(), "fake lacks {s}");
     }
@@ -721,4 +730,278 @@ fn errbuf_text_stops_at_the_first_nul() {
     }
     buf[10] = b'z' as c_char;
     assert_eq!(errbuf_text(&buf), "boom");
+}
+
+// ---------- sendqueue ----------
+
+/// Размер записи очереди для кадра из `n` байт.
+fn rec(n: usize) -> u32 {
+    (SENDQUEUE_RECORD_HEADER + n) as u32
+}
+
+fn fake_queue_len(i: usize) -> u32 {
+    queue_len(i)
+}
+
+#[test]
+fn sendqueue_abi_layout_matches_the_npcap_header() {
+    assert_eq!(size_of::<PcapSendQueue>(), 16);
+    assert_eq!(align_of::<PcapSendQueue>(), 8);
+    assert_eq!(offset_of!(PcapSendQueue, maxlen), 0);
+    assert_eq!(offset_of!(PcapSendQueue, len), 4);
+    assert_eq!(offset_of!(PcapSendQueue, buffer), 8);
+    assert_eq!(SENDQUEUE_RECORD_HEADER, 16);
+    assert_eq!(SENDQUEUE_RECORD_HEADER, size_of::<PcapPkthdr>());
+}
+
+#[test]
+fn missing_sendqueue_symbol_is_missing_capability_naming_it() {
+    reset(|_| {});
+    let l = FakeLoader {
+        result: Ok(vec!["pcap_sendqueue_transmit"]),
+        ..FakeLoader::ok()
+    };
+    match NpcapApi::load_with(&l, GOOD_PATH).unwrap_err() {
+        NetError::MissingCapability(m) => {
+            assert!(m.contains("pcap_sendqueue_transmit"), "{m}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(events().last().unwrap(), "unload");
+}
+
+#[test]
+fn sendqueue_alloc_null_is_a_system_error() {
+    reset(|s| s.sendqueue_alloc_null = true);
+    let api = good_api();
+    let e = SendQueue::alloc(&api, 4096).err().unwrap();
+    assert!(
+        matches!(e, NetError::System(ref m) if m.contains("pcap_sendqueue_alloc")),
+        "{e:?}"
+    );
+    assert_eq!(count("sendqueue_alloc:4096"), 1);
+    assert_eq!(count("sendqueue_destroy"), 0);
+}
+
+#[test]
+fn sendqueue_push_records_header_plus_frame_and_full_is_minus_one() {
+    reset(|_| {});
+    let api = good_api();
+    // Две записи по 60 + 16 = 76 помещаются в 160, третья нет.
+    let mut q = SendQueue::alloc(&api, 160).unwrap();
+    assert_eq!(q.capacity(), 160);
+    let f1 = [0x11u8; 60];
+    let f2 = [0x22u8; 60];
+    assert_eq!(q.push(&f1), Ok(()));
+    assert_eq!(fake_queue_len(0), rec(60));
+    assert_eq!(q.queued_bytes(), rec(60));
+    assert_eq!(q.push(&f2), Ok(()));
+    assert_eq!(fake_queue_len(0), 2 * rec(60));
+    assert_eq!(q.queued_bytes(), 2 * rec(60));
+    assert_eq!(q.record_sizes(), [rec(60), rec(60)]);
+    assert_eq!(q.len(), 2);
+    // Полная очередь: -1, ничего не изменилось.
+    assert_eq!(q.push(&[0x33u8; 60]), Err(-1));
+    assert_eq!(fake_queue_len(0), 2 * rec(60));
+    assert_eq!(q.record_sizes(), [rec(60), rec(60)]);
+    // Содержимое буфера: pkthdr {ts 0, caplen = len = 60} + кадр.
+    with(|s| {
+        let b = &s.queues[0].1;
+        assert_eq!(&b[0..8], &[0u8; 8], "ts is zero");
+        assert_eq!(u32::from_ne_bytes(b[8..12].try_into().unwrap()), 60);
+        assert_eq!(u32::from_ne_bytes(b[12..16].try_into().unwrap()), 60);
+        assert_eq!(&b[16..76], &f1);
+        assert_eq!(&b[76 + 16..152], &f2);
+    });
+}
+
+#[test]
+fn queue_full_at_makes_the_fake_refuse_by_record_count() {
+    reset(|s| s.queue_full_at = Some(1));
+    let api = good_api();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    assert_eq!(q.push(&[1u8; 60]), Ok(()));
+    assert_eq!(q.push(&[2u8; 60]), Err(-1));
+    assert_eq!(q.len(), 1);
+}
+
+#[test]
+fn clear_resets_len_and_records() {
+    reset(|_| {});
+    let api = good_api();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    q.push(&[1u8; 60]).unwrap();
+    q.push(&[2u8; 100]).unwrap();
+    assert_eq!(fake_queue_len(0), rec(60) + rec(100));
+    q.clear();
+    assert_eq!(q.queued_bytes(), 0);
+    assert_eq!(fake_queue_len(0), 0);
+    assert_eq!(q.len(), 0);
+    assert!(q.is_empty());
+    assert!(q.record_sizes().is_empty());
+    // Повторное использование: запись снова с начала буфера.
+    q.push(&[3u8; 64]).unwrap();
+    assert_eq!(q.record_sizes(), [rec(64)]);
+    with(|s| assert_eq!(&s.queues[0].1[16..80], &[3u8; 64]));
+    assert_eq!(count("sendqueue_alloc:4096"), 1, "no realloc on clear");
+}
+
+#[test]
+fn sendqueue_destroy_precedes_close_and_unload() {
+    reset(|_| {});
+    let api = good_api();
+    let h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let q = SendQueue::alloc(&api, 4096).unwrap();
+    drop(api);
+    drop(q);
+    let ev = events();
+    assert!(!ev.contains(&"close:1".to_string()), "{ev:?}");
+    drop(h);
+    let ev = events();
+    assert!(
+        pos(&ev, "sendqueue_destroy") < pos(&ev, "close:1"),
+        "{ev:?}"
+    );
+    assert!(pos(&ev, "close:1") < pos(&ev, "unload"), "{ev:?}");
+    assert_eq!(count("sendqueue_destroy"), 1);
+}
+
+#[test]
+fn queue_outliving_the_handle_still_unloads_last() {
+    reset(|_| {});
+    let api = good_api();
+    let h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let q = SendQueue::alloc(&api, 4096).unwrap();
+    drop(api);
+    drop(h);
+    assert!(!events().contains(&"unload".to_string()));
+    drop(q);
+    let ev = events();
+    assert!(pos(&ev, "sendqueue_destroy") < pos(&ev, "unload"), "{ev:?}");
+}
+
+#[test]
+fn transmit_returns_the_scripted_bytes_and_passes_sync_zero() {
+    reset(|s| {
+        s.transmit_script.extend([
+            TransmitStep::All,
+            TransmitStep::Bytes(100),
+            TransmitStep::Boundary(1),
+            TransmitStep::Straddle(1),
+            TransmitStep::Over,
+        ]);
+    });
+    let api = good_api();
+    let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    let frames = [[1u8; 60], [2u8; 60], [3u8; 60]];
+    for f in &frames {
+        q.push(f).unwrap();
+    }
+    let total = q.queued_bytes();
+    assert_eq!(total, 3 * rec(60));
+    assert_eq!(h.transmit_raw(&mut q, false), total);
+    assert_eq!(h.transmit_raw(&mut q, false), 100);
+    assert_eq!(h.transmit_raw(&mut q, false), rec(60));
+    assert_eq!(h.transmit_raw(&mut q, false), rec(60) + 7);
+    assert_eq!(h.transmit_raw(&mut q, false), total + 1);
+    // Очередь transmit не меняет.
+    assert_eq!(q.queued_bytes(), total);
+    assert_eq!(q.len(), 3);
+    with(|s| {
+        assert_eq!(s.transmit_calls, 5);
+        assert_eq!(s.sync_seen, [0, 0, 0, 0, 0]);
+        let lens: Vec<usize> = s.transmitted.iter().map(Vec::len).collect();
+        // All, Bytes(100) (одна запись 76 <= 100), Boundary(1), Straddle(1), Over.
+        assert_eq!(lens, [3, 1, 1, 1, 3]);
+        assert_eq!(
+            s.transmitted[0],
+            frames
+                .to_vec()
+                .iter()
+                .map(|f| f.to_vec())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(s.sent.len(), 9);
+        // Частичный исход доставляет ПЕРВЫЕ k записей в порядке очереди.
+        let all: Vec<Vec<u8>> = frames.iter().map(|f| f.to_vec()).collect();
+        assert_eq!(s.transmitted[0], all);
+        assert_eq!(s.transmitted[1], &all[..1]);
+        assert_eq!(s.transmitted[2], &all[..1]);
+        assert_eq!(s.transmitted[3], &all[..1]);
+        assert_eq!(s.transmitted[4], all);
+        // `sent` это те же кадры подряд: 3 + 1 + 1 + 1 + 3.
+        let flat: Vec<Vec<u8>> = s.transmitted.iter().flatten().cloned().collect();
+        assert_eq!(s.sent, flat);
+    });
+    assert_eq!(count("sendqueue_transmit_records:3"), 5);
+    assert!(events().iter().all(|e| !e.starts_with("fake_error")));
+}
+
+#[test]
+fn transmitted_frames_reach_the_responder_and_the_echo_in_queue_order() {
+    reset(|s| {
+        s.echo_tx = true;
+        s.responder = Some(Arc::new(|f: &[u8]| vec![vec![f[0] + 100; 64]]));
+        s.transmit_script.push_back(TransmitStep::Boundary(2));
+    });
+    let api = good_api();
+    let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    for b in [1u8, 2, 3] {
+        q.push(&[b; 60]).unwrap();
+    }
+    h.transmit_raw(&mut q, false);
+    with(|s| {
+        // Первые два кадра: для каждого эхо, затем ответ ответчика. Третий не ушёл.
+        let got: Vec<Vec<u8>> = s
+            .next_script
+            .iter()
+            .map(|n| match n {
+                NextStep::Frame(v) => v.clone(),
+                _ => panic!("unexpected step"),
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                vec![1u8; 60],
+                vec![101u8; 64],
+                vec![2u8; 60],
+                vec![102u8; 64]
+            ]
+        );
+    });
+}
+
+#[test]
+fn push_raw_records_an_arbitrary_header_and_refuses_a_short_buffer() {
+    reset(|_| {});
+    let api = good_api();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    let hdr = PcapPkthdr {
+        caplen: 10,
+        len: 60,
+        ..PcapPkthdr::default()
+    };
+    assert_eq!(q.push_raw(&hdr, &[9u8; 10]), Ok(()));
+    assert_eq!(q.record_sizes(), [rec(10)]);
+    with(|s| {
+        let b = &s.queues[0].1;
+        assert_eq!(u32::from_ne_bytes(b[8..12].try_into().unwrap()), 10);
+        assert_eq!(u32::from_ne_bytes(b[12..16].try_into().unwrap()), 60);
+    });
+    assert_eq!(q.push_raw(&hdr, &[9u8; 9]), Err(-1));
+    assert_eq!(q.len(), 1);
+}
+
+#[test]
+fn transmit_sync_true_is_passed_as_one() {
+    reset(|_| {});
+    let api = good_api();
+    let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let mut q = SendQueue::alloc(&api, 4096).unwrap();
+    q.push(&[1u8; 60]).unwrap();
+    h.transmit_raw(&mut q, true);
+    with(|s| assert_eq!(s.sync_seen, [1]));
 }

@@ -1,0 +1,16 @@
+[2026-10-26T13:34:41.787Z] tag=wl1-scan test=live_batched_scan_counts_exactly_once_on_the_wire cond=idle sha=628fcad7118943642dc797a0432b62851fbe6c1d nonce=r57fa476bfcb64d03-78a3ffc0b5379088 extra=
+[2026-10-26T13:34:43.764Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T13:34:44.277Z] guest run begins
+[2026-10-26T13:34:51.279Z] guest run ended rc=0
+[2026-10-26T13:34:53.856Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=65525
+==> /home/a1/winvm/wl-ev/wl1-scan/peer.err <==
+65525 packets captured
+65525 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/wl-ev/wl1-scan/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

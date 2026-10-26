@@ -37,9 +37,9 @@ use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 use rmasscan_engine::{
     AdapterPair, CancelHandle, Checkpoint, Engine, EngineHandle, EngineOptions, Event, FailReason,
-    IoError, Outcome, Reason, SendStatus, Tx,
+    IoError, Outcome, Reason, SendStatus, Tx, TxBatch,
 };
-use rmasscan_net::{NetStats, open_explicit};
+use rmasscan_net::{NetStats, TxMode, open_explicit};
 
 const SRC_IP: u32 = 0xC612_0001; // 198.18.0.1
 const DST_IP: u32 = 0xC612_0002; // 198.18.0.2
@@ -167,6 +167,56 @@ impl Tx for GuardTx {
         }
         Ok(r)
     }
+
+    fn max_batch(&self) -> usize {
+        self.inner.max_batch()
+    }
+
+    /// Каждый кадр пачки проверяется до проброса. `panic_at` и
+    /// `uncertain_after` режут пачку ровно на своём номере. Принятый префикс
+    /// всегда возвращается движку (он его засчитывает): `uncertain_after` это
+    /// `Uncertain` сразу после префикса, `panic_at` это `WouldBlockUnsent`, а
+    /// паника случается на следующем вызове, который ничего не отправил (как
+    /// в одиночном пути).
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        for f in frames {
+            assert_lab_frame(&self.lab, f);
+        }
+        let room = [self.panic_at, self.uncertain_after]
+            .into_iter()
+            .flatten()
+            .filter(|&t| t >= self.n)
+            .map(|t| usize::try_from(t - self.n).unwrap_or(usize::MAX))
+            .min();
+        let take = room.map_or(frames.len(), |r| frames.len().min(r));
+        if take == 0 {
+            return Ok(TxBatch {
+                sent: 0,
+                rest: self.at_boundary(),
+            });
+        }
+        let r = self.inner.send_batch(&frames[..take], timeout)?;
+        self.n += r.sent as u64;
+        if r.rest == SendStatus::Sent && take < frames.len() {
+            let rest = if self.panic_at == Some(self.n) {
+                SendStatus::WouldBlockUnsent
+            } else {
+                SendStatus::Uncertain
+            };
+            return Ok(TxBatch { sent: r.sent, rest });
+        }
+        Ok(r)
+    }
+}
+
+impl GuardTx {
+    /// Следующий кадр стоит на номере `panic_at` или `uncertain_after`.
+    fn at_boundary(&self) -> SendStatus {
+        if self.panic_at == Some(self.n) {
+            panic!("injected tx panic at send #{}", self.n);
+        }
+        SendStatus::Uncertain
+    }
 }
 
 fn guarded(
@@ -195,6 +245,8 @@ struct Run {
     checkpoint: Option<Checkpoint>,
     stats_final: NetStats,
     stats_handle: rmasscan_net::NetStatsHandle,
+    /// Способ передачи, с которым открыт адаптер.
+    tx_mode: TxMode,
     /// От вызова `stop`/`pause` до появления исхода, если команда подавалась.
     command_to_outcome: Option<Duration>,
     /// Прогресс (sent) в момент исхода.
@@ -241,6 +293,7 @@ impl<'a> Spec<'a> {
 fn run_engine(lab: &Lab, mut spec: Spec<'_>) -> Run {
     let opened = open_explicit(spec.plan.binding()).expect("open_explicit");
     let stats = opened.stats.clone();
+    let tx_mode = opened.tx_mode;
     let io = guarded(lab, opened.io, spec.uncertain_after, spec.panic_at);
     let opts = EngineOptions::new([7; 16], [spec.attempt; 16]);
     let started = Instant::now();
@@ -306,6 +359,7 @@ fn run_engine(lab: &Lab, mut spec: Spec<'_>) -> Run {
         checkpoint,
         stats_final: stats.snapshot(),
         stats_handle: stats,
+        tx_mode,
         command_to_outcome,
         sent_at_outcome,
         finished_ms,
@@ -321,7 +375,8 @@ fn summarize(lab: &Lab, what: &str, r: &Run) {
             "reason={:?} sent={} next_index={} received={} discarded={} duplicates={} \
              rx_health={:?} net.tx_sent={} net.tx_uncertain={} net.tx_errors={} \
              net.rx_packets={} net.rx_outgoing={} net.rx_truncated={} net.rx_errors={} \
-             net.kernel_drops={:?} command_to_outcome_ms={:?} checkpoint={}",
+             net.kernel_drops={:?} net.tx_batches={} net.tx_batch_max={} net.tx_over_budget={} \
+             command_to_outcome_ms={:?} checkpoint={}",
             r.outcome.reason,
             r.outcome.progress.sent,
             r.outcome.progress.next_index,
@@ -337,6 +392,9 @@ fn summarize(lab: &Lab, what: &str, r: &Run) {
             s.rx_truncated,
             s.rx_errors,
             s.kernel_drops,
+            s.tx_batches,
+            s.tx_batch_max,
+            s.tx_over_budget,
             r.command_to_outcome.map(|d| d.as_secs_f64() * 1000.0),
             r.checkpoint.is_some(),
         ),
@@ -789,6 +847,283 @@ fn live_budgeted_calls() {
         );
     }
     assert!(s.kernel_drops.is_some());
+}
+
+// =====================================================================
+// Пачки через Npcap sendqueue (TX_BATCH_FRAMES кадров на один transmit)
+// =====================================================================
+
+/// Адаптер открыт в пачечном режиме, и пачки реально шли (иначе обёртка
+/// молча вернула одиночный путь).
+fn assert_batched(r: &Run) {
+    let TxMode::SendQueue { max_batch } = r.tx_mode else {
+        panic!(
+            "the adapter was not opened in sendqueue mode: {:?}",
+            r.tx_mode
+        );
+    };
+    let s = &r.stats_final;
+    assert!(s.tx_batches > 0, "no batch was transmitted: {s:?}");
+    assert!(
+        s.tx_batch_max >= 2 && s.tx_batch_max as usize <= max_batch,
+        "largest batch {} outside 2..={max_batch}: {s:?}",
+        s.tx_batch_max
+    );
+    // Превышение бюджета вызова это FAIL приёмки, не примечание.
+    assert_eq!(s.tx_over_budget, 0, "a call exceeded 50 ms: {s:?}");
+}
+
+/// Порты `lo..=hi`, на которых пир отвечает ровно одним RST: без портов с
+/// listener (SYN-ACK пира повторяется и даёт `duplicates`) и без «немых»
+/// (никогда не отвечают). Исключения: стандартный набор стенда (80, 443,
+/// 8000-8007, немой 8099), `RMASSCAN_NPCAP_LAB_OPEN_PORTS` и необязательный
+/// `RMASSCAN_NPCAP_LAB_SILENT_PORTS` (список через запятую).
+fn closed_only_ports(lo: u16, hi: u16) -> Vec<u16> {
+    let mut skip: Vec<u16> = vec![80, 443, 8099];
+    skip.extend(8000..=8007);
+    skip.extend(ports_of(&need("RMASSCAN_NPCAP_LAB_OPEN_PORTS")));
+    if let Ok(v) = std::env::var("RMASSCAN_NPCAP_LAB_SILENT_PORTS") {
+        skip.extend(ports_of(&v));
+    }
+    (lo..=hi).filter(|p| !skip.contains(p)).collect()
+}
+
+/// Список портов в виде диапазонов для плана: `1-79,81-442,...`.
+fn port_spec(ports: &[u16]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < ports.len() {
+        let mut j = i;
+        while j + 1 < ports.len() && ports[j + 1] == ports[j] + 1 {
+            j += 1;
+        }
+        out.push(if i == j {
+            ports[i].to_string()
+        } else {
+            format!("{}-{}", ports[i], ports[j])
+        });
+        i = j + 1;
+    }
+    out.join(",")
+}
+
+/// Каждый порт списка ответил ровно одним RST: ни дублей, ни пропусков.
+fn assert_each_closed_port_answered_once(replies: &[Reply], ports: &[u16]) {
+    assert!(replies.iter().all(|r| r.status == PortStatus::Closed));
+    let mut got: Vec<u16> = replies.iter().map(|r| r.remote_port).collect();
+    got.sort_unstable();
+    assert_eq!(got, ports, "replies are not exactly the scanned ports");
+}
+
+#[test]
+#[ignore = "live: needs the lab NIC and a peer (see module docs)"]
+fn live_batched_scan_counts_exactly_once_on_the_wire() {
+    let lab = lab();
+    // Только закрытые порты: каждый SYN, дошедший до пира, даёт ровно один RST.
+    let ports = closed_only_ports(1, 65_535);
+    let total = ports.len() as u64;
+    let p = plan(&lab, &port_spec(&ports), 100_000.0, 3);
+    let r = run_engine(&lab, Spec::new(&p, 2));
+    summarize(&lab, "batched_scan", &r);
+    // tx_sent это число кадров, принятых драйвером. Оркестратор сверяет его с
+    // числом SYN в захвате пира (равенство строгое); значение печатается ВСЕГДА,
+    // до проверок, чтобы оно было в KV и при падении.
+    kv(
+        &lab,
+        "batched_scan_wire",
+        &format!(
+            "ports={total} tx_sent={} tx_uncertain={} tx_batches={} tx_batch_max={} replies={} duplicates={}",
+            r.stats_final.tx_sent,
+            r.stats_final.tx_uncertain,
+            r.stats_final.tx_batches,
+            r.stats_final.tx_batch_max,
+            r.replies.len(),
+            r.outcome.progress.duplicates
+        ),
+    );
+    assert_eq!(r.outcome.reason, Reason::Completed, "{:?}", r.outcome);
+    assert_eq!(r.outcome.progress.sent, total);
+    assert_eq!(r.outcome.progress.next_index, total);
+    assert_eq!(r.stats_final.tx_sent, total);
+    assert_eq!(r.stats_final.tx_uncertain, 0);
+    assert_eq!(r.stats_final.tx_errors, 0);
+    assert_eq!(r.outcome.progress.duplicates, 0, "duplicate replies");
+    // Ноль потерь очереди NPF: каждый RST доставлен, значит каждый SYN ушёл один раз.
+    assert_eq!(r.outcome.rx_health.kernel_drops, Some(0));
+    assert_eq!(r.stats_final.kernel_drops, Some(0));
+    assert_each_closed_port_answered_once(&r.replies, &ports);
+    assert_batched(&r);
+}
+
+#[test]
+#[ignore = "live: needs the lab NIC and a peer (see module docs)"]
+fn live_batched_stop_is_prompt_and_nothing_is_sent_afterwards() {
+    let lab = lab();
+    let p = plan(&lab, "1-65535", 20_000.0, 3);
+    let mut spec = Spec::new(&p, 2);
+    spec.command = Command::StopAfter(Duration::from_millis(1000));
+    let r = run_engine(&lab, spec);
+    summarize(&lab, "batched_stop", &r);
+    assert_eq!(r.outcome.reason, Reason::Stopped, "{:?}", r.outcome);
+    let d = r.command_to_outcome.expect("stop was commanded");
+    kv(
+        &lab,
+        "batched_stop_to_outcome",
+        &format!("ms={}", d.as_millis()),
+    );
+    assert!(d < Duration::from_secs(1), "Stop took {d:?}");
+    assert!(r.outcome.progress.sent > 0 && r.outcome.progress.sent < 65_535);
+    // Курсор равен тому, что принял драйвер; никакая очередь не пережила вызов.
+    assert_eq!(r.stats_final.tx_sent, r.outcome.progress.sent);
+    assert_eq!(r.stats_final.tx_uncertain, 0);
+    assert_batched(&r);
+    // Ничего не уходит после исхода; число SYN у пира сверяет оркестратор.
+    assert_silent_after(
+        &lab,
+        "batched_stop_silence",
+        &r.stats_handle,
+        Duration::from_millis(700),
+    );
+}
+
+#[test]
+#[ignore = "live: needs the lab NIC and a peer (see module docs)"]
+fn live_batched_pause_resume_has_no_gap_or_duplicate() {
+    let lab = lab();
+    let ports = closed_only_ports(1, 20_000);
+    let total = ports.len() as u64;
+    let p = plan(&lab, &port_spec(&ports), 20_000.0, 3);
+    let leg1 = run_engine(&lab, {
+        let mut s = Spec::new(&p, 2);
+        s.command = Command::PauseAfterSent(5_000);
+        s
+    });
+    summarize(&lab, "batched_pause_leg1", &leg1);
+    assert_eq!(leg1.outcome.reason, Reason::Paused, "{:?}", leg1.outcome);
+    let d = leg1.command_to_outcome.expect("pause was commanded");
+    kv(
+        &lab,
+        "batched_pause_command_to_outcome",
+        &format!("ms={}", d.as_millis()),
+    );
+    assert!(
+        d < Duration::from_secs(3 + 1),
+        "pause + RX drain wait=3 must finish within 4 s, took {d:?}"
+    );
+    assert!(leg1.outcome.progress.sent >= 5_000 && leg1.outcome.progress.sent < total);
+    let cp = leg1
+        .checkpoint
+        .clone()
+        .expect("paused run has a checkpoint");
+    assert_eq!(cp.next_index, leg1.outcome.progress.sent);
+    assert_eq!(leg1.stats_final.tx_sent, leg1.outcome.progress.sent);
+    assert_eq!(leg1.stats_final.tx_uncertain, 0);
+    assert_eq!(leg1.sent_at_outcome, leg1.outcome.progress.sent);
+    assert_batched(&leg1);
+
+    let leg2 = run_engine(&lab, {
+        let mut s = Spec::new(&p, 3);
+        s.resume = Some(cp.clone());
+        s
+    });
+    summarize(&lab, "batched_pause_leg2", &leg2);
+    assert_eq!(leg2.outcome.reason, Reason::Completed, "{:?}", leg2.outcome);
+    assert_eq!(
+        leg1.stats_final.tx_sent + leg2.stats_final.tx_sent,
+        total,
+        "exactly one send per probe across both legs"
+    );
+    assert_eq!(leg2.outcome.progress.sent, total - cp.next_index);
+    assert_batched(&leg2);
+    // Нет пропусков и повторов: только закрытые порты, каждый отвечает одним RST,
+    // ноль потерь очереди NPF подтверждён движком в обеих частях.
+    assert_eq!(leg1.outcome.rx_health.kernel_drops, Some(0));
+    assert_eq!(leg2.outcome.rx_health.kernel_drops, Some(0));
+    assert_eq!(leg1.outcome.progress.duplicates, 0);
+    assert_eq!(leg2.outcome.progress.duplicates, 0);
+    let both: Vec<Reply> = leg1
+        .replies
+        .iter()
+        .chain(leg2.replies.iter())
+        .copied()
+        .collect();
+    assert_each_closed_port_answered_once(&both, &ports);
+}
+
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs)"]
+fn live_call_latency_under_batches() {
+    let lab = lab();
+    let opened = open_explicit(&binding(&lab)).expect("open_explicit");
+    let stats = opened.stats.clone();
+    let TxMode::SendQueue { max_batch } = opened.tx_mode else {
+        panic!("the adapter was not opened in sendqueue mode");
+    };
+    let AdapterPair { mut tx, mut rx } = opened.io;
+    assert_eq!(tx.max_batch(), max_batch);
+    let tpl = TcpSynTemplate::new(lab.src_mac, lab.peer_mac, LinkType::Ethernet);
+    let (mut batch_l, mut recv_l, mut health_l) = (Lat::default(), Lat::default(), Lat::default());
+    let mut buf = vec![0u8; 2048];
+    let mut seq = 0u32;
+    // Размеры пачек: минимальная пачка, средняя и предельная.
+    let sizes = [2usize, 64, max_batch];
+    for i in 0..120usize {
+        let n = sizes[i % sizes.len()];
+        let mut frames: Vec<Vec<u8>> = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut f = Vec::new();
+            tpl.build_syn(
+                DST_IP,
+                9400 + (seq % 50) as u16,
+                SRC_IP,
+                42_000 + (seq % 1000) as u16,
+                seq,
+                &mut f,
+            );
+            seq = seq.wrapping_add(1);
+            assert_lab_frame(&lab, &f);
+            frames.push(f);
+        }
+        let refs: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
+        let t = Instant::now();
+        let out = tx
+            .send_batch(&refs, Duration::from_millis(50))
+            .expect("send_batch");
+        batch_l.push(t.elapsed());
+        assert_eq!(out.sent, n, "{out:?}");
+        assert_eq!(out.rest, SendStatus::Sent);
+        let t = Instant::now();
+        let _ = rx.recv(&mut buf, Duration::from_millis(50)).expect("recv");
+        recv_l.push(t.elapsed());
+        if i % 4 == 0 {
+            let t = Instant::now();
+            rx.health(Duration::from_millis(50)).expect("health");
+            health_l.push(t.elapsed());
+        }
+    }
+    // Максимум на тип вызова (контракт ≤50 мс на вызов): одна строка для отчёта.
+    kv(
+        &lab,
+        "max_per_call",
+        &format!(
+            "max_us_send_batch={} max_us_recv={} max_us_health={}",
+            batch_l.max(),
+            recv_l.max(),
+            health_l.max()
+        ),
+    );
+    kv(&lab, "send_batch", &batch_l.line("send_batch"));
+    kv(&lab, "recv", &recv_l.line("recv"));
+    kv(&lab, "health", &health_l.line("health"));
+    let s = stats.snapshot();
+    kv(&lab, "latency_stats", &format!("{s:?}"));
+    let limit = Duration::from_millis(50);
+    assert_eq!(batch_l.over(limit), 0, "send_batch exceeded 50 ms");
+    assert_eq!(recv_l.over(limit), 0, "recv exceeded 50 ms");
+    assert_eq!(health_l.over(limit), 0, "health exceeded 50 ms");
+    assert!(s.tx_batches >= 120, "{s:?}");
+    assert_eq!(s.tx_over_budget, 0, "{s:?}");
+    assert_eq!(s.tx_uncertain, 0, "{s:?}");
 }
 
 // =====================================================================

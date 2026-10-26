@@ -1,0 +1,5 @@
+peer.pcap not stored (size over 40 MB). Full file stays on home-pc (~/winvm/sq-ev/r08-confirm-flood/peer.pcap).
+sha256 8ffcca9124652318476a0b3e6620e15f4ab3c4ed0b366fada59a2d6a56e0abc7
+size_bytes 66452082
+packets 898001
+stored: peer.excerpt.pcap = first 2000 packets of that capture

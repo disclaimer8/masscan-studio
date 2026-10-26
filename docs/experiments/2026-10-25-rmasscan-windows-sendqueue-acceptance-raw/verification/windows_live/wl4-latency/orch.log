@@ -1,0 +1,16 @@
+[2026-10-26T13:35:40.458Z] tag=wl4-latency test=live_call_latency_under_batches cond=idle sha=628fcad7118943642dc797a0432b62851fbe6c1d nonce=rcc94765c07cf89b5-0d378e8f76ac9d0c extra=
+[2026-10-26T13:35:42.165Z] pre status ok (raw_run_allowed true, nonce matches)
+[2026-10-26T13:35:42.677Z] guest run begins
+[2026-10-26T13:35:43.946Z] guest run ended rc=0
+[2026-10-26T13:35:46.519Z] post status ok (raw_run_allowed true)
+eno1.pcap lab_frames=0
+peer.pcap frames=5200
+==> /home/a1/winvm/wl-ev/wl4-latency/peer.err <==
+5200 packets captured
+5200 packets received by filter
+0 packets dropped by kernel
+
+==> /home/a1/winvm/wl-ev/wl4-latency/eno1.err <==
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel

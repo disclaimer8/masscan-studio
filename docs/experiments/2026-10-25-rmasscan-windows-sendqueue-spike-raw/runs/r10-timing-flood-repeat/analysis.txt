@@ -1,0 +1,6 @@
+# derived from r10-timing-flood-repeat/peer.pcap (full capture, before trimming) by an ad-hoc script; method: classify frames with src MAC 52:54:00:04:80:a9, IPv4/TCP, 198.18.0.1->198.18.0.2, flags==SYN; seq field = frame index
+expected SYN frames: 1093400
+frames=1093402 syn_unique_seq=1093400 expected=1093400 missing=0 out_of_range=0 dup_seq=0 dup_sha256=0 non_syn=2
+  non-syn (42, '02574c3d2e9b5254000480a90806', '000108000604') 2
+guest NIC ReceivedUnicastPackets delta during run: 2343602
+eno1.pcap size bytes: 24 (24 = pcap header only, 0 frames)

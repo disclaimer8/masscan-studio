@@ -176,6 +176,17 @@ pub struct NetStats {
     pub rx_wrong_interface: u64,
     pub rx_errors: u64,
     pub kernel_drops: Option<u64>,
+    /// Вызовы пакетной передачи (Windows: `pcap_sendqueue_transmit`). Linux и
+    /// macOS: всегда 0, у них пачек нет.
+    pub tx_batches: u64,
+    /// Наибольшая пачка (кадров) среди этих вызовов; 0, если пачек не было.
+    pub tx_batch_max: u64,
+    /// Вызовы драйвера (`pcap_sendpacket`/`pcap_sendqueue_transmit`) дольше
+    /// `MAX_IO_TIMEOUT` (50 мс) по `Instant`.
+    /// Измеряет только Windows (там передача синхронна и не отменяема). Linux и
+    /// macOS: всегда 0 и НЕ измерено, а структурно не наблюдается; нуль там не
+    /// свидетельство соблюдения бюджета.
+    pub tx_over_budget: u64,
 }
 
 #[derive(Default)]
@@ -191,6 +202,9 @@ pub(crate) struct Counters {
     pub rx_errors: AtomicU64,
     pub kernel_drops: AtomicU64,
     pub kernel_drops_known: AtomicBool,
+    pub tx_batches: AtomicU64,
+    pub tx_batch_max: AtomicU64,
+    pub tx_over_budget: AtomicU64,
 }
 
 #[cfg_attr(
@@ -236,6 +250,9 @@ impl NetStatsHandle {
                 .kernel_drops_known
                 .load(Ordering::Acquire)
                 .then(|| get(&c.kernel_drops)),
+            tx_batches: get(&c.tx_batches),
+            tx_batch_max: get(&c.tx_batch_max),
+            tx_over_budget: get(&c.tx_over_budget),
         }
     }
 }
@@ -248,10 +265,20 @@ impl std::fmt::Debug for NetStatsHandle {
     }
 }
 
-/// Открытый адаптер: пара TX/RX для движка и независимый handle статистики.
+/// Как адаптер передаёт кадры. `SendQueue`: один вызов драйвера на пачку до
+/// `max_batch` кадров (Windows, Npcap sendqueue); `Single`: один кадр на вызов.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxMode {
+    Single,
+    SendQueue { max_batch: usize },
+}
+
+/// Открытый адаптер: пара TX/RX для движка, независимый handle статистики и
+/// режим передачи (для идентичности доказательств).
 pub struct OpenedAdapter {
     pub io: AdapterPair,
     pub stats: NetStatsHandle,
+    pub tx_mode: TxMode,
 }
 
 /// Открывает адаптер по явному binding (имя интерфейса проверяется ОС;

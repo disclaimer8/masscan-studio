@@ -39,6 +39,10 @@ correctness **объявлен** после зелёного CI на `main` `2cc
 Стенд: QEMU Win11 Pro, виртуальная Intel 82574L (e1000e), Npcap 1.90, режим Admin-only. Результат относится именно к этой
 связке (spike: «не универсальная гарантия для других версий Npcap, физических NIC»).
 
+> Сноска (2026-10-26): строки о пропускной способности выше (**OPEN**, потолок VM около 6.4 kpps при одном `pcap_sendpacket` на кадр) относятся к состоянию до sendqueue и не переписаны. Результат
+> после перехода на Npcap sendqueue (`perf-r2`, 10k pps MET, 100k pps OPEN на VM, физический NIC NOT RUN) см. в отчёте
+> [Windows sendqueue acceptance](2026-10-25-rmasscan-windows-sendqueue-acceptance.md).
+
 ## 2. Закреплённые коммиты и чистота дерева
 
 | Часть | Код (commit) | Evidence (commit) | Чистота |

@@ -241,7 +241,7 @@ the last two items.
    rate, OPEN otherwise, NOT RUN with fewer than 3 Completed PASS cells or no measured median. RxLoss PASS
    cells are counted (`rx_loss`) and reported separately (`rxloss_cells`, `rxloss_steady_pps_wire_median`);
    they never enter a median or the gate. It is a measurement of the VM, not of
-   a physical NIC, and may stay OPEN until 2B-sendqueue; it never changes `overall`, which is PASS
+   a physical NIC: the VM ceiling with sendqueue is an OPEN finding for the physical NIC stage, never a FAIL; it never changes `overall`, which is PASS
    only if the manifest and all 20 cells are PASS. Per-cell metrics (`notes.perf` of each run in the
    verdict) also carry `transmitted_wire`, `tx_sent`, `rx_packets`, `kernel_drops`, received and
    peer-wire reply counts and `capture_valid`. Stop latency under load is not remeasured here: it is
@@ -254,6 +254,57 @@ the last two items.
    afterwards (`gzip -9 -n runs/<tag>/peer.pcap`, the same as `failure-r1`) and say so in the
    README; to verify such a copy, work on a scratch copy and run `gunzip -k runs/*/peer.pcap.gz` there
    first, because the verifier reads `peer.pcap` and the recorded sha256 is that of the uncompressed file.
+
+### Part C with sendqueue
+
+The Windows adapter sends through `pcap_sendqueue_transmit` in batches of at most `TX_BATCH_FRAMES`
+(64) frames, one transmit per engine batch. Part C is rerun on that code into a new directory,
+`perf-r2`, with the same twenty cells as `perf-r1` (rep-major, same ports, same fixtures), so the two
+compare row by row. `--tx-mode sendqueue|single` (default `sendqueue`) is the TX path the verifier
+must find in `identity.tx_mode`; it only records `tx_mode_expected` in `manifest.json` and does not
+change what runs on the guest. A directory keeps the mode it was started with.
+
+```sh
+rmasscan/target/release/rmasscan-lab windows-suite \
+  --out docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/perf-r2 \
+  --suite perf-r2 --plan perf --tx-mode sendqueue --commit $COMMIT --repo . \
+  --guest-exe 'C:\Users\lab\t4\wire_scan.exe' \
+  --fixtures docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional/fixtures \
+  --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+```
+
+New `windows-verify` checks, all FAIL (behaviour) and applied only when the manifest has
+`tx_mode_expected` (older directories such as `perf-r1` and `failure-r1` get no new check and keep
+their verdicts) and only to scan reports (`status` ok with a `net` block):
+
+- `identity.tx_mode` is present (absent: "harness predates sendqueue") and equals `tx_mode_expected`.
+- `net.tx_over_budget == 0`, else "call budget breached". The counter counts driver calls over the 50 ms
+  contract (`MAX_IO_TIMEOUT`), not over the 42 ms `IO_BUDGET`. It is measured by the Windows adapter; a `single` run does not measure it, so zero there is not evidence and is not asked for.
+- For `perf.<rate>` cells with `rate >= 10000` under sendqueue: `net.tx_batches > 0` and
+  `net.tx_batch_max <= identity.tx_batch_cap`, else "sendqueue claimed but no batch was transmitted".
+- Wire sequence (perf cells, offline on the kept full pcaps): the SYNs in capture order must equal, byte for
+  byte and in order, the frames of the cell's plan ("wire SYN sequence equals the plan's probe sequence").
+  The expected sequence is generated with `rmasscan-core`'s `ProbeCursor` from the cell's own arguments
+  (ports, targets, seed, source port, MACs, IPs and the same `--rate`, because the probe order rotates by
+  the rate: `xXx = i + r * rate`). A Completed cell must match in full; a cell that ended early (RxLoss)
+  must match a prefix. A difference is a behaviour FAIL; a missing or incomplete capture makes it INVALID.
+  A directory without `tx_mode_expected` gets the result only as `notes.perf.wire_order_matches_plan`
+  (report-only; `perf-r1` matches on every cell whose pcap is plain). This is the GO evidence that the
+  batched sendqueue path neither reorders, drops, duplicates nor alters a frame. The rate-100 functional
+  cases form only one-frame batches (no batch forms before about the 139th frame of a scan), so they do
+  not exercise the batched path: perf proves the batching path, the functional cases against the C
+  fixtures prove the bytes (and the order) of the generator.
+- Unchanged: `tx_sent` equals the SYN count on the wire, order equals the fixture, exactly once.
+  On a run with `tx_uncertain > 0` the wire rule is `tx_sent <= SYN on wire <= tx_sent + tx_uncertain`.
+
+JSON fields: `identity.tx_mode`, `identity.tx_batch_cap`, `net.tx_batches`, `net.tx_batch_max`,
+`net.tx_over_budget` in `run.json`; `notes.perf` of each cell carries `tx_batches`, `tx_batch_max`,
+`tx_batch_cap`, `tx_over_budget`; `perf_summary.rows[].median` adds `tx_batch_max`.
+
+GO rule for throughput (VM): `rate_gate` MET at 100, 1000 and 10000 pps, and the 100000 row recorded
+as measured. The VM ceiling with sendqueue (about 16k to 37k pps in the spike, two VM speed modes)
+does not reach 100k; that is an OPEN finding for the physical NIC stage, never a FAIL, and it never
+changes `overall`.
 
 Cleanup after an aborted suite: `rmasscan-lab windows-suite --cleanup --suite ID` stops every
 recorded remote process (pid and start time must match) and removes the suite's scratch directories except runs that still carry the keep marker (see below); those are reported.

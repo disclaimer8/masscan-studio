@@ -415,6 +415,7 @@ pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> 
             rx: Box::new(RxHalf::new(rx, ifindex, Arc::clone(&counters))),
         },
         stats: NetStatsHandle::new(counters),
+        tx_mode: crate::TxMode::Single,
     })
 }
 

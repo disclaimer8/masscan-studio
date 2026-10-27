@@ -1,0 +1,216 @@
+{
+  "scans": [
+    {
+      "attempt_hex": "fb352d20521cc436e782697f0787e2d4",
+      "checkpoint_len": 0,
+      "created_at": "2026-10-27T11:00:30.248Z",
+      "detail": "Completed",
+      "job": {
+        "backend": "MacFeth",
+        "exclusions": "",
+        "ports": "8000-8031",
+        "rate": 4,
+        "seed": "2",
+        "targets": "198.18.0.2"
+      },
+      "next_index": null,
+      "rows": [
+        {
+          "discovered_at": "2026-10-27T11:00:30.670Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8024
+        },
+        {
+          "discovered_at": "2026-10-27T11:00:30.670Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8028
+        },
+        {
+          "discovered_at": "2026-10-27T11:00:31.135Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8027
+        },
+        {
+          "discovered_at": "2026-10-27T11:00:31.397Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8022
+        },
+        {
+          "discovered_at": "2026-10-27T11:00:31.654Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8019
+        },
+        {
+          "discovered_at": "2026-10-27T11:00:31.654Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8008
+        },
+        {
+          "discovered_at": "2026-10-27T11:00:31.957Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8014
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:21.121Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8012
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:21.121Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8002
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:21.583Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8013
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:21.843Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8006
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:22.105Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8016
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:22.105Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8026
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:22.411Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8009
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:22.715Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8025
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:22.977Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8011
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:23.235Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8004
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:23.585Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8000
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:23.845Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8021
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:24.108Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8029
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:24.108Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8030
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:24.565Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8020
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:24.825Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8003
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:25.082Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8018
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:25.082Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8017
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:25.342Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8010
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:25.646Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8023
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:25.913Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8007
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:26.169Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8001
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:26.430Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8031
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:26.732Z",
+          "ip": "198.18.0.2",
+          "open": true,
+          "port": 8005
+        },
+        {
+          "discovered_at": "2026-10-27T11:01:26.992Z",
+          "ip": "198.18.0.2",
+          "open": false,
+          "port": 8015
+        }
+      ],
+      "scan_id_hex": "8d7d08c7712032555448f87b11724582",
+      "sequence": null,
+      "status": "Completed"
+    }
+  ]
+}

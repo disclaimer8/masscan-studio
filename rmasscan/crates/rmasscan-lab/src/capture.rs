@@ -359,10 +359,15 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     let mut endpoints = Vec::new();
     for (k, opt) in [("scanner", "ns-a"), ("peer", "ns-b")] {
         let ns = get(a, opt)?;
-        let mode = match (autodetect, k) {
-            (false, _) => IsolationMode::Default,
-            (true, "scanner") => IsolationMode::Autodetect(Side::Scanner),
-            (true, _) => IsolationMode::Autodetect(Side::Peer),
+        let mode = if autodetect {
+            IsolationMode::Autodetect
+        } else {
+            IsolationMode::Default
+        };
+        let side = if k == "scanner" {
+            Side::Scanner
+        } else {
+            Side::Peer
         };
         let links: Value =
             serde_json::from_str(&checked(&["ip", "-n", ns, "-d", "-j", "link"])?).map_err(err)?;
@@ -377,7 +382,7 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             "cat",
             "/proc/sys/net/ipv4/ip_forward",
         ])?;
-        check_isolation_snapshot(&links, &routes, &forwarding, mode)?;
+        check_isolation_snapshot(&links, &routes, &forwarding, mode, side)?;
         let endpoint = links
             .as_array()
             .and_then(|ls| ls.iter().find(|x| x["ifname"] != "lo"))
@@ -406,7 +411,7 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             .args(["netns", "exec", ns, "ip", "route", "get", "8.8.8.8"])
             .output()
             .map_err(err)?;
-        if mode == IsolationMode::Autodetect(Side::Scanner) {
+        if mode == IsolationMode::Autodetect && side == Side::Scanner {
             if !route_get.status.success() {
                 return Err("scanner namespace has no route to 8.8.8.8 via the peer".into());
             }
@@ -447,7 +452,7 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     if autodetect {
         v["mode"] = json!("autodetect");
         v["default_route"] = isolation_default_route(
-            IsolationMode::Autodetect(Side::Scanner),
+            IsolationMode::Autodetect,
             endpoints[0]["ifname"].as_str().ok_or("veth missing")?,
         );
     }
@@ -468,7 +473,7 @@ pub enum Side {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IsolationMode {
     Default,
-    Autodetect(Side),
+    Autodetect,
 }
 
 const AUTODETECT_NET: &str = "198.18.0.0/24";
@@ -483,7 +488,7 @@ fn autodetect_via(iface: &str) -> String {
 pub fn isolation_default_route(mode: IsolationMode, scanner_iface: &str) -> Value {
     match mode {
         IsolationMode::Default => json!(false),
-        IsolationMode::Autodetect(_) => {
+        IsolationMode::Autodetect => {
             json!({"scanner_ns": autodetect_via(scanner_iface), "peer_ns": false})
         }
     }
@@ -493,7 +498,7 @@ pub fn isolation_default_route(mode: IsolationMode, scanner_iface: &str) -> Valu
 pub fn isolation_permits(v: &Value, mode: IsolationMode) -> bool {
     let default_ok = match mode {
         IsolationMode::Default => v["default_route"] == false,
-        IsolationMode::Autodetect(_) => {
+        IsolationMode::Autodetect => {
             v["default_route"]["scanner_ns"] == autodetect_via("veth-a")
                 && v["default_route"]["peer_ns"] == false
                 && v["default_route"].as_object().map(|o| o.len()) == Some(2)
@@ -512,6 +517,7 @@ pub fn check_isolation_snapshot(
     routes: &Value,
     forwarding: &str,
     mode: IsolationMode,
+    side: Side,
 ) -> Result<(), String> {
     let links = links.as_array().ok_or("invalid interface inventory")?;
     if links.len() != 2 || links.iter().filter(|l| l["ifname"] == "lo").count() != 1 {
@@ -525,8 +531,8 @@ pub fn check_isolation_snapshot(
         return Err("foreign link or bridge master in namespace".into());
     }
     let routes = routes.as_array().ok_or("invalid route inventory")?;
-    match mode {
-        IsolationMode::Autodetect(Side::Scanner) => {
+    match (mode, side) {
+        (IsolationMode::Autodetect, Side::Scanner) => {
             let dev = veth["ifname"].as_str().ok_or("veth name missing")?;
             let connected = routes.iter().filter(|r| {
                 r["dst"] == AUTODETECT_NET && r["gateway"].is_null() && r["dev"] == dev
@@ -538,7 +544,7 @@ pub fn check_isolation_snapshot(
                 return Err("scanner namespace routes are not exactly the connected route and the default route via the peer".into());
             }
         }
-        IsolationMode::Default | IsolationMode::Autodetect(Side::Peer) => {
+        (IsolationMode::Default, _) | (IsolationMode::Autodetect, Side::Peer) => {
             if routes.len() > 1
                 || routes
                     .iter()

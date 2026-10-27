@@ -10,7 +10,7 @@
 # Suite autodetect runs rmasscan-lab autodetect-suite linux inside the lab, with ONE controlled change to the
 # seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
 # 198.18.0.2-5, so the rmasscan CLI can auto-detect its interface, source IP and router. The peer namespace
-# still has no default route; the stand is fixed inside this script (WIRELAB_* overrides are ignored).
+# still has no default route; the stand is fixed inside this script (the WIRELAB_* stand overrides, MACs, ports and cases file included, are ignored).
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -88,6 +88,7 @@ if [ "$SUITE" = autodetect ]; then
   # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
   IP_A_LINK=198.18.0.1; IP_ADAPTER=198.18.0.1; PEER_IPS="198.18.0.2 198.18.0.3 198.18.0.4 198.18.0.5"; PEER_PREFIX=24
   DEFAULT_VIA=198.18.0.2
+  MAC_A=02:aa:00:00:00:01; MAC_B=02:aa:00:00:00:02; OPEN_PORTS=80,8080; CASES_FILE=""
 fi
 SEED=1; RATE=100
 CREATED_A=0; CREATED_B=0; PIDS=()
@@ -216,7 +217,11 @@ for ns in "$NS_A" "$NS_B"; do
   fi
 done
 [ "$(ip -o link | awk -F': ' '{print $2}' | sort)" = "$host_links_before" ] || fail "host link list changed"
-note_cmd "ip -n \$NS route show default (empty); ip -n \$NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces"
+if [ -n "$DEFAULT_VIA" ]; then
+  note_cmd "ip -n \$NS_A route show (exactly: 198.18.0.0/24 dev $IF_A; default via $DEFAULT_VIA dev $IF_A); ip -n \$NS_A route get 8.8.8.8 (via $DEFAULT_VIA dev $IF_A); ip -n \$NS_B route show default (empty); ip -n \$NS_B route get 8.8.8.8 (fails)  # seal assertions, autodetect stand"
+else
+  note_cmd "ip -n \$NS route show default (empty); ip -n \$NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces"
+fi
 "$LAB_BIN" capture isolation ${DEFAULT_VIA:+--mode autodetect} --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
 
 topo() {  # topo FILE : save topology + routes of both namespaces
@@ -245,7 +250,11 @@ else
   # rust/perf suites: rmasscan-lab wire-suite restarts its own responder before EVERY run, because the peer kernel
   # keeps retransmitting SYN-ACKs of half-open sockets for ~1 minute (the Rust scanner never RSTs them)
   # and those would bleed into the next run's capture.
-  note_cmd "(rmasscan-lab wire-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # restarted before every run"
+  if [ "$SUITE" = autodetect ]; then
+    note_cmd "(rmasscan-lab autodetect-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # started by the suite"
+  else
+    note_cmd "(rmasscan-lab wire-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # restarted before every run"
+  fi
 fi
 
 "$LAB_BIN" capture env --out "$OUT/env.json" --oracle "$ORACLE" --ns-a "$NS_A" --ns-b "$NS_B" \

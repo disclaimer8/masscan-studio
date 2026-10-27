@@ -5,6 +5,12 @@
 #   wire-lab.sh --oracle /path/to/masscan --out DIR                       # C oracle capture (default suite)
 #   wire-lab.sh --oracle BIN --out DIR --suite rust --rust-bin WIRE_SCAN --fixtures tests/golden/wire
 #   wire-lab.sh --oracle BIN --out DIR --suite perf --rust-bin WIRE_SCAN [--reps 5] [--rates 100,1000,10000,100000]
+#   wire-lab.sh --oracle BIN --out DIR --suite autodetect --rmasscan RMASSCAN_CLI
+#
+# Suite autodetect runs rmasscan-lab autodetect-suite linux inside the lab, with ONE controlled change to the
+# seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
+# 198.18.0.2-5, so the rmasscan CLI can auto-detect its interface, source IP and router. The peer namespace
+# still has no default route; the stand is fixed inside this script (WIRELAB_* overrides are ignored).
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -24,7 +30,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$HERE/lab-process-group.sh"
 LAB_BIN="${RMASSCAN_LAB_BIN:-$HERE/../target/release/rmasscan-lab}"
 [ -x "$LAB_BIN" ] || { echo "Build rmasscan-lab or set RMASSCAN_LAB_BIN" >&2; exit 2; }
-ORACLE=""; OUT=""; SUITE=oracle; RUST_BIN=""; FIXTURES=""; REPS=5; RATES=100,1000,10000,100000
+ORACLE=""; OUT=""; SUITE=oracle; RUST_BIN=""; RMASSCAN_BIN=""; FIXTURES=""; REPS=5; RATES=100,1000,10000,100000
 while [ $# -gt 0 ]; do
   case "$1" in
     --oracle) ORACLE=$2; shift 2 ;;
@@ -32,20 +38,22 @@ while [ $# -gt 0 ]; do
     --suite) SUITE=$2; shift 2 ;;
     --rust-bin) RUST_BIN=$2; shift 2 ;;
     --fixtures) FIXTURES=$2; shift 2 ;;
+    --rmasscan) RMASSCAN_BIN=$2; shift 2 ;;
     --reps) REPS=$2; shift 2 ;;
     --rates) RATES=$2; shift 2 ;;
-    -h|--help) sed -n 2,16p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,23p "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 [ -n "$ORACLE" ] && [ -n "$OUT" ] || { echo "usage: wire-lab.sh --oracle BIN --out DIR" >&2; exit 64; }
-case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
+case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
 [ "$SUITE" != rust ] || [ -n "$FIXTURES" ] || { echo "--suite rust needs --fixtures" >&2; exit 64; }
 [ "$(uname -s)" = Linux ] || { echo "FATAL: Linux only" >&2; exit 2; }
 if [ "$(id -u)" != 0 ]; then
   mkdir -p "$OUT"
   REEXEC=(--oracle "$(readlink -f "$ORACLE")" --out "$(readlink -f "$OUT")" --suite "$SUITE" --reps "$REPS" --rates "$RATES")
   [ -z "$RUST_BIN" ] || REEXEC+=(--rust-bin "$(readlink -f "$RUST_BIN")")
+  [ -z "$RMASSCAN_BIN" ] || REEXEC+=(--rmasscan "$(readlink -f "$RMASSCAN_BIN")")
   [ -z "$FIXTURES" ] || REEXEC+=(--fixtures "$(readlink -f "$FIXTURES")")
   exec sudo -n env "RMASSCAN_LAB_BIN=$LAB_BIN" "WIRELAB_INJECT=${WIRELAB_INJECT:-}" \
     ${RMASSCAN_DEPLOY_MANIFEST:+"RMASSCAN_DEPLOY_MANIFEST=$(readlink -f "$RMASSCAN_DEPLOY_MANIFEST")"} \
@@ -74,6 +82,13 @@ PEER_IPS=${WIRELAB_PEER_IPS:-"10.200.0.2 10.200.0.3 10.200.0.4 10.200.0.5"}
 PEER_PREFIX=${WIRELAB_PEER_PREFIX:-24}
 OPEN_PORTS=${WIRELAB_OPEN_PORTS:-80,8080}               # responder listens here; every other port gets RST
 CASES_FILE=${WIRELAB_CASES_FILE:-}                      # optional "name|syn|synack|rst|masscan args" lines
+DEFAULT_VIA=""
+if [ "$SUITE" = autodetect ]; then
+  # Fixed stand of the autodetect suite (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
+  # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
+  IP_A_LINK=198.18.0.1; IP_ADAPTER=198.18.0.1; PEER_IPS="198.18.0.2 198.18.0.3 198.18.0.4 198.18.0.5"; PEER_PREFIX=24
+  DEFAULT_VIA=198.18.0.2
+fi
 SEED=1; RATE=100
 CREATED_A=0; CREATED_B=0; PIDS=()
 STOP_GRACE=45   # witness: quiet wait <= 20 s + end markers <= 15 s + tcpdump stop <= 30 s, but normally 2-3 s
@@ -161,6 +176,12 @@ ip -n "$NS_B" neigh add "$IP_ADAPTER" lladdr "$MAC_A" dev "$IF_B" nud permanent 
 for ns in "$NS_A" "$NS_B"; do ip -n "$ns" link set lo up; done
 ip -n "$NS_A" link set "$IF_A" up
 ip -n "$NS_B" link set "$IF_B" up
+if [ -n "$DEFAULT_VIA" ]; then
+  # autodetect: the one controlled change. Default route via the peer and permanent neighbours, both in NS_A only.
+  ip -n "$NS_A" route add default via "$DEFAULT_VIA" dev "$IF_A"
+  for ip_ in $PEER_IPS; do ip -n "$NS_A" neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done
+  note_cmd "ip -n \$NS_A route add default via $DEFAULT_VIA dev $IF_A; ip -n \$NS_A neigh add {$PEER_IPS} lladdr $MAC_B dev $IF_A nud permanent   # autodetect stand"
+fi
 if [ "$SUITE" != oracle ]; then
   # veth hands CHECKSUM_PARTIAL frames to AF_PACKET readers: the peer kernel's SYN-ACK arrives with
   # an unfinished TCP checksum, which a verifying receiver (the Rust engine, unlike C) must reject.
@@ -174,19 +195,29 @@ fi
 # ---- seal assertions (fail closed) ------------------------------------------
 fail() { echo "FATAL: $*" >&2; exit 3; }
 for ns in "$NS_A" "$NS_B"; do
-  [ -z "$(ip -n "$ns" route show default)" ] || fail "$ns has a default route"
+  if [ -n "$DEFAULT_VIA" ] && [ "$ns" = "$NS_A" ]; then :; else
+    [ -z "$(ip -n "$ns" route show default)" ] || fail "$ns has a default route"
+  fi
   [ -z "$(ip -n "$ns" -6 route show default)" ] || fail "$ns has an IPv6 default route"
   links=$(ip -n "$ns" -o link | awk -F': ' '{print $2}' | sed 's/@.*//' | sort | tr '\n' ' ')
   case "$ns" in "$NS_A") want="lo $IF_A ";; *) want="lo $IF_B ";; esac
   [ "$links" = "$want" ] || fail "$ns links '$links' != '$want'"
   ip -n "$ns" -d link | grep -Eq 'bridge|master|bond|vlan|macvlan' && fail "$ns has a bridge/master/virtual upper device"
   [ "$(ip netns exec "$ns" cat /proc/sys/net/ipv4/ip_forward)" = 0 ] || fail "$ns ip_forward != 0"
-  ip netns exec "$ns" ip route get 8.8.8.8 >/dev/null 2>&1 && fail "$ns can route to 8.8.8.8"
-  [ "$(ip -n "$ns" route show | grep -c .)" -le 1 ] || fail "$ns has more than the connected route"
+  if [ -n "$DEFAULT_VIA" ] && [ "$ns" = "$NS_A" ]; then
+    # autodetect scanner namespace: exactly the connected route and the default route via the peer
+    [ "$(ip -n "$ns" route show | grep -c .)" = 2 ] || fail "$ns routes are not exactly two"
+    ip -n "$ns" route show | grep -Eq "^198\.18\.0\.0/24 dev $IF_A( |\$)" || fail "$ns lacks 198.18.0.0/24 dev $IF_A"
+    ip -n "$ns" route show | grep -Eq "^default via $DEFAULT_VIA dev $IF_A( |\$)" || fail "$ns lacks default via $DEFAULT_VIA dev $IF_A"
+    ip netns exec "$ns" ip route get 8.8.8.8 | head -n1 | grep -Eq "^8\.8\.8\.8 via $DEFAULT_VIA dev $IF_A( |\$)" || fail "$ns route get 8.8.8.8 is not via $DEFAULT_VIA dev $IF_A"
+  else
+    ip netns exec "$ns" ip route get 8.8.8.8 >/dev/null 2>&1 && fail "$ns can route to 8.8.8.8"
+    [ "$(ip -n "$ns" route show | grep -c .)" -le 1 ] || fail "$ns has more than the connected route"
+  fi
 done
 [ "$(ip -o link | awk -F': ' '{print $2}' | sort)" = "$host_links_before" ] || fail "host link list changed"
 note_cmd "ip -n \$NS route show default (empty); ip -n \$NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces"
-"$LAB_BIN" capture isolation --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
+"$LAB_BIN" capture isolation ${DEFAULT_VIA:+--mode autodetect} --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
 
 topo() {  # topo FILE : save topology + routes of both namespaces
   { echo "# host namespace links (must not contain veth-a/veth-b)"; ip -o link | awk -F': ' '{print $2}'
@@ -279,7 +310,17 @@ done
 
 fi
 
-if [ "$SUITE" != oracle ]; then
+if [ "$SUITE" = autodetect ]; then
+  # ---- autodetect suite: the Rust driver runs inside this sealed lab and starts its own responders/witnesses
+  note_cmd "rmasscan-lab autodetect-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_suite_group "$OUT/suite.log" "$LAB_BIN" autodetect-suite linux --out "$OUT" --work "$WORK" \
+    --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
+    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED"
+  SUITE_PID=$SUITE_PGID
+  SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  stop_suite_group
+  log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
+elif [ "$SUITE" != oracle ]; then
   # ---- Rust suites: driver runs inside this sealed lab; its own children die with it
   note_cmd "rmasscan-lab wire-suite --suite $SUITE ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
   start_suite_group "$OUT/suite.log" "$LAB_BIN" wire-suite --suite "$SUITE" --out "$OUT" --work "$WORK" \
@@ -297,6 +338,9 @@ topo "$OUT/topology-after.txt"
 if [ "$SUITE" = oracle ]; then
   "$LAB_BIN" capture manifest --dir "$OUT"
   log "done: $OUT/manifest.json"
+elif [ "$SUITE" = autodetect ]; then
+  log "done: $OUT"
+  exit "${SUITE_RC:-0}"
 else
   log "done: $OUT/results.json"
   exit "${SUITE_RC:-0}"

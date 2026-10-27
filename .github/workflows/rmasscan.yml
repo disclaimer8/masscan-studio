@@ -99,7 +99,7 @@ jobs:
   # отправляет и не открывает адаптер. Письма и загрузки наружу не происходит.
   package-windows-wire:
     name: windows-x64 wire lab package
-    runs-on: windows-2022
+    runs-on: windows-2025
     needs: check
     env:
       # На pull_request github.sha это временный merge-коммит refs/pull/N/merge, которого

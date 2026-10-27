@@ -18,9 +18,9 @@ use rmasscan_core::targets::{add_target_string, parse_ports};
 #[command(
     name = "rmasscan",
     version,
-    about = "Rust port of masscan (stage 1): -sL, --echo and --offline --packet-trace",
+    about = "Rust port of masscan: -sL, --echo, --offline --packet-trace and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 \\\n    --router-mac 66-55-44-33-22-11 --source-port 40000-40003\n\nOperations: -sL, --echo, --echo-all, --offline --packet-trace (mutually exclusive).\n--seed is required. Any other masscan option is an error."
+    after_help = "Examples:\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 \\\n    --router-mac 66-55-44-33-22-11 --source-port 40000-40003\n\nOperations: -sL, --echo, --echo-all, --offline --packet-trace, --iflist (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
@@ -59,7 +59,7 @@ pub struct Cli {
     #[arg(
         long,
         value_name = "N",
-        help = "Randomization seed (REQUIRED, must be non-zero)"
+        help = "Randomization seed, non-zero (required for -sL, --echo and --offline)"
     )]
     pub seed: Option<u64>,
     #[arg(long, value_name = "PPS", help = "Packets per second (default 100)")]
@@ -100,14 +100,29 @@ pub struct Cli {
         help = "Stop after this many indexes"
     )]
     pub resume_count: Option<u64>,
+    // main-conf.c:2486: `source-ip` - синоним `adapter-ip`.
     #[arg(
         long = "adapter-ip",
+        alias = "source-ip",
         value_name = "IP",
-        help = "Source IPv4 address (single address)"
+        help = "Source IPv4 address (single address; alias: --source-ip)"
     )]
     pub adapter_ip: Option<String>,
-    #[arg(long = "adapter-mac", value_name = "MAC", help = "Source MAC address")]
+    // main-conf.c:2556: `source-mac` - синоним `adapter-mac`.
+    #[arg(
+        long = "adapter-mac",
+        alias = "source-mac",
+        value_name = "MAC",
+        help = "Source MAC address (alias: --source-mac)"
+    )]
     pub adapter_mac: Option<String>,
+    // main-conf.c:2626-2641: ровно один IPv4.
+    #[arg(
+        long = "router-ip",
+        value_name = "IP",
+        help = "Router (next hop) IPv4 address (single address)"
+    )]
+    pub router_ip: Option<String>,
     #[arg(long = "router-mac", value_name = "MAC", help = "Router MAC address")]
     pub router_mac: Option<String>,
     // Одиночный порт или диапазон степени двойки (main-conf.c:2523).
@@ -144,6 +159,12 @@ pub struct Cli {
         help = "List the targets in scan order (alias: -sL)"
     )]
     pub list: bool,
+    #[arg(
+        long = "iflist",
+        conflicts_with_all = ["targets", "range", "list", "echo", "echo_all", "packet_trace", "offline"],
+        help = "List network interfaces and exit"
+    )]
+    pub iflist: bool,
     #[arg(long, conflicts_with_all = ["echo_all", "packet_trace"], help = "Print the configuration and exit")]
     pub echo: bool,
     #[arg(
@@ -200,10 +221,18 @@ impl Cli {
         for f in &self.excludefile {
             read_exclude_file(&mut cfg, f)?;
         }
-        // seed == 0 в C значит "взять энтропию" (main.c:1640-1641); порт этого не делает.
-        cfg.seed = self.seed.filter(|&s| s != 0).ok_or(
-            "--seed is required and must be non-zero (the entropy-based default is not ported)",
-        )?;
+        // seed == 0 в C значит "взять энтропию" (main.c:1640-1641). Явный 0
+        // отклоняется; отсутствие --seed решает `run` по операции (см.
+        // [`seed_policy`]), здесь это seed 0.
+        cfg.seed = match self.seed {
+            Some(0) => {
+                return Err(
+                    "--seed must be non-zero (omit it for a live scan to use entropy)".into(),
+                );
+            }
+            Some(s) => s,
+            None => 0,
+        };
         if let Some(r) = &self.rate {
             cfg.max_rate = parse_rate(r).map_err(|e| e.to_string())?;
         }
@@ -232,6 +261,12 @@ impl Cli {
         if let Some(m) = &self.adapter_mac {
             cfg.adapter_mac = Some(parse_mac(m).map_err(|e| e.to_string())?);
         }
+        if let Some(ip) = &self.router_ip {
+            let ip: Ipv4Addr = ip
+                .parse()
+                .map_err(|_| format!("bad --router-ip {ip:?}: expected one IPv4 address"))?;
+            cfg.router_ip = Some(ip.into());
+        }
         if let Some(m) = &self.router_mac {
             cfg.router_mac = Some(parse_mac(m).map_err(|e| e.to_string())?);
         }
@@ -241,6 +276,23 @@ impl Cli {
         cfg.adapter_name = self.interface.clone();
         cfg.offline = self.offline;
         Ok(cfg)
+    }
+}
+
+/// Откуда берётся seed (решение 6 плана): по операции, до `validate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedPolicy {
+    /// `-sL`, `--echo`/`--echo-all`, `--offline`: нужен явный ненулевой `--seed`.
+    Required,
+    /// Живой скан (и `--iflist`, где seed не используется): без `--seed` берётся энтропия.
+    Entropy,
+}
+
+pub fn seed_policy(cli: &Cli) -> SeedPolicy {
+    if cli.list || cli.echo || cli.echo_all || cli.offline {
+        SeedPolicy::Required
+    } else {
+        SeedPolicy::Entropy
     }
 }
 
@@ -258,4 +310,91 @@ fn read_exclude_file(cfg: &mut ScanConfig, path: &str) -> Result<(), String> {
             .map_err(|e| format!("{path}:{}: invalid IP address: {e}", n + 1))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(a: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_masscan(std::iter::once("rmasscan").chain(a.iter().copied()))
+    }
+
+    #[test]
+    fn router_ip_accepts_one_address_and_rejects_ranges() {
+        let cfg = parse(&["--router-ip", "198.18.0.2"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.router_ip, Some(0xc612_0002));
+        for bad in ["198.18.0.0/24", "198.18.0.2-198.18.0.3", "x", "", "::1"] {
+            let cli = parse(&["--router-ip", bad]).unwrap();
+            let e = cli.to_config().unwrap_err();
+            assert!(e.contains("--router-ip"), "{bad}: {e}");
+        }
+        assert_eq!(parse(&[]).unwrap().to_config().unwrap().router_ip, None);
+    }
+
+    #[test]
+    fn iflist_conflicts_with_operations_and_targets() {
+        assert!(parse(&["--iflist"]).unwrap().iflist);
+        for other in [
+            &["10.0.0.1"][..],
+            &["--range", "10.0.0.1"][..],
+            &["-sL"][..],
+            &["--list"][..],
+            &["--echo"][..],
+            &["--echo-all"][..],
+            &["--offline"][..],
+            &["--offline", "--packet-trace"][..],
+        ] {
+            let mut a = vec!["--iflist"];
+            a.extend_from_slice(other);
+            assert!(parse(&a).is_err(), "{a:?}");
+        }
+        assert!(parse(&["--iflist", "-p80"]).is_ok());
+    }
+
+    #[test]
+    fn source_ip_and_source_mac_aliases_set_the_adapter_fields() {
+        let cfg = parse(&[
+            "--source-ip",
+            "10.255.0.1",
+            "--source-mac",
+            "00-11-22-33-44-55",
+        ])
+        .unwrap()
+        .to_config()
+        .unwrap();
+        assert_eq!(cfg.adapter_ip, Some(0x0aff_0001));
+        assert_eq!(cfg.adapter_mac, Some([0, 0x11, 0x22, 0x33, 0x44, 0x55]));
+    }
+
+    #[test]
+    fn seed_policy_by_operation() {
+        use SeedPolicy::{Entropy, Required};
+        for (args, want) in [
+            (&["-sL", "10.0.0.1"][..], Required),
+            (&["--list", "10.0.0.1"][..], Required),
+            (&["--echo", "10.0.0.1"][..], Required),
+            (&["--echo-all", "10.0.0.1"][..], Required),
+            (&["--offline", "10.0.0.1"][..], Required),
+            (&["--offline", "--packet-trace", "10.0.0.1"][..], Required),
+            (&["10.0.0.1", "-p80"][..], Entropy),
+            (&["--iflist"][..], Entropy),
+        ] {
+            assert_eq!(seed_policy(&parse(args).unwrap()), want, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn to_config_seed_none_is_zero_and_explicit_zero_is_an_error() {
+        assert_eq!(parse(&[]).unwrap().to_config().unwrap().seed, 0);
+        assert_eq!(
+            parse(&["--seed", "7"]).unwrap().to_config().unwrap().seed,
+            7
+        );
+        let e = parse(&["--seed", "0"]).unwrap().to_config().unwrap_err();
+        assert!(e.contains("--seed"), "{e}");
+    }
 }

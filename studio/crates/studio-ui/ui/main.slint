@@ -139,6 +139,8 @@ export component MainWindow inherits Window {
     in property <string> selection-label: "No selection";
     in property <string> event-label: "Ready · no scan started";
     in-out property <int> backend-index: 0;
+    // Set once from studio_protocol::raw_profile_enabled(Backend::MacFeth): the gate differs per OS.
+    in property <bool> mac-feth-open: false;
     in-out property <string> scan-backend-label: "No scan selected";
     in property <[string]> history-labels;
     in-out property <int> history-index: -1;
@@ -504,7 +506,7 @@ export component MainWindow inherits Window {
                     ActionButton { text: "Cancel"; enabled: !root.profile-busy; clicked => { root.confirm-profile-delete = false; } }
                     ActionButton { text: "Delete profile"; enabled: !root.profile-busy; clicked => { root.delete-profile(); } }
                 }
-                ComboBox { model: ["Mac feth · not enabled yet", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
+                ComboBox { model: [root.mac-feth-open ? "Mac feth · isolated stand (macOS)" : "Mac feth · not enabled on this OS", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
                 JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
                 HorizontalLayout {
                     spacing: 12px;
@@ -514,7 +516,7 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 12px;
                     JobField { label: "Exclude · optional"; hint: "IPv4 addresses or ranges"; value <=> root.job-exclusions; edited => { root.settings-edited(); } }
-                    Text { text: root.backend-index == 0 ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
+                    Text { text: root.backend-index == 0 ? (root.mac-feth-open ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Raw scanning is not enabled for this profile on this OS.") : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
                 }
                 HorizontalLayout {
                     spacing: 12px;

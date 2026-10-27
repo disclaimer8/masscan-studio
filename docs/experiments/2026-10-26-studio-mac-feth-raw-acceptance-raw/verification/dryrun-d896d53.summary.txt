@@ -1,0 +1,2 @@
+DRY RUN: no stand, no installed runner, no witness, no frame. The window is NOT RUN.
+PASS: studio-ui --smoke-feth exited rc 1 with "Authorization failed", wrote smoke.json, left no Studio process and no administrator dialog.

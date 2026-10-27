@@ -59,7 +59,7 @@ fn prepare_source(root: &Path, source: &Path) -> Result<PathBuf> {
             "cargo_lock_sha256":root.join("Cargo.lock").is_file().then(||digest(&root.join("Cargo.lock"))).transpose()?,
             "package_manifest_sha256":source.parent().map(|p|p.join("manifest.json")).filter(|p|p.is_file()).map(|p|digest(&p)).transpose()?,
             "install_script_sha256":digest(&dir.join("install.ps1"))?,
-            "raw_enabled":studio_protocol::RAW_SCANNING_ENABLED,
+            "raw_profiles":studio_protocol::RAW_PROFILES,
             "session_uac_enabled":true
         }))?,
     )?;
@@ -83,7 +83,9 @@ pub fn verify_ci(root: &Path) -> Result<()> {
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
         return Err("Requires disposable GitHub Windows VM".into());
     }
-    if studio_protocol::RAW_SCANNING_ENABLED {
+    if studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacFeth)
+        || !studio_protocol::RAW_PROFILES.is_empty()
+    {
         return Err("Raw gate must stay closed".into());
     }
     let dir = prepare_source(root, &build_runner()?)?;

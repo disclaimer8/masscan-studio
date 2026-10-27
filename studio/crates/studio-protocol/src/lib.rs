@@ -12,8 +12,6 @@ use std::io::{self, Read, Write};
 
 pub const VERSION: u32 = 2;
 pub const ENGINE_VERSION: u32 = rmasscan_engine::ENGINE_ALGORITHM_VERSION;
-/// Release gate, not a user-configurable escape hatch.
-pub const RAW_SCANNING_ENABLED: bool = false;
 pub const MAX_FRAME: usize = 131_072;
 pub const MAX_QUEUE: usize = 4 * 1024 * 1024;
 pub type Id = [u8; 16];
@@ -42,6 +40,17 @@ pub enum Backend {
     #[serde(rename = "SwiftImport")]
     Archived,
 }
+/// Release gate per profile and platform. Compile-time; never a user setting.
+/// Only the sealed Mac feth stand on macOS is open; Windows/Linux raw profiles and physical NICs stay closed.
+pub const fn raw_profile_enabled(backend: Backend) -> bool {
+    matches!(backend, Backend::MacFeth) && cfg!(target_os = "macos")
+}
+/// Profiles open in this build (for manifests and reports): `["MacFeth"]` on macOS, `[]` elsewhere.
+pub const RAW_PROFILES: &[&str] = if cfg!(target_os = "macos") {
+    &["MacFeth"]
+} else {
+    &[]
+};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Job {
@@ -305,4 +314,28 @@ pub fn checkpoint_origin(bytes: &[u8]) -> Result<Id, String> {
     rmasscan_engine::Checkpoint::from_bytes(bytes)
         .map(|cp| cp.attempt_id)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+    #[test]
+    fn raw_gate_is_open_only_for_mac_feth_on_macos() {
+        assert_eq!(
+            raw_profile_enabled(Backend::MacFeth),
+            cfg!(target_os = "macos")
+        );
+        assert!(!raw_profile_enabled(Backend::Simulation));
+        assert!(!raw_profile_enabled(Backend::Archived));
+        let open = [Backend::Simulation, Backend::MacFeth, Backend::Archived]
+            .into_iter()
+            .filter(|b| raw_profile_enabled(*b))
+            .count();
+        assert_eq!(RAW_PROFILES.len(), open);
+        if raw_profile_enabled(Backend::MacFeth) {
+            assert_eq!(RAW_PROFILES, ["MacFeth"]);
+        } else {
+            assert!(RAW_PROFILES.is_empty());
+        }
+    }
 }

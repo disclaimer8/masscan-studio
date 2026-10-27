@@ -2547,3 +2547,39 @@ fn a_stopped_scan_that_lost_replies_received_well_before_the_stop_fails() {
         failing_checks(&r)
     );
 }
+
+#[test]
+fn the_peer_capture_command_takes_no_filter_or_exactly_the_mdns_filter() {
+    let b = crate::verify::Binding {
+        src: "198.18.0.1".into(),
+        sm: "02:ac:00:00:00:01".into(),
+        pm: "02:ac:00:00:00:02".into(),
+    };
+    let man = json!({"stand":{"peer_if":"feth4202"}});
+    let base = [
+        "/usr/sbin/tcpdump",
+        "-p",
+        "-n",
+        "-U",
+        "-s",
+        "0",
+        "-i",
+        "feth4202",
+        "-w",
+        "peer.pcap",
+    ];
+    let rec = |extra: Option<&str>, filter: &str| {
+        let mut cmd: Vec<&str> = base.to_vec();
+        cmd.extend(extra);
+        json!({"cmd": cmd, "filter": filter})
+    };
+    let ok = |r: Value| capture_command(&r, "peer", &man, "en0", &b);
+    assert!(ok(rec(None, "")));
+    assert!(ok(rec(Some(PEER_FILTER), PEER_FILTER)));
+    assert!(!ok(rec(Some("udp"), "udp")));
+    assert!(!ok(rec(Some(PEER_FILTER), "")));
+    assert!(!ok(rec(
+        Some("not (ether src 02:ac:00:00:00:02 and udp port 5353) or arp"),
+        "x"
+    )));
+}

@@ -273,9 +273,19 @@ fn flags_of(cmd: &[&str]) -> Option<(String, Vec<String>)> {
     }
     Some((iface?, tail))
 }
-/// `who` is `peer` (every frame of the peer interface, no filter) or `uplink` (the default-route
-/// interface of the status gate, the lab filter).
-fn capture_command(c: &Value, who: &str, man: &Value, uplink: &str, b: &Binding) -> bool {
+/// The only filter a peer witness may carry: it drops the host's own mDNS announcements (the host owns
+/// 198.18.0.2 on the peer interface and announces its name there; that must not be published) and nothing else.
+pub(crate) const PEER_FILTER: &str = "not (ether src 02:ac:00:00:00:02 and udp port 5353)";
+
+/// `who` is `peer` (every frame of the peer interface: no filter, or exactly `PEER_FILTER`) or `uplink` (the
+/// default-route interface of the status gate, the lab filter).
+pub(crate) fn capture_command(
+    c: &Value,
+    who: &str,
+    man: &Value,
+    uplink: &str,
+    b: &Binding,
+) -> bool {
     let all: Vec<&str> = array(&c["cmd"]).iter().filter_map(Value::as_str).collect();
     let Some((iface, tail)) = flags_of(&all) else {
         return false;
@@ -284,8 +294,9 @@ fn capture_command(c: &Value, who: &str, man: &Value, uplink: &str, b: &Binding)
     if who == "peer" {
         iface == s(&man["stand"]["peer_if"])
             && !iface.is_empty()
-            && tail.is_empty()
-            && (filter.is_empty() || filter == "(none: every frame on the peer interface)")
+            && ((tail.is_empty()
+                && (filter.is_empty() || filter == "(none: every frame on the peer interface)"))
+                || (tail == [PEER_FILTER] && filter == PEER_FILTER))
     } else {
         let want = uplink_filter(&b.sm, &b.pm);
         !uplink.is_empty()
@@ -1272,7 +1283,7 @@ pub(crate) fn verify_item(
 }
 
 /// Whether anything under `d` is a `*.gz`: captures are stored uncompressed, the verifier has no decompression.
-fn has_compressed_capture(d: &Path) -> bool {
+pub(crate) fn has_compressed_capture(d: &Path) -> bool {
     fs::read_dir(d).is_ok_and(|rd| {
         rd.filter_map(Result::ok).any(|e| {
             let p = e.path();

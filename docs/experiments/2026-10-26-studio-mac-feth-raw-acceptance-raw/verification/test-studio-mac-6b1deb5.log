@@ -1,0 +1,78 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running `$SCRATCH/target-live/studio/debug/xtask test`
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.56s
+     Running unittests src/lib.rs ($SCRATCH/target-live/studio/debug/deps/studio_app-4bd6a1cbbadd205f)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running unittests src/lib.rs ($SCRATCH/target-live/studio/debug/deps/studio_inspection-e0c8dc4a64deca74)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/studio-inspect.rs ($SCRATCH/target-live/studio/debug/deps/studio_inspect-24b8c1a732cbaf49)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/contracts.rs ($SCRATCH/target-live/studio/debug/deps/contracts-c160de19a3fe77bf)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/live.rs ($SCRATCH/target-live/studio/debug/deps/live-2ec55742974fbc32)
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/processes.rs ($SCRATCH/target-live/studio/debug/deps/processes-e1887fbc0c6ebc5e)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+     Running unittests src/lib.rs ($SCRATCH/target-live/studio/debug/deps/studio_platform-89cfcc2868d8737a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/linux_launch.rs ($SCRATCH/target-live/studio/debug/deps/linux_launch-eeab1e498ecb12b4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/linux_lifetime.rs ($SCRATCH/target-live/studio/debug/deps/linux_lifetime-9b00c48f757a2894)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/mac_launch.rs ($SCRATCH/target-live/studio/debug/deps/mac_launch-18885241ad46bd70)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/preflight.rs ($SCRATCH/target-live/studio/debug/deps/preflight-a5be7f4ab832d114)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/session_auth.rs ($SCRATCH/target-live/studio/debug/deps/session_auth-2e313299a8b60a4a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/trusted_install.rs ($SCRATCH/target-live/studio/debug/deps/trusted_install-00cee1c32908408d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running tests/windows_arguments.rs ($SCRATCH/target-live/studio/debug/deps/windows_arguments-cbbd42ddba45a340)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_environment.rs ($SCRATCH/target-live/studio/debug/deps/windows_environment-23ade2ac36058206)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_pipe.rs ($SCRATCH/target-live/studio/debug/deps/windows_pipe-0abb209c7ddb54f4)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_setup.rs ($SCRATCH/target-live/studio/debug/deps/windows_setup-e9abd2ec89e8f526)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_uac.rs ($SCRATCH/target-live/studio/debug/deps/windows_uac-762254c94aed1364)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs ($SCRATCH/target-live/studio/debug/deps/studio_protocol-b75cd413281a6f31)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/contracts.rs ($SCRATCH/target-live/studio/debug/deps/contracts-89ad2ab29a63540c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/main.rs ($SCRATCH/target-live/studio/debug/deps/studio_runner-edb802f985311fb2)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.12s
+     Running tests/controller.rs ($SCRATCH/target-live/studio/debug/deps/controller-5a92609f025123d9)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.42s
+     Running tests/history.rs ($SCRATCH/target-live/studio/debug/deps/history-a57edbbabd4fc99c)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/lifecycle.rs ($SCRATCH/target-live/studio/debug/deps/lifecycle-f20d0f355788516c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.06s
+     Running tests/pipe_session.rs ($SCRATCH/target-live/studio/debug/deps/pipe_session-de47fb5b5dd07fa0)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/profiles.rs ($SCRATCH/target-live/studio/debug/deps/profiles-3fddc304f3aa2382)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/raw_profile.rs ($SCRATCH/target-live/studio/debug/deps/raw_profile-864ed31ea693a3cb)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/socket_session.rs ($SCRATCH/target-live/studio/debug/deps/socket_session-8ed6e0acae082d1a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running tests/volume.rs ($SCRATCH/target-live/studio/debug/deps/volume-5d319285924c86a5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.24s
+     Running unittests src/lib.rs ($SCRATCH/target-live/studio/debug/deps/studio_store-138f3ed9d43432d2)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/durability.rs ($SCRATCH/target-live/studio/debug/deps/durability-575be60afc52cef2)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/history.rs ($SCRATCH/target-live/studio/debug/deps/history-a49a11f90a4422a9)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/profiles.rs ($SCRATCH/target-live/studio/debug/deps/profiles-30e0ffce8b5271fd)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/lib.rs ($SCRATCH/target-live/studio/debug/deps/studio_table-14f100ae6070a15a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/selection.rs ($SCRATCH/target-live/studio/debug/deps/selection-efa50bf429b841da)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/main.rs ($SCRATCH/target-live/studio/debug/deps/studio_ui-016df5da70827f03)
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+     Running unittests src/main.rs ($SCRATCH/target-live/studio/debug/deps/xtask-d77bb1ced16391f9)
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.12s

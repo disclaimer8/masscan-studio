@@ -31,7 +31,8 @@ fn isolation_refuses_an_extra_link_or_default_route() {
             &links,
             &json!([]),
             "0",
-            IsolationMode::Default
+            IsolationMode::Default,
+            Side::Scanner
         )
         .is_ok()
     );
@@ -40,7 +41,8 @@ fn isolation_refuses_an_extra_link_or_default_route() {
             &links,
             &json!([{"dst":"default"}]),
             "0",
-            IsolationMode::Default
+            IsolationMode::Default,
+            Side::Scanner
         )
         .is_err()
     );
@@ -49,7 +51,8 @@ fn isolation_refuses_an_extra_link_or_default_route() {
             &links,
             &json!([]),
             "1",
-            IsolationMode::Default
+            IsolationMode::Default,
+            Side::Scanner
         )
         .is_err()
     );
@@ -266,8 +269,12 @@ fn legacy_mode_is_byte_identical() {
     use serde_json::json;
     let veth = json!({"ifname":"veth-a","linkinfo":{"info_kind":"veth"},"master":null});
     let links = json!([{"ifname":"lo"}, veth]);
-    let snap =
-        |l: &Value, r: Value, f: &str| format!("{:?}", check(l, &r, f, IsolationMode::Default));
+    let snap = |l: &Value, r: Value, f: &str| {
+        format!(
+            "{:?}",
+            check(l, &r, f, IsolationMode::Default, Side::Scanner)
+        )
+    };
     let rows = [
         snap(&links, json!([]), "0"),
         snap(
@@ -332,9 +339,14 @@ fn autodetect_mode_accepts_the_default_route_via_the_peer_and_the_permanent_neig
     use rmasscan_lab::capture::{
         check_isolation_neighbours, check_isolation_snapshot, check_route_get,
     };
-    let scanner = IsolationMode::Autodetect(Side::Scanner);
     assert_eq!(
-        check_isolation_snapshot(&ad_links(), &ad_routes(), "0", scanner),
+        check_isolation_snapshot(
+            &ad_links(),
+            &ad_routes(),
+            "0",
+            IsolationMode::Autodetect,
+            Side::Scanner
+        ),
         Ok(())
     );
     assert_eq!(check_isolation_neighbours(&ad_neigh(), "veth-a"), Ok(()));
@@ -347,13 +359,13 @@ fn autodetect_mode_accepts_the_default_route_via_the_peer_and_the_permanent_neig
     );
     // the peer namespace keeps the sealed shape
     let peer_links = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-b","linkinfo":{"info_kind":"veth"},"master":null}]);
-    let peer = IsolationMode::Autodetect(Side::Peer);
     assert_eq!(
         check_isolation_snapshot(
             &peer_links,
             &serde_json::json!([{"dst":"198.18.0.0/24","dev":"veth-b"}]),
             "0",
-            peer
+            IsolationMode::Autodetect,
+            Side::Peer
         ),
         Ok(())
     );
@@ -372,14 +384,20 @@ fn autodetect_mode_accepts_the_default_route_via_the_peer_and_the_permanent_neig
 fn autodetect_mode_refuses_a_default_route_in_the_peer_namespace() {
     use rmasscan_lab::capture::check_isolation_snapshot;
     let peer_links = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-b","linkinfo":{"info_kind":"veth"},"master":null}]);
-    let peer = IsolationMode::Autodetect(Side::Peer);
     for routes in [
         serde_json::json!([{"dst":"default","gateway":"198.18.0.1","dev":"veth-b"}]),
         serde_json::json!([{"dst":"default","dev":"veth-b"}]),
         serde_json::json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":"default","gateway":"198.18.0.1","dev":"veth-b"}]),
     ] {
         assert!(
-            check_isolation_snapshot(&peer_links, &routes, "0", peer).is_err(),
+            check_isolation_snapshot(
+                &peer_links,
+                &routes,
+                "0",
+                IsolationMode::Autodetect,
+                Side::Peer
+            )
+            .is_err(),
             "{routes}"
         );
     }
@@ -389,7 +407,8 @@ fn autodetect_mode_refuses_a_default_route_in_the_peer_namespace() {
             &ad_links(),
             &ad_routes(),
             "1",
-            IsolationMode::Autodetect(Side::Scanner)
+            IsolationMode::Autodetect,
+            Side::Scanner
         )
         .is_err()
     );
@@ -398,13 +417,21 @@ fn autodetect_mode_refuses_a_default_route_in_the_peer_namespace() {
 #[test]
 fn autodetect_mode_refuses_a_third_route_or_a_host_link() {
     use rmasscan_lab::capture::check_isolation_snapshot;
-    let scanner = IsolationMode::Autodetect(Side::Scanner);
     let mut third = ad_routes();
     third
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({"dst":"10.0.0.0/8","dev":"veth-a"}));
-    assert!(check_isolation_snapshot(&ad_links(), &third, "0", scanner).is_err());
+    assert!(
+        check_isolation_snapshot(
+            &ad_links(),
+            &third,
+            "0",
+            IsolationMode::Autodetect,
+            Side::Scanner
+        )
+        .is_err()
+    );
     // only the connected route, only the default route, the wrong gateway, the wrong device
     for routes in [
         serde_json::json!([{"dst":"198.18.0.0/24","dev":"veth-a"}]),
@@ -414,15 +441,40 @@ fn autodetect_mode_refuses_a_third_route_or_a_host_link() {
         serde_json::json!([{"dst":"default","gateway":"198.18.0.2","dev":"veth-a"},{"dst":"192.0.2.0/24","dev":"veth-a"}]),
     ] {
         assert!(
-            check_isolation_snapshot(&ad_links(), &routes, "0", scanner).is_err(),
+            check_isolation_snapshot(
+                &ad_links(),
+                &routes,
+                "0",
+                IsolationMode::Autodetect,
+                Side::Scanner
+            )
+            .is_err(),
             "{routes}"
         );
     }
     // a host link inside the namespace
     let hosted = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-a","linkinfo":{"info_kind":"veth"},"master":null},{"ifname":"eno1"}]);
-    assert!(check_isolation_snapshot(&hosted, &ad_routes(), "0", scanner).is_err());
+    assert!(
+        check_isolation_snapshot(
+            &hosted,
+            &ad_routes(),
+            "0",
+            IsolationMode::Autodetect,
+            Side::Scanner
+        )
+        .is_err()
+    );
     let bridged = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-a","linkinfo":{"info_kind":"veth"},"master":"br0"}]);
-    assert!(check_isolation_snapshot(&bridged, &ad_routes(), "0", scanner).is_err());
+    assert!(
+        check_isolation_snapshot(
+            &bridged,
+            &ad_routes(),
+            "0",
+            IsolationMode::Autodetect,
+            Side::Scanner
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -430,7 +482,7 @@ fn autodetect_mode_records_default_route_truthfully() {
     use rmasscan_lab::capture::{isolation_default_route, isolation_permits};
     let default = isolation_default_route(IsolationMode::Default, "unused");
     assert_eq!(default, serde_json::json!(false));
-    let scanner = isolation_default_route(IsolationMode::Autodetect(Side::Scanner), "veth-a");
+    let scanner = isolation_default_route(IsolationMode::Autodetect, "veth-a");
     assert_eq!(
         scanner,
         serde_json::json!({"scanner_ns": "via 198.18.0.2 dev veth-a", "peer_ns": false})
@@ -444,7 +496,7 @@ fn autodetect_mode_records_default_route_truthfully() {
     let truthful = serde_json::json!({"scanner_ns":"via 198.18.0.2 dev veth-a","peer_ns":false});
     assert!(isolation_permits(
         &doc(truthful.clone()),
-        IsolationMode::Autodetect(Side::Scanner)
+        IsolationMode::Autodetect
     ));
     // the default mode refuses any recorded default route; autodetect refuses a plain false-less lie
     assert!(!isolation_permits(
@@ -457,16 +509,13 @@ fn autodetect_mode_records_default_route_truthfully() {
     ));
     assert!(!isolation_permits(
         &doc(serde_json::json!(false)),
-        IsolationMode::Autodetect(Side::Scanner)
+        IsolationMode::Autodetect
     ));
     let peer_default = serde_json::json!({"scanner_ns":"via 198.18.0.2 dev veth-a","peer_ns":"via 198.18.0.1 dev veth-b"});
     assert!(!isolation_permits(
         &doc(peer_default),
-        IsolationMode::Autodetect(Side::Scanner)
+        IsolationMode::Autodetect
     ));
     let other = serde_json::json!({"scanner_ns":"via 10.0.0.1 dev eno1","peer_ns":false});
-    assert!(!isolation_permits(
-        &doc(other),
-        IsolationMode::Autodetect(Side::Scanner)
-    ));
+    assert!(!isolation_permits(&doc(other), IsolationMode::Autodetect));
 }

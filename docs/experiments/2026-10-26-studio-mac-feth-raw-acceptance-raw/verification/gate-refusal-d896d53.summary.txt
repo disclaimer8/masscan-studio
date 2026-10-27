@@ -1,0 +1,11 @@
+NOT RUN: nothing was started by the orchestrator.
+- macos-lab status exited rc 3 (rc 3: a check failed)
+- status raw_run_allowed is not true; failed checks: ["manifest: no stand recorded at /var/run/rmasscan-lab/m1.json", "interfaces: ifconfig feth4201: ifconfig: interface feth4201 does not exist", "default_route: no recorded default route to compare with", "lab_routes: route to 198.18.0.1 goes through Some(\"en0\"), not the pair", "arp: no permanent 198.18.0.1 -> 02:ac:00:00:00:01 entry on feth4202"]
+- status bpf_access is "denied", not "granted"
+- host listeners not recorded: netstat -an -p tcp failed, was empty or wrote to stderr
+- the runner of this exact bundle (cf22b14834291a5f363e6d42e2dd9ff3d7fc180ae1216cc413c0d13c352380b6) is not installed under /Library/PrivilegedHelperTools/MasscanStudio/: install the runner of this exact bundle first
+
+User action B (paste this one line into Terminal; it asks for your password, and install-runner shows the administrator dialog once), then rerun with a fresh --out:
+'$SCRATCH/target-live/studio/debug/xtask' install-runner '$REPO/studio/dist/runner-1793067307004' && sudo '$SCRATCH/target-live/rmasscan/release/rmasscan-lab' macos-lab up --run-id m1 && sudo '$SCRATCH/target-live/rmasscan/release/rmasscan-lab' macos-lab bpf-access --run-id m1 --grant
+
+The orchestrator never runs sudo itself. Use a fresh, empty --out directory for the next attempt.

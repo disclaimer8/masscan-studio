@@ -1,0 +1,4 @@
+NOT RUN: nothing was started by the orchestrator.
+- host listeners not recorded: netstat -an -p tcp failed, was empty or wrote to stderr
+
+The orchestrator never runs sudo itself. Use a fresh, empty --out directory for the next attempt.

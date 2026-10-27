@@ -1,0 +1,80 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 10.93s
+     Running unittests src/main.rs ($SCRATCH/target-live/rmasscan/debug/deps/rmasscan-95808a913174b577)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/differential.rs ($SCRATCH/target-live/rmasscan/debug/deps/differential-6b8f4d42627b8848)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.58s
+     Running unittests src/lib.rs ($SCRATCH/target-live/rmasscan/debug/deps/rmasscan_core-953cb687f6ee7c2f)
+test result: ok. 136 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+     Running tests/blackrock_golden.rs ($SCRATCH/target-live/rmasscan/debug/deps/blackrock_golden-fb0a96322472650a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/echo_golden.rs ($SCRATCH/target-live/rmasscan/debug/deps/echo_golden-761c94335a077e06)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/no_c_in_build.rs ($SCRATCH/target-live/rmasscan/debug/deps/no_c_in_build-167c16124a4da2e4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/offline_gen.rs ($SCRATCH/target-live/rmasscan/debug/deps/offline_gen-16c2d486f3b86e71)
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/probe_cursor.rs ($SCRATCH/target-live/rmasscan/debug/deps/probe_cursor-f342a1b83aafb370)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/proptest_order.rs ($SCRATCH/target-live/rmasscan/debug/deps/proptest_order-5ce52a05502518ec)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/receive.rs ($SCRATCH/target-live/rmasscan/debug/deps/receive-7e9a596c190d5927)
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/scan_golden.rs ($SCRATCH/target-live/rmasscan/debug/deps/scan_golden-a44a9ae0b7f44a80)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.25s
+     Running tests/selftest_parity.rs ($SCRATCH/target-live/rmasscan/debug/deps/selftest_parity-b286630c648b96e0)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/sha256_vectors.rs ($SCRATCH/target-live/rmasscan/debug/deps/sha256_vectors-e1c7e80138bcdbc7)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs ($SCRATCH/target-live/rmasscan/debug/deps/rmasscan_engine-ed58b51b32891210)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/backpressure.rs ($SCRATCH/target-live/rmasscan/debug/deps/backpressure-a4f315f6322809a6)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/bounded_memory.rs ($SCRATCH/target-live/rmasscan/debug/deps/bounded_memory-75fa28de461f03c6)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+     Running tests/identity.rs ($SCRATCH/target-live/rmasscan/debug/deps/identity-e0e68f35bf90520b)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/lifecycle.rs ($SCRATCH/target-live/rmasscan/debug/deps/lifecycle-1917fcd393f5374c)
+test result_batches_respect_event_batch_limit ... ok
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+     Running tests/pause_resume.rs ($SCRATCH/target-live/rmasscan/debug/deps/pause_resume-a7e89f027f9016c2)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/rx_integrity.rs ($SCRATCH/target-live/rmasscan/debug/deps/rx_integrity-99fa5fbca34bb7e0)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/tx_batch.rs ($SCRATCH/target-live/rmasscan/debug/deps/tx_batch-2fc774c9cc5b71c0)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+     Running tests/tx_stall.rs ($SCRATCH/target-live/rmasscan/debug/deps/tx_stall-1dbe37bc24933c67)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/lib.rs ($SCRATCH/target-live/rmasscan/debug/deps/rmasscan_lab-1e09d0ba7bbba08d)
+test result: ok. 706 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.95s
+     Running unittests src/main.rs ($SCRATCH/target-live/rmasscan/debug/deps/rmasscan_lab-95ef7c26b1699280)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/capture.rs ($SCRATCH/target-live/rmasscan/debug/deps/capture-44305f0443f05b4a)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/oracle_util.rs ($SCRATCH/target-live/rmasscan/debug/deps/oracle_util-a832c7e36219b9a2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/process_group.rs ($SCRATCH/target-live/rmasscan/debug/deps/process_group-331091c8aa420150)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rust_only.rs ($SCRATCH/target-live/rmasscan/debug/deps/rust_only-0cd7bec927a42413)
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.16s
+     Running tests/windows_evidence.rs ($SCRATCH/target-live/rmasscan/debug/deps/windows_evidence-5cba6313ad57d4aa)
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs ($SCRATCH/target-live/rmasscan/debug/deps/rmasscan_net-cbcf4973426993ed)
+test result: ok. 193 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 9.89s
+     Running tests/linux_io.rs ($SCRATCH/target-live/rmasscan/debug/deps/linux_io-e8bf4681e5e3693d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/linux_wire.rs ($SCRATCH/target-live/rmasscan/debug/deps/linux_wire-20ebb2e3835e75e5)
+test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/macos_live.rs ($SCRATCH/target-live/rmasscan/debug/deps/macos_live-2ce4e977a38969e5)
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_io.rs ($SCRATCH/target-live/rmasscan/debug/deps/windows_io-99c8019f4d317a63)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_live.rs ($SCRATCH/target-live/rmasscan/debug/deps/windows_live-f345251deafeefd4)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_core
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_engine
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_lab
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_net
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

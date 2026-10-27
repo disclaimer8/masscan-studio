@@ -1,0 +1,6 @@
+session-6b1deb5 (code 6b1deb5, runner cf22b148...), about 07:49
+Result: NOT RUN. Orchestrator rc 10, UI rc 1 "Authorization failed: Authorization timed out"; no scan started.
+studio-verify: overall NOT RUN rc 2 (verification/session-6b1deb5.verify.log, session-6b1deb5.verdict.json).
+Cause: the Studio Authorize dialog was shown at 07:49:08 and left unanswered; dismissed at 07:52:09 (authorization
+service log, controller analysis). Peer 0 frames, uplink 0 frames, leftover file empty. Not a code defect.
+The window directory is not copied into the repository; the verdict and this summary are the record.

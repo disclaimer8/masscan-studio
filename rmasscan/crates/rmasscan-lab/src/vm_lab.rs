@@ -536,6 +536,23 @@ fn isolation(h: &dyn Host, d: &Names) -> Result<Vec<String>, String> {
             v.push(format!("{n} not enslaved to bridge"));
         }
     }
+    if h.sh(
+        &[
+            "ip",
+            "netns",
+            "exec",
+            &d.netns,
+            "cat",
+            "/proc/sys/net/ipv4/ip_forward",
+        ],
+        false,
+    )
+    .map(|s| s.trim().to_string())
+    .as_deref()
+        != Ok("0")
+    {
+        v.push(format!("{}: ip_forward must be 0", d.netns));
+    }
     if !br.vlan_filtering {
         v.push("bridge vlan_filtering is off".into());
     }
@@ -825,6 +842,8 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
                         "sysctl",
                         "-qw",
                         "net.ipv6.conf.all.disable_ipv6=1",
+                        // A new netns copies the host's global value; the peer must not route.
+                        "net.ipv4.ip_forward=0",
                     ],
                     true,
                 )?;
@@ -1180,6 +1199,11 @@ mod ownership_tests {
                 if !self.ns.borrow_mut().insert(a[3].into()) {
                     return Err("namespace already exists".into());
                 }
+                // A new netns copies the host's global ip_forward.
+                let g = self.sysctl("net.ipv4.ip_forward").unwrap_or_default();
+                self.sysctls
+                    .borrow_mut()
+                    .insert(format!("netns:{}:net.ipv4.ip_forward", a[3]), g);
             } else if a.starts_with(&["ip", "netns", "del"]) {
                 self.ns.borrow_mut().remove(a[3]);
             } else if a.starts_with(&["ip", "link", "add"]) {
@@ -1221,6 +1245,27 @@ mod ownership_tests {
             {
                 // `sysctl -qw net.ipv4.conf.<n>.<key>=<v>` is stored under its dotted key.
                 self.sysctls.borrow_mut().insert(k.into(), v.into());
+            }
+            if a.starts_with(&["ip", "netns", "exec"]) && a.len() > 5 {
+                if a[4] == "sysctl" && a[5] == "-qw" {
+                    for kv in &a[6..] {
+                        if let Some((k, v)) = kv.split_once('=') {
+                            self.sysctls
+                                .borrow_mut()
+                                .insert(format!("netns:{}:{k}", a[3]), v.into());
+                        }
+                    }
+                } else if a[4] == "cat"
+                    && let Some(k) = a[5].strip_prefix("/proc/sys/")
+                {
+                    let key = format!("netns:{}:{}", a[3], k.replace('/', "."));
+                    return self
+                        .sysctls
+                        .borrow()
+                        .get(&key)
+                        .cloned()
+                        .ok_or("no such netns".into());
+                }
             }
             let joined = a.join(" ");
             if let Some((_, out)) = self
@@ -1949,6 +1994,32 @@ mod ownership_tests {
         assert_eq!(r["isolation_violations"], json!([]));
         assert_eq!(r["global_ip_forward"], "1");
         fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn peer_namespace_ip_forward_is_forced_to_zero_on_a_forwarding_host() {
+        let h = Fake::default();
+        set_sysctl(&h, "net.ipv4.ip_forward", "1");
+        let (p, _) = up(&h);
+        assert_eq!(
+            h.sysctls
+                .borrow()
+                .get("netns:wvp-t1:net.ipv4.ip_forward")
+                .map(String::as_str),
+            Some("0")
+        );
+        let (rc, r) = status(&h, &p);
+        assert_eq!(rc, 0, "{r}");
+        assert_eq!(r["isolation_violations"], json!([]));
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn peer_namespace_ip_forward_flipped_later_is_a_violation() {
+        break_and_expect(
+            |h| {
+                set_sysctl(h, "netns:wvp-t1:net.ipv4.ip_forward", "1");
+            },
+            "wvp-t1: ip_forward must be 0",
+        );
     }
     #[test]
     fn global_ip_forward_with_a_forwarding_lab_link_is_a_violation() {

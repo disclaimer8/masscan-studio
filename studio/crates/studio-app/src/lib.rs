@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 mod hosts;
 mod persistence;
+mod setup;
 use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::PathBuf,
@@ -41,6 +42,9 @@ pub enum Action {
     },
     InspectHost(String),
     CancelInspection,
+    CheckSetup,
+    InstallRunner,
+    CancelSetup,
     Authorize,
     Start(Job),
     Pause,
@@ -50,6 +54,12 @@ pub enum Action {
     Lock,
 }
 pub enum Update {
+    Setup {
+        busy: bool,
+        ready: bool,
+        installable: bool,
+        detail: String,
+    },
     HistoryResult(Result<String, String>),
     Clear,
     ProfileResult(Result<String, String>),
@@ -72,6 +82,8 @@ pub struct Controller {
     updates: mpsc::Receiver<Update>,
     stop: Arc<AtomicBool>,
     cancel_auth: Arc<AtomicBool>,
+    setup_pending: Arc<AtomicBool>,
+    cancel_setup: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -86,8 +98,11 @@ impl Controller {
         let cancel = cancel_auth.clone();
         let error = Arc::new(Mutex::new(None));
         let errors = error.clone();
+        let setup_pending = Arc::new(AtomicBool::new(false));
+        let cancel_setup = Arc::new(AtomicBool::new(false));
+        let setup_state = (setup_pending.clone(), cancel_setup.clone());
         let worker = thread::spawn(move || {
-            if let Err(e) = work(store, runner, rx, out, flag, cancel) {
+            if let Err(e) = work(store, runner, rx, out, flag, cancel, setup_state) {
                 *errors.lock().unwrap() = Some(e);
             }
         });
@@ -96,11 +111,26 @@ impl Controller {
             updates,
             stop,
             cancel_auth,
+            setup_pending,
+            cancel_setup,
             error,
             worker: Some(worker),
         })
     }
     pub fn send(&self, a: Action) -> Result<(), String> {
+        if matches!(a, Action::CancelSetup) {
+            self.cancel_setup.store(true, Ordering::Release);
+            return Ok(());
+        }
+        let setup = matches!(a, Action::CheckSetup | Action::InstallRunner);
+        if setup {
+            self.setup_pending
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map_err(|_| "Scanner setup is already in progress")?;
+            self.cancel_setup.store(false, Ordering::Release);
+        } else if self.setup_pending.load(Ordering::Acquire) {
+            return Err("Wait for scanner setup to finish, or cancel waiting in Setup".into());
+        }
         if matches!(a, Action::Authorize) {
             self.cancel_auth.store(false, Ordering::Release);
         }
@@ -108,9 +138,13 @@ impl Controller {
         if matches!(a, Action::Stop | Action::Lock) {
             self.cancel_auth.store(true, Ordering::Release);
         }
-        self.commands
-            .try_send(a)
-            .map_err(|_| "Application command queue is busy or closed".into())
+        if self.commands.try_send(a).is_err() {
+            if setup {
+                self.setup_pending.store(false, Ordering::Release);
+            }
+            return Err("Application command queue is busy or closed".into());
+        }
+        Ok(())
     }
     pub fn poll(&mut self) -> Vec<Update> {
         let mut out: Vec<_> = self.updates.try_iter().collect();
@@ -124,6 +158,7 @@ impl Drop for Controller {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         self.cancel_auth.store(true, Ordering::Release);
+        self.cancel_setup.store(true, Ordering::Release);
         if let Some(h) = self.worker.take() {
             let _ = h.join();
         }
@@ -212,7 +247,7 @@ impl Client {
         let installed = studio_platform::trusted::verify(&path, &hash);
         let auth = authorization::Authorized::open(&path, &hash, cancelled).map_err(|e| {
             if installed.is_err() {
-                format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
+                format!("{e}. Open Scanner setup to install the helper for this build.")
             } else {
                 e
             }
@@ -425,7 +460,10 @@ fn work(
     out: mpsc::SyncSender<Update>,
     stop: Arc<AtomicBool>,
     cancel_auth: Arc<AtomicBool>,
+    setup_state: (Arc<AtomicBool>, Arc<AtomicBool>),
 ) -> Result<(), String> {
+    let (setup_pending, cancel_setup) = setup_state;
+    let mut setup = setup::Setup::default();
     let mut client: Option<Client> = None;
     let mut hosts = hosts::Hosts::new(
         path.with_file_name(format!("studio-inspect{}", std::env::consts::EXE_SUFFIX)),
@@ -591,6 +629,30 @@ fn work(
                             Ok(info) => emit(&out, Update::Hosts(info))?,
                             Err(e) => emit(&out, Update::Notice(e))?,
                         },
+                        Action::CheckSetup | Action::InstallRunner => {
+                            emit(
+                                &out,
+                                Update::Setup {
+                                    busy: true,
+                                    ready: false,
+                                    installable: false,
+                                    detail: if matches!(action, Action::InstallRunner) {
+                                        "Waiting for system installation permission…"
+                                    } else {
+                                        "Checking the bundled scanner helper…"
+                                    }
+                                    .into(),
+                                },
+                            )?;
+                            let result = setup.perform(
+                                matches!(action, Action::InstallRunner),
+                                &path,
+                                active || client.as_ref().is_some_and(Client::is_authorized),
+                                &cancel_setup,
+                            );
+                            setup_pending.store(false, Ordering::Release);
+                            emit(&out, result)?;
+                        }
                         Action::Authorize if !active => {
                             client.take();
                             emit(

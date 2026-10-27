@@ -340,6 +340,11 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         }
         Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
+    let autodetect = match a.get("mode").map(String::as_str) {
+        None | Some("default") => false,
+        Some("autodetect") => true,
+        Some(other) => return Err(format!("unknown isolation mode {other}")),
+    };
     let before = fs::read_to_string(get(a, "host-links-before")?).map_err(err)?;
     let now_links = checked(&["ip", "-o", "link"])?;
     let mut names = now_links
@@ -354,6 +359,11 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     let mut endpoints = Vec::new();
     for (k, opt) in [("scanner", "ns-a"), ("peer", "ns-b")] {
         let ns = get(a, opt)?;
+        let mode = match (autodetect, k) {
+            (false, _) => IsolationMode::Default,
+            (true, "scanner") => IsolationMode::Autodetect(Side::Scanner),
+            (true, _) => IsolationMode::Autodetect(Side::Peer),
+        };
         let links: Value =
             serde_json::from_str(&checked(&["ip", "-n", ns, "-d", "-j", "link"])?).map_err(err)?;
         let routes: Value =
@@ -367,7 +377,7 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             "cat",
             "/proc/sys/net/ipv4/ip_forward",
         ])?;
-        check_isolation_snapshot(&links, &routes, &forwarding)?;
+        check_isolation_snapshot(&links, &routes, &forwarding, mode)?;
         let endpoint = links
             .as_array()
             .and_then(|ls| ls.iter().find(|x| x["ifname"] != "lo"))
@@ -392,15 +402,29 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         if !checked(&["ip", "-n", ns, "-6", "route", "show", "default"])?.is_empty() {
             return Err("IPv6 default route in lab".into());
         }
-        let unreachable = Command::new("ip")
+        let route_get = Command::new("ip")
             .args(["netns", "exec", ns, "ip", "route", "get", "8.8.8.8"])
             .output()
             .map_err(err)?;
-        if unreachable.status.success() {
-            return Err("lab has route to external IP".into());
+        if mode == IsolationMode::Autodetect(Side::Scanner) {
+            if !route_get.status.success() {
+                return Err("scanner namespace has no route to 8.8.8.8 via the peer".into());
+            }
+            let out = String::from_utf8_lossy(&route_get.stdout);
+            check_route_get(&out, iface)?;
+            check_isolation_neighbours(
+                &serde_json::from_str(&checked(&["ip", "-n", ns, "-j", "neigh", "show"])?)
+                    .map_err(err)?,
+                iface,
+            )?;
+            v[format!("{k}_route_get_8_8_8_8")] = json!(out.lines().next().unwrap_or_default());
+        } else {
+            if route_get.status.success() {
+                return Err("lab has route to external IP".into());
+            }
+            v[format!("{k}_route_get_8_8_8_8")] =
+                json!(String::from_utf8_lossy(&route_get.stderr).trim());
         }
-        v[format!("{k}_route_get_8_8_8_8")] =
-            json!(String::from_utf8_lossy(&unreachable.stderr).trim());
         v[format!("{k}_routes")] = json!(
             checked(&["ip", "-n", ns, "route", "show"])?
                 .lines()
@@ -420,14 +444,74 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             return Err("namespace veth endpoints are not paired".into());
         }
     }
+    if autodetect {
+        v["mode"] = json!("autodetect");
+        v["default_route"] = isolation_default_route(
+            IsolationMode::Autodetect(Side::Scanner),
+            endpoints[0]["ifname"].as_str().ok_or("veth missing")?,
+        );
+    }
     write_json(get(a, "out")?, &v)?;
     Ok(0)
+}
+
+/// Which namespace of the lab pair a snapshot describes (autodetect mode only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Scanner,
+    Peer,
+}
+
+/// Sealed-lab mode of `capture isolation`. `Default` is the original sealed lab (no default route
+/// anywhere). `Autodetect` is the stand for the scanner's auto-detection: the scanner namespace has
+/// exactly the connected route and a default route via the peer, plus permanent neighbours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IsolationMode {
+    Default,
+    Autodetect(Side),
+}
+
+const AUTODETECT_NET: &str = "198.18.0.0/24";
+const AUTODETECT_GATEWAY: &str = "198.18.0.2";
+const AUTODETECT_NEIGHBOURS: [&str; 4] = ["198.18.0.2", "198.18.0.3", "198.18.0.4", "198.18.0.5"];
+
+fn autodetect_via(iface: &str) -> String {
+    format!("via {AUTODETECT_GATEWAY} dev {iface}")
+}
+
+/// The `default_route` field of isolation.json, recorded as it is.
+pub fn isolation_default_route(mode: IsolationMode, scanner_iface: &str) -> Value {
+    match mode {
+        IsolationMode::Default => json!(false),
+        IsolationMode::Autodetect(_) => {
+            json!({"scanner_ns": autodetect_via(scanner_iface), "peer_ns": false})
+        }
+    }
+}
+
+/// Whether a recorded isolation.json document permits a run in `mode`.
+pub fn isolation_permits(v: &Value, mode: IsolationMode) -> bool {
+    let default_ok = match mode {
+        IsolationMode::Default => v["default_route"] == false,
+        IsolationMode::Autodetect(_) => {
+            v["default_route"]["scanner_ns"] == autodetect_via("veth-a")
+                && v["default_route"]["peer_ns"] == false
+                && v["default_route"].as_object().map(|o| o.len()) == Some(2)
+        }
+    };
+    ["uplink", "bridge", "nat"].iter().all(|k| v[*k] == false)
+        && default_ok
+        && v["ip_forward"].as_u64() == Some(0)
+        && v["ipv6"] == "disabled"
+        && v["veth_created_inside_scanner_ns_peer_moved_to_peer_ns"] == true
+        && v["host_link_list_unchanged"] == true
 }
 
 pub fn check_isolation_snapshot(
     links: &Value,
     routes: &Value,
     forwarding: &str,
+    mode: IsolationMode,
 ) -> Result<(), String> {
     let links = links.as_array().ok_or("invalid interface inventory")?;
     if links.len() != 2 || links.iter().filter(|l| l["ifname"] == "lo").count() != 1 {
@@ -441,17 +525,70 @@ pub fn check_isolation_snapshot(
         return Err("foreign link or bridge master in namespace".into());
     }
     let routes = routes.as_array().ok_or("invalid route inventory")?;
-    if routes.len() > 1
-        || routes
-            .iter()
-            .any(|r| r["dst"] == "default" || !r["gateway"].is_null())
-    {
-        return Err("unexpected route or gateway in lab".into());
+    match mode {
+        IsolationMode::Autodetect(Side::Scanner) => {
+            let dev = veth["ifname"].as_str().ok_or("veth name missing")?;
+            let connected = routes.iter().filter(|r| {
+                r["dst"] == AUTODETECT_NET && r["gateway"].is_null() && r["dev"] == dev
+            });
+            let default = routes.iter().filter(|r| {
+                r["dst"] == "default" && r["gateway"] == AUTODETECT_GATEWAY && r["dev"] == dev
+            });
+            if routes.len() != 2 || connected.count() != 1 || default.count() != 1 {
+                return Err("scanner namespace routes are not exactly the connected route and the default route via the peer".into());
+            }
+        }
+        IsolationMode::Default | IsolationMode::Autodetect(Side::Peer) => {
+            if routes.len() > 1
+                || routes
+                    .iter()
+                    .any(|r| r["dst"] == "default" || !r["gateway"].is_null())
+            {
+                return Err("unexpected route or gateway in lab".into());
+            }
+        }
     }
     if forwarding.trim() != "0" {
         return Err("namespace forwarding enabled or unknown".into());
     }
     Ok(())
+}
+
+/// Scanner namespace neighbours: 198.18.0.2-5 permanent on the lab veth, nothing from outside the /24.
+pub fn check_isolation_neighbours(neigh: &Value, iface: &str) -> Result<(), String> {
+    let list = neigh.as_array().ok_or("invalid neighbour inventory")?;
+    for want in AUTODETECT_NEIGHBOURS {
+        let ok = list.iter().any(|n| {
+            n["dst"] == want
+                && n["dev"] == iface
+                && n["state"]
+                    .as_array()
+                    .is_some_and(|s| s.iter().any(|x| x == "PERMANENT"))
+        });
+        if !ok {
+            return Err(format!("neighbour {want} is not permanent on {iface}"));
+        }
+    }
+    if list.iter().any(|n| {
+        !n["dst"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("198.18.0."))
+    }) {
+        return Err("neighbour outside the lab network".into());
+    }
+    Ok(())
+}
+
+/// `ip route get 8.8.8.8` in the scanner namespace must go via the peer on the lab veth.
+pub fn check_route_get(out: &str, iface: &str) -> Result<(), String> {
+    let first = out.lines().next().unwrap_or_default();
+    if first.starts_with(&format!("8.8.8.8 {} ", autodetect_via(iface)))
+        || first == format!("8.8.8.8 {}", autodetect_via(iface))
+    {
+        Ok(())
+    } else {
+        Err(format!("route get 8.8.8.8 is not via the peer: {first}"))
+    }
 }
 
 /// macOS: `capture marker` and `capture responder` are Linux-lab tools (CAP_NET_RAW inside a

@@ -1,4 +1,4 @@
-use rmasscan_lab::capture::classify;
+use rmasscan_lab::capture::{IsolationMode, Side, classify};
 #[test]
 fn a_queued_outgoing_tail_missing_from_the_pcap_does_not_pass_as_complete_capture() {
     // The interface counted 3 frames (window 3..3) but the pcap holds 2 and tcpdump retired 2:
@@ -26,12 +26,33 @@ fn a_queued_outgoing_tail_missing_from_the_pcap_does_not_pass_as_complete_captur
 fn isolation_refuses_an_extra_link_or_default_route() {
     use serde_json::json;
     let links = json!([{"ifname":"lo"},{"ifname":"veth-a","linkinfo":{"info_kind":"veth"}}]);
-    assert!(rmasscan_lab::capture::check_isolation_snapshot(&links, &json!([]), "0").is_ok());
     assert!(
-        rmasscan_lab::capture::check_isolation_snapshot(&links, &json!([{"dst":"default"}]), "0")
-            .is_err()
+        rmasscan_lab::capture::check_isolation_snapshot(
+            &links,
+            &json!([]),
+            "0",
+            IsolationMode::Default
+        )
+        .is_ok()
     );
-    assert!(rmasscan_lab::capture::check_isolation_snapshot(&links, &json!([]), "1").is_err());
+    assert!(
+        rmasscan_lab::capture::check_isolation_snapshot(
+            &links,
+            &json!([{"dst":"default"}]),
+            "0",
+            IsolationMode::Default
+        )
+        .is_err()
+    );
+    assert!(
+        rmasscan_lab::capture::check_isolation_snapshot(
+            &links,
+            &json!([]),
+            "1",
+            IsolationMode::Default
+        )
+        .is_err()
+    );
 }
 #[test]
 fn truncated_ipv4_options_are_classified_without_indexing_past_end() {
@@ -237,4 +258,215 @@ fn a_tampered_capture_meta_or_count_makes_the_manifest_invalid() {
         assert_eq!(rc, 3, "{tamper}");
         let _ = fs::remove_dir_all(dir);
     }
+}
+
+#[test]
+fn legacy_mode_is_byte_identical() {
+    use rmasscan_lab::capture::check_isolation_snapshot as check;
+    use serde_json::json;
+    let veth = json!({"ifname":"veth-a","linkinfo":{"info_kind":"veth"},"master":null});
+    let links = json!([{"ifname":"lo"}, veth]);
+    let snap =
+        |l: &Value, r: Value, f: &str| format!("{:?}", check(l, &r, f, IsolationMode::Default));
+    let rows = [
+        snap(&links, json!([]), "0"),
+        snap(
+            &links,
+            json!([{"dst":"198.18.0.0/24","dev":"veth-a"}]),
+            "0\n",
+        ),
+        snap(&links, json!([{"dst":"default"}]), "0"),
+        snap(&links, json!([{"dst":"x","gateway":"198.18.0.2"}]), "0"),
+        snap(&links, json!([{"dst":"a"},{"dst":"b"}]), "0"),
+        snap(&links, json!([]), "1"),
+        snap(&json!([{"ifname":"lo"}]), json!([]), "0"),
+        snap(&json!("x"), json!([]), "0"),
+        snap(&links, json!("x"), "0"),
+        snap(
+            &json!([{"ifname":"lo"},{"ifname":"v","linkinfo":{"info_kind":"bridge"}}]),
+            json!([]),
+            "0",
+        ),
+        snap(
+            &json!([{"ifname":"lo"},{"ifname":"v","linkinfo":{"info_kind":"veth"},"master":"br0"}]),
+            json!([]),
+            "0",
+        ),
+    ];
+    assert_eq!(
+        rows.join("\n"),
+        [
+            "Ok(())",
+            "Ok(())",
+            "Err(\"unexpected route or gateway in lab\")",
+            "Err(\"unexpected route or gateway in lab\")",
+            "Err(\"unexpected route or gateway in lab\")",
+            "Err(\"namespace forwarding enabled or unknown\")",
+            "Err(\"namespace must contain only lo and its veth\")",
+            "Err(\"invalid interface inventory\")",
+            "Err(\"invalid route inventory\")",
+            "Err(\"foreign link or bridge master in namespace\")",
+            "Err(\"foreign link or bridge master in namespace\")",
+        ]
+        .join("\n")
+    );
+}
+
+fn ad_links() -> serde_json::Value {
+    serde_json::json!([{"ifname":"lo"},{"ifname":"veth-a","linkinfo":{"info_kind":"veth"},"master":null}])
+}
+fn ad_routes() -> serde_json::Value {
+    serde_json::json!([
+        {"dst":"default","gateway":"198.18.0.2","dev":"veth-a","flags":[]},
+        {"dst":"198.18.0.0/24","dev":"veth-a","protocol":"kernel","scope":"link","prefsrc":"198.18.0.1"}
+    ])
+}
+fn ad_neigh() -> serde_json::Value {
+    serde_json::json!(["198.18.0.2", "198.18.0.3", "198.18.0.4", "198.18.0.5"].map(
+        |d| serde_json::json!({"dst":d,"dev":"veth-a","lladdr":"02:aa:00:00:00:02","state":["PERMANENT"]})
+    ))
+}
+
+#[test]
+fn autodetect_mode_accepts_the_default_route_via_the_peer_and_the_permanent_neighbours() {
+    use rmasscan_lab::capture::{
+        check_isolation_neighbours, check_isolation_snapshot, check_route_get,
+    };
+    let scanner = IsolationMode::Autodetect(Side::Scanner);
+    assert_eq!(
+        check_isolation_snapshot(&ad_links(), &ad_routes(), "0", scanner),
+        Ok(())
+    );
+    assert_eq!(check_isolation_neighbours(&ad_neigh(), "veth-a"), Ok(()));
+    assert_eq!(
+        check_route_get(
+            "8.8.8.8 via 198.18.0.2 dev veth-a src 198.18.0.1 uid 0\n    cache",
+            "veth-a"
+        ),
+        Ok(())
+    );
+    // the peer namespace keeps the sealed shape
+    let peer_links = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-b","linkinfo":{"info_kind":"veth"},"master":null}]);
+    let peer = IsolationMode::Autodetect(Side::Peer);
+    assert_eq!(
+        check_isolation_snapshot(
+            &peer_links,
+            &serde_json::json!([{"dst":"198.18.0.0/24","dev":"veth-b"}]),
+            "0",
+            peer
+        ),
+        Ok(())
+    );
+    // a missing or non-permanent neighbour, or a wrong route get, is refused
+    let mut n = ad_neigh();
+    n[2]["state"] = serde_json::json!(["REACHABLE"]);
+    assert!(check_isolation_neighbours(&n, "veth-a").is_err());
+    let mut n = ad_neigh();
+    n.as_array_mut().unwrap().pop();
+    assert!(check_isolation_neighbours(&n, "veth-a").is_err());
+    assert!(check_route_get("8.8.8.8 dev veth-a src 198.18.0.1", "veth-a").is_err());
+    assert!(check_route_get("8.8.8.8 via 198.18.0.3 dev veth-a", "veth-a").is_err());
+}
+
+#[test]
+fn autodetect_mode_refuses_a_default_route_in_the_peer_namespace() {
+    use rmasscan_lab::capture::check_isolation_snapshot;
+    let peer_links = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-b","linkinfo":{"info_kind":"veth"},"master":null}]);
+    let peer = IsolationMode::Autodetect(Side::Peer);
+    for routes in [
+        serde_json::json!([{"dst":"default","gateway":"198.18.0.1","dev":"veth-b"}]),
+        serde_json::json!([{"dst":"default","dev":"veth-b"}]),
+        serde_json::json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":"default","gateway":"198.18.0.1","dev":"veth-b"}]),
+    ] {
+        assert!(
+            check_isolation_snapshot(&peer_links, &routes, "0", peer).is_err(),
+            "{routes}"
+        );
+    }
+    // and the scanner side is refused when forwarding is on
+    assert!(
+        check_isolation_snapshot(
+            &ad_links(),
+            &ad_routes(),
+            "1",
+            IsolationMode::Autodetect(Side::Scanner)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn autodetect_mode_refuses_a_third_route_or_a_host_link() {
+    use rmasscan_lab::capture::check_isolation_snapshot;
+    let scanner = IsolationMode::Autodetect(Side::Scanner);
+    let mut third = ad_routes();
+    third
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"dst":"10.0.0.0/8","dev":"veth-a"}));
+    assert!(check_isolation_snapshot(&ad_links(), &third, "0", scanner).is_err());
+    // only the connected route, only the default route, the wrong gateway, the wrong device
+    for routes in [
+        serde_json::json!([{"dst":"198.18.0.0/24","dev":"veth-a"}]),
+        serde_json::json!([{"dst":"default","gateway":"198.18.0.2","dev":"veth-a"}]),
+        serde_json::json!([{"dst":"default","gateway":"198.18.0.3","dev":"veth-a"},{"dst":"198.18.0.0/24","dev":"veth-a"}]),
+        serde_json::json!([{"dst":"default","gateway":"198.18.0.2","dev":"eno1"},{"dst":"198.18.0.0/24","dev":"veth-a"}]),
+        serde_json::json!([{"dst":"default","gateway":"198.18.0.2","dev":"veth-a"},{"dst":"192.0.2.0/24","dev":"veth-a"}]),
+    ] {
+        assert!(
+            check_isolation_snapshot(&ad_links(), &routes, "0", scanner).is_err(),
+            "{routes}"
+        );
+    }
+    // a host link inside the namespace
+    let hosted = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-a","linkinfo":{"info_kind":"veth"},"master":null},{"ifname":"eno1"}]);
+    assert!(check_isolation_snapshot(&hosted, &ad_routes(), "0", scanner).is_err());
+    let bridged = serde_json::json!([{"ifname":"lo"},{"ifname":"veth-a","linkinfo":{"info_kind":"veth"},"master":"br0"}]);
+    assert!(check_isolation_snapshot(&bridged, &ad_routes(), "0", scanner).is_err());
+}
+
+#[test]
+fn autodetect_mode_records_default_route_truthfully() {
+    use rmasscan_lab::capture::{isolation_default_route, isolation_permits};
+    let default = isolation_default_route(IsolationMode::Default, "unused");
+    assert_eq!(default, serde_json::json!(false));
+    let scanner = isolation_default_route(IsolationMode::Autodetect(Side::Scanner), "veth-a");
+    assert_eq!(
+        scanner,
+        serde_json::json!({"scanner_ns": "via 198.18.0.2 dev veth-a", "peer_ns": false})
+    );
+    let doc = |d: serde_json::Value| {
+        serde_json::json!({
+            "uplink":false,"bridge":false,"nat":false,"default_route":d,"ip_forward":0,"ipv6":"disabled",
+            "veth_created_inside_scanner_ns_peer_moved_to_peer_ns":true,"host_link_list_unchanged":true
+        })
+    };
+    let truthful = serde_json::json!({"scanner_ns":"via 198.18.0.2 dev veth-a","peer_ns":false});
+    assert!(isolation_permits(
+        &doc(truthful.clone()),
+        IsolationMode::Autodetect(Side::Scanner)
+    ));
+    // the default mode refuses any recorded default route; autodetect refuses a plain false-less lie
+    assert!(!isolation_permits(
+        &doc(truthful.clone()),
+        IsolationMode::Default
+    ));
+    assert!(isolation_permits(
+        &doc(serde_json::json!(false)),
+        IsolationMode::Default
+    ));
+    assert!(!isolation_permits(
+        &doc(serde_json::json!(false)),
+        IsolationMode::Autodetect(Side::Scanner)
+    ));
+    let peer_default = serde_json::json!({"scanner_ns":"via 198.18.0.2 dev veth-a","peer_ns":"via 198.18.0.1 dev veth-b"});
+    assert!(!isolation_permits(
+        &doc(peer_default),
+        IsolationMode::Autodetect(Side::Scanner)
+    ));
+    let other = serde_json::json!({"scanner_ns":"via 10.0.0.1 dev eno1","peer_ns":false});
+    assert!(!isolation_permits(
+        &doc(other),
+        IsolationMode::Autodetect(Side::Scanner)
+    ));
 }

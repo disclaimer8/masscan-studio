@@ -1,0 +1,6 @@
+    Checking studio-platform v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-platform)
+   Compiling studio-ui v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-ui)
+    Checking studio-app v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-app)
+    Checking studio-runner v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-runner)
+    Checking xtask v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.05s

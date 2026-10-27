@@ -1,0 +1,19 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running `target/debug/xtask build`
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.39s
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/Frameworks/libsqlite3.0.dylib
+/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/Frameworks/libsqlite3.0.dylib: replacing existing signature
+/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/MacOS/studio-runner: replacing existing signature
+/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/MacOS/studio-inspect: replacing existing signature
+/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/MacOS/studio-ui: replacing existing signature
+/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app: replacing existing signature
+--prepared:/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/MacOS/studio-inspect
+--validated:/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/MacOS/studio-inspect
+--prepared:/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/Frameworks/libsqlite3.0.dylib
+--validated:/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/Frameworks/libsqlite3.0.dylib
+--prepared:/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/MacOS/studio-runner
+--validated:/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app/Contents/MacOS/studio-runner
+/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app: valid on disk
+/Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app: satisfies its Designated Requirement
+App: /Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940/Masscan Studio.app
+Artifacts: /Users/denyskolomiiets/masscan-studio-app/studio/dist/build-1793106251940

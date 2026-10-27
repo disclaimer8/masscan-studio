@@ -1,0 +1,6 @@
+7fc3fde70297a232e2585e1f3d42b59ff72f516611b469caa5d5fc755461e632  docs/experiments/2026-10-27-studio-runner-setup/cancellation-regression-red.log
+68bac5c3ff428c2d5d49ebffe520b2a8cadde5757823e35c7a7014297242e581  docs/experiments/2026-10-27-studio-runner-setup/clippy.log
+577a78afd45701d2a0c170f8729e5ea908567625055d1cc2d7d9e03fef6f40e1  docs/experiments/2026-10-27-studio-runner-setup/package-build.log
+da6d5b52edc1352f59fad1064e2691b3ba7c075c7f45881ce4f9bee0fef90cb8  docs/experiments/2026-10-27-studio-runner-setup/package-manifest.json
+34093bf34f77a7574e43cfd0a460a65467c803378c0c97707b520fb93a87d9b4  docs/experiments/2026-10-27-studio-runner-setup/setup-check.png
+daae9a25a4e9f64fda7616acf96d66391b2b9536f3c2a9d4afbb4d5ecc67ea5d  docs/experiments/2026-10-27-studio-runner-setup/workspace-tests.log

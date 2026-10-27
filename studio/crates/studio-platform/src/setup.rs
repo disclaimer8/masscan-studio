@@ -271,16 +271,51 @@ fn command(
         }
     })();
     if result.is_err() {
-        let _ = child.kill();
+        cleanup(child, std::process::Child::kill);
     }
-    let _ = child.wait();
     result
+}
+
+fn cleanup(
+    mut child: std::process::Child,
+    terminate: impl FnOnce(&mut std::process::Child) -> std::io::Result<()>,
+) {
+    let _ = terminate(&mut child);
+    // pkexec may already be root; kill can fail with EPERM. Never join that
+    // process on the controller thread, including during Controller::drop.
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("studio-setup-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
+    #[cfg(unix)]
+    #[test]
+    fn setup_failed_termination_does_not_block_cancellation() {
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("0.5")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let start = std::time::Instant::now();
+        cleanup(child, |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        });
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(300),
+            "cleanup waited for an unkillable elevated child"
+        );
+    }
     #[cfg(unix)]
     fn shell(script: &str, cancel: &AtomicBool, timeout: std::time::Duration) -> Result<String> {
         command(

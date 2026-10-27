@@ -555,29 +555,38 @@ mod tests {
         assert_eq!(error_text("x"), "rmasscan: error: x");
     }
 
-    /// Заполнитель Darwin и групповой MAC не становятся source MAC и в герметичном `--offline` (ОС не опрашивается).
+    /// Заполнитель Darwin и групповой MAC не становятся source MAC ни в герметичном `--offline` (IP, MAC и порт заданы,
+    /// ОС не опрашивается), ни в `--offline` с обнаружением (порт не задан: интерфейс найден по маршруту).
     #[test]
     fn offline_with_an_unusable_explicit_mac_is_refused() {
         for mac in ["02-00-00-00-00-00", "01-00-5e-00-00-01"] {
-            let e = run_args(&[
-                "rmasscan",
-                "--offline",
-                "10.0.0.1",
-                "-p80",
-                "--seed",
-                "1",
-                "--adapter-ip",
-                "10.255.0.1",
-                "--adapter-mac",
-                mac,
-            ])
-            .unwrap_err();
-            assert_eq!(
-                e,
-                "[-] FAIL: failed to detect MAC address of interface: \"offline\"\n \
-                 [hint] try something like \"--source-mac 00-11-22-33-44-55\"",
-                "{mac}"
-            );
+            for (port, iface) in [
+                (&["--source-port", "40000"][..], "offline"),
+                (&[][..], "eth0"),
+            ] {
+                let mut args = vec![
+                    "rmasscan",
+                    "--offline",
+                    "10.0.0.1",
+                    "-p80",
+                    "--seed",
+                    "1",
+                    "--adapter-ip",
+                    "10.255.0.1",
+                    "--adapter-mac",
+                    mac,
+                ];
+                args.extend_from_slice(port);
+                let e = run_args(&args).unwrap_err();
+                assert_eq!(
+                    e,
+                    format!(
+                        "[-] FAIL: failed to detect MAC address of interface: \"{iface}\"\n \
+                         [hint] try something like \"--source-mac 00-11-22-33-44-55\""
+                    ),
+                    "{mac} {port:?}"
+                );
+            }
         }
     }
 

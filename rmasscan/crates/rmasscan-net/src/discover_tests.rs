@@ -721,6 +721,22 @@ fn placeholder_and_multicast_adapter_mac_overrides_are_refused() {
     }
 }
 
+/// Публичный предикат, который зовёт и `detect`, и герметичный `--offline` CLI: одно правило на оба пути.
+#[test]
+fn usable_source_mac_refuses_zero_placeholder_and_group_macs() {
+    assert!(usable_source_mac(MAC_A));
+    assert!(usable_source_mac([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]));
+    for m in [
+        [0; 6],
+        [0x02, 0, 0, 0, 0, 0],
+        [0x01, 0, 0x5e, 0, 0, 1],
+        [0x33, 0x33, 0, 0, 0, 1],
+        [0xff; 6],
+    ] {
+        assert!(!usable_source_mac(m), "{m:?}");
+    }
+}
+
 #[test]
 fn placeholder_mac_reported_unmasked_by_a_backend_is_refused() {
     let (routes, _) = eth0_world();

@@ -191,7 +191,10 @@ const OFFLINE_ROUTER_MAC: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
 /// Заполнитель Darwin для скрытого MAC: никогда не становится source MAC.
 const DARWIN_PLACEHOLDER_MAC: [u8; 6] = [0x02, 0, 0, 0, 0, 0];
 
-fn usable_mac(m: [u8; 6]) -> bool {
+/// Годится ли MAC как source MAC кадров: не нулевой, не заполнитель Darwin `02:00:00:00:00:00` (скрытый ОС MAC) и не
+/// групповой/широковещательный (младший бит первого октета). Единое правило для [`detect`]/[`detect_offline`] и для
+/// вызывающих, которые берут явный MAC без обнаружения (герметичный `--offline` CLI).
+pub fn usable_source_mac(m: [u8; 6]) -> bool {
     m != [0; 6] && m != DARWIN_PLACEHOLDER_MAC && m[0] & 1 == 0
 }
 
@@ -279,11 +282,11 @@ fn choose(
         (None, None) => return Err(DetectError::NoIpv4(iface.name)),
     };
     let source_mac = match ov.adapter_mac {
-        Some(m) if usable_mac(m) => (m, Source::Given),
+        Some(m) if usable_source_mac(m) => (m, Source::Given),
         Some(_) => return Err(DetectError::NoMac(iface.name)),
         None if iface.mac_masked => return Err(DetectError::MacMasked(iface.name)),
         None => match iface.mac {
-            Some(m) if usable_mac(m) => (m, Source::Detected),
+            Some(m) if usable_source_mac(m) => (m, Source::Detected),
             _ => return Err(DetectError::NoMac(iface.name)),
         },
     };

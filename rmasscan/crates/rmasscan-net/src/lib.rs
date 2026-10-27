@@ -46,6 +46,9 @@ mod drop_counter;
 #[cfg(any(windows, test))]
 mod windows;
 
+// Логика обнаружения адаптера/источника/следующего хопа над швами `RouteTable`/`Interfaces`: безопасная, без ОС.
+pub mod discover;
+
 /// Ошибка открытия адаптера.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NetError {

@@ -4,6 +4,8 @@
 //! [`RouteTable`] и [`Interfaces`] (их реализуют бэкенды ОС). Одна пара «интерфейс, следующий хоп» на скан;
 //! маршруты по умолчанию берутся только из [`RouteTable::default_routes`], lookup `0.0.0.0` не используется.
 
+#![forbid(unsafe_code)]
+
 use std::net::Ipv4Addr;
 
 use rmasscan_core::massip::MassIp;
@@ -98,6 +100,9 @@ pub struct Detected {
     pub next_hop: NextHop,
 }
 
+/// Подсказки masscan для отказов маршрутизатора (C `main-initadapter.c:196–198`).
+const ROUTER_HINTS: &str = "\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface";
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DetectError {
     #[error(
@@ -111,6 +116,7 @@ pub enum DetectError {
     )]
     LocalTarget { ip: Ipv4Addr, ifname: String },
     #[error("FAIL: targets are routed differently ({} via {}, {} via {})\n    [hint] try \"--interface ethX\"", .first.0, .first.1, .last.0, .last.1)]
+    /// Первая и последняя цель идут разными маршрутами (только без `--adapter`).
     SplitRoutes {
         first: (Ipv4Addr, String),
         last: (Ipv4Addr, String),
@@ -134,10 +140,20 @@ pub enum DetectError {
     )]
     NoMac(String),
     #[error(
-        "FAIL: no default gateway on interface \"{ifname}\" for several on-link targets\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface"
+        "FAIL: no default gateway on interface \"{ifname}\" for several on-link targets{}",
+        ROUTER_HINTS
     )]
     NoGateway { ifname: String },
-    #[error("{0}")]
+    #[error(
+        "FAIL: route doesn't match interface: {ip} is routed via {route_ifname}, not \"{adapter}\"{}",
+        ROUTER_HINTS
+    )]
+    RouteNotViaAdapter {
+        ip: Ipv4Addr,
+        adapter: String,
+        route_ifname: String,
+    },
+    #[error("FAIL: {0}")]
     Os(#[from] NetError),
 }
 
@@ -172,8 +188,11 @@ pub fn probe_targets(massip: &MassIp) -> Option<Targets> {
 /// Фиктивный MAC шлюза для `--offline` (C `main-initadapter.c:163`).
 const OFFLINE_ROUTER_MAC: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
 
+/// Заполнитель Darwin для скрытого MAC: никогда не становится source MAC.
+const DARWIN_PLACEHOLDER_MAC: [u8; 6] = [0x02, 0, 0, 0, 0, 0];
+
 fn usable_mac(m: [u8; 6]) -> bool {
-    m != [0; 6] && m[0] & 1 == 0
+    m != [0; 6] && m != DARWIN_PLACEHOLDER_MAC && m[0] & 1 == 0
 }
 
 /// Маршрут к целям-пробам: первая и последняя цель обязаны дать один интерфейс и один шлюз.
@@ -294,13 +313,22 @@ fn next_hop(
     }
     let route = match &c.route {
         Some(r) => r.clone(),
-        None => route_for_targets(t, routes)?,
+        None => match route_for_targets(t, routes) {
+            // `--adapter` без маршрута к цели: поведение C на Linux, отказ маршрутизатора
+            Err(DetectError::NoRoute(_)) => {
+                return Err(DetectError::NoGateway {
+                    ifname: c.iface.name.clone(),
+                });
+            }
+            other => other?,
+        },
     };
     if route.ifindex != c.iface.index {
-        // `--adapter` указывает не на интерфейс маршрута к целям
-        return Err(DetectError::SplitRoutes {
-            first: (t.first, c.iface.name.clone()),
-            last: (t.first, route.ifname),
+        // `--adapter` указывает не на интерфейс маршрута к целям (C `rawsock-getroute.c:211`)
+        return Err(DetectError::RouteNotViaAdapter {
+            ip: t.first,
+            adapter: c.iface.name.clone(),
+            route_ifname: route.ifname,
         });
     }
     if let Some(g) = route.gateway {

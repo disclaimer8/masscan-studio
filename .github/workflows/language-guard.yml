@@ -18,7 +18,7 @@ jobs:
     name: no interpreted programs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Tracked sources and scripts
         run: bash scripts/language-guard.sh
       - name: No tracked banned source files

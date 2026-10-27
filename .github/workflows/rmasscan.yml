@@ -40,7 +40,7 @@ jobs:
         shell: bash
         working-directory: rmasscan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Все шаги идут в bash на всех ОС (`defaults.run.shell: bash`; на Windows
       # это Git Bash), так что поведение команд одинаково на трёх ОС.
@@ -110,7 +110,7 @@ jobs:
         shell: pwsh
         working-directory: rmasscan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.PACKAGE_COMMIT }}
 

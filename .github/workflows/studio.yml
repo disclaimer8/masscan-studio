@@ -26,7 +26,7 @@ jobs:
         working-directory: studio
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust toolchain
         run: |
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy

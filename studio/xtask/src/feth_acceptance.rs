@@ -2775,7 +2775,7 @@ tcp4       0      0  192.168.1.5.8002       *.*                    ESTABLISHED\n
     fn the_leftover_file_holds_leftovers_only() {
         let (root, o, mut f, _) = setup("lsofprivacy");
         f.lsof_out = Some(
-            "Viber 1 u 5u IPv4 0x1 0t0 TCP *:5000 (LISTEN)\nollama 2 u 3u IPv4 0x2 0t0 TCP 127.0.0.1:11434 (LISTEN)\n"
+            "appA 1 u 5u IPv4 0x1 0t0 TCP *:5000 (LISTEN)\nappB 2 u 3u IPv4 0x2 0t0 TCP 127.0.0.1:11434 (LISTEN)\n"
                 .into(),
         );
         run(&mut f, &o).unwrap();

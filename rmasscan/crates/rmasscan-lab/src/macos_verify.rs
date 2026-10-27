@@ -273,12 +273,12 @@ fn flags_of(cmd: &[&str]) -> Option<(String, Vec<String>)> {
     }
     Some((iface?, tail))
 }
-/// `who` is `peer` (every frame of the peer interface, no filter) or `uplink` (the default-route
-/// interface of the status gate, the lab filter).
 /// The only filter a peer witness may carry: it drops the host's own mDNS announcements (the host owns
 /// 198.18.0.2 on the peer interface and announces its name there; that must not be published) and nothing else.
 pub(crate) const PEER_FILTER: &str = "not (ether src 02:ac:00:00:00:02 and udp port 5353)";
 
+/// `who` is `peer` (every frame of the peer interface: no filter, or exactly `PEER_FILTER`) or `uplink` (the
+/// default-route interface of the status gate, the lab filter).
 pub(crate) fn capture_command(
     c: &Value,
     who: &str,

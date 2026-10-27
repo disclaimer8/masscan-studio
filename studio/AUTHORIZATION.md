@@ -5,6 +5,33 @@ Windows same-account desktop UAC and elevated runner lifetime passed native
 acceptance on 2026-10-26. Trusted installation remains a separate prerequisite.
 See VERIFICATION.md for exact package provenance and acceptance limits.
 
+## Explicit installation from Studio
+
+Scanner setup checks a hash-pinned bundle source; only Install invokes elevation.
+Check and Install are serialized with other controller commands. Active scans and
+authorized sessions refuse setup; Stop/Lock must complete first. Installation
+never sends IPC commands, authorizes a session or opens packet adapters.
+
+macOS uses the existing inline osascript installer; Linux uses the existing inline
+pkexec installer. Neither executes a mutable script file. Source validation and
+hash comparison precede elevation; the protected staging copy is hash-checked
+again before atomic placement. The destination is verified afterward. Existing
+invalid destinations are errors, not overwrite/repair requests.
+
+Windows starts a dedicated **unprivileged** bundled runner with `--setup-install
+<expected-hash>`. That entry clears its process environment using the existing
+Windows runner allowlist and verifies its own hash. It then pins the administrator-
+owned Program Files/PowerShell/7/pwsh.exe and ancestors, invokes it through UAC
+with the existing installer text as a quoted argument, and retains the pins while
+waiting. Elevated setup entry is refused. The setup subprocess owns no scanner,
+IPC endpoint or authorization session; its parent may terminate it on cancellation.
+System-wide PowerShell 7 is a prerequisite. No PATH/user PowerShell fallback exists.
+
+Waiting is bounded to 180 seconds. Cancellation/close terminates the ordinary
+launcher and returns without asserting rollback: an approved privileged copy can
+finish independently. Users must dismiss a remaining OS prompt and Check again
+before retrying. No cancellation result is displayed as a verified installation.
+
 ## Threat model and identity
 
 Protect against other unprivileged local users, stale/foreign sessions, frame
@@ -148,7 +175,7 @@ Polling can miss transient changes between observations. OS-tool output is not
 an atomic network snapshot; this does not guarantee zero transmitted packets
 after drift or detect every interface recreation with identical configuration.
 The observer currently covers the fixed Mac feth profile only. Linux/Windows raw
-observers, physical NIC identity, native sleep hooks and live drift capture remain
+observers, physical NIC identity and native sleep hooks remain
 separate acceptance work. RAW_SCANNING_ENABLED remains false.
 
 ## Acceptance still required
@@ -157,8 +184,9 @@ separate acceptance work. RAW_SCANNING_ENABLED remains false.
   VERIFICATION.md separately from offline tests and from engine Stage 2C.
 - Mac feth on macOS: Authorize, Start, Pause, Resume and Stop through Studio with independent
   packet capture passed once on a sealed `feth` pair (see VERIFICATION.md,
-  2026-10-26). Still NOT RUN: Resume after a Studio restart on raw, sleep/wake, VPN, mid-scan
-  network drift in a live window.
+  2026-10-26). Restart/resume and live permanent-ARP drift passed the bounded
+  2026-10-27 acceptance (`docs/experiments/2026-10-27-studio-restart-guard.md`).
+  Still NOT RUN: sleep/wake, VPN and other live drift scenarios.
 - Windows and Linux raw profiles stay closed (`raw_profile_enabled` is false there) until
   their own live acceptance passes.
 - Windows alternate-account UAC refusal still needs a real second-account test;

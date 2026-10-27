@@ -415,6 +415,243 @@ fn verdict_of(m: &mut Model) -> Value {
     fs::remove_dir_all(d).ok();
     v
 }
+
+fn stage_model(stage: &str) -> Model {
+    let mut m = Model::consistent();
+    let resume = stage == "resume";
+    let guard = stage == "guard";
+    let offset = if resume { 20.0 } else { 0.0 };
+    let job = json!({"targets":PEER_IP,"ports":if guard {"8000-8255"} else {"8000-8031"},"exclusions":"","seed":"2","rate":4,"backend":"MacFeth"});
+    let frames = plan_frames_for_job(&job).unwrap();
+    let (lo, hi) = if resume { (7, 32) } else { (0, 7) };
+    m.syns = vec![
+        frames[lo..hi]
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (T0 + offset + 3.2 + i as f64 * 0.25, f.clone()))
+            .collect(),
+    ];
+    m.replies = vec![
+        m.syns[0]
+            .iter()
+            .map(|(t, f)| (*t + 0.01, reply_to(f, true)))
+            .collect(),
+    ];
+    let status = if resume {
+        "Completed"
+    } else if guard {
+        "Interrupted"
+    } else {
+        "Paused"
+    };
+    let end = if resume {
+        13.0
+    } else if guard {
+        5.5
+    } else {
+        7.7
+    };
+    let detail = if guard {
+        "Attempt interrupted: Static ARP changed or unavailable. Start a new scan after checking the network."
+    } else if resume {
+        "done"
+    } else {
+        PAUSE_ACK_TEXT
+    };
+    let scan_id = "11".repeat(16);
+    let attempt = if resume { "33" } else { "22" }.repeat(16);
+    let rows = frames[..hi]
+        .iter()
+        .map(|f| json!({"ip":PEER_IP,"port":tcp(f).unwrap().dp,"open":true}))
+        .collect::<Vec<_>>();
+    m.history = json!({"scans":[{"scan_id_hex":scan_id,"attempt_hex":attempt,"job":job,"status":status,"detail":detail,"checkpoint_len":if stage=="pause" {100} else {0},"next_index":if stage=="pause" {json!(7)} else {Value::Null},"rows":rows,"sequence":null}]});
+    let mut actions = vec![action(offset + 1.0, "Authorize")];
+    if resume {
+        actions.push(action(offset + 2.1, &format!("Select:{scan_id}")));
+    }
+    actions.push(action(
+        offset + 3.0,
+        if resume {
+            "Resume"
+        } else if guard {
+            "Start:guard"
+        } else {
+            "Start:restart"
+        },
+    ));
+    if stage == "pause" {
+        actions.push(action(offset + 4.6, "Pause"));
+    }
+    actions.push(action(offset + end + 0.1, "Lock"));
+    let mut auth = event(offset + 1.5, "Authorization", "", "authorized");
+    auth["authorized"] = json!(true);
+    let events = vec![
+        auth,
+        event(offset + 2.0, "Notice", "", "Network preflight passed"),
+        event(offset + 3.1, "State", "Scanning", "scanning"),
+        event(offset + end, "State", status, detail),
+        event(offset + end + 0.2, "Notice", "", "Runner session closed"),
+    ];
+    m.smoke = Some(
+        json!({"schema":1,"stage":stage,"process_id":if resume {200} else {100},"prior_attempt_hex":if resume {json!("22".repeat(16))} else {Value::Null},"result":"ok","actions":actions,"events":events,"plan":[{"tag":if guard {"guard"} else {"restart"},"job":job,"scan_id_hex":scan_id,"finished_status":status,"paused_next_index":if guard {Value::Null} else {json!(7)}}]}),
+    );
+    m.edit("window.json", |v| {
+        v["stage"] = json!(stage);
+        v["pids"] = json!([{"name":"ui","pid":if resume {200} else {100}}]);
+        v["started_utc"] = json!(utc(T0 + offset - 5.0));
+        v["ended_utc"] = json!(utc(T0 + offset + end + 5.0));
+    });
+    for file in ["peer.cmd.json", "uplink.cmd.json"] {
+        m.edit(file, |v| {
+            v["start_utc"] = json!(utc(T0 + offset - 5.0));
+            v["stop_utc"] = json!(utc(T0 + offset + end + 6.0));
+        });
+    }
+    if guard {
+        m.extra.insert(
+            "restored-arp.txt".into(),
+            b"? (198.18.0.1) at 2:ac:0:0:0:1 on feth4202 ifscope permanent [ethernet]\n".to_vec(),
+        );
+        m.extra.insert(
+            "guard-ready.json".into(),
+            pretty(&json!({"schema":1,"pid":100,"utc":utc(T0+3.1)})),
+        );
+        m.extra.insert("guard-change.json".into(), pretty(&json!({"schema":1,"interface":PEER_IF,"source_ip":SCANNER_IP,"removed_utc":utc(T0+4.8),"restored_utc":utc(T0+9.8),"remove_exit":0,"restore_exit":0})));
+    }
+    m
+}
+
+fn stage_pair() -> (PathBuf, PathBuf) {
+    let mut pause = stage_model("pause");
+    let p = pause.write();
+    let mut resume = stage_model("resume");
+    resume
+        .extra
+        .insert("history-before.json".into(), pretty(&pause.history));
+    resume.extra.insert(
+        "data-before.sha256".into(),
+        pause.extra["data.sha256"].clone(),
+    );
+    (p, resume.write())
+}
+
+#[test]
+fn restart_windows_require_a_different_process_and_exact_packet_continuation() {
+    let (p, r) = stage_pair();
+    let verify = || verify_restart(&r, &p, None);
+    let good = verify();
+    assert_eq!(good["overall"], PASS, "{good:#}");
+    let original = fs::read(r.join("smoke.json")).unwrap();
+    let mut sm: Value = serde_json::from_slice(&original).unwrap();
+    sm["process_id"] = json!(100);
+    write_file(&r, "smoke.json", &pretty(&sm));
+    rehash(&r, "smoke.json");
+    assert_ne!(verify()["overall"], PASS);
+    sm["process_id"] = json!(999);
+    write_file(&r, "smoke.json", &pretty(&sm));
+    rehash(&r, "smoke.json");
+    assert_ne!(
+        verify()["overall"],
+        PASS,
+        "chronicle PID must be the process the orchestrator spawned"
+    );
+    write_file(&r, "smoke.json", &original);
+    rehash(&r, "smoke.json");
+    let original = fs::read(r.join("peer.pcap")).unwrap();
+    let mut model = stage_model("resume");
+    model.syns[0].remove(0);
+    write_file(&r, "peer.pcap", &pcap::encode(&model.peer_frames()));
+    rehash(&r, "peer.pcap");
+    let frames = model.peer_frames().len();
+    let stats = fs::read(r.join("peer.err")).unwrap();
+    write_file(
+        &r,
+        "peer.err",
+        tcpdump_err_on(PEER_IF, frames, frames, 0).as_bytes(),
+    );
+    rehash(&r, "peer.err");
+    assert_ne!(verify()["overall"], PASS);
+    write_file(&r, "peer.pcap", &original);
+    rehash(&r, "peer.pcap");
+    write_file(&r, "peer.err", &stats);
+    rehash(&r, "peer.err");
+    write_file(
+        &r,
+        "data-before.sha256",
+        format!("{}  history.sqlite3\n", "00".repeat(32)).as_bytes(),
+    );
+    rehash(&r, "data-before.sha256");
+    assert_ne!(verify()["overall"], PASS);
+    fs::remove_dir_all(p).unwrap();
+    fs::remove_dir_all(r).unwrap();
+}
+
+#[test]
+fn restart_requires_actual_prior_rows_and_preserves_them() {
+    let mut pause = stage_model("pause");
+    pause.replies[0].clear();
+    pause.rows_mut(0).clear();
+    let p = pause.write();
+    let mut resume = stage_model("resume");
+    resume.rows_mut(0).drain(..7);
+    resume
+        .extra
+        .insert("history-before.json".into(), pretty(&pause.history));
+    resume.extra.insert(
+        "data-before.sha256".into(),
+        pause.extra["data.sha256"].clone(),
+    );
+    let r = resume.write();
+    assert_ne!(
+        verify_restart(&r, &p, None)["overall"],
+        PASS,
+        "empty prior history cannot prove result retention"
+    );
+    fs::remove_dir_all(p).unwrap();
+    fs::remove_dir_all(r).unwrap();
+
+    let (p, r) = stage_pair();
+    let mut h = read_json(r.join("history.json")).unwrap();
+    h["scans"][0]["rows"].as_array_mut().unwrap().remove(0);
+    write_file(&r, "history.json", &pretty(&h));
+    rehash(&r, "history.json");
+    assert_ne!(
+        verify_restart(&r, &p, None)["overall"],
+        PASS,
+        "a saved row lost at restart cannot pass"
+    );
+    fs::remove_dir_all(p).unwrap();
+    fs::remove_dir_all(r).unwrap();
+}
+
+#[test]
+fn guard_requires_observed_permanent_mapping_after_successful_arp_command() {
+    for arp in [
+        "",
+        "? (198.18.0.1) at (incomplete) on feth4202 ifscope [ethernet]",
+        "? (198.18.0.1) at 2:ac:0:0:0:2 on feth4202 ifscope permanent [ethernet]",
+    ] {
+        let mut m = stage_model("guard");
+        m.extra
+            .insert("restored-arp.txt".into(), arp.as_bytes().to_vec());
+        assert_ne!(verdict_of(&mut m)["overall"], PASS, "{arp}");
+    }
+}
+
+#[test]
+fn guard_window_requires_real_change_guard_reason_and_no_checkpoint() {
+    let mut m = stage_model("guard");
+    let good = verdict_of(&mut m);
+    assert_eq!(good["overall"], PASS, "{good:#}");
+    m.history["scans"][0]["checkpoint_len"] = json!(100);
+    assert_ne!(verdict_of(&mut m)["overall"], PASS);
+    m.history["scans"][0]["checkpoint_len"] = json!(0);
+    m.smoke.as_mut().unwrap()["events"][3]["detail"] = json!("runner disconnected");
+    assert_ne!(verdict_of(&mut m)["overall"], PASS);
+    let mut m = stage_model("guard");
+    m.skip.push("guard-change.json");
+    assert_ne!(verdict_of(&mut m)["overall"], PASS);
+}
 fn overall(v: &Value) -> &str {
     s(&v["overall"])
 }

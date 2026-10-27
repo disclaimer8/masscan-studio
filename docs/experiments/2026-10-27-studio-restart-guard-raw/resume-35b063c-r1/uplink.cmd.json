@@ -1,0 +1,21 @@
+{
+  "cmd": [
+    "/usr/sbin/tcpdump",
+    "-p",
+    "-n",
+    "-U",
+    "-s",
+    "0",
+    "-i",
+    "en0",
+    "-w",
+    "uplink.pcap",
+    "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5"
+  ],
+  "exit_code": 0,
+  "filter": "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5",
+  "interface": "en0",
+  "listening": true,
+  "start_utc": "2026-10-27T11:01:05.534Z",
+  "stop_utc": "2026-10-27T11:01:31.870Z"
+}

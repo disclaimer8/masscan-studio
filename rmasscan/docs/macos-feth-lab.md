@@ -454,6 +454,14 @@ Linux are unchanged):
 
 ## Studio acceptance (`studio-verify`)
 
+Restart/guard extension: `studio-verify --dir RESUME --pause-dir PAUSE --out FILE`
+checks two independent windows of the same persisted job. Without `--pause-dir`,
+a resume window cannot PASS. A window with `stage: "guard"` requires the recorded
+lab-only ARP removal/restoration as well as the production interruption and no
+checkpoint. Both modes retain all standard capture/isolation/provenance checks.
+See [procedure](../../docs/experiments/2026-10-27-studio-restart-guard.md).
+
+
 A Masscan Studio window on the stand is one authorized session of the packaged `studio-ui --smoke-feth` (three scans:
 `s1_full`, `s2_pause`, `s3_stop`), recorded by `cargo xtask feth-acceptance --out DIR --app '/abs/Masscan Studio.app'
 --lab /abs/rmasscan-lab [--manual]` in `studio/`. The orchestrator writes the window directory and never reads a pcap;

@@ -30,6 +30,8 @@ use std::{
     path::Path,
 };
 
+#[path = "studio_stage_verify.rs"]
+mod stages;
 pub const SCANNER_IP: &str = "198.18.0.1";
 pub const PEER_IP: &str = "198.18.0.2";
 pub const SCANNER_MAC: &str = "02:ac:00:00:00:01";
@@ -225,11 +227,13 @@ pub fn parse_utc(t: &str) -> Option<f64> {
 
 // ------------------------------------------------------------------ wire model
 
+#[derive(Clone)]
 struct Syn {
     t: f64,
     port: u16,
     seq: u32,
 }
+#[derive(Clone)]
 struct Reply {
     t: f64,
     port: u16,
@@ -439,12 +443,11 @@ fn load_chronicle(r: &mut Run, sm: &Value) -> Option<Chronicle> {
     })
 }
 fn chronicle_checks(r: &mut Run, c: &Chronicle) {
+    session_checks(r, c, &ACTION_ORDER);
+}
+fn session_checks(r: &mut Run, c: &Chronicle, expected: &[&str]) {
     let names: Vec<&str> = c.actions.iter().map(|a| a.name.as_str()).collect();
-    r.beh(
-        "actions equal the plan",
-        names == ACTION_ORDER,
-        names.join(","),
-    );
+    r.beh("actions equal the plan", names == expected, names.join(","));
     let granted = c
         .events
         .iter()
@@ -454,7 +457,7 @@ fn chronicle_checks(r: &mut Run, c: &Chronicle) {
     let first_start = c
         .actions
         .iter()
-        .find(|a| a.name.starts_with("Start:"))
+        .find(|a| a.name.starts_with("Start:") || a.name == "Resume")
         .map_or(i64::MAX, |a| a.mono);
     r.beh(
         "network preflight passed before the first Start",
@@ -1216,8 +1219,14 @@ fn lab_open(ports: &[u16], host: &BTreeSet<u16>) -> BTreeSet<u16> {
 pub fn verify_dir(d: &Path, manual: bool) -> Value {
     verify_dir_expect(d, manual, None)
 }
+pub fn verify_restart(d: &Path, pause: &Path, head: Option<&str>) -> Value {
+    stages::verify(d, Some(pause), head)
+}
 /// As `verify_dir`, and `expect_head` (the commit the window must have been taken on) binds `provenance.json`.
 pub fn verify_dir_expect(d: &Path, manual: bool, expect_head: Option<&str>) -> Value {
+    if !manual && read_json(d.join("window.json")).is_some_and(|w| w["stage"].is_string()) {
+        return stages::verify(d, None, expect_head);
+    }
     let (mut sr, safe, extra) = safety(d, expect_head);
     let mut notes = Map::new();
     let history = read_json(d.join("history.json"));
@@ -1924,11 +1933,14 @@ pub fn exit_code(verdict: &Value) -> i32 {
 pub fn run(args: &[String]) -> Result<i32, String> {
     let manual = args.iter().any(|a| a == "--manual");
     let rest: Vec<String> = args.iter().filter(|a| *a != "--manual").cloned().collect();
-    let o =
-        crate::windows_suite::options_for("studio-verify", &rest, &["dir", "out", "expect-head"])?;
+    let o = crate::windows_suite::options_for(
+        "studio-verify",
+        &rest,
+        &["dir", "out", "expect-head", "pause-dir"],
+    )?;
     if o.contains_key("help") {
         println!(
-            "studio-verify --dir DIR --out FILE [--expect-head SHA] [--manual]  (exit 0 PASS, 1 FAIL, 2 INVALID or NOT RUN)"
+            "studio-verify --dir DIR --out FILE [--expect-head SHA] [--manual | --pause-dir DIR]  (exit 0 PASS, 1 FAIL, 2 INVALID or NOT RUN)"
         );
         return Ok(0);
     }
@@ -1938,7 +1950,14 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         return Err(format!("--dir {dir} is not a directory"));
     }
     let head = o.get("expect-head").and_then(|v| v.first()).cloned();
-    let res = verify_dir_expect(Path::new(&dir), manual, head.as_deref());
+    let res = if let Some(pause) = o.get("pause-dir").and_then(|v| v.first()) {
+        if manual {
+            return Err("--pause-dir cannot be combined with --manual".into());
+        }
+        verify_restart(Path::new(&dir), Path::new(pause), head.as_deref())
+    } else {
+        verify_dir_expect(Path::new(&dir), manual, head.as_deref())
+    };
     fs::write(
         &out,
         format!(

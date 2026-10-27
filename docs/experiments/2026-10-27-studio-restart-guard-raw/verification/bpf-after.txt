@@ -1,0 +1,16 @@
+/dev/bpf0 root:wheel 600
+/dev/bpf1 root:wheel 600
+/dev/bpf2 root:wheel 600
+/dev/bpf3 root:wheel 600
+/dev/bpf4 root:wheel 600
+/dev/bpf5 root:wheel 600
+/dev/bpf6 root:wheel 600
+/dev/bpf7 root:wheel 600
+/dev/bpf8 root:wheel 600
+/dev/bpf9 root:wheel 600
+/dev/bpf10 root:wheel 600
+/dev/bpf11 root:wheel 600
+/dev/bpf12 root:wheel 600
+/dev/bpf13 root:wheel 600
+/dev/bpf14 root:wheel 600
+/dev/bpf15 root:wheel 600

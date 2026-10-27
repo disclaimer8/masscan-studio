@@ -14,6 +14,27 @@ struct Window {
 fn job(stage: &str) -> Value {
     json!({"targets":PEER_IP,"ports":if stage=="guard" {"8000-8255"} else {"8000-8031"},"seed":"2","rate":4,"exclusions":"","backend":"MacFeth"})
 }
+// Pure parsing: archived Mac evidence must also be verifiable on Linux/Windows.
+fn restored_mapping(text: &str) -> bool {
+    let source = text
+        .lines()
+        .filter(|l| l.split_whitespace().any(|w| w == "(198.18.0.1)"))
+        .collect::<Vec<_>>();
+    if source.len() != 1 {
+        return false;
+    }
+    let words = source[0].split_whitespace().collect::<Vec<_>>();
+    let field = |name| words.windows(2).find(|w| w[0] == name).map(|w| w[1]);
+    let bytes = field("at").and_then(|value| {
+        value
+            .split(':')
+            .map(|v| u8::from_str_radix(v, 16).ok())
+            .collect::<Option<Vec<_>>>()
+    });
+    field("on") == Some(PEER_IF)
+        && words.contains(&"permanent")
+        && bytes.as_deref() == Some(&[2, 172, 0, 0, 0, 1])
+}
 fn read_window(d: &Path, head: Option<&str>, stage: &str) -> Window {
     let (mut safety, safe, extra) = super::safety(d, head);
     let mut r = run_of(stage);
@@ -160,18 +181,9 @@ fn read_window(d: &Path, head: Option<&str>, stage: &str) -> Window {
         );
     }
     if stage == "guard" {
-        let entries =
-            crate::macos_lab::parse_arp(&text_in(d, "restored-arp.txt").unwrap_or_default());
-        let source = entries
-            .iter()
-            .filter(|e| e.ip == SCANNER_IP)
-            .collect::<Vec<_>>();
         r.inv(
             "permanent source ARP mapping observed after restoration",
-            source.len() == 1
-                && source[0].iface == PEER_IF
-                && source[0].permanent
-                && source[0].mac.as_deref() == Some(SCANNER_MAC),
+            restored_mapping(&text_in(d, "restored-arp.txt").unwrap_or_default()),
             "",
         );
         let change = read_json(d.join("guard-change.json")).unwrap_or(Value::Null);

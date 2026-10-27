@@ -28,8 +28,18 @@ packet adapter, scan or authorized scanner session is started by setup.
 
 ## Live installation status
 
-Awaiting the user's Install helper click and macOS system authorization. Successful
-copy/verification and the subsequent ready state are not yet claimed.
+**macOS installation: PASS.** The user clicked Install helper and confirmed the
+system prompt. The panel changed to **Scanner helper is ready**, removing Install.
+Check again also returned ready without a new permission prompt. Independent
+inspection found the expected SHA-256 at the hash-addressed destination,
+`root:wheel` ownership, mode `0755`, and a valid strict code signature. The
+application's ready state additionally requires its normal ancestor/ACL/symlink
+trust checks. [Ready screenshot](2026-10-27-studio-runner-setup/setup-ready.png)
+and [installed file record](2026-10-27-studio-runner-setup/installed.txt).
+
+This proves installation of this exact local debug build on one Mac. Native
+permission-dialog cancellation/timeout was not exercised; the bounded cleanup
+and failure paths were tested offline. No scan or authorized session was started.
 
 Windows new setup-entry/UAC acceptance and Linux desktop polkit acceptance are
 **NOT RUN**. Earlier runner session-authorization acceptance is a different path.

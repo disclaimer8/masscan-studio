@@ -188,6 +188,36 @@ pub struct Installed {
     _file: File,
     _ancestors: Vec<OwnedHandle>,
 }
+/// Pin only the supported system-wide PowerShell installation, never PATH or
+/// user installs. Retain these handles until its elevated process exits.
+pub(crate) struct PowerShell {
+    pub path: PathBuf,
+    _pins: Vec<OwnedHandle>,
+}
+impl PowerShell {
+    pub fn open() -> Result<Self> {
+        let path = program_files()?
+            .join("PowerShell")
+            .join("7")
+            .join("pwsh.exe");
+        let mut pins = Vec::new();
+        for ancestor in path
+            .ancestors()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            pins.push(
+                pin(ancestor, true, ancestor.parent().is_none()).map_err(|e| {
+                    format!("Install PowerShell 7 for all users before setting up the scanner: {e}")
+                })?,
+            );
+        }
+        pins.push(pin(&path, false, false)?);
+        Ok(Self { path, _pins: pins })
+    }
+}
 impl Installed {
     pub fn path(&self) -> &Path {
         &self.path

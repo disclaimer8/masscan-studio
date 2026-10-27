@@ -207,6 +207,14 @@ fn execute(
     job: &str,
     hash: &str,
 ) -> Result<OwnedHandle> {
+    let identity = serde_json::to_string(owner).map_err(|e| e.to_string())?;
+    let parameters =
+        crate::win_setup::command_line(&["--authorized-pipe", pipe, &identity, job, hash])?;
+    execute_pinned(installation.path(), &parameters)
+}
+// Only the verified runner and pinned system-wide PowerShell call this private
+// primitive. It is not a general application elevation API.
+fn execute_pinned(path: &Path, parameters: &str) -> Result<OwnedHandle> {
     // SAFETY: called only on a fresh launcher thread; no apartment existed there.
     let hr = unsafe {
         CoInitializeEx(
@@ -218,23 +226,18 @@ fn execute(
         return Err(format!("Cannot initialize UAC launcher: {hr:#x}"));
     }
     let _apartment = Apartment;
-    let executable = installation
-        .path()
+    let executable = path
         .to_str()
         .ok_or("Installed runner path is not Unicode")?;
-    let directory = installation
-        .path()
+    let directory = path
         .parent()
         .and_then(Path::to_str)
         .ok_or("Installed runner directory missing")?;
-    let identity = serde_json::to_string(owner).map_err(|e| e.to_string())?;
-    let parameters =
-        crate::win_setup::command_line(&["--authorized-pipe", pipe, &identity, job, hash])?;
     let (verb, file, cwd, args) = (
         wide("runas"),
         wide(executable),
         wide(directory),
-        wide(&parameters),
+        wide(parameters),
     );
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
@@ -255,6 +258,55 @@ fn execute(
         ));
     }
     owned(info.hProcess).map_err(|e| e.to_string())
+}
+
+/// Called only by the dedicated unelevated runner setup subprocess, after it
+/// cleared its environment. Parent Studio bounds its lifetime independently.
+pub(crate) fn install_runner(source: &Path, hash: &str, cancelled: &AtomicBool) -> Result<()> {
+    if Process::open(std::process::id())?.elevation()?.elevated {
+        return Err("Start setup from Studio running as a normal user".into());
+    }
+    let shell = install::PowerShell::open()?;
+    let source = source
+        .to_str()
+        .ok_or("Runner source path is not Unicode")?
+        .strip_prefix(r"\\?\")
+        .unwrap_or(source.to_str().unwrap());
+    let script = crate::win_setup::install_script(source, hash)?;
+    let args = crate::win_setup::command_line(&[
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &script,
+    ])?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Setup cancelled".into());
+    }
+    let handle = execute_pinned(&shell.path, &args)?;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        // SAFETY: retained ShellExecuteEx process handle supports SYNCHRONIZE;
+        // short bounded wait permits cancellation. No arbitrary PID is killed.
+        match unsafe { WaitForSingleObject(handle.as_raw_handle(), 20) } {
+            WAIT_OBJECT_0 => break,
+            WAIT_TIMEOUT => {}
+            _ => return Err(error()),
+        }
+        if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
+            return Err("Setup wait ended; installation may still finish".into());
+        }
+    }
+    let mut code = 0;
+    // SAFETY: live process handle, writable DWORD, process has exited.
+    if unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) } == 0 {
+        return Err(error());
+    }
+    if code != 0 {
+        return Err(format!("Scanner installation failed ({code})"));
+    }
+    install::Installed::open(hash)?;
+    Ok(())
 }
 fn same_executable(actual: &Path, expected: &Path) -> Result<()> {
     if std::fs::canonicalize(actual).map_err(|e| e.to_string())?

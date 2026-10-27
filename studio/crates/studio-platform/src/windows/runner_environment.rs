@@ -9,7 +9,7 @@ use windows_sys::Win32::System::{
     SystemInformation::{GetSystemDirectoryW, GetSystemWindowsDirectoryW},
 };
 
-fn directory(system: bool) -> Result<OsString> {
+pub(crate) fn directory(system: bool) -> Result<OsString> {
     let mut buffer = [0u16; 32768];
     // SAFETY: fixed-size writable UTF-16 buffer; both OS APIs return the required
     // size on overflow. These lookups do not trust caller environment variables.

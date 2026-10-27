@@ -192,6 +192,8 @@ GO нужны зелёные полные прогоны.
   `main.c` без `[-] `: `FAIL: range too big, need confirmation` (`main.c:1236`, hints `:1237–1238`), `FAIL: failed to detect IP of interface`
   (`main.c:1286`, hint с `--adapter-ip 192.168.100.5` на `:1288–1289`), `main-conf.c` — `FAIL: bad source port specification`
   и другие без `[-] `.
+- **Форма отказа rmasscan (решение 7).** Отказы обнаружения и ARP печатаются в форме C: `[-] FAIL: …` и строки подсказок
+  (`    [hint] …`) дословно, без обёртки `rmasscan: error:`. Решение 7 код выхода не задаёт, поэтому baseline его не фиксирует.
 - `:66–81` адаптер открывается ДО MAC/IP (требует привилегий); у rmasscan обнаружение идёт до `open` (отклонение).
 - `:90–112` MAC: если `my_mac_count == 0` и MAC нулевой → `rawsock_get_adapter_mac`; всё ещё нулевой → stderr
   `[-] FAIL: failed to detect MAC address of interface: "%s"\n` + ` [hint] try something like "--source-mac 00-11-22-33-44-55"\n`
@@ -245,8 +247,8 @@ GO нужны зелёные полные прогоны.
 | 3 | Source IP/MAC | первый IPv4, MAC интерфейса; нулевой MAC → отказ с `--source-mac`/`--source-ip` | то же; плейсхолдер Darwin и нулевой MAC отказывают с теми же подсказками; алиасы `--source-ip/--source-mac`; IfType 71 как Ethernet | matched |
 | 4 | ARP | 12 запросов за ~11 с, `time(0)` | 10 запросов с шагом 1 с, отказ в 10 с по инжектированным часам; критерии строже | deviate |
 | 5 | Привилегии | `rawsock_init_adapter` до MAC/IP | обнаружение, `--iflist`, `--offline` без привилегий; порядок defaults → validate → detect → ARP → open | deviate |
-| 6 | Умолчания | seed из энтропии; порт {p, p+16}; `--offline` фиктивный MAC `66-55-44-33-22-11` | seed из `getrandom` (печатается); один порт `40000 + t % 20000`; `--offline` принудительно, без поиска маршрутизатора | deviate (offline matched) |
-| 7 | Вывод | `Discovered…` 39+40+`\n`, flush, `[+]` только с `-v`; `--iflist` в stderr | строка побайтно; `[+]` всегда; свой формат `--iflist`; нет строки статуса и Ctrl-C | строка matched, остальное deviate |
+| 6 | Умолчания | seed из энтропии; порт {p, p+16}; `--offline` фиктивный MAC `66-55-44-33-22-11` | seed из `getrandom` (печатается); один порт `40000 + t % 20000`; `--offline` принудительно, без поиска маршрутизатора; герметичный offline: C `--offline` без `--interface` всё равно вызывает `rawsock_get_default_interface` (`main-initadapter.c:44–57`), rmasscan при явно заданных всех значениях ОС не опрашивает | deviate |
+| 7 | Вывод | `Discovered…` 39+40+`\n`, flush, `[+]` только с `-v`; `--iflist` в stderr | строка побайтно; `[+]` всегда; свой формат `--iflist`; отказы обнаружения и ARP: `[-] FAIL: …` и подсказки дословно, без обёртки `rmasscan: error:`; нет строки статуса и Ctrl-C | строка matched, остальное deviate |
 
 ## 5. Доказательства чтением
 

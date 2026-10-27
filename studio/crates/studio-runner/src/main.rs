@@ -512,6 +512,10 @@ fn launch() -> Result<(), String> {
         return Err("Elevated runner requires an authenticated UAC session".into());
     }
     #[cfg(windows)]
+    if args.len() == 2 && args[0] == "--setup-install" {
+        return studio_platform::setup::windows_install_entry(&args[1]);
+    }
+    #[cfg(windows)]
     if args.len() == 5 && args[0] == "--authorized-pipe" {
         use studio_platform::windows::{Identity, uac::RunnerConnection};
         let ui: Identity = serde_json::from_str(&args[2]).map_err(|e| e.to_string())?;

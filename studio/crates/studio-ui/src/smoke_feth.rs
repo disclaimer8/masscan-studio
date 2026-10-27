@@ -33,6 +33,51 @@ pub struct ScanCase {
 pub struct Plan {
     pub scans: Vec<ScanCase>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Pause,
+    Resume,
+    Guard,
+}
+impl Stage {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "pause" => Ok(Self::Pause),
+            "resume" => Ok(Self::Resume),
+            "guard" => Ok(Self::Guard),
+            _ => Err("feth stage must be pause, resume or guard".into()),
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Guard => "guard",
+        }
+    }
+    fn plan(self) -> Plan {
+        Plan {
+            scans: vec![ScanCase {
+                tag: if self == Self::Guard {
+                    "guard"
+                } else {
+                    "restart"
+                },
+                job: feth_job(
+                    if self == Self::Guard {
+                        "8000-8255"
+                    } else {
+                        "8000-8031"
+                    },
+                    "2",
+                    4,
+                ),
+                pause_after: (self == Self::Pause).then_some(ACTION_DELAY),
+                stop_after: None,
+            }],
+        }
+    }
+}
 fn feth_job(ports: &str, seed: &str, rate: u32) -> Job {
     Job {
         targets: "198.18.0.2".into(),
@@ -73,6 +118,7 @@ impl Plan {
 
 pub enum Step {
     Send(Action),
+    GuardReady,
     Quit { ok: bool, reason: String },
 }
 
@@ -110,6 +156,9 @@ pub struct CaseRecord {
 #[derive(Serialize)]
 pub struct Chronicle {
     pub schema: u32,
+    pub stage: Option<&'static str>,
+    pub process_id: u32,
+    pub prior_attempt_hex: Option<String>,
     pub started_utc: String,
     pub result: String,
     pub plan: Vec<CaseRecord>,
@@ -123,6 +172,7 @@ enum Phase {
     Authorize { granted: bool, busy: bool },
     Settle { next: Option<usize>, since: Instant },
     AwaitScanning(usize),
+    AwaitSelected,
     Scanning(usize, Instant),
     AwaitPaused(usize),
     AwaitPausedHistory(usize),
@@ -136,6 +186,8 @@ enum Phase {
 
 pub struct Driver {
     plan: Plan,
+    stage: Option<Stage>,
+    saved: Option<studio_store::SavedScan>,
     t0: Instant,
     phase: Phase,
     phase_since: Instant,
@@ -146,6 +198,12 @@ pub struct Driver {
 }
 
 impl Driver {
+    pub fn for_stage(stage: Stage, now: Instant) -> Self {
+        let mut d = Self::new(stage.plan(), now);
+        d.stage = Some(stage);
+        d.chron.stage = Some(stage.name());
+        d
+    }
     pub fn new(plan: Plan, now: Instant) -> Self {
         let records = plan
             .scans
@@ -165,11 +223,16 @@ impl Driver {
             .collect();
         Self {
             plan,
+            stage: None,
+            saved: None,
             t0: now,
             phase: Phase::Init,
             phase_since: now,
             chron: Chronicle {
                 schema: 1,
+                stage: None,
+                process_id: std::process::id(),
+                prior_attempt_hex: None,
                 started_utc: String::new(),
                 result: String::new(),
                 plan: records,
@@ -308,7 +371,36 @@ impl Driver {
         self.set_phase(Phase::AwaitHistory(i), now);
     }
     fn on_update(&mut self, u: &Update, now: Instant, utc: &str, out: &mut Vec<Step>) {
+        if self.stage == Some(Stage::Resume)
+            && self.phase == Phase::Init
+            && let Update::History(scans, _) = u
+        {
+            // This dedicated run uses one private history; never guess among scans.
+            if scans.len() != 1 || !self.resumable(&scans[0]) {
+                self.fail(
+                    "Resume stage needs exactly one matching durable paused scan".into(),
+                    false,
+                    now,
+                    utc,
+                    out,
+                );
+                return;
+            }
+            self.saved = Some(scans[0].clone());
+            self.chron.prior_attempt_hex = Some(id_text(scans[0].attempt));
+            self.chron.plan[0].scan_id_hex = Some(id_text(scans[0].scan));
+            self.chron.plan[0].paused_next_index =
+                scans[0].next_index.as_ref().and_then(|s| s.parse().ok());
+        }
         match (self.phase, u) {
+            (Phase::AwaitSelected, Update::State(Status::Paused, _)) => {
+                // Select emits Reset/Hosts/State, not History. The private store
+                // had exactly one validated scan; the controller validates its
+                // checkpoint again when processing Resume.
+                self.chron.plan[0].started_utc = Some(utc.into());
+                self.act("Resume".into(), now, utc, out, Action::Resume);
+                self.set_phase(Phase::AwaitResumed(0), now);
+            }
             (
                 Phase::Authorize { granted, .. },
                 Update::Authorization {
@@ -385,19 +477,39 @@ impl Driver {
                     self.chron.plan[i].rows_seen = self.rows.len();
                 }
             }
+            (Phase::Scanning(i, _), Update::State(Status::Interrupted, detail))
+                if self.stage == Some(Stage::Guard)
+                    && detail.starts_with("Attempt interrupted:") =>
+            {
+                self.finish(i, &Status::Interrupted, now, utc);
+            }
             (_, Update::State(s @ (Status::Failed | Status::Interrupted), detail)) => {
                 self.fail(format!("State {s:?}: {detail}"), false, now, utc, out);
             }
             (Phase::AwaitScanning(i), Update::State(Status::Scanning, _)) => {
                 self.set_phase(Phase::Scanning(i, now), now);
+                if self.stage == Some(Stage::Guard) {
+                    out.push(Step::GuardReady);
+                }
             }
             (Phase::Scanning(i, _), Update::State(s @ Status::Completed, _))
                 if self.plan.scans[i].pause_after.is_none()
-                    && self.plan.scans[i].stop_after.is_none() =>
+                    && self.plan.scans[i].stop_after.is_none()
+                    && self.stage != Some(Stage::Guard) =>
             {
                 self.finish(i, s, now, utc);
             }
-            (Phase::AwaitPaused(i), Update::State(Status::Paused, _)) => {
+            (Phase::AwaitPaused(i), Update::State(Status::Paused, detail)) => {
+                if self.stage == Some(Stage::Pause) && detail != "Checkpoint committed by Studio" {
+                    self.fail(
+                        "Pause was not acknowledged by the runner".into(),
+                        false,
+                        now,
+                        utc,
+                        out,
+                    );
+                    return;
+                }
                 let ms = self.mono(now) - self.action_mono;
                 self.chron.plan[i].pause_to_paused_ms = Some(ms);
                 self.set_phase(Phase::AwaitPausedHistory(i), now);
@@ -414,6 +526,31 @@ impl Driver {
                 self.finish(i, s, now, utc);
             }
             (Phase::AwaitPausedHistory(i), Update::History(scans, Some(id))) => {
+                if self.stage == Some(Stage::Pause) {
+                    if scans.len() != 1 || scans[0].scan != *id || !self.resumable(&scans[0]) {
+                        self.fail(
+                            "Paused scan lacks a matching durable checkpoint".into(),
+                            false,
+                            now,
+                            utc,
+                            out,
+                        );
+                        return;
+                    }
+                    let r = &mut self.chron.plan[i];
+                    r.scan_id_hex = Some(id_text(*id));
+                    r.paused_next_index = scans[0].next_index.as_ref().and_then(|s| s.parse().ok());
+                    r.finished_utc = Some(utc.into());
+                    r.finished_status = Some("Paused".into());
+                    self.set_phase(
+                        Phase::Settle {
+                            next: None,
+                            since: now,
+                        },
+                        now,
+                    );
+                    return;
+                }
                 let next = scans
                     .iter()
                     .find(|s| s.scan == *id && s.status == Status::Paused)
@@ -435,7 +572,32 @@ impl Driver {
                 self.act("Resume".into(), now, utc, out, Action::Resume);
                 self.set_phase(Phase::AwaitResumed(i), now);
             }
-            (Phase::AwaitHistory(i), Update::History(_, Some(id))) => {
+            (Phase::AwaitHistory(i), Update::History(scans, Some(id))) => {
+                if let Some(stage) = self.stage {
+                    let valid = scans.len() == 1
+                        && scans[0].scan == *id
+                        && scans[0].job == self.plan.scans[i].job
+                        && scans[0].checkpoint.is_none()
+                        && scans[0].next_index.is_none()
+                        && if stage == Stage::Guard {
+                            scans[0].status == Status::Interrupted
+                        } else {
+                            scans[0].status == Status::Completed
+                                && self.saved.as_ref().is_some_and(|old| {
+                                    old.scan == *id && old.attempt != scans[0].attempt
+                                })
+                        };
+                    if !valid {
+                        self.fail(
+                            "Terminal history does not match the acceptance stage".into(),
+                            false,
+                            now,
+                            utc,
+                            out,
+                        );
+                        return;
+                    }
+                }
                 self.chron.plan[i].scan_id_hex = Some(id_text(*id));
                 let next = (i + 1 < self.plan.scans.len()).then_some(i + 1);
                 self.set_phase(Phase::Settle { next, since: now }, now);
@@ -464,6 +626,19 @@ impl Driver {
         let waited = now.saturating_duration_since(self.phase_since);
         match self.phase {
             Phase::Init => {
+                // Wait for startup history; a missing replay cannot authorize a guessed scan.
+                if self.stage == Some(Stage::Resume) && self.saved.is_none() {
+                    if waited > PHASE_TIMEOUT {
+                        self.fail(
+                            "timeout waiting for saved history".into(),
+                            false,
+                            now,
+                            utc,
+                            out,
+                        );
+                    }
+                    return;
+                }
                 self.chron.started_utc = utc.to_owned();
                 self.act("Authorize".into(), now, utc, out, Action::Authorize);
                 self.set_phase(
@@ -479,6 +654,21 @@ impl Driver {
             Phase::Settle { next, since } => {
                 if now.saturating_duration_since(since) >= SETTLE {
                     if let Some(i) = next {
+                        if self.stage == Some(Stage::Resume) {
+                            let Some(id) = self.saved.as_ref().map(|s| s.scan) else {
+                                self.fail("Saved scan unavailable".into(), false, now, utc, out);
+                                return;
+                            };
+                            self.act(
+                                format!("Select:{}", id_text(id)),
+                                now,
+                                utc,
+                                out,
+                                Action::Select(id),
+                            );
+                            self.set_phase(Phase::AwaitSelected, now);
+                            return;
+                        }
                         let (tag, job) = (self.plan.scans[i].tag, self.plan.scans[i].job.clone());
                         self.rows.clear();
                         self.chron.plan[i].started_utc = Some(utc.to_owned());
@@ -530,6 +720,15 @@ impl Driver {
             let stop = self.scan_may_run();
             self.fail(reason, stop, now, utc, out);
         }
+    }
+    fn resumable(&self, s: &studio_store::SavedScan) -> bool {
+        s.status == Status::Paused
+            && s.job == self.plan.scans[0].job
+            && s.checkpoint.as_ref().is_some_and(|c| !c.is_empty())
+            && s.next_index
+                .as_ref()
+                .and_then(|n| n.parse::<u64>().ok())
+                .is_some_and(|n| (1..32).contains(&n))
     }
     /// One `Update` (or a timer tick when `None`) in, the steps to execute out.
     pub fn step(&mut self, update: Option<&Update>, now: Instant, utc: String) -> Vec<Step> {
@@ -660,6 +859,7 @@ mod tests {
                         self.sent.push(n);
                     }
                     Step::Quit { ok, reason } => self.quit = Some((ok, reason)),
+                    Step::GuardReady => self.sent.push("GuardReady".into()),
                 }
             }
             n
@@ -763,6 +963,137 @@ mod tests {
                 }),
             );
             self.notice(10850, "Runner session closed");
+        }
+    }
+
+    #[test]
+    fn pause_stage_locks_after_checkpoint_and_never_resumes() {
+        let mut t = T::new();
+        t.d = Driver::for_stage(Stage::Pause, t.t0);
+        t.authorize();
+        t.at(200, None);
+        t.state(300, Status::Scanning, "scanning");
+        t.at(1800, None);
+        t.state(4900, Status::Paused, "Checkpoint committed by Studio");
+        assert_eq!(t.sent.last().unwrap(), "Pause");
+        let s = stage_saved();
+        t.at(4950, Some(Update::History(vec![s], Some(ID2))));
+        t.at(5100, None);
+        t.notice(5150, "Runner session closed");
+        assert!(matches!(t.quit, Some((true, _))));
+        assert!(!t.sent.iter().any(|s| s == "Resume"));
+        assert_eq!(
+            t.d.chronicle().plan[0].finished_status.as_deref(),
+            Some("Paused")
+        );
+    }
+
+    fn stage_saved() -> SavedScan {
+        SavedScan {
+            scan: ID2,
+            attempt: [9; 16],
+            job: Stage::Pause.plan().scans[0].job.clone(),
+            status: Status::Paused,
+            checkpoint: Some(vec![1, 2, 3]),
+            next_index: Some("7".into()),
+            detail: "Checkpoint committed by Studio".into(),
+            name: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn resume_stage_selects_saved_scan_in_new_session_and_never_starts() {
+        let mut t = T::new();
+        t.d = Driver::for_stage(Stage::Resume, t.t0);
+        // Startup replay precedes successful authorization.
+        t.at(0, Some(Update::History(vec![stage_saved()], Some(ID2))));
+        t.authorize();
+        t.at(200, None);
+        assert_eq!(t.sent.last().unwrap(), "other"); // Select, not Start/Resume yet
+        // Select emits Reset/Hosts/State, not a fresh History event.
+        t.state(210, Status::Paused, "restored");
+        assert_eq!(t.sent.last().unwrap(), "Resume");
+        t.state(300, Status::Scanning, "resumed");
+        t.state(5000, Status::Completed, "done");
+        let mut saved = stage_saved();
+        saved.status = Status::Completed;
+        saved.attempt = [10; 16];
+        saved.checkpoint = None;
+        saved.next_index = None;
+        t.at(5010, Some(Update::History(vec![saved], Some(ID2))));
+        t.at(5200, None);
+        t.notice(5250, "Runner session closed");
+        assert!(matches!(t.quit, Some((true, _))));
+        assert!(!t.sent.iter().any(|s| s.starts_with("Start:")));
+    }
+
+    #[test]
+    fn resume_stage_refuses_missing_ambiguous_or_empty_checkpoint() {
+        for scans in [
+            vec![],
+            vec![stage_saved(), stage_saved()],
+            {
+                let mut s = stage_saved();
+                s.checkpoint = Some(vec![]);
+                vec![s]
+            },
+            {
+                let mut s = stage_saved();
+                s.job.seed = "999".into();
+                vec![s]
+            },
+        ] {
+            let mut t = T::new();
+            t.d = Driver::for_stage(Stage::Resume, t.t0);
+            t.at(0, Some(Update::History(scans, Some(ID2))));
+            t.authorize();
+            t.at(200, None);
+            assert!(matches!(t.quit, Some((false, _))));
+            assert!(
+                !t.sent
+                    .iter()
+                    .any(|s| s == "Resume" || s.starts_with("Start:"))
+            );
+        }
+    }
+
+    #[test]
+    fn guard_stage_requires_guard_reason_and_checkpoint_free_history() {
+        for (status, detail, checkpoint, success) in [
+            (
+                Status::Interrupted,
+                "Attempt interrupted: ARP changed. Start a new scan after checking the network.",
+                false,
+                true,
+            ),
+            (Status::Interrupted, "runner disconnected", false, false),
+            (Status::Stopped, "Stopped", false, false),
+            (Status::Completed, "done", false, false),
+            (
+                Status::Interrupted,
+                "Attempt interrupted: ARP changed",
+                true,
+                false,
+            ),
+        ] {
+            let mut t = T::new();
+            t.d = Driver::for_stage(Stage::Guard, t.t0);
+            t.authorize();
+            t.at(200, None);
+            t.state(300, Status::Scanning, "scanning");
+            t.state(2000, status.clone(), detail);
+            let mut s = stage_saved();
+            s.job = Stage::Guard.plan().scans[0].job.clone();
+            s.status = status;
+            if !checkpoint {
+                s.checkpoint = None;
+                s.next_index = None;
+            }
+            t.at(2010, Some(Update::History(vec![s], Some(ID2))));
+            t.at(2200, None);
+            t.notice(2250, "Runner session closed");
+            assert_eq!(t.quit.as_ref().map(|q| q.0), Some(success), "{detail}");
         }
     }
 

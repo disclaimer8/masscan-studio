@@ -747,3 +747,12 @@ Final code `6b1deb5d0f88a1f31efb1d9f5eb538401bc66d85` (manifest `dirty: false`):
 Evidence: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance-raw/` (hashes in `MANIFEST.sha256`). Report and
 status words: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`. GO (feth) there is conditional on green CI
 on the exact HEAD and an APPROVED final review.
+
+## 2026-10-27 — restart and guard follow-up
+
+Separate pause-exit, resume-saved and guard UI stages and their independent
+packet/history verifier are implemented. Resume binds the closed database hash,
+scan identity and prior results across two UI processes; guard requires a real
+lab ARP change and restoration. Live status remains **NOT RUN** until the
+[follow-up procedure](../docs/experiments/2026-10-27-studio-restart-guard.md) is
+completed. Existing feth GO does not close these follow-up cases.

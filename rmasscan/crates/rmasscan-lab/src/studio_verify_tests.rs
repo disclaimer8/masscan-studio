@@ -509,6 +509,10 @@ fn stage_model(stage: &str) -> Model {
     }
     if guard {
         m.extra.insert(
+            "restored-arp.txt".into(),
+            b"? (198.18.0.1) at 2:ac:0:0:0:1 on feth4202 ifscope permanent [ethernet]\n".to_vec(),
+        );
+        m.extra.insert(
             "guard-ready.json".into(),
             pretty(&json!({"schema":1,"pid":100,"utc":utc(T0+3.1)})),
         );
@@ -580,6 +584,58 @@ fn restart_windows_require_a_different_process_and_exact_packet_continuation() {
     assert_ne!(verify()["overall"], PASS);
     fs::remove_dir_all(p).unwrap();
     fs::remove_dir_all(r).unwrap();
+}
+
+#[test]
+fn restart_requires_actual_prior_rows_and_preserves_them() {
+    let mut pause = stage_model("pause");
+    pause.replies[0].clear();
+    pause.rows_mut(0).clear();
+    let p = pause.write();
+    let mut resume = stage_model("resume");
+    resume.rows_mut(0).drain(..7);
+    resume
+        .extra
+        .insert("history-before.json".into(), pretty(&pause.history));
+    resume.extra.insert(
+        "data-before.sha256".into(),
+        pause.extra["data.sha256"].clone(),
+    );
+    let r = resume.write();
+    assert_ne!(
+        verify_restart(&r, &p, None)["overall"],
+        PASS,
+        "empty prior history cannot prove result retention"
+    );
+    fs::remove_dir_all(p).unwrap();
+    fs::remove_dir_all(r).unwrap();
+
+    let (p, r) = stage_pair();
+    let mut h = read_json(r.join("history.json")).unwrap();
+    h["scans"][0]["rows"].as_array_mut().unwrap().remove(0);
+    write_file(&r, "history.json", &pretty(&h));
+    rehash(&r, "history.json");
+    assert_ne!(
+        verify_restart(&r, &p, None)["overall"],
+        PASS,
+        "a saved row lost at restart cannot pass"
+    );
+    fs::remove_dir_all(p).unwrap();
+    fs::remove_dir_all(r).unwrap();
+}
+
+#[test]
+fn guard_requires_observed_permanent_mapping_after_successful_arp_command() {
+    for arp in [
+        "",
+        "? (198.18.0.1) at (incomplete) on feth4202 ifscope [ethernet]",
+        "? (198.18.0.1) at 2:ac:0:0:0:2 on feth4202 ifscope permanent [ethernet]",
+    ] {
+        let mut m = stage_model("guard");
+        m.extra
+            .insert("restored-arp.txt".into(), arp.as_bytes().to_vec());
+        assert_ne!(verdict_of(&mut m)["overall"], PASS, "{arp}");
+    }
 }
 
 #[test]

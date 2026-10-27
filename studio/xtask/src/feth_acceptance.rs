@@ -1143,6 +1143,33 @@ fn stop<H: Host>(c: &mut Ctx<'_, H>, p: Proc, first: &str) -> i32 {
     -1
 }
 
+/// Require the scoped ARP observation, not merely `arp -S` returning zero.
+fn restored_arp(text: &str) -> bool {
+    let entries = text
+        .lines()
+        .filter(|l| l.contains("(198.18.0.1)"))
+        .collect::<Vec<_>>();
+    if entries.len() != 1 {
+        return false;
+    }
+    let words = entries[0].split_whitespace().collect::<Vec<_>>();
+    let after = |key| {
+        words
+            .iter()
+            .position(|w| *w == key)
+            .and_then(|i| words.get(i + 1))
+            .copied()
+    };
+    let mac = after("at").and_then(|s| {
+        s.split(':')
+            .map(|b| u8::from_str_radix(b, 16).ok())
+            .collect::<Option<Vec<_>>>()
+    });
+    after("on") == Some(PEER_IF)
+        && words.contains(&"permanent")
+        && mac.as_deref() == Some(&[2, 172, 0, 0, 0, 1])
+}
+
 fn await_guard_restoration<H: Host>(
     c: &mut Ctx<'_, H>,
     witnesses: &[(&'static str, Proc)],
@@ -1165,12 +1192,13 @@ fn await_guard_restoration<H: Host>(
             .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .is_some_and(|v| v["restore_exit"] == 0 && v["restored_utc"].is_string())
+            && fs::read_to_string(c.dir.join("restored-arp.txt")).is_ok_and(|t| restored_arp(&t))
         {
             return true;
         }
         c.h.sleep(Duration::from_millis(250));
     }
-    c.mark("lab restoration record missing after 30 seconds");
+    c.mark("verified lab restoration missing after 30 seconds");
     false
 }
 
@@ -2264,6 +2292,7 @@ mod tests {
         clock: u64,
         smoke: Option<String>,
         restoration: bool,
+        restored_arp: Option<String>,
         dir: PathBuf,
     }
     impl Host for Fake {
@@ -2372,6 +2401,8 @@ mod tests {
                         self.dir.join("guard-change.json"),
                         r#"{"restore_exit":0,"restored_utc":"2026-10-27T12:00:00Z"}"#,
                     )?;
+                    fs::write(self.dir.join("restored-arp.txt"), self.restored_arp.as_deref().unwrap_or(
+                        "? (198.18.0.1) at 2:ac:0:0:0:1 on feth4202 ifscope permanent [ethernet]\n"))?;
                 }
                 fs::write(self.dir.join("ui.log"), "ui\n")?;
                 let data = s
@@ -2877,6 +2908,25 @@ tcp4       0      0  192.168.1.5.8002       *.*                    ESTABLISHED\n
             o.history = Some(root.join("alias/data"));
             assert_eq!(run(&mut f, &o).unwrap(), 2);
             assert!(f.log.is_empty());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn zero_restore_exit_cannot_hide_an_incomplete_or_wrong_arp_entry() {
+        for arp in [
+            "",
+            "? (198.18.0.1) at (incomplete) on feth4202 ifscope [ethernet]",
+            "? (198.18.0.1) at 2:ac:0:0:0:2 on feth4202 ifscope permanent [ethernet]",
+            "? (198.18.0.1) at 2:ac:0:0:0:1 on en0 ifscope permanent [ethernet]",
+        ] {
+            let (root, mut o, mut f, _) = setup("bad-arp-restore");
+            o.stage = Some("guard".into());
+            o.history = Some(root.join("shared"));
+            f.smoke = Some("{}".into());
+            f.restoration = true;
+            f.restored_arp = Some(arp.into());
+            assert_eq!(run(&mut f, &o).unwrap(), 10, "{arp}");
             fs::remove_dir_all(root).unwrap();
         }
     }

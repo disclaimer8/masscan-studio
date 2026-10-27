@@ -160,6 +160,20 @@ fn read_window(d: &Path, head: Option<&str>, stage: &str) -> Window {
         );
     }
     if stage == "guard" {
+        let entries =
+            crate::macos_lab::parse_arp(&text_in(d, "restored-arp.txt").unwrap_or_default());
+        let source = entries
+            .iter()
+            .filter(|e| e.ip == SCANNER_IP)
+            .collect::<Vec<_>>();
+        r.inv(
+            "permanent source ARP mapping observed after restoration",
+            source.len() == 1
+                && source[0].iface == PEER_IF
+                && source[0].permanent
+                && source[0].mac.as_deref() == Some(SCANNER_MAC),
+            "",
+        );
         let change = read_json(d.join("guard-change.json")).unwrap_or(Value::Null);
         let ready = read_json(d.join("guard-ready.json")).unwrap_or(Value::Null);
         let removed = parse_utc(s(&change["removed_utc"]));
@@ -219,6 +233,11 @@ pub(super) fn verify(d: &Path, pause: Option<&Path>, head: Option<&str>) -> Valu
         if let Some(p) = pause {
             let mut first = read_window(p, head, "pause");
             let first_rows = history_checks(&mut first.checks, &first.history["scans"][0]);
+            first.checks.beh(
+                "restart includes durable pre-restart results",
+                !first_rows.is_empty(),
+                "an empty pause history cannot prove existing-row retention",
+            );
             results_checks(
                 &mut first.checks,
                 &first_rows,

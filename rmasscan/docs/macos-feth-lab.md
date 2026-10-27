@@ -451,3 +451,115 @@ Linux are unchanged):
 - Multicast strays (x01 upper bound) are Mac-only and limited to `[guest_started_utc, guest_finished_utc]`.
 - A lab SYN-ACK retransmit of an in-window reply after the last end marker (the listeners now stop after the
   witness) is the note `post_run_synack_retransmits`; any other frame there is still an unflushed tail (INVALID).
+
+## Studio acceptance (`studio-verify`)
+
+A Masscan Studio window on the stand is one authorized session of the packaged `studio-ui --smoke-feth` (three scans:
+`s1_full`, `s2_pause`, `s3_stop`), recorded by `cargo xtask feth-acceptance --out DIR --app '/abs/Masscan Studio.app'
+--lab /abs/rmasscan-lab [--manual]` in `studio/`. The orchestrator writes the window directory and never reads a pcap;
+`rmasscan-lab studio-verify` judges it offline:
+
+```sh
+rmasscan-lab studio-verify --dir DIR --out DIR/verdict.json [--expect-head SHA] [--manual]   # rc 0 PASS, 1 FAIL, 2 INVALID or NOT RUN
+```
+
+The verifier reads only `DIR`, starts no process and opens no network or BPF device. It pins the Studio binding
+(`198.18.0.1`, `02:ac:00:00:00:01`, next hop `02:ac:00:00:00:02`, source port 40000, wait 3 s, adapter `feth4201`, peer
+interface `feth4202`) and the three jobs in `studio_verify.rs` instead of importing `studio-protocol`, and rebuilds the
+probe order with the same `plan_frames` (engine `ProbeCursor`) the Windows and macOS verifiers use. It reuses their
+capture-command check (`macos_verify::capture_command`), the lab-frame check (`verify::safety_checks`), the reply rule
+for an RST after a SYN-ACK (`answered_port_open`), the host-listener parser and the final precedence (`verify::finish`).
+
+### Window directory (the contract of the orchestrator)
+
+All of these are top-level files of `DIR`, except `data/`. Every file is listed in `hashes-before-copy.txt`.
+
+| File | Content | If absent or wrong |
+| --- | --- | --- |
+| `smoke.json` | UI chronicle, schema 1: `result` (`"ok"`, or `"timeout ..."`, or a failure text), `plan[]` (`tag job scan_id_hex rows_seen started_utc finished_utc finished_status paused_next_index pause_to_paused_ms stop_to_stopped_ms`; `job` is `{targets ports exclusions seed(string) rate(number) backend:"MacFeth"}`), `events[]` (`utc mono_ms kind status detail`, plus `authorized` bool on `kind:"Authorization"`; scan states are `kind:"State"` with `status` `Starting Scanning Saving Paused Completed Stopped ...`), `actions[]` (`utc mono_ms action`). UTC is `YYYY-MM-DDTHH:MM:SS[.fff]Z`; `mono_ms` is one monotonic clock for events and actions. `Paused` carries `detail: "Checkpoint committed by Studio"`. Not needed with `--manual` | NOT RUN; unparseable times INVALID |
+| `history.json` | SQLite dump taken after the UI exited: `{"scans":[{scan_id_hex, attempt_hex, job, status, detail, next_index, checkpoint_len, sequence, created_at, rows:[{ip, port, open, discovered_at}]}]}`. `status` is the plain name (`Completed`, `Stopped`); `checkpoint_len` is an **integer** (0 when no checkpoint, never null); `next_index` is null or an integer | NOT RUN (absent or not JSON) |
+| `peer.pcap`, `peer.err` | uncompressed `tcpdump` on `feth4202`, no filter, and its stderr (banner `listening on feth4202,` and the exit statistics lines `N packets captured`, `N packets dropped by kernel`, which tcpdump prints on a clean exit) | NOT RUN if the pcap is missing, INVALID otherwise |
+| `uplink.pcap`, `uplink.err` | the same on the uplink with the exact lab filter; banner `listening on <uplink>,` | as above; a stored frame, or `captured > 0`, is a safety FAIL |
+| `peer.cmd.json`, `uplink.cmd.json` | one record per witness: `{cmd:[argv...], interface, filter, start_utc, stop_utc, exit_code, listening}`. `cmd` is the tcpdump argv, e.g. `["/usr/sbin/tcpdump","-p","-n","-U","-s","0","-i","en0","-w","uplink.pcap","<lab filter>"]` (the filter is one argument, the last). `start_utc` is taken before the witness is started, `stop_utc` after it exited, both with millisecond precision (`...SS.fffZ`; the coverage margin is 1 s), `exit_code` is its exit status after SIGINT (0), `listening` is true when it was reading before the UI started | INVALID |
+| `status-pre.json`, `status-post.json` | `macos-lab status`: `raw_run_allowed: true`; before also `bpf_access: "granted"` and `uplink` (the default-route interface, not `feth*`) | INVALID (NOT RUN if missing) |
+| `window.json` | `{schema:1, started_utc, ended_utc, uplink, ui_rc, invalid_marks:[text...]}`; `uplink` equals `status-pre.uplink`; `ui_rc` is the UI exit code (0); every INVALID mark the orchestrator sets (e.g. `status-post` not allowed, `history not closed cleanly`) goes into `invalid_marks` | NOT RUN if absent, INVALID if a mark, `ui_rc != 0` or another uplink |
+| `provenance.json` | `git_head` (40 hex), `dirty` (false), `ui_sha256`, `runner_sha256` (the bundle's runner bytes), `installed_runner_sha256` (sha256 of the bytes of the installed file under `/Library/PrivilegedHelperTools/MasscanStudio/<hash>/studio-runner`, read as the user, not a `stat`), all 64 hex. `dirty` is computed from `git status --porcelain --untracked-files=no`: tracked changes only, so an untracked `.superpowers/` does not matter. `--expect-head SHA` also requires `git_head == SHA` | INVALID (NOT RUN if absent) |
+| `alf.txt` | `Firewall is disabled. (State = 0)` | INVALID (NOT RUN if absent) |
+| `leftover-listeners.txt`, `leftover-procs.txt` | empty (whitespace only) | INVALID (NOT RUN if absent) |
+| `pair-quiet.txt` | free text; presence only | NOT RUN if absent |
+| `listeners-ready.txt` | written by `peer listen --ready` | INVALID if absent |
+| `host-listen-before.txt`, `host-listen-after.txt` | `rc 0` line, then `netstat -an -p tcp` including its `Active Internet connections` header; stderr lines as `# stderr:`. A file with `rc 0` and no header (a blinded netstat) is "not recorded", never "no listeners". On macOS 27 this is the normal case: the OS hides the TCP table from every process started by an ad-hoc-signed tool, with rc 0 and no message. The orchestrator then writes `# not recorded: macOS hides the TCP table from processes started by ad-hoc-signed tools; replies are judged from the wire capture`, proceeds, and leaves leftover lab listeners to `lsof -nP -iTCP -sTCP:LISTEN` (the user's own sockets) and the `ps` gate. The wire decides: the verifier judges the replies from the complete peer capture (note `open_truth`) and still requires the lab listeners 8000-8007 to answer, else INVALID. A netstat that fails (rc not 0) or writes to stderr is still NOT RUN | INVALID unless the wire decides |
+| `data.sha256` | `<sha256>  history.sqlite3` of `data/history.sqlite3`, taken after the UI exited and the history dump closed the store (so no journal is left); when `data/` is present its file must hash to it and must have no `-wal`/`-shm` next to it | NOT RUN if absent, INVALID on a mismatch or a journal |
+| `ISOLATION-BREACH.txt` | written by the orchestrator's interlock | present = safety FAIL |
+| `hashes-before-copy.txt` | `sha256sum` format of every top-level file except itself and `verdict.json` (the directory `data/` is neither listed nor read); an unlisted file, a listed entry that cannot be read, or a mismatch | INVALID |
+| other files | `ui.log`, `final.png`, listener logs ...: only hashed | |
+| `verdict.json` | written by this verifier, outside the hashes | |
+
+A `*.gz` anywhere under `DIR` is a safety FAIL (the verifier does not decompress).
+
+### Rules
+
+Every check is named in `verdict.json` (`cases[].checks[] {name, ok, result, detail, behaviour, safety}`); `cases` holds the
+pseudo-cases `safety`, `chronicle`, `history`, `wire` (and `host-listeners` when it has a finding) and one case per scan.
+The final precedence is the shared `verify::finish`: any safety trip (lab frame on the uplink, `*.gz`, a SYN to anything
+but `198.18.0.2`, `ISOLATION-BREACH.txt`) or behaviour failure anywhere makes the whole window FAIL, and an unrelated
+unproven file cannot downgrade it (`behaviour_fail` and `safety_trips` list the tags); with none, any NOT RUN gives NOT
+RUN, then any INVALID gives INVALID, and PASS only when every check passed. Nothing is ever promoted.
+
+- `safety`:
+  - `uplink.pcap` parses and holds 0 frames; `uplink.err` shows `0 packets captured` (a frame tcpdump counted as passing
+    the filter is a lab frame even if not stored) and `0 packets dropped by kernel`; `packets received by filter` is
+    pre-filter on macOS and informational. A drop, a missing statistics line or a truncated pcap is INVALID.
+  - `peer.pcap` parses, its `captured` equals the frames, 0 kernel drops.
+  - Each witness has its `<who>.cmd.json`: the command is the one `macos-verify` accepts (peer: `feth4202`, no filter;
+    uplink: the interface of `status-pre.uplink`, not `feth*`, exactly the lab filter, `-p`), the `.err` banner names the
+    same interface, `listening` is true, `exit_code` is 0, and every frame of its pcap lies inside `[start_utc, stop_utc]`
+    (2 s tolerance). With a chronicle the witnesses must also cover the session: `start_utc <= first action - 1 s`,
+    `stop_utc >= last event + 1 s`. Anything else is INVALID; an unproven peer capture makes the wire rules INVALID
+    (never FAIL) because a late witness proves nothing about the scanner.
+  - The status gates, `hashes-before-copy.txt`, the provenance and the files of the orchestrator are INVALID/NOT RUN as
+    listed in the table.
+- `chronicle`: actions are exactly `Authorize, Start:s1_full, Start:s2_pause, Pause, Resume, Start:s3_stop, Stop, Lock`;
+  one `Authorization` with `authorized: true`; a `Network preflight passed` notice before the first Start and a
+  `Runner session closed` notice after `Lock`; `result == "ok"`. A session that ends before any `Start:` action (authorization timeout, cancelled dialog, preflight refusal) is
+  NOT RUN whatever the plan records say (the driver writes them with null `scan_id_hex`), with the chronicle's `result`
+  as the reason; a safety trip there still FAILs. A `timeout` or any failure text after a Start is a FAIL (the UI/runner
+  contract was broken). UTC and `mono_ms` must not drift apart by more than 100 ms plus 1 ms per second of session
+  (a wall-clock step shifts the windows), and each case's `finished_utc` must equal its
+  terminal State within 50 ms.
+- `history`: exactly the three planned `scan_id_hex` of the chronicle (no unplanned scan, none twice).
+- per scan:
+  - `history`: found by `scan_id_hex`, job equals the plan, status `Completed`/`Completed`/`Stopped`, no duplicate
+    `(ip, port)`, all `198.18.0.2`, `rows_seen` equals the rows. A case whose State never reached a terminal state is a
+    FAIL (Studio hung).
+  - `wire`: the SYNs of the scanner inside the case window `[Starting - 1 s, terminal State + 1 s)`, cut where
+    neighbours overlap; each port once; order equals the plan (the whole plan if Completed, a prefix if Stopped). Every
+    unicast IPv4 frame from the scanner's MAC or IP must be a source-port-40000 SYN to `198.18.0.2` that lies inside a
+    case window: a SYN with another source port, an RST sent by the scanner, or a SYN outside every window is a FAIL.
+  - `results`: every row has a wire reply with the same open flag. Every SYN-ACK and every RST that answers a SYN of the
+    case (same port, `ack == seq + 1`) before the scanner exit is a row, with two tolerances: a missing RST is fine
+    (closed-port rate limit) and an RST that follows a SYN-ACK of the same port is not a second result (Studio keeps one
+    row per port). Replies after the exit, listener teardown, are only `notes.post_run_replies.<tag>`. In `s1_full` the
+    open rows are `8000-8007` plus the host wildcard listeners present in both `host-listen-*` records.
+- `s2_pause`: states `Scanning, Saving, Paused, Scanning, Completed`; Pause action to `Paused` at most 5000 ms (the
+  recorded figure must equal the chronicle); `Paused.detail == "Checkpoint committed by Studio"`; `paused_next_index = k`
+  equals the SYNs sent before the Resume action; the first leg is the first `k` planned ports, the second leg the rest;
+  `0 < k < 32`, otherwise INVALID (the pause did not split the probe stream); after Resume the history has
+  `checkpoint_len == 0` and `next_index` null.
+- `s3_stop`: Stop action to `Stopped` at most 1000 ms; `0 < SYN < 2000`; no SYN later than `Stopped + 100 ms` (the runner joins the engine before it reports Finished);
+  `checkpoint_len == 0`, `next_index` null.
+- `--manual`: no `smoke.json`, no plan. `safety` and the orchestrator's files; a settled history status (`Completed`,
+  `Stopped`, `Failed`, `Paused`, `Interrupted`); no duplicate rows; rows backed by a reply to a SYN of the scanner
+  anywhere in the capture (not per scan); every scanner frame a planned-form SYN. The witnesses' coverage of the
+  session cannot be judged without a chronicle. `notes.manual` is `true`.
+
+`verdict.json` also records `provenance` (`verifier_sha256`, `window_sha`, `ui_sha256`, `runner_sha256`,
+`installed_runner_sha256`), `isolation` (`uplink_frames`, `uplink_captured`, `uplink_dropped`, `uplink_exit_code`,
+`peer_exit_code`, `status_pre`, `status_post`), `totals`, `behaviour_fail`, `safety_trips` and `notes`. A tripped
+isolation check makes the window FAIL for good; there is no rerun.
+
+### Studio acceptance: peer witness filter and leftover file
+
+The peer witness (`peer.pcap`) runs with the single filter `not (ether src 02:ac:00:00:00:02 and udp port 5353)`, recorded in `peer.cmd.json` as `filter` and as the last `cmd` argument. The host owns 198.18.0.2 on the peer interface and announces its name over mDNS there; those frames name the machine and must not be published. The filter drops only them; every scanner frame is still captured. The verifier accepts exactly two peer forms: no filter (windows archived on 2026-10-26 at 05ab27f) or exactly this filter; anything else is INVALID.
+
+`leftover-listeners.txt` holds only the leftover lab listeners found (lines of `lsof -nP -iTCP -sTCP:LISTEN` and of the netstat record); it is empty when there are none. The full listener list is never written, because it is the user's app inventory.

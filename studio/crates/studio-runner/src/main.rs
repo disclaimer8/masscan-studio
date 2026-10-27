@@ -59,11 +59,17 @@ fn raw_adapter(job: &Job) -> Result<PreparedAdapter, String> {
             Ok((fake.pair(), None))
         }
         Backend::MacFeth => {
-            // The scanner's stand checks also validate routes, peer addresses,
-            // ARP and forwarding. A manifest alone is insufficient after VPN
-            // changes. Keep raw I/O closed until Studio has the complete gate.
-            if !studio_protocol::RAW_SCANNING_ENABLED {
-                return Err("Raw scanning is not enabled in this Studio build: complete live isolation preflight and authenticated runner bootstrap are still required. Simulation is available.".into());
+            // Order is fixed: profile gate, root, strict preflight, adapter.
+            if !studio_protocol::raw_profile_enabled(job.backend) {
+                return Err("Raw scanning is not enabled for this profile in this Studio build: complete live isolation preflight and authenticated runner bootstrap are still required. Simulation is available.".into());
+            }
+            // Invariant: a root process here was started by `--connect` after
+            // `trusted::verify`; `--stdio` refuses root at launch.
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            if studio_platform::unix::Identity::current()?.uid != 0 {
+                return Err(
+                    "The Mac feth profile needs the authorized root runner; Authorize first".into(),
+                );
             }
             let inspector = feth_inspector()?;
             let pair = rmasscan_net::open_explicit(plan.binding()).map(|a|a.io).map_err(|e|format!("BPF access unavailable: {e}. The isolated feth stand and an explicit access grant are required."))?;

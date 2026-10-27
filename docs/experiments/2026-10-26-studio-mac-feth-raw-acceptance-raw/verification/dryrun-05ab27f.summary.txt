@@ -1,0 +1,5 @@
+DRY RUN: no stand, no installed runner, no witness, no frame. The window is NOT RUN.
+PASS: studio-ui --smoke-feth exited rc 1 with "Authorization failed", wrote smoke.json, left no Studio process and no administrator dialog.
+Dry run (no stand, no installed runner, no witness, no frame). Orchestrator rc 0; studio-verify on it: NOT RUN rc 2 (see dryrun-05ab27f.verify.log).
+ui_rc: 1
+Error: "--smoke-feth failed: Authorization failed: No such file or directory (os error 2). Install this build's runner with cargo xtask prepare-runner first."

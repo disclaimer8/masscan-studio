@@ -1,6 +1,6 @@
 # Studio runner authorization
 
-Status: macOS, Linux and Windows session bootstrap implemented; raw scanning disabled.
+Status: macOS, Linux and Windows session bootstrap implemented; raw scanning open only for the Mac feth profile on macOS, closed on Windows and Linux.
 Windows same-account desktop UAC and elevated runner lifetime passed native
 acceptance on 2026-10-26. Trusted installation remains a separate prerequisite.
 See VERIFICATION.md for exact package provenance and acceptance limits.
@@ -83,7 +83,7 @@ PID before and after. The spawning controller thread stays alive for the session
 Socket closure ends the session; if credentials prevent the UI from killing a
 root child, bounded cleanup delegates only reaping to a waiter. The runner's
 disconnect/UI checks and parent-death signal govern exit. Linux preflight currently
-reports unavailable and cannot enable raw scanning.
+reports unavailable and keeps raw scanning closed on Linux.
 
 CI uses a temporary XML policy granting only its exact hash-addressed runner in
 a disposable GitHub VM. It removes the policy after the probe and never bundles
@@ -155,8 +155,12 @@ separate acceptance work. RAW_SCANNING_ENABLED remains false.
 
 - Real authorized UI/runner lifecycle and isolation evidence are recorded in
   VERIFICATION.md separately from offline tests and from engine Stage 2C.
-- Raw Start/Pause/Resume/Stop with independent packet capture and mid-scan network
-  drift handling must pass before RAW_SCANNING_ENABLED can change.
+- Mac feth on macOS: Authorize, Start, Pause, Resume and Stop through Studio with independent
+  packet capture passed once on a sealed `feth` pair (see VERIFICATION.md,
+  2026-10-26). Still NOT RUN: Resume after a Studio restart on raw, sleep/wake, VPN, mid-scan
+  network drift in a live window.
+- Windows and Linux raw profiles stay closed (`raw_profile_enabled` is false there) until
+  their own live acceptance passes.
 - Windows alternate-account UAC refusal still needs a real second-account test;
   Linux desktop password prompt/cancellation remains a manual acceptance item.
 - No physical NIC or three-OS raw support follows from this implementation.

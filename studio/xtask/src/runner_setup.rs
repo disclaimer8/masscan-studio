@@ -53,7 +53,7 @@ pub(super) fn prepare_source(root: &Path, source: &Path) -> Result<PathBuf> {
         serde_json::to_vec_pretty(&serde_json::json!({
             "sha256":hash,"destination":platform::installed_path(&hash)?,"source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,
             "dirty":!text(Command::new("git").args(["status","--porcelain"]))?.is_empty(),
-            "cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,"raw_enabled":studio_protocol::RAW_SCANNING_ENABLED,
+            "cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,"raw_profiles":studio_protocol::RAW_PROFILES,
             "install_script_sha256":digest(&dir.join("install.sh"))?
         }))?,
     )?;
@@ -241,6 +241,9 @@ pub(super) fn probe_source(source: &Path) -> Result<()> {
         return Err("Root runner survived session close".into());
     }
     println!("Root runner exited; socket endpoint removed.");
-    println!("Authorization probe complete. No packets sent; raw gate remains closed.");
+    println!(
+        "Authorization probe complete. No packets sent. Raw profiles open in this build: {:?} (empty means every raw profile is closed on this OS; an open one still needs Authorize and the stand preflight).",
+        studio_protocol::RAW_PROFILES
+    );
     Ok(())
 }

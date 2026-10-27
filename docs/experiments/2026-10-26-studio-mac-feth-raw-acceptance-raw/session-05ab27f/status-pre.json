@@ -1,0 +1,55 @@
+{
+  "bpf_access": "granted",
+  "checks": [
+    {
+      "detail": "run \"m1\" created \"2026-10-26T20:26:37Z\"",
+      "name": "manifest",
+      "ok": true
+    },
+    {
+      "detail": "feth4201 <-> feth4202, 198.18.0.2/30 on the peer only; feth4201: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up; feth4202: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:02 at up",
+      "name": "interfaces",
+      "ok": true
+    },
+    {
+      "detail": "en0 via Some(\"192.168.1.1\"), unchanged",
+      "name": "default_route",
+      "ok": true
+    },
+    {
+      "detail": "8.8.8.8 via en0",
+      "name": "routes",
+      "ok": true
+    },
+    {
+      "detail": "198.18.0.0/30 is routed only by the pair",
+      "name": "lab_routes",
+      "ok": true
+    },
+    {
+      "detail": "198.18.0.1 on feth4202 permanent; arp entry: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up",
+      "name": "arp",
+      "ok": true
+    },
+    {
+      "detail": "no bridge has a feth member",
+      "name": "bridges",
+      "ok": true
+    },
+    {
+      "detail": "net.inet.ip.forwarding = 0",
+      "name": "forwarding",
+      "ok": true
+    },
+    {
+      "detail": "/dev/bpf0..15 exist",
+      "name": "bpf_nodes",
+      "ok": true
+    }
+  ],
+  "gateway": "192.168.1.1",
+  "manifest": "/var/run/rmasscan-lab/m1.json",
+  "raw_run_allowed": true,
+  "run_id": "m1",
+  "uplink": "en0"
+}

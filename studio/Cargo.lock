@@ -4503,6 +4503,8 @@ dependencies = [
  "image",
  "pollster",
  "rfd",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "studio-app",
@@ -5914,6 +5916,7 @@ dependencies = [
  "sha2 0.10.9",
  "studio-platform",
  "studio-protocol",
+ "studio-store",
  "windows-sys 0.61.2",
 ]
 

@@ -207,8 +207,15 @@ impl Client {
     fn authorize(source: &std::path::Path, cancelled: &AtomicBool) -> Result<Self, String> {
         let hash = studio_platform::trusted::file_hash(source)?;
         let path = authorization::installed_path(&hash)?;
+        // The installation hint belongs to a missing or unverifiable installed image only; a timeout or a
+        // cancelled dialog keeps its own diagnostic.
+        let installed = studio_platform::trusted::verify(&path, &hash);
         let auth = authorization::Authorized::open(&path, &hash, cancelled).map_err(|e| {
-            format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
+            if installed.is_err() {
+                format!("{e}. Install this build's runner with cargo xtask prepare-runner first.")
+            } else {
+                e
+            }
         })?;
         let input = auth.stream.try_clone().map_err(|e| e.to_string())?;
         let output = auth.stream.try_clone().map_err(|e| e.to_string())?;
@@ -616,14 +623,20 @@ fn work(
                         Action::Start(job) => {
                             job.prepare()?;
                             if job.backend != Backend::Simulation {
-                                if !RAW_SCANNING_ENABLED {
+                                if !raw_profile_enabled(job.backend) {
                                     emit(&out,Update::State(Status::Failed,"Raw scanning is not enabled in this build. Authorization can be checked separately without sending packets.".into()))?;
                                     return Ok(());
                                 }
                                 if !client.as_ref().is_some_and(Client::is_authorized) {
-                                    return Err(
-                                        "Authorize the runner before starting a raw scan".into()
-                                    );
+                                    emit(
+                                        &out,
+                                        Update::State(
+                                            Status::Failed,
+                                            "Authorize the runner before starting a raw scan"
+                                                .into(),
+                                        ),
+                                    )?;
+                                    return Ok(());
                                 }
                             } else if client.as_ref().is_some_and(Client::is_authorized) {
                                 client.take();
@@ -677,7 +690,7 @@ fn work(
                             }
                             let checkpoint = s.checkpoint.ok_or("Checkpoint unavailable")?;
                             if s.job.backend != Backend::Simulation
-                                && (!RAW_SCANNING_ENABLED
+                                && (!raw_profile_enabled(s.job.backend)
                                     || !client.as_ref().is_some_and(Client::is_authorized))
                             {
                                 return Err(

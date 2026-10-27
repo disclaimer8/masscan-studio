@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "started_utc": "2026-10-26T20:27:12.938Z",
+  "result": "Authorization failed: Authorization timed out. Install this build's runner with cargo xtask prepare-runner first.",
+  "plan": [
+    {
+      "tag": "s1_full",
+      "job": {
+        "targets": "198.18.0.2",
+        "ports": "80,443,8000-8007,9000-9009",
+        "exclusions": "",
+        "seed": "1",
+        "rate": 100,
+        "backend": "MacFeth"
+      },
+      "scan_id_hex": null,
+      "rows_seen": 0,
+      "started_utc": null,
+      "finished_utc": null,
+      "finished_status": null,
+      "paused_next_index": null,
+      "pause_to_paused_ms": null,
+      "stop_to_stopped_ms": null
+    },
+    {
+      "tag": "s2_pause",
+      "job": {
+        "targets": "198.18.0.2",
+        "ports": "9000-9031",
+        "exclusions": "",
+        "seed": "2",
+        "rate": 4,
+        "backend": "MacFeth"
+      },
+      "scan_id_hex": null,
+      "rows_seen": 0,
+      "started_utc": null,
+      "finished_utc": null,
+      "finished_status": null,
+      "paused_next_index": null,
+      "pause_to_paused_ms": null,
+      "stop_to_stopped_ms": null
+    },
+    {
+      "tag": "s3_stop",
+      "job": {
+        "targets": "198.18.0.2",
+        "ports": "1-2000",
+        "exclusions": "",
+        "seed": "3",
+        "rate": 300,
+        "backend": "MacFeth"
+      },
+      "scan_id_hex": null,
+      "rows_seen": 0,
+      "started_utc": null,
+      "finished_utc": null,
+      "finished_status": null,
+      "paused_next_index": null,
+      "pause_to_paused_ms": null,
+      "stop_to_stopped_ms": null
+    }
+  ],
+  "events": [
+    {
+      "utc": "2026-10-26T20:27:12.938Z",
+      "mono_ms": 405,
+      "kind": "History",
+      "status": "",
+      "detail": "0 scans, selected none"
+    },
+    {
+      "utc": "2026-10-26T20:27:12.988Z",
+      "mono_ms": 454,
+      "kind": "Authorization",
+      "status": "busy",
+      "detail": "Waiting for system authorization…",
+      "authorized": false
+    },
+    {
+      "utc": "2026-10-26T20:30:13.454Z",
+      "mono_ms": 180921,
+      "kind": "Authorization",
+      "status": "idle",
+      "detail": "Authorization timed out. Install this build's runner with cargo xtask prepare-runner first.",
+      "authorized": false
+    }
+  ],
+  "actions": [
+    {
+      "utc": "2026-10-26T20:27:12.938Z",
+      "mono_ms": 405,
+      "action": "Authorize"
+    },
+    {
+      "utc": "2026-10-26T20:30:13.454Z",
+      "mono_ms": 180921,
+      "action": "Lock"
+    }
+  ]
+}

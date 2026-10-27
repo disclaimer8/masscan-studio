@@ -1,0 +1,9 @@
+NOT RUN  safety NOT RUN: peer.pcap present; NOT RUN: uplink.pcap present; INVALID: uplink.err has tcpdump's exit statistics (clean exit)
+NOT RUN  chronicle NOT RUN: smoke.json: the session ended before any Start
+INVALID  host-listeners INVALID: host listeners recorded before and after (wildcard listeners answer on 198.18.0.2)
+PASS     history 
+NOT RUN  s1_full NOT RUN: the Start action of the case is in the chronicle
+NOT RUN  s2_pause NOT RUN: the Start action of the case is in the chronicle
+NOT RUN  s3_stop NOT RUN: the Start action of the case is in the chronicle
+NOT RUN  wire NOT RUN: SYN outside the case windows needs the chronicle times of every case
+overall: NOT RUN {"fail":0,"invalid":1,"not_run":6,"pass":1}

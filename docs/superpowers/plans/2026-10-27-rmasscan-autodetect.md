@@ -172,12 +172,18 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
   `windows-sys`. **Никогда не запускать `route`, `netstat`, `ip`, `ifconfig`, `arp`** из продукта: на macOS 27 их вывод
   отфильтрован для ad-hoc-подписанных вызывающих, а spawn хрупок.
 - **Ни один unit- или интеграционный тест не достигает реального бэкенда.** `rmasscan_cli::run` принимает `&dyn
-  Backend`; все тесты библиотеки и бинарника используют `FakeBackend`, чей `open` **паникует**; `OsBackend` определён в
-  модуле бинарника `src/os_backend.rs`, включённом только `#[cfg(not(test))]`, поэтому под `cargo test` его нельзя даже
-  назвать; интеграционные тесты запускают бинарник только с `--iflist` и `--offline` (они ничего не открывают и не
-  шлют). Причина: полные тесты GO идут на elevated госте Windows с Npcap Admin-only, чей management NIC это QEMU NAT —
-  тест, дошедший до `open_explicit`, послал бы ARP к `10.0.2.2` и SYN в реальную сеть через slirp. Тест
-  `os_backend_is_absent_under_test` (компиляция `cfg(test)` без модуля) и ревью Focus 1 это закрепляют.
+  Backend`; все тесты библиотеки используют `FakeBackend`, чей `open` **паникует**; `OsBackend` определён в модуле
+  бинарника `src/os_backend.rs`, включённом только `#[cfg(not(test))]`, и `fn main` тоже под `#[cfg(not(test))]` (cargo
+  компилирует bin-таргет под `cfg(test)`, иначе сборка тестов не соберётся — N2); бинарник тестов не содержит (все
+  прежние unit-тесты переехали в библиотеку). Интеграционные тесты запускают бинарник (он собирается **без**
+  `cfg(test)` и содержит `OsBackend`) **только через один помощник** `tests/common/spawn.rs::spawn_readonly(argv)`,
+  который паникует, если argv не содержит ни одного из `--iflist`, `--offline`, `-sL`/`--list`, `--echo`/`--echo-all`,
+  `--help`/`-V`; `differential.rs` и `detect_readonly.rs` идут через него, а кейс `--banners 10.0.0.0/24 -p80` в
+  `differential.rs` заменяется на неизвестный флаг плюс `--offline` (`--nonsense --offline 10.0.0.0/30 -p80 --seed 1`),
+  чтобы этап 3 не превратил его в живой скан /24 (N3). Причина: полные тесты GO идут на elevated госте Windows с Npcap
+  Admin-only, чей management NIC это QEMU NAT — тест, дошедший до `open_explicit`, послал бы ARP к `10.0.2.2` и SYN в
+  реальную сеть через slirp. Гарантия структурная (границы модулей, N2, N3); тест `os_backend_is_absent_under_test`
+  (компиляция) и ревью Focus 1 это закрепляют.
 - **Живые кадры только на запечатанных стендах:** Linux `netns` на minipc (внутри `wire-lab.sh`), macOS `feth` `m1` (по
   действиям пользователя), Windows VM `n2` на home-pc (агент может поднять VM/стенд через `sudo -n`, решение
   пользователя). Никогда на реальной LAN: ARP к реальному шлюзу это живой кадр в сети пользователя и **запрещён**.
@@ -186,7 +192,9 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
   изменений firewall, маршрутов, DNS, NIC на реальных хостах; мост лаборатории без uplink; сканируются только адреса
   `198.18.0.0/24`; пароли не попадают ни в репозиторий, ни в evidence; Npcap не поставляется. **Детекционный preflight**
   перед каждым живым кейсом, который зависит от маршрутизации на хосте с двумя NIC (`w01`, `w06`, `m05`): тот же
-  `rmasscan --offline` с теми же целями; живой кейс идёт только если `[+] interface` называет NIC стенда, иначе NOT RUN.
+  `rmasscan --offline` с теми же целями; живой кейс идёт только если результат preflight **равен ожидаемому обнаружению
+  кейса** (`w01`/`w06`: `[+] interface = Ethernet 2`; `m05`: отказ `LocalTarget` «address of this host (route via
+  lo0)»), иначе NOT RUN (R1).
 - **Автоопределение проверяемо на стендах.** Чего не хватало, меняется **внутри запечатанного пространства имён**:
   только Linux netns сканера получает IPv4 `198.18.0.1/24` на `veth-a`, маршрут по умолчанию `via 198.18.0.2` (пир, в
   той же netns-паре, без uplink) и постоянные соседские записи `198.18.0.2–.5 → 02:aa:00:00:00:02` (чтобы ядро сканера
@@ -258,8 +266,10 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
   модулях с `unsafe`; новых зависимостей нет).
 - Изменить `rmasscan/crates/rmasscan-cli/Cargo.toml` (`[lib]` + `[[bin]]`, зависимости `rmasscan-engine`, `rmasscan-net`,
   `getrandom`), `src/args.rs` (`--router-ip`, `--iflist`, алиасы `--source-ip`/`--source-mac`, тексты help), `src/main.rs`
-  (тонкий бинарник); создать `src/lib.rs` (`pub mod args; pub mod live; pub mod output; pub fn run`), `src/live.rs`,
-  `src/output.rs`, `src/os_backend.rs` (`#[cfg(not(test))]`), `tests/live_fake.rs`, `tests/detect_readonly.rs`.
+  (тонкий бинарник, `#[cfg(not(test))] fn main`), `tests/differential.rs` (через `spawn_readonly`, кейс `--banners`
+  заменён); создать `src/lib.rs` (`pub mod args; pub mod live; pub mod output; pub fn run`), `src/live.rs` (задача 1:
+  минимальный `Backend`; задача 5: полный), `src/output.rs`, `src/os_backend.rs` (`#[cfg(not(test))]`),
+  `tests/common/spawn.rs` (`spawn_readonly`), `tests/live_fake.rs`, `tests/detect_readonly.rs`.
 - Создать `rmasscan/crates/rmasscan-lab/src/autodetect_suite.rs` (+ `autodetect_suite_tests.rs`),
   `src/autodetect_verify.rs` (+ `autodetect_verify_tests.rs`); изменить `src/{lib,main}.rs` (подкоманды),
   `src/capture.rs` (+ `tests/capture.rs`: режим isolation `autodetect`), `src/windows_suite.rs` (+ `windows_suite_tests.rs`:
@@ -278,7 +288,8 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
 
 | Параметр | Значение |
 | --- | --- |
-| ARP | `ARP_INTERVAL` 1 с, `ARP_TIMEOUT` 10 с по инжектированным часам: запросы в t = 0, 1, …, 9 с (ровно 10), отказ в 10 с; `recv` с дедлайном `MAX_IO_TIMEOUT` 50 мс; ARP-binding: `next_hop_mac = ff:ff:ff:ff:ff:ff`, `source_ports` плана; кадр сканера = ровно 60 байт `encode_request` |
+| ARP | `ARP_INTERVAL` 1 с, `ARP_TIMEOUT` 10 с по инжектированным часам: запросы в t = 0, 1, …, 9 с (ровно 10), отказ в 10 с; `recv` с дедлайном `MAX_IO_TIMEOUT` 50 мс; ARP-binding: `next_hop_mac = ff:ff:ff:ff:ff:ff`, `source_ports` плана; «ARP сканера» в верификаторе = ARP-запрос с eth src = source MAC ровно 60 байт с нулевым дополнением (любой target IP), затем проверка target = `router-ip` и байтов `encode_request`; «ARP ОС» = 42-байтовые запросы и кадры opcode 2 с MAC сканера |
+| Тексты отказов | строки C как есть: `[-] FAIL: …` и строки `    [hint] …`/` [hint] …` дословно, без обёртки `rmasscan: error:`; exit 1 |
 | Фиктивный MAC шлюза `--offline` | `66-55-44-33-22-11`, принудительно (и при `--router-mac`), поиска маршрутизатора нет (C `main-initadapter.c:159–163`) |
 | Значения по умолчанию | порт источника: один порт `40000 + unix_time % 20000` (C: {p, p+16}, отклонение, решение 6); seed живого скана: 64 бита `getrandom`, ≠ 0, печатается; rate 100, wait 10 |
 | Цели-пробы обнаружения | первый и последний **unicast**-адрес итогового набора: пропускаются `0.0.0.0/8`, `127.0.0.0/8`, `224.0.0.0/3` (в т. ч. `255.255.255.255`); если unicast-адресов нет — отказ `NoUnicastTargets` |
@@ -289,11 +300,12 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
 | Стенд Windows `n2` | без изменений: `\Device\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}` = `Ethernet 2`, `198.18.0.1/30`, MAC `52:54:00:04:80:a9`, без шлюза; пир `198.18.0.2` `02:57:4c:3d:2e:9b`, слушатели `80,443,8000-8007`, `eno1`-фильтр как в приёмке Windows; ARP-ответы ядра гостя на `who-has 198.18.0.1` ожидаемы (42 байта, считаются как `os_arp`) |
 | Общие аргументы кейсов | `--seed 1 --rate 100 --wait 3` (где не сказано иное); порты Linux `80,81,8080`, Windows `80,443,8000-8007,8099`, macOS `8000-8007,9000-9003` |
 | Кейсы Linux | `l01_auto` (`198.18.0.2`, без флагов адаптера), `l02_auto_multi` (`198.18.0.2-198.18.0.5`), `l03_adapter` (`--adapter veth-a`), `l04_adapter_ip` (`--adapter-ip 198.18.0.1`), `l05_adapter_mac` (`--adapter-mac 02-aa-00-00-00-01`), `l06_router_ip` (`--router-ip 198.18.0.3`), `l07_router_mac` (`--router-mac 02-aa-00-00-00-02`), `l08_source_port` (`--source-port 50000-50015`), `l09_arp_timeout` (`--router-ip 198.18.0.9`), `l10_no_such_adapter` (`--adapter nosuch0`), `l11_parity` (оракул и rmasscan, `198.18.0.2-198.18.0.5 -p80,8080 --source-port 40000`, без флагов адаптера), `l12_iflist` (оба `--iflist`: проверка на месте, хранится редуцированная форма) |
-| Кейсы Windows | `w01_auto` (после preflight), `w02_adapter_npf`, `w03_adapter_friendly` (`--adapter "Ethernet 2"`), `w04_router_mac`, `w05_arp_timeout` (`--router-ip 198.18.0.3`), `w06_multi_no_gateway` (`198.18.0.2-198.18.0.3`, после preflight: отказ), `w07_iflist`, `w08_restricted` (ограниченный токен: `--iflist` rc 0; скан — отказ rc 1 любого вида, 0 кадров) |
+| Кейсы Windows | `w01_auto` (после preflight), `w02_adapter_npf`, `w03_adapter_friendly` (`--adapter "Ethernet 2"`), `w04_router_mac`, `w05_arp_timeout` (`--router-ip 198.18.0.3`), `w06_multi_no_gateway` (`198.18.0.2-198.18.0.3`, после preflight: отказ), `w07_iflist`, `w08a_restricted_iflist` (ограниченный токен: `--iflist` rc 0), `w08b_restricted_scan` (ограниченный токен: отказ rc 1 любого вида, 0 кадров); на Windows файлы прогона называются `guest-stdout.txt`/`guest-stderr.txt`/`guest-exit.txt`, `run.json` не строится |
+| Preflight (`w01`, `w06`, `m05`) | `rmasscan --offline` с теми же целями на том же хосте перед живым кейсом; результат обязан **равняться ожидаемому обнаружению кейса**: `w01`/`w06` → `[+] interface = Ethernet 2`; `m05` → отказ `LocalTarget` (route via `lo0`); иначе кейс NOT RUN |
 | Кейсы macOS (пользователь, грант) | `m01_user_masked` (`--adapter feth4201 --adapter-ip 198.18.0.1 --router-ip 198.18.0.2`: отказ «os-masked»), `m02_user_explicit` (+ `--adapter-mac 02-ac-00-00-00-01`: ARP, скан), `m03_user_router_mac`, `m04_user_arp_timeout` (`--router-ip 198.18.0.3`), `m05_user_no_adapter` (после preflight; без `--adapter`: отказ «address of this host»), `m06_user_no_ip` (без `--adapter-ip`: отказ «no IP address»), `m07_user_iflist` |
 | Кейсы macOS (root, действие B) | `m10_root_auto_mac` (`--adapter feth4201 --adapter-ip 198.18.0.1 --router-ip 198.18.0.2`: MAC определён, ARP, скан), `m11_root_iflist` (строка `feth4201` с настоящим MAC) |
 | Ожидания отказов | exit 1, 0 кадров сканера на проводе (ARP-таймаут: ровно 10 запросов с шагом 1 ± 0.3 с, 0 SYN), stderr с `FAIL:` и подсказками masscan |
-| Каталог прогона | `runs/<tag>/{argv.json, expect.json, stdout.txt, stderr.txt, exit.txt, detected.json, peer.pcap, capture.json\|peer.err, status-pre.json, status-post.json (mac/win), uplink.pcap+uplink.err (mac) \| isolation.json (linux), preflight.txt (w01, w06, m05), hashes-before-copy.txt}`; iflist-кейсы: `iflist.json` `{rc, lines, sha256, stand_line}` вместо вывода; `l11_parity` дополнительно `oracle/{stdout,stderr,exit}.txt`, `oracle.pcap` |
+| Каталог прогона | `runs/<tag>/{argv.json, expect.json, stdout.txt, stderr.txt, exit.txt (Windows: guest-stdout.txt, guest-stderr.txt, guest-exit.txt), detected.json, peer.pcap, capture.json\|peer.err, status-pre.json, status-post.json (mac/win), uplink.pcap+uplink.err (mac) \| isolation.json (linux), preflight.txt (w01, w06, m05), hashes-before-copy.txt}`; iflist-кейсы: `iflist.json` `{rc, lines, sha256, stand_line}` вместо вывода и без `stdout.txt`/`guest-stdout.txt` (на Windows редукция делается на home-pc в рабочем каталоге до записи каталога прогона); `l11_parity` дополнительно `oracle/{stdout,stderr,exit}.txt`, `oracle.pcap` |
 | Доступ | minipc `ssh minipc`, `sudo -n` (проверить); home-pc `a1` `sudo -n` (проверить); гость `ssh -J home-pc -p 2222 lab@127.0.0.1` (elevated, Npcap Admin-only); Mac: действия пользователя |
 
 ## Задача 0. База и контракты (чтение, без кода)
@@ -337,6 +349,17 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
   macos-lab status --run-id m1` (ожидаемо rc 3), `sw_vers`, `rustc --version`; на Mac в оболочке агента `route -n get
   default` (только интерфейс и шлюз, в baseline записывается лишь факт «есть/нет» — S10, сверка с задачей 3). Записать,
   какие действия пользователя потребуются в задаче 7 (A, B, F) и что B1/B2 при необходимости сделает агент.
+- [ ] Дополнения по re-check r1 (§4): (1) C FAIL-строки несут префикс `[-] ` (`main-initadapter.c:52`, `:102`, `:134`,
+  `:195`), подсказки дословны — записать форму rmasscan (решение 7: `[-] FAIL:` + подсказки печатаются как есть); (2) C
+  `--offline` всё равно ищет интерфейс по умолчанию, если нет `--interface` (`:44–57`) — в таблицу matched/deviate как
+  отклонение «герметичный offline»; (3) часы: `Clock` это `now_micros`/`sleep_micros` (`throttle.rs:22–30`),
+  `FakeAdapter::with_clock` продвигает `ManualClock` на таймаут `recv` при простое (`fake.rs:436–441`),
+  `Engine::start_with_clock` помечен `#[doc(hidden)]` «не часть стабильного API» (`engine.rs:700–711`) — продукт его
+  использует (решение 4); (4) cargo собирает bin-таргет под `cfg(test)` (`rmasscan-cli/Cargo.toml:8` без `test = false`),
+  а бинарник для интеграционных тестов — без `cfg(test)`; (5) `windows-suite` всегда переносит гостевые
+  `stdout.txt`/`stderr.txt`/`exit.txt` в каталог прогона как `guest-*.txt` (`windows_suite.rs:1367–1390`) и строит
+  `run.json` из JSON-строки stdout (`:1392–1400`); (6) ожидаемый preflight `m05` это отказ `LocalTarget` через `lo0`, не
+  NIC стенда.
 - [ ] На Mac: `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo test
   --locked --workspace` в `rmasscan/`, `cargo xtask test` в `studio/`, `bash scripts/language-guard.sh`; записать rc и
   строки `test result`. Записать базу: readiness «ARP: только кодек, resolver и discovery шлюза нет нигде».
@@ -348,10 +371,13 @@ NOT RUN до решения пользователя), семантика мар
 
 ## Задача 1. Контракт CLI: `[lib]`, `--router-ip`, `--iflist`, алиасы, seed по операции, приёмник результатов (офлайн)
 
-**Files:** изменить `rmasscan-core/src/config.rs` и тесты, `rmasscan-cli/Cargo.toml`, `src/args.rs`, `src/main.rs`;
-создать `src/lib.rs`, `src/output.rs`.
+**Files:** изменить `rmasscan-core/src/config.rs` и тесты, `rmasscan-cli/Cargo.toml`, `src/args.rs`, `src/main.rs`,
+`tests/differential.rs`; создать `src/lib.rs`, `src/output.rs`, `src/live.rs` (минимальный `Backend`, N1),
+`src/os_backend.rs` (заглушка, `#[cfg(not(test))]`), `tests/common/spawn.rs` (N3).
 
 **Constraints:** `#![forbid(unsafe_code)]`; golden-тесты `-sL`/`--echo`/`--packet-trace` остаются побайтно зелёными;
+бинарник тестов не содержит и `fn main` под `#[cfg(not(test))]` (N2); все spawn-ы бинарника в интеграционных тестах
+через `spawn_readonly` (N3); `live::Backend` в этой задаче минимален и не зависит от задач 2 и 4 (N1);
 `--seed` обязателен и ≠ 0 для `-sL`, `--echo`, `--offline` (решение по операции **до** `validate`, чтобы `--echo` без
 seed не печатал `seed = 0`), необязателен только для живого скана (задача 5 подставляет энтропию до `validate`);
 `--iflist` взаимоисключает `-sL`/`--echo`/`--packet-trace`/`--offline` **и** позиционные цели/`--range`; существующие
@@ -371,6 +397,13 @@ impl EffectiveConfig { pub fn router_ip(&self) -> Option<u32>; }
 #![forbid(unsafe_code)]
 pub mod args; pub mod live; pub mod output;
 pub fn run(cli: &args::Cli, backend: &dyn live::Backend, out: &mut dyn Write, log: &mut dyn Write) -> Result<(), String>;
+// rmasscan-cli/src/live.rs (в этой задаче): минимальный шов, который задача 5 расширяет методами routes/interfaces/open/…
+pub trait Backend { fn entropy64(&self) -> u64; fn unix_time(&self) -> u64; }
+// run: --iflist и живой скан пока → Err("not yet available in this build") (задача 5 заменяет); -sL/--echo/--offline как прежде.
+// rmasscan-cli/src/os_backend.rs (бинарник, #[cfg(not(test))]): pub struct OsBackend; impl Backend (getrandom, SystemTime).
+// rmasscan-cli/src/main.rs: #[cfg(not(test))] mod os_backend; #[cfg(not(test))] fn main() { … rmasscan_cli::run(&cli, &OsBackend, …) }
+// rmasscan-cli/tests/common/spawn.rs: pub fn spawn_readonly(argv: &[&str]) -> Output — паникует, если argv не содержит
+//   --iflist | --offline | -sL | --list | --echo | --echo-all | --help | -V; единственный путь к CARGO_BIN_EXE_rmasscan в тестах.
 // rmasscan-cli/src/args.rs
 #[arg(long = "router-ip", value_name = "IP")] pub router_ip: Option<String>,   // один IPv4
 #[arg(long = "iflist", conflicts_with_all = ["targets","range","list","echo","echo_all","packet_trace","offline"])] pub iflist: bool,
@@ -393,12 +426,16 @@ pub fn discovered_line(ip: Ipv4Addr, port: u16) -> String;   // чистая ф�
   (golden `echo/*.conf` как прежде), `validate_keeps_router_ip`.
 - [ ] Red `args.rs`/`lib.rs`: `router_ip_accepts_one_address_and_rejects_ranges`, `iflist_conflicts_with_operations_and_targets`,
   `source_ip_and_source_mac_aliases_set_the_adapter_fields`, `seed_policy_by_operation` (таблица), `echo_without_seed_errors_before_printing`
-  (вывод пуст, ошибка содержит `--seed`), `list_without_seed_errors`.
+  (вывод пуст, ошибка содержит `--seed`), `list_without_seed_errors` — все на тест-локальном fake минимального `Backend`.
+- [ ] Red `tests/common/spawn.rs`: `spawn_helper_refuses_argv_that_could_transmit` (`["10.0.0.0/24","-p80"]` → паника;
+  `["--offline", …]` → запуск); `differential.rs` переведён на помощник, кейс `--banners 10.0.0.0/24 -p80` заменён на
+  `--nonsense --offline 10.0.0.0/30 -p80 --seed 1` (ожидание: ошибка clap).
 - [ ] Red `output.rs`: `discovered_line_matches_masscan_byte_for_byte` (`"Discovered open port 80/tcp on 10.0.0.1"` + 40
   пробелов + `\n`, длина 80; второй вектор `443`/`198.18.0.2` → 42 + 37 + 1), `closed_replies_are_not_printed`,
   `each_line_is_flushed` (writer-счётчик flush), `broken_pipe_exits_zero` (как `io_fail`).
-- [ ] Перенести код `main.rs` в `lib.rs` без изменения поведения golden-веток; `main.rs` = разбор argv + `OsBackend`
-  (пока заглушка, задача 5) + `run`; `cargo test --locked --workspace`; `tests/differential.rs` зелёный.
+- [ ] Перенести код и unit-тесты `main.rs` в `lib.rs` без изменения поведения golden-веток; `main.rs` = `#[cfg(not(test))]`
+  модуль `os_backend` + `#[cfg(not(test))] fn main` (разбор argv + `run`); `cargo test --locked --workspace` (в т. ч. сборка
+  bin-таргета под `cfg(test)`); `tests/differential.rs` зелёный через `spawn_readonly`.
   Commit: `feat(cli): library crate, --router-ip, --iflist, source aliases and the Discovered sink`.
 
 **GREEN:** все тесты core/cli PASS на Mac; golden побайтно; `--echo`/`-sL` без seed отказывают до вывода; clippy/fmt
@@ -547,8 +584,10 @@ pub(crate) fn defaults_from_table(rows: &[Fwd], ifaces: &[Iface]) -> Vec<Route>;
   `RMASSCAN_EXPECT_DEFAULT_ROUTE=1`: непустой, первый с `gateway: Some` и `local: false` — это и есть проверка route
   socket на Darwin 27 из ad-hoc-подписанного теста, S10), `interfaces_list_is_nonempty_and_loopback_is_not_ethernet`,
   `every_ethernet_interface_has_a_six_byte_or_masked_mac`, `remote_lookup_matches_offline_detection` (если `lookup(8.8.8.8)`
-  даёт маршрут: `detect` без переопределений выбирает тот же интерфейс или даёт `NoIpv4`/`MacMasked`; с переменной маршрут
-  обязателен). Выводы тестов в evidence не копируются (privacy).
+  даёт маршрут: `detect` без переопределений выбирает тот же интерфейс или даёт `NoIpv4`/`MacMasked`/`NotUsable` (маршрут по
+  умолчанию через VPN-туннель, N4); с переменной маршрут обязателен). Строгий режим на Mac предполагает, что маршрут по
+  умолчанию не идёт через VPN `utun` (иначе шлюз link-level и тест честно падает — запускать без VPN или записать).
+  Выводы тестов в evidence не копируются (privacy).
 - [ ] Реализовать; `cargo test --locked -p rmasscan-net` и `-p rmasscan-cli` на Mac (с переменной), minipc, госте (с
   переменной) и в CI (без). Задача 0 сверила `route -n get default` из оболочки агента с результатом теста на Mac.
   Commit: `feat(net): in-process route and interface lookups on Linux, macOS and Windows`.
@@ -607,8 +646,9 @@ MAX_IO_TIMEOUT)` (`Sent` → `requests_sent += 1`, `next_send += interval`; `Wou
 
 ## Задача 5. Живой путь CLI, `--offline` с обнаружением, `--iflist` (офлайн end-to-end на fake-бэкенде)
 
-**Files:** создать `rmasscan-cli/src/live.rs`, `src/os_backend.rs`, `tests/live_fake.rs`; изменить `src/lib.rs`,
-`src/main.rs`, `src/args.rs` (тексты help), `rmasscan/README.md` («Команды», «Отличия от masscan», «Ограничения»).
+**Files:** изменить `rmasscan-cli/src/live.rs` (расширение минимального `Backend` задачи 1 до полного), `src/os_backend.rs`,
+`src/lib.rs`, `src/main.rs`, `src/args.rs` (тексты help), `tests/detect_readonly.rs`, `rmasscan/README.md` («Команды»,
+«Отличия от masscan», «Ограничения»); создать `tests/live_fake.rs`.
 
 **Constraints:** `#![forbid(unsafe_code)]`; порядок строго `defaults (seed по политике, порт) → validate → detect →
 печать `[+]` → ARP (если нужно) → ReadyPlan → open → Engine → события → Sink → join`; обнаружение и `--iflist` не требуют
@@ -617,8 +657,11 @@ MAX_IO_TIMEOUT)` (`Sent` → `requests_sent += 1`, `next_send += interval`; `Wou
 `--adapter-mac` и `--source-port` в `--offline` ОС не опрашивается вовсе (прежние golden-тесты герметичны; `--router-mac`
 там игнорируется в пользу фиктивного, как C); ARP-адаптер закрывается (`drop`) до `open` адаптера скана; Ctrl-C не
 перехватывается (поведение ОС по умолчанию, `paused.conf` не пишется — записано в README); exit code 0 при
-`Completed`/`Stopped`, 1 иначе; **`OsBackend` только в `src/os_backend.rs` под `#[cfg(not(test))]`**; тесты
-`live_fake.rs` используют `wait_secs = 0` (иначе каждый fake-скан ждёт 10 с); приватный `CARGO_TARGET_DIR`.
+`Completed`/`Stopped`, 1 иначе; отказы обнаружения/ARP печатаются на stderr как есть в форме C (`[-] FAIL: …` плюс
+строки подсказок), без обёртки `rmasscan: error:` (она остаётся для прочих ошибок); **`OsBackend` только в
+`src/os_backend.rs` под `#[cfg(not(test))]`, `fn main` под `#[cfg(not(test))]`**; `Engine::start_with_clock`
+(`#[doc(hidden)]`) используется продуктом осознанно (решение 4); тесты `live_fake.rs` используют `wait_secs = 0` (иначе
+каждый fake-скан ждёт 10 с); бинарник в `detect_readonly.rs` только через `spawn_readonly`; приватный `CARGO_TARGET_DIR`.
 
 **Interfaces:**
 
@@ -674,9 +717,9 @@ backend.clock())` (идентификаторы из `entropy64`); цикл `rec
   изменено осознанно), оставить проверку `--packet-trace` без `--offline` и `-sL --echo` конфликтов;
   `packet_trace_requires_adapter_options` → `packet_trace_fills_missing_values_from_the_backend` (fake-бэкенд) и
   `packet_trace_without_adapter_ip_on_an_interface_without_ipv4_names_the_source_ip_hint`.
-- [ ] `tests/detect_readonly.rs` (задача 3) дополняется запуском **бинарника** только с `--iflist` (rc 0, непустой вывод) и
-  `--offline 8.8.8.8 -p80 --seed 1` (rc 0 со строками `[+]` или rc 1 с одним из `NoRoute`/`NoIpv4`/`MacMasked`); вывод в
-  evidence не копируется.
+- [ ] `tests/detect_readonly.rs` (задача 3) дополняется запуском **бинарника** через `spawn_readonly` только с `--iflist`
+  (rc 0, непустой вывод) и `--offline 8.8.8.8 -p80 --seed 1` (rc 0 со строками `[+]` или rc 1 с одним из
+  `NoRoute`/`NoIpv4`/`MacMasked`/`NotUsable`); вывод в evidence не копируется.
 - [ ] README: «Команды» (примеры `--iflist`, `--offline`, `sudo rmasscan …`), «Отличия от masscan» (строки 34–40 нынешнего
   README): удалить «обычный скан без `--offline --packet-trace` не поддержан» и «`--offline --packet-trace` требует
   `--adapter-ip`, …»; переписать пункт `--seed` («обязателен для `-sL`, `--echo`, `--offline`; для живого скана берётся
@@ -684,7 +727,9 @@ backend.clock())` (идентификаторы из `entropy64`); цикл `rec
   единственная on-link цель → ARP к цели (masscan: к маршрутизатору); порт источника по умолчанию один (masscan: два,
   {p, p+16}); `--iflist` свой формат на stdout; строки `[+]` печатаются всегда (masscan только с `-v`); Ctrl-C без
   `paused.conf`; `--adapter` на Windows по `\Device\NPF_{GUID}` или имени, числовых индексов нет; Wi-Fi принимается;
-  туннели/DLT_NULL/VLAN/IPv6 не поддержаны; ARP-таймаут 10 с (masscan ≈ 11 с).
+  явный не-Ethernet `--adapter` отказывает (masscan проверяет тип только при автовыборе); туннели/DLT_NULL/VLAN/IPv6 не
+  поддержаны; ARP-таймаут 10 с (masscan ≈ 11 с); `--offline` с явными IP, MAC и портом не опрашивает ОС (masscan и в
+  offline ищет интерфейс по умолчанию без `--interface`).
   Commit: `feat(cli): live scan with adapter and gateway auto-detection; --offline detects read-only`.
 
 **GREEN:** все тесты CLI PASS на трёх ОС (CI) без единого открытия адаптера (`panic_on_open` ни разу не сработал);
@@ -717,9 +762,12 @@ rmasscan-lab autodetect-suite macos --out DIR --rmasscan PATH --lab PATH_TO_SELF
     # без --root-case: euid != 0 обязателен, кейсы m01–m07, ворота как у macos-suite (status-pre/post, alf, leftovers incl. rmasscan,
     # pair-quiet), peer listen 8000-8007, свидетели tcpdump пира (фильтр приватности) и uplink (UPLINK_FILTER), interlock 13,
     # preflight --offline перед m05; с --root-case: euid == 0 обязателен, только m10–m11, свидетели от root, в конце chown -R на $SUDO_USER
-rmasscan-lab windows-suite --plan autodetect --guest-exe 'C:\Users\lab\t4\rmasscan.exe' ...   # кейсы w01–w08 через тот же
-    # гостевой runner (argv.json → windows_wire_run.ps1; w08 через windows_wire_runas.cmd); --fixtures для этого плана не требуется;
-    # manifest: exe.build "Rust static CRT rmasscan CLI from code_commit", binding по кейсу из expect.json; preflight --offline перед w01/w06
+rmasscan-lab windows-suite --plan autodetect --guest-exe 'C:\Users\lab\t4\rmasscan.exe' ...   # кейсы w01–w08b через тот же
+    # гостевой runner (argv.json → windows_wire_run.ps1; w08a/w08b через windows_wire_runas.cmd); --fixtures для этого плана не требуется;
+    # manifest: exe.build "Rust static CRT rmasscan CLI from code_commit", binding по кейсу из expect.json; preflight --offline перед w01/w06;
+    # план autodetect НЕ строит run.json из JSON-строки stdout (:1392–1400; у rmasscan её нет) и переносит гостевые файлы как
+    # guest-stdout.txt / guest-stderr.txt / guest-exit.txt; для w07 и w08a гостевой stdout.txt забирается в РАБОЧИЙ каталог
+    # на home-pc, редуцируется там в iflist.json, и в каталог прогона пишется только iflist.json (guest-stdout.txt не создаётся) — R2
 rmasscan-lab autodetect-verify --dir DIR [--out DIR/verdict.json]          # rc 0 PASS, 1 FAIL, 2 INVALID/NOT RUN
 ```
 
@@ -740,22 +788,26 @@ NS_A ровно два маршрута (`198.18.0.0/24 dev veth-a`, `default vi
   нет строк вне allowlist (адреса `198.18.0.0/24`, MAC стендов, имена `veth-a`, `feth420x`, `Ethernet 2`, NPF GUID стенда,
   `lo0`/`lo`); любой другой hostname/имя → INVALID с указанием файла; `iflist.json` вместо вывода `--iflist`.
 - `detection`: строки `[+]` присутствуют и равны `expect.json` кейса (интерфейс, IP, MAC, `router-ip` и причина, источник
-  `given|detected`); для отказов `exit.txt` = 1, stderr содержит `FAIL:` и ожидаемую подсказку; `preflight.txt` (где
-  требуется) называет NIC стенда.
-- `arp`: **ARP сканера** = только кадры, побайтно равные `encode_request(source_mac, source_ip, router_ip)` (60 байт); их
-  число: 1 (ответ пришёл; при потере ответа ≤ 10 с шагом 1 с — заметка) или ровно 10 с шагом 1 ± 0.3 с (таймаут); при
-  `--router-mac` 0; ARP-ответ пира (opcode 2, sender = `router-ip`) после первого запроса при успехе; первый запрос
-  раньше первого SYN; ни одного запроса сканера к другому IP. **ARP ОС** (42-байтовые запросы с MAC сканера, ответы
-  opcode 2 с MAC сканера — ядро гостя Windows отвечает на `who-has 198.18.0.1`) считается отдельно в `os_arp` и никогда не
-  считается кадром сканера; на Linux `os_arp.requests` обязан быть 0 (neigh постоянные), иначе INVALID стенда.
+  `given|detected`); для отказов `exit.txt` = 1 (Windows: `guest-exit.txt`), stderr (`guest-stderr.txt`) содержит `[-] FAIL:`
+  и ожидаемую подсказку; `preflight.txt` (где требуется) **равен ожидаемому обнаружению кейса**: `w01`/`w06` — `[+]
+  interface = Ethernet 2`, `m05` — отказ `LocalTarget` «address of this host (route via lo0)» (R1).
+- `arp`: **ARP сканера** = ARP-запрос (opcode 1) с eth src = source MAC длиной **ровно 60 байт с нулевым дополнением**
+  (N5); для каждого такого кадра требуется target = `router-ip` и побайтное равенство `encode_request(source_mac,
+  source_ip, router_ip)`, иначе FAIL (`an_arp_request_to_another_ip_is_fail`); их число: 1 (ответ пришёл; при потере ответа
+  ≤ 10 с шагом 1 с — заметка) или ровно 10 с шагом 1 ± 0.3 с (таймаут); при `--router-mac` 0; ARP-ответ пира (opcode 2,
+  sender = `router-ip`) после первого запроса при успехе; первый запрос раньше первого SYN. **ARP ОС** = 42-байтовые
+  запросы с MAC сканера и кадры opcode 2 с MAC сканера (ядро гостя Windows отвечает на `who-has 198.18.0.1`); считается
+  отдельно в `os_arp` и никогда не считается кадром сканера; на Linux `os_arp.requests` обязан быть 0 (neigh постоянные),
+  иначе INVALID стенда.
 - `wire`: все SYN сканера с eth src = source MAC, eth dst = `router-mac`, ip src = source IP, sport в диапазоне
   `source-port`; порядок и множество SYN равны плану (`ProbeCursor`, seed из `[+] seed`); exactly-once; `[+] finished …
   sent N` равен числу SYN сканера; при отказах 0 SYN; RST ядра сканера (Linux, `rst_from_scanner`) допускаются и считаются.
-- `results`: каждая строка `stdout.txt` ровно 80 байт по формуле (пустой файл или ровно `"\n"` = пусто); множество
+- `results`: каждая строка `stdout.txt` (Windows: `guest-stdout.txt`) ровно 80 байт по формуле (пустой файл или ровно `"\n"` = пусто); множество
   `Discovered` равно множеству портов с SYN-ACK пира в окне прогона (полный захват), иначе FAIL; закрытых портов нет.
 - `parity` (`l11_parity`): байты ARP-запроса оракула == байты запроса rmasscan; упорядоченные SYN равны (`compare_streams`);
   множества строк `Discovered` равны; оба `exit` 0.
-- `iflist` (`l12`, `m07`, `m11`, `w07`, `w08`): `iflist.json` `{rc: 0, lines ≥ 2, sha256, stand_line}`; `stand_line` содержит
+- `iflist` (`l12`, `m07`, `m11`, `w07`, `w08a`): `iflist.json` `{rc: 0, lines ≥ 2, sha256, stand_line}` и **отсутствие**
+  `stdout.txt`/`guest-stdout.txt` в каталоге (иначе INVALID); `stand_line` содержит
   имя NIC стенда и ожидаемый MAC (`m11`, `w07`) или `os-masked` (`m07`) или MAC `02:aa:00:00:00:01` (`l12`); для оракула только
   `{rc, lines, sha256}`.
 - `--root-case` каталог (macOS): те же правила; `detected.json` должен нести `source-mac … (detected)`.
@@ -774,16 +826,20 @@ NS_A ровно два маршрута (`198.18.0.0/24 dev veth-a`, `default vi
   `a_discovered_line_without_a_synack_is_fail`, `a_synack_without_a_discovered_line_is_fail`, `a_line_not_80_bytes_is_fail`,
   `guest_newline_only_stdout_is_empty`, `parity_arp_bytes_differ_is_fail`, `parity_syn_order_differs_is_fail`,
   `a_lab_frame_on_the_uplink_is_fail`, `a_gzipped_capture_is_refused`, `a_changed_hash_is_invalid`, `a_hostname_in_stderr_is_invalid`,
-  `a_full_iflist_dump_in_the_run_is_invalid`, `iflist_json_without_the_stand_line_is_fail`, `missing_preflight_is_not_run`,
+  `a_full_iflist_dump_in_the_run_is_invalid` (`stdout.txt` и `guest-stdout.txt`), `iflist_json_without_the_stand_line_is_fail`,
+  `missing_preflight_is_not_run`, `preflight_not_equal_to_the_expected_detection_is_not_run` (w01 с чужим интерфейсом; m05 с
+  `[+] interface` вместо `LocalTarget`), `a_60_byte_scanner_request_to_another_ip_is_fail`, `windows_run_reads_guest_named_files`,
   `missing_root_case_is_not_run_never_pass`, `verdict_never_upgrades`, `plan_args_from_argv_and_detected_matches_wire_scan_keys`.
 - [ ] Red `autodetect_suite_tests.rs` (без процессов): таблицы кейсов трёх ОС (`argv` и ожидания) сериализуются в
   `argv.json`/`expect.json`; `linux_cases_never_name_an_address_outside_198_18_0_0_24`, `macos_user_cases_all_carry_adapter_feth4201_or_expect_a_refusal`,
   `root_case_requires_euid_zero_and_user_cases_refuse_root`, `windows_plan_uses_rmasscan_exe_argv_not_wire_scan`,
   `leftover_patterns_cover_rmasscan`, `privacy_filter_is_applied_to_the_peer_witness_on_macos`,
-  `iflist_cases_store_only_the_redacted_form`, `preflight_is_required_before_w01_w06_and_m05`.
-- [ ] Red `windows_suite_tests.rs`: `plan_autodetect_lists_w01_to_w08`, `autodetect_runs_carry_expect_json`,
-  `options_list_accepts_plan_autodetect`, `fixtures_are_optional_only_for_plan_autodetect`,
-  `manifest_build_and_binding_follow_the_plan`; `verify_tests.rs`: `windows_verify_delegates_autodetect_runs`,
+  `iflist_cases_store_only_the_redacted_form`, `preflight_expectation_is_the_stand_nic_for_w01_w06_and_local_target_for_m05`.
+- [ ] Red `windows_suite_tests.rs`: `plan_autodetect_lists_w01_to_w08b` (w08a `--iflist`, w08b скан — два запуска runner под
+  ограниченным токеном), `autodetect_runs_carry_expect_json`, `options_list_accepts_plan_autodetect`,
+  `fixtures_are_optional_only_for_plan_autodetect`, `manifest_build_and_binding_follow_the_plan`,
+  `autodetect_plan_skips_the_run_json_line_and_keeps_guest_names`, `iflist_runs_reduce_guest_stdout_in_the_work_dir_before_the_run_dir_is_written`
+  (в каталоге прогона только `iflist.json`, `guest-stdout.txt` отсутствует); `verify_tests.rs`: `windows_verify_delegates_autodetect_runs`,
   `legacy_directories_are_unchanged` (закоммиченные `perf-r1`, `functional-r3` дают прежние вердикты).
 - [ ] Реализовать; `cargo test --locked -p rmasscan-lab` на Mac и Linux; `bash -n scripts/wire-lab.sh`; документы:
   `rust-lab.md` (раздел «Autodetect suite»: команды Linux/Windows, каталог прогона, коды, `RMASSCAN_EXPECT_DEFAULT_ROUTE`),
@@ -821,8 +877,9 @@ test` под elevated-сессией с Npcap Admin-only); заморозка к
   «Deployment» (шаги 1–5) с дополнительной сборкой `rmasscan.exe` на госте из того же архива; `windows-suite --plan
   autodetect --suite windows-r1 --guest-exe 'C:\Users\lab\t4\rmasscan.exe' --commit C --repo . --remote-lab …
   --deploy-manifest ./deploy-manifest.json`; `windows-verify --dir` (делегирует `autodetect-verify`). Ожидание: preflight
-  `w01`/`w06` называет `Ethernet 2` (иначе NOT RUN, не прогон), `w01–w07` PASS, `w08_restricted` PASS (`--iflist` rc 0;
-  скан rc 1, 0 кадров), `eno1` 0 кадров во всех прогонах, `status-pre/post` true, ARP-ответы ядра гостя в `os_arp`.
+  `w01`/`w06` называет `Ethernet 2` (иначе NOT RUN, не прогон), `w01–w07` PASS, `w08a` PASS (`--iflist` rc 0, `iflist.json`,
+  без `guest-stdout.txt`), `w08b` PASS (скан rc 1, 0 кадров), `eno1` 0 кадров во всех прогонах, `status-pre/post` true,
+  ARP-ответы ядра гостя в `os_arp`.
   Гостевой `cargo test --locked --workspace` (офлайн, `RMASSCAN_EXPECT_DEFAULT_ROUTE=1`) в `verification/`.
 - [ ] **macOS (Mac, действия пользователя).** Оператор собирает `rmasscan` и `rmasscan-lab` (release, `target-live`),
   офлайн `cargo test --locked --workspace` (`RMASSCAN_EXPECT_DEFAULT_ROUTE=1`) и `cargo xtask test` (логи в `verification/`),
@@ -831,7 +888,8 @@ test` под elevated-сессией с Npcap Admin-only); заморозка к
   `$OUT/macos-root-r1/runs/m10_root_auto_mac/exit.txt`; запускает как пользователь `"$LAB" autodetect-suite macos --out
   "$OUT/macos-r1" --rmasscan "$RM" --lab "$LAB"` (кейсы `m01–m07`, preflight перед `m05`), затем `autodetect-verify` на обоих
   каталогах. Ожидание: `m01` отказ «os-masked» без кадров (если Darwin не маскирует MAC на этой версии — INVALID с
-  заметкой, не PASS), `m02` ARP + 8 `Discovered`, `m03` 0 ARP, `m04` 10 ARP и 0 SYN, `m05`/`m06` отказы без кадров, `m07`
+  заметкой, не PASS), `m02` ARP + 8 `Discovered`, `m03` 0 ARP, `m04` 10 ARP и 0 SYN, `m05` preflight = отказ `LocalTarget` через `lo0` и тот
+  же отказ в живом кейсе без кадров, `m06` отказ без кадров, `m07`
   `iflist.json` с `os-masked`; `m10` MAC определён под root, ARP, 8 `Discovered`; `m11` `iflist.json` с настоящим MAC; 0
   кадров лаборатории на uplink в каждом прогоне. Затем действие **F** (`down`); `status` → rc 3, `/dev/bpf0` `0600 root:wheel`.
 - [ ] **Evidence:** `shasum -a 256 -c hashes-before-copy.txt` в каждом каталоге; privacy-скан (`grep -E` по hostname Mac,
@@ -919,8 +977,11 @@ true до/после; хэши сходятся; privacy-скан чист (ifli
    открытия адаптера скана; шов `open` отдаёт `AdapterPair`.** Причина: отдельный open не пускает кадры фазы ARP в engine и
    оставляет binding плана неизменяемым; `NetStatsHandle` нельзя подделать снаружи, а резолверу и engine нужен только
    `AdapterPair`, поэтому доказательство «кадры = SYN» строится на `sent` engine, напечатанном в `[+] finished`, и на
-   проводе. Отвергнуто: один open с подменой `next_hop_mac`; публичный конструктор `OpenedAdapter`. Цена ошибки: второй
-   open стоит миллисекунды; таймаут 10 с против 11 с не влияет на паритет (верификатор таймаута считает запросы rmasscan).
+   проводе. Продукт зовёт `Engine::start_with_clock` (`#[doc(hidden)]`, «не часть стабильного API»): это единственный
+   способ отдать engine те же часы, что и резолверу, и сделать `live_fake` детерминированным; в `OsBackend` часы —
+   `SystemClock`, так что поведение равно `Engine::start`. Отвергнуто: один open с подменой `next_hop_mac`; публичный
+   конструктор `OpenedAdapter`. Цена ошибки: второй open стоит миллисекунды; таймаут 10 с против 11 с не влияет на паритет
+   (верификатор таймаута считает запросы rmasscan); если `start_with_clock` изменится, это ловит `live_fake`.
 5. **Привилегии: обнаружение, `--iflist`, `--offline` без привилегий и без spawn; только `open` нуждается в root/
    Administrator/BPF; порядок «defaults → validate → detect → ARP → open»; ни один тест не достигает реального бэкенда
    (`OsBackend` под `cfg(not(test))`, fake паникует на `open`).** Причина: полные тесты GO идут на elevated госте с
@@ -930,19 +991,25 @@ true до/после; хэши сходятся; privacy-скан чист (ifli
    `--offline` (решение по операции до `validate`); `--source-port` один порт `40000 + time % 20000` — отклонение от C
    ({p, p+16}, маска 16), потому что `AdapterBinding::source_ports` требует ширину-степень-двойки и ширина 17 не
    выражается без изменения контракта core/engine; `--offline` принудительно с фиктивным MAC шлюза и без поиска
-   маршрутизатора (C); при всех явных значениях ОС не опрашивается.** Причина: заголовочная команда брифа без `--seed`;
-   детерминизм golden; минимальный diff core. Цена ошибки: случайный seed невоспроизводим без stderr — печатается
-   всегда; один порт источника против двух не меняет ни один SYN в паритете, где `--source-port` задан явно.
+   маршрутизатора (C); при всех явных значениях ОС не опрашивается — отклонение: C в offline всё равно ищет интерфейс по
+   умолчанию без `--interface` (`main-initadapter.c:44–57`), rmasscan нет, чтобы golden-тесты оставались герметичными.**
+   Причина: заголовочная команда брифа без `--seed`; детерминизм golden; минимальный diff core. Цена ошибки: случайный seed
+   невоспроизводим без stderr — печатается всегда; один порт источника против двух не меняет ни один SYN в паритете, где
+   `--source-port` задан явно; герметичный offline не влияет ни на один живой путь.
 7. **Вывод: строка `Discovered open port N/tcp on IP` побайтно (дополнение до 79, flush, только open) за трейтом `Sink`;
-   строки `[+]` на stderr всегда (masscan — с `-v`); строки статуса нет; Ctrl-C не перехватывается.** Причина: паритет
-   stdout проверяется оракулом; шов для этапа 2; обработчик сигналов и `paused.conf` — отдельный механизм. Цена ошибки:
-   пользователь теряет прогресс при Ctrl-C; записано в README.
+   строки `[+]` на stderr всегда (masscan — с `-v`); отказы обнаружения и ARP печатаются в форме C — `[-] FAIL: …` и строки
+   подсказок дословно, без обёртки `rmasscan: error:`; строки статуса нет; Ctrl-C не перехватывается.** Причина: паритет
+   stdout проверяется оракулом; тексты отказов сравнимы с C строка в строку; шов для этапа 2; обработчик сигналов и
+   `paused.conf` — отдельный механизм. Цена ошибки: пользователь теряет прогресс при Ctrl-C; записано в README.
 8. **Стенды: Linux netns получает IPv4 на `veth-a`, маршрут по умолчанию через пира и постоянные neigh на цели (чтобы
    ядро сканера не слало ARP); `capture isolation` получает режим `autodetect`; macOS и Windows не меняются; macOS
    доказывает отказ по маскированию, MAC под root (одна команда пользователя), ARP, отказы и переопределения, но не
    маршрут к цели (на одном хосте цель локальна); Windows доказывает on-link цель без шлюза и отказ многоцелевого
-   on-link; верификатор отличает ARP сканера (ровно 60-байтовый `encode_request`) от ARP ОС (42-байтовые запросы и ответы
-   ядра гостя Windows на `who-has 198.18.0.1`).** Причина: только Linux позволяет маршрутизируемый сценарий и паритет с
+   on-link; верификатор отличает ARP сканера (ARP-запрос с MAC сканера ровно 60 байт с нулевым дополнением, затем
+   проверка цели и байтов `encode_request`) от ARP ОС (42-байтовые запросы и кадры opcode 2 с MAC сканера, включая ответы
+   ядра гостя Windows на `who-has 198.18.0.1`); preflight `--offline` перед `w01`/`w06`/`m05` обязан равняться ожидаемому
+   обнаружению кейса (NIC стенда либо отказ `LocalTarget` через `lo0`); на Windows `--iflist` редуцируется на home-pc до
+   записи каталога прогона, `run.json` из JSON-строки не строится.** Причина: только Linux позволяет маршрутизируемый сценарий и паритет с
    C; изменение macOS-стенда нарушило бы правила `macos-lab status`; шлюз на лабораторном NIC гостя нарушил бы Verify.
    Цена ошибки: RST ядра сканера на Linux попадают в захват — верификатор их считает, не отвергает.
 9. **Паритет с C-оракулом на minipc: байты ARP-запроса, упорядоченные SYN (`compare_streams`) и множество строк
@@ -956,9 +1023,13 @@ true до/после; хэши сходятся; privacy-скан чист (ifli
     seam-тесты на fake-таблицах, `FakeAdapter` и `ManualClock` покрывают весь путь офлайн и детерминированно на трёх ОС;
     переносимые парсеры тестируются без ядра. Цена ошибки: публичный API net расширяется (только добавления; Studio
     собирается без правок — проверяет CI `Studio`).
-11. **Оставлено как есть из minor-замечаний ревью:** `w08_restricted` сохранён (ожидание «отказ rc 1, 0 кадров» без
-    привязки к виду `NetError`) — он проверяет, что `--iflist` работает под ограниченным токеном, чего прежние приёмки не
-    показывали; `l12_iflist` сохранён в редуцированной форме ради записи `--iflist` оракула в том же стенде.
+11. **Оставлено как есть из minor-замечаний ревью:** `w08` сохранён как два запуска runner под ограниченным токеном
+    (`w08a` `--iflist`, `w08b` скан с ожиданием «отказ rc 1, 0 кадров» без привязки к виду `NetError`) — он проверяет, что
+    `--iflist` работает под ограниченным токеном, чего прежние приёмки не показывали; `l12_iflist` сохранён в
+    редуцированной форме ради записи `--iflist` оракула в том же стенде.
+12. **Минимальный `live::Backend` в задаче 1 (`entropy64`, `unix_time`) с заглушкой `OsBackend`, расширяемый задачей 5
+    до полного (`routes`, `interfaces`, `open`, `arp_policy`, `clock`).** Причина: задача 1 обязана компилироваться до
+    задач 2 и 4 (N1); минимальный трейт покрывает политику seed. Цена ошибки: один дополнительный diff трейта в задаче 5.
 
 ## Действия пользователя (точные команды, когда, отмена)
 
@@ -998,7 +1069,8 @@ true до/после; хэши сходятся; privacy-скан чист (ifli
   `tests/golden/wire/README.md`; спека порта §4.7–4.8, §10; спека Studio §0.1–0.2; readiness; приёмки macOS BPF §9,
   Studio feth §4, §9; Linux-приёмка §0; приёмка Windows VM (строки 113–114), доступ к VM; планы sendqueue и Studio feth
   (формат, исполнение); pre-flight ревью этого плана (M1–M6, S1–S13, minor — все учтены, отклонений нет; два minor
-  приняты как решение 11).
+  приняты как решение 11) и его re-check r1 (R1, R2, N1–N5 и minor — учтены: Global Constraints, задачи 0, 1, 3, 5–7,
+  константы, решения 4, 6, 7, 8, 11, 12).
 - Review Focus 1→1/4/5/6; 2→2/3/5; 3→4/5/7; 4→1/5/6/7; 5→6/7/8. Публичные API: `open_explicit`, `AdapterBinding`,
   `ReadyPlan`, `Tx`/`Rx`, события engine не меняются; `rmasscan-net` расширяется модулями `discover`, `route_parse`,
   `arp_resolve` и функциями `os_route_table`/`os_interfaces`; `ScanConfig` получает одно поле; `rmasscan-cli` получает

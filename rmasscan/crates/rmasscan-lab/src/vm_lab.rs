@@ -474,9 +474,6 @@ fn plan(h: &dyn Host, d: &Names, m: Option<&Value>) -> Result<(Vec<String>, Vec<
             problems.push(format!("route conflict: {s} overlaps 198.18.0.0/30"));
         }
     }
-    if h.sysctl("net.ipv4.ip_forward").as_deref() != Some("0") {
-        problems.push("global net.ipv4.ip_forward must be 0".into());
-    }
     problems.extend(
         h.firewall(&[&d.bridge, &d.tap, &d.veth_host])?
             .into_iter()
@@ -555,9 +552,8 @@ fn isolation(h: &dyn Host, d: &Names) -> Result<Vec<String>, String> {
         }
         Err(_) => v.push("cannot read bridge self VLANs".into()),
     }
-    if h.sysctl("net.ipv4.ip_forward").as_deref() != Some("0") {
-        v.push("global ip_forward must be 0".into());
-    }
+    // Global ip_forward is a reported fact, not a violation: forwarding is decided per ingress
+    // interface, and every lab link is checked above to have forwarding=0.
     v.extend(
         h.firewall(&[&d.bridge, &d.tap, &d.veth_host])?
             .into_iter()
@@ -964,7 +960,7 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
                 write_manifest(&a.manifest, &m)?;
             }
             emit(
-                json!({"state":m["state"],"objects":objs,"isolation_violations":violations,"host_ok":host_ok,"vm":vm,"guest_verify_fresh":gf,"guest_verify_nonce":if a.host_only{Value::Null}else{m["guest"]["verify"]["verification_nonce"].clone()},"raw_run_allowed":full,"ok":ok}).to_string()
+                json!({"state":m["state"],"objects":objs,"isolation_violations":violations,"host_ok":host_ok,"vm":vm,"guest_verify_fresh":gf,"guest_verify_nonce":if a.host_only{Value::Null}else{m["guest"]["verify"]["verification_nonce"].clone()},"raw_run_allowed":full,"global_ip_forward":h.sysctl("net.ipv4.ip_forward"),"ok":ok}).to_string()
             );
             Ok(if ok { 0 } else { 1 })
         }
@@ -1136,12 +1132,23 @@ mod ownership_tests {
         mark_fail: bool,
         vm_start: std::cell::Cell<Option<f64>>,
         sysctls: RefCell<BTreeMap<String, String>>,
+        /// Value every new link's `forwarding` starts with (the kernel copies it from the global).
+        default_forwarding: Option<String>,
         replies: RefCell<Vec<(String, String)>>,
         vm_facts: RefCell<Option<Value>>,
         rogue: RefCell<Option<String>>,
         lock_probe: RefCell<Option<PathBuf>>,
         lock_was_held: std::cell::Cell<usize>,
         lock_was_free: std::cell::Cell<usize>,
+    }
+    impl Fake {
+        fn inherit_forwarding(&self, n: &str) {
+            if let Some(v) = &self.default_forwarding {
+                self.sysctls
+                    .borrow_mut()
+                    .insert(format!("net.ipv4.conf.{n}.forwarding"), v.clone());
+            }
+        }
     }
     impl Host for Fake {
         fn sh(&self, a: &[&str], _: bool) -> Result<String, String> {
@@ -1187,6 +1194,7 @@ mod ownership_tests {
                         ..Default::default()
                     },
                 );
+                self.inherit_forwarding(a[3]);
                 if a.contains(&"bridge")
                     && let Some(r) = self.rogue.borrow().as_ref()
                     && let Some(x) = l.get_mut(r)
@@ -1195,6 +1203,7 @@ mod ownership_tests {
                 }
             } else if a.starts_with(&["ip", "tuntap", "add"]) {
                 self.links.borrow_mut().insert(a[4].into(), Link::default());
+                self.inherit_forwarding(a[4]);
             } else if a.starts_with(&["ip", "link", "del"]) {
                 self.links.borrow_mut().remove(a[3]);
             } else if a.starts_with(&["ip", "link", "set"])
@@ -1206,6 +1215,12 @@ mod ownership_tests {
                     "arp" => l.noarp = a[5] == "off",
                     _ => {}
                 }
+            }
+            if a.starts_with(&["sysctl", "-qw"])
+                && let Some((k, v)) = a[2].split_once('=')
+            {
+                // `sysctl -qw net.ipv4.conf.<n>.<key>=<v>` is stored under its dotted key.
+                self.sysctls.borrow_mut().insert(k.into(), v.into());
             }
             let joined = a.join(" ");
             if let Some((_, out)) = self
@@ -1764,12 +1779,11 @@ mod ownership_tests {
             },
         );
         assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 3);
-        // Global forwarding or a firewall rule naming a lab interface blocks plan and up.
+        // Global forwarding alone is no longer a problem; a firewall rule naming a lab interface
+        // still blocks plan and up.
         let h = Fake::default();
         set_sysctl(&h, "net.ipv4.ip_forward", "1");
-        assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 3);
-        assert!(execute(&h, &args(&p, "up")).is_err());
-        assert!(no_mutation(&h));
+        assert_eq!(execute(&h, &args(&p, "plan")).unwrap(), 0);
         let h = Fake::default();
         h.replies.borrow_mut().push((
             "nft list ruleset".into(),
@@ -1926,8 +1940,56 @@ mod ownership_tests {
         );
     }
     #[test]
-    fn global_ip_forward_enabled_later_is_a_violation() {
-        break_and_expect(|h| set_sysctl(h, "net.ipv4.ip_forward", "1"), "ip_forward");
+    fn global_ip_forward_alone_is_not_a_violation() {
+        let h = Fake::default();
+        let (p, _) = recorded_stand(&h, "Up", None);
+        set_sysctl(&h, "net.ipv4.ip_forward", "1");
+        let (rc, r) = full_status(&h, &p);
+        assert_eq!((rc, r["raw_run_allowed"].clone()), (0, json!(true)), "{r}");
+        assert_eq!(r["isolation_violations"], json!([]));
+        assert_eq!(r["global_ip_forward"], "1");
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn global_ip_forward_with_a_forwarding_lab_link_is_a_violation() {
+        for n in ["wvb-t1", "wvt-t1", "wvh-t1"] {
+            let h = Fake::default();
+            let (p, _) = up(&h);
+            set_sysctl(&h, "net.ipv4.ip_forward", "1");
+            set_sysctl(&h, &format!("net.ipv4.conf.{n}.forwarding"), "1");
+            let (rc, r) = status(&h, &p);
+            assert_eq!(rc, 1, "{n}: {r}");
+            assert!(
+                violations(&r).contains(&format!("{n}: forwarding must be 0")),
+                "{r}"
+            );
+            assert_eq!(r["raw_run_allowed"], false);
+            assert_eq!(r["global_ip_forward"], "1");
+            fs::remove_dir_all(p).unwrap();
+        }
+    }
+    #[test]
+    fn up_on_a_forwarding_host_leaves_every_lab_link_with_forwarding_off() {
+        // New links inherit forwarding=1 from the global value, as on a host with a VPN exit.
+        let h = Fake {
+            default_forwarding: Some("1".into()),
+            ..Default::default()
+        };
+        set_sysctl(&h, "net.ipv4.ip_forward", "1");
+        let (p, _) = up(&h);
+        for n in ["wvb-t1", "wvt-t1", "wvh-t1"] {
+            assert_eq!(
+                h.sysctl(&format!("net.ipv4.conf.{n}.forwarding"))
+                    .as_deref(),
+                Some("0"),
+                "{n}"
+            );
+        }
+        let (rc, r) = status(&h, &p);
+        assert_eq!(rc, 0, "{r}");
+        assert_eq!(r["isolation_violations"], json!([]));
+        assert_eq!(r["global_ip_forward"], "1");
+        fs::remove_dir_all(p).unwrap();
     }
     #[test]
     fn a_host_ip_on_bridge_or_tap_is_a_violation() {

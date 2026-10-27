@@ -56,6 +56,9 @@ mod windows;
 // Логика обнаружения адаптера/источника/следующего хопа над швами `RouteTable`/`Interfaces`: безопасная, без ОС.
 pub mod discover;
 
+// Синхронный ARP-резолвер следующего хопа над Tx/Rx (безопасный, без ОС; тесты на FakeAdapter).
+pub mod arp_resolve;
+
 // Безопасный переносимый разбор ответов ядра о маршрутах (rtnetlink, route socket Darwin, IP Helper).
 mod route_parse;
 

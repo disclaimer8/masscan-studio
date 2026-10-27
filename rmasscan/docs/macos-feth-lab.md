@@ -557,3 +557,9 @@ RUN, then any INVALID gives INVALID, and PASS only when every check passed. Noth
 `installed_runner_sha256`), `isolation` (`uplink_frames`, `uplink_captured`, `uplink_dropped`, `uplink_exit_code`,
 `peer_exit_code`, `status_pre`, `status_post`), `totals`, `behaviour_fail`, `safety_trips` and `notes`. A tripped
 isolation check makes the window FAIL for good; there is no rerun.
+
+### Studio acceptance: peer witness filter and leftover file
+
+The peer witness (`peer.pcap`) runs with the single filter `not (ether src 02:ac:00:00:00:02 and udp port 5353)`, recorded in `peer.cmd.json` as `filter` and as the last `cmd` argument. The host owns 198.18.0.2 on the peer interface and announces its name over mDNS there; those frames name the machine and must not be published. The filter drops only them; every scanner frame is still captured. The verifier accepts exactly two peer forms: no filter (windows archived on 2026-10-26 at 05ab27f) or exactly this filter; anything else is INVALID.
+
+`leftover-listeners.txt` holds only the leftover lab listeners found (lines of `lsof -nP -iTCP -sTCP:LISTEN` and of the netstat record); it is empty when there are none. The full listener list is never written, because it is the user's app inventory.

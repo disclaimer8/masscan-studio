@@ -29,6 +29,8 @@ pub const UPLINK_FILTER: &str = "net 198.18.0.0/30 or (arp and (host 198.18.0.1 
 pub const ALF_TEXT: &str = "Firewall is disabled. (State = 0)";
 /// A pcap holding no frame is exactly its global header.
 const PCAP_HEADER: u64 = 24;
+/// The peer witness drops only the host's own mDNS (it announces the host name on the peer interface).
+pub const PEER_FILTER: &str = "not (ether src 02:ac:00:00:00:02 and udp port 5353)";
 const TCPDUMP: &str = "/usr/sbin/tcpdump";
 /// 420 s smoke deadline of the UI plus a minute.
 const UI_SECONDS: u64 = 480;
@@ -451,6 +453,10 @@ pub fn check_bundle_manifest(text: Option<&str>, head: &str) -> std::result::Res
 /// result proves nothing; it is extra information. A listener it does show is a finding.
 pub fn lsof_ok(rc: i32) -> bool {
     matches!(rc, 0 | 1)
+}
+
+fn lines_text(v: &[String]) -> String {
+    v.iter().map(|l| format!("{l}\n")).collect()
 }
 
 /// Leftover lab listeners in `lsof -nP -iTCP -sTCP:LISTEN` output: a LISTEN on `198.18.0.2:<port>` or on
@@ -1338,11 +1344,12 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
         ));
     }
     let ls = c.run(&["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN"]);
-    c.put("leftover-listeners.txt", &ls.stdout)?;
     if !lsof_ok(ls.rc) {
         reasons.push(format!("lsof could not run (rc {})", ls.rc));
     }
     let lleft = lsof_leftovers(&ls.stdout);
+    // Only the leftover lines are evidence; the full listing is the user's app inventory and is never written.
+    c.put("leftover-listeners.txt", &lines_text(&lleft))?;
     if !lleft.is_empty() {
         reasons.push(format!(
             "a listener on 198.18.0.2 or a lab port is left over (lsof): {lleft:?}"
@@ -1389,6 +1396,10 @@ fn live<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, g: &Git) -> Result<i32> {
     // A valid record lists every user's sockets; lsof above covers the user's own when netstat is blind.
     let left = leftover_listeners(&ns.stdout);
     if !left.is_empty() {
+        c.put(
+            "leftover-listeners.txt",
+            &lines_text(&[lleft.clone(), left.clone()].concat()),
+        )?;
         reasons.push(format!(
             "a listener on 198.18.0.2 or a lab port is left over (netstat): {left:?}"
         ));
@@ -1523,7 +1534,7 @@ fn window<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, lab: &str, uplink: &str) -> R
     // 4. witnesses
     let mut cmds: Vec<Witness> = Vec::new();
     for (who, iface, filter) in [
-        ("peer", PEER_IF.to_owned(), None),
+        ("peer", PEER_IF.to_owned(), Some(PEER_FILTER)),
         ("uplink", uplink.to_owned(), Some(UPLINK_FILTER)),
     ] {
         let argv = capture_argv(&iface, &format!("{who}.pcap"), filter);
@@ -1916,8 +1927,10 @@ mod tests {
             ]
         );
         assert_eq!(
-            capture_argv("feth4202", "peer.pcap", None).last().unwrap(),
-            "peer.pcap"
+            capture_argv("feth4202", "peer.pcap", Some(PEER_FILTER))
+                .last()
+                .unwrap(),
+            PEER_FILTER
         );
         assert!(
             UPLINK_FILTER
@@ -2438,7 +2451,8 @@ mod tests {
             assert!(c["start_utc"].as_str().unwrap() < c["stop_utc"].as_str().unwrap());
         }
         assert_eq!(uc["filter"], UPLINK_FILTER);
-        assert_eq!(pc["filter"], "");
+        assert_eq!(pc["filter"], PEER_FILTER);
+        assert_eq!(pc["cmd"].as_array().unwrap().last().unwrap(), PEER_FILTER);
         let p: Value =
             serde_json::from_slice(&fs::read(o.out.join("provenance.json")).unwrap()).unwrap();
         assert_eq!(p["installed_runner_sha256"], runner);
@@ -2754,6 +2768,19 @@ tcp4       0      0  192.168.1.5.8002       *.*                    ESTABLISHED\n
         if let Ok(w) = fs::read_to_string(o.out.join("INVALID.txt")) {
             assert!(!w.contains("host listeners not recorded"), "{w}");
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_leftover_file_holds_leftovers_only() {
+        let (root, o, mut f, _) = setup("lsofprivacy");
+        f.lsof_out = Some(
+            "Viber 1 u 5u IPv4 0x1 0t0 TCP *:5000 (LISTEN)\nollama 2 u 3u IPv4 0x2 0t0 TCP 127.0.0.1:11434 (LISTEN)\n"
+                .into(),
+        );
+        run(&mut f, &o).unwrap();
+        let t = fs::read_to_string(o.out.join("leftover-listeners.txt")).unwrap();
+        assert!(t.is_empty(), "{t}");
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -1,0 +1,22 @@
+   Compiling studio-platform v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-platform)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.16s
+     Running unittests src/lib.rs (target/debug/deps/studio_platform-d4b9520cf9575e61)
+
+running 1 test
+test setup::tests::setup_failed_termination_does_not_block_cancellation ... FAILED
+
+failures:
+
+---- setup::tests::setup_failed_termination_does_not_block_cancellation stdout ----
+
+thread 'setup::tests::setup_failed_termination_does_not_block_cancellation' (31982555) panicked at crates/studio-platform/src/setup.rs:294:9:
+cleanup waited for an unkillable elevated child
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    setup::tests::setup_failed_termination_does_not_block_cancellation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.51s
+
+error: test failed, to rerun pass `-p studio-platform --lib`

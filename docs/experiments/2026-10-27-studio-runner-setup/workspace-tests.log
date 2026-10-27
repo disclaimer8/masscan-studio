@@ -1,0 +1,437 @@
+   Compiling studio-platform v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-platform)
+   Compiling studio-app v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-app)
+   Compiling xtask v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/xtask)
+   Compiling studio-runner v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-runner)
+   Compiling studio-ui v0.1.0 (/Users/denyskolomiiets/masscan-studio-app/studio/crates/studio-ui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.01s
+     Running unittests src/lib.rs (studio/target/debug/deps/studio_app-b1d161566e94197a)
+
+running 13 tests
+test persistence::tests::checkpoint_and_terminal_force_prior_results_to_commit ... ok
+test setup::tests::install_requires_a_successful_check ... ok
+test setup::tests::setup_refuses_active_or_authorized_session_before_io ... ok
+test persistence::tests::rows_wait_for_count_or_deadline_and_never_overfill_a_batch ... ok
+test setup::tests::missing_source_never_reports_ready_or_installable ... ok
+test setup::tests::setup_command_gate_prevents_late_authorization_and_allows_cancel ... ok
+test hosts::tests::simulation_refuses_all_network_actions ... ok
+test hosts::tests::failed_dns_is_not_cached_but_authoritative_absence_is ... ok
+test hosts::tests::deleting_selection_cancels_requests_and_ignores_late_completions ... ok
+test hosts::persistence_regression::failed_save_does_not_discard_other_host_completions ... ok
+test hosts::tests::late_reply_cannot_cross_scan_or_overwrite_new_request ... ok
+test hosts::tests::cached_lookup_cancels_older_refresh_and_manual_refresh_bypasses_cache ... ok
+test hosts::queue_regression::queue_full_preserves_existing_request_for_cancel_and_completion ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (studio/target/debug/deps/studio_inspection-be76e7729974674a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/studio-inspect.rs (studio/target/debug/deps/studio_inspect-85ba7062243d2c88)
+
+running 2 tests
+test mac_dns::tests::authoritative_absence_and_valid_ptr_are_distinct_from_bad_data ... ok
+test mac_dns::tests::resolver_errors_and_deadline_are_not_missing_names ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contracts.rs (studio/target/debug/deps/contracts-b8a3c1830333e63e)
+
+running 4 tests
+test export_quotes_formulas_and_keeps_snapshot_order ... ok
+test exact_nmap_contract_and_print_port_exclusion ... ok
+test xml_requires_complete_matching_host_and_rejects_entities ... ok
+test export_replaces_complete_files_and_preserves_destination_on_failure ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/live.rs (studio/target/debug/deps/live-98f6dc19cef8b910)
+
+running 2 tests
+test real_resolver_child_returns_valid_loopback_response ... ignored, queries the host system resolver for loopback only
+test real_unprivileged_nmap_inspects_owned_loopback_http_server ... ignored, requires separately installed Nmap; only probes our loopback listener
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/processes.rs (studio/target/debug/deps/processes-a714f8636371e913)
+
+running 4 tests
+test ptr_rejects_compression_truncation_and_trailing_bytes ... ok
+test descendant_holding_pipes_cannot_outlive_deadline_or_pool_shutdown ... ok
+test dropping_pool_cancels_active_and_queued_children ... ok
+test timeout_cancel_and_oversize_are_bounded_and_reaped ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+     Running unittests src/lib.rs (studio/target/debug/deps/studio_platform-deeb6bf05448410e)
+
+running 10 tests
+test setup::tests::setup_cancellation_precedes_source_access ... ok
+test network::tests::masked_mac_is_refused_with_the_root_hint ... ok
+test setup::tests::setup_cancelled_install_never_elevates ... ok
+test setup::tests::setup_source_changed_after_check_never_elevates ... ok
+test setup::tests::setup_failed_termination_does_not_block_cancellation ... ok
+test network::tests::cancelled_preflight_reaps_its_command_without_waiting_for_timeout ... ok
+test audit::tests::wrong_pid_incarnation_is_rejected_by_kernel ... ok
+test setup::tests::setup_command_timeout_does_not_wait_for_inherited_pipe ... ok
+test setup::tests::setup_command_reports_failure_and_bounds_output ... ok
+test setup::tests::setup_invalid_executable_is_rejected_before_elevation ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/linux_launch.rs (studio/target/debug/deps/linux_launch-b626a755bcb0b7fd)
+
+running 2 tests
+test linux_runner_rejects_custom_loader_and_search_paths ... ok
+test linux_install_is_immutable_hash_addressed_and_shell_safe ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/linux_lifetime.rs (studio/target/debug/deps/linux_lifetime-4e328c1a48eeedc8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mac_launch.rs (studio/target/debug/deps/mac_launch-8278074f366114c6)
+
+running 3 tests
+test installation_is_hash_addressed_and_cannot_inject_destination ... ok
+test acl_write_grants_are_not_hidden_by_posix_mode ... ok
+test launch_arguments_round_trip_without_shell_expansion ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/preflight.rs (studio/target/debug/deps/preflight-2fe0cb28e1aa6122)
+
+running 2 tests
+test unreadable_or_conflicting_routes_fail_closed ... ok
+test sealed_pair_passes_but_each_isolation_mutation_refuses ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/session_auth.rs (studio/target/debug/deps/session_auth-532c905c83849568)
+
+running 3 tests
+test private_endpoint_checks_live_peer_and_process_birth ... ok
+test audit_bound_peer_resolves_live_executable_without_bsdinfo ... ok
+test world_accessible_endpoint_and_symlink_are_refused ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/trusted_install.rs (studio/target/debug/deps/trusted_install-2a7561205430755d)
+
+running 1 test
+test expected_hash_does_not_make_a_user_writable_binary_trusted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/windows_arguments.rs (studio/target/debug/deps/windows_arguments-e3c140b907d291c3)
+
+running 1 test
+test argv_encoding_refuses_nul_and_preserves_quotes_and_trailing_backslashes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_environment.rs (studio/target/debug/deps/windows_environment-c7385f74dbf0bebc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_pipe.rs (studio/target/debug/deps/windows_pipe-212ac27aa0b653b3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_setup.rs (studio/target/debug/deps/windows_setup-ca08c34d0c210b0a)
+
+running 1 test
+test windows_installer_accepts_data_not_commands ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_uac.rs (studio/target/debug/deps/windows_uac-b716f64e08c26eac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (studio/target/debug/deps/studio_protocol-fbf7510d50fb8030)
+
+running 1 test
+test gate_tests::raw_gate_is_open_only_for_mac_feth_on_macos ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contracts.rs (studio/target/debug/deps/contracts-cbffde29ce7440d4)
+
+running 3 tests
+test wrong_attempt_and_duplicate_sequence_never_advance_state ... ok
+test exact_seed_and_lab_boundary ... ok
+test framing_rejects_oversize_truncation_and_old_version ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (studio/target/debug/deps/studio_runner-39fc79054bad1335)
+
+running 17 tests
+test guard::tests::scheduling_gap_and_backwards_clock_are_not_silent ... ok
+test guard::tests::suspension_is_detected_even_when_monotonic_clock_does_not_advance ... ok
+test checkpoint_tests::backlog_does_not_consume_the_ack_deadline_but_a_stalled_writer_times_out ... ok
+test guard::tests::late_success_cannot_hide_a_gap_between_valid_observations ... ok
+test outbox::tests::oversized_reservation_leaves_no_budget_debt ... ok
+test outbox::tests::receipt_is_ready_only_after_the_frame_is_flushed ... ok
+test outbox::tests::encoded_frames_preserve_protocol_and_release_budget_after_write_failure ... ok
+test outbox::tests::tiny_frame_count_limit_releases_the_rejected_reservation ... ok
+test guard::tests::healthy_observer_is_cancellable_and_simulation_needs_no_network ... ok
+test guard::tests::observation_failure_stops_engine_and_stays_failed ... ok
+test guard::tests::finishing_does_not_discard_an_in_flight_failure ... ok
+test guard::tests::dead_observer_is_not_a_successful_check ... ok
+test guard::tests::observer_panic_during_finish_is_an_interruption ... ok
+test guard::tests::stale_observation_stops_engine_and_drop_cancels_probe ... ok
+test guard_tests::drift_interrupts_runner_retains_results_and_allows_new_attempt ... ok
+test outbox::tests::small_frames_use_the_byte_budget_instead_of_failing_at_32_frames ... ok
+test guard_tests::interruption_wins_over_queued_completion_or_pause_without_losing_rows ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.12s
+
+     Running tests/controller.rs (studio/target/debug/deps/controller-97909f08188e8a4a)
+
+running 5 tests
+test raw_resume_without_authorization_keeps_the_checkpoint ... ok
+test incomplete_raw_integration_refuses_before_opening_an_adapter ... ok
+test failed_authorization_leaves_simulation_and_history_usable ... ok
+test failed_runner_launch_does_not_disable_future_scans ... ok
+test controller_persists_pause_before_resume_and_survives_restart ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.43s
+
+     Running tests/history.rs (studio/target/debug/deps/history-eaec6fe9c3e5924e)
+
+running 2 tests
+test history_changes_without_runner_refresh_selection_and_clear_last_scan ... ok
+test active_controller_refuses_edits_even_to_another_saved_scan ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/lifecycle.rs (studio/target/debug/deps/lifecycle-140c013ab3805c95)
+
+running 1 test
+test real_engine_pause_checkpoint_ack_and_resume_on_same_runner ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.06s
+
+     Running tests/pipe_session.rs (studio/target/debug/deps/pipe_session-fed34e48f946b882)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/profiles.rs (studio/target/debug/deps/profiles-d4ddc6b108b23b61)
+
+running 1 test
+test profile_operations_do_not_start_runner_or_create_scans ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/raw_profile.rs (studio/target/debug/deps/raw_profile-ab84f91e0b77ec3b)
+
+running 2 tests
+test unprivileged_runner_fails_mac_feth_before_any_adapter ... ok
+test check_network_without_root_refuses_and_names_masking_or_manifest ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/socket_session.rs (studio/target/debug/deps/socket_session-ba269d01b03834a5)
+
+running 2 tests
+Studio runner: Peer account/process/birth does not match this launch
+test stale_owner_identity_never_reaches_hello ... ok
+test authenticated_child_uses_protocol_and_exits_on_disconnect ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/volume.rs (studio/target/debug/deps/volume-ebbe8367c26b14a0)
+
+running 1 test
+test hundred_thousand_results_survive_a_display_polled_at_twenty_hz ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.34s
+
+     Running unittests src/lib.rs (studio/target/debug/deps/studio_store-2993aaefde315271)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/durability.rs (studio/target/debug/deps/durability-c3684508f88791d9)
+
+running 7 tests
+test corrupted_checkpoint_is_never_resumable ... ok
+test committed_batch_returns_saved_dates_without_requerying_each_result ... ok
+test failed_result_transaction_exposes_no_uncommitted_rows ... ok
+test event_batch_commits_in_order_and_rolls_back_all_rows_on_a_gap ... ok
+test failed_checkpoint_commit_cannot_be_acknowledged_or_resumed ... ok
+test restart_preserves_rows_and_marks_inflight_interrupted ... ok
+test metadata_and_observation_dates_survive_restart_without_fabricating_legacy_dates ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/history.rs (studio/target/debug/deps/history-be0bfd83006f677e)
+
+running 4 tests
+test failed_delete_rolls_back_results_and_host_details ... ok
+test active_invalid_and_stale_edits_are_rejected ... ok
+test paused_checkpoint_survives_rename_and_old_metadata_does_not_block_delete ... ok
+test rename_and_delete_preserve_other_scans_profiles_and_creation_time ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/profiles.rs (studio/target/debug/deps/profiles-b29fba76038e1965)
+
+running 4 tests
+test invalid_conflicting_and_stale_changes_are_atomic ... ok
+test profile_roundtrip_update_delete_keeps_history ... ok
+test v3_history_and_archived_metadata_survive_without_an_importer ... ok
+test profile_limit_does_not_prevent_update_or_delete ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (studio/target/debug/deps/studio_table-1df6186c11c5b0d2)
+
+running 4 tests
+test producer::tests::late_workload_does_not_meet_sixty_second_target ... ok
+test benchmark::tests::unsupported_renderer_cannot_pass_benchmark ... ok
+test benchmark::tests::stale_frame_ack_cannot_consume_a_new_query ... ok
+test benchmark::tests::rejects_short_workload_and_samples_after_stream_finished ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/selection.rs (studio/target/debug/deps/selection-f605f68fe70c3ec1)
+
+running 3 tests
+test copying_selection_deduplicates_ips_in_numeric_view_order ... ok
+test copying_filtered_selection_never_falls_back_to_hidden_or_focused_rows ... ok
+test escape_clears_range_anchor_but_keeps_keyboard_focus ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (studio/target/debug/deps/studio_ui-35aa162e694f677d)
+
+running 29 tests
+test smoke_feth::tests::authorization_lost_after_busy_quits ... ok
+test smoke_feth::tests::preflight_refused_locks_and_fails_without_start ... ok
+test smoke_feth::tests::pause_is_sent_only_after_scanning_and_after_the_delay ... ok
+test smoke_feth::tests::interrupted_while_authorizing_or_locking_fails_at_once ... ok
+test smoke_feth::tests::stop_latency_is_measured_from_the_action_to_stopped ... ok
+test smoke_feth::tests::phase_timeout_quits_with_reason ... ok
+test smoke_feth::tests::utc_text_formats_millis_and_leap_days ... ok
+test smoke_feth::tests::unexpected_states_fail_at_once_not_by_timeout ... ok
+test smoke_feth::tests::failed_state_during_a_case_quits_without_the_next_case ... ok
+test smoke_feth::tests::resume_stage_refuses_missing_ambiguous_or_empty_checkpoint ... ok
+test smoke_feth::tests::pause_stage_locks_after_checkpoint_and_never_resumes ... ok
+test smoke_feth::tests::resume_stage_selects_saved_scan_in_new_session_and_never_starts ... ok
+test smoke_feth::tests::guard_stage_requires_guard_reason_and_checkpoint_free_history ... ok
+test tests::archived_ready_history_does_not_lock_the_ui_as_an_active_scan ... ok
+test tests::repeat_is_exact_configuration_without_checkpoint_or_archived_execution ... ok
+test smoke_feth::tests::chronicle_serializes_without_personal_paths ... ok
+test tests::stage_cli_rejects_unknown_conflicting_and_non_mac_stages ... ok
+test smoke_feth::tests::driver_authorizes_then_runs_the_three_cases_in_order_and_locks ... ok
+test tests::smoke_feth_requires_macos_data_dir_and_out_dir ... ok
+test smoke_feth::tests::chronicle_matches_the_verifier_schema ... ok
+test tests::export_uses_filtered_sorted_view_and_never_leaks_hidden_port_details ... ok
+test table_controls::tests::idle_summary_never_borrows_or_walks_the_unchanged_table ... ok
+test table_controls::tests::summary_refreshes_after_sort_enrichment_batches_and_history_replacement ... ok
+test table_controls::tests::escape_in_context_menu_does_not_clear_table_selection ... ok
+test table_controls::tests::copy_keys_use_visible_selection_and_escape_preserves_clipboard ... ok
+test table_controls::tests::filter_hides_selected_addresses_and_text_input_keeps_its_shortcuts ... ok
+test table_controls::tests::empty_states_distinguish_first_use_waiting_history_and_filter ... ok
+test table_controls::tests::page_keys_follow_viewport_size_and_home_end_keep_navigation ... ok
+test table_controls::tests::page_boundaries_use_content_viewport_and_keep_focused_row_fully_visible ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+
+     Running unittests src/main.rs (studio/target/debug/deps/xtask-f0cc890661244429)
+
+running 38 tests
+test feth_acceptance::tests::args_are_absolute_and_exclusive ... ok
+test feth_acceptance::tests::action_b_uses_the_built_binary ... ok
+test feth_acceptance::tests::capture_commands_match_the_verifier_contract ... ok
+test feth_acceptance::tests::apple_sqlite_is_not_run_before_anything_starts ... ok
+test feth_acceptance::tests::a_bundle_from_another_commit_is_not_run ... ok
+test feth_acceptance::tests::dry_verdict_accepts_only_an_authorization_failure ... ok
+test feth_acceptance::tests::firewall_text_must_be_exact ... ok
+test feth_acceptance::tests::gates_require_granted_sealed_stand_and_a_real_uplink ... ok
+test feth_acceptance::tests::a_missing_stand_is_not_run_and_prints_action_b_without_starting_anything ... ok
+test feth_acceptance::tests::a_sealed_but_drifted_stand_does_not_print_up ... ok
+test feth_acceptance::tests::interlock_reads_tcpdump_statistics ... ok
+test feth_acceptance::tests::leftover_patterns_cover_studio_binaries ... ok
+test feth_acceptance::tests::pair_quiet_refuses_only_when_every_window_moved ... ok
+test feth_acceptance::tests::paths_are_scrubbed_before_writing ... ok
+test feth_acceptance::tests::dirty_tree_and_unready_gates_refuse_with_reasons_only ... ok
+test feth_acceptance::tests::pure_gates_of_round_one ... ok
+test feth_acceptance::tests::runner_of_the_bundle_must_be_installed_before_the_ui_starts ... ok
+test feth_acceptance::tests::a_failed_ui_spawn_stops_every_child_and_still_writes_the_window ... ok
+test feth_acceptance::tests::history_json_lists_rows_in_rowid_order_with_checkpoint_presence ... ok
+test feth_acceptance::tests::stage_options_require_explicit_history_and_exclude_other_modes ... ok
+test feth_acceptance::tests::a_failing_netstat_is_not_run ... ok
+test feth_acceptance::tests::a_leftover_lab_listener_is_not_run ... ok
+test feth_acceptance::tests::a_failed_write_after_the_children_started_still_cleans_up ... ok
+test feth_acceptance::tests::user_action_lines_are_one_chain_with_only_what_is_missing ... ok
+test feth_acceptance::tests::dry_run_needs_no_runner_and_starts_only_the_ui ... ok
+test feth_acceptance::tests::a_silent_netstat_proceeds_with_a_note_and_no_invalid_mark ... ok
+test feth_acceptance::tests::stage_history_cannot_overlap_evidence_even_through_an_alias ... ok
+test feth_acceptance::tests::stage_history_refuses_missing_resume_or_existing_fresh_data_before_tools ... ok
+test feth_acceptance::tests::a_lab_frame_on_the_uplink_stops_everything_and_exits_13 ... ok
+test feth_acceptance::tests::a_clean_window_writes_every_file_of_the_contract_in_order ... ok
+test feth_acceptance::tests::guard_window_cannot_close_cleanly_without_restoration_record ... ok
+test feth_acceptance::tests::guard_window_keeps_witnesses_until_restoration ... ok
+test feth_acceptance::tests::pause_stage_uses_shared_history_without_changing_standard_mode ... ok
+test feth_acceptance::tests::the_breach_file_comes_first_and_rc_13_survives_a_failed_write ... ok
+test feth_acceptance::tests::the_uplink_statistics_trip_the_interlock_even_if_the_file_is_clean ... ok
+test feth_acceptance::tests::the_leftover_file_holds_leftovers_only ... ok
+test feth_acceptance::tests::a_failing_ui_or_missing_statistics_is_an_abort_not_a_clean_window ... ok
+test feth_acceptance::tests::zero_restore_exit_cannot_hide_an_incomplete_or_wrong_arp_entry ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+   Doc-tests studio_app
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests studio_inspection
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests studio_platform
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests studio_protocol
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests studio_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests studio_table
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

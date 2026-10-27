@@ -18,9 +18,9 @@ use rmasscan_core::targets::{add_target_string, parse_ports};
 #[command(
     name = "rmasscan",
     version,
-    about = "Rust port of masscan: -sL, --echo, --offline --packet-trace and --iflist",
+    about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, --offline, -sL, --echo and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 \\\n    --router-mac 66-55-44-33-22-11 --source-port 40000-40003\n\nOperations: -sL, --echo, --echo-all, --offline --packet-trace, --iflist (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline. Any other masscan option is an error."
+    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. Detection, --offline and --iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
@@ -59,7 +59,7 @@ pub struct Cli {
     #[arg(
         long,
         value_name = "N",
-        help = "Randomization seed, non-zero (required for -sL, --echo and --offline)"
+        help = "Randomization seed, non-zero (required for -sL, --echo and --offline; a live scan defaults to OS entropy)"
     )]
     pub seed: Option<u64>,
     #[arg(long, value_name = "PPS", help = "Packets per second (default 100)")]
@@ -120,17 +120,21 @@ pub struct Cli {
     #[arg(
         long = "router-ip",
         value_name = "IP",
-        help = "Router (next hop) IPv4 address (single address)"
+        help = "Router (next hop) IPv4 address to resolve with ARP (single address; default: route gateway)"
     )]
     pub router_ip: Option<String>,
-    #[arg(long = "router-mac", value_name = "MAC", help = "Router MAC address")]
+    #[arg(
+        long = "router-mac",
+        value_name = "MAC",
+        help = "Router (next hop) MAC address: skips ARP (ignored by --offline, which uses 66-55-44-33-22-11)"
+    )]
     pub router_mac: Option<String>,
     // Одиночный порт или диапазон степени двойки (main-conf.c:2523).
     #[arg(
         long = "source-port",
         alias = "adapter-port",
         value_name = "PORT",
-        help = "Source port, or a range whose size is a power of two"
+        help = "Source port, or a range whose size is a power of two (default: one port 40000 + time % 20000)"
     )]
     pub source_port: Option<String>,
     #[arg(
@@ -138,18 +142,18 @@ pub struct Cli {
         long = "interface",
         alias = "adapter",
         value_name = "IFACE",
-        help = "Network interface name (recorded only; no adapter is opened in stage 1)"
+        help = "Network interface (alias: --adapter): its name; on Windows \\Device\\NPF_{GUID} or the adapter name (default: the interface of the route to the targets)"
     )]
     pub interface: Option<String>,
     #[arg(
         long,
-        help = "Do not transmit (stage 1 supports only --offline --packet-trace)"
+        help = "Do not transmit: detect read-only and print the [+] lines (fake router MAC 66-55-44-33-22-11)"
     )]
     pub offline: bool,
     #[arg(
         long = "packet-trace",
         requires = "offline",
-        help = "With --offline: print one SENT line per SYN. Needs --adapter-ip, --adapter-mac, --router-mac and --source-port"
+        help = "With --offline: print one SENT line per SYN (values not given are detected read-only)"
     )]
     pub packet_trace: bool,
     // `-sL` (см. [`preprocess_args`]).
@@ -162,7 +166,7 @@ pub struct Cli {
     #[arg(
         long = "iflist",
         conflicts_with_all = ["targets", "range", "list", "echo", "echo_all", "packet_trace", "offline"],
-        help = "List network interfaces and exit"
+        help = "List network interfaces and default routes (read-only, no privileges) and exit"
     )]
     pub iflist: bool,
     #[arg(long, conflicts_with_all = ["echo_all", "packet_trace"], help = "Print the configuration and exit")]

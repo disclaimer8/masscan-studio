@@ -5,13 +5,83 @@
 //! `RMASSCAN_EXPECT_DEFAULT_ROUTE=1` (хосты с известным маршрутом по умолчанию через шлюз: dev Mac без VPN, minipc,
 //! гость Windows) делает ожидания строгими; без переменной (CI) тесты терпимы к хосту без маршрута по умолчанию.
 //! Сообщения проверок называют только признаки, не адреса и не имена: выводы тестов не попадают в evidence.
+//!
+//! Бинарник запускается только через `spawn_readonly` и только с `--iflist` или `--offline` (оба только читают ОС).
+
+#[path = "common/spawn.rs"]
+mod spawn;
 
 use std::net::Ipv4Addr;
 
 use rmasscan_net::{DetectError, Overrides, Targets, detect, os_interfaces, os_route_table};
+use spawn::spawn_readonly;
 
 fn strict() -> bool {
     std::env::var("RMASSCAN_EXPECT_DEFAULT_ROUTE").as_deref() == Ok("1")
+}
+
+#[test]
+fn binary_iflist_lists_interfaces() {
+    let out = spawn_readonly(&["--iflist"]);
+    assert_eq!(out.status.code(), Some(0), "--iflist exits 0");
+    assert!(!out.stdout.is_empty(), "--iflist prints the interfaces");
+    assert!(out.stderr.is_empty(), "--iflist writes nothing to stderr");
+}
+
+/// `--offline` обнаруживает только чтением: либо строки `[+]` с фиктивным MAC шлюза, либо отказ в форме C одного из
+/// видов, допустимых на хосте без доступного Ethernet (VPN, интерфейс без IPv4, MAC скрыт ОС, Darwin без root).
+#[test]
+fn binary_offline_detects_or_refuses_read_only() {
+    let out = spawn_readonly(&["--offline", "8.8.8.8", "-p80", "--seed", "1"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.stdout.is_empty(),
+        "--offline without --packet-trace prints nothing to stdout"
+    );
+    assert!(
+        !err.contains("rmasscan: error:"),
+        "detection refusals use the C form"
+    );
+    match out.status.code() {
+        Some(0) => {
+            for prefix in [
+                "[+] interface = ",
+                "[+] source-mac = ",
+                "[+] source-ip = ",
+                "[+] router-ip = none (offline)",
+                "[+] router-mac = 66-55-44-33-22-11 (offline)",
+                "[+] seed = 1 (given)",
+                "[+] source-port = ",
+            ] {
+                assert!(
+                    err.lines().any(|l| l.starts_with(prefix)),
+                    "missing stderr line {prefix:?}"
+                );
+            }
+        }
+        Some(1) => {
+            assert!(
+                err.starts_with("[-] FAIL: "),
+                "a refusal starts with [-] FAIL:"
+            );
+            let kinds = [
+                ("NoRoute", "could not determine default interface"),
+                ("NoIpv4", "failed to detect IP of interface"),
+                ("MacMasked", "is os-masked"),
+                ("NotUsable", "is not usable"),
+            ];
+            let kind = kinds
+                .iter()
+                .find(|(_, text)| err.contains(text))
+                .map(|(k, _)| *k);
+            assert!(kind.is_some(), "the refusal is one of {kinds:?}");
+            assert!(
+                !(strict() && kind == Some("NoRoute")),
+                "RMASSCAN_EXPECT_DEFAULT_ROUTE=1: 8.8.8.8 must have a route"
+            );
+        }
+        other => panic!("unexpected exit code {other:?}"),
+    }
 }
 
 #[test]

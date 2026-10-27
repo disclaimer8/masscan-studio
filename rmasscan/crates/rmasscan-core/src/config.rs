@@ -211,8 +211,9 @@ impl EffectiveConfig {
     pub fn adapter_mac(&self) -> Option<[u8; 6]> {
         self.adapter_mac
     }
+    /// `0.0.0.0` значит «не задан» (C `main-initadapter.c:176` тогда ищет шлюз), и в argv, и в `paused.conf`.
     pub fn router_ip(&self) -> Option<u32> {
-        self.router_ip
+        self.router_ip.filter(|&ip| ip != 0)
     }
     pub fn router_mac(&self) -> Option<[u8; 6]> {
         self.router_mac
@@ -1335,6 +1336,25 @@ mod tests {
         assert_eq!(
             validate(&cfg, Operation::Scan).unwrap().router_ip(),
             Some(0x0a00_0001)
+        );
+    }
+
+    /// C `main-initadapter.c:176`: router_ip 0 значит «не задан» (ищется шлюз).
+    #[test]
+    fn router_ip_zero_means_not_given() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.router_ip = Some(0);
+        assert_eq!(validate(&cfg, Operation::Scan).unwrap().router_ip(), None);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(!s.contains("router-ip"), "{s}");
+        let back =
+            read_paused_conf("seed = 1\nrange = 10.0.0.0/30\nports = 80\nrouter-ip = 0.0.0.0\n")
+                .unwrap();
+        assert_eq!(
+            validate(&back, Operation::Scan).unwrap().router_ip(),
+            None,
+            "paused.conf router-ip = 0.0.0.0"
         );
     }
 

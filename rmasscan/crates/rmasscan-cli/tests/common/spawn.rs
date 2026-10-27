@@ -1,6 +1,11 @@
 //! Единственный путь тестов к бинарнику `rmasscan` (N3). Бинарник содержит
 //! настоящий `OsBackend`; полные тесты идут на хосте с реальной сетью, поэтому
 //! запуск без операции, которая гарантированно ничего не передаёт, паникует.
+//! Собственные тесты защиты живут в `tests/spawn_guard.rs`, а не здесь: модуль
+//! включается в несколько тестовых crate.
+
+// Каждый включающий crate берёт свою часть помощников (differential оба, detect_readonly и spawn_guard часть).
+#![allow(dead_code)]
 
 use std::process::{Command, Output};
 
@@ -29,25 +34,7 @@ pub fn readonly_command(argv: &[&str]) -> Command {
     c
 }
 
+/// Запускает бинарник через [`readonly_command`] (та же защита) и ждёт вывод.
 pub fn spawn_readonly(argv: &[&str]) -> Output {
     readonly_command(argv).output().expect("spawn rmasscan")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[should_panic(expected = "could transmit")]
-    fn spawn_helper_refuses_argv_that_could_transmit() {
-        spawn_readonly(&["10.0.0.0/24", "-p80"]);
-    }
-
-    #[test]
-    fn spawn_helper_runs_argv_with_a_readonly_marker() {
-        let out = spawn_readonly(&["--offline", "--nonsense", "10.0.0.0/30"]);
-        assert_ne!(out.status.code(), Some(0));
-        assert!(out.stdout.is_empty());
-        assert!(!out.stderr.is_empty());
-    }
 }

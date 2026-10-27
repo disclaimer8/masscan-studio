@@ -3,10 +3,13 @@
 //! `main_scan` (`main.c`) masscan © Robert David Graham (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0) в форме
 //! решений плана: интерфейс по маршруту к целям, ARP к следующему хопу, один порт источника по умолчанию.
 //!
-//! Порядок строго `defaults (seed, порт) → validate → detect → печать [+] → ARP → ReadyPlan → open → Engine → события →
-//! Sink → join`. Всё состояние ОС приходит через шов [`Backend`]; обнаружение, `--offline` и `--iflist` ничего не
-//! открывают. Единственный кадр до engine это ARP-запрос резолвера с отдельного короткоживущего адаптера, закрытого до
-//! открытия адаптера скана. Ctrl-C не перехватывается, `paused.conf` не пишется.
+//! Порядок: `defaults (seed, порт) → validate → detect → пробная сборка ReadyPlan → печать [+] → ARP → ReadyPlan →
+//! open → Engine → события → Sink → join`. Пробный план (next hop ещё нулевой) проверяет ограничения runtime
+//! (`--retries`, `--shard`, rounds, legacy resume) до ARP, чтобы отклонённый engine скан не стоил ни одного ARP-кадра;
+//! настоящий план строится после ARP, потому что binding неизменяем. Всё состояние ОС приходит через шов
+//! [`Backend`]; обнаружение, `--offline` и `--iflist` ничего не открывают. Единственный кадр до engine это ARP-запрос
+//! резолвера с отдельного короткоживущего адаптера, закрытого до открытия адаптера скана. Ctrl-C не перехватывается,
+//! `paused.conf` не пишется.
 
 #![forbid(unsafe_code)]
 
@@ -26,7 +29,7 @@ use rmasscan_core::receive::PortStatus;
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::{AdapterPair, Engine, EngineOptions, Event, Outcome, Reason};
 use rmasscan_net::arp_resolve::{ArpPolicy, NextHopKind, arp_binding, resolve_next_hop};
-use rmasscan_net::discover::{NextHopWhy, Source};
+use rmasscan_net::discover::{NextHopWhy, Source, usable_source_mac};
 use rmasscan_net::{
     DetectError, Detected, Iface, Interfaces, NetError, NextHop, Overrides, RouteTable, detect,
     detect_offline, iflist_text, probe_targets,
@@ -74,14 +77,14 @@ fn refusal(e: impl std::fmt::Display) -> String {
     format!("{REFUSAL_PREFIX}{e}")
 }
 
-/// `--offline` с явными `--adapter-ip` и `--adapter-mac`: ОС не опрашивается вовсе (golden-тесты герметичны).
-fn hermetic_offline(eff: &EffectiveConfig) -> bool {
-    eff.offline() && eff.adapter_ip().is_some() && eff.adapter_mac().is_some()
-}
-
-/// Правило `discover` для source MAC: не нулевой, не заполнитель Darwin, не групповой.
-fn usable_mac(m: [u8; 6]) -> bool {
-    m != [0; 6] && m != [0x02, 0, 0, 0, 0, 0] && m[0] & 1 == 0
+/// `--offline` с явными `--adapter-ip`, `--adapter-mac` и `--source-port` (решение 6): ОС не опрашивается вовсе
+/// (golden-тесты герметичны). Без любого из трёх идёт обычное обнаружение только чтением, поэтому `--offline`
+/// годится как preflight живого прогона (R1). `port` это источник порта до подстановки умолчания.
+fn hermetic_offline(eff: &EffectiveConfig, port: Source) -> bool {
+    eff.offline()
+        && eff.adapter_ip().is_some()
+        && eff.adapter_mac().is_some()
+        && port == Source::Given
 }
 
 /// Фиктивный MAC шлюза `--offline` (C `main-initadapter.c:163`).
@@ -90,7 +93,7 @@ const OFFLINE_ROUTER_MAC: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
 /// Обнаружение для герметичного `--offline`: все значения заданы, интерфейс не ищется.
 fn given_offline(eff: &EffectiveConfig, ip: u32, mac: [u8; 6]) -> Result<Detected, String> {
     let name = eff.adapter_name().unwrap_or("offline").to_string();
-    if !usable_mac(mac) {
+    if !usable_source_mac(mac) {
         return Err(refusal(DetectError::NoMac(name)));
     }
     Ok(Detected {
@@ -136,29 +139,32 @@ pub fn prepare(
     };
     cfg.source_port = Some(source_ports.0);
     let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
-    let detected =
-        if let (true, Some(ip), Some(mac)) = (eff.offline(), eff.adapter_ip(), eff.adapter_mac()) {
-            given_offline(&eff, ip, mac)?
-        } else {
-            let targets = probe_targets(eff.massip())
-                .ok_or_else(|| refusal(DetectError::NoUnicastTargets))?;
-            let ov = Overrides {
-                adapter: eff.adapter_name().map(str::to_string),
-                adapter_ip: eff.adapter_ip().map(Ipv4Addr::from),
-                adapter_mac: eff.adapter_mac(),
-                router_ip: eff.router_ip().map(Ipv4Addr::from),
-                router_mac: eff.router_mac(),
-            };
-            let os = |e: NetError| refusal(DetectError::Os(e));
-            let routes = backend.routes().map_err(os)?;
-            let ifaces = backend.interfaces().map_err(os)?;
-            let found = if offline {
-                detect_offline(&targets, &ov, routes.as_ref(), ifaces.as_ref())
-            } else {
-                detect(&targets, &ov, routes.as_ref(), ifaces.as_ref())
-            };
-            found.map_err(refusal)?
+    let detected = if let (true, Some(ip), Some(mac)) = (
+        hermetic_offline(&eff, source_ports.1),
+        eff.adapter_ip(),
+        eff.adapter_mac(),
+    ) {
+        given_offline(&eff, ip, mac)?
+    } else {
+        let targets =
+            probe_targets(eff.massip()).ok_or_else(|| refusal(DetectError::NoUnicastTargets))?;
+        let ov = Overrides {
+            adapter: eff.adapter_name().map(str::to_string),
+            adapter_ip: eff.adapter_ip().map(Ipv4Addr::from),
+            adapter_mac: eff.adapter_mac(),
+            router_ip: eff.router_ip().map(Ipv4Addr::from),
+            router_mac: eff.router_mac(),
         };
+        let os = |e: NetError| refusal(DetectError::Os(e));
+        let routes = backend.routes().map_err(os)?;
+        let ifaces = backend.interfaces().map_err(os)?;
+        let found = if offline {
+            detect_offline(&targets, &ov, routes.as_ref(), ifaces.as_ref())
+        } else {
+            detect(&targets, &ov, routes.as_ref(), ifaces.as_ref())
+        };
+        found.map_err(refusal)?
+    };
     let binding = AdapterBinding {
         interface_id: detected.iface.device_id.clone(),
         link_type: LinkType::Ethernet,
@@ -203,7 +209,7 @@ fn line(log: &mut dyn Write, s: &str) -> Result<(), String> {
 pub fn print_detection(p: &Prepared, log: &mut dyn Write) -> Result<(), String> {
     let d = &p.detected;
     let offline = p.eff.offline();
-    let iface = if hermetic_offline(&p.eff) && p.eff.adapter_name().is_none() {
+    let iface = if hermetic_offline(&p.eff, p.source_ports.1) && p.eff.adapter_name().is_none() {
         "none (offline)".to_string()
     } else {
         match d.iface_source {
@@ -502,22 +508,4 @@ pub fn iflist(backend: &dyn Backend, out: &mut dyn Write) -> Result<(), String> 
         .map_err(fail)?;
     out.write_all(iflist_text(&list, &defaults).as_bytes())
         .map_err(io_fail)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn usable_mac_matches_the_discover_rule() {
-        assert!(usable_mac([0x02, 0xaa, 0, 0, 0, 1]));
-        for bad in [
-            [0; 6],
-            [0x02, 0, 0, 0, 0, 0],
-            [0x01, 0, 0x5e, 0, 0, 1],
-            [0xff; 6],
-        ] {
-            assert!(!usable_mac(bad), "{bad:?}");
-        }
-    }
 }

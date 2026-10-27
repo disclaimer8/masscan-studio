@@ -132,6 +132,10 @@ struct FakeBackend {
     unix_time: u64,
     clock: Arc<ManualClock>,
     opened: Mutex<Vec<Opened>>,
+    /// Каждый вызов `open`, до любой ошибки.
+    attempts: Mutex<Vec<AdapterBinding>>,
+    /// Общий журнал TX: каждый успешно отправленный кадр любого адаптера, по порядку.
+    tx: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl FakeBackend {
@@ -184,7 +188,17 @@ impl FakeBackend {
             unix_time: UNIX_TIME,
             clock: ManualClock::new(),
             opened: Mutex::new(Vec::new()),
+            attempts: Mutex::new(Vec::new()),
+            tx: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn attempts(&self) -> Vec<AdapterBinding> {
+        self.attempts.lock().unwrap().clone()
+    }
+
+    fn tx_journal(&self) -> Vec<Vec<u8>> {
+        self.tx.lock().unwrap().clone()
     }
 
     fn lookups(&self) -> Vec<Ipv4Addr> {
@@ -233,6 +247,7 @@ impl Backend for FakeBackend {
     }
     fn open(&self, binding: &AdapterBinding) -> Result<AdapterPair, NetError> {
         assert!(!self.panic_on_open, "open must not be called in this test");
+        self.attempts.lock().unwrap().push(binding.clone());
         if let Some(e) = &self.open_error {
             return Err(e.clone());
         }
@@ -242,8 +257,11 @@ impl Backend for FakeBackend {
         if let Some(h) = &self.health {
             adapter.set_health(h.clone());
         }
-        let neighbors = self.neighbors.clone();
-        adapter.set_responder(move |f| respond(f, &neighbors));
+        let (neighbors, tx) = (self.neighbors.clone(), self.tx.clone());
+        adapter.set_responder(move |f| {
+            tx.lock().unwrap().push(f.to_vec());
+            respond(f, &neighbors)
+        });
         let pair = adapter.pair();
         opened.push(Opened {
             binding: binding.clone(),
@@ -359,6 +377,18 @@ fn live_scan_detects_resolves_and_prints_discovered_lines() {
         );
     }
     assert_eq!(syns.len(), 4, "2 addresses x 2 ports");
+    let journal = b.tx_journal();
+    assert_eq!(
+        journal.len(),
+        1 + syns.len(),
+        "every frame on the wire: 1 ARP + the SYNs"
+    );
+    assert!(is_arp(&journal[0]), "the ARP request comes first");
+    assert_eq!(
+        &journal[1..],
+        &syns[..],
+        "then only the scan adapter's SYNs"
+    );
     assert_eq!(
         scan.binding,
         AdapterBinding {
@@ -513,8 +543,6 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
 
 #[test]
 fn permission_denied_on_open_names_the_os_hint_and_sends_nothing() {
-    let mut b = FakeBackend::new();
-    b.open_error = Some(NetError::PermissionDenied("/dev/x".into()));
     let hint = if cfg!(target_os = "linux") {
         "CAP_NET_RAW"
     } else if cfg!(target_os = "macos") {
@@ -524,11 +552,28 @@ fn permission_denied_on_open_names_the_os_hint_and_sends_nothing() {
     } else {
         "root"
     };
-    // ARP-адаптер (первый open) и адаптер скана (при --router-mac).
-    for args in [
-        LIVE.to_vec(),
-        with(&LIVE, &["--router-mac", "02-aa-00-00-00-09"]),
+    let scan_binding = AdapterBinding {
+        interface_id: IF_NAME.into(),
+        link_type: LinkType::Ethernet,
+        source_ipv4: u32::from(MY_IP),
+        source_mac: MY_MAC,
+        next_hop_mac: [0x02, 0xaa, 0, 0, 0, 9],
+        source_ports: (TIME_PORT, TIME_PORT),
+    };
+    // Отказ первого open: ARP-адаптера (без --router-mac) или адаптера скана (с --router-mac). После него ни одной
+    // попытки открыть что-то ещё и ни одного кадра.
+    for (args, only_attempt) in [
+        (
+            LIVE.to_vec(),
+            arp_binding(IF_NAME, MY_IP, MY_MAC, (TIME_PORT, TIME_PORT)),
+        ),
+        (
+            with(&LIVE, &["--router-mac", "02-aa-00-00-00-09"]),
+            scan_binding,
+        ),
     ] {
+        let mut b = FakeBackend::new();
+        b.open_error = Some(NetError::PermissionDenied("/dev/x".into()));
         let (r, out, _) = cli(&b, &args);
         let e = r.unwrap_err();
         assert!(e.contains("permission denied"), "{e}");
@@ -541,11 +586,13 @@ fn permission_denied_on_open_names_the_os_hint_and_sends_nothing() {
             "an open error keeps the wrapper: {e}"
         );
         assert!(out.is_empty());
+        assert_eq!(
+            b.attempts(),
+            vec![only_attempt],
+            "{args:?}: exactly one open attempt, no scan open after the failed one"
+        );
+        assert!(b.tx_journal().is_empty(), "{args:?}: no frame was sent");
     }
-    assert!(
-        b.opened().is_empty(),
-        "no adapter was opened, nothing was sent"
-    );
 }
 
 #[test]
@@ -703,6 +750,48 @@ fn offline_uses_the_fake_router_mac_even_with_router_mac_and_no_next_hop_lookup(
     let p = live::prepare(&config(&base), SeedPolicy::Required, &b, true).unwrap();
     assert_eq!(b.lookups(), vec![Ipv4Addr::new(198, 51, 100, 7)]);
     assert_eq!(p.binding.next_hop_mac, OFFLINE_MAC);
+}
+
+/// `--offline` с явными IP и MAC, но без `--source-port` не герметичен: интерфейс ищется по маршруту к цели, поэтому
+/// preflight `--offline` (R1) видит обнаруженный интерфейс и отказы маршрута.
+#[test]
+fn offline_with_explicit_ip_and_mac_but_no_port_still_consults_the_os() {
+    let mut b = FakeBackend::new();
+    b.panic_on_open = true;
+    b.routes.defaults_panic = true;
+    let base = [
+        "--offline",
+        "-p80",
+        "--seed",
+        "1",
+        "--adapter-ip",
+        "10.255.0.1",
+        "--adapter-mac",
+        "00-11-22-33-44-55",
+    ];
+    let (r, out, log) = cli(&b, &with(&base, &["198.51.100.7"]));
+    r.unwrap();
+    assert!(out.is_empty());
+    assert_eq!(b.lookups(), vec![Ipv4Addr::new(198, 51, 100, 7)]);
+    assert_eq!(
+        plus_lines(&log),
+        [
+            "[+] interface = eth0 (detected: route to 198.51.100.7)",
+            "[+] source-mac = 00-11-22-33-44-55 (given)",
+            "[+] source-ip = 10.255.0.1 (given)",
+            "[+] router-ip = none (offline)",
+            "[+] router-mac = 66-55-44-33-22-11 (offline)",
+            "[+] seed = 1 (given)",
+            &format!("[+] source-port = {TIME_PORT} (time)"),
+        ]
+    );
+    // Отказ, зависящий от маршрута, не скрыт.
+    let (r, _, log) = cli(&b, &with(&base, &["203.0.113.9"]));
+    assert_eq!(
+        r.unwrap_err(),
+        "[-] FAIL: could not determine default interface\n    [hint] try \"--interface ethX\""
+    );
+    assert!(log.is_empty(), "{log}");
 }
 
 /// Прежний набор `TRACE` (lib-тесты): явные IP, MAC, MAC шлюза и порт.

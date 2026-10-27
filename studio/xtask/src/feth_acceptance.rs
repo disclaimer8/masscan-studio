@@ -47,13 +47,16 @@ pub struct Opts {
     pub lab: PathBuf,
     pub manual: bool,
     pub dry_run: bool,
+    pub stage: Option<String>,
+    pub history: Option<PathBuf>,
 }
 
-const USAGE: &str = "Usage: cargo xtask feth-acceptance --out DIR --app '/abs/Masscan Studio.app' --lab /abs/rmasscan-lab [--manual] [--dry-run]";
+const USAGE: &str = "Usage: cargo xtask feth-acceptance --out DIR --app '/abs/Masscan Studio.app' --lab /abs/rmasscan-lab [--manual | --dry-run | --stage pause|resume|guard --history DIR]";
 
 pub fn parse_args(args: &[String]) -> std::result::Result<Opts, String> {
     let (mut out, mut app, mut lab) = (None, None, None);
     let (mut manual, mut dry_run) = (false, false);
+    let (mut stage, mut history) = (None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = |slot: &mut Option<PathBuf>| match it.next() {
@@ -67,6 +70,13 @@ pub fn parse_args(args: &[String]) -> std::result::Result<Opts, String> {
             "--out" => value(&mut out)?,
             "--app" => value(&mut app)?,
             "--lab" => value(&mut lab)?,
+            "--history" => value(&mut history)?,
+            "--stage" => {
+                if stage.is_some() {
+                    return Err("duplicate --stage".into());
+                }
+                stage = Some(it.next().ok_or("--stage needs a value")?.to_owned());
+            }
             "--manual" => manual = true,
             "--dry-run" => dry_run = true,
             other => return Err(format!("unknown argument {other}. {USAGE}")),
@@ -85,12 +95,25 @@ pub fn parse_args(args: &[String]) -> std::result::Result<Opts, String> {
             "--manual and --dry-run exclude each other. {USAGE}"
         ));
     }
+    if stage.is_some() != history.is_some()
+        || stage
+            .as_deref()
+            .is_some_and(|s| !matches!(s, "pause" | "resume" | "guard"))
+        || (stage.is_some() && (manual || dry_run))
+        || history.as_ref().is_some_and(|p| !p.is_absolute())
+    {
+        return Err(format!(
+            "Stage requires an absolute --history and excludes manual/dry-run. {USAGE}"
+        ));
+    }
     Ok(Opts {
         out,
         app,
         lab,
         manual,
         dry_run,
+        stage,
+        history,
     })
 }
 
@@ -811,7 +834,97 @@ fn s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// Resolve existing parents without creating the history or following a lexical `..` through a missing path.
+fn prospective_path(p: &Path) -> Result<PathBuf> {
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err("Stage history must not contain '..'".into());
+    }
+    if p.exists() {
+        return Ok(fs::canonicalize(p)?);
+    }
+    let parent = p.parent().ok_or("History has no existing ancestor")?;
+    Ok(prospective_path(parent)?.join(p.file_name().ok_or("History has no name")?))
+}
+
 impl<H: Host> Ctx<'_, H> {
+    fn data_dir(&self) -> PathBuf {
+        self.o
+            .history
+            .clone()
+            .unwrap_or_else(|| self.dir.join("data"))
+    }
+    fn stage_history(&mut self) -> Result<()> {
+        let Some(stage) = self.o.stage.as_deref() else {
+            return Ok(());
+        };
+        let data = self.data_dir();
+        if fs::symlink_metadata(&data).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err("Stage history must not be a symlink".into());
+        }
+        let resolved = prospective_path(&data)?;
+        if resolved.starts_with(&self.dir) || self.dir.starts_with(&resolved) {
+            return Err("Stage history and evidence directories must not overlap".into());
+        }
+        if stage != "resume" {
+            if data.exists() && fs::read_dir(&data)?.next().is_some() {
+                return Err("Pause/guard require a new empty private history".into());
+            }
+            return Ok(());
+        }
+        let db = data.join("history.sqlite3");
+        if !db.is_file()
+            || ["history.sqlite3-wal", "history.sqlite3-shm"]
+                .iter()
+                .any(|n| data.join(n).exists())
+        {
+            return Err("Resume requires a closed saved history, without WAL/SHM".into());
+        }
+        let before = sha_file(&db)?;
+        let st = Store::open(&data).map_err(|e| e.to_string())?;
+        let scans = st.scans().map_err(|e| e.to_string())?;
+        if scans.len() != 1 {
+            return Err("Resume requires exactly one saved scan".into());
+        }
+        let scan = &scans[0];
+        let expected = studio_protocol::Job {
+            targets: "198.18.0.2".into(),
+            ports: "8000-8031".into(),
+            seed: "2".into(),
+            rate: 4,
+            exclusions: String::new(),
+            backend: studio_protocol::Backend::MacFeth,
+        };
+        if scan.status != studio_protocol::Status::Paused || scan.job != expected {
+            return Err("Resume history does not match the acceptance job".into());
+        }
+        let bytes = scan
+            .checkpoint
+            .as_deref()
+            .ok_or("Resume history lacks checkpoint")?;
+        let index = scan
+            .next_index
+            .as_deref()
+            .ok_or("Resume history lacks index")?;
+        if index.parse::<u64>().is_ok_and(|n| n == 0) {
+            return Err("Empty pause is not restart evidence".into());
+        }
+        studio_protocol::validate_checkpoint(
+            &scan.job,
+            scan.scan,
+            studio_protocol::checkpoint_origin(bytes)?,
+            bytes,
+            index,
+        )?;
+        self.put_json(
+            "history-before.json",
+            &history_json(&st).map_err(|e| e.to_string())?,
+        )?;
+        self.put(
+            "data-before.sha256",
+            &format!("{before}  history.sqlite3\n"),
+        )?;
+        Ok(())
+    }
     fn put(&self, name: &str, text: &str) -> Result<()> {
         Ok(fs::write(self.dir.join(name), scrub(text, &self.rules))?)
     }
@@ -977,7 +1090,7 @@ fn uplink_len(dir: &Path) -> Option<u64> {
 }
 
 fn ui_env(c: &Ctx<'_, impl Host>, smoke: bool) -> Vec<(String, String)> {
-    let mut env = vec![("STUDIO_DATA_DIR".to_owned(), s(&c.dir.join("data")))];
+    let mut env = vec![("STUDIO_DATA_DIR".to_owned(), s(&c.data_dir()))];
     if smoke {
         env.push(("STUDIO_SMOKE_OUT".into(), s(&c.dir)));
     }
@@ -1030,6 +1143,37 @@ fn stop<H: Host>(c: &mut Ctx<'_, H>, p: Proc, first: &str) -> i32 {
     -1
 }
 
+fn await_guard_restoration<H: Host>(
+    c: &mut Ctx<'_, H>,
+    witnesses: &[(&'static str, Proc)],
+) -> bool {
+    // Keep both witnesses alive while the operator restores the lab-only ARP
+    // change. No blocking external command in this interlock loop.
+    for _ in 0..120 {
+        if uplink_len(&c.dir).is_some_and(|n| n > 24) {
+            c.record_breach("uplink packet while awaiting lab restoration");
+            return false;
+        }
+        if witnesses
+            .iter()
+            .any(|(_, p)| c.h.wait(*p, Duration::ZERO).is_some())
+        {
+            c.mark("witness exited before lab restoration");
+            return false;
+        }
+        if fs::read_to_string(c.dir.join("guard-change.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .is_some_and(|v| v["restore_exit"] == 0 && v["restored_utc"].is_string())
+        {
+            return true;
+        }
+        c.h.sleep(Duration::from_millis(250));
+    }
+    c.mark("lab restoration record missing after 30 seconds");
+    false
+}
+
 pub fn run<H: Host>(h: &mut H, o: &Opts) -> Result<i32> {
     // The window directory is created empty; anything else is refused.
     if o.out.exists() && fs::read_dir(&o.out)?.next().is_some() {
@@ -1051,6 +1195,9 @@ pub fn run<H: Host>(h: &mut H, o: &Opts) -> Result<i32> {
     };
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
         c.rules.push((home, "$HOME".into()));
+    }
+    if let Err(e) = c.stage_history() {
+        return c.not_run(&[e.to_string()], &[]);
     }
     let mut early = Vec::new();
     if !o.lab.is_file() {
@@ -1168,7 +1315,7 @@ fn close<H: Host>(
             c.mark(format!("isolation breach: {why}"));
         }
     }
-    let data = c.dir.join("data");
+    let data = c.data_dir();
     let journal = |d: &Path| {
         ["history.sqlite3-wal", "history.sqlite3-shm"]
             .iter()
@@ -1204,6 +1351,7 @@ fn close<H: Host>(
         "schema": 1, "started_utc": c.started, "ended_utc": ended, "uplink": c.uplink,
         "ui_rc": ui_rc, "invalid_marks": c.marks,
         "manual": c.o.manual, "dry_run": c.o.dry_run,
+        "stage": c.o.stage,
         "data_sha256_before_dump": before_dump,
         "thresholds": {"pause_to_paused_ms": 5000, "stop_to_stopped_ms": 1000, "smoke_deadline_s": 420},
     });
@@ -1583,6 +1731,8 @@ fn window<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, lab: &str, uplink: &str) -> R
         &Spawn {
             argv: if c.o.manual {
                 vec![s(&b.ui)]
+            } else if let Some(stage) = &c.o.stage {
+                vec![s(&b.ui), format!("--smoke-feth-stage={stage}")]
             } else {
                 vec![s(&b.ui), "--smoke-feth".into()]
             },
@@ -1637,6 +1787,12 @@ fn window<H: Host>(c: &mut Ctx<'_, H>, b: &Bundle, lab: &str, uplink: &str) -> R
         }
     }
 
+    if c.o.stage.as_deref() == Some("guard")
+        && c.breach.is_none()
+        && !await_guard_restoration(c, &watch)
+    {
+        aborted = true;
+    }
     // 6. stop: a second of quiet, SIGINT to the witnesses, wait
     c.h.sleep(Duration::from_secs(1));
     let mut records = Vec::new();
@@ -2107,6 +2263,7 @@ mod tests {
         procs: Vec<Spawn>,
         clock: u64,
         smoke: Option<String>,
+        restoration: bool,
         dir: PathBuf,
     }
     impl Host for Fake {
@@ -2210,8 +2367,19 @@ mod tests {
                 if let Some(t) = &self.smoke {
                     fs::write(self.dir.join("smoke.json"), t)?;
                 }
+                if self.restoration {
+                    fs::write(
+                        self.dir.join("guard-change.json"),
+                        r#"{"restore_exit":0,"restored_utc":"2026-10-27T12:00:00Z"}"#,
+                    )?;
+                }
                 fs::write(self.dir.join("ui.log"), "ui\n")?;
-                let data = self.dir.join("data");
+                let data = s
+                    .env
+                    .iter()
+                    .find(|(k, _)| k == "STUDIO_DATA_DIR")
+                    .map(|(_, v)| PathBuf::from(v))
+                    .unwrap_or_else(|| self.dir.join("data"));
                 fs::create_dir_all(&data)?;
                 drop(Store::open(&data).unwrap());
             }
@@ -2310,6 +2478,8 @@ mod tests {
                 lab,
                 manual: false,
                 dry_run: false,
+                stage: None,
+                history: None,
             },
             f,
             runner,
@@ -2662,6 +2832,142 @@ tcp4       0      0  192.168.1.5.8002       *.*                    ESTABLISHED\n
         );
         assert!(!drift.stand_missing, "{drift:?}");
         assert!(drift.reasons.iter().any(|r| r.contains("drift")));
+    }
+
+    #[test]
+    fn stage_history_refuses_missing_resume_or_existing_fresh_data_before_tools() {
+        for stage in ["pause", "guard", "resume"] {
+            let (root, mut o, mut f, _) = setup("stage-history");
+            let history = root.join("shared-history");
+            if stage != "resume" {
+                fs::create_dir(&history).unwrap();
+                fs::write(history.join("keep"), "untouched").unwrap();
+            }
+            o.stage = Some(stage.into());
+            o.history = Some(history.clone());
+            assert_eq!(run(&mut f, &o).unwrap(), 2);
+            assert!(f.log.is_empty(), "no commands before history validation");
+            if stage != "resume" {
+                assert_eq!(
+                    fs::read_to_string(history.join("keep")).unwrap(),
+                    "untouched"
+                );
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn stage_history_cannot_overlap_evidence_even_through_an_alias() {
+        for nested in ["", "data", "../out/data"] {
+            let (root, mut o, mut f, _) = setup("overlap");
+            o.stage = Some("pause".into());
+            o.history = Some(o.out.join(nested));
+            assert_eq!(run(&mut f, &o).unwrap(), 2);
+            assert!(f.log.is_empty());
+            assert!(!o.out.join("data/history.sqlite3").exists());
+            fs::remove_dir_all(root).unwrap();
+        }
+        #[cfg(unix)]
+        {
+            let (root, mut o, mut f, _) = setup("alias-overlap");
+            fs::create_dir(&o.out).unwrap();
+            std::os::unix::fs::symlink(&o.out, root.join("alias")).unwrap();
+            o.stage = Some("pause".into());
+            o.history = Some(root.join("alias/data"));
+            assert_eq!(run(&mut f, &o).unwrap(), 2);
+            assert!(f.log.is_empty());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn guard_window_keeps_witnesses_until_restoration() {
+        let (root, mut o, mut f, _) = setup("guard-restored");
+        o.stage = Some("guard".into());
+        o.history = Some(root.join("shared"));
+        f.smoke = Some("{}".into());
+        f.restoration = true;
+        assert_eq!(run(&mut f, &o).unwrap(), 0);
+        assert!(o.out.join("guard-change.json").is_file());
+        assert!(
+            fs::read_to_string(o.out.join("hashes-before-copy.txt"))
+                .unwrap()
+                .contains("guard-change.json")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pause_stage_uses_shared_history_without_changing_standard_mode() {
+        let (root, mut o, mut f, _) = setup("stage-window");
+        let history = fs::canonicalize(&root).unwrap().join("shared-history");
+        o.stage = Some("pause".into());
+        o.history = Some(history.clone());
+        f.smoke = Some("{}".into());
+        assert_eq!(run(&mut f, &o).unwrap(), 0);
+        let ui = f
+            .procs
+            .iter()
+            .find(|p| p.argv[0].ends_with("studio-ui"))
+            .unwrap();
+        assert_eq!(ui.argv[1], "--smoke-feth-stage=pause");
+        assert!(ui.env.contains(&("STUDIO_DATA_DIR".into(), s(&history))));
+        assert!(history.join("history.sqlite3").is_file());
+        assert!(o.out.join("history.json").is_file());
+        let w: Value =
+            serde_json::from_str(&fs::read_to_string(o.out.join("window.json")).unwrap()).unwrap();
+        assert_eq!(w["stage"], "pause");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guard_window_cannot_close_cleanly_without_restoration_record() {
+        let (root, mut o, mut f, _) = setup("guard-restore");
+        o.stage = Some("guard".into());
+        o.history = Some(root.join("shared"));
+        f.smoke = Some("{}".into());
+        assert_eq!(run(&mut f, &o).unwrap(), 10);
+        assert!(
+            fs::read_to_string(o.out.join("window.json"))
+                .unwrap()
+                .contains("restoration")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stage_options_require_explicit_history_and_exclude_other_modes() {
+        let base = ["--out", "/o", "--app", "/a", "--lab", "/l"];
+        for tail in [
+            vec!["--stage", "pause", "--history", "/h"],
+            vec!["--stage", "resume", "--history", "/h"],
+            vec!["--stage", "guard", "--history", "/h"],
+        ] {
+            let args = base
+                .iter()
+                .copied()
+                .chain(tail)
+                .map(String::from)
+                .collect::<Vec<_>>();
+            assert!(parse_args(&args).is_ok());
+        }
+        for tail in [
+            vec!["--stage", "resume"],
+            vec!["--history", "/h"],
+            vec!["--stage", "bad", "--history", "/h"],
+            vec!["--stage", "pause", "--history", "relative"],
+            vec!["--stage", "pause", "--history", "/h", "--manual"],
+            vec!["--stage", "pause", "--history", "/h", "--dry-run"],
+        ] {
+            let args = base
+                .iter()
+                .copied()
+                .chain(tail)
+                .map(String::from)
+                .collect::<Vec<_>>();
+            assert!(parse_args(&args).is_err());
+        }
     }
 
     #[test]

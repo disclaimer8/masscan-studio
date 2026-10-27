@@ -101,7 +101,7 @@ pub struct Detected {
 }
 
 /// Подсказки masscan для отказов маршрутизатора (C `main-initadapter.c:196–198`).
-const ROUTER_HINTS: &str = "\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface";
+pub(crate) const ROUTER_HINTS: &str = "\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DetectError {

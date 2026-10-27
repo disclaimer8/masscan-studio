@@ -527,6 +527,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let w = ui.as_weak();
     let a = app.clone();
+    ui.on_check_setup(move || {
+        if let Some(ui) = w.upgrade() {
+            match a.borrow().send(Action::CheckSetup) {
+                Ok(()) => {
+                    ui.set_setup_busy(true);
+                    ui.set_setup_ready(false);
+                    ui.set_setup_installable(false);
+                    ui.set_setup_detail("Checking the bundled scanner helper…".into());
+                }
+                Err(e) => ui.set_setup_detail(e.into()),
+            }
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    ui.on_install_runner(move || {
+        if let Some(ui) = w.upgrade() {
+            match a.borrow().send(Action::InstallRunner) {
+                Ok(()) => {
+                    ui.set_setup_busy(true);
+                    ui.set_setup_installable(false);
+                    ui.set_setup_detail("Waiting for system installation permission…".into());
+                }
+                Err(e) => ui.set_setup_detail(e.into()),
+            }
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    ui.on_cancel_setup(move || {
+        if let Some(ui) = w.upgrade() {
+            action(&a, &ui, Action::CancelSetup);
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
     let h = history.clone();
     let edit = history_edit.clone();
     ui.on_select_history(move |i| {
@@ -950,6 +986,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .into(),
                     ),
+                    Update::Setup { busy, ready, installable, detail } => {
+                        ui.set_setup_busy(busy);
+                        ui.set_setup_ready(ready);
+                        ui.set_setup_installable(installable);
+                        ui.set_setup_detail(detail.into());
+                    }
                     Update::Notice(text) => ui.set_action_notice(text.into()),
                     Update::History(data, selected) => {
                         ui.set_history_labels(ModelRc::new(slint::VecModel::from(

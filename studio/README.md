@@ -71,7 +71,31 @@ Active attempts interrupt after a long scheduling/clock gap instead of silently
 resuming. The gated Mac feth path also repeats isolation checks in a background
 worker; a failed or stale check stops the attempt, retains received results, and
 cannot become Completed or a resumable pause. See AUTHORIZATION.md for polling
-limits. These contracts are tested offline; live mid-scan drift is still pending.
+limits. Restart/resume and live permanent-ARP drift acceptance are recorded in
+`docs/experiments/2026-10-27-studio-restart-guard.md`; sleep/wake, VPN and physical
+NIC acceptance remain separate.
+
+## Scanner setup
+
+Open **Scanner setup** in the toolbar. It checks the bundled helper without
+requesting administrator rights. If this build is not installed, **Install helper…**
+opens the system permission dialog and installs an immutable copy. Successful
+installation is verified against this build's SHA-256. Close setup and use
+**Authorize** separately when needed; installation never starts a scan.
+
+Setup is unavailable during a scan or an authorized session; Stop and Lock first.
+Simulation needs no installation. Updates install another hash-addressed version;
+previous versions are retained and never overwritten. A damaged installation is
+reported as an error, not repaired silently.
+
+**Cancel waiting** returns control without claiming rollback. Dismiss any remaining
+system permission dialog. An already approved copy may still finish; use **Check
+again** to discover its result. Waiting is bounded to 180 seconds.
+
+Linux requires `pkexec`, `polkitd`, `binutils` and a desktop authentication agent.
+Windows requires a system-wide PowerShell 7 installation in Program Files; user
+or PATH-only installations are refused. No driver, Npcap, service or automatic
+update is installed by this action. Raw network gates remain unchanged.
 
 ## macOS and Linux session authorization
 
@@ -81,7 +105,8 @@ or Stop cancels the wait; **Lock** closes the session. The password never enters
 Studio. Switching to Simulation closes the elevated session and uses an
 unprivileged runner.
 
-Prepare a copy of the runner from the exact app bundle you will run:
+For command-line review/installation instead of the setup panel, prepare a copy
+of the runner from the exact app bundle you will run:
 
 ```sh
 cargo xtask prepare-runner '/absolute/path/Masscan Studio.app/Contents/MacOS/studio-runner'

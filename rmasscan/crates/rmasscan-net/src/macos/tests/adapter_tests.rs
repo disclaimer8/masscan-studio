@@ -48,8 +48,13 @@ fn binding() -> AdapterBinding {
 }
 
 fn plan(rate: f64, wait: u32) -> ReadyPlan {
+    plan_cidr(rate, wait, "198.18.0.0/29")
+}
+
+/// Like `plan`, over an arbitrary target block (ports stay 80,443).
+fn plan_cidr(rate: f64, wait: u32, cidr: &str) -> ReadyPlan {
     let mut m = MassIp::new();
-    add_target_string(m.ipv4_mut(), "198.18.0.0/29").unwrap();
+    add_target_string(m.ipv4_mut(), cidr).unwrap();
     parse_ports(m.ports_mut(), "80,443").unwrap();
     let cfg = ScanConfig {
         targets: m,
@@ -1213,7 +1218,10 @@ fn stop_ends_the_run_quickly_and_nothing_is_sent_afterwards() {
 fn pause_stops_tx_then_resume_continues_without_gaps_or_duplicates() {
     let w = world();
     syn_ack_responder(&w);
-    let p = plan(40.0, 1);
+    // /25 x 2 ports = 256 probes = 6.4 s of sending at 40 pps: a runner stall of
+    // several seconds cannot finish the plan before `pause()` lands.
+    let p = plan_cidr(40.0, 1, "198.18.0.0/25");
+    let total = 256u64;
     let (io, _stats) = engine_pair(open_pair(&w));
     let h = start(&p, io, 2);
     while h.progress().sent < 3 {
@@ -1249,7 +1257,7 @@ fn pause_stops_tx_then_resume_continues_without_gaps_or_duplicates() {
     let all = lock(&w).written.clone();
     assert_eq!(
         all.len() as u64,
-        PROBES,
+        total,
         "exactly one write per probe across both legs"
     );
     for (i, f) in all.iter().enumerate() {

@@ -524,7 +524,7 @@ fn explicit_adapter_with_a_local_route_still_needs_router_ip() {
 }
 
 #[test]
-fn adapter_that_differs_from_the_route_interface_is_split() {
+fn adapter_that_differs_from_the_route_interface_names_the_mismatch() {
     let (routes, ifs) = eth0_world();
     let ov = Overrides {
         adapter: Some("eth1".into()),
@@ -534,11 +534,205 @@ fn adapter_that_differs_from_the_route_interface_is_split() {
     let e = detect(&t, &ov, &routes, &ifs).unwrap_err();
     assert_eq!(
         e,
-        DetectError::SplitRoutes {
-            first: (ip(8, 8, 8, 8), "eth1".into()),
-            last: (ip(8, 8, 8, 8), "eth0".into())
+        DetectError::RouteNotViaAdapter {
+            ip: ip(8, 8, 8, 8),
+            adapter: "eth1".into(),
+            route_ifname: "eth0".into()
         }
     );
+    assert_eq!(
+        e.to_string(),
+        "FAIL: route doesn't match interface: 8.8.8.8 is routed via eth0, not \"eth1\"\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface"
+    );
+}
+
+#[test]
+fn adapter_whose_interface_matches_the_route_proceeds() {
+    let (routes, ifs) = eth0_world();
+    let t = targets(ip(8, 8, 8, 8), ip(8, 8, 8, 8));
+    let ov = Overrides {
+        adapter: Some("eth0".into()),
+        ..Default::default()
+    };
+    let d = detect(&t, &ov, &routes, &ifs).unwrap();
+    assert_eq!(d.iface_source, Source::Given);
+    assert_eq!(
+        d.next_hop,
+        NextHop::Resolve {
+            ip: ip(192, 0, 2, 1),
+            why: NextHopWhy::RouteGateway
+        }
+    );
+    let t = targets(ip(10, 1, 4, 4), ip(10, 1, 4, 4));
+    let ov = Overrides {
+        adapter: Some("eth1".into()),
+        ..Default::default()
+    };
+    let d = detect(&t, &ov, &routes, &ifs).unwrap();
+    assert_eq!(
+        d.next_hop,
+        NextHop::Resolve {
+            ip: ip(10, 1, 4, 4),
+            why: NextHopWhy::OnLinkTarget
+        }
+    );
+}
+
+#[test]
+fn adapter_with_no_route_to_the_target_is_no_gateway() {
+    let ifs = FakeIfaces(vec![iface("eth0", 2, Some(MAC_A), &[ip(192, 0, 2, 5)])]);
+    let ov = Overrides {
+        adapter: Some("eth0".into()),
+        ..Default::default()
+    };
+    let t = targets(ip(8, 8, 8, 8), ip(8, 8, 8, 8));
+    let e = detect(&t, &ov, &FakeRoutes::default(), &ifs).unwrap_err();
+    assert_eq!(
+        e,
+        DetectError::NoGateway {
+            ifname: "eth0".into()
+        }
+    );
+}
+
+#[test]
+fn route_interface_missing_from_the_list_is_no_such_adapter() {
+    let routes = FakeRoutes::default().rule(
+        ip(0, 0, 0, 0),
+        ip(255, 255, 255, 255),
+        Some(route(99, "ghost0", Some(ip(192, 0, 2, 1)), false)),
+    );
+    let ifs = FakeIfaces(vec![iface("eth0", 2, Some(MAC_A), &[ip(192, 0, 2, 5)])]);
+    let t = targets(ip(8, 8, 8, 8), ip(8, 8, 8, 8));
+    let e = detect(&t, &Overrides::default(), &routes, &ifs).unwrap_err();
+    assert_eq!(e, DetectError::NoSuchAdapter("ghost0".into()));
+}
+
+#[test]
+fn no_route_and_local_route_on_the_last_target_are_refused() {
+    let (_, ifs) = eth0_world();
+    let ok = route(2, "eth0", Some(ip(192, 0, 2, 1)), false);
+    let no_last =
+        FakeRoutes::default().rule(ip(1, 0, 0, 0), ip(1, 255, 255, 255), Some(ok.clone()));
+    let t = targets(ip(1, 0, 0, 1), ip(2, 0, 0, 1));
+    assert_eq!(
+        detect(&t, &Overrides::default(), &no_last, &ifs).unwrap_err(),
+        DetectError::NoRoute(ip(2, 0, 0, 1))
+    );
+    let local_last = FakeRoutes::default()
+        .rule(ip(1, 0, 0, 0), ip(1, 255, 255, 255), Some(ok))
+        .rule(
+            ip(2, 0, 0, 0),
+            ip(2, 255, 255, 255),
+            Some(route(1, "lo", None, true)),
+        );
+    assert_eq!(
+        detect(&t, &Overrides::default(), &local_last, &ifs).unwrap_err(),
+        DetectError::LocalTarget {
+            ip: ip(2, 0, 0, 1),
+            ifname: "lo".into()
+        }
+    );
+}
+
+#[test]
+fn detect_offline_with_router_mac_still_uses_the_fake_gateway_mac() {
+    let (routes, ifs) = eth0_world();
+    let ov = Overrides {
+        router_mac: Some(MAC_B),
+        ..Default::default()
+    };
+    let t = targets(ip(8, 8, 8, 8), ip(8, 8, 8, 8));
+    let d = detect_offline(&t, &ov, &routes, &ifs).unwrap();
+    assert_eq!(
+        d.next_hop,
+        NextHop::Mac([0x66, 0x55, 0x44, 0x33, 0x22, 0x11], Source::Given)
+    );
+}
+
+#[test]
+fn os_errors_propagate_from_lookup_list_and_default_routes_with_fail_prefix() {
+    struct Failing {
+        lookup: bool,
+        defaults: bool,
+        inner: FakeRoutes,
+    }
+    impl RouteTable for Failing {
+        fn lookup(&self, dst: Ipv4Addr) -> Result<Option<Route>, NetError> {
+            if self.lookup {
+                Err(NetError::System("lookup".into()))
+            } else {
+                self.inner.lookup(dst)
+            }
+        }
+        fn default_routes(&self) -> Result<Vec<Route>, NetError> {
+            if self.defaults {
+                Err(NetError::System("defaults".into()))
+            } else {
+                self.inner.default_routes()
+            }
+        }
+    }
+    struct FailingIfaces;
+    impl Interfaces for FailingIfaces {
+        fn list(&self) -> Result<Vec<Iface>, NetError> {
+            Err(NetError::System("list".into()))
+        }
+    }
+    let (inner, ifs) = eth0_world();
+    let single = targets(ip(8, 8, 8, 8), ip(8, 8, 8, 8));
+    let many = targets(ip(10, 1, 4, 4), ip(10, 1, 4, 9));
+    let r = Failing {
+        lookup: true,
+        defaults: false,
+        inner: FakeRoutes::default(),
+    };
+    let e = detect(&single, &Overrides::default(), &r, &ifs).unwrap_err();
+    assert_eq!(e.to_string(), "FAIL: system error: lookup");
+    let r = Failing {
+        lookup: false,
+        defaults: false,
+        inner: FakeRoutes::default(),
+    };
+    let e = detect(&single, &Overrides::default(), &r, &FailingIfaces).unwrap_err();
+    assert_eq!(e.to_string(), "FAIL: system error: list");
+    let r = Failing {
+        lookup: false,
+        defaults: true,
+        inner,
+    };
+    let e = detect(&many, &Overrides::default(), &r, &ifs).unwrap_err();
+    assert_eq!(e.to_string(), "FAIL: system error: defaults");
+    assert!(matches!(e, DetectError::Os(NetError::System(_))));
+}
+
+#[test]
+fn placeholder_and_multicast_adapter_mac_overrides_are_refused() {
+    let (routes, ifs) = eth0_world();
+    let t = targets(ip(8, 8, 8, 8), ip(8, 8, 8, 8));
+    for m in [[0x02, 0, 0, 0, 0, 0], [0x01, 0, 0x5e, 0, 0, 1]] {
+        let ov = Overrides {
+            adapter_mac: Some(m),
+            ..Default::default()
+        };
+        let e = detect(&t, &ov, &routes, &ifs).unwrap_err();
+        assert_eq!(e, DetectError::NoMac("eth0".into()), "{m:?}");
+        assert!(e.to_string().contains("--source-mac"));
+    }
+}
+
+#[test]
+fn placeholder_mac_reported_unmasked_by_a_backend_is_refused() {
+    let (routes, _) = eth0_world();
+    let ifs = FakeIfaces(vec![iface(
+        "eth0",
+        2,
+        Some([0x02, 0, 0, 0, 0, 0]),
+        &[ip(192, 0, 2, 5)],
+    )]);
+    let t = targets(ip(8, 8, 8, 8), ip(8, 8, 8, 8));
+    let e = detect(&t, &Overrides::default(), &routes, &ifs).unwrap_err();
+    assert_eq!(e, DetectError::NoMac("eth0".into()));
 }
 
 #[test]
@@ -675,7 +869,19 @@ fn every_detect_error_text_contains_its_masscan_hint() {
         ),
         (
             DetectError::Os(NetError::UnsupportedPlatform),
-            vec!["not implemented"],
+            vec!["FAIL: raw packet I/O is not implemented"],
+        ),
+        (
+            DetectError::RouteNotViaAdapter {
+                ip: a,
+                adapter: "x".into(),
+                route_ifname: "y".into(),
+            },
+            vec![
+                "FAIL: route doesn't match interface: 192.0.2.1 is routed via y, not \"x\"\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router",
+                "    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP",
+                "    [hint] try \"--interface eth0\" to change interface",
+            ],
         ),
     ];
     for (e, needles) in table {
@@ -683,8 +889,6 @@ fn every_detect_error_text_contains_its_masscan_hint() {
         for n in needles {
             assert!(s.contains(n), "{s:?} lacks {n:?}");
         }
-        if !matches!(e, DetectError::Os(_)) {
-            assert!(s.starts_with("FAIL: "), "{s:?}");
-        }
+        assert!(s.starts_with("FAIL: "), "{s:?}");
     }
 }

@@ -317,6 +317,7 @@ fn clear_view(rows: &Rows, ui: &MainWindow) {
 #[derive(Debug)]
 struct SmokeFeth {
     out_dir: PathBuf,
+    stage: Option<smoke_feth::Stage>,
 }
 /// Parses `--smoke-feth`: `Ok(None)` without the flag, an error unless this is macOS and both
 /// `STUDIO_DATA_DIR` and `STUDIO_SMOKE_OUT` are set.
@@ -325,7 +326,19 @@ fn smoke_feth_config(
     env: impl Fn(&str) -> Option<std::ffi::OsString>,
     macos: bool,
 ) -> Result<Option<SmokeFeth>, String> {
-    if !args.iter().any(|a| a == "--smoke-feth") {
+    let stages = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--smoke-feth-stage="))
+        .collect::<Vec<_>>();
+    let standard = args.iter().any(|a| a == "--smoke-feth");
+    if stages.len() > 1 || (standard && !stages.is_empty()) {
+        return Err("Choose exactly one feth smoke mode".into());
+    }
+    let stage = stages
+        .first()
+        .map(|s| smoke_feth::Stage::parse(s))
+        .transpose()?;
+    if !standard && stage.is_none() {
         return Ok(None);
     }
     if args.iter().any(|a| {
@@ -347,6 +360,7 @@ fn smoke_feth_config(
     };
     Ok(Some(SmokeFeth {
         out_dir: out.into(),
+        stage,
     }))
 }
 /// The chronicle directory must exist and be writable before an administrator dialog is spent on a run.
@@ -793,11 +807,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ok = success.clone();
     let phase = Rc::new(Cell::new(0));
     let phase2 = phase.clone();
-    let driver = feth.as_ref().map(|_| {
-        Rc::new(RefCell::new(smoke_feth::Driver::new(
-            smoke_feth::Plan::feth(),
-            Instant::now(),
-        )))
+    let driver = feth.as_ref().map(|f| {
+        Rc::new(RefCell::new(match f.stage {
+            Some(stage) => smoke_feth::Driver::for_stage(stage, Instant::now()),
+            None => smoke_feth::Driver::new(smoke_feth::Plan::feth(), Instant::now()),
+        }))
     });
     let feth_out = feth.map(|f| f.out_dir);
     let outcome = Rc::new(RefCell::new(None::<(bool, String)>));
@@ -999,6 +1013,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut feth_steps = std::collections::VecDeque::from(feth_steps);
             while let Some(step) = feth_steps.pop_front() {
                 match step {
+                    smoke_feth::Step::GuardReady => {
+                        if let Some(dir) = &feth_out {
+                            let marker = serde_json::json!({"schema":1,"pid":std::process::id(),"utc":smoke_feth::utc_now()});
+                            if let Err(e) = std::fs::write(dir.join("guard-ready.json"), marker.to_string())
+                                && let Some(d) = &driver {
+                                feth_steps.extend(d.borrow_mut().abort(format!("cannot write guard marker: {e}"), Instant::now(), smoke_feth::utc_now()));
+                            }
+                        }
+                    }
                     // Start goes through the settings form and the Start button's callback, Stop through the Stop
                     // button; the rest are the controller actions the other buttons send.
                     smoke_feth::Step::Send(Action::Start(job)) => {
@@ -1086,6 +1109,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stage_cli_rejects_unknown_conflicting_and_non_mac_stages() {
+        let env = |_: &str| Some(std::ffi::OsString::from("/test"));
+        for args in [
+            vec!["--smoke-feth-stage=unknown"],
+            vec!["--smoke-feth-stage=pause", "--smoke-feth"],
+            vec!["--smoke-feth-stage=pause", "--smoke-feth-stage=resume"],
+            vec!["--smoke-feth-stage=pause", "--smoke"],
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            assert!(smoke_feth_config(&args, env, true).is_err());
+        }
+        let args = vec!["--smoke-feth-stage=resume".into()];
+        assert!(smoke_feth_config(&args, env, false).is_err());
+        assert!(smoke_feth_config(&args, env, true).unwrap().is_some());
+    }
+
     #[test]
     fn smoke_feth_requires_macos_data_dir_and_out_dir() {
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();

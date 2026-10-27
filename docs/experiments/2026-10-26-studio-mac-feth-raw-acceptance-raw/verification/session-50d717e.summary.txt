@@ -1,0 +1,6 @@
+session-50d717e (code 50d717e, runner cf22b148..., bundle build-1793057206210)
+Result: NOT RUN. Orchestrator rc 10, UI rc 1 "Authorization failed: Authorization timed out" after 180 s; no scan started.
+Cause: the Studio Authorize dialog was shown at 02:27:06 and left unanswered; the caller was dismissed at 02:30:06
+(authorization service log, controller analysis). Not a code defect.
+The blind netstat was noted, not refused (see report section 9). No verdict.json was produced (verify log not kept).
+The window directory is not copied into the repository (no evidence value beyond this summary).

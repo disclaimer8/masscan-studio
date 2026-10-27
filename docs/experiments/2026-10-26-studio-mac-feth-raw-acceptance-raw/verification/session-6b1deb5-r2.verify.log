@@ -1,0 +1,8 @@
+PASS     safety 
+PASS     chronicle 
+PASS     history 
+PASS     s1_full 
+PASS     s2_pause 
+PASS     s3_stop 
+PASS     wire 
+overall: PASS {"fail":0,"invalid":0,"not_run":0,"pass":7}

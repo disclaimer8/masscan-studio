@@ -1,0 +1,10 @@
+session-50d717e-r2 (code 50d717e, runner cf22b148...), ran at 07:39 after the Mac woke from sleep
+Result: studio-verify overall INVALID: pass 6, invalid 1, fail 0, not run 0 (verification/session-50d717e-r2.verify.log).
+Behaviour checks passed 6/6: chronicle, history, s1_full (19 rows, SYN order = plan), s2_pause (next_index 7,
+pause_to_paused_ms 3063), s3_stop (stop_to_stopped_ms 50, 429 rows, 466 SYN), wire. Uplink 0 frames. Orchestrator rc 0.
+The single INVALID is "leftover-listeners.txt is empty": that build wrote the full lsof listing of the host into the
+file (a seam between orchestrator and verifier, fixed in 6b1deb5 so the file holds leftovers only).
+RAW FILES WITHHELD FOR PRIVACY and not committed: peer.pcap held 4 frames of the host's own mDNS (host name,
+account name, device-service announcements), leftover-listeners.txt and its copy in verdict.json held the host's
+application inventory. verdict.json of this window is withheld for the same reason; the behaviour counts above
+were read from it. The status is INVALID and is not raised; this window is not GO evidence.

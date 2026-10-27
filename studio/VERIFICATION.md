@@ -726,19 +726,23 @@ Current gate: `raw_profile_enabled` (compile-time, per profile) is true only for
 and Linux raw profiles, physical NICs and Simulation-as-raw stay closed. The "disabled" and `RAW_SCANNING_ENABLED=false`
 statements in the dated entries above are historical: they describe the gate as it stood on those dates.
 
-Live acceptance through Studio on the sealed `feth4201`/`feth4202` pair, one Mac (macOS 27.0.1, arm64), debug-profile
-bundle `studio/dist/build-1793039025527`, frozen commit `05ab27fb631da440539344cf8c600308149d4671` (manifest `dirty: false`).
+Live acceptance through Studio on the sealed `feth4201`/`feth4202` pair, one Mac (macOS 27.0.1, arm64), debug-profile bundle.
+The first windows (frozen commit `05ab27fb631da440539344cf8c600308149d4671`, runner `e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb`,
+PASS 7/7 in `session-05ab27f-r2`) are history: merging `main` (PR #28, network guard in `studio-runner`) changed the runner bytes, so the window was repeated
+on the final code.
 
-- `studio-ui` sha256 `eff51e58117f2cc7b6ed3690d3874a512a1ad4091db98a29339df14a921daa86`.
-- `studio-runner` (bundle = installed) sha256 `e369e29dff4d89577ec58b87f5f86306312875c185305e00fe70ac23c4a943cb`.
-- `rmasscan-lab` (witnesses, `studio-verify`) sha256 `e0e2f5170218763b51ed22045516a738efbafae4e0a54eaa9570b047d460733b`.
-- Attempt 1 (`session-05ab27f`): **NOT RUN**. The Authorize dialog stayed unanswered for 180 s; no scan started.
-- Attempt 2 (`session-05ab27f-r2`): **PASS** 7/7. `s1_full` 20 rows, 8 open, Completed; `s2_pause` paused at `next_index` 7
-  after 3090 ms with the runner text "Checkpoint committed by Studio", then Completed with 32 rows; `s3_stop` Stopped in
-  50 ms with 439 rows and no SYN after Stop. Uplink `en0`: 0 lab frames; peer: 1046 frames.
-- Studio tests on the Mac at that commit: 121 passed, 0 failed; rmasscan 1268 passed, 0 failed.
-- NOT RUN: manual UI pass, Resume after a Studio restart on raw, sleep/wake, VPN, release-profile build, physical NIC,
-  Windows and Linux raw.
+Final code `6b1deb5d0f88a1f31efb1d9f5eb538401bc66d85` (manifest `dirty: false`):
+
+- `studio-ui` sha256 `619f24de785b685cc1fc34d3ba102c6fbec322b47416daa4a1c68db18df36ba0`.
+- `studio-runner` (bundle = installed) sha256 `cf22b14834291a5f363e6d42e2dd9ff3d7fc180ae1216cc413c0d13c352380b6`. A release bundle must reproduce this runner hash.
+- `rmasscan-lab` (witnesses, `studio-verify`) sha256 `c259a1b3c8d38ec5d58f7fdeb518b48ac9304822cab0bd43e2f8143071c05a07`.
+- `session-6b1deb5-r2`: **PASS** 7/7. `s1_full` 20 rows, 8 open, Completed; `s2_pause` paused at `next_index` 7 after 3090 ms with the runner text
+  "Checkpoint committed by Studio", then Completed with 32 rows; `s3_stop` Stopped in 51 ms with 428 rows and no SYN after Stop. Uplink `en0`: 0 lab frames;
+  peer: 1038 frames, none outside TCP/ARP (the peer witness drops only the host's own mDNS).
+- Other attempts on the final branch: `session-d896d53` NOT RUN (blind `netstat` on macOS 27 refused before start; fixed in xtask), `session-50d717e` NOT RUN
+  (Authorize unanswered), `session-50d717e-r2` INVALID (behaviour 6/6; raw files withheld for privacy), `session-6b1deb5` NOT RUN (Authorize unanswered).
+- Studio and rmasscan tests at `6b1deb5` (Mac 147/0 and 1274/0, Linux 1153/0, Windows 1083/0): PASS, logs in `verification/`. CI on the final HEAD is recorded by the controller at merge.
+- NOT RUN: manual UI pass, Resume after a Studio restart on raw, the interrupt path of the network guard (stand drift, stale observation, sleep mid-scan), sleep/wake, VPN, release-profile build, physical NIC, Windows and Linux raw.
 
 Evidence: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance-raw/` (hashes in `MANIFEST.sha256`). Report and
 status words: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`. GO (feth) there is conditional on green CI

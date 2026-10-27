@@ -1,0 +1,8 @@
+INVALID  safety INVALID: window.json carries INVALID mark(s) or no mark list; INVALID: the UI exited with code 1, not 0 (window.json ui_rc)
+NOT RUN  chronicle NOT RUN: smoke.json: the session ended before any Start
+PASS     history 
+NOT RUN  s1_full NOT RUN: the Start action of the case is not in the chronicle
+NOT RUN  s2_pause NOT RUN: the Start action of the case is not in the chronicle
+NOT RUN  s3_stop NOT RUN: the Start action of the case is not in the chronicle
+NOT RUN  wire NOT RUN: SYN outside the case windows needs the chronicle times of every case
+overall: NOT RUN {"fail":0,"invalid":1,"not_run":5,"pass":1}

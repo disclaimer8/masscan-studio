@@ -1,0 +1,8 @@
+INVALID  safety INVALID: leftover-listeners.txt is empty (nothing left over from an earlier run)
+PASS     chronicle 
+PASS     history 
+PASS     s1_full 
+PASS     s2_pause 
+PASS     s3_stop 
+PASS     wire 
+overall: INVALID {"fail":0,"invalid":1,"not_run":0,"pass":6}

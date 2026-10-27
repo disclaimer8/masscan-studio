@@ -1,11 +1,14 @@
-//! CLI порта masscan (AGPL-3.0): `-sL`, `--echo`/`--echo-all` и
-//! `--offline --packet-trace` поверх `rmasscan-core`. Порт `src/main.c`
-//! (`main` :1595-1805, `transmit_thread` :203-448), `src/main-listscan.c` и
-//! `src/main-ptrace.c` из masscan © Robert David Graham
-//! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
+//! CLI порта masscan (AGPL-3.0): живой скан с обнаружением адаптера и шлюза, `--offline` (с `--packet-trace`),
+//! `-sL`, `--echo`/`--echo-all` и `--iflist` поверх `rmasscan-core`, `rmasscan-engine` и `rmasscan-net`. Порт
+//! `src/main.c` (`main` :1595-1805, `main_scan`), `src/main-initadapter.c`, `src/main-listscan.c` и
+//! `src/main-ptrace.c` из masscan © Robert David Graham (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Библиотека: бинарник `rmasscan` тонкий и зовёт [`run`] с настоящим
-//! `Backend`; все тесты идут через fake (ни один не достигает ОС).
+//! Библиотека: бинарник `rmasscan` тонкий и зовёт [`run`] с настоящим `Backend`; все тесты идут через fake (ни один
+//! не достигает ОС). Настоящая реализация шва библиотеке недоступна:
+//!
+//! ```compile_fail
+//! use rmasscan_cli::os_backend::OsBackend;
+//! ```
 
 #![forbid(unsafe_code)]
 
@@ -14,86 +17,11 @@ pub mod live;
 pub mod output;
 
 use std::io::Write;
-use std::net::Ipv4Addr;
-use std::ops::ControlFlow;
-use std::time::Instant;
 
 use args::{Cli, SeedPolicy, seed_policy};
-use output::io_fail;
-use rmasscan_core::config::{EffectiveConfig, Operation, echo, validate};
-use rmasscan_core::packet::LinkType;
-use rmasscan_core::probe::{AdapterBinding, Probe, for_each_probe as core_for_each_probe};
+use output::{Interactive, io_fail};
+use rmasscan_core::config::{Operation, echo, validate};
 use rmasscan_core::scan::{format_list_line, list_scan};
-
-/// Поток кадров `transmit_thread` без сети: генерация живёт в
-/// `rmasscan_core::probe` (индексы `transmit_scan`, SYN-cookie и порт источника
-/// как main.c:373-393); здесь только разбор параметров адаптера.
-///
-/// Требует `--adapter-ip`, `--adapter-mac`, `--router-mac` и `--source-port`:
-/// в этапе 1 нет обнаружения адаптера, а C без `--source-port` берёт
-/// `40000 + time(0) % 20000` (main.c:1316-1321), что недетерминированно.
-/// Ошибка callback останавливает генератор сразу (`ControlFlow::Break`).
-fn for_each_probe(
-    eff: &EffectiveConfig,
-    mut f: impl FnMut(&Probe) -> Result<(), String>,
-) -> Result<(), String> {
-    let missing =
-        |o: &str| format!("--offline --packet-trace needs {o} (stage 1 has no adapter discovery)");
-    let source_ipv4 = eff.adapter_ip().ok_or_else(|| missing("--adapter-ip"))?;
-    let source_mac = eff.adapter_mac().ok_or_else(|| missing("--adapter-mac"))?;
-    let next_hop_mac = eff.router_mac().ok_or_else(|| missing("--router-mac"))?;
-    let source_ports = eff.source_port().ok_or_else(|| {
-        "--offline --packet-trace needs --source-port (C picks 40000 + time(0) % 20000, \
-         which is not deterministic)"
-            .to_string()
-    })?;
-    let binding = AdapterBinding {
-        interface_id: eff.adapter_name().unwrap_or("offline").to_string(),
-        link_type: LinkType::Ethernet,
-        source_ipv4,
-        source_mac,
-        next_hop_mac,
-        source_ports,
-    };
-    match core_for_each_probe(eff, &binding, |p| match f(p) {
-        Ok(()) => ControlFlow::Continue(()),
-        Err(e) => ControlFlow::Break(e),
-    })
-    .map_err(|e| e.to_string())?
-    {
-        ControlFlow::Continue(()) => Ok(()),
-        ControlFlow::Break(e) => Err(e),
-    }
-}
-
-/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s`. Адреса и флаги
-/// разбираются из самого кадра, как `preprocess_frame` в C.
-fn trace_line(secs: f64, frame: &[u8]) -> String {
-    let (ip, tcp) = (14, 34);
-    let src = Ipv4Addr::new(
-        frame[ip + 12],
-        frame[ip + 13],
-        frame[ip + 14],
-        frame[ip + 15],
-    );
-    let dst = Ipv4Addr::new(
-        frame[ip + 16],
-        frame[ip + 17],
-        frame[ip + 18],
-        frame[ip + 19],
-    );
-    let sport = u16::from_be_bytes([frame[tcp], frame[tcp + 1]]);
-    let dport = u16::from_be_bytes([frame[tcp + 2], frame[tcp + 3]]);
-    let flags = match frame[tcp + 13] {
-        0x02 => "SYN".to_string(),
-        other => format!("flags-{other:#04x}"),
-    };
-    format!(
-        "SENT ({secs:5.4}) TCP  {:<21} > {:<21} {flags}\n",
-        format!("[{src}]:{sport}"),
-        format!("[{dst}]:{dport}")
-    )
-}
 
 fn write_out(out: &mut dyn Write, s: &str) -> Result<(), String> {
     out.write_all(s.as_bytes()).map_err(io_fail)
@@ -104,17 +32,28 @@ fn finish(out: &mut dyn Write) -> Result<(), String> {
     out.flush().map_err(io_fail)
 }
 
-/// Выполняет разобранную командную строку. `backend` - единственный шов к ОС;
-/// `log` получит строки `[+]` живого скана (задача 5).
+/// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) как есть, прочие ошибки
+/// с обёрткой `rmasscan: error:`. Любая ошибка даёт exit 1.
+pub fn error_text(msg: &str) -> String {
+    if msg.starts_with(live::REFUSAL_PREFIX) {
+        msg.to_string()
+    } else {
+        format!("rmasscan: error: {msg}")
+    }
+}
+
+/// Выполняет разобранную командную строку. `backend` - единственный шов к ОС; `out` получает stdout (строки
+/// `Discovered`, трассу, `-sL`, `--echo`, `--iflist`), `log` строки `[+]`. `Ok` значит exit 0.
 pub fn run(
     cli: &Cli,
-    _backend: &dyn live::Backend,
+    backend: &dyn live::Backend,
     out: &mut dyn Write,
-    _log: &mut dyn Write,
+    log: &mut dyn Write,
 ) -> Result<(), String> {
     let cfg = cli.to_config()?;
     if cli.iflist {
-        return Err("--iflist is not yet available in this build".into());
+        live::iflist(backend, out)?;
+        return finish(out);
     }
     // Решение по операции до validate: --echo без seed не печатает `seed = 0`.
     if seed_policy(cli) == SeedPolicy::Required && cli.seed.is_none() {
@@ -157,41 +96,114 @@ pub fn run(
         res?;
         return finish(out);
     }
-    if cli.offline && cli.packet_trace {
-        let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
-        let start = Instant::now();
-        for_each_probe(&eff, |p| {
-            write_out(out, &trace_line(start.elapsed().as_secs_f64(), &p.frame))
-        })?;
+    if cli.offline {
+        live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
-    if !cli.offline {
-        return Err("live scanning is not yet available in this build".into());
-    }
-    Err("only -sL, --echo/--echo-all and --offline --packet-trace are available".into())
+    live::run_live(&cfg, backend, &mut Interactive::new(&mut *out), log)?;
+    finish(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmasscan_core::cookie::syn_cookie_ipv4;
-    use rmasscan_core::scan::transmit_scan;
+    use std::net::Ipv4Addr;
+    use std::sync::Arc;
 
-    struct FakeBackend;
+    use args::SeedPolicy;
+    use rmasscan_core::cookie::syn_cookie_ipv4;
+    use rmasscan_core::probe::AdapterBinding;
+    use rmasscan_core::scan::transmit_scan;
+    use rmasscan_core::throttle::Clock;
+    use rmasscan_engine::AdapterPair;
+    use rmasscan_engine::fake::ManualClock;
+    use rmasscan_net::arp_resolve::ArpPolicy;
+    use rmasscan_net::{Iface, Interfaces, NetError, Route, RouteTable};
+
+    const ETH0_IP: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 5);
+
+    /// Одна сеть: `eth0` (Ethernet, `02:aa:00:00:00:01`, адреса `ipv4`), всё через шлюз `192.0.2.1`. `open`
+    /// паникует: unit-тесты библиотеки никогда не открывают адаптер.
+    struct FakeBackend {
+        ipv4: Vec<Ipv4Addr>,
+    }
+
+    impl Default for FakeBackend {
+        fn default() -> Self {
+            FakeBackend {
+                ipv4: vec![ETH0_IP],
+            }
+        }
+    }
+
+    struct Routes;
+    fn eth0_route() -> Route {
+        Route {
+            ifindex: 2,
+            ifname: "eth0".into(),
+            gateway: Some(Ipv4Addr::new(192, 0, 2, 1)),
+            local: false,
+        }
+    }
+    impl RouteTable for Routes {
+        fn lookup(&self, _: Ipv4Addr) -> Result<Option<Route>, NetError> {
+            Ok(Some(eth0_route()))
+        }
+        fn default_routes(&self) -> Result<Vec<Route>, NetError> {
+            Ok(vec![eth0_route()])
+        }
+    }
+
+    struct Ifaces(Vec<Ipv4Addr>);
+    impl Interfaces for Ifaces {
+        fn list(&self) -> Result<Vec<Iface>, NetError> {
+            Ok(vec![Iface {
+                name: "eth0".into(),
+                index: 2,
+                device_id: "eth0".into(),
+                description: None,
+                mac: Some([0x02, 0xaa, 0, 0, 0, 1]),
+                mac_masked: false,
+                ethernet: true,
+                up: true,
+                ipv4: self.0.clone(),
+            }])
+        }
+    }
+
     impl live::Backend for FakeBackend {
+        fn routes(&self) -> Result<Box<dyn RouteTable>, NetError> {
+            Ok(Box::new(Routes))
+        }
+        fn interfaces(&self) -> Result<Box<dyn Interfaces>, NetError> {
+            Ok(Box::new(Ifaces(self.ipv4.clone())))
+        }
+        fn open(&self, _: &AdapterBinding) -> Result<AdapterPair, NetError> {
+            panic!("library unit tests never open an adapter")
+        }
         fn entropy64(&self) -> u64 {
             0x1234_5678_9abc_def1
         }
         fn unix_time(&self) -> u64 {
             1_800_000_000
         }
+        fn arp_policy(&self) -> ArpPolicy {
+            ArpPolicy::default()
+        }
+        fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
+            ManualClock::new()
+        }
+    }
+
+    fn run_with(b: &FakeBackend, args: &[&str]) -> Result<String, String> {
+        let cli = Cli::try_parse_masscan(args.iter().copied()).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        run(&cli, b, &mut out, &mut Vec::new())?;
+        Ok(String::from_utf8(out).unwrap())
     }
 
     fn run_args(args: &[&str]) -> Result<String, String> {
-        let cli = Cli::try_parse_masscan(args.iter().copied()).map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        run(&cli, &FakeBackend, &mut out, &mut Vec::new())?;
-        Ok(String::from_utf8(out).unwrap())
+        run_with(&FakeBackend::default(), args)
     }
 
     #[test]
@@ -312,7 +324,6 @@ mod tests {
             ][..],
             &["rmasscan", "-sL", "10.0.0.0/30", "-p80"][..],
             &["rmasscan", "-sL", "2001:db8::/126", "-p80", "--seed", "1"][..],
-            &["rmasscan", "10.0.0.0/30", "-p80", "--seed", "1"][..],
         ] {
             assert!(run_args(args).is_err(), "{args:?}");
         }
@@ -362,6 +373,20 @@ mod tests {
         v
     }
 
+    /// `TRACE` без опции `opt` (и её значения).
+    fn trace_without(opts: &[&str]) -> Vec<&'static str> {
+        let mut v = TRACE.to_vec();
+        for opt in opts {
+            let i = v.iter().position(|a| a.starts_with(opt)).unwrap();
+            if v[i].contains('=') {
+                v.remove(i);
+            } else {
+                v.drain(i..i + 2);
+            }
+        }
+        v
+    }
+
     #[test]
     fn packet_trace_count_is_range_times_retries_plus_one_squared() {
         // range 4 ips * 2 ports = 8; transmit sends (retries+1)^2 per target.
@@ -392,16 +417,18 @@ mod tests {
         }
     }
 
-    fn effective(args: &[&str]) -> Result<EffectiveConfig, String> {
+    fn prepared(args: &[&str]) -> live::Prepared {
         let cfg = Cli::try_parse_masscan(args.iter().copied())
-            .map_err(|e| e.to_string())?
-            .to_config()?;
-        validate(&cfg, Operation::Scan).map_err(|e| e.to_string())
+            .unwrap()
+            .to_config()
+            .unwrap();
+        live::prepare(&cfg, SeedPolicy::Required, &FakeBackend::default(), true).unwrap()
     }
 
     #[test]
     fn packet_trace_seqno_and_source_port_match_cookie_formula() {
-        let eff = effective(&trace_args(&["--retries", "1"])).unwrap();
+        let p = prepared(&trace_args(&["--retries", "1"]));
+        let eff = &p.eff;
         // Independent recomputation of main.c:373-393 from transmit_scan's own indices.
         let mut expected = Vec::new();
         transmit_scan(
@@ -431,19 +458,19 @@ mod tests {
         )
         .unwrap();
         let mut got = Vec::new();
-        for_each_probe(&eff, |p| {
+        live::for_each_probe(eff, &p.binding, |pr| {
             // Frame carries the same values (TCP header at 34, seqno at +4).
-            assert_eq!(p.ip_me, 0x0aff_0001);
-            assert_eq!(&p.frame[26..30], &p.ip_me.to_be_bytes());
-            assert_eq!(&p.frame[30..34], &p.ip_them.to_be_bytes());
-            assert_eq!(&p.frame[34..36], &p.port_me.to_be_bytes());
-            assert_eq!(&p.frame[36..38], &p.port_them.to_be_bytes());
-            assert_eq!(&p.frame[38..42], &p.seqno.to_be_bytes());
+            assert_eq!(pr.ip_me, 0x0aff_0001);
+            assert_eq!(&pr.frame[26..30], &pr.ip_me.to_be_bytes());
+            assert_eq!(&pr.frame[30..34], &pr.ip_them.to_be_bytes());
+            assert_eq!(&pr.frame[34..36], &pr.port_me.to_be_bytes());
+            assert_eq!(&pr.frame[36..38], &pr.port_them.to_be_bytes());
+            assert_eq!(&pr.frame[38..42], &pr.seqno.to_be_bytes());
             got.push((
-                p.ip_them,
-                u32::from(p.port_them),
-                u32::from(p.port_me),
-                p.seqno,
+                pr.ip_them,
+                u32::from(pr.port_them),
+                u32::from(pr.port_me),
+                pr.seqno,
             ));
             Ok(())
         })
@@ -465,13 +492,13 @@ mod tests {
         let mut a = trace_args(&[]);
         a.pop();
         a.extend(["--source-port", "40000"]);
-        let eff = effective(&a).unwrap();
+        let p = prepared(&a);
         let mut n = 0;
-        for_each_probe(&eff, |p| {
-            assert_eq!(p.port_me, 40000);
+        live::for_each_probe(&p.eff, &p.binding, |pr| {
+            assert_eq!(pr.port_me, 40000);
             assert_eq!(
-                p.seqno,
-                syn_cookie_ipv4(p.ip_them, u32::from(p.port_them), p.ip_me, 40000, 5) as u32
+                pr.seqno,
+                syn_cookie_ipv4(pr.ip_them, u32::from(pr.port_them), pr.ip_me, 40000, 5) as u32
             );
             n += 1;
             Ok(())
@@ -480,42 +507,82 @@ mod tests {
         assert_eq!(n, 8);
     }
 
+    /// Прежде `--offline --packet-trace` требовал четыре опции адаптера; теперь недостающие значения даёт
+    /// обнаружение (fake-бэкенд), MAC шлюза в offline всегда фиктивный, порт по формуле времени.
     #[test]
-    fn packet_trace_requires_adapter_options() {
-        let without = |opt: &str| -> Vec<&'static str> {
-            let mut v = TRACE.to_vec();
-            let i = v.iter().position(|a| a.starts_with(opt)).unwrap();
-            if v[i].contains('=') {
-                v.remove(i);
-            } else {
-                v.drain(i..i + 2);
-            }
-            v
-        };
-        for opt in [
-            "--source-port",
-            "--adapter-ip",
-            "--adapter-mac",
-            "--router-mac",
+    fn packet_trace_fills_missing_values_from_the_backend() {
+        for (opts, src) in [
+            (&["--adapter-ip"][..], "[192.0.2.5]:4000"),
+            (&["--adapter-mac"][..], "[10.255.0.1]:4000"),
+            (&["--router-mac"][..], "[10.255.0.1]:4000"),
+            // 40000 + 1_800_000_000 % 20000 = 40000, один порт.
+            (&["--source-port"][..], "[10.255.0.1]:40000 "),
+            (
+                &[
+                    "--adapter-ip",
+                    "--adapter-mac",
+                    "--router-mac",
+                    "--source-port",
+                ][..],
+                "[192.0.2.5]:40000 ",
+            ),
         ] {
-            let e = run_args(&without(opt)).unwrap_err();
-            assert!(e.contains(opt), "{opt}: {e}");
+            let out = run_args(&trace_without(opts)).unwrap();
+            assert_eq!(out.lines().count(), 8, "{opts:?}");
+            assert!(out.lines().all(|l| l.contains(src)), "{opts:?}: {out}");
+        }
+        let p = prepared(&trace_without(&["--adapter-mac", "--router-mac"]));
+        assert_eq!(p.binding.source_mac, [0x02, 0xaa, 0, 0, 0, 1]);
+        assert_eq!(p.binding.next_hop_mac, [0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
+        assert_eq!(p.binding.interface_id, "eth0");
+    }
+
+    #[test]
+    fn packet_trace_without_adapter_ip_on_an_interface_without_ipv4_names_the_source_ip_hint() {
+        let b = FakeBackend { ipv4: vec![] };
+        let e = run_with(&b, &trace_without(&["--adapter-ip"])).unwrap_err();
+        assert_eq!(
+            e,
+            "[-] FAIL: failed to detect IP of interface \"eth0\"\n    \
+             [hint] did you spell the name correctly?\n    \
+             [hint] if it has no IP address, manually set with something like \"--source-ip 198.51.100.17\""
+        );
+        assert_eq!(
+            error_text(&e),
+            e,
+            "C form without the rmasscan: error: wrapper"
+        );
+        assert_eq!(error_text("x"), "rmasscan: error: x");
+    }
+
+    /// Заполнитель Darwin и групповой MAC не становятся source MAC и в герметичном `--offline` (ОС не опрашивается).
+    #[test]
+    fn offline_with_an_unusable_explicit_mac_is_refused() {
+        for mac in ["02-00-00-00-00-00", "01-00-5e-00-00-01"] {
+            let e = run_args(&[
+                "rmasscan",
+                "--offline",
+                "10.0.0.1",
+                "-p80",
+                "--seed",
+                "1",
+                "--adapter-ip",
+                "10.255.0.1",
+                "--adapter-mac",
+                mac,
+            ])
+            .unwrap_err();
+            assert_eq!(
+                e,
+                "[-] FAIL: failed to detect MAC address of interface: \"offline\"\n \
+                 [hint] try something like \"--source-mac 00-11-22-33-44-55\"",
+                "{mac}"
+            );
         }
     }
 
     #[test]
-    fn scan_without_offline_trace_is_rejected() {
-        assert!(
-            run_args(&[
-                "rmasscan",
-                "10.0.0.0/30",
-                "-p80",
-                "--seed",
-                "1",
-                "--offline"
-            ])
-            .is_err()
-        );
+    fn packet_trace_without_offline_and_list_with_echo_are_rejected() {
         assert!(Cli::try_parse_masscan(["rmasscan", "10.0.0.0/30", "--packet-trace"]).is_err());
         assert!(Cli::try_parse_masscan(["rmasscan", "-sL", "--echo", "10.0.0.0/30"]).is_err());
     }
@@ -524,7 +591,7 @@ mod tests {
     fn echo_without_seed_errors_before_printing() {
         let cli = Cli::try_parse_masscan(["rmasscan", "--echo", "10.0.0.0/30", "-p80"]).unwrap();
         let mut out = Vec::new();
-        let e = run(&cli, &FakeBackend, &mut out, &mut Vec::new()).unwrap_err();
+        let e = run(&cli, &FakeBackend::default(), &mut out, &mut Vec::new()).unwrap_err();
         assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
         assert!(e.contains("--seed"), "{e}");
     }
@@ -539,30 +606,5 @@ mod tests {
     fn offline_without_seed_errors() {
         let e = run_args(&["rmasscan", "--offline", "10.0.0.0/30", "-p80"]).unwrap_err();
         assert!(e.contains("--seed"), "{e}");
-    }
-
-    #[test]
-    fn iflist_and_live_scan_are_not_yet_available() {
-        let e = run_args(&["rmasscan", "--iflist"]).unwrap_err();
-        assert!(e.contains("not yet available"), "{e}");
-        let e = run_args(&["rmasscan", "10.0.0.0/30", "-p80"]).unwrap_err();
-        assert!(e.contains("not yet available"), "{e}");
-    }
-
-    /// Бинарник тестов не содержит `OsBackend`: модуль и `fn main` закрыты
-    /// `cfg(not(test))`, а `lib.rs` не знает о нём вовсе (N2).
-    #[test]
-    fn os_backend_is_absent_under_test() {
-        let main = include_str!("main.rs");
-        assert!(main.contains("#[cfg(not(test))]\nmod os_backend;"));
-        assert!(main.contains("#[cfg(not(test))]\nfn main("));
-        assert!(!main.contains("#[test]"), "unit tests live in the library");
-        assert!(
-            !include_str!("lib.rs")
-                .split("mod tests")
-                .next()
-                .unwrap()
-                .contains("os_backend")
-        );
     }
 }

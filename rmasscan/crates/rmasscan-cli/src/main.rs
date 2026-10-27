@@ -2,6 +2,7 @@
 //! настоящим `OsBackend`. Весь код и все unit-тесты живут в библиотеке; модуль
 //! `os_backend` и `fn main` существуют только вне `cfg(test)` (cargo собирает
 //! bin-таргет и под `cfg(test)`), поэтому ни один тест не может дойти до ОС.
+//! Ctrl-C не перехватывается: поведение ОС по умолчанию, `paused.conf` не пишется.
 
 #![forbid(unsafe_code)]
 
@@ -23,7 +24,7 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(msg) => {
             let _ = out.flush();
-            eprintln!("rmasscan: error: {msg}");
+            eprintln!("{}", rmasscan_cli::error_text(&msg));
             std::process::ExitCode::FAILURE
         }
     }

@@ -1,0 +1,1604 @@
+   Compiling rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
+    Finished `test` profile [optimized + debuginfo] target(s) in 6.29s
+     Running unittests src/main.rs (target/debug/deps/rmasscan-35a0fc6db7f1870b)
+
+running 15 tests
+test tests::list_scan_two_ports_prints_ip_port ... ok
+test tests::packet_trace_single_source_port_uses_plain_cookie ... ok
+test tests::packet_trace_seqno_and_source_port_match_cookie_formula ... ok
+test tests::excludefile_applies ... ok
+test tests::packet_trace_line_format ... ok
+test tests::list_scan_single_port_prints_ip_only ... ok
+test tests::list_scan_without_ports_adds_port_80 ... ok
+test tests::echo_without_ports_adds_no_port_80 ... ok
+test tests::echo_and_echo_all_are_identical ... ok
+test tests::scan_without_offline_trace_is_rejected ... ok
+test tests::packet_trace_requires_adapter_options ... ok
+test tests::unsupported_option_errors ... ok
+test tests::packet_trace_count_is_range_times_retries_plus_one_squared ... ok
+test tests::bad_inputs_are_fatal ... ok
+test tests::list_scan_with_non_terminating_retries_is_an_error_not_a_hang ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential.rs (target/debug/deps/differential-3cff3c5eb38eaded)
+
+running 7 tests
+test seed_zero_is_rejected ... ok
+test help_is_plain_english ... ok
+test errors_exit_nonzero_with_message_on_stderr ... ok
+test list_scan_retries_that_cannot_terminate_fails_fast ... ok
+test broken_pipe_stops_work_quickly ... ok
+test echo_matches_oracle_as_set ... ok
+test list_scan_binary_matches_c_oracle_fixtures ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.53s
+
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_core-b78460f9d114afa1)
+
+running 136 tests
+test blackrock::tests::huge_range_and_seed_do_not_panic ... ok
+test blackrock::tests::no_overflow_panic_on_large_range_and_rounds14 ... ok
+test blackrock::tests::range_one_maps_zero_to_zero ... ok
+test blackrock::tests::rounds_64_or_more_is_rejected ... ok
+test blackrock::tests::shuffle_unshuffle_round_trip ... ok
+test blackrock::tests::zero_range_is_rejected ... ok
+test checksum::tests::fold_u64_overflowing_incremental_sum ... ok
+test checksum::tests::fold_and_invert_double_fold ... ok
+test checksum::tests::checksum_ipv4_reference_vectors ... ok
+test checksum::tests::ip_header_checksum_known_header ... ok
+test checksum::tests::ip_header_checksum_respects_ihl_and_offset ... ok
+test checksum::tests::ip_header_checksum_truncated_and_odd_max ... ok
+test blackrock::tests::tiny_ranges_are_permutations_and_round_trip ... ok
+test checksum::tests::unknown_protocol_returns_all_ones ... ok
+test checksum::tests::tcp_ipv4_partial_matches_c ... ok
+test config::tests::defaults_match_c ... ok
+test config::tests::echo_all_prints_defaults ... ok
+test config::tests::echo_applies_excludes_and_does_not_add_port_80 ... ok
+test config::tests::echo_prints_cidr_single_and_dashed_ranges ... ok
+test config::tests::echo_full_roundtrip_all_fields ... ok
+test config::tests::echo_roundtrips_through_paused_conf ... ok
+test config::tests::echo_prints_non_tcp_ports_with_prefixes ... ok
+test config::tests::echo_zero_based_ranges_like_c_oracle ... ok
+test config::tests::effective_config_feeds_list_scan ... ok
+test config::tests::effective_keeps_normalized_source_ranges_apart_from_final_set ... ok
+test config::tests::parse_mac_cases ... ok
+test config::tests::parse_rate_differs_from_std_parse_like_c ... ok
+test blackrock::tests::new_panics_on_zero_range - should panic ... ok
+test config::tests::parse_rate_rejects_non_digits ... ok
+test config::tests::parse_rate_simple_values ... ok
+test config::tests::parse_shard_cases ... ok
+test config::tests::parse_source_port_cases ... ok
+test config::tests::rate_c_semantics_visible_in_list_scan_line_count ... ok
+test config::tests::rate_echo_branches ... ok
+test config::tests::rate_cast_models_cvttsd2si ... ok
+test blackrock::tests::shuffle_is_a_permutation ... ok
+test config::tests::read_errors_have_exact_variants ... ok
+test config::tests::read_accepts_wait_rounds_exclude_and_booleans ... ok
+test config::tests::read_ignores_display_only_keys_but_not_semantic_ones ... ok
+test config::tests::read_keeps_trailing_comment_in_value_like_c ... ok
+test config::tests::read_matches_names_like_c_equals ... ok
+test config::tests::read_retries_uses_strtoul_base_0 ... ok
+test config::tests::read_skips_comments_blank_and_punct_lines ... ok
+test config::tests::validate_accepts_largest_63_bit_range ... ok
+test config::tests::validate_applies_excludes_before_optimize ... ok
+test config::tests::validate_distinguishes_everything_excluded ... ok
+test config::tests::validate_echo_accepts_what_c_echo_accepts ... ok
+test config::tests::validate_list_adds_port_80_when_no_ports ... ok
+test config::tests::validate_list_readds_port_80_when_excludes_removed_all_ports ... ok
+test config::tests::validate_rejects_bad_rounds_shard_retries_rate ... ok
+test config::tests::validate_rejects_empty_ports_for_scan ... ok
+test config::tests::validate_rejects_empty_targets ... ok
+test config::tests::validate_rejects_over_63_bits ... ok
+test config::tests::validate_requires_exclude_over_1e9_addresses_for_scan_only ... ok
+test config::tests::zero_adapter_mac_is_normalized_to_none ... ok
+test config::tests::zero_seed_rejected_for_runtime_ops_but_not_echo ... ok
+test cookie::tests::siphash24_reference_vectors ... ok
+test cookie::tests::syn_cookie_assembles_four_u32_le ... ok
+test cookie::tests::syn_cookie_matches_c_values ... ok
+test massip::tests::empty_range_is_zero ... ok
+test massip::tests::excluded_port_shrinks_port_space ... ok
+test massip::tests::excludes_then_optimize_change_counts_and_pick ... ok
+test massip::tests::pick_after_add_following_optimize_panics - should panic ... ok
+test massip::tests::pick_before_optimize_panics - should panic ... ok
+test massip::tests::pick_on_empty_list_panics - should panic ... ok
+test massip::tests::pick_out_of_range_panics - should panic ... ok
+test massip::tests::range_overflow_boundary ... ok
+test massip::tests::ports_may_be_added_between_excludes_and_optimize ... ok
+test massip::tests::try_range_same_before_and_after_optimize ... ok
+test massip::tests::udp_port_is_returned_in_templ_space ... ok
+test packet::tests::default_template_is_58_bytes ... ok
+test packet::tests::null_and_raw_are_trimmed_ethernet_frames ... ok
+test packet::tests::syn_checksums_validate_when_u64_sum_exceeds_2_pow_32 ... ok
+test packet::tests::syn_frame_checksums_validate ... ok
+test packet::tests::syn_frame_fixed_fields ... ok
+test packet::tests::syn_frame_matches_c_bytes ... ok
+test packet::tests::template_proto_detection ... ok
+test ranges::tests::exclude_quirk_invalid_range_end_is_1 ... ok
+test ranges::tests::full_space_counts_2_pow_32 ... ok
+test ranges::tests::merge_and_exclude_at_top_boundary ... ok
+test ranges::tests::ports_selftest ... ok
+test ranges::tests::pick_reproduces_sorted_list ... ok
+test ranges::tests::range_is_cidr_cases ... ok
+test ranges::tests::removal_reference_selftest ... ok
+test ranges::tests::reversed_range_does_not_panic ... ok
+test ranges::tests::sort_merges_overlapping_ipv4 ... ok
+test scan::tests::format_line_single_vs_multi_port ... ok
+test scan::tests::list_scan_emits_every_target_once ... ok
+test scan::tests::list_scan_empty_range_is_error_before_blackrock ... ok
+test scan::tests::list_scan_fractional_rate_matches_c_double_cast ... ok
+test scan::tests::list_scan_indices_retries_use_max_rate_not_range ... ok
+test scan::tests::list_scan_rejects_zero_shard_and_bad_rounds ... ok
+test scan::tests::list_scan_resume_count_clamps_end ... ok
+test scan::tests::list_scan_resume_index_past_range_with_retries ... ok
+test scan::tests::list_scan_with_retries_that_cannot_terminate_errors_before_any_emit ... ok
+test scan::tests::shard_2_of_3_steps_by_three ... ok
+test scan::tests::transmit_empty_range_yields_nothing ... ok
+test scan::tests::transmit_end_wraps_when_retries_times_range_overflows ... ok
+test scan::tests::transmit_fractional_rate_truncates ... ok
+test scan::tests::transmit_rate_above_range_uses_modulo ... ok
+test scan::tests::transmit_scan_validates_and_matches_list_scan_order ... ok
+test scan::tests::transmit_start_with_nic_shard_and_resume ... ok
+test scan::tests::transmit_stream_retries0_offsets_by_rate ... ok
+test scan::tests::transmit_stream_retries2_three_offsets_per_index ... ok
+test targets::tests::add_target_string_ipv6_and_edges ... ok
+test targets::tests::add_target_string_quirks_of_c ... ok
+test targets::tests::add_target_string_selftest_cases ... ok
+test targets::tests::malformed_octets_rejected ... ok
+test targets::tests::parse_ipv4_rejects_bad_octets ... ok
+test targets::tests::parse_ipv4_single_cidr_dash ... ok
+test ranges::tests::exclude_matches_reference_algorithm ... ok
+test targets::tests::parse_ports_forms ... ok
+test targets::tests::parse_ports_tcp_and_rejects_other_protos ... ok
+test targets::tests::port_garbage_rejected_where_c_truncates ... ok
+test targets::tests::proto_offsets ... ok
+test targets::tests::reversed_ranges_rejected ... ok
+test targets::tests::target_separators_and_host_bits ... ok
+test scan::tests::list_scan_retries_golden_cases_still_terminate ... ok
+test tests::version_constant_matches_oracle ... ok
+test throttle::tests::batch_below_one_truncates_to_zero_like_c ... ok
+test throttle::tests::batch_size_grows_under_high_rate ... ok
+test throttle::tests::batch_size_is_one_at_low_rate ... ok
+test throttle::tests::batch_size_is_capped_at_10000 ... ok
+test throttle::tests::cancel_after_sleep_is_noticed_before_next_clock_read ... ok
+test throttle::tests::cancel_detected_right_before_a_sleep_starts_no_new_sleep ... ok
+test throttle::tests::cancel_during_long_sleep_stops_after_one_chunk ... ok
+test throttle::tests::cancel_is_checked_inside_the_retry_loop_without_sleeps ... ok
+test throttle::tests::cancelled_before_any_clock_read_returns_err ... ok
+test throttle::tests::gap_over_one_second_resets_batch_to_one ... ok
+test throttle::tests::index_wraps_over_256_buckets ... ok
+test throttle::tests::interruptible_without_cancel_matches_next_batch ... ok
+test throttle::tests::long_sleep_is_split_into_chunks_of_at_most_50ms ... ok
+test throttle::tests::over_rate_sleeps_with_capped_wait_and_shrinks_batch ... ok
+test throttle::tests::system_clock_is_monotonic_micros ... ok
+test blackrock::tests::c_selftest_ranges_are_permutations ... ok
+test blackrock::tests::shuffle_bounded_is_exact_for_small_ranges ... ok
+
+test result: ok. 136 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/blackrock_golden.rs (target/debug/deps/blackrock_golden-f63bdda8a4011605)
+
+running 1 test
+test listscan_order_matches_oracle_for_single_range_single_port ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/echo_golden.rs (target/debug/deps/echo_golden-62544b73b976704f)
+
+running 5 tests
+test paused_fixtures_are_exactly_the_manifest_paused_records ... ok
+test reads_studio_flags_paused_conf ... ok
+test reads_c_oracle_paused_conf_fixtures ... ok
+test paused_conf_fixtures_round_trip_byte_exact ... ok
+test echo_matches_c_oracle_fixtures_exactly ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/no_c_in_build.rs (target/debug/deps/no_c_in_build-56bfb75cb0d1c526)
+
+running 2 tests
+test matcher_compares_whole_names ... ok
+test build_graph_has_no_c_toolchain_crates ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/offline_gen.rs (target/debug/deps/offline_gen-6baf2c530aa39048)
+
+running 2 tests
+test offline_generation_meets_80pct_of_oracle ... ignored, release-only, minipc: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture
+test small_workload_generates_every_target ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/probe_cursor.rs (target/debug/deps/probe_cursor-0208d59f50cc00d7)
+
+running 15 tests
+test preload_is_capped_by_the_range ... ok
+test break_after_three_probes_stops_a_huge_range ... ok
+test index_boundaries ... ok
+test plan_rejects_unsupported_runtime_settings ... ok
+test legacy_stream_keeps_retries_and_matches_cookie_formula ... ok
+test plan_rejects_echo_job_and_bad_source_ports_and_non_tcp_ports ... ok
+test position_moves_only_in_advance ... ok
+test callback_error_after_three_probes_stops_a_huge_range ... ok
+test plan_rejects_legacy_resume_fields ... ok
+test current_repeats_until_advance_and_position_counts_sent ... ok
+test preload_then_advance_n_matches_single_steps ... ok
+test sixteen_wide_range_uses_several_source_ports ... ok
+test advance_n_beyond_loaded_is_rejected_by_debug_assert_and_saturates ... ok
+test restart_at_n_reproduces_exact_suffix ... ok
+test full_trace_matches_reference_across_matrix ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_order.rs (target/debug/deps/proptest_order-b57acccecbecb4cd)
+
+running 14 tests
+test port_exclude_quirk_is_pinned_through_massip ... ok
+test list_line_round_trips ... ok
+test resume_continues_the_order ... ok
+test transmit_retries0_is_list_shifted_by_rate ... ok
+test transmit_with_retries_repeats_each_index ... ok
+test shards_partition_list_indices ... ok
+test transmit_shard_nic_partition ... ok
+test transmit_scan_is_rotated_list_scan ... ok
+test list_scan_visits_every_target_once ... ok
+test parse_rate_never_panics_and_reaches_deep_states ... ok
+test read_paused_conf_never_panics_and_roundtrips_echo ... ok
+test parse_ports_never_panics_and_reaches_deep_states ... ok
+test add_target_string_never_panics_and_reaches_deep_states ... ok
+test blackrock_is_bijective_on_small_ranges ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/receive.rs (target/debug/deps/receive-65d83fbf905fe382)
+
+running 41 tests
+test arp_fixed_field_errors_are_typed ... ok
+test arp_reply_round_trips_and_resolves ... ok
+test arp_request_has_the_c_layout ... ok
+test bad_checksum_on_a_foreign_packet_is_not_an_error ... ok
+test every_truncated_arp_prefix_is_an_error ... ok
+test ethernet_padding_after_total_length_is_ignored ... ok
+test arp_and_ipv6_ethertype_yield_none ... ok
+test checksums_are_verified_by_default_and_policy_is_explicit ... ok
+test frame_longer_than_1514_is_rejected ... ok
+test bad_ip_version_is_rejected ... ok
+test full_address_space_target_accepts_both_extremes ... ok
+test range_edges_are_inclusive ... ok
+test ipv4_options_within_ihl_are_skipped ... ok
+test ipv4_fragments_are_rejected ... ok
+test own_transmitted_syn_yields_none ... ok
+test non_synack_non_rst_flags_yield_none ... ok
+test reject_excluded_port ... ok
+test reject_excluded_target ... ok
+test reject_previous_job_port_with_valid_cookie ... ok
+test real_probe_from_cursor_is_answered_by_matching_synack ... ok
+test reject_previous_job_target_with_valid_cookie ... ok
+test rst_without_matching_ackno_is_not_a_reply ... ok
+test rst_with_valid_cookie_is_closed ... ok
+test synack_is_open_on_every_link_type ... ok
+test target_and_port_range_boundaries_are_inclusive ... ok
+test tcp_options_with_matching_data_offset_are_accepted ... ok
+test unsuitable_arp_replies_do_not_resolve ... ok
+test unknown_link_types_and_families ... ok
+test vlan_is_never_read_as_ipv4 ... ok
+test udp_icmp_and_other_protocols_yield_none ... ok
+test bad_tcp_data_offset_is_rejected_without_oob ... ok
+test wrong_ack_wrong_tuple_wrong_destination_yield_none ... ok
+test total_length_below_header_or_beyond_frame_is_rejected ... ok
+test bad_ihl_never_panics_and_small_ihl_is_rejected ... ok
+test every_strict_prefix_with_options_is_an_error ... ok
+test every_strict_prefix_of_a_valid_frame_is_an_error_not_a_panic ... ok
+test arp_mutations_resolve_only_when_tuple_matches ... ok
+test arbitrary_arp_bytes_never_panic ... ok
+test mutated_valid_frames_only_accept_by_rule ... ok
+test random_headers_behind_valid_prefix_never_panic ... ok
+test arbitrary_bytes_never_panic ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/scan_golden.rs (target/debug/deps/scan_golden-7a8c0b38b2c5871e)
+
+running 1 test
+test list_scan_matches_c_oracle_fixtures ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.38s
+
+     Running tests/selftest_parity.rs (target/debug/deps/selftest_parity-5f68fd051b509a69)
+
+running 4 tests
+test map_covers_all_31_c_selftests_in_main_c_order ... ok
+test print_parity_summary ... ok
+test statuses_are_consistent_with_mappings_and_reasons ... ok
+test every_named_rust_test_exists ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sha256_vectors.rs (target/debug/deps/sha256_vectors-6a1f6b9d12f38f7f)
+
+running 1 test
+test sha256_known_vectors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/offline_gen.rs (target/debug/deps/offline_gen-cfebe62c04b34dec)
+offline_gen run 1: 4194304 packets in 0.659 s = 6364948 pps (sink 534795568)
+offline_gen run 2: 4194304 packets in 0.668 s = 6275741 pps (sink 534795568)
+offline_gen run 3: 4194304 packets in 0.656 s = 6391538 pps (sink 534795568)
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_engine-9cde2968bddaf9b7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/backpressure.rs (target/debug/deps/backpressure-4d39a4143a5d1731)
+
+running 6 tests
+test drop_with_full_queue_joins_workers ... ok
+test stop_with_full_queue_is_fast_and_keeps_results ... ok
+test overflow_fails_with_consumer_too_slow_and_keeps_received_results ... ok
+test pause_with_full_queue_still_completes_the_pause ... ok
+test pause_at_rate_1_with_full_queue_is_not_blocked_by_consumer ... ok
+test overflow_stops_tx_without_further_sends ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/bounded_memory.rs (target/debug/deps/bounded_memory-7f854762188fed77)
+
+running 1 test
+test slash0_generation_and_idle_rx_stay_bounded ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/identity.rs (target/debug/deps/identity-277800282ff34a45)
+
+running 9 tests
+test encoding_is_framed_and_versioned ... ok
+test retries_shard_and_rounds_are_part_of_the_encoding ... ok
+test equivalent_spellings_normalize_to_the_same_digest ... ok
+test digest_is_pinned_for_the_reference_job ... ok
+test every_identity_field_changes_the_digest ... ok
+test flipping_any_byte_of_the_serialized_checkpoint_is_detected ... ok
+test every_identity_field_rejects_resume_before_the_first_send ... ok
+test scan_id_is_preserved_and_attempt_id_is_fresh ... ok
+test corrupted_checkpoint_fields_are_rejected ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-c26de6a2693a1cbb)
+
+running 32 tests
+test invalid_options_are_rejected ... ok
+test dedup_is_fifo_bounded_and_allows_repeat_after_eviction ... ok
+test partial_send_failure_does_not_skip_unacknowledged_frames ... ok
+test dropping_the_handle_while_draining_joins_workers ... ok
+test cancellation_is_checked_before_every_send_inside_a_batch ... ok
+test panic_does_not_duplicate_events_already_read ... ok
+test observing_the_outcome_does_not_drop_received_events ... ok
+test dedup_never_exceeds_100k_entries ... ok
+test result_batches_respect_event_batch_limit ... ok
+test rx_panic_preserves_accepted_results_on_join_drain ... ok
+test duplicate_replies_are_collapsed_and_counted ... ok
+test malformed_frames_are_dropped_and_scan_keeps_running ... ok
+test engine_dedup_is_bounded_fifo_and_redelivers_after_eviction ... ok
+test complete_scan_delivers_all_results_then_one_finished ... ok
+test stop_immediately_finishes_stopped_quickly ... ok
+test uncertain_send_fails_without_checkpoint_or_retry ... ok
+test stop_during_deterministic_throttle_wait ... ok
+test progress_events_coalesce_while_consumer_is_idle ... ok
+test tx_panic_after_confirmed_send_preserves_results_on_join_drain ... ok
+test would_block_unsent_backs_off_1ms_on_the_injected_clock ... ok
+test would_block_unsent_retries_same_frame_without_advancing ... ok
+test vlan_tagged_replies_are_unsupported_discarded_and_never_delivered ... ok
+test stop_during_drain_does_not_wait_for_wait ... ok
+test no_sends_after_terminal_outcome ... ok
+test stop_after_pause_overrides_it_and_skips_checkpoint ... ok
+test stop_with_empty_rx_and_idle_consumer ... ok
+test rx_error_fails_the_scan_and_stops_tx ... ok
+test persistent_would_block_waits_between_attempts_and_stop_completes ... ok
+test dropping_the_handle_stops_and_joins_both_workers ... ok
+test stop_at_rate_1_interrupts_real_throttle_wait ... ok
+test pause_at_rate_1_stops_tx_then_collects_final_replies_for_wait ... ok
+test persistent_would_block_waits_between_attempts_and_pause_completes ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+     Running tests/pause_resume.rs (target/debug/deps/pause_resume-2819fafe5b6186a4)
+
+running 10 tests
+test full_result_queue_fails_and_never_offers_a_checkpoint ... ok
+test checkpoint_carries_scan_attempt_and_versions ... ok
+test pause_commanded_while_last_probe_is_sent_is_completion_not_checkpoint ... ok
+test pause_on_last_pending_probe_resumes_with_exactly_that_probe ... ok
+test pause_before_first_send_sends_nothing_and_resumes_from_zero ... ok
+test chained_pause_resume_pause_resume_is_byte_identical ... ok
+test natural_completion_while_paused_stays_completed ... ok
+test pause_during_would_block_loses_and_duplicates_nothing ... ok
+test only_a_clean_pause_yields_a_checkpoint ... ok
+test pause_at_every_index_then_resume_is_byte_identical ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running tests/rx_integrity.rs (target/debug/deps/rx_integrity-3e3c5031e623e337)
+
+running 11 tests
+test verified_zero_drops_completes ... ok
+test drops_fail_with_rx_loss ... ok
+test unavailable_statistics_fail_and_are_not_zero ... ok
+test panic_in_health_is_worker_panicked_without_checkpoint ... ok
+test health_is_called_within_the_adapter_call_limit ... ok
+test drops_at_final_health_fail_pause_and_withhold_checkpoint ... ok
+test drops_seen_only_by_the_final_health_still_fail ... ok
+test drops_at_final_health_fail_stop ... ok
+test earlier_consumer_overflow_is_kept_but_last_statistics_are_recorded ... ok
+test health_error_fails_and_earlier_zero_does_not_mask_it ... ok
+test health_runs_periodically_without_incoming_frames ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/tx_batch.rs (target/debug/deps/tx_batch-d1556c806284047d)
+
+running 14 tests
+test a_full_batch_advances_the_cursor_by_its_size_once ... ok
+test max_batch_one_sends_the_same_frames_in_the_same_order ... ok
+test a_batch_error_fails_tx_error_and_sends_nothing_more ... ok
+test pause_lands_on_a_batch_boundary_and_the_checkpoint_equals_position ... ok
+test an_inconsistent_batch_result_fails_uncertain_without_advancing ... ok
+test stall_window_resets_after_any_sent_prefix ... ok
+test a_prefix_then_would_block_retries_the_first_unsent_frame_and_opens_the_stall_window ... ok
+test a_command_lands_on_the_end_of_its_own_adapter_batch ... ok
+test a_prefix_result_advances_only_the_prefix_and_fails_uncertain_without_checkpoint ... ok
+test progress_sent_equals_cursor_position ... ok
+test batches_never_exceed_max_batch_or_the_throttle_batch ... ok
+test stop_between_batches_sends_nothing_afterwards ... ok
+test resume_from_a_batched_pause_continues_without_gap_or_duplicate ... ok
+test the_engine_never_offers_more_than_max_tx_batch ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/tx_stall.rs (target/debug/deps/tx_stall-e057cb0c381dc503)
+
+running 9 tests
+test zero_stall_timeout_is_rejected_before_threads_start ... ok
+test no_new_send_starts_after_deadline ... ok
+test throttle_sleep_at_rate_one_does_not_trip_watchdog ... ok
+test uncertain_and_tx_error_keep_priority_over_stall ... ok
+test persistent_would_block_fails_with_tx_stalled_after_ten_seconds ... ok
+test stop_inside_long_would_block_is_fast ... ok
+test transient_would_block_resets_window_after_each_sent ... ok
+test sent_from_call_that_crosses_deadline_is_counted ... ok
+test pause_inside_long_would_block_is_fast_and_checkpoints ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_lab-ba90fdd9fc3c5b76)
+
+running 710 tests
+test dump::tests::a_complete_capture_has_no_problems ... ok
+test capture::tests::classifies_only_complete_tcp_headers_and_directions ... ok
+test capture::tests::macos_refuses_marker_and_responder_with_an_explanation_and_leaves_the_rest ... ok
+test capture::tests::scrub_removes_home_paths_and_run_namespaces_in_values_and_keys ... ok
+test deploy::tests::clock_limits_are_plus_five_and_minus_sixty_seconds ... ok
+test capture::tests::macos_run_returns_rc_2_for_marker_and_responder_before_opening_anything ... ok
+test capture::tests::scrub_namespace_pattern_is_exactly_wl_kind_digits_dash_digits ... ok
+test deploy::tests::only_a_listed_hash_passes_the_remote_binary_check ... ok
+test dump::tests::a_valid_witness_meta_passes_the_comparator_gate_and_an_invalid_one_does_not ... ok
+test deploy::tests::the_manifest_records_commit_path_and_the_exact_hash ... ok
+test dump::tests::argv_is_packet_buffered_full_snaplen_both_directions_and_shell_free ... ok
+test dump::tests::a_missing_interface_drop_line_falls_back_to_the_measured_delta_never_to_zero ... ok
+test dump::tests::capture_dump_on_macos_only_accepts_the_pair_and_the_default_route_uplink ... ok
+test deploy::tests::a_manifest_for_another_commit_path_or_kind_is_unusable ... ok
+test deploy::tests::scripts_are_read_from_the_commit_not_from_a_compile_time_path ... ok
+test dump::tests::every_missing_proof_makes_the_capture_invalid ... ok
+test dump::tests::macos_probe::macos_tcpdump_argv_has_no_linux_only_flags_and_one_filter_argument ... ok
+test dump::tests::macos_probe::netstat_link_row_without_an_address_shifts_the_columns ... ok
+test dump::tests::macos_probe::netstat_row_with_drop_column_is_parsed_by_header_name ... ok
+test dump::tests::macos_probe::netstat_without_a_drop_column_is_an_error_not_zero ... ok
+test dump::tests::linux_wire_gate::the_gate_rejects_hand_edited_metas ... ok
+test dump::tests::macos_probe::netstat_unknown_interface_and_empty_text_are_errors ... ok
+test dump::tests::macos_probe_down_interface::a_down_interface_printed_with_a_star_still_matches ... ok
+test dump::tests::macos_received_by_filter_is_a_prefilter_count_and_never_a_matched_frame_count ... ok
+test dump::tests::tcpdump_statistics_are_parsed_exactly_and_garbage_stays_unknown ... ok
+test link::tests::a_full_queue_is_retried_until_the_frame_is_sent ... ok
+test link::tests::a_masked_stand_mac_is_the_plan_constant_and_nothing_else_is ... ok
+test deploy::tests::the_deploy_manifest_command_hashes_the_installed_file ... ok
+test link::tests::an_interrupt_ends_the_wait_and_failures_are_never_retried ... ok
+test link::tests::interface_names_and_macs_are_validated ... ok
+test link::tests::marker_frames_are_padded_ordered_and_never_truncated ... ok
+test link::tests::markers_are_counted_by_payload_and_short_frames_never_panic ... ok
+test link::tests::opening_a_missing_interface_is_a_clean_error_without_privileges ... ok
+test link::tests::the_mac_comes_from_ifconfig_text_and_a_masked_placeholder_is_refused ... ok
+test capture::tests::harness_hashes_the_scripts_it_is_given_and_never_omits_one ... ok
+test macos_lab::tests::a_failed_or_unparseable_id_counts_as_root ... ok
+test capture::tests::a_deploy_manifest_binds_the_running_binary_to_a_commit ... ok
+test link::tests::a_queue_that_never_drains_gives_up_after_the_patience ... ok
+test macos_lab::tests::a_failed_arp_set_rolls_back_without_deleting_an_arp_entry ... ok
+test macos_lab::tests::a_failed_post_check_rolls_everything_back ... ok
+test macos_lab::tests::a_failed_rollback_keeps_the_manifest_and_down_finishes_it ... ok
+test macos_lab::tests::a_held_lock_is_reported_not_waited_on_forever ... ok
+test macos_lab::tests::a_foreign_interface_that_appears_after_preflight_is_never_destroyed ... ok
+test macos_lab::tests::a_manifest_outside_the_state_directory_is_refused_for_every_command ... ok
+test macos_lab::tests::a_failed_restore_is_rc_10_with_the_manual_fallback ... ok
+test macos_lab::tests::a_fresh_unpeered_feth_with_a_random_mac_is_destroyed_when_unsealed ... ok
+test macos_lab::tests::a_lab_named_interface_that_is_not_ours_is_not_destroyed_even_when_unsealed ... ok
+test macos_lab::tests::a_masked_mac_does_not_hide_other_deviations_or_other_macs ... ok
+test macos_lab::tests::a_missing_entry_on_delete_is_ignored ... ok
+test dump::tests::linux_wire_gate::the_shared_sample_meta_has_exactly_the_keys_the_real_witness_writes ... ok
+test dump::tests::sequence::a_complete_capture_is_acknowledged_finalised_and_valid ... ok
+test macos_lab::tests::a_missing_parent_is_never_created_only_the_lab_directory_itself ... ok
+test macos_lab::tests::a_non_root_status_accepts_the_placeholder_only_against_a_sealed_manifest ... ok
+test macos_lab::tests::a_plain_set_over_the_incomplete_entry_would_not_have_worked ... ok
+test macos_lab::tests::a_partly_failed_revoke_prints_the_manual_fallback_and_down_exits_10 ... ok
+test macos_lab::tests::a_sealed_manifest_cannot_make_down_destroy_a_foreign_interface ... ok
+test macos_lab::tests::a_symlinked_lock_file_is_refused ... ok
+test dump::tests::sequence::tcpdump_that_never_listens_or_dies_at_startup_is_a_harness_error ... ok
+test macos_lab::tests::bpf_access_needs_a_recorded_stand ... ok
+test macos_lab::tests::a_symlinked_or_writable_state_directory_is_refused_by_every_privileged_command ... ok
+test macos_lab::tests::a_short_route_row_makes_status_and_up_refuse ... ok
+test macos_lab::tests::dir_policy_table ... ok
+test macos_lab::tests::commands_without_a_stand_or_without_root_create_nothing ... ok
+test dump::tests::sequence::missing_end_markers_make_the_tail_unproven ... ok
+test macos_lab::tests::dispatch_refuses_a_symlinked_or_group_writable_lab_directory ... ok
+test macos_lab::tests::a_state_file_not_owned_by_the_state_owner_is_not_trusted ... ok
+test macos_lab::tests::bpf_access_handles_nodes_that_do_not_exist_yet ... ok
+test macos_lab::tests::an_unsealed_down_touches_only_the_interfaces_it_recorded ... ok
+test dump::tests::sequence::a_tcpdump_that_ignores_sigint_is_invalid_and_reaped ... ok
+test macos_lab::tests::bpf_access_records_previous_modes ... ok
+test macos_lab::tests::down_with_no_stand_still_revokes ... ok
+test macos_lab::tests::dispatch_creates_the_directory_for_up_and_removes_the_lock_after_down ... ok
+test dump::tests::sequence::a_start_marker_that_never_arrives_is_never_acknowledged_and_invalid ... ok
+test macos_lab::tests::down_destroys_a_half_made_interface_whose_mac_is_not_yet_the_lab_mac ... ok
+test macos_lab::tests::flags_are_validated_per_command ... ok
+test macos_lab::tests::down_and_revoke_only_ever_set_0600_root_wheel_whatever_the_manifest_says ... ok
+test macos_lab::tests::down_does_not_mention_modes_that_were_the_default ... ok
+test macos_lab::tests::down_refuses_a_foreign_interface_with_the_lab_name ... ok
+test macos_lab::tests::down_touches_only_manifest_objects_and_revokes_bpf ... ok
+test macos_lab::tests::down_without_a_matching_marker_is_refused ... ok
+test dump::tests::linux_wire_gate::any_loss_in_a_real_witness_meta_fails_the_linux_wire_gate ... ok
+test macos_lab::tests::failed_down_keeps_the_manifest_so_it_can_be_repeated ... ok
+test macos_lab::tests::every_command_the_lab_runs_has_an_absolute_system_path ... ok
+test macos_lab::tests::lock_ownership::a_hardlinked_lock_is_refused_and_not_chowned ... ok
+test macos_lab::tests::link_down_drops_the_entry_and_up_restores_it_with_delete_then_set ... ok
+test macos_lab::tests::grant_prints_the_real_exposure ... ok
+test macos_lab::tests::lock_ownership::a_new_lock_is_created_with_create_new_and_reused_when_it_is_ours ... ok
+test macos_lab::tests::lock_ownership::existing_file_policy_table ... ok
+test macos_lab::tests::link_only_flaps_the_peer_side ... ok
+test macos_lab::tests::nothing_the_lab_does_reads_the_environment_or_the_home_directory ... ok
+test macos_lab::tests::link_refuses_a_foreign_peer_interface ... ok
+test macos_lab::tests::lock_ownership::a_writable_or_non_regular_existing_lock_is_refused ... ok
+test macos_lab::tests::lock_ownership::a_symlinked_lock_is_refused_and_not_chowned ... ok
+test macos_lab::tests::grant_saves_previous_modes_first_and_is_atomic ... ok
+test macos_lab::tests::plan_does_not_claim_a_chown_to_root ... ok
+test macos_lab::tests::plan_and_guide_describe_the_real_down_and_the_chmodbpf_cost ... ok
+test macos_lab::tests::populate_counts_busy_nodes_and_stops_when_the_kernel_stops_creating ... ok
+test macos_lab::tests::plan_names_the_root_owned_state_directory ... ok
+test macos_lab::tests::populate_is_a_no_op_when_everything_exists ... ok
+test macos_lab::tests::plan_prints_commands_and_runs_nothing ... ok
+test macos_lab::tests::populate_opens_existing_nodes_in_sequence_until_bpf15_exists ... ok
+test macos_lab::tests::plan_prints_the_link_steps_and_the_guide_documents_them ... ok
+test macos_lab::tests::prefix_and_route_destination_parsing ... ok
+test macos_lab::tests::link_up_does_not_overwrite_a_foreign_complete_entry ... ok
+test macos_lab::tests::link_up_leaves_a_complete_permanent_entry_alone ... ok
+test macos_lab::tests::revoke_still_needs_root ... ok
+test macos_lab::tests::routes_are_read_by_header_and_short_rows_are_errors ... ok
+test macos_lab::tests::revoke_with_no_manifest_and_no_state_directory_still_applies_0600_root_wheel ... ok
+test macos_lab::tests::a_manifest_that_lists_foreign_interfaces_destroys_nothing ... ok
+test macos_lab::tests::down_revokes_bpf_even_when_the_manifest_is_refused_and_exits_non_zero ... ok
+test macos_lab::tests::only_constants_reach_arp_on_link_up ... ok
+test dump::tests::sequence::a_lost_tail_kernel_drops_or_a_counter_gap_are_invalid ... ok
+test dump::tests::sequence::endless_traffic_is_never_declared_quiet ... ok
+test macos_lab::tests::status_reports_bpf_access_from_modes ... ok
+test macos_lab::tests::root_never_accepts_the_placeholder ... ok
+test macos_lab::tests::second_down_is_safe ... ok
+test macos_lab::tests::status_without_a_stand_is_not_sealed ... ok
+test macos_lab::tests::status_fails_closed_when_default_route_changed ... ok
+test macos_lab::tests::the_guide_documents_the_fallback_and_the_reboot_behaviour ... ok
+test macos_lab::tests::the_arp_step_is_one_named_constant_used_by_up_restore_and_plan ... ok
+test macos_lab::tests::the_guide_states_the_grant_exposure_and_commands ... ok
+test macos_lab::tests::status_fails_closed_when_feth_is_a_bridge_member ... ok
+test macos_lab::tests::status_fails_closed_on_stray_routes_addresses_and_missing_arp ... ok
+test macos_lab::tests::the_manifest_path_is_fixed_by_the_run_id ... ok
+test macos_lab::tests::revoke_works_when_the_manifest_is_refused_or_the_state_directory_is_a_symlink ... ok
+test macos_lab::tests::status_parses_arp_without_leading_zeros ... ok
+test macos_lab::tests::trusted_reads::status_with_a_symlinked_manifest_is_refused_not_followed ... ok
+test macos_lab::tests::status_reads_the_root_owned_state_without_root ... ok
+test macos_lab::tests::up_refuses_a_stray_marker ... ok
+test macos_lab::tests::up_refuses_existing_feth_names ... ok
+test macos_lab::tests::status_refuses_a_feth4202_route_outside_the_slash_30 ... ok
+test macos_lab::tests::status_refuses_routes_that_would_carry_lab_replies_off_the_pair ... ok
+test macos_lab::tests::up_refuses_forwarding_and_unreadable_inet ... ok
+test macos_lab::tests::up_refuses_without_root ... ok
+test macos_lab::tests::trusted_reads::symlinks_oversize_hardlinked_and_writable_files_are_not_read ... ok
+test macos_lab::tests::status_requires_all_sixteen_bpf_nodes ... ok
+test macos_lab::tests::utc_formatting ... ok
+test macos_lab::tests::up_refuses_overlapping_198_18_route ... ok
+test macos_lab::tests::status_refuses_a_non_permanent_arp_entry_and_an_unsealed_manifest ... ok
+test macos_suite::tests::a_lock_owned_by_another_user_is_alive_and_media_flags_are_read ... ok
+test macos_lab::tests::up_as_root_verifies_real_macs_before_recording_sealed ... ok
+test macos_lab::tests::link_requires_a_sealed_stand_with_the_peer_interface_in_created ... ok
+test macos_lab::tests::unreadable_inet_forms_are_kept_and_refused ... ok
+test macos_suite::tests::a_forced_stop_kills_the_whole_process_group_and_nothing_else ... ok
+test macos_lab::tests::up_rolls_back_created_interfaces_on_failure ... ok
+test macos_lab::tests::up_rolls_back_arp_and_both_interfaces_when_a_later_step_fails ... ok
+test macos_suite::tests::a_recorded_group_is_named_only_when_a_member_is_a_lab_command ... ok
+test macos_lab::tests::up_then_status_is_sealed_and_a_second_up_is_refused ... ok
+test macos_lab::tests::the_placeholder_is_not_accepted_without_a_sealed_manifest_that_records_the_plan ... ok
+test macos_suite::tests::a_scanner_that_ignores_int_is_killed_before_the_witnesses_stop ... ok
+test macos_suite::tests::a_stale_lock_with_live_children_is_not_removed ... ok
+test macos_suite::tests::a_second_suite_does_not_start_anything ... ok
+test macos_suite::tests::a_listener_set_that_is_not_ready_still_refuses_the_run ... ok
+test macos_lab::tests::the_real_unmasked_darwin_text_passes_for_root_and_non_root ... ok
+test macos_suite::tests::an_uplink_capture_that_cannot_be_read_is_not_isolation_proof ... ok
+test macos_suite::tests::a_work_directory_left_in_out_blocks_the_next_start ... ok
+test macos_suite::tests::gate_refuses_when_status_pre_not_allowed ... ok
+test macos_suite::tests::hashes_are_taken_before_copy_and_checked_after ... ok
+test macos_suite::tests::leftover_lab_processes_are_found_in_a_ps_listing ... ok
+ACTION REQUIRED NOW (linkloss): in a root shell run
+  rmasscan-lab macos-lab link --run-id m1 --down ; sleep 3 ; rmasscan-lab macos-lab link --run-id m1 --up
+(that takes feth4202 down and up; the suite watches feth4202). The scan lasts about 10 s; without it this run is NOT RUN (user action not performed).
+test macos_suite::tests::a_stop_before_the_scanner_starts_starts_no_scanner ... ok
+perf.100.r1 perf
+perf.1000.r1 perf
+perf.10000.r1 perf
+perf.100000.r1 perf
+perf.100.r2 perf
+perf.1000.r2 perf
+perf.10000.r2 perf
+perf.100000.r2 perf
+perf.100.r3 perf
+perf.1000.r3 perf
+perf.10000.r3 perf
+perf.100000.r3 perf
+perf.100.r4 perf
+perf.1000.r4 perf
+perf.10000.r4 perf
+perf.100000.r4 perf
+perf.100.r5 perf
+perf.1000.r5 perf
+perf.10000.r5 perf
+perf.100000.r5 perf
+test macos_suite::tests::list_prints_the_plan_without_any_action ... ok
+test macos_suite::tests::gate_refuses_when_start_marker_missing ... ok
+test macos_suite::tests::only_and_rerun_accept_discardable_runs_only ... ok
+test macos_suite::tests::options_are_validated_by_name ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r8853e11d1142b87724581c0d828f7f86/out/runs/c01_one_addr_port_synack.run1.r6edfba087d4146f69ba050e98e3bc2fd
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r8853e11d1142b87724581c0d828f7f86/out
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rc8d5bc595e821a49db3d4135dd206b80/out/runs/c01_one_addr_port_synack.run1.r67f732a488fc59c6d2441501bf4eb6d6
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rc8d5bc595e821a49db3d4135dd206b80/out
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r02787d63670a9c933560b2be92c2d043/out/runs/c01_one_addr_port_synack.run1.r52b1fc8b4e00cbd5f857301168275526
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r02787d63670a9c933560b2be92c2d043/out
+test macos_suite::tests::perm_denied_requires_bpf_access_denied ... ok
+test macos_suite::tests::a_pair_that_is_not_quiet_refuses_the_run ... ok
+test macos_suite::tests::received_by_filter_is_information_only_for_the_uplink_interlock ... ok
+test macos_suite::tests::a_tag_that_already_has_a_run_is_not_run_again ... ok
+test macos_suite::tests::the_flood_frame_is_recognised_by_the_verifier ... ok
+test macos_suite::tests::the_group_state_is_read_from_ps_without_reaping_the_leader ... ok
+test macos_suite::tests::the_lab_writes_only_peer_to_scanner_markers_and_peer_ip_frames ... ok
+test macos_suite::tests::background_traffic_on_the_uplink_is_not_an_isolation_breach ... ok
+test macos_suite::tests::a_rebuilt_scanner_binary_cannot_extend_an_existing_directory ... ok
+test macos_suite::tests::dropping_the_tools_stops_the_scanner_first_and_sweeps_the_rest ... ok
+test macos_suite::tests::a_run_is_refused_while_an_earlier_scanner_or_lab_tcpdump_is_alive ... ok
+test macos_suite::tests::the_ps_gate_fails_closed ... ok
+test macos_suite::tests::the_uplink_filter_of_the_verifier_is_the_one_of_the_lab ... ok
+test macos_suite::tests::the_verifiers_pinned_binding_is_the_suites_plan ... ok
+test macos_suite::tests::link_loss_is_recorded_on_the_peer_interface_the_user_takes_down ... ok
+test macos_suite::tests::writes_to_a_hung_up_terminal_cannot_panic ... ok
+test dump::tests::linux_wire_gate::real_witness_metas_over_every_golden_case_pass_the_linux_wire_gate ... ok
+test macos_suite::tests::an_error_while_the_scanner_runs_stops_and_reaps_it_before_the_witnesses ... ok
+test macos_suite::tests::perm_denied_runs_use_counters_and_no_capture ... ok
+test macos_suite::tests::lock_file_refuses_a_second_suite ... ok
+test macos_suite::tests::a_pair_that_moves_in_one_window_only_is_still_quiet_enough ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r3fb7654b8d4ab6f9f4dc8f393c6b5831/out/runs/c01_one_addr_port_synack.run1.raa1ea8454b6cfbb3b8883649befb4492
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r3fb7654b8d4ab6f9f4dc8f393c6b5831/out
+test macos_verify::tests::a_complete_synthetic_run_is_pass_and_the_baselines_hold ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-ref951e114e7323efd2afe94b8aa45e7d/out/runs/c01_one_addr_port_synack.run1.r6c8dd1c7f130d94c8a0dcc2493e9ebea
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-ref951e114e7323efd2afe94b8aa45e7d/out
+test macos_verify::tests::a_capture_from_another_time_window_is_invalid ... ok
+test macos_suite::tests::the_peer_listens_on_8000_to_8007_only_and_the_rst_limit_is_recorded ... ok
+test macos_suite::tests::the_children_process_groups_are_recorded_in_the_lock_file ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rf878d822a43da626c50d764ce3420e8a/out/runs/c01_one_addr_port_synack.run1.r8187632ead129faa6f490403478d04e8
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rf878d822a43da626c50d764ce3420e8a/out
+test macos_suite::tests::the_suite_refuses_to_run_as_root_before_anything_else ... ok
+test macos_verify::tests::a_closed_result_missing_only_because_its_rst_never_hit_the_wire_still_passes ... ok
+test macos_verify::tests::a_genuine_kernel_reply_with_the_injected_ip_id_is_still_a_reply ... ok
+test macos_suite::tests::uplink_frame_stops_the_suite_with_exit_13 ... ok
+test macos_verify::tests::a_lab_synack_retransmit_after_the_last_end_marker_is_a_post_run_note ... ok
+test macos_verify::tests::a_lab_frame_on_uplink_is_fail_and_a_safety_trip ... ok
+test macos_verify::tests::a_kept_run_needs_the_uplink_tcpdump_to_have_exited_cleanly ... ok
+test macos_suite::tests::the_uplink_capture_is_not_promiscuous_and_the_firewall_state_is_recorded ... ok
+test macos_verify::tests::an_empty_directory_is_not_run_with_exit_two_and_never_pass ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rc46ad9f424b1498b5a95d9ee4cf5ebf7/out/runs/c01_one_addr_port_synack.run1.r1f444b9aec42c86bd3fac76b19e4403c
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rc46ad9f424b1498b5a95d9ee4cf5ebf7/out
+done stop_silent -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-reb110d97516903393532ea7336eef6db/out/runs/stop_silent.r1d38ce849047b94ca9fb742e17b12664
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-reb110d97516903393532ea7336eef6db/out
+test macos_verify::tests::a_stale_synack_retransmit_of_an_earlier_cell_is_not_a_missed_open_reply ... ok
+test macos_verify::tests::a_missing_peer_capture_without_a_host_record_makes_the_listener_truth_invalid_not_fail ... ok
+test macos_verify::tests::a_missing_closed_port_rst_is_not_a_finding_but_a_missing_open_answer_and_invented_results_are ... ok
+test macos_suite::tests::the_manifest_records_that_the_mac_has_no_silent_ports ... ok
+test macos_verify::tests::an_mdns_frame_outside_the_syn_window_is_a_stray_and_never_a_foreign_reply ... ok
+test macos_verify::tests::completed_with_unknown_or_nonzero_drops_is_fail ... ok
+test macos_verify::tests::every_counter_of_the_tcpdump_stderr_is_compared_and_a_known_loss_is_invalid ... ok
+test macos_verify::tests::hash_mismatch_after_copy_is_invalid ... ok
+test macos_verify::tests::a_failed_manifest_gate_cannot_turn_a_safety_trip_into_not_run ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r6349d9f01902e86ffdb347cc0804913d/out/runs/c01_one_addr_port_synack.run1.r09c6f1b6d19ae57c4aa21485b634f1fe
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r6349d9f01902e86ffdb347cc0804913d/out
+test macos_verify::tests::a_stopped_scan_that_lost_replies_received_well_before_the_stop_fails ... ok
+test macos_verify::tests::an_open_reply_on_the_wire_the_scanner_did_not_report_fails_perf_drain_and_the_union ... ok
+test macos_verify::tests::incomplete_capture_is_invalid_not_pass ... ok
+test macos_verify::tests::injected_frames_are_told_from_genuine_replies_by_their_recorded_identity ... ok
+test macos_verify::tests::linkloss_without_a_down_event_is_not_run_user_action_not_performed ... ok
+test macos_verify::tests::listener_teardown_resets_after_the_scanner_exited_are_not_replies_of_the_run ... ok
+test macos_verify::tests::losing_both_captured_rsts_of_stop_drain_is_a_behaviour_fail ... ok
+test macos_verify::tests::link_loss_is_judged_on_the_peer_interface_and_the_failure_class_is_provisional ... ok
+test macos_verify::tests::missing_run_json_is_not_run_never_pass ... ok
+test macos_verify::tests::only_a_discardable_verdict_may_be_rerun ... ok
+test macos_verify::tests::fixture_binding_must_equal_run_binding ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r5efa7ae996e7c5dc6a1ccce48fbbd17c/out/runs/c01_one_addr_port_synack.run1.r00ce78526c864629bd7a70b8e7c92cd8
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r5efa7ae996e7c5dc6a1ccce48fbbd17c/out
+test macos_verify::tests::a_work_directory_left_in_out_is_walked ... ok
+test macos_verify::tests::perf_gate_is_open_outside_twenty_percent_and_not_run_under_three_cells ... ok
+test macos_verify::tests::on_the_mac_stand_80_and_443_are_closed_and_only_8000_to_8007_answer_open ... ok
+test macos_verify::tests::macos_received_by_filter_counts_everything_the_descriptor_saw_and_is_information_only ... ok
+test macos_verify::tests::losing_the_real_418_rsts_of_the_archived_perf_100_r1_is_a_behaviour_fail ... ok
+test macos_verify::tests::losing_every_captured_rst_of_a_completed_perf_cell_is_a_behaviour_fail ... ok
+test macos_verify::tests::perm_denied_run_with_any_syn_is_fail ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r02677dd52e4eb50ac11888a0be372e2b/out/runs/c01_one_addr_port_synack.run1.rbfcae1ca0df5cb324b6d63c6b81ba133
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r02677dd52e4eb50ac11888a0be372e2b/out
+test macos_verify::tests::pause_resume_legs_must_equal_continuous_and_fixture ... ok
+test macos_verify::tests::ports_8099_and_8100_to_8119_are_ordinary_closed_ports_on_the_mac ... ok
+test macos_verify::tests::run_json_is_bound_to_the_scanner_output_and_to_the_run_window ... ok
+test macos_verify::tests::a_tag_with_two_directories_is_judged_in_each_and_a_fail_is_never_hidden_as_invalid ... ok
+test macos_verify::tests::start_markers_after_the_scanner_traffic_are_invalid ... ok
+test macos_verify::tests::rxloss_with_zero_or_unknown_drops_is_fail ... ok
+test macos_verify::tests::status_pre_or_post_not_allowed_is_not_run ... ok
+test macos_verify::tests::the_failure_plan_has_the_agreed_tags_and_permission_runs_first ... ok
+test macos_verify::tests::a_leak_in_an_unplanned_directory_is_fail_whatever_else_is_missing ... ok
+test macos_verify::tests::results_must_be_replies_the_peer_really_sent_for_perf_drain_and_the_group_union ... ok
+test macos_verify::tests::syn_bytes_differ_from_fixture_is_fail ... ok
+test macos_verify::tests::the_peer_capture_command_takes_no_filter_or_exactly_the_mdns_filter ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rbc281dfcf62b235f063fddb19df109f6/out/runs/c01_one_addr_port_synack.run1.r8cae74a3756824d180b762d84c39fad1
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rbc281dfcf62b235f063fddb19df109f6/out
+test macos_verify::tests::run_directories_are_found_by_tag_and_nonce_and_a_second_one_is_ambiguous ... ok
+test macos_verify::tests::status_post_not_allowed_is_invalid_and_a_fail_for_a_perf_cell ... ok
+test macos_verify::tests::the_rst_rate_limit_and_the_fixture_ports_are_part_of_the_evidence ... ok
+test macos_verify::tests::stop_silent_on_the_mac_is_judged_on_mid_tx_and_the_wire_with_the_empty_path_noted_not_run ... ok
+test macos_verify::tests::stop_fullqueue_needs_two_peer_replies_on_the_wire_and_results_equal_to_them ... ok
+test macos_verify::tests::the_perm_denied_counter_window_must_enclose_the_scanner_run ... ok
+test macos_verify::tests::an_rst_that_follows_the_synack_of_the_same_port_needs_no_closed_result ... ok
+test macos_verify::tests::the_real_inventory_summary_passes_as_the_permission_control ... ok
+test oracle::expectation_tests::the_expectations_follow_the_parsed_open_port_set ... ok
+test oracle::open_port_tests::oracle_plan_uses_the_given_open_ports_and_cases_follow_them ... ok
+test oracle::tests::oracle_conversion_preserves_hashes_binding_and_repeat_failures ... ok
+test oracle::tests::oracle_plan_has_no_interpreter_and_quotes_binding ... ok
+test oracle::tests::oracle_plan_uses_the_given_source_mac_and_quotes_it ... ok
+test oracle::tests::remote_staging_includes_every_local_sourced_script ... ok
+test oracle::tests::src_mac_is_validated_and_defaults_to_the_windows_value ... ok
+test pcap::acceptance_tests::a_slow_startup_is_excluded_from_the_steady_rate ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r670bccd0a68eeac213ba4e0fc4700f74/out/runs/c01_one_addr_port_synack.run1.rd30730d0e58ed8fcee4db6357a1011ea
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r670bccd0a68eeac213ba4e0fc4700f74/out
+test pcap::acceptance_tests::an_expected_capture_without_any_syn_is_invalid_even_with_other_frames ... ok
+test pcap::acceptance_tests::both_endiannesses_and_timestamp_units ... ok
+test pcap::acceptance_tests::capture_meta_of_either_side_decides_invalid_and_a_clean_meta_still_passes ... ok
+test pcap::acceptance_tests::every_original_packet_comparator_rejection_class ... ok
+test pcap::acceptance_tests::reply_flags_fragments_and_short_packets_not_syn ... ok
+test pcap::acceptance_tests::the_cli_self_test_is_gone_and_says_where_the_cases_run ... ok
+test pcap::acceptance_tests::unknown_negative_or_noninteger_capture_counters_are_invalid ... ok
+test pcap::tests::comparator_regressions ... ok
+test pcap::tests::parses_classic_capture ... ok
+test pcap::tests::rate_excludes_startup ... ok
+test pcap::tests::recognizes_syn ... ok
+test pcap::tests::rejects_truncation ... ok
+test peer::tests::foreign_replies_have_valid_checksums ... ok
+test peer::tests::malformed_syn_is_never_indexed ... ok
+test peer::tests::port_ranges_reject_reverse_and_zero ... ok
+test peer::tests::qmp::a_qmp_error_reply_an_eof_or_a_bad_greeting_is_an_error_never_success ... ok
+test peer::tests::qmp::set_link_sends_capabilities_then_set_link_on_lab0_only_with_the_requested_state ... ok
+test macos_verify::tests::the_rst_rate_limit_is_informational_whatever_was_recorded ... ok
+test macos_verify::tests::the_recorded_effective_uid_must_be_there_and_not_root ... ok
+test macos_verify::tests::the_manifest_binding_is_pinned_to_the_stand ... ok
+test macos_verify::tests::wire_scans_real_src_mac_check_values_have_one_contract ... ok
+test provenance::tests::problem_checks_the_build_commit_when_present ... ok
+test provenance::tests::problem_rejects_each_malformed_field ... ok
+test macos_verify::tests::the_text_report_names_a_run_tripped_while_the_manifest_gate_failed ... ok
+test macos_verify::tests::verdict_counts_add_up ... ok
+test macos_verify::tests::the_mac_peer_has_no_silent_ports_and_the_evidence_says_why ... ok
+test provenance::tests::an_unreadable_tree_is_recorded_as_null_with_a_reason_and_is_not_acceptable ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rbb050074480f8f875a84db8e1ed126ea/out/runs/c01_one_addr_port_synack.run1.rbbcbff755f3eddf0ca528f10490b1aaa
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-rbb050074480f8f875a84db8e1ed126ea/out
+test studio_verify::tests::a_consistent_window_is_pass ... ok
+test studio_verify::tests::a_darwin_synack_then_rst_is_one_result ... ok
+test studio_verify::tests::a_duplicate_syn_is_fail ... ok
+test studio_verify::tests::a_gzipped_capture_is_refused ... ok
+done c01_one_addr_port_synack.run1 -> /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r9e0711b6decefe5c16a2279b3d312c7b/out/runs/c01_one_addr_port_synack.run1.r51990426bec10e3dc9fcbaa30745c343
+all planned runs executed; verify offline with rmasscan-lab macos-verify --dir /var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-macos-suite-r9e0711b6decefe5c16a2279b3d312c7b/out
+test studio_verify::tests::a_late_peer_witness_is_invalid_not_fail ... ok
+test macos_suite::tests::a_changed_binding_in_an_existing_manifest_is_refused_before_the_scanner_is_called ... ok
+test macos_verify::tests::x01_needs_three_kinds_from_a_clean_guard_and_never_other_ip ... ok
+test studio_verify::tests::a_changed_hash_is_invalid ... ok
+test studio_verify::tests::a_behaviour_fail_is_not_laundered_by_unproven_evidence ... ok
+test studio_verify::tests::a_hang_after_the_first_start_is_fail_and_before_it_is_not_run ... ok
+test studio_verify::tests::a_listed_entry_that_cannot_be_read_is_invalid ... ok
+test studio_verify::tests::a_lab_frame_on_the_uplink_is_fail ... ok
+test macos_verify::tests::a_run_directory_with_only_compressed_captures_is_unproven_and_fails_closed ... ok
+test studio_verify::tests::a_missing_history_is_not_run ... ok
+test studio_verify::tests::a_pause_that_does_not_split_the_probes_is_invalid ... ok
+test studio_verify::tests::a_non_syn_from_the_scanner_is_fail ... ok
+test studio_verify::tests::a_synack_without_an_open_row_is_fail ... ok
+test studio_verify::tests::a_row_without_a_wire_reply_is_fail ... ok
+test provenance::tests::the_build_commit_is_embedded_apart_from_the_checkout_head ... ok
+test studio_verify::tests::an_extra_syn_from_another_source_port_is_fail ... ok
+test studio_verify::tests::a_syn_after_stop_is_fail ... ok
+test studio_verify::tests::an_unplanned_scan_in_the_history_is_fail ... ok
+test studio_verify::tests::a_session_that_ends_before_any_start_is_not_run ... ok
+test studio_verify::tests::frames_outside_the_capture_window_make_it_invalid ... ok
+test studio_verify::tests::expect_head_binds_the_window_to_a_commit ... ok
+test studio_verify::tests::chronicle_times_must_agree_with_themselves ... ok
+test studio_verify::tests::failing_messages_state_the_finding ... ok
+test studio_verify::tests::an_empty_netstat_record_is_not_recorded_and_the_wire_decides ... ok
+test studio_verify::tests::guard_requires_observed_permanent_mapping_after_successful_arp_command ... ok
+test studio_verify::tests::manual_mode_accepts_an_interrupted_scan ... ok
+test studio_verify::tests::parse_tcpdump_stats_table ... ok
+test studio_verify::tests::parse_utc_table ... ok
+test studio_verify::tests::first_leg_not_equal_next_index_is_fail ... ok
+test studio_verify::tests::installed_hash_mismatch_is_invalid ... ok
+test studio_verify::tests::plan_ports_for_job_follow_the_engine_cursor ... ok
+test studio_verify::tests::guard_window_requires_real_change_guard_reason_and_no_checkpoint ... ok
+test studio_verify::tests::late_replies_before_a_stop_need_no_row ... ok
+test studio_verify::tests::paused_without_the_runner_ack_text_is_fail ... ok
+test studio_verify::tests::host_wildcard_listeners_make_scanned_ports_open ... ok
+test provenance::tests::commit_dirty_flag_and_binary_hash_are_read_from_the_tree_and_the_running_binary ... ok
+test studio_verify::tests::missing_rst_is_tolerated ... ok
+test studio_verify::tests::replies_after_the_scanner_exit_are_only_a_note ... ok
+test studio_verify::tests::scan_window_table ... ok
+test studio_verify::tests::a_witness_must_cover_the_session_and_exit_cleanly ... ok
+test studio_verify::tests::pause_latency_over_five_seconds_is_fail ... ok
+test studio_verify::tests::rows_seen_not_equal_history_rows_is_fail ... ok
+test studio_verify::tests::scanner_syn_to_a_foreign_address_is_a_safety_fail ... ok
+test studio_verify::tests::run_writes_the_verdict_and_returns_the_code ... ok
+test studio_verify::tests::resume_gap_or_duplicate_is_fail ... ok
+test studio_verify::tests::manual_mode_skips_the_plan_but_keeps_safety_and_results ... ok
+test studio_verify::tests::restart_requires_actual_prior_rows_and_preserves_them ... ok
+test studio_verify::tests::stop_latency_over_a_second_is_fail ... ok
+test macos_verify::tests::only_tcp4_and_tcp46_listeners_count_and_a_failed_netstat_is_not_a_record ... ok
+test studio_verify::tests::restart_windows_require_a_different_process_and_exact_packet_continuation ... ok
+test studio_verify::tests::silent_lab_listeners_fail_even_when_the_host_listeners_are_not_recorded ... ok
+test studio_verify::tests::syn_order_off_the_plan_is_fail ... ok
+test studio_verify::tests::history_must_match_the_plan_and_have_no_duplicate_rows ... ok
+test studio_verify::tests::the_data_binding_note_reaches_the_verdict_and_missing_files_are_named ... ok
+test studio_verify::tests::the_drift_cap_scales_with_the_session ... ok
+test studio_verify::tests::the_gates_are_checked ... ok
+test studio_verify::tests::the_peer_witness_must_be_the_peer_interface_without_a_filter ... ok
+test studio_verify::tests::the_verdict_carries_the_facts_the_rerun_rule_needs ... ok
+test studio_verify::tests::the_stop_grace_is_100_ms ... ok
+test verify::perf_tests::a_clean_completed_cell_passes_and_records_every_metric ... ok
+test verify::perf_tests::a_completed_cell_with_a_duplicated_probe_is_fail ... ok
+test studio_verify::tests::the_peer_capture_must_be_complete ... ok
+test verify::perf_tests::a_completed_cell_with_a_probe_missing_on_the_wire_is_fail ... ok
+test studio_verify::tests::provenance_is_bound_to_a_commit_and_to_real_hashes ... ok
+test studio_verify::tests::the_bundle_manifest_must_agree_with_the_provenance ... ok
+test studio_verify::tests::uplink_kernel_drop_is_invalid ... ok
+test verify::perf_tests::a_missing_median_is_not_run_never_open ... ok
+test verify::perf_tests::a_missing_run_is_not_run ... ok
+test verify::perf_tests::a_genuine_rxloss_cell_still_passes ... ok
+test verify::perf_tests::a_gate_nonce_that_is_not_this_invocation_is_fail ... ok
+test verify::perf_tests::a_functional_run_without_tx_mode_fails_like_a_perf_cell ... ok
+test verify::perf_tests::a_syn_after_the_outcome_is_fail ... ok
+test verify::perf_tests::a_single_mode_run_is_not_judged_by_unmeasured_budget_counters ... ok
+test verify::perf_tests::a_failed_gate_leg_is_fail_not_invalid ... ok
+test verify::perf_tests::a_nonzero_guest_verify_exit_is_fail ... ok
+test verify::perf_tests::a_sequence_built_with_another_rate_is_fail ... ok
+test verify::perf_tests::a_syn_from_the_wrong_ip_is_fail ... ok
+test verify::perf_tests::a_syn_from_the_wrong_source_port_is_fail ... ok
+test verify::perf_tests::a_syn_missing_from_a_proven_capture_is_still_a_behaviour_fail ... ok
+test verify::perf_tests::a_syn_missing_from_an_incomplete_capture_is_invalid_not_a_behaviour_failure ... ok
+test verify::perf_tests::a_syn_from_the_wrong_mac_is_fail ... ok
+test studio_verify::tests::the_chronicle_must_follow_the_plan ... ok
+test verify::perf_tests::a_syn_to_another_destination_is_fail ... ok
+test studio_verify::tests::verdict_never_upgrades_invalid_to_pass ... ok
+test verify::perf_tests::an_incomplete_capture_makes_the_order_check_invalid_not_fail ... ok
+test verify::perf_tests::an_old_capture_schema_makes_the_cell_invalid ... ok
+test studio_verify::tests::the_uplink_witness_must_be_the_default_route_interface_with_the_lab_filter ... ok
+test verify::perf_tests::an_ok_report_without_a_net_block_is_not_hidden_by_the_narrowing ... ok
+test verify::perf_tests::captured_not_equal_received_makes_the_cell_invalid ... ok
+test verify::perf_tests::completed_with_a_missing_reply_is_silent_loss_and_fail ... ok
+test verify::perf_tests::completed_with_a_wrong_open_closed_state_is_fail ... ok
+test verify::perf_tests::an_rx_loss_cell_must_send_a_prefix_of_the_plan ... ok
+test verify::perf_tests::eno1_seeing_a_lab_frame_is_fail ... ok
+test verify::perf_tests::fewer_than_three_completed_pass_cells_leave_the_gate_not_run_even_with_rxloss_passes ... ok
+test verify::perf_tests::an_outcome_that_is_neither_completed_nor_rxloss_is_fail ... ok
+test verify::perf_tests::eno1_frame_with_a_lab0_drop_is_fail_and_not_discardable ... ok
+test verify::perf_tests::frames_after_the_end_marker_make_the_cell_invalid ... ok
+test verify::perf_tests::medians_and_the_gate_use_completed_pass_cells_and_rxloss_cells_get_their_own_fields ... ok
+test verify::perf_tests::medians_ignore_cells_that_did_not_pass_and_average_an_even_count ... ok
+test verify::perf_tests::lab0_counter_window_mismatch_makes_the_cell_invalid ... ok
+test macos_verify::tests::a_host_wildcard_listener_is_open_truth_when_the_wire_or_the_record_shows_it ... ok
+test verify::perf_tests::other_plans_are_unchanged_by_perf ... ok
+test verify::perf_tests::completed_with_drops_or_unknown_drops_is_fail ... ok
+test verify::perf_tests::per_rate_case_args_use_the_functional_binding ... ok
+test verify::perf_tests::missing_tx_mode_in_a_sendqueue_directory_is_fail_not_pass ... ok
+test verify::perf_tests::per_rate_ports_probes_and_expected_counts ... ok
+test verify::perf_tests::over_budget_calls_fail_the_run ... ok
+test verify::perf_tests::planned_perf_is_exactly_twenty_runs_in_rep_major_order ... ok
+test verify::perf_tests::rate_gate_needs_three_pass_cells_else_not_run ... ok
+test verify::perf_tests::rate_gate_is_met_within_twenty_percent_and_open_outside ... ok
+test verify::perf_tests::reordered_altered_duplicated_or_missing_syns_are_fail ... ok
+test verify::perf_tests::refusals_carry_no_tx_mode_and_no_net_block_and_are_not_judged ... ok
+test verify::perf_tests::failed_outcomes_are_status_ok_and_still_judged_by_the_sendqueue_rules ... ok
+test verify::perf_tests::rx_loss_cells_are_counted_and_stay_pass ... ok
+test studio_verify::tests::the_files_of_the_orchestrator_are_judged ... ok
+test verify::perf_tests::rxloss_must_exit_three ... ok
+test verify::perf_tests::rxloss_results_may_not_repeat_an_entry ... ok
+test verify::perf_tests::rxloss_detail_must_match_the_measured_drops ... ok
+test verify::perf_tests::rxloss_with_measured_drops_is_an_honest_pass ... ok
+test verify::perf_tests::rxloss_still_has_to_keep_wire_and_tx_consistent ... ok
+test verify::perf_tests::rxloss_results_must_be_a_subset_of_the_listener_truth ... ok
+test verify::perf_tests::summary_has_one_row_per_rate_with_medians_over_pass_cells ... ok
+test verify::perf_tests::summary_notes_name_the_latency_sources_and_the_gate_caveat ... ok
+test verify::perf_tests::tcpdump_kernel_drops_make_the_cell_invalid ... ok
+test verify::perf_tests::the_generated_sequence_depends_on_the_rate_the_scanner_used ... ok
+test verify::perf_tests::rxloss_with_zero_or_unknown_drops_is_fail ... ok
+test verify::perf_tests::tx_mode_mismatch_is_fail ... ok
+test macos_suite::tests::a_leader_that_exits_leaves_no_member_of_its_group_behind ... ok
+test verify::perf_tests::wire_syn_count_differing_from_tx_sent_is_fail ... ok
+test verify::perf_tests::without_tx_mode_expected_the_order_is_a_report_only_note ... ok
+test verify::perf_tests::a_clean_cell_sends_exactly_the_plan_sequence ... ok
+test verify::perf_tests::batch_max_above_cap_is_fail ... ok
+test verify::regression_tests::a_clean_refusal_run_does_not_trip_the_safety_checks ... ok
+test verify::regression_tests::a_checkpoint_refusal_with_a_scanner_syn_on_the_wire_is_a_failure ... ok
+test verify::perf_tests::perf_notes_carry_batch_fields ... ok
+test verify::regression_tests::a_manifest_expecting_permission_denied_accepts_only_exit_5_with_the_admin_only_hint ... ok
+test verify::perf_tests::the_verifier_refuses_a_manifest_with_an_unknown_plan ... ok
+test verify::perf_tests::a_fast_cell_without_batches_under_sendqueue_is_fail ... ok
+test verify::regression_tests::a_scanner_syn_in_a_refusal_run_is_fail_even_when_the_capture_is_unproven ... ok
+test verify::regression_tests::a_scanner_syn_in_a_refusal_or_restricted_run_is_a_failure_whatever_the_capture ... ok
+test verify::regression_tests::a_discarded_invalid_run_with_an_accepted_foreign_result_is_overall_fail ... ok
+test verify::regression_tests::a_resumed_completed_job_and_a_syn_during_a_refusal_are_failures ... ok
+test verify::regression_tests::a_schema2_run_in_a_schema1_directory_cannot_skip_the_end_marker ... ok
+test verify::regression_tests::a_discarded_attempt_without_an_eno1_frame_is_still_a_plain_discard ... ok
+test verify::perf_tests::legacy_directories_without_tx_mode_expected_are_unchanged ... ok
+test verify::regression_tests::all_checkpoint_fields_must_match_report ... ok
+test verify::regression_tests::a_discarded_attempt_with_an_eno1_frame_fails_the_directory_after_a_clean_rerun ... ok
+test verify::regression_tests::an_eno1_frame_counted_but_not_stored_is_a_non_discardable_fail ... ok
+test verify::regression_tests::argv_error_disables_behaviour_blame ... ok
+test verify::regression_tests::cases_psv_lists_six_classes_plus_the_foreign_case ... ok
+test verify::regression_tests::a_wrong_stop_argument_is_a_harness_error_that_may_be_rerun ... ok
+test verify::regression_tests::an_aborted_copy_whose_eno1_log_counts_frames_fails_the_directory ... ok
+test verify::regression_tests::an_aborted_run_with_a_clean_eno1_or_no_pcap_changes_nothing ... ok
+test verify::regression_tests::bad_capture_cannot_hide_scanner_failure ... ok
+test verify::regression_tests::an_aborted_run_with_an_eno1_frame_fails_the_directory ... ok
+test verify::regression_tests::eno1_frame_with_an_invalid_status_post_is_fail_and_not_discardable ... ok
+test verify::regression_tests::eno1_isolation_failure_is_detected ... ok
+test verify::regression_tests::eno1_pcap_alone_is_judged_before_the_missing_artifacts_return_not_run ... ok
+test verify::regression_tests::a_schema_3_manifest_must_record_the_orchestrator_build ... ok
+test verify::regression_tests::continuous_behaviour_checks_fail_independently_of_capture ... ok
+test verify::regression_tests::failure_checkpoint_file_is_behaviour_fail ... ok
+test verify::regression_tests::capture_provenance_mutations_are_invalid ... ok
+test verify::regression_tests::exported_checkpoint_checksum_and_identity_are_verified ... ok
+test verify::regression_tests::foreign_floor_is_a_failure_even_with_bad_capture ... ok
+test verify::perf_tests::rule_c_edges ... ok
+test verify::regression_tests::fixture_hash_binding_and_path_must_match ... ok
+test verify::regression_tests::eno1_capture_must_run_in_the_host_namespace_with_the_derived_filter ... ok
+test verify::regression_tests::foreign_syn_with_an_incomplete_capture_is_fail_and_not_discardable ... ok
+test verify::regression_tests::fresh_invocation_requires_matching_nonce_and_hash_proof ... ok
+test verify::regression_tests::discarded_pass_fail_and_unknown_are_not_hidden ... ok
+test verify::regression_tests::guest_transport_failure_cannot_reuse_old_success ... ok
+test verify::regression_tests::foreign_reply_accepted_as_result_is_fail ... ok
+test verify::regression_tests::drain_and_fullqueue_stop_contracts ... ok
+test verify::regression_tests::full_failure_plan_replays_19_pass ... ok
+test verify::regression_tests::incomplete_capture_cannot_blame_unexplained_foreign_discards ... ok
+test verify::regression_tests::interface_counters_cannot_decrease_and_compensate_each_other ... ok
+test verify::regression_tests::foreign_frames_missing_from_the_wire_are_invalid_and_a_missing_injector_log_is_not_run ... ok
+test verify::regression_tests::failure_plan_harness_evidence_mutations_invalid ... ok
+test verify::regression_tests::linkloss_must_have_at_least_one_uncertain_tx ... ok
+test verify::regression_tests::guest_verify_nonce_is_checked_even_when_the_hash_proof_is_consistent ... ok
+test verify::regression_tests::late_tx_is_failure_only_when_capture_complete ... ok
+test verify::regression_tests::maximum_interface_counters_neither_overflow_nor_pass ... ok
+test verify::regression_tests::independent_nic_unknown_fields_are_not_measured_zero ... ok
+test verify::regression_tests::malformed_exported_checkpoints_are_a_behaviour_failure_and_never_rerunnable ... ok
+test verify::regression_tests::maximum_receive_counters_neither_overflow_nor_pass ... ok
+test verify::regression_tests::linkloss_without_events_is_not_run_and_without_proof_is_invalid ... ok
+test verify::regression_tests::missing_part_b_run_is_not_run ... ok
+test verify::regression_tests::missing_readiness_is_invalid ... ok
+test verify::regression_tests::missing_artifacts_never_pass ... ok
+test verify::regression_tests::failure_plan_each_error_contract_enforced ... ok
+test verify::regression_tests::omitted_tcpdump_interface_drops_need_independent_measurement ... ok
+test verify::regression_tests::packet_truncation_and_hash_changes_are_invalid ... ok
+test verify::regression_tests::foreign_frames_must_each_be_discarded_and_duplicates_are_genuine_retransmits_only ... ok
+test verify::regression_tests::linkloss_harness_events_must_prove_down_then_restore_around_the_failure ... ok
+test verify::regression_tests::missing_fixture_manifest_and_planned_runs_are_not_run ... ok
+test verify::regression_tests::pause_after_must_match_n ... ok
+test verify::regression_tests::missing_continuous_or_leg_pcap_makes_groups_not_run_without_crashing ... ok
+test verify::perf_tests::a_synthetic_plan_with_a_pass_rx_loss_cell_still_passes_overall ... ok
+test verify::regression_tests::refusal_with_the_wrong_variants_checkpoint_fails ... ok
+test verify::regression_tests::refusal_without_recorded_checkpoints_is_not_run ... ok
+test verify::perf_tests::an_open_rate_gate_never_changes_overall ... ok
+test verify::regression_tests::restricted_scan_refusals_accepted_are_only_the_documented_ones ... ok
+test verify::perf_tests::the_full_synthetic_plan_verifies_pass_with_a_met_gate_at_every_rate ... ok
+test verify::perf_tests::one_incomplete_capture_in_the_plan_makes_overall_invalid_and_the_cell_rerunnable ... ok
+test verify::regression_tests::received_and_duplicate_counters_require_measured_unsigned_values ... ok
+test verify::regression_tests::rxloss_independent_count_inputs_required ... ok
+test verify::regression_tests::overflow_and_linkloss_contracts ... ok
+test verify::regression_tests::rx_load_flood_must_overlap_the_stop_and_stay_on_the_wire ... ok
+test verify::regression_tests::requested_scan_and_attempt_identity_cannot_be_consistently_replaced ... ok
+test verify::regression_tests::rxloss_unreproduced_or_unknown_is_not_run ... ok
+test verify::regression_tests::restricted_token_rules ... ok
+test verify::regression_tests::schema3_requires_the_hash_proof ... ok
+test verify::regression_tests::schema2_end_marker_tail_and_immediate_mode_required ... ok
+test verify::regression_tests::stale_run_binding_is_invalid ... ok
+test verify::regression_tests::schema_1_and_2_directories_keep_their_exemption_and_say_so ... ok
+test verify::regression_tests::rx_overflow_independent_bounds_and_flood_accounting ... ok
+test verify::regression_tests::peer_capture_must_run_in_the_manifest_namespace ... ok
+test verify::regression_tests::schema_below_3_keeps_its_exemption_and_says_so ... ok
+test verify::regression_tests::syn_bytes_and_order_are_exact ... ok
+test verify::regression_tests::schema3_records_the_guest_verify_exit_code_and_output ... ok
+test verify::regression_tests::syn_after_the_terminal_outcome_fails_on_a_complete_capture ... ok
+test verify::regression_tests::pause_resume_group_failures ... ok
+test verify::regression_tests::schema3_requires_the_nonce_and_a_matching_guest_verify ... ok
+test verify::regression_tests::synthetic_failure_plan_has_every_run_passing_individually ... ok
+test verify::regression_tests::stop_load_needs_the_flood_on_the_wire ... ok
+test verify::regression_tests::the_requested_scan_and_attempt_id_is_checked_in_each_leg_on_its_own ... ok
+test verify::regression_tests::the_clock_offset_is_recorded_from_the_wire_not_assumed ... ok
+test verify::regression_tests::the_wire_syn_count_must_equal_tx_sent ... ok
+test verify::perf_tests::a_failed_cell_fails_overall_and_a_missing_cell_is_not_run ... ok
+test verify::tests::committed_r1_smoke_replays_as_documented ... ok
+test verify::tests::duplicate_arguments_rejected ... ok
+test verify::regression_tests::the_wrong_ports_checkpoint_variant_needs_its_matching_argv ... ok
+test verify::tests::missing_never_pass ... ok
+test verify::tests::plans_have_full_spec ... ok
+test verify::tests::wrong_interface_and_filter_rejected ... ok
+test verify::tests::historical_functional_is_pass ... ok
+test vm_lab::ownership_tests::a_foreign_namespace_of_our_name_is_never_deleted_by_a_stale_manifest ... ok
+test verify::regression_tests::wrong_interface_is_invalid_even_when_filter_and_packet_hashes_match ... ok
+test vm_lab::ownership_tests::a_firewall_rule_naming_a_lab_interface_is_a_violation ... ok
+test verify::regression_tests::the_checkpoint_magic_version_and_trailer_are_each_checked_on_their_own ... ok
+test vm_lab::ownership_tests::a_malformed_guest_record_is_a_clean_error ... ok
+test vm_lab::ownership_tests::a_host_ip_on_bridge_or_tap_is_a_violation ... ok
+test vm_lab::ownership_tests::a_physical_uplink_enslaved_during_up_is_rejected_and_rolled_back ... ok
+test vm_lab::ownership_tests::actual_guest_time_and_nonce_bind_vm ... ok
+test vm_lab::ownership_tests::a_guest_verify_must_be_up_and_report_the_lab_mac ... ok
+test vm_lab::ownership_tests::a_namespace_with_another_manifests_token_is_not_deleted ... ok
+test vm_lab::ownership_tests::an_incomplete_up_is_refused_and_down_cleans_only_our_objects ... ok
+test verify::regression_tests::the_verdict_reports_the_orchestrator_and_the_verifier_builds_and_flags_a_dirty_tree ... ok
+test verify::regression_tests::unrelated_process_worker_count_is_not_engine_leak ... ok
+test vm_lab::ownership_tests::an_unreadable_bridge_vlan_table_is_a_violation_not_a_pass ... ok
+test vm_lab::ownership_tests::an_unexpected_non_physical_port_on_the_bridge_is_named_as_a_violation ... ok
+test vm_lab::ownership_tests::busy_names_refuse_up_and_change_nothing ... ok
+test vm_lab::ownership_tests::derived_names_fit_ifnamsiz_and_macs_never_collide ... ok
+test vm_lab::ownership_tests::down_without_a_manifest_is_a_noop_that_leaves_look_alike_objects ... ok
+test vm_lab::ownership_tests::a_taken_name_at_create_time_deletes_nothing_it_did_not_create ... ok
+test vm_lab::ownership_tests::failed_link_creation_cannot_delete_foreign ... ok
+test vm_lab::ownership_tests::failed_namespace_creation_never_deletes_existing ... ok
+test vm_lab::ownership_tests::another_manifest_for_the_same_run_id_cannot_delete_our_stand ... ok
+test vm_lab::ownership_tests::failure_after_link_creation_rolls_back_that_link ... ok
+test vm_lab::ownership_tests::bridge_self_vlan_is_a_violation ... ok
+test vm_lab::ownership_tests::global_ip_forward_enabled_later_is_a_violation ... ok
+test vm_lab::ownership_tests::marker_failure_removes_only_created_namespace ... ok
+test vm_lab::ownership_tests::network_manager_not_running_is_not_fatal_and_running_marks_the_link_unmanaged ... ok
+test vm_lab::ownership_tests::nonzero_firewall_query_cannot_masquerade_as_empty_rules ... ok
+test vm_lab::ownership_tests::host_only_status_is_ok_but_never_allows_a_raw_run_without_attachment ... ok
+test vm_lab::ownership_tests::only_missing_optional_firewall_program_is_ignored ... ok
+test vm_lab::ownership_tests::every_non_plan_command_runs_under_the_run_id_lock ... ok
+test vm_lab::ownership_tests::lifecycle_preserves_foreign_objects_and_repeated_down ... ok
+test vm_lab::ownership_tests::plan_changes_nothing_and_conflicts_block_it ... ok
+test vm_lab::ownership_tests::arp_on_is_a_violation_on_every_lab_interface ... ok
+test vm_lab::ownership_tests::physical_port_and_host_address_fail_isolation ... ok
+test vm_lab::ownership_tests::present_firewall_backend_failure_refuses_preflight_and_status ... ok
+test vm_lab::ownership_tests::secure_tokens_are_available_on_this_platform ... ok
+test vm_lab::ownership_tests::stale_marker_refuses_before_creation ... ok
+test verify::regression_tests::the_verdict_reports_the_build_commit_apart_from_the_checkout_head ... ok
+test vm_lab::ownership_tests::arp_ignore_rp_filter_forwarding_and_ipv6_violations ... ok
+test vm_lab::ownership_tests::status_flags_a_physical_uplink_enslaved_later ... ok
+test vm_lab::ownership_tests::status_is_not_ok_without_vm_attachment ... ok
+test vm_lab::ownership_tests::teardown_refuses_changed_live_owner ... ok
+test vm_lab::ownership_tests::the_guest_script_keeps_its_guards ... ok
+test vm_lab::ownership_tests::the_lab_env_of_another_run_is_not_overwritten ... ok
+test vm_lab::ownership_tests::record_guest_refuses_a_report_for_another_nonce ... ok
+test vm_lab::ownership_tests::record_guest_selects_exactly_one_adapter_by_the_lab_mac ... ok
+test vm_lab::ownership_tests::the_real_lock_serializes_the_same_run_id_and_releases_afterwards ... ok
+test vm_lab::ownership_tests::status_reports_the_nonce_of_the_guest_verify_it_relied_on ... ok
+test vm_lab::ownership_tests::status_ok_needs_every_attachment_fact_the_carrier_and_a_fresh_guest ... ok
+test vm_lab::std_helper_tests::random_token_is_sixteen_random_bytes_as_hex ... ok
+test vm_lab::std_helper_tests::restoring_the_owner_of_a_file_we_own_as_a_normal_user_is_a_no_op ... ok
+test vm_lab::std_helper_tests::sudo_target_applies_only_to_root_owned_files_with_valid_ids ... ok
+test vm_lab::tests::names_are_bounded_and_deterministic ... ok
+test vm_lab::tests::old_guest_json_cannot_be_relabelled_fresh ... ok
+test vm_lab::ownership_tests::record_guest_refuses_a_verify_that_predates_the_vm_start ... ok
+test vm_lab::tests::overlap_covers_host_routes_and_broad_routes ... ok
+test vm_lab::ownership_tests::up_status_down_roundtrip_records_the_lab_net_and_keeps_the_uplink ... ok
+test vm_lab::ownership_tests::vlan_filtering_off_is_a_violation ... ok
+test vm_lab::ownership_tests::up_after_a_clean_down_gets_a_fresh_token_and_a_healthy_stand ... ok
+test vm_lab::ownership_tests::verification_import_rejects_replay_and_revokes_previous_success ... ok
+test vm_lab::ownership_tests::record_guest_refuses_reports_outside_the_sixty_second_window ... ok
+test verify::regression_tests::status_pre_must_carry_the_nonce_of_this_invocations_guest_verify ... ok
+test verify::regression_tests::uncertain_tx_window_bounds_the_wire_syn_count ... ok
+test windows_suite::suite_tests::a_manifest_for_another_commit_or_binary_path_or_a_missing_one_is_refused_locally ... ok
+test windows_suite::suite_tests::a_guest_copy_that_differs_from_the_commit_stops_the_suite_before_the_gate ... ok
+test windows_suite::suite_tests::a_lost_lock_with_a_stop_request_runs_no_global_sweep ... ok
+test verify::regression_tests::the_rxloss_independent_count_is_recorded_and_bounds_the_drops ... ok
+test windows_suite::suite_tests::a_dead_orchestrator_or_failed_ssh_after_the_send_leaves_the_run_marked_and_the_next_start_refuses ... ok
+test windows_suite::suite_tests::a_new_evidence_directory_records_the_orchestrator_build_in_manifest_and_preflight ... ok
+test windows_suite::suite_tests::a_refused_gate_starts_no_listener_capture_marker_or_scanner ... ok
+test windows_suite::suite_tests::a_lost_lock_session_stops_the_suite_before_any_raw_run ... ok
+test windows_suite::suite_tests::a_safety_finding_in_a_discarded_run_refuses_to_start_a_rerun ... ok
+test windows_suite::suite_tests::a_remote_binary_that_is_not_in_the_manifest_is_refused_before_anything_runs ... ok
+test windows_suite::suite_tests::a_script_missing_at_the_commit_is_refused_before_any_remote_command ... ok
+test verify::regression_tests::refusal_used_checkpoint_must_be_the_declared_mutation_of_the_forged_one ... ok
+test windows_suite::suite_tests::a_stop_request_before_a_run_starts_exits_130_without_a_remote_run ... ok
+test windows_suite::suite_tests::abort_after_send_with_a_clean_eno1_is_still_not_run_and_discardable ... ok
+test windows_suite::suite_tests::an_abort_after_a_capture_started_still_keeps_the_marker_until_the_copy_matches ... ok
+test windows_suite::suite_tests::abort_after_send_with_an_eno1_frame_exits_13_and_the_verifier_fails_the_directory ... ok
+test windows_suite::suite_tests::an_abort_before_the_runner_never_reads_eno1 ... ok
+test verify::regression_tests::strays_in_the_receive_window_are_counted_and_required ... ok
+test windows_suite::suite_tests::an_aborted_run_is_copied_from_its_own_scratch_into_runs_aborted_under_tag_and_run_id ... ok
+test windows_suite::suite_tests::a_perf_run_needs_an_explicit_suite_id ... ok
+test windows_suite::suite_tests::eno1_interlock_treats_unreadable_captures_as_unproven ... ok
+test windows_suite::suite_tests::cleanup_stops_recorded_processes_by_start_time_then_removes_only_the_suite_scratch ... ok
+test verify::regression_tests::stop_latency_worker_and_resource_mutations_fail ... ok
+test windows_suite::suite_tests::every_subcommand_refuses_unknown_and_repeated_options ... ok
+test windows_suite::suite_tests::an_abort_between_the_captures_and_the_runner_still_reads_remote_eno1 ... ok
+test windows_suite::suite_tests::ctrl_c_during_a_run_stops_the_remote_tools_through_the_uninterruptible_path ... ok
+test windows_suite::suite_tests::an_unproven_eno1_under_a_stop_is_exit_10_never_a_plain_interrupt ... ok
+test windows_suite::suite_tests::a_normal_run_sets_the_marker_before_anything_is_sent_and_clears_it_with_the_scratch ... ok
+test windows_suite::suite_tests::every_suite_start_sweeps_before_it_creates_anything ... ok
+test windows_suite::suite_tests::failed_verify_aborts_before_fetching_recording_or_asking_for_status ... ok
+test windows_suite::suite_tests::gate_binds_the_nonce_records_the_verify_and_only_then_reports_status ... ok
+test windows_suite::suite_tests::guest_directories_are_prepared_by_a_script_file ... ok
+test windows_suite::suite_tests::guest_scanner_failure_keeps_remote_scratch_and_stops_the_remote_tools ... ok
+test windows_suite::suite_tests::local_sweep::removing_a_scratch_directory_that_does_not_exist_is_a_clean_no_op ... ok
+test windows_suite::suite_tests::invalid_suite_ids_and_tags_are_refused_before_any_remote_command ... ok
+test windows_suite::suite_tests::guest_scripts_come_from_the_commit_and_their_hashes_are_evidence ... ok
+test windows_suite::suite_tests::nonces_come_from_the_os_rng_and_fit_the_powershell_contract ... ok
+test windows_suite::suite_tests::lab_nic_must_be_the_one_the_scanner_is_told_to_open ... ok
+test windows_suite::suite_tests::options_list_includes_tx_mode ... ok
+test windows_suite::suite_tests::old_schema_and_refused_rerun_have_their_own_exit_codes_and_touch_nothing ... ok
+test windows_suite::suite_tests::perf_timeouts_scale_with_the_run_and_both_extreme_cells_fit ... ok
+test verify::regression_tests::every_checkpoint_refusal_variant_must_name_its_reason_and_open_nothing ... ok
+test windows_suite::suite_tests::record_guest_refusal_aborts_before_status ... ok
+test windows_suite::suite_tests::schema_age_gate ... ok
+test windows_suite::suite_tests::scratch_removal_is_quoted_and_symlink_checked ... ok
+test windows_suite::suite_tests::sweep_script_skips_a_reused_pid ... ok
+test windows_suite::suite_tests::the_clock_limits_are_the_ones_record_guest_enforces ... ok
+test windows_suite::suite_tests::clock_skew_beyond_plus_five_or_minus_sixty_seconds_refuses_every_raw_run ... ok
+test windows_suite::suite_tests::the_commands_documented_in_rust_lab_md_parse_with_the_option_allow_lists ... ok
+test windows_suite::suite_tests::local_sweep::the_sweep_works_when_home_is_reached_through_a_symlink ... ok
+test windows_suite::suite_tests::report_of_another_invocation_aborts_before_record_guest ... ok
+test windows_suite::suite_tests::the_lock_session_is_kept_alive_and_a_missing_flock_is_not_busy ... ok
+test windows_suite::suite_tests::isolation_refusal_or_any_violation_aborts_the_gate ... ok
+test windows_suite::suite_tests::the_gate_refuses_a_status_that_relied_on_another_guest_verify ... ok
+test windows_suite::suite_tests::the_clock_reading_is_recorded_in_the_preflight_evidence ... ok
+test windows_suite::suite_tests::the_sweep_keeps_uncopied_abort_evidence_and_removes_the_rest ... ok
+test windows_suite::suite_tests::the_text_report_names_aborted_runs_and_every_safety_trip ... ok
+test windows_suite::suite_tests::the_lock_guard_notices_that_its_ssh_session_died ... ok
+test windows_suite::suite_tests::the_suite_lock_is_held_by_every_invocation_and_refuses_a_second_one ... ok
+test windows_suite::suite_tests::the_marker_is_not_cleared_while_the_scratch_has_a_subdirectory ... ok
+test windows_suite::suite_tests::the_vouched_binary_passes_and_its_hash_is_recorded_in_the_evidence ... ok
+test windows_suite::suite_tests::unknown_and_repeated_options_are_refused_by_name_before_any_remote_command ... ok
+test windows_suite::suite_tests::the_remote_scratch_stays_marked_until_the_local_copy_matches_the_recorded_hashes ... ok
+test windows_suite::tests::checkpoint_mutations_preserve_layout_and_reseal_only_versions ... ok
+test windows_suite::suite_tests::local_sweep::the_sweep_creates_the_evidence_root_and_works_on_a_first_ever_start ... ok
+test windows_suite::tests::every_planned_kind_has_explicit_scanner_argv_and_forge_contract ... ok
+test windows_suite::tests::every_planned_nonce_is_accepted_by_powershell_contract ... ok
+test windows_suite::tests::evidence_rerun_policy_preserves_failures ... ok
+test windows_suite::tests::failed_verify_never_calls_fetch_even_with_successful_old_report ... ok
+test windows_suite::suite_tests::background_tools_run_under_a_dead_man_timeout ... ok
+test windows_suite::tests::quiescence_times_out_on_endless_traffic_and_propagates_read_errors ... ok
+test windows_suite::tests::remote_cleanup_matches_pid_starttime_before_signalling ... ok
+test windows_suite::tests::reports_bound_to_invocation_and_failure_never_fetches ... ok
+test windows_suite::tests::scanner_argv_carries_every_explicit_parameter ... ok
+test windows_suite::tests::scratch_cannot_escape_or_inject ... ok
+test windows_suite::tests::scratch_creation_never_deletes_and_checks_symlink_containment ... ok
+test windows_suite::tests::unknown_counters_stay_unknown ... ok
+test windows_suite::tests::windows_shell_paths_refuse_expansion_and_command_tokens ... ok
+test wire_suite::suite_tests::a_missing_summary_field_never_satisfies_any_comparison ... ok
+test wire_suite::suite_tests::a_witness_that_dies_before_it_is_ready_fails_fast_with_its_own_message ... ok
+test wire_suite::suite_tests::an_empty_fixtures_argument_is_none_never_the_current_directory ... ok
+test wire_suite::suite_tests::an_interrupted_perf_run_is_partial_and_starts_no_further_cell ... ok
+test wire_suite::suite_tests::an_invalid_stop_stage_is_out_of_the_stop_median_and_the_matrix_check ... ok
+test wire_suite::suite_tests::capture_complete_all_eight_python_cases ... ok
+test wire_suite::suite_tests::cleanup_signals_do_not_go_through_command_and_reach_the_process ... ok
+test wire_suite::suite_tests::committed_python_perf_results_satisfy_the_same_acceptance ... ok
+test wire_suite::suite_tests::fixture_c03_capture_meta_with_drops_or_a_truncated_pcap_is_invalid ... ok
+test wire_suite::suite_tests::fixture_c03_has_sixteen_syns_and_compares_equal_to_itself ... ok
+test wire_suite::suite_tests::fixture_c03_one_changed_seq_or_port_byte_swap_or_drop_is_a_fail ... ok
+test wire_suite::suite_tests::only_gnu_time_with_verbose_output_satisfies_the_perf_preflight ... ok
+test wire_suite::suite_tests::perf_rows_record_the_capture_kernel_drops_of_every_cell_and_never_normalise_an_invalid_one ... ok
+test wire_suite::suite_tests::record_hash_records_sha256_size_and_frames_before_the_file_is_deleted ... ok
+test wire_suite::suite_tests::results_json_schema_is_what_linux_wire_tests_read ... ok
+test wire_suite::suite_tests::rust_suite_captures_stay_in_the_evidence_directory_and_perf_captures_in_scratch ... ok
+test wire_suite::suite_tests::rx_health_ok_requires_completed_and_a_measured_zero_all_python_cases ... ok
+test wire_suite::suite_tests::rx_is_complete_needs_the_exact_reply_sets_python_cases ... ok
+test wire_suite::suite_tests::the_cli_self_test_is_gone_and_says_where_the_cases_run ... ok
+test wire_suite::suite_tests::the_linux_wire_acceptance_rejects_an_invalid_stop_capture_in_a_results_file ... ok
+test wire_suite::suite_tests::the_stop_stage_verdict_needs_capture_exit_stop_and_the_rust_outcome ... ok
+test wire_suite::suite_tests::the_suite_comparison_carries_every_run_capture_meta_into_the_verdict ... ok
+test wire_suite::suite_tests::wait_quiet_a_constant_counter_is_quiet_from_the_first_sample ... ok
+test wire_suite::suite_tests::wait_quiet_never_quiet_is_false_after_the_timeout ... ok
+test wire_suite::suite_tests::wait_quiet_stops_when_the_orchestrator_is_interrupted ... ok
+test wire_suite::suite_tests::wait_quiet_waits_past_a_late_retransmit ... ok
+test wire_suite::suite_tests::wait_quiet_with_a_short_window_would_stop_before_the_late_frame ... ok
+test wire_suite::tests::archived_isolation_all_fields_are_required ... ok
+test wire_suite::tests::capture_tail_loss_never_passes ... ok
+test wire_suite::tests::commands_use_namespace_and_current_rust_tools_without_interpreters ... ok
+test wire_suite::tests::foreign_mac_ip_port_and_synack_never_count_as_scanner_syn ... ok
+test wire_suite::tests::full_performance_matrix_preserves_counts_and_stop_ranges ... ok
+test wire_suite::tests::reply_filter_rejects_other_mac_ip_and_source_port ... ok
+test wire_suite::tests::six_archived_cases_keep_exact_wire_counts_and_binding ... ok
+test wire_suite::tests::unknown_and_boolean_rx_drop_counts_never_pass ... ok
+test windows_suite::suite_tests::complete_run_writes_schema_3_evidence_that_the_verifier_passes ... ok
+test windows_suite::suite_tests::perf_is_a_known_plan_and_other_names_are_still_refused ... ok
+test windows_suite::tests::quiescence_waits_for_unchanged_counters ... ok
+test windows_suite::tests::a_descendant_briefly_holding_stderr_after_exit_is_not_a_timeout ... ok
+test windows_suite::suite_tests::eno1_lab_frames_abort_the_suite_before_the_next_raw_run ... ok
+test windows_suite::suite_tests::unfinished_evidence_of_another_suite_is_reported_and_nothing_of_it_is_deleted ... ok
+test windows_suite::suite_tests::a_gate_failure_or_ctrl_c_during_the_gate_clears_the_marker_and_the_next_start_proceeds ... ok
+test windows_suite::suite_tests::a_perf_cell_runs_through_the_same_gate_with_its_rate_and_ports_and_scaled_bounds ... ok
+test windows_suite::tests::command_deadline_kills_owned_descendants_and_never_joins_open_pipes ... ok
+test windows_suite::suite_tests::every_background_tool_has_at_least_twice_its_expected_run_time_as_dead_man_bound ... ok
+test windows_suite::tests::a_descendant_holding_stderr_for_ten_seconds_is_cut_at_the_five_second_drain_ceiling ... ok
+test windows_suite::suite_tests::tx_mode_option_is_validated_and_recorded_in_the_manifest ... ok
+test windows_suite::suite_tests::a_lost_lock_abort_signals_only_this_runs_pidfiles_escalates_and_names_what_it_could_not_stop ... ok
+
+test result: ok. 710 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.91s
+
+     Running unittests src/main.rs (target/debug/deps/rmasscan_lab-91afdb45c2f01202)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/capture.rs (target/debug/deps/capture-f5cef85686c08c55)
+
+running 6 tests
+test isolation_refuses_an_extra_link_or_default_route ... ok
+test truncated_ipv4_options_are_classified_without_indexing_past_end ... ok
+test a_queued_outgoing_tail_missing_from_the_pcap_does_not_pass_as_complete_capture ... ok
+test committed_golden_fixtures_reverify_to_the_recorded_verdicts ... ok
+test a_tampered_capture_meta_or_count_makes_the_manifest_invalid ... ok
+test capture_manifest_reproduces_the_committed_golden_cases ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/oracle_util.rs (target/debug/deps/oracle_util-d21666a8e15b07a4)
+
+running 1 test
+test patches_only_the_unique_offline_adapter_return ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/process_group.rs (target/debug/deps/process_group-bfc1117a52b31d41)
+
+running 1 test
+test wire_lab_cleanup_uses_session_stops_and_checks_for_strays ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rust_only.rs (target/debug/deps/rust_only-fdba7905df988ef8)
+
+running 25 tests
+test banned_source_extensions_are_flagged_in_any_letter_case ... ok
+test shebangs_and_extensions_are_flagged_wherever_the_file_lives ... ok
+test lab_evidence_is_never_line_ending_normalised ... ok
+test the_guard_workflow_runs_on_every_change_and_calls_the_shell_guard ... ok
+test the_matcher_flags_every_form_of_invocation_a_comment_included ... ok
+test the_matcher_ignores_identifiers_that_only_contain_the_word ... ok
+test the_rust_matcher_flags_the_same_additions ... ok
+test both_guards_fail_on_a_symlink_to_an_outside_file_with_the_banned_shebang ... ok
+test everyday_uses_of_the_runtime_name_and_prose_are_not_flagged ... ok
+test both_guards_accept_harmless_symlinks ... ok
+test the_shell_guard_does_not_flag_py_as_part_of_other_words ... ok
+test match_arms_comparisons_indexes_and_prose_are_not_invocations ... ok
+test the_shell_guard_passes_a_clean_repository_and_ignores_prose ... ok
+test the_allowlist_still_accepts_the_files_the_tree_holds ... ok
+test both_guards_fail_on_tracked_symlinks_to_banned_programs ... ok
+test the_shell_guard_fails_on_planted_swift_c_and_cpp_sources ... ok
+test the_allowlist_accepts_ui_images_fonts_documents_and_conventional_names ... ok
+test conventional_document_names_take_no_other_extension_and_svg_takes_no_script ... ok
+test identifiers_index_keys_and_comments_are_not_invocations_but_real_ones_still_are ... ok
+test the_shell_guard_catches_case_variants_zipapps_makefiles_and_the_windows_launcher ... ok
+test files_of_other_languages_fail_both_guards ... ok
+test other_interpreters_are_scanned_like_the_first ... ok
+test the_tracked_tree_has_no_interpreted_programs ... ok
+test more_banned_extensions_and_build_files_fail_both_guards ... ok
+test every_invocation_form_of_another_interpreter_fails_both_guards ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.12s
+
+     Running tests/windows_evidence.rs (target/debug/deps/windows_evidence-cec79e5a8d5741ff)
+
+running 2 tests
+test lab_functional_and_pause_resume_artifacts_verify ... ignored, stand artifacts: set RMASSCAN_WINWIRE_RESULTS; no packets are sent
+test missing_evidence_never_passes ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_net-40793988da868644)
+
+running 202 tests
+test macos::spike::live_own_frames ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::spike::live_rx_deadline_flood ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::spike::live_rx_deadline_idle ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::spike::live_rx_deadline_long ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::spike::live_rx_health ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::spike::live_rx_wakeup ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::spike::live_stand_path ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::spike::live_stop ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::process::tests::process_sample_fields_are_some_on_macos ... ok
+test macos::spike::live_tx ... ignored, live: needs the sealed macOS feth stand and BPF access
+test macos::tests::adapter_tests::a_failed_final_read_keeps_the_last_known_value_or_none ... ok
+test macos::process::tests::thread_ids_contain_the_current_thread ... ok
+test macos::tests::adapter_tests::a_kernel_buffer_too_small_for_one_frame_is_refused_and_closed ... ok
+test lab_io::tests::the_silent_listener_binds_and_completes_the_first_handshake_on_any_unix ... ok
+test macos::tests::adapter_tests::a_stats_error_is_an_error_never_a_false_zero_or_a_cached_value ... ok
+test macos::tests::adapter_tests::bad_bindings_are_refused_before_any_descriptor_is_opened ... ok
+test macos::tests::adapter_tests::eacces_on_every_device_is_permission_denied_with_the_grant_hint ... ok
+test macos::tests::adapter_tests::ebusy_devices_are_skipped ... ok
+test macos::tests::adapter_tests::health_survives_the_u32_wrap ... ok
+test macos::tests::adapter_tests::io_budget_leaves_margin_below_the_50ms_contract ... ok
+test macos::tests::adapter_tests::health_reports_cumulative_drops_from_the_open_baseline ... ok
+test macos::tests::adapter_tests::net_stats_final_totals_survive_closing_the_handles ... ok
+test macos::tests::adapter_tests::a_worker_panic_ends_the_run_and_closes_every_descriptor ... ok
+test macos::tests::adapter_tests::no_nodes_at_all_is_a_system_error ... ok
+test macos::tests::adapter_tests::every_open_failure_after_the_first_fd_closes_both ... ok
+test macos::tests::adapter_tests::an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends ... ok
+test macos::tests::adapter_tests::open_configures_rx_then_tx_exactly_as_documented ... ok
+test macos::tests::adapter_tests::non_ethernet_dlt_is_unsupported_link_and_closes ... ok
+test macos::tests::adapter_tests::own_mac_filter_program_bytes_are_exact ... ok
+test macos::tests::adapter_tests::own_mac_filter_interpreted_drops_own_and_accepts_peer ... ok
+test macos::tests::adapter_tests::parse_record_advances_by_wordalign_and_tolerates_a_missing_final_pad ... ok
+test macos::tests::adapter_tests::rx_and_stats_hit_only_the_rx_descriptor_writes_only_the_tx_descriptor_and_each_closes_once ... ok
+test macos::tests::adapter_tests::rx_caplen_shorter_than_datalen_is_truncated_not_returned ... ok
+test macos::tests::adapter_tests::rx_fatal_read_errno_closes_the_fd ... ok
+test macos::tests::adapter_tests::rx_frame_larger_than_callers_buffer_is_dropped_and_counted ... ok
+test lab_io::tests::ordinary_listener_semantics_are_those_of_the_standard_library ... ok
+test macos::tests::adapter_tests::rx_own_mac_frames_are_dropped_before_the_caller_sees_them ... ok
+test macos::tests::adapter_tests::rx_peer_syn_ack_and_rst_are_never_filtered_and_parse_as_replies ... ok
+test macos::tests::adapter_tests::rx_poll_failure_is_fatal ... ok
+test macos::tests::adapter_tests::rx_reads_use_the_buffer_length_the_kernel_reported ... ok
+test macos::tests::adapter_tests::rx_malformed_header_is_fatal_and_closes_the_fd ... ok
+test macos::tests::adapter_tests::rx_record_shorter_than_an_ethernet_header_is_dropped_as_truncated ... ok
+test macos::tests::adapter_tests::rx_record_walk_uses_bh_hdrlen_and_wordalign ... ok
+test macos::tests::adapter_tests::setup_errors_map_to_the_documented_kinds ... ok
+test macos::tests::adapter_tests::tx_eagain_is_treated_like_enobufs ... ok
+test lab_io::tests::sigterm_sigint_and_sighup_set_the_flag_and_install_clears_it ... ok
+test macos::tests::adapter_tests::tx_emsgsize_is_an_io_error_and_the_fd_stays_open ... ok
+test macos::tests::adapter_tests::tx_enobufs_then_success_is_sent_once ... ok
+test macos::tests::adapter_tests::rx_garbage_stream_cannot_extend_the_deadline ... ok
+test macos::tests::adapter_tests::tx_fatal_errno_closes_the_fd_and_later_calls_fail ... ok
+test macos::tests::adapter_tests::tx_frame_length_is_checked_before_any_write ... ok
+test macos::tests::adapter_tests::tx_full_write_is_sent ... ok
+test macos::tests::adapter_tests::tx_partial_write_is_uncertain_and_keeps_fd_open ... ok
+test macos::tests::adapter_tests::rx_readiness_without_records_keeps_waiting_until_the_deadline ... ok
+test macos::tests::iface_tests::a_nonexistent_interface_is_a_mismatch ... ok
+test macos::tests::iface_tests::binding_matching_the_os_yields_the_ifindex ... ok
+test macos::tests::iface_tests::hostile_interface_names_never_reach_the_os ... ok
+test macos::tests::iface_tests::iface_existence_does_not_depend_on_the_mac ... ok
+test macos::tests::adapter_tests::tx_eintr_flood_does_not_extend_the_deadline ... ok
+test macos::tests::iface_tests::lo0_is_not_ethernet ... ok
+test macos::tests::iface_tests::masked_placeholder_mac_is_unknown_never_a_value ... ok
+test macos::tests::iface_tests::missing_interface_is_a_mismatch ... ok
+test macos::tests::iface_tests::nic_mac_of_lo0_is_none ... ok
+test macos::tests::iface_tests::non_ethernet_interface_is_unsupported_link ... ok
+test macos::tests::iface_tests::non_ethernet_link_type_is_rejected_before_any_os_query ... ok
+test macos::tests::iface_tests::parse_link_reads_past_the_twelve_declared_data_bytes ... ok
+test macos::tests::iface_tests::parse_link_reads_the_mac_after_the_name ... ok
+test macos::tests::iface_tests::parse_link_rejects_hostile_lengths_without_reading_out_of_bounds ... ok
+test macos::tests::iface_tests::source_ip_and_mac_are_not_validated_against_the_os ... ok
+test macos::tests::layout_tests::ioc_reproduces_every_libc_constant ... ok
+test macos::tests::layout_tests::ioctl_ptr_refuses_an_argument_whose_size_differs_from_the_request ... ok
+test macos::tests::layout_tests::own_constants_are_derived_from_the_ioc_formula ... ok
+test macos::tests::layout_tests::own_constants_match_the_sdk_header ... ok
+test macos::tests::layout_tests::portable_errno_and_header_constants_match_libc ... ok
+test macos::tests::layout_tests::struct_layouts_match_lp64 ... ok
+test macos::tests::layout_tests::wordalign_rounds_up_to_four ... ok
+test macos::tests::iface_tests::inventory_lists_lo0_and_bpf0_without_opening_anything ... ok
+test windows::tests::activate_error_codes_are_mapped ... ok
+test windows::tests::adapter_tests::a_bad_length_anywhere_in_the_batch_sends_nothing_and_is_an_io_error ... ok
+test windows::tests::adapter_tests::a_boundary_partial_is_all_uncertain_and_the_prefix_is_not_counted ... ok
+test windows::tests::adapter_tests::a_failed_final_read_keeps_the_last_known_value_or_none ... ok
+test windows::tests::adapter_tests::a_frame_is_copied_before_the_next_pcap_call ... ok
+test macos::tests::adapter_tests::rx_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test macos::tests::adapter_tests::rx_poll_eintr_backs_off_bounded_and_keeps_deadline ... ok
+test macos::spike::flood_tests::finish_still_returns_the_counters ... ok
+test windows::tests::adapter_tests::a_frame_larger_than_the_callers_buffer_is_dropped_and_counted ... ok
+test macos::tests::adapter_tests::tx_enobufs_until_deadline_is_would_block_unsent ... ok
+test macos::spike::flood_tests::a_panic_while_the_flood_is_active_stops_and_joins_the_worker ... ok
+test macos::tests::adapter_tests::rx_one_read_with_three_records_yields_three_frames ... ok
+test macos::tests::adapter_tests::tx_timeout_is_capped_at_the_budget ... ok
+test macos::tests::adapter_tests::rx_empty_poll_times_out_within_the_deadline ... ok
+test macos::tests::adapter_tests::stop_ends_the_run_quickly_and_nothing_is_sent_afterwards ... ok
+test macos::tests::adapter_tests::rx_loss_and_stats_errors_fail_the_run_and_keep_the_results ... ok
+test windows::tests::adapter_tests::a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent ... ok
+test windows::tests::adapter_tests::a_full_transmit_is_sent_exactly_n_and_counts_one_batch ... ok
+test windows::tests::adapter_tests::a_returned_frame_is_the_exact_pcap_frame_and_counted ... ok
+test macos::tests::adapter_tests::a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent ... ok
+test windows::tests::adapter_tests::a_short_timeout_is_honoured_and_a_long_one_is_clamped ... ok
+test windows::tests::adapter_tests::a_single_send_longer_than_fifty_ms_is_counted_over_budget ... ok
+test windows::tests::adapter_tests::a_stats_error_is_an_error_never_a_false_zero_or_a_cached_value ... ok
+test windows::tests::adapter_tests::a_straddling_partial_is_all_uncertain ... ok
+test windows::tests::adapter_tests::a_stream_of_garbage_does_not_extend_the_deadline ... ok
+test windows::tests::adapter_tests::a_worker_panic_ends_the_run_and_closes_every_handle ... ok
+test windows::tests::adapter_tests::an_oversized_batch_is_refused_before_queueing ... ok
+test windows::tests::adapter_tests::an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends ... ok
+test windows::tests::adapter_tests::any_nonzero_send_rc_is_uncertain_without_a_retry_and_ignores_the_driver_text ... ok
+test windows::tests::adapter_tests::bad_bindings_are_refused_before_the_driver_is_touched ... ok
+test windows::tests::adapter_tests::bytes_over_queued_is_all_uncertain ... ok
+test windows::tests::adapter_tests::concurrent_first_loads_run_the_loader_once ... ok
+test windows::tests::adapter_tests::engine_partial_transmit_fails_uncertain_without_checkpoint_or_more_batches ... ok
+test windows::tests::adapter_tests::engine_scan_through_fake_sendqueue_completes_with_exactly_one_advance_per_sent ... ok
+test windows::tests::adapter_tests::engine_stop_between_batches_sends_nothing_afterwards ... ok
+test windows::tests::adapter_tests::every_open_failure_after_the_first_handle_closes_all_handles_before_unload ... ok
+test windows::tests::adapter_tests::one_frame_batches_use_sendpacket_not_the_queue ... ok
+test windows::tests::adapter_tests::health_survives_the_u32_wrap ... ok
+test windows::tests::adapter_tests::open_allocates_one_queue_after_the_tx_handle_and_before_rx ... ok
+test windows::tests::adapter_tests::load_is_shared_while_an_owner_lives_reloaded_after_and_failure_is_not_cached ... ok
+test windows::tests::adapter_tests::malformed_library_output_is_a_fatal_error_that_closes_the_handle ... ok
+test windows::tests::adapter_tests::missing_or_failing_pcap_init_is_not_fatal_and_is_reported ... ok
+test windows::tests::adapter_tests::net_stats_batches_and_max_survive_closing ... ok
+test windows::tests::adapter_tests::net_stats_final_totals_survive_closing_the_handles ... ok
+test windows::tests::adapter_tests::next_ex_error_and_eof_are_fatal_and_carry_the_driver_text ... ok
+test windows::tests::adapter_tests::pre_send_validation_errors_are_io_errors_and_never_reach_the_driver ... ok
+test windows::tests::adapter_tests::nothing_accepted_is_all_uncertain_and_the_driver_text_decides_nothing ... ok
+test windows::tests::adapter_tests::health_reports_the_cumulative_per_attempt_drop_count ... ok
+test windows::tests::adapter_tests::runt_frames_pass_through_without_panicking ... ok
+test windows::tests::adapter_tests::own_transmitted_frames_are_dropped_before_the_caller_sees_them ... ok
+test windows::tests::adapter_tests::open_configures_two_handles_exactly_as_documented ... ok
+test windows::tests::adapter_tests::pause_resume_through_batches_has_no_gap_or_duplicate ... ok
+test windows::tests::adapter_tests::the_outcome_is_sent_only_when_every_queued_byte_was_accepted ... ok
+test macos::tests::adapter_tests::pause_stops_tx_then_resume_continues_without_gaps_or_duplicates ... ok
+test windows::tests::adapter_tests::pause_stops_tx_then_resume_continues_without_gaps_or_duplicates ... ok
+test windows::tests::adapter_tests::pcap_init_utf8_runs_before_any_other_call_into_the_library ... ok
+test windows::tests::adapter_tests::peer_syn_ack_and_rst_are_never_filtered_and_parse_as_replies ... ok
+test windows::tests::adapter_tests::non_ethernet_device_is_refused_and_closed ... ok
+test windows::tests::adapter_tests::queue_full_is_an_io_error_and_nothing_was_transmitted ... ok
+test windows::tests::adapter_tests::queue_is_empty_after_every_outcome ... ok
+test windows::tests::close_after_partial_open_precedes_unload ... ok
+test windows::tests::adapter_tests::rx_and_stats_hit_only_the_rx_handle_sends_only_the_tx_handle_and_each_closes_once ... ok
+test windows::tests::dll_path_is_built_from_an_absolute_system_directory_only ... ok
+test windows::tests::drop_counter_baseline_is_subtracted ... ok
+test windows::tests::drop_counter_is_cumulative_and_idempotent_on_repeated_reads ... ok
+test windows::tests::drop_counter_reset_looks_like_a_wrap_and_fails_safe ... ok
+test windows::tests::drop_counter_survives_u32_wraparound ... ok
+test windows::tests::adapter_tests::rx_loss_and_stats_errors_fail_the_run_and_keep_the_results ... ok
+test windows::tests::adapter_tests::send_rc_zero_is_sent_exactly_once ... ok
+test windows::tests::adapter_tests::sendqueue_is_destroyed_before_the_tx_handle_closes ... ok
+test windows::tests::enumerates_devices_and_frees_the_list_once ... ok
+test windows::tests::errbuf_text_is_bounded_when_the_buffer_has_no_nul ... ok
+test windows::tests::errbuf_text_stops_at_the_first_nul ... ok
+test windows::tests::ethernet_is_accepted_loopback_and_monitor_are_unsupported_link ... ok
+test windows::tests::adapter_tests::stop_ends_the_run_quickly_and_nothing_is_sent_afterwards ... ok
+test windows::tests::adapter_tests::truncated_frames_are_counted_and_dropped_not_returned ... ok
+test windows::tests::adapter_tests::tx_mode_is_sendqueue_with_the_cap ... ok
+test windows::tests::adapter_tests::unknown_device_name_never_creates_a_handle ... ok
+test windows::tests::clear_resets_len_and_records ... ok
+test windows::tests::adapter_tests::idle_rx_waits_to_the_internal_budget_and_never_longer ... ok
+test windows::tests::create_failure_leaves_nothing_to_close ... ok
+test windows::tests::diagnostic_paths_compare_case_insensitively ... ok
+test windows::tests::dll_missing_is_driver_unavailable_and_nothing_to_unload ... ok
+test windows::tests::empty_device_list_is_ok_and_not_freed ... ok
+test windows::tests::npf_guid_is_extracted_only_from_a_wellformed_device_name ... ok
+test windows::tests::ownership_types_have_the_intended_auto_traits ... ok
+test windows::tests::adapter_tests::transmit_longer_than_fifty_ms_is_counted_over_budget ... ok
+test windows::tests::findalldevs_failure_is_reported ... ok
+test windows::tests::handle_moves_to_another_thread_and_closes_there_before_unload ... ok
+test windows::tests::init_failure_null_version_is_driver_unavailable_and_unloads ... ok
+test windows::tests::inventory_lists_devices_without_opening_or_sending ... ok
+test windows::tests::inventory_reports_enumeration_failure ... ok
+test windows::tests::library_unloads_only_after_both_handles_close ... ok
+test windows::tests::queue_outliving_the_handle_still_unloads_last ... ok
+test windows::tests::missing_sendqueue_symbol_is_missing_capability_naming_it ... ok
+test windows::tests::required_symbols_are_unique_and_prefixed ... ok
+test windows::tests::missing_symbol_is_missing_capability_naming_it_and_unloads ... ok
+test windows::tests::resolve_accepts_a_name_at_the_length_limit_if_enumerated ... ok
+test windows::tests::open_ethernet_closes_a_non_ethernet_handle ... ok
+test windows::tests::other_os_failure_is_driver_unavailable ... ok
+test windows::tests::resolve_refuses_the_loopback_adapter_before_any_open ... ok
+test windows::tests::positive_activate_warning_is_accepted ... ok
+test windows::tests::push_raw_records_an_arbitrary_header_and_refuses_a_short_buffer ... ok
+test windows::tests::queue_full_at_makes_the_fake_refuse_by_record_count ... ok
+test windows::tests::resolve_with_an_empty_device_list_is_permission_denied ... ok
+test windows::tests::null_symbol_address_is_rejected_as_missing_not_transmuted ... ok
+test windows::tests::resolve_accepts_backslash_name_any_case_and_returns_canonical ... ok
+test windows::tests::sendqueue_abi_layout_matches_the_npcap_header ... ok
+test windows::tests::packet_dll_from_another_directory_is_rejected ... ok
+test windows::tests::resolve_rejects_nul_empty_long_and_unknown ... ok
+test windows::tests::resolve_unknown_name_among_real_adapters_stays_interface_mismatch ... ok
+test windows::tests::missing_packet_dll_is_rejected_and_unloads ... ok
+test windows::tests::resolve_with_only_loopback_visible_is_permission_denied ... ok
+test windows::tests::sha256_known_vector ... ok
+test windows::tests::sendqueue_alloc_null_is_a_system_error ... ok
+test windows::tests::sendqueue_destroy_precedes_close_and_unload ... ok
+test windows::tests::sendqueue_push_records_header_plus_frame_and_full_is_minus_one ... ok
+test windows::tests::transmit_returns_the_scripted_bytes_and_passes_sync_zero ... ok
+test windows::tests::successful_load_exposes_version_and_diagnostics ... ok
+test windows::tests::transmit_sync_true_is_passed_as_one ... ok
+test windows::tests::transmitted_frames_reach_the_responder_and_the_echo_in_queue_order ... ok
+test windows::tests::untrusted_module_is_rejected_before_any_export_runs ... ok
+test windows::tests::windows_abi_layout_matches_the_npcap_headers ... ok
+test windows::tests::wpcap_loaded_from_an_unrequested_path_is_rejected ... ok
+test windows::tests::wrong_architecture_is_abi_mismatch ... ok
+
+test result: ok. 193 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 16.11s
+
+     Running tests/linux_io.rs (target/debug/deps/linux_io-cc8a45364d66ac9e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/linux_wire.rs (target/debug/deps/linux_wire-fdb17741641708c9)
+
+running 12 tests
+test lab_all_recorded_checks_pass_none_failed_none_not_run ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_pause_resume_pcap_concat_equals_continuous_trace ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_perf_matrix_is_complete_and_invalid_cells_are_never_normalised ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_PERF_RESULTS (see module docs)
+test lab_rejected_resumes_never_open_the_adapter_or_touch_the_wire ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_rust_syn_stream_equals_c_oracle_for_every_case_and_run ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test lab_veth_removal_fails_diagnosably_without_a_checkpoint ... ignored, sealed-lab artifacts: set RMASSCAN_WIRE_RESULTS (see module docs)
+test pcap_parser_is_strict ... ok
+test pause_plus_resume_must_equal_continuous_and_detects_seam_defects ... ok
+test syn_filter_ignores_other_frames ... ok
+test rust_suite_acceptance_rejects_an_interface_drop - should panic ... ok
+test rust_suite_acceptance_rejects_a_witness_meta_with_kernel_drops - should panic ... ok
+test rust_suite_acceptance_accepts_tcpdump_witness_metas ... ok
+
+test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/macos_live.rs (target/debug/deps/macos_live-599a01c3720693fd)
+
+running 6 tests
+test a_full_scan_through_the_engine_completes_with_exactly_one_advance_per_sent ... ignored, live: needs the sealed feth stand (see module docs)
+test an_uncertain_send_fails_the_run_without_checkpoint_retry_or_more_sends ... ignored, live: needs the sealed feth stand (see module docs)
+test pause_stops_tx_then_resume_continues_without_gaps_or_duplicates ... ignored, live: needs the sealed feth stand (see module docs)
+test per_call_latency_stays_within_the_io_budget ... ignored, live: needs the sealed feth stand (see module docs)
+test rx_loss_from_a_stalled_reader_fails_the_run_and_keeps_the_results ... ignored, live: needs the sealed feth stand (see module docs)
+test stop_ends_the_run_quickly_and_nothing_is_sent_afterwards ... ignored, live: needs the sealed feth stand (see module docs)
+
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_io.rs (target/debug/deps/windows_io-615ec96b605c788b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/windows_live.rs (target/debug/deps/windows_live-89ec523ea1ef059d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/wire_scan.rs (target/debug/examples/wire_scan-ff10ec6a8cf9bd4d)
+
+running 28 tests
+test support::metrics::tests::unavailable_is_null_never_zero ... ok
+test support::metrics::tests::process_sample_fields_are_some_on_macos ... ok
+test tests::denied_or_missing_npcap_maps_to_exit_5 ... ok
+test support::tests::json_escaping ... ok
+test tests::inventory_does_not_combine_with_other_modes ... ok
+test tests::harness_forwards_max_batch ... ok
+test tests::default_run_without_explicit_parameters_does_not_start_a_scan ... ok
+test tests::npcap_block_off_windows_says_it_does_not_apply_and_never_claims_raw_io_is_missing ... ok
+test tests::pause_after_inside_a_batch_cuts_the_batch_exactly_at_n ... ok
+test support::tests::identity_has_commit_hash_os_abi ... ok
+test tests::post_send_failure_json_carries_the_mac_identity ... ok
+test tests::identity_names_the_sendqueue_mode_and_its_cap ... ok
+test tests::permission_denied_on_open_exits_5_with_the_open_stage ... ok
+test tests::every_failure_json_carries_the_identity ... ok
+test support::tests::identity_has_raw_io_abi_and_os_version ... ok
+test tests::corrupt_checkpoint_is_rejected_before_adapter_open ... ok
+test tests::mismatched_checkpoint_is_rejected_before_adapter_open ... ok
+test tests::checkpoint_beyond_the_range_is_rejected_before_adapter_open ... ok
+test tests::job_is_recorded_in_reference_forge_and_preflight_errors ... ok
+test tests::zero_result_capacity_is_rejected_at_argument_parsing ... ok
+test tests::reference_pcap_is_reproducible_and_needs_an_explicit_src_mac ... ok
+test tests::reference_pcap_mode_needs_no_bpf ... ok
+test tests::reference_pcap_touches_neither_the_dll_nor_the_adapter ... ok
+test tests::inventory_mode_never_opens_bpf_or_sends ... ok
+test tests::failure_after_sending_reports_the_real_tx_counters ... ok
+test tests::success_json_reports_engine_threads_and_wall_clock ... ok
+test tests::success_json_carries_the_tx_mode_and_the_batch_counters ... ok
+test tests::macos_requires_src_mac_and_checks_it_against_the_interface ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+

@@ -1,0 +1,315 @@
+{
+  "schema": 1,
+  "stage": "pause",
+  "process_id": 15735,
+  "prior_attempt_hex": null,
+  "started_utc": "2026-10-27T11:00:17.078Z",
+  "result": "ok",
+  "plan": [
+    {
+      "tag": "restart",
+      "job": {
+        "targets": "198.18.0.2",
+        "ports": "8000-8031",
+        "exclusions": "",
+        "seed": "2",
+        "rate": 4,
+        "backend": "MacFeth"
+      },
+      "scan_id_hex": "8d7d08c7712032555448f87b11724582",
+      "rows_seen": 7,
+      "started_utc": "2026-10-27T11:00:30.246Z",
+      "finished_utc": "2026-10-27T11:00:35.017Z",
+      "finished_status": "Paused",
+      "paused_next_index": 7,
+      "pause_to_paused_ms": 3094,
+      "stop_to_stopped_ms": null
+    }
+  ],
+  "events": [
+    {
+      "utc": "2026-10-27T11:00:17.078Z",
+      "mono_ms": 391,
+      "kind": "History",
+      "status": "",
+      "detail": "0 scans, selected none"
+    },
+    {
+      "utc": "2026-10-27T11:00:17.129Z",
+      "mono_ms": 442,
+      "kind": "Authorization",
+      "status": "busy",
+      "detail": "Waiting for system authorization…",
+      "authorized": false
+    },
+    {
+      "utc": "2026-10-27T11:00:30.043Z",
+      "mono_ms": 13356,
+      "kind": "Authorization",
+      "status": "idle",
+      "detail": "Runner authorized for this session; checking isolated network…",
+      "authorized": true
+    },
+    {
+      "utc": "2026-10-27T11:00:30.145Z",
+      "mono_ms": 13458,
+      "kind": "Notice",
+      "status": "",
+      "detail": "Network preflight passed: Isolated feth preflight passed; no packets sent"
+    },
+    {
+      "utc": "2026-10-27T11:00:30.297Z",
+      "mono_ms": 13610,
+      "kind": "State",
+      "status": "Starting",
+      "detail": "Starting scanner"
+    },
+    {
+      "utc": "2026-10-27T11:00:30.398Z",
+      "mono_ms": 13710,
+      "kind": "State",
+      "status": "Scanning",
+      "detail": "Scanning 32 endpoints"
+    },
+    {
+      "utc": "2026-10-27T11:00:30.702Z",
+      "mono_ms": 14015,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-27T11:00:30.702Z",
+      "mono_ms": 14015,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-27T11:00:30.702Z",
+      "mono_ms": 14015,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 2 received 2"
+    },
+    {
+      "utc": "2026-10-27T11:00:31.163Z",
+      "mono_ms": 14476,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-27T11:00:31.163Z",
+      "mono_ms": 14476,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 3 received 3"
+    },
+    {
+      "utc": "2026-10-27T11:00:31.417Z",
+      "mono_ms": 14730,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-27T11:00:31.417Z",
+      "mono_ms": 14730,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 4 received 4"
+    },
+    {
+      "utc": "2026-10-27T11:00:31.670Z",
+      "mono_ms": 14982,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-27T11:00:31.670Z",
+      "mono_ms": 14983,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 5 received 5"
+    },
+    {
+      "utc": "2026-10-27T11:00:31.670Z",
+      "mono_ms": 14983,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-27T11:00:31.974Z",
+      "mono_ms": 15287,
+      "kind": "State",
+      "status": "Saving",
+      "detail": "Pausing and draining replies…"
+    },
+    {
+      "utc": "2026-10-27T11:00:31.974Z",
+      "mono_ms": 15287,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 6 received 6"
+    },
+    {
+      "utc": "2026-10-27T11:00:31.974Z",
+      "mono_ms": 15287,
+      "kind": "Rows",
+      "status": "",
+      "detail": "",
+      "rows": 1
+    },
+    {
+      "utc": "2026-10-27T11:00:32.276Z",
+      "mono_ms": 15589,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:32.530Z",
+      "mono_ms": 15843,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:32.785Z",
+      "mono_ms": 16098,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:33.039Z",
+      "mono_ms": 16352,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:33.345Z",
+      "mono_ms": 16657,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:33.649Z",
+      "mono_ms": 16962,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:33.902Z",
+      "mono_ms": 17215,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:34.207Z",
+      "mono_ms": 17520,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:34.461Z",
+      "mono_ms": 17774,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:34.714Z",
+      "mono_ms": 18027,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:35.017Z",
+      "mono_ms": 18330,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:35.017Z",
+      "mono_ms": 18330,
+      "kind": "Progress",
+      "status": "",
+      "detail": "sent 7 received 7"
+    },
+    {
+      "utc": "2026-10-27T11:00:35.017Z",
+      "mono_ms": 18330,
+      "kind": "State",
+      "status": "Saving",
+      "detail": "Checkpoint saved; confirming pause…"
+    },
+    {
+      "utc": "2026-10-27T11:00:35.017Z",
+      "mono_ms": 18330,
+      "kind": "State",
+      "status": "Paused",
+      "detail": "Checkpoint committed by Studio"
+    },
+    {
+      "utc": "2026-10-27T11:00:35.017Z",
+      "mono_ms": 18330,
+      "kind": "History",
+      "status": "",
+      "detail": "1 scans, selected 8d7d08c7712032555448f87b11724582"
+    },
+    {
+      "utc": "2026-10-27T11:00:35.169Z",
+      "mono_ms": 18482,
+      "kind": "Authorization",
+      "status": "idle",
+      "detail": "Runner session closed",
+      "authorized": false
+    },
+    {
+      "utc": "2026-10-27T11:00:35.169Z",
+      "mono_ms": 18482,
+      "kind": "Notice",
+      "status": "",
+      "detail": "Runner session closed"
+    }
+  ],
+  "actions": [
+    {
+      "utc": "2026-10-27T11:00:17.078Z",
+      "mono_ms": 391,
+      "action": "Authorize"
+    },
+    {
+      "utc": "2026-10-27T11:00:30.246Z",
+      "mono_ms": 13559,
+      "action": "Start:restart"
+    },
+    {
+      "utc": "2026-10-27T11:00:31.923Z",
+      "mono_ms": 15236,
+      "action": "Pause"
+    },
+    {
+      "utc": "2026-10-27T11:00:35.118Z",
+      "mono_ms": 18431,
+      "action": "Lock"
+    }
+  ]
+}

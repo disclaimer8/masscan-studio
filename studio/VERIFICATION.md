@@ -747,3 +747,18 @@ Final code `6b1deb5d0f88a1f31efb1d9f5eb538401bc66d85` (manifest `dirty: false`):
 Evidence: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance-raw/` (hashes in `MANIFEST.sha256`). Report and
 status words: `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`. GO (feth) there is conditional on green CI
 on the exact HEAD and an APPROVED final review.
+
+## 2026-10-27 — restart and guard follow-up
+
+Separate pause-exit, resume-saved and guard UI stages and their independent
+packet/history verifier are implemented. Live source/build `35b063c`:
+restart Resume **PASS 4/4** across PIDs 15735/16068, index 7 followed by the exact
+remaining 25 probes, all 32 rows retained (8 open). Lab ARP interruption **PASS
+2/2**, Interrupted after 1142 ms, 113 rows retained and no checkpoint. The actual
+mapping was restored and witnessed. Zero uplink lab packets in every window.
+The stand was removed and all 16 BPF nodes returned to `0600 root:wheel`.
+[Report, procedure and evidence](../docs/experiments/2026-10-27-studio-restart-guard.md).
+This closes restart and the controlled ARP guard path on Mac feth only; sleep,
+VPN, physical NIC and Windows/Linux raw remain open. Code-head CI is green on
+all three OSes; local Studio 159/0 (2 ignored), rmasscan 1306/0 (23 ignored),
+portable lab 744/0 (1 ignored). The delivery commit changes documentation only.

@@ -338,6 +338,8 @@ mod rtsock {
     pub(crate) const RTF_UP: i32 = 0x1;
     pub(crate) const RTF_GATEWAY: i32 = 0x2;
     pub(crate) const RTF_REJECT: i32 = 0x8;
+    /// Маршрут хоста с записью канального уровня (ARP); XNU ставит ему `RTF_REJECT` на `arpt_down` после неудачного ARP.
+    pub(crate) const RTF_LLINFO: i32 = 0x400;
     pub(crate) const RTF_BLACKHOLE: i32 = 0x1000;
     pub(crate) const RTF_LOCAL: i32 = 0x20_0000;
     pub(crate) const AF_LINK: u8 = 18;
@@ -351,6 +353,8 @@ mod rtsock {
     pub(crate) const OFF_PID: usize = 16;
     pub(crate) const OFF_SEQ: usize = 20;
     pub(crate) const OFF_ERRNO: usize = 24;
+    /// Общий заголовок сообщений route socket: `msglen` (u16), `version`, `type`.
+    const COMMON_HDR_LEN: usize = 4;
     const RTAX_GATEWAY: usize = 1;
     const RTAX_IFP: usize = 4;
     const RTAX_MAX: usize = 8;
@@ -395,19 +399,21 @@ mod rtsock {
         b
     }
 
-    /// Одно сообщение route socket. Чужие `rtm_seq`/`rtm_pid` → `Ok(None)` (сокет видит сообщения всей системы);
-    /// своё с `rtm_errno` или искажённое → `Err`.
+    /// Одно сообщение route socket. Чужие тип (в том числе короче `rt_msghdr`), `rtm_seq` или `rtm_pid` → `Ok(None)`
+    /// (сокет видит сообщения всей системы); своё с `rtm_errno`, `RTM_GET` короче `rt_msghdr` или искажённое → `Err`.
     pub(crate) fn parse_rt_reply(
         buf: &[u8],
         seq: i32,
         pid: i32,
     ) -> Result<Option<RtReply>, String> {
         let field = |at: usize| i32_at(buf, at).ok_or("short rt_msghdr");
-        if buf.len() < RT_MSGHDR_LEN {
-            return Err(format!("short rt_msghdr ({} bytes)", buf.len()));
+        // Общий заголовок всех сообщений route socket (`msglen`, `version`, `type`): по нему чужие типы короче
+        // `rt_msghdr` (`ifa_msghdr` 20 байт, `ifma_msghdr` 16 байт) пропускаются, а не считаются искажёнными.
+        if buf.len() < COMMON_HDR_LEN {
+            return Err(format!("short route message ({} bytes)", buf.len()));
         }
-        let msglen = usize::from(u16_at(buf, OFF_MSGLEN).ok_or("short rt_msghdr")?);
-        if msglen < RT_MSGHDR_LEN || msglen > buf.len() {
+        let msglen = usize::from(u16_at(buf, OFF_MSGLEN).ok_or("short route message")?);
+        if msglen < COMMON_HDR_LEN || msglen > buf.len() {
             return Err(format!(
                 "rtm_msglen {msglen} out of bounds ({} read)",
                 buf.len()
@@ -419,7 +425,13 @@ mod rtsock {
                 buf[OFF_VERSION]
             ));
         }
-        if field(OFF_SEQ)? != seq || field(OFF_PID)? != pid || buf[OFF_TYPE] != RTM_GET {
+        if buf[OFF_TYPE] != RTM_GET {
+            return Ok(None);
+        }
+        if msglen < RT_MSGHDR_LEN {
+            return Err(format!("short rt_msghdr ({msglen} bytes)"));
+        }
+        if field(OFF_SEQ)? != seq || field(OFF_PID)? != pid {
             return Ok(None);
         }
         let errno = field(OFF_ERRNO)?;
@@ -472,9 +484,11 @@ mod rtsock {
     }
 
     /// Ответ → [`Route`]: `RTF_LOCAL` или `lo0` это адрес хоста; шлюз только `sockaddr_in` при `RTF_GATEWAY`
-    /// (`sockaddr_dl` это on-link); `RTF_REJECT`/`RTF_BLACKHOLE` это «нет маршрута».
+    /// (`sockaddr_dl` это on-link); `RTF_REJECT`/`RTF_BLACKHOLE` без `RTF_LLINFO` это «нет маршрута».
     pub(crate) fn route_from_rt(r: &RtReply) -> Option<Route> {
-        if r.flags & (RTF_REJECT | RTF_BLACKHOLE) != 0 {
+        // llinfo-маршрут хоста с RTF_REJECT это сосед, чей ARP только что не удался (XNU `arpt_down`): он остаётся
+        // on-link, иначе следующий скан той же цели получил бы «нет маршрута».
+        if r.flags & (RTF_REJECT | RTF_BLACKHOLE) != 0 && r.flags & RTF_LLINFO == 0 {
             return None;
         }
         let ifname = r.ifp.clone().unwrap_or_default();

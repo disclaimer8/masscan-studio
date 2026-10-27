@@ -674,12 +674,14 @@ fn rt_reply_rtf_local_or_lo0_is_local() {
 
 #[test]
 fn rt_reply_reject_or_blackhole_is_no_route() {
-    for flags in [RTF_REJECT, RTF_BLACKHOLE] {
+    // Без RTF_LLINFO reject/blackhole это «нет маршрута», и с on-link шлюзом тоже (ср. llinfo-тест ниже).
+    for flags in [RTF_REJECT, RTF_BLACKHOLE, RTF_REJECT | RTF_HOST] {
         let m = rt_msg(
             RTF_UP | flags,
             3,
             &[
                 (RTA_DST_BIT, sin(ip(192, 0, 2, 20))),
+                (RTA_GATEWAY_BIT, sdl(3, "", None)),
                 (RTA_IFP_BIT, sdl(3, "en12", None)),
             ],
             PID,
@@ -691,6 +693,105 @@ fn rt_reply_reject_or_blackhole_is_no_route() {
             None
         );
     }
+}
+
+const RTM_NEWADDR: u8 = 0xc;
+const RTM_NEWMADDR: u8 = 0xf;
+
+/// Сообщение `ifa_msghdr` (20 байт) или `ifma_msghdr` (16 байт) и его sockaddr: общий заголовок `msglen, version, type`,
+/// затем `addrs` по смещению 4; полей seq/pid у них нет.
+fn if_msg(ty: u8, hdr_len: usize, sas: &[Vec<u8>]) -> Vec<u8> {
+    let mut b = vec![0u8; hdr_len];
+    for sa in sas {
+        b.extend(sa);
+        let step = if sa[0] == 0 {
+            4
+        } else {
+            (usize::from(sa[0]) + 3) & !3
+        };
+        b.resize(b.len() + step - sa.len(), 0);
+    }
+    let len = b.len() as u16;
+    b[0..2].copy_from_slice(&len.to_ne_bytes());
+    b[2] = RTM_VERSION;
+    b[3] = ty;
+    b[4..8].copy_from_slice(&(RTA_NETMASK_BIT | RTA_IFP_BIT | RTA_IFA_BIT).to_ne_bytes());
+    b
+}
+
+#[test]
+fn rt_reply_foreign_short_messages_are_skipped() {
+    // RTM_NEWADDR (ifa_msghdr 20 байт + маска, sockaddr_dl, адрес) = 72 байта, короче rt_msghdr.
+    let newaddr = if_msg(
+        RTM_NEWADDR,
+        20,
+        &[
+            vec![7, AF_INET, 0, 0, 255, 255, 255],
+            sdl(7, "en12", Some([2, 0xac, 0, 0, 0, 1])),
+            sin(ip(192, 0, 2, 10)),
+        ],
+    );
+    assert!(newaddr.len() < RT_MSGHDR_LEN, "{} bytes", newaddr.len());
+    assert_eq!(parse_rt_reply(&newaddr, SEQ, PID), Ok(None));
+    // RTM_NEWMADDR (ifma_msghdr 16 байт + sockaddr_dl группы, sockaddr_dl интерфейса, адрес группы).
+    let newmaddr = if_msg(
+        RTM_NEWMADDR,
+        16,
+        &[
+            sdl(0, "", Some([1, 0, 0x5e, 0, 0, 1])),
+            sdl(7, "en12", None),
+            sin(ip(224, 0, 0, 1)),
+        ],
+    );
+    assert!(newmaddr.len() < RT_MSGHDR_LEN, "{} bytes", newmaddr.len());
+    assert_eq!(parse_rt_reply(&newmaddr, SEQ, PID), Ok(None));
+    // Только заголовок ifma_msghdr.
+    assert_eq!(
+        parse_rt_reply(&if_msg(RTM_NEWMADDR, 16, &[]), SEQ, PID),
+        Ok(None)
+    );
+    // Обрезанное чтение остаётся ошибкой и у короткого чужого сообщения: rtm_msglen больше прочитанного.
+    assert!(parse_rt_reply(&newaddr[..40], SEQ, PID).is_err());
+    // Меньше общего заголовка, msglen меньше заголовка, чужая версия.
+    assert!(parse_rt_reply(&newaddr[..3], SEQ, PID).is_err());
+    let mut tiny = newaddr.clone();
+    tiny[0..2].copy_from_slice(&3u16.to_ne_bytes());
+    assert!(parse_rt_reply(&tiny, SEQ, PID).is_err());
+    let mut v4 = newaddr.clone();
+    v4[2] = 4;
+    assert!(parse_rt_reply(&v4, SEQ, PID).is_err());
+    // RTM_GET короче rt_msghdr это искажённый ответ, а не чужое сообщение.
+    let mut short_get = newaddr.clone();
+    short_get[3] = RTM_GET;
+    assert!(parse_rt_reply(&short_get, SEQ, PID).is_err());
+}
+
+#[test]
+fn rt_reply_llinfo_reject_route_stays_on_link() {
+    // XNU после неудачного ARP помечает llinfo-маршрут хоста RTF_REJECT на arpt_down: это всё ещё on-link сосед.
+    let m = rt_msg(
+        RTF_UP | RTF_HOST | RTF_LLINFO | RTF_REJECT,
+        7,
+        &[
+            (RTA_DST_BIT, sin(ip(192, 0, 2, 20))),
+            (RTA_GATEWAY_BIT, sdl(7, "", None)),
+            (RTA_IFP_BIT, sdl(7, "en12", Some([2, 0xac, 0, 0, 0, 1]))),
+        ],
+        PID,
+        SEQ,
+        0,
+    );
+    let r = parse_rt_reply(&m, SEQ, PID).unwrap().unwrap();
+    assert!(r.gateway_is_link);
+    assert_eq!(
+        route_from_rt(&r),
+        Some(Route {
+            ifindex: 7,
+            ifname: "en12".into(),
+            gateway: None,
+            local: false,
+        })
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -711,11 +812,19 @@ fn rt_msghdr_layout_and_constants_match_libc() {
     assert_eq!(i32::from(RTM_GET), libc::RTM_GET);
     assert_eq!((RTA_DST_BIT, RTA_IFP_BIT), (libc::RTA_DST, libc::RTA_IFP));
     assert_eq!(
-        [RTF_UP, RTF_GATEWAY, RTF_REJECT, RTF_BLACKHOLE, RTF_LOCAL],
+        [
+            RTF_UP,
+            RTF_GATEWAY,
+            RTF_REJECT,
+            RTF_LLINFO,
+            RTF_BLACKHOLE,
+            RTF_LOCAL
+        ],
         [
             libc::RTF_UP,
             libc::RTF_GATEWAY,
             libc::RTF_REJECT,
+            libc::RTF_LLINFO,
             libc::RTF_BLACKHOLE,
             libc::RTF_LOCAL
         ]
@@ -726,6 +835,12 @@ fn rt_msghdr_layout_and_constants_match_libc() {
     );
     assert_eq!(size_of::<libc::sockaddr_in>(), 16);
     assert_eq!(offset_of!(libc::sockaddr_dl, sdl_data), 8);
+    assert_eq!(
+        (i32::from(RTM_NEWADDR), i32::from(RTM_NEWMADDR)),
+        (libc::RTM_NEWADDR, libc::RTM_NEWMADDR)
+    );
+    assert_eq!(size_of::<libc::ifa_msghdr>(), 20);
+    assert_eq!(size_of::<libc::ifma_msghdr>(), 16);
 }
 
 // ---------- Windows IP Helper ----------

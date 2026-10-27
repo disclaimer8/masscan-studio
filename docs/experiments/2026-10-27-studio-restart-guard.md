@@ -5,6 +5,11 @@ pause/resume and stop window to two application processes and an actual change
 observed by the production network guard. No engine/adapter changes, physical
 NIC, Windows raw, Linux raw, sleep or VPN acceptance is implied.
 
+**Accepted on 2026-10-27:** restart Resume PASS 4/4; ARP-triggered interruption
+PASS 2/2. Source/build `35b063cf943383765926fe1c417dcd8a6e36ca8d`, macOS 27.0.1,
+Apple Silicon, debug bundle. Both archived windows were independently rechecked.
+[Evidence and hashes](2026-10-27-studio-restart-guard-raw/README.md).
+
 ## Procedure
 
 Build a clean committed checkout with Homebrew SQLite:
@@ -85,9 +90,40 @@ the mutable private databases themselves stay outside the repository.
 
 ## Status
 
-Live restart and guard windows: **NOT RUN**. Offline test success is not a live
-acceptance result. Final build identity, runner hash and live evidence will be
-recorded here when measured.
+Live acceptance is limited to the exact Mac feth cases below. Offline test
+success is recorded separately.
+
+| Window | Observed result |
+| --- | --- |
+| `preflight-8107b89` | NOT RUN before children started: no stand, BPF grant or matching installed runner; VPN default route lacked a gateway. Preserved, not promoted. |
+| `pause-35b063c-r1` | PASS 2/2. PID 15735, durable Paused checkpoint at index 7 (120 bytes), 7 saved rows, pause ACK in 3094 ms; runner locked and process exited. |
+| `resume-35b063c-r1` paired with pause | PASS 4/4. New PID 16068 and engine attempt; identical saved scan/database before launch. Exact remaining 25 probes, final Completed with 32 rows (8 open), including the prior 7 rows. |
+| `guard-35b063c-r1` | PASS 2/2. Source ARP entry removed at 11:02:43.119Z, production guard Interrupted at 11:02:44.261Z: **1142 ms**. 113 rows retained, no checkpoint/resume index. Permanent mapping read back at 11:02:48.172Z. |
+
+The scoped ARP operation used the system authorization dialog, `arp -d`, a
+five-second wait and the existing checked `macos-lab link --up` restoration.
+An EXIT trap also requested restoration. Timestamps came from the system zsh
+`EPOCHREALTIME` around the actual commands, converted to UTC milliseconds;
+`guard-operator.log` preserves those raw values and return codes. No root process
+wrote to the user-owned evidence directory; the ordinary operator saved the
+returned record and scoped ARP output.
+
+All three windows: zero lab packets on `en0`, complete independent witnesses,
+zero reported kernel drops, clean closure and `raw_run_allowed: true` before
+and after. The user disabled VPN before setup; its behavior was not tested.
+After the final window, `down` removed the pair and revoked the grant:
+`/dev/bpf0..15` are `0600 root:wheel`, status reports no stand, and no Studio or
+tcpdump process remains. The ordinary default route stayed `en0` via its gateway.
+
+Build identity:
+
+- UI SHA-256: `305164bc2b8daa73546286c85e365dc29281b53ba6be61e5be6537f637746860`.
+- Runner (bundle = installed): `f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4`.
+- Laboratory verifier: `275c3e74570e1b107ad0681ad997036620519b874d5d6c6c157fffd3f32112d6`.
+- Clean build manifest and code-head CI are in `verification/`. Studio and
+  rmasscan passed macOS/Linux/Windows CI, including the Windows wire package.
+  The delivery commit adds only this report/evidence and verification status;
+  it does not change the tested code.
 
 Offline verification on the Mac after the single review fix pass:
 
@@ -103,10 +139,12 @@ Offline verification on the Mac after the single review fix pass:
   refused before launching children: stand absent, BPF access denied, new bundle
   runner not installed, and the current default route is VPN `ppp0` without a
   gateway. System networking and the installed runner were not changed.
-- PR #33 tracks delivery; exact-head CI and live windows are separate gates.
+- [PR #33](https://github.com/disclaimer8/masscan-studio/pull/33) tracks delivery;
+  its final documentation-head checks are separate from the archived code-head CI.
 
 Decisions: use the existing sealed lab restoration helper rather than a bare
 ARP command; if it cannot restore the mapping, keep the window invalid and
 restore the lab before continuing. Reviewer exclusions (physical NIC, other
-platforms, engine correctness and live timing) remain open/out of this branch's
-scope; none is inferred from these offline results.
+platforms and general engine correctness) remain open/out of this branch's
+scope; none is inferred from these results. The measured guard timing covers
+this ARP perturbation only, not sleep, VPN or physical link loss.

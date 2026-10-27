@@ -1,0 +1,12 @@
+{
+  "bundle_manifest_dirty": false,
+  "bundle_manifest_sha256": "7156cc9a130337b955995feb569eb6750af992a7ba025e5a050253191e2d07c5",
+  "dirty": false,
+  "git_head": "35b063cf943383765926fe1c417dcd8a6e36ca8d",
+  "inspect_sha256": "b0d7d8e9d05cfd246085d589c98bdb893e4dae8280546c03c94c0393e8565448",
+  "installed_runner_sha256": "f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4",
+  "lab_sha256": "275c3e74570e1b107ad0681ad997036620519b874d5d6c6c157fffd3f32112d6",
+  "lab_version": "rmasscan-lab 0.1.0 (Rust)",
+  "runner_sha256": "f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4",
+  "ui_sha256": "305164bc2b8daa73546286c85e365dc29281b53ba6be61e5be6537f637746860"
+}

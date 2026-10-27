@@ -1,0 +1,55 @@
+{
+  "bpf_access": "denied",
+  "checks": [
+    {
+      "detail": "no stand recorded at /var/run/rmasscan-lab/m1.json",
+      "name": "manifest",
+      "ok": false
+    },
+    {
+      "detail": "ifconfig feth4201: ifconfig: interface feth4201 does not exist",
+      "name": "interfaces",
+      "ok": false
+    },
+    {
+      "detail": "no recorded default route to compare with",
+      "name": "default_route",
+      "ok": false
+    },
+    {
+      "detail": "8.8.8.8 via ppp0",
+      "name": "routes",
+      "ok": true
+    },
+    {
+      "detail": "route to 198.18.0.1 goes through Some(\"ppp0\"), not the pair",
+      "name": "lab_routes",
+      "ok": false
+    },
+    {
+      "detail": "no permanent 198.18.0.1 -> 02:ac:00:00:00:01 entry on feth4202",
+      "name": "arp",
+      "ok": false
+    },
+    {
+      "detail": "no bridge has a feth member",
+      "name": "bridges",
+      "ok": true
+    },
+    {
+      "detail": "net.inet.ip.forwarding = 0",
+      "name": "forwarding",
+      "ok": true
+    },
+    {
+      "detail": "/dev/bpf0..15 exist",
+      "name": "bpf_nodes",
+      "ok": true
+    }
+  ],
+  "gateway": null,
+  "manifest": "/var/run/rmasscan-lab/m1.json",
+  "raw_run_allowed": false,
+  "run_id": "m1",
+  "uplink": "ppp0"
+}

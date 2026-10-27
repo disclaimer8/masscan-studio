@@ -1,0 +1,21 @@
+{
+  "cmd": [
+    "/usr/sbin/tcpdump",
+    "-p",
+    "-n",
+    "-U",
+    "-s",
+    "0",
+    "-i",
+    "feth4202",
+    "-w",
+    "peer.pcap",
+    "not (ether src 02:ac:00:00:00:02 and udp port 5353)"
+  ],
+  "exit_code": 0,
+  "filter": "not (ether src 02:ac:00:00:00:02 and udp port 5353)",
+  "interface": "feth4202",
+  "listening": true,
+  "start_utc": "2026-10-27T11:01:59.870Z",
+  "stop_utc": "2026-10-27T11:03:03.513Z"
+}

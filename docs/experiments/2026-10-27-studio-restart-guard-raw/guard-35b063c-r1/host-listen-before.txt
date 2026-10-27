@@ -1,0 +1,2 @@
+rc 0
+# not recorded: macOS hides the TCP table from processes started by ad-hoc-signed tools; replies are judged from the wire capture

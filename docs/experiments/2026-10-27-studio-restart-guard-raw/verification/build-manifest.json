@@ -1,0 +1,26 @@
+{
+  "arch": "aarch64",
+  "cargo_lock_sha256": "e097f2be8b6a0c2e37820ae2780abb6b56d6a90ccd4d6b24b2e033a0a665e31b",
+  "dirty": false,
+  "files": [
+    {
+      "path": "Masscan Studio.app/Contents/MacOS/studio-ui",
+      "sha256": "305164bc2b8daa73546286c85e365dc29281b53ba6be61e5be6537f637746860"
+    },
+    {
+      "path": "Masscan Studio.app/Contents/MacOS/studio-runner",
+      "sha256": "f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4"
+    },
+    {
+      "path": "Masscan Studio.app/Contents/MacOS/studio-inspect",
+      "sha256": "b0d7d8e9d05cfd246085d589c98bdb893e4dae8280546c03c94c0393e8565448"
+    },
+    {
+      "path": "Masscan Studio.app/Contents/Frameworks/libsqlite3.0.dylib",
+      "sha256": "39abc3b44cbf9d33d13311b7ae548ab7d93a7119ada4c44cb3f5ba18db340eba"
+    }
+  ],
+  "platform": "macos",
+  "profile": "debug",
+  "source_commit": "35b063cf943383765926fe1c417dcd8a6e36ca8d"
+}

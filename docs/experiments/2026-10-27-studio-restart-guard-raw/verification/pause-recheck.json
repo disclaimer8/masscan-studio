@@ -1,0 +1,755 @@
+{
+  "behaviour_fail": [],
+  "cases": [
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "compressed capture is not allowed; store captures uncompressed",
+          "name": "no compressed capture in the window directory",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "14",
+          "name": "peer.pcap complete pcap",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink.pcap complete pcap",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink saw zero lab packets",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink tcpdump counted zero frames matching the lab filter",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN from outside the binding or to anything but 198.18.0.2",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "uplink.err has tcpdump's exit statistics (clean exit)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "Some(0)",
+          "name": "uplink tcpdump dropped 0 packets by kernel",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "peer.err has tcpdump's exit statistics (clean exit)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "captured 14 frames 14 dropped 0",
+          "name": "peer capture complete: captured equals the pcap frames, 0 kernel drops",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "status-pre.json raw_run_allowed is true",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"granted\"",
+          "name": "status-pre.json bpf_access is granted",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "status-post.json raw_run_allowed is true",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "en0",
+          "name": "status-pre.json names the uplink (default-route interface, not feth)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"/usr/sbin/tcpdump\",\"-p\",\"-n\",\"-U\",\"-s\",\"0\",\"-i\",\"feth4202\",\"-w\",\"peer.pcap\",\"not (ether src 02:ac:00:00:00:02 and udp port 5353)\"]",
+          "name": "peer capture interface and filter are exact",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "peer.err banner names the interface feth4202",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "peer listening before the first action",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "peer tcpdump exited cleanly after the stop (exit code 0)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"2026-10-27T11:00:13.830Z\" .. \"2026-10-27T11:00:36.778Z\"",
+          "name": "peer start_utc and stop_utc are recorded",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"/usr/sbin/tcpdump\",\"-p\",\"-n\",\"-U\",\"-s\",\"0\",\"-i\",\"en0\",\"-w\",\"uplink.pcap\",\"net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5\"]",
+          "name": "uplink capture interface and filter are exact",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "uplink.err banner names the interface en0",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "uplink listening before the first action",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "uplink tcpdump exited cleanly after the stop (exit code 0)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"/usr/sbin/tcpdump\",\"-p\",\"-n\",\"-U\",\"-s\",\"0\",\"-i\",\"en0\",\"-w\",\"uplink.pcap\",\"net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5\"]",
+          "name": "uplink tcpdump is not promiscuous (the user's own NIC)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"2026-10-27T11:00:13.832Z\" .. \"2026-10-27T11:00:36.803Z\"",
+          "name": "uplink start_utc and stop_utc are recorded",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0 of 14 packets outside the recorded window",
+          "name": "peer capture packets fall inside the recorded window",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0 of 0 packets outside the recorded window",
+          "name": "uplink capture packets fall inside the recorded window",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "hashes-before-copy.txt matches the files",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"35b063cf943383765926fe1c417dcd8a6e36ca8d\"",
+          "name": "git_head is a 40-hex commit",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "ui \"305164bc2b8daa73546286c85e365dc29281b53ba6be61e5be6537f637746860\" runner \"f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4\" installed \"f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4\"",
+          "name": "ui, bundle runner and installed runner hashes are 64-hex",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "bundle f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4 installed f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4",
+          "name": "bundle runner hash equals the installed runner hash",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "false",
+          "name": "working tree was clean (dirty is false)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "expected 35b063cf943383765926fe1c417dcd8a6e36ca8d recorded 35b063cf943383765926fe1c417dcd8a6e36ca8d",
+          "name": "git_head equals the expected commit",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest 305164bc2b8daa73546286c85e365dc29281b53ba6be61e5be6537f637746860 provenance 305164bc2b8daa73546286c85e365dc29281b53ba6be61e5be6537f637746860",
+          "name": "bundle-manifest.json ui hash equals provenance ui_sha256",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4 provenance f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4",
+          "name": "bundle-manifest.json runner hash equals provenance runner_sha256",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest 35b063cf943383765926fe1c417dcd8a6e36ca8d provenance 35b063cf943383765926fe1c417dcd8a6e36ca8d",
+          "name": "bundle-manifest.json source_commit equals provenance git_head",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "window.json has no INVALID mark",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "the UI exited with code 0 (window.json ui_rc)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "\"en0\" vs en0",
+          "name": "window.json uplink equals status-pre.json uplink",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "Firewall is disabled. (State = 0)",
+          "name": "the application firewall was disabled",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "leftover-listeners.txt is empty (nothing left over from an earlier run)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "leftover-procs.txt is empty (nothing left over from an earlier run)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the lab listeners were ready (listeners-ready.txt)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "e438f9f5e050c32d6bfd0690dcf6c20e19d2add651f8ca3fd6a1084755cf2280  history.sqlite3",
+          "name": "data.sha256 holds a 64-hex hash",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the history store was closed cleanly (no -wal or -shm left)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no ISOLATION-BREACH.txt: the orchestrator's interlock did not trip",
+          "ok": true,
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "capture Some(1793098813.83) .. Some(1793098836.778), session 1793098817.078 .. 1793098835.169",
+          "name": "peer capture covers the session (first action to last event, 1 s margin)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "capture Some(1793098813.832) .. Some(1793098836.803), session 1793098817.078 .. 1793098835.169",
+          "name": "uplink capture covers the session (first action to last event, 1 s margin)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        }
+      ],
+      "scan_id": null,
+      "status": "PASS",
+      "tag": "safety"
+    },
+    {
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "pause",
+          "name": "window and chronicle name the expected stage",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "1",
+          "name": "smoke.json schema 1",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "chronicle times parse (UTC and mono_ms)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "ok",
+          "name": "smoke.json result is ok",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "Authorize,Start:restart,Pause,Lock",
+          "name": "actions equal the plan",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "authorization granted exactly once",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "network preflight passed before the first Start",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "runner session closed after Lock",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "spread 0.001 s, cap 0.118 s",
+          "name": "chronicle UTC and monotonic clocks agree (no wall-clock step; 100 ms plus 1 ms per second of session)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "missing/incomplete peer capture",
+          "name": "peer witness is complete",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "scanner frame outside the plan: []",
+          "name": "every unicast IPv4 frame from the scanner is a source-port-40000 SYN to 198.18.0.2",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "exactly one planned and saved scan",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "fixed acceptance job in chronicle and history",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "scan identity matches",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "chronicle records a process ID",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "chronicle PID matches the spawned UI",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "terminal status matches stage",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "terminal state follows action",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "all SYNs inside the active stage",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "SYN order and cookies equal the planned continuation",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stage stops before completing the plan",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "durable checkpoint equals the sent prefix",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "pause is ACKed within five seconds",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "history rows have no duplicate (ip, port)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "history rows are all 198.18.0.2",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "row without wire reply: []",
+          "name": "every row has a wire reply with the same open flag",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        },
+        {
+          "behaviour": true,
+          "detail": "reply without row: []",
+          "name": "every genuine reply on the wire is a row (a missing RST is tolerated)",
+          "ok": true,
+          "result": "PASS",
+          "safety": false
+        }
+      ],
+      "scan_id": null,
+      "status": "PASS",
+      "tag": "pause"
+    }
+  ],
+  "isolation": {
+    "peer_exit_code": 0,
+    "status_post": {
+      "bpf_access": "granted",
+      "checks": [
+        {
+          "detail": "run \"m1\" created \"2026-10-27T10:59:41Z\"",
+          "name": "manifest",
+          "ok": true
+        },
+        {
+          "detail": "feth4201 <-> feth4202, 198.18.0.2/30 on the peer only; feth4201: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up; feth4202: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:02 at up",
+          "name": "interfaces",
+          "ok": true
+        },
+        {
+          "detail": "en0 via Some(\"192.168.1.1\"), unchanged",
+          "name": "default_route",
+          "ok": true
+        },
+        {
+          "detail": "8.8.8.8 via en0",
+          "name": "routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.0/30 is routed only by the pair",
+          "name": "lab_routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.1 on feth4202 permanent; arp entry: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up",
+          "name": "arp",
+          "ok": true
+        },
+        {
+          "detail": "no bridge has a feth member",
+          "name": "bridges",
+          "ok": true
+        },
+        {
+          "detail": "net.inet.ip.forwarding = 0",
+          "name": "forwarding",
+          "ok": true
+        },
+        {
+          "detail": "/dev/bpf0..15 exist",
+          "name": "bpf_nodes",
+          "ok": true
+        }
+      ],
+      "gateway": "192.168.1.1",
+      "manifest": "/var/run/rmasscan-lab/m1.json",
+      "raw_run_allowed": true,
+      "run_id": "m1",
+      "uplink": "en0"
+    },
+    "status_pre": {
+      "bpf_access": "granted",
+      "checks": [
+        {
+          "detail": "run \"m1\" created \"2026-10-27T10:59:41Z\"",
+          "name": "manifest",
+          "ok": true
+        },
+        {
+          "detail": "feth4201 <-> feth4202, 198.18.0.2/30 on the peer only; feth4201: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up; feth4202: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:02 at up",
+          "name": "interfaces",
+          "ok": true
+        },
+        {
+          "detail": "en0 via Some(\"192.168.1.1\"), unchanged",
+          "name": "default_route",
+          "ok": true
+        },
+        {
+          "detail": "8.8.8.8 via en0",
+          "name": "routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.0/30 is routed only by the pair",
+          "name": "lab_routes",
+          "ok": true
+        },
+        {
+          "detail": "198.18.0.1 on feth4202 permanent; arp entry: MAC os-masked (Darwin hides MACs from ad-hoc-signed processes); root verified 02:ac:00:00:00:01 at up",
+          "name": "arp",
+          "ok": true
+        },
+        {
+          "detail": "no bridge has a feth member",
+          "name": "bridges",
+          "ok": true
+        },
+        {
+          "detail": "net.inet.ip.forwarding = 0",
+          "name": "forwarding",
+          "ok": true
+        },
+        {
+          "detail": "/dev/bpf0..15 exist",
+          "name": "bpf_nodes",
+          "ok": true
+        }
+      ],
+      "gateway": "192.168.1.1",
+      "manifest": "/var/run/rmasscan-lab/m1.json",
+      "raw_run_allowed": true,
+      "run_id": "m1",
+      "uplink": "en0"
+    },
+    "uplink_captured": 0,
+    "uplink_dropped": 0,
+    "uplink_exit_code": 0,
+    "uplink_frames": 0
+  },
+  "notes": {
+    "data_binding": "data/ is not in this archive; the binding was checked in the window, see its committed verdict",
+    "manual": false
+  },
+  "overall": "PASS",
+  "provenance": {
+    "installed_runner_sha256": "f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4",
+    "runner_sha256": "f649ff03030e2bd08a54c83b5ea055e7829b4b4b75350acb7b0a4413f9dc6de4",
+    "ui_sha256": "305164bc2b8daa73546286c85e365dc29281b53ba6be61e5be6537f637746860",
+    "verifier_sha256": "275c3e74570e1b107ad0681ad997036620519b874d5d6c6c157fffd3f32112d6",
+    "window_sha": "35b063cf943383765926fe1c417dcd8a6e36ca8d"
+  },
+  "safety_trips": [],
+  "totals": {
+    "fail": 0,
+    "invalid": 0,
+    "not_run": 0,
+    "pass": 2
+  }
+}

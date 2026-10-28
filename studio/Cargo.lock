@@ -4371,6 +4371,9 @@ dependencies = [
 name = "studio-app"
 version = "0.1.0"
 dependencies = [
+ "rmasscan-core",
+ "rmasscan-engine",
+ "rmasscan-net",
  "rusqlite",
  "serde_json",
  "studio-inspection",

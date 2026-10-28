@@ -97,6 +97,14 @@ Windows requires a system-wide PowerShell 7 installation in Program Files; user
 or PATH-only installations are refused. No driver, Npcap, service or automatic
 update is installed by this action. Raw network gates remain unchanged.
 
+Native setup installation is recorded for [macOS](../docs/experiments/2026-10-27-studio-runner-setup.md),
+[Windows](../docs/experiments/2026-10-28-studio-windows-setup.md) and
+[Linux](../docs/experiments/2026-10-28-studio-linux-setup.md). Windows also passed
+UAC refusal/retry and a repeated check. Linux used a temporary X desktop with a
+real polkit agent; its refusal/retry is inconclusive, and the final Check again
+and Close are user-confirmed. Each report identifies its exact debug package.
+These setup checks do not establish an authorized scanner session or raw I/O.
+
 ## macOS and Linux session authorization
 
 The **Authorize** button opens the system administrator dialog, connects to the
@@ -142,8 +150,9 @@ Simulation uses authenticated named pipes on Windows and inherited anonymous
 pipes on macOS/Linux. Windows checks both peer processes using retained handles,
 user/logon identity and a protected pipe DACL; it does not elevate. Unix sockets
 have peer identity tests on macOS/Linux; system elevation is implemented on both.
-Do not launch the UI with sudo or as Administrator. Linux desktop prompt
-acceptance, physical NIC selection and Windows/Linux raw profiles remain open.
+Do not launch the UI with sudo or as Administrator. Linux desktop session
+authorization/cancellation acceptance, physical NIC selection and Windows/Linux
+raw profiles remain open. Linux setup installation is recorded separately above.
 Raw scanning is gated per profile, independently of host actions and saved
 profiles: open for Mac feth on macOS, closed for every Windows and Linux raw
 profile and for physical NICs.

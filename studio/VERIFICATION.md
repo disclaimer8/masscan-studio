@@ -1,7 +1,7 @@
 # Studio integration evidence
 
 Note (2026-10-26): entries dated before the Mac feth raw acceptance describe the raw gate as it stood then. The current
-gate is per profile: open for Mac feth on macOS, closed on Windows and Linux (see the last section).
+gate is per profile: open for Mac feth on macOS, closed on Windows and Linux (see the dated Mac feth entries).
 
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
@@ -762,3 +762,23 @@ This closes restart and the controlled ARP guard path on Mac feth only; sleep,
 VPN, physical NIC and Windows/Linux raw remain open. Code-head CI is green on
 all three OSes; local Studio 159/0 (2 ignored), rmasscan 1306/0 (23 ignored),
 portable lab 744/0 (1 ignored). The delivery commit changes documentation only.
+
+## 2026-10-27–28 — native scanner helper setup
+
+Scope: install the helper matching the application through **Scanner setup**,
+verify the protected destination, and retain an empty acceptance database.
+Installation does not authorize a runner session or start a scan.
+
+| Platform | Confirmed setup behavior | Limits and evidence |
+| --- | --- | --- |
+| macOS | Install, ready state, repeated check; matching hash, root ownership, mode 0755 and valid signature | One local debug package; native cancellation/timeout not exercised; [report](../docs/experiments/2026-10-27-studio-runner-setup.md) |
+| Windows 11 VM | Missing helper, real UAC, deny, retry, user-approved install, ready, repeated check and Close; protected hash and ACL verified | One CI debug package; native Cancel waiting/timeout/late approval not run; [report](../docs/experiments/2026-10-28-studio-windows-setup.md) |
+| Ubuntu 26.04.1 x86-64 | Missing helper, real graphical polkit prompt, user-approved install, ready; matching hash, root ownership and mode 0755 | Temporary Xvfb desktop, not GNOME/Wayland; refusal/retry inconclusive; final Check again/Close user-confirmed without independent UI capture; [report](../docs/experiments/2026-10-28-studio-linux-setup.md) |
+
+All three acceptance databases had zero scans/results. Windows and Linux UI
+processes remained unprivileged; no runner remained after setup verification.
+The Windows/Linux packages came from successful Studio CI run `40509803957`,
+source merge tree `06bf606770b8d954fa064ff4cc76275e3f8836a4`. Package manifests,
+screenshots, filesystem checks and evidence checksums are linked from the reports.
+The current follow-up changes documentation only, without a rebuilt package.
+Raw-profile gates and outstanding session-authorization checks remain unchanged.

@@ -1,0 +1,11 @@
+783898ba1fb573ddc73fb016bfcd2f0d9206d7f59112fe3e0ee6242d3fe1b2a1  /usr/local/libexec/masscan-studio/783898ba1fb573ddc73fb016bfcd2f0d9206d7f59112fe3e0ee6242d3fe1b2a1/studio-runner
+f: /usr/local/libexec/masscan-studio/783898ba1fb573ddc73fb016bfcd2f0d9206d7f59112fe3e0ee6242d3fe1b2a1/studio-runner
+drwxr-xr-x root root /
+drwxr-xr-x root root usr
+drwxr-xr-x root root local
+drwxr-xr-x root root libexec
+drwxr-xr-x root root masscan-studio
+drwxr-xr-x root root 783898ba1fb573ddc73fb016bfcd2f0d9206d7f59112fe3e0ee6242d3fe1b2a1
+-rwxr-xr-x root root studio-runner
+    PID   UID  EUID COMMAND
+1476273  1000  1000 ./studio-ui

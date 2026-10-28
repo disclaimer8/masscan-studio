@@ -32,6 +32,15 @@ launcher and returns without asserting rollback: an approved privileged copy can
 finish independently. Users must dismiss a remaining OS prompt and Check again
 before retrying. No cancellation result is displayed as a verified installation.
 
+Native setup installation passed for the recorded debug packages on
+[macOS](../docs/experiments/2026-10-27-studio-runner-setup.md),
+[Windows](../docs/experiments/2026-10-28-studio-windows-setup.md) and
+[Linux](../docs/experiments/2026-10-28-studio-linux-setup.md). Windows refusal/retry
+also passed. Linux used a real graphical polkit agent in a temporary X desktop;
+refusal/retry is inconclusive, and Check again/Close are user-confirmed.
+Setup acceptance is separate from session authorization, native cancellation
+and raw scanning acceptance.
+
 ## Threat model and identity
 
 Protect against other unprivileged local users, stale/foreign sessions, frame
@@ -190,7 +199,9 @@ separate acceptance work. RAW_SCANNING_ENABLED remains false.
 - Windows and Linux raw profiles stay closed (`raw_profile_enabled` is false there) until
   their own live acceptance passes.
 - Windows alternate-account UAC refusal still needs a real second-account test;
-  Linux desktop password prompt/cancellation remains a manual acceptance item.
+  Linux desktop session-authorization password prompt/cancellation remains a
+  manual acceptance item. The 2026-10-28 Linux setup installation check does not
+  cover that separate authorization path.
 - No physical NIC or three-OS raw support follows from this implementation.
 
 ## Windows simulation session transport

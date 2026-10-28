@@ -705,6 +705,9 @@ fn random_token() -> Result<String, String> {
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
+    execute_with_clock(h, a, now)
+}
+fn execute_with_clock(h: &dyn Host, a: &Args, clock: impl Fn() -> f64) -> Result<i32, String> {
     let d = derive(&a.run_id)?;
     let mut m = read_manifest(&a.manifest)?;
     match a.cmd.as_str() {
@@ -1024,10 +1027,13 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
                     .ok_or("malformed guest record: actual verified_at required")?;
                 let vm = h.vm(&d);
                 let start = vm["start"].as_f64().unwrap_or(0.0);
+                // Read once at the decision, after report and VM lookup, so both bounds
+                // and the persisted import time use the same clock observation.
+                let recorded_at = clock();
                 if v["verification_nonce"] != nonce
                     || m["guest"]["verification_nonce"] == nonce
-                    || verified > now() + VERIFY_FUTURE_SKEW_S
-                    || now() - verified > VERIFY_MAX_AGE_S
+                    || verified > recorded_at + VERIFY_FUTURE_SKEW_S
+                    || recorded_at - verified > VERIFY_MAX_AGE_S
                     || start <= 0.0
                     || verified < start
                 {
@@ -1047,7 +1053,7 @@ fn execute(h: &dyn Host, a: &Args) -> Result<i32, String> {
                     .ok_or("malformed guest record: InterfaceGuid")?;
                 let ok = v["ok"].as_bool().ok_or("malformed guest record: ok")?;
                 m["guest"]["verification_nonce"] = json!(nonce);
-                m["guest"]["verify"] = json!({"ok":ok,"status":status,"mac":mac,"guid":guid,"verified_at":verified,"verification_nonce":nonce,"recorded_at":now()});
+                m["guest"]["verify"] = json!({"ok":ok,"status":status,"mac":mac,"guid":guid,"verified_at":verified,"verification_nonce":nonce,"recorded_at":recorded_at});
             }
             write_manifest(&a.manifest, &m)?;
             println!("{}", m["guest"]);
@@ -1510,36 +1516,79 @@ mod ownership_tests {
     }
     #[test]
     fn record_guest_refuses_reports_outside_the_sixty_second_window() {
-        for (age, accepted) in [(30.0, true), (59.0, true), (61.0, false), (3600.0, false)] {
+        let decision_at = 1_700_000_000.0;
+        for (age, accepted) in [
+            (30.0, true),
+            (59.0, true),
+            (60.0, true),
+            (60.001, false),
+            (61.0, false),
+            (3600.0, false),
+        ] {
             let h = host(None);
-            let (p, a) = record_setup(&h, now() - age, "check-1");
-            assert_eq!(execute(&h, &a).is_ok(), accepted, "age {age}s");
+            let verified_at = decision_at - age;
+            let (p, a) = record_setup(&h, verified_at, "check-1");
+            let clock_reads = std::cell::Cell::new(0);
+            assert_eq!(
+                execute_with_clock(&h, &a, || {
+                    clock_reads.set(clock_reads.get() + 1);
+                    decision_at
+                })
+                .is_ok(),
+                accepted,
+                "age {age}s"
+            );
+            assert_eq!(clock_reads.get(), 1);
             assert_eq!(fresh_after(&h, &a), accepted, "age {age}s");
+            let m = read_manifest(&a.manifest).unwrap().unwrap();
+            if accepted {
+                assert_eq!(m["guest"]["verify"]["verified_at"], verified_at);
+                assert_eq!(m["guest"]["verify"]["recorded_at"], decision_at);
+            } else {
+                assert!(m["guest"]["verify"].is_null());
+            }
             fs::remove_dir_all(p).unwrap();
         }
-        // A report time in the future beyond clock skew is not a fresh Verify either.
-        let h = host(None);
-        let (p, a) = record_setup(&h, now() + 30.0, "check-1");
-        assert!(execute(&h, &a).is_err());
-        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn record_guest_accepts_only_reports_within_the_future_skew_window() {
+        let decision_at = 1_700_000_000.0;
+        for (ahead, accepted) in [(5.0, true), (5.001, false), (30.0, false)] {
+            let h = host(None);
+            let (p, a) = record_setup(&h, decision_at + ahead, "check-1");
+            assert_eq!(
+                execute_with_clock(&h, &a, || decision_at).is_ok(),
+                accepted,
+                "ahead {ahead}s"
+            );
+            assert_eq!(fresh_after(&h, &a), accepted, "ahead {ahead}s");
+            let m = read_manifest(&a.manifest).unwrap().unwrap();
+            if accepted {
+                assert_eq!(m["guest"]["verify"]["recorded_at"], decision_at);
+            } else {
+                assert!(m["guest"]["verify"].is_null());
+            }
+            fs::remove_dir_all(p).unwrap();
+        }
     }
     #[test]
     fn record_guest_refuses_a_verify_that_predates_the_vm_start() {
+        let decision_at = 1_700_000_000.0;
         // Both reports are inside the 60 s window, so only the VM start rule can refuse.
-        let h = host(Some(now() - 10.0));
-        let (p, a) = record_setup(&h, now() - 20.0, "check-1");
-        assert!(execute(&h, &a).is_err());
+        let h = host(Some(decision_at - 10.0));
+        let (p, a) = record_setup(&h, decision_at - 20.0, "check-1");
+        assert!(execute_with_clock(&h, &a, || decision_at).is_err());
         assert!(!fresh_after(&h, &a));
         fs::remove_dir_all(p).unwrap();
-        let h = host(Some(now() - 10.0));
-        let (p, a) = record_setup(&h, now() - 5.0, "check-1");
-        assert_eq!(execute(&h, &a).unwrap(), 0);
+        let h = host(Some(decision_at - 10.0));
+        let (p, a) = record_setup(&h, decision_at - 5.0, "check-1");
+        assert_eq!(execute_with_clock(&h, &a, || decision_at).unwrap(), 0);
         assert!(fresh_after(&h, &a));
         fs::remove_dir_all(p).unwrap();
         // An unknown VM start (no VM process) can never validate a report.
         let h = host(Some(0.0));
-        let (p, a) = record_setup(&h, now(), "check-1");
-        assert!(execute(&h, &a).is_err());
+        let (p, a) = record_setup(&h, decision_at, "check-1");
+        assert!(execute_with_clock(&h, &a, || decision_at).is_err());
         fs::remove_dir_all(p).unwrap();
     }
     #[test]

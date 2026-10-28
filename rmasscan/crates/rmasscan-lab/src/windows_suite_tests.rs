@@ -1403,16 +1403,6 @@ fn the_clock_reading_is_recorded_in_the_preflight_evidence() {
     assert_eq!(rec["clock"]["limits"]["guest_ahead_s"], 5.0);
     assert_eq!(rec["clock"]["limits"]["guest_behind_s"], 60.0);
 }
-#[test]
-fn the_clock_limits_are_the_ones_record_guest_enforces() {
-    // One definition: the preflight and record-guest cannot drift apart.
-    let source = include_str!("vm_lab.rs");
-    assert!(source.contains("verified > now() + VERIFY_FUTURE_SKEW_S"));
-    assert!(source.contains("now() - verified > VERIFY_MAX_AGE_S"));
-    assert_eq!(crate::vm_lab::VERIFY_FUTURE_SKEW_S, 5.0);
-    assert_eq!(crate::vm_lab::VERIFY_MAX_AGE_S, 60.0);
-}
-
 // ---- F5: the remote sweep against a real local shell (WR N1, N2) ----
 //
 // `LocalHome` answers the `ssh home-pc CMD` calls by running CMD in a local `sh` with a private

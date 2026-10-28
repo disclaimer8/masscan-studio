@@ -1,0 +1,22 @@
+{
+  "arch": "x86_64",
+  "cargo_lock_sha256": "e097f2be8b6a0c2e37820ae2780abb6b56d6a90ccd4d6b24b2e033a0a665e31b",
+  "dirty": false,
+  "files": [
+    {
+      "path": "studio-ui",
+      "sha256": "aa409863b822bbe3f7834600a07e22565d9b202c67f803033879384ef8ed35c0"
+    },
+    {
+      "path": "studio-runner",
+      "sha256": "783898ba1fb573ddc73fb016bfcd2f0d9206d7f59112fe3e0ee6242d3fe1b2a1"
+    },
+    {
+      "path": "studio-inspect",
+      "sha256": "f277c592c1934fd76754a3987584cfec6d8e5cb1e48b77d88673e92006cf6470"
+    }
+  ],
+  "platform": "linux",
+  "profile": "debug",
+  "source_commit": "06bf606770b8d954fa064ff4cc76275e3f8836a4"
+}

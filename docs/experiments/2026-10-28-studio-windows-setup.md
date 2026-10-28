@@ -52,7 +52,9 @@ laboratory network change was performed by this acceptance.
 Native Cancel waiting, installer timeout, late approval after cancellation and
 environment-poisoning checks of this setup entry were **NOT RUN**. Offline
 coverage and earlier session-authorization tests do not establish those native
-setup cases. Linux desktop polkit acceptance remains **NOT RUN**.
+setup cases. The subsequent [Linux setup report](2026-10-28-studio-linux-setup.md)
+records user-approved installation through a real graphical polkit agent and
+its remaining coverage limits.
 
 The refusal wording includes the executable path and generic exit code; recovery
 works, but this run does not establish a distinct user-facing cancellation label.

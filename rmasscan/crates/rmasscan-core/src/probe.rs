@@ -14,7 +14,7 @@
 //!   сохраняет все алгоритмы этапа 1 (retries, shard), с остановкой через
 //!   [`ControlFlow`].
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -52,6 +52,14 @@ pub enum PlanError {
     PortDoesNotFit { port_them: u32, port_me: u32 },
     #[error("next index {next_index} is beyond the scan range {range}")]
     NextIndexBeyondRange { next_index: u64, range: u64 },
+    #[error("per-destination MACs require an Ethernet link")]
+    DestinationsRequireEthernet,
+    #[error("destination map has {actual} keys, expected {expected} effective target addresses")]
+    DestinationCountMismatch { expected: u64, actual: usize },
+    #[error("destination map key {0:#010x} is not an effective target address")]
+    UnexpectedDestination(u32),
+    #[error("destination {ip:#010x} has an invalid unicast MAC {mac:02x?}")]
+    InvalidDestinationMac { ip: u32, mac: [u8; 6] },
     #[error(transparent)]
     Scan(#[from] ScanError),
 }
@@ -206,13 +214,14 @@ pub fn for_each_probe<B>(
 struct PlanInner {
     effective: EffectiveConfig,
     binding: AdapterBinding,
+    destinations: Option<BTreeMap<u32, [u8; 6]>>,
     range: u64,
     blackrock: BlackRock,
     builder: Builder,
 }
 
 /// Проверенный план нового запуска. Поля приватны; создать можно только через
-/// [`ReadyPlan::new`].
+/// [`ReadyPlan::new`] или [`ReadyPlan::with_destinations`].
 #[derive(Debug, Clone)]
 pub struct ReadyPlan {
     inner: Arc<PlanInner>,
@@ -222,6 +231,45 @@ impl ReadyPlan {
     pub fn new(
         effective: EffectiveConfig,
         binding: AdapterBinding,
+    ) -> Result<ReadyPlan, PlanError> {
+        Self::build(effective, binding, None)
+    }
+
+    /// Freeze a complete Ethernet delivery map for the effective target addresses.
+    /// Each key must occur exactly once and each MAC must be nonzero and unicast.
+    /// The binding's single next-hop MAC remains unchanged but is not used for delivery.
+    pub fn with_destinations(
+        effective: EffectiveConfig,
+        binding: AdapterBinding,
+        destinations: BTreeMap<u32, [u8; 6]>,
+    ) -> Result<ReadyPlan, PlanError> {
+        if binding.link_type != LinkType::Ethernet {
+            return Err(PlanError::DestinationsRequireEthernet);
+        }
+        let targets = effective.massip().ipv4();
+        let expected = targets.count();
+        // Bound work by the supplied map, never by enumerating the IPv4 space.
+        if destinations.len() as u64 != expected {
+            return Err(PlanError::DestinationCountMismatch {
+                expected,
+                actual: destinations.len(),
+            });
+        }
+        for (&ip, &mac) in &destinations {
+            if !targets.is_contains(ip) {
+                return Err(PlanError::UnexpectedDestination(ip));
+            }
+            if mac == [0; 6] || mac[0] & 1 != 0 {
+                return Err(PlanError::InvalidDestinationMac { ip, mac });
+            }
+        }
+        Self::build(effective, binding, Some(destinations))
+    }
+
+    fn build(
+        effective: EffectiveConfig,
+        binding: AdapterBinding,
+        destinations: Option<BTreeMap<u32, [u8; 6]>>,
     ) -> Result<ReadyPlan, PlanError> {
         if effective.operation() != Operation::Scan {
             return Err(PlanError::NotScanOperation(effective.operation()));
@@ -265,6 +313,7 @@ impl ReadyPlan {
             inner: Arc::new(PlanInner {
                 effective,
                 binding,
+                destinations,
                 range,
                 blackrock,
                 builder,
@@ -278,6 +327,11 @@ impl ReadyPlan {
 
     pub fn binding(&self) -> &AdapterBinding {
         &self.inner.binding
+    }
+
+    /// Frozen per-target Ethernet delivery; `None` preserves single-MAC plans.
+    pub fn destinations(&self) -> Option<&BTreeMap<u32, [u8; 6]>> {
+        self.inner.destinations.as_ref()
     }
 
     /// Число probe плана (комбинации IP/порт).
@@ -352,6 +406,11 @@ impl ProbeCursor {
         // План уже проверил, что порты помещаются в TCP; при ошибке probe не
         // выдаётся (курсор заканчивается), а не паникует.
         if inner.builder.fill(&mut p, i, 0, xxx, ip, port).is_ok() {
+            if let Some(destinations) = &inner.destinations {
+                // Constructor guarantees complete immutable coverage and Ethernet framing.
+                // Only L2 destination bytes change; cookies and IP/TCP checksums stay intact.
+                p.frame[..6].copy_from_slice(&destinations[&ip]);
+            }
             self.loaded.push_back(p);
             true
         } else {

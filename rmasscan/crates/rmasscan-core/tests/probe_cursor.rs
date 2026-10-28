@@ -2,6 +2,7 @@
 //! Эталон считается здесь независимо из `transmit_scan` и формулы
 //! main.c:373-393; курсор обязан дать те же байты.
 
+use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
@@ -15,6 +16,99 @@ use rmasscan_core::targets::{add_target_string, parse_ports};
 const IP_ME: u32 = 0x0aff_0001;
 const MAC_ME: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
 const MAC_NH: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
+
+fn destination_map() -> BTreeMap<u32, [u8; 6]> {
+    [
+        (0x0a00_0001, [2, 1, 2, 3, 4, 5]),
+        (0x0a00_0002, [2, 1, 2, 3, 4, 6]),
+    ]
+    .into()
+}
+
+#[test]
+fn mapped_on_link_targets_keep_probe_order_and_ip_tcp_bytes() {
+    let e = eff(&config("10.0.0.1-10.0.0.2", "80,443", 5, 100.0));
+    let destinations = destination_map();
+    let plan = ReadyPlan::with_destinations(e.clone(), binding(40000, 40015), destinations.clone())
+        .unwrap();
+    assert_eq!(plan.destinations(), Some(&destinations));
+    let legacy = ReadyPlan::new(e, binding(40000, 40015)).unwrap();
+    assert_eq!(legacy.destinations(), None);
+    let actual = drain(&mut ProbeCursor::new(&plan, 0).unwrap());
+    let expected = drain(&mut ProbeCursor::new(&legacy, 0).unwrap());
+    for (a, b) in actual.iter().zip(&expected) {
+        assert_eq!(
+            (&a.0, &a.1, &a.2, &a.3, &a.4),
+            (&b.0, &b.1, &b.2, &b.3, &b.4)
+        );
+        assert_eq!(&a.5[..6], &destinations[&a.1]);
+        assert_eq!(&a.5[6..], &b.5[6..]);
+    }
+    assert_eq!(actual.len(), 4);
+    for n in 0..=actual.len() {
+        assert_eq!(
+            drain(&mut ProbeCursor::new(&plan, n as u64).unwrap()),
+            actual[n..]
+        );
+    }
+}
+
+#[test]
+fn mapped_routed_targets_can_share_a_gateway_mac() {
+    let e = eff(&config("10.0.0.1-10.0.0.2", "80", 5, 100.0));
+    let destinations = [(0x0a00_0001, MAC_NH), (0x0a00_0002, MAC_NH)].into();
+    let plan =
+        ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), destinations).unwrap();
+    assert_eq!(
+        drain(&mut ProbeCursor::new(&plan, 0).unwrap()),
+        reference(&e, 40000, 40000)
+    );
+}
+
+#[test]
+fn mapped_plan_requires_exactly_the_effective_target_keys() {
+    let mut c = config("10.0.0.1-10.0.0.3", "80,443", 5, 100.0);
+    c.excludes = massip("10.0.0.3", "443");
+    let e = eff(&c);
+    ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), destination_map()).unwrap();
+    for keys in [
+        vec![],
+        vec![0x0a00_0001],
+        vec![0x0a00_0001, 0x0a00_0002, 0x0a00_0003],
+        vec![0x0a00_0001, 0x0a00_0003],
+    ] {
+        let map = keys.into_iter().map(|ip| (ip, MAC_NH)).collect();
+        assert!(ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), map).is_err());
+    }
+}
+
+#[test]
+fn mapped_plan_rejects_invalid_destination_macs() {
+    let e = eff(&config("10.0.0.1-10.0.0.2", "80", 5, 100.0));
+    for mac in [[0; 6], [0xff; 6], [1, 2, 3, 4, 5, 6]] {
+        let mut map = destination_map();
+        map.insert(0x0a00_0002, mac);
+        assert!(ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), map).is_err());
+    }
+}
+
+#[test]
+fn mapped_plan_rejects_non_ethernet_links() {
+    let e = eff(&config("10.0.0.1-10.0.0.2", "80", 5, 100.0));
+    for link_type in [LinkType::Raw, LinkType::Null] {
+        let b = AdapterBinding {
+            link_type,
+            ..binding(40000, 40000)
+        };
+        assert!(ReadyPlan::with_destinations(e.clone(), b, destination_map()).is_err());
+    }
+}
+
+#[test]
+fn mapped_plan_checks_cardinality_without_enumerating_huge_ranges() {
+    let e = eff(&config("10.0.0.0/8", "80", 5, 100.0));
+    assert!(ReadyPlan::with_destinations(e, binding(40000, 40000), destination_map()).is_err());
+}
 
 fn massip(targets: &str, ports: &str) -> MassIp {
     let mut m = MassIp::new();

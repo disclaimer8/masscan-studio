@@ -50,7 +50,8 @@ allow-build-scripts = [
     # Выбор cfg под платформу (линковка с ОС, а не компиляция C).
     # Также нужен rmasscan-net (FFI-объявления AF_PACKET; build.rs libc C не компилирует).
     { name = "libc", version = "=0.2.191" },
-    { name = "rustix", version = "=1.1.5" },
+    # 1.1.6 build.rs matches the reviewed 1.1.5 script: Rust cfg probes only.
+    { name = "rustix", version = "=1.1.6" },
     { name = "getrandom", version = "=0.4.3" },
 ]
 # windows-sys 0.61.2 и windows-link 0.2.1 (системные import-библиотеки, Rust

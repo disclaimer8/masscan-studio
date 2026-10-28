@@ -912,3 +912,139 @@ fn original_requested_counts_handle_full_ipv4_union_without_expansion() {
         (131070, 131070, 65535)
     );
 }
+
+// Hold the real production launch boundary after entry, while setup or the
+// persistence operation is still in progress. No production gate is changed.
+fn cancelled_during_launch(resume: bool, during_setup: bool, close: bool) {
+    let dir = Temp::new();
+    let mut db = Store::open(&dir.0).unwrap();
+    let job = Job::example(Backend::Simulation);
+    let checkpoint = if resume {
+        db.begin([1; 16], [2; 16], &job, false).unwrap();
+        let bytes = rmasscan_engine::Checkpoint {
+            format_version: rmasscan_engine::CHECKPOINT_FORMAT_VERSION,
+            engine_version: ENGINE_VERSION,
+            scan_id: [1; 16],
+            attempt_id: [2; 16],
+            job_digest: rmasscan_engine::job_digest(&job.prepare().unwrap()),
+            next_index: 1,
+        }
+        .to_bytes();
+        db.apply(&Envelope::new(
+            [4; 16],
+            [1; 16],
+            [2; 16],
+            1,
+            Event::Checkpoint {
+                bytes: bytes.clone(),
+                next_index: "1".into(),
+            },
+        ))
+        .unwrap();
+        Some(bytes)
+    } else {
+        None
+    };
+    let expected_checkpoint = checkpoint.clone();
+    let launch = Launch {
+        scan: [1; 16],
+        attempt: [3; 16],
+        command: match checkpoint {
+            Some(checkpoint) => Command::Resume { job, checkpoint },
+            None => Command::Start(job),
+        },
+    };
+    let (client, _tx, wire) = fake_client();
+    let stop = Arc::new(AtomicBool::new(false));
+    let epoch = Arc::new(AtomicU64::new(0));
+    let worker_stop = stop.clone();
+    let worker_epoch = epoch.clone();
+    let (entered, waiting) = mpsc::sync_channel(0);
+    let (release, held) = mpsc::sync_channel(0);
+    let worker = thread::spawn(move || {
+        let cancelled =
+            || worker_stop.load(Ordering::Acquire) || worker_epoch.load(Ordering::Acquire) != 0;
+        assert!(!cancelled(), "cancellation must occur after entry");
+        let mut connected = None;
+        let result = if during_setup {
+            launch_attempt(
+                &mut db,
+                &mut connected,
+                launch,
+                &cancelled,
+                || {
+                    entered.send(()).unwrap();
+                    held.recv().unwrap();
+                    Ok(client)
+                },
+                persist_launch,
+            )
+        } else {
+            connected = Some(client);
+            launch_attempt(
+                &mut db,
+                &mut connected,
+                launch,
+                &cancelled,
+                || panic!("already connected"),
+                |db, launch| {
+                    // A real transaction commits here. Hold the persistence call's
+                    // return to deterministically model cancellation during begin.
+                    persist_launch(db, launch)?;
+                    entered.send(()).unwrap();
+                    held.recv().unwrap();
+                    Ok(())
+                },
+            )
+        };
+        (result, db.scans().unwrap())
+    });
+    waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+    if close {
+        stop.store(true, Ordering::Release);
+    } else {
+        epoch.fetch_add(1, Ordering::AcqRel);
+    }
+    release.send(()).unwrap();
+    let (result, saved) = worker.join().unwrap();
+    assert!(
+        !wire
+            .commands()
+            .iter()
+            .any(|e| matches!(e.payload, Command::Start(_) | Command::Resume { .. })),
+        "cancelled launch emitted a frame (resume={resume}, setup={during_setup}, close={close})"
+    );
+    assert!(!result.unwrap());
+    if resume {
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].status, Status::Paused);
+        assert_eq!(saved[0].checkpoint, expected_checkpoint);
+        assert_eq!(
+            saved[0].attempt,
+            if during_setup { [2; 16] } else { [3; 16] }
+        );
+    } else if during_setup {
+        assert!(saved.is_empty(), "cancelled setup must not create a scan");
+    } else {
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].status, Status::Interrupted);
+        assert!(saved[0].detail.contains("cancelled before dispatch"));
+    }
+}
+
+#[test]
+fn cancellation_during_setup_prevents_start_and_resume_dispatch() {
+    for resume in [false, true] {
+        for close in [false, true] {
+            cancelled_during_launch(resume, true, close);
+        }
+    }
+}
+#[test]
+fn cancellation_during_persistence_prevents_start_and_resume_dispatch() {
+    for resume in [false, true] {
+        for close in [false, true] {
+            cancelled_during_launch(resume, false, close);
+        }
+    }
+}

@@ -840,18 +840,37 @@ fn work(
                             }
                             let scan = new_id()?;
                             let attempt = new_id()?;
-                            if client.is_none() {
-                                client = Some(Client::open(&path)?);
+                            let backend = job.backend;
+                            if !launch_attempt(
+                                &mut db,
+                                &mut client,
+                                Launch {
+                                    scan,
+                                    attempt,
+                                    command: Command::Start(job),
+                                },
+                                &|| {
+                                    requested_epoch != cancel_epoch.load(Ordering::Acquire)
+                                        || stop.load(Ordering::Acquire)
+                                },
+                                || Client::open(&path),
+                                persist_launch,
+                            )? {
+                                emit(
+                                    &out,
+                                    Update::History(
+                                        db.scans().map_err(|e| e.to_string())?,
+                                        selected,
+                                    ),
+                                )?;
+                                emit(
+                                    &out,
+                                    Update::Notice("Scan launch cancelled before dispatch".into()),
+                                )?;
+                                return Ok(());
                             }
-                            db.begin(scan, attempt, &job, false)
-                                .map_err(|e| e.to_string())?;
                             selected = Some(scan);
                             active = true;
-                            let backend = job.backend;
-                            client
-                                .as_mut()
-                                .unwrap()
-                                .start(scan, attempt, Command::Start(job))?;
                             draft.invalidate(&out)?;
                             emit(&out, Update::Reset(vec![], backend))?;
                             emit(&out, Update::NetworkCoverage(None))?;
@@ -909,21 +928,39 @@ fn work(
                                 )?;
                             }
                             let attempt = new_id()?;
-                            if client.is_none() {
-                                client = Some(Client::open(&path)?);
-                            }
-                            db.begin(s.scan, attempt, &s.job, true)
-                                .map_err(|e| e.to_string())?;
-                            draft.invalidate(&out)?;
-                            active = true;
-                            client.as_mut().unwrap().start(
-                                s.scan,
-                                attempt,
-                                Command::Resume {
-                                    job: s.job,
-                                    checkpoint,
+                            if !launch_attempt(
+                                &mut db,
+                                &mut client,
+                                Launch {
+                                    scan: s.scan,
+                                    attempt,
+                                    command: Command::Resume {
+                                        job: s.job,
+                                        checkpoint,
+                                    },
                                 },
-                            )?;
+                                &|| {
+                                    requested_epoch != cancel_epoch.load(Ordering::Acquire)
+                                        || stop.load(Ordering::Acquire)
+                                },
+                                || Client::open(&path),
+                                persist_launch,
+                            )? {
+                                emit(
+                                    &out,
+                                    Update::History(
+                                        db.scans().map_err(|e| e.to_string())?,
+                                        selected,
+                                    ),
+                                )?;
+                                emit(
+                                    &out,
+                                    Update::Notice("Scan launch cancelled before dispatch".into()),
+                                )?;
+                                return Ok(());
+                            }
+                            active = true;
+                            draft.invalidate(&out)?;
                             emit(
                                 &out,
                                 Update::State(Status::Starting, "Resuming saved scan".into()),
@@ -1200,4 +1237,59 @@ fn commit_scan_events(
         }
     }
     Ok((rows, finished))
+}
+
+struct Launch {
+    scan: Id,
+    attempt: Id,
+    command: Command,
+}
+fn persist_launch(db: &mut Store, launch: &Launch) -> Result<(), String> {
+    let (job, resume) = match &launch.command {
+        Command::Start(job) => (job, false),
+        Command::Resume { job, .. } => (job, true),
+        _ => return Err("Invalid launch command".into()),
+    };
+    db.begin(launch.scan, launch.attempt, job, resume)
+        .map_err(|e| e.to_string())
+}
+// Both production Start and Resume use this boundary. The injected operations
+// let tests hold setup or persistence while another thread requests cancellation.
+fn launch_attempt(
+    db: &mut Store,
+    client: &mut Option<Client>,
+    launch: Launch,
+    cancelled: &dyn Fn() -> bool,
+    open: impl FnOnce() -> Result<Client, String>,
+    persist: impl FnOnce(&mut Store, &Launch) -> Result<(), String>,
+) -> Result<bool, String> {
+    if cancelled() {
+        return Ok(false);
+    }
+    if client.is_none() {
+        *client = Some(open()?);
+    }
+    // Opening/handshaking can block; do not even create a Starting row if a
+    // Stop, Lock, or application close became known during that operation.
+    if cancelled() {
+        return Ok(false);
+    }
+    persist(db, &launch)?;
+    // SQLite may wait for another writer. Make the final decision immediately
+    // before dispatch, and reconcile a committed row if cancellation won.
+    if cancelled() {
+        db.interrupt(launch.scan, "Scan launch cancelled before dispatch")
+            .map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+    if let Err(detail) = client
+        .as_mut()
+        .unwrap()
+        .start(launch.scan, launch.attempt, launch.command)
+    {
+        db.interrupt(launch.scan, &detail)
+            .map_err(|e| e.to_string())?;
+        return Err(detail);
+    }
+    Ok(true)
 }

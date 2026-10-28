@@ -28,6 +28,7 @@ it does not establish GNOME/Wayland or raw scanning acceptance.
 | Native permission request | PASS: real graphical polkit password prompt for the installation shell command; [screen](2026-10-28-studio-linux-setup/polkit-prompt.png) |
 | User approves installation | PASS: matching helper at its protected destination; [inspection](2026-10-28-studio-linux-setup/after-consent.txt) |
 | UI recognizes installation | PASS: Scanner helper is ready; [screen](2026-10-28-studio-linux-setup/setup-ready.png) |
+| Manual Check again and Close | User confirmed completion after being asked to perform both actions; no independent final UI capture |
 
 The installed path is
 `/usr/local/libexec/masscan-studio/<SHA256>/studio-runner`. The installed file
@@ -41,13 +42,20 @@ and zero results; [record](2026-10-28-studio-linux-setup/history-after.json).
 No scan, authorized scanner session, driver or laboratory network change was
 performed during this acceptance.
 
+After the user's final confirmation, a fresh SSH inspection again verified the
+installed hash, root ownership, mode 0755, database integrity, zero scans/results
+and no remaining runner or pkexec process; [final record](2026-10-28-studio-linux-setup/final-check.json).
+The temporary Studio/VNC desktop had ended by this inspection, so Screen Sharing
+showed Reconnecting rather than a live final application screen.
+
 ## Limits
 
 Polkit refusal/retry is **INCONCLUSIVE**: a Cancel click was attempted through
 Screen Sharing, but no declined state was captured before the user completed
 installation. Subsequent remote clicks did not reliably activate controls.
 An unchanged ready screenshot does not by itself prove that Check again ran.
-Post-install Check again and Close verification are pending manual interaction.
+Post-install Check again and Close are user-confirmed; their final UI behavior
+was not independently captured before the temporary desktop ended.
 Native Cancel waiting, timeout, late approval after cancellation and poisoned
 environment cases were **NOT RUN**. The polkit prompt exposes a truncated shell
 command rather than a friendly application-specific installer description.

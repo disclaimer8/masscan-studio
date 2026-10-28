@@ -12,7 +12,11 @@ pub fn file_hash(path: &Path) -> Result<String, String> {
         }
         sha.update(&buf[..n]);
     }
-    Ok(format!("{:x}", sha.finalize()))
+    Ok(sha
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 #[cfg(unix)]
 pub fn verify(path: &Path, expected_hash: &str) -> Result<(), String> {

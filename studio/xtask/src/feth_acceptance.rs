@@ -568,7 +568,10 @@ pub fn dirty(porcelain: &str) -> bool {
 }
 
 fn sha_bytes(b: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(b))
+    Sha256::digest(b)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 fn sha_file(p: &Path) -> Result<String> {
     Ok(sha_bytes(&fs::read(p)?))

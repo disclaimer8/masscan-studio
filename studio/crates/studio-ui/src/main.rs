@@ -245,7 +245,10 @@ fn action(app: &RefCell<Controller>, ui: &MainWindow, a: Action) {
     }
 }
 fn process_active(status: &Status) -> bool {
-    matches!(status, Status::Starting | Status::Scanning | Status::Saving)
+    matches!(
+        status,
+        Status::Starting | Status::Preparing | Status::Scanning | Status::Saving
+    )
 }
 fn repeat_job(saved: &studio_store::SavedScan) -> Result<Job, String> {
     saved.job.prepare()?;
@@ -882,6 +885,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for update in updates {
                 match update {
+                    // Task5 consumes these typed network presentation updates.
+                    Update::NetworkReadiness(_) | Update::NetworkCoverage(_) => {}
                     Update::HistoryResult(result) => {
                         ui.set_history_busy(false);
                         if result.is_ok() {
@@ -1232,7 +1237,12 @@ mod tests {
     #[test]
     fn archived_ready_history_does_not_lock_the_ui_as_an_active_scan() {
         assert!(!process_active(&Status::Ready));
-        for status in [Status::Starting, Status::Scanning, Status::Saving] {
+        for status in [
+            Status::Starting,
+            Status::Preparing,
+            Status::Scanning,
+            Status::Saving,
+        ] {
             assert!(process_active(&status));
         }
     }

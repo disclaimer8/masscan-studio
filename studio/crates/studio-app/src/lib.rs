@@ -1,7 +1,11 @@
 //! Application controller.
 #![forbid(unsafe_code)]
 mod hosts;
+mod network;
 mod persistence;
+pub use network::{NetworkCoverage, NetworkReadiness};
+#[cfg(test)]
+mod network_tests;
 mod setup;
 use std::{
     io::{BufReader, BufWriter, Read, Write},
@@ -9,7 +13,7 @@ use std::{
     process::{Child, Command as Process, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, TryRecvError},
     },
     thread,
@@ -46,6 +50,12 @@ pub enum Action {
     InstallRunner,
     CancelSetup,
     Authorize,
+    /// Packet-free authorization/check for this job; legacy Authorize checks feth.
+    AuthorizeFor(Job),
+    /// Packet-free, job-specific route check. Never grants execution readiness.
+    CheckNetwork(Job),
+    /// Call whenever settings/backend change to invalidate obsolete readiness.
+    SetDraft(Job),
     Start(Job),
     Pause,
     Stop,
@@ -54,6 +64,8 @@ pub enum Action {
     Lock,
 }
 pub enum Update {
+    NetworkReadiness(Option<NetworkReadiness>),
+    NetworkCoverage(Option<Box<NetworkCoverage>>),
     Setup {
         busy: bool,
         ready: bool,
@@ -78,10 +90,11 @@ pub enum Update {
     Notice(String),
 }
 pub struct Controller {
-    commands: mpsc::SyncSender<Action>,
+    commands: mpsc::SyncSender<(Action, u64)>,
     updates: mpsc::Receiver<Update>,
     stop: Arc<AtomicBool>,
     cancel_auth: Arc<AtomicBool>,
+    cancel_epoch: Arc<AtomicU64>,
     setup_pending: Arc<AtomicBool>,
     cancel_setup: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
@@ -96,13 +109,23 @@ impl Controller {
         let flag = stop.clone();
         let cancel_auth = Arc::new(AtomicBool::new(false));
         let cancel = cancel_auth.clone();
+        let cancel_epoch = Arc::new(AtomicU64::new(0));
+        let cancel_attempt = cancel_epoch.clone();
         let error = Arc::new(Mutex::new(None));
         let errors = error.clone();
         let setup_pending = Arc::new(AtomicBool::new(false));
         let cancel_setup = Arc::new(AtomicBool::new(false));
         let setup_state = (setup_pending.clone(), cancel_setup.clone());
         let worker = thread::spawn(move || {
-            if let Err(e) = work(store, runner, rx, out, flag, cancel, setup_state) {
+            if let Err(e) = work(
+                store,
+                runner,
+                rx,
+                out,
+                (flag, cancel_attempt),
+                cancel,
+                setup_state,
+            ) {
                 *errors.lock().unwrap() = Some(e);
             }
         });
@@ -111,6 +134,7 @@ impl Controller {
             updates,
             stop,
             cancel_auth,
+            cancel_epoch,
             setup_pending,
             cancel_setup,
             error,
@@ -131,14 +155,17 @@ impl Controller {
         } else if self.setup_pending.load(Ordering::Acquire) {
             return Err("Wait for scanner setup to finish, or cancel waiting in Setup".into());
         }
-        if matches!(a, Action::Authorize) {
+        if matches!(a, Action::Authorize | Action::AuthorizeFor(_)) {
             self.cancel_auth.store(false, Ordering::Release);
         }
-        // Interrupt a pending OS prompt without waiting for the worker queue.
+        // Invalidate queued starts and suppress report ACKs immediately, including
+        // while the worker is committing SQLite or waiting on an OS prompt.
         if matches!(a, Action::Stop | Action::Lock) {
             self.cancel_auth.store(true, Ordering::Release);
+            self.cancel_epoch.fetch_add(1, Ordering::AcqRel);
         }
-        if self.commands.try_send(a).is_err() {
+        let epoch = self.cancel_epoch.load(Ordering::Acquire);
+        if self.commands.try_send((a, epoch)).is_err() {
             if setup {
                 self.setup_pending.store(false, Ordering::Release);
             }
@@ -177,7 +204,11 @@ struct Client {
     scan: Id,
     attempt: Id,
     sequence: u64,
-    order: ReceiveOrder,
+    order: Option<ReceiveOrder>,
+    session_sequence: u64,
+    session_order: ReceiveOrder,
+    halted: bool,
+    preparing: bool,
     pending: persistence::Pending,
     deferred: Option<Envelope<Event>>,
 }
@@ -336,7 +367,11 @@ impl Client {
             scan: [0; 16],
             attempt: [0; 16],
             sequence: 0,
-            order: ReceiveOrder::new(session, [0; 16], [0; 16]),
+            order: None,
+            session_sequence: 0,
+            session_order: ReceiveOrder::new(session, [0; 16], [0; 16]),
+            halted: false,
+            preparing: false,
             pending: persistence::Pending::default(),
             deferred: None,
         })
@@ -378,7 +413,7 @@ impl Client {
                 return Err("Runner handshake timed out".into());
             }
         };
-        self.order.accept(&hello)?;
+        self.session_order.accept(&hello)?;
         if !matches!(
             hello.payload,
             Event::Hello {
@@ -390,23 +425,47 @@ impl Client {
         Ok(())
     }
     fn start(&mut self, scan: Id, attempt: Id, command: Command) -> Result<(), String> {
+        if scan == [0; 16]
+            || attempt == [0; 16]
+            || !matches!(command, Command::Start(_) | Command::Resume { .. })
+        {
+            return Err("Invalid scan start identity or command".into());
+        }
+        self.halted = false;
+        self.preparing = match &command {
+            Command::Start(job) | Command::Resume { job, .. } => job.backend == Backend::MacNetwork,
+            _ => false,
+        };
         self.scan = scan;
         self.attempt = attempt;
         self.sequence = 0;
-        self.order = ReceiveOrder::new(self.session, scan, attempt);
+        self.order = Some(ReceiveOrder::new(self.session, scan, attempt));
         self.send(command)
     }
     fn send(&mut self, command: Command) -> Result<(), String> {
-        self.sequence += 1;
+        let session_command = matches!(
+            command,
+            Command::Hello | Command::CheckNetwork | Command::CheckNetworkJob(_)
+        );
+        let (scan, attempt, sequence) = if session_command {
+            self.session_sequence = self
+                .session_sequence
+                .checked_add(1)
+                .ok_or("Sequence exhausted")?;
+            ([0; 16], [0; 16], self.session_sequence)
+        } else {
+            if self.order.is_none() {
+                return Err("No scan attempt".into());
+            }
+            if matches!(command, Command::Stop | Command::CloseSession) {
+                self.halted = true;
+            }
+            self.sequence = self.sequence.checked_add(1).ok_or("Sequence exhausted")?;
+            (self.scan, self.attempt, self.sequence)
+        };
         write_frame(
             self.input.as_mut().ok_or("Runner closed")?,
-            &Envelope::new(
-                self.session,
-                self.scan,
-                self.attempt,
-                self.sequence,
-                command,
-            ),
+            &Envelope::new(self.session, scan, attempt, sequence, command),
         )
         .map_err(|e| e.to_string())
     }
@@ -414,7 +473,17 @@ impl Client {
         match self.events.try_recv() {
             Ok(e) => {
                 let e = e?;
-                self.order.accept(&e)?;
+                match e.payload {
+                    Event::NetworkChecked { .. } | Event::NetworkPreflight { .. } => {
+                        self.session_order.accept(&e)?
+                    }
+                    Event::Hello { .. } => return Err("Unexpected repeated handshake".into()),
+                    _ => self
+                        .order
+                        .as_mut()
+                        .ok_or("Scan event without an attempt")?
+                        .accept(&e)?,
+                }
                 Ok(Some(e))
             }
             Err(TryRecvError::Empty) => Ok(None),
@@ -456,13 +525,16 @@ fn emit(out: &mpsc::SyncSender<Update>, u: Update) -> Result<(), String> {
 fn work(
     mut db: Store,
     path: PathBuf,
-    actions: mpsc::Receiver<Action>,
+    actions: mpsc::Receiver<(Action, u64)>,
     out: mpsc::SyncSender<Update>,
-    stop: Arc<AtomicBool>,
+    cancellation: (Arc<AtomicBool>, Arc<AtomicU64>),
     cancel_auth: Arc<AtomicBool>,
     setup_state: (Arc<AtomicBool>, Arc<AtomicBool>),
 ) -> Result<(), String> {
+    let (stop, cancel_epoch) = cancellation;
+    let mut attempt_epoch = 0;
     let (setup_pending, cancel_setup) = setup_state;
+    let mut draft = network::Draft::default();
     let mut setup = setup::Setup::default();
     let mut client: Option<Client> = None;
     let mut hosts = hosts::Hosts::new(
@@ -489,6 +561,7 @@ fn work(
             &out,
             host_selection(&mut hosts, s.scan, s.job.backend, &mut db),
         )?;
+        emit(&out, network::coverage(s)?)?;
         emit(&out, Update::State(s.status.clone(), s.detail.clone()))?;
     }
     emit(&out, Update::History(history, selected))?;
@@ -499,7 +572,7 @@ fn work(
     let result = (|| {
         while !stop.load(Ordering::Acquire) {
             let step = (|| -> Result<(), String> {
-                if let Ok(action) = actions.try_recv() {
+                if let Ok((action, requested_epoch)) = actions.try_recv() {
                     match action {
                         Action::RenameScan { .. } | Action::DeleteScan(_) if active => {
                             emit(
@@ -536,6 +609,7 @@ fn work(
                                     hosts.forget();
                                     selected = history.first().map(|s| s.scan);
                                     if let Some(s) = history.first() {
+                                        draft.invalidate(&out)?;
                                         emit(
                                             &out,
                                             Update::Reset(
@@ -553,11 +627,14 @@ fn work(
                                                 &mut db,
                                             ),
                                         )?;
+                                        emit(&out, network::coverage(s)?)?;
                                         emit(
                                             &out,
                                             Update::State(s.status.clone(), s.detail.clone()),
                                         )?;
                                     } else {
+                                        draft.invalidate(&out)?;
+                                        emit(&out, Update::NetworkCoverage(None))?;
                                         emit(&out, Update::Clear)?;
                                         emit(
                                             &out,
@@ -653,7 +730,45 @@ fn work(
                             setup_pending.store(false, Ordering::Release);
                             emit(&out, result)?;
                         }
-                        Action::Authorize if !active => {
+                        Action::SetDraft(job) if !active => {
+                            draft.invalidate(&out)?;
+                            emit(&out, Update::NetworkCoverage(None))?;
+                            draft.set(&job, false, &out)?;
+                        }
+                        Action::CheckNetwork(job) if !active => {
+                            draft.invalidate(&out)?;
+                            if !draft.set(&job, job.backend != Backend::Simulation, &out)? {
+                                return Ok(());
+                            }
+                            if job.backend == Backend::Simulation {
+                                return Ok(());
+                            }
+                            if client.is_none() {
+                                client = Some(Client::open(&path)?);
+                            }
+                            client.as_mut().unwrap().send(network::check_command(job))?;
+                        }
+                        action @ (Action::Authorize | Action::AuthorizeFor(_)) if !active => {
+                            let job = match action {
+                                Action::AuthorizeFor(job) => Some(job),
+                                _ => None,
+                            };
+                            draft.invalidate(&out)?;
+                            if let Some(job) = &job {
+                                if !draft.set(job, job.backend != Backend::Simulation, &out)? {
+                                    return Ok(());
+                                }
+                                if job.backend == Backend::Simulation {
+                                    emit(
+                                        &out,
+                                        Update::Notice(
+                                            "Simulation needs no privileged network session".into(),
+                                        ),
+                                    )?;
+                                    return Ok(());
+                                }
+                            }
+
                             client.take();
                             emit(
                                 &out,
@@ -665,25 +780,37 @@ fn work(
                             )?;
                             match Client::authorize(&path, &cancel_auth) {
                                 Ok(mut c) => {
-                                    emit(&out,Update::Authorization {busy:false,authorized:true,detail:"Runner authorized for this session; checking isolated network…".into()})?;
-                                    c.send(Command::CheckNetwork)?;
+                                    emit(&out, Update::Authorization { busy:false, authorized:true, detail:"Runner authorized for this session; checking network routes…".into() })?;
+                                    c.send(match job {
+                                        Some(job) => network::check_command(job),
+                                        None => Command::CheckNetwork,
+                                    })?;
                                     client = Some(c);
                                 }
-                                Err(e) => emit(
-                                    &out,
-                                    Update::Authorization {
-                                        busy: false,
-                                        authorized: false,
-                                        detail: e,
-                                    },
-                                )?,
+                                Err(e) => {
+                                    draft.invalidate(&out)?;
+                                    emit(
+                                        &out,
+                                        Update::Authorization {
+                                            busy: false,
+                                            authorized: false,
+                                            detail: e,
+                                        },
+                                    )?;
+                                }
                             }
                         }
                         Action::Start(_) | Action::Resume if active => {
                             emit(&out, Update::Notice("A scan is already active".into()))?
                         }
                         Action::Start(job) => {
-                            job.prepare()?;
+                            job.validate()?;
+                            if requested_epoch != cancel_epoch.load(Ordering::Acquire)
+                                || stop.load(Ordering::Acquire)
+                            {
+                                return Ok(());
+                            }
+                            attempt_epoch = requested_epoch;
                             if job.backend != Backend::Simulation {
                                 if !raw_profile_enabled(job.backend) {
                                     emit(&out,Update::State(Status::Failed,"Raw scanning is not enabled in this build. Authorization can be checked separately without sending packets.".into()))?;
@@ -725,7 +852,9 @@ fn work(
                                 .as_mut()
                                 .unwrap()
                                 .start(scan, attempt, Command::Start(job))?;
+                            draft.invalidate(&out)?;
                             emit(&out, Update::Reset(vec![], backend))?;
+                            emit(&out, Update::NetworkCoverage(None))?;
                             emit(&out, host_selection(&mut hosts, scan, backend, &mut db))?;
                             emit(
                                 &out,
@@ -733,6 +862,12 @@ fn work(
                             )?;
                         }
                         Action::Resume => {
+                            if requested_epoch != cancel_epoch.load(Ordering::Acquire)
+                                || stop.load(Ordering::Acquire)
+                            {
+                                return Ok(());
+                            }
+                            attempt_epoch = requested_epoch;
                             let s = db
                                 .scans()
                                 .map_err(|e| e.to_string())?
@@ -750,6 +885,7 @@ fn work(
                                 )?;
                                 return Ok(());
                             }
+                            emit(&out, network::coverage(&s)?)?;
                             let checkpoint = s.checkpoint.ok_or("Checkpoint unavailable")?;
                             if s.job.backend != Backend::Simulation
                                 && (!raw_profile_enabled(s.job.backend)
@@ -778,6 +914,7 @@ fn work(
                             }
                             db.begin(s.scan, attempt, &s.job, true)
                                 .map_err(|e| e.to_string())?;
+                            draft.invalidate(&out)?;
                             active = true;
                             client.as_mut().unwrap().start(
                                 s.scan,
@@ -790,6 +927,15 @@ fn work(
                             emit(
                                 &out,
                                 Update::State(Status::Starting, "Resuming saved scan".into()),
+                            )?;
+                        }
+                        Action::Pause if active && client.as_ref().is_some_and(|c| c.preparing) => {
+                            emit(
+                                &out,
+                                Update::Notice(
+                                    "Network preparation cannot be paused; use Stop to cancel"
+                                        .into(),
+                                ),
                             )?;
                         }
                         Action::Pause if active => {
@@ -812,8 +958,24 @@ fn work(
                                 .send(Command::Stop)?;
                             emit(&out, Update::Notice("Stopping…".into()))?;
                         }
-                        Action::Lock if !active => {
+                        Action::Lock => {
                             client.take();
+                            draft.invalidate(&out)?;
+                            if active && let Some(scan) = selected {
+                                db.interrupt(scan, "Runner session locked during scan")
+                                    .map_err(|e| e.to_string())?;
+                                active = false;
+                                let saved = db.scans().map_err(|e| e.to_string())?;
+                                let scan = saved
+                                    .iter()
+                                    .find(|s| s.scan == scan)
+                                    .ok_or("Saved scan disappeared")?;
+                                emit(
+                                    &out,
+                                    Update::State(scan.status.clone(), scan.detail.clone()),
+                                )?;
+                                emit(&out, Update::History(saved, selected))?;
+                            }
                             emit(
                                 &out,
                                 Update::Authorization {
@@ -832,6 +994,7 @@ fn work(
                                 .find(|s| s.scan == id)
                             {
                                 selected = Some(id);
+                                draft.invalidate(&out)?;
                                 emit(
                                     &out,
                                     Update::Reset(
@@ -840,6 +1003,7 @@ fn work(
                                     ),
                                 )?;
                                 emit(&out, host_selection(&mut hosts, id, s.job.backend, &mut db))?;
+                                emit(&out, network::coverage(&s)?)?;
                                 emit(&out, Update::State(s.status, s.detail))?;
                             }
                         }
@@ -850,7 +1014,17 @@ fn work(
                     let events = c.poll_batch()?;
                     let mut durable = Vec::new();
                     for e in events {
+                        if let Event::NetworkPreflight {
+                            job_digest,
+                            ready,
+                            detail,
+                        } = &e.payload
+                        {
+                            draft.checked(*job_digest, *ready, detail.clone(), &out)?;
+                            continue;
+                        }
                         if let Event::NetworkChecked { ready, detail } = &e.payload {
+                            draft.checked_legacy(*ready, detail.clone(), &out)?;
                             emit(
                                 &out,
                                 Update::Notice(format!(
@@ -863,13 +1037,16 @@ fn work(
                         durable.push(e);
                     }
                     let began = Instant::now();
-                    let committed = if durable.is_empty() {
-                        Vec::new()
-                    } else {
-                        db.apply_batch(&durable).map_err(|e| e.to_string())?
-                    };
+                    let (rows, finished) =
+                        commit_scan_events(&mut db, c, durable, &out, selected, &|| {
+                            stop.load(Ordering::Acquire)
+                                || attempt_epoch != cancel_epoch.load(Ordering::Acquire)
+                        })?;
                     commits += began.elapsed();
-                    saved_rows += committed.iter().map(Vec::len).sum::<usize>();
+                    saved_rows += rows;
+                    if finished {
+                        active = false;
+                    }
                     if trace && logged.elapsed() >= Duration::from_secs(1) {
                         eprintln!(
                             "controller store: rows={saved_rows} commit_ms={} age_ms={}",
@@ -878,46 +1055,6 @@ fn work(
                         );
                         logged = Instant::now();
                     }
-                    for (e, observed) in durable.into_iter().zip(committed) {
-                        match e.payload {
-                            Event::Started { total } => emit(
-                                &out,
-                                Update::State(
-                                    Status::Scanning,
-                                    format!("Scanning {total} endpoints"),
-                                ),
-                            )?,
-                            Event::Results(_) => emit(&out, Update::Rows(observed))?,
-                            Event::Progress { sent, received } => {
-                                emit(&out, Update::Progress(sent, received))?
-                            }
-                            Event::Checkpoint { .. } => {
-                                emit(
-                                    &out,
-                                    Update::State(
-                                        Status::Saving,
-                                        "Checkpoint saved; confirming pause…".into(),
-                                    ),
-                                )?;
-                                c.send(Command::AckCheckpoint {
-                                    through: e.sequence,
-                                })?;
-                            }
-                            Event::Finished { detail, .. } => {
-                                active = false;
-                                let history = db.scans().map_err(|e| e.to_string())?;
-                                let status = history
-                                    .iter()
-                                    .find(|s| s.scan == e.scan)
-                                    .ok_or("Saved scan disappeared")?
-                                    .status
-                                    .clone();
-                                emit(&out, Update::State(status, detail))?;
-                                emit(&out, Update::History(history, selected))?;
-                            }
-                            _ => {}
-                        }
-                    }
                 }
                 Ok(())
             })();
@@ -925,6 +1062,7 @@ fn work(
                 // A broken runner session is recoverable. Close its inherited pipes
                 // before accepting another scan; committed history remains intact.
                 client.take();
+                draft.invalidate(&out)?;
                 emit(
                     &out,
                     Update::Authorization {
@@ -978,4 +1116,88 @@ fn host_selection(hosts: &mut hosts::Hosts, scan: Id, backend: Backend, db: &mut
         Ok(info) => Update::Hosts(info),
         Err(e) => Update::Notice(format!("Host details unavailable: {e}")),
     }
+}
+
+// This is the controller's durable boundary: no acknowledgement can leave before
+// the whole batch commits successfully, and only this client's attempt may commit.
+fn commit_scan_events(
+    db: &mut Store,
+    c: &mut Client,
+    durable: Vec<Envelope<Event>>,
+    out: &mpsc::SyncSender<Update>,
+    selected: Option<Id>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(usize, bool), String> {
+    if durable
+        .iter()
+        .any(|e| e.session != c.session || e.scan != c.scan || e.attempt != c.attempt)
+    {
+        return Err("Stale controller event identity".into());
+    }
+    let committed = if durable.is_empty() {
+        Vec::new()
+    } else {
+        db.apply_batch(&durable).map_err(|e| e.to_string())?
+    };
+    let rows = committed.iter().map(Vec::len).sum();
+    let mut finished = false;
+    for (e, observed) in durable.into_iter().zip(committed) {
+        match e.payload {
+            Event::PreparingNetwork => emit(
+                out,
+                Update::State(
+                    Status::Preparing,
+                    "Preparing network; Stop or Lock cancels preparation".into(),
+                ),
+            )?,
+            Event::NetworkPrepared { .. } => {
+                let saved = db.scans().map_err(|e| e.to_string())?;
+                let saved = saved
+                    .iter()
+                    .find(|s| s.scan == e.scan)
+                    .ok_or("Saved scan disappeared")?;
+                emit(out, network::coverage(saved)?)?;
+                if !c.halted && !cancelled() {
+                    c.send(Command::AckNetworkReport {
+                        through: e.sequence,
+                    })?;
+                }
+            }
+            Event::Started { total } => {
+                c.preparing = false;
+                emit(
+                    out,
+                    Update::State(Status::Scanning, format!("Scanning {total} endpoints")),
+                )?;
+            }
+            Event::Results(_) => emit(out, Update::Rows(observed))?,
+            Event::Progress { sent, received } => emit(out, Update::Progress(sent, received))?,
+            Event::Checkpoint { .. } => {
+                emit(
+                    out,
+                    Update::State(Status::Saving, "Checkpoint saved; confirming pause…".into()),
+                )?;
+                if !c.halted && !cancelled() {
+                    c.send(Command::AckCheckpoint {
+                        through: e.sequence,
+                    })?;
+                }
+            }
+            Event::Finished { detail, .. } => {
+                c.preparing = false;
+                finished = true;
+                let history = db.scans().map_err(|e| e.to_string())?;
+                let status = history
+                    .iter()
+                    .find(|s| s.scan == e.scan)
+                    .ok_or("Saved scan disappeared")?
+                    .status
+                    .clone();
+                emit(out, Update::State(status, detail))?;
+                emit(out, Update::History(history, selected))?;
+            }
+            _ => {}
+        }
+    }
+    Ok((rows, finished))
 }

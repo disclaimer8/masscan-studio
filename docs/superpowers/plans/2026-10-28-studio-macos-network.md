@@ -100,6 +100,12 @@
 
 ### Task 4: Helper preparation, lifecycle and network guard
 
+Execute this task as two sequential, independently reviewed changes: **4a** owns
+the runner preparation/lifecycle/guard and its fake tests; **4b** owns application
+authorization/readiness, durable report acknowledgement and coverage updates.
+The 4a report supplies the runtime contract consumed by 4b. A focused helper
+module may hold the new state machine rather than growing the existing entrypoint.
+
 **Files:**
 - Create `studio/crates/studio-runner/src/network.rs` and targeted fake tests.
 - Modify `studio/crates/studio-runner/src/main.rs`, `guard.rs` and relevant runner integration tests.
@@ -122,12 +128,14 @@
 
 **Files:**
 - Modify `studio/crates/studio-ui/ui/main.slint`, `src/main.rs`, and UI contract tests.
+- Extend `studio/crates/studio-inspection` export DTOs/serializers and tests for physical-scan coverage.
 - Update `studio/README.md`, `studio/AUTHORIZATION.md` and `studio/VERIFICATION.md`.
 
 **Interfaces:**
 - Add `Mac network · Wi-Fi / Ethernet` without changing existing feth/Simulation saved backend meanings.
 - Show requested target/probe counts, interface/source and route result, Preparing network, and separately counted not-scanned neighbours.
 - Preserve profile save/load, History, inspection and export; report preparation and partial coverage persistently.
+- Physical exports retain scan-wide coverage in the same atomic file, including zero-result scans: JSON coverage metadata and explicit CSV non-result record kinds. Preserve legacy exports and filtered result rows; never invent closed-port rows for unscanned addresses.
 - Keep Stop available during preparation and make the backend-specific helper/route readiness clear.
 
 - [ ] Add failing headless tests for backend/profile round-trip, counts, unsupported-OS display, preparation cancellation and partial-coverage History.

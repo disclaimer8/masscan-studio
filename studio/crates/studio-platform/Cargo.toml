@@ -8,7 +8,7 @@ license.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 getrandom.workspace = true
-sha2 = "0.10"
+sha2 = "0.11.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -530,6 +530,7 @@ fn wait_updates(c: &mut Controller, predicate: impl Fn(&[Update]) -> bool) -> Ve
 
 #[test]
 fn all_unresolved_history_reopens_and_switching_scan_or_draft_clears_coverage() {
+    let _process_reopen_guard = PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
     let dir = Temp::new();
     let mut db = Store::open(&dir.0).unwrap();
     db.begin([8; 16], [9; 16], &Job::example(Backend::Simulation), false)
@@ -706,6 +707,7 @@ fn coverage_counts_use_port_union_and_distinguish_user_and_automatic_exclusions(
 
 #[test]
 fn network_checkpoint_uses_frozen_report_and_resume_restores_coverage() {
+    let _process_reopen_guard = PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
     let dir = Temp::new();
     let mut db = Store::open(&dir.0).unwrap();
     let (job, report) = fixture();
@@ -793,6 +795,7 @@ fn network_checkpoint_uses_frozen_report_and_resume_restores_coverage() {
 
 #[test]
 fn malformed_physical_settings_are_reported_without_starting_or_authorizing() {
+    let _process_reopen_guard = PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
     let dir = Temp::new();
     let mut c =
         Controller::open(dir.0.clone(), PathBuf::from("/nonexistent/studio-runner")).unwrap();
@@ -824,6 +827,7 @@ fn malformed_physical_settings_are_reported_without_starting_or_authorizing() {
 
 #[test]
 fn queued_start_before_stop_is_cancelled_even_before_worker_reads_actions() {
+    let _process_reopen_guard = PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
     let dir = Temp::new();
     let db = Store::open(&dir.0).unwrap();
     let (commands, rx) = mpsc::sync_channel(8);

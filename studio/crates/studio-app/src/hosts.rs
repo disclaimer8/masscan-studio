@@ -460,6 +460,7 @@ mod tests {
     }
     #[test]
     fn cached_lookup_cancels_older_refresh_and_manual_refresh_bypasses_cache() {
+        let _process_reopen_guard = crate::PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
         let (dir, mut db, mut h) = setup();
         h.select([1; 16], Backend::MacFeth, &mut db).unwrap();
         let ip: Ipv4Addr = "198.18.0.2".parse().unwrap();

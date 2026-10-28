@@ -34,13 +34,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        os: [ubuntu-24.04, macos-14, windows-2025]
     defaults:
       run:
         shell: bash
         working-directory: rmasscan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Все шаги идут в bash на всех ОС (`defaults.run.shell: bash`; на Windows
       # это Git Bash), так что поведение команд одинаково на трёх ОС.
@@ -52,7 +52,7 @@ jobs:
           cargo --version
 
       - name: Кеш cargo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -99,7 +99,7 @@ jobs:
   # отправляет и не открывает адаптер. Письма и загрузки наружу не происходит.
   package-windows-wire:
     name: windows-x64 wire lab package
-    runs-on: windows-2022
+    runs-on: windows-2025
     needs: check
     env:
       # На pull_request github.sha это временный merge-коммит refs/pull/N/merge, которого
@@ -110,7 +110,7 @@ jobs:
         shell: pwsh
         working-directory: rmasscan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.PACKAGE_COMMIT }}
 
@@ -146,7 +146,7 @@ jobs:
           if (-not $exe) { throw 'wire_scan.exe not found in the package' }
           ./scripts/check-dll-search-flag.ps1 -Exe $exe.FullName
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rmasscan-wire-windows-x64-${{ env.PACKAGE_COMMIT }}
           path: |

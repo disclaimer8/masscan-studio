@@ -1,0 +1,11 @@
+{
+  "helper_sha256": "783898ba1fb573ddc73fb016bfcd2f0d9206d7f59112fe3e0ee6242d3fe1b2a1",
+  "uid": 0,
+  "gid": 0,
+  "mode": "0o755",
+  "integrity": "ok",
+  "scans": 0,
+  "results": 0,
+  "studio-runner_processes": [],
+  "pkexec_processes": []
+}

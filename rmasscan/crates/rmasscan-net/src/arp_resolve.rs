@@ -27,7 +27,9 @@ pub const ARP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArpPolicy {
+    /// Must be at least one microsecond and fit the clock's u64 microsecond range.
     pub interval: Duration,
+    /// Must fit the clock range including the absolute start timestamp.
     pub timeout: Duration,
 }
 
@@ -65,6 +67,7 @@ pub struct ArpReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArpResolveError {
+    InvalidPolicy(&'static str),
     Timeout {
         ifname: String,
         target: Ipv4Addr,
@@ -78,6 +81,7 @@ pub enum ArpResolveError {
 impl fmt::Display for ArpResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidPolicy(reason) => write!(f, "FAIL: invalid ARP policy: {reason}"),
             Self::Timeout {
                 ifname,
                 target,
@@ -119,8 +123,8 @@ pub fn arp_binding(
     }
 }
 
-fn micros(d: Duration) -> u64 {
-    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
+fn micros(d: Duration) -> Option<u64> {
+    u64::try_from(d.as_micros()).ok()
 }
 
 /// Разрешает MAC следующего хопа ARP-запросами раз в `policy.interval` до `policy.timeout`.
@@ -135,12 +139,25 @@ pub fn resolve_next_hop(
     policy: &ArpPolicy,
     clock: &dyn Clock,
 ) -> Result<ArpReport, ArpResolveError> {
+    let interval_us =
+        micros(policy.interval)
+            .filter(|&us| us != 0)
+            .ok_or(ArpResolveError::InvalidPolicy(
+                "interval must fit u64 microseconds and be at least one microsecond",
+            ))?;
+    let timeout_us = micros(policy.timeout).ok_or(ArpResolveError::InvalidPolicy(
+        "timeout must fit u64 microseconds",
+    ))?;
+    let t0 = clock.now_micros();
+    let deadline = t0
+        .checked_add(timeout_us)
+        .ok_or(ArpResolveError::InvalidPolicy(
+            "absolute deadline exceeds the clock range",
+        ))?;
     let mut pending = PendingResolve::new(my_mac, u32::from(my_ip), u32::from(target));
     let frame = pending.request_frame();
-    let timeout_us = micros(policy.timeout);
-    let interval_us = micros(policy.interval);
-    let max_io_us = micros(MAX_IO_TIMEOUT);
-    let t0 = clock.now_micros();
+    // MAX_IO_TIMEOUT is a fixed 50 ms, representable in the clock's microseconds.
+    let max_io_us = MAX_IO_TIMEOUT.as_micros() as u64;
     let mut next_send = t0;
     let mut requests_sent = 0u32;
     let mut buf = [0u8; 2048];
@@ -163,10 +180,11 @@ pub fn resolve_next_hop(
             {
                 SendStatus::Sent => {
                     requests_sent += 1;
-                    next_send += interval_us;
+                    // No further request is needed at or beyond the deadline.
+                    next_send = next_send.saturating_add(interval_us).min(deadline);
                 }
                 SendStatus::WouldBlockUnsent => {
-                    clock.sleep_micros(1000);
+                    clock.sleep_micros(1000.min(deadline.saturating_sub(clock.now_micros())));
                     continue;
                 }
                 SendStatus::Uncertain => return Err(ArpResolveError::Uncertain),
@@ -174,7 +192,7 @@ pub fn resolve_next_hop(
         }
         let now = clock.now_micros();
         let until_send = next_send.saturating_sub(now);
-        let until_end = (t0 + timeout_us).saturating_sub(now);
+        let until_end = deadline.saturating_sub(now);
         let wait = max_io_us.min(until_send).min(until_end);
         let got = io
             .rx

@@ -52,6 +52,17 @@ supplied owned home-network and remote-server targets, recording interface type,
 known port states and Wi-Fi/AP isolation limits. Package/sign/hash/install the
 exact accepted candidate through the normal helper flow when requested.
 
+Task 5 review correction: draft edits, profile loads and repeated settings now
+invalidate only draft readiness. Selected scan coverage stays paired with its
+unchanged results/zero-row selection until Reset/Clear/new scan/History selection
+replaces that view. App and headless UI regressions first failed on the two
+coverage-clear paths, then passed after both clears were removed. The UI regression
+reopens partial/all-unresolved temporary History, edits/loads/repeats settings and
+atomically exports the original scan metadata with filtered or zero rows. Affected
+app/UI/inspection tests: **79 passed, 0 failed, 2 ignored**; affected Clippy,
+workspace all-targets compile and formatting passed. No native packet or app
+installation acceptance was performed by this correction.
+
 ## 2026-10-26 — PR #30 viewport and idle-summary follow-up
 
 Base: `4413e113165e9eb6dbed04ae5d9448d89318e0da`. Both deferred minor findings

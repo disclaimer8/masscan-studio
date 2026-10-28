@@ -100,6 +100,10 @@ under **Coverage…**, including addresses not scanned due to no neighbour respo
 and automatic exclusions. Eligible counts describe the prepared plan, not a claim
 that every probe was sent. An all-unresolved scan has no TCP results and still has
 saved coverage. History reopening preserves these facts and original settings.
+Editing new settings, loading a profile or repeating settings invalidates route
+readiness while retaining coverage for the selected saved scan and its displayed
+results. Export continues to describe that selected scan until a new scan starts
+or another History selection clears/replaces the view.
 
 These controls and fake-network tests do not establish working physical Wi-Fi or
 Ethernet scanning. Sealed multi-peer/routed lab acceptance and explicitly supplied

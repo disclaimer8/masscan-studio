@@ -215,3 +215,162 @@ fn saved_partial_and_all_missing_coverage_survive_reopen_and_programmatic_fill()
     drop(store);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn history_edit_profile_and_repeat_keep_selected_coverage_with_filtered_and_zero_row_exports() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new().unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "studio-ui-draft-export-{}",
+        studio_protocol::id_text(studio_protocol::new_id().unwrap())
+    ));
+    {
+        let mut store = studio_store::Store::open(&path).unwrap();
+        store
+            .save_profile(None, "Other draft", &Job::example(Backend::Simulation))
+            .unwrap();
+        for all_missing in [false, true] {
+            let (job, report) = report(all_missing);
+            let scan = [if all_missing { 2 } else { 1 }; 16];
+            store.begin(scan, [3; 16], &job, false).unwrap();
+            store
+                .apply(&Envelope::new(
+                    [4; 16],
+                    scan,
+                    [3; 16],
+                    1,
+                    Event::NetworkPrepared {
+                        bytes: report.encode().unwrap(),
+                    },
+                ))
+                .unwrap();
+            if !all_missing {
+                store
+                    .apply(&Envelope::new(
+                        [4; 16],
+                        scan,
+                        [3; 16],
+                        2,
+                        Event::Results(
+                            [80, 90]
+                                .map(|port| studio_protocol::Row {
+                                    ip: "10.0.0.1".into(),
+                                    port,
+                                    open: true,
+                                })
+                                .into(),
+                        ),
+                    ))
+                    .unwrap();
+            }
+        }
+    }
+    let store = studio_store::Store::open(&path).unwrap();
+    let profile = store.profiles().unwrap().into_iter().next().unwrap();
+    let cache = Rc::new(RefCell::new(None));
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let sent = actions.clone();
+    let weak = ui.as_weak();
+    ui.on_draft_changed(move || {
+        if let Some(ui) = weak.upgrade() {
+            sent.borrow_mut().push(network_ui::changed_draft(&ui));
+        }
+    });
+    for saved in store.scans().unwrap() {
+        let value = NetworkCoverage::from_saved(&saved).unwrap().unwrap();
+        let original = network_ui::coverage(&ui, Some(&value)).unwrap();
+        *cache.borrow_mut() = Some(original.clone());
+        let rows = Rows {
+            observations: RefCell::new(HashMap::new()),
+            hosts: RefCell::new(HashMap::new()),
+            table: RefCell::new(Table::new(0)),
+            keys: RefCell::new(HashMap::new()),
+            notify: ModelNotify::default(),
+            summary_dirty: Cell::new(true),
+            simulation: Cell::new(false),
+            archived: Cell::new(false),
+        };
+        rows.add(store.observations(saved.scan).unwrap());
+        rows.table.borrow_mut().filter("80");
+        rows.table.borrow_mut().sort(0, true);
+        let expected_rows = rows.export_rows();
+        assert_eq!(
+            expected_rows.len(),
+            usize::from(value.eligible_targets != 0)
+        );
+        for flow in ["edit", "profile load", "repeat"] {
+            fill_settings(&ui, &saved.job);
+            network_ui::readiness(
+                &ui,
+                Some(&NetworkReadiness {
+                    job_digest: Some(saved.job.original_digest().unwrap()),
+                    backend: Backend::MacNetwork,
+                    checking: false,
+                    route_ready: true,
+                    execution_enabled: false,
+                    detail: "saved draft route check".into(),
+                }),
+            );
+            assert!(ui.get_network_detail().contains("passed"));
+            match flow {
+                "edit" => ui.set_job_targets("10.0.0.77".into()),
+                "profile load" => fill_settings(&ui, &profile.job),
+                "repeat" => fill_settings(&ui, &repeat_job(&saved).unwrap()),
+                _ => unreachable!(),
+            }
+            // These flows all use the same settings-edited -> production draft
+            // handler as the actual text inputs, Load and Repeat callbacks.
+            ui.invoke_settings_edited();
+            assert!(!ui.get_network_detail().contains("passed"));
+            assert!(!ui.get_job_valid());
+            assert!(matches!(actions.borrow().last(), Some(Action::SetDraft(_))));
+            assert!(
+                ui.get_has_network_coverage(),
+                "{flow} erased the selected scan's visible coverage"
+            );
+            let selected = cache
+                .borrow()
+                .clone()
+                .expect("selected History coverage must remain exportable");
+            assert_eq!(
+                selected, original,
+                "{flow} substituted draft settings for saved scan metadata"
+            );
+            let snapshot = rows.export_rows();
+            assert_eq!(
+                serde_json::to_value(&snapshot).unwrap(),
+                serde_json::to_value(&expected_rows).unwrap()
+            );
+            let output = path.join("selected-report.json");
+            studio_inspection::write_export_with_coverage(
+                &output,
+                &snapshot,
+                Some(&selected),
+                true,
+            )
+            .unwrap();
+            let exported: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+            assert_eq!(exported["version"], 2);
+            assert_eq!(
+                exported["coverage"],
+                serde_json::to_value(&original).unwrap()
+            );
+            assert_eq!(
+                exported["rows"],
+                serde_json::to_value(&expected_rows).unwrap()
+            );
+            let csv = studio_inspection::csv_with_coverage(&snapshot, Some(&selected)).unwrap();
+            assert!(csv.contains("\r\nscan_coverage,"));
+            assert!(csv.contains("\r\nnot_scanned,"));
+            assert_eq!(
+                csv.lines()
+                    .filter(|line| line.starts_with("result,"))
+                    .count(),
+                expected_rows.len()
+            );
+        }
+    }
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+}

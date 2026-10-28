@@ -529,7 +529,7 @@ fn wait_updates(c: &mut Controller, predicate: impl Fn(&[Update]) -> bool) -> Ve
 }
 
 #[test]
-fn all_unresolved_history_reopens_and_switching_scan_or_draft_clears_coverage() {
+fn all_unresolved_history_reopens_and_draft_keeps_selected_coverage_until_scan_changes() {
     let _process_reopen_guard = PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
     let dir = Temp::new();
     let mut db = Store::open(&dir.0).unwrap();
@@ -630,9 +630,17 @@ fn all_unresolved_history_reopens_and_switching_scan_or_draft_clears_coverage() 
     });
     c.send(Action::SetDraft(Job::example(Backend::Simulation)))
         .unwrap();
-    wait_updates(&mut c, |u| {
-        u.iter().any(|v| matches!(v, Update::NetworkCoverage(None)))
+    let updates = wait_updates(&mut c, |u| {
+        u.iter()
+            .any(|v| matches!(v, Update::NetworkReadiness(Some(_))))
     });
+    assert!(
+        !updates.iter().any(|v| matches!(
+            v,
+            Update::NetworkCoverage(_) | Update::Reset(..) | Update::Clear
+        )),
+        "a new draft must not detach coverage from the selected zero-row History scan"
+    );
     c.send(Action::Select([1; 16])).unwrap();
     wait_updates(&mut c, |u| {
         u.iter()

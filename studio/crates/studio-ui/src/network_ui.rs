@@ -159,7 +159,7 @@ pub(super) fn coverage(ui: &MainWindow, value: Option<&NetworkCoverage>) -> Opti
         return None;
     };
     let report = export_coverage(value);
-    ui.set_coverage_summary(format!("Whole scan · requested {} addresses / {} probes · candidates {} addresses / {} probes · effective {} addresses / {} probes · eligible {} addresses / {} probes\nNot scanned: {} addresses / {} probes (no neighbour response) · automatically excluded {} addresses / {} probes. Eligible is the prepared plan; sent counts are shown separately.", value.requested_targets, value.requested_probes, value.candidate_targets, value.candidate_probes, value.effective_targets, value.effective_probes, value.eligible_targets, value.eligible_probes, value.unresolved_targets, value.unresolved_probes, value.excluded_targets, value.excluded_probes).into());
+    ui.set_coverage_summary(format!("Selected scan · requested {} addresses / {} probes · candidates {} addresses / {} probes · effective {} addresses / {} probes · eligible {} addresses / {} probes\nNot scanned: {} addresses / {} probes (no neighbour response) · automatically excluded {} addresses / {} probes. Eligible is the prepared plan; sent counts are shown separately.", value.requested_targets, value.requested_probes, value.candidate_targets, value.candidate_probes, value.effective_targets, value.effective_probes, value.eligible_targets, value.eligible_probes, value.unresolved_targets, value.unresolved_probes, value.excluded_targets, value.excluded_probes).into());
     let direct = value
         .report
         .routes
@@ -202,4 +202,27 @@ pub(super) fn settings_changed(ui: &MainWindow) {
     ui.set_job_valid(false);
     ui.set_job_preview("".into());
     ui.set_job_feedback("Settings changed. Check again to refresh the preview.".into());
+}
+
+/// Shared by the actual user-edit callback and headless History/export regression.
+pub(super) fn changed_draft(ui: &MainWindow) -> Action {
+    settings_changed(ui);
+    // Draft readiness belongs to settings; durable coverage belongs to the
+    // selected result table (including a saved selection with zero rows).
+    readiness(ui, None);
+    match draft(ui) {
+        Ok(job) => Action::SetDraft(job),
+        Err(e) => {
+            let invalid = Job {
+                targets: ui.get_job_targets().to_string(),
+                ports: ui.get_job_ports().to_string(),
+                exclusions: ui.get_job_exclusions().to_string(),
+                seed: ui.get_job_seed().to_string(),
+                rate: 0,
+                backend: backend(ui.get_backend_index()).unwrap_or(Backend::Archived),
+            };
+            ui.set_job_feedback(e.into());
+            Action::SetDraft(invalid)
+        }
+    }
 }

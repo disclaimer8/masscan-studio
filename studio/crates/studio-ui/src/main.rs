@@ -467,29 +467,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let w = ui.as_weak();
     let a = app.clone();
-    let c = coverage.clone();
     ui.on_draft_changed(move || {
         if let Some(ui) = w.upgrade() {
-            network_ui::settings_changed(&ui);
-            *c.borrow_mut() = network_ui::coverage(&ui, None);
-            network_ui::readiness(&ui, None);
-            match draft(&ui) {
-                Ok(job) => action(&a, &ui, Action::SetDraft(job)),
-                Err(e) => {
-                    // Still invalidate the last digest when the rate text cannot be parsed.
-                    let invalid = Job {
-                        targets: ui.get_job_targets().to_string(),
-                        ports: ui.get_job_ports().to_string(),
-                        exclusions: ui.get_job_exclusions().to_string(),
-                        seed: ui.get_job_seed().to_string(),
-                        rate: 0,
-                        backend: network_ui::backend(ui.get_backend_index())
-                            .unwrap_or(Backend::Archived),
-                    };
-                    action(&a, &ui, Action::SetDraft(invalid));
-                    ui.set_job_feedback(e.into());
-                }
-            }
+            action(&a, &ui, network_ui::changed_draft(&ui));
         }
     });
     let w = ui.as_weak();

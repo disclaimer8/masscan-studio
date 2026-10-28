@@ -12,4 +12,4 @@ studio-inspection.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-rusqlite = { version = "=0.41.0", default-features = false }
+rusqlite = { version = "=0.41.1", default-features = false }

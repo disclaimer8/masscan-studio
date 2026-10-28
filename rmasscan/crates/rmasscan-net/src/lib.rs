@@ -55,6 +55,13 @@ mod windows;
 
 // Логика обнаружения адаптера/источника/следующего хопа над швами `RouteTable`/`Interfaces`: безопасная, без ОС.
 pub mod discover;
+pub mod neighbours;
+pub mod network_plan;
+pub use neighbours::{NeighbourReport, resolve_neighbours};
+pub use network_plan::{
+    ExcludedReason, InterfaceObservation, Ipv4Prefix, PhysicalRoutePlan, PhysicalTargets,
+    plan_physical,
+};
 
 // Синхронный ARP-резолвер следующего хопа над Tx/Rx (безопасный, без ОС; тесты на FakeAdapter).
 pub mod arp_resolve;

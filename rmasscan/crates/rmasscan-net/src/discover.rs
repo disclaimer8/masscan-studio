@@ -41,6 +41,19 @@ pub struct Iface {
 }
 
 pub trait RouteTable {
+    /// Physical preparation must implement a cancellable, absolute-deadline lookup.
+    /// Refuse unsupported implementations rather than calling an unbounded legacy lookup.
+    fn lookup_until(
+        &self,
+        _dst: Ipv4Addr,
+        _deadline: std::time::Instant,
+        _cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<Route>, NetError> {
+        Err(NetError::MissingCapability(
+            "bounded route observation".into(),
+        ))
+    }
+
     /// Маршрут к одному unicast-адресу (Linux RTM_GETROUTE+RTA_DST, macOS RTM_GET, Windows GetBestRoute2); `None` = нет
     /// маршрута (Linux unreachable/blackhole/prohibit; Windows ERROR_NOT_FOUND/NETWORK_UNREACHABLE/HOST_UNREACHABLE;
     /// macOS ESRCH).
@@ -51,6 +64,17 @@ pub trait RouteTable {
 }
 
 pub trait Interfaces {
+    /// Prefix-aware snapshot for physical planning; no packet handles may be opened.
+    fn observe(
+        &self,
+        _deadline: std::time::Instant,
+        _cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<crate::network_plan::InterfaceObservation>, NetError> {
+        Err(NetError::MissingCapability(
+            "bounded interface observation".into(),
+        ))
+    }
+
     fn list(&self) -> Result<Vec<Iface>, NetError>;
 }
 

@@ -133,14 +133,24 @@ export component MainWindow inherits Window {
     default-font-size: 13px;
     in property <[ResultRow]> rows;
     in property <string> summary;
-    out property <string> empty-title: root.filter-query != "" ? "No matching results" : root.process-active ? "Waiting for results" : root.history-index >= 0 ? "No results saved" : "Start your first scan";
+    out property <string> empty-title: root.filter-query != "" ? "No matching results" : root.process-active ? "Waiting for results" : root.has-network-coverage ? "No TCP results saved · see scan coverage" : root.history-index >= 0 ? "No results saved" : "Start your first scan";
     out property <string> empty-action: root.filter-query != "" ? "Clear filter" : root.process-active ? "" : "New scan";
-    private property <string> empty-description: root.filter-query != "" ? "Try another IP, hostname or service." : root.process-active ? "Results will appear here as they are saved." : root.history-index >= 0 ? "Choose another scan in History or start a new scan." : "Configure targets and ports to begin. Results are saved in History.";
+    private property <string> empty-description: root.filter-query != "" ? "Try another IP, hostname or service." : root.process-active ? "Results will appear here as they are saved." : root.has-network-coverage ? "Preparation coverage is saved above and can be exported even without result rows. Unresolved neighbours were not scanned." : root.history-index >= 0 ? "Choose another scan in History or start a new scan." : "Configure targets and ports to begin. Results are saved in History.";
     in property <string> selection-label: "No selection";
     in property <string> event-label: "Ready · no scan started";
     in-out property <int> backend-index: 0;
     // Set once from studio_protocol::raw_profile_enabled(Backend::MacFeth): the gate differs per OS.
     in property <bool> mac-feth-open: false;
+    in property <bool> mac-network-open: false;
+    in property <bool> mac-network-supported: false;
+    in property <string> network-profile-hint;
+    in property <bool> network-checking: false;
+    in property <string> network-detail: "Check routes for the current settings. No ARP or TCP scan packets are sent.";
+    callback check-network();
+    in property <bool> has-network-coverage: false;
+    in property <string> coverage-summary;
+    in property <string> coverage-details;
+    in-out property <bool> coverage-open: false;
     in-out property <string> scan-backend-label: "No scan selected";
     in property <[string]> history-labels;
     in-out property <int> history-index: -1;
@@ -188,13 +198,19 @@ export component MainWindow inherits Window {
     callback run-process-test();
     in property <bool> process-view: false;
     in property <bool> process-active: false;
+    in property <bool> process-preparing: false;
+    out property <bool> can-pause: root.process-active && !root.process-preparing && root.process-status == "Scanning" && !root.process-stopping;
+    out property <bool> can-stop: root.process-active && !root.process-stopping;
+    out property <bool> can-start: root.job-valid && !root.process-active && (root.backend-index != 2 || (root.mac-network-open && root.mac-network-supported));
     in-out property <bool> process-stopping: false;
     in property <string> process-status: "Ready";
     callback settings-edited();
+    callback draft-changed();
     settings-edited => {
         root.job-valid = false;
         root.job-preview = "";
         root.job-feedback = "Settings changed. Check again to refresh the preview.";
+        root.draft-changed();
     }
     private property <ResultRow> action-target;
     private property <length> actions-x;
@@ -244,7 +260,7 @@ export component MainWindow inherits Window {
                 ActionButton { text: "History…"; enabled: !root.process-active && root.history-labels.length > 0; clicked => { root.manage-history(); } }
                 ActionButton { text: "New scan"; enabled: !root.process-active; clicked => { root.settings-open = true; } }
                 ActionButton { text: "Scanner setup"; enabled: !root.process-active && !root.authorized && !root.setup-busy; clicked => { root.setup-open = true; root.check-setup(); } }
-                ActionButton { text: root.authorizing ? "Cancel authorization" : root.authorized || !root.authorization-available ? "Lock" : "Authorize"; enabled: root.authorizing || !root.process-active; clicked => { root.lock-session(); } }
+                ActionButton { text: root.authorizing ? "Cancel authorization" : root.process-active || root.authorized || !root.authorization-available ? "Lock" : "Authorize"; clicked => { root.lock-session(); } }
                 theme-button := ActionButton { text: Theme.preference == 0 ? "Theme: System" : Theme.dark ? "Theme: Dark" : "Theme: Light"; clicked => { themes.show(); } }
                 Rectangle { width: 6px; height: 6px; border-radius: 3px; background: root.stream-state == 1 ? Theme.accent : Theme.muted; }
                 Text { text: root.process-view ? (root.process-stopping ? "Stopping…" : root.process-status) : root.stream-state == 1 ? "Streaming" : root.stream-state == 2 ? "Stream complete" : "Ready"; color: Theme.muted; font-size: 12px; }
@@ -278,10 +294,15 @@ export component MainWindow inherits Window {
                 ActionButton { text: "Names"; enabled: root.inspection-available; clicked => { root.resolve-names(); } Tooltip { Text { text: "Resolve selected hosts, or all visible hosts (up to 512)"; } } }
                 ActionButton { text: "Export…"; enabled: !root.exporting; clicked => { exports.show(); } }
                 Rectangle { width: 8px; }
-                if root.process-active : ActionButton { text: "Pause"; enabled: root.process-status != "Saving" && !root.process-stopping; clicked => { root.pause-scan(); } }
-                if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: !root.process-stopping; clicked => { root.stop-scan(); } }
+                if root.process-active : ActionButton { text: "Pause"; enabled: root.can-pause; clicked => { root.pause-scan(); } }
+                if root.process-active : ActionButton { text: root.process-stopping ? "Stopping…" : "Stop"; primary: true; enabled: root.can-stop; clicked => { root.stop-scan(); } }
                 if root.can-resume : ActionButton { text: "Resume"; primary: true; clicked => { root.resume-scan(); } }
             }
+        }
+        if root.has-network-coverage : HorizontalLayout {
+            padding-left: 20px; padding-right: 20px; padding-top: 8px; padding-bottom: 8px; spacing: 12px;
+            Text { text: root.coverage-summary; color: Theme.muted; font-size: 11px; wrap: word-wrap; horizontal-stretch: 1; }
+            ActionButton { text: "Coverage…"; clicked => { root.coverage-open = true; } }
         }
         Rectangle {
             height: 30px;
@@ -506,6 +527,27 @@ export component MainWindow inherits Window {
             }
         }
     }
+    if root.coverage-open : Rectangle {
+        background: Theme.canvas;
+        Rectangle {
+            x: (parent.width - self.width) / 2; y: 20px;
+            width: min(740px, parent.width - 32px); height: parent.height - 40px;
+            background: Theme.surface; border-radius: 8px; border-width: 1px; border-color: Theme.divider;
+            VerticalLayout {
+                padding: 20px; spacing: 12px;
+                HorizontalLayout {
+                    Text { text: "Whole-scan coverage"; color: Theme.text; font-size: 18px; font-weight: 600; }
+                    ActionButton { text: "Close"; clicked => { root.coverage-open = false; } }
+                }
+                Text { text: root.coverage-summary; color: Theme.text; wrap: word-wrap; }
+                ScrollView {
+                    content-width: self.visible-width;
+                    content-height: max(self.visible-height, coverage-text.preferred-height);
+                    coverage-text := Text { width: parent.width; height: self.preferred-height; text: root.coverage-details; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                }
+            }
+        }
+    }
     if root.settings-open : Rectangle {
         background: Theme.canvas;
         Rectangle {
@@ -538,7 +580,7 @@ export component MainWindow inherits Window {
                     ActionButton { text: "Cancel"; enabled: !root.profile-busy; clicked => { root.confirm-profile-delete = false; } }
                     ActionButton { text: "Delete profile"; enabled: !root.profile-busy; clicked => { root.delete-profile(); } }
                 }
-                ComboBox { model: [root.mac-feth-open ? "Mac feth · isolated stand (macOS)" : "Mac feth · not enabled on this OS", "Simulation · no network packets"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
+                ComboBox { model: [root.mac-feth-open ? "Mac feth · isolated stand (macOS)" : "Mac feth · not enabled on this OS", "Simulation · no network packets", "Mac network · Wi-Fi / Ethernet"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
                 JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
                 HorizontalLayout {
                     spacing: 12px;
@@ -548,8 +590,15 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 12px;
                     JobField { label: "Exclude · optional"; hint: "IPv4 addresses or ranges"; value <=> root.job-exclusions; edited => { root.settings-edited(); } }
-                    Text { text: root.backend-index == 0 ? (root.mac-feth-open ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Raw scanning is not enabled for this profile on this OS.") : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
+                    Text { text: root.backend-index == 2 ? root.network-profile-hint : root.backend-index == 0 ? (root.mac-feth-open ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Raw scanning is not enabled for this profile on this OS.") : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
                 }
+                if root.backend-index != 1 : HorizontalLayout {
+                    spacing: 12px;
+                    ActionButton { text: root.network-checking ? "Checking routes…" : root.backend-index == 2 ? "Check network" : "Check isolated stand"; enabled: !root.network-checking && !root.process-active && (root.backend-index != 2 || root.mac-network-supported); clicked => { root.check-network(); } }
+                    ActionButton { text: root.authorizing ? "Cancel authorization" : root.authorized ? "Lock session" : "Authorize session…"; enabled: root.authorizing || root.authorized || (root.authorization-available && (root.backend-index != 2 || root.mac-network-supported)); clicked => { root.lock-session(); } }
+                    Text { text: root.authorized ? "Helper session authorized" : "Helper session is not authorized"; color: Theme.muted; wrap: word-wrap; }
+                }
+                if root.backend-index != 1 : Text { text: root.network-detail; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
                 HorizontalLayout {
                     spacing: 12px;
                     JobField { label: "Seed · exact job sequence"; value <=> root.job-seed; edited => { root.settings-edited(); } }
@@ -575,9 +624,9 @@ export component MainWindow inherits Window {
                 }
                 HorizontalLayout {
                     spacing: 12px; height: 30px;
-                    Text { text: root.backend-index == 1 ? "Simulation sends no network packets." : "Only scan networks you are authorized to test. This build supports the isolated feth stand."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                    Text { text: root.backend-index == 1 ? "Simulation sends no network packets." : root.backend-index == 2 ? (root.mac-network-open ? "Only scan targets you are authorized to test." : "Route checks send no scan packets. Physical Start is disabled in this build.") : "Only scan networks you are authorized to test. This profile uses the isolated feth stand."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                     ActionButton { width: 130px; text: root.job-checking ? "Preparing…" : "Check settings"; enabled: !root.job-checking; primary: true; clicked => { root.check-settings(); } }
-                    ActionButton { width: 140px; text: "Start scan"; enabled: root.job-valid && !root.process-active; clicked => { root.run-process-test(); } }
+                    ActionButton { width: 140px; text: "Start scan"; enabled: root.can-start; clicked => { root.run-process-test(); } }
                 }
             }
             }
@@ -621,7 +670,7 @@ export component MainWindow inherits Window {
         x: root.width - 230px; y: 118px; width: 210px; height: 112px;
         Rectangle { background: Theme.surface; border-color: Theme.divider; border-width: 1px; border-radius: 6px;
             VerticalLayout { padding: 10px; spacing: 4px;
-                Text { text: "Export visible rows"; color: Theme.muted; font-size: 11px; }
+                Text { text: root.has-network-coverage ? "Visible rows + scan coverage" : "Export visible rows"; color: Theme.muted; font-size: 11px; }
                 MenuAction { text: "CSV spreadsheet"; clicked => { exports.close(); root.export-rows("csv"); } }
                 MenuAction { text: "JSON with inspection data"; clicked => { exports.close(); root.export-rows("json"); } }
             }

@@ -16,6 +16,36 @@ pub struct NetworkReadiness {
     pub detail: String,
 }
 
+/// Normalized original input counts, before user/automatic exclusions. Parsing
+/// uses range arithmetic, so a broad requested range trimmed by exclusions stays bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestedCounts {
+    pub targets: u64,
+    pub ports: u64,
+    pub probes: u64,
+}
+pub fn requested_counts(job: &Job) -> Result<RequestedCounts, String> {
+    job.validate()?;
+    let mut targets = rmasscan_core::ranges::RangeList::new();
+    for selector in job
+        .targets
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+    {
+        rmasscan_core::targets::add_target_string(&mut targets, selector)
+            .map_err(|e| e.to_string())?;
+    }
+    targets.sort_and_merge();
+    let mut ports = rmasscan_core::ranges::RangeList::new();
+    rmasscan_core::targets::parse_ports(&mut ports, &job.ports).map_err(|e| e.to_string())?;
+    ports.sort_and_merge();
+    Ok(RequestedCounts {
+        targets: targets.count(),
+        ports: ports.count(),
+        probes: targets.count() * ports.count(),
+    })
+}
+
 /// Scan-wide metadata, independent of the currently filtered result rows.
 /// The original input strings and the complete exclusion/unresolved lists remain
 /// available; eligible targets are not a claim that TCP probing completed.
@@ -49,23 +79,9 @@ impl NetworkCoverage {
         report.validate_for(&saved.job)?;
         // Count normalized ranges without expanding addresses or ports. An
         // original /0 trimmed by user exclusions must remain bounded work.
-        let mut targets = rmasscan_core::ranges::RangeList::new();
-        for selector in saved
-            .job
-            .targets
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .filter(|s| !s.is_empty())
-        {
-            rmasscan_core::targets::add_target_string(&mut targets, selector)
-                .map_err(|e| e.to_string())?;
-        }
-        targets.sort_and_merge();
-        let requested_targets = targets.count();
-        let mut ports = rmasscan_core::ranges::RangeList::new();
-        rmasscan_core::targets::parse_ports(&mut ports, &saved.job.ports)
-            .map_err(|e| e.to_string())?;
-        ports.sort_and_merge();
-        let ports = ports.count();
+        let counts = requested_counts(&saved.job)?;
+        let requested_targets = counts.targets;
+        let ports = counts.ports;
         let candidate_targets = saved.job.network_targets()?.addresses().len() as u64;
         let effective_targets = report.routes.next_hops.len() as u64;
         let eligible_targets = report.destinations.len() as u64;

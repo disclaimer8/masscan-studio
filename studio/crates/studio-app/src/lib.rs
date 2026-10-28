@@ -3,7 +3,7 @@
 mod hosts;
 mod network;
 mod persistence;
-pub use network::{NetworkCoverage, NetworkReadiness};
+pub use network::{NetworkCoverage, NetworkReadiness, RequestedCounts, requested_counts};
 #[cfg(test)]
 mod network_tests;
 // On macOS, a concurrent child spawn can briefly retain a flock open-file

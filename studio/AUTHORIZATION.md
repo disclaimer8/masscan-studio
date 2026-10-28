@@ -71,7 +71,8 @@ proof of process death.
 
 The endpoint is removed when the session closes; removal checks its saved
 device/inode. The protocol has separate version, session/attempt IDs and strictly
-ordered frames. Protocol v2 adds a read-only CheckNetwork command before any scan.
+ordered frames. Protocol v3 retains the legacy read-only CheckNetwork command and
+adds job-bound physical route checks and durable preparation-report acknowledgement.
 
 ## macOS installation and launch
 
@@ -183,9 +184,36 @@ and any later resume requires a new preflight.
 Polling can miss transient changes between observations. OS-tool output is not
 an atomic network snapshot; this does not guarantee zero transmitted packets
 after drift or detect every interface recreation with identical configuration.
-The observer currently covers the fixed Mac feth profile only. Linux/Windows raw
-observers, physical NIC identity and native sleep hooks remain
-separate acceptance work. RAW_SCANNING_ENABLED remains false.
+This fixed-stand observer covers Mac feth only. The separately implemented physical
+observer below remains behind a closed execution gate. Linux/Windows raw observers
+and native sleep hooks remain separate work.
+
+## Gated physical macOS preparation
+
+The visible Mac network profile uses job-specific **Check network** and
+**Authorize session…** actions, preserving legacy feth callers. Settings and route
+checks send no ARP/TCP and never open packet adapters. A successful unprivileged
+route check may include a masked source MAC; it cannot prove executable adapter
+identity, helper authorization, neighbour response or packet access. The compile-time
+physical execution gate stays closed; no environment bypass exists.
+
+For the implemented gated execution path, only explicit Start begins neighbour
+preparation, after independent privileged source/route validation and bounded
+admission. Route observations have a ten-second budget; ARP has a 35-second
+total deadline and at most three requests per distinct next hop at 100 frames/s,
+with one-second response windows. Stop, Lock and disconnect cancel observation,
+preparation and report waiting. The immutable report commits to History before
+acknowledgement permits TCP startup. Unresolved local neighbours are recorded as
+not scanned; unresolved gateways fail preparation. If no target is eligible, no
+TCP engine starts. Eligible counts alone never establish probes sent.
+
+The physical running guard rechecks the complete source/interface/route snapshot
+with a three-second observation/freshness budget, one-second polling and the
+existing five-second scheduling-gap policy. Resume must revalidate the frozen
+report and eligible destination MAC map before packet access. Previously unresolved
+targets cannot silently join Resume. These are implemented constraints covered by
+fake tests, not measured live-network guarantees. Multi-peer/routed sealed-lab,
+physical Wi-Fi/Ethernet and owned remote-server acceptance remain pending.
 
 ## Acceptance still required
 

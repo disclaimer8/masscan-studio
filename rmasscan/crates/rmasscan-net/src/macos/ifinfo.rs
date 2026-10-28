@@ -1,8 +1,10 @@
 //! Сведения об интерфейсе через `if_nametoindex` и `getifaddrs` (AF_LINK /
 //! AF_INET). Без привилегий и без открытия BPF.
 
+use crate::network_plan::{InterfaceObservation, Ipv4Prefix, check_observation};
 use std::ffi::{CStr, CString};
 use std::net::Ipv4Addr;
+use std::time::{Duration, Instant};
 
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
@@ -53,7 +55,10 @@ pub(crate) struct RawAddr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AddrKind {
     Link(LinkInfo),
-    V4(Ipv4Addr),
+    V4 {
+        address: Ipv4Addr,
+        prefix: Option<u8>,
+    },
     Other,
 }
 
@@ -105,10 +110,25 @@ pub(crate) fn link_from_bytes(rec: &[u8]) -> Option<LinkInfo> {
 
 /// Снимок всех записей `getifaddrs`.
 pub(crate) fn raw_addrs() -> Result<Vec<RawAddr>, Errno> {
+    raw_addrs_until(Instant::now() + Duration::from_secs(10), &|| false)
+}
+fn raw_addrs_until(deadline: Instant, cancelled: &dyn Fn() -> bool) -> Result<Vec<RawAddr>, Errno> {
+    let check = || {
+        if cancelled() {
+            Err(libc::ECANCELED)
+        } else if Instant::now() >= deadline {
+            Err(libc::ETIMEDOUT)
+        } else {
+            Ok(())
+        }
+    };
+    check()?;
     let list = IfAddrs::get()?;
+    check()?;
     let mut out = Vec::new();
     let mut cur = list.0;
     while !cur.is_null() {
+        check()?;
         // SAFETY: `cur` это элемент списка, живущего до конца `list`.
         let e = unsafe { &*cur };
         cur = e.ifa_next;
@@ -148,7 +168,21 @@ pub(crate) fn raw_addrs() -> Result<Vec<RawAddr>, Errno> {
                     // (поля читаются по выровненным смещениям).
                     let s_addr =
                         unsafe { (*e.ifa_addr.cast::<libc::sockaddr_in>()).sin_addr.s_addr };
-                    AddrKind::V4(Ipv4Addr::from(u32::from_be(s_addr)))
+                    let prefix = if e.ifa_netmask.is_null() {
+                        None
+                    } else {
+                        // SAFETY: getifaddrs owns this netmask. Darwin may omit trailing zero
+                        // bytes, so read only sa_len bytes and zero-fill missing IPv4 octets.
+                        let len = unsafe { usize::from((*e.ifa_netmask).sa_len) };
+                        // SAFETY: sa_len is the size of this owned sockaddr record.
+                        let bytes =
+                            unsafe { std::slice::from_raw_parts(e.ifa_netmask.cast::<u8>(), len) };
+                        prefix_from_sockaddr(bytes)
+                    };
+                    AddrKind::V4 {
+                        address: Ipv4Addr::from(u32::from_be(s_addr)),
+                        prefix,
+                    }
                 }
                 _ => AddrKind::Other,
             }
@@ -241,7 +275,7 @@ pub(crate) fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> 
                 r.mac = l.visible_mac();
                 r.mac_masked = l.masked();
             }
-            AddrKind::V4(ip) => r.ipv4.push(ip),
+            AddrKind::V4 { address, .. } => r.ipv4.push(address),
             AddrKind::Other => {}
         }
     }
@@ -319,4 +353,147 @@ pub(crate) fn nic_mac_masked(name: &str) -> bool {
 /// Существование интерфейса независимо от MAC (`if_nametoindex`).
 pub(crate) fn iface_exists(name: &str) -> Option<bool> {
     OsIface.ifindex(name).ok().map(|i| i.is_some())
+}
+
+fn prefix_from_mask(mask: Ipv4Addr) -> Option<u8> {
+    let mask = u32::from(mask);
+    let length = mask.leading_ones();
+    let expected = u32::MAX.checked_shl(32 - length).unwrap_or(0);
+    (mask == expected).then_some(length as u8)
+}
+fn prefix_from_sockaddr(bytes: &[u8]) -> Option<u8> {
+    let offset = std::mem::offset_of!(libc::sockaddr_in, sin_addr);
+    if bytes.len() < 2 {
+        return None;
+    }
+    let mut octets = [0; 4];
+    for (i, octet) in octets.iter_mut().enumerate() {
+        *octet = bytes.get(offset + i).copied().unwrap_or(0);
+    }
+    prefix_from_mask(Ipv4Addr::from(octets))
+}
+fn observations(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<InterfaceObservation> {
+    let reports = merge(addrs.clone(), q);
+    reports
+        .into_iter()
+        .map(|r| {
+            let mut ipv4_prefixes: Vec<_> = addrs
+                .iter()
+                .filter(|a| a.name == r.name)
+                .filter_map(|a| match a.kind {
+                    AddrKind::V4 {
+                        address,
+                        prefix: Some(length),
+                    } => Some(Ipv4Prefix { address, length }),
+                    _ => None,
+                })
+                .collect();
+            ipv4_prefixes.sort_unstable();
+            ipv4_prefixes.dedup();
+            InterfaceObservation {
+                iface: iface_from_report(r),
+                ipv4_prefixes,
+            }
+        })
+        .collect()
+}
+pub(crate) fn observe(
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<InterfaceObservation>, NetError> {
+    check_observation(deadline, cancelled)?;
+    let addrs = raw_addrs_until(deadline, cancelled)
+        .map_err(|e| NetError::System(errno_msg("getifaddrs", e)))?;
+    check_observation(deadline, cancelled)?;
+    let out = observations(addrs, &OsIface);
+    check_observation(deadline, cancelled)?;
+    Ok(out)
+}
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+    #[test]
+    fn network_plan_prefixes_keep_aliases_and_ignore_missing_masks() {
+        struct Q;
+        impl IfaceInfo for Q {
+            fn ifindex(&self, _: &str) -> Result<Option<u32>, Errno> {
+                Ok(Some(2))
+            }
+            fn link(&self, _: &str) -> Result<Option<LinkInfo>, Errno> {
+                panic!("records already contain links")
+            }
+        }
+        let addrs = vec![
+            RawAddr {
+                name: "en0".into(),
+                flags: libc::IFF_UP as u32,
+                kind: AddrKind::Link(LinkInfo {
+                    sdl_type: IFT_ETHER,
+                    mac: Some([2, 1, 2, 3, 4, 5]),
+                }),
+            },
+            RawAddr {
+                name: "en0".into(),
+                flags: libc::IFF_UP as u32,
+                kind: AddrKind::V4 {
+                    address: "192.168.1.10".parse().unwrap(),
+                    prefix: Some(24),
+                },
+            },
+            RawAddr {
+                name: "en0".into(),
+                flags: 0,
+                kind: AddrKind::V4 {
+                    address: "10.0.0.1".parse().unwrap(),
+                    prefix: Some(31),
+                },
+            },
+            RawAddr {
+                name: "en0".into(),
+                flags: 0,
+                kind: AddrKind::V4 {
+                    address: "203.0.113.1".parse().unwrap(),
+                    prefix: None,
+                },
+            },
+        ];
+        let o = observations(addrs, &Q);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].iface.ipv4.len(), 3);
+        assert_eq!(
+            o[0].ipv4_prefixes,
+            vec![
+                Ipv4Prefix {
+                    address: "10.0.0.1".parse().unwrap(),
+                    length: 31
+                },
+                Ipv4Prefix {
+                    address: "192.168.1.10".parse().unwrap(),
+                    length: 24
+                }
+            ]
+        );
+    }
+    #[test]
+    fn network_plan_short_darwin_netmasks_zero_fill_trailing_octets() {
+        assert_eq!(prefix_from_sockaddr(&[7, 2, 0, 0, 255, 255, 255]), Some(24));
+        assert_eq!(
+            prefix_from_sockaddr(&[8, 2, 0, 0, 255, 255, 255, 254]),
+            Some(31)
+        );
+        assert_eq!(prefix_from_sockaddr(&[8, 2, 0, 0, 255, 0, 255, 0]), None);
+        assert_eq!(prefix_from_sockaddr(&[]), None);
+    }
+    #[test]
+    fn network_plan_prefix_masks_validate_contiguity_and_host_semantics() {
+        for (mask, want) in [
+            ("255.255.255.0", Some(24)),
+            ("255.255.255.254", Some(31)),
+            ("255.255.255.255", Some(32)),
+            ("0.0.0.0", Some(0)),
+            ("255.0.255.0", None),
+        ] {
+            assert_eq!(prefix_from_mask(mask.parse().unwrap()), want);
+        }
+    }
 }

@@ -6,6 +6,52 @@ gate is per profile: open for Mac feth on macOS, closed on Windows and Linux (se
 Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
 Studio is a separate workspace/branch; scanner source unchanged.
 
+## 2026-10-28 — gated Mac network UI, History and coverage exports
+
+Task 5 base: `e5ea8de`, branch `feat/studio-macos-network-integration`.
+The visible **Mac network · Wi-Fi / Ethernet** profile is implemented; its physical
+execution gate remains closed. No physical Start, packet adapter, ARP/TCP traffic,
+administrator prompt, helper installation or stable History database was used in
+this task. No native Wi-Fi/Ethernet scan acceptance is claimed.
+
+`cargo xtask test` with Rust 1.99.1 and Homebrew SQLite: **239 passed, 0 failed,
+2 ignored**; workspace Clippy (`-D warnings`) and formatting passed. The ignored
+tests require the real system resolver/Nmap. The existing runner stale-owner
+negative fixture prints its deliberate identity rejection; there are no unexpected
+warnings/errors. Focused UI/app/inspection tests passed before the full run.
+After the final exhaustive exclusion-reason projection and stale queued-readiness
+check, affected UI tests (35) and inspection tests (13, plus 2 ignored) passed
+again; their Clippy check and workspace formatting also passed.
+
+Headless Slint tests preserve selector indices 0=feth, 1=Simulation, 2=Mac network,
+round-trip physical settings and repeat History with `Job::validate`. Requested
+counts use the shared normalized-range helper, including original /0 requests
+trimmed to two candidates without expanding the IPv4 space. Passing read-only
+readiness never authorizes a session or enables the closed physical Start.
+Preparing keeps Stop available, disables Pause until Scanning, and selects Lock
+rather than another authorization attempt. A temporary real Store persists partial
+and all-unresolved reports; reopening renders original settings, count stages,
+unresolved neighbours and automatic exclusions even with zero result rows.
+Programmatic settings fills do not emit user-edit notifications that would erase
+restored History coverage; explicit edits still invalidate draft readiness.
+
+Physical JSON version 2 stores scan-wide coverage alongside filtered result rows.
+Physical CSV identifies metadata, not-scanned, automatically-excluded and result
+records; non-result ports/protocol/state stay empty. Tests verify zero-row reports,
+filtered result order/no hidden inspection data, exact legacy CSV bytes, single-file
+atomic replacement, owner-only temporary output and symlink/failure preservation.
+These are fake network facts and headless presentation/export evidence.
+
+Native verification still required on a reviewed candidate: inspect settings and
+route-only checks with the closed gate, then obtain separate approval for sealed
+multi-peer/routed packet acceptance on an identified unmerged gate-enabled build.
+Confirm per-destination Ethernet addressing, excluded/unresolved coverage, Stop
+and Lock during preparation/report acknowledgement, frozen checkpoint Resume and
+network-drift refusal with independent captures. Only after that use explicitly
+supplied owned home-network and remote-server targets, recording interface type,
+known port states and Wi-Fi/AP isolation limits. Package/sign/hash/install the
+exact accepted candidate through the normal helper flow when requested.
+
 ## 2026-10-26 — PR #30 viewport and idle-summary follow-up
 
 Base: `4413e113165e9eb6dbed04ae5d9448d89318e0da`. Both deferred minor findings

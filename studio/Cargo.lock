@@ -4461,6 +4461,7 @@ dependencies = [
  "image",
  "pollster 1.0.1",
  "rfd",
+ "rmasscan-net",
  "serde",
  "serde_json",
  "slint",

@@ -8,6 +8,7 @@ license.workspace = true
 studio-protocol.workspace = true
 studio-store.workspace = true
 studio-app.workspace = true
+rmasscan-net.workspace = true
 studio-table = { path = "../studio-table" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }

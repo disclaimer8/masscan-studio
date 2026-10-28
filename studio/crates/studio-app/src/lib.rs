@@ -60,6 +60,7 @@ pub enum Action {
     /// Packet-free, job-specific route check. Never grants execution readiness.
     CheckNetwork(Job),
     /// Call whenever settings/backend change to invalidate obsolete readiness.
+    /// Selected result rows and their durable coverage remain unchanged.
     SetDraft(Job),
     Start(Job),
     Pause,
@@ -736,8 +737,9 @@ fn work(
                             emit(&out, result)?;
                         }
                         Action::SetDraft(job) if !active => {
+                            // Readiness follows the draft; coverage stays paired
+                            // with the selected scan until its view is replaced.
                             draft.invalidate(&out)?;
-                            emit(&out, Update::NetworkCoverage(None))?;
                             draft.set(&job, false, &out)?;
                         }
                         Action::CheckNetwork(job) if !active => {

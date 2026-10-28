@@ -9,6 +9,7 @@ use rmasscan_core::probe::AdapterBinding;
 
 use super::sys::IFT_ETHER;
 use super::{Errno, errno_msg};
+use crate::discover::Iface;
 use crate::{IfaceReport, NetError};
 
 /// Канальный уровень интерфейса (из AF_LINK).
@@ -189,6 +190,26 @@ impl IfaceInfo for OsIface {
 /// Сводка по интерфейсам для инвентаря (порядок первого появления имени).
 pub(crate) fn interfaces() -> Result<Vec<IfaceReport>, Errno> {
     Ok(merge(raw_addrs()?, &OsIface))
+}
+
+/// Те же интерфейсы в терминах обнаружения ([`Iface`]): `device_id` это имя, описания нет; плейсхолдер MAC это
+/// `mac: None, mac_masked: true`.
+pub(crate) fn iface_list() -> Result<Vec<Iface>, Errno> {
+    Ok(interfaces()?.into_iter().map(iface_from_report).collect())
+}
+
+pub(crate) fn iface_from_report(r: IfaceReport) -> Iface {
+    Iface {
+        device_id: r.name.clone(),
+        name: r.name,
+        index: r.index,
+        description: None,
+        mac: r.mac,
+        mac_masked: r.mac_masked,
+        ethernet: r.ethernet,
+        up: r.up,
+        ipv4: r.ipv4,
+    }
 }
 
 pub(crate) fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {

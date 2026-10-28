@@ -26,6 +26,11 @@
 //! исключений). `ENGINE_ALGORITHM_VERSION` это явная версия алгоритма и
 //! формата: её повышают вручную при изменении порядка probe, формулы кадра или
 //! этой кодировки. Она НЕ зависит от commit и комментариев.
+//!
+//! Mapped plans use a separate domain: `RMSCNMAP`, u32 map format version (1),
+//! u64 legacy encoding length, the unchanged legacy encoding, u64 entry count,
+//! then sorted `(u32 IPv4, [u8;6] MAC)` entries. Integers are big-endian.
+//! Single-MAC plans retain the exact version-1 encoding and digest above.
 
 use rmasscan_core::config::EffectiveConfig;
 use rmasscan_core::packet::LinkType;
@@ -63,7 +68,8 @@ fn link_tag(l: LinkType) -> u8 {
     }
 }
 
-/// Каноническое байтовое представление задания (то, что хешируется).
+/// Legacy single-MAC encoding. For mapped plans, [`job_digest`] frames this
+/// encoding in the separate map domain together with the complete destination map.
 pub fn canonical_job_bytes(effective: &EffectiveConfig, binding: &AdapterBinding) -> Vec<u8> {
     let mut o = Vec::with_capacity(256);
     o.extend_from_slice(JOB_MAGIC);
@@ -99,5 +105,19 @@ pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
 
 /// Идентичность задания плана.
 pub fn job_digest(plan: &ReadyPlan) -> [u8; 32] {
-    digest_bytes(&canonical_job_bytes(plan.effective(), plan.binding()))
+    let legacy = canonical_job_bytes(plan.effective(), plan.binding());
+    let Some(destinations) = plan.destinations() else {
+        return digest_bytes(&legacy);
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"RMSCNMAP");
+    digest.update(1u32.to_be_bytes());
+    digest.update((legacy.len() as u64).to_be_bytes());
+    digest.update(&legacy);
+    digest.update((destinations.len() as u64).to_be_bytes());
+    for (ip, mac) in destinations {
+        digest.update(ip.to_be_bytes());
+        digest.update(mac);
+    }
+    digest.finalize().into()
 }

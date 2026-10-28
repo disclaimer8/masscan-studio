@@ -20,12 +20,18 @@ pub enum Observation {
 }
 pub type Inspector = Box<dyn FnMut(&dyn Fn() -> bool) -> Result<Observation, String> + Send>;
 
-struct Clock {
+pub(crate) struct Clock {
     tick: Instant,
     wall: SystemTime,
 }
 impl Clock {
-    fn check(&mut self, tick: Instant, wall: SystemTime) -> Option<String> {
+    pub(crate) fn new() -> Self {
+        Self {
+            tick: Instant::now(),
+            wall: SystemTime::now(),
+        }
+    }
+    pub(crate) fn check(&mut self, tick: Instant, wall: SystemTime) -> Option<String> {
         let gap = tick.saturating_duration_since(self.tick) > SUSPENSION
             || !wall
                 .duration_since(self.wall)

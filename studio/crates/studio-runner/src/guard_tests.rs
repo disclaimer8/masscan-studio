@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-struct Reader(mpsc::Receiver<Vec<u8>>, Cursor<Vec<u8>>);
+pub(super) struct Reader(mpsc::Receiver<Vec<u8>>, Cursor<Vec<u8>>);
 impl Read for Reader {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
@@ -27,7 +27,7 @@ impl Read for Reader {
         }
     }
 }
-struct Writer(mpsc::Sender<Vec<u8>>);
+pub(super) struct Writer(mpsc::Sender<Vec<u8>>);
 impl Write for Writer {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.0
@@ -39,7 +39,7 @@ impl Write for Writer {
         Ok(())
     }
 }
-fn pipe() -> (Writer, Reader) {
+pub(super) fn pipe() -> (Writer, Reader) {
     let (tx, rx) = mpsc::channel();
     (Writer(tx), Reader(rx, Cursor::new(Vec::new())))
 }
@@ -192,6 +192,7 @@ fn interruption_wins_over_queued_completion_or_pause_without_losing_rows() {
             engine: None,
             guard: Some(guard),
             pending: None,
+            network: None,
             rows: vec![studio_protocol::Row {
                 ip: "198.18.0.2".into(),
                 port: 80,

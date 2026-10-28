@@ -6,6 +6,11 @@ mod persistence;
 pub use network::{NetworkCoverage, NetworkReadiness};
 #[cfg(test)]
 mod network_tests;
+// On macOS, a concurrent child spawn can briefly retain a flock open-file
+// description even with CLOEXEC. Coordinate only subprocess/reopen fixtures;
+// production Store ownership and locking are unchanged.
+#[cfg(test)]
+static PROCESS_REOPEN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod setup;
 use std::{
     io::{BufReader, BufWriter, Read, Write},

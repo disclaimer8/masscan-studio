@@ -19,6 +19,7 @@ type StoredFields = (
     String,
     Option<String>,
     Option<String>,
+    Option<Vec<u8>>,
 );
 pub struct Store {
     db: Connection,
@@ -32,6 +33,8 @@ pub struct SavedScan {
     pub status: Status,
     pub checkpoint: Option<Vec<u8>>,
     pub next_index: Option<String>,
+    /// Canonical committed network provenance; present even when no neighbour answered.
+    pub network_report: Option<Vec<u8>>,
     pub detail: String,
     pub name: Option<String>,
     pub created_at: Option<String>,
@@ -73,7 +76,7 @@ impl Store {
         let mut db = Connection::open(dir.join("history.sqlite3"))?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 4 {
+        if version > 5 {
             return Err("History was created by a newer Studio version".into());
         }
         // Permuted scan keys dirty many index pages. The default 1,000-page
@@ -81,8 +84,8 @@ impl Store {
         // This 4,096-page trigger (~16 MiB at 4 KiB/page, not a size cap) reduces
         // that write amplification. FULL still syncs every WAL commit.
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=4096;")?;
-        if version > 0 && version < 4 {
-            let backup = dir.join(format!("before-v4-{}.sqlite3", id_text(new_id()?)));
+        if version > 0 && version < 5 {
+            let backup = dir.join(format!("before-v5-{}.sqlite3", id_text(new_id()?)));
             let partial = backup.with_extension("partial");
             let file = private_file(&partial)?;
             let mut destination = Connection::open(&partial)?;
@@ -110,7 +113,10 @@ impl Store {
         if version < 3 {
             migration.execute_batch("ALTER TABLE scans ADD COLUMN name TEXT; ALTER TABLE scans ADD COLUMN created_at TEXT;")?;
         }
-        migration.execute_batch("PRAGMA user_version=4;")?;
+        if version < 5 {
+            migration.execute_batch("ALTER TABLE scans ADD COLUMN network_report BLOB;")?;
+        }
+        migration.execute_batch("PRAGMA user_version=5;")?;
         migration.commit()?;
         let mut pending = db.prepare("SELECT scan,ip,data FROM host_details")?;
         let saved = pending
@@ -134,7 +140,7 @@ impl Store {
                 )?;
             }
         }
-        db.execute("UPDATE scans SET status=CASE WHEN status='\"Starting\"' AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END, detail='Previous attempt ended before a terminal state was saved' WHERE status IN ('\"Starting\"','\"Scanning\"','\"Saving\"')",[])?;
+        db.execute("UPDATE scans SET status=CASE WHEN status IN ('\"Starting\"','\"Preparing\"') AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END, detail='Previous attempt ended before a terminal state was saved' WHERE status IN ('\"Starting\"','\"Preparing\"','\"Scanning\"','\"Saving\"')",[])?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -153,7 +159,7 @@ impl Store {
         Ok(Self { db, _lock: lock })
     }
     pub fn begin(&mut self, scan: Id, attempt: Id, job: &Job, resume: bool) -> Result<()> {
-        job.prepare()?;
+        job.validate()?;
         let tx = self.db.transaction()?;
         if resume {
             let old = Self::find(&tx, scan)?.ok_or("No saved scan")?;
@@ -167,6 +173,15 @@ impl Store {
                 old.checkpoint.as_deref().ok_or("No checkpoint")?,
                 old.next_index.as_deref().ok_or("No checkpoint index")?,
             )?;
+            if job.backend == Backend::MacNetwork {
+                let envelope =
+                    NetworkCheckpoint::decode(old.checkpoint.as_deref().ok_or("No checkpoint")?)?;
+                if old.network_report.as_deref() != Some(envelope.report.encode()?.as_slice()) {
+                    return Err(
+                        "Checkpoint network report differs from durable scan coverage".into(),
+                    );
+                }
+            }
             tx.execute("UPDATE scans SET attempt=?2,status='\"Starting\"',sequence='0',detail='',updated=unixepoch() WHERE id=?1",params![scan.as_slice(),attempt.as_slice()])?;
         } else {
             tx.execute("INSERT INTO scans(id,attempt,job,status,updated,created_at) VALUES(?1,?2,?3,'\"Starting\"',unixepoch(),?4)",params![scan.as_slice(),attempt.as_slice(),serde_json::to_string(job)?,studio_inspection::now()])?;
@@ -177,7 +192,7 @@ impl Store {
     fn find(db: &Connection, scan: Id) -> Result<Option<SavedScan>> {
         let raw: Option<StoredFields> = db
             .query_row(
-                "SELECT attempt,job,status,checkpoint,next_index,detail,name,created_at FROM scans WHERE id=?1",
+                "SELECT attempt,job,status,checkpoint,next_index,detail,name,created_at,network_report FROM scans WHERE id=?1",
                 [scan.as_slice()],
                 |r| {
                     Ok((
@@ -189,19 +204,53 @@ impl Store {
                         r.get(5)?,
                         r.get(6)?,
                         r.get(7)?,
+                        r.get(8)?,
                     ))
                 },
             )
             .optional()?;
         raw.map(
-            |(attempt, job, status, checkpoint, next_index, detail, name, created_at)| {
+            |(
+                attempt,
+                job,
+                status,
+                checkpoint,
+                next_index,
+                detail,
+                name,
+                created_at,
+                network_report,
+            )| {
+                let job: Job = serde_json::from_str(&job)?;
+                if job.backend == Backend::MacNetwork {
+                    if let Some(bytes) = &network_report {
+                        NetworkReport::decode(bytes)?.validate_for(&job)?;
+                    }
+                    if let Some(bytes) = &checkpoint {
+                        let envelope = NetworkCheckpoint::decode(bytes)?;
+                        if network_report.as_deref() != Some(envelope.report.encode()?.as_slice()) {
+                            return Err(
+                                "Checkpoint network report differs from durable scan coverage"
+                                    .into(),
+                            );
+                        }
+                        validate_checkpoint(
+                            &job,
+                            scan,
+                            checkpoint_origin(bytes)?,
+                            bytes,
+                            next_index.as_deref().ok_or("Missing checkpoint index")?,
+                        )?;
+                    }
+                }
                 Ok(SavedScan {
                     scan,
                     attempt: attempt.try_into().map_err(|_| "Invalid attempt id")?,
-                    job: serde_json::from_str(&job)?,
+                    job,
                     status: serde_json::from_str(&status)?,
                     checkpoint,
                     next_index,
+                    network_report,
                     detail,
                     name,
                     created_at,
@@ -326,6 +375,37 @@ impl Store {
         }
         let mut observed = Vec::new();
         match &event.payload {
+            Event::PreparingNetwork => {
+                if saved.job.backend != Backend::MacNetwork
+                    || !matches!(saved.status, Status::Starting | Status::Preparing)
+                {
+                    return Err("Unexpected network preparation".into());
+                }
+                tx.execute(
+                    "UPDATE scans SET status='\"Preparing\"' WHERE id=?1",
+                    [event.scan.as_slice()],
+                )?;
+            }
+            Event::NetworkPrepared { bytes } => {
+                if saved.job.backend != Backend::MacNetwork
+                    || !matches!(saved.status, Status::Starting | Status::Preparing)
+                {
+                    return Err("Unexpected network report".into());
+                }
+                let report = NetworkReport::decode(bytes)?;
+                report.validate_for(&saved.job)?;
+                if saved
+                    .network_report
+                    .as_ref()
+                    .is_some_and(|old| old != bytes)
+                {
+                    return Err("Frozen network report cannot change within a scan".into());
+                }
+                tx.execute(
+                    "UPDATE scans SET network_report=?2 WHERE id=?1",
+                    params![event.scan.as_slice(), bytes],
+                )?;
+            }
             Event::Results(rows) => {
                 // One prepared write inside one transaction. RETURNING retains
                 // the original discovery date on conflict, including legacy NULL.
@@ -345,12 +425,32 @@ impl Store {
             }
             Event::Checkpoint { bytes, next_index } => {
                 validate_checkpoint(&saved.job, event.scan, event.attempt, bytes, next_index)?;
+                if saved.job.backend == Backend::MacNetwork {
+                    let envelope = NetworkCheckpoint::decode(bytes)?;
+                    if saved.network_report.as_deref() != Some(envelope.report.encode()?.as_slice())
+                    {
+                        return Err(
+                            "Checkpoint network report differs from durable scan coverage".into(),
+                        );
+                    }
+                }
                 tx.execute(
                     "UPDATE scans SET checkpoint=?2,next_index=?3,status='\"Paused\"' WHERE id=?1",
                     params![event.scan.as_slice(), bytes, next_index],
                 )?;
             }
-            Event::Started { .. } => {
+            Event::Started { total } => {
+                if saved.job.backend == Backend::MacNetwork {
+                    let report = NetworkReport::decode(
+                        saved
+                            .network_report
+                            .as_deref()
+                            .ok_or("Network report must be committed before TCP starts")?,
+                    )?;
+                    if saved.job.prepare_network(&report)?.range() != decimal(total)? {
+                        return Err("Started total differs from frozen network plan".into());
+                    }
+                }
                 tx.execute(
                     "UPDATE scans SET status='\"Scanning\"',checkpoint=NULL,next_index=NULL WHERE id=?1",
                     [event.scan.as_slice()],
@@ -361,7 +461,7 @@ impl Store {
                     return Err("Paused without durable checkpoint".into());
                 }
                 let status = if *status == Status::Failed
-                    && saved.status == Status::Starting
+                    && matches!(saved.status, Status::Starting | Status::Preparing)
                     && saved.checkpoint.is_some()
                 {
                     &Status::Paused
@@ -386,7 +486,7 @@ impl Store {
         Ok(observed)
     }
     pub fn interrupt(&mut self, scan: Id, detail: &str) -> Result<()> {
-        self.db.execute("UPDATE scans SET status=CASE WHEN status='\"Starting\"' AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END,detail=?2 WHERE id=?1 AND status != '\"Paused\"'",params![scan.as_slice(),detail])?;
+        self.db.execute("UPDATE scans SET status=CASE WHEN status IN ('\"Starting\"','\"Preparing\"') AND checkpoint IS NOT NULL THEN '\"Paused\"' ELSE '\"Interrupted\"' END,detail=?2 WHERE id=?1 AND status != '\"Paused\"'",params![scan.as_slice(),detail])?;
         Ok(())
     }
 }

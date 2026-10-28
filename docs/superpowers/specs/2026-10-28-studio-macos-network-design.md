@@ -27,7 +27,9 @@ The following are implementation choices, not additional user requirements:
 New scan offers `Mac network · Wi-Fi / Ethernet` on macOS alongside the existing
 feth and Simulation profiles. The user enters targets, ports, exclusions and
 rate. The application shows the number of effective addresses and probes before
-Start. CIDR expansion is bounded before allocation or per-target OS lookups.
+Start. CIDR expansion is bounded before allocation or per-target OS lookups: at most
+2,048 candidates after user exclusions, then at most 1,024 effective addresses
+after disclosed self/subnet endpoint exclusions. Oversize is refused, never trimmed.
 
 Authorize opens the existing verified helper session without requiring a feth
 stand for the physical profile. A read-only Check network action reports the
@@ -113,6 +115,12 @@ deadline, uncertain send or inability to provide this response window aborts the
 whole preparation; it is not a successful partial scan. Poll cancellation between sends/receives, with adapter I/O capped at
 50 ms. Validate all input and resume provenance before opening a packet handle.
 Check the route snapshot again after ARP and before starting the engine.
+
+Preserve the legacy `Iface` record. Add prefix-bearing `InterfaceObservation`
+through `Interfaces::observe`, and `RouteTable::lookup_until`; unsupported
+physical-observation backends refuse rather than falling back to unbounded legacy
+calls. The new macOS implementation is required; Linux/Windows physical profiles
+remain unavailable.
 
 Route and interface observation APIs accept a cancellation callback and absolute
 monotonic deadline. A read-only check and each full preparation snapshot have a

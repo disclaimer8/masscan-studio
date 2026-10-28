@@ -41,8 +41,11 @@ This proves installation of this exact local debug build on one Mac. Native
 permission-dialog cancellation/timeout was not exercised; the bounded cleanup
 and failure paths were tested offline. No scan or authorized session was started.
 
-Windows new setup-entry/UAC acceptance and Linux desktop polkit acceptance are
-**NOT RUN**. Earlier runner session-authorization acceptance is a different path.
+**Windows installation and UAC refusal/retry: PASS on 2026-10-28.** See the
+[native Windows setup report](2026-10-28-studio-windows-setup.md) for the exact
+package, protected installed hash, UI recheck and retained evidence.
+Linux desktop polkit acceptance remains **NOT RUN**. Earlier runner
+session-authorization acceptance is a different path.
 Cross-platform CI covers compilation, offline behavior, existing installer tests
 and packaging; it does not prove successful interaction with desktop prompts.
 

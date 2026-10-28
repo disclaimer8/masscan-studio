@@ -1,0 +1,30 @@
+{
+  "arch": "x86_64",
+  "cargo_lock_sha256": "36d039acdb011dd1c80025be233f08713f398bb00b5e7ccbc785b1627276e823",
+  "dirty": false,
+  "files": [
+    {
+      "path": "studio-ui.exe",
+      "sha256": "c4f2f4dc545a887ca05a665d7432610750348c20de20a672410a6dffa05730bc"
+    },
+    {
+      "path": "studio-runner.exe",
+      "sha256": "420c57583f3b2a6fc1c5f33a906670d4fd7b55c374e62e75926f6a1a369be8ce"
+    },
+    {
+      "path": "studio-inspect.exe",
+      "sha256": "f207f248cd22e4c239ccbcdda873316ed6d74c678f57ecfb1f392dfe748affb7"
+    },
+    {
+      "path": "sqlite3.dll",
+      "sha256": "70450594d9f5743484723e8a27b08f76257e32854fbe6943c96b2aefcdf1ce3b"
+    },
+    {
+      "path": "studio-tools.exe",
+      "sha256": "c1936ad32da1ff2ed21749d3d6bf2bcf11f3a55ef954cb937543fec81b39741f"
+    }
+  ],
+  "platform": "windows",
+  "profile": "debug",
+  "source_commit": "06bf606770b8d954fa064ff4cc76275e3f8836a4"
+}

@@ -1,0 +1,18 @@
+{
+  "label": "after-consent",
+  "utc": "2026-10-28T07:05:23.8757939Z",
+  "destination": "C:\\Program Files\\Masscan Studio\\Runner\\420c57583f3b2a6fc1c5f33a906670d4fd7b55c374e62e75926f6a1a369be8ce\\studio-runner.exe",
+  "exists": true,
+  "processes": [
+    {
+      "ProcessName": "studio-ui",
+      "Id": 11180,
+      "SessionId": 1,
+      "Path": "C:\\Users\\lab\\studio-setup-20261027\\studio-ui.exe"
+    }
+  ],
+  "sha256": "420c57583f3b2a6fc1c5f33a906670d4fd7b55c374e62e75926f6a1a369be8ce",
+  "acl": "O:BAG:BAD:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)",
+  "verification_exit": 0,
+  "verification": "Trusted immutable runner: C:\\Program Files\\Masscan Studio\\Runner\\420c57583f3b2a6fc1c5f33a906670d4fd7b55c374e62e75926f6a1a369be8ce\\studio-runner.exe\r\nSHA-256: 420c57583f3b2a6fc1c5f33a906670d4fd7b55c374e62e75926f6a1a369be8ce\r\nStart Studio as an ordinary user and select Authorize. Raw scanning remains disabled.\r\n"
+}

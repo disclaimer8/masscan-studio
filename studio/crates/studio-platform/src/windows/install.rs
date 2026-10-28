@@ -241,7 +241,12 @@ impl Installed {
             }
             sha.update(&buffer[..n]);
         }
-        if format!("{:x}", sha.finalize()) != hash {
+        let actual: String = sha
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if actual != hash {
             return Err("Installed runner hash mismatch".into());
         }
         Ok(Self {

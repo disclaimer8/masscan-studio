@@ -31,7 +31,10 @@ fn text(cmd: &mut Command) -> Result<String> {
     Ok(String::from_utf8(o.stdout)?.trim().into())
 }
 fn digest(path: &Path) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
+    Ok(Sha256::digest(fs::read(path)?)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 fn main() -> Result<()> {
     let task = std::env::args().nth(1).unwrap_or("build".into());

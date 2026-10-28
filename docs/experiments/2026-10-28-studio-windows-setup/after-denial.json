@@ -1,0 +1,14 @@
+{
+  "label": "after-denial",
+  "utc": "2026-10-28T07:01:53.4346051Z",
+  "destination": "C:\\Program Files\\Masscan Studio\\Runner\\420c57583f3b2a6fc1c5f33a906670d4fd7b55c374e62e75926f6a1a369be8ce\\studio-runner.exe",
+  "exists": false,
+  "processes": [
+    {
+      "ProcessName": "studio-ui",
+      "Id": 11180,
+      "SessionId": 1,
+      "Path": "C:\\Users\\lab\\studio-setup-20261027\\studio-ui.exe"
+    }
+  ]
+}

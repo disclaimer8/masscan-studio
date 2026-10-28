@@ -1,11 +1,18 @@
 //! Сетевые адаптеры (AGPL-3.0). Linux: AF_PACKET; macOS: BPF (`/dev/bpfN`); Windows: Npcap. Это
-//! единственный crate, где допускается `unsafe`: весь FFI находится в
-//! private-модулях (`linux::socket`; `macos::{sys, ifinfo, process}` (BPF ABI, sysctl, getifaddrs, метрики процесса); `windows::{ffi, handle, loader, process, sys}`; `process` это лабораторная
-//! телеметрия процесса (Toolhelp, токен, счётчики памяти), в продуктовой сборке она
-//! тоже присутствует) и,
-//! только с feature `lab` (включает один rmasscan-lab), в `lab_io::imp`
-//! (sigaction-флаг остановки и listener с backlog 0); остальной код безопасный и тестируется через синтетические швы
-//! (`linux::PacketIo`, `linux::IfaceInfo`; `macos::adapter::BpfIo`; подставная таблица функций wpcap).
+//! единственный crate, где допускается `unsafe`, и только в private FFI-модулях с `#[allow(unsafe_code)]` и
+//! `// SAFETY:` на каждом блоке:
+//!
+//! * `linux::socket` (AF_PACKET), `linux::route` (rtnetlink и ioctl интерфейсов для обнаружения);
+//! * `macos::{sys, ifinfo, process, route}` (BPF ABI и sysctl, getifaddrs, метрики процесса, route socket);
+//! * `windows::{ffi, handle, loader, process, sys}` (Npcap; `process` это телеметрия процесса для harness, в
+//!   продуктовой сборке она тоже есть; `sys` также читает адаптеры и маршруты IP Helper для обнаружения).
+//!
+//! Вне продукта: `lab_io::imp` только с feature `lab` (её включает один rmasscan-lab: sigaction-флаг остановки и
+//! listener с backlog 0) и тестовые модули (`macos::spike`, `windows::{tests, live}`). Остальной код безопасный:
+//! `discover` и `route_parse` под `forbid(unsafe_code)`, разбор ответов ядра переносим и тестируется на любой ОС;
+//! адаптеры тестируются через синтетические швы (`linux::PacketIo`, `linux::IfaceInfo`; `macos::adapter::BpfIo`;
+//! подставная таблица функций wpcap). Обнаружение читает состояние ОС в процессе, без привилегий и без запуска
+//! `route`/`netstat`/`ip`/`ifconfig`/`arp`.
 //!
 //! Контракт: каждый вызов `recv`/`health` возвращается не позже
 //! `min(timeout, 50 мс)` (абсолютный дедлайн; на Windows внутренний бюджет
@@ -45,6 +52,71 @@ mod drop_counter;
 // разрешён только в FFI-подмодулях (см. `windows/mod.rs`).
 #[cfg(any(windows, test))]
 mod windows;
+
+// Логика обнаружения адаптера/источника/следующего хопа над швами `RouteTable`/`Interfaces`: безопасная, без ОС.
+pub mod discover;
+pub mod neighbours;
+pub mod network_plan;
+pub use neighbours::{NeighbourReport, resolve_neighbours};
+pub use network_plan::{
+    ExcludedReason, InterfaceObservation, Ipv4Prefix, PhysicalRoutePlan, PhysicalTargets,
+    plan_physical,
+};
+
+// Синхронный ARP-резолвер следующего хопа над Tx/Rx (безопасный, без ОС; тесты на FakeAdapter).
+pub mod arp_resolve;
+
+// Безопасный переносимый разбор ответов ядра о маршрутах (rtnetlink, route socket Darwin, IP Helper).
+mod route_parse;
+
+pub use discover::{
+    DetectError, Detected, Iface, Interfaces, NextHop, Overrides, Route, RouteTable, Targets,
+    detect, detect_offline, iflist_text, probe_targets,
+};
+
+/// Таблица маршрутов ОС, читаемая в процессе и без привилегий (процессы не запускаются): Linux rtnetlink
+/// (`RTM_GETROUTE`), macOS route socket (`RTM_GET`), Windows `GetBestRoute2`/`GetIpForwardTable2`.
+#[cfg(target_os = "linux")]
+pub fn os_route_table() -> Result<Box<dyn RouteTable>, NetError> {
+    Ok(Box::new(linux::route::OsRoutes))
+}
+
+#[cfg(target_os = "macos")]
+pub fn os_route_table() -> Result<Box<dyn RouteTable>, NetError> {
+    Ok(Box::new(macos::route::OsRoutes))
+}
+
+#[cfg(windows)]
+pub fn os_route_table() -> Result<Box<dyn RouteTable>, NetError> {
+    Ok(Box::new(windows::OsRoutes))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+pub fn os_route_table() -> Result<Box<dyn RouteTable>, NetError> {
+    Err(NetError::UnsupportedPlatform)
+}
+
+/// Интерфейсы ОС, читаемые в процессе и без привилегий: Linux `if_nameindex` + ioctl, macOS `getifaddrs`,
+/// Windows `GetAdaptersAddresses`.
+#[cfg(target_os = "linux")]
+pub fn os_interfaces() -> Result<Box<dyn Interfaces>, NetError> {
+    Ok(Box::new(linux::route::OsIfaces))
+}
+
+#[cfg(target_os = "macos")]
+pub fn os_interfaces() -> Result<Box<dyn Interfaces>, NetError> {
+    Ok(Box::new(macos::route::OsIfaces))
+}
+
+#[cfg(windows)]
+pub fn os_interfaces() -> Result<Box<dyn Interfaces>, NetError> {
+    Ok(Box::new(windows::OsIfaces))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+pub fn os_interfaces() -> Result<Box<dyn Interfaces>, NetError> {
+    Err(NetError::UnsupportedPlatform)
+}
 
 /// Ошибка открытия адаптера.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

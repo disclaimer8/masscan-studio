@@ -1,6 +1,7 @@
 //! macOS BPF: ABI-объявления, сведения об интерфейсе, инвентарь без
-//! привилегий и адаптер (`open`, TX/RX поверх шва `BpfIo`). `unsafe` только в
-//! `sys`, `ifinfo` и `process` (плюс тестовый `spike`, которого нет в продуктовой сборке).
+//! привилегий, адаптер (`open`, TX/RX поверх шва `BpfIo`) и таблица маршрутов для
+//! обнаружения (`route`: route socket `RTM_GET`). `unsafe` только в `sys`, `ifinfo`,
+//! `process` и `route` (плюс тестовый `spike`, которого нет в продуктовой сборке).
 //!
 //! `abi` и `adapter` переносимы и собираются в тестах на любой ОС (seam-тесты
 //! адаптера идут и на Linux, и на Windows); остальное только на macOS.
@@ -25,6 +26,10 @@ pub(crate) mod ifinfo;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 pub(crate) mod process;
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub(crate) mod route;
 
 #[cfg(test)]
 mod tests;

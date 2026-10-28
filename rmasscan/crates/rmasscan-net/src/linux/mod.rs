@@ -2,6 +2,8 @@
 //! до АБСОЛЮТНОГО дедлайна (не более 50 мс). Логика здесь безопасная и
 //! общая для всех реализаций [`PacketIo`]; настоящие syscalls лежат в
 //! private-модуле `socket`, а тесты подставляют синтетический `PacketIo`.
+//! Таблица маршрутов (rtnetlink) и интерфейсы (`if_nameindex` + ioctl) для
+//! обнаружения: модуль `route`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,6 +16,10 @@ use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
 #[allow(unsafe_code)]
 mod socket;
+
+// Обнаружение в процессе: rtnetlink (маршруты) и ioctl интерфейсов; `unsafe` только вокруг вызовов libc.
+#[allow(unsafe_code)]
+pub(crate) mod route;
 
 /// Сырой errno.
 pub(crate) type Errno = i32;

@@ -199,6 +199,116 @@ fn digest_is_pinned_for_the_reference_job() {
 
 const PINNED: &str = "f51d122b3a2cc0377130e70d6b1d7e9d90a6e901062c6a65bb81b8c895695dc5";
 
+fn mapped(reverse: bool, changed_ip: Option<u32>) -> ReadyPlan {
+    let s = base();
+    let mut entries: Vec<_> = (0x0a00_0000..=0x0a00_0007)
+        .map(|ip| (ip, [2, 1, 2, 3, 4, ip as u8 + 1]))
+        .collect();
+    if reverse {
+        entries.reverse();
+    }
+    let mut map: std::collections::BTreeMap<_, _> = entries.into_iter().collect();
+    if let Some(ip) = changed_ip {
+        map.get_mut(&ip).unwrap()[5] ^= 0x10;
+    }
+    ReadyPlan::with_destinations(validate(&cfg(&s), Operation::Scan).unwrap(), s.binding, map)
+        .unwrap()
+}
+
+#[test]
+fn mapped_identity_is_canonical_and_includes_every_mac() {
+    let p = mapped(false, None);
+    let digest = job_digest(&p);
+    assert_eq!(digest, job_digest(&mapped(true, None)));
+    assert_ne!(digest, job_digest(&build(&base())));
+    for ip in 0x0a00_0000..=0x0a00_0007 {
+        assert_ne!(
+            digest,
+            job_digest(&mapped(false, Some(ip))),
+            "MAC for {ip:#x} omitted"
+        );
+    }
+    // Independently construct the mapped domain around the unchanged legacy encoding.
+    let legacy = canonical_job_bytes(p.effective(), p.binding());
+    let mut expected = b"RMSCNMAP".to_vec();
+    expected.extend_from_slice(&1u32.to_be_bytes());
+    expected.extend_from_slice(&(legacy.len() as u64).to_be_bytes());
+    expected.extend_from_slice(&legacy);
+    expected.extend_from_slice(&8u64.to_be_bytes());
+    for (ip, mac) in p.destinations().unwrap() {
+        expected.extend_from_slice(&ip.to_be_bytes());
+        expected.extend_from_slice(mac);
+    }
+    assert_eq!(digest, digest_bytes(&expected));
+}
+
+#[test]
+fn mapped_checkpoint_resumes_same_map_and_rejects_each_changed_mac_before_send() {
+    let p = mapped(false, None);
+    let cp = first_leg(&p, 5, 1, 10).checkpoint.unwrap();
+    let reordered = mapped(true, None);
+    let resumed = resume_leg(&reordered, &cp, usize::MAX, 11);
+    assert_eq!(resumed.outcome.reason, rmasscan_engine::Reason::Completed);
+    for ip in 0x0a00_0000..=0x0a00_0007 {
+        let err = resume_rejected(&mapped(false, Some(ip)), &cp, 11);
+        assert!(matches!(
+            err,
+            StartError::Checkpoint(CheckpointError::JobMismatch)
+        ));
+    }
+    let err = resume_rejected(&build(&base()), &cp, 11);
+    assert!(matches!(
+        err,
+        StartError::Checkpoint(CheckpointError::JobMismatch)
+    ));
+    let legacy_cp = first_leg(&build(&base()), 5, 1, 10).checkpoint.unwrap();
+    let err = resume_rejected(&p, &legacy_cp, 11);
+    assert!(matches!(
+        err,
+        StartError::Checkpoint(CheckpointError::JobMismatch)
+    ));
+}
+
+#[test]
+fn legacy_canonical_bytes_remain_pinned() {
+    let p = build(&base());
+    let bytes = canonical_job_bytes(p.effective(), p.binding());
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        hex,
+        concat!(
+            "524d53434e4a4f42",
+            "00000001",
+            "00000001",
+            "0a000000",
+            "0a000007",
+            "00000002",
+            "00000050",
+            "00000050",
+            "000001bb",
+            "000001bb",
+            "00000000",
+            "00000000",
+            "0000123456789abc",
+            "412e848000000000",
+            "00000000",
+            "00000001",
+            "00000001",
+            "0000000e",
+            "00000003",
+            "00000005",
+            "66616b6530",
+            "01",
+            "0aff0001",
+            "001122334455",
+            "665544332211",
+            "9c40",
+            "9c4f"
+        )
+    );
+    assert_eq!(job_digest(&p), digest_bytes(&bytes));
+}
+
 fn good_checkpoint() -> (ReadyPlan, Checkpoint) {
     let p = build(&base());
     let cp = first_leg(&p, 5, 1, 10).checkpoint.unwrap();

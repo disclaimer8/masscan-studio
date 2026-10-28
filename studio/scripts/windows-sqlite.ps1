@@ -1,8 +1,8 @@
-param([string]$Destination = "$env:LOCALAPPDATA\MasscanStudioBuild\sqlite-3.50.4")
+param([string]$Destination = "$env:LOCALAPPDATA\MasscanStudioBuild\sqlite-3.54.1")
 $ErrorActionPreference = 'Stop'
 # Official prebuilt library: no SQLite C sources or compiler invocation.
-$url = 'https://www.sqlite.org/2025/sqlite-dll-win-x64-3500400.zip'
-$sha256 = '56b8751cdbf6dcd8ac9a35508039e456692a402bc5ddf576c2b0eddb0fed8536'
+$url = 'https://www.sqlite.org/2026/sqlite-dll-win-x64-3540100.zip'
+$sha256 = 'f436f53ad8f965af43f3817b42c99c0689e6787f6b7ace208fe38dab7ffc4971'
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $archive = Join-Path $Destination 'sqlite.zip'
 if (!(Test-Path $archive)) { Invoke-WebRequest -Uri $url -OutFile $archive }

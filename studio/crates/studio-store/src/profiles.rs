@@ -34,7 +34,7 @@ impl Store {
             .collect()
     }
     pub fn save_profile(&mut self, id: Option<Id>, name: &str, job: &Job) -> Result<SavedProfile> {
-        job.prepare()?;
+        job.validate()?;
         let name = name.trim();
         if name.is_empty()
             || name.chars().count() > 128

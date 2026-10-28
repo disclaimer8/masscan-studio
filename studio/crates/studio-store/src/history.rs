@@ -6,7 +6,7 @@ fn editable(db: &Connection, scan: Id) -> Result<()> {
     let saved = Store::find(db, scan)?.ok_or("This scan no longer exists")?;
     if matches!(
         saved.status,
-        Status::Starting | Status::Scanning | Status::Saving
+        Status::Starting | Status::Preparing | Status::Scanning | Status::Saving
     ) {
         return Err("An active scan cannot be changed or deleted".into());
     }

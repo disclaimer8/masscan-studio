@@ -268,6 +268,7 @@ fn history_label(s: &studio_store::SavedScan) -> String {
     let kind = match s.job.backend {
         Backend::Simulation => "Simulation",
         Backend::MacFeth => "feth",
+        Backend::MacNetwork => "Mac network (disabled)",
         Backend::Archived => "Archived history",
     };
     format!(
@@ -1214,6 +1215,7 @@ mod tests {
             job: Job::example(Backend::Simulation),
             status: Status::Paused,
             checkpoint: Some(vec![1, 2, 3]),
+            network_report: None,
             next_index: Some("42".into()),
             detail: "paused".into(),
             name: Some("Office".into()),

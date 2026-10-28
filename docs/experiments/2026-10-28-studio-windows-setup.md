@@ -61,4 +61,4 @@ works, but this run does not establish a distinct user-facing cancellation label
 No product code changed, and the existing offline suite was not rerun for this
 documentation-only update. The package's prior CI is identified above.
 
-Evidence checksums: [SHA256SUMS](2026-10-28-studio-windows-setup/SHA256SUMS).
+Evidence checksums: [MANIFEST.sha256](2026-10-28-studio-windows-setup/MANIFEST.sha256).

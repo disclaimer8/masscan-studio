@@ -62,3 +62,5 @@ command rather than a friendly application-specific installer description.
 
 No product code changed. The package's prior CI is identified above; the offline
 suite was not rerun for this documentation-only update.
+
+Evidence checksums: [MANIFEST.sha256](2026-10-28-studio-linux-setup/MANIFEST.sha256).

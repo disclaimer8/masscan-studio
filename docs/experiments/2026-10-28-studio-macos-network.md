@@ -59,15 +59,24 @@ from this document. The parent records absolute paths, candidate commit and hash
 before requesting the concrete privilege action. `up` creates only the fixed
 pair/source subnet and one host route. It writes an exclusive root-owned journal
 under `/private/var/run/studio-network-fixture-v1` with a random generation,
-tooling hash, creation/expiry times and observed interface indices/MACs/peers.
+tooling hash, creation/expiry times and observed interface indices/MACs/peers,
+IPv4 addresses/prefixes, bridge memberships and administrative link state.
 The seal lasts30minutes; expiration, backward time or partial setup cannot
 authorize status/peer work. `up` never refreshes an existing seal. `down` permits
 cleanup after expiration but requires live ownership matches.
 
-Every confirmed setup operation updates the journal. A failed operation retains
+Only an independently successful create establishes ownership of that resource;
+setup never adopts the other interface merely because it became visible. Each
+later command validates the prior identity and records only its expected
+transition. Every confirmed setup operation updates the journal. A failed operation retains
 the journal and resources for `down`; there is no blind rollback. If a crash
 leaves an unrecorded interface, cleanup preserves it and reports the ambiguity.
-Changed index/MAC/peer/route also stops cleanup. The journal/lock directory stays
+Changed index/MAC/peer/address/prefix/bridge/route also stops cleanup; only the
+documented scanner link-down transition is allowed. Exact host-route evidence
+comes from bounded route-table rows with destination /32 and up/gateway/host/static
+flags, never a reduced destination lookup. An absent host with ordinary uplink
+fallback is distinct from a broader replacement using a fixture interface; the
+latter preserves the stand for inspection. The journal/lock directory stays
 for safe reuse; successful down removes the completed state and stop marker.
 Native commands have5second subprocess deadlines and64KiB output limits. The
 fixed root directory rejects symlinks, wrong owners, permissive modes, hardlinked
@@ -111,8 +120,14 @@ microsecond/nanosecond timestamps, bounded sizes/counts, ordered times, exact
 SYN tuples/cookies/MACs/checksums, matching SYN-ACK/RST outcomes, three missing
 neighbour ARPs with one-second spacing and final answer window, and zero uplink
 frames. It rejects duplicate SYNs/replies and requires all96 completed probes.
-Ordinary unrelated multicast/UDP/IPv6 frames may be present in the peer capture;
-they are not TCP probes. Cookie validation uses the core cookie primitive;
+All fixture-associated frames are classified or rejected. Valid kernel mDNS and
+IPv6 neighbour-discovery multicast have explicit structural/checksum checks;
+arbitrary UDP/IPv6 or malformed fixture frames are not silently skipped. Kernel
+RSTs are counted separately and accepted only for an eligible even-port tuple
+with the expected Ethernet identity, zero ACK/window, no options/data and sequence
+matching an earlier captured SYN/SYN-ACK. Foreign/excluded/missing targets,
+uncorrelated or duplicate resets fail. Actual native reset shape/count remains an
+unmeasured Task6b question. Cookie validation uses the core cookie primitive;
 Ethernet/TCP decoding and response construction are independent of Engine.
 
 After Task6b interlocks, run the **unprivileged** driver with the exact packaged,

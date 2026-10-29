@@ -1,51 +1,251 @@
-//! Independent bounded Ethernet/IP/TCP fixture codec, not Engine output.
+//! Independent bounded fixture packet classification and response construction.
 use super::topology::*;
 use std::net::Ipv4Addr;
 
-pub fn reply(frame: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    if frame.len() < 14 {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Syn {
+    pub target: Ipv4Addr,
+    pub port: u16,
+    pub sequence: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Frame {
+    Unrelated,
+    KernelMulticast,
+    ArpRequest(Ipv4Addr),
+    ArpReply(Ipv4Addr),
+    Syn(Syn),
+    Response(Syn),
+    KernelReset(Syn),
+}
+
+fn fixture_mac(mac: &[u8]) -> bool {
+    [SOURCE_MAC, PEER_MAC, A_MAC, B_MAC, GATEWAY_MAC]
+        .iter()
+        .any(|m| mac == m)
+}
+fn fixture_ip(address: Ipv4Addr) -> bool {
+    u32::from(address) & 0xfffffff8 == u32::from(Ipv4Addr::new(198, 18, 42, 0)) || address == ROUTED
+}
+
+/// Every fixture-associated packet has one explicit class or is an error.
+/// No TCP flags are discarded before identity, tuple and header validation.
+pub fn classify(f: &[u8]) -> Result<Frame, String> {
+    if f.len() < 14 {
         return Err("truncated Ethernet".into());
     }
-    // Ignore unrelated traffic (e.g. host IPv6/mDNS). Never answer it.
-    match &frame[12..14] {
-        [8, 6] => arp_reply(frame),
-        [8, 0] => tcp_reply(frame),
-        _ => Ok(None),
+    let associated = fixture_mac(&f[..6]) || fixture_mac(&f[6..12]);
+    match &f[12..14] {
+        [8, 6] => {
+            let associated = associated
+                || (f.len() >= 42 && (fixture_ip(ip(&f[28..32])) || fixture_ip(ip(&f[38..42]))));
+            if !associated {
+                return Ok(Frame::Unrelated);
+            }
+            classify_arp(f)
+        }
+        [8, 0] => {
+            let associated = associated
+                || (f.len() >= 34 && (fixture_ip(ip(&f[26..30])) || fixture_ip(ip(&f[30..34]))));
+            if !associated {
+                return Ok(Frame::Unrelated);
+            }
+            classify_ipv4(f)
+        }
+        [0x86, 0xdd] if associated => {
+            classify_ipv6_multicast(f)?;
+            Ok(Frame::KernelMulticast)
+        }
+        _ if associated => Err("unclassified fixture Ethernet protocol".into()),
+        _ => Ok(Frame::Unrelated),
     }
 }
 
-fn arp_reply(f: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    if f.len() < 42 || f[14..22] != [0, 1, 8, 0, 6, 4, 0, 1] {
-        return Ok(None);
+fn arp_mac(address: Ipv4Addr) -> Option<[u8; 6]> {
+    match address {
+        A => Some(A_MAC),
+        B => Some(B_MAC),
+        GATEWAY => Some(GATEWAY_MAC),
+        _ => None,
+    }
+}
+fn classify_arp(f: &[u8]) -> Result<Frame, String> {
+    if !(42..=60).contains(&f.len()) || f[14..20] != [0, 1, 8, 0, 6, 4] {
+        return Err("truncated or malformed fixture ARP".into());
     }
     let sender = ip(&f[28..32]);
     let target = ip(&f[38..42]);
-    if sender != SOURCE {
-        return Ok(None);
+    match word(&f[20..22]) {
+        1 if sender == SOURCE
+            && f[..6] == [255; 6]
+            && f[6..12] == SOURCE_MAC
+            && f[22..28] == SOURCE_MAC
+            && f[32..38] == [0; 6]
+            && [A, B, GATEWAY, MISSING].contains(&target) =>
+        {
+            Ok(Frame::ArpRequest(target))
+        }
+        2 if target == SOURCE && f[..6] == SOURCE_MAC && f[32..38] == SOURCE_MAC => {
+            let mac = arp_mac(sender).ok_or("ARP reply outside next-hop allowlist")?;
+            if f[6..12] != mac || f[22..28] != mac {
+                return Err("ARP reply MAC differs".into());
+            }
+            Ok(Frame::ArpReply(sender))
+        }
+        _ => Err("unexpected fixture ARP identity/opcode/target".into()),
     }
-    if f[..6] != [255; 6]
-        || f[6..12] != SOURCE_MAC
-        || f[22..28] != SOURCE_MAC
-        || f[32..38] != [0; 6]
+}
+
+fn classify_ipv4(f: &[u8]) -> Result<Frame, String> {
+    if f.len() < 34 || f[14] != 0x45 || word(&f[20..22]) & 0xbfff != 0 || checksum(&f[14..34]) != 0
     {
-        return Err("unexpected lab ARP identity".into());
+        return Err("malformed fixture IPv4 header".into());
     }
-    let mac = match target {
-        A => A_MAC,
-        B => B_MAC,
-        GATEWAY => GATEWAY_MAC,
-        MISSING => return Ok(None),
-        _ => return Err("ARP outside fixture next-hop allowlist".into()),
-    };
-    let mut out = vec![0; 60];
-    out[..6].copy_from_slice(&SOURCE_MAC);
-    out[6..12].copy_from_slice(&mac);
-    out[12..22].copy_from_slice(&[8, 6, 0, 1, 8, 0, 6, 4, 0, 2]);
-    out[22..28].copy_from_slice(&mac);
-    out[28..32].copy_from_slice(&target.octets());
-    out[32..38].copy_from_slice(&SOURCE_MAC);
-    out[38..42].copy_from_slice(&SOURCE.octets());
-    Ok(Some(out))
+    let end = 14 + usize::from(word(&f[16..18]));
+    if end < 34 || end > f.len() || f.len() > end.max(60) {
+        return Err("truncated fixture IPv4 packet".into());
+    }
+    let source = ip(&f[26..30]);
+    let destination = ip(&f[30..34]);
+    if f[23] == 17 {
+        // Explicitly permit valid kernel mDNS multicast, never arbitrary UDP.
+        if source != SOURCE
+            || destination != Ipv4Addr::new(224, 0, 0, 251)
+            || f[6..12] != SOURCE_MAC
+            || f[..6] != [1, 0, 0x5e, 0, 0, 0xfb]
+            || end < 42
+            || word(&f[34..36]) != 5353
+            || word(&f[36..38]) != 5353
+            || usize::from(word(&f[38..40])) != end - 34
+        {
+            return Err("unclassified fixture UDP".into());
+        }
+        if word(&f[40..42]) != 0 {
+            let mut pseudo = f[26..34].to_vec();
+            pseudo.extend_from_slice(&[0, 17]);
+            pseudo.extend_from_slice(&((end - 34) as u16).to_be_bytes());
+            pseudo.extend_from_slice(&f[34..end]);
+            if checksum(&pseudo) != 0 {
+                return Err("invalid kernel multicast UDP checksum".into());
+            }
+        }
+        return Ok(Frame::KernelMulticast);
+    }
+    if f[23] != 6 || end < 54 || tcp_checksum(f, end) != 0 {
+        return Err("malformed or unclassified fixture TCP".into());
+    }
+    let header = usize::from(f[46] >> 4) * 4;
+    if header < 20 || 34 + header != end || f[46] & 15 != 0 || word(&f[52..54]) != 0 {
+        return Err("fixture TCP data/reserved bits/header invalid".into());
+    }
+    if source == SOURCE {
+        let mac = destination_mac(destination).ok_or("scanner TCP outside eligible targets")?;
+        let port = word(&f[36..38]);
+        if f[..6] != mac
+            || f[6..12] != SOURCE_MAC
+            || word(&f[34..36]) != 40000
+            || !(PORT_FIRST..=PORT_LAST).contains(&port)
+            || dword(&f[42..46]) != 0
+        {
+            return Err("unexpected scanner TCP tuple/MAC/acknowledgement".into());
+        }
+        let sequence = dword(&f[38..42]);
+        match f[47] {
+            2 if header == 24 && f[54..58] == [2, 4, 5, 0xb4] => Ok(Frame::Syn(Syn {
+                target: destination,
+                port,
+                sequence,
+            })),
+            // RFC793 reset in response to our SYN-ACK: SEQ=received ACK,
+            // ACK unset/zero, no payload/options/window. Correlate in witness.
+            4 if header == 20 && word(&f[48..50]) == 0 && port.is_multiple_of(2) => {
+                Ok(Frame::KernelReset(Syn {
+                    target: destination,
+                    port,
+                    sequence: sequence.wrapping_sub(1),
+                }))
+            }
+            _ => Err("unexpected scanner TCP flags/reset shape".into()),
+        }
+    } else if destination == SOURCE {
+        let mac = destination_mac(source).ok_or("TCP reply outside eligible targets")?;
+        let port = word(&f[34..36]);
+        if f[..6] != SOURCE_MAC
+            || f[6..12] != mac
+            || word(&f[36..38]) != 40000
+            || !(PORT_FIRST..=PORT_LAST).contains(&port)
+            || header != 20
+            || f[47] != if port.is_multiple_of(2) { 0x12 } else { 0x14 }
+            || dword(&f[38..42]) != 123
+            || word(&f[48..50]) != 4096
+        {
+            return Err("invalid fixture TCP response".into());
+        }
+        Ok(Frame::Response(Syn {
+            target: source,
+            port,
+            sequence: dword(&f[42..46]).wrapping_sub(1),
+        }))
+    } else {
+        Err("fixture TCP has unexpected IP endpoints".into())
+    }
+}
+
+fn classify_ipv6_multicast(f: &[u8]) -> Result<(), String> {
+    if f.len() < 54
+        || f[14] >> 4 != 6
+        || ![SOURCE_MAC, PEER_MAC].iter().any(|m| f[6..12] == *m)
+        || f[38] != 0xff
+        || f[..2] != [0x33, 0x33]
+        || f[2..6] != f[50..54]
+    {
+        return Err("malformed/unclassified fixture IPv6".into());
+    }
+    let end = 54 + usize::from(word(&f[18..20]));
+    if end > f.len() || end < 62 || f.len() > end.max(60) {
+        return Err("truncated fixture IPv6 payload".into());
+    }
+    match f[20] {
+        17 if word(&f[54..56]) == 5353
+            && word(&f[56..58]) == 5353
+            && usize::from(word(&f[58..60])) == end - 54
+            && f[38..54] == [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xfb] => {}
+        58 if f[55] == 0
+            && ((f[54] == 133 && end >= 62)
+                || (f[54] == 134 && end >= 70)
+                || ([135, 136].contains(&f[54]) && end >= 78)) => {}
+        _ => return Err("unclassified fixture IPv6 multicast protocol".into()),
+    }
+    let mut pseudo = f[22..54].to_vec();
+    pseudo.extend_from_slice(&((end - 54) as u32).to_be_bytes());
+    pseudo.extend_from_slice(&[0, 0, 0, f[20]]);
+    pseudo.extend_from_slice(&f[54..end]);
+    if checksum(&pseudo) != 0 {
+        return Err("invalid fixture IPv6 multicast checksum".into());
+    }
+    Ok(())
+}
+
+pub fn reply(frame: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    match classify(frame)? {
+        Frame::ArpRequest(target) => {
+            let Some(mac) = arp_mac(target) else {
+                return Ok(None);
+            };
+            let mut out = vec![0; 60];
+            out[..6].copy_from_slice(&SOURCE_MAC);
+            out[6..12].copy_from_slice(&mac);
+            out[12..22].copy_from_slice(&[8, 6, 0, 1, 8, 0, 6, 4, 0, 2]);
+            out[22..28].copy_from_slice(&mac);
+            out[28..32].copy_from_slice(&target.octets());
+            out[32..38].copy_from_slice(&SOURCE_MAC);
+            out[38..42].copy_from_slice(&SOURCE.octets());
+            Ok(Some(out))
+        }
+        Frame::Syn(_) => tcp_reply(frame),
+        _ => Ok(None),
+    }
 }
 
 fn ip(b: &[u8]) -> Ipv4Addr {
@@ -75,105 +275,8 @@ fn tcp_checksum(f: &[u8], end: usize) -> u16 {
     checksum(&p)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Syn {
-    pub target: Ipv4Addr,
-    pub port: u16,
-    pub sequence: u32,
-}
-
-pub fn response(f: &[u8]) -> Result<Option<Syn>, String> {
-    if f.len() < 34 || f[12..14] != [8, 0] || ip(&f[30..34]) != SOURCE {
-        return Ok(None);
-    }
-    let target = ip(&f[26..30]);
-    let mac = destination_mac(target).ok_or("reply source outside eligible targets")?;
-    let end = 14 + usize::from(word(&f[16..18]));
-    if f.len() < 54
-        || end > f.len()
-        || end < 54
-        || f[14] != 0x45
-        || f[23] != 6
-        || checksum(&f[14..34]) != 0
-        || tcp_checksum(f, end) != 0
-        || f[..6] != SOURCE_MAC
-        || f[6..12] != mac
-        || word(&f[36..38]) != 40000
-    {
-        return Err("invalid captured TCP reply".into());
-    }
-    let port = word(&f[34..36]);
-    if !(PORT_FIRST..=PORT_LAST).contains(&port)
-        || f[47] != if port.is_multiple_of(2) { 0x12 } else { 0x14 }
-    {
-        return Err("unexpected captured port result".into());
-    }
-    Ok(Some(Syn {
-        target,
-        port,
-        sequence: dword(&f[42..46]).wrapping_sub(1),
-    }))
-}
-
-pub fn arp_request_target(f: &[u8]) -> Result<Option<Ipv4Addr>, String> {
-    if f.len() < 42 || f[12..22] != [8, 6, 0, 1, 8, 0, 6, 4, 0, 1] || ip(&f[28..32]) != SOURCE {
-        return Ok(None);
-    }
-    arp_reply(f)?; // Also validates the deliberately unanswered missing peer.
-    Ok(Some(ip(&f[38..42])))
-}
-
-/// This parser is shared by the responder and offline witness, never by the product.
-pub fn syn(f: &[u8]) -> Result<Option<Syn>, String> {
-    if f.len() < 34 || f[12..14] != [8, 0] {
-        return Ok(None);
-    }
-    // Ordinary kernel multicast/UDP on the isolated wire is not scanner TCP.
-    if f[23] != 6 {
-        return Ok(None);
-    }
-    if ip(&f[26..30]) != SOURCE {
-        if f[6..12] == SOURCE_MAC {
-            return Err("scanner TCP has wrong source IPv4".into());
-        }
-        return Ok(None);
-    }
-    if f[14] != 0x45 || f[23] != 6 || word(&f[20..22]) & 0x3fff != 0 {
-        return Err("unexpected lab IPv4 header/fragment".into());
-    }
-    let end = 14 + usize::from(word(&f[16..18]));
-    if end < 54 || end > f.len() || checksum(&f[14..34]) != 0 || tcp_checksum(f, end) != 0 {
-        return Err("truncated lab TCP or invalid checksum".into());
-    }
-    let header = usize::from(f[46] >> 4) * 4;
-    if header < 20 || 34 + header != end {
-        return Err("TCP data or invalid header length".into());
-    }
-    // Kernel resets on the scanner are recorded but are not probes/replied to.
-    if f[47] == 4 || f[47] == 0x14 {
-        return Ok(None);
-    }
-    let target = ip(&f[30..34]);
-    let mac = destination_mac(target).ok_or("TCP outside eligible fixture targets")?;
-    let port = word(&f[36..38]);
-    if f[..6] != mac
-        || f[6..12] != SOURCE_MAC
-        || word(&f[34..36]) != 40000
-        || !(PORT_FIRST..=PORT_LAST).contains(&port)
-        || f[47] != 2
-        || dword(&f[42..46]) != 0
-    {
-        return Err("unexpected fixture SYN Ethernet identity/ports/flags".into());
-    }
-    Ok(Some(Syn {
-        target,
-        port,
-        sequence: dword(&f[38..42]),
-    }))
-}
-
 fn tcp_reply(f: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    let Some(probe) = syn(f)? else {
+    let Frame::Syn(probe) = classify(f)? else {
         return Ok(None);
     };
     let mut out = vec![0; 60];
@@ -201,8 +304,58 @@ fn tcp_reply(f: &[u8]) -> Result<Option<Vec<u8>>, String> {
 }
 
 #[cfg(test)]
+pub fn test_reset(target: Ipv4Addr, port: u16) -> Vec<u8> {
+    let cookie = rmasscan_core::cookie::syn_cookie_ipv4(
+        target.into(),
+        u32::from(port),
+        SOURCE.into(),
+        40000,
+        42,
+    ) as u32;
+    let mut f = Vec::new();
+    rmasscan_core::packet::TcpSynTemplate::new(
+        SOURCE_MAC,
+        destination_mac(target).unwrap_or(GATEWAY_MAC),
+        rmasscan_core::packet::LinkType::Ethernet,
+    )
+    .build_syn(
+        target.into(),
+        port,
+        SOURCE.into(),
+        40000,
+        cookie.wrapping_add(1),
+        &mut f,
+    );
+    f.truncate(54);
+    f[16..18].copy_from_slice(&40u16.to_be_bytes());
+    f[46] = 0x50;
+    f[47] = 4;
+    f[48..50].fill(0);
+    f[24..26].fill(0);
+    f[50..52].fill(0);
+    let c = checksum(&f[14..34]);
+    f[24..26].copy_from_slice(&c.to_be_bytes());
+    let c = tcp_checksum(&f, 54);
+    f[50..52].copy_from_slice(&c.to_be_bytes());
+    f
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn truncated_fixture_ip_and_arp_are_errors_not_unrelated_frames() {
+        for kind in [[8, 0], [8, 6], [0x86, 0xdd]] {
+            let mut f = vec![0; 14];
+            f[..6].copy_from_slice(&SOURCE_MAC);
+            f[6..12].copy_from_slice(&A_MAC);
+            f[12..14].copy_from_slice(&kind);
+            assert!(
+                reply(&f).is_err(),
+                "malformed fixture frame silently ignored"
+            );
+        }
+    }
     #[test]
     fn replies_to_each_allowlisted_arp_but_never_missing_or_foreign_sender() {
         for ip in [A, B, GATEWAY] {

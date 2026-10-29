@@ -122,7 +122,12 @@ impl Environment for Fake {
             elapsed: Duration::ZERO,
         })
     }
-    fn open(&self, _: &AdapterBinding) -> Result<rmasscan_engine::AdapterPair, String> {
+    fn open(
+        &self,
+        _: &AdapterBinding,
+        _: Instant,
+        _: &dyn Fn() -> bool,
+    ) -> Result<rmasscan_engine::AdapterPair, String> {
         self.opened.fetch_add(1, Ordering::AcqRel);
         let pair = self.packet.pair();
         if self.block.load(Ordering::Acquire) == 3 {

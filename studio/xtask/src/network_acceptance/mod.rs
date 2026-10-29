@@ -1,4 +1,4 @@
-//! Fixed, isolated acceptance tooling. Never opens the product release gate.
+//! Fixed, isolated acceptance tooling for the unmerged fixture-only candidate.
 #![forbid(unsafe_code)]
 #[cfg(target_os = "macos")]
 mod controller;
@@ -89,7 +89,7 @@ pub fn main_entry() -> super::Result<()> {
     let args: Vec<_> = std::env::args().skip(2).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["plan"] => {
-            println!("{}",serde_json::to_string_pretty(&serde_json::json!({"schema":1,"scanner":topology::SCANNER,"peer":topology::PEER,"job":topology::job(),"setup_argv":ownership::setup_steps(),"native_scan":"BLOCKED until candidate pre-ARP and pre-ACK interlocks reviewed","cleanup":"only root-journalled matching interface index/MAC/peer and exact host route; preserve drift"}))?);
+            println!("{}",serde_json::to_string_pretty(&serde_json::json!({"schema":1,"scanner":topology::SCANNER,"peer":topology::PEER,"job":topology::job(),"setup_argv":ownership::setup_steps(),"native_scan":"fixture-only candidate; supervision and native grant still required","cleanup":"only root-journalled matching interface index/MAC/peer and exact host route; preserve drift"}))?);
             Ok(())
         },
         ["verify",dir] => {

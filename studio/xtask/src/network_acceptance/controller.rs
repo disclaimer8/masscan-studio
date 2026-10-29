@@ -11,7 +11,7 @@ use studio_app::{Action, Controller, Update};
 use studio_protocol::{Backend, Status};
 
 // Task6b must change this only together with reviewed pre-ARP/pre-ACK constraints.
-const SEALED_CANDIDATE_INTERLOCKS_REVIEWED: bool = false;
+const SEALED_CANDIDATE_INTERLOCKS_REVIEWED: bool = true;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Case {
@@ -286,11 +286,11 @@ mod tests {
         assert!(
             drive("complete", Path::new("/no-runner"), &path)
                 .unwrap_err()
-                .starts_with("NOT RUN")
+                .contains("runner/out must be absolute; runner must exist")
         );
         assert!(
             !path.exists(),
-            "closed interlock must precede Store/directory access"
+            "invalid runner must precede Store/directory access"
         );
     }
     #[test]

@@ -33,7 +33,10 @@ fn network_bounds_and_settings_without_binding() {
     assert!(j.admit_network(&r.routes).is_ok());
     assert_eq!(j.prepare_network(&r).unwrap().range(), 1048576);
     assert!(j.prepare().is_err());
-    assert!(!raw_profile_enabled(Backend::MacNetwork));
+    assert_eq!(
+        raw_profile_enabled(Backend::MacNetwork),
+        cfg!(target_os = "macos")
+    );
     j.ports = "1-1025".into();
     assert!(j.admit_network(&r.routes).is_err());
     let (mut j, r) = fixture(1);

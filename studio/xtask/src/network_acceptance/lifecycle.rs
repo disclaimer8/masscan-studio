@@ -31,12 +31,20 @@ impl Stamp {
     }
     pub fn low(&self) -> Result<u64, String> {
         self.wall_ns
-            .checked_sub(self.uncertainty_ns + CLOCK_ERROR_NS)
+            .checked_sub(self.margin()?)
             .ok_or("clock underflow".into())
     }
     pub fn high(&self) -> Result<u64, String> {
         self.wall_ns
-            .checked_add(self.uncertainty_ns + CLOCK_ERROR_NS)
+            .checked_add(self.margin()?)
+            .ok_or("clock overflow".into())
+    }
+    fn margin(&self) -> Result<u64, String> {
+        if self.uncertainty_ns > CLOCK_ERROR_NS {
+            return Err("ambiguous clock sample".into());
+        }
+        self.uncertainty_ns
+            .checked_add(CLOCK_ERROR_NS)
             .ok_or("clock overflow".into())
     }
 }
@@ -151,6 +159,16 @@ pub struct Attempt {
     pub checkpoint: Option<Vec<u8>>,
     pub next_index: Option<String>,
     pub rows: Vec<Row>,
+}
+impl Attempt {
+    /// Used on deserialized evidence before full clock/order verification.
+    pub fn quiet_until(&self) -> Result<u64, String> {
+        self.joined
+            .high()?
+            .max(self.terminal.high()?)
+            .checked_add(QUIET_NS)
+            .ok_or("clock overflow".into())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Window {
@@ -491,6 +509,34 @@ mod tests {
             wall_ns: (100 + seconds) * 1_000_000_000,
             mono_ns: seconds * 1_000_000_000,
             uncertainty_ns: 0,
+        }
+    }
+    #[test]
+    fn extreme_uncertainty_is_an_error_in_both_clock_bounds() {
+        for uncertainty_ns in [CLOCK_ERROR_NS + 1, u64::MAX - CLOCK_ERROR_NS, u64::MAX] {
+            let s = Stamp {
+                uncertainty_ns,
+                ..stamp(1)
+            };
+            assert_eq!(s.low(), Err("ambiguous clock sample".into()));
+            assert_eq!(s.high(), Err("ambiguous clock sample".into()));
+        }
+    }
+    #[test]
+    fn untrusted_attempt_uncertainty_refuses_quiet_window_without_panicking() {
+        for terminal in [false, true] {
+            let mut a = fixture("complete", 0, 96).a;
+            if terminal {
+                a.terminal.uncertainty_ns = u64::MAX;
+            } else {
+                a.joined.uncertainty_ns = u64::MAX;
+            }
+            let bytes = serde_json::to_vec(&a).unwrap();
+            let untrusted: Attempt = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                untrusted.quiet_until(),
+                Err("ambiguous clock sample".into())
+            );
         }
     }
     fn header() -> Vec<u8> {

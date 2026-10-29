@@ -87,8 +87,14 @@ fn version_four_migration_backs_up_before_altering() {
     drop(db);
     let backups: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("before-v5-"))
+        .map(Result::unwrap)
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            e.file_type().unwrap().is_file()
+                && name.starts_with("before-v5-")
+                && name.ends_with(".sqlite3")
+        })
         .collect();
     assert_eq!(backups.len(), 1);
     let backup = rusqlite::Connection::open(backups[0].path()).unwrap();
@@ -99,6 +105,12 @@ fn version_four_migration_backs_up_before_altering() {
         4
     );
     assert!(backup.prepare("SELECT network_report FROM scans").is_err());
+    assert_eq!(
+        backup
+            .query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
     drop(backup);
     std::fs::remove_dir_all(dir).unwrap();
 }

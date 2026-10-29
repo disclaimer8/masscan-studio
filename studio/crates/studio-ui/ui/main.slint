@@ -587,11 +587,8 @@ export component MainWindow inherits Window {
                     JobField { label: "TCP ports"; value <=> root.job-ports; edited => { root.settings-edited(); } }
                     JobField { label: "Rate · packets/s"; value <=> root.job-rate; edited => { root.settings-edited(); } }
                 }
-                HorizontalLayout {
-                    spacing: 12px;
-                    JobField { label: "Exclude · optional"; hint: "IPv4 addresses or ranges"; value <=> root.job-exclusions; edited => { root.settings-edited(); } }
-                    Text { text: root.backend-index == 2 ? root.network-profile-hint : root.backend-index == 0 ? (root.mac-feth-open ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Raw scanning is not enabled for this profile on this OS.") : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
-                }
+                JobField { label: "Exclude · optional"; hint: "IPv4 addresses or ranges"; value <=> root.job-exclusions; edited => { root.settings-edited(); } }
+                Text { text: root.backend-index == 2 ? root.network-profile-hint : root.backend-index == 0 ? (root.mac-feth-open ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Raw scanning is not enabled for this profile on this OS.") : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
                 if root.backend-index != 1 : HorizontalLayout {
                     spacing: 12px;
                     ActionButton { text: root.network-checking ? "Checking routes…" : root.backend-index == 2 ? "Check network" : "Check isolated stand"; enabled: !root.network-checking && !root.process-active && (root.backend-index != 2 || root.mac-network-supported); clicked => { root.check-network(); } }

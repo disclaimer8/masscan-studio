@@ -14,7 +14,8 @@ struct Fake {
     cancel_on_plan: AtomicBool,
     replace_on_plan: AtomicBool,
     bad_mac: AtomicBool,
-    late_open: AtomicBool,
+    cancel_on_open: AtomicBool,
+    open_until: Mutex<Option<Instant>>,
     cancel: AtomicBool,
     io: rmasscan_engine::fake::FakeAdapter,
 }
@@ -79,7 +80,8 @@ fn fake() -> Arc<Fake> {
         cancel_on_plan: AtomicBool::new(false),
         replace_on_plan: AtomicBool::new(false),
         bad_mac: AtomicBool::new(false),
-        late_open: AtomicBool::new(false),
+        cancel_on_open: AtomicBool::new(false),
+        open_until: Mutex::new(None),
         cancel: AtomicBool::new(false),
         io: rmasscan_engine::fake::FakeAdapter::new(),
     })
@@ -107,7 +109,12 @@ impl Host for Arc<Fake> {
     fn open(&self, _: &AdapterBinding) -> Result<AdapterPair, String> {
         self.opens.fetch_add(1, Ordering::Relaxed);
         let pair = self.io.pair();
-        if self.late_open.load(Ordering::Relaxed) {
+        if let Some(deadline) = *self.open_until.lock().unwrap() {
+            std::thread::sleep(
+                deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+            );
+        }
+        if self.cancel_on_open.load(Ordering::Relaxed) {
             self.cancel.store(true, Ordering::Relaxed);
         }
         Ok(pair)
@@ -243,7 +250,7 @@ fn cancellation_deadline_and_late_open_cannot_publish_packet_handles() {
             host.cancel_on_plan.store(true, Ordering::Relaxed);
         }
         if defect == 3 {
-            host.late_open.store(true, Ordering::Relaxed);
+            host.cancel_on_open.store(true, Ordering::Relaxed);
         }
         assert!(
             env.open(&binding(), deadline, &|| host
@@ -255,6 +262,25 @@ fn cancellation_deadline_and_late_open_cannot_publish_packet_handles() {
         assert_eq!(host.io.alive_handles(), 0);
         assert_eq!(host.resolves.load(Ordering::Relaxed), 0);
     }
+}
+
+#[test]
+fn successful_open_after_deadline_closes_pair_without_cancellation() {
+    let host = fake();
+    let env = native(&host);
+    let deadline = Instant::now() + Duration::from_millis(100);
+    *host.open_until.lock().unwrap() = Some(deadline);
+    let result = env.open(&binding(), deadline, &|| {
+        host.cancel.load(Ordering::Relaxed)
+    });
+    assert_eq!(
+        result.err().as_deref(),
+        Some("sealed fixture observation timed out")
+    );
+    assert!(!host.cancel.load(Ordering::Relaxed));
+    assert_eq!(host.opens.load(Ordering::Relaxed), 1);
+    assert_eq!(host.io.alive_handles(), 0);
+    assert_eq!(host.resolves.load(Ordering::Relaxed), 0);
 }
 
 #[test]

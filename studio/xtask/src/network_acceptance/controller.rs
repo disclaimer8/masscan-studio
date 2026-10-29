@@ -1,6 +1,11 @@
 //! Actual Studio Controller -> authenticated installed helper -> durable Store.
 //! This driver cannot launch until the separately reviewed candidate interlocks exist.
-use super::{read_bounded, topology::*};
+use super::{
+    lifecycle::{Attempt, Sampler, Stamp, Ticket},
+    read_bounded,
+    supervision::Phase,
+    topology::*,
+};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -40,7 +45,7 @@ fn admission(interlocks: bool, gate: bool) -> Result<(), String> {
     Ok(())
 }
 
-pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
+pub fn drive(text: &str, runner: &Path, out: &Path, ticket_path: &Path) -> Result<(), String> {
     // Before even creating a directory or opening any history/Controller.
     admission(
         SEALED_CANDIDATE_INTERLOCKS_REVIEWED,
@@ -50,6 +55,24 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
     if !runner.is_absolute() || !out.is_absolute() || !runner.is_file() {
         return Err("runner/out must be absolute; runner must exist".into());
     }
+    let driver_uid = super::native::command(&["/usr/bin/id", "-u"])?
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "invalid driver uid")?;
+    if driver_uid == 0 {
+        return Err(
+            "Controller driver must run unprivileged; use normal helper authorization".into(),
+        );
+    }
+    let process_identity = super::native::command(&[
+        "/bin/ps",
+        "-p",
+        &std::process::id().to_string(),
+        "-o",
+        "lstart=",
+        "-o",
+        "command=",
+    ])?;
     if case == Case::Resume {
         if fs::symlink_metadata(out)
             .map_err(|e| e.to_string())?
@@ -60,14 +83,34 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
         {
             return Err("resume needs this fixture's marked isolated history".into());
         }
-    } else {
-        fs::create_dir(out).map_err(|e| e.to_string())?;
-        fs::write(
-            out.join("fixture-job.json"),
-            serde_json::to_vec(&job()).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+    } else if read_bounded(&out.join(format!("prepared-{text}")), 64)? != b"prepared\n"
+        || out.join("history").exists()
+    {
+        return Err("new case needs prepared empty isolated directory".into());
     }
+    let ticket: Ticket =
+        serde_json::from_slice(&read_bounded(ticket_path, 65536)?).map_err(|e| e.to_string())?;
+    if ticket.case != text
+        || ticket.runner_sha256 != studio_platform::trusted::file_hash(runner)?
+        || ticket.tooling_sha256
+            != studio_platform::trusted::file_hash(
+                &std::env::current_exe().map_err(|e| e.to_string())?,
+            )?
+    {
+        return Err("ticket case/candidate binary hashes differ".into());
+    }
+    let begin = Instant::now();
+    let driver_started = Stamp::now(begin)?;
+    let sampler = Sampler::start(begin, driver_started.clone());
+    let expiry = ticket
+        .ready
+        .wall_ns
+        .checked_add(70_000_000_000)
+        .ok_or("ticket time overflow")?;
+    if driver_started.low()? <= ticket.ready.high()? || driver_started.high()? >= expiry {
+        return Err("ticket not fresh or clock ambiguous".into());
+    }
+    let budget = Duration::from_nanos(expiry - driver_started.high()?);
     let history = out.join("history");
     let previous = if case == Case::Resume {
         let db = studio_store::Store::open(&history).map_err(|e| e.to_string())?;
@@ -90,13 +133,16 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let mut app = Controller::open(history.clone(), runner.into())?;
     app.send(Action::AuthorizeFor(job()))?;
-    let begin = Instant::now();
+    let mut start_stamp = None;
+    let mut control_stamp = None;
+    let mut terminal_stamp = None;
+    let mut active = None;
     let mut started = false;
     let mut control = false;
     let mut terminal = None;
     let mut coverage = false;
     let mut sent = 0u64;
-    while begin.elapsed() < Duration::from_secs(180) && terminal.is_none() {
+    while begin.elapsed() < budget && terminal.is_none() {
         for update in app.poll() {
             match update {
                 Update::Authorization {
@@ -112,6 +158,16 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
                         // Packet-free planner check before production Start/Resume. The
                         // candidate helper repeats stronger executable checks before I/O.
                         read_only_check()?;
+                        if begin.elapsed() >= budget {
+                            return Err("ticket expired before Start".into());
+                        }
+                        start_stamp = Some(Stamp::now(begin)?);
+                        writeln!(
+                            log,
+                            "{}",
+                            serde_json::json!({"event":"start-request","stamp":start_stamp})
+                        )
+                        .map_err(|e| e.to_string())?;
                         app.send(if case == Case::Resume {
                             Action::Resume
                         } else {
@@ -128,6 +184,8 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
                     sent = n.parse().map_err(|_| "invalid progress sent")?;
                     writeln!(log,"{}",serde_json::json!({"ms":begin.elapsed().as_millis(),"sent":n,"received":received})).map_err(|e|e.to_string())?;
                     if !control && sent >= 4 && matches!(case, Case::Pause | Case::StopRunning) {
+                        control_stamp = Some(Stamp::now(begin)?);
+                        writeln!(log,"{}",serde_json::json!({"event":"control-request","case":text,"stamp":control_stamp})).map_err(|e|e.to_string())?;
                         app.send(if case == Case::Pause {
                             Action::Pause
                         } else {
@@ -135,14 +193,32 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
                         })?;
                         control = true;
                     }
-                    if !control && sent >= 4 && case == Case::Guard {
-                        fs::write(out.join("bound-for-drift"),b"At least four probes sent on the candidate-verified fixture; reviewed link-down action may now run.\n").map_err(|e|e.to_string())?;
+                    if !control
+                        && sent >= 4
+                        && case == Case::Guard
+                        && let Some((scan, attempt)) = active
+                    {
+                        let observed = Stamp::now(begin)?;
+                        control_stamp = Some(observed.clone());
+                        let phase = Phase {
+                            ticket: ticket.clone(),
+                            driver_pid: std::process::id(),
+                            driver_started: driver_started.clone(),
+                            start: start_stamp.clone().ok_or("missing Start stamp")?,
+                            observed,
+                            scan,
+                            attempt,
+                            sent,
+                        };
+                        atomic_json(out, "guard-phase.json", &phase)?;
                         control = true;
                     }
                 }
                 Update::State(status, detail) => {
                     writeln!(log,"{}",serde_json::json!({"ms":begin.elapsed().as_millis(),"state":status,"detail":detail})).map_err(|e|e.to_string())?;
                     if status == Status::Preparing && case == Case::StopPreparing && !control {
+                        control_stamp = Some(Stamp::now(begin)?);
+                        writeln!(log,"{}",serde_json::json!({"event":"stop-preparing-request","stamp":control_stamp})).map_err(|e|e.to_string())?;
                         app.send(Action::Stop)?;
                         control = true;
                     }
@@ -156,7 +232,14 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
                                 | Status::Interrupted
                         )
                     {
+                        terminal_stamp = Some(Stamp::now(begin)?);
+                        writeln!(log,"{}",serde_json::json!({"event":"terminal-observed","stamp":terminal_stamp,"status":status})).map_err(|e|e.to_string())?;
                         terminal = Some(status);
+                    }
+                }
+                Update::History(scans, selected) => {
+                    if let Some(scan) = scans.iter().find(|s| Some(s.scan) == selected) {
+                        active = Some((scan.scan, scan.attempt));
                     }
                 }
                 Update::Notice(detail) => {
@@ -179,7 +262,32 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
             "controller acceptance deadline expired; stop requested and resources joined".into(),
         );
     }
+    // Keep the real Controller alive through a quiet period: dropping it at the
+    // first terminal update could hide an automatic restart. Captures continue
+    // for another quiet period after its resources are actually joined.
+    let quiet = Instant::now() + Duration::from_nanos(super::lifecycle::QUIET_NS);
+    while Instant::now() < quiet {
+        for update in app.poll() {
+            if let Update::State(status, detail) = update {
+                writeln!(log,"{}",serde_json::json!({"event":"post-terminal-state","stamp":Stamp::now(begin)?,"state":status,"detail":detail})).map_err(|e|e.to_string())?;
+                if matches!(
+                    status,
+                    Status::Starting | Status::Preparing | Status::Scanning | Status::Saving
+                ) {
+                    return Err("Controller restarted after terminal state".into());
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
     drop(app);
+    let (joined, samples) = sampler.finish()?;
+    writeln!(
+        log,
+        "{}",
+        serde_json::json!({"event":"controller-joined","stamp":joined})
+    )
+    .map_err(|e| e.to_string())?;
     log.sync_all().map_err(|e| e.to_string())?;
     let db = studio_store::Store::open(&history).map_err(|e| e.to_string())?;
     let scans = db.scans().map_err(|e| e.to_string())?;
@@ -211,7 +319,7 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
         validate_report(&studio_protocol::NetworkReport::decode(bytes)?)?;
         fs::write(out.join("network-report.bin"), bytes).map_err(|e| e.to_string())?;
     }
-    if let Some(previous) = previous
+    if let Some(previous) = &previous
         && (saved.scan != previous.scan
             || saved.attempt == previous.attempt
             || saved.network_report != previous.network_report)
@@ -222,6 +330,26 @@ pub fn drive(text: &str, runner: &Path, out: &Path) -> Result<(), String> {
         return Err("pause not durable".into());
     }
     fs::write(out.join(format!("{text}-store.json")),serde_json::to_vec_pretty(&serde_json::json!({"scan":studio_protocol::id_text(saved.scan),"attempt":studio_protocol::id_text(saved.attempt),"status":saved.status,"checkpoint":saved.checkpoint,"rows":rows,"packet_witness_required":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    let attempt = Attempt {
+        ticket,
+        driver_pid: std::process::id(),
+        driver_uid,
+        process_identity,
+        driver_started,
+        start: start_stamp.ok_or("missing Start")?,
+        control: control_stamp,
+        terminal: terminal_stamp.ok_or("missing terminal")?,
+        joined,
+        samples,
+        scan: saved.scan,
+        attempt: saved.attempt,
+        status: saved.status.clone(),
+        report: saved.network_report.clone(),
+        checkpoint: saved.checkpoint.clone(),
+        next_index: saved.next_index.clone(),
+        rows,
+    };
+    atomic_json(out, &format!("{text}-attempt.json"), &attempt)?;
     println!(
         "Controller/store case {text} finished as {expected:?}; independent capture verification still required"
     );
@@ -270,6 +398,48 @@ fn read_only_check() -> Result<(), String> {
     validate_plan(&plan)
 }
 
+/// Prepare user-owned empty history before root pins its directory descriptor.
+pub fn prepare(text: &str, out: &Path) -> Result<(), String> {
+    let case = case(text)?;
+    if !out.is_absolute() {
+        return Err("absolute isolated output directory required".into());
+    }
+    if case != Case::Resume {
+        fs::create_dir(out).map_err(|e| e.to_string())?;
+        fs::write(
+            out.join("fixture-job.json"),
+            serde_json::to_vec(&job()).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    } else if read_bounded(&out.join("fixture-job.json"), 4096)?
+        != serde_json::to_vec(&job()).map_err(|e| e.to_string())?
+    {
+        return Err("Resume requires existing paused fixture directory".into());
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out.join(format!("prepared-{text}")))
+        .map_err(|e| e.to_string())?;
+    file.write_all(b"prepared\n").map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())
+}
+fn atomic_json(out: &Path, name: &str, value: &impl serde::Serialize) -> Result<(), String> {
+    let temporary = out.join(format!("{name}.next"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|e| e.to_string())?;
+    file.write_all(&serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    if out.join(name).exists() {
+        return Err("refuse existing attempt/phase evidence".into());
+    }
+    fs::rename(temporary, out.join(name)).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,9 +454,14 @@ mod tests {
             studio_protocol::id_text(studio_protocol::new_id().unwrap())
         ));
         assert!(
-            drive("complete", Path::new("/no-runner"), &path)
-                .unwrap_err()
-                .contains("runner/out must be absolute; runner must exist")
+            drive(
+                "complete",
+                Path::new("/no-runner"),
+                &path,
+                Path::new("/no-ticket")
+            )
+            .unwrap_err()
+            .contains("runner/out must be absolute; runner must exist")
         );
         assert!(
             !path.exists(),

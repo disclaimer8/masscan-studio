@@ -19,7 +19,7 @@ fn now() -> Result<u64> {
 }
 
 /// Native tools have bounded argv and output, and are killed/reaped at the deadline.
-fn command(argv: &[&str]) -> Result<String> {
+pub(super) fn command(argv: &[&str]) -> Result<String> {
     studio_platform::sealed_fixture::command(argv, Instant::now() + Duration::from_secs(5), &|| {
         false
     })
@@ -374,6 +374,9 @@ pub fn peer() -> Result<()> {
         return Err("peer final health unknown or dropped".into());
     }
     drop(pair);
+    if !stop.exists() {
+        return Err("raw peer deadline expired without supervised stop".into());
+    }
     println!(
         "{}",
         serde_json::json!({"responses":sent,"kernel_drops":0,"stop_marker":stop.exists(),"deadline_seconds":90,"packet_witness_required":true})
@@ -396,4 +399,43 @@ pub fn stop_peer() -> Result<()> {
         .map_err(|e| e.to_string())?
         .sync_all()
         .map_err(|e| e.to_string())
+}
+
+/// Supervision starts only while no prior peer/setup operation holds the lock.
+pub(super) fn supervision_state() -> Result<State> {
+    let _lock = lock(false)?;
+    let state = load()?;
+    check_owned(&state)?;
+    snapshot()?;
+    // A prior supervised case has ended; preserve seal/index/generation for Resume.
+    let marker = Path::new(STATE_DIR).join("stop-peer");
+    if marker.try_exists().map_err(|e| e.to_string())? {
+        trusted(&marker, false)?;
+        fs::remove_file(marker).map_err(|e| e.to_string())?;
+    }
+    Ok(state)
+}
+/// The sole supervised drift action. No user path, command or interface is used.
+pub(super) fn guard_down(expected: &State) -> Result<()> {
+    let _lock = lock(false)?;
+    let current = load()?;
+    if &current != expected {
+        return Err("guard seal replaced".into());
+    }
+    check_owned(&current)?;
+    snapshot()?;
+    command(&["/sbin/ifconfig", SCANNER, "down"])?;
+    Ok(())
+}
+
+pub(super) fn supervision_check(expected: &State, running: bool) -> Result<()> {
+    let current = load()?;
+    if &current != expected {
+        return Err("supervised fixture seal replaced".into());
+    }
+    check_owned(&current)?;
+    if running {
+        snapshot()?;
+    }
+    Ok(())
 }

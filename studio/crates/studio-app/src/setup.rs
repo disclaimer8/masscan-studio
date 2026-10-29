@@ -112,6 +112,7 @@ mod tests {
             updates,
             stop: Arc::new(AtomicBool::new(false)),
             cancel_auth: Arc::new(AtomicBool::new(false)),
+            cancel_epoch: Arc::new(AtomicU64::new(0)),
             setup_pending: Arc::new(AtomicBool::new(false)),
             cancel_setup: Arc::new(AtomicBool::new(false)),
             error: Arc::new(Mutex::new(None)),
@@ -122,7 +123,7 @@ mod tests {
         assert!(c.send(Action::InstallRunner).is_err());
         c.send(Action::CancelSetup).unwrap();
         assert!(c.cancel_setup.load(Ordering::Acquire));
-        assert!(matches!(rx.try_recv().unwrap(), Action::CheckSetup));
+        assert!(matches!(rx.try_recv().unwrap().0, Action::CheckSetup));
         assert!(
             rx.try_recv().is_err(),
             "cancel must bypass the pending command"

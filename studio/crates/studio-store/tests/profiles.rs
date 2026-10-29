@@ -87,7 +87,7 @@ fn v3_history_and_archived_metadata_survive_without_an_importer() {
     drop(db);
     let c = rusqlite::Connection::open(d.join("history.sqlite3")).unwrap();
     let job = Job::example(Backend::Archived);
-    c.execute_batch("DROP TABLE profiles; PRAGMA user_version=3; CREATE TABLE legacy_records(data TEXT NOT NULL); INSERT INTO legacy_records VALUES('retained metadata');").unwrap();
+    c.execute_batch("DROP TABLE profiles; ALTER TABLE scans DROP COLUMN network_report; PRAGMA user_version=3; CREATE TABLE legacy_records(data TEXT NOT NULL); INSERT INTO legacy_records VALUES('retained metadata');").unwrap();
     c.execute("INSERT INTO scans(id,attempt,job,status,updated,name,created_at) VALUES(?1,?2,?3,'\"Paused\"',1,'Archived session','2001-01-01T00:00:00.125Z')", rusqlite::params![[1u8;16].as_slice(),[2u8;16].as_slice(),serde_json::to_string(&job).unwrap()]).unwrap();
     c.execute("INSERT INTO results(scan,ip,port,open,discovered_at) VALUES(?1,'192.0.2.1',80,1,'2001-01-01T00:00:00.250Z')",[[1u8;16].as_slice()]).unwrap();
     let db = Store::open(&d).unwrap();
@@ -107,7 +107,7 @@ fn v3_history_and_archived_metadata_survive_without_an_importer() {
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
     let backup = std::fs::read_dir(&d)
         .unwrap()
@@ -117,7 +117,7 @@ fn v3_history_and_archived_metadata_survive_without_an_importer() {
                 && p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("before-v4-")
+                    .starts_with("before-v5-")
         })
         .unwrap();
     let b =

@@ -1,6 +1,8 @@
 //! Unprivileged host inspection; independent of scanner/runner/UI/storage crates.
 #![forbid(unsafe_code)]
+mod physical_export;
 pub mod process;
+pub use physical_export::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, net::Ipv4Addr};
 pub type Result<T> = std::result::Result<T, String>;
@@ -8,11 +10,14 @@ pub const MAX_XML: usize = 2_097_152;
 /// Write in the destination directory, then atomically replace the selected file.
 /// Failed serialization/writes preserve any existing export. Tempfiles are 0600 on Unix.
 pub fn write_export(path: &std::path::Path, rows: &[ExportRow], as_json: bool) -> Result<()> {
+    let bytes = if as_json { json(rows)? } else { csv(rows)? };
+    write_export_bytes(path, &bytes)
+}
+fn write_export_bytes(path: &std::path::Path, bytes: &str) -> Result<()> {
     use std::io::Write;
     if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err("Export destination cannot be a symlink".into());
     }
-    let bytes = if as_json { json(rows)? } else { csv(rows)? };
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

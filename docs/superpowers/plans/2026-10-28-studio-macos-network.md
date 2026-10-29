@@ -1,6 +1,6 @@
 # Studio macOS Network Scanning Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Scan home-network devices and owned remote IPv4 servers through a real macOS Wi-Fi/Ethernet interface from Studio.
 
@@ -47,12 +47,12 @@
 - Produce `ReadyPlan::with_destinations(effective: EffectiveConfig, binding: AdapterBinding, destinations: BTreeMap<u32, [u8; 6]>) -> Result<ReadyPlan, PlanError>` and `ReadyPlan::destinations() -> Option<&BTreeMap<u32, [u8; 6]>>`.
 - Existing `ReadyPlan::new` and single-MAC identity output are unchanged.
 
-- [ ] Import the selected modules, recording donor commit and preserving main's dependency versions; compile and run `cargo test --locked -p rmasscan-net`.
-- [ ] Add failing tests for two on-link targets with different destination MACs, shared gateway MACs, missing/extra destination keys, invalid MACs, wrong link type and unchanged IP/TCP bytes.
-- [ ] Add failing identity/resume tests: map order is canonical, MAC changes alter digest, old single-MAC golden bytes are unchanged, changed map cannot resume.
-- [ ] Run the focused core/engine tests and record the expected failures.
-- [ ] Implement the constructor, frame destination selection and domain-separated map identity.
-- [ ] Run `cargo test --locked -p rmasscan-core -p rmasscan-engine -p rmasscan-net`, formatting and Clippy; commit the foundation.
+- [x] Import the selected modules, recording donor commit and preserving main's dependency versions; compile and run `cargo test --locked -p rmasscan-net`.
+- [x] Add failing tests for two on-link targets with different destination MACs, shared gateway MACs, missing/extra destination keys, invalid MACs, wrong link type and unchanged IP/TCP bytes.
+- [x] Add failing identity/resume tests: map order is canonical, MAC changes alter digest, old single-MAC golden bytes are unchanged, changed map cannot resume.
+- [x] Run the focused core/engine tests and record the expected failures.
+- [x] Implement the constructor, frame destination selection and domain-separated map identity.
+- [x] Run `cargo test --locked -p rmasscan-core -p rmasscan-engine -p rmasscan-net`, formatting and Clippy; commit the foundation.
 
 ### Task 2: Bounded route planning and cancellable neighbour discovery
 
@@ -68,13 +68,13 @@
 - `resolve_neighbours(io: &mut AdapterPair, plan: &PhysicalRoutePlan, clock: &dyn Clock, cancelled: &dyn Fn() -> bool) -> Result<NeighbourReport, NetError>` returns a complete destination map plus unresolved on-link targets; unresolved gateway is an error.
 - Constructor and input validation enforce the spec budgets independently of UI validation.
 
-- [ ] Add failing pure route tests for all targets including interior VPN route, mixed interfaces, multiple gateways on one interface, local/invalid addresses, subnet endpoints and /31-/32 semantics.
-- [ ] Add fake-I/O tests for three fair ARP passes, one-second final response opportunity, duplicate/out-of-scope replies, missing local peers, gateway failure, backpressure, uncertainty, cancellation and deadline. Deadline before a full response opportunity fails the preparation.
-- [ ] Add route-observation tests for endless foreign messages/EINTR and cancellation during a blocked lookup; original absolute deadlines must hold.
-- [ ] Test that a home /24 excludes the scanner address, an explicit self-address is refused unless user-excluded, overlap preserves singleton provenance, and remote addresses are not classified from local subnet masks.
-- [ ] Demonstrate failures with `cargo test --locked -p rmasscan-net network_plan` and `cargo test --locked -p rmasscan-net neighbours`.
-- [ ] Implement portable planning and neighbour resolution, extending only the necessary OS observation fields.
-- [ ] Run the focused tests plus the net crate suite; commit.
+- [x] Add failing pure route tests for all targets including interior VPN route, mixed interfaces, multiple gateways on one interface, local/invalid addresses, subnet endpoints and /31-/32 semantics.
+- [x] Add fake-I/O tests for three fair ARP passes, one-second final response opportunity, duplicate/out-of-scope replies, missing local peers, gateway failure, backpressure, uncertainty, cancellation and deadline. Deadline before a full response opportunity fails the preparation.
+- [x] Add route-observation tests for endless foreign messages/EINTR and cancellation during a blocked lookup; original absolute deadlines must hold.
+- [x] Test that a home /24 excludes the scanner address, an explicit self-address is refused unless user-excluded, overlap preserves singleton provenance, and remote addresses are not classified from local subnet masks.
+- [x] Demonstrate failures with `cargo test --locked -p rmasscan-net network_plan` and `cargo test --locked -p rmasscan-net neighbours`.
+- [x] Implement portable planning and neighbour resolution, extending only the necessary OS observation fields.
+- [x] Run the focused tests plus the net crate suite; commit.
 
 ### Task 3: Job-specific network reports and checkpoint envelopes
 
@@ -91,14 +91,20 @@
 - `validate_checkpoint` and `checkpoint_origin` retain their external signatures and support legacy checkpoints as well as the new envelope.
 - Add job-specific read-only preflight and preparation-report/acknowledgement protocol messages; bump IPC version.
 
-- [ ] Add failing tests for target/port/rate bounds, unsupported OS gate, legacy job JSON, mismatched job/report, report overflow and checkpoint substitution/corruption. Include all 65535 ports on one host, exact 1048576-probe admission, and limit checks before unresolved hosts are removed.
-- [ ] Test maximum-size report/checkpoint bytes inside the actual JSON Envelope, including worst-case byte values and skipped-address records; admission must reject unpausable jobs before any adapter access.
-- [ ] Add persistence tests proving report commit precedes acknowledgement and that original requested targets and unresolved targets survive reopening History.
-- [ ] Run the focused protocol/store tests to record failures.
-- [ ] Implement validation, bounded serialization, runtime-plan reconstruction, schema migration and durable report storage.
-- [ ] Run `cargo test --locked -p studio-protocol -p studio-store`; commit.
+- [x] Add failing tests for target/port/rate bounds, unsupported OS gate, legacy job JSON, mismatched job/report, report overflow and checkpoint substitution/corruption. Include all 65535 ports on one host, exact 1048576-probe admission, and limit checks before unresolved hosts are removed.
+- [x] Test maximum-size report/checkpoint bytes inside the actual JSON Envelope, including worst-case byte values and skipped-address records; admission must reject unpausable jobs before any adapter access.
+- [x] Add persistence tests proving report commit precedes acknowledgement and that original requested targets and unresolved targets survive reopening History.
+- [x] Run the focused protocol/store tests to record failures.
+- [x] Implement validation, bounded serialization, runtime-plan reconstruction, schema migration and durable report storage.
+- [x] Run `cargo test --locked -p studio-protocol -p studio-store`; commit.
 
 ### Task 4: Helper preparation, lifecycle and network guard
+
+Execute this task as two sequential, independently reviewed changes: **4a** owns
+the runner preparation/lifecycle/guard and its fake tests; **4b** owns application
+authorization/readiness, durable report acknowledgement and coverage updates.
+The 4a report supplies the runtime contract consumed by 4b. A focused helper
+module may hold the new state machine rather than growing the existing entrypoint.
 
 **Files:**
 - Create `studio/crates/studio-runner/src/network.rs` and targeted fake tests.
@@ -111,30 +117,34 @@
 - Route inspection uses the existing guard's one-second polling, three-second freshness and five-second suspension rules.
 - `Authorize` establishes a helper session; the selected job determines feth versus physical preflight.
 
-- [ ] Add fake lifecycle tests for successful LAN/routed scans and truthful unresolved-target reporting.
-- [ ] Add tests for Stop/Close while resolving ARP or waiting for report ACK, stale completion, worker panic, changed route before first SYN, and no usable targets.
-- [ ] Add restart-resume tests requiring the exact frozen job/map and a fresh attempt; formerly unresolved hosts cannot join Resume.
-- [ ] Add guard tests for source/interface change, interior route change, stale observation and suspension.
-- [ ] Run targeted tests to show failures; implement the worker/state transitions and authenticated report handling.
-- [ ] Run the runner/app suites and existing Simulation/feth lifecycle regressions; commit.
+- [x] Add fake lifecycle tests for successful LAN/routed scans and truthful unresolved-target reporting.
+- [x] Add tests for Stop/Close while resolving ARP or waiting for report ACK, stale completion, worker panic, changed route before first SYN, and no usable targets.
+- [x] Add restart-resume tests requiring the exact frozen job/map and a fresh attempt; formerly unresolved hosts cannot join Resume.
+- [x] Add guard tests for source/interface change, interior route change, stale observation and suspension.
+- [x] Run targeted tests to show failures; implement the worker/state transitions and authenticated report handling.
+- [x] Run the runner/app suites and existing Simulation/feth lifecycle regressions; commit.
 
 ### Task 5: Studio controls, summaries and history
 
 **Files:**
 - Modify `studio/crates/studio-ui/ui/main.slint`, `src/main.rs`, and UI contract tests.
+- Extend `studio/crates/studio-inspection` export DTOs/serializers and tests for physical-scan coverage.
 - Update `studio/README.md`, `studio/AUTHORIZATION.md` and `studio/VERIFICATION.md`.
 
 **Interfaces:**
 - Add `Mac network · Wi-Fi / Ethernet` without changing existing feth/Simulation saved backend meanings.
 - Show requested target/probe counts, interface/source and route result, Preparing network, and separately counted not-scanned neighbours.
 - Preserve profile save/load, History, inspection and export; report preparation and partial coverage persistently.
+- Physical exports retain scan-wide coverage in the same atomic file, including zero-result scans: JSON coverage metadata and explicit CSV non-result record kinds. Preserve legacy exports and filtered result rows; never invent closed-port rows for unscanned addresses.
 - Keep Stop available during preparation and make the backend-specific helper/route readiness clear.
 
-- [ ] Add failing headless tests for backend/profile round-trip, counts, unsupported-OS display, preparation cancellation and partial-coverage History.
-- [ ] Implement the controls and report presentation using existing UI conventions.
-- [ ] Run targeted UI tests and `cargo xtask test`; update documentation with exact limits and measured status, then commit.
+- [x] Add failing headless tests for backend/profile round-trip, counts, unsupported-OS display, preparation cancellation and partial-coverage History.
+- [x] Implement the controls and report presentation using existing UI conventions.
+- [x] Run targeted UI tests and `cargo xtask test`; update documentation with exact limits and measured status, then commit.
 
 ### Task 6: Review, cross-platform CI and real-network acceptance
+
+Execution split: **6a** prepares the bounded Rust fixture, packet witnesses and Controller driver with native launch refused. **6b** reviews the complete branch, adds a separate unmerged fixture-constrained candidate, then performs privileged lab and owned-target acceptance. Candidate fixture constraints must reject a different source/interface/route before packet adapter open and reject a different persisted report before ACK; external preflight alone cannot close that race. Removing fixture-only constraints for owned-target acceptance is a separate reviewed change. The distributed physical gate stays closed until acceptance evidence is complete.
 
 **Files:**
 - Add `docs/experiments/2026-10-28-studio-macos-network.md` and bounded evidence artifacts.

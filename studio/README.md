@@ -67,6 +67,48 @@ Studio (one Mac, one macOS version, debug build) is recorded in
 `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`; its status
 words there govern.
 
+## Mac network · Wi-Fi / Ethernet (implemented, execution disabled)
+
+Scan settings includes a third **Mac network · Wi-Fi / Ethernet** profile.
+The physical execution gate remains closed on every OS pending native acceptance;
+**Start scan** is disabled for this profile in this build. On Windows/Linux it
+also explains that physical scanning is macOS-only. Existing feth and Simulation
+profile meanings and saved settings are unchanged. No target is inferred from
+this Mac's network. When the physical gate is eventually opened, fresh settings
+default to this profile with empty targets and rate 100; explicit saved/draft
+settings are retained.
+
+Enter IPv4 addresses, CIDRs or ranges, TCP ports, optional exclusions and a rate.
+**Check settings** validates without manufacturing an adapter or sending packets.
+It shows deduplicated requested addresses/probes and candidates after your
+exclusions. **Check network** on macOS is read-only: it reports the selected
+interface/source, direct/routed counts and automatic exclusions. A successful
+route check does not authorize a helper session, resolve neighbours or establish
+packet access. macOS may mask the source hardware address during this check.
+**Authorize session…** grants a separate verified helper session for the selected
+job; it does not start a scan or send ARP/TCP. Install this build's matching helper
+through **Scanner setup** before requesting authorization.
+
+The implemented gated path accepts at most 2,048 candidates after user exclusions,
+1,024 effective addresses and 1,048,576 TCP probes, at rate 1–1,000 packets/s.
+One scan requires one Ethernet-compatible interface/source; mixed interfaces,
+tunnel/loopback routes, IPv6, UDP and hostname targets are unsupported.
+After an accepted physical Start, **Preparing network** resolves neighbours;
+**Stop** and **Lock** remain available, and Pause becomes available only when TCP
+scanning begins. Frozen preparation coverage remains visible above results and
+under **Coverage…**, including addresses not scanned due to no neighbour response
+and automatic exclusions. Eligible counts describe the prepared plan, not a claim
+that every probe was sent. An all-unresolved scan has no TCP results and still has
+saved coverage. History reopening preserves these facts and original settings.
+Editing new settings, loading a profile or repeating settings invalidates route
+readiness while retaining coverage for the selected saved scan and its displayed
+results. Export continues to describe that selected scan until a new scan starts
+or another History selection clears/replaces the view.
+
+These controls and fake-network tests do not establish working physical Wi-Fi or
+Ethernet scanning. Sealed multi-peer/routed lab acceptance and explicitly supplied
+owned home-network/remote-server targets are still required; see VERIFICATION.md.
+
 Active attempts interrupt after a long scheduling/clock gap instead of silently
 resuming. The gated Mac feth path also repeats isolation checks in a background
 worker; a failed or stale check stops the attempt, retains received results, and
@@ -202,6 +244,15 @@ hardware identity. All inspection data belongs to its original saved scan.
 snapshot taken before the native save dialog. CSV neutralizes spreadsheet formulas;
 JSON includes inspection details only for exported ports. Export runs in the
 background. Existing exports are replaced only after the full new file is written.
+Physical reports retain whole-scan preparation coverage in the same atomic file,
+even with zero visible result rows. JSON version 2 adds original settings, counts,
+interface/source, routes, unresolved neighbours and exclusions alongside the
+filtered `rows`. Physical CSV adds `Record kind`/`Detail`: `scan_coverage` holds the
+complete metadata as JSON, `not_scanned` and `automatically_excluded` have empty
+port/protocol/state cells, and `result` rows retain the current filtered order.
+Unscanned addresses never become closed-port rows. Nonphysical export formats
+remain unchanged. Whole-scan settings may list ports hidden by a result filter;
+hidden result or inspection details are never exported.
 Old history rows without discovery times remain unknown. Pending host checks are
 marked cancelled after an interrupted application run.
 

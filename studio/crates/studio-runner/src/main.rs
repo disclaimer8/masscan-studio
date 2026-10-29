@@ -2,6 +2,10 @@
 mod guard;
 #[cfg(test)]
 mod guard_tests;
+mod network;
+mod network_attempt;
+#[cfg(test)]
+mod network_lifecycle_tests;
 mod outbox;
 use rmasscan_engine::{Checkpoint, Engine, EngineHandle, EngineOptions, Reason};
 use std::{
@@ -21,6 +25,7 @@ struct Attempt {
     engine: Option<EngineHandle>,
     guard: Option<guard::Guard>,
     pending: Option<CheckpointAck>,
+    network: Option<network_attempt::State>,
     rows: Vec<studio_protocol::Row>,
     progress: Option<Event>,
     flushed: Instant,
@@ -48,6 +53,9 @@ type PreparedAdapter = (rmasscan_engine::AdapterPair, Option<guard::Inspector>);
 fn raw_adapter(job: &Job) -> Result<PreparedAdapter, String> {
     let plan = job.prepare()?;
     match job.backend {
+        Backend::MacNetwork => {
+            Err("Physical network profile is disabled pending integration and acceptance".into())
+        }
         Backend::Archived => Err("Archived history cannot start a scanner".into()),
         Backend::Simulation => {
             let fake = rmasscan_engine::fake::FakeAdapter::new();
@@ -107,6 +115,26 @@ fn check_feth() -> Result<(), String> {
     Err("Mac feth profile is only available on macOS. Use explicit Simulation to test the application.".into())
 }
 
+fn retire_check(
+    checking: &mut Option<network::Check>,
+    retiring: &mut Vec<network::Check>,
+) -> Result<(), String> {
+    if let Some(worker) = checking.take() {
+        worker.cancel();
+        retiring.push(worker);
+    }
+    if retiring.len() > 8 {
+        return Err("Too many unfinished network checks".into());
+    }
+    Ok(())
+}
+fn attempt_active(a: &Attempt) -> bool {
+    a.engine.is_some()
+        || a.pending.is_some()
+        || a.network
+            .as_ref()
+            .is_some_and(network_attempt::State::active)
+}
 fn send(tx: &outbox::Sender, session: Id, a: &mut Attempt, event: Event) -> Result<(), String> {
     a.sequence += 1;
     tx.try_send(Envelope::new(session, a.scan, a.id, a.sequence, event))
@@ -150,7 +178,14 @@ fn publish_finish(
             a.id,
             a.sequence,
             Event::Checkpoint {
-                bytes: cp.to_bytes(),
+                bytes: match a.network.as_ref().and_then(|n| n.report.as_ref()) {
+                    Some(report) => studio_protocol::NetworkCheckpoint {
+                        report: report.clone(),
+                        engine: cp.to_bytes(),
+                    }
+                    .encode()?,
+                    None => cp.to_bytes(),
+                },
                 next_index: cp.next_index.to_string(),
             },
         ))?;
@@ -188,7 +223,22 @@ fn serve_with_adapter(
     input: Box<dyn Read + Send>,
     output_stream: Box<dyn Write + Send>,
     live: Box<dyn Fn() -> Result<(), String>>,
+    adapter: impl FnMut(&Job) -> Result<PreparedAdapter, String>,
+) -> Result<(), String> {
+    serve_with_network(
+        input,
+        output_stream,
+        live,
+        adapter,
+        std::sync::Arc::new(network::Native),
+    )
+}
+fn serve_with_network(
+    input: Box<dyn Read + Send>,
+    output_stream: Box<dyn Write + Send>,
+    live: Box<dyn Fn() -> Result<(), String>>,
     mut adapter: impl FnMut(&Job) -> Result<PreparedAdapter, String>,
+    network_env: std::sync::Arc<dyn network::Environment>,
 ) -> Result<(), String> {
     let (commands, rx) = mpsc::sync_channel(8);
     let disconnected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -248,9 +298,17 @@ fn serve_with_adapter(
             },
         ))
         .map_err(|e| e.to_string())?;
-    let mut active: Option<Attempt> = None;
     let mut checked = Instant::now();
+    let mut checking: Option<network::Check> = None;
+    let mut retiring_checks = Vec::new();
+    let mut used_attempts = std::collections::BTreeSet::new();
+    // Declared last so all error paths cancel packet-capable work before joining
+    // superseded read-only observers that may be finishing a native call.
+    let mut active: Option<Attempt> = None;
     loop {
+        if disconnected.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
         if let Some(a) = active.as_mut()
             && let Some(guard) = a.guard.as_mut()
         {
@@ -271,50 +329,60 @@ fn serve_with_adapter(
                     return Err("Session mismatch".into());
                 }
                 match &e.payload {
-                    Command::CheckNetwork if active.is_none() => {
+                    Command::CheckNetwork | Command::CheckNetworkJob(_)
+                        if !active.as_ref().is_some_and(attempt_active) =>
+                    {
                         session_order.accept(&e)?;
-                        #[cfg(target_os = "macos")]
-                        let preflight =
-                            studio_platform::network::inspect_mac_feth_cancellable(&|| {
-                                disconnected.load(std::sync::atomic::Ordering::Acquire)
-                            })
-                            .map(|_| ());
-                        #[cfg(not(target_os = "macos"))]
-                        let preflight = check_feth();
-                        let (ready, detail) = match preflight {
-                            Ok(()) => (
-                                true,
-                                "Isolated feth preflight passed; no packets sent".into(),
-                            ),
-                            Err(e) => (false, e),
-                        };
-                        session_sequence = session_sequence
-                            .checked_add(1)
-                            .ok_or("Sequence exhausted")?;
-                        events
-                            .try_send(Envelope::new(
-                                session,
-                                [0; 16],
-                                [0; 16],
-                                session_sequence,
-                                Event::NetworkChecked { ready, detail },
-                            ))
-                            .map_err(|e| e.to_string())?;
+                        // Superseded read-only work is cancelled and joined, never published late.
+                        retire_check(&mut checking, &mut retiring_checks)?;
+                        let command = e.payload;
+                        let env = network_env.clone();
+                        checking = Some(network::Check::spawn(move |cancelled| match command {
+                            Command::CheckNetworkJob(job) => {
+                                let job_digest = job.original_digest()?;
+                                let result = network::preflight(env.as_ref(), &job, cancelled);
+                                let (ready, detail) = match result {
+                                    Ok(d) => (true, d),
+                                    Err(e) => (false, e),
+                                };
+                                Ok(Event::NetworkPreflight {
+                                    job_digest,
+                                    ready,
+                                    detail,
+                                })
+                            }
+                            _ => {
+                                #[cfg(target_os = "macos")]
+                                let result =
+                                    studio_platform::network::inspect_mac_feth_cancellable(
+                                        cancelled,
+                                    )
+                                    .map(|_| ());
+                                #[cfg(not(target_os = "macos"))]
+                                let result = check_feth();
+                                let (ready, detail) = match result {
+                                    Ok(()) => (
+                                        true,
+                                        "Isolated feth preflight passed; no packets sent".into(),
+                                    ),
+                                    Err(e) => (false, e),
+                                };
+                                Ok(Event::NetworkChecked { ready, detail })
+                            }
+                        })?);
                     }
                     Command::CloseSession if active.is_none() => {
                         session_order.accept(&e)?;
                         break;
                     }
                     Command::Start(job) | Command::Resume { job, .. } => {
-                        if active
-                            .as_ref()
-                            .is_some_and(|a| a.engine.is_some() || a.pending.is_some())
-                        {
+                        if active.as_ref().is_some_and(attempt_active) {
                             return Err("One active attempt only".into());
                         }
-                        if active.as_ref().is_some_and(|a| a.id == e.attempt) {
+                        if !used_attempts.insert(e.attempt) {
                             return Err("Attempt id must be fresh".into());
                         }
+                        retire_check(&mut checking, &mut retiring_checks)?;
                         let mut a = Attempt {
                             scan: e.scan,
                             id: e.attempt,
@@ -323,11 +391,28 @@ fn serve_with_adapter(
                             engine: None,
                             guard: None,
                             pending: None,
+                            network: None,
                             rows: Vec::new(),
                             progress: None,
                             flushed: Instant::now(),
                         };
                         a.order.accept(&e)?;
+                        if job.backend == Backend::MacNetwork {
+                            let checkpoint = match &e.payload {
+                                Command::Resume { checkpoint, .. } => Some(checkpoint.clone()),
+                                _ => None,
+                            };
+                            a.network = Some(network_attempt::State::start(
+                                network_env.clone(),
+                                job.clone(),
+                                e.scan,
+                                e.attempt,
+                                checkpoint,
+                            )?);
+                            send(&events, session, &mut a, Event::PreparingNetwork)?;
+                            active = Some(a);
+                            continue;
+                        }
                         let run = (|| {
                             let plan = job.prepare()?;
                             let cp = if let Command::Resume { checkpoint, .. } = &e.payload {
@@ -389,6 +474,9 @@ fn serve_with_adapter(
                                 }
                             }
                             Command::Stop => {
+                                if let Some(state) = a.network.as_mut() {
+                                    state.stop();
+                                }
                                 if let Some(engine) = &a.engine {
                                     engine.stop();
                                 } else if a.pending.take().is_some() {
@@ -403,6 +491,12 @@ fn serve_with_adapter(
                                         },
                                     )?;
                                 }
+                            }
+                            Command::AckNetworkReport { through } => {
+                                a.network
+                                    .as_mut()
+                                    .ok_or("No pending network report")?
+                                    .acknowledge(through)?;
                             }
                             Command::AckCheckpoint { through } => {
                                 if a.pending.as_ref().map(|p| p.sequence) != Some(through) {
@@ -428,7 +522,24 @@ fn serve_with_adapter(
             Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
         }
+        retiring_checks.retain_mut(|worker| worker.poll().is_none());
+        if let Some(worker) = checking.as_mut()
+            && let Some(result) = worker.poll()
+        {
+            checking = None;
+            session_sequence = session_sequence
+                .checked_add(1)
+                .ok_or("Sequence exhausted")?;
+            events.try_send(Envelope::new(
+                session,
+                [0; 16],
+                [0; 16],
+                session_sequence,
+                result?,
+            ))?;
+        }
         if let Some(a) = active.as_mut() {
+            network_attempt::poll(&events, session, a)?;
             if let Some(error) = a
                 .pending
                 .as_ref()
@@ -490,6 +601,8 @@ fn serve_with_adapter(
     }
     // EngineHandle drop requests Stop and joins. This also handles every error/EOF path.
     drop(active);
+    drop(checking);
+    drop(retiring_checks);
     drop(events);
     // No join on a potentially blocked pipe writer: exiting the process closes it.
     Ok(())

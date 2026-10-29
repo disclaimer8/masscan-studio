@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 mod feth_acceptance;
 #[cfg(target_os = "linux")]
 mod linux_acceptance;
+#[cfg(any(target_os = "macos", test))]
+mod network_acceptance;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod runner_setup;
 #[cfg(windows)]
@@ -63,6 +65,8 @@ fn main() -> Result<()> {
     };
     std::env::set_current_dir(&root)?;
     match task.as_str() {
+        #[cfg(any(target_os = "macos", test))]
+        "network-acceptance" => network_acceptance::main_entry()?,
         #[cfg(any(target_os="macos", target_os="linux", windows))]
         "prepare-runner" => runner_setup::prepare(&root)?,
         #[cfg(windows)]

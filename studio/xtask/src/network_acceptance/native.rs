@@ -192,19 +192,26 @@ fn identity(name: &str) -> Result<Option<InterfaceIdentity>> {
         index: i.iface.index,
         mac: i.iface.mac.ok_or("fixture MAC unavailable")?,
         peer,
+        ipv4: {
+            let mut addresses = i.iface.ipv4.clone();
+            addresses.sort_unstable();
+            addresses
+        },
+        ipv4_prefixes: {
+            let mut p: Vec<_> = i
+                .ipv4_prefixes
+                .iter()
+                .map(|p| (p.address, p.length))
+                .collect();
+            p.sort_unstable();
+            p
+        },
+        bridges: memberships(&command(&["/sbin/ifconfig", "-a"])?, name)?,
+        up: i.iface.up,
     }))
 }
 fn route() -> Result<Option<OwnedRoute>> {
-    let routes = rmasscan_net::os_route_table().map_err(|e| e.to_string())?;
-    let r = routes
-        .lookup_until(ROUTED, Instant::now() + Duration::from_secs(1), &|| false)
-        .map_err(|e| e.to_string())?;
-    // A default or other route remains foreign, so down refuses rather than deleting it.
-    Ok(r.map(|r| OwnedRoute {
-        destination: ROUTED.to_string(),
-        gateway: r.gateway.map(|v| v.to_string()).unwrap_or_default(),
-        interface: r.ifname,
-    }))
+    exact_route(&command(&["/usr/sbin/netstat", "-rn", "-f", "inet"])?)
 }
 
 pub fn snapshot() -> Result<PhysicalRoutePlan> {
@@ -308,22 +315,27 @@ pub fn up() -> Result<()> {
         route: None,
     };
     save(&state)?;
-    for (index, step) in setup_steps().iter().enumerate() {
-        if let Err(e) = command(step) {
+    struct Host;
+    impl SetupHost for Host {
+        fn identity(&mut self, name: &str) -> Result<Option<InterfaceIdentity>> {
+            identity(name)
+        }
+        fn command(&mut self, argv: &[&str]) -> Result<()> {
+            command(argv).map(|_| ())
+        }
+    }
+    for index in 0..setup_steps().len() {
+        if let Err(e) = setup_step(&mut Host, index, &mut state.scanner, &mut state.peer) {
             return Err(format!(
                 "setup step{index} failed; state retained, use reviewed down: {e}"
             ));
         }
         // Record identity after every confirmed operation. If observation fails, retain
         // everything: an unrecorded name cannot authorize later cleanup.
-        state.scanner = identity(SCANNER)?;
-        state.peer = identity(PEER)?;
         if index == 7 {
-            state.route = Some(OwnedRoute {
-                destination: ROUTED.to_string(),
-                gateway: GATEWAY.to_string(),
-                interface: SCANNER.into(),
-            });
+            let created = route()?.ok_or("created host route absent; journal retained")?;
+            delete_route(&created, Some(&created))?;
+            state.route = Some(created);
         }
         save(&state)?;
     }
@@ -337,6 +349,11 @@ pub fn up() -> Result<()> {
 pub fn down() -> Result<()> {
     let _lock = lock(false)?;
     let mut state = load()?;
+    // Check every owned interface before deleting anything: a foreign alias or
+    // bridge on either side must preserve the complete stand for inspection.
+    for recorded in [&state.scanner, &state.peer].into_iter().flatten() {
+        can_destroy(recorded, identity(&recorded.name)?.as_ref())?;
+    }
     if let Some(recorded) = &state.route {
         if let Some(argv) = delete_route(recorded, route()?.as_ref())? {
             command(&argv.iter().map(String::as_str).collect::<Vec<_>>())?;
@@ -415,6 +432,7 @@ pub fn peer() -> Result<()> {
     while Instant::now() < deadline && !stop.try_exists().map_err(|e| e.to_string())? {
         fresh_lease(state.created_utc_seconds, state.expires_utc_seconds, now()?)?;
         if observed.elapsed() >= Duration::from_secs(1) {
+            check_owned(&state)?;
             if snapshot()? != expected {
                 return Err("fixture drift; peer stopped".into());
             }

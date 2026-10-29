@@ -101,7 +101,7 @@ pub fn main_entry() -> super::Result<()> {
             let peer_stats=String::from_utf8(read_bounded(&dir.join("peer.stderr"),65536)?)?;
             let uplink_stats=String::from_utf8(read_bounded(&dir.join("uplink.stderr"),65536)?)?;
             let count=witness::verify(&peer,&peer_stats,&uplink,&uplink_stats)?;
-            println!("Packet subset PASS: {count} unique direct/routed SYNs, correct frozen report, no captured uplink frame. Lifecycle acceptance requires controller/store evidence.");
+            println!("Packet subset PASS: {} unique direct/routed SYNs, {} strictly correlated kernel resets, correct frozen report, no captured uplink frame. Lifecycle acceptance requires controller/store evidence.",count.probes,count.kernel_resets);
             Ok(())
         },
         #[cfg(target_os="macos")]

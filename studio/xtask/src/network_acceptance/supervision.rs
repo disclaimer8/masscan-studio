@@ -21,7 +21,7 @@ use studio_platform::{
 };
 const FILTER: &str = "net 198.18.42.0/29 or host 198.19.42.2 or ether host 02:ac:42:00:00:01 or ether host 02:ac:42:00:00:02 or ether host 02:ac:42:00:01:02 or ether host 02:ac:42:00:01:03 or ether host 02:ac:42:00:01:04";
 type Result<T> = std::result::Result<T, String>;
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Phase {
     pub ticket: Ticket,
     pub driver_pid: u32,
@@ -155,6 +155,11 @@ impl Drop for OwnedChild {
     }
 }
 #[derive(Debug, Serialize, Deserialize)]
+struct GuardProof {
+    checked: Stamp,
+    probes: u64,
+}
+#[derive(Debug, Serialize, Deserialize)]
 struct Manifest {
     schema: u32,
     window: Window,
@@ -164,6 +169,8 @@ struct Manifest {
     seal: studio_protocol::sealed_fixture::State,
     driver_uid: u32,
     guard: Option<Phase>,
+    #[serde(default)]
+    guard_proof: Option<GuardProof>,
     drift: Option<Stamp>,
     hashes: BTreeMap<String, String>,
     failure: Option<String>,
@@ -228,6 +235,151 @@ fn valid_case(case: &str) -> bool {
         case,
         "complete" | "pause" | "resume" | "stop-preparing" | "stop-running" | "guard"
     )
+}
+
+/// Single guard transition seam: evidence must authorize the callback before
+/// either stopping the peer or changing the fixed interface.
+const GUARD_PROOF_WAIT: Duration = Duration::from_secs(5);
+fn guard_step(
+    ticket: &Ticket,
+    phase: &Phase,
+    now: &Stamp,
+    peer: &[u8],
+    uplink: &[u8],
+    mutate: impl FnOnce(u64) -> Result<()>,
+) -> Result<bool> {
+    if ticket.case != "guard"
+        || phase.ticket != *ticket
+        || phase.driver_pid == 0
+        || !(4..96).contains(&phase.sent)
+        || phase.scan == [0; 16]
+        || phase.attempt == [0; 16]
+    {
+        return Err("guard phase/ticket/attempt invalid".into());
+    }
+    // Validate uncertainty before low/high on any untrusted phase stamp.
+    lifecycle::clocks(&[
+        phase.driver_started.clone(),
+        phase.start.clone(),
+        phase.observed.clone(),
+    ])?;
+    lifecycle::clocks(&[ticket.ready.clone(), now.clone()])?;
+    if ticket.ready.high()? >= phase.driver_started.low()?
+        || ticket.ready.high()? >= phase.start.low()?
+        || phase.start.high()? >= phase.observed.low()?
+        || phase.observed.low()? > now.high()?
+        || now
+            .high()?
+            .checked_sub(phase.observed.low()?)
+            .ok_or("guard clock order invalid")?
+            > GUARD_PROOF_WAIT.as_nanos() as u64
+    {
+        return Err("guard readiness/Start/phase/current window is stale or ambiguous".into());
+    }
+    if phase.observed.high()? >= now.low()? {
+        return Ok(false);
+    }
+    let Some(peer) = witness::snapshot_frames(peer)? else {
+        return Ok(false);
+    };
+    let Some(uplink) = witness::snapshot_frames(uplink)? else {
+        return Ok(false);
+    };
+    if !uplink.is_empty() {
+        return Err("ISOLATION BREACH before guard: uplink frame".into());
+    }
+    let mut probes = std::collections::BTreeSet::new();
+    let mut replies = std::collections::BTreeSet::new();
+    let mut resets = std::collections::BTreeSet::new();
+    let mut before_phase = 0;
+    for packet in peer {
+        let lo = packet
+            .time_ns
+            .checked_sub(lifecycle::CLOCK_ERROR_NS + 1000)
+            .ok_or("guard packet time underflow")?;
+        let hi = packet
+            .time_ns
+            .checked_add(lifecycle::CLOCK_ERROR_NS + 1000)
+            .ok_or("guard packet time overflow")?;
+        if hi > now.high()? {
+            return Err("guard capture contains future/ambiguous packet time".into());
+        }
+        let frame = super::wire::classify(packet.frame)?;
+        if matches!(
+            frame,
+            super::wire::Frame::Syn(_) | super::wire::Frame::ArpRequest(_)
+        ) && lo <= phase.start.high()?
+        {
+            return Err(
+                "scanner packet precedes current Start or overlaps its clock interval".into(),
+            );
+        }
+        match frame {
+            super::wire::Frame::Syn(s) => {
+                let cookie = rmasscan_core::cookie::syn_cookie_ipv4(
+                    s.target.into(),
+                    u32::from(s.port),
+                    SOURCE.into(),
+                    40000,
+                    42,
+                ) as u32;
+                if s.sequence != cookie || !probes.insert(s) {
+                    return Err("invalid cookie or duplicate guard probe".into());
+                }
+                if hi < phase.observed.low()? {
+                    before_phase += 1;
+                }
+            }
+            super::wire::Frame::Response(s) => {
+                if !probes.contains(&s) || !replies.insert(s) {
+                    return Err("uncorrelated/duplicate guard response".into());
+                }
+            }
+            super::wire::Frame::KernelReset(s) => {
+                if !replies.contains(&s) || !resets.insert(s) {
+                    return Err("uncorrelated/duplicate guard reset".into());
+                }
+            }
+            _ => {}
+        }
+    }
+    if probes.len() >= 96 {
+        return Err("guard capture already contains completed probe set".into());
+    }
+    if before_phase < phase.sent {
+        return Ok(false);
+    }
+    mutate(before_phase)?;
+    Ok(true)
+}
+
+/// The first observed phase pins both its identity and one retry deadline.
+/// A replacement phase or continuously partial capture cannot renew the budget.
+#[derive(Default)]
+struct GuardPending(Option<(Phase, Instant)>);
+impl GuardPending {
+    fn observe(&mut self, phase: &Phase, now: Instant, overall: Instant) -> Result<()> {
+        let (p, deadline) = self
+            .0
+            .get_or_insert_with(|| (phase.clone(), (now + GUARD_PROOF_WAIT).min(overall)));
+        if p != phase {
+            return Err("guard phase replaced while awaiting packet proof".into());
+        }
+        if now >= *deadline {
+            return Err("guard packet corroboration deadline expired".into());
+        }
+        Ok(())
+    }
+    fn check(&self, now: Instant) -> Result<()> {
+        if self
+            .0
+            .as_ref()
+            .is_some_and(|(_, deadline)| now >= *deadline)
+        {
+            return Err("guard packet corroboration deadline expired".into());
+        }
+        Ok(())
+    }
 }
 
 pub fn supervise(
@@ -312,6 +464,8 @@ pub fn supervise(
     let mut children = Vec::<OwnedChild>::new();
     let mut ticket = None;
     let mut guard = None;
+    let mut guard_pending = GuardPending::default();
+    let mut guard_proof = None;
     let mut drift = None;
     let mut peer_stopped = false;
     let mut attempt = None;
@@ -405,6 +559,9 @@ pub fn supervise(
             if Instant::now() >= deadline {
                 return Err("supervision120-second deadline expired".into());
             }
+            if guard.is_none() {
+                guard_pending.check(Instant::now())?;
+            }
             for c in children.iter_mut().take(if peer_stopped { 2 } else { 3 }) {
                 c.require_alive(origin)?;
             }
@@ -417,31 +574,56 @@ pub fn supervise(
                 )?
             {
                 let phase: Phase = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-                if phase.ticket != t
-                    || phase.driver_pid == 0
-                    || phase.sent < 4
-                    || phase.sent >= 96
-                    || phase.scan == [0; 16]
-                    || phase.attempt == [0; 16]
-                {
-                    return Err("guard phase/ticket/attempt invalid".into());
+                guard_pending.observe(&phase, Instant::now(), deadline)?;
+                let peer_capture = read_bounded(&dir.join("peer.pcap"), witness::MAX_CAPTURE)?;
+                let uplink_capture = read_bounded(&dir.join("uplink.pcap"), witness::MAX_CAPTURE)?;
+                let checked = Stamp::now(origin)?;
+                guard_pending.observe(&phase, Instant::now(), deadline)?;
+                if guard_step(
+                    &t,
+                    &phase,
+                    &checked,
+                    &peer_capture,
+                    &uplink_capture,
+                    |probes| {
+                        // Preserve exactly the validated snapshots before mutation.
+                        for (name, data) in [
+                            ("guard-peer-before.pcap", peer_capture.as_slice()),
+                            ("guard-uplink-before.pcap", uplink_capture.as_slice()),
+                        ] {
+                            let mut file = create(&dir.join(name))?;
+                            file.write_all(data).map_err(|e| e.to_string())?;
+                            file.sync_all().map_err(|e| e.to_string())?;
+                        }
+                        guard_pending.observe(&phase, Instant::now(), deadline)?;
+                        let action_now = Stamp::now(origin)?;
+                        lifecycle::clocks(&[checked.clone(), action_now.clone()])?;
+                        if action_now
+                            .high()?
+                            .checked_sub(phase.observed.low()?)
+                            .ok_or("guard action clock order")?
+                            > GUARD_PROOF_WAIT.as_nanos() as u64
+                        {
+                            return Err("guard phase expired while preserving proof".into());
+                        }
+                        for child in &mut children {
+                            child.require_alive(origin)?;
+                        }
+                        guard_proof = Some(GuardProof {
+                            checked: action_now,
+                            probes,
+                        });
+                        native::stop_peer()?;
+                        children[2].record.stop_requested = Some(Stamp::now(origin)?);
+                        children[2].finish(origin, Instant::now() + Duration::from_secs(5))?;
+                        peer_stopped = true;
+                        native::guard_down(&state)?;
+                        drift = Some(Stamp::now(origin)?);
+                        Ok(())
+                    },
+                )? {
+                    guard = Some(phase);
                 }
-                lifecycle::clocks(&[
-                    phase.driver_started.clone(),
-                    phase.start.clone(),
-                    phase.observed.clone(),
-                ])?;
-                if phase.observed.high()? >= now.low()? {
-                    std::thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
-                native::stop_peer()?;
-                children[2].record.stop_requested = Some(Stamp::now(origin)?);
-                children[2].finish(origin, Instant::now() + Duration::from_secs(5))?;
-                peer_stopped = true;
-                native::guard_down(&state)?;
-                drift = Some(Stamp::now(origin)?);
-                guard = Some(phase);
             }
             if let Some(bytes) = reader.read(
                 &format!("{case}-attempt.json"),
@@ -539,6 +721,8 @@ pub fn supervise(
         "raw-peer.stderr",
         "attempt.json",
         "ticket.json",
+        "guard-peer-before.pcap",
+        "guard-uplink-before.pcap",
     ] {
         if dir.join(name).is_file() {
             hashes.insert(name.into(), trusted::file_hash(&dir.join(name))?);
@@ -569,6 +753,7 @@ pub fn supervise(
         seal: state,
         driver_uid: uid,
         guard,
+        guard_proof,
         drift,
         hashes,
         failure,
@@ -650,6 +835,42 @@ fn load(dir: &Path) -> Result<Loaded> {
     validate_manifest(&m, &a)?;
     capture_stats(&text(&dir.join("peer.stderr"))?)?;
     capture_stats(&text(&dir.join("uplink.stderr"))?)?;
+    if a.ticket.case == "guard" {
+        let proof = m
+            .guard_proof
+            .as_ref()
+            .ok_or("missing pre-mutation guard proof")?;
+        let phase = m.guard.as_ref().ok_or("missing guard phase")?;
+        let mut snapshots = Vec::new();
+        for (before, final_name) in [
+            ("guard-peer-before.pcap", "peer.pcap"),
+            ("guard-uplink-before.pcap", "uplink.pcap"),
+        ] {
+            if m.hashes.get(before) != Some(&trusted::file_hash(&dir.join(before))?) {
+                return Err("pre-mutation capture hash mismatch".into());
+            }
+            let snapshot = read_bounded(&dir.join(before), witness::MAX_CAPTURE)?;
+            if !read_bounded(&dir.join(final_name), witness::MAX_CAPTURE)?.starts_with(&snapshot) {
+                return Err("pre-mutation snapshot is not a prefix of final owned capture".into());
+            }
+            snapshots.push(snapshot);
+        }
+        if !guard_step(
+            &m.window.ticket,
+            phase,
+            &proof.checked,
+            &snapshots[0],
+            &snapshots[1],
+            |count| {
+                if count != proof.probes {
+                    return Err("pre-mutation guard probe count differs".into());
+                }
+                Ok(())
+            },
+        )? {
+            return Err("pre-mutation guard proof incomplete".into());
+        }
+    }
     if let Some(drift) = &m.drift {
         let bytes = read_bounded(&dir.join("peer.pcap"), witness::MAX_CAPTURE)?;
         let phase = m.guard.as_ref().ok_or("guard phase missing")?;
@@ -769,6 +990,21 @@ fn validate_manifest(m: &Manifest, a: &Attempt) -> Result<()> {
         }
     }
     if a.ticket.case == "guard" {
+        let proof = m
+            .guard_proof
+            .as_ref()
+            .ok_or("guard pre-mutation proof missing")?;
+        lifecycle::clocks(&[m.window.ticket.ready.clone(), proof.checked.clone()])?;
+        if !(4..96).contains(&proof.probes)
+            || proof.checked.mono_ns
+                > m.children[2]
+                    .stop_requested
+                    .as_ref()
+                    .ok_or("peer stop missing")?
+                    .mono_ns
+        {
+            return Err("guard proof did not precede peer stop".into());
+        }
         let g = m.guard.as_ref().ok_or("guard phase missing")?;
         let drift = m.drift.as_ref().ok_or("drift anchor missing")?;
         if g.ticket != a.ticket
@@ -789,7 +1025,7 @@ fn validate_manifest(m: &Manifest, a: &Attempt) -> Result<()> {
         {
             return Err("guard phase/drift/terminal ordering differs".into());
         }
-    } else if m.guard.is_some() || m.drift.is_some() {
+    } else if m.guard.is_some() || m.drift.is_some() || m.guard_proof.is_some() {
         return Err("unexpected guard mutation".into());
     }
     Ok(())
@@ -1069,6 +1305,10 @@ mod tests {
             seal: state,
             driver_uid: a.driver_uid,
             guard: Some(guard),
+            guard_proof: Some(GuardProof {
+                checked: stamp(11_050_000_000),
+                probes: 4,
+            }),
             drift: Some(stamp(11_500_000_000)),
             hashes: BTreeMap::new(),
             failure: None,
@@ -1089,5 +1329,246 @@ mod tests {
             change(&mut m);
             assert!(validate_manifest(&m, &a).is_err());
         }
+    }
+    fn guard_phase_fixture() -> (Ticket, Phase, Stamp) {
+        let (a, _) = lifecycle::sample_attempt("guard");
+        let mut driver_started = a.driver_started;
+        driver_started.wall_ns += 100_000_000;
+        driver_started.mono_ns += 100_000_000;
+        let phase = Phase {
+            ticket: a.ticket.clone(),
+            driver_pid: a.driver_pid,
+            driver_started,
+            start: a.start,
+            observed: a.control.unwrap(),
+            scan: a.scan,
+            attempt: a.attempt,
+            sent: 4,
+        };
+        let now = Stamp {
+            wall_ns: 111_500_000_000,
+            mono_ns: 11_500_000_000,
+            uncertainty_ns: 0,
+        };
+        (a.ticket, phase, now)
+    }
+    fn snapshot_header() -> Vec<u8> {
+        vec![
+            0x4d, 0x3c, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 1, 0, 0, 0,
+        ]
+    }
+    #[test]
+    fn guard_zero_packet_phase_never_invokes_mutation() {
+        let (ticket, phase, now) = guard_phase_fixture();
+        let mut mutations = 0;
+        let _ = guard_step(
+            &ticket,
+            &phase,
+            &now,
+            &snapshot_header(),
+            &snapshot_header(),
+            |_| {
+                mutations += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(
+            mutations, 0,
+            "user-owned phase cannot authorize peer stop/down without actual root capture probes"
+        );
+    }
+    fn append_snapshot(capture: &mut Vec<u8>, time_ns: u64, frame: &[u8]) {
+        capture.extend_from_slice(&((time_ns / 1_000_000_000) as u32).to_le_bytes());
+        capture.extend_from_slice(&((time_ns % 1_000_000_000) as u32).to_le_bytes());
+        capture.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        capture.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        capture.extend_from_slice(frame);
+    }
+    fn guard_syn(target: std::net::Ipv4Addr, port: u16, bad_cookie: bool) -> Vec<u8> {
+        let cookie = rmasscan_core::cookie::syn_cookie_ipv4(
+            target.into(),
+            u32::from(port),
+            SOURCE.into(),
+            40000,
+            42,
+        ) as u32;
+        let mut frame = Vec::new();
+        rmasscan_core::packet::TcpSynTemplate::new(
+            SOURCE_MAC,
+            destination_mac(target).unwrap(),
+            rmasscan_core::packet::LinkType::Ethernet,
+        )
+        .build_syn(
+            target.into(),
+            port,
+            SOURCE.into(),
+            40000,
+            cookie.wrapping_add(u32::from(bad_cookie)),
+            &mut frame,
+        );
+        frame
+    }
+    fn guard_capture() -> Vec<u8> {
+        let mut bytes = snapshot_header();
+        for (i, target) in [A, B, ROUTED, A].into_iter().enumerate() {
+            let frame = guard_syn(target, 8000 + i as u16, false);
+            let time = (107 + i as u64) * 1_000_000_000;
+            append_snapshot(&mut bytes, time, &frame);
+            append_snapshot(
+                &mut bytes,
+                time + 100_000,
+                &super::super::wire::reply(&frame).unwrap().unwrap(),
+            );
+        }
+        bytes
+    }
+    #[test]
+    fn guard_requires_current_valid_capture_and_phase_order_before_any_mutation() {
+        let (ticket, phase, now) = guard_phase_fixture();
+        let capture = guard_capture();
+        let empty = snapshot_header();
+        let mut mutations = 0;
+        assert!(
+            guard_step(&ticket, &phase, &now, &capture, &empty, |n| {
+                assert_eq!(n, 4);
+                mutations += 1;
+                Ok(())
+            })
+            .unwrap()
+        );
+        assert_eq!(mutations, 1);
+        for change in [
+            |p: &mut Phase| p.ticket.nonce = "f".repeat(32),
+            |p: &mut Phase| {
+                p.driver_started.wall_ns = 100_100_000_000;
+                p.driver_started.mono_ns = 100_000_000;
+                p.start.wall_ns = 100_500_000_000;
+                p.start.mono_ns = 500_000_000;
+            },
+            |p: &mut Phase| {
+                p.start.wall_ns = 109_500_000_000;
+                p.start.mono_ns = 9_500_000_000;
+            },
+            |p: &mut Phase| {
+                p.observed.wall_ns = 109_500_000_000;
+                p.observed.mono_ns = 9_500_000_000;
+            },
+            |p: &mut Phase| {
+                p.observed.wall_ns = 110_000_001_000;
+                p.observed.mono_ns = 10_000_001_000;
+            },
+            |p: &mut Phase| p.sent = 5,
+            |p: &mut Phase| p.observed.uncertainty_ns = u64::MAX,
+        ] {
+            let mut p = phase.clone();
+            change(&mut p);
+            let mut actions = 0;
+            let result = guard_step(&ticket, &p, &now, &capture, &empty, |_| {
+                actions += 1;
+                Ok(())
+            });
+            assert!(!matches!(result, Ok(true)));
+            assert_eq!(actions, 0);
+        }
+        let mut stale = now.clone();
+        stale.wall_ns += 6_000_000_000;
+        stale.mono_ns += 6_000_000_000;
+        let mut actions = 0;
+        assert!(
+            guard_step(&ticket, &phase, &stale, &capture, &empty, |_| {
+                actions += 1;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(actions, 0);
+        let mut duplicate = capture.clone();
+        append_snapshot(&mut duplicate, 110_500_000_000, &guard_syn(A, 8000, false));
+        let mut bad_cookie = capture.clone();
+        append_snapshot(&mut bad_cookie, 110_500_000_000, &guard_syn(B, 8005, true));
+        for (peer, uplink) in [
+            (&duplicate, &empty),
+            (&bad_cookie, &empty),
+            (&capture, &capture),
+        ] {
+            let mut actions = 0;
+            assert!(
+                guard_step(&ticket, &phase, &now, peer, uplink, |_| {
+                    actions += 1;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(actions, 0);
+        }
+    }
+    #[test]
+    fn guard_live_snapshot_retries_incomplete_tail_without_crediting_valid_prefix() {
+        let (ticket, phase, now) = guard_phase_fixture();
+        let full = guard_capture();
+        let empty = snapshot_header();
+        let dir = std::env::temp_dir().join(format!(
+            "guard-live-snapshot-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("peer.pcap");
+        let mut actions = 0;
+        for len in [0, 3, 23, 25, full.len() - 1] {
+            fs::write(&path, &full[..len]).unwrap();
+            let snapshot = read_bounded(&path, witness::MAX_CAPTURE).unwrap();
+            assert!(
+                !guard_step(&ticket, &phase, &now, &snapshot, &empty, |_| {
+                    actions += 1;
+                    Ok(())
+                })
+                .unwrap()
+            );
+            assert_eq!(actions, 0);
+        }
+        fs::write(&path, &full).unwrap();
+        let snapshot = read_bounded(&path, witness::MAX_CAPTURE).unwrap();
+        assert!(
+            guard_step(&ticket, &phase, &now, &snapshot, &empty, |_| {
+                actions += 1;
+                Ok(())
+            })
+            .unwrap()
+        );
+        assert_eq!(actions, 1);
+        // The accepted snapshot is retained verbatim, not reconstructed from a prefix.
+        assert_eq!(snapshot, full);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn guard_proof_retry_deadline_never_renews_and_honors_remaining_run_budget() {
+        let (_, phase, _) = guard_phase_fixture();
+        let begin = Instant::now();
+        let overall = begin + Duration::from_secs(120);
+        let mut pending = GuardPending::default();
+        pending.observe(&phase, begin, overall).unwrap();
+        pending
+            .observe(&phase, begin + Duration::from_secs(4), overall)
+            .unwrap();
+        assert!(
+            pending
+                .observe(&phase, begin + GUARD_PROOF_WAIT, overall)
+                .is_err()
+        );
+        assert!(
+            pending.check(begin + GUARD_PROOF_WAIT).is_err(),
+            "phase file disappearance cannot stop the deadline"
+        );
+        let mut changed = phase.clone();
+        changed.attempt = [9; 16];
+        assert!(
+            pending
+                .observe(&changed, begin + Duration::from_secs(1), overall)
+                .is_err()
+        );
+        let mut pending = GuardPending::default();
+        let soon = begin + Duration::from_millis(100);
+        pending.observe(&phase, begin, soon).unwrap();
+        assert!(pending.observe(&phase, soon, overall).is_err());
     }
 }

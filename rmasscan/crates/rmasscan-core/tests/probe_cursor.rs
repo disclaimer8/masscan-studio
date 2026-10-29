@@ -71,14 +71,38 @@ fn mapped_plan_requires_exactly_the_effective_target_keys() {
     c.excludes = massip("10.0.0.3", "443");
     let e = eff(&c);
     ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), destination_map()).unwrap();
-    for keys in [
-        vec![],
-        vec![0x0a00_0001],
-        vec![0x0a00_0001, 0x0a00_0002, 0x0a00_0003],
-        vec![0x0a00_0001, 0x0a00_0003],
+    for (keys, expected) in [
+        (
+            vec![],
+            PlanError::DestinationCountMismatch {
+                expected: 2,
+                actual: 0,
+            },
+        ),
+        (
+            vec![0x0a00_0001],
+            PlanError::DestinationCountMismatch {
+                expected: 2,
+                actual: 1,
+            },
+        ),
+        (
+            vec![0x0a00_0001, 0x0a00_0002, 0x0a00_0003],
+            PlanError::DestinationCountMismatch {
+                expected: 2,
+                actual: 3,
+            },
+        ),
+        (
+            vec![0x0a00_0001, 0x0a00_0003],
+            PlanError::UnexpectedDestination(0x0a00_0003),
+        ),
     ] {
         let map = keys.into_iter().map(|ip| (ip, MAC_NH)).collect();
-        assert!(ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), map).is_err());
+        assert_eq!(
+            ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), map).unwrap_err(),
+            expected
+        );
     }
 }
 
@@ -88,7 +112,13 @@ fn mapped_plan_rejects_invalid_destination_macs() {
     for mac in [[0; 6], [0xff; 6], [1, 2, 3, 4, 5, 6]] {
         let mut map = destination_map();
         map.insert(0x0a00_0002, mac);
-        assert!(ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), map).is_err());
+        assert_eq!(
+            ReadyPlan::with_destinations(e.clone(), binding(40000, 40000), map).unwrap_err(),
+            PlanError::InvalidDestinationMac {
+                ip: 0x0a00_0002,
+                mac
+            }
+        );
     }
 }
 
@@ -100,14 +130,23 @@ fn mapped_plan_rejects_non_ethernet_links() {
             link_type,
             ..binding(40000, 40000)
         };
-        assert!(ReadyPlan::with_destinations(e.clone(), b, destination_map()).is_err());
+        assert_eq!(
+            ReadyPlan::with_destinations(e.clone(), b, destination_map()).unwrap_err(),
+            PlanError::DestinationsRequireEthernet
+        );
     }
 }
 
 #[test]
 fn mapped_plan_checks_cardinality_without_enumerating_huge_ranges() {
     let e = eff(&config("10.0.0.0/8", "80", 5, 100.0));
-    assert!(ReadyPlan::with_destinations(e, binding(40000, 40000), destination_map()).is_err());
+    assert_eq!(
+        ReadyPlan::with_destinations(e, binding(40000, 40000), destination_map()).unwrap_err(),
+        PlanError::DestinationCountMismatch {
+            expected: 1 << 24,
+            actual: 2
+        }
+    );
 }
 
 fn massip(targets: &str, ports: &str) -> MassIp {

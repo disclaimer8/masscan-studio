@@ -645,13 +645,7 @@ pub fn supervise(
                 {
                     return Err("guard phase and durable attempt differ".into());
                 }
-                if now.low()?
-                    > a.joined
-                        .high()?
-                        .max(a.terminal.high()?)
-                        .checked_add(lifecycle::QUIET_NS)
-                        .ok_or("clock overflow")?
-                {
+                if now.low()? > a.quiet_until()? {
                     json(&dir.join("attempt.json"), &a)?;
                     attempt = Some(a);
                     break;

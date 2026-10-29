@@ -182,11 +182,26 @@ root read path. Resume requires the same seal/index, tooling/runner hashes, scan
 and frozen report, a distinct run nonce, a different driver PID and attempt ID.
 
 For `guard`, there is no separate operator `ifconfig` command. Only after the
-real driver observes at least four sent probes and supplies matching scan/attempt
-phase evidence does the supervisor stop/reap the healthy peer, freshly recheck
-ownership and run exactly `/sbin/ifconfig feth4203 down`. Captures must independently
-show at least four SYNs before drift and an actual Controller `Interrupted` after
-it. Probes between peer shutdown and link-down still count; missing responses do
+real driver reports at least four sent probes and supplies matching scan/attempt
+phase evidence does the supervisor consider a guard transition. **Before either
+peer stop or link-down**, current root-owned captures must independently contain
+at least the claimed number of distinct valid-cookie eligible SYNs strictly after
+this ticket's Start and before its phase timestamp, with no uplink frame.
+Readiness, driver Start, phase and current root time must be ordered and fresh;
+malformed packets, duplicate probes or uncorrelated replies/resets refuse.
+Only then does the supervisor stop/reap the healthy peer, freshly recheck ownership
+and run exactly `/sbin/ifconfig feth4203 down`.
+
+A concurrent tcpdump write may expose a partial header/record. The shared decoder
+returns Pending and credits zero probes for that whole snapshot; it never discards
+a truncated tail and treats the remaining prefix as proof. The supervisor rereads
+under one deadline, the earlier of five seconds from first phase observation and
+the remaining overall budget. A replaced/disappearing phase cannot renew that
+budget. Missing/unflushed capture headers also fail at that deadline; native live
+flush behavior is unrun. Exact accepted snapshots are synced in the private run
+directory before mutation, hash-bound in the manifest and required to be byte-for-
+byte prefixes of the same final captures. Final verification repeats the pre-action
+gate and still requires an actual Controller `Interrupted` after the drift. Probes between peer shutdown and link-down still count; missing responses do
 not become closed results. No supervisor action terminates the Controller.
 
 The driver uses actual Controller/Store APIs, writes explicit Start/control/

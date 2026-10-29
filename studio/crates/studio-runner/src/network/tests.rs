@@ -72,7 +72,12 @@ impl Environment for Fake {
             elapsed: Duration::ZERO,
         })
     }
-    fn open(&self, _: &AdapterBinding) -> Result<AdapterPair, String> {
+    fn open(
+        &self,
+        _: &AdapterBinding,
+        _: Instant,
+        _: &dyn Fn() -> bool,
+    ) -> Result<AdapterPair, String> {
         self.calls.lock().unwrap().push("tcp-open");
         Ok(rmasscan_engine::fake::FakeAdapter::new().pair())
     }
@@ -270,12 +275,28 @@ fn full_effective_probe_admission_precedes_arp_even_when_most_hosts_would_be_unr
     assert_eq!(*env.calls.lock().unwrap(), vec!["authorize", "observe"]);
 }
 #[test]
-fn mismatched_route_partition_is_rejected_before_arp_and_native_gate_stays_closed() {
+fn mismatched_route_partition_is_rejected_before_arp_and_native_authorization_remains_required() {
     let (job, env) = Fake::new();
     env.routes.lock().unwrap().next_hops.insert(ip(4), ip(4));
     assert!(prepare(&env, job, [1; 16], [2; 16], None, &|| false).is_err());
     assert!(!env.calls.lock().unwrap().contains(&"arp"));
-    assert!(Native.authorize().unwrap_err().contains("disabled"));
+    if !studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacNetwork) {
+        assert!(
+            Native::default()
+                .authorize()
+                .unwrap_err()
+                .contains("disabled")
+        );
+    }
+    #[cfg(unix)]
+    if cfg!(target_os = "macos") && studio_platform::unix::Identity::current().unwrap().uid != 0 {
+        assert!(
+            Native::default()
+                .authorize()
+                .unwrap_err()
+                .contains("root helper")
+        );
+    }
 }
 
 #[test]

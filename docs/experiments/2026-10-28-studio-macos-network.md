@@ -3,9 +3,13 @@
 Task6a implements Rust tooling, portable tests and an actual Studio Controller
 driver. **No native setup, BPF opening, packet transmission, helper installation,
 stable history access or physical-network acceptance was performed for Task6a.**
-The product physical gate remains closed. The driver additionally refuses before
-creating its output/history directory until a separately reviewed candidate adds
-the pre-ARP and pre-ACK constraints below. This refusal is not acceptance evidence.
+PR41/integration remains closed-gate at f5b1877. This separate, unmerged
+`acceptance/studio-macos-network-fixture` candidate implements Task6b1's mandatory
+pre-ARP and persisted-report pre-ACK hooks and enables its MacNetwork gate/driver
+interlock together. This is preparation for review, not native acceptance or an
+execution grant. Task6b2 capture/peer supervision and partial lifecycle evidence
+remain unfinished; do not run the native commands until those artifacts, exact
+binaries/hashes and the concrete privilege action have been reviewed.
 
 ## Fixed topology
 
@@ -170,13 +174,18 @@ window contract is not a verifier for partial Stop/Pause/Resume windows. Those
 windows need independent cumulative cursor/packet accounting in Task6b/native
 review. The driver is controller-level acceptance, not visible Slint UI evidence.
 
-## Task6b: exact candidate interlock design (not implemented here)
+## Task6b1: mandatory candidate hooks (implemented; native use unrun)
 
-Create a separate reviewed **unmerged** commit; do not ship it. No environment
-bypass or new IPC field/user setting is needed. Keep the checks mandatory for all
-MacNetwork actions in this sealed candidate, including manually launched UI scans.
+This separate **unmerged** candidate must not ship. There is no environment
+bypass or new IPC field/user setting. The hooks are mandatory for all MacNetwork
+actions, including manually launched UI scans. Pure predicates live in
+`studio-protocol::sealed_fixture`; xtask re-exports the existing topology and
+ownership modules. Root-only, read-only seal/live checks live in
+`studio-platform::sealed_fixture`, with no peer-lock acquisition or seal refresh.
+`studio-runner/src/network/native.rs` owns the session pin and hooks. The remaining
+requirements below describe their enforced boundaries.
 
-1. In `studio-runner/src/network.rs`, `Native::observe`: validate the exact fixed
+1. In `studio-runner/src/network/native.rs`, `Native::observe`: validate the exact fixed
    job and a fresh trusted sealed manifest before OS observation. Obtain the
    existing bounded production `plan_physical` result, then validate the exact
    feth source/index/MAC, original next-hop/exclusion map and live manifest
@@ -198,7 +207,7 @@ MacNetwork actions in this sealed candidate, including manually launched UI scan
    replacement seal after down/up or merely compare constants. The peer holds
    the fixture lock, so the helper must read the atomically replaced seal and
    check live identities rather than try to acquire that exclusive lock.
-4. In `studio-app/src/lib.rs`, `commit_durable`, inside the
+4. In `studio-app/src/lib.rs`, `commit_scan_events`, inside the
    `Event::NetworkPrepared` arm: after the existing `Store::apply_batch`
    commit and fetching `saved`, decode **saved.network_report**, validate its
    job and exact source/routes/direct MACs/gateway/missing/excluded coverage,
@@ -213,12 +222,26 @@ MacNetwork actions in this sealed candidate, including manually launched UI scan
    `SEALED_CANDIDATE_INTERLOCKS_REVIEWED` in the driver to true. Gate change
    alone deliberately cannot enable Task6a's driver.
 
-The shared predicate implementation location is a Task6b code-review decision;
-do not couple a normal product binary to xtask or introduce a configurable
-production testing bypass. Topology/report predicates here provide the concrete
-expected values. Task6b must bind the dynamic interface index and seal generation;
-Task6a's pure plan checker only requires a nonzero index until the root journal
-is available.
+The whole schema1 seal is pinned for the helper session, including generation,
+scanner/peer indices and tooling hash; any replacement requires a new helper
+session. The same sealed state is reread before and after live ownership checks.
+No route fallback can pass the complete fixed plan predicate. Fresh initial ARP
+and frozen eligible Resume ARP use the same production Native implementation.
+
+Native checks and subprocesses consume the caller's absolute10second observation/
+launch or3second guard deadline, with cancellation before/after steps. Adapter
+open also receives the remaining deadline/cancellation callback; a late or
+cancelled pair is dropped before a Launch can be published. BPF open/kernel calls
+are still not forcibly preemptible. Added subprocess supervision here is only for
+short fixed ownership-observation commands; tcpdump/raw-peer run supervision is
+still Task6b2.
+
+Candidate Check network cannot read a root0700 seal without an authorized helper
+and refuses readiness. This temporary restriction does not change PR41's normal
+closed-gate read-only route UX. A later general-purpose candidate should branch
+from reviewed integration and deliberately carry the generic open deadline/
+cancellation improvement; it must not accidentally drop that fix while omitting
+the temporary fixture policy.
 
 ## Evidence status and remaining acceptance
 

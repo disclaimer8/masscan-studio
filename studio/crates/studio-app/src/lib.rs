@@ -1200,6 +1200,12 @@ fn commit_scan_events(
                     .iter()
                     .find(|s| s.scan == e.scan)
                     .ok_or("Saved scan disappeared")?;
+                // Candidate-only veto uses the bytes read back after Store commit.
+                // Coverage delivery and ACK cannot authorize a substituted report.
+                studio_protocol::sealed_fixture::validate_persisted(
+                    &saved.job,
+                    saved.network_report.as_deref(),
+                )?;
                 emit(out, network::coverage(saved)?)?;
                 if !c.halted && !cancelled() {
                     c.send(Command::AckNetworkReport {

@@ -312,3 +312,6 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(1));
     }
 }
+
+/// Temporary acceptance supervisor's read-only unprivileged evidence boundary.
+pub mod evidence;

@@ -7,9 +7,10 @@ PR41/integration remains closed-gate at f5b1877. This separate, unmerged
 `acceptance/studio-macos-network-fixture` candidate implements Task6b1's mandatory
 pre-ARP and persisted-report pre-ACK hooks and enables its MacNetwork gate/driver
 interlock together. This is preparation for review, not native acceptance or an
-execution grant. Task6b2 capture/peer supervision and partial lifecycle evidence
-remain unfinished; do not run the native commands until those artifacts, exact
-binaries/hashes and the concrete privilege action have been reviewed.
+execution grant. Task6b2 now prepares capture/peer supervision and partial lifecycle consistency
+checks. They remain unrun on native interfaces. Do not run native commands until
+the complete branch, exact binaries/dependencies/hashes, three-OS CI and the
+concrete privilege action have been reviewed.
 
 ## Fixed topology
 
@@ -95,84 +96,153 @@ limitations still apply. The peer is non-promiscuous: **whether feth delivers th
 distinct synthetic destination MACs to this BPF reader is untested**. Missing
 delivery must fail acceptance, never justify weakening the product adapter.
 
-## Independent witness and Controller driver
+## Task6b2: supervised evidence and unprivileged Controller
 
-The parent/operator must supervise two independent tcpdump processes with a
-bounded window, record exact argv/interface/PID/start/stop/exit status and require
-the `listening on` readiness output before Start. Stop/reap only those processes
-with SIGINT so capture statistics are preserved; a120second capture deadline is
-the proposed window for each already-authorized short case. Capture supervision
-and identity/hash evidence are not automated by Task6a and must be reviewed in
-the native orchestration before execution.
+`supervise` is temporary acceptance tooling, not a daemon or product protocol.
+Root owns only its three child handles: tcpdump on `feth4204`, tcpdump on the
+observed active Ethernet/Wi-Fi default uplink, and this exact xtask's raw peer.
+The uplink filter is the fixed fixture IP/MAC filter. The tool validates both
+root-owned executable paths/hashes, the sealed tooling hash, child PID/OS start
+identity, exact argv and `listening on`/peer readiness before printing a ticket.
+The final privileged tool must also link **only system libraries**. The current
+Homebrew test build links a user-writable Homebrew SQLite dylib and must not be
+used as the root executable. The parent must rebuild with the installed Apple SDK
+SQLite, inspect all load commands and rerun affected tests before the grant.
+Binary ownership alone does not protect an unsafe dynamic dependency.
 
-Peer command argv:
+The supervisor writes only new root0700 `run-<nonce>` directories inside the
+fixed seal directory. It never executes/signals a command/PID from driver files.
+An approved read-only platform wrapper opens each path component with anchored
+`openat`, rejects symlinks, pins directory identities and checks the intended
+unprivileged owner. Only fixed preparation/phase/attempt basenames can be read;
+nonregular, hardlinked, permissively writable, changed, oversized or late data
+is refused. Replacing a parent directory is also a refusal. Driver files remain
+untrusted evidence; matching a nonce does not turn them into privileged commands.
 
-```text
-/usr/sbin/tcpdump -p -n -U -s 0 -i feth4204 -w /ABS/EVIDENCE/peer.pcap
-```
+Each case has a120second supervisor deadline,16MiB capture caps,64KiB child-log
+caps and5second shutdown waits. The raw peer retains its90second deadline and
+2048reply cap. A timeout is a failure, including the peer reaching its deadline.
+The driver must start from a fresh ticket and finish its main loop within70seconds
+of readiness, including normal helper authorization. Slow authorization may fail
+the case; no password storage, scripted SecurityAgent or root Controller is used.
+These are cooperative deadlines; native kernel I/O is not forcibly preemptible.
 
-Use the actual observed uplink, never an assumed `en0`, with this exact scope:
+For capture shutdown the supervisor sends SIGINT only to its own unreaped Child
+PID, waits for exit0 and retains tcpdump statistics. The peer stops via the fixed
+trusted stop marker and must exit0 with measured zero drops. Unexpected exit,
+unknown/missing/duplicate capture counters, kernel/interface drops, malformed
+pcap, uplink traffic, forced kill or deadline fails the case. Failure cleanup
+kills/reaps only owned children; it never deletes interfaces, routes or evidence.
+A fresh ownership check under the operation lock clears the previous case's
+trusted peer-stop marker while preserving the seal for Pause→Resume.
 
-```text
-/usr/sbin/tcpdump -p -n -U -s 0 -i VERIFIED_UPLINK -w /ABS/EVIDENCE/uplink.pcap 'net 198.18.42.0/29 or host 198.19.42.2 or ether host 02:ac:42:00:00:01 or ether host 02:ac:42:00:00:02 or ether host 02:ac:42:00:01:02 or ether host 02:ac:42:00:01:03 or ether host 02:ac:42:00:01:04'
-```
+### Concrete command sequence for final review (do not execute yet)
 
-Save stderr separately as `peer.stderr` and `uplink.stderr`. Any captured uplink
-frame, unknown/dropped capture statistics, truncated capture or ambiguity aborts
-the run. The offline verifier checks classic Ethernet pcap in either endian,
-microsecond/nanosecond timestamps, bounded sizes/counts, ordered times, exact
-SYN tuples/cookies/MACs/checksums, matching SYN-ACK/RST outcomes, three missing
-neighbour ARPs with one-second spacing and final answer window, and zero uplink
-frames. It rejects duplicate SYNs/replies and requires all96 completed probes.
-All fixture-associated frames are classified or rejected. Valid kernel mDNS and
-IPv6 neighbour-discovery multicast have explicit structural/checksum checks;
-arbitrary UDP/IPv6 or malformed fixture frames are not silently skipped. Kernel
-RSTs are counted separately and accepted only for an eligible even-port tuple
-with the expected Ethernet identity, zero ACK/window, no options/data and sequence
-matching an earlier captured SYN/SYN-ACK. Foreign/excluded/missing targets,
-uncorrelated or duplicate resets fail. Actual native reset shape/count remains an
-unmeasured Task6b question. Cookie validation uses the core cookie primitive;
-Ethernet/TCP decoding and response construction are independent of Engine.
-
-After Task6b interlocks, run the **unprivileged** driver with the exact packaged,
-installed helper path and a new isolated output directory:
-
-```text
-/ABS/REVIEWED/xtask network-acceptance drive complete /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-COMPLETE
-/ABS/REVIEWED/xtask network-acceptance drive pause /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-PAUSE
-/ABS/REVIEWED/xtask network-acceptance drive resume /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-PAUSE
-/ABS/REVIEWED/xtask network-acceptance drive stop-preparing /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-STOP-PREPARING
-/ABS/REVIEWED/xtask network-acceptance drive stop-running /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-STOP-RUNNING
-/ABS/REVIEWED/xtask network-acceptance drive guard /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-GUARD
-```
-
-The driver uses real `studio_app::Controller`, `AuthorizeFor`, Start/Resume,
-durable coverage, Pause/Stop and Store reopening. It uses no standalone Engine
-or mocked helper. It validates exact persisted results, checkpoint presence,
-scan continuity/new attempt/frozen report after restart, and logs transitions.
-The180second overall deadline includes the authorization dialog. Its local
-read-only route check cannot enforce the pre-ARP race boundary; Task6b is required.
-
-For guard drift only after the driver's `bound-for-drift` file exists, the
-reviewed action is `sudo /sbin/ifconfig feth4203 down`; no route removal before
-binding and no default-route manipulation. A fresh fixture must be established
-before another case. The current peer will also stop on drift. The driver cannot
-prove packet silence by itself; independent captures must cover the full Stop/
-interruption and cleanup interval.
-
-The driver writes `network-report.bin`, case event logs and case Store snapshots.
-Copy the complete-case witness into that same evidence directory and run:
+The parent substitutes reviewed absolute paths, UID, hashes and unique case
+paths below. `ROOT-XTASK` must be a protected root-owned copy of the reviewed
+system-library build; the unprivileged `XTASK` must have the same SHA256.
+The packaged runner uses the normal helper installation/authorization flow.
+First, as the ordinary user, prepare the new directory that root will pin:
 
 ```text
-/ABS/REVIEWED/xtask network-acceptance verify /ABS/NEW-COMPLETE
+/ABS/XTASK network-acceptance prepare-drive complete /ABS/NEW-COMPLETE
 ```
 
-This command explicitly reports **packet subset PASS**, never full lifecycle
-acceptance. It does not authenticate tcpdump provenance, candidate identity or
-store artifacts; those require the supervising evidence manifest. Its completed
-window contract is not a verifier for partial Stop/Pause/Resume windows. Those
-windows need independent cumulative cursor/packet accounting in Task6b/native
-review. The driver is controller-level acceptance, not visible Slint UI evidence.
+In terminal1, the final approved root action starts supervision. The ordinary
+shell opens the stdout redirect before `sudo`; the supervisor itself writes no
+user-selected path. The first stdout line is the ticket, printed and flushed
+only after all three children are ready:
+
+```text
+sudo /ABS/ROOT-XTASK network-acceptance supervise complete /ABS/NEW-COMPLETE USER_UID RUNNER_SHA256 > /ABS/complete-ticket-stream.ndjson
+```
+
+While that command is still running, in terminal2, after the JSON line appears:
+
+```text
+/usr/bin/head -n 1 /ABS/complete-ticket-stream.ndjson > /ABS/complete-ticket.json
+/ABS/XTASK network-acceptance drive complete /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-COMPLETE /ABS/complete-ticket.json
+```
+
+Use the same three-command sequence with distinct directories/ticket files for
+`pause`, `stop-preparing`, `stop-running` and `guard`. Guard runs last. After a
+successful pause, **do not down/up the fixture**. Start a new driver process and
+a fresh supervised case against the same paused directory:
+
+```text
+/ABS/XTASK network-acceptance prepare-drive resume /ABS/NEW-PAUSE
+sudo /ABS/ROOT-XTASK network-acceptance supervise resume /ABS/NEW-PAUSE USER_UID RUNNER_SHA256 PAUSE_RUN_NONCE > /ABS/resume-ticket-stream.ndjson
+/usr/bin/head -n 1 /ABS/resume-ticket-stream.ndjson > /ABS/resume-ticket.json
+/ABS/XTASK network-acceptance drive resume /ABS/CANDIDATE.app/Contents/MacOS/studio-runner /ABS/NEW-PAUSE /ABS/resume-ticket.json
+```
+
+The last two commands run in terminal2 while terminal1 supervises. The prior
+nonce refers only to a fixed root-owned `run-<nonce>` directory, never a supplied
+root read path. Resume requires the same seal/index, tooling/runner hashes, scan
+and frozen report, a distinct run nonce, a different driver PID and attempt ID.
+
+For `guard`, there is no separate operator `ifconfig` command. Only after the
+real driver observes at least four sent probes and supplies matching scan/attempt
+phase evidence does the supervisor stop/reap the healthy peer, freshly recheck
+ownership and run exactly `/sbin/ifconfig feth4203 down`. Captures must independently
+show at least four SYNs before drift and an actual Controller `Interrupted` after
+it. Probes between peer shutdown and link-down still count; missing responses do
+not become closed results. No supervisor action terminates the Controller.
+
+The driver uses actual Controller/Store APIs, writes explicit Start/control/
+terminal/joined anchors, leaves Controller alive for two seconds after terminal
+to detect restart, then drops it and reopens the isolated Store. Both captures
+continue at least another two seconds after joining. Successful supervision runs
+the offline consistency checker before returning success. Original root-owned
+artifacts include ticket, manifest, copied attempt/Store evidence, both captures,
+child stdout/stderr, exact hashes, argv/PIDs, readiness/stop/reap windows and health.
+
+Export the reviewed exact run directory through stdout; only the unprivileged
+right-hand command writes to the user evidence directory:
+
+```text
+sudo /usr/bin/tar -C /private/var/run/studio-network-fixture-v1 -cf - run-RUN_NONCE | /usr/bin/tar -xf - -C /ABS/USER-EVIDENCE
+/ABS/XTASK network-acceptance verify-lifecycle /ABS/USER-EVIDENCE/run-RUN_NONCE
+/ABS/XTASK network-acceptance verify-lifecycle /ABS/USER-EVIDENCE/run-RESUME_NONCE /ABS/USER-EVIDENCE/run-PAUSE_NONCE
+```
+
+The fixed `down` command remains a separate, reviewed cleanup after all child
+processes have ended. Capture evidence is retained. No stable application,
+history, default route, forwarding, firewall or BPF permission is changed.
+
+### What the evidence checks establish
+
+The decoder remains independent and strict about Ethernet/TCP/checksums/MACs,
+SYN cookies, matching replies and separately counted correlated kernel resets.
+The new checker uses the existing production `NetworkCheckpoint`/engine decoder
+and `ProbeCursor`, not a copied parser/permutation. Pause must match its durable
+sent cursor exactly. Resume must continue the exact suffix without duplicate or
+missing tuples, preserve the frozen unresolved target and reach96 cumulative
+eligible endpoints with96 correct retained open/closed rows. Running Stop/guard
+require a4–95 probe prefix and retained rows correlated to captured responses;
+Stop during Preparing requires zero TCP and zero rows. Partial cases never
+pretend all96 probes completed. Initial completed preparation still requires
+three missing-neighbour ARPs with full one-second answer windows; Resume must
+not ARP the formerly missing neighbour.
+
+Wall timestamps are bracketed with monotonic reads. Independent50ms sampling
+runs even while the driver or supervisor blocks. More than5ms cumulative
+wall/monotonic divergence, reversed time, samples more than one second apart,
+wrong windows or packet/event interval overlap fails as ambiguous. Scanner ARP
+and SYN packets must be strictly before the **observed Controller terminal**;
+peer replies after terminal are allowed and are not new scanner probes. Classic
+pcap contributes up to1microsecond timestamp quantisation to the comparison.
+This is sampled clock consistency: it cannot exclude a wall-clock step and
+return entirely between samples, nor identify an earlier internal engine stop
+instant. Native timestamp-source/clock assumptions require explicit review.
+
+Output deliberately says **Offline consistency PASS**, not native acceptance.
+Copied files cannot authenticate their original recorder, actual execution or
+candidate binary. The native reviewer must compare the private root-owned
+originals, package/dependency hashes, invocation/privilege record and timestamps.
+The older `verify DIR` remains only the complete96-packet subset checker; it is
+not a substitute for `verify-lifecycle` or provenance review. The Controller
+fixture is not visible Slint UI acceptance.
 
 ## Task6b1: mandatory candidate hooks (implemented; native use unrun)
 
@@ -232,9 +302,8 @@ Native checks and subprocesses consume the caller's absolute10second observation
 launch or3second guard deadline, with cancellation before/after steps. Adapter
 open also receives the remaining deadline/cancellation callback; a late or
 cancelled pair is dropped before a Launch can be published. BPF open/kernel calls
-are still not forcibly preemptible. Added subprocess supervision here is only for
-short fixed ownership-observation commands; tcpdump/raw-peer run supervision is
-still Task6b2.
+are still not forcibly preemptible. The Task6b1 subprocess wrapper remains for short ownership-observation
+commands; Task6b2 separately owns long-lived capture/raw-peer child handles.
 
 Candidate Check network cannot read a root0700 seal without an authorized helper
 and refuses readiness. This temporary restriction does not change PR41's normal
@@ -245,9 +314,11 @@ the temporary fixture policy.
 
 ## Evidence status and remaining acceptance
 
-Portable tests cover fixture predicates, independent ARP/TCP codec, capture
-parsing/outcomes/timing, ownership-preserving cleanup decisions, stale leases,
-exact result rows and refusal before history access. Native setup rollback/crash
+Portable/synthetic tests cover fixture predicates, independent ARP/TCP codec,
+capture parsing/outcomes/timing, partial/cumulative lifecycle evidence, decoded
+checkpoints and reopened temporary Store rows, owned harmless-child cancellation,
+read-only evidence-path substitution refusals, ownership-preserving cleanup,
+stale leases, exact result rows and refusal before history access. Native setup rollback/crash
 recovery, feth synthetic-MAC delivery, packet witnesses, preparation Stop,
 running Stop, Pause/Resume, process restart, guard drift and visible UI are all
 **unrun**. No all-unresolved or gateway-failure native scenario is implemented by

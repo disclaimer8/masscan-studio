@@ -2,13 +2,21 @@
 #![forbid(unsafe_code)]
 #[cfg(target_os = "macos")]
 mod controller;
+#[cfg(any(target_os = "macos", test))]
+mod lifecycle;
 #[cfg(target_os = "macos")]
 mod native;
 mod ownership;
+#[cfg(target_os = "macos")]
+mod supervision;
 mod topology;
 mod wire;
 mod witness;
 use std::{fs::File, io::Read, path::Path};
+// Darwin process spawning can transiently retain the Store's flock across a
+// concurrent immediate reopen. Serialize only these test fixtures through reap.
+#[cfg(all(test, target_os = "macos"))]
+static TEST_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let mut data = Vec::new();
@@ -115,8 +123,18 @@ pub fn main_entry() -> super::Result<()> {
         #[cfg(target_os="macos")]
         ["stop-peer"] => native::stop_peer().map_err(Into::into),
         #[cfg(target_os="macos")]
-        ["drive",case,runner,out] => controller::drive(case,Path::new(runner),Path::new(out)).map_err(Into::into),
-        _=>Err("Usage: cargo xtask network-acceptance plan | verify DIR | up | status | down; native scan unavailable pending candidate safety interlocks".into()),
+        ["drive",case,runner,out,ticket] => controller::drive(case,Path::new(runner),Path::new(out),Path::new(ticket)).map_err(Into::into),
+        #[cfg(target_os="macos")]
+        ["prepare-drive",case,out] => controller::prepare(case,Path::new(out)).map_err(Into::into),
+        #[cfg(target_os="macos")]
+        ["supervise",case,out,uid,hash] => supervision::supervise(case,Path::new(out),uid.parse()?,hash,None).map_err(Into::into),
+        #[cfg(target_os="macos")]
+        ["supervise",case,out,uid,hash,prior] => supervision::supervise(case,Path::new(out),uid.parse()?,hash,Some(prior)).map_err(Into::into),
+        #[cfg(target_os="macos")]
+        ["verify-lifecycle",dir] => supervision::verify_dir(Path::new(dir),None).map_err(Into::into),
+        #[cfg(target_os="macos")]
+        ["verify-lifecycle",dir,prior] => supervision::verify_dir(Path::new(dir),Some(Path::new(prior))).map_err(Into::into),
+        _=>Err("Usage: network-acceptance plan | verify DIR | prepare-drive CASE DIR | supervise CASE DIR UID RUNNER_SHA256 [PAUSE_NONCE] | drive CASE RUNNER DIR TICKET | verify-lifecycle DIR [PAUSE_DIR] | up | status | down; native commands require reviewed candidate and explicit grant".into()),
     }
 }
 

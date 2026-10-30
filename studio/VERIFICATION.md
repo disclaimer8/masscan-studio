@@ -839,3 +839,16 @@ source merge tree `06bf606770b8d954fa064ff4cc76275e3f8836a4`. Package manifests,
 screenshots, filesystem checks and evidence checksums are linked from the reports.
 The current follow-up changes documentation only, without a rebuilt package.
 Raw-profile gates and outstanding session-authorization checks remain unchanged.
+
+## 2026-10-30 — First sealed MacNetwork native trial
+
+Candidate `1213101` completed the fixed Controller/helper scan with 96 retained
+results (48 open, 48 closed) and 96 SYNs in the independent peer capture. The
+uplink capture contained no packet records. **Native acceptance remains FAIL:**
+both system tcpdump processes required forced termination and supplied no final
+capture statistics. The temporary stand was removed and evidence retained.
+Fresh Studio tests: 300 passed, 0 failed, 2 ignored; engine: 1416 passed,
+0 failed, 23 ignored. See
+[`2026-10-30-studio-macos-network-native.md`](../docs/experiments/2026-10-30-studio-macos-network-native.md)
+for the reproduction, exact artifacts and remaining work. Other native lifecycle
+cases and physical-network acceptance remain pending.

@@ -1,5 +1,11 @@
 # macOS network acceptance: fixture tooling and pending native evidence
 
+**2026-10-30 status:** the first native complete-case trial reached96 expected
+results, but capture shutdown failed. Acceptance remains FAIL. See the
+[native trial report](2026-10-30-studio-macos-network-native.md) for exact candidate,
+packet observations, retained evidence, teardown and the remaining blocker.
+The implementation-stage statements below describe the pre-trial preparation.
+
 Task6a implements Rust tooling, portable tests and an actual Studio Controller
 driver. **No native setup, BPF opening, packet transmission, helper installation,
 stable history access or physical-network acceptance was performed for Task6a.**

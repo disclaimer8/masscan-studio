@@ -105,16 +105,20 @@ delivery must fail acceptance, never justify weakening the product adapter.
 ## Task6b2: supervised evidence and unprivileged Controller
 
 `supervise` is temporary acceptance tooling, not a daemon or product protocol.
-Root owns only its three child handles: tcpdump on `feth4204`, tcpdump on the
-observed active Ethernet/Wi-Fi default uplink, and this exact xtask's raw peer.
-The uplink filter is the fixed fixture IP/MAC filter. The tool validates both
-root-owned executable paths/hashes, the sealed tooling hash, child PID/OS start
-identity, exact argv and `listening on`/peer readiness before printing a ticket.
-The final privileged tool must also link **only system libraries**. The current
-Homebrew test build links a user-writable Homebrew SQLite dylib and must not be
-used as the root executable. The parent must rebuild with the installed Apple SDK
-SQLite, inspect all load commands and rerun affected tests before the grant.
-Binary ownership alone does not protect an unsafe dynamic dependency.
+Root owns three child handles from the exact protected xtask: independent capture
+on `feth4204`, independent capture on the observed active Ethernet/Wi-Fi default
+uplink, and the raw peer. The capture workers use system libpcap, separately from
+the scanner's BPF adapters and packet builder. The fixed uplink IP/MAC filter is
+unchanged. Each worker checks the sealed tooling hash, live fixture and expected
+interface before opening a non-promiscuous Ethernet capture. The supervisor pins
+child PID/OS start identity, exact argv, hash and explicit readiness before issuing
+a ticket. Manifest schema2 requires these capture-worker commands and tooling
+hashes; old tcpdump manifests cannot be accepted as schema2 evidence.
+
+The privileged tool must link **only system libraries**, including system libpcap
+and Apple SDK SQLite. Inspect all load commands and rerun affected tests for the
+exact build before installing it. A user-writable Homebrew dependency remains a
+refusal even when the executable itself is protected.
 
 The supervisor writes only new root0700 `run-<nonce>` directories inside the
 fixed seal directory. It never executes/signals a command/PID from driver files.
@@ -133,8 +137,17 @@ of readiness, including normal helper authorization. Slow authorization may fail
 the case; no password storage, scripted SecurityAgent or root Controller is used.
 These are cooperative deadlines; native kernel I/O is not forcibly preemptible.
 
-For capture shutdown the supervisor sends SIGINT only to its own unreaped Child
-PID, waits for exit0 and retains tcpdump statistics. The peer stops via the fixed
+Capture uses verified nonblocking reads, immediate mode, a131072-byte snapshot
+and microsecond timestamps. An empty read returns promptly; idle polling sleeps
+10ms. Readiness follows writing/flushing the pcap header. The supervisor sends a
+single stop byte through its own inherited anonymous pipe, waits for exit0 and
+retains measured libpcap statistics. EOF or an invalid command is a failure.
+After Stop, the worker drains available packets under an absolute500ms budget;
+the120second overall deadline and20000-record/16MiB limits remain in force. It
+syncs the output before reporting final statistics and exiting. A timeout, write
+error or drop cannot produce a successful shutdown. This replaces signal-driven
+tcpdump shutdown after the documented native failure; it does not relax the
+capture evidence criteria. The peer stops via the fixed
 trusted stop marker and must exit0 with measured zero drops. Unexpected exit,
 unknown/missing/duplicate capture counters, kernel/interface drops, malformed
 pcap, uplink traffic, forced kill or deadline fails the case. Failure cleanup

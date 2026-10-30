@@ -6,6 +6,8 @@ pub mod linux;
 pub mod macos;
 pub mod network;
 #[cfg(target_os = "macos")]
+pub mod pcap;
+#[cfg(target_os = "macos")]
 pub mod sealed_fixture;
 pub mod setup;
 pub mod trusted;

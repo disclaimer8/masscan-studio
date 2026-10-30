@@ -19,7 +19,6 @@ use studio_platform::{
     sealed_fixture::{self, STATE_DIR, evidence::EvidenceDirectory},
     trusted,
 };
-const FILTER: &str = "net 198.18.42.0/29 or host 198.19.42.2 or ether host 02:ac:42:00:00:01 or ether host 02:ac:42:00:00:02 or ether host 02:ac:42:00:01:02 or ether host 02:ac:42:00:01:03 or ether host 02:ac:42:00:01:04";
 type Result<T> = std::result::Result<T, String>;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Phase {
@@ -58,7 +57,7 @@ impl OwnedChild {
             .args(&argv[1..])
             .env_clear()
             .env("LC_ALL", "C")
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(out)
             .stderr(err)
             .spawn()
@@ -113,12 +112,25 @@ impl OwnedChild {
             Ok(())
         }
     }
+    #[cfg(test)]
     fn interrupt(&mut self, origin: Instant) -> Result<()> {
         self.require_alive(origin)?;
         self.record.stop_requested = Some(Stamp::now(origin)?);
         // This pid comes only from our still-unreaped Child. If it exits here,
         // its zombie retains the pid until our wait; no supplied pid is used.
         native::command(&["/bin/kill", "-INT", &self.child.id().to_string()])?;
+        self.finish(origin, Instant::now() + Duration::from_secs(5))
+    }
+    fn stop_capture(&mut self, origin: Instant) -> Result<()> {
+        self.require_alive(origin)?;
+        self.record.stop_requested = Some(Stamp::now(origin)?);
+        let mut control = self
+            .child
+            .stdin
+            .take()
+            .ok_or("capture control pipe missing")?;
+        control.write_all(b"S").map_err(|e| e.to_string())?;
+        drop(control);
         self.finish(origin, Instant::now() + Duration::from_secs(5))
     }
     fn finish(&mut self, origin: Instant, deadline: Instant) -> Result<()> {
@@ -415,8 +427,6 @@ pub fn supervise(
         .map_err(|e| e.to_string())?;
     let exe_hash = trusted::file_hash(&exe)?;
     trusted::verify(&exe, &exe_hash)?;
-    let tcpdump = Path::new("/usr/sbin/tcpdump");
-    trusted::verify(tcpdump, &trusted::file_hash(tcpdump)?)?;
     let state = native::supervision_state()?;
     if state.tooling_sha256 != exe_hash {
         return Err("supervisor binary differs from sealed tooling".into());
@@ -471,31 +481,23 @@ pub fn supervise(
     let mut attempt = None;
     let outcome = (|| -> Result<()> {
         for (name, iface) in [("peer", PEER), ("uplink", uplink.as_str())] {
-            let mut argv = vec![
-                "/usr/sbin/tcpdump".into(),
-                "-p".into(),
-                "-n".into(),
-                "-U".into(),
-                "-s".into(),
-                "0".into(),
-                "-i".into(),
+            let argv = vec![
+                exe.display().to_string(),
+                "network-acceptance".into(),
+                "capture".into(),
+                name.into(),
                 iface.into(),
-                "-w".into(),
-                dir.join(format!("{name}.pcap")).display().to_string(),
             ];
-            if name == "uplink" {
-                argv.push(FILTER.into());
-            }
             children.push(OwnedChild::spawn(
                 argv,
-                create(&dir.join(format!("{name}.stdout")))?,
+                create(&dir.join(format!("{name}.pcap")))?,
                 create(&dir.join(format!("{name}.stderr")))?,
                 origin,
             )?);
             ready(
                 children.last_mut().ok_or("missing capture")?,
                 &dir.join(format!("{name}.stderr")),
-                &format!("tcpdump: listening on {iface},"),
+                &format!("capture ready: {iface},"),
                 origin,
                 Instant::now() + Duration::from_secs(5),
             )?;
@@ -676,7 +678,7 @@ pub fn supervise(
     }
     for c in children.iter_mut().take(2) {
         if !c.reaped
-            && let Err(e) = c.interrupt(origin)
+            && let Err(e) = c.stop_capture(origin)
         {
             failure.get_or_insert(e);
         }
@@ -732,7 +734,7 @@ pub fn supervise(
                 && c.record.stop_requested.is_some()
         });
     let manifest = Manifest {
-        schema: 1,
+        schema: 2,
         window: Window {
             ticket: ticket.unwrap_or(fallback),
             opened,
@@ -807,7 +809,7 @@ type Loaded = (Attempt, Window, Vec<u8>, String, Vec<u8>, String);
 fn load(dir: &Path) -> Result<Loaded> {
     let m: Manifest = serde_json::from_slice(&read_bounded(&dir.join("manifest.json"), 1_048_576)?)
         .map_err(|e| e.to_string())?;
-    if m.schema != 1 || m.failure.is_some() || !m.window.children_clean || m.children.len() != 3 {
+    if m.schema != 2 || m.failure.is_some() || !m.window.children_clean || m.children.len() != 3 {
         return Err("failed/incomplete supervisor manifest".into());
     }
     for name in [
@@ -896,6 +898,9 @@ fn load(dir: &Path) -> Result<Loaded> {
     ))
 }
 fn validate_manifest(m: &Manifest, a: &Attempt) -> Result<()> {
+    if m.schema != 2 {
+        return Err("capture manifest schema differs".into());
+    }
     if m.window.ticket != a.ticket
         || m.seal.generation != a.ticket.seal_generation
         || m.seal.tooling_sha256 != a.ticket.tooling_sha256
@@ -946,27 +951,10 @@ fn validate_manifest(m: &Manifest, a: &Attempt) -> Result<()> {
         if i < 2 {
             let iface = if i == 0 { PEER } else { &m.uplink };
             let name = if i == 0 { "peer" } else { "uplink" };
-            let output = Path::new(STATE_DIR)
-                .join(format!("run-{}", a.ticket.nonce))
-                .join(format!("{name}.pcap"))
-                .display()
-                .to_string();
-            if c.argv.len() != if i == 0 { 10 } else { 11 }
-                || c.argv[..9]
-                    != [
-                        "/usr/sbin/tcpdump",
-                        "-p",
-                        "-n",
-                        "-U",
-                        "-s",
-                        "0",
-                        "-i",
-                        iface,
-                        "-w",
-                    ]
-                || c.argv.get(9) != Some(&output)
-                || (i == 1 && c.argv.get(10).map(String::as_str) != Some(FILTER))
-                || (i == 1 && c.sha256 != m.children[0].sha256)
+            if c.argv.len() != 5
+                || c.argv[1..] != ["network-acceptance", "capture", name, iface]
+                || c.argv.first() != m.children[2].argv.first()
+                || c.sha256 != a.ticket.tooling_sha256
                 || stop.low()?
                     <= a.joined
                         .high()?
@@ -1116,6 +1104,33 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn owned_capture_stops_over_pipe_without_signals() {
+        let _test_lock = super::super::TEST_PROCESS_LOCK.lock().unwrap();
+        let origin = Instant::now();
+        let dir = std::env::temp_dir().join(format!(
+            "capture-pipe-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&dir).unwrap();
+        let mut c=OwnedChild::spawn(
+            vec!["/bin/sh".into(),"-c".into(),"trap '' INT TERM; echo READY; value=$(/bin/dd bs=1 count=1 2>/dev/null); [ \"$value\" = S ]".into()],
+            create(&dir.join("out")).unwrap(),create(&dir.join("err")).unwrap(),origin,
+        ).unwrap();
+        ready(
+            &mut c,
+            &dir.join("out"),
+            "READY",
+            origin,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+        c.stop_capture(origin).unwrap();
+        assert!(c.reaped && !c.record.forced);
+        assert_eq!(c.record.exit_code, Some(0));
+        assert!(c.record.stop_requested.is_some());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn unknown_missing_duplicate_or_dropped_capture_statistics_fail() {
         let good =
             "4 packets captured\n4 packets received by filter\n0 packets dropped by kernel\n";
@@ -1230,24 +1245,12 @@ mod tests {
             (2, "raw-peer", PEER),
         ] {
             let mut argv = vec![
-                "/usr/sbin/tcpdump".into(),
-                "-p".into(),
-                "-n".into(),
-                "-U".into(),
-                "-s".into(),
-                "0".into(),
-                "-i".into(),
+                "/protected/xtask".into(),
+                "network-acceptance".into(),
+                "capture".into(),
+                name.into(),
                 iface.into(),
-                "-w".into(),
-                Path::new(STATE_DIR)
-                    .join(format!("run-{}", a.ticket.nonce))
-                    .join(format!("{name}.pcap"))
-                    .display()
-                    .to_string(),
             ];
-            if i == 1 {
-                argv.push(FILTER.into());
-            }
             if i == 2 {
                 argv = vec![
                     "/protected/xtask".into(),
@@ -1257,11 +1260,7 @@ mod tests {
             }
             children.push(ChildRecord {
                 argv,
-                sha256: if i < 2 {
-                    "f".repeat(64)
-                } else {
-                    a.ticket.tooling_sha256.clone()
-                },
+                sha256: a.ticket.tooling_sha256.clone(),
                 pid: 100 + i,
                 started: stamp(100_000_000),
                 process_identity: "synthetic owned process".into(),
@@ -1291,7 +1290,7 @@ mod tests {
             sent: 4,
         };
         let m = Manifest {
-            schema: 1,
+            schema: 2,
             window: w,
             children,
             uplink: "en0".into(),
@@ -1310,8 +1309,10 @@ mod tests {
         assert!(validate_manifest(&m, &a).is_ok());
         let bytes = serde_json::to_vec(&m).unwrap();
         for change in [
+            |m: &mut Manifest| m.schema = 1,
             |m: &mut Manifest| m.children[0].stop_requested = Some(m.window.ticket.ready.clone()),
-            |m: &mut Manifest| m.children[1].argv[7] = "foreign0".into(),
+            |m: &mut Manifest| m.children[1].argv[4] = "foreign0".into(),
+            |m: &mut Manifest| m.children[0].sha256 = "f".repeat(64),
             |m: &mut Manifest| m.children[2].sha256 = "e".repeat(64),
             |m: &mut Manifest| m.children[0].forced = true,
             |m: &mut Manifest| m.children[1].exit_code = None,

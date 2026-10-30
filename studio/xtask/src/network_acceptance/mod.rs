@@ -1,5 +1,8 @@
 //! Fixed, isolated acceptance tooling for the unmerged fixture-only candidate.
 #![forbid(unsafe_code)]
+mod capture;
+#[cfg(target_os = "macos")]
+mod capture_native;
 #[cfg(target_os = "macos")]
 mod controller;
 #[cfg(any(target_os = "macos", test))]
@@ -120,6 +123,8 @@ pub fn main_entry() -> super::Result<()> {
         ["status"] => native::status().map_err(Into::into),
         #[cfg(target_os="macos")]
         ["peer"] => native::peer().map_err(Into::into),
+        #[cfg(target_os="macos")]
+        ["capture",role,iface] => capture_native::run(role,iface).map_err(Into::into),
         #[cfg(target_os="macos")]
         ["stop-peer"] => native::stop_peer().map_err(Into::into),
         #[cfg(target_os="macos")]

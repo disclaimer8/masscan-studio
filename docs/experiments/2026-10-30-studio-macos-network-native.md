@@ -114,3 +114,53 @@ capture implementation requires its own review and validation; forced shutdown
 must not be reclassified as success. Then rerun complete, preparation/running
 Stop, Pause/restart/Resume and guard drift. Owned-target and visible UI acceptance
 remain pending. The distributed physical gate remains closed.
+
+## Capture replacement follow-up (native rerun pending)
+
+Candidate `923334e44769e8026498a939c4ab6531e5f39363` replaces the supervisor's
+tcpdump children with separate system-libpcap processes. Reads are nonblocking;
+an owned anonymous pipe requests a bounded final drain and clean close. The
+capture does not use the scanner's packet adapter or decoder. Root-owned evidence,
+sealed topology, exact executable hashes, zero-loss counters, quiet windows and
+strict lifecycle verification remain required. Manifest schema2 rejects older
+capture provenance rather than reclassifying the failed trial above.
+
+A passive root diagnostic using the installed system libpcap completed100 empty
+nonblocking reads, measured a maximum read time of32 microseconds, reported zero
+receive/drop/interface-drop counters and exited0. This establishes feasibility;
+it is not native acceptance of the integrated replacement.
+
+The replacement passed independent scoped review, full-workspace formatting and
+Clippy. Its final complete local Studio run passed312 tests with2 ignored using
+Apple SDK SQLite. Exact packet-count and byte-count boundaries also rejected
+intentional off-by-one mutations, which were immediately restored. One preceding
+full run failed the existing platform cancellation test's one-second timing
+assertion. Temporary stage tracing and120 subsequent diagnostic suite runs did
+not reproduce it; the original failure log is retained. Its cause is unresolved,
+and no timing threshold or production cancellation code was changed.
+
+Signed package `studio/dist/build-1793382752065/Masscan Studio.app` passed signature
+verification and all three simulation checks: `--smoke`, `--smoke-pause` and
+`--smoke-stop-race`. Packaged helper SHA256:
+
+```text
+e64c1b9181b6d579d13519b9136d601706b289fb2669e2627d34db86d3b1d574
+```
+
+Acceptance tool SHA256:
+
+```text
+21a15706878b968931695ddd6f33b66a9f8ff8b445402e729ab55dc7ce9ecd27
+```
+
+Both load only system libraries/frameworks. Prepared immutable installers and
+six isolated lifecycle cases remain unexecuted. The actual integrated empty
+capture must stop with measured counters before any scanner rerun.
+
+CI initially queued during a [GitHub Actions incident](https://www.githubstatus.com/incidents/pwxsjgnvrk6b).
+The macOS job then reported a scheduled `macos-14` runner brownout before executing
+any steps. Both workflow matrices now use `macos-15`, following the
+[official retirement notice](https://github.com/actions/runner-images/issues/13518).
+This changes the CI host, not the application's native acceptance result. The
+new head still requires successful macOS, Linux and Windows checks before the
+prepared root installation and lifecycle trials.

@@ -169,22 +169,17 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 fn check_owned(state: &State) -> Result<()> {
+    check_owned_mode(state, false)
+}
+fn check_owned_mode(state: &State, after_guard: bool) -> Result<()> {
     fresh_lease(state.created_utc_seconds, state.expires_utc_seconds, now()?)?;
-    if !state.sealed {
-        return Err("fixture setup incomplete; inspect retained state".into());
-    }
-    for recorded in [&state.scanner, &state.peer] {
-        let recorded = recorded.as_ref().ok_or("missing owned interface")?;
-        if !can_destroy(recorded, identity(&recorded.name)?.as_ref())? {
-            return Err("owned interface disappeared".into());
-        }
-    }
-    delete_route(
-        state.route.as_ref().ok_or("missing owned host route")?,
+    verify_owned(
+        state,
+        identity(SCANNER)?.as_ref(),
+        identity(PEER)?.as_ref(),
         route()?.as_ref(),
-    )?
-    .ok_or("owned route disappeared")?;
-    Ok(())
+        after_guard,
+    )
 }
 
 pub fn up() -> Result<()> {
@@ -439,7 +434,7 @@ pub(super) fn supervision_check(expected: &State, running: bool) -> Result<()> {
     if &current != expected {
         return Err("supervised fixture seal replaced".into());
     }
-    check_owned(&current)?;
+    check_owned_mode(&current, !running)?;
     if running {
         snapshot()?;
     }

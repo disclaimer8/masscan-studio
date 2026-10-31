@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod work_session;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "macos")]
 mod feth_acceptance;
@@ -65,6 +67,8 @@ fn main() -> Result<()> {
     };
     std::env::set_current_dir(&root)?;
     match task.as_str() {
+        #[cfg(target_os = "macos")]
+        "work-session" => work_session::main_entry(&root)?,
         #[cfg(any(target_os = "macos", test))]
         "network-acceptance" => network_acceptance::main_entry()?,
         #[cfg(any(target_os="macos", target_os="linux", windows))]

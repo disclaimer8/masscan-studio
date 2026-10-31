@@ -342,3 +342,42 @@ runas returned ERROR_CANCELLED (1223). CI retains native identity, environment,
 job lifetime, rejection, simulation, installer and package checks. It packages
 the exact ignored integrated cancellation test for desktop execution. Passing
 CI does not substitute for this desktop acceptance.
+
+
+## macOS development working session
+
+`xtask work-session start /absolute/path/to/studio-runner` requests administrator
+authorization once, installs the exact verified tool/helper versions if needed,
+and starts a task-specific host. `work-session status` shows the host PID,
+approved hashes and active operations. `work-session probe RUNNER` checks a
+helper session without packets and refuses to fall back to a password prompt if
+the host is absent. Independent acceptance Controller processes use the host
+automatically. Their helper still authenticates the ordinary Controller directly.
+
+The host remains available after those processes exit. It ends only on explicit
+`work-session stop` or process/system termination; there is no idle expiry or
+login auto-start. Stop refuses active helper leases/jobs. Installed binaries are
+retained. The stable installed tool path shown by status can keep managing the
+session even if the checkout's debug binary is later rebuilt. This initial
+version approves one exact caller/tool/helper build; it is not a general admin
+shell and does not authorize unrelated applications or silently accept new builds.
+
+Fixed operations are `fixture up`, `fixture status`, `fixture down`,
+`fixture supervise CASE ABSOLUTE_DRIVER_DIR [PAUSE_NONCE]`, and `export NONCE`.
+A fixture must be created by this work session; a different existing fixture is
+not adopted. Resume and export require a run nonce created by this host.
+`prepare-drive resume` must also mark the same Pause directory before supervision.
+Supervision still requires the reviewed candidate and native acceptance scope.
+
+Runtime metadata/socket live under root-owned `/private/var/run/studio-work-UID`.
+Both endpoints check kernel process identity and approved executable hashes.
+Requests are typed and bounded; there is no shell/executable/environment API.
+Private root output is streamed only over that authenticated connection. At most
+8 helper/job operations may be active, with separate bounded control connections.
+Closing a Controller drops only its helper lease. Losing the host connection
+closes the original runner IPC; the host independently reaps disconnected helper
+children. Fixture jobs retain their native bounds and private evidence on CLI
+loss. A failed partial Up is associated with its preassigned generation so a
+later Down can safely clean that specific journal. Host/process crashes may leave
+a fixture journal for explicit recovery; clients never silently adopt it or
+remove stale root runtime state.

@@ -79,11 +79,10 @@ fn fixture_state() -> Result<Option<studio_protocol::sealed_fixture::State>> {
         Ok(m) if m.len() > 65536 => return Err("Oversized fixture state".into()),
         Ok(_) => {}
     }
-    wire::protected(p, false)?;
-    serde_json::from_slice(&fs::read(p).map_err(error)?)
+    studio_platform::sealed_fixture::load(Instant::now() + Duration::from_secs(3), &|| false)
         .map(Some)
-        .map_err(error)
 }
+
 fn own_fixture(shared: &Shared) -> Result<()> {
     let expected = shared
         .state
@@ -517,7 +516,7 @@ fn serve(uid: u32, runner_hash: String, caller_hash: String) -> Result<()> {
     let runner = studio_platform::macos::installed_path(&config.runner_hash)?;
     studio_platform::trusted::verify(&runner, &config.runner_hash)?;
     // Global fixture state is shared across users; only one host may own it.
-    let lock_path = Path::new("/private/var/run/studio-work-fixture.lock");
+    let lock_path = Path::new("/Library/PrivilegedHelperTools/MasscanStudio/work-fixture.lock");
     let lock = match OpenOptions::new()
         .read(true)
         .write(true)
@@ -613,7 +612,7 @@ fn serve(uid: u32, runner_hash: String, caller_hash: String) -> Result<()> {
     fs::remove_file(shared.dir.join("host.json")).map_err(error)?;
     let archived = shared
         .dir
-        .with_file_name(format!("studio-work-{uid}-ended-{}", shared.config.pid));
+        .with_file_name(format!("work-{uid}-ended-{}", shared.config.pid));
     fs::rename(&shared.dir, archived).map_err(error)?;
     Ok(())
 }
@@ -684,35 +683,48 @@ fn start(root: &Path, runner: &Path) -> Result<()> {
         script.push_str("\n)\n");
     }
     script.push_str(&format!(
-        "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C /usr/bin/nohup {} work-session serve {} {} {} </dev/null >/dev/null 2>&1 &\n",
+        "exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C {} work-session serve {} {} {}\n",
         studio_platform::macos::shell_quote(installed.to_str().ok_or("non-UTF8 tool")?)?,
         owner.uid,
         runner_hash,
         hash
     ));
-    let status = Command::new("/usr/bin/osascript")
+    let mut launcher = Command::new("/usr/bin/osascript")
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .env("LC_ALL", "C")
         .args(["-e", &studio_platform::macos::applescript(&script)])
-        .status()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(error)?;
-    if !status.success() {
-        return Err("Working-session authorization cancelled or failed".into());
-    }
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         if matches!(wire::connect(), Ok(Some(_))) {
+            // Child::drop does not terminate the launcher. The explicitly started
+            // host and its authorization outlive this CLI until work-session stop.
             return request(Request::Status {});
         }
+        if launcher.try_wait().map_err(error)?.is_some() {
+            let mut output = String::new();
+            if let Some(out) = launcher.stdout.take() {
+                out.take(32768).read_to_string(&mut output).map_err(error)?;
+            }
+            if let Some(err) = launcher.stderr.take() {
+                err.take(32768).read_to_string(&mut output).map_err(error)?;
+            }
+            return Err(format!("Working-session launch failed: {output}"));
+        }
         if Instant::now() >= deadline {
-            return Err(
-                "Working-session host did not become ready; inspect runtime directory".into(),
-            );
+            let _ = launcher.kill();
+            let _ = launcher.wait();
+            return Err("Working-session authorization/start timed out".into());
         }
         std::thread::sleep(WAIT);
     }
 }
+
 pub fn main_entry(root: &Path) -> Result<()> {
     let args = std::env::args().skip(2).collect::<Vec<_>>();
     let a = args.iter().map(String::as_str).collect::<Vec<_>>();

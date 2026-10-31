@@ -130,7 +130,9 @@ pub fn validate_request(r: &Request, c: &Config, peer: &Identity) -> Result<()> 
     Ok(())
 }
 pub fn directory(uid: u32) -> PathBuf {
-    PathBuf::from(format!("/private/var/run/studio-work-{uid}"))
+    PathBuf::from(format!(
+        "/Library/PrivilegedHelperTools/MasscanStudio/work-{uid}"
+    ))
 }
 /// Root-owned immutable namespace; also rejects ACLs and symlink ancestors.
 pub fn protected(path: &Path, socket: bool) -> Result<()> {

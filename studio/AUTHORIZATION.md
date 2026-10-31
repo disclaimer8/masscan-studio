@@ -369,7 +369,7 @@ not adopted. Resume and export require a run nonce created by this host.
 `prepare-drive resume` must also mark the same Pause directory before supervision.
 Supervision still requires the reviewed candidate and native acceptance scope.
 
-Runtime metadata/socket live under root-owned `/private/var/run/studio-work-UID`.
+Runtime metadata/socket live under root-owned `/Library/PrivilegedHelperTools/MasscanStudio/work-UID`.
 Both endpoints check kernel process identity and approved executable hashes.
 Requests are typed and bounded; there is no shell/executable/environment API.
 Private root output is streamed only over that authenticated connection. At most

@@ -108,7 +108,8 @@ pub struct Authorized {
     pub stream: UnixStream,
     pub peer: crate::audit::Peer,
     _endpoint: Endpoint,
-    launcher: Child,
+    launcher: Option<Child>,
+    work_session: Option<crate::work_session::Watch>,
 }
 impl Authorized {
     pub fn endpoint_path(&self) -> &Path {
@@ -127,6 +128,22 @@ impl Authorized {
             return Err("Studio must run without administrator privileges".into());
         }
         let endpoint = Endpoint::create()?;
+        if let Some(mut lease) =
+            crate::work_session::helper(path, hash, endpoint.path(), &owner, cancelled)?
+        {
+            let (stream, peer) =
+                endpoint.accept_trusted(Duration::from_secs(10), path, hash, cancelled, || {
+                    lease.check()
+                })?;
+            let watch = lease.watch(&stream)?;
+            return Ok(Self {
+                stream,
+                peer,
+                _endpoint: endpoint,
+                launcher: None,
+                work_session: Some(watch),
+            });
+        }
         let line = format!(
             "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C {} --connect {} {}",
             shell_quote(path.to_str().ok_or("Runner path is not UTF-8")?)?,
@@ -158,7 +175,8 @@ impl Authorized {
                 stream,
                 peer,
                 _endpoint: endpoint,
-                launcher,
+                launcher: Some(launcher),
+                work_session: None,
             }),
             Err(e) => {
                 let _ = launcher.kill();
@@ -171,14 +189,21 @@ impl Authorized {
 impl Drop for Authorized {
     fn drop(&mut self) {
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        self.work_session.take();
         let deadline = Instant::now() + Duration::from_secs(2);
-        while self.launcher.try_wait().ok().flatten().is_none() {
-            if Instant::now() >= deadline {
-                let _ = self.launcher.kill();
-                let _ = self.launcher.wait();
-                break;
+        if let Some(launcher) = self.launcher.as_mut() {
+            while launcher.try_wait().ok().flatten().is_none() {
+                if Instant::now() >= deadline {
+                    let _ = launcher.kill();
+                    let _ = launcher.wait();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            std::thread::sleep(Duration::from_millis(10));
+        } else {
+            while self.peer.is_alive().unwrap_or(false) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 }

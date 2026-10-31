@@ -98,6 +98,9 @@ fn classify_arp(f: &[u8]) -> Result<Frame, String> {
 }
 
 fn classify_ipv4(f: &[u8]) -> Result<Frame, String> {
+    if f.len() >= 34 && f[23] == 2 {
+        return classify_mdns_membership(f);
+    }
     if f.len() < 34 || f[14] != 0x45 || word(&f[20..22]) & 0xbfff != 0 || checksum(&f[14..34]) != 0
     {
         return Err("malformed fixture IPv4 header".into());
@@ -190,6 +193,37 @@ fn classify_ipv4(f: &[u8]) -> Result<Frame, String> {
     } else {
         Err("fixture TCP has unexpected IP endpoints".into())
     }
+}
+
+fn classify_mdns_membership(f: &[u8]) -> Result<Frame, String> {
+    // macOS joins mDNS on a newly created interface using IGMPv3 and the IPv4
+    // Router Alert option. Admit only a single source-free mDNS membership
+    // record from the fixed scanner, never generic IPv4 options or multicast.
+    if !(54..=60).contains(&f.len())
+        || f[..6] != [1, 0, 0x5e, 0, 0, 0x16]
+        || f[6..12] != SOURCE_MAC
+        || f[14] != 0x46
+        || word(&f[16..18]) != 40
+        || word(&f[20..22]) & 0xbfff != 0
+        || f[22] != 1
+        || f[23] != 2
+        || ip(&f[26..30]) != SOURCE
+        || ip(&f[30..34]) != Ipv4Addr::new(224, 0, 0, 22)
+        || f[34..38] != [0x94, 4, 0, 0]
+        || checksum(&f[14..38]) != 0
+        || f[38] != 0x22
+        || f[39] != 0
+        || word(&f[42..44]) != 0
+        || word(&f[44..46]) != 1
+        || !(1..=4).contains(&f[46])
+        || f[47] != 0
+        || word(&f[48..50]) != 0
+        || ip(&f[50..54]) != Ipv4Addr::new(224, 0, 0, 251)
+        || checksum(&f[38..54]) != 0
+    {
+        return Err("malformed or unclassified fixture IGMP membership".into());
+    }
+    Ok(Frame::KernelMulticast)
 }
 
 fn classify_ipv6_multicast(f: &[u8]) -> Result<(), String> {
@@ -343,6 +377,87 @@ pub fn test_reset(target: Ipv4Addr, port: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn kernel_mdns_membership() -> Vec<u8> {
+        // Exact 54-byte IGMPv3 frame observed on the sealed stand. Contains only
+        // fixed fixture addresses and the mDNS multicast group, no host metadata.
+        let hex = "01005e00001602ac42000001080046c0002800004000010213e6c6122a01e0000016940400002200f9020000000104000000e00000fb";
+        hex.as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u8::from_str_radix(std::str::from_utf8(b).unwrap(), 16).unwrap())
+            .collect()
+    }
+    fn membership_checksums(f: &mut [u8]) {
+        f[24..26].fill(0);
+        let c = checksum(&f[14..38]);
+        f[24..26].copy_from_slice(&c.to_be_bytes());
+        f[40..42].fill(0);
+        let c = checksum(&f[38..54]);
+        f[40..42].copy_from_slice(&c.to_be_bytes());
+    }
+    #[test]
+    fn kernel_mdns_igmpv3_membership_is_classified_without_reply() {
+        let frame = kernel_mdns_membership();
+        assert_eq!(frame.len(), 54);
+        assert_eq!(checksum(&frame[14..38]), 0);
+        assert_eq!(checksum(&frame[38..54]), 0);
+        for record in 1..=4 {
+            for length in [54, 60] {
+                let mut f = frame.clone();
+                f[46] = record;
+                membership_checksums(&mut f);
+                f.resize(length, 0);
+                assert_eq!(classify(&f), Ok(Frame::KernelMulticast));
+                assert_eq!(reply(&f), Ok(None));
+            }
+        }
+    }
+    #[test]
+    fn malformed_or_other_igmp_cannot_be_hidden_as_kernel_multicast() {
+        let frame = kernel_mdns_membership();
+        for (offset, value) in [
+            (5, 0x17),
+            (11, 2),
+            (14, 0x45),
+            (17, 41),
+            (20, 0x20),
+            (22, 2),
+            (23, 6),
+            (29, 2),
+            (33, 0x17),
+            (34, 1),
+            (35, 3),
+            (38, 0x11),
+            (39, 1),
+            (42, 1),
+            (45, 2),
+            (46, 5),
+            (47, 1),
+            (49, 1),
+            (53, 0xfc),
+        ] {
+            let mut f = frame.clone();
+            f[offset] = value;
+            membership_checksums(&mut f);
+            assert!(classify(&f).is_err(), "accepted changed byte {offset}");
+            assert!(reply(&f).is_err(), "answered changed byte {offset}");
+        }
+        for offset in [24, 40] {
+            let mut f = frame.clone();
+            f[offset] ^= 1;
+            assert!(classify(&f).is_err(), "accepted bad checksum at {offset}");
+        }
+        for length in 0..54 {
+            assert!(
+                classify(&frame[..length]).is_err(),
+                "accepted length {length}"
+            );
+        }
+        let mut oversized = frame;
+        oversized.resize(61, 0);
+        assert!(classify(&oversized).is_err());
+    }
     #[test]
     fn truncated_fixture_ip_and_arp_are_errors_not_unrelated_frames() {
         for kind in [[8, 0], [8, 6], [0x86, 0xdd]] {

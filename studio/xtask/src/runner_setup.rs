@@ -65,12 +65,18 @@ pub(super) fn prepare_source(root: &Path, source: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 #[cfg(target_os = "macos")]
-fn validate(copy: &Path) -> Result<()> {
+pub(super) fn validate(copy: &Path) -> Result<()> {
     // Preserve already-signed package bytes: the UI pins their exact SHA-256.
-    run(Command::new("codesign")
+    run(Command::new("/usr/bin/codesign")
+        .env_clear()
         .args(["--verify", "--strict"])
         .arg(copy))?;
-    let deps = text(Command::new("otool").arg("-L").arg(copy))?;
+    let deps = text(
+        Command::new("/usr/bin/otool")
+            .env_clear()
+            .arg("-L")
+            .arg(copy),
+    )?;
     for line in deps.lines().skip(1) {
         let lib = line
             .split_whitespace()

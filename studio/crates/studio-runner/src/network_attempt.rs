@@ -289,7 +289,7 @@ mod tests {
                 };
                 let mut state = State {
                     phase,
-                    env: Arc::new(network::Native),
+                    env: Arc::new(network::Native::default()),
                     report: None,
                     stopping: false,
                     report_sequence: (!preparing).then_some(1),
@@ -346,7 +346,7 @@ mod tests {
         .unwrap();
         let mut state = State {
             phase: Phase::Launching(worker),
-            env: Arc::new(network::Native),
+            env: Arc::new(network::Native::default()),
             report: None,
             stopping: false,
             report_sequence: Some(1),

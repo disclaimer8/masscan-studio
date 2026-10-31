@@ -230,7 +230,7 @@ fn serve_with_adapter(
         output_stream,
         live,
         adapter,
-        std::sync::Arc::new(network::Native),
+        std::sync::Arc::new(network::Native::default()),
     )
 }
 fn serve_with_network(

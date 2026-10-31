@@ -20,3 +20,6 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Secu
 [target.'cfg(target_os = "macos")'.dependencies]
 studio-store.workspace = true
 studio-app.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+rusqlite = { version = "=0.41.0", default-features = false }

@@ -1,6 +1,7 @@
 //! Versioned Studio IPC and immutable scan settings.
 #![forbid(unsafe_code)]
 mod network;
+pub mod sealed_fixture;
 pub use network::*;
 use rmasscan_core::{
     config::{Operation, ScanConfig, validate},
@@ -43,14 +44,14 @@ pub enum Backend {
     #[serde(rename = "SwiftImport")]
     Archived,
 }
-/// Release gate per profile and platform. Compile-time; never a user setting.
-/// Only the sealed Mac feth stand on macOS is open; Windows/Linux raw profiles and physical NICs stay closed.
+/// UNMERGED SEALED-FIXTURE CANDIDATE ONLY. MacNetwork is constrained by mandatory
+/// helper and persisted-report predicates; this branch must never be distributed.
 pub const fn raw_profile_enabled(backend: Backend) -> bool {
-    matches!(backend, Backend::MacFeth) && cfg!(target_os = "macos")
+    matches!(backend, Backend::MacFeth | Backend::MacNetwork) && cfg!(target_os = "macos")
 }
-/// Profiles open in this build (for manifests and reports): `["MacFeth"]` on macOS, `[]` elsewhere.
+/// Candidate profiles: MacNetwork is fixture-only, never general physical access.
 pub const RAW_PROFILES: &[&str] = if cfg!(target_os = "macos") {
-    &["MacFeth"]
+    &["MacFeth", "MacNetwork"]
 } else {
     &[]
 };
@@ -370,12 +371,15 @@ pub fn checkpoint_origin(bytes: &[u8]) -> Result<Id, String> {
 mod gate_tests {
     use super::*;
     #[test]
-    fn raw_gate_is_open_only_for_mac_feth_on_macos() {
+    fn candidate_gate_is_mac_only_and_declares_both_constrained_profiles() {
         assert_eq!(
             raw_profile_enabled(Backend::MacFeth),
             cfg!(target_os = "macos")
         );
-        assert!(!raw_profile_enabled(Backend::MacNetwork));
+        assert_eq!(
+            raw_profile_enabled(Backend::MacNetwork),
+            cfg!(target_os = "macos")
+        );
         assert!(!raw_profile_enabled(Backend::Simulation));
         assert!(!raw_profile_enabled(Backend::Archived));
         let open = [
@@ -389,7 +393,7 @@ mod gate_tests {
         .count();
         assert_eq!(RAW_PROFILES.len(), open);
         if raw_profile_enabled(Backend::MacFeth) {
-            assert_eq!(RAW_PROFILES, ["MacFeth"]);
+            assert_eq!(RAW_PROFILES, ["MacFeth", "MacNetwork"]);
         } else {
             assert!(RAW_PROFILES.is_empty());
         }

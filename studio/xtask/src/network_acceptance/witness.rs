@@ -11,11 +11,24 @@ pub struct Verified {
 }
 
 pub struct Captured<'a> {
-    time_ns: u64,
-    frame: &'a [u8],
+    pub(super) time_ns: u64,
+    pub(super) frame: &'a [u8],
 }
 
 pub fn frames(bytes: &[u8]) -> Result<Vec<Captured<'_>>, String> {
+    parse_frames(bytes, false)?.ok_or("incomplete finalized capture".into())
+}
+
+/// A live writer may expose a partial header/record. Never credit a decoded
+/// prefix when any tail is incomplete: retry a fresh bounded snapshot instead.
+#[cfg(any(target_os = "macos", test))]
+pub fn snapshot_frames(bytes: &[u8]) -> Result<Option<Vec<Captured<'_>>>, String> {
+    parse_frames(bytes, true)
+}
+fn parse_frames(bytes: &[u8], live: bool) -> Result<Option<Vec<Captured<'_>>>, String> {
+    if live && bytes.len() < 24 {
+        return Ok(None);
+    }
     if !(24..=MAX_CAPTURE).contains(&bytes.len()) {
         return Err("pcap missing header or exceeds16MiB limit".into());
     }
@@ -50,13 +63,15 @@ pub fn frames(bytes: &[u8]) -> Result<Vec<Captured<'_>>, String> {
     let mut out = Vec::new();
     while offset < bytes.len() {
         if bytes.len() - offset < 16 {
+            if live {
+                return Ok(None);
+            }
             return Err("truncated pcap record header".into());
         }
         let length = u32at(offset + 8) as usize;
         if length < 14
             || length > snap as usize
             || length != u32at(offset + 12) as usize
-            || length > bytes.len() - offset - 16
             || u32at(offset + 4) >= if nanos { 1_000_000_000 } else { 1_000_000 }
         {
             return Err("truncated/invalid pcap record".into());
@@ -69,6 +84,12 @@ pub fn frames(bytes: &[u8]) -> Result<Vec<Captured<'_>>, String> {
         {
             return Err("capture time moved backwards".into());
         }
+        if length > bytes.len() - offset - 16 {
+            if live {
+                return Ok(None);
+            }
+            return Err("truncated/invalid pcap record".into());
+        }
         offset += 16;
         out.push(Captured {
             time_ns,
@@ -79,7 +100,7 @@ pub fn frames(bytes: &[u8]) -> Result<Vec<Captured<'_>>, String> {
             return Err("pcap packet count exceeds fixture budget".into());
         }
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 pub fn stats(text: &str) -> Result<u64, String> {
@@ -372,5 +393,32 @@ mod tests {
         let last = corrupt.len() - 10;
         corrupt[last] ^= 1;
         assert!(verify(&corrupt, &stats, &header(), clean).is_err());
+    }
+    #[test]
+    fn live_snapshot_never_credits_partial_records_or_hides_malformed_headers() {
+        for n in 0..24 {
+            assert!(snapshot_frames(&header()[..n]).unwrap().is_none());
+            assert!(frames(&header()[..n]).is_err());
+        }
+        let mut capture = header();
+        let frame = rmasscan_core::arp::encode_request(SOURCE_MAC, SOURCE.into(), A.into());
+        capture.extend_from_slice(&1u32.to_le_bytes());
+        capture.extend_from_slice(&0u32.to_le_bytes());
+        capture.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        capture.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        capture.extend_from_slice(&frame);
+        for n in 25..capture.len() {
+            assert!(snapshot_frames(&capture[..n]).unwrap().is_none());
+            assert!(frames(&capture[..n]).is_err());
+        }
+        assert_eq!(snapshot_frames(&capture).unwrap().unwrap().len(), 1);
+        let mut bad = capture.clone();
+        bad[24 + 12..24 + 16].copy_from_slice(&999u32.to_le_bytes());
+        assert!(
+            snapshot_frames(&bad).is_err(),
+            "truncated wire record is malformed, not a flushing tail"
+        );
+        bad[20] = 0;
+        assert!(snapshot_frames(&bad).is_err());
     }
 }

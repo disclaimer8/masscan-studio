@@ -720,6 +720,12 @@ pub trait Host {
     fn installed_runner_sha256(&mut self, bundle_hash: &str) -> Option<String>;
     /// `cargo xtask prepare-runner` for the bundle's runner (copies and validates; changes no system file).
     fn prepare_runner(&mut self, runner: &Path) -> Result<PathBuf>;
+    /// Export after UI shutdown; native behavior retains Store's provider policy.
+    fn export_history(&mut self, data: &Path) -> Result<Value> {
+        Store::open(data)
+            .and_then(|st| history_json(&st))
+            .map_err(|e| e as Box<dyn std::error::Error>)
+    }
 }
 
 struct Slot {
@@ -1359,7 +1365,7 @@ fn close<H: Host>(
         .ok()
         .map(|b| sha_bytes(&b));
     if data.is_dir() {
-        match Store::open(&data).and_then(|st| history_json(&st)) {
+        match c.h.export_history(&data) {
             Ok(h) => c.put_json("history.json", &h)?,
             Err(e) => c.mark(format!("history.json not written: {e}")),
         }
@@ -2271,6 +2277,28 @@ mod tests {
 
     // ---- the flow with a fake host
 
+    // The legacy fake advertises a provider with nonpersistent WAL. Model that
+    // policy only on its owned, closed temporary history, using SQLite itself.
+    fn close_fake_history(data: &Path) -> Result<()> {
+        let db = rusqlite::Connection::open(data.join("history.sqlite3"))?;
+        let mut persist_wal = 0;
+        db.file_control(
+            Some("main"),
+            rusqlite::FileControl::PersistWal(&mut persist_wal),
+        )?;
+        db.pragma_update(None, "journal_mode", "WAL")?;
+        let version: u32 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        // A real write transaction exercises the provider's final WAL close.
+        db.pragma_update(None, "user_version", version)?;
+        db.close().map_err(|(_, e)| e)?;
+        for name in ["history.sqlite3-wal", "history.sqlite3-shm"] {
+            if data.join(name).exists() {
+                return Err(format!("fake history retained {name}").into());
+            }
+        }
+        Ok(())
+    }
+
     #[derive(Default)]
     struct Fake {
         ui_dead: bool,
@@ -2415,7 +2443,8 @@ mod tests {
                     .map(|(_, v)| PathBuf::from(v))
                     .unwrap_or_else(|| self.dir.join("data"));
                 fs::create_dir_all(&data)?;
-                drop(Store::open(&data).unwrap());
+                drop(Store::open(&data).map_err(|e| e as Box<dyn std::error::Error>)?);
+                close_fake_history(&data)?;
             }
             self.procs.push(s.clone());
             Ok(Proc {
@@ -2477,6 +2506,13 @@ mod tests {
             self.log.push("prepare".into());
             Ok(PathBuf::from("/r/studio/dist/runner-1"))
         }
+        fn export_history(&mut self, data: &Path) -> Result<Value> {
+            let store = Store::open(data).map_err(|e| e as Box<dyn std::error::Error>)?;
+            let history = history_json(&store);
+            drop(store);
+            close_fake_history(data)?;
+            history.map_err(|e| e as Box<dyn std::error::Error>)
+        }
     }
 
     fn setup(tag: &str) -> (PathBuf, Opts, Fake, String) {
@@ -2526,6 +2562,40 @@ mod tests {
             .filter(|l| l.starts_with("spawn "))
             .cloned()
             .collect()
+    }
+
+    #[test]
+    fn fake_history_export_preserves_real_history_and_closes_each_export() {
+        let (root, _, mut host, _) = setup("history-export");
+        let data = root.join("owned-history");
+        let mut store = Store::open(&data).unwrap();
+        let job = studio_protocol::Job::example(studio_protocol::Backend::Simulation);
+        store.begin([1; 16], [2; 16], &job, false).unwrap();
+        store
+            .apply(&studio_protocol::Envelope::new(
+                [3; 16],
+                [1; 16],
+                [2; 16],
+                1,
+                studio_protocol::Event::Finished {
+                    status: studio_protocol::Status::Completed,
+                    detail: "done".into(),
+                },
+            ))
+            .unwrap();
+        let expected = history_json(&store).unwrap();
+        assert_eq!(expected["scans"].as_array().unwrap().len(), 1);
+        drop(store);
+        close_fake_history(&data).unwrap();
+        for _ in 0..2 {
+            assert_eq!(host.export_history(&data).unwrap(), expected);
+            for name in ["history.sqlite3-wal", "history.sqlite3-shm"] {
+                assert!(!data.join(name).exists(), "retained {name}");
+            }
+        }
+        // Errors remain visible rather than being treated as successful cleanup.
+        assert!(close_fake_history(&root.join("absent")).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2606,6 +2676,9 @@ mod tests {
         f.smoke = Some(r#"{"result":"ok"}"#.into());
         let rc = run(&mut f, &o).unwrap();
         assert_eq!(rc, 0, "{:?}", f.log);
+        for name in ["history.sqlite3-wal", "history.sqlite3-shm"] {
+            assert!(!o.out.join("data").join(name).exists(), "retained {name}");
+        }
         for n in NAMES {
             assert!(o.out.join(n).is_file(), "missing {n}");
         }

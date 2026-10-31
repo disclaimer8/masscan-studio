@@ -318,13 +318,16 @@ impl rmasscan_core::throttle::Clock for BackoffClock {
 
 #[test]
 fn would_block_unsent_backs_off_1ms_on_the_injected_clock() {
-    let p = plan(1_000_000.0, 1);
+    // This checks TX backoff, not RX draining. Let only the injected TX clock
+    // advance time: a concurrently idle fake RX otherwise jumps that clock by
+    // its entire timeout on every poll and can spuriously trip the stall limit.
+    let p = plan(1_000_000.0, 0);
     let manual = ManualClock::new();
     let clock = std::sync::Arc::new(BackoffClock {
         inner: manual.clone(),
         backoffs: Default::default(),
     });
-    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(manual);
+    let fake = rmasscan_engine::fake::FakeAdapter::new();
     fake.script_tx(std::iter::repeat_n(TxStep::WouldBlockUnsent, 30));
     let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
     let h = rmasscan_engine::Engine::start_with_clock(p.clone(), fake.pair(), opts(), c).unwrap();

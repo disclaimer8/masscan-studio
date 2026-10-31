@@ -1,5 +1,9 @@
 # Working-session native bootstrap — 2026-10-31
 
+This is the original bootstrap record. The evening replacement and retained
+active host are documented in [work-session updates](2026-10-31-studio-work-session-updates.md);
+the original PID97855 and fixed-build selection below have been superseded.
+
 User requested one authorization for the working period. Implemented in e7c451e,
 startup/path correction aa1ecbafb86a2f10d8124f307da2d8f5df4f55a1. Root host is
 intentionally LEFT ACTIVE at user request; do not automatically stop it on task

@@ -1,5 +1,13 @@
 # macOS capture replacement trial — 2026-10-31
 
+**Latest result:** the guard case passed on `5d29176`, including the root packet/
+lifecycle verifier and an independent offline check of exported evidence. The
+working host remains active, while the fixture is removed. Earlier unsuccessful
+attempts below remain failed; they were not edited or reclassified. See the final
+retry section for the exact source, hashes, nonce and measured result.
+
+**Initial checkpoint (retained):**
+
 **Partial acceptance.** The integrated replacement capture stopped cleanly with
 no matching packets, and the complete fixed-fixture scan passed the root
 supervisor's strict packet/lifecycle verifier. The remaining lifecycle cases
@@ -49,7 +57,7 @@ packet/counter consistency and the quiet interval. Its successful result is
 evidence of the integrated capture fix on this host. The originals were exported
 with administrator authorization later on October31 and reviewed independently
 of the live supervisor. Offline `verify-lifecycle` also passed. Manifest schema2
-has `failure:null`; all three protected children exited0 without forced shutdown.
+has `failure:null`; all three protected children exited 0 without forced shutdown.
 Peer capture contains250 records (`ps_recv=250`, `ps_drop=0`); uplink contains0
 records (`ps_recv=23190`, `ps_drop=0`). Raw peer reports99 responses and its trusted
 stop marker. These received counters have the qualification below.
@@ -97,7 +105,7 @@ Retry seal `b544533fe9cae3dfd6c4f7fe55d53d77`, stop-preparing nonce
 0.456s with `malformed fixture IPv4 header`. Authorization finished at8.977s;
 by then the root supervisor had removed the fixture. The Controller's route
 mismatch was a consequence of teardown, not the initiating failure. Both capture
-children exited0 without forced termination. No Stop behavior is accepted.
+children exited 0 without forced termination. No Stop behavior is accepted.
 Automatic teardown and evidence export completed; suite exit remains1.
 
 - Archive SHA256: `4a2fa79975d82e68e9d450752acd796d839999a0725b90951574081dba496377`.
@@ -152,8 +160,8 @@ exported automatically on teardown and checked offline again.
 | --- | --- | --- |
 | Stop during preparation | PASS; Stopped,0 TCP probes/replies | `4831e82bb34a12a3e89bab283e22da75` |
 | Stop while running | PASS; Stopped,5 probes/5 correlated replies | `9b293fa10821adea05622108d593b844` |
-| Initial Pause | PASS; Paused at cursor5 | `7a2c6853145ea3000a2026e896f73c2e` |
-| Fresh Pause | PASS; Paused at cursor5 | `2fda080fa7b413fb9cfb0ddc67c57115` |
+| Initial Pause | PASS; Paused at cursor 5 | `7a2c6853145ea3000a2026e896f73c2e` |
+| Fresh Pause | PASS; Paused at cursor 5 | `2fda080fa7b413fb9cfb0ddc67c57115` |
 | Restarted Resume | PASS;91 additional probes/replies, cumulative cursor96 | `458160bc4260207a156dacb57d02ef92` |
 | Guard interruption | FAILED; guard mutation was never requested, scan Completed | `7b50ffce113489e5e01c6f4e7986296d` |
 
@@ -194,3 +202,114 @@ independent acceptance processes currently reopen authorization. No persistent
 privileged service or generic command channel was added. A bounded shared
 working-session authorization design remains a follow-up, before repeating a
 multi-prompt test suite.
+
+## Evening: retained work session and actual guard mutation
+
+The earlier authorization follow-up is now implemented and natively verified;
+see [work-session updates](2026-10-31-studio-work-session-updates.md). One successful
+OS grant replaced the original host. The new host PID 49278 admitted staged builds,
+retained prior clients and completed independent helper probes without another
+password. It remains active by operator request; fixture teardown does not end it.
+
+The preterminal identity fix in6c0f875 allowed the guard driver to emit its phase.
+Run `15205750cb06db5236f0d54730c476d6`, seal `eb880335f83b885bd5ce82a1dd9dde53`,
+then reached the real mutation: root independently corroborated 5 earlier probes
+and brought down the scanner feth interface. The driver observed 6 accepted sends,
+5 responses, and `Failed(TxError("write: Network is down (os error 50)"))`, rather
+than the required Interrupted. This is a FAILED acceptance result, not a pass.
+The missing accepted attempt record caused the supervisor's120-second deadline;
+all three owned children nevertheless exited 0/unforced. Export and fixture Down
+both succeeded. Failed evidence remains unchanged under
+`native-work-session-guard/evidence/run-15205750cb06db5236f0d54730c476d6`;
+archive SHA256 `e4ddff371f8158efc9616ea118dc747ed14959e67c684d6e5455611651a87a6f`.
+
+Cause: adapter I/O failed before the next periodic observer finished. Terminal
+shutdown cancelled the in-flight read-only snapshot; its cancellation-aware
+inspector discarded that incomplete snapshot, so no environment change survived
+for terminal classification. Commit `1daad2e` joins packet workers, cancels/joins
+the periodic observer, then uses its returned inspector for one fresh bounded
+read-only check on engine failure. A valid unchanged environment retains Failed;
+observed drift, staleness, panic, deadline or unexpected cancellation interrupts.
+Rows are preserved and interruption emits no checkpoint. Normal completion,
+Pause and Stop retain their existing finish path.
+
+The deterministic regression failed before the change and passed afterward.
+Local full Studio 331 passed/0 failed/2 ignored; Clippy/formatting and independent
+scoped review passed. The new helper was installed through Stage without another
+OS grant and passed a no-packet authenticated probe. The native retry result is
+recorded separately below; the preceding failed runs are not reclassified.
+
+### First retry: application interruption passed, supervisor rejected terminal route
+
+On reviewed `1daad2e` (Studio CI 41231380607 and engine CI 41231380554 both successful),
+run `4bb92c39d6a3a49e5c5e9bc84b1e8b05` with seal `ba61127283d05e414db7fb9728cd2ff1`
+reached Interrupted and the ordinary driver exited 0. Read-only SQLite inspection
+confirmed 5 saved rows and no checkpoint/index; terminal observation followed the
+root drift stamp by 254.794 ms. Root had independently corroborated 5 probes before
+its guard mutation. The supervisor still exited1:
+its terminal ownership check reported `owned route disappeared` after interface
+shutdown. All children exited 0/unforced; export and Down succeeded. This remains
+an overall FAILED acceptance result despite the corrected application behavior.
+Archive SHA256 `6666b2209d824e9271b52661667d23db8888b72bbbfac6a35ffb934c703d64a2`;
+local evidence `native-work-session-guard-retry1/evidence/run-4bb92c39d6a3a49e5c5e9bc84b1e8b05`.
+
+Tool-only correction `5d29176` models the exact terminal guard state: scanner
+identity must match the seal with only up=true becoming false, and peer identity
+must remain unchanged. The recorded fixed /32 is validated even if no longer
+present; a different observed /32 is rejected. Only this terminal path permits
+its absence. Initial packet admission still requires the owned route and live
+snapshot; helper validation, cleanup predicates, broader-route-on-fixture checks,
+default-uplink comparison and packet isolation witnesses are unchanged.
+The new regression failed before the change; all 95 tool tests, Clippy, formatting
+and independent review then passed. Tool SHA256
+`7f8d81538ea0a33b4b901d0fa22b416d37028cd80ddab7fe1b017ddfc48dc9cb`
+was staged with helper237b228f... through the retained hostPID 49278, without a
+new authorization dialog. The subsequent native result is recorded below.
+
+### Final retry: guard PASS
+
+Source `5d291761f265b187466ff86726f59daa46c42d89` passed Studio CI41232753958
+and engine CI41232754004 on all three OSes, including the Windows wire-lab package.
+The native run began only after both workflows completed successfully.
+
+| Evidence | Measured result |
+| --- | --- |
+| Run nonce | `f7029a23f2ca04b9f2fe60eb095ef213` |
+| Seal generation | `5c24bc1d5d52ad9bb198ff205fbc7d46` |
+| Driver / root supervisor / export / teardown | All exited 0 |
+| Root guard corroboration before mutation | 4 captured probes |
+| Complete capture window | 5 probes, 4 correlated replies, prefix cursor 5 |
+| Durable terminal state | Interrupted; 4 saved rows, no checkpoint or resume index |
+| Terminal observation after root drift stamp | 86.523 ms |
+| Uplink witness | 0 captured lab frames |
+| Owned capture/peer children | All 3 exited 0, none forced; manifest failure=null |
+| Post-run host | PID 49278 ready, active 0; both feth interfaces absent |
+
+The raw peer is deliberately stopped before the guard mutation; the fifth probe
+was captured without a correlated reply. Partial guard acceptance does not require
+all probes to receive replies. All 4 observed replies agree with the persisted closed-port rows. The peer pcap
+contains 22 frames in total (5 SYNs, 4 TCP replies, 9 ARP and 4 other frames).
+The uplink pcap is header-only; its received counter was 2010, so this is not a
+claim that the external interface carried no unrelated traffic.
+
+The root supervisor verified its own protected originals successfully. Export
+used the authenticated work-session channel. Archive entries are uid0, gid1 with
+private 0700/0600 permissions (gid0 is not an ownership requirement); all manifest
+file hashes matched after extraction. The independent offline verifier also
+reported PASS: 5 probes, 4 replies, witness-derived cursor 5. Read-only SQLite inspection confirmed
+Interrupted and the exact 4 rows with no checkpoint/index. Offline consistency alone
+is not treated as authentication of native capture provenance.
+
+- Tool SHA256: `7f8d81538ea0a33b4b901d0fa22b416d37028cd80ddab7fe1b017ddfc48dc9cb`.
+- Helper SHA256: `237b228f48c127b577bb9b53f2ade469fdab57a754ecea6a9327fc74e8f241c8`.
+- Archive SHA256: `6ccc256a0eaaaff34290daaa7f4f7354b8499aef34d443e729010f047028acf4`.
+- Root originals: `/private/var/run/studio-network-fixture-v1/run-f7029a23f2ca04b9f2fe60eb095ef213`.
+- Local records: task evidence `native-work-session-guard-retry2/`, including
+  `summary.json`, `verified-summary.json`, `offline-verify.log` and the unchanged export.
+
+No further authorization dialog was used for either code update or the three
+evening guard runs. The host remains deliberately active. This closes the missing
+fixed-fixture guard case; it does not claim a fresh full-matrix native rerun on
+one candidate, an owned physical-target scan, final native UI acceptance, merge
+or general-network distribution. Earlier successful cases retain their recorded
+source and binary provenance above.

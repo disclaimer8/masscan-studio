@@ -118,6 +118,8 @@ pub fn main_entry() -> super::Result<()> {
         #[cfg(target_os="macos")]
         ["up"] => native::up().map_err(Into::into),
         #[cfg(target_os="macos")]
+        ["up-owned",generation] => native::up_owned((*generation).into()).map_err(Into::into),
+        #[cfg(target_os="macos")]
         ["down"] => native::down().map_err(Into::into),
         #[cfg(target_os="macos")]
         ["status"] => native::status().map_err(Into::into),

@@ -16,3 +16,6 @@ pub mod unix;
 pub mod win_setup;
 #[cfg(windows)]
 pub mod windows;
+
+#[cfg(target_os = "macos")]
+pub mod work_session;

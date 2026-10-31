@@ -188,6 +188,12 @@ fn check_owned(state: &State) -> Result<()> {
 }
 
 pub fn up() -> Result<()> {
+    up_owned(studio_protocol::id_text(studio_protocol::new_id()?))
+}
+pub(super) fn up_owned(generation: String) -> Result<()> {
+    if !studio_platform::work_session::valid_hex(&generation, 32) {
+        return Err("invalid fixture generation".into());
+    }
     let _lock = lock(true)?;
     if Path::new(STATE).exists() {
         return Err("fixture state already exists; inspect/down first".into());
@@ -198,7 +204,7 @@ pub fn up() -> Result<()> {
     let created = now()?;
     let mut state = State {
         version: 1,
-        generation: studio_protocol::id_text(studio_protocol::new_id()?),
+        generation,
         created_utc_seconds: created,
         expires_utc_seconds: created.checked_add(1800).ok_or("fixture time overflow")?,
         tooling_sha256: crate::digest(&std::env::current_exe().map_err(|e| e.to_string())?)

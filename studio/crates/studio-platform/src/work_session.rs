@@ -15,6 +15,42 @@ use std::{
 type Result<T> = std::result::Result<T, String>;
 pub const MAX_FRAME: usize = 16 * 1024;
 pub const MAX_ACTIVE: usize = 8;
+pub const MAX_BUILD: u64 = 256 * 1024 * 1024;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Build {
+    pub path: PathBuf,
+    pub sha256: String,
+}
+impl Build {
+    pub fn validate(&self) -> Result<()> {
+        if !self.path.is_absolute()
+            || self.path.as_os_str().len() > 4096
+            || !valid_hex(&self.sha256, 64)
+        {
+            return Err("Invalid staged build path or hash".into());
+        }
+        Ok(())
+    }
+}
+/// Open once, without following a last-component symlink or waiting on a FIFO.
+/// Hash and signature verification must use the private copy of this descriptor.
+pub fn open_build(build: &Build, uid: u32) -> Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    build.validate()?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&build.path)
+        .map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.uid() != uid || meta.len() == 0 || meta.len() > MAX_BUILD {
+        return Err(
+            "Staged source must be a bounded regular file owned by the session account".into(),
+        );
+    }
+    Ok(file)
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -41,6 +77,10 @@ pub enum Fixture {
 pub enum Request {
     Status {},
     Stop {},
+    Stage {
+        tool: Build,
+        runner: Build,
+    },
     Helper {
         hash: String,
         endpoint: PathBuf,
@@ -84,6 +124,10 @@ pub fn validate_request(r: &Request, c: &Config, peer: &Identity) -> Result<()> 
         return Err("Work-session caller account differs".into());
     }
     match r {
+        Request::Stage { tool, runner } => {
+            tool.validate()?;
+            runner.validate()?;
+        }
         Request::Helper {
             hash,
             endpoint,
@@ -362,6 +406,95 @@ pub fn helper(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn build_descriptor_refuses_links_special_files_other_owner_and_oversize() {
+        let dir = std::env::temp_dir().join(format!(
+            "studio-build-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("source");
+        fs::write(&path, b"build").unwrap();
+        let uid = Identity::current().unwrap().uid;
+        let build = Build {
+            path: path.clone(),
+            sha256: "a".repeat(64),
+        };
+        let mut opened = open_build(&build, uid).unwrap();
+        assert!(open_build(&build, uid + 1).is_err());
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(
+            open_build(
+                &Build {
+                    path: link,
+                    ..build.clone()
+                },
+                uid
+            )
+            .is_err()
+        );
+        assert!(
+            open_build(
+                &Build {
+                    path: dir.clone(),
+                    ..build.clone()
+                },
+                uid
+            )
+            .is_err()
+        );
+        let fifo = dir.join("fifo");
+        assert!(
+            std::process::Command::new("/usr/bin/mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let now = Instant::now();
+        assert!(
+            open_build(
+                &Build {
+                    path: fifo,
+                    ..build.clone()
+                },
+                uid
+            )
+            .is_err()
+        );
+        assert!(now.elapsed() < Duration::from_secs(1));
+        // Replacing the pathname cannot substitute the already-open descriptor.
+        fs::rename(&path, dir.join("original")).unwrap();
+        fs::write(&path, b"substituted").unwrap();
+        let mut bytes = Vec::new();
+        opened.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"build");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(MAX_BUILD + 1)
+            .unwrap();
+        assert!(open_build(&build, uid).is_err());
+        assert!(
+            Build {
+                path: "relative".into(),
+                ..build.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Build {
+                sha256: "../no".into(),
+                ..build
+            }
+            .validate()
+            .is_err()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
     fn fixture() -> (Config, Identity) {
         (
             Config {

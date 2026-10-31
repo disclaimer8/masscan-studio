@@ -1170,3 +1170,83 @@ fn sealed_candidate_checks_saved_bytes_not_original_event_before_ack() {
             .any(|e| matches!(e.payload, Command::AckNetworkReport { .. }))
     );
 }
+
+#[test]
+fn started_publishes_active_identity_before_progress_for_new_and_resumed_attempts() {
+    for attempt in [[2; 16], [3; 16]] {
+        let dir = Temp::new();
+        let mut db = Store::open(&dir.0).unwrap();
+        let job = Job::example(Backend::Simulation);
+        let (mut c, tx, _wire) = fake_client();
+        let resume = attempt == [3; 16];
+        let command = if resume {
+            db.begin([1; 16], [2; 16], &job, false).unwrap();
+            let checkpoint = rmasscan_engine::Checkpoint {
+                format_version: rmasscan_engine::CHECKPOINT_FORMAT_VERSION,
+                engine_version: ENGINE_VERSION,
+                scan_id: [1; 16],
+                attempt_id: [2; 16],
+                job_digest: rmasscan_engine::job_digest(&job.prepare().unwrap()),
+                next_index: 1,
+            }
+            .to_bytes();
+            db.apply(&Envelope::new(
+                c.session,
+                [1; 16],
+                [2; 16],
+                1,
+                Event::Checkpoint {
+                    bytes: checkpoint.clone(),
+                    next_index: "1".into(),
+                },
+            ))
+            .unwrap();
+            Command::Resume {
+                job: job.clone(),
+                checkpoint,
+            }
+        } else {
+            Command::Start(job.clone())
+        };
+        db.begin([1; 16], attempt, &job, resume).unwrap();
+        c.start([1; 16], attempt, command).unwrap();
+        let (out, rx) = mpsc::sync_channel(32);
+        for (seq, payload) in [
+            (1, Event::Started { total: "8".into() }),
+            (
+                2,
+                Event::Progress {
+                    sent: "4".into(),
+                    received: "4".into(),
+                },
+            ),
+        ] {
+            tx.send(Ok(Envelope::new(
+                c.session, c.scan, c.attempt, seq, payload,
+            )))
+            .unwrap();
+        }
+        let events = vec![c.poll().unwrap().unwrap(), c.poll().unwrap().unwrap()];
+        commit_scan_events(&mut db, &mut c, events, &out, Some([1; 16]), &|| false).unwrap();
+        let mut active = None;
+        let mut witnessed = false;
+        for update in rx.try_iter() {
+            match update {
+                Update::History(scans, selected) => {
+                    let saved = scans.iter().find(|s| Some(s.scan) == selected).unwrap();
+                    active = Some((saved.scan, saved.attempt));
+                }
+                Update::Progress(_, _) => {
+                    assert_eq!(
+                        active,
+                        Some(([1; 16], attempt)),
+                        "guard must know the attempt before progress, without a terminal event"
+                    );
+                    witnessed = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(witnessed);
+    }
+}

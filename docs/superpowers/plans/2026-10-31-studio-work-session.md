@@ -9,14 +9,14 @@
 
 ## Global Constraints
 
-One explicit start, persistent until stop; no generic shell or environment bypass; fixed reviewed tool/helper/caller hashes; no change to physical-network gates; preserve pending native evidence. Root runtime directory and server identity checked on every connection. Limit8 clients and16KiB frames.
+One explicit start, persistent until stop; no generic shell or environment bypass; explicitly selected reviewed tool/helper/caller hashes; no change to physical-network gates; preserve pending native evidence. Root runtime directory and server identity checked on every connection. Limit8 clients and16KiB frames.
 
 ## Review Focus
 
 - Same uid but wrong executable, foreign uid, forged owner or stale pid must fail before helper spawn.
 - Malformed/oversized JSON and arbitrary fixture arguments must fail before side effects.
 - Disconnect or cancellation ends only its helper, not the work session or another job.
-- A valid installed host cannot authorize a different helper hash or caller build.
+- A valid installed host cannot authorize a different helper hash or caller build without an explicit reviewed Stage operation; Stage requires idle state with no owned fixture.
 - Stop must refuse active jobs and clean its own fixture/runtime only.
 
 ### Task1: Shared typed protocol and client integration
@@ -35,3 +35,14 @@ Files: new studio/xtask/src/work_session.rs; main.rs.
 - [x] Run affected tests, workspace tests, clippy/fmt; independent privilege-boundary review and fixes.
 - [x] Record source/artifact hashes, install/start with one macOS prompt; verify two independent helper sessions without further prompts and retained host status.
 - [x] Keep host available as requested; document status/stop commands and native limits. Guard test correction is separate from host functionality.
+
+### Task4: Reviewed build updates without a new authorization
+- [x] Add descriptor-bound private root staging, immutable version publication and atomic selected tool/helper pair.
+- [x] Retain the host identity and previously approved clients; refuse changes during active jobs or owned fixtures.
+- [x] Review and test wrong owner/type/link/size/hash, failed publication, stale helper selection and retained client access.
+- [x] Perform one authorized replacement of the original fixed-build host.
+- [x] Natively verify new hash installation, pre-stage rejection/post-stage admission, two independent helper probes and idempotent staging.
+- [x] Stage a subsequent actual source-code fix and probe its new helper without a password; leave host PID49278 active.
+
+Native evidence: `docs/experiments/2026-10-31-studio-work-session-updates.md`.
+The separate network guard acceptance still requires its own packet/lifecycle evidence.

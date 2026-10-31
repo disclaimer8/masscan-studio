@@ -1,5 +1,9 @@
 # macOS sealed network trial — 2026-10-30
 
+Follow-up: the [October31 replacement-capture trial](2026-10-31-studio-macos-network-capture.md)
+passed empty-capture shutdown and the complete fixed-fixture case; the remaining
+lifecycle acceptance is incomplete. The failed trial below is retained unchanged.
+
 **Result: native acceptance FAIL.** The actual Studio Controller/helper completed
 the fixed scan with the expected results, but neither independent tcpdump process
 terminated gracefully. Missing capture shutdown statistics and forced termination

@@ -134,3 +134,63 @@ execute the remaining five cases on a newly sealed fixture. Pause and Resume mus
 failed authorization attempt regardless of later results. The candidate remains
 unmerged; complete lifecycle, owned-target and visible native UI acceptance are
 still required before opening the distributed physical-network gate.
+
+
+## October31 10:28 continuation: Stop and restarted Resume
+
+Source46c0bc28e747dfa1a675470e7307d4fb8949ffe4 passed exact-source Studio
+CI41191395865 and engine CI41191395844 on all three OSes, including Windows
+packaging. Corrected tool SHA256
+`51644dfac6e66c2c9000890d6c93dd46024ba95761a3341fb219a80de93d95ce`
+was installed with operator authorization and independently hash/signature/owner
+checked. Packaged helper remains `e64c1b9181b6d579d13519b9136d601706b289fb2669e2627d34db86d3b1d574`.
+
+The operator authorized the native retry. Root-owned original evidence was
+exported automatically on teardown and checked offline again.
+
+| Case | Native result | Nonce |
+| --- | --- | --- |
+| Stop during preparation | PASS; Stopped,0 TCP probes/replies | `4831e82bb34a12a3e89bab283e22da75` |
+| Stop while running | PASS; Stopped,5 probes/5 correlated replies | `9b293fa10821adea05622108d593b844` |
+| Initial Pause | PASS; Paused at cursor5 | `7a2c6853145ea3000a2026e896f73c2e` |
+| Fresh Pause | PASS; Paused at cursor5 | `2fda080fa7b413fb9cfb0ddc67c57115` |
+| Restarted Resume | PASS;91 additional probes/replies, cumulative cursor96 | `458160bc4260207a156dacb57d02ef92` |
+| Guard interruption | FAILED; guard mutation was never requested, scan Completed | `7b50ffce113489e5e01c6f4e7986296d` |
+
+The initial retry stopped before Resume because its orchestration omitted
+`prepare-drive resume` for the shared Pause directory. This was a preparation
+error, not a Resume failure. A fresh seal and shared Pause/Resume history were
+then prepared with both markers; the second pair passed. Both suite exit codes
+remain1 because each suite contains an unaccepted case.
+
+- Retry2 seal: `29c42397f009b6c48a178b83c4d2c985`.
+- Retry2 archive SHA256: `cdd3433e1f187ae9ba8b2320257dbdd28d6f15af90bb359f0838a1aa8f73b711`.
+- Retry3 seal: `d71ed420ce1d7de54da047cc3a79ddee`.
+- Retry3 archive SHA256: `72259a6f5b21b7ee01eff0943224a8de399f1701a215783e87dc21374f5e857c`.
+- Public originals/export records: `/private/var/run/studio-network-tickets-v2-retry2-20261031/`
+  and `/private/var/run/studio-network-tickets-v2-retry3-20261031/`.
+- Local copies: task evidence `native-capture-v2-retry2/evidence/` and
+  `native-capture-v2-retry3/evidence/`; manifest/child summary in
+  `native-20261031-lifecycle-summary.json`.
+
+Guard diagnosis: the driver learns the active scan/attempt only from
+`Update::History`. A successful new Start does not emit that update until its
+terminal event, so the guard's `active` value remains absent while scanning and
+`guard-phase.json` is never written. The scan therefore Completed rather than
+Interrupted. The driver rejected that terminal status; the raw peer later reached
+its90-second bound, and the supervisor retained a failed manifest. This is an
+acceptance-driver defect; it supplies no evidence that the production network
+guard would fail after an actual interface change. The failed manifest remains
+rejected offline. A regression and reviewed correction are still required.
+
+Both stands were automatically removed; feth4203/feth4204 are absent. There is
+no pending authorization or native child. No owned physical target or final UI
+acceptance is claimed. Guard acceptance is still outstanding.
+
+The operator requested one authorization for the whole working period instead
+of one per test process. The installed helper is retained. Ordinary Studio already
+reuses its authorized helper for successive scans until Lock/application closure;
+independent acceptance processes currently reopen authorization. No persistent
+privileged service or generic command channel was added. A bounded shared
+working-session authorization design remains a follow-up, before repeating a
+multi-prompt test suite.

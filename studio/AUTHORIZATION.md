@@ -358,9 +358,21 @@ The host remains available after those processes exit. It ends only on explicit
 `work-session stop` or process/system termination; there is no idle expiry or
 login auto-start. Stop refuses active helper leases/jobs. Installed binaries are
 retained. The stable installed tool path shown by status can keep managing the
-session even if the checkout's debug binary is later rebuilt. This initial
-version approves one exact caller/tool/helper build; it is not a general admin
-shell and does not authorize unrelated applications or silently accept new builds.
+session even if the checkout's debug binary is later rebuilt.
+
+Use that stable approved client to run `work-session stage ABSOLUTE_TOOL ABSOLUTE_RUNNER`
+after reviewing and testing a new build. This explicitly grants software-maintenance
+access during the session: selected executable code is installed with administrator
+ownership and may run with administrator privileges. Signature/hash/dependency checks
+verify the selected bytes; they do not replace code review. Staging requires no active
+jobs and no owned fixture. The tool/helper selection changes together after both
+installations pass, and previously approved clients remain usable. No password is
+requested for staging. The running host's own executable and identity stay unchanged.
+
+To upgrade an older host that lacks staging, run `work-session replace RUNNER` from
+the reviewed new tool once. This needs one OS authorization to install and launch the
+new host; the old host is retained until installation succeeds and refuses to stop
+while jobs are active. Subsequent build changes use `stage` within the same session.
 
 Fixed operations are `fixture up`, `fixture status`, `fixture down`,
 `fixture supervise CASE ABSOLUTE_DRIVER_DIR [PAUSE_NONCE]`, and `export NONCE`.
@@ -371,7 +383,10 @@ Supervision still requires the reviewed candidate and native acceptance scope.
 
 Runtime metadata/socket live under root-owned `/Library/PrivilegedHelperTools/MasscanStudio/work-UID`.
 Both endpoints check kernel process identity and approved executable hashes.
-Requests are typed and bounded; there is no shell/executable/environment API.
+Requests are typed and bounded; there is no arbitrary shell/argument/environment API.
+Build staging accepts only bounded regular files owned by the session account, opens
+without following final symlinks, and verifies hashes/signatures on a private root copy
+before publishing an immutable installed version.
 Private root output is streamed only over that authenticated connection. At most
 8 helper/job operations may be active, with separate bounded control connections.
 Closing a Controller drops only its helper lease. Losing the host connection

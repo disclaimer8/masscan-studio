@@ -31,6 +31,8 @@ struct State {
     generation: Option<String>,
     runs: BTreeSet<String>,
     stopping: bool,
+    selected: Option<(String, String)>,
+    callers: BTreeSet<String>,
 }
 impl State {
     fn new() -> Self {
@@ -43,6 +45,8 @@ impl State {
             generation: None,
             runs: BTreeSet::new(),
             stopping: false,
+            selected: None,
+            callers: BTreeSet::new(),
         }
     }
 }
@@ -51,6 +55,16 @@ struct Shared {
     dir: PathBuf,
     state: Mutex<State>,
     sequence: AtomicUsize,
+}
+impl Shared {
+    fn snapshot(&self) -> Config {
+        let mut c = self.config.clone();
+        if let Some((tool, runner)) = &self.state.lock().unwrap().selected {
+            c.caller_hash = tool.clone();
+            c.runner_hash = runner.clone();
+        }
+        c
+    }
 }
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -70,6 +84,120 @@ fn protected_tool(c: &Config) -> Result<PathBuf> {
     let p = tool(c)?;
     studio_platform::trusted::verify(&p, &c.tool_hash)?;
     Ok(p)
+}
+fn selected_tool(c: &Config) -> Result<PathBuf> {
+    let p = studio_platform::macos::installed_path(&c.caller_hash)?;
+    studio_platform::trusted::verify(&p, &c.caller_hash)?;
+    Ok(p)
+}
+struct StageDir(PathBuf);
+impl Drop for StageDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.0.join("studio-runner"));
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+fn copy_build(build: &wire::Build, uid: u32, destination: &Path) -> Result<()> {
+    let source = wire::open_build(build, uid)?;
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(destination)
+        .map_err(error)?;
+    let size = std::io::copy(&mut source.take(wire::MAX_BUILD + 1), &mut output).map_err(error)?;
+    if size == 0 || size > wire::MAX_BUILD {
+        return Err("Staged source exceeded build bound".into());
+    }
+    output.sync_all().map_err(error)?;
+    if studio_platform::trusted::file_hash(destination)? != build.sha256 {
+        return Err("Staged source hash changed or differs from requested build".into());
+    }
+    Ok(())
+}
+fn install_build(build: &wire::Build, uid: u32) -> Result<()> {
+    build.validate()?;
+    let destination = studio_platform::macos::installed_path(&build.sha256)?;
+    let parent = destination.parent().unwrap().parent().unwrap();
+    wire::protected(parent, false)?;
+    if destination.try_exists().map_err(error)? {
+        return studio_platform::trusted::verify(&destination, &build.sha256);
+    }
+    let staging_path = parent.join(format!(
+        ".work-stage-{}",
+        studio_protocol::id_text(studio_protocol::new_id()?)
+    ));
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&staging_path)
+        .map_err(error)?;
+    let stage = StageDir(staging_path);
+    let copy = stage.0.join("studio-runner");
+    copy_build(build, uid, &copy)?;
+    super::runner_setup::validate(&copy).map_err(error)?;
+    fs::set_permissions(&copy, fs::Permissions::from_mode(0o755)).map_err(error)?;
+    // A root-owned parent and exclusive session reservation prevent user races.
+    // create_dir refuses any existing version, including a dangling link.
+    let target = destination.parent().unwrap();
+    fs::DirBuilder::new()
+        .mode(0o755)
+        .create(target)
+        .map_err(error)?;
+    if let Err(e) = fs::rename(&copy, &destination) {
+        let _ = fs::remove_dir(target);
+        return Err(error(e));
+    }
+    studio_platform::trusted::verify(&destination, &build.sha256)
+}
+fn reserve_stage(shared: &Arc<Shared>) -> Result<Reservation> {
+    let reservation = reserve(shared, false, true, true)?;
+    if shared.state.lock().unwrap().generation.is_some() {
+        return Err("Take down the owned fixture before changing builds".into());
+    }
+    Ok(reservation)
+}
+fn publish_selection(shared: &Shared, tool: String, runner: String) -> Result<()> {
+    let mut config = shared.config.clone();
+    config.caller_hash = tool.clone();
+    config.runner_hash = runner.clone();
+    wire::validate_config(&config)?;
+    let path = shared.dir.join(format!(
+        "host-{}.json",
+        studio_protocol::id_text(studio_protocol::new_id()?)
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o644)
+            .open(&path)
+            .map_err(error)?;
+        file.write_all(&serde_json::to_vec(&config).map_err(error)?)
+            .map_err(error)?;
+        file.sync_all().map_err(error)?;
+        // Keep readers of the selected pair and caller allowlist together.
+        let mut state = shared.state.lock().unwrap();
+        fs::rename(&path, shared.dir.join("host.json")).map_err(error)?;
+        state.callers.insert(tool.clone());
+        state.selected = Some((tool, runner));
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+fn stage(
+    shared: &Arc<Shared>,
+    stream: &mut UnixStream,
+    tool: wire::Build,
+    runner: wire::Build,
+) -> Result<()> {
+    let _reservation = reserve_stage(shared)?;
+    install_build(&tool, shared.config.uid)?;
+    install_build(&runner, shared.config.uid)?;
+    publish_selection(shared, tool.sha256, runner.sha256)?;
+    wire::write(stream, &Response::Done { code: 0 })
 }
 fn fixture_state() -> Result<Option<studio_protocol::sealed_fixture::State>> {
     let p = Path::new(studio_platform::sealed_fixture::STATE);
@@ -92,7 +220,7 @@ fn own_fixture(shared: &Shared) -> Result<()> {
         .clone()
         .ok_or("This work session owns no fixture")?;
     let state = fixture_state()?.ok_or("Owned fixture disappeared")?;
-    if state.generation != expected || state.tooling_sha256 != shared.config.tool_hash {
+    if state.generation != expected || state.tooling_sha256 != shared.snapshot().caller_hash {
         return Err("Fixture generation/tool differs from this work session".into());
     }
     Ok(())
@@ -154,7 +282,8 @@ fn reserve(
         fixture,
     })
 }
-fn authenticate(stream: &UnixStream, c: &Config) -> Result<Identity> {
+fn authenticate(stream: &UnixStream, shared: &Shared) -> Result<Identity> {
+    let c = &shared.config;
     let audit = Peer::from_stream(stream)?;
     if audit.uid != c.uid {
         return Err("Different work-session account".into());
@@ -163,7 +292,8 @@ fn authenticate(stream: &UnixStream, c: &Config) -> Result<Identity> {
     if owner.uid != audit.uid || owner.executable != audit.executable {
         return Err("Caller identity changed".into());
     }
-    if studio_platform::trusted::file_hash(&audit.executable)? != c.caller_hash {
+    let hash = studio_platform::trusted::file_hash(&audit.executable)?;
+    if hash != c.caller_hash && !shared.state.lock().unwrap().callers.contains(&hash) {
         return Err("Caller build is not authorized for this working session".into());
     }
     owner.verify(stream)?;
@@ -178,6 +308,9 @@ fn helper(
     owner: Identity,
 ) -> Result<()> {
     let _reservation = reserve(shared, true, false, false)?;
+    if hash != shared.snapshot().runner_hash {
+        return Err("Helper selection changed; retry with the current build".into());
+    }
     let path = studio_platform::macos::installed_path(&hash)?;
     studio_platform::trusted::verify(&path, &hash)?;
     let mut child = ChildOwner(
@@ -321,7 +454,7 @@ fn reconcile_up(
     state: Option<studio_protocol::sealed_fixture::State>,
 ) -> Result<()> {
     if let Some(state) = state {
-        if state.generation != generation || state.tooling_sha256 != shared.config.tool_hash {
+        if state.generation != generation || state.tooling_sha256 != shared.snapshot().caller_hash {
             return Err("Another operation owns the fixture journal; refusing adoption".into());
         }
         shared.state.lock().unwrap().generation = Some(generation.into());
@@ -332,7 +465,8 @@ fn reconcile_up(
 fn fixture(shared: &Arc<Shared>, stream: &mut UnixStream, op: Fixture) -> Result<()> {
     let exclusive = matches!(op, Fixture::Up {} | Fixture::Down {});
     let _reservation = reserve(shared, false, true, exclusive)?;
-    let mut cmd = command(&protected_tool(&shared.config)?);
+    let config = shared.snapshot();
+    let mut cmd = command(&selected_tool(&config)?);
     cmd.arg("network-acceptance");
     let mut supervise = false;
     let mut up: Option<String> = None;
@@ -369,8 +503,8 @@ fn fixture(shared: &Arc<Shared>, stream: &mut UnixStream, op: Fixture) -> Result
             }
             cmd.args(["supervise", &case])
                 .arg(driver)
-                .arg(shared.config.uid.to_string())
-                .arg(&shared.config.runner_hash);
+                .arg(config.uid.to_string())
+                .arg(&config.runner_hash);
             if let Some(n) = prior {
                 cmd.arg(n);
             }
@@ -441,17 +575,17 @@ impl Drop for Closing {
 }
 
 fn handle(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
-    let owner = authenticate(&stream, &shared.config)?;
+    let owner = authenticate(&stream, shared)?;
     let request: Request =
         wire::read(&mut stream, Duration::from_secs(3), &AtomicBool::new(false))?;
-    wire::validate_request(&request, &shared.config, &owner)?;
+    wire::validate_request(&request, &shared.snapshot(), &owner)?;
     // Revalidate process incarnation after receiving a possibly slow frame.
     owner.verify(&stream)?;
     match request {
         Request::Status {} => wire::write(
             &mut stream,
             &Response::Status {
-                config: shared.config.clone(),
+                config: shared.snapshot(),
                 active: shared.state.lock().unwrap().active,
             },
         ),
@@ -469,7 +603,7 @@ fn handle(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     shared.state.lock().unwrap().closing = false;
                     return Err(e);
                 }
-                let mut cmd = command(&protected_tool(&shared.config)?);
+                let mut cmd = command(&selected_tool(&shared.snapshot())?);
                 cmd.args(["network-acceptance", "down"]);
                 let result = run_job(shared, &mut stream, cmd, Duration::from_secs(45), false);
                 match result {
@@ -494,6 +628,7 @@ fn handle(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
         } => helper(shared, &mut stream, hash, endpoint, owner),
         Request::Fixture { operation } => fixture(shared, &mut stream, operation),
         Request::Export { nonce } => export(shared, &mut stream, nonce),
+        Request::Stage { tool, runner } => stage(shared, &mut stream, tool, runner),
     }
 }
 fn serve(uid: u32, runner_hash: String, caller_hash: String) -> Result<()> {
@@ -654,8 +789,14 @@ fn request(request: Request) -> Result<()> {
     }
 }
 
-fn start(root: &Path, runner: &Path) -> Result<()> {
-    if wire::connect()?.is_some() {
+fn build(path: &Path) -> Result<wire::Build> {
+    let path = fs::canonicalize(path).map_err(error)?;
+    let sha256 = studio_platform::trusted::file_hash(&path)?;
+    Ok(wire::Build { path, sha256 })
+}
+fn start(root: &Path, runner: &Path, replace: bool) -> Result<()> {
+    let previous = wire::connect()?.map(|(_, config)| config);
+    if previous.is_some() && !replace {
         return request(Request::Status {});
     }
     let owner = Identity::current()?;
@@ -682,6 +823,19 @@ fn start(root: &Path, runner: &Path) -> Result<()> {
         script.push_str(&fs::read_to_string(p.join("install.sh")).map_err(error)?);
         script.push_str("\n)\n");
     }
+    if let Some(old) = &previous {
+        let old_client = selected_tool(old)?;
+        let old_dir = wire::directory(old.uid);
+        script.push_str(&format!(
+            "/usr/bin/sudo -u '#{}' -- {} work-session stop\n\
+             n=0\nwhile /bin/kill -0 {} 2>/dev/null || test -e {}; do\n\
+             n=$((n+1))\ntest \"$n\" -lt 200 || exit 1\n/bin/sleep 0.1\ndone\n",
+            old.uid,
+            studio_platform::macos::shell_quote(old_client.to_str().ok_or("non-UTF8 old tool")?)?,
+            old.pid,
+            studio_platform::macos::shell_quote(old_dir.to_str().ok_or("non-UTF8 old directory")?)?,
+        ));
+    }
     script.push_str(&format!(
         "exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C {} work-session serve {} {} {}\n",
         studio_platform::macos::shell_quote(installed.to_str().ok_or("non-UTF8 tool")?)?,
@@ -701,7 +855,8 @@ fn start(root: &Path, runner: &Path) -> Result<()> {
         .map_err(error)?;
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
-        if matches!(wire::connect(), Ok(Some(_))) {
+        if matches!(wire::connect(), Ok(Some((_, c))) if c.tool_hash == hash && previous.as_ref().is_none_or(|p| p.pid != c.pid))
+        {
             // Child::drop does not terminate the launcher. The explicitly started
             // host and its authorization outlive this CLI until work-session stop.
             return request(Request::Status {});
@@ -729,7 +884,9 @@ pub fn main_entry(root: &Path) -> Result<()> {
     let args = std::env::args().skip(2).collect::<Vec<_>>();
     let a = args.iter().map(String::as_str).collect::<Vec<_>>();
     match a.as_slice(){
-  ["start",runner]=>start(root,Path::new(runner)),["status"]=>request(Request::Status{}),["stop"]=>request(Request::Stop{}),
+  ["start",runner]=>start(root,Path::new(runner),false),
+  ["replace",runner]=>start(root,Path::new(runner),true),
+  ["stage",tool,runner]=>request(Request::Stage{tool:build(Path::new(tool))?,runner:build(Path::new(runner))?}),["status"]=>request(Request::Status{}),["stop"]=>request(Request::Stop{}),
   ["probe",runner]=>{
       let(_,config)=wire::connect()?.ok_or("No working session; probe will not request a password")?;
       if studio_platform::trusted::file_hash(Path::new(runner))?!=config.runner_hash{return Err("Probe helper differs from working session".into());}
@@ -740,7 +897,7 @@ pub fn main_entry(root: &Path) -> Result<()> {
   ["fixture","supervise",case,driver]=>request(Request::Fixture{operation:Fixture::Supervise{case:(*case).into(),driver:(*driver).into(),prior:None}}),
   ["fixture","supervise",case,driver,prior]=>request(Request::Fixture{operation:Fixture::Supervise{case:(*case).into(),driver:(*driver).into(),prior:Some((*prior).into())}}),
   ["export",nonce]=>request(Request::Export{nonce:(*nonce).into()}),
-  _=>Err("Usage: work-session start RUNNER | status | stop | probe RUNNER | fixture up/down/status | fixture supervise CASE DIR [PAUSE_NONCE] | export NONCE".into())
+  _=>Err("Usage: work-session start/replace RUNNER | stage TOOL RUNNER | status | stop | probe RUNNER | fixture up/down/status | fixture supervise CASE DIR [PAUSE_NONCE] | export NONCE".into())
  }
 }
 
@@ -767,6 +924,99 @@ mod tests {
             state: Mutex::new(State::new()),
             sequence: AtomicUsize::new(0),
         })
+    }
+    #[test]
+    fn staged_copy_pins_requested_bytes_and_does_not_replace_existing_files() {
+        let host = shared();
+        let source = host.dir.join("source");
+        fs::write(&source, b"first reviewed bytes").unwrap();
+        let build = build(&source).unwrap();
+        let target = host.dir.join("copy");
+        copy_build(&build, host.config.uid, &target).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"first reviewed bytes");
+        assert_eq!(fs::metadata(&target).unwrap().mode() & 0o777, 0o600);
+        assert!(copy_build(&build, host.config.uid, &target).is_err());
+        fs::write(&source, b"changed after selection").unwrap();
+        assert!(
+            copy_build(&build, host.config.uid, &host.dir.join("changed"))
+                .unwrap_err()
+                .contains("hash changed")
+        );
+        fs::remove_dir_all(&host.dir).unwrap();
+    }
+    #[test]
+    fn staging_requires_idle_session_without_owned_fixture() {
+        let host = shared();
+        let helper = reserve(&host, true, false, false).unwrap();
+        assert!(reserve_stage(&host).is_err());
+        drop(helper);
+        host.state.lock().unwrap().generation = Some("1".repeat(32));
+        assert!(reserve_stage(&host).is_err());
+        assert_eq!(host.state.lock().unwrap().active, 0);
+        host.state.lock().unwrap().generation = None;
+        let stage = reserve_stage(&host).unwrap();
+        assert!(reserve_stage(&host).is_err());
+        assert!(reserve(&host, true, false, false).is_err());
+        drop(stage);
+        fs::remove_dir(&host.dir).unwrap();
+    }
+    #[test]
+    fn selection_keeps_host_identity_and_previous_clients_and_is_atomic_on_failure() {
+        let host = shared();
+        let original = host.snapshot();
+        publish_selection(&host, "c".repeat(64), "d".repeat(64)).unwrap();
+        let selected = host.snapshot();
+        assert_eq!(selected.tool_hash, original.tool_hash);
+        assert_eq!(selected.pid, original.pid);
+        assert_eq!(selected.caller_hash, "c".repeat(64));
+        assert_eq!(selected.runner_hash, "d".repeat(64));
+        assert_eq!(
+            serde_json::from_slice::<Config>(&fs::read(host.dir.join("host.json")).unwrap())
+                .unwrap(),
+            selected
+        );
+        let (a, _b) = UnixStream::pair().unwrap();
+        authenticate(&a, &host).unwrap(); // original client still authorized
+        publish_selection(&host, "e".repeat(64), "f".repeat(64)).unwrap();
+        assert!(host.state.lock().unwrap().callers.contains(&"c".repeat(64)));
+        let before_failure = host.snapshot();
+        fs::remove_file(host.dir.join("host.json")).unwrap();
+        fs::create_dir(host.dir.join("host.json")).unwrap();
+        assert!(publish_selection(&host, "1".repeat(64), "2".repeat(64)).is_err());
+        assert_eq!(host.snapshot(), before_failure);
+        assert!(!host.state.lock().unwrap().callers.contains(&"1".repeat(64)));
+        assert_eq!(fs::read_dir(&host.dir).unwrap().count(), 1);
+        fs::remove_dir_all(&host.dir).unwrap();
+    }
+    #[test]
+    fn selected_client_authentication_and_stale_helper_selection() {
+        let mut host = shared();
+        let current_hash = host.config.caller_hash.clone();
+        Arc::get_mut(&mut host).unwrap().config.caller_hash = "a".repeat(64);
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        assert!(authenticate(&server, &host).is_err());
+        publish_selection(&host, current_hash, "d".repeat(64)).unwrap();
+        let owner = authenticate(&server, &host).unwrap();
+        assert!(
+            helper(
+                &host,
+                &mut server,
+                "b".repeat(64),
+                "/tmp/unused".into(),
+                owner
+            )
+            .unwrap_err()
+            .contains("selection changed")
+        );
+        assert_eq!(host.state.lock().unwrap().active, 0);
+        wire::write(&mut client, &Request::Status {}).unwrap();
+        handle(&host, server).unwrap();
+        assert!(matches!(
+            wire::read::<Response>(&mut client, Duration::from_secs(1), &AtomicBool::new(false))
+                .unwrap(),
+            Response::Status { active: 0, .. }
+        ));
+        fs::remove_dir_all(&host.dir).unwrap();
     }
     #[test]
     fn fixture_conflicts_and_capacity_preserve_status_and_next_client() {
@@ -806,15 +1056,16 @@ mod tests {
         let host = shared();
         let (a, _b) = UnixStream::pair().unwrap();
         assert_eq!(
-            authenticate(&a, &host.config).unwrap(),
+            authenticate(&a, &host).unwrap(),
             Identity::current().unwrap()
         );
-        let mut bad = host.config.clone();
-        bad.uid += 1;
+        let mut bad = shared();
+        Arc::get_mut(&mut bad).unwrap().config.uid += 1;
         assert!(authenticate(&a, &bad).is_err());
-        bad = host.config.clone();
-        bad.caller_hash = "c".repeat(64);
+        Arc::get_mut(&mut bad).unwrap().config.uid = host.config.uid;
+        Arc::get_mut(&mut bad).unwrap().config.caller_hash = "c".repeat(64);
         assert!(authenticate(&a, &bad).is_err());
+        fs::remove_dir(&bad.dir).unwrap();
         fs::remove_dir(&host.dir).unwrap();
     }
     #[test]
@@ -826,7 +1077,7 @@ mod tests {
             generation: generation.clone(),
             created_utc_seconds: 1,
             expires_utc_seconds: 1801,
-            tooling_sha256: host.config.tool_hash.clone(),
+            tooling_sha256: host.snapshot().caller_hash,
             sealed: false,
             scanner: None,
             peer: None,

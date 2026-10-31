@@ -1215,6 +1215,12 @@ fn commit_scan_events(
             }
             Event::Started { total } => {
                 c.preparing = false;
+                // Publish the persisted attempt identity while it is active, before
+                // progress consumers (including the native guard driver) need it.
+                emit(
+                    out,
+                    Update::History(db.scans().map_err(|e| e.to_string())?, selected),
+                )?;
                 emit(
                     out,
                     Update::State(Status::Scanning, format!("Scanning {total} endpoints")),

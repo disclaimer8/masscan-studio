@@ -1,6 +1,48 @@
 //! Executable fixture setup orchestration stays in the operator tooling.
 use super::topology::*;
+use studio_protocol::sealed_fixture::State;
 pub use studio_protocol::sealed_fixture::ownership::*;
+
+pub fn verify_owned(
+    state: &State,
+    scanner: Option<&InterfaceIdentity>,
+    peer: Option<&InterfaceIdentity>,
+    route: Option<&OwnedRoute>,
+    after_guard: bool,
+) -> Result<(), String> {
+    if !state.sealed {
+        return Err("fixture setup incomplete; inspect retained state".into());
+    }
+    for (recorded, observed) in [(&state.scanner, scanner), (&state.peer, peer)] {
+        let recorded = recorded.as_ref().ok_or("missing owned interface")?;
+        if !can_destroy(recorded, observed)? {
+            return Err("owned interface disappeared".into());
+        }
+    }
+    if after_guard {
+        let mut expected = state.scanner.clone().ok_or("missing owned scanner")?;
+        if !expected.up {
+            return Err("guard requires an originally up scanner".into());
+        }
+        expected.up = false;
+        if scanner != Some(&expected) || peer != state.peer.as_ref() {
+            return Err(
+                "guard terminal interfaces differ from the exact owned down transition".into(),
+            );
+        }
+    }
+    let recorded_route = state.route.as_ref().ok_or("missing owned host route")?;
+    // Validate the recorded fixed route even when the kernel removed it.
+    delete_route(recorded_route, Some(recorded_route))?;
+    let present = delete_route(recorded_route, route)?;
+    // ifconfig down can remove this host route. Absence is acceptable only
+    // after the exact guard transition; any replacement still fails above.
+    // This predicate neither enables packet I/O nor changes cleanup ownership.
+    if present.is_none() && !after_guard {
+        return Err("owned route disappeared".into());
+    }
+    Ok(())
+}
 
 pub trait SetupHost {
     fn identity(&mut self, name: &str) -> Result<Option<InterfaceIdentity>, String>;
@@ -104,6 +146,76 @@ mod tests {
             bridges: vec![],
             up: false,
         }
+    }
+    #[test]
+    fn guard_terminal_allows_route_removal_only_with_exact_owned_down_transition() {
+        let mut host = FakeSetup::default();
+        let (mut scanner, mut peer) = (None, None);
+        for index in 0..setup_steps().len() {
+            setup_step(&mut host, index, &mut scanner, &mut peer).unwrap();
+        }
+        let state = State {
+            version: 1,
+            generation: "1".repeat(32),
+            created_utc_seconds: 1,
+            expires_utc_seconds: 1801,
+            tooling_sha256: "a".repeat(64),
+            sealed: true,
+            scanner: scanner.clone(),
+            peer: peer.clone(),
+            route: Some(OwnedRoute {
+                destination: ROUTED.to_string(),
+                prefix: 32,
+                flags: "UGHS".into(),
+                gateway: GATEWAY.to_string(),
+                interface: SCANNER.into(),
+            }),
+        };
+        assert!(verify_owned(&state, scanner.as_ref(), peer.as_ref(), None, false).is_err());
+        assert!(verify_owned(&state, scanner.as_ref(), peer.as_ref(), None, true).is_err());
+        assert!(
+            verify_owned(
+                &state,
+                scanner.as_ref(),
+                peer.as_ref(),
+                state.route.as_ref(),
+                true
+            )
+            .is_err()
+        );
+        let mut down = scanner.unwrap();
+        down.up = false;
+        verify_owned(&state, Some(&down), peer.as_ref(), None, true).unwrap();
+        let mut invalid_seal = state.clone();
+        invalid_seal.route.as_mut().unwrap().interface = "en0".into();
+        assert!(verify_owned(&invalid_seal, Some(&down), peer.as_ref(), None, true).is_err());
+        verify_owned(
+            &state,
+            Some(&down),
+            peer.as_ref(),
+            state.route.as_ref(),
+            true,
+        )
+        .unwrap();
+        assert!(verify_owned(&state, Some(&down), peer.as_ref(), None, false).is_err());
+        let mut foreign = state.route.clone().unwrap();
+        foreign.interface = "en0".into();
+        assert!(verify_owned(&state, Some(&down), peer.as_ref(), Some(&foreign), true).is_err());
+        for field in 0..5 {
+            let mut changed = down.clone();
+            match field {
+                0 => changed.index += 1,
+                1 => changed.mac[5] ^= 1,
+                2 => changed.ipv4.push(A),
+                3 => changed.bridges.push("bridge0".into()),
+                _ => changed.ipv4_prefixes[0].1 = 24,
+            }
+            assert!(verify_owned(&state, Some(&changed), peer.as_ref(), None, true).is_err());
+        }
+        let mut changed_peer = peer.unwrap();
+        changed_peer.up = false;
+        assert!(verify_owned(&state, Some(&down), Some(&changed_peer), None, true).is_err());
+        assert!(verify_owned(&state, None, Some(&changed_peer), None, true).is_err());
     }
     #[derive(Default)]
     struct FakeSetup {

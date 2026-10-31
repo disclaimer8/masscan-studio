@@ -290,8 +290,14 @@ fn history_edit_profile_and_repeat_keep_selected_coverage_with_filtered_and_zero
             simulation: Cell::new(false),
             archived: Cell::new(false),
         };
-        rows.add(store.observations(saved.scan).unwrap());
-        rows.table.borrow_mut().filter("80");
+        let mut observations = store.observations(saved.scan).unwrap();
+        // Keep the observed clock collision deterministic: plain "80" also
+        // matches the discovered-time column of the port90 row.
+        for observation in &mut observations {
+            observation.discovered_at = Some("2026-10-31T10:00:25.580Z".into());
+        }
+        rows.add(observations);
+        rows.table.borrow_mut().filter("80 tcp");
         rows.table.borrow_mut().sort(0, true);
         let expected_rows = rows.export_rows();
         assert_eq!(

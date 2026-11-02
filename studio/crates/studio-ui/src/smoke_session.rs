@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn rejects_unsafe_session_smoke_launches_before_opening_history() {
         let args = vec!["studio-ui".into(), "--smoke-work-session".into()];
-        let path = Some(PathBuf::from("/private/test"));
+        let path = Some(std::env::current_dir().unwrap().join("session-test"));
         assert!(validate(&args, None, path.clone(), true).is_err());
         assert!(validate(&args, path.clone(), None, true).is_err());
         assert!(validate(&args, path.clone(), path.clone(), false).is_err());

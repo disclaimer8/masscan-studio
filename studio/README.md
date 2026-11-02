@@ -1,5 +1,12 @@
 # Masscan Studio (Rust + Slint)
 
+**Acceptance branch notice:** this checkout enables MacNetwork only for a mandatory
+sealed local fixture. It is not a general-network release and must not be
+distributed. The older gate description below describes the intended distributed
+baseline; use the [release checklist](RELEASE-CHECKLIST.md) and
+[current GUI/session evidence](../docs/experiments/2026-11-02-studio-gui-work-session.md)
+for this candidate's actual status.
+
 This workspace connects the selected Slint interface to the current `rmasscan`
 engine through a separate Rust runner. Engine/core/net remain in `../rmasscan`;
 there is no vendored second engine. Studio is a Rust/Slint application.

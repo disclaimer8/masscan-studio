@@ -595,8 +595,16 @@ mod tests {
         let mut lease = Lease { stream: a };
         assert!(lease.check().is_ok());
         drop(b);
-        assert!(lease.check().is_err());
+        // Other parallel tests can fork with a transient copy of b before
+        // close-on-exec runs. The production watcher polls; EOF need not be
+        // visible in the first nonblocking read after our local close.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while lease.check().is_ok() {
+            assert!(Instant::now() < deadline, "Lease did not detect host EOF");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let (a, b) = UnixStream::pair().unwrap();
+        b.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         drop(Lease { stream: a });
         let mut b = b;
         assert_eq!(b.read(&mut [0]).unwrap(), 0);

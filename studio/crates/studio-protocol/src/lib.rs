@@ -1,5 +1,6 @@
 //! Versioned Studio IPC and immutable scan settings.
 #![forbid(unsafe_code)]
+pub mod acceptance;
 mod network;
 pub mod sealed_fixture;
 pub use network::*;

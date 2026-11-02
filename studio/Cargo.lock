@@ -4470,6 +4470,7 @@ dependencies = [
  "slint-build",
  "studio-app",
  "studio-inspection",
+ "studio-platform",
  "studio-protocol",
  "studio-store",
  "studio-table",

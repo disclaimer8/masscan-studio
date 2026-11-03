@@ -2176,3 +2176,157 @@ fn an_aborted_copy_whose_eno1_log_counts_frames_fails_the_directory() {
     assert_eq!(v["overall"], FAIL);
     assert_eq!(v["safety_trips"], json!([format!("{C01}.x")]));
 }
+
+// ---- Task 6d: windows-verify hands an autodetect directory to autodetect-verify ----
+use crate::autodetect_verify::{self as av, Plan, tests::Sim};
+
+/// A Windows autodetect evidence directory as `windows-suite --plan autodetect` leaves it, every case from the
+/// verifier's synthetic generator (one rule broken by `tweak`, or none).
+fn autodetect_scratch(tweak: impl Fn(&mut Sim)) -> Scratch {
+    let p = std::env::temp_dir().join(format!(
+        "rmasscan-verifier-test-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&p).unwrap();
+    fs::write(
+        p.join("manifest.json"),
+        json!({"autodetect": "windows", "plan": "autodetect", "suite": "windows-r1"}).to_string(),
+    )
+    .unwrap();
+    for tag in av::planned_tags(Plan::Windows) {
+        let mut sim = Sim::new(Plan::Windows, tag);
+        tweak(&mut sim);
+        sim.write(&p);
+    }
+    Scratch(p)
+}
+fn check_names(v: &Value) -> Vec<String> {
+    array(&v["runs"])
+        .iter()
+        .flat_map(|r| array(&r["checks"]).iter().map(|c| s(&c["name"]).to_owned()))
+        .collect()
+}
+
+#[test]
+fn windows_verify_delegates_autodetect_runs() {
+    let arg = |d: &Scratch| vec!["--dir".to_owned(), d.0.to_string_lossy().into_owned()];
+    // A consistent directory: windows-verify's verdict is autodetect-verify's, to the byte, and PASS.
+    let clean = autodetect_scratch(|_| {});
+    let v = verify_dir(&clean.0);
+    assert_eq!(v, av::verify_dir(&clean.0));
+    assert_eq!(v["overall"], PASS, "{v:#}");
+    // No rule of the Windows verifier ran: it has no fixtures, provenance or wire_scan run.json to ask for.
+    assert!(v.get("provenance").is_none());
+    let names = check_names(&v);
+    for windows_only in [
+        "fixtures manifest present",
+        "manifest.code_commit present",
+        "manifest executable sha256 present",
+    ] {
+        assert!(!names.iter().any(|n| n == windows_only), "{windows_only}");
+    }
+    assert_eq!(
+        run_status(&clean.0, "w02_adapter_npf"),
+        (PASS.to_owned(), false)
+    );
+    assert_eq!(
+        run_status(&clean.0, "c01_one_addr_port_synack.run1").0,
+        NOT_RUN
+    );
+    assert!(safety_trips(&clean.0).is_empty());
+    assert_eq!(run(&arg(&clean)).unwrap(), 0);
+    // A lab frame on eno1 in w03: both verdicts agree, the directory FAILs and the suite's start check names the run.
+    let tripped = autodetect_scratch(|sim| {
+        if sim.case.tag == "w03_adapter_friendly" {
+            sim.uplink
+                .push((fixture::BASE, fixture::scanner_syn(80, 40000)));
+        }
+    });
+    let v = verify_dir(&tripped.0);
+    assert_eq!(v, av::verify_dir(&tripped.0));
+    assert_eq!(v["overall"], FAIL);
+    assert_eq!(safety_trips(&tripped.0), ["w03_adapter_friendly"]);
+    assert_eq!(run_status(&tripped.0, "w03_adapter_friendly").0, FAIL);
+    assert_eq!(run(&arg(&tripped)).unwrap(), 1);
+    // A wrong exit code (behaviour) in w05: FAIL with the behaviour flag, as autodetect-verify says.
+    let wrong = autodetect_scratch(|sim| {
+        if sim.case.tag == "w05_arp_timeout" {
+            sim.exit = 0;
+        }
+    });
+    assert_eq!(verify_dir(&wrong.0), av::verify_dir(&wrong.0));
+    assert_eq!(
+        run_status(&wrong.0, "w05_arp_timeout"),
+        (FAIL.to_owned(), true)
+    );
+    // `plan: autodetect` alone hands the directory over too; without the plan key it is NOT RUN, never a Windows run.
+    let unnamed = autodetect_scratch(|_| {});
+    fs::write(
+        unnamed.0.join("manifest.json"),
+        json!({"plan": "autodetect"}).to_string(),
+    )
+    .unwrap();
+    let v = verify_dir(&unnamed.0);
+    assert_eq!(v, av::verify_dir(&unnamed.0));
+    assert_eq!(v["overall"], NOT_RUN);
+    assert_eq!(run(&arg(&unnamed)).unwrap(), 2);
+}
+
+#[test]
+fn legacy_directories_are_unchanged() {
+    let exp =
+        Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../../docs/experiments");
+    let verdicts = |v: &Value, key: &str| -> Vec<(String, String)> {
+        array(&v[key])
+            .iter()
+            .map(|r| (s(&r["tag"]).to_owned(), s(&r["verdict"]).to_owned()))
+            .collect()
+    };
+    // functional-r3 (sendqueue acceptance): the whole committed verdict, run by run, group by group.
+    let dir = exp.join("2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/functional-r3");
+    let committed = read_json(dir.join("verdict.json")).unwrap();
+    let now = verify_dir(&dir);
+    assert!(
+        now.get("provenance").is_some(),
+        "judged by the Windows verifier"
+    );
+    for key in [
+        "overall",
+        "totals",
+        "discarded_totals",
+        "safety_trips",
+        "behaviour_fail",
+    ] {
+        assert_eq!(now[key], committed[key], "functional-r3 {key}");
+    }
+    for key in ["runs", "groups", "discarded", "aborted"] {
+        assert_eq!(
+            verdicts(&now, key),
+            verdicts(&committed, key),
+            "functional-r3 {key}"
+        );
+    }
+    assert!(verdicts(&now, "runs").len() > 20);
+    for (tag, verdict) in verdicts(&committed, "runs").into_iter().skip(1) {
+        assert_eq!(run_status(&dir, &tag).0, verdict, "functional-r3 {tag}");
+    }
+    assert!(safety_trips(&dir).is_empty());
+    // perf-r1: every cell whose pcaps are stored plain (the gzipped ones cannot be re-judged in place).
+    let dir = exp.join("2026-10-24-rmasscan-windows-vm-acceptance-raw/perf-r1");
+    let committed = read_json(dir.join("verdict.json")).unwrap();
+    let now = verify_dir(&dir);
+    assert!(now.get("provenance").is_some() && now.get("perf_summary").is_some());
+    let old = verdicts(&committed, "runs");
+    let mut compared = 0;
+    for (tag, verdict) in verdicts(&now, "runs") {
+        if tag != "manifest" && !dir.join("runs").join(&tag).join("peer.pcap").is_file() {
+            continue;
+        }
+        let want = old.iter().find(|(t, _)| *t == tag).map(|(_, v)| v.clone());
+        assert_eq!(Some(verdict), want, "perf-r1 {tag}");
+        compared += 1;
+    }
+    assert!(compared >= 10, "{compared} compared");
+    assert!(safety_trips(&dir).is_empty());
+}

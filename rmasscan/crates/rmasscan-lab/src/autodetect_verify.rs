@@ -391,6 +391,9 @@ pub struct CaseSpec {
     /// The exact hint lines after the refusal.
     pub hints: &'static [&'static str],
     pub preflight: Option<Preflight>,
+    /// The case runs under a restricted token (Windows: `runas /trustlevel:0x20000` through `windows_wire_runas.cmd`):
+    /// `w08a` and `w08b` only.
+    pub restricted: bool,
 }
 
 /// The arguments every scan case shares (constants table: `--seed 1 --rate 100 --wait 3`).
@@ -428,6 +431,7 @@ const NO_DETECTION: CaseSpec = CaseSpec {
     fail: None,
     hints: &[],
     preflight: None,
+    restricted: false,
 };
 
 const LINUX: CaseSpec = CaseSpec {
@@ -443,6 +447,7 @@ const LINUX: CaseSpec = CaseSpec {
     fail: None,
     hints: &[],
     preflight: None,
+    restricted: false,
 };
 const LINUX_CASES: [CaseSpec; 12] = [
     CaseSpec {
@@ -548,6 +553,7 @@ const MACOS: CaseSpec = CaseSpec {
     fail: None,
     hints: &[],
     preflight: None,
+    restricted: false,
 };
 const MACOS_REFUSAL: CaseSpec = CaseSpec {
     plan: Plan::Macos,
@@ -678,6 +684,7 @@ const WINDOWS: CaseSpec = CaseSpec {
     fail: None,
     hints: &[],
     preflight: None,
+    restricted: false,
 };
 const WINDOWS_REFUSAL: CaseSpec = CaseSpec {
     plan: Plan::Windows,
@@ -739,11 +746,13 @@ const WINDOWS_CASES: [CaseSpec; 9] = [
         kind: CaseKind::Iflist,
         targets: "",
         ports: "",
+        restricted: true,
         ..WINDOWS_REFUSAL
     },
     // A restricted token: w01's scan, refused in any way (detection works, opening does not), no frame.
     CaseSpec {
         tag: "w08b_restricted_scan",
+        restricted: true,
         ..WINDOWS_REFUSAL
     },
 ];

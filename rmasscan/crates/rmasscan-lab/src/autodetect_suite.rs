@@ -120,7 +120,7 @@ fn colon(m: [u8; 6]) -> String {
         .join(":")
 }
 /// A record as pretty JSON with a final newline.
-fn write_record<T: Serialize>(path: &Path, v: &T) -> Result<(), String> {
+pub(crate) fn write_record<T: Serialize>(path: &Path, v: &T) -> Result<(), String> {
     let mut b = serde_json::to_vec_pretty(v).map_err(|e| e.to_string())?;
     b.push(b'\n');
     io(fs::write(path, b), &p2s(path))
@@ -293,10 +293,10 @@ fn write_iflist(run: &Path, o: &Output, stand_iface: &str) -> Result<(), String>
     io(fs::write(run.join("stderr.txt"), &o.stderr), "stderr.txt")?;
     write_exit(run, o.rc)
 }
-/// `detected.json`: rmasscan's stderr parsed by the verifier's parser. A stderr that does not parse gets no record
-/// (the verifier then cannot pass the run).
-fn write_detected(run: &Path) -> Result<(), String> {
-    let b = io(fs::read(run.join("stderr.txt")), "stderr.txt")?;
+/// `detected.json`: rmasscan's stderr (`stderr`: `stderr.txt`, on Windows `guest-stderr.txt`) parsed by the verifier's
+/// parser. A stderr that does not parse gets no record (the verifier then cannot pass the run).
+pub(crate) fn write_detected(run: &Path, stderr: &str) -> Result<(), String> {
+    let b = io(fs::read(run.join(stderr)), stderr)?;
     match av::parse_stderr(&String::from_utf8_lossy(&b)) {
         Ok(d) => write_record(&run.join(DETECTED_JSON), &d),
         Err(e) => {
@@ -308,15 +308,14 @@ fn write_detected(run: &Path) -> Result<(), String> {
     }
 }
 
-/// The `--offline` preflight of a case (R1): the same argv, read only. (Only macOS has a preflight case, `m05`.)
-#[cfg(any(target_os = "macos", test))]
+/// The `--offline` preflight of a case (R1): the same argv, read only (`w01`, `w06` through `windows-suite --plan
+/// autodetect`, `m05` here).
 pub(crate) fn preflight_argv(spec: &CaseSpec) -> Vec<String> {
     let mut a = spec.argv();
     a.push("--offline".into());
     a
 }
 /// `preflight.txt`: `rc N`, then the preflight's stderr.
-#[cfg(any(target_os = "macos", test))]
 pub(crate) fn preflight_text(rc: i32, stderr: &str) -> String {
     format!("rc {rc}\n{stderr}")
 }
@@ -905,7 +904,7 @@ impl Linux<'_> {
             )?);
             let rc = self.wait(t, tag)?;
             write_exit(run, rc)?;
-            write_detected(run)?;
+            write_detected(run, "stderr.txt")?;
         }
         self.finish_witness(&w, t, run, CAPTURE_JSON, "peer.err")?;
         // 4. l11: the C oracle on the same stand with the same argv, under its own witness.
@@ -1345,7 +1344,7 @@ mod mac {
                 )?;
                 t.scanner = None;
                 write_exit(run, rc)?;
-                write_detected(run)?;
+                write_detected(run, "stderr.txt")?;
             }
             // 5. The witnesses stop (peer first); the peer capture is published without the host's own mDNS.
             let (witness, _, _) = stop_witnesses(self.st, t, files)?;

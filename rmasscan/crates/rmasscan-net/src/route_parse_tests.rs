@@ -1,9 +1,15 @@
-//! Разбор ответов ядра на синтетических байтах (любая ОС). Адреса только из документационных диапазонов.
+//! Разбор ответов ядра на синтетических байтах (любая ОС). Адреса только из документационных диапазонов, кроме раздела
+//! гостя n2: он воспроизводит лабораторный стенд (198.18.0.0/30, RFC 2544) и NIC управления QEMU (10.0.2.0/24) дословно.
 
 use std::net::Ipv4Addr;
 
+use rmasscan_core::massip::MassIp;
+
 use super::*;
-use crate::discover::{Iface, Route};
+use crate::discover::{
+    DetectError, Iface, Interfaces, NextHop, NextHopWhy, Overrides, Route, RouteTable, Source,
+    Targets, detect, detect_offline, probe_targets,
+};
 
 fn ip(a: u8, b: u8, c: u8, d: u8) -> Ipv4Addr {
     Ipv4Addr::new(a, b, c, d)
@@ -865,7 +871,8 @@ fn fwd(ifindex: u32, prefix_len: u8, next_hop: Ipv4Addr, metric: u32) -> Fwd {
         prefix_len,
         next_hop,
         metric,
-        loopback: false,
+        mib_loopback: false,
+        loopback_if: false,
     }
 }
 
@@ -952,17 +959,34 @@ fn win_adapter_iftype_71_is_ethernet_and_24_is_loopback() {
         fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256),
     ];
     mark_loopback(&mut rows, &host_adapters());
-    assert_eq!((rows[0].loopback, rows[1].loopback), (true, false));
+    assert_eq!((rows[0].loopback_if, rows[1].loopback_if), (true, false));
+    assert_eq!(
+        (rows[0].mib_loopback, rows[1].mib_loopback),
+        (false, false),
+        "IfType 24 never sets the row's MIB flag"
+    );
 }
 
 #[test]
-fn fwd_row_loopback_flag_or_iftype_24_or_own_unicast_is_local() {
+fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
     let adapters = host_adapters();
     let ifaces = ifaces_of(&adapters);
-    // Флаг Loopback строки.
+    // Флаг MIB `Loopback` строки сам по себе не делает чужой адрес локальным: это on-link маршрут интерфейса строки
+    // (так Windows помечает /32 широковещательного адреса подсети), как RTN_BROADCAST на Linux.
     let mut flagged = fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256);
-    flagged.loopback = true;
-    assert!(route_from_best(&flagged, ip(192, 0, 2, 99), &ifaces).local);
+    flagged.mib_loopback = true;
+    assert_eq!(
+        route_from_best(&flagged, ip(192, 0, 2, 255), &ifaces),
+        Route {
+            ifindex: 12,
+            ifname: "Ethernet".into(),
+            gateway: None,
+            local: false,
+        },
+        "a MIB-flagged row to a foreign address is on-link"
+    );
+    // С флагом MIB и адресом адаптера назначение локально по адресу.
+    assert!(route_from_best(&flagged, ip(192, 0, 2, 10), &ifaces).local);
     // IfType 24 интерфейса строки.
     let mut rows = [fwd(1, 8, Ipv4Addr::UNSPECIFIED, 256)];
     mark_loopback(&mut rows, &adapters);
@@ -1014,29 +1038,43 @@ fn fwd_row_loopback_flag_or_iftype_24_or_own_unicast_is_local() {
         &ifaces,
     );
     assert_eq!((via.gateway, via.local), (Some(ip(192, 0, 2, 1)), false));
-    // Флаг loopback отменяет шлюз.
+    // Флаг MIB со шлюзом: строка не локальна, шлюз остаётся.
     let mut lgw = fwd(12, 0, ip(192, 0, 2, 1), 25);
-    lgw.loopback = true;
-    assert_eq!(
-        route_from_best(&lgw, ip(203, 0, 113, 5), &ifaces).gateway,
-        None
-    );
+    lgw.mib_loopback = true;
+    let r = route_from_best(&lgw, ip(203, 0, 113, 5), &ifaces);
+    assert_eq!((r.gateway, r.local), (Some(ip(192, 0, 2, 1)), false));
+    // Интерфейс IfType 24 отменяет шлюз.
+    let mut rows = [fwd(1, 0, ip(192, 0, 2, 1), 25)];
+    mark_loopback(&mut rows, &adapters);
+    let r = route_from_best(&rows[0], ip(203, 0, 113, 5), &ifaces);
+    assert_eq!((r.gateway, r.local), (None, true));
 }
 
 #[test]
 fn fwd_rows_prefix_zero_sorted_by_metric() {
     let adapters = host_adapters();
     let ifaces = ifaces_of(&adapters);
-    let mut rows = vec![
+    // Строка с префиксом 0 и флагом MIB `Loopback` на Ethernet: фильтр маршрутов по умолчанию её отбрасывает, как и
+    // строку через IfType 24 (флаг MIB здесь значит то же, что до PF3).
+    let mut mib_flagged = fwd(12, 0, ip(192, 0, 2, 254), 5);
+    mib_flagged.mib_loopback = true;
+    let table = vec![
         fwd(12, 24, Ipv4Addr::UNSPECIFIED, 1),
         fwd(12, 0, ip(192, 0, 2, 1), 50),
         fwd(15, 0, ip(198, 51, 100, 1), 10),
         fwd(1, 0, Ipv4Addr::UNSPECIFIED, 0),
+        mib_flagged,
         fwd(15, 0, Ipv4Addr::UNSPECIFIED, 25),
         fwd(99, 0, ip(203, 0, 113, 1), 30),
         fwd(12, 32, ip(192, 0, 2, 1), 2),
     ];
+    let mut rows = table.clone();
     mark_loopback(&mut rows, &adapters);
+    assert_eq!(
+        defaults_from_rows(table, &adapters),
+        defaults_from_table(&rows, &ifaces),
+        "OsRoutes::default_routes is mark_loopback + defaults_from_table"
+    );
     let r = |ifindex: u32, ifname: &str, gateway: Option<Ipv4Addr>| Route {
         ifindex,
         ifname: ifname.into(),
@@ -1051,8 +1089,353 @@ fn fwd_rows_prefix_zero_sorted_by_metric() {
             r(99, "ifindex 99", Some(ip(203, 0, 113, 1))),
             r(12, "Ethernet", Some(ip(192, 0, 2, 1))),
         ],
-        "prefix 0 and not loopback, by Metric; an unknown interface keeps its index as the name"
+        "prefix 0, neither the MIB Loopback flag nor IfType 24, by Metric; an unknown interface keeps its index as the name"
     );
+}
+
+// ---------- Windows: гость n2 (PF3) ----------
+
+const N2_LAB: u32 = 14;
+const N2_MGMT: u32 = 3;
+const N2_LO: u32 = 1;
+const N2_LAB_GUID: &str = "{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
+const N2_LAB_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x04, 0x80, 0xa9];
+
+/// Строка таблицы гостя: префикс назначения и [`Fwd`] с флагом MIB `Loopback`, как его отдаёт IP Helper.
+fn n2_row(
+    prefix: Ipv4Addr,
+    prefix_len: u8,
+    ifindex: u32,
+    next_hop: Ipv4Addr,
+    metric: u32,
+    mib_loopback: bool,
+) -> (Ipv4Addr, Fwd) {
+    (
+        prefix,
+        Fwd {
+            ifindex,
+            prefix_len,
+            next_hop,
+            metric,
+            mib_loopback,
+            loopback_if: false,
+        },
+    )
+}
+
+/// Гость n2 (Windows 11, стенд w01–w08b): лабораторный NIC «Ethernet 2» 198.18.0.1/30 без шлюза, NIC управления
+/// «Ethernet» 10.0.2.15 с единственным маршрутом по умолчанию через 10.0.2.2 и Loopback Pseudo-Interface 1. Строки
+/// «Ethernet 2» дословно из `Get-NetRoute` гостя (живое окно 2026-11-03), маршрут по умолчанию из записи гостя
+/// (ifIndex 3, NextHop 10.0.2.2, Metric 0), строки loopback это стандартные строки Windows (не сняты).
+///
+/// Флаг MIB `Loopback` (`Get-NetRoute` его не показывает): у 198.18.0.3/32 он стоит, иначе в окне не было бы
+/// `is an address of this host` (это не адрес адаптера и не IfType 24); у /30 его нет (w01 к 198.18.0.2 прошёл); у
+/// остальных строк хоста он стоит, как Windows помечает локальные строки, и ни на что не влияет: 198.18.0.1 это адрес
+/// адаптера, 224.0.0.0/4 и 255.255.255.255 не бывают целями-пробами, 127.0.0.0/8 идёт через IfType 24.
+///
+/// `lookup` выбирает строку как `GetBestRoute2` (самый длинный префикс, затем меньшая метрика) и классифицирует её тем
+/// же кодом, что `windows::os::OsRoutes` ([`lookup_from_best`], [`defaults_from_rows`]); `list` как `OsIfaces`.
+struct GuestN2 {
+    rows: Vec<(Ipv4Addr, Fwd)>,
+    adapters: Vec<WinAdapter>,
+    lookups: std::cell::RefCell<Vec<Ipv4Addr>>,
+}
+
+impl GuestN2 {
+    fn best(&self, dst: Ipv4Addr) -> Option<&(Ipv4Addr, Fwd)> {
+        self.rows
+            .iter()
+            .filter(|(p, f)| {
+                let mask = u32::MAX
+                    .checked_shl(32 - u32::from(f.prefix_len))
+                    .unwrap_or(0);
+                u32::from(dst) & mask == u32::from(*p) & mask
+            })
+            .min_by_key(|(_, f)| (std::cmp::Reverse(f.prefix_len), f.metric))
+    }
+
+    fn lookups(&self) -> Vec<Ipv4Addr> {
+        self.lookups.borrow().clone()
+    }
+}
+
+impl RouteTable for GuestN2 {
+    fn lookup(&self, dst: Ipv4Addr) -> Result<Option<Route>, crate::NetError> {
+        self.lookups.borrow_mut().push(dst);
+        Ok(self
+            .best(dst)
+            .map(|(_, f)| lookup_from_best(*f, dst, &self.adapters)))
+    }
+
+    fn default_routes(&self) -> Result<Vec<Route>, crate::NetError> {
+        let rows = self.rows.iter().map(|(_, f)| *f).collect();
+        Ok(defaults_from_rows(rows, &self.adapters))
+    }
+}
+
+impl Interfaces for GuestN2 {
+    fn list(&self) -> Result<Vec<Iface>, crate::NetError> {
+        Ok(self.adapters.iter().map(iface_from_adapter).collect())
+    }
+}
+
+fn guest_n2() -> GuestN2 {
+    let on_link = Ipv4Addr::UNSPECIFIED;
+    let mut lab = adapter(
+        N2_LAB,
+        IF_TYPE_ETHERNET_CSMACD,
+        "Ethernet 2",
+        &[ip(198, 18, 0, 1)],
+    );
+    lab.adapter_name = N2_LAB_GUID.into();
+    lab.mac = Some(N2_LAB_MAC);
+    let mut mgmt = adapter(
+        N2_MGMT,
+        IF_TYPE_ETHERNET_CSMACD,
+        "Ethernet",
+        &[ip(10, 0, 2, 15)],
+    );
+    mgmt.mac = Some([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+    GuestN2 {
+        rows: vec![
+            // Get-NetRoute -AddressFamily IPv4 -InterfaceAlias 'Ethernet 2' (RouteMetric 256, TypeOfRoute 3).
+            n2_row(ip(198, 18, 0, 0), 30, N2_LAB, on_link, 256, false),
+            n2_row(ip(198, 18, 0, 1), 32, N2_LAB, on_link, 256, true),
+            n2_row(ip(198, 18, 0, 3), 32, N2_LAB, on_link, 256, true),
+            n2_row(ip(224, 0, 0, 0), 4, N2_LAB, on_link, 256, true),
+            n2_row(ip(255, 255, 255, 255), 32, N2_LAB, on_link, 256, true),
+            // Единственный маршрут по умолчанию гостя: NIC управления.
+            n2_row(ip(0, 0, 0, 0), 0, N2_MGMT, ip(10, 0, 2, 2), 0, false),
+            // Loopback Pseudo-Interface 1.
+            n2_row(ip(127, 0, 0, 0), 8, N2_LO, on_link, 256, true),
+            n2_row(ip(127, 0, 0, 1), 32, N2_LO, on_link, 256, true),
+        ],
+        adapters: vec![
+            mgmt,
+            lab,
+            adapter(
+                N2_LO,
+                IF_TYPE_SOFTWARE_LOOPBACK,
+                "Loopback Pseudo-Interface 1",
+                &[ip(127, 0, 0, 1)],
+            ),
+        ],
+        lookups: Default::default(),
+    }
+}
+
+fn n2_targets(ranges: &[(Ipv4Addr, Ipv4Addr)]) -> Option<Targets> {
+    let mut m = MassIp::new();
+    for (a, b) in ranges {
+        m.ipv4_mut().add_range(u32::from(*a), u32::from(*b));
+    }
+    probe_targets(&m)
+}
+
+fn n2_lab(local: bool) -> Route {
+    Route {
+        ifindex: N2_LAB,
+        ifname: "Ethernet 2".into(),
+        gateway: None,
+        local,
+    }
+}
+
+/// Классификация адресов стенда (её же зашивает герметичный CLI-тест `live_fake::guest_n2`): сосед 198.18.0.2 и
+/// широковещательный 198.18.0.3 идут on-link через «Ethernet 2», адрес адаптера 198.18.0.1 и 127.0.0.1 (IfType 24)
+/// локальны, маршрут по умолчанию один, через «Ethernet». Выбор строк совпадает с `Find-NetRoute` гостя.
+#[test]
+fn guest_n2_broadcast_is_on_link_own_address_and_loopback_interface_are_local() {
+    let g = guest_n2();
+    for (dst, picked) in [
+        (ip(198, 18, 0, 2), (ip(198, 18, 0, 0), 30)),
+        (ip(198, 18, 0, 0), (ip(198, 18, 0, 0), 30)),
+        (ip(198, 18, 0, 3), (ip(198, 18, 0, 3), 32)),
+        (ip(198, 18, 0, 1), (ip(198, 18, 0, 1), 32)),
+    ] {
+        let (p, f) = g.best(dst).unwrap();
+        assert_eq!((*p, f.prefix_len), picked, "Find-NetRoute {dst}");
+    }
+    assert_eq!(
+        g.lookup(ip(198, 18, 0, 3)).unwrap(),
+        Some(n2_lab(false)),
+        "the subnet broadcast is an on-link destination, as on Linux and macOS"
+    );
+    assert_eq!(g.lookup(ip(198, 18, 0, 2)).unwrap(), Some(n2_lab(false)));
+    assert_eq!(
+        g.lookup(ip(198, 18, 0, 1)).unwrap(),
+        Some(n2_lab(true)),
+        "the adapter's own unicast address"
+    );
+    assert_eq!(
+        g.lookup(Ipv4Addr::LOCALHOST).unwrap(),
+        Some(Route {
+            ifindex: N2_LO,
+            ifname: "Loopback Pseudo-Interface 1".into(),
+            gateway: None,
+            local: true,
+        })
+    );
+    assert_eq!(
+        g.default_routes().unwrap(),
+        vec![Route {
+            ifindex: N2_MGMT,
+            ifname: "Ethernet".into(),
+            gateway: Some(ip(10, 0, 2, 2)),
+            local: false,
+        }],
+        "MIB-flagged and loopback rows are never default routes"
+    );
+}
+
+/// w06_multi_no_gateway (lab `WINDOWS_CASES`), его preflight `--offline`: цели 198.18.0.2-198.18.0.3, интерфейс
+/// «Ethernet 2» по маршруту к первой цели. В живом окне на 9496cd7 он отказал `[-] FAIL: 198.18.0.3 is an address of
+/// this host (route via Ethernet 2)`: флаг MIB строки 198.18.0.3/32 (широковещательный адрес /30) делал её локальной.
+#[test]
+fn guest_n2_w06_preflight_detects_ethernet_2_through_the_broadcast_row() {
+    let g = guest_n2();
+    let t = n2_targets(&[(ip(198, 18, 0, 2), ip(198, 18, 0, 3))]).unwrap();
+    assert_eq!(
+        (t.first, t.last, t.single),
+        (ip(198, 18, 0, 2), ip(198, 18, 0, 3), false)
+    );
+    let d = detect_offline(&t, &Overrides::default(), &g, &g).unwrap_or_else(|e| panic!("[-] {e}"));
+    assert_eq!(
+        (d.iface.name.as_str(), d.iface_source),
+        ("Ethernet 2", Source::Detected)
+    );
+    assert_eq!(d.iface.device_id, format!("\\Device\\NPF_{N2_LAB_GUID}"));
+    assert_eq!(d.source_ipv4, (ip(198, 18, 0, 1), Source::Detected));
+    assert_eq!(d.source_mac, (N2_LAB_MAC, Source::Detected));
+    assert_eq!(
+        d.next_hop,
+        NextHop::Mac([0x66, 0x55, 0x44, 0x33, 0x22, 0x11], Source::Given)
+    );
+    assert_eq!(g.lookups(), [ip(198, 18, 0, 2), ip(198, 18, 0, 3)]);
+}
+
+/// Живой w06: та же пара целей без `--offline`. Обе идут on-link через «Ethernet 2» без шлюза, а маршрут по умолчанию
+/// есть только у «Ethernet», поэтому отказ `NoGateway` с подсказками маршрутизатора C, как требует таблица случаев.
+#[test]
+fn guest_n2_w06_live_refuses_no_gateway_on_ethernet_2() {
+    let g = guest_n2();
+    let t = n2_targets(&[(ip(198, 18, 0, 2), ip(198, 18, 0, 3))]).unwrap();
+    let e = detect(&t, &Overrides::default(), &g, &g).unwrap_err();
+    assert_eq!(
+        e,
+        DetectError::NoGateway {
+            ifname: "Ethernet 2".into()
+        },
+        "[-] {e}"
+    );
+    assert_eq!(
+        e.to_string(),
+        "FAIL: no default gateway on interface \"Ethernet 2\" for several on-link targets\n    \
+         [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    \
+         [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    \
+         [hint] try \"--interface eth0\" to change interface"
+    );
+}
+
+/// Одна цель 198.18.0.3 (широковещательный адрес /30) теперь on-link: следующий хоп это сама цель (ARP к ней, как на
+/// Linux). Адрес адаптера 198.18.0.1 остаётся `LocalTarget`, и цель, чей лучший маршрут идёт через интерфейс IfType 24,
+/// тоже, без флага MIB на строке.
+#[test]
+fn guest_n2_single_broadcast_target_is_on_link_own_and_loopback_routed_targets_are_local() {
+    let one = |a: Ipv4Addr| n2_targets(&[(a, a)]).unwrap();
+    let g = guest_n2();
+    let d = detect(&one(ip(198, 18, 0, 3)), &Overrides::default(), &g, &g)
+        .unwrap_or_else(|e| panic!("[-] {e}"));
+    assert_eq!(d.iface.name, "Ethernet 2");
+    assert_eq!(
+        d.next_hop,
+        NextHop::Resolve {
+            ip: ip(198, 18, 0, 3),
+            why: NextHopWhy::OnLinkTarget,
+        }
+    );
+
+    for offline in [false, true] {
+        let g = guest_n2();
+        let t = one(ip(198, 18, 0, 1));
+        let r = if offline {
+            detect_offline(&t, &Overrides::default(), &g, &g)
+        } else {
+            detect(&t, &Overrides::default(), &g, &g)
+        };
+        let e = r.unwrap_err();
+        assert_eq!(
+            e,
+            DetectError::LocalTarget {
+                ip: ip(198, 18, 0, 1),
+                ifname: "Ethernet 2".into(),
+                with_adapter: false,
+            },
+            "offline {offline}"
+        );
+        assert_eq!(
+            e.to_string(),
+            "FAIL: 198.18.0.1 is an address of this host (route via Ethernet 2)\n    \
+             [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\""
+        );
+    }
+
+    let mut g = guest_n2();
+    g.rows.push(n2_row(
+        ip(192, 0, 2, 0),
+        24,
+        N2_LO,
+        Ipv4Addr::UNSPECIFIED,
+        256,
+        false,
+    ));
+    let e = detect(&one(ip(192, 0, 2, 7)), &Overrides::default(), &g, &g).unwrap_err();
+    assert_eq!(
+        e,
+        DetectError::LocalTarget {
+            ip: ip(192, 0, 2, 7),
+            ifname: "Loopback Pseudo-Interface 1".into(),
+            with_adapter: false,
+        }
+    );
+}
+
+/// 224.0.0.0/4 и 255.255.255.255 гостя (строки «Ethernet 2» с флагом MIB) не становятся целями-пробами, как и до PF3:
+/// таблица их не ищет.
+#[test]
+fn guest_n2_multicast_and_limited_broadcast_stay_out_of_probe_targets() {
+    let bcast = ip(255, 255, 255, 255);
+    let mcast = ip(224, 0, 0, 1);
+    assert_eq!(
+        n2_targets(&[(ip(224, 0, 0, 0), ip(239, 255, 255, 255))]),
+        None
+    );
+    assert_eq!(n2_targets(&[(bcast, bcast)]), None);
+    assert_eq!(n2_targets(&[(mcast, mcast), (bcast, bcast)]), None);
+    let t = n2_targets(&[
+        (mcast, mcast),
+        (ip(198, 18, 0, 2), ip(198, 18, 0, 2)),
+        (bcast, bcast),
+    ])
+    .unwrap();
+    assert_eq!(
+        t,
+        Targets {
+            first: ip(198, 18, 0, 2),
+            last: ip(198, 18, 0, 2),
+            single: true,
+        }
+    );
+    let g = guest_n2();
+    let d = detect(&t, &Overrides::default(), &g, &g).unwrap();
+    assert_eq!(
+        d.next_hop,
+        NextHop::Resolve {
+            ip: ip(198, 18, 0, 2),
+            why: NextHopWhy::OnLinkTarget,
+        }
+    );
+    assert_eq!(g.lookups(), [ip(198, 18, 0, 2)]);
 }
 
 #[cfg(windows)]

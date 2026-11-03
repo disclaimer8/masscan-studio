@@ -326,8 +326,8 @@ pub(crate) fn adapters() -> Result<Vec<WinAdapter>, NetError> {
         .collect())
 }
 
-/// Строка `MIB_IPFORWARD_ROW2` → [`Fwd`]; `loopback` здесь только флаг строки (IfType 24 добавляет
-/// `route_parse::mark_loopback`).
+/// Строка `MIB_IPFORWARD_ROW2` → [`Fwd`]; `mib_loopback` это флаг `Loopback` строки, `loopback_if` здесь всегда
+/// `false` (IfType 24 отмечает `route_parse::mark_loopback`).
 ///
 /// # Safety
 /// `p` указывает на строку, заполненную IP Helper и живую на время вызова.
@@ -352,7 +352,8 @@ unsafe fn fwd_from_row(
             prefix_len: (*p).DestinationPrefix.PrefixLength,
             next_hop: gateway,
             metric: (*p).Metric,
-            loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
+            mib_loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
+            loopback_if: false,
         }
     }
 }

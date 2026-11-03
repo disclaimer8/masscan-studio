@@ -526,8 +526,12 @@ mod iphlp {
         /// `0.0.0.0` это on-link.
         pub next_hop: Ipv4Addr,
         pub metric: u32,
-        /// Флаг `Loopback` строки или IfType 24 её интерфейса ([`mark_loopback`]).
-        pub loopback: bool,
+        /// Флаг `Loopback` строки `MIB_IPFORWARD_ROW2` как есть. Windows ставит его и строкам, которые не адрес хоста
+        /// (/32 широковещательного адреса подсети), поэтому он только исключает строку из маршрутов по умолчанию
+        /// ([`defaults_from_table`]), но не делает назначение локальным ([`route_from_best`]).
+        pub mib_loopback: bool,
+        /// Интерфейс строки это software loopback, IfType 24 ([`mark_loopback`]).
+        pub loopback_if: bool,
     }
 
     /// Адаптер `GetAdaptersAddresses(AF_INET)`.
@@ -576,21 +580,42 @@ mod iphlp {
             .map_or_else(|| format!("ifindex {ifindex}"), |i| i.name.clone())
     }
 
-    /// Строки через интерфейс IfType 24 (software loopback) получают `loopback`.
+    /// Строки через интерфейс IfType 24 (software loopback) получают `loopback_if`.
     pub(crate) fn mark_loopback(rows: &mut [Fwd], adapters: &[WinAdapter]) {
         for row in rows {
             if adapters
                 .iter()
                 .any(|a| a.if_index == row.ifindex && a.if_type == IF_TYPE_SOFTWARE_LOOPBACK)
             {
-                row.loopback = true;
+                row.loopback_if = true;
             }
         }
     }
 
-    /// `GetBestRoute2` → [`Route`] (правило `Route::local`: флаг loopback строки или `dst` равен unicast-адресу адаптера).
+    /// `RouteTable::lookup` Windows: строка `GetBestRoute2` к `dst` и адаптеры `GetAdaptersAddresses` → [`Route`]
+    /// ([`mark_loopback`], затем [`route_from_best`]). Через неё идут `windows::os::OsRoutes` и герметичная таблица
+    /// гостя в тестах.
+    pub(crate) fn lookup_from_best(row: Fwd, dst: Ipv4Addr, adapters: &[WinAdapter]) -> Route {
+        let mut rows = [row];
+        mark_loopback(&mut rows, adapters);
+        let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
+        route_from_best(&rows[0], dst, &ifaces)
+    }
+
+    /// `RouteTable::default_routes` Windows: строки `GetIpForwardTable2` и адаптеры → маршруты по умолчанию
+    /// ([`mark_loopback`], затем [`defaults_from_table`]).
+    pub(crate) fn defaults_from_rows(mut rows: Vec<Fwd>, adapters: &[WinAdapter]) -> Vec<Route> {
+        mark_loopback(&mut rows, adapters);
+        let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
+        defaults_from_table(&rows, &ifaces)
+    }
+
+    /// `GetBestRoute2` → [`Route`]. Правило `Route::local`: `dst` равен unicast-адресу адаптера или лучший маршрут идёт
+    /// через software loopback (IfType 24). Флаг MIB `Loopback` строки сам по себе назначение локальным не делает:
+    /// Windows ставит его и строке /32 широковещательного адреса подсети, а такая строка это on-link маршрут своего
+    /// интерфейса (шлюз это `next_hop`, если он задан), как `RTN_BROADCAST` на Linux и маршрут без `RTF_LOCAL` на macOS.
     pub(crate) fn route_from_best(row: &Fwd, dst: Ipv4Addr, ifaces: &[Iface]) -> Route {
-        let local = row.loopback || ifaces.iter().any(|i| i.ipv4.contains(&dst));
+        let local = row.loopback_if || ifaces.iter().any(|i| i.ipv4.contains(&dst));
         Route {
             ifindex: row.ifindex,
             ifname: name_of(row.ifindex, ifaces),
@@ -599,11 +624,12 @@ mod iphlp {
         }
     }
 
-    /// Маршруты по умолчанию: префикс 0, не loopback, по `metric` (порядок равных сохраняется).
+    /// Маршруты по умолчанию: префикс 0, без флага MIB `Loopback` и не через IfType 24, по `metric` (порядок равных
+    /// сохраняется).
     pub(crate) fn defaults_from_table(rows: &[Fwd], ifaces: &[Iface]) -> Vec<Route> {
         let mut d: Vec<&Fwd> = rows
             .iter()
-            .filter(|r| r.prefix_len == 0 && !r.loopback)
+            .filter(|r| r.prefix_len == 0 && !r.mib_loopback && !r.loopback_if)
             .collect();
         d.sort_by_key(|r| r.metric);
         d.into_iter()

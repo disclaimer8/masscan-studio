@@ -26,8 +26,8 @@
 use crate::{
     autodetect_verify::{
         self as av, ARGV_JSON, ArgvRecord, CAPTURE_JSON, CaseKind, CaseSpec, DETECTED_JSON,
-        EXPECT_JSON, ExpectRecord, HASHES, IFLIST_JSON, IflistRecord, MANIFEST_JSON,
-        ORACLE_CAPTURE_JSON, ORACLE_IFLIST_JSON, ORACLE_PCAP, PEER_PCAP, Plan,
+        EXPECT_JSON, ExpectRecord, HASHES, IFLIST_JSON, ISOLATION_POST_JSON, IflistRecord,
+        MANIFEST_JSON, ORACLE_CAPTURE_JSON, ORACLE_IFLIST_JSON, ORACLE_PCAP, PEER_PCAP, Plan,
     },
     capture::{self, IsolationMode, isolation_permits, scrub_str},
     macos_verify::{hashes_match_tree, tree},
@@ -71,6 +71,9 @@ const ACK_POLLS: u32 = 300;
 const WITNESS_POLLS: u32 = 1800;
 const RESPONDER_POLLS: u32 = 200;
 const EXEC_TIMEOUT: u64 = 60;
+/// The Linux suite's mark in `--work` that a run could not be copied into the evidence directory and its work
+/// directory stays: `wire-lab.sh` then leaves `--work` in place at its cleanup (and refuses that `--out` next time).
+pub(crate) const WORK_KEPT: &str = "work-kept.txt";
 
 const USAGE: &str = "autodetect-suite linux --out DIR --work DIR --ns-a NS --ns-b NS --iface-a IF --iface-b IF --mac-a MAC --mac-b MAC --rmasscan PATH --oracle PATH --conf-masked 0|1 [--only TAG ...]   (run by wire-lab.sh --suite autodetect, as root)
 autodetect-suite macos --out DIR --rmasscan PATH --lab PATH_TO_SELF [--run-id m1] [--only TAG ...] [--root-case]   (as the user in the grant window; --root-case under sudo)
@@ -268,17 +271,18 @@ pub(crate) fn addresses_outside_the_lab(argv: &[String]) -> Vec<String> {
     bad
 }
 
-/// `--iflist` reduced on the spot: exit code, line count, sha256 of the whole output and the one line of the stand
-/// NIC (`None` for the oracle, whose format is its own). The listing itself is an inventory of the host.
-pub(crate) fn reduce_iflist(rc: i32, stdout: &str, stand_iface: Option<&str>) -> IflistRecord {
+/// `--iflist` reduced on the spot: exit code, the number of listed (non-blank) lines, sha256 of the whole output and
+/// the one line of the stand NIC (`None` for the oracle, whose format is its own: masscan prints ` N  NAME \t(DESC)`
+/// per adapter and closes with a blank line, and without any adapter one error line, so a blank line never counts).
+/// The listing itself is an inventory of the host.
+pub(crate) fn reduce_iflist(rc: i32, text: &str, stand_iface: Option<&str>) -> IflistRecord {
     let lead = stand_iface.map(|n| format!("{n} index="));
     IflistRecord {
         rc,
-        lines: stdout.lines().count() as u64,
-        sha256: crate::verify::sha(stdout.as_bytes()),
+        lines: text.lines().filter(|l| !l.trim().is_empty()).count() as u64,
+        sha256: crate::verify::sha(text.as_bytes()),
         stand_line: lead.and_then(|lead| {
-            stdout
-                .lines()
+            text.lines()
                 .find(|l| l.starts_with(&lead))
                 .map(|l| l.trim_end_matches('\r').to_owned())
         }),
@@ -831,7 +835,9 @@ impl Linux<'_> {
         Ok(self.ns(&self.ns_a, a))
     }
 
-    /// `--iflist` of rmasscan and of the C oracle in the scanner namespace, reduced in memory.
+    /// `--iflist` of rmasscan and of the C oracle in the scanner namespace, reduced in memory. rmasscan lists on
+    /// stdout; masscan on stderr (`rawsock_list_adapters`), its stdout stays empty. Neither of the oracle's streams
+    /// is written anywhere: `oracle/iflist.json` is all that is kept of it.
     fn iflist(&self, base: &Path, run: &Path) -> Result<(), SuiteError> {
         let o = self.host.exec(
             &self.ns(&self.ns_a, [self.rmasscan.clone(), "--iflist".into()]),
@@ -845,7 +851,7 @@ impl Linux<'_> {
         io(fs::create_dir_all(run.join("oracle")), "oracle directory")?;
         write_record(
             &run.join(ORACLE_IFLIST_JSON),
-            &reduce_iflist(o.rc, &o.stdout, None),
+            &reduce_iflist(o.rc, &o.stderr, None),
         )?;
         Ok(())
     }
@@ -861,10 +867,33 @@ impl Linux<'_> {
         }
         drop(t);
         let dest = self.out.join("runs").join(spec.tag);
-        io(fs::create_dir_all(self.out.join("runs")), "runs directory")?;
-        hash_and_copy(&run, &dest).map_err(SuiteError::Abort)?;
+        io(fs::create_dir_all(self.out.join("runs")), "runs directory")
+            .and_then(|()| hash_and_copy(&run, &dest))
+            .map_err(|e| SuiteError::Abort(self.keep_work(&base, &e)))?;
         io(fs::remove_dir_all(&base), "remove the work directory")?;
         Ok(dest)
+    }
+
+    /// A run that could not be copied into the evidence directory: its work directory `base` stays as it is, marked
+    /// in `--work` ([`WORK_KEPT`]) so that `wire-lab.sh` leaves `--work` in place at its cleanup. The message tells
+    /// what happens to it, also when the mark cannot be written (then the cleanup removes it).
+    fn keep_work(&self, base: &Path, e: &str) -> String {
+        let mark = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.work.join(WORK_KEPT))
+            .and_then(|mut f| writeln!(f, "{}: {}", scrub_str(&p2s(base)), scrub_str(e)));
+        match mark {
+            Ok(()) => format!(
+                "{e}; the work directory {} is kept ({WORK_KEPT} tells wire-lab.sh to leave {} in place)",
+                base.display(),
+                self.work.display()
+            ),
+            Err(x) => format!(
+                "{e}; the work directory {} could not be marked to be kept ({x}), so wire-lab.sh's cleanup removes it",
+                base.display()
+            ),
+        }
     }
 
     fn one_inner(
@@ -928,17 +957,17 @@ impl Linux<'_> {
             stop(p.as_mut(), "TERM", &self.pause(), RESPONDER_POLLS);
         }
         // 5. The seal after the run: a stand that changed stops the suite (the run is kept under runs_aborted).
-        self.isolation(&run.join("isolation-post.json"))
-            .map_err(|e| {
-                SuiteError::Abort(format!(
-                    "{tag}: the stand is not sealed after the run ({e}); no further run"
-                ))
-            })
+        self.isolation(&run.join(ISOLATION_POST_JSON)).map_err(|e| {
+            SuiteError::Abort(format!(
+                "{tag}: the stand is not sealed after the run ({e}); no further run"
+            ))
+        })
     }
 
     /// The failure path of one run: the scanner stops first, then the witness (with its full window, so that its
     /// capture is finished). Once a frame may exist the run directory is kept under `runs_aborted/<tag>.<nonce>`,
-    /// hashed like a run; before that nothing is left.
+    /// hashed like a run (when that copy fails, the work directory stays, marked: [`Self::keep_work`]); before that
+    /// nothing is left.
     fn abort(
         &self,
         base: &Path,
@@ -970,7 +999,7 @@ impl Linux<'_> {
                 let _ = fs::remove_dir_all(base);
                 format!("evidence kept in runs_aborted/{name}")
             }
-            Err(e) => format!("{e}; the work directory {} is kept", base.display()),
+            Err(e) => self.keep_work(base, &e),
         };
         match err {
             SuiteError::NotRun(m) => SuiteError::NotRun(format!("{m}; {note}")),

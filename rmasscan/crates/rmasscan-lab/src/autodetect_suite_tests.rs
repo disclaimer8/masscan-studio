@@ -67,8 +67,12 @@ fn full_iflist(stand_line: &str) -> String {
         "lo index=1 mac=none ipv4=127.0.0.1 up other\n{stand_line}\nwlp2s0 index=3 mac=3c-22-fb-11-22-33 ipv4=192.168.1.20 up ethernet\ndefault via 192.168.1.1 dev wlp2s0\n"
     )
 }
-/// The C oracle's `--iflist` (its own format), with a host interface in it.
-const ORACLE_IFLIST: &str = "If list:\n  1  veth-a\n  2  wlp2s0\n  3  lo\n";
+/// The C oracle's `--iflist` as masscan prints it, on stderr (`rawsock_list_adapters`, rawsock.c:198-225:
+/// `" %d  %s \t"`, then `"(%s)\n"` or `"(No description available)\n"`, then a blank line; stdout stays empty), with
+/// a host interface in it.
+const ORACLE_IFLIST: &str = " 0  veth-a \t(No description available)\n 1  any \t(Pseudo-device that captures on all interfaces)\n 2  lo \t(No description available)\n 3  wlp2s0 \t(No description available)\n 4  nflog \t(Linux netfilter log (NFLOG) interface)\n 5  nfqueue \t(Linux netfilter queue (NFQUEUE) interface)\n\n";
+/// The six adapters of [`ORACLE_IFLIST`]; its blank last line is not one.
+const ORACLE_ADAPTERS: u64 = 6;
 /// The host name an mDNS announcement carries: it must never reach the evidence.
 const HOST: &[u8] = b"\x09denys-mbp\x05local\x00";
 const PEER: [u8; 6] = crate::link::STAND_PEER_MAC;
@@ -189,6 +193,8 @@ struct FakeLinux {
     isolation_calls: Cell<usize>,
     /// A file overwritten when rmasscan starts (a binary replaced in the middle of the suite).
     replace_on_scan: RefCell<Option<PathBuf>>,
+    /// A directory created when rmasscan starts (something takes the run's place in the evidence directory).
+    occupy_on_scan: RefCell<Option<PathBuf>>,
 }
 impl FakeLinux {
     fn new(tags: &[&'static str], rmasscan: &Path, oracle: &Path) -> Self {
@@ -210,6 +216,7 @@ impl FakeLinux {
             isolation_fails_at: Cell::new(0),
             isolation_calls: Cell::new(0),
             replace_on_scan: RefCell::default(),
+            occupy_on_scan: RefCell::default(),
         }
     }
     /// The run a command belongs to, from the work directory its paths name (`<work>/<tag>.<nonce>/...`).
@@ -280,11 +287,17 @@ impl LinuxHost for FakeLinux {
             }
             fs::write(after(argv, "--out"), file_of(self.sim(), "isolation.json")).unwrap();
         } else if argv.iter().any(|a| a == "--iflist") {
-            return Ok(ok(if argv.contains(&self.oracle) {
-                ORACLE_IFLIST.to_owned()
-            } else {
-                full_iflist("veth-a index=2 mac=02-aa-00-00-00-01 ipv4=198.18.0.1 up ethernet")
-            }));
+            // masscan lists on stderr, rmasscan on stdout.
+            if argv.contains(&self.oracle) {
+                return Ok(Output {
+                    rc: 0,
+                    stdout: String::new(),
+                    stderr: ORACLE_IFLIST.into(),
+                });
+            }
+            return Ok(ok(full_iflist(
+                "veth-a index=2 mac=02-aa-00-00-00-01 ipv4=198.18.0.1 up ethernet",
+            )));
         }
         Ok(ok(String::new()))
     }
@@ -336,6 +349,9 @@ impl LinuxHost for FakeLinux {
         if argv.contains(&self.rmasscan) {
             if let Some(p) = self.replace_on_scan.borrow().as_ref() {
                 fs::write(p, "another build").unwrap();
+            }
+            if let Some(p) = self.occupy_on_scan.borrow().as_ref() {
+                fs::create_dir_all(p).unwrap();
             }
             if self.scanner_hangs.get() {
                 return Ok(self.proc("scanner", None, None));
@@ -783,6 +799,29 @@ fn iflist_cases_store_only_the_redacted_form() {
         reduce_iflist(0, "lo index=1 mac=none\n", Some("veth-a")).stand_line,
         None
     );
+    // C's form: one line per adapter (the stand line ` 0  veth-a \t(...)` among them), the closing blank line not
+    // counted; masscan's own form is never read as rmasscan's `NAME index=` line, even when asked for the stand NIC.
+    let c = reduce_iflist(0, ORACLE_IFLIST, None);
+    assert_eq!(
+        (c.rc, c.lines, c.sha256.as_str()),
+        (
+            0,
+            ORACLE_ADAPTERS,
+            crate::verify::sha(ORACLE_IFLIST.as_bytes()).as_str()
+        )
+    );
+    assert!(
+        ORACLE_IFLIST
+            .lines()
+            .any(|l| l.starts_with(" 0  veth-a \t("))
+    );
+    assert_eq!(
+        reduce_iflist(0, ORACLE_IFLIST, Some("veth-a")).stand_line,
+        None
+    );
+    // masscan without any adapter prints one error line and the blank line, still exit 0: one line, never two.
+    let none = "ERR:libpcap: no adapters found, are you sure you are root?\n\n";
+    assert_eq!(reduce_iflist(0, none, None).lines, 1);
     // The suite: l12 keeps iflist.json and oracle/iflist.json, never a stdout file, and no file names the host.
     let s = linux_setup(&["l12_iflist"]);
     assert_eq!(linux_with(&s.args, &s.fake, &s.lab).unwrap(), 0);
@@ -798,9 +837,23 @@ fn iflist_cases_store_only_the_redacted_form() {
             "{f} holds the host listing"
         );
     }
+    // The oracle's listing is reduced from its stderr (masscan lists there), and neither stream is kept.
     let rec: av::IflistRecord =
         serde_json::from_slice(&fs::read(run.join(av::ORACLE_IFLIST_JSON)).unwrap()).unwrap();
-    assert_eq!((rec.rc, rec.lines, rec.stand_line), (0, 4, None));
+    assert_eq!(
+        (rec.rc, rec.lines, rec.stand_line),
+        (0, ORACLE_ADAPTERS, None)
+    );
+    assert_eq!(rec.sha256, crate::verify::sha(ORACLE_IFLIST.as_bytes()));
+    assert!(!run.join(av::ORACLE_STDERR).exists() && !run.join(av::ORACLE_STDOUT).exists());
+    let res = av::verify_dir(&s.out);
+    let l12 = res["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tag"] == "l12_iflist")
+        .unwrap();
+    assert_eq!(l12["verdict"], "PASS", "{:#?}", bad(&res));
     fs::remove_dir_all(s.root).unwrap();
 }
 
@@ -872,6 +925,8 @@ fn a_linux_suite_directory_passes_autodetect_verify() {
     )
     .unwrap();
     assert_eq!(linux_with(&s.args, &s.fake, &s.lab).unwrap(), 0);
+    // wire-lab.sh's cleanup then deletes both namespaces and records the undo.
+    fs::write(s.out.join(av::TEARDOWN_JSON), av::tests::TEARDOWN).unwrap();
     let res = av::verify_dir(&s.out);
     assert_eq!(res["overall"], "PASS", "{:#?}", bad(&res));
     assert_eq!(res["runs"].as_array().unwrap().len(), tags.len() + 1);
@@ -1834,4 +1889,106 @@ fn a_stderr_that_does_not_parse_is_named_by_the_file_that_was_read() {
     write_detected(&d, "guest-stderr.txt").unwrap();
     assert!(!d.join(av::DETECTED_JSON).exists());
     fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_linux_copy_that_fails_keeps_the_work_directory_and_marks_it_for_wire_lab() {
+    // M4: the suite says the work directory is kept only when wire-lab.sh will keep it: it leaves WORK_KEPT in
+    // --work, and wire-lab.sh's cleanup skips `rm -rf "$WORK"` on it.
+    let kept_dirs = |work: &Path| -> Vec<String> {
+        fs::read_dir(work)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("l01_auto."))
+            .collect()
+    };
+    // The copy into runs/<tag> fails (the place is taken by then).
+    let s = linux_setup(&["l01_auto"]);
+    let work = s.out.join(".work");
+    *s.fake.occupy_on_scan.borrow_mut() = Some(s.out.join("runs/l01_auto"));
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(matches!(e, SuiteError::Abort(_)), "{e:?}");
+    assert!(
+        e.message().contains("exists already") && e.message().contains("is kept"),
+        "{e:?}"
+    );
+    let kept = kept_dirs(&work);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(work.join(&kept[0]).join("run/peer.pcap").is_file());
+    let marker = fs::read_to_string(work.join(WORK_KEPT)).unwrap();
+    assert!(marker.contains(&kept[0]), "{marker}");
+    fs::remove_dir_all(s.root).unwrap();
+    // The copy of an aborted run into runs_aborted fails too.
+    let s = linux_setup(&["l01_auto"]);
+    let work = s.out.join(".work");
+    s.fake.scanner_hangs.set(true);
+    fs::write(s.out.join("runs_aborted"), "in the way").unwrap();
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        e.message().contains("ran longer than") && e.message().contains("is kept"),
+        "{e:?}"
+    );
+    let kept = kept_dirs(&work);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(work.join(&kept[0]).join("run/argv.json").is_file());
+    assert!(
+        fs::read_to_string(work.join(WORK_KEPT))
+            .unwrap()
+            .contains(&kept[0])
+    );
+    fs::remove_dir_all(s.root).unwrap();
+    // A run that is copied leaves no marker (the work directory goes with wire-lab.sh's cleanup).
+    let s = linux_setup(&["l01_auto"]);
+    assert_eq!(linux_with(&s.args, &s.fake, &s.lab).unwrap(), 0);
+    assert!(!s.out.join(".work").join(WORK_KEPT).exists());
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[test]
+fn wire_lab_records_the_teardown_and_keeps_a_work_directory_the_suite_marked() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/wire-lab.sh"))
+            .unwrap();
+    let cleanup = text
+        .split("cleanup() {")
+        .nth(1)
+        .and_then(|t| t.split("\ntrap cleanup EXIT").next())
+        .expect("cleanup()");
+    let at = |needle: &str| {
+        cleanup
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} not in cleanup()"))
+    };
+    // M1: the autodetect lab records the undo after both namespaces are deleted and before the files go back to
+    // the user; the record is the verifier's file in the verifier's schema. The other suites write none.
+    let record = at(r#"[ "$SUITE" != autodetect ] || autodetect_teardown"#);
+    assert!(at(r#"ip netns del "$NS_B""#) < record && record < at("chown -R"));
+    let f = text
+        .split("autodetect_teardown() {")
+        .nth(1)
+        .and_then(|t| t.split("\n}\n").next())
+        .expect("autodetect_teardown()");
+    assert!(
+        f.contains(&format!(r#""$OUT/{}""#, av::TEARDOWN_JSON)),
+        "{f}"
+    );
+    assert!(
+        f.contains(r#"'{"namespaces_deleted":[%s],"namespaces_left":%s}\n'"#),
+        "{f}"
+    );
+    let t: av::TeardownRecord = serde_json::from_str(av::tests::TEARDOWN).unwrap();
+    assert_eq!(t.namespaces_left, 0);
+    // M4: the work directory the suite marked survives; every other one is removed as before.
+    let keep = at(&format!(
+        r#"if [ "$SUITE" = autodetect ] && [ -e "$WORK/{WORK_KEPT}" ]; then"#
+    ));
+    assert!(keep < at(r#"rm -rf "$WORK""#));
+    // A later lab never reuses such a directory, so neither the record nor the kept work is lost at its start.
+    let guard = text
+        .find(&format!(
+            r#"for f in "$OUT/{}" "$OUT/.work/{WORK_KEPT}"; do"#,
+            av::TEARDOWN_JSON
+        ))
+        .expect("the reuse guard");
+    assert!(guard < text.find(r#"WORK="$OUT/.work"; rm -rf "$WORK""#).unwrap());
 }

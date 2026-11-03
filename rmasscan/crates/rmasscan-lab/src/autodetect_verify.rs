@@ -4,19 +4,22 @@
 //!
 //! Portable and passive: it reads files and compares bytes, no network, no process. It keeps the honesty rules of
 //! the Windows and macOS verifiers and reuses their machinery (`verify::Run`, `verify::finish`): a missing input is
-//! NOT RUN, unproven evidence is INVALID, a lab frame on the uplink, a foreign SYN or a compressed capture is a
-//! safety FAIL that nothing discards, and no verdict is ever promoted.
+//! NOT RUN, unproven evidence is INVALID, a lab frame on the uplink, a foreign SYN, a frame on the stand's wire from
+//! a MAC that is neither end of the stand, or a compressed capture is a safety FAIL that nothing discards, and no
+//! verdict is ever promoted.
 //!
 //! Layout of an evidence directory: `manifest.json` (key `autodetect`: `linux`, `macos`, `macos-root` or
-//! `windows`; other keys are the suite's own) and `runs/<tag>/` per planned case ([`planned_tags`]). A run
-//! directory holds
+//! `windows`; other keys are the suite's own), on Linux `teardown.json` ([`TeardownRecord`]), and `runs/<tag>/` per
+//! planned case ([`planned_tags`]). A run directory holds
 //! - `argv.json` ([`ArgvRecord`]), `expect.json` ([`ExpectRecord`]) and `detected.json` ([`DetectedRecord`]: the
 //!   stderr parsed by [`parse_stderr`]; not for `--iflist`);
 //! - `stdout.txt stderr.txt exit.txt` (Windows: `guest-stdout.txt guest-stderr.txt guest-exit.txt`); an `--iflist`
 //!   case has `iflist.json` ([`IflistRecord`]) and never a stdout file, since the full listing is an inventory;
-//! - `peer.pcap` with its witness `capture.json` ([`PeerWitness`], the `capture dump` record);
-//! - Linux `isolation.json` (`capture isolation --mode autodetect`); macOS `uplink.pcap uplink.err`, Windows
-//!   `eno1.pcap eno1.err`, and on both `status-pre.json status-post.json`;
+//! - `peer.pcap` with its witness `capture.json` ([`PeerWitness`], the `capture dump` record; on macOS also
+//!   `privacy_filter` and `unfiltered`, what the published capture left out);
+//! - Linux `isolation.json` and `isolation-post.json` (`capture isolation --mode autodetect` before and after the
+//!   run); macOS `uplink.pcap uplink.err`, Windows `eno1.pcap eno1.err`, and on both `status-pre.json
+//!   status-post.json`;
 //! - `preflight.txt` for `w01`, `w06`, `m05`: `rc N`, then the stderr of the `rmasscan --offline` preflight;
 //! - `l11_parity` also `oracle/{stdout,stderr,exit}.txt`, `oracle.pcap` and its witness `oracle-capture.json`;
 //!   `l12_iflist` also `oracle/iflist.json` (`rc`, `lines`, `sha256` only);
@@ -51,6 +54,8 @@ pub const EXPECT_JSON: &str = "expect.json";
 pub const DETECTED_JSON: &str = "detected.json";
 pub const IFLIST_JSON: &str = "iflist.json";
 pub const PREFLIGHT_TXT: &str = "preflight.txt";
+/// Linux: `capture isolation --mode autodetect` taken again after the run (the seal before it is `isolation.json`).
+pub const ISOLATION_POST_JSON: &str = "isolation-post.json";
 pub const CAPTURE_JSON: &str = "capture.json";
 pub const PEER_PCAP: &str = "peer.pcap";
 pub const ORACLE_PCAP: &str = "oracle.pcap";
@@ -60,6 +65,8 @@ pub const ORACLE_STDOUT: &str = "oracle/stdout.txt";
 pub const ORACLE_STDERR: &str = "oracle/stderr.txt";
 pub const ORACLE_EXIT: &str = "oracle/exit.txt";
 pub const HASHES: &str = "hashes-before-copy.txt";
+/// Linux, at the root of the evidence directory: the stand's undo ([`TeardownRecord`]).
+pub const TEARDOWN_JSON: &str = "teardown.json";
 /// The only extensions an evidence file may carry (`*.gz` is a safety refusal of its own).
 pub const EVIDENCE_EXTENSIONS: [&str; 7] = ["json", "pcap", "txt", "log", "err", "sha256", "md"];
 
@@ -250,6 +257,17 @@ pub struct IflistRecord {
     pub sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stand_line: Option<String>,
+}
+
+/// `teardown.json`: the undo of the Linux stand, written by `wire-lab.sh --suite autodetect` at its cleanup, after
+/// the two namespaces were deleted. `namespaces_deleted` names those of this lab that are gone (scrubbed to
+/// `wl-scan-RUNID`, `wl-peer-RUNID`), `namespaces_left` counts its namespaces still listed (`null` when `ip netns
+/// list` failed, which no number stands in for).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TeardownRecord {
+    pub namespaces_deleted: Vec<String>,
+    pub namespaces_left: u64,
 }
 
 /// The fields of a `capture dump` record (`capture.json`, `oracle-capture.json`) this verifier reads: the
@@ -1417,14 +1435,31 @@ fn token_problems(text: &str, scanner_text: bool) -> Vec<String> {
     }
     p
 }
+/// The quoted values of a line, with the two escapes Rust's `{:?}` puts into a name undone (`\\` and `\"`, nothing
+/// else): the Windows device name reaches stderr as `"\\Device\\NPF_{…}"` through `NetError`'s text, the C-form
+/// refusals quote names as they are. Any other backslash stays, so a name that still differs is still a finding. An
+/// unterminated value is kept too.
+fn quoted_values(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (cur.as_mut(), c) {
+            (None, '"') => cur = Some(String::new()),
+            (None, _) => {}
+            (Some(_), '"') => out.extend(cur.take()),
+            (Some(v), '\\') if matches!(chars.peek(), Some('\\' | '"')) => {
+                v.extend(chars.next());
+            }
+            (Some(v), c) => v.push(c),
+        }
+    }
+    out.extend(cur);
+    out
+}
 /// The interface names a refusal or error line carries: quoted values, the name after `via `, after `for router `.
 fn refusal_names(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = text
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .map(str::to_owned)
-        .collect();
+    let mut out = quoted_values(text);
     for (i, _) in text.match_indices("via ") {
         let rest = &text[i + 4..];
         let end = rest.find([',', ')', '"']).unwrap_or(rest.len());
@@ -1660,6 +1695,47 @@ fn foreign_syns(fr: &Frames, st: &Stand) -> usize {
         .count()
 }
 
+/// Frames of a stand capture whose Ethernet source is neither end of the stand (the scanner NIC, the peer), the lab
+/// markers aside whoever sent them: `MAC ethertype` of each. Only those two MACs share each stand's wire (the Linux
+/// veth pair, the macOS feth pair, the Windows guest NIC and the peer veth behind the L2-only bridge); the Windows
+/// guest kernel's ARP comes from the scanner NIC (`os_arp`), the macOS peer host's mDNS is left out of the published
+/// capture before the verifier sees it. Anything else, the Darwin placeholder `02:00:00:00:00:00`, the zero MAC or a
+/// third device, is the scanner forging its source or a device with no business on the sealed wire. A frame too short
+/// to carry a source counts too.
+fn foreign_frames(fr: &Frames, st: &Stand) -> Vec<String> {
+    fr.iter()
+        .filter(|(_, f)| !is_marker(f, START_PAYLOAD) && !is_marker(f, END_PAYLOAD))
+        .filter(|(_, f)| {
+            !f.get(6..12)
+                .is_some_and(|m| m == st.scanner_mac || m == st.peer_mac)
+        })
+        .map(|(_, f)| match (f.get(6..12), f.get(12..14)) {
+            (Some(m), Some(e)) => format!(
+                "{} ethertype {:02x}{:02x}",
+                colon(m.try_into().unwrap_or_default()),
+                e[0],
+                e[1]
+            ),
+            _ => format!("a {}-byte frame without an Ethernet header", f.len()),
+        })
+        .collect()
+}
+/// The safety check of [`foreign_frames`] on one capture.
+fn no_foreign_frame(r: &mut Run, who: &str, fr: &Frames, st: &Stand) {
+    let foreign = foreign_frames(fr, st);
+    r.safety(
+        &format!(
+            "no frame on the {who} capture from a MAC other than the stand's scanner and peer (markers aside)"
+        ),
+        foreign.is_empty(),
+        format!(
+            "{} frames: {}",
+            foreign.len(),
+            foreign.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        ),
+    );
+}
+
 // ------------------------------------------------------------------ one run
 
 struct Names {
@@ -1719,7 +1795,8 @@ fn capture(r: &mut Run, d: &Path, name: &str, links: &[String]) -> Option<(Frame
 }
 
 /// Lab-isolation checks that need nothing but the pcaps: a frame on the uplink (stored, or counted by tcpdump), a
-/// SYN that is not the scanner's. They cannot be hidden by any other missing or wrong file.
+/// SYN that is not the scanner's, a frame from neither end of the stand. They cannot be hidden by any other missing
+/// or wrong file.
 fn safety(
     r: &mut Run,
     plan: Plan,
@@ -1774,6 +1851,7 @@ fn safety(
                 n == 0,
                 n,
             );
+            no_foreign_frame(r, who, fr, &st);
         }
     }
 }
@@ -1828,6 +1906,35 @@ fn witness(
     );
 }
 
+/// The macOS peer capture is published without the peer host's own mDNS (`autodetect_suite::publish_peer_capture`;
+/// the witness judged completeness on every frame it captured). `capture.json` must say what was left out, and the
+/// counts must add up: the frames kept are the frames of `peer.pcap`, kept plus dropped are the frames the witness
+/// captured (`unfiltered.pcap_frames`), and the filter is the brief's (`macos_verify::PEER_FILTER`). A record that
+/// does not prove it is INVALID; a missing or broken record is judged by [`witness`] already.
+fn privacy_filter(r: &mut Run, d: &Path, fr: &Frames) {
+    let Some(v) = read_json(d.join(CAPTURE_JSON)) else {
+        return;
+    };
+    let pf = &v["privacy_filter"];
+    let (kept, dropped, all) = (
+        pf["frames_kept"].as_u64(),
+        pf["frames_dropped"].as_u64(),
+        v["unfiltered"]["pcap_frames"].as_u64(),
+    );
+    let n = fr.len() as u64;
+    r.inv(
+        "capture.json: the macOS privacy filter kept the frames of peer.pcap and left out only the rest of the witness's capture (kept = peer.pcap, kept + dropped = unfiltered)",
+        pf["published"] == crate::macos_verify::PEER_FILTER
+            && kept == Some(n)
+            && all.is_some()
+            && kept.zip(dropped).and_then(|(k, x)| k.checked_add(x)) == all,
+        format!(
+            "filter {}, kept {kept:?}, dropped {dropped:?}, unfiltered {all:?}, peer.pcap {n}",
+            pf["published"]
+        ),
+    );
+}
+
 /// Does a file carry one of [`EVIDENCE_EXTENSIONS`]? A file without an extension (`README`, `.DS_Store`) does not.
 fn allowed_extension(f: &str) -> bool {
     Path::new(f)
@@ -1872,6 +1979,9 @@ fn gate(r: &mut Run, plan: Plan, d: &Path, files: &[String]) {
     let present: Vec<&str> = other.into_iter().filter(|n| d.join(n).exists()).collect();
     r.inv(label, present.is_empty(), format!("{present:?}"));
     if plan == Plan::Linux {
+        let sealed = |v: &Value| {
+            v["mode"] == "autodetect" && isolation_permits(v, IsolationMode::Autodetect)
+        };
         match read_json(d.join("isolation.json")) {
             None => r.add(
                 "isolation.json present",
@@ -1881,10 +1991,21 @@ fn gate(r: &mut Run, plan: Plan, d: &Path, files: &[String]) {
             ),
             Some(v) => r.inv(
                 "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
-                v["mode"] == "autodetect" && isolation_permits(&v, IsolationMode::Autodetect),
+                sealed(&v),
                 v["default_route"].to_string(),
             ),
         }
+        // The seal after the run, under the same rule. It is taken once the scanner has run, so missing or broken it
+        // is unproven evidence (INVALID), as a changed `status-post.json` is on the other stands.
+        let post = read_json(d.join(ISOLATION_POST_JSON));
+        r.inv(
+            "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+            post.as_ref().is_some_and(sealed),
+            post.map_or_else(
+                || "missing or invalid JSON".to_owned(),
+                |v| format!("mode {}, default_route {}", v["mode"], v["default_route"]),
+            ),
+        );
         return;
     }
     for name in ["status-pre.json", "status-post.json"] {
@@ -2048,6 +2169,9 @@ fn verify_run(root: &Path, spec: &CaseSpec, root_links: &[String]) -> Run {
     gate(&mut r, plan, &d, &t.files);
     if let Some(p) = &peer {
         witness(&mut r, &d, PEER_PCAP, CAPTURE_JSON, p, &st);
+        if matches!(plan, Plan::Macos | Plan::MacosRoot) {
+            privacy_filter(&mut r, &d, &p.0);
+        }
     }
     if let Some(o) = &oracle {
         witness(&mut r, &d, ORACLE_PCAP, ORACLE_CAPTURE_JSON, o, &st);
@@ -2680,6 +2804,16 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
             ),
         );
     }
+    if ev.tag == "l12_iflist" {
+        // R2 for the oracle as well: masscan lists on stderr, so neither stream of its --iflist run is kept.
+        for name in [ORACLE_STDOUT, ORACLE_STDERR] {
+            r.inv(
+                &format!("the oracle's full --iflist output is not stored ({name} absent)"),
+                !d.join(name).exists(),
+                "",
+            );
+        }
+    }
     if ev.tag == "l12_iflist"
         && let Some(o) = typed::<IflistRecord>(r, d, ORACLE_IFLIST_JSON)
     {
@@ -2700,6 +2834,48 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
 }
 
 // ------------------------------------------------------------------ the directory
+
+/// The undo of the Linux stand (`wire-lab.sh` cleanup, Review Focus 5): both namespaces deleted and none of the lab
+/// left. Missing or unreadable it is unproven; a namespace left behind means the stand change was not undone. Both
+/// are INVALID: the record proves the stand, not the scanner, and a namespace pair without an uplink carries no frame
+/// onto a real network (a frame that reached one is a safety FAIL of the captures). A symbolic link is not read.
+fn teardown(m: &mut Run, root: &Path, links: &[String]) {
+    let name = "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left";
+    if links.iter().any(|l| l == TEARDOWN_JSON) {
+        m.inv(name, false, "a symbolic link (not followed)");
+        return;
+    }
+    let rec = fs::read(root.join(TEARDOWN_JSON))
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice::<TeardownRecord>(&b).map_err(|e| e.to_string()));
+    match rec {
+        Err(e) => m.inv(
+            name,
+            false,
+            format!("missing or not a teardown record: {e}"),
+        ),
+        Ok(t) => {
+            let deleted = |lead: &str| {
+                t.namespaces_deleted
+                    .iter()
+                    .filter(|n| n.starts_with(lead))
+                    .count()
+                    == 1
+            };
+            m.inv(
+                name,
+                t.namespaces_left == 0
+                    && t.namespaces_deleted.len() == 2
+                    && deleted("wl-scan-")
+                    && deleted("wl-peer-"),
+                format!(
+                    "deleted {:?}, left {}",
+                    t.namespaces_deleted, t.namespaces_left
+                ),
+            );
+        }
+    }
+}
 
 /// Lab-isolation findings of every directory the plan does not judge itself (the root, unplanned tags, aborted or
 /// discarded runs, work directories): only their captures are read, and only those that are regular files.
@@ -2755,6 +2931,7 @@ fn stray_scan(root: &Path, plan: Option<Plan>, tags: &[&'static str], t: &Tree) 
                         n == 0,
                         n,
                     );
+                    no_foreign_frame(&mut r, who, &fr, &stand(plan));
                 }
             }
         }
@@ -2827,6 +3004,9 @@ pub fn verify_dir(root: &Path) -> Value {
         unplanned.is_empty(),
         format!("{unplanned:?}"),
     );
+    if plan == Some(Plan::Linux) {
+        teardown(&mut m, root, &t.links);
+    }
     let mut runs = vec![m.summary()];
     if let Some(plan) = plan {
         runs.extend(

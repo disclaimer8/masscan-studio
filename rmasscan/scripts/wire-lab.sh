@@ -11,6 +11,8 @@
 # seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
 # 198.18.0.2-5, so the rmasscan CLI can auto-detect its interface, source IP and router. The peer namespace
 # still has no default route; the stand is fixed inside this script (the WIRELAB_* stand overrides, MACs, ports and cases file included, are ignored).
+# Its cleanup records the undo in OUT/teardown.json and keeps OUT/.work when the suite marked it (work-kept.txt);
+# an OUT holding either is refused, so every autodetect lab gets a new --out.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -41,7 +43,7 @@ while [ $# -gt 0 ]; do
     --rmasscan) RMASSCAN_BIN=$2; shift 2 ;;
     --reps) REPS=$2; shift 2 ;;
     --rates) RATES=$2; shift 2 ;;
-    -h|--help) sed -n 2,23p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,25p "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -94,11 +96,36 @@ SEED=1; RATE=100
 CREATED_A=0; CREATED_B=0; PIDS=()
 STOP_GRACE=45   # witness: quiet wait <= 20 s + end markers <= 15 s + tcpdump stop <= 30 s, but normally 2-3 s
 mkdir -p "$OUT"; OUT=$(readlink -f "$OUT")
+if [ "$SUITE" = autodetect ]; then
+  # An earlier autodetect lab's directory is never reused: its teardown record and a work directory the suite kept
+  # after a failed evidence copy must survive (the rm below would wipe the latter), so a new lab needs a new --out.
+  for f in "$OUT/teardown.json" "$OUT/.work/work-kept.txt"; do
+    [ ! -e "$f" ] || { echo "FATAL: $f exists: $OUT holds an earlier autodetect lab; use a new --out" >&2; exit 2; }
+  done
+fi
 WORK="$OUT/.work"; rm -rf "$WORK"; mkdir -p "$WORK"
 : >"$OUT/commands.txt"
 
 log() { echo "[wire-lab] $*"; }
 note_cmd() { echo "$*" >>"$OUT/commands.txt"; }
+
+# The undo of the autodetect stand as evidence ($OUT/teardown.json, judged by autodetect-verify): which of this
+# run's namespaces are gone once cleanup deleted them (names scrubbed like env.json), and how many are still
+# listed; null when `ip netns list` fails, so that no count stands in for an unread list.
+autodetect_teardown() {
+  local list names left=null deleted="" created_ns created ns
+  if list=$(ip netns list 2>/dev/null); then
+    left=$(printf '%s\n' "$list" | grep -c -- "$RUN_ID")
+    names=$(printf '%s\n' "$list" | awk '{print $1}')
+    for created_ns in "$CREATED_A:$NS_A" "$CREATED_B:$NS_B"; do
+      created=${created_ns%%:*}; ns=${created_ns#*:}
+      [ "$created" = 1 ] || continue
+      case $'\n'"$names"$'\n' in *$'\n'"$ns"$'\n'*) continue ;; esac
+      deleted="$deleted${deleted:+,}\"$(printf '%s' "$ns" | sed -E 's/wl-(scan|peer)-[0-9]+-[0-9]+/wl-\1-RUNID/')\""
+    done
+  fi
+  printf '{"namespaces_deleted":[%s],"namespaces_left":%s}\n' "$deleted" "$left" >"$OUT/teardown.json"
+}
 
 cleanup() {
   local rc=$?
@@ -115,7 +142,13 @@ cleanup() {
   # nothing of this run may outlive it: no tcpdump writing into OUT, no live member of a tracked session
   stray=$((stray + $(stray_processes tcpdump "$OUT/")))
   local left; left=$(ip netns list 2>/dev/null | grep -c -- "$RUN_ID")
-  rm -rf "$WORK"
+  [ "$SUITE" != autodetect ] || autodetect_teardown
+  # The autodetect suite marks a work directory it kept after a failed evidence copy: that one stays for inspection.
+  if [ "$SUITE" = autodetect ] && [ -e "$WORK/work-kept.txt" ]; then
+    log "cleanup: $WORK kept: the suite could not copy a run into the evidence directory (see work-kept.txt); inspect it, never publish it"
+  else
+    rm -rf "$WORK"
+  fi
   [ -n "${SUDO_UID:-}" ] && chown -R "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$OUT" 2>/dev/null
   log "cleanup: rc=$rc own_pids=${#PIDS[@]} stray_processes=$stray namespaces_left=$left"
   # a leftover process or namespace is a failure of the run even when the body succeeded

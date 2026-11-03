@@ -10,6 +10,8 @@ pub mod pcap;
 #[cfg(target_os = "macos")]
 pub mod sealed_fixture;
 pub mod setup;
+#[cfg(target_os = "macos")]
+pub mod single_target;
 pub mod trusted;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod unix;

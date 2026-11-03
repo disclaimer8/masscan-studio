@@ -4,12 +4,75 @@ use crate::unix::Identity;
 pub const CAPTURE_SECONDS: u64 = 40;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CaptureStatistics {
+    pub received: u32,
+    pub dropped: u32,
+    pub interface_dropped: u32,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureFinish {
+    pub elapsed_millis: u64,
+    pub recorded: u64,
+    pub statistics: Option<CaptureStatistics>,
+    pub error: Option<String>,
+}
+impl CaptureFinish {
+    fn validate(&self, witness: &CaptureWitness, finished: u64) -> Result<()> {
+        if self.recorded > 1024
+            || self
+                .error
+                .as_ref()
+                .is_some_and(|e| e.is_empty() || e.len() > 1024)
+        {
+            return Err("Invalid capture completion bounds".into());
+        }
+        if self.error.is_none() {
+            let stats = self
+                .statistics
+                .as_ref()
+                .ok_or("Capture statistics missing")?;
+            if stats.dropped != 0
+                || stats.interface_dropped != 0
+                || u64::from(stats.received) < self.recorded
+                || self.elapsed_millis >= CAPTURE_SECONDS * 1000
+                || finished < witness.created
+                || !witness
+                    .created
+                    .checked_add(CAPTURE_SECONDS)
+                    .is_some_and(|end| finished < end)
+            {
+                return Err("Capture loss, count or lifetime cannot be successful".into());
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureCompletion {
+    pub witness: CaptureWitness,
+    pub finished: u64,
+    pub measurements: CaptureFinish,
+    pub pcap_bytes: u64,
+    pub pcap_sha256: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureWitness {
     pub generation: String,
     pub nonce: String,
     pub permit_sha256: String,
     pub created: u64,
     pub process: Identity,
+    pub lease_file: [u64; 2],
+}
+/// Sole descriptor for a process-owned kernel lock. Never reopen this file in the
+/// publisher: POSIX closing *any* descriptor for that inode releases its locks.
+pub struct CaptureLease {
+    file: File,
+    generation: String,
+    pid: u32,
 }
 pub const CAPTURE_HEADER: [u8; 24] = [
     0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0,
@@ -90,6 +153,7 @@ impl CaptureWitness {
             || self.process.pid == 0
             || self.process.pid > i32::MAX as u32
             || self.process.birth == [0, 0]
+            || self.lease_file == [0, 0]
             || &self.process != live
             || self.process.executable != crate::macos::installed_path(context.tooling_sha256)?
         {
@@ -105,6 +169,167 @@ fn digest(bytes: &[u8]) -> String {
         .collect()
 }
 impl Store {
+    pub fn capture_lease(&self, permit: &Permit, context: &Context<'_>) -> Result<CaptureLease> {
+        let deadline = budget();
+        let _lock = self.lock(deadline)?;
+        let bytes = self.capture_permit(permit, context, deadline)?;
+        if self.read(
+            &self.marker("capture-permit", &permit.generation)?,
+            deadline,
+        )? != bytes
+        {
+            return Err("Capture lease snapshot differs".into());
+        }
+        for prefix in ["claim", "capture-ready", "capture-ended"] {
+            absent(&self.marker(prefix, &permit.generation)?)?;
+        }
+        let path = self.marker("capture-live", &permit.generation)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(err)?;
+        metadata(&file.metadata().map_err(err)?, self.owner, false)?;
+        trusted(&path, self.owner, false, deadline)?;
+        same_file(
+            &file.metadata().map_err(err)?,
+            &fs::symlink_metadata(&path).map_err(err)?,
+        )?;
+        super::capture_lock::acquire(&file)?;
+        file.sync_all().map_err(err)?;
+        self.sync()?;
+        Ok(CaptureLease {
+            file,
+            generation: permit.generation.clone(),
+            pid: std::process::id(),
+        })
+    }
+    fn live_lease(&self, witness: &CaptureWitness, deadline: Instant) -> Result<()> {
+        if witness.process.pid == std::process::id() {
+            return Err("Capture publisher cannot reopen its POSIX lease file".into());
+        }
+        let path = self.marker("capture-live", &witness.generation)?;
+        trusted(&path, self.owner, false, deadline)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(err)?;
+        let fd = file.metadata().map_err(err)?;
+        metadata(&fd, self.owner, false)?;
+        same_file(&fd, &fs::symlink_metadata(&path).map_err(err)?)?;
+        if fd.len() != 0
+            || [fd.dev(), fd.ino()] != witness.lease_file
+            || super::capture_lock::owner(&file)? != Some(witness.process.pid)
+        {
+            return Err("Capture kernel lease released or owner changed".into());
+        }
+        Ok(())
+    }
+    /// Persist final measurements only after readiness has ended, from the same
+    /// root process incarnation. The actual fixed-name PCAP is bounded and hashed;
+    /// no caller-supplied output path or digest is accepted. Failures stay evidence.
+    pub fn finish_capture(
+        &self,
+        permit: &Permit,
+        witness: &CaptureWitness,
+        data: &CaptureFinish,
+    ) -> Result<CaptureCompletion> {
+        let process = Identity::current()?;
+        crate::trusted::verify(&process.executable, &permit.tooling_sha256)?;
+        self.finish_owned(
+            permit,
+            witness,
+            data,
+            crate::sealed_fixture::now()?,
+            &process,
+        )
+    }
+    fn finish_owned(
+        &self,
+        permit: &Permit,
+        witness: &CaptureWitness,
+        data: &CaptureFinish,
+        finished: u64,
+        process: &Identity,
+    ) -> Result<CaptureCompletion> {
+        data.validate(witness, finished)?;
+        let deadline = budget();
+        let _lock = self.lock(deadline)?;
+        let bytes = self.read(
+            &self.marker("capture-permit", &permit.generation)?,
+            deadline,
+        )?;
+        let snapshot: Permit = serde_json::from_slice(&bytes).map_err(err)?;
+        if &snapshot != permit {
+            return Err("Capture completion permit differs".into());
+        }
+        witness.validate(
+            permit,
+            &digest(&bytes),
+            &Context {
+                now: witness.created,
+                owner_uid: permit.owner_uid,
+                tooling_sha256: &permit.tooling_sha256,
+                helper_sha256: &permit.helper_sha256,
+            },
+            process,
+        )?;
+        for prefix in ["capture-ready", "capture-ended"] {
+            let stored: CaptureWitness = serde_json::from_slice(
+                &self.read(&self.marker(prefix, &permit.generation)?, deadline)?,
+            )
+            .map_err(err)?;
+            if &stored != witness {
+                return Err("Capture completion witness differs".into());
+            }
+        }
+        let pcap = self.read_limit(
+            &self.capture_path(&permit.generation)?,
+            deadline,
+            super::recording::MAX_BYTES as u64,
+        )?;
+        if data.error.is_none() {
+            if !pcap.starts_with(&CAPTURE_HEADER) {
+                return Err("Capture completion header differs".into());
+            }
+            let mut remaining = &pcap[24..];
+            let mut count = 0;
+            while !remaining.is_empty() {
+                if remaining.len() < 16 {
+                    return Err("Partial capture record".into());
+                }
+                let n = u32::from_le_bytes(remaining[8..12].try_into().map_err(err)?) as usize;
+                if !(14..=131072).contains(&n)
+                    || remaining[8..12] != remaining[12..16]
+                    || remaining.len() < 16 + n
+                {
+                    return Err("Invalid capture record length".into());
+                }
+                remaining = &remaining[16 + n..];
+                count += 1;
+            }
+            if count != data.recorded {
+                return Err("Capture completion count differs".into());
+            }
+        }
+        let result = CaptureCompletion {
+            witness: witness.clone(),
+            finished,
+            measurements: data.clone(),
+            pcap_bytes: pcap.len() as u64,
+            pcap_sha256: digest(&pcap),
+        };
+        self.create(
+            &self.marker("capture-result", &permit.generation)?,
+            &serde_json::to_vec(&result).map_err(err)?,
+            deadline,
+        )?;
+        Ok(result)
+    }
     fn capture_path(&self, generation: &str) -> Result<PathBuf> {
         Ok(self.marker("capture", generation)?.with_extension("pcap"))
     }
@@ -155,6 +380,7 @@ impl Store {
         &self,
         permit: &Permit,
         context: &Context<'_>,
+        lease: &CaptureLease,
     ) -> Result<CaptureWitness> {
         let process = Identity::current()?;
         if process.uid != 0 {
@@ -167,6 +393,15 @@ impl Store {
         crate::trusted::verify(&process.executable, context.tooling_sha256)?;
         let deadline = budget();
         let _lock = self.lock(deadline)?;
+        let lease_md = lease.file.metadata().map_err(err)?;
+        let lease_path = self.marker("capture-live", &permit.generation)?;
+        trusted(&lease_path, self.owner, false, deadline)?;
+        metadata(&lease_md, self.owner, false)?;
+        same_file(&lease_md, &fs::symlink_metadata(&lease_path).map_err(err)?)?;
+        if lease.generation != permit.generation || lease.pid != process.pid || lease_md.len() != 0
+        {
+            return Err("Capture lease does not belong to this publisher".into());
+        }
         let bytes = self.capture_permit(permit, context, deadline)?;
         for prefix in ["claim", "capture-ended"] {
             absent(&self.marker(prefix, &permit.generation)?)?;
@@ -203,6 +438,7 @@ impl Store {
             permit_sha256: digest(&bytes),
             created: context.now,
             process,
+            lease_file: [lease_md.dev(), lease_md.ino()],
         };
         witness.validate(permit, &digest(&bytes), context, &witness.process)?;
         self.create(
@@ -227,6 +463,7 @@ impl Store {
         let live = Identity::read(witness.process.pid)?;
         witness.validate(permit, &digest(&bytes), context, &live)?;
         crate::trusted::verify(&live.executable, context.tooling_sha256)?;
+        self.live_lease(&witness, deadline)?;
         crate::sealed_fixture::check(deadline, &|| false)?;
         Ok(witness)
     }
@@ -305,6 +542,171 @@ mod tests {
             helper_sha256: &p.helper_sha256,
         }
     }
+    #[test]
+    fn child_observes_store_kernel_lease() {
+        let Some(path) = std::env::var_os("STUDIO_CAPTURE_STORE_TEST_DIR") else {
+            return;
+        };
+        let store = Store::at(path.into(), Identity::current().unwrap().uid).unwrap();
+        let w: CaptureWitness =
+            serde_json::from_str(&std::env::var("STUDIO_CAPTURE_STORE_TEST_WITNESS").unwrap())
+                .unwrap();
+        let expected = std::env::var("STUDIO_CAPTURE_STORE_TEST_EXPECT").unwrap() == "true";
+        assert_eq!(store.live_lease(&w, budget()).is_ok(), expected);
+    }
+    #[test]
+    fn store_refuses_released_lease_even_while_publisher_lives_without_ended_marker() {
+        let path = std::env::temp_dir().join(format!(
+            "studio-capture-live-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = fs::canonicalize(path).unwrap();
+        let store = Store::at(path.clone(), Identity::current().unwrap().uid).unwrap();
+        let p = permit();
+        let c = context(&p, 1001);
+        store.prepare(&p, &c).unwrap();
+        let _output = store.begin_capture(&p, &c).unwrap();
+        let lease = store.capture_lease(&p, &c).unwrap();
+        let mut w = witness(&p);
+        w.process = Identity::current().unwrap();
+        let md = lease.file.metadata().unwrap();
+        w.lease_file = [md.dev(), md.ino()];
+        // A mistaken same-process query must refuse before opening/closing a
+        // second descriptor, which would otherwise drop the process's lock.
+        assert!(
+            store
+                .live_lease(&w, budget())
+                .unwrap_err()
+                .contains("cannot reopen")
+        );
+        let check = |w: &CaptureWitness, expected: bool| {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "single_target::capture::tests::child_observes_store_kernel_lease",
+                    "--nocapture",
+                ])
+                .env("STUDIO_CAPTURE_STORE_TEST_DIR", &path)
+                .env(
+                    "STUDIO_CAPTURE_STORE_TEST_WITNESS",
+                    serde_json::to_string(w).unwrap(),
+                )
+                .env("STUDIO_CAPTURE_STORE_TEST_EXPECT", expected.to_string())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        };
+        check(&w, true);
+        let mut wrong = w.clone();
+        wrong.lease_file[1] += 1;
+        check(&wrong, false);
+        let mut wrong = w.clone();
+        wrong.process.pid += 1;
+        check(&wrong, false);
+        drop(lease);
+        check(&w, false);
+        assert!(
+            !store
+                .marker("capture-ended", &p.generation)
+                .unwrap()
+                .exists()
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn completed_evidence_requires_ended_owner_and_is_private_immutable_and_hashed() {
+        let path = std::env::temp_dir().join(format!(
+            "studio-capture-finish-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = fs::canonicalize(path).unwrap();
+        let store = Store::at(path.clone(), Identity::current().unwrap().uid).unwrap();
+        let p = permit();
+        let c = context(&p, 1001);
+        store.prepare(&p, &c).unwrap();
+        let mut file = store.begin_capture(&p, &c).unwrap();
+        file.write_all(&CAPTURE_HEADER).unwrap();
+        file.sync_all().unwrap();
+        let mut w = witness(&p);
+        w.permit_sha256 = digest(&serde_json::to_vec(&p).unwrap());
+        let data = CaptureFinish {
+            elapsed_millis: 1000,
+            recorded: 0,
+            statistics: Some(CaptureStatistics {
+                received: 0,
+                dropped: 0,
+                interface_dropped: 0,
+            }),
+            error: None,
+        };
+        assert!(store.finish_owned(&p, &w, &data, 1002, &w.process).is_err());
+        for prefix in ["capture-ready", "capture-ended"] {
+            store
+                .create(
+                    &store.marker(prefix, &p.generation).unwrap(),
+                    &serde_json::to_vec(&w).unwrap(),
+                    budget(),
+                )
+                .unwrap();
+        }
+        let mut wrong = w.process.clone();
+        wrong.birth[0] += 1;
+        assert!(store.finish_owned(&p, &w, &data, 1002, &wrong).is_err());
+        let result = store.finish_owned(&p, &w, &data, 1002, &w.process).unwrap();
+        assert_eq!(result.pcap_bytes, 24);
+        assert_eq!(result.pcap_sha256, digest(&CAPTURE_HEADER));
+        assert!(store.finish_owned(&p, &w, &data, 1002, &w.process).is_err());
+        let output = store.marker("capture-result", &p.generation).unwrap();
+        assert_eq!(fs::metadata(&output).unwrap().mode() & 0o777, 0o600);
+        let saved: CaptureCompletion = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        assert_eq!(saved, result);
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn completion_cannot_label_loss_missing_stats_or_expired_recording_as_success() {
+        let p = permit();
+        let w = witness(&p);
+        let good = CaptureFinish {
+            elapsed_millis: 1000,
+            recorded: 1,
+            statistics: Some(CaptureStatistics {
+                received: 1,
+                dropped: 0,
+                interface_dropped: 0,
+            }),
+            error: None,
+        };
+        good.validate(&w, 1002).unwrap();
+        for kind in 0..6 {
+            let mut bad = good.clone();
+            match kind {
+                0 => bad.statistics = None,
+                1 => bad.statistics.as_mut().unwrap().dropped = 1,
+                2 => bad.statistics.as_mut().unwrap().received = 0,
+                3 => bad.recorded = 1025,
+                4 => bad.elapsed_millis = 40_000,
+                _ => bad.statistics.as_mut().unwrap().interface_dropped = 1,
+            }
+            assert!(bad.validate(&w, 1002).is_err());
+        }
+        assert!(good.validate(&w, 1000).is_err());
+        assert!(good.validate(&w, 1041).is_err());
+        let failed = CaptureFinish {
+            elapsed_millis: 40_100,
+            recorded: 1,
+            statistics: None,
+            error: Some("deadline expired".into()),
+        };
+        failed.validate(&w, 1042).unwrap();
+    }
     fn witness(p: &Permit) -> CaptureWitness {
         CaptureWitness {
             generation: p.generation.clone(),
@@ -317,6 +719,7 @@ mod tests {
                 birth: [1, 2],
                 executable: crate::macos::installed_path(&p.tooling_sha256).unwrap(),
             },
+            lease_file: [1, 2],
         }
     }
     #[test]
@@ -429,12 +832,13 @@ mod tests {
         let c = context(&p, 1001);
         store.prepare(&p, &c).unwrap();
         let file = store.begin_capture(&p, &c).unwrap();
+        let lease = store.capture_lease(&p, &c).unwrap();
         assert_eq!(file.metadata().unwrap().mode() & 0o777, 0o600);
         assert_eq!(file.metadata().unwrap().len(), 0);
         drop(file);
         assert!(store.begin_capture(&p, &c).is_err());
         if Identity::current().unwrap().uid != 0 {
-            assert!(store.publish_capture(&p, &c).is_err());
+            assert!(store.publish_capture(&p, &c, &lease).is_err());
         }
         assert!(store.live_capture(&p, &c).is_err());
         store.revoke(501, &p.generation).unwrap();

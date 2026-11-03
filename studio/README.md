@@ -2,8 +2,7 @@
 
 **Acceptance branch notice:** this checkout enables MacNetwork only for a mandatory
 sealed local fixture. It is not a general-network release and must not be
-distributed. The older gate description below describes the intended distributed
-baseline; use the [release checklist](RELEASE-CHECKLIST.md) and
+distributed. Use the [release checklist](RELEASE-CHECKLIST.md) and
 [current GUI/session evidence](../docs/experiments/2026-11-02-studio-gui-work-session.md)
 for this candidate's actual status.
 
@@ -74,16 +73,20 @@ Studio (one Mac, one macOS version, debug build) is recorded in
 `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`; its status
 words there govern.
 
-## Mac network · Wi-Fi / Ethernet (implemented, execution disabled)
+## Mac network · local test only
 
-Scan settings includes a third **Mac network · Wi-Fi / Ethernet** profile.
-The physical execution gate remains closed on every OS pending native acceptance;
-**Start scan** is disabled for this profile in this build. On Windows/Linux it
-also explains that physical scanning is macOS-only. Existing feth and Simulation
-profile meanings and saved settings are unchanged. No target is inferred from
-this Mac's network. When the physical gate is eventually opened, fresh settings
-default to this profile with empty targets and rate 100; explicit saved/draft
-settings are retained.
+On macOS this acceptance branch enables the **Mac network · local test only**
+profile exclusively for a sealed synthetic multi-peer/routed fixture on this Mac.
+The helper enforces its exact topology before opening a packet adapter. Arbitrary
+Wi-Fi/Ethernet devices, including hotel clients and the gateway, are not enabled.
+Windows/Linux show **Mac network · scanning disabled**; read-only physical route
+checks are macOS-only. This is not a general-network release.
+
+Fresh macOS settings select this profile with empty targets and rate 100. No
+targets are inferred from the current network. Existing feth and Simulation
+profile meanings and saved settings are unchanged. Follow the
+[release checklist](RELEASE-CHECKLIST.md) for the separate owned-target policy and
+physical-interface acceptance still required before enabling broader use.
 
 Enter IPv4 addresses, CIDRs or ranges, TCP ports, optional exclusions and a rate.
 **Check settings** validates without manufacturing an adapter or sending packets.
@@ -100,7 +103,7 @@ The implemented gated path accepts at most 2,048 candidates after user exclusion
 1,024 effective addresses and 1,048,576 TCP probes, at rate 1–1,000 packets/s.
 One scan requires one Ethernet-compatible interface/source; mixed interfaces,
 tunnel/loopback routes, IPv6, UDP and hostname targets are unsupported.
-After an accepted physical Start, **Preparing network** resolves neighbours;
+After an accepted fixture Start, **Preparing network** resolves neighbours;
 **Stop** and **Lock** remain available, and Pause becomes available only when TCP
 scanning begins. Frozen preparation coverage remains visible above results and
 under **Coverage…**, including addresses not scanned due to no neighbour response
@@ -112,9 +115,13 @@ readiness while retaining coverage for the selected saved scan and its displayed
 results. Export continues to describe that selected scan until a new scan starts
 or another History selection clears/replaces the view.
 
-These controls and fake-network tests do not establish working physical Wi-Fi or
-Ethernet scanning. Sealed multi-peer/routed lab acceptance and explicitly supplied
-owned home-network/remote-server targets are still required; see VERIFICATION.md.
+The optimized packaged GUI passed isolated multi-peer/routed Complete, Stop and
+another Complete in separate launches (96, 5 and 96 saved rows), with independent
+root packet evidence. This does not establish physical Wi-Fi/Ethernet delivery,
+same-window native restart, or manual keyboard/mouse acceptance. Exact source and
+artifact provenance is in the [GUI/session report](../docs/experiments/2026-11-02-studio-gui-work-session.md).
+A separately reviewed owned-target policy and authorized physical target remain
+required; see [VERIFICATION.md](VERIFICATION.md).
 
 Active attempts interrupt after a long scheduling/clock gap instead of silently
 resuming. The gated Mac feth path also repeats isolation checks in a background

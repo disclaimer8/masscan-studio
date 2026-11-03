@@ -36,7 +36,7 @@ pub(super) fn profile_hint(macos: bool, enabled: bool) -> &'static str {
     } else if !enabled {
         "Physical scanning is disabled in this build pending network acceptance. You can check settings and routes without sending scan packets."
     } else {
-        "Only scan targets you are authorized to test. Start prepares neighbours, then sends TCP probes."
+        "This development build scans only the isolated local test network. Other Wi-Fi and Ethernet targets are not enabled."
     }
 }
 pub(super) fn preview(job: &Job) -> Result<String, String> {

@@ -2,7 +2,8 @@
 //! `Sink`, `--offline` и `--iflist`. Синтетические таблицы маршрутов и интерфейсов, `FakeAdapter` с ответчиком ARP и
 //! `reply_to_syn`, `ManualClock` для резолвера и engine, фиксированные энтропия и время. Ни один тест не достигает ОС:
 //! `OsBackend` существует только в бинарнике, а `open` здесь выдаёт `FakeAdapter` или паникует (`panic_on_open`).
-//! Адреса и MAC только документационные (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) и локальные `02:…`.
+//! Адреса и MAC только документационные (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) и локальные `02:…`,
+//! кроме гостя n2: он воспроизводит лабораторный стенд (`198.18.0.0/30`) и NIC QEMU (`10.0.2.0/24`, `52:54:00:…`).
 
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
@@ -1162,6 +1163,192 @@ fn failed_outcome_exits_one_with_reason() {
         )),
         "{log}"
     );
+}
+
+// ---------- Гость n2 (Windows 11, лабораторный стенд w01–w08b; PF3) ----------
+
+const N2_LAB_IP: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
+const N2_LAB_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x04, 0x80, 0xa9];
+
+/// Гость n2: «Ethernet 2» 198.18.0.1/30 без шлюза, «Ethernet» 10.0.2.15 с единственным маршрутом по умолчанию через
+/// 10.0.2.2, Loopback Pseudo-Interface 1. Маршруты это ровно то, что `route_parse` (IP Helper) теперь выдаёт для строк
+/// гостя; в `rmasscan-net` это закрепляет `route_parse_tests::guest_n2_broadcast_is_on_link_own_address_and_loopback_
+/// interface_are_local` на дословной таблице `Get-NetRoute`: 198.18.0.1 локален (адрес адаптера), сосед .2 и
+/// широковещательный .3 on-link через «Ethernet 2», остальное через «Ethernet». Открытие адаптера паникует.
+fn guest_n2() -> FakeBackend {
+    let lab = |local| Route {
+        ifindex: 14,
+        ifname: "Ethernet 2".into(),
+        gateway: None,
+        local,
+    };
+    let mgmt = Route {
+        ifindex: 3,
+        ifname: "Ethernet".into(),
+        gateway: Some(Ipv4Addr::new(10, 0, 2, 2)),
+        local: false,
+    };
+    let nic = |name: &str, index: u32, guid: &str, mac: Option<[u8; 6]>, ethernet, ip| Iface {
+        name: name.into(),
+        index,
+        device_id: format!("\\Device\\NPF_{guid}"),
+        description: Some(name.into()),
+        mac,
+        mac_masked: false,
+        ethernet,
+        up: true,
+        ipv4: vec![ip],
+    };
+    let mut b = FakeBackend::new();
+    b.routes.rules = vec![
+        (u32::from(N2_LAB_IP), u32::from(N2_LAB_IP), Some(lab(true))),
+        (
+            u32::from(Ipv4Addr::new(198, 18, 0, 0)),
+            u32::from(Ipv4Addr::new(198, 18, 0, 3)),
+            Some(lab(false)),
+        ),
+        (0, u32::MAX, Some(mgmt.clone())),
+    ];
+    b.routes.defaults = vec![mgmt];
+    b.ifaces = vec![
+        nic(
+            "Ethernet",
+            3,
+            "{00000000-0000-0000-0000-000000000003}",
+            Some([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
+            true,
+            Ipv4Addr::new(10, 0, 2, 15),
+        ),
+        nic(
+            "Ethernet 2",
+            14,
+            "{C4617223-A264-44F4-BDC8-0EA27F02CC40}",
+            Some(N2_LAB_MAC),
+            true,
+            N2_LAB_IP,
+        ),
+        nic(
+            "Loopback Pseudo-Interface 1",
+            1,
+            "{00000000-0000-0000-0000-000000000001}",
+            None,
+            false,
+            Ipv4Addr::LOCALHOST,
+        ),
+    ];
+    b.neighbors.clear();
+    b.panic_on_open = true;
+    b
+}
+
+/// w06_multi_no_gateway из `WINDOWS_CASES` (rmasscan-lab `autodetect_verify.rs`): `CaseSpec::argv` (цели, `-p`, флагов
+/// нет, `COMMON_ARGS`); его preflight это тот же argv с `--offline` (`autodetect_suite::preflight_argv`).
+const W06: [&str; 8] = [
+    "198.18.0.2-198.18.0.3",
+    "-p80,443,8000-8007,8099",
+    "--seed",
+    "1",
+    "--rate",
+    "100",
+    "--wait",
+    "3",
+];
+
+/// w06 на таблице гостя. Preflight `--offline` печатает то, чего ждёт `preflight_expectation("w06_multi_no_gateway")`
+/// (`Preflight::Interface("Ethernet 2")`: rc 0 и `[+] interface = Ethernet 2 (detected: route to 198.18.0.2)`), и
+/// только строки `[+]`. Живой argv отказывает текстом и подсказками строки w06 (`fail`, `hints: ROUTER_HINTS`) без
+/// единой строки `[+]` (`detection: None`) и до открытия адаптера. На 9496cd7 тот же preflight на госте напечатал
+/// `[-] FAIL: 198.18.0.3 is an address of this host (route via Ethernet 2)`.
+#[test]
+fn guest_n2_w06_preflight_shows_ethernet_2_and_the_live_run_refuses_no_gateway() {
+    let mut b = guest_n2();
+    b.routes.defaults_panic = true;
+    let (r, out, log) = cli(&b, &with(&W06, &["--offline"]));
+    assert_eq!(r, Ok(()), "{log}");
+    assert!(out.is_empty(), "{out}");
+    assert_eq!(
+        log,
+        format!(
+            "[+] interface = Ethernet 2 (detected: route to 198.18.0.2)\n\
+             [+] source-mac = 52-54-00-04-80-a9 (detected)\n\
+             [+] source-ip = 198.18.0.1 (detected)\n\
+             [+] router-ip = none (offline)\n\
+             [+] router-mac = 66-55-44-33-22-11 (offline)\n\
+             [+] seed = 1 (given)\n\
+             [+] source-port = {TIME_PORT} (time)\n"
+        )
+    );
+    assert_eq!(
+        b.lookups(),
+        [Ipv4Addr::new(198, 18, 0, 2), Ipv4Addr::new(198, 18, 0, 3)]
+    );
+
+    let b = guest_n2();
+    let (r, out, log) = cli(&b, &W06);
+    let e = r.unwrap_err();
+    assert_eq!(
+        e,
+        "[-] FAIL: no default gateway on interface \"Ethernet 2\" for several on-link targets\n    \
+         [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    \
+         [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    \
+         [hint] try \"--interface eth0\" to change interface"
+    );
+    assert_eq!(
+        rmasscan_cli::error_text(&e),
+        e,
+        "C form, no rmasscan: error: wrapper"
+    );
+    assert!(out.is_empty() && log.is_empty(), "{log}");
+    assert!(b.attempts().is_empty(), "nothing is opened");
+}
+
+/// Одна цель 198.18.0.3 (широковещательный адрес /30 стенда) на таблице гостя: on-link, следующий хоп это сама цель
+/// (её разрешает ARP, как на Linux). Только `prepare` и строки `[+]` обнаружения: ни открытия, ни кадров. Адрес адаптера
+/// 198.18.0.1 остаётся отказом `LocalTarget`; 224.0.0.0/4 и 255.255.255.255 по-прежнему не цели-пробы.
+#[test]
+fn guest_n2_single_broadcast_target_resolves_itself_on_link_and_own_address_refuses() {
+    let b = guest_n2();
+    let p = live::prepare(
+        &config(&["198.18.0.3", "-p80", "--seed", "1"]),
+        SeedPolicy::Required,
+        &b,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        p.detected.next_hop,
+        NextHop::Resolve {
+            ip: Ipv4Addr::new(198, 18, 0, 3),
+            why: NextHopWhy::OnLinkTarget,
+        }
+    );
+    let mut log = Vec::new();
+    live::print_detection(&p, &mut log).unwrap();
+    assert_eq!(
+        String::from_utf8(log).unwrap(),
+        "[+] interface = Ethernet 2 (detected: route to 198.18.0.3)\n\
+         [+] source-mac = 52-54-00-04-80-a9 (detected)\n\
+         [+] source-ip = 198.18.0.1 (detected)\n\
+         [+] router-ip = 198.18.0.3 (on-link target)\n"
+    );
+    assert!(b.attempts().is_empty(), "nothing is opened");
+
+    let (r, out, log) = cli(&b, &["198.18.0.1", "-p80"]);
+    assert_eq!(
+        r.unwrap_err(),
+        "[-] FAIL: 198.18.0.1 is an address of this host (route via Ethernet 2)\n    \
+         [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\""
+    );
+    assert!(out.is_empty() && log.is_empty(), "{log}");
+
+    let b = guest_n2();
+    let (r, _, log) = cli(&b, &["224.0.0.1,255.255.255.255", "-p80"]);
+    assert_eq!(
+        r.unwrap_err(),
+        "[-] FAIL: no unicast target addresses to route to\n    \
+         [hint] targets must include an address outside 0.0.0.0/8, 127.0.0.0/8 and 224.0.0.0/3"
+    );
+    assert!(log.is_empty() && b.lookups().is_empty(), "{log}");
 }
 
 /// `OsBackend` недостижим из тестов: модуль и `fn main` бинарника под `cfg(not(test))`, библиотека его не знает,

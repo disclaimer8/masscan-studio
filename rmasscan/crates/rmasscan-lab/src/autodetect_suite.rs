@@ -75,7 +75,7 @@ const EXEC_TIMEOUT: u64 = 60;
 /// directory stays: `wire-lab.sh` then leaves `--work` in place at its cleanup (and refuses that `--out` next time).
 pub(crate) const WORK_KEPT: &str = "work-kept.txt";
 
-const USAGE: &str = "autodetect-suite linux --out DIR --work DIR --ns-a NS --ns-b NS --iface-a IF --iface-b IF --mac-a MAC --mac-b MAC --rmasscan PATH --oracle PATH --conf-masked 0|1 [--only TAG ...]   (run by wire-lab.sh --suite autodetect, as root)
+const USAGE: &str = "autodetect-suite linux --out DIR --work DIR --ns-a NS --ns-b NS --iface-a IF --iface-b IF --mac-a MAC --mac-b MAC --rmasscan PATH --oracle PATH --conf-masked 0|1 --lab-id ID [--only TAG ...]   (run by wire-lab.sh --suite autodetect, as root)
 autodetect-suite macos --out DIR --rmasscan PATH --lab PATH_TO_SELF [--run-id m1] [--only TAG ...] [--root-case]   (as the user in the grant window; --root-case under sudo)
 exit 0 every selected run executed, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH, 130 INTERRUPTED; judge the directory with autodetect-verify";
 pub(crate) const LINUX_OPTIONS: &[&str] = &[
@@ -90,6 +90,7 @@ pub(crate) const LINUX_OPTIONS: &[&str] = &[
     "rmasscan",
     "oracle",
     "conf-masked",
+    "lab-id",
     "only",
 ];
 
@@ -271,21 +272,32 @@ pub(crate) fn addresses_outside_the_lab(argv: &[String]) -> Vec<String> {
     bad
 }
 
-/// `--iflist` reduced on the spot: exit code, the number of listed (non-blank) lines, sha256 of the whole output and
-/// the one line of the stand NIC (`None` for the oracle, whose format is its own: masscan prints ` N  NAME \t(DESC)`
-/// per adapter and closes with a blank line, and without any adapter one error line, so a blank line never counts).
+/// rmasscan's `--iflist` reduced on the spot: exit code, the number of listed (non-blank) lines, sha256 of the whole
+/// output and the one line of the stand NIC (`NAME index=…`; `None` when it is not listed or no NIC is asked for).
 /// The listing itself is an inventory of the host.
 pub(crate) fn reduce_iflist(rc: i32, text: &str, stand_iface: Option<&str>) -> IflistRecord {
     let lead = stand_iface.map(|n| format!("{n} index="));
+    reduce(rc, text, |l| {
+        lead.as_deref().is_some_and(|lead| l.starts_with(lead))
+    })
+}
+/// The C oracle's `--iflist` (masscan lists on stderr) reduced by the same rule; its stand line is masscan's own
+/// ` N  NAME \t(DESC)` line of `stand_iface` ([`av::masscan_iflist_name`]). masscan closes its listing with a blank
+/// line and without any adapter prints one error line, so a blank line never counts.
+pub(crate) fn reduce_masscan_iflist(rc: i32, text: &str, stand_iface: &str) -> IflistRecord {
+    reduce(rc, text, |l| {
+        av::masscan_iflist_name(l) == Some(stand_iface)
+    })
+}
+fn reduce(rc: i32, text: &str, is_stand: impl Fn(&str) -> bool) -> IflistRecord {
     IflistRecord {
         rc,
         lines: text.lines().filter(|l| !l.trim().is_empty()).count() as u64,
         sha256: crate::verify::sha(text.as_bytes()),
-        stand_line: lead.and_then(|lead| {
-            text.lines()
-                .find(|l| l.starts_with(&lead))
-                .map(|l| l.trim_end_matches('\r').to_owned())
-        }),
+        stand_line: text
+            .lines()
+            .find(|l| is_stand(l))
+            .map(|l| l.trim_end_matches('\r').to_owned()),
     }
 }
 /// `iflist.json`, `stderr.txt` and `exit.txt` of an `--iflist` run; its stdout stays in memory.
@@ -425,7 +437,8 @@ pub(crate) fn hash_and_copy(work: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// Before the first run: no lab-isolation finding anywhere in `out` (a breach makes the directory FAIL for good),
-/// no run of a selected case yet, and no manifest of another plan, build (rmasscan, oracle, rmasscan-lab) or stand.
+/// no run of a selected case yet, and no manifest of another plan, build (rmasscan, oracle, rmasscan-lab), stand or
+/// Linux lab (`lab_id`).
 fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteError> {
     io(fs::create_dir_all(out), "--out")?;
     let trips = av::verify_dir(out)["safety_trips"]
@@ -450,7 +463,14 @@ fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteErr
                 "manifest.json is unreadable ({e}); use a new --out"
             ))
         })?;
-        for k in ["autodetect", "rmasscan", "oracle", "lab", "run_id"] {
+        for k in [
+            "autodetect",
+            "rmasscan",
+            "oracle",
+            "lab",
+            "run_id",
+            "lab_id",
+        ] {
             if m[k] != identity[k] {
                 return Err(not_run(format!(
                     "the existing manifest.json has {k} {} where this suite has {}; use a new --out",
@@ -835,9 +855,9 @@ impl Linux<'_> {
         Ok(self.ns(&self.ns_a, a))
     }
 
-    /// `--iflist` of rmasscan and of the C oracle in the scanner namespace, reduced in memory. rmasscan lists on
-    /// stdout; masscan on stderr (`rawsock_list_adapters`), its stdout stays empty. Neither of the oracle's streams
-    /// is written anywhere: `oracle/iflist.json` is all that is kept of it.
+    /// `--iflist` of rmasscan and of the C oracle in the scanner namespace, reduced in memory, each with its line of
+    /// the stand NIC. rmasscan lists on stdout; masscan on stderr (`rawsock_list_adapters`), its stdout stays empty.
+    /// Neither of the oracle's streams is written anywhere: `oracle/iflist.json` is all that is kept of it.
     fn iflist(&self, base: &Path, run: &Path) -> Result<(), SuiteError> {
         let o = self.host.exec(
             &self.ns(&self.ns_a, [self.rmasscan.clone(), "--iflist".into()]),
@@ -851,7 +871,7 @@ impl Linux<'_> {
         io(fs::create_dir_all(run.join("oracle")), "oracle directory")?;
         write_record(
             &run.join(ORACLE_IFLIST_JSON),
-            &reduce_iflist(o.rc, &o.stderr, None),
+            &reduce_masscan_iflist(o.rc, &o.stderr, av::stand(Plan::Linux).iface),
         )?;
         Ok(())
     }
@@ -1045,6 +1065,12 @@ pub(crate) fn linux_with(
             "--ns-a and --ns-b must be two different safe namespace names",
         ));
     }
+    // wire-lab.sh's id of this lab: kept in manifest.json, and its teardown.json carries the same (the verifier binds
+    // the record of the undo to these runs with it).
+    let lab_id = required(&o, "lab-id")?;
+    if !safe_id(&lab_id) {
+        return Err(not_run("--lab-id must be a safe identifier"));
+    }
     let masked = match required(&o, "conf-masked")?.as_str() {
         "0" => false,
         "1" => true,
@@ -1089,7 +1115,7 @@ pub(crate) fn linux_with(
             "peer_mac": colon(st.peer_mac), "scanner_ip": st.scanner_ip.to_string(),
             "peer_ips": st.peer_ips.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>(),
             "open_ports": st.open_ports, "default_route": "via 198.18.0.2 dev veth-a (scanner namespace only)"},
-        "conf_masked": masked});
+        "conf_masked": masked, "lab_id": lab_id});
     check_out(&out, &tags, &identity)?;
     write_manifest(&out, &identity)?;
     // wire-lab.sh's env.json names the oracle by its path, which may be under a home directory.

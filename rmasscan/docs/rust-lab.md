@@ -408,10 +408,14 @@ checkout under test, in a private target directory.
 `via 198.18.0.2 dev veth-a` и постоянные соседские записи `198.18.0.2–.5 → 02:aa:00:00:00:02`. Seal-проверки и
 `capture isolation --mode autodetect` подтверждают ровно это до каждого прогона и после него (`isolation.json` и
 `isolation-post.json` прогона, верификатор судит оба). Отмена: cleanup скрипта удаляет обе netns и записывает это в
-`OUT/teardown.json` (`namespaces_deleted`, `namespaces_left`). `autodetect-verify` требует его в каталоге Linux: нет
-записи, она не читается или netns осталась — INVALID. Если suite не смог скопировать прогон в каталог evidence, он
-оставляет рабочий каталог прогона и метку `OUT/.work/work-kept.txt`, и cleanup тогда `OUT/.work` не удаляет. `OUT`
-с `teardown.json` или такой меткой скрипт не принимает (FATAL, rc 2): каждая лаборатория идёт в новый `--out`.
+`OUT/teardown.json` (`lab_id`, `namespaces_deleted`, `namespaces_left`; netns считаются по точному имени).
+`lab_id` — id лаборатории: скрипт берёт его при старте из `/proc/sys/kernel/random/uuid` и передаёт suite
+(`--lab-id`, suite пишет его в `manifest.json`). `autodetect-verify` требует запись в каталоге Linux: нет записи,
+она не читается, netns осталась или её `lab_id` не равен `lab_id` манифеста — INVALID (запись чужой лаборатории не
+закрывает эти прогоны). Если suite не смог скопировать прогон в каталог evidence, он оставляет рабочий каталог
+прогона и метку `OUT/.work/work-kept.txt`, и cleanup тогда `OUT/.work` не удаляет. `OUT`, где уже есть вывод
+прежней лаборатории (`manifest.json`, `runs/`, `runs_aborted/`, `teardown.json`, `.work/`), скрипт не принимает
+(FATAL, rc 2): каждая лаборатория идёт в новый `--out`.
 Скрипт сам перезапускает себя через `sudo -n`; suite `sudo` не вызывает. `--out` всегда вне репозитория, в
 приватном `$SCRATCH` (например `mktemp -d`), в репозиторий каталог попадает только шагом «Evidence в репозиторий»
 ниже. Из каталога `rmasscan/` экспорта коммита на minipc:
@@ -500,28 +504,48 @@ rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT" --out "$OUT/ver
 
 В корне каталога Linux ещё `teardown.json` (отмена стенда, см. выше). Файлы evidence несут только расширения
 `json pcap txt log err sha256 md`. Полный вывод `--iflist` не хранится нигде, ни у `rmasscan`, ни у оракула (masscan
-печатает список на stderr; `l12_iflist` с `oracle/stdout.txt` или `oracle/stderr.txt` — INVALID). Кадр на захвате
+печатает список на stderr; `l12_iflist` с `oracle/stdout.txt` или `oracle/stderr.txt` — INVALID). `oracle/iflist.json`
+редуцируется так же, как у `rmasscan`, со строкой стенда в форме masscan (` N  veth-a \t(…)`); её нет или она не
+называет `veth-a` — INVALID, к ней те же правила приватности, что к строке `rmasscan`. Кадр на захвате
 стенда (пир, оракул) с MAC, который не равен ни MAC сканера, ни MAC пира стенда (маркеры не в счёт), — FAIL
 безопасности в любом кейсе. На macOS `capture.json` обязан сводить `privacy_filter` с захватом: `frames_kept` равно
 числу кадров `peer.pcap`, `frames_kept + frames_dropped` — `unfiltered.pcap_frames`, иначе INVALID.
 
 **Evidence в репозиторий** (план, задача 7, «Evidence»). Каталог из `$SCRATCH` копируется в
 `docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/<linux-r1|windows-r1|macos-r1|macos-root-r1>` только
-так, на Mac из корня репозитория (каталог Linux сначала забирается с minipc в `$SCRATCH` Mac:
-`rsync -a --exclude .work minipc:"$OUT"/ "$SRC"/`):
+так, на Mac из корня репозитория. Каталог Linux сначала забирается с minipc; путь на minipc пишется целиком (`$OUT`
+и `$SCRATCH` Mac — не пути minipc), и `.work` проверяется там, до копии:
 
 ```sh
-SRC=$SCRATCH/autodetect-out/windows-r1   # каталог --out
+LINUX_OUT=/home/a1/<scratch>/autodetect-out/linux-r1   # --out на minipc, буквально
+ssh minipc "test ! -e '$LINUX_OUT/.work'" || echo "STOP: minipc kept $LINUX_OUT/.work (an unfinished copy)"
+rsync -a minipc:"$LINUX_OUT"/ "$SCRATCH/autodetect-out/linux-r1"/
+```
+
+Затем для каждого каталога (`NAMES` — имена хостов и учётных записей всех машин, через которые каталог прошёл, без
+учётной записи гостя `lab`, которая разрешена):
+
+```sh
+names() { tr -d '\r' | grep -vx lab | paste -sd'|' -; }
+NAMES=$( { hostname -s; id -un; } | names )   # Mac: macos-r1, macos-root-r1
+# linux-r1:   NAMES="$NAMES|$(ssh minipc 'hostname -s; id -un' | names)"
+# windows-r1: NAMES="$NAMES|$( { ssh home-pc 'hostname -s; id -un'; ssh -J home-pc -p 2222 lab@127.0.0.1 hostname; } | names )"
+SRC=$SCRATCH/autodetect-out/windows-r1   # каталог --out (linux-r1: забранная копия)
 DST=docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/windows-r1
 test ! -e "$SRC/.work" || test -z "$(ls -A "$SRC/.work")" || echo "STOP: $SRC/.work is not empty (an unfinished copy)"
-for d in "$SRC"/runs/*/; do (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"; done
-grep -rIlE "$(hostname -s)|$(id -un)|_tcp\.local" "$SRC" && echo "STOP: privacy"   # 0 совпадений
+for d in "$SRC"/runs/*/ "$SRC"/runs_aborted/*/; do
+  [ ! -d "$d" ] || (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"
+done
+grep -ralwE "$NAMES|_tcp\.local|_udp\.local" "$SRC" && echo "STOP: privacy"   # каждый файл, pcap тоже (-a): 0 совпадений
 mkdir -p "$DST" && rsync -a --exclude .work "$SRC"/ "$DST"/
-for d in "$DST"/runs/*/; do (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"; done
+for d in "$DST"/runs/*/ "$DST"/runs_aborted/*/; do
+  [ ! -d "$d" ] || (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"
+done
 rmasscan/target/release/rmasscan-lab autodetect-verify --dir "$DST" --out "$DST/verdict.json"   # тот же вердикт
 ```
 
-Любой `STOP` — копия не делается или удаляется. Дальше `MANIFEST.sha256`, `README.md` каталога и `verification/`,
+Любой `STOP` — копия не делается или удаляется. Совпадение privacy-скана смотрят глазами: настоящее имя — копии нет;
+случайное совпадение короткого имени (`a1`) в байтах pcap записывается в `README.md` каталога. Дальше `MANIFEST.sha256`, `README.md` каталога и `verification/`,
 как в плане. `.work` в репозиторий не попадает никогда (он не в `.gitignore`).
 
 **Коды.** `autodetect-verify --dir DIR [--out FILE]` (и `windows-verify` для такого каталога): 0 PASS, 1 FAIL,

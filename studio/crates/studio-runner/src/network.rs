@@ -14,6 +14,11 @@ use studio_protocol::{Id, Job, NetworkReport};
 
 pub trait Environment: Send + Sync {
     fn authorize(&self) -> Result<(), String>;
+    /// Called after frozen-checkpoint validation and before route/adapter access.
+    /// Binding an attempt is distinct from consuming its first packet claim.
+    fn begin_attempt(&self, _job: &Job, _attempt: Id, _resuming: bool) -> Result<(), String> {
+        Ok(())
+    }
     fn observe(
         &self,
         job: &Job,
@@ -25,6 +30,15 @@ pub trait Environment: Send + Sync {
         plan: &PhysicalRoutePlan,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<NeighbourReport, String>;
+    /// Retiring a read-only preflight must not cancel a later scan attempt.
+    fn observe_preflight(
+        &self,
+        job: &Job,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<PhysicalRoutePlan, String> {
+        self.observe(job, deadline, cancelled)
+    }
     fn open(
         &self,
         binding: &AdapterBinding,
@@ -74,6 +88,7 @@ pub fn prepare(
             Ok::<_, String>((frozen.report, cp))
         })
         .transpose()?;
+    env.begin_attempt(&job, attempt, resume.is_some())?;
     let routes = snapshot(env, &job, Duration::from_secs(10), cancelled)?;
     job.admit_network(&routes)?;
     routes.validate_executable().map_err(|e| e.to_string())?;
@@ -201,7 +216,13 @@ pub fn preflight(
 ) -> Result<String, String> {
     job.validate()?;
     job.network_targets()?;
-    let routes = snapshot(env, job, Duration::from_secs(10), cancelled)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    check(cancelled)?;
+    let routes = env.observe_preflight(job, deadline, cancelled)?;
+    check(cancelled)?;
+    if Instant::now() >= deadline {
+        return Err("Network observation timed out".into());
+    }
     job.admit_network(&routes)?;
     let direct = routes
         .next_hops
@@ -327,6 +348,10 @@ impl Check {
 
 mod native;
 pub use native::Native;
+#[cfg(target_os = "macos")]
+mod single_target;
+#[cfg(target_os = "macos")]
+pub use single_target::Candidate;
 
 #[cfg(test)]
 mod tests;

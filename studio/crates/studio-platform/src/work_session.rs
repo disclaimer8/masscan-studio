@@ -348,26 +348,87 @@ pub fn write_until<T: Serialize>(
     Ok(())
 }
 
-pub fn connect() -> Result<Option<(UnixStream, Config)>> {
-    let owner = Identity::current()?;
-    let dir = directory(owner.uid);
+/// Fixed-namespace metadata reader for an authenticated owner. This is not a
+/// live-host or execution grant; connect still authenticates the kernel peer.
+pub fn host_config(uid: u32) -> Result<Option<Config>> {
+    if uid == 0 {
+        return Err("Work-session owner must be an ordinary user".into());
+    }
+    let dir = directory(uid);
     match fs::symlink_metadata(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
         Ok(_) => {}
     }
     protected(&dir, false)?;
-    let file = dir.join("host.json");
-    protected(&file, false)?;
-    if fs::metadata(&file).map_err(|e| e.to_string())?.len() > MAX_FRAME as u64 {
-        return Err("Oversized work-session metadata".into());
+    read_host_config(&dir.join("host.json"), 0, uid).map(Some)
+}
+fn read_host_config(path: &Path, filesystem_owner: u32, uid: u32) -> Result<Config> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let text = crate::sealed_fixture::command(
+        &[
+            "/bin/ls",
+            "-lde",
+            "-n",
+            path.to_str().ok_or("Invalid metadata path")?,
+        ],
+        deadline,
+        &|| false,
+    )?;
+    if text.lines().count() != 1 {
+        return Err("Extended ACL on work-session metadata".into());
     }
-    let c: Config = serde_json::from_slice(&fs::read(file).map_err(|e| e.to_string())?)
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
         .map_err(|e| e.to_string())?;
-    validate_config(&c)?;
-    if c.uid != owner.uid {
+    let valid = |m: &fs::Metadata| -> Result<()> {
+        if !m.is_file()
+            || m.file_type().is_symlink()
+            || m.uid() != filesystem_owner
+            || m.mode() & 0o7777 != 0o644
+            || m.nlink() != 1
+            || m.len() == 0
+            || m.len() > MAX_FRAME as u64
+        {
+            return Err("Untrusted or oversized work-session metadata".into());
+        }
+        Ok(())
+    };
+    let before = file.metadata().map_err(|e| e.to_string())?;
+    valid(&before)?;
+    let mut bytes = Vec::new();
+    (&file)
+        .take(MAX_FRAME as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let after = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    valid(&after)?;
+    if before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || bytes.len() as u64 != before.len()
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+    {
+        return Err("Work-session metadata changed during read".into());
+    }
+    crate::sealed_fixture::check(deadline, &|| false)?;
+    let config: Config = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    validate_config(&config)?;
+    if config.uid != uid {
         return Err("Work-session owner differs".into());
     }
+    Ok(config)
+}
+pub fn connect() -> Result<Option<(UnixStream, Config)>> {
+    let owner = Identity::current()?;
+    let Some(c) = host_config(owner.uid)? else {
+        return Ok(None);
+    };
+    let dir = directory(owner.uid);
     let path = dir.join("socket");
     protected(&path, true)?;
     let stream = UnixStream::connect(path).map_err(|e| format!("Work session unavailable: {e}"))?;
@@ -463,6 +524,76 @@ pub fn helper(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_reader_refuses_wrong_owners_links_modes_oversize_and_unknown_fields() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "studio-host-metadata-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&dir).unwrap();
+        let file = dir.join("host.json");
+        let owner = Identity::current().unwrap();
+        let config = Config {
+            uid: owner.uid,
+            pid: owner.pid,
+            tool_hash: "a".repeat(64),
+            runner_hash: "b".repeat(64),
+            caller_hash: "c".repeat(64),
+        };
+        let bytes = serde_json::to_vec(&config).unwrap();
+        fs::write(&file, &bytes).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            read_host_config(&file, owner.uid, owner.uid).unwrap(),
+            config
+        );
+        assert!(read_host_config(&file, owner.uid + 1, owner.uid).is_err());
+        assert!(read_host_config(&file, owner.uid, owner.uid + 1).is_err());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o646)).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let link = dir.join("link");
+        fs::hard_link(&file, &link).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::remove_file(link).unwrap();
+        fs::remove_file(&file).unwrap();
+        let original = dir.join("original");
+        fs::write(&original, &bytes).unwrap();
+        std::os::unix::fs::symlink(&original, &file).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::remove_file(&file).unwrap();
+        fs::write(&file, vec![b' '; MAX_FRAME + 1]).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        let mut value = serde_json::to_value(&config).unwrap();
+        value["command"] = serde_json::json!("ignored");
+        fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        assert!(host_config(0).is_err());
+        fs::write(&file, &bytes).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read"])
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::remove_file(&file).unwrap();
+        assert!(
+            std::process::Command::new("/usr/bin/mkfifo")
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let started = Instant::now();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        assert!(started.elapsed() < Duration::from_secs(4));
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn single_target_wire_rejects_expansion_and_paths() {
         let uid = Identity::current().unwrap();

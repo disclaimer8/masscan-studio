@@ -18,7 +18,7 @@ use std::{
 use studio_platform::{
     audit::Peer,
     unix::Identity,
-    work_session::{self as wire, Config, Fixture, Request, Response},
+    work_session::{self as wire, Config, Fixture, Request, Response, SingleTarget},
 };
 type Result<T> = std::result::Result<T, String>;
 const WAIT: Duration = Duration::from_millis(20);
@@ -29,6 +29,7 @@ struct State {
     exclusive: bool,
     closing: bool,
     generation: Option<String>,
+    single_target: Option<String>,
     runs: BTreeSet<String>,
     stopping: bool,
     selected: Option<(String, String)>,
@@ -43,6 +44,7 @@ impl State {
             exclusive: false,
             closing: false,
             generation: None,
+            single_target: None,
             runs: BTreeSet::new(),
             stopping: false,
             selected: None,
@@ -149,8 +151,160 @@ fn install_build(build: &wire::Build, uid: u32) -> Result<()> {
     }
     studio_platform::trusted::verify(&destination, &build.sha256)
 }
+fn build_single_target_permit(
+    intent: studio_protocol::single_target::Intent,
+    config: &Config,
+    plan: rmasscan_net::PhysicalRoutePlan,
+    now: u64,
+    generation: String,
+) -> Result<studio_protocol::single_target::Permit> {
+    use studio_protocol::single_target::{Context, InterfaceBinding, Permit};
+    intent.validate()?;
+    plan.validate_executable().map_err(error)?;
+    let next_hop = *plan
+        .next_hops
+        .get(&intent.target)
+        .ok_or("Missing authorized target route")?;
+    let permit = Permit {
+        version: 1,
+        generation,
+        owner_uid: config.uid,
+        created: now,
+        expires: now.checked_add(300).ok_or("Invalid permit time")?,
+        tooling_sha256: config.tool_hash.clone(),
+        helper_sha256: config.runner_hash.clone(),
+        target: intent.target,
+        ports: intent.ports,
+        seed: intent.seed,
+        interface: InterfaceBinding {
+            name: plan.interface_name.clone(),
+            index: plan.interface_index,
+            source_ipv4: plan.source_ipv4,
+            source_mac: plan.source_mac.ok_or("Missing physical MAC")?,
+            next_hop,
+        },
+    };
+    permit.admit_plan(
+        &plan,
+        &Context {
+            now,
+            owner_uid: config.uid,
+            tooling_sha256: &config.tool_hash,
+            helper_sha256: &config.runner_hash,
+        },
+    )?;
+    Ok(permit)
+}
+fn fixture_allowed(shared: &Shared) -> Result<()> {
+    if shared.state.lock().unwrap().single_target.is_some() {
+        return Err(
+            "Revoke the single-target permit before using the fixture or changing builds".into(),
+        );
+    }
+    Ok(())
+}
+fn revoke_single_target(shared: &Shared, generation: &str) -> Result<()> {
+    if shared.state.lock().unwrap().single_target.as_deref() != Some(generation) {
+        return Err("Revocation differs from this host's single-target record".into());
+    }
+    let store = studio_platform::single_target::Store::root()?;
+    if let Some(record) = store.inspect(shared.config.uid)? {
+        if record.permit.generation != generation {
+            return Err("Single-target record changed".into());
+        }
+        store.revoke(shared.config.uid, generation)?;
+    }
+    shared.state.lock().unwrap().single_target = None;
+    Ok(())
+}
+fn reserve_revocation(shared: &Arc<Shared>) -> Result<Reservation> {
+    let mut state = shared.state.lock().unwrap();
+    if state.stopping || state.closing || state.exclusive || state.fixture_busy {
+        return Err("Working session busy; revocation refused".into());
+    }
+    // Exactly one control operation may exceed the ordinary helper/job limit.
+    // It grants no child/scan capacity and excludes creation/staging/fixture work.
+    state.active += 1;
+    state.fixture_busy = true;
+    Ok(Reservation {
+        shared: shared.clone(),
+        helper: false,
+        fixture: true,
+    })
+}
+fn single_target(
+    shared: &Arc<Shared>,
+    stream: &mut UnixStream,
+    operation: SingleTarget,
+) -> Result<()> {
+    use studio_protocol::single_target::Context;
+    // Revoke remains available with active helpers. The future permit-aware
+    // environment must recheck this record; current native scanning is fixture-only.
+    let exclusive = matches!(operation, SingleTarget::CreatePermit { .. });
+    let _reservation = if matches!(operation, SingleTarget::Revoke { .. }) {
+        reserve_revocation(shared)?
+    } else {
+        reserve(shared, false, true, exclusive)?
+    };
+    let store = studio_platform::single_target::Store::root()?;
+    match operation {
+        SingleTarget::CreatePermit { intent } => {
+            intent.validate()?;
+            fixture_allowed(shared)?;
+            if shared.state.lock().unwrap().generation.is_some()
+                || fixture_state()?.is_some()
+                || store.inspect(shared.config.uid)?.is_some()
+            {
+                return Err(
+                    "Remove existing fixture/permit before creating a single-target permit".into(),
+                );
+            }
+            let config = shared.snapshot();
+            protected_tool(&config)?;
+            let runner = studio_platform::macos::installed_path(&config.runner_hash)?;
+            studio_platform::trusted::verify(&runner, &config.runner_hash)?;
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let plan = rmasscan_net::plan_physical(
+                &intent.job().network_targets()?,
+                rmasscan_net::os_route_table().map_err(error)?.as_ref(),
+                rmasscan_net::os_interfaces().map_err(error)?.as_ref(),
+                deadline,
+                &|| false,
+            )
+            .map_err(error)?;
+            let now = studio_platform::sealed_fixture::now()?;
+            let permit = build_single_target_permit(
+                intent,
+                &config,
+                plan,
+                now,
+                studio_protocol::id_text(studio_protocol::new_id()?),
+            )?;
+            // Pin before writing: even a partial failed write blocks staging/up.
+            shared.state.lock().unwrap().single_target = Some(permit.generation.clone());
+            store.prepare(
+                &permit,
+                &Context {
+                    now,
+                    owner_uid: config.uid,
+                    tooling_sha256: &config.tool_hash,
+                    helper_sha256: &config.runner_hash,
+                },
+            )?;
+        }
+        SingleTarget::Inspect {} => {}
+        SingleTarget::Revoke { generation } => revoke_single_target(shared, &generation)?,
+    }
+    wire::write(
+        stream,
+        &Response::SingleTarget {
+            record: store.inspect(shared.config.uid)?,
+        },
+    )
+}
 fn reserve_stage(shared: &Arc<Shared>) -> Result<Reservation> {
     let reservation = reserve(shared, false, true, true)?;
+    fixture_allowed(shared)?;
     if shared.state.lock().unwrap().generation.is_some() {
         return Err("Take down the owned fixture before changing builds".into());
     }
@@ -473,6 +627,7 @@ fn fixture(shared: &Arc<Shared>, stream: &mut UnixStream, op: Fixture) -> Result
     let mut down = false;
     match op {
         Fixture::Up {} => {
+            fixture_allowed(shared)?;
             if shared.state.lock().unwrap().generation.is_some() || fixture_state()?.is_some() {
                 return Err("Existing fixture is not adopted or replaced".into());
             }
@@ -582,6 +737,14 @@ fn handle(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
     // Revalidate process incarnation after receiving a possibly slow frame.
     owner.verify(&stream)?;
     match request {
+        Request::Capabilities {} => wire::write(
+            &mut stream,
+            &Response::Capabilities {
+                version: 1,
+                single_target_permits: true,
+            },
+        ),
+        Request::SingleTarget { operation } => single_target(shared, &mut stream, operation),
         Request::Status {} => wire::write(
             &mut stream,
             &Response::Status {
@@ -617,6 +780,10 @@ fn handle(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                         return Err(e);
                     }
                 }
+            }
+            let generation = shared.state.lock().unwrap().single_target.clone();
+            if let Some(generation) = generation {
+                revoke_single_target(shared, &generation)?;
             }
             shared.state.lock().unwrap().stopping = true;
             wire::write(&mut stream, &Response::Done { code: 0 })
@@ -672,6 +839,10 @@ fn serve(uid: u32, runner_hash: String, caller_hash: String) -> Result<()> {
     };
     lock.try_lock()
         .map_err(|_| "Another work-session host owns the fixture lock")?;
+    let mut initial_state = State::new();
+    initial_state.single_target = studio_platform::single_target::Store::root()?
+        .inspect(uid)?
+        .map(|record| record.permit.generation);
     let dir = wire::directory(uid);
     wire::protected(dir.parent().unwrap(), false)?;
     fs::DirBuilder::new()
@@ -693,7 +864,7 @@ fn serve(uid: u32, runner_hash: String, caller_hash: String) -> Result<()> {
     let shared = Arc::new(Shared {
         config,
         dir,
-        state: Mutex::new(State::new()),
+        state: Mutex::new(initial_state),
         sequence: AtomicUsize::new(0),
     });
     let connections = Arc::new(AtomicUsize::new(0));
@@ -752,13 +923,38 @@ fn serve(uid: u32, runner_hash: String, caller_hash: String) -> Result<()> {
     Ok(())
 }
 fn request(request: Request) -> Result<()> {
-    let (mut stream, _) =
+    let negotiated = if matches!(&request, Request::SingleTarget { .. }) {
+        let (mut stream, config) =
+            wire::connect()?.ok_or("No working session; a reviewed host upgrade is required")?;
+        wire::require_single_target_permits(&mut stream)?;
+        Some(config)
+    } else {
+        None
+    };
+    let (mut stream, config) =
         wire::connect()?.ok_or("No working session; run work-session start RUNNER once")?;
+    if negotiated.is_some_and(|old| old != config) {
+        return Err("Work-session host changed after capability negotiation".into());
+    }
     wire::write(&mut stream, &request)?;
     let deadline = Instant::now() + Duration::from_secs(150);
     loop {
         let timeout = deadline.saturating_duration_since(Instant::now());
         match wire::read(&mut stream, timeout, &AtomicBool::new(false))? {
+            Response::Capabilities {
+                version,
+                single_target_permits,
+            } => {
+                println!(
+                    "{}",
+                    serde_json::json!({"version":version,"single_target_permits":single_target_permits})
+                );
+                return Ok(());
+            }
+            Response::SingleTarget { record } => {
+                println!("{}", serde_json::to_string(&record).map_err(error)?);
+                return Ok(());
+            }
             Response::Status { config, active } => {
                 println!(
                     "{}",
@@ -884,6 +1080,13 @@ pub fn main_entry(root: &Path) -> Result<()> {
     let args = std::env::args().skip(2).collect::<Vec<_>>();
     let a = args.iter().map(String::as_str).collect::<Vec<_>>();
     match a.as_slice(){
+  ["capabilities"]=>request(Request::Capabilities{}),
+  ["single-target","inspect"]=>request(Request::SingleTarget{operation:SingleTarget::Inspect{}}),
+  ["single-target","revoke",generation]=>request(Request::SingleTarget{operation:SingleTarget::Revoke{generation:(*generation).into()}}),
+  ["single-target","create",target,ports,seed]=>{
+      let intent=studio_protocol::single_target::Intent{target:target.parse().map_err(error)?,ports:ports.split(',').map(|p|p.parse().map_err(error)).collect::<Result<Vec<_>>>()?,seed:seed.parse().map_err(error)?};
+      intent.validate()?;request(Request::SingleTarget{operation:SingleTarget::CreatePermit{intent}})
+  },
   ["start",runner]=>start(root,Path::new(runner),false),
   ["replace",runner]=>start(root,Path::new(runner),true),
   ["stage",tool,runner]=>request(Request::Stage{tool:build(Path::new(tool))?,runner:build(Path::new(runner))?}),["status"]=>request(Request::Status{}),["stop"]=>request(Request::Stop{}),
@@ -897,7 +1100,7 @@ pub fn main_entry(root: &Path) -> Result<()> {
   ["fixture","supervise",case,driver]=>request(Request::Fixture{operation:Fixture::Supervise{case:(*case).into(),driver:(*driver).into(),prior:None}}),
   ["fixture","supervise",case,driver,prior]=>request(Request::Fixture{operation:Fixture::Supervise{case:(*case).into(),driver:(*driver).into(),prior:Some((*prior).into())}}),
   ["export",nonce]=>request(Request::Export{nonce:(*nonce).into()}),
-  _=>Err("Usage: work-session start/replace RUNNER | stage TOOL RUNNER | status | stop | probe RUNNER | fixture up/down/status | fixture supervise CASE DIR [PAUSE_NONCE] | export NONCE".into())
+  _=>Err("Usage: work-session start/replace RUNNER | stage TOOL RUNNER | status | stop | probe RUNNER | fixture up/down/status | fixture supervise CASE DIR [PAUSE_NONCE] | export NONCE | capabilities | single-target create IP PORT[,PORT] SEED | single-target inspect | single-target revoke GENERATION".into())
  }
 }
 
@@ -924,6 +1127,88 @@ mod tests {
             state: Mutex::new(State::new()),
             sequence: AtomicUsize::new(0),
         })
+    }
+    #[test]
+    fn revocation_has_one_control_slot_when_all_helper_slots_are_occupied() {
+        let host = shared();
+        let helpers: Vec<_> = (0..wire::MAX_ACTIVE)
+            .map(|_| reserve(&host, true, false, false).unwrap())
+            .collect();
+        let revoke = reserve_revocation(&host).unwrap();
+        assert_eq!(host.state.lock().unwrap().active, wire::MAX_ACTIVE + 1);
+        assert!(reserve_revocation(&host).is_err());
+        assert!(reserve(&host, true, false, false).is_err());
+        assert!(reserve_stage(&host).is_err());
+        drop(revoke);
+        assert_eq!(host.state.lock().unwrap().active, wire::MAX_ACTIVE);
+        assert!(reserve(&host, true, false, false).is_err());
+        drop(helpers);
+        assert_eq!(host.state.lock().unwrap().active, 0);
+        fs::remove_dir(&host.dir).unwrap();
+    }
+    #[test]
+    fn single_target_binding_uses_observed_root_route_and_current_builds() {
+        let host = shared();
+        let intent = studio_protocol::single_target::Intent {
+            target: "45.33.32.156".parse().unwrap(),
+            ports: vec![80, 443],
+            seed: 42,
+        };
+        let plan = rmasscan_net::PhysicalRoutePlan {
+            interface_name: "en0".into(),
+            interface_index: 5,
+            source_ipv4: "10.0.0.2".parse().unwrap(),
+            source_mac: Some([2, 1, 2, 3, 4, 5]),
+            next_hops: [(intent.target, "10.0.0.1".parse().unwrap())].into(),
+            excluded: Default::default(),
+        };
+        let permit = build_single_target_permit(
+            intent.clone(),
+            &host.snapshot(),
+            plan.clone(),
+            1000,
+            "1".repeat(32),
+        )
+        .unwrap();
+        assert_eq!(permit.plan(), plan);
+        assert_eq!(permit.owner_uid, host.config.uid);
+        assert_eq!(permit.tooling_sha256, host.config.tool_hash);
+        assert_eq!(permit.helper_sha256, host.config.runner_hash);
+        assert_eq!(permit.expires, 1300);
+        assert_eq!(permit.job(), intent.job());
+        let mut extra = plan.clone();
+        extra
+            .next_hops
+            .insert("8.8.8.8".parse().unwrap(), "10.0.0.1".parse().unwrap());
+        assert!(
+            build_single_target_permit(
+                intent.clone(),
+                &host.snapshot(),
+                extra,
+                1000,
+                "1".repeat(32)
+            )
+            .is_err()
+        );
+        let mut wrong = plan;
+        wrong.interface_name = "utun0".into();
+        assert!(
+            build_single_target_permit(intent, &host.snapshot(), wrong, 1000, "1".repeat(32))
+                .is_err()
+        );
+        fs::remove_dir(&host.dir).unwrap();
+    }
+    #[test]
+    fn active_permit_blocks_fixture_creation_and_build_staging() {
+        let host = shared();
+        host.state.lock().unwrap().single_target = Some("1".repeat(32));
+        assert!(fixture_allowed(&host).is_err());
+        assert!(reserve_stage(&host).is_err());
+        assert_eq!(host.state.lock().unwrap().active, 0);
+        host.state.lock().unwrap().single_target = None;
+        fixture_allowed(&host).unwrap();
+        drop(reserve_stage(&host).unwrap());
+        fs::remove_dir(&host.dir).unwrap();
     }
     #[test]
     fn staged_copy_pins_requested_bytes_and_does_not_replace_existing_files() {

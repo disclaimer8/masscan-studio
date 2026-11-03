@@ -641,6 +641,27 @@ fn autodetect_binding() -> Value {
             .collect(),
     )
 }
+/// Remove a file or directory of the autodetect plan's work area. A failure is printed, never swallowed; whatever
+/// stays in `.work` stops the next start until someone has looked (fail-closed).
+fn discard(path: &Path) {
+    let r = if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    };
+    if let Err(e) = r
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "WARN: could not remove {} ({e}); the next start refuses while {WORK} holds it",
+            path.display()
+        );
+    }
+}
+/// `.work` itself goes once it is empty; while it still holds something it stays, and the next start refuses.
+fn drop_empty_work(out: &Path) {
+    let _ = fs::remove_dir(out.join(WORK));
+}
 /// The exit code a guest runner wrote (`exit.txt`, UTF-8, maybe with a BOM).
 fn guest_exit(text: &str) -> Result<i32, String> {
     text.trim_start_matches('\u{feff}')
@@ -1078,6 +1099,9 @@ impl Suite<'_> {
         if let Err(e) = result {
             // From here every remote call ignores a pending stop request: the cleanup must run.
             self.cleanup.set(true);
+            if self.autodetect() && !self.runner_invoked.get() && e.contains(PREFLIGHT_MARK) {
+                return Err(self.preflight_not_run(tag, &ev, &rev, e));
+            }
             let e = self.abort_evidence(tag, &rev, e);
             return Err(if self.autodetect() {
                 self.keep_aborted_work(tag, &ev, e)
@@ -1093,8 +1117,8 @@ impl Suite<'_> {
             // A failure keeps the work directory and the marked remote scratch, so the next start refuses.
             fs::create_dir_all(self.out.join("runs")).map_err(|e| e.to_string())?;
             hash_and_copy(&ev, &dest)?;
-            let _ = fs::remove_dir_all(ev.parent().unwrap_or(&ev));
-            let _ = fs::remove_dir(self.out.join(WORK));
+            discard(ev.parent().unwrap_or(&ev));
+            drop_empty_work(&self.out);
         }
         // Successful copies were hash checked before this point.
         self.home(&remove_scratch_command(&rev), true)?;
@@ -1261,8 +1285,8 @@ impl Suite<'_> {
             let stderr = fs::read(&err).map_err(|e| e.to_string())?;
             Ok(preflight_text(rc, &String::from_utf8_lossy(&stderr)))
         })();
-        let _ = fs::remove_file(&err);
-        let _ = fs::remove_file(&exit);
+        discard(&err);
+        discard(&exit);
         let text = read?;
         fs::write(ev.join(av::PREFLIGHT_TXT), &text).map_err(|e| e.to_string())?;
         if av::preflight_shows(spec, &text) {
@@ -1291,13 +1315,27 @@ impl Suite<'_> {
         let listing = self
             .transfer(true, false, &raw, &format!("{gout}\\stdout.txt"), true)
             .and_then(|()| fs::read(&raw).map_err(|e| e.to_string()));
-        let _ = fs::remove_file(&raw);
+        discard(&raw);
         let rec = reduce_iflist(
             rc,
             &String::from_utf8_lossy(&listing?),
             Some(av::stand(Plan::Windows).iface),
         );
         write_record(&ev.join(av::IFLIST_JSON), &rec)
+    }
+    /// A preflight that did not show the case's expected detection (R1) is NOT RUN, not an aborted run: the scanner
+    /// never ran and nothing was captured. The remote scratch (the gate's report and the keep marker, no capture) is
+    /// removed on home-pc instead of being copied home, so no marker or failure copy lands in the evidence; only the
+    /// orchestrator's records (gate, `preflight.txt`) are kept as `runs_aborted/<tag>.<run id>/work/`. If the removal
+    /// fails, the marker stays and the next start refuses.
+    fn preflight_not_run(&self, tag: &str, ev: &Path, rev: &str, err: String) -> String {
+        let remote = match self.home(&remove_scratch_command(rev), true) {
+            Ok(_) => "nothing ran: the remote scratch and its keep marker are removed".to_owned(),
+            Err(x) => format!(
+                "the remote scratch {rev} could not be removed ({x}): its keep marker stops the next start until it is looked at"
+            ),
+        };
+        self.keep_aborted_work(tag, ev, format!("{err}; {remote}"))
     }
     /// An aborted autodetect run: the remote scratch is already under `runs_aborted/<tag>.<run id>/` (the shared
     /// failure path); the orchestrator's own part of the run (gate records, case records, preflight, whatever was
@@ -1314,8 +1352,8 @@ impl Suite<'_> {
             .and_then(|()| hash_and_copy(ev, &dest))
         {
             Ok(()) => {
-                let _ = fs::remove_dir_all(base);
-                let _ = fs::remove_dir(self.out.join(WORK));
+                discard(base);
+                drop_empty_work(&self.out);
                 format!(
                     "the orchestrator's part of the run is kept in {}",
                     dest.display()
@@ -1700,6 +1738,12 @@ impl Suite<'_> {
                 return Err(format!(
                     "the guest runner ran an executable with sha256 {} but the manifest vouches for {vouched}",
                     runner["exe_sha256"]
+                ));
+            }
+            if runner["exe"] != self.guest_exe.as_str() {
+                return Err(format!(
+                    "the guest runner ran {} but the plan runs {} (--guest-exe)",
+                    runner["exe"], self.guest_exe
                 ));
             }
             if spec.kind == CaseKind::Iflist {
@@ -2387,8 +2431,11 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     if !valid_mac(&s.pm) {
         return Err("invalid peer MAC".to_string().into());
     }
-    if autodetect {
-        staged.write_to(&stage)?;
+    if autodetect && let Err(e) = staged.write_to(&stage) {
+        // A partial stage never stays behind unnoticed.
+        discard(&stage);
+        drop_empty_work(&s.out);
+        return Err(e.into());
     }
     let sent = (|| -> Result<(), SuiteError> {
         for (name, guest, _, _) in &staged.files {
@@ -2416,8 +2463,8 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         Ok(())
     })();
     if autodetect {
-        let _ = fs::remove_dir_all(&stage);
-        let _ = fs::remove_dir(s.out.join(WORK));
+        discard(&stage);
+        drop_empty_work(&s.out);
     }
     sent?;
     // record-guest rejects a Verify report outside +5/-60 s of the home-pc clock.
@@ -2445,6 +2492,14 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         "checked_utc": epoch(),
     });
     if autodetect {
+        // deploy_manifest_sha256 is the anchor on this machine; the copy in the directory is scrubbed, so its own
+        // hash is recorded beside it.
+        preflight["deploy_manifest_copy"] = json!({
+            "path": "deploy/deploy-manifest.json",
+            "sha256": hash(deploy_dir.join("deploy-manifest.json"))?,
+            "scrubbed": true,
+            "note": "deploy_manifest_sha256 is the --deploy-manifest file on the orchestrating machine; this copy has the home directory replaced by $HOME",
+        });
         crate::capture::scrub(&mut preflight);
     }
     write_json(

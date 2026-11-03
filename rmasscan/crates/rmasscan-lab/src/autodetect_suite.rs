@@ -293,6 +293,10 @@ fn write_iflist(run: &Path, o: &Output, stand_iface: &str) -> Result<(), String>
     io(fs::write(run.join("stderr.txt"), &o.stderr), "stderr.txt")?;
     write_exit(run, o.rc)
 }
+/// What the suite prints when rmasscan's stderr (`stderr`, the file it read) does not parse.
+pub(crate) fn stderr_parse_warning(stderr: &str, e: &str) -> String {
+    format!("{stderr} does not parse ({e}); detected.json is not written")
+}
 /// `detected.json`: rmasscan's stderr (`stderr`: `stderr.txt`, on Windows `guest-stderr.txt`) parsed by the verifier's
 /// parser. A stderr that does not parse gets no record (the verifier then cannot pass the run).
 pub(crate) fn write_detected(run: &Path, stderr: &str) -> Result<(), String> {
@@ -300,9 +304,7 @@ pub(crate) fn write_detected(run: &Path, stderr: &str) -> Result<(), String> {
     match av::parse_stderr(&String::from_utf8_lossy(&b)) {
         Ok(d) => write_record(&run.join(DETECTED_JSON), &d),
         Err(e) => {
-            warn(&format!(
-                "stderr.txt does not parse ({e}); detected.json is not written"
-            ));
+            warn(&stderr_parse_warning(stderr, &e));
             Ok(())
         }
     }

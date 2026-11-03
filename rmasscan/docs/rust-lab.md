@@ -453,7 +453,10 @@ rmasscan/target/release/rmasscan-lab windows-verify \
 - Перед `w01` и `w06` после ворот тем же runner идёт preflight `rmasscan --offline` с теми же целями
   (`runner-preflight-argv.json`, `preflight.txt`). Живой кейс идёт, только если preflight показал
   `[+] interface = Ethernet 2 (detected: route to 198.18.0.2)`. Иначе кейс NOT RUN (код 2), и ни слушатель, ни
-  захват, ни скан не запускаются.
+  захват, ни скан не запускаются. Это не прерванный прогон: удалённый scratch (отчёт ворот и маркер, захвата нет)
+  удаляется на home-pc, а не копируется домой, и маркер в evidence не попадает. Записи ворот и `preflight.txt`
+  остаются в `runs_aborted/<tag>.<run id>/work/`; каталог — NOT RUN, не INVALID. Если удалить scratch не удалось,
+  маркер остаётся, и следующий старт отказывает.
 - Гостевые файлы переносятся как `guest-stdout.txt`, `guest-stderr.txt`, `guest-exit.txt`. Код ограниченного
   runner переносится как `guest-runner-rc.txt` (`.rc` не входит в allowlist). `detected.json` — разбор
   `guest-stderr.txt` парсером верификатора.
@@ -466,13 +469,17 @@ rmasscan/target/release/rmasscan-lab windows-verify \
   счётчиков, тишина, выход tcpdump.
 - Прогон пишется в `<out>/.work/` и попадает в `runs/<tag>` только целиком, через `hashes-before-copy.txt` и
   проверку копии правилом верификатора. Прерванный прогон: удалённый scratch уходит в
-  `runs_aborted/<tag>.<run id>/` (прежний путь), часть оркестратора — туда же в `work/`. Непустой `.work`
-  останавливает следующий старт.
+  `runs_aborted/<tag>.<run id>/` (прежний путь, с маркером и pid-файлами: каталог после этого INVALID), часть
+  оркестратора — туда же в `work/`. Непустой `.work` останавливает следующий старт; что не удалось удалить из
+  `.work`, suite называет строкой `WARN`.
 - Манифест: `"autodetect": "windows"`, `exe.build` `Rust static CRT rmasscan CLI from code_commit`, `binding` по
   кейсу (ожидаемое обнаружение из `expect.json`). Полей `oracle`, `pause`, `tx_mode_expected` нет. Скрипты гостя
   проходят только через `.work`, их хэши записаны в `deploy/preflight-<run>.json`. Пути под домашним каталогом в
-  манифесте, статусах, `capture.json` и `deploy/` заменены на `$HOME`. Гостевой `exe_sha256` каждого прогона обязан
-  совпасть с манифестом; продолжение каталога с другим `rmasscan.exe` отклоняется.
+  манифесте, статусах, `capture.json` и `deploy/` заменены на `$HOME`. Поэтому копия `deploy/deploy-manifest.json`
+  уже не совпадает с исходным файлом: в `deploy/preflight-<run>.json` `deploy_manifest_sha256` — хэш исходного
+  `--deploy-manifest` на этой машине, `deploy_manifest_copy.sha256` — хэш копии в каталоге. В каждом прогоне
+  `guest-runner.json` обязан назвать `--guest-exe` (`exe`) и sha256 из манифеста (`exe_sha256`); продолжение
+  каталога с другим `rmasscan.exe` отклоняется.
 
 **Каталог прогона** `runs/<tag>/`:
 

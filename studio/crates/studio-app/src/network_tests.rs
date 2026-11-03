@@ -175,6 +175,59 @@ fn network_report_is_committed_and_acknowledged_by_controller() {
         Command::AckNetworkReport { through: 1 }
     ));
 }
+#[test]
+fn single_target_ack_requires_exact_canonical_job_and_persisted_physical_report() {
+    for tunnel in [false, true] {
+        let dir = Temp::new();
+        let mut db = Store::open(&dir.0).unwrap();
+        let target = "45.33.32.156".parse().unwrap();
+        let job = studio_protocol::single_target::Intent {
+            target,
+            ports: vec![80, 443],
+            seed: 42,
+        }
+        .job();
+        let report = NetworkReport {
+            job_digest: job.original_digest().unwrap(),
+            routes: rmasscan_net::PhysicalRoutePlan {
+                interface_name: if tunnel { "utun3" } else { "en0" }.into(),
+                interface_index: 5,
+                source_ipv4: "10.0.0.2".parse().unwrap(),
+                source_mac: Some([2, 1, 2, 3, 4, 5]),
+                next_hops: [(target, "10.0.0.1".parse().unwrap())].into(),
+                excluded: Default::default(),
+            },
+            destinations: [(target, [2, 6, 7, 8, 9, 10])].into(),
+            unresolved: vec![],
+        };
+        let (mut c, _, wire) = fake_client();
+        db.begin([1; 16], [2; 16], &job, false).unwrap();
+        c.start([1; 16], [2; 16], Command::Start(job)).unwrap();
+        let event = Envelope::new(
+            c.session,
+            c.scan,
+            c.attempt,
+            1,
+            Event::NetworkPrepared {
+                bytes: report.encode().unwrap(),
+            },
+        );
+        let (out, _rx) = mpsc::sync_channel(32);
+        let result =
+            commit_scan_events(&mut db, &mut c, vec![event], &out, Some([1; 16]), &|| false);
+        assert_eq!(result.is_ok(), !tunnel);
+        assert_eq!(
+            db.scans().unwrap()[0].network_report,
+            Some(report.encode().unwrap())
+        );
+        assert_eq!(
+            wire.commands()
+                .iter()
+                .any(|e| matches!(e.payload, Command::AckNetworkReport { through: 1 })),
+            !tunnel
+        );
+    }
+}
 
 struct AckWitness {
     wire: Wire,

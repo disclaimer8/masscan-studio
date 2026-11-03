@@ -1,5 +1,5 @@
 //! Root-only permit records and atomic one-use claims for physical acceptance.
-//! Not connected to the retained host or scanner until their typed upgrade is reviewed.
+//! Used by the typed candidate; the installed legacy retained host is unchanged.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -15,10 +15,12 @@ const DIRECTORY: &str = "/Library/PrivilegedHelperTools/MasscanStudio/single-tar
 const LIMIT: u64 = 16384;
 mod capture;
 mod capture_lock;
+mod transmission;
 pub use capture::{
     CAPTURE_HEADER, CAPTURE_SECONDS, CaptureCompletion, CaptureEvidence, CaptureFinish,
     CaptureLease, CapturePin, CaptureStatistics, CaptureWitness,
 };
+pub use transmission::TransmissionLease;
 pub mod recording;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +38,12 @@ pub struct Lease {
     rejected: bool,
 }
 impl Lease {
+    pub fn deadline(&self) -> Result<Instant> {
+        if self.rejected {
+            return Err("Single-target lease invalidated".into());
+        }
+        self.deadline.ok_or("Single-target lease not pinned".into())
+    }
     pub fn check(&mut self, permit: &Permit, context: &Context<'_>) -> Result<()> {
         self.check_at(permit, context, Instant::now())
     }
@@ -80,6 +88,13 @@ pub struct Store {
 impl Store {
     /// Only production constructor: no environment, caller path or owner override.
     pub fn root() -> Result<Self> {
+        Self::production(true)
+    }
+    /// Runtime reads never initialize a missing permission namespace.
+    pub fn existing_root() -> Result<Self> {
+        Self::production(false)
+    }
+    fn production(create: bool) -> Result<Self> {
         if crate::unix::Identity::current()?.uid != 0 {
             return Err("Single-target records require the root helper".into());
         }
@@ -92,13 +107,15 @@ impl Store {
             }
             no_acl(ancestor, deadline)?;
         }
-        match fs::DirBuilder::new().mode(0o700).create(&directory) {
-            Ok(()) => File::open(directory.parent().ok_or("Missing permit parent")?)
-                .map_err(err)?
-                .sync_all()
-                .map_err(err)?,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e.to_string()),
+        if create {
+            match fs::DirBuilder::new().mode(0o700).create(&directory) {
+                Ok(()) => File::open(directory.parent().ok_or("Missing permit parent")?)
+                    .map_err(err)?
+                    .sync_all()
+                    .map_err(err)?,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e.to_string()),
+            }
         }
         Self::at(directory, 0)
     }
@@ -130,7 +147,24 @@ impl Store {
         metadata(&fd, self.owner, false)?;
         trusted(&path, self.owner, false, deadline)?;
         same_file(&fd, &fs::symlink_metadata(&path).map_err(err)?)?;
-        file.try_lock().map_err(err)?;
+        loop {
+            crate::sealed_fixture::check(deadline, &|| false)?;
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(fs::TryLockError::WouldBlock) => std::thread::sleep(
+                    Duration::from_millis(5)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                ),
+                Err(fs::TryLockError::Error(e)) => return Err(err(e)),
+            }
+        }
+        // The inode must still be the named lock after waiting for another
+        // legitimate recorder/helper reader. Contention never renews the budget.
+        same_file(
+            &file.metadata().map_err(err)?,
+            &fs::symlink_metadata(&path).map_err(err)?,
+        )?;
+        crate::sealed_fixture::check(deadline, &|| false)?;
         Ok(file)
     }
     fn read(&self, path: &Path, deadline: Instant) -> Result<Vec<u8>> {
@@ -473,6 +507,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+    #[test]
+    fn legitimate_recorder_helper_lock_overlap_waits_within_a_fixed_deadline() {
+        let t = Temp::new();
+        let store = t.store();
+        store.prepare(&permit(), &context()).unwrap();
+        let held = store.lock(budget()).unwrap();
+        let other = t.store();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (result, done) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            result.send(other.load(&context())).unwrap();
+        });
+        ready.recv().unwrap();
+        assert!(matches!(
+            done.recv_timeout(Duration::from_millis(60)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(held);
+        assert_eq!(
+            done.recv_timeout(Duration::from_secs(2)).unwrap().unwrap(),
+            permit()
+        );
+        worker.join().unwrap();
+        let held = store.lock(budget()).unwrap();
+        let began = Instant::now();
+        assert!(store.lock(began + Duration::from_millis(40)).is_err());
+        assert!(began.elapsed() >= Duration::from_millis(35));
+        assert!(began.elapsed() < Duration::from_secs(1));
+        drop(held);
     }
     #[test]
     fn one_claim_survives_reopen_and_refuses_another_attempt_or_permit() {

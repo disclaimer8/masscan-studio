@@ -698,12 +698,23 @@ fn launch() -> Result<(), String> {
         }
         let stream = Endpoint::connect(std::path::Path::new(&args[1]), &ui)?;
         let writer = stream.try_clone().map_err(|e| e.to_string())?;
+        #[cfg(target_os = "macos")]
+        let owner_uid = ui.uid;
         let live = Box::new(move || {
             if Identity::read(ui.pid)? != ui {
                 return Err("UI process exited or changed identity".into());
             }
             Ok(())
         });
+        #[cfg(target_os = "macos")]
+        return serve_with_network(
+            Box::new(stream),
+            Box::new(writer),
+            live,
+            raw_adapter,
+            std::sync::Arc::new(network::Candidate::new(owner_uid)),
+        );
+        #[cfg(target_os = "linux")]
         return serve(Box::new(stream), Box::new(writer), live);
     }
     Err("Runner requires --stdio or an authenticated --connect endpoint".into())

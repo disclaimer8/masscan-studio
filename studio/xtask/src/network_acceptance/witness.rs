@@ -11,8 +11,8 @@ pub struct Verified {
 }
 
 pub struct Captured<'a> {
-    pub(super) time_ns: u64,
-    pub(super) frame: &'a [u8],
+    pub(crate) time_ns: u64,
+    pub(crate) frame: &'a [u8],
 }
 
 pub fn frames(bytes: &[u8]) -> Result<Vec<Captured<'_>>, String> {

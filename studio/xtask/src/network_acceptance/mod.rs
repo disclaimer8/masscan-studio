@@ -14,7 +14,7 @@ mod ownership;
 mod supervision;
 mod topology;
 mod wire;
-mod witness;
+pub(crate) mod witness;
 use std::{fs::File, io::Read, path::Path};
 // Darwin process spawning can transiently retain the Store's flock across a
 // concurrent immediate reopen. Serialize only these test fixtures through reap.

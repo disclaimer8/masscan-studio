@@ -10,7 +10,11 @@ use crate::{
     windows_suite::nonce,
 };
 use serde_json::json;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    rc::Rc,
+};
 
 fn scratch() -> PathBuf {
     let d = std::env::temp_dir().join(format!("rml-autodetect-suite-{}", nonce()));
@@ -65,19 +69,87 @@ fn full_iflist(stand_line: &str) -> String {
 }
 /// The C oracle's `--iflist` (its own format), with a host interface in it.
 const ORACLE_IFLIST: &str = "If list:\n  1  veth-a\n  2  wlp2s0\n  3  lo\n";
+/// The host name an mDNS announcement carries: it must never reach the evidence.
+const HOST: &[u8] = b"\x09denys-mbp\x05local\x00";
+const PEER: [u8; 6] = crate::link::STAND_PEER_MAC;
+const SCANNER: [u8; 6] = crate::link::STAND_SCANNER_MAC;
+
+/// An Ethernet frame with an IPv4 (or IPv6) header and a UDP (17) or TCP SYN-ACK (6) header, then `payload`.
+fn ip_frame(
+    src: [u8; 6],
+    dst: [u8; 6],
+    v6: bool,
+    proto: u8,
+    ports: (u16, u16),
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut l4 = Vec::new();
+    l4.extend(ports.0.to_be_bytes());
+    l4.extend(ports.1.to_be_bytes());
+    if proto == 17 {
+        l4.extend(((8 + payload.len()) as u16).to_be_bytes());
+        l4.extend([0, 0]);
+    } else {
+        l4.extend([0; 8]);
+        l4.extend([0x50, 0x12]);
+        l4.extend([0; 6]);
+    }
+    l4.extend(payload);
+    let mut f: Vec<u8> = dst.iter().chain(&src).copied().collect();
+    if v6 {
+        f.extend([0x86, 0xdd, 0x60, 0, 0, 0]);
+        f.extend((l4.len() as u16).to_be_bytes());
+        f.extend([proto, 255]);
+        f.extend([0xfe, 0x80].iter().chain(&[0u8; 14]));
+        f.extend([0xff, 0x02].iter().chain(&[0u8; 13]).chain(&[0xfb]));
+    } else {
+        f.extend([8, 0, 0x45, 0]);
+        f.extend(((20 + l4.len()) as u16).to_be_bytes());
+        f.extend([0, 0, 0, 0, 64, proto, 0, 0, 198, 18, 0, 2, 224, 0, 0, 251]);
+    }
+    f.extend(l4);
+    f
+}
+/// The peer host's own mDNS announcement (multicast, from the peer stand MAC, UDP 5353), naming the host.
+fn mdns(v6: bool) -> Vec<u8> {
+    ip_frame(
+        PEER,
+        [0x01, 0x00, 0x5e, 0, 0, 0xfb],
+        v6,
+        17,
+        (5353, 5353),
+        HOST,
+    )
+}
+/// `frames` with the peer host's mDNS (IPv4 and IPv6) right after the first frame: what the unfiltered witness saw.
+fn with_mdns(frames: &pcap::Frames) -> pcap::Frames {
+    let mut v = frames.clone();
+    let t = v.first().map_or(1.0, |f| f.0);
+    v.insert(1.min(v.len()), (t + 0.000_002, mdns(false)));
+    v.insert(2.min(v.len()), (t + 0.000_003, mdns(true)));
+    v
+}
+fn holds(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
 
 // ------------------------------------------------------------------ a recording Linux host
 
 /// A scripted process: it exits at once with `rc`, or runs until signalled, then runs `on_stop` (the witness
-/// finalising its capture) and exits with what that returns.
+/// finalising its capture) and exits with what that returns, `linger` polls later.
 struct FakeRun {
     rc: Option<i32>,
     on_stop: Option<Box<dyn FnOnce() -> i32>>,
     name: String,
     signals: Rc<RefCell<Vec<String>>>,
+    linger: u32,
 }
 impl Running for FakeRun {
     fn try_wait(&mut self) -> Result<Option<i32>, String> {
+        if self.rc.is_some() && self.linger > 0 {
+            self.linger -= 1;
+            return Ok(None);
+        }
         Ok(self.rc)
     }
     fn signal(&mut self, sig: &str) {
@@ -106,6 +178,17 @@ struct FakeLinux {
     spawned: RefCell<Vec<Vec<String>>>,
     execs: RefCell<Vec<Vec<String>>>,
     signals: Rc<RefCell<Vec<String>>>,
+    /// rmasscan runs until it is signalled.
+    scanner_hangs: Cell<bool>,
+    /// Polls the witness still runs after its stop signal (it finalises its capture).
+    witness_linger: Cell<u32>,
+    /// The responder never says it is ready.
+    responder_silent: Cell<bool>,
+    /// The n-th `capture isolation` (1-based) fails; 0: none does.
+    isolation_fails_at: Cell<usize>,
+    isolation_calls: Cell<usize>,
+    /// A file overwritten when rmasscan starts (a binary replaced in the middle of the suite).
+    replace_on_scan: RefCell<Option<PathBuf>>,
 }
 impl FakeLinux {
     fn new(tags: &[&'static str], rmasscan: &Path, oracle: &Path) -> Self {
@@ -121,6 +204,12 @@ impl FakeLinux {
             spawned: RefCell::default(),
             execs: RefCell::default(),
             signals: Rc::default(),
+            scanner_hangs: Cell::new(false),
+            witness_linger: Cell::new(0),
+            responder_silent: Cell::new(false),
+            isolation_fails_at: Cell::new(0),
+            isolation_calls: Cell::new(0),
+            replace_on_scan: RefCell::default(),
         }
     }
     /// The run a command belongs to, from the work directory its paths name (`<work>/<tag>.<nonce>/...`).
@@ -163,6 +252,11 @@ impl FakeLinux {
             on_stop,
             name: name.into(),
             signals: self.signals.clone(),
+            linger: if name == "witness" {
+                self.witness_linger.get()
+            } else {
+                0
+            },
         })
     }
 }
@@ -176,6 +270,14 @@ impl LinuxHost for FakeLinux {
             stderr: String::new(),
         };
         if argv.iter().any(|a| a == "isolation") {
+            self.isolation_calls.set(self.isolation_calls.get() + 1);
+            if self.isolation_calls.get() == self.isolation_fails_at.get() {
+                return Ok(Output {
+                    rc: 1,
+                    stdout: String::new(),
+                    stderr: "host link list changed or baseline does not match".into(),
+                });
+            }
             fs::write(after(argv, "--out"), file_of(self.sim(), "isolation.json")).unwrap();
         } else if argv.iter().any(|a| a == "--iflist") {
             return Ok(ok(if argv.contains(&self.oracle) {
@@ -198,7 +300,9 @@ impl LinuxHost for FakeLinux {
         fs::write(stderr, "").unwrap();
         let sim = self.sim();
         if argv.iter().any(|a| a == "responder") {
-            fs::write(after(argv, "--ready"), "listening 80,8080\n").unwrap();
+            if !self.responder_silent.get() {
+                fs::write(after(argv, "--ready"), "listening 80,8080\n").unwrap();
+            }
             return Ok(self.proc("responder", None, None));
         }
         if argv.iter().any(|a| a == "dump") {
@@ -230,6 +334,12 @@ impl LinuxHost for FakeLinux {
             return Ok(self.proc("oracle", Some(o.exit.trim().parse().unwrap()), None));
         }
         if argv.contains(&self.rmasscan) {
+            if let Some(p) = self.replace_on_scan.borrow().as_ref() {
+                fs::write(p, "another build").unwrap();
+            }
+            if self.scanner_hangs.get() {
+                return Ok(self.proc("scanner", None, None));
+            }
             fs::write(stdout, sim.stdout.clone().unwrap_or_default()).unwrap();
             fs::write(stderr, sim.stderr_text()).unwrap();
             return Ok(self.proc("scanner", Some(sim.exit), None));
@@ -503,34 +613,155 @@ fn leftover_patterns_cover_rmasscan() {
 
 #[test]
 fn privacy_filter_is_applied_to_the_peer_witness_on_macos() {
-    use crate::{dump, macos_verify::PEER_FILTER};
+    use crate::macos_verify::PEER_FILTER;
+    // The brief's filter, applied after the capture: exactly the peer host's own mDNS, over IPv4 and IPv6.
     assert_eq!(
         PEER_FILTER,
         "not (ether src 02:ac:00:00:00:02 and udp port 5353)"
     );
-    // `capture dump --filter` takes exactly the privacy filter on the macOS peer interface, and nothing else.
-    assert!(dump::witness_filter_allowed("feth4202", PEER_FILTER, true));
-    for (iface, filter, macos) in [
-        ("feth4202", PEER_FILTER, false),
-        ("feth4201", PEER_FILTER, true),
-        ("veth-b", PEER_FILTER, true),
-        ("feth4202", "not arp", true),
-        ("feth4202", "", true),
+    assert!(is_peer_mdns(&mdns(false)) && is_peer_mdns(&mdns(true)));
+    for (f, why) in [
         (
-            "feth4202",
-            "not (ether src 02:ac:00:00:00:02 and udp port 5353) or tcp",
-            true,
+            ip_frame(SCANNER, PEER, false, 17, (5353, 5353), HOST),
+            "UDP 5353 from the scanner MAC",
+        ),
+        (
+            ip_frame(PEER, SCANNER, false, 17, (53, 40000), b"x"),
+            "other UDP from the peer",
+        ),
+        (
+            ip_frame(PEER, SCANNER, false, 6, (5353, 40000), b""),
+            "TCP from the peer",
+        ),
+        (
+            mdns(false)[..36].to_vec(),
+            "a frame cut before its UDP ports",
         ),
     ] {
-        assert!(
-            !dump::witness_filter_allowed(iface, filter, macos),
-            "{iface} {filter:?} {macos}"
-        );
+        assert!(!is_peer_mdns(&f), "{why}");
     }
-    let argv = dump::tcpdump_argv_macos("feth4202", "/w/peer.pcap", Some(PEER_FILTER));
-    assert_eq!(argv.last().map(String::as_str), Some(PEER_FILTER));
+    // A later fragment carries no UDP header: never read as one.
+    let mut frag = mdns(false);
+    frag[20..22].copy_from_slice(&0x0010u16.to_be_bytes());
+    assert!(!is_peer_mdns(&frag));
+    // `capture dump` takes no filter any more: the witness records every frame of the peer interface.
+    assert!(
+        !crate::dump::tcpdump_argv_macos("feth4202", "/w/peer.unfiltered", None)
+            .iter()
+            .any(|a| a.contains("5353"))
+    );
     #[cfg(target_os = "macos")]
-    mac::the_witness_carries_the_privacy_filter();
+    mac::the_peer_capture_is_published_without_the_hosts_mdns();
+}
+
+#[test]
+fn the_peer_capture_drops_only_the_peer_hosts_mdns_and_counts_it() {
+    use rmasscan_core::arp::encode_reply;
+    let ip = |o: u8| u32::from(Ipv4Addr::new(198, 18, 0, o));
+    let lab: pcap::Frames = vec![
+        (
+            1.0,
+            crate::link::marker_frame(SCANNER, PEER, crate::link::START_PAYLOAD),
+        ),
+        (1.1, encode_reply(PEER, ip(2), SCANNER, ip(1)).to_vec()),
+        (1.2, ip_frame(PEER, SCANNER, false, 6, (8000, 40000), b"")),
+        (
+            1.3,
+            ip_frame(SCANNER, PEER, false, 17, (5353, 5353), b"scanner"),
+        ),
+        (
+            1.4,
+            ip_frame(PEER, SCANNER, false, 17, (53, 40000), b"other"),
+        ),
+        (
+            1.5,
+            crate::link::marker_frame(SCANNER, PEER, crate::link::END_PAYLOAD),
+        ),
+    ];
+    let unfiltered = with_mdns(&lab);
+    assert_eq!(unfiltered.len(), lab.len() + 2);
+    let raw = pcap::encode(&unfiltered);
+    let (kept, dropped) = pcap::keep_records(&raw, |f| !is_peer_mdns(f)).unwrap();
+    assert_eq!(dropped, 2);
+    // Every lab frame survives, byte for byte and with its timestamp; the host name does not.
+    assert_eq!(kept, pcap::encode(&lab));
+    let frames = |b: &[u8]| pcap::read_pcap_records(b).unwrap().1;
+    assert_eq!(frames(&kept), frames(&pcap::encode(&lab)));
+    assert_eq!(frames(&kept).len(), lab.len());
+    assert!(holds(&raw, HOST) && !holds(&kept, HOST));
+    // capture.json: the witness's verdict on all it captured, describing the published file.
+    let witness: Value = serde_json::from_slice(&Sim::witness(&unfiltered)).unwrap();
+    let (published, rec) = publish_peer_capture(&raw, witness.clone()).unwrap();
+    assert_eq!(published, kept);
+    assert_eq!(rec["pcap_sha256"], crate::verify::sha(&kept));
+    assert_eq!(rec["pcap_frames"], lab.len());
+    assert_eq!(rec["privacy_filter"]["frames_dropped"], 2);
+    assert_eq!(rec["unfiltered"]["pcap_frames"], unfiltered.len());
+    assert_eq!(rec["unfiltered"]["pcap_sha256"], witness["pcap_sha256"]);
+    let w: av::PeerWitness = serde_json::from_value(rec).unwrap();
+    assert!(w.valid && w.invalid_reasons.is_empty(), "{w:?}");
+    // A file other than the one the witness hashed and counted is not its capture.
+    let mut other = raw.clone();
+    let last = other.len() - 1;
+    other[last] ^= 1;
+    let (_, rec) = publish_peer_capture(&other, witness).unwrap();
+    assert_eq!(rec["valid"], false, "{rec}");
+}
+
+#[test]
+fn a_witness_window_with_dropped_mdns_is_still_complete() {
+    use crate::dump::{Facts, problems};
+    // The peer interface moved 13 frames in the witness's counter window: 11 of the lab and the host's mDNS twice.
+    let lab: pcap::Frames = (0..11)
+        .map(|k| {
+            let payload = if k == 0 {
+                crate::link::START_PAYLOAD
+            } else {
+                crate::link::END_PAYLOAD
+            };
+            (
+                1.0 + f64::from(k),
+                crate::link::marker_frame(SCANNER, PEER, payload),
+            )
+        })
+        .collect();
+    let all = with_mdns(&lab);
+    let n = all.len() as u64;
+    assert_eq!(n, 13);
+    let unfiltered = Facts {
+        start_markers: 1,
+        end_markers: 10,
+        quiesced: true,
+        captured: Some(n),
+        received: Some(n + 57),
+        dropped_kernel: Some(0),
+        interface_drop_delta: Some(0),
+        received_is_prefilter: true,
+        pcap_frames: n,
+        tcpdump_exited: true,
+        window_lo: Some(n),
+        window_hi: Some(n),
+        ..Facts::default()
+    };
+    assert!(
+        problems(&unfiltered).is_empty(),
+        "{:?}",
+        problems(&unfiltered)
+    );
+    // Filtered at capture time (round 1) the same window could not be proven: the counters saw both frames.
+    let filtered = Facts {
+        captured: Some(n - 2),
+        pcap_frames: n - 2,
+        ..unfiltered.clone()
+    };
+    assert!(!problems(&filtered).is_empty());
+    // Filtered after the capture, the witness's record stays valid and describes the published capture.
+    let witness: Value = serde_json::from_slice(&Sim::witness(&all)).unwrap();
+    let (_, rec) = publish_peer_capture(&pcap::encode(&all), witness).unwrap();
+    let w: av::PeerWitness = serde_json::from_value(rec.clone()).unwrap();
+    assert!(w.valid && w.invalid_reasons.is_empty(), "{rec}");
+    assert_eq!(w.pcap_frames, 11);
+    assert_eq!(rec["privacy_filter"]["frames_dropped"], 2);
 }
 
 #[test]
@@ -781,6 +1012,187 @@ fn a_run_copy_is_hashed_before_the_copy_and_checked_with_the_verifiers_rule() {
     fs::remove_dir_all(d).unwrap();
 }
 
+/// The directories under `runs_aborted/`.
+fn aborted(out: &Path) -> Vec<PathBuf> {
+    fs::read_dir(out.join("runs_aborted"))
+        .map(|d| d.map(|e| e.unwrap().path()).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_linux_run_that_fails_after_a_frame_is_kept_under_runs_aborted() {
+    let s = linux_setup(&["l01_auto", "l02_auto_multi"]);
+    s.fake.scanner_hangs.set(true);
+    // Longer than the 40 polls a dropped run grants, well inside the witness's own stop window.
+    s.fake.witness_linger.set(500);
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::Abort(_))
+            && e.message().contains("ran longer than")
+            && e.message().contains("runs_aborted/l01_auto."),
+        "{e:?}"
+    );
+    // The scanner stops first, then the witness, which finishes its capture: nothing is killed.
+    let sig = s.fake.signals.borrow().clone();
+    let at = |x: &str| {
+        sig.iter()
+            .position(|y| y == x)
+            .unwrap_or_else(|| panic!("{x} not in {sig:?}"))
+    };
+    assert!(at("scanner:INT") < at("witness:TERM"), "{sig:?}");
+    assert!(!sig.iter().any(|x| x.ends_with(":KILL")), "{sig:?}");
+    // The run is kept, hashed like a run; the work directory is gone, and the next case never started.
+    let kept = aborted(&s.out);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(
+        kept[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("l01_auto.")
+    );
+    crate::macos_verify::hashes_match_tree(&kept[0], true).unwrap();
+    for f in ["peer.pcap", "isolation.json", "argv.json", "expect.json"] {
+        assert!(kept[0].join(f).is_file(), "{f}");
+    }
+    assert!(!s.out.join("runs/l01_auto").exists());
+    assert_eq!(s.fake.runs(&s.fake.rmasscan.clone()), 1);
+    assert_eq!(fs::read_dir(s.out.join(".work")).unwrap().count(), 1);
+    // The verifier's safety walk reads the kept capture and finds nothing foreign in it.
+    assert_eq!(av::verify_dir(&s.out)["safety_trips"], json!([]));
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[test]
+fn a_linux_failure_before_any_frame_leaves_nothing() {
+    let s = linux_setup(&["l01_auto"]);
+    s.fake.responder_silent.set(true);
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("responder"),
+        "{e:?}"
+    );
+    assert!(aborted(&s.out).is_empty() && !s.out.join("runs_aborted").exists());
+    assert!(
+        !s.fake
+            .spawned
+            .borrow()
+            .iter()
+            .any(|a| a.iter().any(|x| x == "dump")),
+        "no witness"
+    );
+    assert_eq!(s.fake.runs(&s.fake.rmasscan.clone()), 0);
+    assert_eq!(fs::read_dir(s.out.join(".work")).unwrap().count(), 1);
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[test]
+fn an_isolation_failure_after_the_run_is_an_abort_and_the_run_is_kept() {
+    let s = linux_setup(&["l01_auto", "l02_auto_multi"]);
+    s.fake.isolation_fails_at.set(2);
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::Abort(_)) && e.message().contains("not sealed after the run"),
+        "{e:?}"
+    );
+    let kept = aborted(&s.out);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(kept[0].join("isolation.json").is_file() && kept[0].join("capture.json").is_file());
+    assert!(!kept[0].join("isolation-post.json").exists());
+    assert!(!s.out.join("runs/l01_auto").exists());
+    assert_eq!(s.fake.runs(&s.fake.rmasscan.clone()), 1, "no further run");
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[test]
+fn another_build_never_extends_a_directory_and_a_replaced_binary_stops_the_next_run() {
+    // A binary replaced while the suite runs stops it before the next case.
+    let s = linux_setup(&["l01_auto", "l02_auto_multi"]);
+    let oracle = PathBuf::from(&s.fake.oracle);
+    *s.fake.replace_on_scan.borrow_mut() = Some(oracle.clone());
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("masscan changed"),
+        "{e:?}"
+    );
+    assert!(s.out.join("runs/l01_auto").is_dir() && !s.out.join("runs/l02_auto_multi").exists());
+    assert_eq!(s.fake.runs(&s.fake.rmasscan.clone()), 1);
+    // That directory is never extended by another oracle, rmasscan-lab or rmasscan build.
+    *s.fake.replace_on_scan.borrow_mut() = None;
+    let mut args = s.args.clone();
+    set_arg(&mut args, "--only", "l02_auto_multi");
+    let before = s.fake.execs.borrow().len() + s.fake.spawned.borrow().len();
+    let e = linux_with(&args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("oracle"),
+        "{e:?}"
+    );
+    fs::write(&oracle, "masscan").unwrap();
+    fs::write(&s.lab, "another lab build").unwrap();
+    let e = linux_with(&args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("lab"),
+        "{e:?}"
+    );
+    assert_eq!(
+        s.fake.execs.borrow().len() + s.fake.spawned.borrow().len(),
+        before,
+        "nothing started"
+    );
+    // The same builds extend it.
+    fs::write(&s.lab, "lab").unwrap();
+    assert_eq!(linux_with(&args, &s.fake, &s.lab).unwrap(), 0);
+    assert!(s.out.join("runs/l02_auto_multi").is_dir());
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[test]
+fn a_committed_macos_status_file_passes_the_verifiers_privacy_scan() {
+    // The status the stand printed in the committed BPF acceptance: the LAN gateway and the stand MACs in it.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance-raw/macos-live/status-pre.json",
+    );
+    let status = fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let text = String::from_utf8_lossy(&status);
+    assert!(text.contains("\"gateway\": \"192.168.1.1\"") && text.contains("02:ac:00:00:00:01"));
+    // A consistent m02 run whose statuses are that file, written and hashed by the suite's own writer.
+    let root = scratch();
+    let work = root.join("work");
+    for (name, bytes) in Sim::new(Plan::Macos, "m02_user_explicit").files() {
+        let to = work.join(&name);
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        let real = matches!(name.as_str(), "status-pre.json" | "status-post.json");
+        fs::write(to, if real { status.clone() } else { bytes }).unwrap();
+    }
+    hash_and_copy(&work, &root.join("runs/m02_user_explicit")).unwrap();
+    fs::write(
+        root.join("manifest.json"),
+        json!({"autodetect": "macos"}).to_string(),
+    )
+    .unwrap();
+    let res = av::verify_dir(&root);
+    let run = res["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tag"] == "m02_user_explicit")
+        .unwrap();
+    let privacy: Vec<&Value> = run["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["name"].as_str().is_some_and(|n| n.starts_with("privacy")))
+        .collect();
+    assert_eq!(privacy.len(), 1, "{privacy:#?}");
+    assert_eq!(
+        privacy[0]["name"],
+        "privacy: every text file holds only allowlisted names, addresses and paths"
+    );
+    assert_eq!(privacy[0]["result"], "PASS", "{privacy:#?}");
+    assert_eq!(run["verdict"], "PASS", "{:#?}", bad(&res));
+    fs::remove_dir_all(root).unwrap();
+}
+
 // ------------------------------------------------------------------ macOS (the seam is macos_suite::Stand)
 
 #[cfg(target_os = "macos")]
@@ -796,14 +1208,21 @@ fn a_lab_frame_on_the_uplink_stops_the_macos_suite_with_13() {
 }
 
 #[cfg(target_os = "macos")]
+#[test]
+fn a_second_suite_is_refused_while_macos_suites_lock_is_held() {
+    mac::the_lock_keeps_one_suite_on_the_stand();
+}
+
+#[cfg(target_os = "macos")]
 mod mac {
     use super::*;
     use crate::{
         dump::NetstatCounters,
-        macos_suite::{FloodSpec, InjectSpec, LinkState, Proc, Side, Stand},
-        macos_verify::PEER_FILTER,
+        macos_suite::{FloodSpec, InjectSpec, LinkState, Proc, Side, Stand, take_lock},
     };
-    use std::cell::Cell;
+
+    /// Every scripted process leads this process group; the suite records it in the lock.
+    const PGID: u32 = 4242;
 
     struct FakeProc {
         rc: Option<i32>,
@@ -812,6 +1231,9 @@ mod mac {
     impl Proc for FakeProc {
         fn try_wait(&mut self) -> Result<Option<i32>, String> {
             Ok(self.rc)
+        }
+        fn pgid(&self) -> Option<u32> {
+            Some(PGID)
         }
         fn signal(&mut self, _sig: &str) {
             if self.rc.is_none() {
@@ -823,7 +1245,8 @@ mod mac {
         }
     }
 
-    /// The feth stand as the suite sees it, played from the generator's runs of one plan.
+    /// The feth stand as the suite sees it, played from the generator's runs of one plan. Its peer witness hears
+    /// the host's own mDNS (IPv4 and IPv6) in every run, as the real one would.
     pub(super) struct FakeMac {
         plan: Plan,
         sims: BTreeMap<&'static str, Sim>,
@@ -838,6 +1261,9 @@ mod mac {
         pub(super) preflight: RefCell<Option<String>>,
         /// Extra `ps` lines (leftover processes).
         pub(super) ps: RefCell<String>,
+        /// The lock file, read when rmasscan starts.
+        pub(super) lock_file: RefCell<Option<PathBuf>>,
+        pub(super) lock_at_scanner: RefCell<String>,
     }
     impl FakeMac {
         pub(super) fn new(plan: Plan, rmasscan: &Path) -> Self {
@@ -855,6 +1281,8 @@ mod mac {
                 uplink_frames: Cell::new(0),
                 preflight: RefCell::default(),
                 ps: RefCell::default(),
+                lock_file: RefCell::default(),
+                lock_at_scanner: RefCell::default(),
             }
         }
         fn note(&self, all: &[String]) {
@@ -994,7 +1422,8 @@ mod mac {
                     PathBuf::from(after(argv, "--pcap")),
                     PathBuf::from(after(argv, "--meta")),
                 );
-                let frames = sim.peer.clone();
+                // Every frame of the peer interface: the run's and the host's own mDNS announcements.
+                let frames = with_mdns(&sim.peer);
                 return Ok(running(Box::new(move || {
                     fs::write(&pcap_path, pcap::encode(&frames)).unwrap();
                     fs::write(&meta, Sim::witness(&frames)).unwrap();
@@ -1007,6 +1436,9 @@ mod mac {
                 })));
             }
             if argv[0] == self.rmasscan {
+                if let Some(l) = self.lock_file.borrow().as_ref() {
+                    *self.lock_at_scanner.borrow_mut() = fs::read_to_string(l).unwrap_or_default();
+                }
                 fs::write(stdout, sim.stdout.clone().unwrap_or_default()).unwrap();
                 fs::write(stderr, sim.stderr_text()).unwrap();
                 return Ok(Box::new(FakeProc {
@@ -1066,6 +1498,8 @@ mod mac {
         pub(super) root: PathBuf,
         pub(super) out: PathBuf,
         pub(super) exe: PathBuf,
+        /// macos-suite's lock file of this scratch (its directory does not exist before the suite).
+        pub(super) lock: PathBuf,
         pub(super) fake: FakeMac,
         pub(super) args: Vec<String>,
     }
@@ -1096,6 +1530,7 @@ mod mac {
         }
         let fake = FakeMac::new(plan, &rm);
         MacSetup {
+            lock: root.join("lockdir").join("macos-suite.lock"),
             root,
             out,
             exe,
@@ -1103,10 +1538,28 @@ mod mac {
             args,
         }
     }
+    /// The suite of `s` with `args`, its lock in the scratch.
+    pub(super) fn run(
+        s: &MacSetup,
+        args: &[String],
+        sudo: Option<&str>,
+    ) -> Result<i32, SuiteError> {
+        macos_with(args, &s.fake, &s.exe, sudo, &|| Ok(s.lock.clone()))
+    }
+    /// No file under `out` keeps the unfiltered capture or the host name.
+    fn no_host_data(out: &Path) {
+        for f in crate::macos_verify::relative_files(out) {
+            assert!(!f.ends_with(".unfiltered"), "{f} left behind");
+            assert!(
+                !holds(&fs::read(out.join(&f)).unwrap(), HOST),
+                "{f} names the host"
+            );
+        }
+    }
 
     pub(super) fn user_and_root_directories_pass() {
         let s = setup(Plan::Macos, &[]);
-        assert_eq!(macos_with(&s.args, &s.fake, &s.exe, None).unwrap(), 0);
+        assert_eq!(run(&s, &s.args, None).unwrap(), 0);
         let res = av::verify_dir(&s.out);
         assert_eq!(res["overall"], "PASS", "{:#?}", bad(&res));
         assert_eq!(
@@ -1120,28 +1573,43 @@ mod mac {
                 .join("runs/m05_user_no_adapter/preflight.txt")
                 .is_file()
         );
-        // The user window never hands the directory to anyone.
+        // Every published peer capture left out the host's two mDNS frames and says so.
+        for tag in av::planned_tags(Plan::Macos) {
+            let rec = read_json(s.out.join("runs").join(tag).join(CAPTURE_JSON)).unwrap();
+            assert_eq!(rec["privacy_filter"]["frames_dropped"], 2, "{tag}");
+        }
+        no_host_data(&s.out);
+        // The user window never hands anything to anyone, and its lock is gone.
         assert!(!s.fake.execs.borrow().iter().any(|a| a[0] == CHOWN));
         assert!(!s.out.join(".work").exists());
+        assert!(!s.lock.exists());
         fs::remove_dir_all(&s.root).unwrap();
 
         let s = setup(Plan::MacosRoot, &[]);
-        assert_eq!(
-            macos_with(&s.args, &s.fake, &s.exe, Some("alice")).unwrap(),
-            0
-        );
+        assert_eq!(run(&s, &s.args, Some("alice")).unwrap(), 0);
         let res = av::verify_dir(&s.out);
         assert_eq!(res["overall"], "PASS", "{:#?}", bad(&res));
         assert_eq!(
             read_json(s.out.join("manifest.json")).unwrap()["autodetect"],
             "macos-root"
         );
-        // At the end the whole directory goes back to the user who ran sudo.
+        no_host_data(&s.out);
+        // At the end the directory goes back to the user who ran sudo, and so does the lock directory this root
+        // case created.
         let execs = s.fake.execs.borrow();
-        let last = execs.last().unwrap();
+        let n = execs.len();
         assert_eq!(
-            *last,
+            execs[n - 2],
             strings(&[CHOWN, "-R", "alice", s.out.to_str().unwrap()])
+        );
+        assert_eq!(
+            execs[n - 1],
+            strings(&[
+                CHOWN,
+                "-h",
+                "alice",
+                s.lock.parent().unwrap().to_str().unwrap()
+            ])
         );
         drop(execs);
         fs::remove_dir_all(&s.root).unwrap();
@@ -1151,10 +1619,10 @@ mod mac {
         // User window as root.
         let s = setup(Plan::Macos, &[]);
         s.fake.euid.set(0);
-        let e = macos_with(&s.args, &s.fake, &s.exe, Some("alice")).unwrap_err();
+        let e = run(&s, &s.args, Some("alice")).unwrap_err();
         assert!(matches!(e, SuiteError::NotRun(_)), "{e:?}");
         assert!(s.fake.nothing_started());
-        assert!(!s.out.exists());
+        assert!(!s.out.exists() && !s.lock.exists());
         fs::remove_dir_all(&s.root).unwrap();
         // Root case as the user, root case without $SUDO_USER (or as root's own), a user case under --root-case.
         for (euid, sudo, only) in [
@@ -1165,7 +1633,7 @@ mod mac {
         ] {
             let s = setup(Plan::MacosRoot, only.as_slice());
             s.fake.euid.set(euid);
-            let e = macos_with(&s.args, &s.fake, &s.exe, sudo).unwrap_err();
+            let e = run(&s, &s.args, sudo).unwrap_err();
             assert!(
                 matches!(e, SuiteError::NotRun(_)),
                 "{euid} {sudo:?} {only:?}: {e:?}"
@@ -1179,10 +1647,7 @@ mod mac {
         fs::write(&other, "another build").unwrap();
         let mut args = s.args.clone();
         set_arg(&mut args, "--lab", other.to_str().unwrap());
-        assert!(matches!(
-            macos_with(&args, &s.fake, &s.exe, None),
-            Err(SuiteError::NotRun(_))
-        ));
+        assert!(matches!(run(&s, &args, None), Err(SuiteError::NotRun(_))));
         assert!(s.fake.nothing_started());
         fs::remove_dir_all(&s.root).unwrap();
     }
@@ -1190,7 +1655,7 @@ mod mac {
     pub(super) fn a_live_rmasscan_refuses_the_run() {
         let s = setup(Plan::Macos, &["m02_user_explicit"]);
         *s.fake.ps.borrow_mut() = "6001  6001 /opt/x/rmasscan 198.18.0.2 -p8000\n".into();
-        let e = macos_with(&s.args, &s.fake, &s.exe, None).unwrap_err();
+        let e = run(&s, &s.args, None).unwrap_err();
         assert!(
             matches!(e, SuiteError::NotRun(_)) && e.message().contains("still alive"),
             "{e:?}"
@@ -1200,22 +1665,53 @@ mod mac {
         fs::remove_dir_all(&s.root).unwrap();
     }
 
-    pub(super) fn the_witness_carries_the_privacy_filter() {
-        let w = macos_witness_argv("/x/rmasscan-lab", Path::new("/w/run"), Path::new("/w"));
-        assert_eq!(after(&w, "--iface"), "feth4202");
-        assert_eq!(after(&w, "--filter"), PEER_FILTER);
-        assert_eq!(after(&w, "--pcap"), "/w/run/peer.pcap");
-        let s = setup(Plan::Macos, &["m07_user_iflist"]);
-        assert_eq!(macos_with(&s.args, &s.fake, &s.exe, None).unwrap(), 0);
+    pub(super) fn the_peer_capture_is_published_without_the_hosts_mdns() {
+        let s = setup(Plan::Macos, &["m02_user_explicit"]);
+        assert_eq!(run(&s, &s.args, None).unwrap(), 0);
         let spawned = s.fake.spawned.borrow();
+        // The witness records every frame (no filter) into the private work directory, never the run directory.
         let dumps: Vec<&Vec<String>> = spawned
             .iter()
             .filter(|a| a.iter().any(|x| x == "dump"))
             .collect();
         assert_eq!(dumps.len(), 1);
-        assert_eq!(after(dumps[0], "--filter"), PEER_FILTER);
         assert_eq!(after(dumps[0], "--iface"), "feth4202");
-        // The uplink witness carries the lab filter, on the uplink, not promiscuous.
+        assert!(
+            !dumps[0]
+                .iter()
+                .any(|a| a == "--filter" || a.contains("5353"))
+        );
+        let unfiltered = Path::new(after(dumps[0], "--pcap"));
+        assert_eq!(unfiltered.file_name().unwrap(), "peer.unfiltered");
+        let base = unfiltered.parent().unwrap();
+        assert_eq!(
+            after(dumps[0], "--meta"),
+            p2s(&base.join("peer-witness.json"))
+        );
+        assert_eq!(
+            witness_files(base, &base.join("run")).peer_pcap,
+            unfiltered,
+            "the suite's own layout"
+        );
+        // The published capture is the run's frames exactly; the record says what was left out.
+        let run_dir = s.out.join("runs/m02_user_explicit");
+        let sim = Sim::new(Plan::Macos, "m02_user_explicit");
+        assert_eq!(
+            fs::read(run_dir.join(PEER_PCAP)).unwrap(),
+            pcap::encode(&sim.peer)
+        );
+        let rec = read_json(run_dir.join(CAPTURE_JSON)).unwrap();
+        assert_eq!(rec["privacy_filter"]["frames_dropped"], 2);
+        assert_eq!(rec["pcap_frames"], sim.peer.len());
+        assert_eq!(rec["unfiltered"]["pcap_frames"], sim.peer.len() + 2);
+        no_host_data(&s.out);
+        // The listeners open the stand's ports; the uplink witness carries the lab filter, not promiscuous.
+        let listen = spawned
+            .iter()
+            .find(|a| a.iter().any(|x| x == "listen"))
+            .unwrap();
+        assert_eq!(after(listen, "--open"), open_ports());
+        assert_eq!(open_ports(), "8000-8007");
         let up = spawned
             .iter()
             .find(|a| a[0] == "/usr/sbin/tcpdump")
@@ -1231,7 +1727,7 @@ mod mac {
         let s = setup(Plan::Macos, &["m05_user_no_adapter"]);
         *s.fake.preflight.borrow_mut() =
             Some("rc 0\n[+] interface = feth4201 (detected: route to 198.18.0.2)\n".into());
-        let e = macos_with(&s.args, &s.fake, &s.exe, None).unwrap_err();
+        let e = run(&s, &s.args, None).unwrap_err();
         assert!(matches!(e, SuiteError::NotRun(_)), "{e:?}");
         assert_eq!(s.fake.scanner_runs(), 0, "the live case never started");
         assert!(
@@ -1245,7 +1741,7 @@ mod mac {
     pub(super) fn uplink_frame_is_an_isolation_stop() {
         let s = setup(Plan::Macos, &["m01_user_masked", "m02_user_explicit"]);
         s.fake.uplink_frames.set(1);
-        let e = macos_with(&s.args, &s.fake, &s.exe, None).unwrap_err();
+        let e = run(&s, &s.args, None).unwrap_err();
         assert!(matches!(e, SuiteError::Isolation(_)), "{e:?}");
         assert_eq!(e.code(), 13);
         assert_eq!(s.fake.scanner_runs(), 1, "no further run after the breach");
@@ -1258,17 +1754,66 @@ mod mac {
             "{aborted:?}"
         );
         assert!(!s.out.join("runs/m01_user_masked").exists());
+        // The kept run has its published peer capture; the unfiltered one is gone on this path too.
+        assert!(
+            s.out
+                .join("runs_aborted")
+                .join(&aborted[0])
+                .join(PEER_PCAP)
+                .is_file()
+        );
+        no_host_data(&s.out);
         // The directory is FAIL for good and cannot be extended.
         assert_eq!(av::verify_dir(&s.out)["overall"], "FAIL");
         let again = setup(Plan::Macos, &["m02_user_explicit"]);
         let mut args = again.args.clone();
         set_arg(&mut args, "--out", s.out.to_str().unwrap());
         assert!(matches!(
-            macos_with(&args, &again.fake, &again.exe, None),
+            run(&again, &args, None),
             Err(SuiteError::Isolation(_))
         ));
         assert!(again.fake.spawned.borrow().is_empty());
         fs::remove_dir_all(&s.root).unwrap();
         fs::remove_dir_all(&again.root).unwrap();
+    }
+
+    pub(super) fn the_lock_keeps_one_suite_on_the_stand() {
+        let s = setup(Plan::Macos, &["m01_user_masked"]);
+        // Another suite holds macos-suite's lock: nothing starts and nothing is written.
+        let held = take_lock(&s.lock).unwrap();
+        let e = run(&s, &s.args, None).unwrap_err();
+        assert!(
+            matches!(e, SuiteError::NotRun(_)) && e.message().contains("one suite at a time"),
+            "{e:?}"
+        );
+        assert!(s.fake.nothing_started() && !s.out.exists());
+        drop(held);
+        // Free again: the live children's process group is in the lock while rmasscan runs; the lock goes after.
+        *s.fake.lock_file.borrow_mut() = Some(s.lock.clone());
+        assert_eq!(run(&s, &s.args, None).unwrap(), 0);
+        assert!(
+            s.fake
+                .lock_at_scanner
+                .borrow()
+                .contains(&format!("children={PGID}")),
+            "{}",
+            s.fake.lock_at_scanner.borrow()
+        );
+        assert!(!s.lock.exists());
+        // The directory is never extended under another stand run id.
+        let mut args = s.args.clone();
+        set_arg(&mut args, "--only", "m02_user_explicit");
+        args.extend(strings(&["--run-id", "m2"]));
+        let before = s.fake.execs.borrow().len() + s.fake.spawned.borrow().len();
+        let e = run(&s, &args, None).unwrap_err();
+        assert!(
+            matches!(e, SuiteError::NotRun(_)) && e.message().contains("run_id"),
+            "{e:?}"
+        );
+        assert_eq!(
+            s.fake.execs.borrow().len() + s.fake.spawned.borrow().len(),
+            before
+        );
+        fs::remove_dir_all(&s.root).unwrap();
     }
 }

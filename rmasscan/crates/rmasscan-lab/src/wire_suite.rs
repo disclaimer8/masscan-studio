@@ -20,10 +20,10 @@ fn stop_requested() -> bool {
     }
     rmasscan_net::lab_io::stop_requested()
 }
-/// Signal a process directly. `command()` kills its own child as soon as the stop flag is up, so a
-/// cleanup kill sent through it would die before it ran (final review M-2).
+/// Signal a process directly (`/bin/kill` by absolute path). `command()` kills its own child as soon as the stop
+/// flag is up, so a cleanup kill sent through it would die before it ran (final review M-2).
 pub(crate) fn signal_process(sig: &str, pid: u32) {
-    let _ = Command::new("kill")
+    let _ = Command::new("/bin/kill")
         .arg(format!("-{sig}"))
         .arg(pid.to_string())
         .stdout(Stdio::null())

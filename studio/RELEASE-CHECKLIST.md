@@ -13,8 +13,12 @@ The next work is ordered by user-visible outcome, not by test count.
 - [x] Run the optimized packaged GUI against the sealed multi-peer/routed fixture
   for Complete, Stop and another Complete in separate launches; independent root
   packet evidence passed (96, 5, 96 saved results on November 3).
-- [ ] Verify same-window native Stop/Start and native Pause/Resume on this package.
-- [ ] Check saved History, repeat settings and exports using those real results.
+- [x] Verify native Pause and Resume after restarting the packaged GUI: 5 then 91
+  independently captured probes, 96 cumulative rows and consumed checkpoint.
+- [ ] Verify same-window native Stop/Start and Pause/Resume on this package.
+- [x] Check saved History, exact repeat settings, filtered/sorted projections and
+  JSON/CSV writers using private copies of those real results (24 files verified).
+- [ ] Exercise the native save-file dialog and asynchronous Export action.
 
 ## 2. Admit a concrete owned physical target
 
@@ -35,13 +39,13 @@ scan targets merely because they appear in routes or neighbour tables.
 
 - [x] Verify the optimized release build with its exact packaged helper on the
   isolated local fixture. Physical-interface acceptance remains separate above.
-- [ ] Check first install, denied authorization, retry, update and reopening saved
-  history in the native GUI. Keep development host maintenance separate from the
+- [x] Reopen saved native results through the packaged GUI without changing history.
+- [ ] Check first install, denied authorization, retry and update in the native GUI. Keep development host maintenance separate from the
   ordinary application's helper session.
 - [ ] Perform manual keyboard/mouse, focus, resizing, scrolling and error-message
   acceptance. Callback automation and rendered snapshots cover only part of this.
-- [ ] Reconcile README/verification documents with the final enabled profiles and
-  clearly explain unsupported targets/protocols.
+- [x] Align the current profile labels and README with fixture-only execution.
+- [ ] Reconcile documentation again if the supported target policy changes.
 - [ ] Obtain release signing/notarization and an explicit publish/merge decision
   for a distributable build. Ad-hoc local signing is not that result.
 
@@ -53,5 +57,6 @@ release scope, each needs its own bounded owned-target lifecycle and installatio
 acceptance. Otherwise the first release must state its macOS-only scan support.
 
 Latest work and exact artifacts:
+[history and Resume report](../docs/experiments/2026-11-03-studio-history-and-resume.md),
 [GUI/session report](../docs/experiments/2026-11-02-studio-gui-work-session.md),
 [prior fixture capture evidence](../docs/experiments/2026-10-31-studio-macos-network-capture.md).

@@ -713,7 +713,7 @@ pub(crate) fn remove_stale_lock_with(path: &Path, ps: &str) -> Result<(), String
     }
     io(fs::remove_file(path), "remove lock")
 }
-fn lock_path() -> Result<PathBuf, String> {
+pub(crate) fn lock_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
     Ok(PathBuf::from(home).join(".rmasscan-lab/macos-suite.lock"))
 }
@@ -1263,6 +1263,227 @@ pub(crate) fn abort_run(
     }
 }
 
+/// Record a child's process group in the suite's lock file (`children=`), so that the gate and the operator can find
+/// it after a SIGKILL of the suite.
+pub(crate) fn note_child(lock: Option<&Path>, children: &RefCell<BTreeSet<u32>>, p: &dyn Proc) {
+    if let Some(g) = p.pgid() {
+        children.borrow_mut().insert(g);
+        sync_lock(lock, &children.borrow());
+    }
+}
+/// Write the live children's process groups into the lock file (no line when there is none).
+pub(crate) fn sync_lock(lock: Option<&Path>, children: &BTreeSet<u32>) {
+    let Some(path) = lock else { return };
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let mut keep: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.starts_with("children="))
+        .collect();
+    let children = children
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let line = format!("children={children}");
+    if !children.is_empty() {
+        keep.push(&line);
+    }
+    let _ = fs::write(path, format!("{}\n", keep.join("\n")));
+}
+
+/// The peer listeners of a run (`peer listen --open OPEN --ready READY`, their output in `log_dir`), restarted for
+/// every run, and their own proof: `ready` appears and says `ready: true` with no silent port. Returns that record.
+pub(crate) fn start_listeners(
+    st: &dyn Stand,
+    t: &mut Tools,
+    exe: &str,
+    open: &str,
+    ready: &Path,
+    log_dir: &Path,
+    note: &dyn Fn(&dyn Proc),
+) -> Result<Value, SuiteError> {
+    let p = st.spawn(
+        &[
+            exe.to_owned(),
+            "peer".into(),
+            "listen".into(),
+            "--open".into(),
+            open.to_owned(),
+            "--ready".into(),
+            p2s(ready),
+        ],
+        &log_dir.join("listener.out.txt"),
+        &log_dir.join("listener.stderr.txt"),
+    )?;
+    note(&*p);
+    t.listener = Some(p);
+    if !wait_file(ready, st, 300, None) {
+        return Err(SuiteError::NotRun(
+            "the peer listeners did not become ready; nothing was started".into(),
+        ));
+    }
+    let lj = read_json(ready)?;
+    if lj["ready"] != true || lj["silent"] != json!([]) {
+        return Err(SuiteError::NotRun(format!(
+            "the peer listeners are not proven (ready {}, silent {}); nothing was started",
+            lj["ready"], lj["silent"]
+        )));
+    }
+    Ok(lj)
+}
+
+/// Where a run's two witnesses write. The uplink capture: its pcap, tcpdump's statistics and stdout. The peer witness
+/// (`capture dump` on feth4202, every frame of the peer interface): its pcap, the directory of its own files
+/// (`peer-ready.json`, `peer-ack.txt`, `peer-witness.json`, `witness.out.txt`, `witness.stderr.txt`) and where its
+/// tcpdump statistics (`<pcap>.tcpdump.err`) are kept once it stopped.
+pub(crate) struct WitnessFiles {
+    pub(crate) uplink_pcap: PathBuf,
+    pub(crate) uplink_err: PathBuf,
+    pub(crate) uplink_out: PathBuf,
+    pub(crate) peer_pcap: PathBuf,
+    pub(crate) peer_dir: PathBuf,
+    pub(crate) peer_err: PathBuf,
+}
+impl WitnessFiles {
+    /// macos-suite's layout: everything in the run's work directory.
+    pub(crate) fn in_dir(work: &Path) -> Self {
+        WitnessFiles {
+            uplink_pcap: work.join("uplink.pcap"),
+            uplink_err: work.join("uplink.err"),
+            uplink_out: work.join("uplink.out.txt"),
+            peer_pcap: work.join("peer.pcap"),
+            peer_dir: work.to_path_buf(),
+            peer_err: work.join("peer.err"),
+        }
+    }
+}
+/// The peer witness: `capture dump` on the peer interface, end markers to the scanner MAC.
+pub(crate) fn peer_witness_argv(exe: &str, f: &WitnessFiles) -> Vec<String> {
+    vec![
+        exe.to_owned(),
+        "capture".into(),
+        "dump".into(),
+        "--iface".into(),
+        PEER_IF.into(),
+        "--end-dst".into(),
+        SCANNER_MAC.into(),
+        "--pcap".into(),
+        p2s(&f.peer_pcap),
+        "--ready".into(),
+        p2s(&f.peer_dir.join("peer-ready.json")),
+        "--ack".into(),
+        p2s(&f.peer_dir.join("peer-ack.txt")),
+        "--meta".into(),
+        p2s(&f.peer_dir.join("peer-witness.json")),
+    ]
+}
+/// Start the uplink capture with the lab filter, then the peer witness, and prove both live: the uplink tcpdump
+/// listens, the witness is ready, and the start markers sent from the peer side are in its capture. From the first
+/// spawn on a frame may exist, so an abort reads the uplink evidence. Returns the uplink argv.
+pub(crate) fn start_witnesses(
+    st: &dyn Stand,
+    t: &mut Tools,
+    exe: &str,
+    uplink_if: &str,
+    f: &WitnessFiles,
+    note: &dyn Fn(&dyn Proc),
+) -> Result<Vec<String>, SuiteError> {
+    let argv = uplink_tcpdump_argv(uplink_if, &f.uplink_pcap);
+    // From here on a frame may exist on the wire; an abort reads the uplink evidence.
+    t.frames_possible = true;
+    t.uplink = Some(st.spawn(&argv, &f.uplink_out, &f.uplink_err)?);
+    if let Some(u) = t.uplink.as_deref() {
+        note(u);
+    }
+    let w = st.spawn(
+        &peer_witness_argv(exe, f),
+        &f.peer_dir.join("witness.out.txt"),
+        &f.peer_dir.join("witness.stderr.txt"),
+    )?;
+    note(&*w);
+    t.witness = Some(w);
+    if !wait_file(&f.uplink_err, st, 200, Some("listening on")) {
+        return Err(SuiteError::NotRun(
+            "the uplink tcpdump never started listening; the scanner was not started".into(),
+        ));
+    }
+    if !wait_file(&f.peer_dir.join("peer-ready.json"), st, 300, None) {
+        return Err(SuiteError::NotRun(
+            "the peer witness never became ready; the scanner was not started".into(),
+        ));
+    }
+    st.send_start_markers()?;
+    if !wait_file(&f.peer_dir.join("peer-ack.txt"), st, 200, None) {
+        return Err(SuiteError::NotRun(
+            "the start marker is not in the peer capture; the scanner was not started".into(),
+        ));
+    }
+    Ok(argv)
+}
+/// Stop the run's witnesses, the peer first (quiet, end markers), then the uplink, and require both to have ended
+/// cleanly, or their statistics are not evidence. Keeps the peer witness's tcpdump statistics at `f.peer_err`.
+/// Returns the witness's record and the two exit codes.
+pub(crate) fn stop_witnesses(
+    st: &dyn Stand,
+    t: &mut Tools,
+    f: &WitnessFiles,
+) -> Result<(Value, Option<i32>, Option<i32>), SuiteError> {
+    let (mut w, mut u) = (
+        t.witness.take().ok_or("witness missing")?,
+        t.uplink.take().ok_or("uplink missing")?,
+    );
+    w.signal("INT");
+    let wrc = wait_exit(w.as_mut(), st, 2400);
+    if wrc.is_none() {
+        w.kill();
+    }
+    u.signal("INT");
+    let urc = wait_exit(u.as_mut(), st, 400);
+    if urc.is_none() {
+        u.kill();
+    }
+    if urc != Some(0) {
+        return Err(SuiteError::Abort(format!(
+            "the uplink tcpdump did not exit cleanly (exit {urc:?}); its statistics are not evidence"
+        )));
+    }
+    if wrc != Some(0) {
+        return Err(SuiteError::Abort(format!(
+            "the peer witness did not finish cleanly (exit {wrc:?}); see witness.stderr.txt"
+        )));
+    }
+    let wmeta = read_json(f.peer_dir.join("peer-witness.json"))?;
+    io(
+        fs::rename(format!("{}.tcpdump.err", p2s(&f.peer_pcap)), &f.peer_err),
+        "peer.err",
+    )?;
+    Ok((wmeta, wrc, urc))
+}
+/// The listeners go only after the witness stopped: stopping one makes Darwin reset its embryonic connections, and
+/// those RSTs belong to no scan.
+pub(crate) fn stop_listener(st: &dyn Stand, t: &mut Tools) {
+    if let Some(l) = t.listener.as_mut() {
+        l.signal("TERM");
+        if wait_exit(l.as_mut(), st, 100).is_none() {
+            l.kill();
+        }
+    }
+    t.listener = None;
+}
+/// [`uplink_interlock`] as the suite's error: a lab frame on the uplink is the isolation breach (exit 13), anything
+/// else that leaves the uplink unproven stops the suite too.
+pub(crate) fn interlock(dir: &Path) -> Result<(), SuiteError> {
+    uplink_interlock(dir).map_err(|m| {
+        if m.contains(LAB_FRAME_MARK) {
+            SuiteError::Isolation(m)
+        } else {
+            SuiteError::Abort(m)
+        }
+    })
+}
+
 impl Suite<'_> {
     fn status_argv(&self) -> Vec<String> {
         status_argv(&self.exe, &self.lab_run_id, self.lab_manifest.as_deref())
@@ -1302,35 +1523,12 @@ impl Suite<'_> {
         Ok(p)
     }
 
-    /// Record a child's process group in the lock file, so that the gate and the operator can find it after
-    /// a SIGKILL of the suite.
+    /// Record a child's process group in the lock file ([`note_child`]).
     fn note_child(&self, p: &dyn Proc) {
-        if let Some(g) = p.pgid() {
-            self.children.borrow_mut().insert(g);
-            self.sync_lock();
-        }
+        note_child(self.lock_path.as_deref(), &self.children, p)
     }
     fn sync_lock(&self) {
-        let Some(path) = &self.lock_path else { return };
-        let Ok(text) = fs::read_to_string(path) else {
-            return;
-        };
-        let mut keep: Vec<&str> = text
-            .lines()
-            .filter(|l| !l.starts_with("children="))
-            .collect();
-        let children = self
-            .children
-            .borrow()
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let line = format!("children={children}");
-        if !children.is_empty() {
-            keep.push(&line);
-        }
-        let _ = fs::write(path, format!("{}\n", keep.join("\n")));
+        sync_lock(self.lock_path.as_deref(), &self.children.borrow())
     }
 
     /// Raw `netstat -an -p tcp` (read only): the evidence of which host services listen beside the lab ones.
@@ -1458,31 +1656,8 @@ impl Suite<'_> {
         // whatever the listen queue holds (`net.inet.tcp.syncookie`), so one cannot exist; 8099 and 8100-8119 are
         // ordinary closed ports here.
         let ready = work.join("listeners.json");
-        t.listener = Some(self.start_proc(
-            &[
-                self.exe.clone(),
-                "peer".into(),
-                "listen".into(),
-                "--open".into(),
-                "8000-8007".into(),
-                "--ready".into(),
-                p2s(&ready),
-            ],
-            work,
-            "listener",
-        )?);
-        if !wait_file(&ready, self.st, 300, None) {
-            return Err(SuiteError::NotRun(
-                "the peer listeners did not become ready; nothing was started".into(),
-            ));
-        }
-        let mut lj = read_json(&ready)?;
-        if lj["ready"] != true || lj["silent"] != json!([]) {
-            return Err(SuiteError::NotRun(format!(
-                "the peer listeners are not proven (ready {}, silent {}); nothing was started",
-                lj["ready"], lj["silent"]
-            )));
-        }
+        let note = |p: &dyn Proc| self.note_child(p);
+        let mut lj = start_listeners(self.st, t, &self.exe, "8000-8007", &ready, work, &note)?;
         // Why there is no silent port, with the value the OS reports (read only, absolute path).
         let cookie = self.st.exec(
             &[
@@ -1552,59 +1727,16 @@ impl Suite<'_> {
             }
             let cu = self.st.counters(&uplink_if)?;
             up0 = Some(cu.ierrs + cu.drop);
-            let argv = uplink_tcpdump_argv(&uplink_if, &work.join("uplink.pcap"));
-            // From here on a frame may exist on the wire; an abort reads the uplink evidence.
-            t.frames_possible = true;
             meta["capture_started_utc"] = json!(epoch());
-            t.uplink = Some(self.st.spawn(
-                &argv,
-                &work.join("uplink.out.txt"),
-                &work.join("uplink.err"),
-            )?);
-            if let Some(u) = t.uplink.as_deref() {
-                self.note_child(u);
-            }
+            let argv = start_witnesses(
+                self.st,
+                t,
+                &self.exe,
+                &uplink_if,
+                &WitnessFiles::in_dir(work),
+                &note,
+            )?;
             cap["uplink_argv"] = json!(argv);
-            let witness = work.join("peer-witness.json");
-            t.witness = Some(self.start_proc(
-                &[
-                    self.exe.clone(),
-                    "capture".into(),
-                    "dump".into(),
-                    "--iface".into(),
-                    PEER_IF.into(),
-                    "--end-dst".into(),
-                    SCANNER_MAC.into(),
-                    "--pcap".into(),
-                    p2s(&work.join("peer.pcap")),
-                    "--ready".into(),
-                    p2s(&work.join("peer-ready.json")),
-                    "--ack".into(),
-                    p2s(&work.join("peer-ack.txt")),
-                    "--meta".into(),
-                    p2s(&witness),
-                ],
-                work,
-                "witness",
-            )?);
-            if !wait_file(&work.join("uplink.err"), self.st, 200, Some("listening on")) {
-                return Err(SuiteError::NotRun(
-                    "the uplink tcpdump never started listening; the scanner was not started"
-                        .into(),
-                ));
-            }
-            if !wait_file(&work.join("peer-ready.json"), self.st, 300, None) {
-                return Err(SuiteError::NotRun(
-                    "the peer witness never became ready; the scanner was not started".into(),
-                ));
-            }
-            self.st.send_start_markers()?;
-            if !wait_file(&work.join("peer-ack.txt"), self.st, 200, None) {
-                return Err(SuiteError::NotRun(
-                    "the start marker is not in the peer capture; the scanner was not started"
-                        .into(),
-                ));
-            }
         }
         if self.st.stopped() {
             return Err(SuiteError::Interrupted(format!(
@@ -1827,36 +1959,8 @@ impl Suite<'_> {
             cap["uplink"] = Value::Null;
             cap["witness"] = json!(mv::NO_WITNESS);
         } else {
-            let (mut w, mut u) = (
-                t.witness.take().ok_or("witness missing")?,
-                t.uplink.take().ok_or("uplink missing")?,
-            );
-            w.signal("INT");
-            let wrc = wait_exit(w.as_mut(), self.st, 2400);
-            if wrc.is_none() {
-                w.kill();
-            }
-            u.signal("INT");
-            let urc = wait_exit(u.as_mut(), self.st, 400);
-            if urc.is_none() {
-                u.kill();
-            }
-            if urc != Some(0) {
-                return Err(SuiteError::Abort(format!(
-                    "the uplink tcpdump did not exit cleanly (exit {urc:?}); its statistics are not evidence"
-                )));
-            }
+            let (wmeta, wrc, urc) = stop_witnesses(self.st, t, &WitnessFiles::in_dir(work))?;
             meta["capture_stopped_utc"] = json!(epoch());
-            if wrc != Some(0) {
-                return Err(SuiteError::Abort(format!(
-                    "the peer witness did not finish cleanly (exit {wrc:?}); see witness.stderr.txt"
-                )));
-            }
-            let wmeta = read_json(work.join("peer-witness.json"))?;
-            io(
-                fs::rename(work.join("peer.pcap.tcpdump.err"), work.join("peer.err")),
-                "peer.err",
-            )?;
             let cu = self.st.counters(&uplink_if)?;
             let up_delta = (cu.ierrs + cu.drop).checked_sub(up0.unwrap_or(u64::MAX));
             let strip = |mut v: Value| {
@@ -1886,15 +1990,8 @@ impl Suite<'_> {
                 .remove("uplink_argv");
             cap["quiet"] = json!({"reached":cap["peer"]["witness"]["quiesced_before_stop"]});
         }
-        // The listeners go only after the witness stopped: stopping one makes Darwin reset its embryonic
-        // connections, and those RSTs belong to no scan.
-        if let Some(l) = t.listener.as_mut() {
-            l.signal("TERM");
-            if wait_exit(l.as_mut(), self.st, 100).is_none() {
-                l.kill();
-            }
-        }
-        t.listener = None;
+        // The listeners go only after the witness stopped ([`stop_listener`]).
+        stop_listener(self.st, t);
         // 8. status after, then the interlock before a single byte is trusted or copied.
         let (post_rc, post) = self.status(work, "status-post.json")?;
         cap["status_post_raw_run_allowed"] = json!(post_rc == 0 && post["raw_run_allowed"] == true);
@@ -1904,13 +2001,7 @@ impl Suite<'_> {
             // already in place: --checkpoint-out wrote it into the work directory
         }
         if !denied {
-            uplink_interlock(work).map_err(|m| {
-                if m.contains(LAB_FRAME_MARK) {
-                    SuiteError::Isolation(m)
-                } else {
-                    SuiteError::Abort(m)
-                }
-            })?;
+            interlock(work)?;
         }
         // 9. hashes in the work directory, copy, hashes again.
         let dest = self.out.join("runs").join(name);

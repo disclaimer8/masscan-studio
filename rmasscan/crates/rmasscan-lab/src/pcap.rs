@@ -3,6 +3,36 @@ use serde_json::Value;
 use std::fs;
 pub type Frames = Vec<(f64, Vec<u8>)>;
 pub fn read_pcap_records(data: &[u8]) -> Result<(u32, Frames), String> {
+    let (lt, records) = records(data)?;
+    Ok((
+        lt,
+        records
+            .into_iter()
+            .map(|(t, _, frame)| (t, data[frame].to_vec()))
+            .collect(),
+    ))
+}
+/// `data` with only the records whose frame `keep` accepts, each kept record byte for byte as it was (header,
+/// timestamp, frame), and the number of records left out. The capture is checked like [`read_pcap_records`].
+pub fn keep_records(
+    data: &[u8],
+    mut keep: impl FnMut(&[u8]) -> bool,
+) -> Result<(Vec<u8>, usize), String> {
+    let (_, records) = records(data)?;
+    let mut out = data[..24].to_vec();
+    let mut dropped = 0;
+    for (_, head, frame) in records {
+        if keep(&data[frame.clone()]) {
+            out.extend_from_slice(&data[head..frame.end]);
+        } else {
+            dropped += 1;
+        }
+    }
+    Ok((out, dropped))
+}
+/// The records of a classic Ethernet pcap: timestamp, offset of the record header, range of the frame.
+type Records = Vec<(f64, usize, std::ops::Range<usize>)>;
+fn records(data: &[u8]) -> Result<(u32, Records), String> {
     if data.len() < 24 {
         return Err("pcap global header truncated".into());
     }
@@ -33,6 +63,7 @@ pub fn read_pcap_records(data: &[u8]) -> Result<(u32, Frames), String> {
         if data.len() - off < 16 {
             return Err(format!("pcap record header truncated at {off}"));
         }
+        let head = off;
         let sec = u32at(off);
         let frac = u32at(off + 4);
         let cap = u32at(off + 8) as usize;
@@ -49,7 +80,8 @@ pub fn read_pcap_records(data: &[u8]) -> Result<(u32, Frames), String> {
         }
         frames.push((
             sec as f64 + frac as f64 / if nano { 1e9 } else { 1e6 },
-            data[off..off + cap].to_vec(),
+            head,
+            off..off + cap,
         ));
         off += cap;
     }

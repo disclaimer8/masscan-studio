@@ -62,7 +62,8 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 - Явный не-Ethernet `--adapter` отказывает (masscan проверяет тип только при автовыборе).
 - Отказы обнаружения, которых у masscan нет (в форме C `[-] FAIL: …` и `[hint]`): цель это адрес самого хоста
   (`LocalTarget`, `is an address of this host`), первая и последняя цель идут разными маршрутами (`SplitRoutes`,
-  `targets are routed differently`; оба и с `--adapter`, если не заданы `--router-ip`/`--router-mac`), среди целей
+  `targets are routed differently`; оба и с `--adapter`, если не заданы `--router-ip`/`--router-mac`, тогда с
+  подсказками маршрутизатора masscan вместо `--interface ethX`), среди целей
   нет unicast-адресов (`NoUnicastTargets`), MAC интерфейса скрыт ОС (`MacMasked`, `os-masked`), `--adapter` не
   совпадает с интерфейсом маршрута к целям (`RouteNotViaAdapter`, `route doesn't match interface` с подсказками
   маршрутизатора; masscan на macOS/BSD печатает `ERROR: ROUTE DOESN'T MATCH INTERFACE` и завершается,
@@ -74,14 +75,15 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 - Отказ ARP-таймаута печатает адрес, который разрешался, а для единственной on-link цели пишет
   `for next hop (target) IF: "IP"`; masscan всегда пишет `for router` и печатает заданный `--router-ip`, то есть
   `0.0.0.0`, если шлюз определён сам (`main-initadapter.c:195–196`).
-- `--offline` с явными `--adapter-ip`, `--adapter-mac` и `--source-port` не опрашивает ОС вовсе (masscan и в
-  offline ищет интерфейс по умолчанию без `--interface`) и без `--adapter` печатает
+- `--offline` с явными ненулевыми `--adapter-ip` и `--adapter-mac` и с `--source-port` не опрашивает ОС вовсе
+  (masscan и в offline ищет интерфейс по умолчанию без `--interface`) и без `--adapter` печатает
   `[+] interface = none (offline)`. MAC шлюза в `--offline` всегда `66-55-44-33-22-11`, в том числе при
   `--router-mac`, и маршрутизатор не ищется (как C).
 - Обнаружение, `--offline` и `--iflist` не требуют привилегий и ничего не открывают (masscan открывает адаптер до
   определения MAC и IP). Скрытый ОС MAC (macOS без root) и нулевой MAC не становятся source MAC: отказ с
   подсказкой `--source-mac`.
-- `--router-ip 0.0.0.0` (и `router-ip = 0.0.0.0` в `paused.conf`) значит «не задан», как в C.
+- `--router-ip 0.0.0.0` (и `router-ip = 0.0.0.0` в `paused.conf`) значит «не задан», как в C; так же нулевые
+  `--adapter-ip`, `--adapter-mac` и `--router-mac` (адрес и MAC определяются, шлюз ищется ARP-ом).
 - Любая другая опция masscan (например `--banners`) - ошибка.
 - Закрытый stdout (`| head`) завершает процесс сразу с кодом 0.
 - `--adapter-ip` принимает один адрес (в C это диапазон).

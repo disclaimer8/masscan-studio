@@ -513,10 +513,11 @@ fn detection_failure_opens_nothing() {
             &["198.51.100.1", "-p80", "--adapter", "lo"][..],
             "[-] FAIL: interface \"lo\" is not usable: not Ethernet\n    [hint] try \"--interface ethX\"",
         ),
-        // `--adapter` без `--router-ip`/`--router-mac`: on-link и удалённая цель идут через eth0 разными шлюзами.
+        // `--adapter` без `--router-ip`/`--router-mac`: on-link и удалённая цель идут через eth0 разными шлюзами;
+        // интерфейс уже задан, поэтому подсказки маршрутизатора C.
         (
             &["192.0.2.9,198.51.100.1", "-p80", "--adapter", "eth0"][..],
-            "[-] FAIL: targets are routed differently (192.0.2.9 via eth0, 198.51.100.1 via eth0)\n    [hint] try \"--interface ethX\"",
+            "[-] FAIL: targets are routed differently (192.0.2.9 via eth0, 198.51.100.1 via eth0)\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface",
         ),
     ] {
         let (r, out, log) = cli(&b, args);

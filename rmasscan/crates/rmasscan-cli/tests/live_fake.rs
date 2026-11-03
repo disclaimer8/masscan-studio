@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use rmasscan_cli::args::{Cli, SeedPolicy};
 use rmasscan_cli::live::{self, Backend};
-use rmasscan_cli::output::{Interactive, discovered_line};
+use rmasscan_cli::output::{Interactive, Sink, discovered_line};
 use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
+use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::fake::{FakeAdapter, HealthStep, ManualClock, reply_to_syn};
 use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHealth};
@@ -512,6 +513,11 @@ fn detection_failure_opens_nothing() {
             &["198.51.100.1", "-p80", "--adapter", "lo"][..],
             "[-] FAIL: interface \"lo\" is not usable: not Ethernet\n    [hint] try \"--interface ethX\"",
         ),
+        // `--adapter` без `--router-ip`/`--router-mac`: on-link и удалённая цель идут через eth0 разными шлюзами.
+        (
+            &["192.0.2.9,198.51.100.1", "-p80", "--adapter", "eth0"][..],
+            "[-] FAIL: targets are routed differently (192.0.2.9 via eth0, 198.51.100.1 via eth0)\n    [hint] try \"--interface ethX\"",
+        ),
     ] {
         let (r, out, log) = cli(&b, args);
         let e = r.unwrap_err();
@@ -869,6 +875,200 @@ fn offline_packet_trace_golden_unchanged() {
     r.unwrap();
     assert_eq!(out, TRACE_GOLDEN);
     assert_eq!(plus_lines(&log).len(), 7, "{log}");
+}
+
+/// C `main-initadapter.c:122–126`: source IP 0 значит «определить у интерфейса». `--adapter-ip 0.0.0.0` и алиас
+/// `--source-ip 0.0.0.0` дают адрес интерфейса: в строке `[+]`, в ARP и в SYN.
+#[test]
+fn zero_adapter_ip_is_unset_and_the_interface_address_is_detected() {
+    for flag in ["--adapter-ip", "--source-ip"] {
+        let b = FakeBackend::new();
+        let (r, out, log) = cli(&b, &with(&LIVE, &[flag, "0.0.0.0"]));
+        r.unwrap();
+        assert!(
+            plus_lines(&log).contains(&"[+] source-ip = 192.0.2.5 (detected)"),
+            "{flag}: {log}"
+        );
+        assert!(!log.contains("0.0.0.0"), "{flag}: {log}");
+        let opened = b.opened();
+        assert_eq!(opened.len(), 2, "{flag}: one ARP adapter, then the scan");
+        assert_eq!(
+            opened[0].adapter.sent_frames(),
+            vec![encode_request(MY_MAC, u32::from(MY_IP), u32::from(GW)).to_vec()],
+            "{flag}: the ARP sender IP is the interface address"
+        );
+        assert_eq!(opened[1].binding.source_ipv4, u32::from(MY_IP), "{flag}");
+        let syns = opened[1].adapter.sent_frames();
+        assert_eq!(syns.len(), 4, "{flag}");
+        assert!(
+            syns.iter().all(|f| f[26..30] == MY_IP.octets()),
+            "{flag}: SYNs come from the interface address"
+        );
+        assert_eq!(out.len(), 2 * 80, "{flag}");
+    }
+}
+
+/// C `main-initadapter.c:170`: нулевой MAC шлюза значит «искать ARP-ом». `--router-mac 00-00-00-00-00-00` ведёт себя
+/// как отсутствие флага: ARP к шлюзу маршрута, SYN на его MAC.
+#[test]
+fn zero_router_mac_is_unset_and_the_router_is_resolved_with_arp() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["--router-mac", "00-00-00-00-00-00"]));
+    r.unwrap();
+    let plus = plus_lines(&log);
+    assert!(
+        plus.contains(&"[+] router-ip = 192.0.2.1 (route gateway)"),
+        "{log}"
+    );
+    assert!(
+        plus.contains(&"[+] router-mac = 02-aa-00-00-00-02 (arp: 1 requests, 0 ms)"),
+        "{log}"
+    );
+    assert!(!log.contains("00-00-00-00-00-00"), "{log}");
+    let opened = b.opened();
+    assert_eq!(opened.len(), 2, "one ARP adapter, then the scan");
+    assert_eq!(
+        opened[0].adapter.sent_frames(),
+        vec![encode_request(MY_MAC, u32::from(MY_IP), u32::from(GW)).to_vec()]
+    );
+    assert_eq!(opened[1].binding.next_hop_mac, GW_MAC);
+    let syns = opened[1].adapter.sent_frames();
+    assert_eq!(syns.len(), 4);
+    assert!(
+        syns.iter().all(|f| f[0..6] == GW_MAC),
+        "SYNs go to the resolved MAC"
+    );
+    assert_eq!(out.len(), 2 * 80);
+}
+
+/// Воспроизведение ревью: `--offline --packet-trace` с `--adapter-ip 0.0.0.0` печатал `source-ip = 0.0.0.0 (given)`
+/// и `SENT … [0.0.0.0]:40000`. Нулевой IP не задан, поэтому прогон не герметичен и берёт адрес интерфейса.
+#[test]
+fn offline_zero_adapter_ip_is_detected_not_sent_from_zero() {
+    let mut b = FakeBackend::new();
+    b.panic_on_open = true;
+    b.routes.defaults_panic = true;
+    let args = [
+        "--offline",
+        "--packet-trace",
+        "10.0.0.1",
+        "-p80",
+        "--seed",
+        "1",
+        "--adapter-ip",
+        "0.0.0.0",
+        "--adapter-mac",
+        "02-aa-00-00-00-01",
+        "--source-port",
+        "40000",
+    ];
+    let (r, out, log) = cli(&b, &args);
+    r.unwrap();
+    assert!(
+        !out.contains("0.0.0.0") && !log.contains("0.0.0.0"),
+        "{log}{out}"
+    );
+    assert_eq!(b.lookups(), vec![Ipv4Addr::new(10, 0, 0, 1)]);
+    assert_eq!(
+        plus_lines(&log),
+        [
+            "[+] interface = eth0 (detected: route to 10.0.0.1)",
+            "[+] source-mac = 02-aa-00-00-00-01 (given)",
+            "[+] source-ip = 192.0.2.5 (detected)",
+            "[+] router-ip = none (offline)",
+            "[+] router-mac = 66-55-44-33-22-11 (offline)",
+            "[+] seed = 1 (given)",
+            "[+] source-port = 40000 (given)",
+        ]
+    );
+    assert_eq!(
+        out,
+        "SENT (0.0000) TCP  [192.0.2.5]:40000     > [10.0.0.1]:80         SYN\n"
+    );
+}
+
+/// Приёмник, у которого запись падает не EPIPE (например, полный диск): на первой open-строке или, с `on_finish`,
+/// только на завершающем flush.
+struct FailingSink {
+    reports: usize,
+    on_finish: bool,
+}
+
+const SINK_ERROR: &str = "write failed: No space left on device (os error 28)";
+
+impl Sink for FailingSink {
+    fn report(&mut self, reply: &Reply) -> Result<(), String> {
+        self.reports += 1;
+        if reply.status == PortStatus::Open && !self.on_finish {
+            return Err(SINK_ERROR.into());
+        }
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<(), String> {
+        assert!(
+            self.on_finish,
+            "finish must not be called after a failed report"
+        );
+        Err(SINK_ERROR.into())
+    }
+}
+
+/// Ошибка приёмника (не EPIPE) не прячет `[+] finished … sent N`: строка с `sent` engine печатается, затем
+/// возвращается ошибка приёмника (exit 1, обёртка `rmasscan: error:`).
+#[test]
+fn sink_report_failure_still_prints_finished_with_the_engine_sent_count() {
+    let b = FakeBackend::new();
+    let mut log = Vec::new();
+    let mut sink = FailingSink {
+        reports: 0,
+        on_finish: false,
+    };
+    let r = live::run_live(&config(&LIVE), &b, &mut sink, &mut log);
+    let log = String::from_utf8(log).unwrap();
+    let e = r.unwrap_err();
+    assert_eq!(e, SINK_ERROR);
+    assert_eq!(
+        rmasscan_cli::error_text(&e),
+        format!("rmasscan: error: {SINK_ERROR}")
+    );
+    let sent = b.opened()[1].adapter.sent_count();
+    let fin = plus_lines(&log).last().copied().unwrap_or_default();
+    let reason = fin
+        .strip_prefix("[+] finished: ")
+        .and_then(|s| s.split(',').next())
+        .unwrap_or_default();
+    assert!(
+        reason == "Stopped" || reason == "Completed",
+        "the stopped engine's outcome: {log}"
+    );
+    assert_eq!(
+        fin,
+        format!(
+            "[+] finished: {reason}, sent {sent}, replies {}, open 1",
+            sink.reports
+        ),
+        "{log}"
+    );
+    assert!(sent > 0, "the engine sent SYNs before the sink failed");
+}
+
+/// Сбой только завершающего flush приёмника: скан закончился сам, строка finished та же, что при успехе.
+#[test]
+fn sink_finish_failure_still_prints_finished() {
+    let b = FakeBackend::new();
+    let mut log = Vec::new();
+    let mut sink = FailingSink {
+        reports: 0,
+        on_finish: true,
+    };
+    let r = live::run_live(&config(&LIVE), &b, &mut sink, &mut log);
+    let log = String::from_utf8(log).unwrap();
+    assert_eq!(r.unwrap_err(), SINK_ERROR);
+    assert_eq!(
+        plus_lines(&log).last().copied(),
+        Some("[+] finished: Completed, sent 4, replies 4, open 2"),
+        "{log}"
+    );
 }
 
 #[test]

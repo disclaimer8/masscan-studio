@@ -317,8 +317,8 @@ fn ids(backend: &dyn Backend) -> [u8; 16] {
     id
 }
 
-/// `[+] finished: …` и решение о коде выхода: `Completed`/`Stopped` → `Ok` (exit 0), иначе `Err` (exit 1).
-pub fn conclude(
+/// `[+] finished: <итог>, sent N, …` с `sent` engine (верификатор сверяет его с SYN на проводе).
+fn print_finished(
     outcome: &Outcome,
     replies: u64,
     open: u64,
@@ -330,7 +330,17 @@ pub fn conclude(
             "finished: {:?}, sent {}, replies {replies}, open {open}",
             outcome.reason, outcome.progress.sent
         ),
-    )?;
+    )
+}
+
+/// `[+] finished: …` и решение о коде выхода: `Completed`/`Stopped` → `Ok` (exit 0), иначе `Err` (exit 1).
+pub fn conclude(
+    outcome: &Outcome,
+    replies: u64,
+    open: u64,
+    log: &mut dyn Write,
+) -> Result<(), String> {
+    print_finished(outcome, replies, open, log)?;
     match &outcome.reason {
         Reason::Completed | Reason::Stopped => Ok(()),
         Reason::Failed(f) => Err(format!("scan failed: {f:?}")),
@@ -419,10 +429,15 @@ pub fn run_live(
     let outcome = handle
         .join()
         .map_err(|e| format!("scan engine error: {e}"))?;
-    if let Some(e) = sink_error {
+    let sunk = match sink_error {
+        Some(e) => Err(e),
+        None => sink.finish(),
+    };
+    if let Err(e) = sunk {
+        // Ошибка приёмника (EPIPE уже завершил процесс в `io_fail`) не прячет `sent` engine; exit 1 от неё.
+        print_finished(&outcome, replies, open_count, log)?;
         return Err(e);
     }
-    sink.finish()?;
     conclude(&outcome, replies, open_count, log)?;
     Ok(outcome)
 }

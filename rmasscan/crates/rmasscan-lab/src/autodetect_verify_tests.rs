@@ -26,11 +26,6 @@ use std::{
 
 const T0: f64 = 1_800_000_000.0;
 const TIME_PORT: &str = "41234";
-const ROUTER_HINTS: [&str; 3] = [
-    "    [hint] try \"--router-ip 192.0.2.1\" to specify different router",
-    "    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP",
-    "    [hint] try \"--interface eth0\" to change interface",
-];
 
 fn scratch() -> PathBuf {
     let d = std::env::temp_dir().join(format!("rml-autodetect-verify-{}", nonce()));
@@ -62,66 +57,7 @@ fn strings(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| (*x).to_owned()).collect()
 }
 
-/// The case kinds as the brief's case tables give them (the generator's own copy, not the verifier's).
-fn kind_of(tag: &str) -> CaseKind {
-    match tag {
-        "l09_arp_timeout" | "m04_user_arp_timeout" | "w05_arp_timeout" => CaseKind::ArpTimeout,
-        "l10_no_such_adapter"
-        | "m01_user_masked"
-        | "m05_user_no_adapter"
-        | "m06_user_no_ip"
-        | "w06_multi_no_gateway"
-        | "w08b_restricted_scan" => CaseKind::Refusal,
-        "l12_iflist"
-        | "m07_user_iflist"
-        | "m11_root_iflist"
-        | "w07_iflist"
-        | "w08a_restricted_iflist" => CaseKind::Iflist,
-        "l11_parity" => CaseKind::Parity,
-        _ => CaseKind::Scan,
-    }
-}
-fn tags_of(plan: Plan) -> Vec<&'static str> {
-    match plan {
-        Plan::Linux => vec![
-            "l01_auto",
-            "l02_auto_multi",
-            "l03_adapter",
-            "l04_adapter_ip",
-            "l05_adapter_mac",
-            "l06_router_ip",
-            "l07_router_mac",
-            "l08_source_port",
-            "l09_arp_timeout",
-            "l10_no_such_adapter",
-            "l11_parity",
-            "l12_iflist",
-        ],
-        Plan::Macos => vec![
-            "m01_user_masked",
-            "m02_user_explicit",
-            "m03_user_router_mac",
-            "m04_user_arp_timeout",
-            "m05_user_no_adapter",
-            "m06_user_no_ip",
-            "m07_user_iflist",
-        ],
-        Plan::MacosRoot => vec!["m10_root_auto_mac", "m11_root_iflist"],
-        Plan::Windows => vec![
-            "w01_auto",
-            "w02_adapter_npf",
-            "w03_adapter_friendly",
-            "w04_router_mac",
-            "w05_arp_timeout",
-            "w06_multi_no_gateway",
-            "w07_iflist",
-            "w08a_restricted_iflist",
-            "w08b_restricted_scan",
-        ],
-    }
-}
-
-/// One case as a suite would define it.
+/// One case as the suites define it: the verifier's case table, plus what the simulated run prints.
 #[derive(Clone)]
 struct Case {
     plan: Plan,
@@ -137,148 +73,20 @@ struct Case {
     arp_target: Option<Ipv4Addr>,
 }
 
+/// The case of the table (`case_spec`), with the `[+]` lines a correct run prints for it.
 fn case(plan: Plan, tag: &'static str) -> Case {
-    let st = stand(plan);
-    let (mac, pmac, iface) = (dash(st.scanner_mac), dash(st.peer_mac), st.iface);
-    let (targets, ports) = match (plan, tag) {
-        (Plan::Linux, "l02_auto_multi") => ("198.18.0.2-198.18.0.5", "80,81,8080"),
-        (Plan::Linux, "l11_parity") => ("198.18.0.2-198.18.0.5", "80,8080"),
-        (Plan::Linux, _) => ("198.18.0.2", "80,81,8080"),
-        (Plan::Windows, "w06_multi_no_gateway") => {
-            ("198.18.0.2-198.18.0.3", "80,443,8000-8007,8099")
-        }
-        (Plan::Windows, _) => ("198.18.0.2", "80,443,8000-8007,8099"),
-        _ => ("198.18.0.2", "8000-8007,9000-9003"),
-    };
-    let npf = crate::windows_suite::IFACE;
-    let extra: Vec<&str> = match tag {
-        "l03_adapter" => vec!["--adapter", "veth-a"],
-        "l04_adapter_ip" => vec!["--adapter-ip", "198.18.0.1"],
-        "l05_adapter_mac" => vec!["--adapter-mac", "02-aa-00-00-00-01"],
-        "l06_router_ip" => vec!["--router-ip", "198.18.0.3"],
-        "l07_router_mac" => vec!["--router-mac", "02-aa-00-00-00-02"],
-        "l08_source_port" => vec!["--source-port", "50000-50015"],
-        "l09_arp_timeout" => vec!["--router-ip", "198.18.0.9"],
-        "l10_no_such_adapter" => vec!["--adapter", "nosuch0"],
-        "l11_parity" => vec!["--source-port", "40000"],
-        "m01_user_masked" | "m10_root_auto_mac" => vec![
-            "--adapter",
-            "feth4201",
-            "--adapter-ip",
-            "198.18.0.1",
-            "--router-ip",
-            "198.18.0.2",
-        ],
-        "m02_user_explicit" => vec![
-            "--adapter",
-            "feth4201",
-            "--adapter-ip",
-            "198.18.0.1",
-            "--adapter-mac",
-            "02-ac-00-00-00-01",
-            "--router-ip",
-            "198.18.0.2",
-        ],
-        "m03_user_router_mac" => vec![
-            "--adapter",
-            "feth4201",
-            "--adapter-ip",
-            "198.18.0.1",
-            "--adapter-mac",
-            "02-ac-00-00-00-01",
-            "--router-ip",
-            "198.18.0.2",
-            "--router-mac",
-            "02-ac-00-00-00-02",
-        ],
-        "m04_user_arp_timeout" => vec![
-            "--adapter",
-            "feth4201",
-            "--adapter-ip",
-            "198.18.0.1",
-            "--adapter-mac",
-            "02-ac-00-00-00-01",
-            "--router-ip",
-            "198.18.0.3",
-        ],
-        "m06_user_no_ip" => vec![
-            "--adapter",
-            "feth4201",
-            "--adapter-mac",
-            "02-ac-00-00-00-01",
-            "--router-ip",
-            "198.18.0.2",
-        ],
-        "w02_adapter_npf" => vec!["--adapter", npf],
-        "w03_adapter_friendly" => vec!["--adapter", "Ethernet 2"],
-        "w04_router_mac" => vec!["--router-mac", "02-57-4c-3d-2e-9b"],
-        "w05_arp_timeout" => vec!["--router-ip", "198.18.0.3"],
-        _ => vec![],
-    };
-    let kind = kind_of(tag);
-    let argv = if kind == CaseKind::Iflist {
-        strings(&["--iflist"])
-    } else {
-        let mut a = strings(&[targets, &format!("-p{ports}")]);
-        a.extend(strings(&extra));
-        a.extend(strings(&["--seed", "1", "--rate", "100", "--wait", "3"]));
-        a
-    };
-    let value_of = |k: &str| {
-        extra
-            .iter()
-            .position(|x| *x == k)
-            .map(|i| extra[i + 1].to_owned())
-    };
-    let multi = targets.contains('-');
-    let first = targets.split('-').next().unwrap();
-    let detection = ExpectDetection {
-        interface: if value_of("--adapter").is_some() {
-            sourced(iface, "given")
-        } else {
-            sourced(iface, &format!("detected: route to {first}"))
-        },
-        source_mac: sourced(
-            &mac,
-            if value_of("--adapter-mac").is_some() {
-                "given"
-            } else {
-                "detected"
-            },
-        ),
-        source_ip: sourced(
-            "198.18.0.1",
-            if value_of("--adapter-ip").is_some() {
-                "given"
-            } else {
-                "detected"
-            },
-        ),
-        router_ip: match (value_of("--router-ip"), value_of("--router-mac")) {
-            (Some(ip), _) => Some(sourced(&ip, "given")),
-            (None, Some(_)) => None,
-            (None, None) if multi => Some(sourced("198.18.0.2", "interface default gateway")),
-            (None, None) => Some(sourced("198.18.0.2", "on-link target")),
-        },
-        router_mac: Some(sourced(
-            &pmac,
-            if value_of("--router-mac").is_some() {
-                "given"
-            } else {
-                "arp"
-            },
-        )),
-    };
-    let router_given = value_of("--router-mac").is_some();
-    let printed_of = |x: &ExpectDetection, with_router_mac: bool| DetectedRecord {
+    let spec = case_spec(plan, tag).unwrap_or_else(|| panic!("{tag} is not a case of {plan:?}"));
+    let expect = spec.expect();
+    let printed_of = |x: &ExpectDetection| DetectedRecord {
         interface: Some(x.interface.clone()),
         source_mac: Some(x.source_mac.clone()),
         source_ip: Some(x.source_ip.clone()),
         router_ip: x.router_ip.clone(),
+        // `(given)` is printed by detection; `(arp: …)` only after the resolver, which the run adds.
         router_mac: x
             .router_mac
             .as_ref()
-            .filter(|_| with_router_mac)
+            .filter(|m| m.source == "given")
             .map(|m| RouterMac {
                 value: m.value.clone(),
                 source: m.source.clone(),
@@ -286,109 +94,42 @@ fn case(plan: Plan, tag: &'static str) -> Case {
             }),
         ..DetectedRecord::default()
     };
-    let refusal = |fail: &str, hints: &[&str]| ExpectRefusal {
-        fail: Some(fail.to_owned()),
-        hints: strings(hints),
-    };
-    let mut expect = ExpectRecord {
-        tag: tag.to_owned(),
-        kind,
-        detection: None,
-        refusal: None,
-        iflist: None,
-        preflight: match tag {
-            "w01_auto" | "w06_multi_no_gateway" => {
-                Some(ExpectPreflight::Interface("Ethernet 2".into()))
-            }
-            "m05_user_no_adapter" => Some(ExpectPreflight::Refusal(
-                "198.18.0.2 is an address of this host (route via lo0)".into(),
-            )),
-            _ => None,
-        },
-    };
-    let mut printed = DetectedRecord::default();
-    let mut arp_target = None;
-    match kind {
-        CaseKind::Scan | CaseKind::Parity => {
-            printed = printed_of(&detection, router_given);
-            if !router_given {
-                arp_target = detection.router_ip.as_ref().map(|r| ip4(&r.value));
-            }
-            expect.detection = Some(detection);
-        }
-        CaseKind::ArpTimeout => {
-            let mut d = detection;
-            d.router_mac = None;
-            printed = printed_of(&d, false);
-            arp_target = d.router_ip.as_ref().map(|r| ip4(&r.value));
-            let target = d.router_ip.as_ref().unwrap().value.clone();
-            expect.refusal = Some(refusal(
-                &format!("ARP timed-out resolving MAC address for router {iface}: \"{target}\""),
-                &ROUTER_HINTS,
-            ));
-            expect.detection = Some(d);
-        }
-        CaseKind::Refusal => {
-            expect.refusal = Some(match tag {
-                "l10_no_such_adapter" => refusal(
-                    "no such interface \"nosuch0\"",
-                    &["    [hint] did you spell the name correctly?"],
-                ),
-                "m01_user_masked" => refusal(
-                    "MAC of interface \"feth4201\" is os-masked (Darwin hides MACs from unprivileged processes)",
-                    &[
-                        "    [hint] run as root, or try something like \"--source-mac 00-11-22-33-44-55\"",
-                    ],
-                ),
-                "m05_user_no_adapter" => refusal(
-                    "198.18.0.2 is an address of this host (route via lo0)",
-                    &["    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\""],
-                ),
-                "m06_user_no_ip" => refusal(
-                    "failed to detect IP of interface \"feth4201\"",
-                    &[
-                        "    [hint] did you spell the name correctly?",
-                        "    [hint] if it has no IP address, manually set with something like \"--source-ip 198.51.100.17\"",
-                    ],
-                ),
-                "w06_multi_no_gateway" => refusal(
-                    "no default gateway on interface \"Ethernet 2\" for several on-link targets",
-                    &ROUTER_HINTS,
-                ),
-                _ => {
-                    // w08b: a restricted token; detection works, opening the adapter is refused. Any refusal kind.
-                    let mut d = detection;
-                    d.router_mac = None;
-                    printed = printed_of(&d, false);
-                    printed.error = Some("cannot open adapter \"Ethernet 2\": permission denied (raw packet access needs elevated privileges): PacketOpenAdapter failed".into());
-                    printed.hints = strings(&[
-                        "    [hint] run as Administrator; Npcap must be installed (Admin-only mode needs an elevated prompt)",
-                    ]);
-                    ExpectRefusal {
-                        fail: None,
-                        hints: vec![],
-                    }
-                }
-            });
-        }
-        CaseKind::Iflist => {
-            expect.iflist = Some(ExpectIflist {
-                name: iface.into(),
-                mac: if tag == "m07_user_iflist" {
-                    "masked".into()
-                } else {
-                    mac.clone()
-                },
-            });
-        }
+    let mut printed = expect
+        .detection
+        .as_ref()
+        .map(printed_of)
+        .unwrap_or_default();
+    let arp_target = expect
+        .detection
+        .as_ref()
+        .filter(|d| {
+            spec.kind == CaseKind::ArpTimeout
+                || d.router_mac.as_ref().is_some_and(|m| m.source == "arp")
+        })
+        .and_then(|d| d.router_ip.as_ref())
+        .map(|r| ip4(&r.value));
+    if tag == "w08b_restricted_scan" {
+        // A restricted token: detection works, opening the ARP adapter is refused (the table accepts any refusal).
+        let st = stand(plan);
+        printed = DetectedRecord {
+            interface: Some(sourced(st.iface, "detected: route to 198.18.0.2")),
+            source_mac: Some(sourced(&dash(st.scanner_mac), "detected")),
+            source_ip: Some(sourced("198.18.0.1", "detected")),
+            router_ip: Some(sourced("198.18.0.2", "on-link target")),
+            error: Some("cannot open adapter \"Ethernet 2\": permission denied (raw packet access needs elevated privileges): PacketOpenAdapter failed".into()),
+            hints: strings(&[
+                "    [hint] run as Administrator; Npcap must be installed (Admin-only mode needs an elevated prompt)",
+            ]),
+            ..DetectedRecord::default()
+        };
     }
     Case {
         plan,
         tag,
-        kind,
-        argv,
-        targets,
-        ports,
+        kind: spec.kind,
+        argv: spec.argv(),
+        targets: spec.targets,
+        ports: spec.ports,
         printed,
         expect,
         arp_target,
@@ -486,7 +227,8 @@ fn syn_dst(syn: &[u8]) -> (Ipv4Addr, u16) {
 struct OracleSim {
     stdout: String,
     stderr: String,
-    exit: i32,
+    /// The text of `oracle/exit.txt`.
+    exit: String,
     pcap: Frames,
 }
 
@@ -639,8 +381,9 @@ impl Sim {
                     }
                     oracle = Some(OracleSim {
                         stdout: lines.concat(),
-                        stderr: "Starting masscan 1.3.2 (http://bit.ly/14GZzcT) at 2026-11-03 10:00:00 GMT\nInitiating SYN Stealth Scan\nScanning 4 hosts [2 ports/host]\n".into(),
-                        exit: 0,
+                        // The forms every committed oracle run shows: banner, status lines rewritten after `\r`, forced exit.
+                        stderr: "Starting masscan 1.3.2-integration (http://bit.ly/14GZzcT) at 2026-11-03 10:00:00 GMT\nInitiating SYN Stealth Scan\nScanning 4 hosts [2 ports/host]\nrate:  0.00-kpps,  0.00% done,   0:00:00 remaining, found=0       \rrate:  0.00-kpps, 100.00% done, waiting 3-secs, found=8       \rrate:  0.00-kpps, 100.00% done, waiting -1-secs, found=8       \r\n[-] Passed the wait window but still running, forcing exit...\n".into(),
+                        exit: "0\n".into(),
                         pcap: ofr,
                     });
                 }
@@ -707,15 +450,17 @@ impl Sim {
                 lines.concat()
             }
         });
-        let preflight = match c.tag {
-            "w01_auto" | "w06_multi_no_gateway" => Some(format!(
-                "rc 0\n[+] interface = Ethernet 2 (detected: route to 198.18.0.2)\n[+] source-mac = {} (detected)\n[+] source-ip = 198.18.0.1 (detected)\n[+] router-ip = none (offline)\n[+] router-mac = 66-55-44-33-22-11 (offline)\n[+] seed = 1 (given)\n[+] source-port = {TIME_PORT} (time)\n",
+        // What the `--offline` preflight prints when it shows what the case expects.
+        let preflight = match &c.expect.preflight {
+            Some(ExpectPreflight::Interface(name)) => Some(format!(
+                "rc 0\n[+] interface = {name} (detected: route to 198.18.0.2)\n[+] source-mac = {} (detected)\n[+] source-ip = 198.18.0.1 (detected)\n[+] router-ip = none (offline)\n[+] router-mac = 66-55-44-33-22-11 (offline)\n[+] seed = 1 (given)\n[+] source-port = {TIME_PORT} (time)\n",
                 dash(st.scanner_mac)
             )),
-            "m05_user_no_adapter" => Some(
-                "rc 1\n[-] FAIL: 198.18.0.2 is an address of this host (route via lo0)\n    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\"\n".into(),
-            ),
-            _ => None,
+            Some(ExpectPreflight::Refusal(text)) => Some(format!(
+                "rc 1\n[-] FAIL: {text}\n{}\n",
+                c.expect.refusal.as_ref().unwrap().hints.join("\n")
+            )),
+            None => None,
         };
         Sim {
             case: c,
@@ -911,10 +656,7 @@ impl Sim {
         if let Some(o) = &self.oracle {
             f.push(("oracle/stdout.txt".into(), o.stdout.clone().into_bytes()));
             f.push(("oracle/stderr.txt".into(), o.stderr.clone().into_bytes()));
-            f.push((
-                "oracle/exit.txt".into(),
-                format!("{}\n", o.exit).into_bytes(),
-            ));
+            f.push(("oracle/exit.txt".into(), o.exit.clone().into_bytes()));
             f.push(("oracle.pcap".into(), pcap::encode(&o.pcap)));
             f.push(("oracle-capture.json".into(), Sim::witness(&o.pcap)));
         }
@@ -952,7 +694,7 @@ fn json<T: Serialize>(v: &T) -> Vec<u8> {
 }
 
 fn write_plan(root: &Path, plan: Plan) {
-    for tag in tags_of(plan) {
+    for tag in planned_tags(plan) {
         Sim::new(plan, tag).write(root);
     }
 }
@@ -1007,7 +749,7 @@ fn a_consistent_linux_run_is_pass() {
     let root = scratch();
     write_plan(&root, Plan::Linux);
     let res = verify_dir(&root);
-    for tag in tags_of(Plan::Linux) {
+    for tag in planned_tags(Plan::Linux) {
         assert_verdict(&run_of(&res, tag), PASS);
     }
     assert_eq!(res["overall"], PASS, "{res:#}");
@@ -1026,14 +768,14 @@ fn a_consistent_macos_run_is_pass() {
     let user = scratch();
     write_plan(&user, Plan::Macos);
     let res = verify_dir(&user);
-    for tag in tags_of(Plan::Macos) {
+    for tag in planned_tags(Plan::Macos) {
         assert_verdict(&run_of(&res, tag), PASS);
     }
     assert_eq!(res["overall"], PASS, "{res:#}");
     let root_case = scratch();
     write_plan(&root_case, Plan::MacosRoot);
     let res = verify_dir(&root_case);
-    for tag in tags_of(Plan::MacosRoot) {
+    for tag in planned_tags(Plan::MacosRoot) {
         assert_verdict(&run_of(&res, tag), PASS);
     }
     assert_eq!(res["overall"], PASS, "{res:#}");
@@ -1051,7 +793,7 @@ fn a_consistent_windows_run_with_guest_kernel_arp_reply_is_pass() {
     let root = scratch();
     write_plan(&root, Plan::Windows);
     let res = verify_dir(&root);
-    for tag in tags_of(Plan::Windows) {
+    for tag in planned_tags(Plan::Windows) {
         assert_verdict(&run_of(&res, tag), PASS);
     }
     assert_eq!(res["overall"], PASS, "{res:#}");
@@ -1610,8 +1352,16 @@ fn verdict_never_upgrades() {
     sim.det.finished.as_mut().unwrap().sent += 1;
     fs::remove_dir_all(root2.join("runs/l01_auto")).unwrap();
     sim.write(&root2);
+    let mut trip = Sim::new(Plan::Linux, "l02_auto_multi");
+    let mut foreign = trip.syns[0].clone();
+    foreign[6..12].copy_from_slice(&[2, 0xaa, 0, 0, 0, 0x77]);
+    trip.insert(trip.first_syn_time() + 0.003, foreign);
+    fs::remove_dir_all(root2.join("runs/l02_auto_multi")).unwrap();
+    trip.write(&root2);
     let res = verify_dir(&root2);
     assert_eq!(res["overall"], FAIL);
+    assert_eq!(res["behaviour_fail"], json!(["l01_auto"]));
+    assert_eq!(res["safety_trips"], json!(["l02_auto_multi"]));
     assert_eq!(
         run(&strings(&["--dir", root2.to_str().unwrap()])).unwrap(),
         1
@@ -1775,14 +1525,11 @@ fn stand_matches_the_other_lab_modules() {
     assert_eq!(b["router_mac"], dash(m.peer_mac).replace('-', ":"));
     assert_eq!(stand(Plan::MacosRoot), m);
     for plan in [Plan::Linux, Plan::Macos, Plan::MacosRoot, Plan::Windows] {
-        assert_eq!(planned_tags(plan), tags_of(plan).as_slice());
-        for tag in tags_of(plan) {
-            assert_eq!(case_kind(tag), Some(kind_of(tag)), "{tag}");
-            assert_eq!(
-                preflight_expectation(tag),
-                case(plan, tag).expect.preflight,
-                "{tag}"
-            );
+        for spec in cases(plan) {
+            assert_eq!(spec.plan, plan, "{}", spec.tag);
+            assert_eq!(case_kind(spec.tag), Some(spec.kind));
+            assert_eq!(preflight_expectation(spec.tag), spec.expect().preflight);
+            assert_eq!(case_spec(plan, spec.tag), Some(*spec));
         }
     }
 }
@@ -1830,5 +1577,507 @@ fn privacy_tokens_allow_the_stand_and_anonymous_values_only() {
         "a index=1 mac=x\nb index=2 mac=y",
     ] {
         assert!(flagged(bad, false), "{bad}");
+    }
+}
+
+// ------------------------------------------------------------------ fix round 1
+
+#[test]
+fn case_table_holds_the_briefs_cases() {
+    // The brief's case lists, kinds and defining arguments (constants table), literally.
+    use CaseKind::*;
+    let c = "--seed 1 --rate 100 --wait 3";
+    let npf = crate::windows_suite::IFACE;
+    let m_up = "--adapter feth4201 --adapter-ip 198.18.0.1";
+    let want: Vec<(Plan, &str, CaseKind, String)> = vec![
+        (
+            Plan::Linux,
+            "l01_auto",
+            Scan,
+            format!("198.18.0.2 -p80,81,8080 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l02_auto_multi",
+            Scan,
+            format!("198.18.0.2-198.18.0.5 -p80,81,8080 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l03_adapter",
+            Scan,
+            format!("198.18.0.2 -p80,81,8080 --adapter veth-a {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l04_adapter_ip",
+            Scan,
+            format!("198.18.0.2 -p80,81,8080 --adapter-ip 198.18.0.1 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l05_adapter_mac",
+            Scan,
+            format!("198.18.0.2 -p80,81,8080 --adapter-mac 02-aa-00-00-00-01 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l06_router_ip",
+            Scan,
+            format!("198.18.0.2 -p80,81,8080 --router-ip 198.18.0.3 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l07_router_mac",
+            Scan,
+            format!("198.18.0.2 -p80,81,8080 --router-mac 02-aa-00-00-00-02 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l08_source_port",
+            Scan,
+            format!("198.18.0.2 -p80,81,8080 --source-port 50000-50015 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l09_arp_timeout",
+            ArpTimeout,
+            format!("198.18.0.2 -p80,81,8080 --router-ip 198.18.0.9 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l10_no_such_adapter",
+            Refusal,
+            format!("198.18.0.2 -p80,81,8080 --adapter nosuch0 {c}"),
+        ),
+        (
+            Plan::Linux,
+            "l11_parity",
+            Parity,
+            format!("198.18.0.2-198.18.0.5 -p80,8080 --source-port 40000 {c}"),
+        ),
+        (Plan::Linux, "l12_iflist", Iflist, "--iflist".into()),
+        (
+            Plan::Macos,
+            "m01_user_masked",
+            Refusal,
+            format!("198.18.0.2 -p8000-8007,9000-9003 {m_up} --router-ip 198.18.0.2 {c}"),
+        ),
+        (
+            Plan::Macos,
+            "m02_user_explicit",
+            Scan,
+            format!(
+                "198.18.0.2 -p8000-8007,9000-9003 {m_up} --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.2 {c}"
+            ),
+        ),
+        (
+            Plan::Macos,
+            "m03_user_router_mac",
+            Scan,
+            format!(
+                "198.18.0.2 -p8000-8007,9000-9003 {m_up} --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.2 --router-mac 02-ac-00-00-00-02 {c}"
+            ),
+        ),
+        (
+            Plan::Macos,
+            "m04_user_arp_timeout",
+            ArpTimeout,
+            format!(
+                "198.18.0.2 -p8000-8007,9000-9003 {m_up} --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.3 {c}"
+            ),
+        ),
+        (
+            Plan::Macos,
+            "m05_user_no_adapter",
+            Refusal,
+            format!("198.18.0.2 -p8000-8007,9000-9003 {c}"),
+        ),
+        (
+            Plan::Macos,
+            "m06_user_no_ip",
+            Refusal,
+            format!(
+                "198.18.0.2 -p8000-8007,9000-9003 --adapter feth4201 --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.2 {c}"
+            ),
+        ),
+        (Plan::Macos, "m07_user_iflist", Iflist, "--iflist".into()),
+        (
+            Plan::MacosRoot,
+            "m10_root_auto_mac",
+            Scan,
+            format!("198.18.0.2 -p8000-8007,9000-9003 {m_up} --router-ip 198.18.0.2 {c}"),
+        ),
+        (
+            Plan::MacosRoot,
+            "m11_root_iflist",
+            Iflist,
+            "--iflist".into(),
+        ),
+        (
+            Plan::Windows,
+            "w01_auto",
+            Scan,
+            format!("198.18.0.2 -p80,443,8000-8007,8099 {c}"),
+        ),
+        (
+            Plan::Windows,
+            "w02_adapter_npf",
+            Scan,
+            format!("198.18.0.2 -p80,443,8000-8007,8099 --adapter {npf} {c}"),
+        ),
+        (
+            Plan::Windows,
+            "w03_adapter_friendly",
+            Scan,
+            format!("198.18.0.2 -p80,443,8000-8007,8099 --adapter Ethernet 2 {c}"),
+        ),
+        (
+            Plan::Windows,
+            "w04_router_mac",
+            Scan,
+            format!("198.18.0.2 -p80,443,8000-8007,8099 --router-mac 02-57-4c-3d-2e-9b {c}"),
+        ),
+        (
+            Plan::Windows,
+            "w05_arp_timeout",
+            ArpTimeout,
+            format!("198.18.0.2 -p80,443,8000-8007,8099 --router-ip 198.18.0.3 {c}"),
+        ),
+        (
+            Plan::Windows,
+            "w06_multi_no_gateway",
+            Refusal,
+            format!("198.18.0.2-198.18.0.3 -p80,443,8000-8007,8099 {c}"),
+        ),
+        (Plan::Windows, "w07_iflist", Iflist, "--iflist".into()),
+        (
+            Plan::Windows,
+            "w08a_restricted_iflist",
+            Iflist,
+            "--iflist".into(),
+        ),
+        (
+            Plan::Windows,
+            "w08b_restricted_scan",
+            Refusal,
+            format!("198.18.0.2 -p80,443,8000-8007,8099 {c}"),
+        ),
+    ];
+    let all: Vec<CaseSpec> = [Plan::Linux, Plan::Macos, Plan::MacosRoot, Plan::Windows]
+        .into_iter()
+        .flat_map(|p| cases(p).iter().copied())
+        .collect();
+    assert_eq!(all.len(), want.len());
+    for (spec, (plan, tag, kind, argv)) in all.iter().zip(&want) {
+        assert_eq!((spec.plan, spec.tag, spec.kind), (*plan, *tag, *kind));
+        assert_eq!(spec.argv().join(" "), *argv, "{tag}");
+    }
+    // What each case proves: route-based detection without adapter flags, the given value where one is given.
+    let src = |tag: &str| case_spec(Plan::Linux, tag).unwrap().detection;
+    assert_eq!(src("l01_auto"), Some([Src::Detected; 3]));
+    assert_eq!(
+        src("l03_adapter"),
+        Some([Src::Given, Src::Detected, Src::Detected])
+    );
+    assert_eq!(
+        case_spec(Plan::Linux, "l02_auto_multi").unwrap().router_ip,
+        Some(("198.18.0.2", "interface default gateway"))
+    );
+    assert_eq!(
+        case_spec(Plan::MacosRoot, "m10_root_auto_mac")
+            .unwrap()
+            .detection,
+        Some([Src::Given, Src::Detected, Src::Given])
+    );
+    let m01 = case_spec(Plan::Macos, "m01_user_masked").unwrap().expect();
+    assert!(m01.refusal.unwrap().fail.unwrap().contains("os-masked"));
+    assert_eq!(
+        case_spec(Plan::Windows, "w08b_restricted_scan")
+            .unwrap()
+            .fail,
+        None
+    );
+}
+
+#[test]
+fn l01_with_the_adapter_given_is_not_pass() {
+    // A self-consistent wrong directory: argv, expect.json and stderr all say the interface was given.
+    let mut sim = Sim::new(Plan::Linux, "l01_auto");
+    sim.case
+        .argv
+        .splice(2..2, strings(&["--adapter", "veth-a"]));
+    sim.case.expect.detection.as_mut().unwrap().interface = sourced("veth-a", "given");
+    sim.det.interface = Some(sourced("veth-a", "given"));
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(check(&r, "argv.json is the case's argv")["result"], INVALID);
+    assert_eq!(
+        check(&r, "expect.json equals the case table")["result"],
+        INVALID
+    );
+    // The right argv and expect.json, but rmasscan printed the interface as given: its behaviour, FAIL.
+    let mut sim = Sim::new(Plan::Linux, "l01_auto");
+    sim.det.interface = Some(sourced("veth-a", "given"));
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert_eq!(check(&r, "[+] detection lines equal")["result"], FAIL);
+}
+
+#[test]
+fn m01_with_a_refusal_other_than_the_masked_mac_is_fail() {
+    let mut sim = Sim::new(Plan::Macos, "m01_user_masked");
+    sim.det.fail = Some("failed to detect IP of interface \"feth4201\"".into());
+    sim.det.hints = strings(&[
+        "    [hint] did you spell the name correctly?",
+        "    [hint] if it has no IP address, manually set with something like \"--source-ip 198.51.100.17\"",
+    ]);
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert_eq!(check(&r, "carries the expected refusal")["result"], FAIL);
+    // The run's own expect.json naming that refusal changes nothing: it disagrees with the table.
+    sim.case.expect.refusal = Some(ExpectRefusal {
+        fail: sim.det.fail.clone(),
+        hints: sim.det.hints.clone(),
+    });
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(
+        check(&r, "expect.json equals the case table")["result"],
+        INVALID
+    );
+}
+
+#[test]
+fn expect_json_that_disagrees_with_the_case_table_is_invalid() {
+    let mut sim = Sim::new(Plan::Linux, "l02_auto_multi");
+    sim.case.expect.detection.as_mut().unwrap().router_ip =
+        Some(sourced("198.18.0.2", "route gateway"));
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(
+        check(&r, "expect.json equals the case table")["result"],
+        INVALID
+    );
+    assert_eq!(r["behaviour_fail"], false);
+    // Any field: the preflight of a case that needs none.
+    let mut sim = Sim::new(Plan::Windows, "w02_adapter_npf");
+    sim.case.expect.preflight = Some(ExpectPreflight::Interface("Ethernet 2".into()));
+    assert_verdict(&judge(&sim), INVALID);
+}
+
+#[test]
+fn a_preflight_with_a_given_interface_is_not_run() {
+    // The NIC must come from the route to the case's first target, not from the command line.
+    let mut sim = Sim::new(Plan::Windows, "w06_multi_no_gateway");
+    sim.preflight = Some(sim.preflight.take().unwrap().replace(
+        "interface = Ethernet 2 (detected: route to 198.18.0.2)",
+        "interface = Ethernet 2 (given)",
+    ));
+    let r = judge(&sim);
+    assert_verdict(&r, NOT_RUN);
+    assert_eq!(check(&r, "preflight equals")["result"], NOT_RUN);
+}
+
+#[test]
+fn an_oracle_that_did_not_exit_zero_is_invalid() {
+    for (text, name) in [
+        ("abc\n", "oracle/exit.txt holds an exit code"),
+        ("", "oracle/exit.txt holds an exit code"),
+        ("1\n", "the oracle exited 0"),
+    ] {
+        let mut sim = Sim::new(Plan::Linux, "l11_parity");
+        sim.oracle.as_mut().unwrap().exit = text.into();
+        let root = scratch();
+        sim.write(&root);
+        let r = run_of(&verify_dir(&root), "l11_parity");
+        assert_eq!(check(&r, "hashes-before-copy")["result"], PASS);
+        assert_verdict(&r, INVALID);
+        assert_eq!(check(&r, name)["result"], INVALID, "{text:?}");
+        assert_eq!(r["behaviour_fail"], false);
+        fs::remove_dir_all(root).unwrap();
+    }
+    // The oracle's --iflist record proves the stand: a failed one is INVALID, not a behaviour FAIL.
+    let mut sim = Sim::new(Plan::Linux, "l12_iflist");
+    sim.oracle_iflist.as_mut().unwrap().rc = 1;
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(
+        check(&r, "the oracle's --iflist exited 0")["result"],
+        INVALID
+    );
+}
+
+#[test]
+fn a_file_outside_the_runs_without_an_allowed_extension_is_invalid() {
+    for (rel, bytes) in [
+        ("README", b"notes\n".to_vec()),
+        (".DS_Store", vec![0u8, 0, 0, 1]),
+        (
+            "runs_aborted/x/iflist.out",
+            b"lo index=1 mac=00-00-00-00-00-00\n".to_vec(),
+        ),
+        ("verification/foo.csv", b"a,b\n".to_vec()),
+    ] {
+        let root = scratch();
+        Sim::new(Plan::MacosRoot, "m11_root_iflist").write(&root);
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, bytes).unwrap();
+        let res = verify_dir(&root);
+        let m = run_of(&res, "manifest");
+        let c = check(&m, "evidence files outside the runs");
+        assert_eq!(c["result"], INVALID, "{rel}");
+        assert!(c["detail"].as_str().unwrap().contains(rel), "{c}");
+        assert_eq!(verdict(&m), INVALID);
+        fs::remove_dir_all(root).unwrap();
+    }
+    // Allowed files outside the runs are fine.
+    let root = scratch();
+    Sim::new(Plan::MacosRoot, "m11_root_iflist").write(&root);
+    fs::write(root.join("README.md"), "macOS root window\n").unwrap();
+    fs::write(root.join("MANIFEST.sha256"), "").unwrap();
+    assert_eq!(
+        check(
+            &run_of(&verify_dir(&root), "manifest"),
+            "evidence files outside the runs"
+        )["result"],
+        PASS
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_text_file_is_invalid() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut sim = Sim::new(Plan::Linux, "l01_auto");
+    sim.extra.push(("notes.txt".into(), b"a note\n".to_vec()));
+    let root = scratch();
+    let d = sim.write(&root);
+    let p = d.join("notes.txt");
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&p).is_ok() {
+        // Running as root: nothing is unreadable here, the case cannot be built.
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        return;
+    }
+    let r = run_of(&verify_dir(&root), "l01_auto");
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_verdict(&r, INVALID);
+    assert_eq!(
+        check(&r, "privacy: notes.txt is readable")["result"],
+        INVALID
+    );
+    assert!(
+        check(&r, "privacy:")["name"]
+            != "privacy: every text file holds only allowlisted names, addresses and paths"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symbolic_link_is_invalid_and_never_followed() {
+    use std::os::unix::fs::symlink;
+    // A loop inside a run: following it would never end.
+    let root = scratch();
+    let d = Sim::new(Plan::Linux, "l01_auto").write(&root);
+    symlink(".", d.join("loop")).unwrap();
+    let res = verify_dir(&root);
+    let r = run_of(&res, "l01_auto");
+    assert_verdict(&r, INVALID);
+    assert_eq!(
+        check(&r, "no symbolic link in the run directory")["result"],
+        INVALID
+    );
+    assert_eq!(
+        check(
+            &run_of(&res, "manifest"),
+            "no symbolic link in the evidence directory"
+        )["result"],
+        INVALID
+    );
+    fs::remove_dir_all(&root).unwrap();
+    // A capture that points outside the evidence directory is not read.
+    let outside = scratch();
+    let root = scratch();
+    let sim = Sim::new(Plan::Macos, "m02_user_explicit");
+    let d = sim.write(&root);
+    fs::write(
+        outside.join("uplink.pcap"),
+        pcap::encode(&vec![(T0, sim.syns[0].clone())]),
+    )
+    .unwrap();
+    fs::remove_file(d.join("uplink.pcap")).unwrap();
+    symlink(outside.join("uplink.pcap"), d.join("uplink.pcap")).unwrap();
+    let r = run_of(&verify_dir(&root), "m02_user_explicit");
+    assert_verdict(&r, INVALID);
+    assert_eq!(
+        check(&r, "uplink.pcap is a regular file")["result"],
+        INVALID
+    );
+    assert!(
+        !r["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "uplink.pcap complete pcap")
+    );
+    fs::remove_dir_all(&root).unwrap();
+    // A run directory that is itself a link, to a directory outside.
+    let root = scratch();
+    let real = Sim::new(Plan::MacosRoot, "m11_root_iflist").write(&outside);
+    fs::create_dir_all(root.join("runs")).unwrap();
+    fs::write(root.join("manifest.json"), r#"{"autodetect":"macos-root"}"#).unwrap();
+    symlink(&real, root.join("runs/m11_root_iflist")).unwrap();
+    let res = verify_dir(&root);
+    let r = run_of(&res, "m11_root_iflist");
+    assert_verdict(&r, INVALID);
+    assert_eq!(check(&r, "not a symbolic link")["result"], INVALID);
+    assert_eq!(
+        r["checks"].as_array().unwrap().len(),
+        1,
+        "nothing behind the link is read"
+    );
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(outside).unwrap();
+}
+
+#[test]
+fn oracle_output_is_held_to_the_scanner_text_rules() {
+    // The realistic oracle stderr (banner, \r status lines, forced exit) is clean.
+    assert_verdict(&judge(&Sim::new(Plan::Linux, "l11_parity")), PASS);
+    for (file, text, needle) in [
+        (
+            "stderr",
+            "Starting masscan 1.3.2 (http://bit.ly/14GZzcT) at 2026-11-03 10:00:00 GMT\nadapter eth0 192.168.1.5\n",
+            "192.168.1.5",
+        ),
+        (
+            "stderr",
+            "Initiating SYN Stealth Scan\nhello from owner-mbp\n",
+            "not a line masscan prints",
+        ),
+        (
+            "stdout",
+            "Discovered open port 80/tcp on 10.1.2.3                                        \n",
+            "10.1.2.3",
+        ),
+        ("stdout", "listening on veth-a\n", "not a Discovered line"),
+    ] {
+        let mut sim = Sim::new(Plan::Linux, "l11_parity");
+        let o = sim.oracle.as_mut().unwrap();
+        if file == "stderr" {
+            o.stderr = text.into();
+        } else {
+            o.stdout = text.into();
+        }
+        let r = judge(&sim);
+        assert_verdict(&r, INVALID);
+        let c = check(&r, &format!("privacy: oracle/{file}.txt"));
+        assert_eq!(c["result"], INVALID);
+        assert!(c["detail"].as_str().unwrap().contains(needle), "{c}");
     }
 }

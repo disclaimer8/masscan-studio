@@ -26,7 +26,7 @@
 use crate::{
     capture::{IsolationMode, isolation_permits},
     link::{END_PAYLOAD, MARKER_ETHERTYPE, START_PAYLOAD},
-    macos_verify::{captured_in, has_compressed_capture, hashes_match_tree, relative_files},
+    macos_verify::{Tree, captured_in, hashes_match_tree, tree},
     pcap::{self, Frames},
     verify::{self, FAIL, INVALID, NOT_RUN, PASS, Run, array, read_json, s, sha, tcp},
 };
@@ -56,6 +56,9 @@ pub const PEER_PCAP: &str = "peer.pcap";
 pub const ORACLE_PCAP: &str = "oracle.pcap";
 pub const ORACLE_CAPTURE_JSON: &str = "oracle-capture.json";
 pub const ORACLE_IFLIST_JSON: &str = "oracle/iflist.json";
+pub const ORACLE_STDOUT: &str = "oracle/stdout.txt";
+pub const ORACLE_STDERR: &str = "oracle/stderr.txt";
+pub const ORACLE_EXIT: &str = "oracle/exit.txt";
 pub const HASHES: &str = "hashes-before-copy.txt";
 /// The only extensions an evidence file may carry (`*.gz` is a safety refusal of its own).
 pub const EVIDENCE_EXTENSIONS: [&str; 7] = ["json", "pcap", "txt", "log", "err", "sha256", "md"];
@@ -344,104 +347,506 @@ pub fn stand(plan: Plan) -> Stand {
     }
 }
 
-const LINUX_TAGS: [&str; 12] = [
-    "l01_auto",
-    "l02_auto_multi",
-    "l03_adapter",
-    "l04_adapter_ip",
-    "l05_adapter_mac",
-    "l06_router_ip",
-    "l07_router_mac",
-    "l08_source_port",
-    "l09_arp_timeout",
-    "l10_no_such_adapter",
-    "l11_parity",
-    "l12_iflist",
-];
-const MACOS_TAGS: [&str; 7] = [
-    "m01_user_masked",
-    "m02_user_explicit",
-    "m03_user_router_mac",
-    "m04_user_arp_timeout",
-    "m05_user_no_adapter",
-    "m06_user_no_ip",
-    "m07_user_iflist",
-];
-const MACOS_ROOT_TAGS: [&str; 2] = ["m10_root_auto_mac", "m11_root_iflist"];
-const WINDOWS_TAGS: [&str; 9] = [
-    "w01_auto",
-    "w02_adapter_npf",
-    "w03_adapter_friendly",
-    "w04_router_mac",
-    "w05_arp_timeout",
-    "w06_multi_no_gateway",
-    "w07_iflist",
-    "w08a_restricted_iflist",
-    "w08b_restricted_scan",
-];
+// ------------------------------------------------------------------ the case table
 
-/// Every case a plan must hold; a missing one is NOT RUN, so a partial (`--only`) directory never passes.
-pub fn planned_tags(plan: Plan) -> &'static [&'static str] {
-    match plan {
-        Plan::Linux => &LINUX_TAGS,
-        Plan::Macos => &MACOS_TAGS,
-        Plan::MacosRoot => &MACOS_ROOT_TAGS,
-        Plan::Windows => &WINDOWS_TAGS,
-    }
+/// Where a `[+]` value comes from: the argv (`given`) or the OS (`detected`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Src {
+    Given,
+    Detected,
 }
 
+/// What the `--offline` preflight must show (see [`ExpectPreflight`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preflight {
+    /// rc 0 and `[+] interface = NAME (detected: route to <first target>)`.
+    Interface(&'static str),
+    /// rc 1 and exactly this text after `[-] FAIL: `.
+    Refusal(&'static str),
+}
+
+/// One planned case, defined here and nowhere else. The suites build `argv.json` from [`CaseSpec::argv`] and
+/// `expect.json` from [`CaseSpec::expect`]; the verifier requires both files to equal them and judges the run's
+/// stderr, exit code and wire against this entry, never against the run's own `expect.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaseSpec {
+    pub plan: Plan,
+    pub tag: &'static str,
+    pub kind: CaseKind,
+    /// The positional targets (empty for `--iflist`).
+    pub targets: &'static str,
+    /// The `-p` ports (empty for `--iflist`).
+    pub ports: &'static str,
+    /// The flags that make the case, between the ports and the common `--seed 1 --rate 100 --wait 3`.
+    pub flags: &'static [&'static str],
+    /// Sources of `[+] interface`, `source-mac` and `source-ip`. `None`: no detection line may be printed (a
+    /// refusal during detection, `--iflist`), or, for the any-refusal `w08b`, none is judged.
+    pub detection: Option<[Src; 3]>,
+    /// `[+] router-ip` address and reason, when the line is printed.
+    pub router_ip: Option<(&'static str, &'static str)>,
+    /// `[+] router-mac` source, `arp` or `given`, when the line is printed (the value is the stand's next hop).
+    pub router_mac: Option<&'static str>,
+    /// The exact text after `[-] FAIL: ` (`None` with a refusal kind: any refusal, `w08b` only).
+    pub fail: Option<&'static str>,
+    /// The exact hint lines after the refusal.
+    pub hints: &'static [&'static str],
+    pub preflight: Option<Preflight>,
+}
+
+/// The arguments every scan case shares (constants table: `--seed 1 --rate 100 --wait 3`).
+pub const COMMON_ARGS: [&str; 6] = ["--seed", "1", "--rate", "100", "--wait", "3"];
+
+// masscan's hint lines, verbatim (C `main-initadapter.c`); the verifier's own copy, so that a drift of the
+// product's texts is a finding, not a new expectation.
+const ROUTER_HINTS: &[&str] = &[
+    "    [hint] try \"--router-ip 192.0.2.1\" to specify different router",
+    "    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP",
+    "    [hint] try \"--interface eth0\" to change interface",
+];
+const SPELL_HINT: &str = "    [hint] did you spell the name correctly?";
+const NO_IP_HINT: &str = "    [hint] if it has no IP address, manually set with something like \"--source-ip 198.51.100.17\"";
+const MASKED_HINT: &str =
+    "    [hint] run as root, or try something like \"--source-mac 00-11-22-33-44-55\"";
+const LOCAL_HINT: &str = "    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\"";
+const LOCAL_TARGET: &str = "198.18.0.2 is an address of this host (route via lo0)";
+
+const G: Src = Src::Given;
+const D: Src = Src::Detected;
+const ON_LINK: Option<(&str, &str)> = Some(("198.18.0.2", "on-link target"));
+const HAIRPIN: Option<(&str, &str)> = Some(("198.18.0.2", "interface default gateway"));
+/// The fields every refusal during detection shares: nothing is printed before the `[-] FAIL:` line.
+const NO_DETECTION: CaseSpec = CaseSpec {
+    plan: Plan::Linux,
+    tag: "",
+    kind: CaseKind::Refusal,
+    targets: "198.18.0.2",
+    ports: "",
+    flags: &[],
+    detection: None,
+    router_ip: None,
+    router_mac: None,
+    fail: None,
+    hints: &[],
+    preflight: None,
+};
+
+const LINUX: CaseSpec = CaseSpec {
+    plan: Plan::Linux,
+    tag: "",
+    kind: CaseKind::Scan,
+    targets: "198.18.0.2",
+    ports: "80,81,8080",
+    flags: &[],
+    detection: Some([D, D, D]),
+    router_ip: ON_LINK,
+    router_mac: Some("arp"),
+    fail: None,
+    hints: &[],
+    preflight: None,
+};
+const LINUX_CASES: [CaseSpec; 12] = [
+    CaseSpec {
+        tag: "l01_auto",
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l02_auto_multi",
+        targets: "198.18.0.2-198.18.0.5",
+        router_ip: HAIRPIN,
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l03_adapter",
+        flags: &["--adapter", "veth-a"],
+        detection: Some([G, D, D]),
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l04_adapter_ip",
+        flags: &["--adapter-ip", "198.18.0.1"],
+        detection: Some([D, D, G]),
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l05_adapter_mac",
+        flags: &["--adapter-mac", "02-aa-00-00-00-01"],
+        detection: Some([D, G, D]),
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l06_router_ip",
+        flags: &["--router-ip", "198.18.0.3"],
+        router_ip: Some(("198.18.0.3", "given")),
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l07_router_mac",
+        flags: &["--router-mac", "02-aa-00-00-00-02"],
+        router_ip: None,
+        router_mac: Some("given"),
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l08_source_port",
+        flags: &["--source-port", "50000-50015"],
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l09_arp_timeout",
+        kind: CaseKind::ArpTimeout,
+        flags: &["--router-ip", "198.18.0.9"],
+        router_ip: Some(("198.18.0.9", "given")),
+        router_mac: None,
+        fail: Some("ARP timed-out resolving MAC address for router veth-a: \"198.18.0.9\""),
+        hints: ROUTER_HINTS,
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l10_no_such_adapter",
+        ports: "80,81,8080",
+        flags: &["--adapter", "nosuch0"],
+        fail: Some("no such interface \"nosuch0\""),
+        hints: &[SPELL_HINT],
+        ..NO_DETECTION
+    },
+    CaseSpec {
+        tag: "l11_parity",
+        kind: CaseKind::Parity,
+        targets: "198.18.0.2-198.18.0.5",
+        ports: "80,8080",
+        flags: &["--source-port", "40000"],
+        router_ip: HAIRPIN,
+        ..LINUX
+    },
+    CaseSpec {
+        tag: "l12_iflist",
+        kind: CaseKind::Iflist,
+        targets: "",
+        ..NO_DETECTION
+    },
+];
+
+const MACOS: CaseSpec = CaseSpec {
+    plan: Plan::Macos,
+    tag: "",
+    kind: CaseKind::Scan,
+    targets: "198.18.0.2",
+    ports: "8000-8007,9000-9003",
+    flags: &[
+        "--adapter",
+        "feth4201",
+        "--adapter-ip",
+        "198.18.0.1",
+        "--adapter-mac",
+        "02-ac-00-00-00-01",
+        "--router-ip",
+        "198.18.0.2",
+    ],
+    detection: Some([G, G, G]),
+    router_ip: Some(("198.18.0.2", "given")),
+    router_mac: Some("arp"),
+    fail: None,
+    hints: &[],
+    preflight: None,
+};
+const MACOS_REFUSAL: CaseSpec = CaseSpec {
+    plan: Plan::Macos,
+    ports: "8000-8007,9000-9003",
+    ..NO_DETECTION
+};
+const MACOS_CASES: [CaseSpec; 7] = [
+    CaseSpec {
+        tag: "m01_user_masked",
+        flags: &[
+            "--adapter",
+            "feth4201",
+            "--adapter-ip",
+            "198.18.0.1",
+            "--router-ip",
+            "198.18.0.2",
+        ],
+        fail: Some(
+            "MAC of interface \"feth4201\" is os-masked (Darwin hides MACs from unprivileged processes)",
+        ),
+        hints: &[MASKED_HINT],
+        ..MACOS_REFUSAL
+    },
+    CaseSpec {
+        tag: "m02_user_explicit",
+        ..MACOS
+    },
+    CaseSpec {
+        tag: "m03_user_router_mac",
+        flags: &[
+            "--adapter",
+            "feth4201",
+            "--adapter-ip",
+            "198.18.0.1",
+            "--adapter-mac",
+            "02-ac-00-00-00-01",
+            "--router-ip",
+            "198.18.0.2",
+            "--router-mac",
+            "02-ac-00-00-00-02",
+        ],
+        router_mac: Some("given"),
+        ..MACOS
+    },
+    CaseSpec {
+        tag: "m04_user_arp_timeout",
+        kind: CaseKind::ArpTimeout,
+        flags: &[
+            "--adapter",
+            "feth4201",
+            "--adapter-ip",
+            "198.18.0.1",
+            "--adapter-mac",
+            "02-ac-00-00-00-01",
+            "--router-ip",
+            "198.18.0.3",
+        ],
+        router_ip: Some(("198.18.0.3", "given")),
+        router_mac: None,
+        fail: Some("ARP timed-out resolving MAC address for router feth4201: \"198.18.0.3\""),
+        hints: ROUTER_HINTS,
+        ..MACOS
+    },
+    CaseSpec {
+        tag: "m05_user_no_adapter",
+        fail: Some(LOCAL_TARGET),
+        hints: &[LOCAL_HINT],
+        preflight: Some(Preflight::Refusal(LOCAL_TARGET)),
+        ..MACOS_REFUSAL
+    },
+    CaseSpec {
+        tag: "m06_user_no_ip",
+        flags: &[
+            "--adapter",
+            "feth4201",
+            "--adapter-mac",
+            "02-ac-00-00-00-01",
+            "--router-ip",
+            "198.18.0.2",
+        ],
+        fail: Some("failed to detect IP of interface \"feth4201\""),
+        hints: &[SPELL_HINT, NO_IP_HINT],
+        ..MACOS_REFUSAL
+    },
+    CaseSpec {
+        tag: "m07_user_iflist",
+        kind: CaseKind::Iflist,
+        targets: "",
+        ports: "",
+        ..MACOS_REFUSAL
+    },
+];
+const MACOS_ROOT_CASES: [CaseSpec; 2] = [
+    CaseSpec {
+        plan: Plan::MacosRoot,
+        tag: "m10_root_auto_mac",
+        flags: &[
+            "--adapter",
+            "feth4201",
+            "--adapter-ip",
+            "198.18.0.1",
+            "--router-ip",
+            "198.18.0.2",
+        ],
+        detection: Some([G, D, G]),
+        ..MACOS
+    },
+    CaseSpec {
+        plan: Plan::MacosRoot,
+        tag: "m11_root_iflist",
+        kind: CaseKind::Iflist,
+        targets: "",
+        ports: "",
+        ..MACOS_REFUSAL
+    },
+];
+
+const WINDOWS: CaseSpec = CaseSpec {
+    plan: Plan::Windows,
+    tag: "",
+    kind: CaseKind::Scan,
+    targets: "198.18.0.2",
+    ports: "80,443,8000-8007,8099",
+    flags: &[],
+    detection: Some([D, D, D]),
+    router_ip: ON_LINK,
+    router_mac: Some("arp"),
+    fail: None,
+    hints: &[],
+    preflight: None,
+};
+const WINDOWS_REFUSAL: CaseSpec = CaseSpec {
+    plan: Plan::Windows,
+    ports: "80,443,8000-8007,8099",
+    ..NO_DETECTION
+};
+const WINDOWS_CASES: [CaseSpec; 9] = [
+    CaseSpec {
+        tag: "w01_auto",
+        preflight: Some(Preflight::Interface("Ethernet 2")),
+        ..WINDOWS
+    },
+    CaseSpec {
+        tag: "w02_adapter_npf",
+        flags: &["--adapter", crate::windows_suite::IFACE],
+        detection: Some([G, D, D]),
+        ..WINDOWS
+    },
+    CaseSpec {
+        tag: "w03_adapter_friendly",
+        flags: &["--adapter", "Ethernet 2"],
+        detection: Some([G, D, D]),
+        ..WINDOWS
+    },
+    CaseSpec {
+        tag: "w04_router_mac",
+        flags: &["--router-mac", "02-57-4c-3d-2e-9b"],
+        router_ip: None,
+        router_mac: Some("given"),
+        ..WINDOWS
+    },
+    CaseSpec {
+        tag: "w05_arp_timeout",
+        kind: CaseKind::ArpTimeout,
+        flags: &["--router-ip", "198.18.0.3"],
+        router_ip: Some(("198.18.0.3", "given")),
+        router_mac: None,
+        fail: Some("ARP timed-out resolving MAC address for router Ethernet 2: \"198.18.0.3\""),
+        hints: ROUTER_HINTS,
+        ..WINDOWS
+    },
+    CaseSpec {
+        tag: "w06_multi_no_gateway",
+        targets: "198.18.0.2-198.18.0.3",
+        fail: Some("no default gateway on interface \"Ethernet 2\" for several on-link targets"),
+        hints: ROUTER_HINTS,
+        preflight: Some(Preflight::Interface("Ethernet 2")),
+        ..WINDOWS_REFUSAL
+    },
+    CaseSpec {
+        tag: "w07_iflist",
+        kind: CaseKind::Iflist,
+        targets: "",
+        ports: "",
+        ..WINDOWS_REFUSAL
+    },
+    CaseSpec {
+        tag: "w08a_restricted_iflist",
+        kind: CaseKind::Iflist,
+        targets: "",
+        ports: "",
+        ..WINDOWS_REFUSAL
+    },
+    // A restricted token: w01's scan, refused in any way (detection works, opening does not), no frame.
+    CaseSpec {
+        tag: "w08b_restricted_scan",
+        ..WINDOWS_REFUSAL
+    },
+];
+
+/// Every case of a plan, in the brief's order. A missing one is NOT RUN, so a partial (`--only`) directory never
+/// passes.
+pub fn cases(plan: Plan) -> &'static [CaseSpec] {
+    match plan {
+        Plan::Linux => &LINUX_CASES,
+        Plan::Macos => &MACOS_CASES,
+        Plan::MacosRoot => &MACOS_ROOT_CASES,
+        Plan::Windows => &WINDOWS_CASES,
+    }
+}
+/// The tags of a plan.
+pub fn planned_tags(plan: Plan) -> Vec<&'static str> {
+    cases(plan).iter().map(|c| c.tag).collect()
+}
+/// The case `tag` of `plan`.
+pub fn case_spec(plan: Plan, tag: &str) -> Option<CaseSpec> {
+    cases(plan).iter().find(|c| c.tag == tag).copied()
+}
+fn any_case(tag: &str) -> Option<CaseSpec> {
+    [Plan::Linux, Plan::Macos, Plan::MacosRoot, Plan::Windows]
+        .into_iter()
+        .find_map(|p| case_spec(p, tag))
+}
 /// The kind of a planned case (`None`: not a case of any plan).
 pub fn case_kind(tag: &str) -> Option<CaseKind> {
-    let all = LINUX_TAGS
-        .iter()
-        .chain(&MACOS_TAGS)
-        .chain(&MACOS_ROOT_TAGS)
-        .chain(&WINDOWS_TAGS);
-    if !all.clone().any(|t| *t == tag) {
-        return None;
-    }
-    Some(match tag {
-        "l09_arp_timeout" | "m04_user_arp_timeout" | "w05_arp_timeout" => CaseKind::ArpTimeout,
-        "l10_no_such_adapter"
-        | "m01_user_masked"
-        | "m05_user_no_adapter"
-        | "m06_user_no_ip"
-        | "w06_multi_no_gateway"
-        | "w08b_restricted_scan" => CaseKind::Refusal,
-        "l12_iflist"
-        | "m07_user_iflist"
-        | "m11_root_iflist"
-        | "w07_iflist"
-        | "w08a_restricted_iflist" => CaseKind::Iflist,
-        "l11_parity" => CaseKind::Parity,
-        _ => CaseKind::Scan,
-    })
+    any_case(tag).map(|c| c.kind)
 }
-
-/// The preflight a case needs before it may run (R1): `w01` and `w06` must detect the stand NIC, `m05` must be
-/// refused because its target is an address of this host.
+/// The preflight a case needs before it may run (R1).
 pub fn preflight_expectation(tag: &str) -> Option<ExpectPreflight> {
-    match tag {
-        "w01_auto" | "w06_multi_no_gateway" => {
-            Some(ExpectPreflight::Interface("Ethernet 2".into()))
-        }
-        "m05_user_no_adapter" => Some(ExpectPreflight::Refusal(
-            "198.18.0.2 is an address of this host (route via lo0)".into(),
-        )),
-        _ => None,
-    }
+    any_case(tag).and_then(|c| c.expect().preflight)
 }
 
-/// The `--iflist` line a case must find: the stand NIC with its MAC, masked only in the user's macOS window.
-fn pinned_iflist(plan: Plan, tag: &str) -> ExpectIflist {
-    let st = stand(plan);
-    ExpectIflist {
-        name: st.iface.into(),
-        mac: if tag == "m07_user_iflist" {
-            "masked".into()
-        } else {
-            dash(st.scanner_mac)
-        },
+impl CaseSpec {
+    /// `argv.json` of the case: `--iflist`, or targets, `-pPORTS`, the case's flags and [`COMMON_ARGS`].
+    pub fn argv(&self) -> Vec<String> {
+        if self.kind == CaseKind::Iflist {
+            return vec!["--iflist".into()];
+        }
+        [self.targets.to_owned(), format!("-p{}", self.ports)]
+            .into_iter()
+            .chain(
+                self.flags
+                    .iter()
+                    .chain(&COMMON_ARGS)
+                    .map(|s| (*s).to_owned()),
+            )
+            .collect()
+    }
+    /// The first unicast target, the one `[+] interface … (detected: route to …)` names.
+    pub fn first_target(&self) -> &'static str {
+        self.targets.split(['-', ',', '/']).next().unwrap_or("")
+    }
+    /// `expect.json` of the case, on its stand.
+    pub fn expect(&self) -> ExpectRecord {
+        let st = stand(self.plan);
+        let src = |s: Src| match s {
+            Src::Given => "given".to_owned(),
+            Src::Detected => "detected".to_owned(),
+        };
+        let sourced = |value: String, source: String| Sourced { value, source };
+        let detection = self.detection.map(|[i, m, ip]| ExpectDetection {
+            interface: sourced(
+                st.iface.into(),
+                match i {
+                    Src::Given => "given".into(),
+                    Src::Detected => format!("detected: route to {}", self.first_target()),
+                },
+            ),
+            source_mac: sourced(dash(st.scanner_mac), src(m)),
+            source_ip: sourced(st.scanner_ip.to_string(), src(ip)),
+            router_ip: self.router_ip.map(|(v, why)| sourced(v.into(), why.into())),
+            router_mac: self
+                .router_mac
+                .map(|s| sourced(dash(st.peer_mac), s.into())),
+        });
+        ExpectRecord {
+            tag: self.tag.into(),
+            kind: self.kind,
+            detection,
+            refusal: matches!(self.kind, CaseKind::Refusal | CaseKind::ArpTimeout).then(|| {
+                ExpectRefusal {
+                    fail: self.fail.map(Into::into),
+                    hints: self.hints.iter().map(|h| (*h).to_owned()).collect(),
+                }
+            }),
+            // Darwin hides the MAC from the user's window; root reads it.
+            iflist: (self.kind == CaseKind::Iflist).then(|| ExpectIflist {
+                name: st.iface.into(),
+                mac: if self.plan == Plan::Macos {
+                    "masked".into()
+                } else {
+                    dash(st.scanner_mac)
+                },
+            }),
+            preflight: self.preflight.map(|p| match p {
+                Preflight::Interface(n) => ExpectPreflight::Interface(n.into()),
+                Preflight::Refusal(t) => ExpectPreflight::Refusal(t.into()),
+            }),
+        }
     }
 }
 
@@ -814,8 +1219,11 @@ fn parse_exit(text: &str) -> Option<i32> {
 
 // ------------------------------------------------------------------ privacy
 
-/// The text of a file the scanner produced: its addresses must be the stand's or the CLI's fixed examples.
-const SCANNER_TEXT: [&str; 10] = [
+/// The text of a file a scanner produced (rmasscan or the C oracle): its addresses must be the stand's or the fixed
+/// examples of the refusal texts, and its lines must be forms that scanner prints.
+const SCANNER_TEXT: [&str; 12] = [
+    ORACLE_STDOUT,
+    ORACLE_STDERR,
     "stdout.txt",
     "stderr.txt",
     "guest-stdout.txt",
@@ -1009,6 +1417,33 @@ fn name_problems(names: impl IntoIterator<Item = String>) -> Vec<String> {
         .map(|n| format!("name {n:?}"))
         .collect()
 }
+/// The lines the C oracle writes on stderr during a scan (masscan's banner, status lines rewritten after `\r`,
+/// the forced exit after the wait window, and its own refusals), as recorded by every committed oracle run.
+fn oracle_stderr_problems(text: &str) -> Vec<String> {
+    let mut p = Vec::new();
+    for seg in text.trim_start_matches('\u{feff}').split(['\n', '\r']) {
+        let s = seg.trim_end();
+        if s.is_empty() || s.starts_with("    [hint] ") || s.starts_with(" [hint] ") {
+            continue;
+        }
+        if let Some(rest) = s.strip_prefix("[-] FAIL: ") {
+            p.extend(name_problems(refusal_names(rest)));
+            continue;
+        }
+        let known = (s.starts_with("Starting masscan ")
+            && s.contains(" (http://bit.ly/14GZzcT) at ")
+            && s.ends_with(" GMT"))
+            || s == "Initiating SYN Stealth Scan"
+            || (s.starts_with("Scanning ") && s.ends_with("/host]"))
+            || s.starts_with("rate:")
+            || s == "[-] Passed the wait window but still running, forcing exit...";
+        if !known {
+            p.push(format!("not a line masscan prints: {s:?}"));
+        }
+    }
+    p
+}
+
 /// Line forms and interface names of the files the scanner wrote.
 fn output_problems(rel: &str, text: &str) -> Vec<String> {
     let stderr_lines = |t: &str| -> Vec<String> {
@@ -1039,7 +1474,8 @@ fn output_problems(rel: &str, text: &str) -> Vec<String> {
     match rel {
         "stderr.txt" | "guest-stderr.txt" => stderr_lines(text),
         PREFLIGHT_TXT => stderr_lines(text.split_once('\n').map_or("", |(_, r)| r)),
-        "stdout.txt" | "guest-stdout.txt" => stdout_lines(text)
+        ORACLE_STDERR => oracle_stderr_problems(text),
+        "stdout.txt" | "guest-stdout.txt" | ORACLE_STDOUT => stdout_lines(text)
             .into_iter()
             .filter(|l| l.trim() != "" && !l.starts_with("Discovered open port "))
             .map(|l| format!("not a Discovered line: {:?}", l.trim_end()))
@@ -1085,8 +1521,14 @@ fn privacy(r: &mut Run, d: &Path, files: &[String]) {
         if !TEXT_EXTENSIONS.contains(&ext) {
             continue;
         }
-        let Ok(bytes) = fs::read(d.join(rel)) else {
-            continue;
+        let bytes = match fs::read(d.join(rel)) {
+            Ok(b) => b,
+            Err(e) => {
+                // A file nobody could read was not scanned: never clean.
+                clean = false;
+                r.inv(&format!("privacy: {rel} is readable"), false, e);
+                continue;
+            }
         };
         seen += 1;
         let text = String::from_utf8_lossy(&bytes);
@@ -1233,9 +1675,29 @@ fn typed<T: DeserializeOwned>(r: &mut Run, d: &Path, name: &str) -> Option<T> {
     }
 }
 
+/// A capture of a directory: `None`, with a check, when it is missing, broken, or a symbolic link (not followed).
+fn capture(r: &mut Run, d: &Path, name: &str, links: &[String]) -> Option<(Frames, Vec<u8>)> {
+    if links.iter().any(|l| l == name) {
+        r.inv(
+            &format!("{name} is a regular file, not a symbolic link"),
+            false,
+            "",
+        );
+        return None;
+    }
+    verify::load_pcap(r, &d.join(name))
+}
+
 /// Lab-isolation checks that need nothing but the pcaps: a frame on the uplink (stored, or counted by tcpdump), a
 /// SYN that is not the scanner's. They cannot be hidden by any other missing or wrong file.
-fn safety(r: &mut Run, plan: Plan, d: &Path, peer: Option<&Frames>, oracle: Option<&Frames>) {
+fn safety(
+    r: &mut Run,
+    plan: Plan,
+    d: &Path,
+    links: &[String],
+    peer: Option<&Frames>,
+    oracle: Option<&Frames>,
+) {
     let st = stand(plan);
     let lan = match plan {
         Plan::Linux => None,
@@ -1243,14 +1705,23 @@ fn safety(r: &mut Run, plan: Plan, d: &Path, peer: Option<&Frames>, oracle: Opti
         Plan::Macos | Plan::MacosRoot => Some(("uplink", "uplink.pcap", "uplink.err")),
     };
     if let Some((lan, pcap_name, err)) = lan {
-        let up = verify::load_pcap(r, &d.join(pcap_name));
+        let up = capture(r, d, pcap_name, links);
+        let linked = links.iter().any(|l| l == err);
         // macOS counts `captured` (its `received by filter` is taken before the filter), Linux hosts `received`.
-        let counted = if plan == Plan::Windows {
+        let counted = if linked {
+            None
+        } else if plan == Plan::Windows {
             verify::eno1_err_received(d)
         } else {
             captured_in(d, err)
         };
-        if !d.join(err).exists() {
+        if linked {
+            r.inv(
+                &format!("{err} is a regular file, not a symbolic link"),
+                false,
+                "",
+            );
+        } else if !d.join(err).exists() {
             r.add(&format!("{err} present"), NOT_RUN, "missing", false);
         } else if counted.is_none() {
             r.inv(&format!("{err} holds tcpdump's statistics"), false, "");
@@ -1327,6 +1798,14 @@ fn witness(
     );
 }
 
+/// Does a file carry one of [`EVIDENCE_EXTENSIONS`]? A file without an extension (`README`, `.DS_Store`) does not.
+fn allowed_extension(f: &str) -> bool {
+    Path::new(f)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| EVIDENCE_EXTENSIONS.contains(&e))
+}
+
 /// The evidence gate: hashes, file names and extensions, the stand's own record.
 fn gate(r: &mut Run, plan: Plan, d: &Path, files: &[String]) {
     match hashes_match_tree(d, true) {
@@ -1343,15 +1822,7 @@ fn gate(r: &mut Run, plan: Plan, d: &Path, files: &[String]) {
             false,
         ),
     }
-    let odd: Vec<&String> = files
-        .iter()
-        .filter(|f| {
-            !Path::new(f)
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| EVIDENCE_EXTENSIONS.contains(&e))
-        })
-        .collect();
+    let odd: Vec<&String> = files.iter().filter(|f| !allowed_extension(f)).collect();
     r.inv(
         "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
         odd.is_empty(),
@@ -1404,86 +1875,6 @@ fn gate(r: &mut Run, plan: Plan, d: &Path, files: &[String]) {
         } else {
             r.inv(&label, ok, v["raw_run_allowed"].to_string());
         }
-    }
-}
-
-/// Is `expect.json` the case as planned on this stand? Returns the problems.
-fn expect_problems(plan: Plan, tag: &str, kind: CaseKind, x: &ExpectRecord) -> Vec<String> {
-    let st = stand(plan);
-    let mut p = Vec::new();
-    let mut need = |ok: bool, what: &str| {
-        if !ok {
-            p.push(what.to_owned());
-        }
-    };
-    need(x.tag == tag, "tag");
-    need(x.kind == kind, "kind");
-    need(x.preflight == preflight_expectation(tag), "preflight");
-    let fail_text = x.refusal.as_ref().map(|f| f.fail.is_some());
-    match kind {
-        CaseKind::Scan | CaseKind::Parity => need(
-            x.detection.as_ref().is_some_and(|d| d.router_mac.is_some())
-                && x.refusal.is_none()
-                && x.iflist.is_none(),
-            "a scan expects a detection with a router-mac and no refusal",
-        ),
-        CaseKind::ArpTimeout => need(
-            x.detection
-                .as_ref()
-                .is_some_and(|d| d.router_mac.is_none() && d.router_ip.is_some())
-                && fail_text == Some(true)
-                && x.iflist.is_none(),
-            "an ARP timeout expects the detection up to router-ip and the refusal text",
-        ),
-        CaseKind::Refusal => need(
-            fail_text == Some(tag != "w08b_restricted_scan") && x.iflist.is_none(),
-            "a refusal expects its text (any refusal only for w08b)",
-        ),
-        CaseKind::Iflist => need(
-            x.iflist.as_ref() == Some(&pinned_iflist(plan, tag))
-                && x.detection.is_none()
-                && x.refusal.is_none(),
-            "--iflist expects the stand NIC line",
-        ),
-    }
-    if let Some(dx) = &x.detection {
-        need(
-            dx.interface.value == st.iface
-                && dx.source_mac.value == dash(st.scanner_mac)
-                && dx.source_ip.value == st.scanner_ip.to_string(),
-            "the detection is not the stand's NIC, MAC and address",
-        );
-        need(
-            dx.router_mac.as_ref().is_none_or(|m| {
-                m.value == dash(st.peer_mac) && matches!(m.source.as_str(), "arp" | "given")
-            }),
-            "router-mac is not the stand's next hop",
-        );
-        need(
-            dx.router_ip
-                .as_ref()
-                .is_none_or(|i| i.value.parse().is_ok_and(stand_ipv4)),
-            "router-ip is off the stand",
-        );
-        if tag == "m10_root_auto_mac" {
-            need(
-                dx.source_mac.source == "detected",
-                "the root case must detect the source MAC",
-            );
-        }
-    }
-    p
-}
-
-/// Is the argv the kind of run the case is?
-fn argv_fits(a: &Args, kind: CaseKind) -> bool {
-    if kind == CaseKind::Iflist {
-        a == &Args {
-            iflist: true,
-            ..Args::default()
-        }
-    } else {
-        !a.iflist && !a.offline && !a.targets.is_empty() && !a.ports.is_empty()
     }
 }
 
@@ -1555,10 +1946,10 @@ fn argv_agreement(a: &Args, det: &DetectedRecord) -> Vec<String> {
     p
 }
 
-/// Everything one judgement needs, read once.
+/// Everything one judgement needs, read once. `expect` is the case table's entry, never the run's own file.
 struct Ev<'a> {
     plan: Plan,
-    tag: &'a str,
+    tag: &'static str,
     kind: CaseKind,
     st: Stand,
     n: Names,
@@ -1566,34 +1957,43 @@ struct Ev<'a> {
     oracle: Option<&'a Frames>,
     argv: Option<ArgvRecord>,
     args: Option<Args>,
-    expect: Option<ExpectRecord>,
+    expect: ExpectRecord,
     exit: Option<i32>,
     det: Option<DetectedRecord>,
     stdout: Option<String>,
 }
 
-fn verify_run(root: &Path, plan: Plan, tag: &str) -> Run {
+/// Judge `runs/<tag>/` against its entry of the case table. `root_links` are the symbolic links of the whole
+/// evidence directory (relative paths); none is ever followed.
+fn verify_run(root: &Path, spec: &CaseSpec, root_links: &[String]) -> Run {
+    let (plan, tag, kind) = (spec.plan, spec.tag, spec.kind);
     let mut r = Run::new(tag);
+    let rel = format!("runs/{tag}");
+    if root_links.iter().any(|l| l == "runs" || *l == rel) {
+        r.inv(
+            "the run directory is a real directory, not a symbolic link",
+            false,
+            rel,
+        );
+        return r;
+    }
     let d = root.join("runs").join(tag);
     if !d.is_dir() {
         r.add("run directory present", NOT_RUN, "missing", false);
         return r;
     }
-    let Some(kind) = case_kind(tag) else {
-        r.add("a planned case", INVALID, tag, false);
-        return r;
-    };
+    let t = tree(&d);
     let st = stand(plan);
     let n = names(plan);
     // ---- safety: independent of every other file
     r.safety(
         "no compressed capture in the run directory",
-        !has_compressed_capture(&d),
+        !t.files.iter().chain(&t.links).any(|f| f.ends_with(".gz")),
         "captures are stored uncompressed; the verifier has no decompression",
     );
-    let peer = verify::load_pcap(&mut r, &d.join(PEER_PCAP));
+    let peer = capture(&mut r, &d, PEER_PCAP, &t.links);
     let oracle = if kind == CaseKind::Parity {
-        verify::load_pcap(&mut r, &d.join(ORACLE_PCAP))
+        capture(&mut r, &d, ORACLE_PCAP, &t.links)
     } else {
         None
     };
@@ -1601,49 +2001,57 @@ fn verify_run(root: &Path, plan: Plan, tag: &str) -> Run {
         &mut r,
         plan,
         &d,
+        &t.links,
         peer.as_ref().map(|p| &p.0),
         oracle.as_ref().map(|p| &p.0),
     );
+    // A link may lead out of the evidence directory or into a loop: nothing more is read.
+    if !t.links.is_empty() {
+        r.inv(
+            "no symbolic link in the run directory (links are never followed)",
+            false,
+            format!("{:?}", t.links),
+        );
+        return r;
+    }
     // ---- the evidence gate
-    let files = relative_files(&d);
-    gate(&mut r, plan, &d, &files);
+    gate(&mut r, plan, &d, &t.files);
     if let Some(p) = &peer {
         witness(&mut r, &d, PEER_PCAP, CAPTURE_JSON, p, &st);
     }
     if let Some(o) = &oracle {
         witness(&mut r, &d, ORACLE_PCAP, ORACLE_CAPTURE_JSON, o, &st);
     }
-    privacy(&mut r, &d, &files);
-    // ---- the case definition
+    privacy(&mut r, &d, &t.files);
+    // ---- the case: argv.json and expect.json are exactly the table's
+    let want = spec.expect();
     let argv: Option<ArgvRecord> = typed(&mut r, &d, ARGV_JSON);
     let expect: Option<ExpectRecord> = typed(&mut r, &d, EXPECT_JSON);
+    let argv_ok = argv.as_ref().is_some_and(|a| a.argv == spec.argv());
+    if let Some(a) = &argv {
+        r.inv(
+            "argv.json is the case's argv in the case table",
+            argv_ok,
+            format!("{:?}, table {:?}", a.argv, spec.argv()),
+        );
+    }
+    let expect_ok = expect.as_ref() == Some(&want);
+    if expect.is_some() {
+        r.inv(
+            "expect.json equals the case table's entry",
+            expect_ok,
+            format!("table {want:?}"),
+        );
+    }
     let args = match argv.as_ref().map(|a| parse_argv(&a.argv)) {
-        Some(Ok(a)) => {
-            r.inv(
-                "argv.json is the kind of run the case is",
-                argv_fits(&a, kind),
-                format!("{a:?}"),
-            );
-            Some(a)
-        }
+        Some(Ok(a)) => Some(a),
         Some(Err(e)) => {
             r.inv("argv.json holds only options the verifier models", false, e);
             None
         }
         None => None,
     };
-    if let Some(x) = &expect {
-        let p = expect_problems(plan, tag, kind, x);
-        r.inv(
-            "expect.json is the case as planned on this stand",
-            p.is_empty(),
-            p.join("; "),
-        );
-    }
-    r.argv_ok = args.as_ref().is_some_and(|a| argv_fits(a, kind))
-        && expect
-            .as_ref()
-            .is_some_and(|x| expect_problems(plan, tag, kind, x).is_empty());
+    r.argv_ok = argv_ok && expect_ok && args.is_some();
     // ---- what the scanner wrote
     let exit = need(&mut r, &d, n.exit).and_then(|t| {
         let rc = parse_exit(&t);
@@ -1685,19 +2093,25 @@ fn verify_run(root: &Path, plan: Plan, tag: &str) -> Run {
     } else {
         need(&mut r, &d, n.stdout)
     };
-    if let Some(want) = preflight_expectation(tag)
-        && let Some(t) = need(&mut r, &d, PREFLIGHT_TXT)
+    if let Some(pre) = &want.preflight
+        && let Some(text) = need(&mut r, &d, PREFLIGHT_TXT)
     {
-        let ok = parse_preflight(&t).is_ok_and(|(rc, p)| match &want {
+        // The NIC must be the one the route to the case's first target names, not one given on the command line.
+        let ok = parse_preflight(&text).is_ok_and(|(rc, p)| match pre {
             ExpectPreflight::Interface(name) => {
-                rc == 0 && p.interface.is_some_and(|i| i.value == *name)
+                rc == 0
+                    && p.interface
+                        == Some(Sourced {
+                            value: name.clone(),
+                            source: format!("detected: route to {}", spec.first_target()),
+                        })
             }
             ExpectPreflight::Refusal(text) => rc == 1 && p.fail.as_deref() == Some(text),
         });
         r.check(
             "preflight equals the expected detection of the case",
             ok,
-            format!("expected {want:?}"),
+            format!("expected {pre:?}"),
             NOT_RUN,
             false,
         );
@@ -1712,7 +2126,7 @@ fn verify_run(root: &Path, plan: Plan, tag: &str) -> Run {
         oracle: oracle.as_ref().map(|p| &p.0),
         argv,
         args,
-        expect,
+        expect: want,
         exit,
         det,
         stdout,
@@ -1755,7 +2169,8 @@ fn behaviour(r: &mut Run, ev: &Ev, d: &Path) {
             );
         }
     }
-    let (Some(x), Some(det)) = (&ev.expect, &ev.det) else {
+    let x = &ev.expect;
+    let Some(det) = &ev.det else {
         return;
     };
     if ev.kind == CaseKind::Iflist {
@@ -2134,11 +2549,22 @@ fn results(r: &mut Run, ev: &Ev, det: &DetectedRecord, w: &Wire) {
 }
 
 fn parity(r: &mut Run, ev: &Ev, d: &Path, w: &Wire) {
-    let o_stdout = need(r, d, "oracle/stdout.txt");
-    need(r, d, "oracle/stderr.txt");
-    let o_exit = need(r, d, "oracle/exit.txt").and_then(|t| parse_exit(&t));
+    let o_stdout = need(r, d, ORACLE_STDOUT);
+    need(r, d, ORACLE_STDERR);
+    let o_exit = need(r, d, ORACLE_EXIT).and_then(|t| {
+        let rc = parse_exit(&t);
+        if rc.is_none() {
+            r.inv(
+                &format!("{ORACLE_EXIT} holds an exit code"),
+                false,
+                t.trim(),
+            );
+        }
+        rc
+    });
+    // An oracle that failed is a broken stand, not a finding about rmasscan.
     if let Some(rc) = o_exit {
-        r.beh("the oracle exited 0", rc == 0, rc);
+        r.inv("the oracle exited 0", rc == 0, rc);
     }
     let Some(ofr) = ev.oracle else { return };
     let o = classify(ofr, ev.st.scanner_mac);
@@ -2185,7 +2611,10 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
             "",
         );
     }
-    let want = pinned_iflist(ev.plan, ev.tag);
+    let want = ev.expect.iflist.clone().unwrap_or(ExpectIflist {
+        name: String::new(),
+        mac: String::new(),
+    });
     if let Some(rec) = typed::<IflistRecord>(r, d, IFLIST_JSON) {
         r.beh("--iflist exited 0 (iflist.json rc)", rec.rc == 0, rec.rc);
         r.beh(
@@ -2236,7 +2665,8 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
     if ev.tag == "l12_iflist"
         && let Some(o) = typed::<IflistRecord>(r, d, ORACLE_IFLIST_JSON)
     {
-        r.beh(
+        // The oracle's listing proves the stand, not rmasscan.
+        r.inv(
             "the oracle's --iflist exited 0 and listed at least two lines",
             o.rc == 0 && o.lines >= 2,
             format!("rc {}, lines {}", o.rc, o.lines),
@@ -2253,38 +2683,34 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
 
 // ------------------------------------------------------------------ the directory
 
-/// Lab-isolation findings of every directory the plan does not judge itself (unplanned tags, aborted or discarded
-/// runs, work directories): only their captures are read.
-fn stray_scan(root: &Path, plan: Option<Plan>, tags: &[&str]) -> Vec<Value> {
-    fn dirs(d: &Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(rd) = fs::read_dir(d) else { return };
-        for e in rd.flatten() {
-            if e.path().is_dir() {
-                out.push(e.path());
-                dirs(&e.path(), out);
-            }
-        }
-    }
-    let mut all = Vec::new();
-    dirs(root, &mut all);
-    all.sort();
-    let planned: Vec<std::path::PathBuf> = tags.iter().map(|t| root.join("runs").join(t)).collect();
+/// Lab-isolation findings of every directory the plan does not judge itself (the root, unplanned tags, aborted or
+/// discarded runs, work directories): only their captures are read, and only those that are regular files.
+fn stray_scan(root: &Path, plan: Option<Plan>, tags: &[&'static str], t: &Tree) -> Vec<Value> {
+    let planned = |rel: &str| {
+        tags.iter()
+            .any(|tag| rel == format!("runs/{tag}") || rel.starts_with(&format!("runs/{tag}/")))
+    };
     let mut out = Vec::new();
-    for d in all {
-        if planned.iter().any(|p| d.starts_with(p)) {
+    for dir in std::iter::once(String::new()).chain(t.dirs.iter().cloned()) {
+        if planned(&dir) {
             continue;
         }
-        let present = |n: &str| d.join(n).exists();
+        let path = |n: &str| {
+            if dir.is_empty() {
+                n.to_owned()
+            } else {
+                format!("{dir}/{n}")
+            }
+        };
+        let present = |n: &str| t.files.contains(&path(n));
         if !["uplink.pcap", "eno1.pcap", PEER_PCAP, ORACLE_PCAP]
             .iter()
             .any(|n| present(n))
         {
             continue;
         }
-        let name = d
-            .strip_prefix(root)
-            .map_or(String::new(), |p| p.to_string_lossy().into_owned());
-        let mut r = Run::new(&name);
+        let d = root.join(&dir);
+        let mut r = Run::new(if dir.is_empty() { "." } else { &dir });
         r.argv_ok = true;
         for (lan, pcap_name) in [("uplink", "uplink.pcap"), ("eno1", "eno1.pcap")] {
             if present(pcap_name) {
@@ -2319,17 +2745,27 @@ fn stray_scan(root: &Path, plan: Option<Plan>, tags: &[&str]) -> Vec<Value> {
     out
 }
 
-/// Judge an evidence directory: the manifest, every planned case, and a safety walk of everything else.
+/// Judge an evidence directory: the manifest, every planned case, and a safety walk of everything else. Symbolic
+/// links are never followed.
 pub fn verify_dir(root: &Path) -> Value {
     let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[],"aborted":[]});
+    let t = tree(root);
     let mut m = Run::new("manifest");
     m.argv_ok = true;
     m.safety(
         "no compressed capture anywhere in the evidence directory",
-        !has_compressed_capture(root),
+        !t.files.iter().chain(&t.links).any(|f| f.ends_with(".gz")),
         "captures are stored uncompressed; the verifier has no decompression",
     );
-    let plan = read_json(root.join(MANIFEST_JSON))
+    m.inv(
+        "no symbolic link in the evidence directory (links are never followed)",
+        t.links.is_empty(),
+        format!("{:?}", t.links),
+    );
+    let manifest_linked = t.links.iter().any(|l| l == MANIFEST_JSON);
+    let plan = (!manifest_linked)
+        .then(|| read_json(root.join(MANIFEST_JSON)))
+        .flatten()
         .and_then(|v| serde_json::from_value::<Manifest>(v).ok())
         .map(|x| x.autodetect);
     m.check(
@@ -2339,21 +2775,34 @@ pub fn verify_dir(root: &Path) -> Value {
         NOT_RUN,
         false,
     );
-    let tags = plan.map_or(&[][..], planned_tags);
-    // Every text file outside the planned run directories is evidence too (the verifier's own verdict.json is not).
-    let outside: Vec<String> = relative_files(root)
-        .into_iter()
+    let tags = plan.map_or_else(Vec::new, planned_tags);
+    // Every file outside the planned run directories is evidence too (the verifier's own verdict.json is not): it
+    // carries an allowed extension and passes the privacy scan.
+    let outside: Vec<String> = t
+        .files
+        .iter()
         .filter(|f| {
-            f != "verdict.json" && !tags.iter().any(|t| f.starts_with(&format!("runs/{t}/")))
+            *f != "verdict.json"
+                && !tags
+                    .iter()
+                    .any(|tag| f.starts_with(&format!("runs/{tag}/")))
         })
+        .cloned()
         .collect();
+    let odd: Vec<&String> = outside.iter().filter(|f| !allowed_extension(f)).collect();
+    m.inv(
+        "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md)",
+        odd.is_empty(),
+        format!("{odd:?}"),
+    );
     privacy(&mut m, root, &outside);
-    let unplanned: Vec<String> = fs::read_dir(root.join("runs"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !tags.contains(&n.as_str()))
+    let unplanned: Vec<&str> = t
+        .dirs
+        .iter()
+        .chain(&t.files)
+        .chain(&t.links)
+        .filter_map(|p| p.strip_prefix("runs/"))
+        .filter(|p| !p.contains('/') && !tags.contains(p))
         .collect();
     m.inv(
         "runs/ holds only the planned case directories",
@@ -2362,10 +2811,14 @@ pub fn verify_dir(root: &Path) -> Value {
     );
     let mut runs = vec![m.summary()];
     if let Some(plan) = plan {
-        runs.extend(tags.iter().map(|t| verify_run(root, plan, t).summary()));
+        runs.extend(
+            cases(plan)
+                .iter()
+                .map(|spec| verify_run(root, spec, &t.links).summary()),
+        );
     }
     result["runs"] = json!(runs);
-    result["safety_scan"] = json!(stray_scan(root, plan, tags));
+    result["safety_scan"] = json!(stray_scan(root, plan, &tags, &t));
     verify::finish(result)
 }
 

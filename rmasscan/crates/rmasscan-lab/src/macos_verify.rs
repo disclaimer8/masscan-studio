@@ -313,25 +313,52 @@ fn hashes_match(d: &Path) -> Result<(), String> {
     hashes_match_tree(d, false)
 }
 
-/// Every file below `d`, as relative paths joined with `/`, sorted (directories are walked, not listed).
-pub(crate) fn relative_files(d: &Path) -> Vec<String> {
-    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+/// The entries below a directory, as relative paths joined with `/`, sorted. A symbolic link is listed in
+/// `links` and never followed (it could lead out of the evidence or into a loop); real directories are walked.
+#[derive(Debug, Default)]
+pub(crate) struct Tree {
+    pub(crate) files: Vec<String>,
+    pub(crate) dirs: Vec<String>,
+    pub(crate) links: Vec<String>,
+}
+
+pub(crate) fn tree(d: &Path) -> Tree {
+    fn walk(base: &Path, dir: &Path, t: &mut Tree) {
         let Ok(rd) = fs::read_dir(dir) else { return };
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir() {
-                walk(base, &p, out);
-            } else if let Ok(rel) = p.strip_prefix(base) {
-                let parts: Vec<String> = rel
-                    .components()
-                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                    .collect();
-                out.push(parts.join("/"));
+            let Ok(rel) = p.strip_prefix(base) else {
+                continue;
+            };
+            let rel = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            // `DirEntry::file_type` does not follow a link.
+            match e.file_type() {
+                Ok(ft) if ft.is_symlink() => t.links.push(rel),
+                Ok(ft) if ft.is_dir() => {
+                    t.dirs.push(rel);
+                    walk(base, &p, t);
+                }
+                _ => t.files.push(rel),
             }
         }
     }
-    let mut out = Vec::new();
-    walk(d, d, &mut out);
+    let mut t = Tree::default();
+    walk(d, d, &mut t);
+    t.files.sort();
+    t.dirs.sort();
+    t.links.sort();
+    t
+}
+
+/// Every file and link below `d` ([`tree`]), sorted.
+pub(crate) fn relative_files(d: &Path) -> Vec<String> {
+    let t = tree(d);
+    let mut out = t.files;
+    out.extend(t.links);
     out.sort();
     out
 }
@@ -380,6 +407,9 @@ pub(crate) fn hashes_match_tree(d: &Path, nested: bool) -> Result<(), String> {
         return Err(format!("unlisted files {extra:?}, missing files {gone:?}"));
     }
     for (name, h) in &want {
+        if nested && fs::symlink_metadata(d.join(name)).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("{name} is a symbolic link; it is not followed"));
+        }
         let bytes = fs::read(d.join(name)).map_err(|e| format!("{name}: {e}"))?;
         if sha(&bytes) != *h {
             return Err(format!(

@@ -852,3 +852,21 @@ Fresh Studio tests: 300 passed, 0 failed, 2 ignored; engine: 1416 passed,
 [`2026-10-30-studio-macos-network-native.md`](../docs/experiments/2026-10-30-studio-macos-network-native.md)
 for the reproduction, exact artifacts and remaining work. Other native lifecycle
 cases and physical-network acceptance remain pending.
+
+## 2026-11-03 — optimized packaged GUI on the sealed local fixture
+
+Clean release package at `4fbe472` passed three separately launched native GUI
+cases with independently supervised root packet captures: Complete 96 SYNs /
+96 replies / 96 rows; Stop 5 / 5 / 5 (observed terminal after 49.29275 ms); another
+Complete 96 / 96 / 96. All nine capture/responder children exited 0 unforced;
+every uplink capture had zero matching fixture frames. SQLite integrity and exact
+rows matched the packet reports. Owned fixtures were removed; the retained work
+host stayed ready/idle without another password request.
+
+Exact source, executable/archive hashes, CI provenance, the preceding failed
+attempt and evidence locations are in the
+[GUI/session report](../docs/experiments/2026-11-02-studio-gui-work-session.md).
+This proves isolated fixture execution through the packaged GUI, not physical
+Wi-Fi delivery, same-window native Stop/Start, native Pause/Resume on this package,
+manual keyboard/mouse acceptance or release readiness. See the
+[remaining release checklist](RELEASE-CHECKLIST.md).

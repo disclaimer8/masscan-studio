@@ -70,8 +70,8 @@ Clock/evidence structures were moved without semantic changes into studio-protoc
 for reuse by the GUI and verifier. A regression rejects empty/incomplete rendering
 even when a Controller could otherwise claim completion.
 
-Native packet execution on this new GUI candidate is pending CI admission and the
-live run. This report does not claim general physical-network release readiness,
+The November 3 native runs below passed on the corrected optimized candidate.
+This report does not claim general physical-network release readiness,
 manual mouse/keyboard acceptance, hotel-device scanning, or Windows/Linux native UI
 acceptance. The branch remains fixture-only and must not be distributed or merged.
 
@@ -110,3 +110,63 @@ leave privileged seal reading/pinning and pre-I/O checks in the root helper.
 The independent root supervisor still requires its exact issued ticket when
 accepting evidence. Syntax checks alone do not authenticate the ticket.
 No helper, engine, fixture ownership or packet-verifier policy was weakened.
+
+## November 3: optimized native GUI acceptance
+
+Clean source `4fbe47291d44d9e6d1773b530e8ae5407569dc3a`, release-profile package
+`studio/dist/build-1793704084608/Masscan Studio.app` (`dirty: false`):
+
+| Executable | SHA256 |
+| --- | --- |
+| launcher | `c8856f29196ca7f79a847d71df5ec3e0571b568792d576a43a6977a99fcf3606` |
+| GUI | `45bc45013eb0fa99bd6cd71e811d87bd14db61907d5a54368527dca37a5daf9c` |
+| helper | `5a36e5206db04e9a4314b9890f9ddecfedff87e107ee7798e9f43623eab70238` |
+| fixture tool | `89cf345602bb9c7f9de6711e35bf031a5a87f35db5d0899506e7df8f43c55018` |
+
+Studio CI `41624845151` passed on macOS, Windows and Linux at this exact source.
+Native admission reused successful engine CI `41375100245` at `4a2883e`: both
+commits have identical rmasscan tree `168dd7b2a0ec2d33c6a03a601c3d636eb45a71f5`
+and engine workflow blob `3d9e50a4213c23935b78aed73a72c6eef16ef8ce`.
+The admission script verifies both identities. The GUI-only boundary correction
+passed 39 GUI unit tests, the launcher integration test, Clippy and formatting.
+The preceding full isolated Studio run passed 336 tests with two ignored.
+
+| Separate GUI launch | Peer SYNs / replies | Saved rows (open / closed) | Outcome |
+| --- | --- | --- | --- |
+| Complete first | 96 / 96 | 96 (48 / 48) | Completed, PASS |
+| Stop while running | 5 / 5 | 5 (1 / 4) | Stopped, PASS |
+| Complete again | 96 / 96 | 96 (48 / 48) | Completed, PASS |
+
+Stop callback to observed terminal state was 49.29275 ms in this single run.
+Each case used a fresh fixture generation and history. The root supervisor
+verified protected original captures before exit 0; export and independent
+offline verification also exited 0. All nine capture/responder children exited 0
+without forced termination. Manifests report no failure and clean children.
+Independent SQLite checks passed integrity, exact result tuples, terminal status
+and report/attempt agreement. Rendered terminal snapshots show 96, 5 and 96 rows.
+
+Every uplink pcap is a 24-byte header with zero matching fixture frames. General
+uplink receive counters were 10084, 915 and 3747; this is not a claim of zero
+background Wi-Fi traffic. Owned fixture cleanup succeeded after each case;
+`feth4203` and `feth4204` were absent afterward. The same administrative host
+PID 49278 remained ready with active 0, without another OS authorization.
+
+Local evidence is under
+`.superpowers/sdd/2026-11-02-studio-gui-session/native-retry1/`:
+`summary.json`, `verified-stores.json`, per-case protected-original verifier logs,
+exported evidence, offline logs, screenshots and SQLite histories. Raw captures
+remain local. Export archive SHA256 values:
+
+| Case / nonce | Archive SHA256 |
+| --- | --- |
+| Complete / `a8a4a8f25607dc822478267187fa1fdc` | `a5eb535d7f2a4730d8d0dd3e39d7e1d9d591181d474ef00349104fa931f83df3` |
+| Stop / `8e00cdb45d303938c4ef16062aa85465` | `318810cb50498695c19d213e8bfca5b8088699d5f5eb16de5adc117bb1abf4a1` |
+| Complete / `b085ba6c19960b7abf8adbf328a72cad` | `3ff34ee68a53eedf4b51d1dc5221d9527ed390ea38d14e8fa25368e2a62a639f` |
+
+The exact final package also passed the packet-free two-authorizations and
+simulation Complete/Stop/Start scenario (8, 2, 16 rows). Native runs above are
+separate launches: same-window native Stop/Start and native Pause/Resume on this
+package remain untested. Callback automation with rendered snapshots does not
+establish manual keyboard/mouse acceptance or physical Wi-Fi delivery. The app
+was subsequently launched with a private SQLite backup of the last 96-row scan;
+the original evidence database was preserved.

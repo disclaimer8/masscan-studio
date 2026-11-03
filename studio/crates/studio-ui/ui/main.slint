@@ -580,7 +580,7 @@ export component MainWindow inherits Window {
                     ActionButton { text: "Cancel"; enabled: !root.profile-busy; clicked => { root.confirm-profile-delete = false; } }
                     ActionButton { text: "Delete profile"; enabled: !root.profile-busy; clicked => { root.delete-profile(); } }
                 }
-                ComboBox { model: [root.mac-feth-open ? "Mac feth · isolated stand (macOS)" : "Mac feth · not enabled on this OS", "Simulation · no network packets", "Mac network · Wi-Fi / Ethernet"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
+                ComboBox { model: [root.mac-feth-open ? "Mac feth · isolated stand (macOS)" : "Mac feth · not enabled on this OS", "Simulation · no network packets", root.mac-network-open ? "Mac network · local test only" : "Mac network · scanning disabled"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
                 JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
                 HorizontalLayout {
                     spacing: 12px;
@@ -621,7 +621,7 @@ export component MainWindow inherits Window {
                 }
                 HorizontalLayout {
                     spacing: 12px; height: 30px;
-                    Text { text: root.backend-index == 1 ? "Simulation sends no network packets." : root.backend-index == 2 ? (root.mac-network-open ? "Only scan targets you are authorized to test." : "Route checks send no scan packets. Physical Start is disabled in this build.") : "Only scan networks you are authorized to test. This profile uses the isolated feth stand."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                    Text { text: root.backend-index == 1 ? "Simulation sends no network packets." : root.backend-index == 2 ? (root.mac-network-open ? "Only the isolated local test network is enabled in this build." : "Route checks send no scan packets. Physical Start is disabled in this build.") : "Only scan networks you are authorized to test. This profile uses the isolated feth stand."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                     ActionButton { width: 130px; text: root.job-checking ? "Preparing…" : "Check settings"; enabled: !root.job-checking; primary: true; clicked => { root.check-settings(); } }
                     ActionButton { width: 140px; text: "Start scan"; enabled: root.can-start; clicked => { root.run-process-test(); } }
                 }

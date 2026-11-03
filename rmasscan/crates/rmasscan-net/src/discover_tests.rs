@@ -178,7 +178,8 @@ fn local_target_is_refused_with_the_interface_hint() {
         e,
         DetectError::LocalTarget {
             ip: ip(198, 18, 0, 2),
-            ifname: "lo0".into()
+            ifname: "lo0".into(),
+            with_adapter: false,
         }
     );
     assert_eq!(
@@ -196,8 +197,14 @@ fn targets_on_two_interfaces_are_refused() {
         e,
         DetectError::SplitRoutes {
             first: (ip(10, 1, 0, 9), "eth1".into()),
-            last: (ip(11, 0, 0, 1), "eth0".into())
+            last: (ip(11, 0, 0, 1), "eth0".into()),
+            with_adapter: false,
         }
+    );
+    // Без `--adapter` подсказка выбрать интерфейс.
+    assert_eq!(
+        e.to_string(),
+        "FAIL: targets are routed differently (10.1.0.9 via eth1, 11.0.0.1 via eth0)\n    [hint] try \"--interface ethX\""
     );
     // тот же интерфейс, другой шлюз: тоже отказ
     let routes = FakeRoutes::default()
@@ -508,7 +515,8 @@ fn explicit_adapter_with_a_local_route_still_needs_router_ip() {
         e,
         DetectError::LocalTarget {
             ip: ip(198, 18, 0, 2),
-            ifname: "lo0".into()
+            ifname: "lo0".into(),
+            with_adapter: true,
         }
     );
     ov.router_ip = Some(ip(198, 18, 0, 2));
@@ -524,9 +532,10 @@ fn explicit_adapter_with_a_local_route_still_needs_router_ip() {
 }
 
 /// `--adapter` без `--router-ip`/`--router-mac`: следующий хоп ищется маршрутом к целям, поэтому отказы маршрута
-/// `SplitRoutes` и `LocalTarget` проходят и с `--adapter`, с теми же текстами и подсказками.
+/// `SplitRoutes` и `LocalTarget` проходят и с `--adapter`: та же фраза, но подсказки маршрутизатора C (интерфейс уже
+/// задан).
 #[test]
-fn explicit_adapter_without_router_overrides_keeps_the_route_refusals() {
+fn explicit_adapter_without_router_overrides_split_routes_point_at_the_router_flags() {
     let (routes, ifs) = eth0_world();
     let mut ov = Overrides {
         adapter: Some("eth0".into()),
@@ -538,19 +547,24 @@ fn explicit_adapter_without_router_overrides_keeps_the_route_refusals() {
         e,
         DetectError::SplitRoutes {
             first: (ip(10, 1, 0, 9), "eth1".into()),
-            last: (ip(11, 0, 0, 1), "eth0".into())
+            last: (ip(11, 0, 0, 1), "eth0".into()),
+            with_adapter: true,
         }
     );
     assert_eq!(
         e.to_string(),
-        "FAIL: targets are routed differently (10.1.0.9 via eth1, 11.0.0.1 via eth0)\n    [hint] try \"--interface ethX\""
+        "FAIL: targets are routed differently (10.1.0.9 via eth1, 11.0.0.1 via eth0)\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface"
     );
     ov.router_ip = Some(ip(192, 0, 2, 1));
     assert!(
         detect(&t, &ov, &routes, &ifs).is_ok(),
         "--router-ip skips the route"
     );
+}
 
+/// То же для `LocalTarget` на пути `--adapter`: фраза та же, подсказки маршрутизатора C.
+#[test]
+fn explicit_adapter_without_router_overrides_local_target_points_at_the_router_flags() {
     let local = FakeRoutes::default().rule(
         ip(0, 0, 0, 0),
         ip(255, 255, 255, 255),
@@ -567,7 +581,7 @@ fn explicit_adapter_without_router_overrides_keeps_the_route_refusals() {
     let t = targets(ip(198, 18, 0, 2), ip(198, 18, 0, 2));
     assert_eq!(
         detect(&t, &ov, &local, &ifs).unwrap_err().to_string(),
-        "FAIL: 198.18.0.2 is an address of this host (route via lo0)\n    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\""
+        "FAIL: 198.18.0.2 is an address of this host (route via lo0)\n    [hint] try \"--router-ip 192.0.2.1\" to specify different router\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP\n    [hint] try \"--interface eth0\" to change interface"
     );
 }
 
@@ -678,7 +692,8 @@ fn no_route_and_local_route_on_the_last_target_are_refused() {
         detect(&t, &Overrides::default(), &local_last, &ifs).unwrap_err(),
         DetectError::LocalTarget {
             ip: ip(2, 0, 0, 1),
-            ifname: "lo".into()
+            ifname: "lo".into(),
+            with_adapter: false,
         }
     );
 }
@@ -875,6 +890,7 @@ fn every_detect_error_text_contains_its_masscan_hint() {
             DetectError::LocalTarget {
                 ip: a,
                 ifname: "lo0".into(),
+                with_adapter: false,
             },
             vec![
                 "is an address of this host (route via lo0)\n    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\"",
@@ -884,6 +900,7 @@ fn every_detect_error_text_contains_its_masscan_hint() {
             DetectError::SplitRoutes {
                 first: (a, "eth0".into()),
                 last: (ip(192, 0, 2, 2), "eth1".into()),
+                with_adapter: false,
             },
             vec![
                 "192.0.2.1 via eth0",

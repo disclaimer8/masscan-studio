@@ -112,15 +112,28 @@ pub enum DetectError {
     #[error("FAIL: could not determine default interface\n    [hint] try \"--interface ethX\"")]
     NoRoute(Ipv4Addr),
     #[error(
-        "FAIL: {ip} is an address of this host (route via {ifname})\n    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\""
+        "FAIL: {ip} is an address of this host (route via {ifname}){}",
+        if *.with_adapter { ROUTER_HINTS } else { "\n    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\"" }
     )]
-    LocalTarget { ip: Ipv4Addr, ifname: String },
-    #[error("FAIL: targets are routed differently ({} via {}, {} via {})\n    [hint] try \"--interface ethX\"", .first.0, .first.1, .last.0, .last.1)]
+    /// Цель это адрес самого хоста. `with_adapter`: отказ на пути `--adapter` (как у `SplitRoutes`), интерфейс уже
+    /// задан, поэтому вместо `--interface ethX` подсказки маршрутизатора C.
+    LocalTarget {
+        ip: Ipv4Addr,
+        ifname: String,
+        with_adapter: bool,
+    },
+    #[error(
+        "FAIL: targets are routed differently ({} via {}, {} via {}){}",
+        .first.0, .first.1, .last.0, .last.1,
+        if *.with_adapter { ROUTER_HINTS } else { "\n    [hint] try \"--interface ethX\"" }
+    )]
     /// Первая и последняя цель идут разными маршрутами (интерфейс или шлюз): без `--adapter` при выборе интерфейса, с
     /// `--adapter` при поиске следующего хопа, если не заданы `--router-ip`/`--router-mac` (как и `LocalTarget`).
+    /// `with_adapter`: интерфейс уже задан, поэтому вместо `--interface ethX` подсказки маршрутизатора C.
     SplitRoutes {
         first: (Ipv4Addr, String),
         last: (Ipv4Addr, String),
+        with_adapter: bool,
     },
     #[error("FAIL: no such interface \"{0}\"\n    [hint] did you spell the name correctly?")]
     NoSuchAdapter(String),
@@ -199,14 +212,20 @@ pub fn usable_source_mac(m: [u8; 6]) -> bool {
     m != [0; 6] && m != DARWIN_PLACEHOLDER_MAC && m[0] & 1 == 0
 }
 
-/// Маршрут к целям-пробам: первая и последняя цель обязаны дать один интерфейс и один шлюз.
-fn route_for_targets(t: &Targets, routes: &dyn RouteTable) -> Result<Route, DetectError> {
+/// Маршрут к целям-пробам: первая и последняя цель обязаны дать один интерфейс и один шлюз. `with_adapter`: зов с
+/// пути `--adapter` (поиск следующего хопа), влияет только на подсказки отказов.
+fn route_for_targets(
+    t: &Targets,
+    routes: &dyn RouteTable,
+    with_adapter: bool,
+) -> Result<Route, DetectError> {
     let one = |ip: Ipv4Addr| -> Result<Route, DetectError> {
         let r = routes.lookup(ip)?.ok_or(DetectError::NoRoute(ip))?;
         if r.local {
             return Err(DetectError::LocalTarget {
                 ip,
                 ifname: r.ifname,
+                with_adapter,
             });
         }
         Ok(r)
@@ -218,6 +237,7 @@ fn route_for_targets(t: &Targets, routes: &dyn RouteTable) -> Result<Route, Dete
             return Err(DetectError::SplitRoutes {
                 first: (t.first, first.ifname),
                 last: (t.last, last.ifname),
+                with_adapter,
             });
         }
     }
@@ -256,7 +276,7 @@ fn choose(
             )
         }
         None => {
-            let r = route_for_targets(t, routes)?;
+            let r = route_for_targets(t, routes, false)?;
             let found = list.into_iter().find(|i| i.index == r.ifindex);
             (
                 found.ok_or_else(|| DetectError::NoSuchAdapter(r.ifname.clone()))?,
@@ -317,7 +337,7 @@ fn next_hop(
     }
     let route = match &c.route {
         Some(r) => r.clone(),
-        None => match route_for_targets(t, routes) {
+        None => match route_for_targets(t, routes, true) {
             // `--adapter` без маршрута к цели: поведение C на Linux, отказ маршрутизатора
             Err(DetectError::NoRoute(_)) => {
                 return Err(DetectError::NoGateway {

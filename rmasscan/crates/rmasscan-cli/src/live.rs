@@ -77,9 +77,10 @@ fn refusal(e: impl std::fmt::Display) -> String {
     format!("{REFUSAL_PREFIX}{e}")
 }
 
-/// `--offline` с явными `--adapter-ip`, `--adapter-mac` и `--source-port` (решение 6): ОС не опрашивается вовсе
-/// (golden-тесты герметичны). Без любого из трёх идёт обычное обнаружение только чтением, поэтому `--offline`
-/// годится как preflight живого прогона (R1). `port` это источник порта до подстановки умолчания.
+/// `--offline` с явными ненулевыми `--adapter-ip` и `--adapter-mac` и с `--source-port` (решение 6): ОС не
+/// опрашивается вовсе (golden-тесты герметичны). Нулевой адрес или MAC значит «не задан», как в C (`effective()`
+/// их отбрасывает). Без любого из трёх идёт обычное обнаружение только чтением, поэтому `--offline` годится как
+/// preflight живого прогона (R1). `port` это источник порта до подстановки умолчания.
 fn hermetic_offline(eff: &EffectiveConfig, port: Source) -> bool {
     eff.offline()
         && eff.adapter_ip().is_some()

@@ -59,16 +59,16 @@ fn strings(v: &[&str]) -> Vec<String> {
 
 /// One case as the suites define it: the verifier's case table, plus what the simulated run prints.
 #[derive(Clone)]
-struct Case {
-    plan: Plan,
-    tag: &'static str,
-    kind: CaseKind,
-    argv: Vec<String>,
+pub(crate) struct Case {
+    pub(crate) plan: Plan,
+    pub(crate) tag: &'static str,
+    pub(crate) kind: CaseKind,
+    pub(crate) argv: Vec<String>,
     targets: &'static str,
     ports: &'static str,
     /// The `[+]` lines up to `router-ip`/`router-mac (given)` (ARP, seed, source port and finished are added by the run).
     printed: DetectedRecord,
-    expect: ExpectRecord,
+    pub(crate) expect: ExpectRecord,
     /// The address the scanner resolves with ARP (none: `--router-mac`, a refusal or `--iflist`).
     arp_target: Option<Ipv4Addr>,
 }
@@ -224,28 +224,29 @@ fn syn_dst(syn: &[u8]) -> (Ipv4Addr, u16) {
     )
 }
 
-struct OracleSim {
-    stdout: String,
-    stderr: String,
+pub(crate) struct OracleSim {
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
     /// The text of `oracle/exit.txt`.
-    exit: String,
-    pcap: Frames,
+    pub(crate) exit: String,
+    pub(crate) pcap: Frames,
 }
 
-/// One simulated run directory. Fields are mutated by the tests before `write`.
-struct Sim {
-    case: Case,
+/// One simulated run directory. Fields are mutated by the tests before `write`. The suite's tests read its
+/// process outputs (stderr, stdout, exit, captures, preflight) and let the suite write the directory itself.
+pub(crate) struct Sim {
+    pub(crate) case: Case,
     st: Stand,
     det: DetectedRecord,
     extra_stderr: Vec<String>,
-    stdout: Option<String>,
-    exit: i32,
-    peer: Frames,
-    uplink: Frames,
-    oracle: Option<OracleSim>,
+    pub(crate) stdout: Option<String>,
+    pub(crate) exit: i32,
+    pub(crate) peer: Frames,
+    pub(crate) uplink: Frames,
+    pub(crate) oracle: Option<OracleSim>,
     iflist: Option<IflistRecord>,
     oracle_iflist: Option<IflistRecord>,
-    preflight: Option<String>,
+    pub(crate) preflight: Option<String>,
     extra: Vec<(String, Vec<u8>)>,
     omit: Vec<&'static str>,
     plain_names: bool,
@@ -260,7 +261,7 @@ fn arp_request(st: &Stand, target: Ipv4Addr) -> Vec<u8> {
 }
 
 impl Sim {
-    fn new(plan: Plan, tag: &'static str) -> Sim {
+    pub(crate) fn new(plan: Plan, tag: &'static str) -> Sim {
         Sim::build(plan, tag, None)
     }
     /// `arp`: how many scanner ARP requests (default 1 for a scan, 10 for a timeout).
@@ -504,7 +505,7 @@ impl Sim {
     }
 
     /// stderr rendered from the detection record in the CLI's own forms (live.rs), then any extra lines.
-    fn stderr_text(&self) -> String {
+    pub(crate) fn stderr_text(&self) -> String {
         let d = &self.det;
         let mut out = String::new();
         let mut put = |s: String| {
@@ -559,7 +560,7 @@ impl Sim {
         out
     }
 
-    fn witness(fr: &Frames) -> Vec<u8> {
+    pub(crate) fn witness(fr: &Frames) -> Vec<u8> {
         let data = pcap::encode(fr);
         serde_json::to_vec_pretty(&json!({
             "tcpdump_captured": fr.len(), "received_by_filter": fr.len(), "kernel_drops": 0, "interface_drops": 0,
@@ -572,7 +573,7 @@ impl Sim {
     }
 
     /// The run directory's files (relative path, bytes) before hashing.
-    fn files(&self) -> Vec<(String, Vec<u8>)> {
+    pub(crate) fn files(&self) -> Vec<(String, Vec<u8>)> {
         let c = &self.case;
         let guest = c.plan == Plan::Windows && !self.plain_names;
         let name = |n: &str| {

@@ -441,7 +441,7 @@ impl Stand for RealStand {
 
 // ------------------------------------------------------------------ small helpers
 
-fn wait_exit(p: &mut dyn Proc, st: &dyn Stand, polls: u32) -> Option<i32> {
+pub(crate) fn wait_exit(p: &mut dyn Proc, st: &dyn Stand, polls: u32) -> Option<i32> {
     for _ in 0..polls {
         if let Ok(Some(rc)) = p.try_wait() {
             return Some(rc);
@@ -450,7 +450,7 @@ fn wait_exit(p: &mut dyn Proc, st: &dyn Stand, polls: u32) -> Option<i32> {
     }
     p.try_wait().ok().flatten()
 }
-fn wait_file(path: &Path, st: &dyn Stand, polls: u32, needle: Option<&str>) -> bool {
+pub(crate) fn wait_file(path: &Path, st: &dyn Stand, polls: u32, needle: Option<&str>) -> bool {
     for _ in 0..polls {
         if let Ok(t) = fs::read_to_string(path)
             && !t.is_empty()
@@ -563,6 +563,17 @@ pub(crate) fn interlock_stats(err: &str) -> Result<(), String> {
             "uplink interlock: the uplink tcpdump counters (captured, dropped by kernel) are not measured, so {UNPROVEN_MARK}; no further raw run"
         )),
     }
+}
+
+/// The uplink capture: `/usr/sbin/tcpdump` on the default-route interface with the lab filter (everything the lab
+/// may emit). Not promiscuous: the uplink is the user's own NIC, and what is looked for (frames the lab itself
+/// emitted) needs no promiscuous mode.
+pub(crate) fn uplink_tcpdump_argv(uplink_if: &str, pcap: &Path) -> Vec<String> {
+    let filter = mv::uplink_filter(SCANNER_MAC, PEER_MAC);
+    let mut argv = crate::dump::tcpdump_argv_macos(uplink_if, &p2s(pcap), Some(&filter));
+    argv[0] = "/usr/sbin/tcpdump".into();
+    argv.insert(1, "-p".into());
+    argv
 }
 
 /// The binding of the sealed stand: the only thing a scan may be pointed at.
@@ -732,9 +743,10 @@ pub(crate) struct Leftover {
 fn base(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
-/// The processes of a `ps -axo pid,pgid,command` listing that belong to the lab: a `wire_scan`, a `tcpdump`
-/// that names a stand interface or the lab filter, `rmasscan-lab peer listen` and `rmasscan-lab capture dump`.
-/// `own` (this suite) is never a leftover.
+/// The processes of a `ps -axo pid,pgid,command` listing that belong to the lab: a `wire_scan` or an `rmasscan`
+/// (the CLI of the autodetect suite, by name or by the path the suite runs), a `tcpdump` that names a stand
+/// interface or the lab filter, `rmasscan-lab peer listen` and `rmasscan-lab capture dump`. `own` (this suite) is
+/// never a leftover.
 pub(crate) fn lab_leftovers(ps: &str, own: u32, wire_scan: &str) -> Vec<Leftover> {
     let mut out = vec![];
     for line in ps.lines() {
@@ -753,6 +765,7 @@ pub(crate) fn lab_leftovers(ps: &str, own: u32, wire_scan: &str) -> Vec<Leftover
         let has = |w: &str| tokens.contains(&w);
         let lab = base(first) == base(wire_scan)
             || base(first) == "wire_scan"
+            || base(first) == "rmasscan"
             || (base(first) == "tcpdump"
                 && (has(SCANNER_IF)
                     || has(PEER_IF)
@@ -955,14 +968,14 @@ struct Suite<'a> {
 
 /// What one run has started and must stop.
 #[derive(Default)]
-struct Tools {
-    listener: Option<Box<dyn Proc>>,
-    scanner: Option<Box<dyn Proc>>,
-    witness: Option<Box<dyn Proc>>,
-    uplink: Option<Box<dyn Proc>>,
+pub(crate) struct Tools {
+    pub(crate) listener: Option<Box<dyn Proc>>,
+    pub(crate) scanner: Option<Box<dyn Proc>>,
+    pub(crate) witness: Option<Box<dyn Proc>>,
+    pub(crate) uplink: Option<Box<dyn Proc>>,
     sides: Vec<(String, Box<dyn Side>)>,
     /// A frame may exist: the first marker is about to be written.
-    frames_possible: bool,
+    pub(crate) frames_possible: bool,
 }
 /// A run that ends without stopping its tools (a panic, an early return) must not leave a raw sender or a
 /// capture behind: the scanner first, then the witnesses, each with a bounded grace and then SIGKILL of its group.
@@ -1003,86 +1016,275 @@ fn json_line(stdout: &str) -> Option<Value> {
         .and_then(|l| serde_json::from_str(l).ok())
 }
 
+/// `macos-lab status` of the stand `run_id` (with the lab manifest when one is named).
+pub(crate) fn status_argv(exe: &str, run_id: &str, manifest: Option<&str>) -> Vec<String> {
+    let mut a = vec![
+        exe.to_owned(),
+        "macos-lab".into(),
+        "status".into(),
+        "--run-id".into(),
+        run_id.to_owned(),
+    ];
+    if let Some(m) = manifest {
+        a.extend(["--manifest".into(), m.to_owned()]);
+    }
+    a
+}
+/// `macos-lab status`, stored under `name` in `work`; the JSON is returned with its exit code.
+pub(crate) fn lab_status(
+    st: &dyn Stand,
+    argv: &[String],
+    work: &Path,
+    name: &str,
+) -> Result<(i32, Value), String> {
+    let o = st.exec(argv, 60)?;
+    io(fs::write(work.join(name), &o.stdout), name)?;
+    let v = serde_json::from_str::<Value>(&o.stdout).map_err(|e| {
+        format!(
+            "macos-lab status printed no JSON ({e}): {}",
+            o.stderr.trim()
+        )
+    })?;
+    Ok((o.rc, v))
+}
+
+/// The per-run gate (`status-pre.json` in `work`). Without it the run is NOT RUN and no adapter is ever opened.
+/// `tag` is printed as it is in the planned item; `want` is the BPF access the run needs.
+pub(crate) fn gate_status(
+    st: &dyn Stand,
+    argv: &[String],
+    work: &Path,
+    tag: &Value,
+    want: &str,
+) -> Result<Value, SuiteError> {
+    let (rc, v) = lab_status(st, argv, work, "status-pre.json")?;
+    if rc != 0 || v["raw_run_allowed"] != true {
+        let failing: Vec<String> = v["checks"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter(|c| c["ok"] == false)
+                    .map(|c| c["name"].to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        return Err(SuiteError::NotRun(format!(
+            "the stand is not sealed (macos-lab status rc {rc}; failing checks {failing:?}); nothing was started"
+        )));
+    }
+    if v["bpf_access"] != want {
+        return Err(SuiteError::NotRun(format!(
+            "{tag} needs bpf_access {want} but the stand reports {}; the user changes it with macos-lab bpf-access; nothing was started",
+            v["bpf_access"]
+        )));
+    }
+    Ok(v)
+}
+
+/// The macOS Application Firewall can prompt for, or silently block, an unsigned listener; its state is
+/// recorded in `alf.txt` and an enabled firewall refuses the run before anything starts.
+pub(crate) fn application_firewall(st: &dyn Stand, work: &Path) -> Result<(), SuiteError> {
+    let o = st.exec(
+        &[
+            "/usr/libexec/ApplicationFirewall/socketfilterfw".into(),
+            "--getglobalstate".into(),
+        ],
+        20,
+    )?;
+    io(
+        fs::write(
+            work.join("alf.txt"),
+            format!("rc {}\nstdout:\n{}\nstderr:\n{}", o.rc, o.stdout, o.stderr),
+        ),
+        "alf.txt",
+    )?;
+    // Fail closed: only an exit 0 that says the firewall is disabled lets the run start.
+    if !firewall_disabled(o.rc, &o.stdout) {
+        return Err(SuiteError::NotRun(format!(
+            "the macOS Application Firewall is not proven disabled (socketfilterfw rc {}, output {:?}); it can block or prompt for the peer listeners. Turn it off for the session (System Settings, Network, Firewall) and start again; alf.txt has the raw output; nothing was started",
+            o.rc,
+            o.stdout.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// The pair carries no frame of anyone else: the packet counters of feth4201 and feth4202 are read twice,
+/// a pause apart (the seam's, not a timing the test depends on), and must not have moved. A sender the name
+/// based gate cannot know (a test binary, a renamed tool) shows up here.
+pub(crate) fn pair_quiet_gate(st: &dyn Stand) -> Result<(), SuiteError> {
+    let read = || -> Result<Vec<(&str, NetstatCounters)>, String> {
+        [SCANNER_IF, PEER_IF]
+            .into_iter()
+            .map(|i| st.counters(i).map(|c| (i, c)))
+            .collect()
+    };
+    // Up to three windows: background multicast (mDNS) on the pair moves the counters now and then. The pair is
+    // quiet as soon as one window is still; it is refused only when every window moved (fail closed).
+    let mut moved: Vec<String> = Vec::new();
+    for _ in 0..3 {
+        let first = read()?;
+        st.pause(Duration::from_secs(1));
+        let second = read()?;
+        moved = first
+            .iter()
+            .zip(&second)
+            .filter(|(a, b)| a.1 != b.1)
+            .map(|(a, b)| format!("{}: {:?} -> {:?}", a.0, a.1, b.1))
+            .collect();
+        if moved.is_empty() {
+            return Ok(());
+        }
+    }
+    Err(SuiteError::NotRun(format!(
+        "the pair is not quiet (its packet counters moved over about a second: {}): some other sender is active. Find it (a spike, a test, a forgotten tool) and stop it; nothing was started",
+        moved.join("; ")
+    )))
+}
+
+/// Refuse while an earlier `wire_scan` or `rmasscan` (or `scanner`, the binary the suite runs), lab `tcpdump`,
+/// `peer listen` or `capture dump` is alive: a raw sender without a witness would poison the next run (same seed,
+/// same cookies).
+pub(crate) fn leftover_gate(st: &dyn Stand, scanner: &str) -> Result<(), SuiteError> {
+    let o = st.exec(
+        &["/bin/ps".into(), "-axo".into(), "pid,pgid,command".into()],
+        20,
+    )?;
+    // Fail closed: a failing `ps`, or a listing that does not even show this suite, proves nothing.
+    let me = std::process::id();
+    let shows_me = o.stdout.lines().any(|l| {
+        l.split_whitespace()
+            .next()
+            .and_then(|v| v.parse::<u32>().ok())
+            == Some(me)
+    });
+    if o.rc != 0 || !shows_me {
+        return Err(SuiteError::NotRun(format!(
+            "`ps -axo pid,pgid,command` failed or its output is unusable (rc {}, {} bytes, this suite {}), so leftover lab processes cannot be ruled out; nothing was started",
+            o.rc,
+            o.stdout.len(),
+            if shows_me { "listed" } else { "not listed" }
+        )));
+    }
+    let left = lab_leftovers(&o.stdout, std::process::id(), scanner);
+    if left.is_empty() {
+        return Ok(());
+    }
+    let list = left
+        .iter()
+        .map(|l| {
+            format!(
+                "pid {} (group {}): {}",
+                l.pid,
+                l.pgid,
+                l.command.chars().take(100).collect::<String>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let stop = left
+        .iter()
+        .map(|l| format!("kill -INT -- -{g}; sleep 2; kill -KILL -- -{g}", g = l.pgid))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(SuiteError::NotRun(format!(
+        "a lab process of an earlier suite or the spike is still alive: {list}. Stop them (check first that they are not a run you want): {stop}. Nothing was started"
+    )))
+}
+
+/// Stop a run's tools: the raw sender first (nothing may keep writing frames once its witnesses are gone), then the
+/// peer-side tasks, the witnesses and the listeners, each with a bounded grace and then SIGKILL.
+pub(crate) fn stop_tools(st: &dyn Stand, t: &mut Tools) {
+    if let Some(sc) = t.scanner.as_mut() {
+        sc.signal("INT");
+        if wait_exit(sc.as_mut(), st, 100).is_none() {
+            sc.kill();
+        }
+    }
+    t.scanner = None;
+    if let Some(p) = t.listener.as_mut() {
+        p.signal("TERM");
+    }
+    for (_, s) in std::mem::take(&mut t.sides) {
+        let _ = s.finish();
+    }
+    for (p, sig) in [
+        (&mut t.witness, "INT"),
+        (&mut t.uplink, "INT"),
+        (&mut t.listener, "TERM"),
+    ] {
+        if let Some(proc_) = p.as_mut() {
+            proc_.signal(sig);
+            if wait_exit(proc_.as_mut(), st, 1200).is_none() {
+                proc_.kill();
+            }
+        }
+        *p = None;
+    }
+}
+
+/// The failure path of one run. It stops the run's tools; once a frame may exist it also reads
+/// the uplink evidence (a lab frame there is the isolation breach, exit 13) and keeps the work
+/// directory under `out/runs_aborted/name`, hash-checked. A run that never reached a frame leaves nothing.
+pub(crate) fn abort_run(
+    st: &dyn Stand,
+    out: &Path,
+    work: &Path,
+    name: &str,
+    t: &mut Tools,
+    err: SuiteError,
+) -> SuiteError {
+    stop_tools(st, t);
+    if !t.frames_possible {
+        let _ = fs::remove_dir_all(work);
+        return err;
+    }
+    let breach = uplink_interlock(work).err();
+    let dest = out.join("runs_aborted").join(name);
+    let _ = fs::create_dir_all(out.join("runs_aborted"));
+    let note = match copy_verified(work, &dest, &|_| {}) {
+        Ok(()) => {
+            let _ = fs::remove_dir_all(work);
+            format!("evidence kept in {}", dest.display())
+        }
+        Err(e) => format!("{e}; {KEPT_RECOVERY}"),
+    };
+    match breach {
+        Some(m) if m.contains(LAB_FRAME_MARK) => SuiteError::Isolation(format!(
+            "{m}; the run had aborted earlier with: {}; {note}",
+            err.message()
+        )),
+        Some(m) => SuiteError::Abort(format!("{m}; {}; {note}", err.message())),
+        None => match err {
+            SuiteError::NotRun(m) => SuiteError::NotRun(format!("{m}; {note}")),
+            SuiteError::Interrupted(m) => SuiteError::Interrupted(format!("{m}; {note}")),
+            other => SuiteError::Abort(format!("{}; {note}", other.message())),
+        },
+    }
+}
+
 impl Suite<'_> {
     fn status_argv(&self) -> Vec<String> {
-        let mut a = vec![
-            self.exe.clone(),
-            "macos-lab".into(),
-            "status".into(),
-            "--run-id".into(),
-            self.lab_run_id.clone(),
-        ];
-        if let Some(m) = &self.lab_manifest {
-            a.extend(["--manifest".into(), m.clone()]);
-        }
-        a
+        status_argv(&self.exe, &self.lab_run_id, self.lab_manifest.as_deref())
     }
     /// `macos-lab status`, stored under `name` in `work`; the JSON is returned with its exit code.
     fn status(&self, work: &Path, name: &str) -> Result<(i32, Value), String> {
-        let o = self.st.exec(&self.status_argv(), 60)?;
-        io(fs::write(work.join(name), &o.stdout), name)?;
-        let v = serde_json::from_str::<Value>(&o.stdout).map_err(|e| {
-            format!(
-                "macos-lab status printed no JSON ({e}): {}",
-                o.stderr.trim()
-            )
-        })?;
-        Ok((o.rc, v))
+        lab_status(self.st, &self.status_argv(), work, name)
     }
 
     /// The per-run gate. Without it the run is NOT RUN and no adapter is ever opened.
     fn gate_status(&self, work: &Path, item: &Value) -> Result<Value, SuiteError> {
-        let (rc, v) = self.status(work, "status-pre.json")?;
-        let want = mv::required_bpf_access(item);
-        if rc != 0 || v["raw_run_allowed"] != true {
-            let failing: Vec<String> = v["checks"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter(|c| c["ok"] == false)
-                        .map(|c| c["name"].to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            return Err(SuiteError::NotRun(format!(
-                "the stand is not sealed (macos-lab status rc {rc}; failing checks {failing:?}); nothing was started"
-            )));
-        }
-        if v["bpf_access"] != want {
-            return Err(SuiteError::NotRun(format!(
-                "{} needs bpf_access {want} but the stand reports {}; the user changes it with macos-lab bpf-access; nothing was started",
-                item["tag"], v["bpf_access"]
-            )));
-        }
-        Ok(v)
+        gate_status(
+            self.st,
+            &self.status_argv(),
+            work,
+            &item["tag"],
+            mv::required_bpf_access(item),
+        )
     }
 
-    /// The macOS Application Firewall can prompt for, or silently block, an unsigned listener; its state is
-    /// recorded in `alf.txt` and an enabled firewall refuses the run before anything starts.
     fn application_firewall(&self, work: &Path) -> Result<(), SuiteError> {
-        let o = self.st.exec(
-            &[
-                "/usr/libexec/ApplicationFirewall/socketfilterfw".into(),
-                "--getglobalstate".into(),
-            ],
-            20,
-        )?;
-        io(
-            fs::write(
-                work.join("alf.txt"),
-                format!("rc {}\nstdout:\n{}\nstderr:\n{}", o.rc, o.stdout, o.stderr),
-            ),
-            "alf.txt",
-        )?;
-        // Fail closed: only an exit 0 that says the firewall is disabled lets the run start.
-        if !firewall_disabled(o.rc, &o.stdout) {
-            return Err(SuiteError::NotRun(format!(
-                "the macOS Application Firewall is not proven disabled (socketfilterfw rc {}, output {:?}); it can block or prompt for the peer listeners. Turn it off for the session (System Settings, Network, Firewall) and start again; alf.txt has the raw output; nothing was started",
-                o.rc,
-                o.stdout.trim()
-            )));
-        }
-        Ok(())
+        application_firewall(self.st, work)
     }
 
     fn start_proc(
@@ -1152,149 +1354,19 @@ impl Suite<'_> {
         Ok(())
     }
 
-    /// The pair carries no frame of anyone else: the packet counters of feth4201 and feth4202 are read twice,
-    /// a pause apart (the seam's, not a timing the test depends on), and must not have moved. A sender the name
-    /// based gate cannot know (a test binary, a renamed tool) shows up here.
+    /// The pair carries no frame of anyone else ([`pair_quiet_gate`]).
     fn pair_quiet_gate(&self) -> Result<(), SuiteError> {
-        let read = || -> Result<Vec<(&str, NetstatCounters)>, String> {
-            [SCANNER_IF, PEER_IF]
-                .into_iter()
-                .map(|i| self.st.counters(i).map(|c| (i, c)))
-                .collect()
-        };
-        // Up to three windows: background multicast (mDNS) on the pair moves the counters now and then. The pair is
-        // quiet as soon as one window is still; it is refused only when every window moved (fail closed).
-        let mut moved: Vec<String> = Vec::new();
-        for _ in 0..3 {
-            let first = read()?;
-            self.st.pause(Duration::from_secs(1));
-            let second = read()?;
-            moved = first
-                .iter()
-                .zip(&second)
-                .filter(|(a, b)| a.1 != b.1)
-                .map(|(a, b)| format!("{}: {:?} -> {:?}", a.0, a.1, b.1))
-                .collect();
-            if moved.is_empty() {
-                return Ok(());
-            }
-        }
-        Err(SuiteError::NotRun(format!(
-            "the pair is not quiet (its packet counters moved over about a second: {}): some other sender is active. Find it (a spike, a test, a forgotten tool) and stop it; nothing was started",
-            moved.join("; ")
-        )))
+        pair_quiet_gate(self.st)
     }
 
-    /// Refuse while an earlier `wire_scan`, lab `tcpdump`, `peer listen` or `capture dump` is alive: a raw
-    /// sender without a witness would poison the next run (same seed, same cookies).
+    /// No earlier lab process is alive ([`leftover_gate`]).
     fn leftover_gate(&self) -> Result<(), SuiteError> {
-        let o = self.st.exec(
-            &["/bin/ps".into(), "-axo".into(), "pid,pgid,command".into()],
-            20,
-        )?;
-        // Fail closed: a failing `ps`, or a listing that does not even show this suite, proves nothing.
-        let me = std::process::id();
-        let shows_me = o.stdout.lines().any(|l| {
-            l.split_whitespace()
-                .next()
-                .and_then(|v| v.parse::<u32>().ok())
-                == Some(me)
-        });
-        if o.rc != 0 || !shows_me {
-            return Err(SuiteError::NotRun(format!(
-                "`ps -axo pid,pgid,command` failed or its output is unusable (rc {}, {} bytes, this suite {}), so leftover lab processes cannot be ruled out; nothing was started",
-                o.rc,
-                o.stdout.len(),
-                if shows_me { "listed" } else { "not listed" }
-            )));
-        }
-        let left = lab_leftovers(&o.stdout, std::process::id(), &self.wire_scan);
-        if left.is_empty() {
-            return Ok(());
-        }
-        let list = left
-            .iter()
-            .map(|l| {
-                format!(
-                    "pid {} (group {}): {}",
-                    l.pid,
-                    l.pgid,
-                    l.command.chars().take(100).collect::<String>()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        let stop = left
-            .iter()
-            .map(|l| format!("kill -INT -- -{g}; sleep 2; kill -KILL -- -{g}", g = l.pgid))
-            .collect::<Vec<_>>()
-            .join("; ");
-        Err(SuiteError::NotRun(format!(
-            "a lab process of an earlier suite or the spike is still alive: {list}. Stop them (check first that they are not a run you want): {stop}. Nothing was started"
-        )))
+        leftover_gate(self.st, &self.wire_scan)
     }
 
-    fn stop_tools(&self, t: &mut Tools) {
-        // The raw sender goes first: nothing may keep writing frames once its witnesses are gone.
-        if let Some(sc) = t.scanner.as_mut() {
-            sc.signal("INT");
-            if wait_exit(sc.as_mut(), self.st, 100).is_none() {
-                sc.kill();
-            }
-        }
-        t.scanner = None;
-        if let Some(p) = t.listener.as_mut() {
-            p.signal("TERM");
-        }
-        for (_, s) in std::mem::take(&mut t.sides) {
-            let _ = s.finish();
-        }
-        for (p, sig) in [
-            (&mut t.witness, "INT"),
-            (&mut t.uplink, "INT"),
-            (&mut t.listener, "TERM"),
-        ] {
-            if let Some(proc_) = p.as_mut() {
-                proc_.signal(sig);
-                if wait_exit(proc_.as_mut(), self.st, 1200).is_none() {
-                    proc_.kill();
-                }
-            }
-            *p = None;
-        }
-    }
-
-    /// The failure path of one run. It stops the run's tools; once a frame may exist it also reads
-    /// the uplink evidence (a lab frame there is the isolation breach, exit 13) and keeps the work
-    /// directory under `runs_aborted`, hash-checked. A run that never reached a frame leaves nothing.
+    /// The failure path of one run ([`abort_run`]).
     fn abort(&self, work: &Path, name: &str, t: &mut Tools, err: SuiteError) -> SuiteError {
-        self.stop_tools(t);
-        if !t.frames_possible {
-            let _ = fs::remove_dir_all(work);
-            return err;
-        }
-        let breach = uplink_interlock(work).err();
-        let dest = self.out.join("runs_aborted").join(name);
-        let _ = fs::create_dir_all(self.out.join("runs_aborted"));
-        let note = match copy_verified(work, &dest, &|_| {}) {
-            Ok(()) => {
-                let _ = fs::remove_dir_all(work);
-                format!("evidence kept in {}", dest.display())
-            }
-            Err(e) => format!("{e}; {KEPT_RECOVERY}"),
-        };
-        match breach {
-            Some(m) if m.contains(LAB_FRAME_MARK) => SuiteError::Isolation(format!(
-                "{m}; the run had aborted earlier with: {}; {note}",
-                err.message()
-            )),
-            Some(m) => SuiteError::Abort(format!("{m}; {}; {note}", err.message())),
-            None => match err {
-                SuiteError::NotRun(m) => SuiteError::NotRun(format!("{m}; {note}")),
-                SuiteError::Interrupted(m) => SuiteError::Interrupted(format!("{m}; {note}")),
-                other => SuiteError::Abort(format!("{}; {note}", other.message())),
-            },
-        }
+        abort_run(self.st, &self.out, work, name, t, err)
     }
 
     fn paths_for(&self, item: &Value, work: &Path) -> BTreeMap<String, String> {
@@ -1480,16 +1552,7 @@ impl Suite<'_> {
             }
             let cu = self.st.counters(&uplink_if)?;
             up0 = Some(cu.ierrs + cu.drop);
-            let filter = mv::uplink_filter(SCANNER_MAC, PEER_MAC);
-            let mut argv = crate::dump::tcpdump_argv_macos(
-                &uplink_if,
-                &p2s(&work.join("uplink.pcap")),
-                Some(&filter),
-            );
-            argv[0] = "/usr/sbin/tcpdump".into();
-            // Not promiscuous: the uplink is the user's own NIC, and what is looked for (frames the lab
-            // itself emitted) needs no promiscuous mode.
-            argv.insert(1, "-p".into());
+            let argv = uplink_tcpdump_argv(&uplink_if, &work.join("uplink.pcap"));
             // From here on a frame may exist on the wire; an abort reads the uplink evidence.
             t.frames_possible = true;
             meta["capture_started_utc"] = json!(epoch());

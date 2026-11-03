@@ -25,6 +25,7 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         "macos-suite" => Err("macos-suite is macOS-only".into()),
         "macos-verify" => rmasscan_lab::macos_verify::run(rest),
+        "autodetect-suite" => rmasscan_lab::autodetect_suite::run(rest),
         "autodetect-verify" => rmasscan_lab::autodetect_verify::run(rest),
         "studio-verify" => rmasscan_lab::studio_verify::run(rest),
         "peer" => rmasscan_lab::peer::run(rest),
@@ -46,6 +47,6 @@ fn main() {
 }
 fn help() {
     println!(
-        "rmasscan-lab — Rust laboratory tools\nCommands:\n  verify-wire       compare ordered SYN packets in classic pcap\n  windows-verify    verify saved Windows evidence (offline)\n  vm-lab            isolated Linux-hosted Windows VM network\n  macos-lab         sealed macOS feth stand (plan/up/status/down/bpf-access/link)\n  macos-suite       macOS feth live orchestration (macOS only)\n  macos-verify      verify saved macOS evidence (offline)\n  autodetect-verify verify saved autodetect evidence of the three stands (offline)\n  studio-verify     verify a Studio Mac feth window (offline)\n  peer              Linux peer/listeners/injection\n  capture           Linux recorder and evidence manifests\n  deploy-manifest   record the commit and sha256 of an installed rmasscan-lab (run on home-pc)\n  wire-suite        Linux acceptance and performance suites\n  windows-suite     explicit Windows VM orchestration\n  oracle-fixtures   independent pinned C-oracle wire fixtures\n  oracle-util       C-oracle build metadata helpers\n\nNo command runs implicitly. Raw operations require an explicit isolated lab."
+        "rmasscan-lab — Rust laboratory tools\nCommands:\n  verify-wire       compare ordered SYN packets in classic pcap\n  windows-verify    verify saved Windows evidence (offline)\n  vm-lab            isolated Linux-hosted Windows VM network\n  macos-lab         sealed macOS feth stand (plan/up/status/down/bpf-access/link)\n  macos-suite       macOS feth live orchestration (macOS only)\n  macos-verify      verify saved macOS evidence (offline)\n  autodetect-suite  autodetect live runs: linux (inside wire-lab.sh --suite autodetect) or macos (feth, --root-case under sudo)\n  autodetect-verify verify saved autodetect evidence of the three stands (offline)\n  studio-verify     verify a Studio Mac feth window (offline)\n  peer              Linux peer/listeners/injection\n  capture           Linux recorder and evidence manifests\n  deploy-manifest   record the commit and sha256 of an installed rmasscan-lab (run on home-pc)\n  wire-suite        Linux acceptance and performance suites\n  windows-suite     explicit Windows VM orchestration\n  oracle-fixtures   independent pinned C-oracle wire fixtures\n  oracle-util       C-oracle build metadata helpers\n\nNo command runs implicitly. Raw operations require an explicit isolated lab."
     );
 }

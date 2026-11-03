@@ -13,6 +13,9 @@ use studio_table::{Change, Table};
 mod network_tests;
 mod network_ui;
 mod smoke_feth;
+mod smoke_history;
+mod smoke_network;
+mod smoke_session;
 mod table_controls;
 slint::include_modules!();
 
@@ -389,9 +392,20 @@ fn save_screenshot(ui: &MainWindow) {
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut history_driver = smoke_history::Driver::prepare(&std::env::args().collect::<Vec<_>>())?;
+    let history_active = history_driver.is_some();
     let smoke = std::env::args().any(|s| s == "--smoke");
     let pause_smoke = std::env::args().any(|s| s == "--smoke-pause");
     let stop_smoke = std::env::args().any(|s| s == "--smoke-stop-race");
+    let session_smoke = smoke_session::validate(
+        &std::env::args().collect::<Vec<_>>(),
+        std::env::var_os("STUDIO_DATA_DIR").map(PathBuf::from),
+        std::env::var_os("STUDIO_SMOKE_OUT").map(PathBuf::from),
+        cfg!(target_os = "macos"),
+    )?;
+    if let Some(out) = &session_smoke {
+        check_smoke_out(out)?;
+    }
     // Refused before any controller exists: no data directory is touched, no runner is started.
     let feth = smoke_feth_config(
         &std::env::args().collect::<Vec<_>>(),
@@ -408,6 +422,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let runner = std::env::current_exe()?
         .with_file_name(format!("studio-runner{}", std::env::consts::EXE_SUFFIX));
+    let network_driver = Rc::new(RefCell::new(
+        smoke_network::case(&std::env::args().collect::<Vec<_>>())?
+            .map(|case| smoke_network::Driver::prepare(case, &runner))
+            .transpose()?,
+    ));
+    let network_active = network_driver.borrow().is_some();
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
     ui.set_mac_feth_open(studio_protocol::raw_profile_enabled(Backend::MacFeth));
@@ -883,12 +903,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let outcome = Rc::new(RefCell::new(None::<(bool, String)>));
     let finished = outcome.clone();
     let driver_active = driver.is_some();
+    let session_active = session_smoke.is_some();
+    let mut session_driver = session_smoke.map(smoke_session::Driver::new);
+    let native = network_driver.clone();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(50),
         move || {
             let Some(ui) = w.upgrade() else { return };
             let updates = a.borrow_mut().poll();
+            if let Some(driver) = &mut history_driver { driver.observe(&updates); }
+            if let Some(driver) = native.borrow_mut().as_mut() { driver.observe(&updates); }
+            if let Some(driver) = &mut session_driver { driver.observe(&updates); }
             // The `--smoke-feth` driver sees every update first, in order, and answers with the steps a user's
             // clicks would have produced; they run through `action` below, the same path as the buttons.
             let mut feth_steps = Vec::new();
@@ -1091,6 +1117,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             m.summary(&ui);
+            if let Some(driver) = &mut history_driver {
+                let result = driver.tick(&ui, &m, &h.borrow(), coverage.borrow().as_ref());
+                if !matches!(result, Ok(false)) {
+                    let result = match driver.finish(&result) { Ok(()) => result, Err(e) => Err(e) };
+                    *finished.borrow_mut() = Some(match result { Ok(_) => (true, String::new()), Err(e) => (false, e) });
+                    history_driver = None;
+                    let _ = slint::quit_event_loop();
+                }
+            }
+            if let Some(driver) = native.borrow_mut().as_mut() {
+                match driver.tick(&ui, m.row_count()) {
+                    Ok(false) => {},
+                    result => {
+                        *finished.borrow_mut() = Some(match result { Ok(_) => (true,String::new()), Err(e) => (false,e) });
+                        let _ = slint::quit_event_loop();
+                    }
+                }
+            }
+            if let Some(driver) = &mut session_driver {
+                let result = driver.tick(&ui, m.row_count(), &h.borrow());
+                if !matches!(result, Ok(false)) {
+                    let result = match driver.finish(&result) { Ok(()) => result, Err(e) => Err(e) };
+                    *finished.borrow_mut() = Some(match result { Ok(_) => (true, String::new()), Err(e) => (false, e) });
+                    let _ = slint::quit_event_loop();
+                }
+            }
             let mut feth_steps = std::collections::VecDeque::from(feth_steps);
             while let Some(step) = feth_steps.pop_front() {
                 match step {
@@ -1174,15 +1226,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     ui.run()?;
     timer.stop();
-    if driver_active {
+    if driver_active || session_active || network_active || history_active {
         match outcome.borrow().as_ref() {
             Some((true, _)) => {}
-            Some((false, reason)) => return Err(format!("--smoke-feth failed: {reason}").into()),
-            None => return Err("--smoke-feth: the window closed before the run finished".into()),
+            Some((false, reason)) => return Err(format!("UI acceptance failed: {reason}").into()),
+            None => return Err("UI acceptance: the window closed before the run finished".into()),
         }
     }
     if (smoke || pause_smoke || stop_smoke) && !success.get() {
         return Err("UI smoke did not complete the expected lifecycle".into());
+    }
+    if network_active {
+        // Destroy all callbacks holding Controller clones before recording joined.
+        drop(timer);
+        drop(ui);
+        let controller = Rc::try_unwrap(app)
+            .map_err(|_| "GUI callbacks still own the Controller")?
+            .into_inner();
+        drop(controller);
+        network_driver
+            .borrow_mut()
+            .take()
+            .ok_or("Missing native GUI driver")?
+            .finish()?;
     }
     Ok(())
 }

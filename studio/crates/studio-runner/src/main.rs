@@ -158,7 +158,13 @@ fn publish_finish(
     cp: Option<Checkpoint>,
 ) -> Result<(), String> {
     flush(events, session, a)?;
-    let interrupted = a.guard.take().and_then(guard::Guard::finish);
+    let interrupted = a.guard.take().and_then(|guard| {
+        if matches!(reason, Reason::Failed(_)) {
+            guard.finish_after_failure()
+        } else {
+            guard.finish()
+        }
+    });
     if let Some(detail) = interrupted {
         send(
             events,
@@ -230,7 +236,7 @@ fn serve_with_adapter(
         output_stream,
         live,
         adapter,
-        std::sync::Arc::new(network::Native),
+        std::sync::Arc::new(network::Native::default()),
     )
 }
 fn serve_with_network(

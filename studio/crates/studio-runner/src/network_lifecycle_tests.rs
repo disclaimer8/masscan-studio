@@ -11,6 +11,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
     },
     thread::JoinHandle,
 };
@@ -26,6 +27,7 @@ struct Fake {
     block: AtomicUsize,
     entered: AtomicBool,
     closed: AtomicBool,
+    close_gate: Mutex<Option<mpsc::Receiver<()>>>,
     panic: AtomicBool,
     release_open: AtomicBool,
     packet: FakeAdapter,
@@ -54,6 +56,7 @@ impl Fake {
             block: AtomicUsize::new(0),
             entered: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            close_gate: Mutex::new(None),
             panic: AtomicBool::new(false),
             release_open: AtomicBool::new(false),
             packet,
@@ -64,6 +67,15 @@ impl Fake {
             self.entered.store(true, Ordering::Release);
             while !cancel() {
                 std::thread::sleep(Duration::from_millis(1));
+            }
+            let gate = self.close_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                match gate.recv_timeout(Duration::from_secs(10)) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        panic!("fake retired observer release timed out")
+                    }
+                }
             }
             self.closed.store(true, Ordering::Release);
             // Deliberately return a stale SUCCESS: owner must discard it after cancellation.
@@ -122,7 +134,12 @@ impl Environment for Fake {
             elapsed: Duration::ZERO,
         })
     }
-    fn open(&self, _: &AdapterBinding) -> Result<rmasscan_engine::AdapterPair, String> {
+    fn open(
+        &self,
+        _: &AdapterBinding,
+        _: Instant,
+        _: &dyn Fn() -> bool,
+    ) -> Result<rmasscan_engine::AdapterPair, String> {
         self.opened.fetch_add(1, Ordering::AcqRel);
         let pair = self.packet.pair();
         if self.block.load(Ordering::Acquire) == 3 {
@@ -582,13 +599,21 @@ fn superseded_job_check_never_publishes_stale_readiness() {
     let env = Fake::new();
     env.block.store(1, Ordering::Release);
     let mut h = Harness::new(env.clone());
+    // Declared after Harness: unwinding drops the sender before Harness joins.
+    // Only the already-entered old observer reaches this completion gate.
+    let (release, gate) = mpsc::channel();
+    *env.close_gate.lock().unwrap() = Some(gate);
     h.session(2, Command::CheckNetworkJob(job()));
     wait(|| env.entered.load(Ordering::Acquire));
     env.block.store(0, Ordering::Release);
     let mut newer = job();
     newer.ports = "81".into();
     h.session(3, Command::CheckNetworkJob(newer.clone()));
-    match h.event().payload {
+    let event = h.event();
+    let closed_when_new_ready = env.closed.load(Ordering::Acquire);
+    // Release before assertions or teardown; dropping also releases on unwind.
+    drop(release);
+    match event.payload {
         Event::NetworkPreflight {
             job_digest, ready, ..
         } => {
@@ -597,9 +622,12 @@ fn superseded_job_check_never_publishes_stale_readiness() {
         }
         event => panic!("{event:?}"),
     };
-    assert!(env.closed.load(Ordering::Acquire));
     assert_eq!(env.arp.load(Ordering::Acquire), 0);
     h.disconnect().unwrap();
+    // Superseded read-only checks may finish after the newest readiness event.
+    // Session teardown is the guaranteed join boundary, not that event.
+    assert!(!closed_when_new_ready);
+    assert!(env.closed.load(Ordering::Acquire));
 }
 
 #[test]

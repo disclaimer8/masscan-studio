@@ -108,6 +108,30 @@ fn fixture() -> (Job, NetworkReport) {
     };
     (j, report)
 }
+fn sealed_fixture() -> (Job, NetworkReport) {
+    use rmasscan_net::ExcludedReason::*;
+    use studio_protocol::sealed_fixture::topology::*;
+    let job = job();
+    let report = NetworkReport {
+        job_digest: job.original_digest().unwrap(),
+        routes: rmasscan_net::PhysicalRoutePlan {
+            interface_name: SCANNER.into(),
+            interface_index: 42,
+            source_ipv4: SOURCE,
+            source_mac: Some(SOURCE_MAC),
+            next_hops: [(A, A), (B, B), (MISSING, MISSING), (ROUTED, GATEWAY)].into(),
+            excluded: [
+                ("198.18.42.0".parse().unwrap(), NetworkAddress),
+                (SOURCE, OwnAddress),
+                ("198.18.42.7".parse().unwrap(), BroadcastAddress),
+            ]
+            .into(),
+        },
+        destinations: [(A, A_MAC), (B, B_MAC), (ROUTED, GATEWAY_MAC)].into(),
+        unresolved: vec![MISSING],
+    };
+    (job, report)
+}
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
@@ -125,7 +149,7 @@ impl Drop for Temp {
 fn network_report_is_committed_and_acknowledged_by_controller() {
     let dir = Temp::new();
     let mut db = Store::open(&dir.0).unwrap();
-    let (job, report) = fixture();
+    let (job, report) = sealed_fixture();
     let (mut c, tx, wire) = fake_client();
     db.begin([1; 16], [2; 16], &job, false).unwrap();
     c.start([1; 16], [2; 16], Command::Start(job)).unwrap();
@@ -186,7 +210,7 @@ impl Write for AckWitness {
 fn report_ack_wire_observes_committed_transaction_and_preparing_state() {
     let dir = Temp::new();
     let mut db = Store::open(&dir.0).unwrap();
-    let (job, report) = fixture();
+    let (job, report) = sealed_fixture();
     let (mut c, tx, wire) = fake_client();
     db.begin([1; 16], [2; 16], &job, false).unwrap();
     c.start([1; 16], [2; 16], Command::Start(job.clone()))
@@ -221,7 +245,7 @@ fn report_ack_wire_observes_committed_transaction_and_preparing_state() {
     match &updates[1] {
         Update::NetworkCoverage(Some(coverage)) => {
             assert_eq!(coverage.job, job);
-            assert_eq!(coverage.eligible_targets, 1);
+            assert_eq!(coverage.eligible_targets, 3);
             assert_eq!(coverage.unresolved_targets, 1);
         }
         _ => panic!("Missing persisted coverage"),
@@ -284,7 +308,7 @@ fn stop_close_and_pending_stop_during_commit_preserve_report_without_ack() {
     for cancellation in ["stop", "close", "during_commit"] {
         let dir = Temp::new();
         let mut db = Store::open(&dir.0).unwrap();
-        let (job, report) = fixture();
+        let (job, report) = sealed_fixture();
         let (mut c, tx, wire) = fake_client();
         db.begin([1; 16], [2; 16], &job, false).unwrap();
         c.start([1; 16], [2; 16], Command::Start(job)).unwrap();
@@ -463,7 +487,7 @@ fn wrongly_scoped_replayed_and_old_attempt_events_are_rejected() {
 }
 
 #[test]
-fn readiness_is_digest_bound_and_never_claims_execution_or_neighbours() {
+fn readiness_is_digest_bound_and_reports_compiled_gate_without_neighbour_claim() {
     let (job, _) = fixture();
     let mut changed = job.clone();
     changed.ports = "443".into();
@@ -489,7 +513,10 @@ fn readiness_is_digest_bound_and_never_claims_execution_or_neighbours() {
         Update::NetworkReadiness(Some(state)) => {
             assert!(state.route_ready);
             assert!(!state.checking);
-            assert!(!state.execution_enabled);
+            assert_eq!(
+                state.execution_enabled,
+                raw_profile_enabled(Backend::MacNetwork)
+            );
             assert_eq!(state.backend, Backend::MacNetwork);
         }
         _ => panic!("Missing readiness"),
@@ -564,20 +591,32 @@ fn all_unresolved_history_reopens_and_draft_keeps_selected_coverage_until_scan_c
             bytes: report.encode().unwrap(),
         },
     );
-    commit_scan_events(
-        &mut db,
-        &mut transport,
-        vec![event],
-        &out,
-        Some([1; 16]),
-        &|| false,
-    )
-    .unwrap();
+    assert!(
+        commit_scan_events(
+            &mut db,
+            &mut transport,
+            vec![event],
+            &out,
+            Some([1; 16]),
+            &|| false
+        )
+        .unwrap_err()
+        .contains("sealed fixture")
+    );
+    let saved = db
+        .scans()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.scan == [1; 16])
+        .unwrap();
+    emit(&out, network::coverage(&saved).unwrap()).unwrap();
     assert!(updates.try_iter().any(|u|matches!(u,Update::NetworkCoverage(Some(c)) if c.eligible_targets==0 && c.unresolved_targets==2)));
-    assert!(matches!(
-        wire.commands().last().unwrap().payload,
-        Command::AckNetworkReport { through: 1 }
-    ));
+    assert!(
+        !wire
+            .commands()
+            .iter()
+            .any(|e| matches!(e.payload, Command::AckNetworkReport { .. }))
+    );
     let event = Envelope::new(
         transport.session,
         transport.scan,
@@ -718,7 +757,7 @@ fn network_checkpoint_uses_frozen_report_and_resume_restores_coverage() {
     let _process_reopen_guard = PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
     let dir = Temp::new();
     let mut db = Store::open(&dir.0).unwrap();
-    let (job, report) = fixture();
+    let (job, report) = sealed_fixture();
     let (mut c, _tx, wire) = fake_client();
     db.begin([1; 16], [2; 16], &job, false).unwrap();
     c.start([1; 16], [2; 16], Command::Start(job.clone()))
@@ -1058,5 +1097,156 @@ fn cancellation_during_persistence_prevents_start_and_resume_dispatch() {
         for close in [false, true] {
             cancelled_during_launch(resume, false, close);
         }
+    }
+}
+
+#[test]
+fn sealed_candidate_refuses_nonfixture_persisted_report_before_ack() {
+    let dir = Temp::new();
+    let mut db = Store::open(&dir.0).unwrap();
+    let (job, report) = fixture();
+    let (mut c, _, wire) = fake_client();
+    db.begin([1; 16], [2; 16], &job, false).unwrap();
+    c.start([1; 16], [2; 16], Command::Start(job)).unwrap();
+    let events = vec![Envelope::new(
+        c.session,
+        c.scan,
+        c.attempt,
+        1,
+        Event::NetworkPrepared {
+            bytes: report.encode().unwrap(),
+        },
+    )];
+    let (out, _rx) = mpsc::sync_channel(32);
+    let result = commit_scan_events(&mut db, &mut c, events, &out, Some([1; 16]), &|| false);
+    assert!(result.unwrap_err().contains("sealed fixture"));
+    assert_eq!(
+        db.scans().unwrap()[0].network_report,
+        Some(report.encode().unwrap())
+    );
+    assert!(
+        !wire
+            .commands()
+            .iter()
+            .any(|e| matches!(e.payload, Command::AckNetworkReport { .. }))
+    );
+}
+
+#[test]
+fn sealed_candidate_checks_saved_bytes_not_original_event_before_ack() {
+    let dir = Temp::new();
+    let mut db = Store::open(&dir.0).unwrap();
+    let (job, report) = sealed_fixture();
+    let mut changed = report.clone();
+    use studio_protocol::sealed_fixture::topology::*;
+    changed.destinations.insert(B, A_MAC);
+    let bytes = changed.encode().unwrap();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let sql = rusqlite::Connection::open(dir.0.join("history.sqlite3")).unwrap();
+    sql.execute_batch(&format!("CREATE TRIGGER substitute_report AFTER UPDATE OF network_report ON scans BEGIN UPDATE scans SET network_report=X'{hex}' WHERE id=NEW.id; END;")).unwrap();
+    let (mut c, _, wire) = fake_client();
+    db.begin([1; 16], [2; 16], &job, false).unwrap();
+    c.start([1; 16], [2; 16], Command::Start(job)).unwrap();
+    let event = Envelope::new(
+        c.session,
+        c.scan,
+        c.attempt,
+        1,
+        Event::NetworkPrepared {
+            bytes: report.encode().unwrap(),
+        },
+    );
+    let (out, _rx) = mpsc::sync_channel(32);
+    assert!(
+        commit_scan_events(&mut db, &mut c, vec![event], &out, Some([1; 16]), &|| false)
+            .unwrap_err()
+            .contains("sealed fixture")
+    );
+    assert_eq!(db.scans().unwrap()[0].network_report, Some(bytes));
+    assert!(
+        !wire
+            .commands()
+            .iter()
+            .any(|e| matches!(e.payload, Command::AckNetworkReport { .. }))
+    );
+}
+
+#[test]
+fn started_publishes_active_identity_before_progress_for_new_and_resumed_attempts() {
+    for attempt in [[2; 16], [3; 16]] {
+        let dir = Temp::new();
+        let mut db = Store::open(&dir.0).unwrap();
+        let job = Job::example(Backend::Simulation);
+        let (mut c, tx, _wire) = fake_client();
+        let resume = attempt == [3; 16];
+        let command = if resume {
+            db.begin([1; 16], [2; 16], &job, false).unwrap();
+            let checkpoint = rmasscan_engine::Checkpoint {
+                format_version: rmasscan_engine::CHECKPOINT_FORMAT_VERSION,
+                engine_version: ENGINE_VERSION,
+                scan_id: [1; 16],
+                attempt_id: [2; 16],
+                job_digest: rmasscan_engine::job_digest(&job.prepare().unwrap()),
+                next_index: 1,
+            }
+            .to_bytes();
+            db.apply(&Envelope::new(
+                c.session,
+                [1; 16],
+                [2; 16],
+                1,
+                Event::Checkpoint {
+                    bytes: checkpoint.clone(),
+                    next_index: "1".into(),
+                },
+            ))
+            .unwrap();
+            Command::Resume {
+                job: job.clone(),
+                checkpoint,
+            }
+        } else {
+            Command::Start(job.clone())
+        };
+        db.begin([1; 16], attempt, &job, resume).unwrap();
+        c.start([1; 16], attempt, command).unwrap();
+        let (out, rx) = mpsc::sync_channel(32);
+        for (seq, payload) in [
+            (1, Event::Started { total: "8".into() }),
+            (
+                2,
+                Event::Progress {
+                    sent: "4".into(),
+                    received: "4".into(),
+                },
+            ),
+        ] {
+            tx.send(Ok(Envelope::new(
+                c.session, c.scan, c.attempt, seq, payload,
+            )))
+            .unwrap();
+        }
+        let events = vec![c.poll().unwrap().unwrap(), c.poll().unwrap().unwrap()];
+        commit_scan_events(&mut db, &mut c, events, &out, Some([1; 16]), &|| false).unwrap();
+        let mut active = None;
+        let mut witnessed = false;
+        for update in rx.try_iter() {
+            match update {
+                Update::History(scans, selected) => {
+                    let saved = scans.iter().find(|s| Some(s.scan) == selected).unwrap();
+                    active = Some((saved.scan, saved.attempt));
+                }
+                Update::Progress(_, _) => {
+                    assert_eq!(
+                        active,
+                        Some(([1; 16], attempt)),
+                        "guard must know the attempt before progress, without a terminal event"
+                    );
+                    witnessed = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(witnessed);
     }
 }

@@ -839,3 +839,57 @@ source merge tree `06bf606770b8d954fa064ff4cc76275e3f8836a4`. Package manifests,
 screenshots, filesystem checks and evidence checksums are linked from the reports.
 The current follow-up changes documentation only, without a rebuilt package.
 Raw-profile gates and outstanding session-authorization checks remain unchanged.
+
+## 2026-10-30 — First sealed MacNetwork native trial
+
+Candidate `1213101` completed the fixed Controller/helper scan with 96 retained
+results (48 open, 48 closed) and 96 SYNs in the independent peer capture. The
+uplink capture contained no packet records. **Native acceptance remains FAIL:**
+both system tcpdump processes required forced termination and supplied no final
+capture statistics. The temporary stand was removed and evidence retained.
+Fresh Studio tests: 300 passed, 0 failed, 2 ignored; engine: 1416 passed,
+0 failed, 23 ignored. See
+[`2026-10-30-studio-macos-network-native.md`](../docs/experiments/2026-10-30-studio-macos-network-native.md)
+for the reproduction, exact artifacts and remaining work. Other native lifecycle
+cases and physical-network acceptance remain pending.
+
+## 2026-11-03 — optimized packaged GUI on the sealed local fixture
+
+Clean release package at `4fbe472` passed three separately launched native GUI
+cases with independently supervised root packet captures: Complete 96 SYNs /
+96 replies / 96 rows; Stop 5 / 5 / 5 (observed terminal after 49.29275 ms); another
+Complete 96 / 96 / 96. All nine capture/responder children exited 0 unforced;
+every uplink capture had zero matching fixture frames. SQLite integrity and exact
+rows matched the packet reports. Owned fixtures were removed; the retained work
+host stayed ready/idle without another password request.
+
+Exact source, executable/archive hashes, CI provenance, the preceding failed
+attempt and evidence locations are in the
+[GUI/session report](../docs/experiments/2026-11-02-studio-gui-work-session.md).
+This proves isolated fixture execution through the packaged GUI, not physical
+Wi-Fi delivery, same-window native Stop/Start, native Pause/Resume on this package,
+manual keyboard/mouse acceptance or release readiness. See the
+[remaining release checklist](RELEASE-CHECKLIST.md).
+
+## 2026-11-03 — history/export projections and restarted native GUI Resume
+
+Clean optimized package `d732533` passed History reopening and exact repeated
+settings on copies of the earlier 96/5/96-row native scans. Independent comparison
+of 24 JSON/CSV files verified visible rows/order and unchanged whole-scan coverage,
+including empty filters; original and copied histories were unchanged. Native
+save dialogs and asynchronous export completion are not included.
+
+The same package then passed independently supervised GUI Pause (5 probes /
+5 replies, checkpoint index 5) and Resume in a new GUI process (91 remaining
+probes / 91 replies, 96 cumulative rows and no checkpoint). Root-original and
+offline verification passed; all six capture/responder children exited 0 unforced,
+no matching fixture frames appeared on the uplink, and owned teardown succeeded.
+The same work host remained ready/idle without another password. Studio CI passed
+on all three OSes at the exact source; unchanged engine/workflow trees reused the
+successful engine run at `4fbe472`. Local Studio tests: 338 passed, two ignored.
+
+Exact artifacts, hashes, CI runs, scope and raw-evidence locations are in the
+[history and Resume report](../docs/experiments/2026-11-03-studio-history-and-resume.md).
+Same-window native restart, manual UI interaction and physical-interface scanning
+remain separate. Profile labels and README now explicitly describe local-only
+execution in this development branch.

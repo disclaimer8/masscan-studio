@@ -139,6 +139,54 @@ fn every_target_is_routed_and_interior_vpn_is_refused() {
     assert!(o.seen.borrow().contains(&ip("192.168.1.21")));
 }
 #[test]
+fn two_valid_ethernet_interfaces_refuse_mixed_destination_routes() {
+    let mut o = Os::new();
+    let mut other = observation();
+    other.iface.name = "en1".into();
+    other.iface.device_id = "en1".into();
+    other.iface.index = 3;
+    other.iface.ipv4 = vec![ip("10.0.0.10")];
+    other.ipv4_prefixes = vec![Ipv4Prefix {
+        address: ip("10.0.0.10"),
+        length: 24,
+    }];
+    o.interfaces.push(other);
+    o.overrides.insert(
+        ip("192.168.1.21"),
+        Route {
+            ifname: "en1".into(),
+            ifindex: 3,
+            local: false,
+            gateway: Some(ip("10.0.0.1")),
+        },
+    );
+    // Both destinations work independently, so only their combination is refused.
+    for address in ["192.168.1.20", "192.168.1.21"] {
+        plan(&targets(address, address, &[], &[]), &o)
+            .unwrap()
+            .validate_executable()
+            .unwrap();
+    }
+    assert_eq!(
+        plan(&targets("192.168.1.20", "192.168.1.21", &[], &[]), &o).unwrap_err(),
+        NetError::System("mixed physical interfaces at 192.168.1.21".into())
+    );
+}
+#[test]
+fn sole_source_with_conflicting_prefix_lengths_is_refused() {
+    let mut o = Os::new();
+    let t = targets("192.168.1.20", "192.168.1.20", &[], &[]);
+    plan(&t, &o).unwrap().validate_executable().unwrap();
+    o.interfaces[0].ipv4_prefixes.push(Ipv4Prefix {
+        address: ip("192.168.1.10"),
+        length: 25,
+    });
+    assert_eq!(
+        plan(&t, &o).unwrap_err(),
+        NetError::System("ambiguous or missing source/prefix on en0".into())
+    );
+}
+#[test]
 fn different_gateways_on_same_interface_are_valid_and_remote_endpoints_not_classified() {
     let t = targets("203.0.113.0", "203.0.113.1", &[], &[]);
     let mut o = Os::new();

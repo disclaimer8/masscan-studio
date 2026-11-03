@@ -342,3 +342,57 @@ runas returned ERROR_CANCELLED (1223). CI retains native identity, environment,
 job lifetime, rejection, simulation, installer and package checks. It packages
 the exact ignored integrated cancellation test for desktop execution. Passing
 CI does not substitute for this desktop acceptance.
+
+
+## macOS development working session
+
+`xtask work-session start /absolute/path/to/studio-runner` requests administrator
+authorization once, installs the exact verified tool/helper versions if needed,
+and starts a task-specific host. `work-session status` shows the host PID,
+approved hashes and active operations. `work-session probe RUNNER` checks a
+helper session without packets and refuses to fall back to a password prompt if
+the host is absent. Independent acceptance Controller processes use the host
+automatically. Their helper still authenticates the ordinary Controller directly.
+
+The host remains available after those processes exit. It ends only on explicit
+`work-session stop` or process/system termination; there is no idle expiry or
+login auto-start. Stop refuses active helper leases/jobs. Installed binaries are
+retained. The stable installed tool path shown by status can keep managing the
+session even if the checkout's debug binary is later rebuilt.
+
+Use that stable approved client to run `work-session stage ABSOLUTE_TOOL ABSOLUTE_RUNNER`
+after reviewing and testing a new build. This explicitly grants software-maintenance
+access during the session: selected executable code is installed with administrator
+ownership and may run with administrator privileges. Signature/hash/dependency checks
+verify the selected bytes; they do not replace code review. Staging requires no active
+jobs and no owned fixture. The tool/helper selection changes together after both
+installations pass, and previously approved clients remain usable. No password is
+requested for staging. The running host's own executable and identity stay unchanged.
+
+To upgrade an older host that lacks staging, run `work-session replace RUNNER` from
+the reviewed new tool once. This needs one OS authorization to install and launch the
+new host; the old host is retained until installation succeeds and refuses to stop
+while jobs are active. Subsequent build changes use `stage` within the same session.
+
+Fixed operations are `fixture up`, `fixture status`, `fixture down`,
+`fixture supervise CASE ABSOLUTE_DRIVER_DIR [PAUSE_NONCE]`, and `export NONCE`.
+A fixture must be created by this work session; a different existing fixture is
+not adopted. Resume and export require a run nonce created by this host.
+`prepare-drive resume` must also mark the same Pause directory before supervision.
+Supervision still requires the reviewed candidate and native acceptance scope.
+
+Runtime metadata/socket live under root-owned `/Library/PrivilegedHelperTools/MasscanStudio/work-UID`.
+Both endpoints check kernel process identity and approved executable hashes.
+Requests are typed and bounded; there is no arbitrary shell/argument/environment API.
+Build staging accepts only bounded regular files owned by the session account, opens
+without following final symlinks, and verifies hashes/signatures on a private root copy
+before publishing an immutable installed version.
+Private root output is streamed only over that authenticated connection. At most
+8 helper/job operations may be active, with separate bounded control connections.
+Closing a Controller drops only its helper lease. Losing the host connection
+closes the original runner IPC; the host independently reaps disconnected helper
+children. Fixture jobs retain their native bounds and private evidence on CLI
+loss. A failed partial Up is associated with its preassigned generation so a
+later Down can safely clean that specific journal. Host/process crashes may leave
+a fixture journal for explicit recovery; clients never silently adopt it or
+remove stale root runtime state.

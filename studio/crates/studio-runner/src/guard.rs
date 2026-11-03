@@ -69,7 +69,7 @@ pub struct Guard {
     clock: Clock,
     health: Arc<Mutex<Health>>,
     closing: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<Inspector>>,
     observing: bool,
 }
 impl Guard {
@@ -116,6 +116,7 @@ impl Guard {
                             drop(state);
                             thread::park_timeout(Duration::from_secs(1));
                         }
+                        inspect
                     })
                     .map_err(|e| format!("Cannot start network observer: {e}"))?,
             )
@@ -152,17 +153,57 @@ impl Guard {
         }
         state.error.clone()
     }
-    fn shutdown(&mut self) {
+    fn shutdown(&mut self) -> Option<Inspector> {
         self.closing.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
             worker.thread().unpark();
-            if worker.join().is_err() {
-                self.health
+            match worker.join() {
+                Ok(inspect) => return Some(inspect),
+                Err(_) => self
+                    .health
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .fail("Network observer panicked".into(), &self.cancel);
+                    .fail("Network observer panicked".into(), &self.cancel),
             }
         }
+        None
+    }
+    pub fn finish_after_failure(mut self) -> Option<String> {
+        self.poll();
+        let inspector = self.shutdown();
+        if self
+            .health
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .error
+            .is_none()
+            && let Some(mut inspect) = inspector
+        {
+            // Adapter I/O can fail before the next periodic observation. The
+            // cancelled in-flight snapshot cannot establish a healthy finish.
+            // Packet workers have already joined; recheck read-only state with
+            // a new bounded cancellation deadline before classifying failure.
+            let began = Instant::now();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                inspect(&|| began.elapsed() >= FRESHNESS)
+            }));
+            let mut state = self.health.lock().unwrap_or_else(|p| p.into_inner());
+            match result {
+                Err(_) => state.fail("Final network observer panicked".into(), &self.cancel),
+                Ok(Err(error)) => state.fail(error, &self.cancel),
+                Ok(_) if began.elapsed() >= FRESHNESS => {
+                    state.fail("Final network observation timed out".into(), &self.cancel)
+                }
+                Ok(Ok(Observation::Cancelled)) => state.fail(
+                    "Final network observation cancelled unexpectedly".into(),
+                    &self.cancel,
+                ),
+                Ok(Ok(Observation::Valid)) => {
+                    state.record_success(began, Instant::now(), &self.cancel)
+                }
+            }
+        }
+        self.poll()
     }
     pub fn finish(mut self) -> Option<String> {
         // Freeze the observation before choosing the terminal state. Otherwise
@@ -227,6 +268,48 @@ mod tests {
             engine.join().unwrap().reason,
             rmasscan_engine::Reason::Stopped
         );
+    }
+
+    #[test]
+    fn failure_recheck_handles_panic_cancellation_and_deadline() {
+        for mode in ["panicked", "cancelled", "timed out"] {
+            let engine = engine();
+            let (entered, ready) = mpsc::channel();
+            let mut first = true;
+            let guard = Guard::new(
+                engine.cancel_handle(),
+                Some(Box::new(move |cancelled| {
+                    if first {
+                        first = false;
+                        entered.send(()).unwrap();
+                        while !cancelled() {
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        return Ok(Observation::Cancelled);
+                    }
+                    match mode {
+                        "panicked" => panic!("final observer panic"),
+                        "cancelled" => Ok(Observation::Cancelled),
+                        _ => {
+                            while !cancelled() {
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                            // A late success must not erase the deadline violation.
+                            Ok(Observation::Valid)
+                        }
+                    }
+                })),
+            )
+            .unwrap();
+            ready.recv_timeout(Duration::from_secs(1)).unwrap();
+            let start = Instant::now();
+            assert!(guard.finish_after_failure().unwrap().contains(mode));
+            assert!(start.elapsed() < FRESHNESS + Duration::from_secs(1));
+            assert_eq!(
+                engine.join().unwrap().reason,
+                rmasscan_engine::Reason::Stopped
+            );
+        }
     }
 
     #[test]

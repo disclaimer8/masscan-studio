@@ -3,6 +3,11 @@ name = "studio-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "studio-ui"
+
+[[bin]]
+name = "studio-launcher"
+path = "src/launcher.rs"
 
 [dependencies]
 studio-protocol.workspace = true
@@ -17,6 +22,9 @@ pollster = "1.0.1"
 studio-inspection = { version = "0.1.0", path = "../studio-inspection" }
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+studio-platform.workspace = true
 
 [build-dependencies]
 slint-build = "=1.18.1"

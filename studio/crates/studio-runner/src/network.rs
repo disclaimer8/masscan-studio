@@ -25,7 +25,12 @@ pub trait Environment: Send + Sync {
         plan: &PhysicalRoutePlan,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<NeighbourReport, String>;
-    fn open(&self, binding: &AdapterBinding) -> Result<AdapterPair, String>;
+    fn open(
+        &self,
+        binding: &AdapterBinding,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<AdapterPair, String>;
 }
 pub struct Prepared {
     pub job: Job,
@@ -146,19 +151,23 @@ pub fn launch(
 ) -> Result<Launch, String> {
     env.authorize()?;
     let plan = prepared.job.prepare_network(&prepared.report)?;
-    let routes = snapshot(
-        env.as_ref(),
-        &prepared.job,
-        Duration::from_secs(10),
-        cancelled,
-    )?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    check(cancelled)?;
+    let routes = env.observe(&prepared.job, deadline, cancelled)?;
+    check(cancelled)?;
+    if Instant::now() >= deadline {
+        return Err("Network observation timed out".into());
+    }
     if routes != prepared.report.routes {
         return Err("Network changed before first TCP probe".into());
     }
     routes.validate_executable().map_err(|e| e.to_string())?;
     let observed = Instant::now();
     check(cancelled)?;
-    let pair = env.open(plan.binding())?;
+    let pair = env.open(plan.binding(), deadline, cancelled)?;
+    if Instant::now() >= deadline {
+        return Err("Network adapter open timed out".into());
+    }
     check(cancelled)?;
     let inspector = inspector(env, prepared.job, prepared.report.routes);
     Ok(Launch {
@@ -316,74 +325,8 @@ impl Check {
     }
 }
 
-pub struct Native;
-impl Environment for Native {
-    fn authorize(&self) -> Result<(), String> {
-        if !cfg!(target_os = "macos")
-            || !studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacNetwork)
-        {
-            return Err("Physical network profile is disabled pending acceptance".into());
-        }
-        #[cfg(unix)]
-        if studio_platform::unix::Identity::current()?.uid != 0 {
-            return Err("Authorize the root helper before a physical scan".into());
-        }
-        // launch() only accepts root after authenticated connection + trusted installation verification.
-        Ok(())
-    }
-    fn observe(
-        &self,
-        job: &Job,
-        deadline: Instant,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<PhysicalRoutePlan, String> {
-        rmasscan_net::plan_physical(
-            &job.network_targets()?,
-            rmasscan_net::os_route_table()
-                .map_err(|e| e.to_string())?
-                .as_ref(),
-            rmasscan_net::os_interfaces()
-                .map_err(|e| e.to_string())?
-                .as_ref(),
-            deadline,
-            cancelled,
-        )
-        .map_err(|e| e.to_string())
-    }
-    fn neighbours(
-        &self,
-        plan: &PhysicalRoutePlan,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<NeighbourReport, String> {
-        plan.validate_executable().map_err(|e| e.to_string())?;
-        check(cancelled)?;
-        let binding = AdapterBinding {
-            interface_id: plan.interface_name.clone(),
-            link_type: rmasscan_core::packet::LinkType::Ethernet,
-            source_ipv4: plan.source_ipv4.into(),
-            source_mac: plan.source_mac.ok_or("Missing source MAC")?,
-            next_hop_mac: [0xff; 6],
-            source_ports: (40000, 40000),
-        };
-        let mut pair = self.open(&binding)?;
-        // BPF native open/write can stall in the kernel: cancellation is cooperative,
-        // and terminal acknowledgement waits for closure; no hard preemption claim.
-        let result = rmasscan_net::resolve_neighbours(
-            &mut pair,
-            plan,
-            &rmasscan_core::throttle::SystemClock::new(),
-            cancelled,
-        )
-        .map_err(|e| e.to_string());
-        drop(pair);
-        result
-    }
-    fn open(&self, binding: &AdapterBinding) -> Result<AdapterPair, String> {
-        rmasscan_net::open_explicit(binding)
-            .map(|a| a.io)
-            .map_err(|e| e.to_string())
-    }
-}
+mod native;
+pub use native::Native;
 
 #[cfg(test)]
 mod tests;

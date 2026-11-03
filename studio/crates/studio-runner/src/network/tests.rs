@@ -7,6 +7,9 @@ struct Fake {
     routes: Mutex<PhysicalRoutePlan>,
     resolved: Mutex<BTreeMap<Ipv4Addr, [u8; 6]>>,
     calls: Mutex<Vec<&'static str>>,
+    deadlines: Mutex<Vec<(&'static str, Instant)>>,
+    late_open: AtomicBool,
+    io: rmasscan_engine::fake::FakeAdapter,
 }
 impl Fake {
     fn new() -> (Job, Self) {
@@ -28,6 +31,9 @@ impl Fake {
                     [(ip(1), [2, 0, 0, 0, 0, 1]), (ip(3), [2, 0, 0, 0, 0, 3])].into(),
                 ),
                 calls: Mutex::new(vec![]),
+                deadlines: Mutex::new(vec![]),
+                late_open: AtomicBool::new(false),
+                io: rmasscan_engine::fake::FakeAdapter::new(),
             },
         )
     }
@@ -40,10 +46,11 @@ impl Environment for Fake {
     fn observe(
         &self,
         _: &Job,
-        _: Instant,
+        deadline: Instant,
         _: &dyn Fn() -> bool,
     ) -> Result<PhysicalRoutePlan, String> {
         self.calls.lock().unwrap().push("observe");
+        self.deadlines.lock().unwrap().push(("observe", deadline));
         Ok(self.routes.lock().unwrap().clone())
     }
     fn neighbours(
@@ -72,10 +79,43 @@ impl Environment for Fake {
             elapsed: Duration::ZERO,
         })
     }
-    fn open(&self, _: &AdapterBinding) -> Result<AdapterPair, String> {
+    fn open(
+        &self,
+        _: &AdapterBinding,
+        deadline: Instant,
+        _: &dyn Fn() -> bool,
+    ) -> Result<AdapterPair, String> {
         self.calls.lock().unwrap().push("tcp-open");
-        Ok(rmasscan_engine::fake::FakeAdapter::new().pair())
+        self.deadlines.lock().unwrap().push(("open", deadline));
+        let pair = self.io.pair();
+        if self.late_open.load(Ordering::Relaxed) {
+            std::thread::sleep(
+                deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+            );
+        }
+        Ok(pair)
     }
+}
+#[test]
+fn launch_shares_absolute_deadline_and_discards_late_success_without_cancellation() {
+    let (job, env) = Fake::new();
+    let prepared = prepare(&env, job, [1; 16], [2; 16], None, &|| false).unwrap();
+    env.deadlines.lock().unwrap().clear();
+    env.late_open.store(true, Ordering::Relaxed);
+    let env = Arc::new(env);
+    let cancelled = AtomicBool::new(false);
+    let result = launch(env.clone(), prepared, &|| cancelled.load(Ordering::Relaxed));
+    assert_eq!(
+        result.err().as_deref(),
+        Some("Network adapter open timed out")
+    );
+    assert!(!cancelled.load(Ordering::Relaxed));
+    assert_eq!(env.io.alive_handles(), 0);
+    let deadlines = env.deadlines.lock().unwrap();
+    assert_eq!(deadlines.len(), 2);
+    assert_eq!(deadlines[0].0, "observe");
+    assert_eq!(deadlines[1].0, "open");
+    assert_eq!(deadlines[0].1, deadlines[1].1);
 }
 #[test]
 fn preparation_keeps_full_routes_and_truthful_partial_coverage_without_tcp() {
@@ -270,12 +310,28 @@ fn full_effective_probe_admission_precedes_arp_even_when_most_hosts_would_be_unr
     assert_eq!(*env.calls.lock().unwrap(), vec!["authorize", "observe"]);
 }
 #[test]
-fn mismatched_route_partition_is_rejected_before_arp_and_native_gate_stays_closed() {
+fn mismatched_route_partition_is_rejected_before_arp_and_native_authorization_remains_required() {
     let (job, env) = Fake::new();
     env.routes.lock().unwrap().next_hops.insert(ip(4), ip(4));
     assert!(prepare(&env, job, [1; 16], [2; 16], None, &|| false).is_err());
     assert!(!env.calls.lock().unwrap().contains(&"arp"));
-    assert!(Native.authorize().unwrap_err().contains("disabled"));
+    if !studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacNetwork) {
+        assert!(
+            Native::default()
+                .authorize()
+                .unwrap_err()
+                .contains("disabled")
+        );
+    }
+    #[cfg(unix)]
+    if cfg!(target_os = "macos") && studio_platform::unix::Identity::current().unwrap().uid != 0 {
+        assert!(
+            Native::default()
+                .authorize()
+                .unwrap_err()
+                .contains("root helper")
+        );
+    }
 }
 
 #[test]

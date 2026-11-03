@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod work_session;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "macos")]
 mod feth_acceptance;
@@ -65,6 +67,8 @@ fn main() -> Result<()> {
     };
     std::env::set_current_dir(&root)?;
     match task.as_str() {
+        #[cfg(target_os = "macos")]
+        "work-session" => work_session::main_entry(&root)?,
         #[cfg(any(target_os = "macos", test))]
         "network-acceptance" => network_acceptance::main_entry()?,
         #[cfg(any(target_os="macos", target_os="linux", windows))]
@@ -153,14 +157,14 @@ fn main() -> Result<()> {
                 let bundle = dist.join("Masscan Studio.app");
                 let macos = bundle.join("Contents/MacOS");
                 fs::create_dir_all(&macos)?;
-                for name in ["studio-ui", "studio-runner", "studio-inspect"] {
+                for name in ["studio-launcher", "studio-ui", "studio-runner", "studio-inspect"] {
                     let dst = macos.join(name);
                     fs::copy(target.join(name), &dst)?;
                     files.push(dst);
                 }
                 fs::write(
                     bundle.join("Contents/Info.plist"),
-                    r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>studio-ui</string><key>CFBundleIdentifier</key><string>dev.masscanstudio.rust</string><key>CFBundleName</key><string>Masscan Studio</string><key>CFBundleVersion</key><string>1</string><key>CFBundleShortVersionString</key><string>0.1.0</string><key>CFBundlePackageType</key><string>APPL</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/></dict></plist>"#,
+                    r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>studio-launcher</string><key>CFBundleIdentifier</key><string>dev.masscanstudio.rust</string><key>CFBundleName</key><string>Masscan Studio</string><key>CFBundleVersion</key><string>1</string><key>CFBundleShortVersionString</key><string>0.1.0</string><key>CFBundlePackageType</key><string>APPL</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/></dict></plist>"#,
                 )?;
                 let deps = text(Command::new("otool").arg("-L").arg(macos.join("studio-ui")))?;
                 if let Some(sqlite) = deps
@@ -188,7 +192,7 @@ fn main() -> Result<()> {
                     files.push(dest);
                 }
                 // Fresh copies/inodes and signing only after every Mach-O change avoid taskgated's stale signatures.
-                for name in ["studio-runner", "studio-inspect", "studio-ui"] {
+                for name in ["studio-runner", "studio-inspect", "studio-ui", "studio-launcher"] {
                     run(Command::new("codesign")
                         .args(["--force", "--sign", "-", "--timestamp=none"])
                         .arg(macos.join(name)))?;

@@ -43,8 +43,8 @@ struct Knobs {
     runner_exe_sha: Option<String>,
     /// What `windows_wire_hash.ps1` reports for the scanner executable (default: `EXE`).
     exe_hash: Option<String>,
-    /// `--out` of the suite under test: every fetch of a guest `stdout.txt` records whether `runs/<tag>` existed.
-    out_root: Option<PathBuf>,
+    /// The executable the guest runner reports it ran (`runner.json` `exe`; default: the plan's own scanner).
+    runner_exe: Option<String>,
 }
 struct Stand {
     src: PathBuf,
@@ -61,8 +61,8 @@ struct Stand {
     marker: RefCell<Option<String>>,
     deleted: Cell<bool>,
     created: Cell<bool>,
-    /// Every copy of a guest `stdout.txt`: (local destination, `runs/<tag>` of `out_root` existed at that moment).
-    stdout_fetches: RefCell<Vec<(PathBuf, bool)>>,
+    /// The local destination of every copy of a guest `stdout.txt` (autodetect stand).
+    stdout_fetches: RefCell<Vec<PathBuf>>,
 }
 /// The "installed" Linux binary of the fake stand; the default deploy manifest vouches for it.
 const LAB_BINARY: &[u8] = b"rmasscan-lab test binary";
@@ -326,6 +326,10 @@ impl Stand {
                 fs::write(local.join(format!("{who}.pcap")), self.pcap(who))
                     .map_err(|e| e.to_string())?;
             }
+            // `scp -r DIR/.` copies dot files too: the keep marker comes home with the scratch while it is set.
+            if self.marker.borrow().is_some() {
+                fs::write(local.join(ABORT_MARKER), "").map_err(|e| e.to_string())?;
+            }
             return out(0, "");
         }
         let guest = dir.join("guest");
@@ -333,13 +337,8 @@ impl Stand {
             && matches!(name, "stdout.txt" | "stderr.txt" | "exit.txt")
         {
             // An autodetect stand: what the guest runner wrote for this run (or for its `--offline` preflight).
-            if name == "stdout.txt"
-                && let Some(root) = &k.out_root
-            {
-                let tag = self.tag.borrow().clone();
-                self.stdout_fetches
-                    .borrow_mut()
-                    .push((local.to_path_buf(), root.join("runs").join(tag).exists()));
+            if name == "stdout.txt" {
+                self.stdout_fetches.borrow_mut().push(local.to_path_buf());
             }
             let file = if remote.contains(".preflight/") {
                 format!("preflight-{name}")
@@ -381,7 +380,7 @@ impl Stand {
                 "stderr.txt" => Some(Vec::new()),
                 "exit.txt" => Some(b"0\n".to_vec()),
                 "runner.json" => Some(
-                    json!({"exe":"C:\\x\\wire_scan.exe","exe_sha256":k.runner_exe_sha.clone().unwrap_or_else(|| EXE.into()),"argc":1,"times":{"started_utc":1.0,"finished_utc":2.0}})
+                    json!({"exe":k.runner_exe.clone().unwrap_or_else(|| if guest.is_dir() { RMASSCAN_EXE } else { "C:\\x\\wire_scan.exe" }.into()),"exe_sha256":k.runner_exe_sha.clone().unwrap_or_else(|| EXE.into()),"argc":1,"times":{"started_utc":1.0,"finished_utc":2.0}})
                         .to_string()
                         .into_bytes(),
                 ),
@@ -3059,7 +3058,6 @@ fn autodetect_stand(w: &World) -> Stand {
     {
         let mut k = stand.knobs.borrow_mut();
         k.provenance = Some(canned_provenance());
-        k.out_root = Some(w.root.clone());
     }
     stand
 }
@@ -3546,16 +3544,21 @@ fn iflist_runs_reduce_guest_stdout_in_the_work_dir_before_the_run_dir_is_written
         "{:?}",
         stand.calls()
     );
-    // The guest's stdout went to the work directory, never into the run, while the run directory did not exist yet.
+    // The guest's stdout went to the work directory next to the run (`.work/<tag>.<run id>/`), never into the run
+    // directory (`.work/<tag>.<run id>/run`), which is what reaches `runs/<tag>`; and it is deleted at once.
     let fetches = stand.stdout_fetches.borrow().clone();
     assert_eq!(fetches.len(), 2, "{fetches:?}");
-    for (local, run_dir_existed) in &fetches {
-        assert!(!run_dir_existed, "{}", local.display());
-        assert!(
-            local.starts_with(w.root.join(".work")),
-            "{}",
-            local.display()
-        );
+    for (local, tag) in fetches.iter().zip(tags) {
+        let rel = local
+            .strip_prefix(w.root.join(".work"))
+            .unwrap_or_else(|_| panic!("{} is not in the work directory", local.display()));
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts[0].starts_with(&format!("{tag}.")), "{parts:?}");
+        assert!(!parts.iter().any(|p| p == "run"), "{parts:?}");
         assert!(
             !local.exists(),
             "the copy is deleted at once: {}",
@@ -3725,20 +3728,55 @@ fn a_preflight_other_than_the_expected_detection_is_not_run_and_starts_nothing()
     assert_eq!(stand.count("windows_wire_run.ps1 -ArgvFile"), 1);
     assert_eq!(stand.count("eno1_size="), 0);
     assert!(!w.root.join("runs/w01_auto").exists());
-    // What it printed is kept with the gate's evidence; the case stays NOT RUN, never PASS.
-    let kept: Vec<PathBuf> = every_file(&w.root.join("runs_aborted"))
+    // Nothing ran and nothing was captured: no failure copy of the remote scratch (it would bring the keep marker
+    // home), the scratch and its marker are removed on home-pc, and only the orchestrator's records are kept.
+    let copies = stand
+        .calls()
         .into_iter()
+        .filter(|c| c.starts_with("scp home-pc:") && c.contains("/. "))
+        .count();
+    assert_eq!(copies, 0, "{:?}", stand.calls());
+    assert!(
+        stand.marker.borrow().is_none(),
+        "the keep marker is cleared"
+    );
+    assert!(
+        stand
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("home if test -e")
+                && c.contains("rm -rf --")
+                && c.contains("/w01_auto'")),
+        "{:?}",
+        stand.calls()
+    );
+    let files = every_file(&w.root);
+    assert!(
+        !files
+            .iter()
+            .any(|p| p.ends_with(ABORT_MARKER) || p.ends_with("eno1.pcap")),
+        "{files:?}"
+    );
+    // What it printed is kept with the gate's records; the directory is NOT RUN, exactly, never INVALID or PASS.
+    let kept: Vec<&PathBuf> = files
+        .iter()
         .filter(|p| p.ends_with(av::PREFLIGHT_TXT))
         .collect();
     assert_eq!(kept.len(), 1, "{kept:?}");
     assert!(
-        fs::read_to_string(&kept[0])
+        kept[0].starts_with(w.root.join("runs_aborted")),
+        "{}",
+        kept[0].display()
+    );
+    assert!(
+        fs::read_to_string(kept[0])
             .unwrap()
             .contains("interface = Ethernet (")
     );
     let res = av::verify_dir(&w.root);
     assert_eq!(ad_verdict(&res, "w01_auto"), "NOT RUN");
-    assert_ne!(res["overall"], "PASS");
+    assert_eq!(ad_verdict(&res, "manifest"), "PASS", "{:#?}", ad_bad(&res));
+    assert_eq!(res["overall"], "NOT RUN", "{:#?}", ad_bad(&res));
     assert!(!w.root.join(".work").exists());
 }
 
@@ -3900,4 +3938,157 @@ fn the_peer_witness_of_a_windows_run_is_judged_by_the_capture_dump_rule() {
         w["invalid_reasons"].to_string().contains("pcap unreadable"),
         "{w}"
     );
+}
+
+// ---- Task 6d fix round 1 ----
+#[test]
+fn the_guest_runner_must_have_run_the_executable_it_was_given() {
+    // runner.json names what the guest runner really started; the autodetect plan accepts only `--guest-exe`.
+    let w = World::autodetect("runner-exe", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap(),
+        0
+    );
+    let runner = read_json(w.root.join("runs/w02_adapter_npf/guest-runner.json")).unwrap();
+    assert_eq!(runner["exe"], RMASSCAN_EXE);
+    // The same sha256 under another executable (a wire_scan.exe that the runner was pointed at) is refused.
+    let w = World::autodetect("runner-exe-other", |_| {});
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().runner_exe = Some("C:\\Users\\lab\\t4\\wire_scan.exe".into());
+    let e = run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::Abort(m) if m.contains("wire_scan.exe") && m.contains("rmasscan.exe")),
+        "{e:?}"
+    );
+    assert!(!w.root.join("runs/w02_adapter_npf").exists());
+}
+
+#[test]
+fn the_deploy_record_hashes_the_trust_anchor_and_the_scrubbed_copy_it_keeps() {
+    let w = World::autodetect("deploy-hash", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap(),
+        0
+    );
+    let copy = w.root.join("deploy/deploy-manifest.json");
+    let text = fs::read_to_string(&copy).unwrap();
+    assert!(
+        !text.contains("/home/a1") && text.contains("$HOME"),
+        "{text}"
+    );
+    let pre = fs::read_dir(w.root.join("deploy"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("preflight-"))
+        .unwrap()
+        .path();
+    let rec = read_json(pre).unwrap();
+    // The anchor on the orchestrating machine (what vouched for the binary) and the copy in the directory.
+    assert_eq!(rec["deploy_manifest_sha256"], hash(&w.deploy).unwrap());
+    assert_eq!(
+        rec["deploy_manifest_copy"]["path"],
+        "deploy/deploy-manifest.json"
+    );
+    assert_eq!(rec["deploy_manifest_copy"]["sha256"], hash(&copy).unwrap());
+    assert_eq!(rec["deploy_manifest_copy"]["scrubbed"], true);
+    assert_ne!(hash(&copy).unwrap(), hash(&w.deploy).unwrap());
+}
+
+#[test]
+fn an_iflist_stand_line_in_the_windows_cli_format_passes_with_the_e1000e_nic() {
+    // The n2 guest's NICs are e1000e ("Intel(R) 82574L Gigabit Network Connection", "… #2"). rmasscan --iflist prints
+    // `desc=` from the adapter's FriendlyName (route_parse::iface_from_adapter), so the stand line reads
+    // `… desc=Ethernet 2`; a line carrying the hardware description must pass as well.
+    use rmasscan_net::{Iface, Route, iflist_text};
+    use std::net::Ipv4Addr;
+    let mac = |b: [u8; 6]| Some(b);
+    let iface = |name: &str, index, id: &str, desc: &str, m, ip: Vec<Ipv4Addr>| Iface {
+        name: name.into(),
+        index,
+        device_id: id.into(),
+        description: Some(desc.into()),
+        mac: m,
+        mac_masked: false,
+        ethernet: true,
+        up: true,
+        ipv4: ip,
+    };
+    let lab_id = IFACE;
+    for lab_desc in [
+        "Ethernet 2",
+        "Intel(R) 82574L Gigabit Network Connection #2",
+    ] {
+        let listing = iflist_text(
+            &[
+                iface(
+                    "Ethernet",
+                    4,
+                    "\\Device\\NPF_{0B9A3C1D-1111-2222-3333-444455556666}",
+                    "Intel(R) 82574L Gigabit Network Connection",
+                    mac([0x52, 0x54, 0, 0x12, 0x34, 0x56]),
+                    vec![Ipv4Addr::new(10, 0, 2, 15)],
+                ),
+                iface(
+                    "Ethernet 2",
+                    14,
+                    lab_id,
+                    lab_desc,
+                    mac([0x52, 0x54, 0, 0x04, 0x80, 0xa9]),
+                    vec![Ipv4Addr::new(198, 18, 0, 1)],
+                ),
+            ],
+            &[Route {
+                ifindex: 4,
+                ifname: "Ethernet".into(),
+                gateway: Some(Ipv4Addr::new(10, 0, 2, 2)),
+                local: false,
+            }],
+        );
+        let w = World::autodetect("e1000e", |_| {});
+        for tag in ["w07_iflist", "w08a_restricted_iflist"] {
+            fs::write(
+                w.src.join("runs").join(tag).join("guest/stdout.txt"),
+                &listing,
+            )
+            .unwrap();
+        }
+        let stand = autodetect_stand(&w);
+        assert_eq!(
+            run_with(
+                &autodetect_args(&w, &["--only", "w07_iflist", "w08a_restricted_iflist"]),
+                &stand
+            )
+            .unwrap(),
+            0
+        );
+        let res = av::verify_dir(&w.root);
+        for tag in ["w07_iflist", "w08a_restricted_iflist"] {
+            assert_eq!(
+                ad_verdict(&res, tag),
+                "PASS",
+                "{lab_desc}: {:#?}",
+                ad_bad(&res)
+            );
+            let rec: IflistRecord = serde_json::from_slice(
+                &fs::read(w.root.join("runs").join(tag).join(av::IFLIST_JSON)).unwrap(),
+            )
+            .unwrap();
+            let line = rec.stand_line.unwrap();
+            assert_eq!(
+                line,
+                format!(
+                    "Ethernet 2 index=14 mac=52-54-00-04-80-a9 ipv4=198.18.0.1 up ethernet id={lab_id} desc={lab_desc}"
+                )
+            );
+            assert_eq!(rec.lines, 3);
+        }
+        for f in every_file(&w.root) {
+            let t = String::from_utf8_lossy(&fs::read(&f).unwrap()).into_owned();
+            for host in ["10.0.2.15", "52-54-00-12-34-56", "10.0.2.2", "0B9A3C1D"] {
+                assert!(!t.contains(host), "{}: {host}", f.display());
+            }
+        }
+    }
 }

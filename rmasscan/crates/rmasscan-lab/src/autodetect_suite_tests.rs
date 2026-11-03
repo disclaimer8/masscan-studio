@@ -1817,3 +1817,21 @@ mod mac {
         fs::remove_dir_all(&s.root).unwrap();
     }
 }
+
+#[test]
+fn a_stderr_that_does_not_parse_is_named_by_the_file_that_was_read() {
+    // Windows reads guest-stderr.txt: the warning must say so, not the Linux/macOS name.
+    for name in ["stderr.txt", "guest-stderr.txt"] {
+        let w = stderr_parse_warning(name, "not a line rmasscan prints");
+        assert!(w.starts_with(&format!("{name} does not parse (")), "{w}");
+        assert!(
+            w.contains("not a line rmasscan prints") && w.contains("detected.json is not written")
+        );
+    }
+    // The record is not written either way.
+    let d = scratch();
+    fs::write(d.join("guest-stderr.txt"), "garbage\n").unwrap();
+    write_detected(&d, "guest-stderr.txt").unwrap();
+    assert!(!d.join(av::DETECTED_JSON).exists());
+    fs::remove_dir_all(d).unwrap();
+}

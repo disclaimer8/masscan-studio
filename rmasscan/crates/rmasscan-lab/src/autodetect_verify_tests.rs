@@ -667,7 +667,7 @@ impl Sim {
     }
 
     /// Writes `root/manifest.json` (if absent) and `root/runs/<tag>/` with its hashes; returns the run directory.
-    fn write(&self, root: &Path) -> PathBuf {
+    pub(crate) fn write(&self, root: &Path) -> PathBuf {
         let man = root.join("manifest.json");
         if !man.exists() {
             fs::write(&man, json!({"autodetect": self.case.plan}).to_string()).unwrap();
@@ -1798,6 +1798,12 @@ fn case_table_holds_the_briefs_cases() {
             .unwrap()
             .fail,
         None
+    );
+    // w08 is two runs under the restricted token (`--iflist`, then w01's scan); every other case runs elevated.
+    let restricted: Vec<&str> = all.iter().filter(|c| c.restricted).map(|c| c.tag).collect();
+    assert_eq!(
+        restricted,
+        ["w08a_restricted_iflist", "w08b_restricted_scan"]
     );
 }
 

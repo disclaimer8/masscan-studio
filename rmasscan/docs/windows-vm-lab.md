@@ -61,6 +61,19 @@ adapter that holds the management address or a default route, and writes `<Manif
 
 See [rust-lab.md](rust-lab.md), section "Deployment for the live Windows rerun". The suite, not the operator, copies `windows-vm-lab.ps1` to `C:\Users\lab\` from the tree of `--commit` and records its sha256; an older guest copy would make every gate fail.
 
+## Autodetect plan
+
+`rmasscan.exe` (CLI с автоопределением) собирается на госте так же, как `wire_scan.exe`: из `git archive` того же
+коммита, release, статический CRT, `RUSTFLAGS` с `/DEPENDENTLOADFLAG:0x800`, проверка `dumpbin /loadconfig`. Отличие
+одно: `cargo build --locked --release -p rmasscan-cli` вместо `-p rmasscan-net --example wire_scan`. Копия кладётся в
+`C:\Users\lab\t4\rmasscan.exe`. `windows-suite --plan autodetect` гоняет кейсы `w01`–`w08b` на этом же стенде
+`n2` без изменений: тот же гейт, слушатели, захваты `lab0`/`eno1` и гостевой runner (`w08a`/`w08b` под ограниченным
+токеном). Команды и каталог прогона — в [rust-lab.md](rust-lab.md), раздел «Autodetect suite». У лабораторного NIC нет
+шлюза, поэтому одна цель на линке (`198.18.0.2`) резолвится ARP-ом к самой цели, а несколько целей (`w06`)
+получают отказ. ARP-ответы ядра гостя ожидаемы: ядро пира спрашивает `who-has 198.18.0.1`, гость отвечает
+42-байтовыми кадрами со своего MAC. Верификатор считает их в `os_arp`, никогда не кадрами сканера. ARP-запрос
+сканера — это ровно 60 байт с нулевым дополнением.
+
 ## Why run.sh was changed instead of QMP hotplug
 
 q35 has no PCIe root port in `~/winvm/run.sh`; QEMU cannot hotplug onto `pcie.0`. The lab NIC is therefore

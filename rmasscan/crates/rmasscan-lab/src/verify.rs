@@ -2248,7 +2248,7 @@ fn permission(r: &mut Run, ctx: &Ctx, it: &Value, man: &Value) {
 /// binding and the run kind, so they run before any other evidence is looked at: a missing meta, an
 /// incomplete capture, a failed gate leg or a wrong argv cannot hide them (final review I-1, I-2).
 /// `packets received by filter` of the run directory's own `eno1.err`, when it is there.
-fn eno1_err_received(dir: &Path) -> Option<u64> {
+pub(crate) fn eno1_err_received(dir: &Path) -> Option<u64> {
     let text = fs::read_to_string(dir.join("eno1.err")).ok()?;
     crate::windows_suite::parse_tcpdump(&text)["received"].as_u64()
 }

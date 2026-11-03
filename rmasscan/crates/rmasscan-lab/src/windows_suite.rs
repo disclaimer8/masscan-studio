@@ -598,8 +598,8 @@ pub(crate) fn capture_commands(netns: &str, rev: &str, pm: &str) -> (String, Str
     (peer, eno, filter)
 }
 const GUEST: &str = "C:\\Users\\lab\\t4";
-const IFACE: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
-const MAC: &str = "52:54:00:04:80:a9";
+pub(crate) const IFACE: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
+pub(crate) const MAC: &str = "52:54:00:04:80:a9";
 struct Suite<'a> {
     exec: &'a dyn Exec,
     out: PathBuf,

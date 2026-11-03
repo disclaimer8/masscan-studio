@@ -485,6 +485,11 @@ Revoke и grant посреди окна не делаются. Между B и F
 "$LAB" autodetect-verify --dir "$OUT/macos-root-r1" --out "$OUT/macos-root-r1/verdict.json"
 ```
 
+`$OUT` всегда в `$SCRATCH`, вне репозитория: `--out` никогда не пишется в `docs/experiments/`. В репозиторий
+`macos-r1` и `macos-root-r1` попадают только после действия F, шагом «Evidence в репозиторий» из `rust-lab.md`
+(«Autodetect suite»): проверка хэшей, privacy-скан, копия без `.work`, повторная проверка и `autodetect-verify`
+копии.
+
 Перед первым прогоном suite проверяет:
 
 - `--lab` — это запущенный бинарник (sha256 совпадает), `--rmasscan` — абсолютный путь к существующему файлу;
@@ -509,7 +514,9 @@ Revoke и grant посреди окна не делаются. Между B и F
 Свидетель пира пишет каждый кадр `feth4202` в приватный рабочий каталог `$OUT/…/.work/<tag>.<nonce>/peer.unfiltered`.
 Suite публикует его как `peer.pcap` без собственного mDNS хоста, по правилу фильтра приватности
 `not (ether src 02:ac:00:00:00:02 and udp port 5353)`. Число выброшенных кадров записано в `capture.json`
-(`privacy_filter`), нефильтрованный файл удаляется.
+(`privacy_filter`), нефильтрованный файл удаляется. `autodetect-verify` сверяет запись с захватом: `frames_kept`
+равно числу кадров `peer.pcap`, `frames_kept + frames_dropped` — числу кадров свидетеля (`unfiltered.pcap_frames`),
+фильтр — этот; иначе INVALID.
 
 Коды `autodetect-suite`: 0 все выбранные прогоны выполнены, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH (кадр
 лаборатории на uplink), 130 INTERRUPTED. PASS или FAIL выносит `autodetect-verify`: 0 PASS, 1 FAIL, 2 INVALID или

@@ -109,14 +109,22 @@ fn case(plan: Plan, tag: &'static str) -> Case {
         .and_then(|d| d.router_ip.as_ref())
         .map(|r| ip4(&r.value));
     if tag == "w08b_restricted_scan" {
-        // A restricted token: detection works, opening the ARP adapter is refused (the table accepts any refusal).
+        // A restricted token: detection works, opening the ARP adapter is refused (the table accepts any refusal),
+        // with the product's own text: Admin-only Npcap shows the token only loopback (rmasscan-net
+        // `windows/handle.rs`, format string copied verbatim, the device name through `{:?}`), wrapped by the CLI's
+        // `open` (`rmasscan-cli/src/live.rs`) with its privilege hint.
         let st = stand(plan);
+        let denied = rmasscan_net::NetError::PermissionDenied(format!(
+            "no Npcap device named {:?}: only loopback is visible: Npcap may be installed in Administrators-only mode and this process lacks rights ({} devices enumerated)",
+            crate::windows_suite::IFACE,
+            1
+        ));
         printed = DetectedRecord {
             interface: Some(sourced(st.iface, "detected: route to 198.18.0.2")),
             source_mac: Some(sourced(&dash(st.scanner_mac), "detected")),
             source_ip: Some(sourced("198.18.0.1", "detected")),
             router_ip: Some(sourced("198.18.0.2", "on-link target")),
-            error: Some("cannot open adapter \"Ethernet 2\": permission denied (raw packet access needs elevated privileges): PacketOpenAdapter failed".into()),
+            error: Some(format!("cannot open adapter \"{}\": {denied}", st.iface)),
             hints: strings(&[
                 "    [hint] run as Administrator; Npcap must be installed (Admin-only mode needs an elevated prompt)",
             ]),
@@ -572,6 +580,17 @@ impl Sim {
         .unwrap()
     }
 
+    /// A macOS `capture.json`: the witness record of the published capture `fr`, which the host's mDNS (two frames
+    /// here) was left out of, with what was left out (the fields `autodetect_suite::publish_peer_capture` adds).
+    pub(crate) fn published_witness(fr: &Frames) -> Vec<u8> {
+        let mut v: Value = serde_json::from_slice(&Sim::witness(fr)).unwrap();
+        v["unfiltered"] = json!({"pcap_sha256": sha_of(b"the witness's capture with the host's mDNS"),
+            "pcap_frames": fr.len() + 2, "kept": "private work directory only, deleted after publishing"});
+        v["privacy_filter"] = json!({"published": crate::macos_verify::PEER_FILTER, "frames_dropped": 2,
+            "frames_kept": fr.len()});
+        serde_json::to_vec_pretty(&v).unwrap()
+    }
+
     /// The run directory's files (relative path, bytes) before hashing.
     pub(crate) fn files(&self) -> Vec<(String, Vec<u8>)> {
         let c = &self.case;
@@ -594,7 +613,14 @@ impl Sim {
             (name("stderr.txt"), self.stderr_text().into_bytes()),
             (name("exit.txt"), format!("{}\n", self.exit).into_bytes()),
             ("peer.pcap".into(), pcap::encode(&self.peer)),
-            ("capture.json".into(), Sim::witness(&self.peer)),
+            (
+                "capture.json".into(),
+                if matches!(c.plan, Plan::Macos | Plan::MacosRoot) {
+                    Sim::published_witness(&self.peer)
+                } else {
+                    Sim::witness(&self.peer)
+                },
+            ),
         ];
         if c.kind != CaseKind::Iflist {
             f.push(("detected.json".into(), json(&self.det)));
@@ -615,10 +641,10 @@ impl Sim {
                     "peer_routes":["198.18.0.0/24 dev veth-b proto kernel scope link src 198.18.0.2"],
                     "mode":"autodetect"});
                 v["default_route"] = isolation_default_route(IsolationMode::Autodetect, "veth-a");
-                f.push((
-                    "isolation.json".into(),
-                    serde_json::to_vec_pretty(&v).unwrap(),
-                ));
+                // The seal before the run and after it (the suite takes `capture isolation` again).
+                for n in ["isolation.json", "isolation-post.json"] {
+                    f.push((n.into(), serde_json::to_vec_pretty(&v).unwrap()));
+                }
             }
             Plan::Macos | Plan::MacosRoot => {
                 f.push(("uplink.pcap".into(), pcap::encode(&self.uplink)));
@@ -661,8 +687,9 @@ impl Sim {
             f.push(("oracle.pcap".into(), pcap::encode(&o.pcap)));
             f.push(("oracle-capture.json".into(), Sim::witness(&o.pcap)));
         }
-        f.extend(self.extra.iter().cloned());
+        // An extra file may stand in for an omitted one.
         f.retain(|(n, _)| !self.omit.contains(&n.as_str()));
+        f.extend(self.extra.iter().cloned());
         f
     }
 
@@ -694,9 +721,17 @@ fn json<T: Serialize>(v: &T) -> Vec<u8> {
     serde_json::to_vec_pretty(v).unwrap()
 }
 
+/// `teardown.json` as `wire-lab.sh --suite autodetect` writes it after a clean teardown (namespace names scrubbed).
+pub(crate) const TEARDOWN: &str =
+    r#"{"namespaces_deleted":["wl-scan-RUNID","wl-peer-RUNID"],"namespaces_left":0}"#;
+
+/// Every planned run of `plan` and, on Linux, the root's teardown record: a whole evidence directory.
 fn write_plan(root: &Path, plan: Plan) {
     for tag in planned_tags(plan) {
         Sim::new(plan, tag).write(root);
+    }
+    if plan == Plan::Linux {
+        fs::write(root.join("teardown.json"), format!("{TEARDOWN}\n")).unwrap();
     }
 }
 fn run_of(res: &Value, tag: &str) -> Value {
@@ -2086,5 +2121,457 @@ fn oracle_output_is_held_to_the_scanner_text_rules() {
         let c = check(&r, &format!("privacy: oracle/{file}.txt"));
         assert_eq!(c["result"], INVALID);
         assert!(c["detail"].as_str().unwrap().contains(needle), "{c}");
+    }
+}
+
+// ------------------------------------------------------------------ pre-window lab fix round LF1
+
+/// An ARP request from `mac` asking for `target`, 60 bytes as the scanner's resolver builds it.
+fn arp_from(mac: [u8; 6], st: &Stand, target: &str) -> Vec<u8> {
+    encode_request(mac, u32::from(st.scanner_ip), u32::from(ip4(target))).to_vec()
+}
+
+#[test]
+fn a_refusal_with_an_arp_request_from_the_placeholder_mac_is_fail() {
+    // m01 proves the masked MAC never reaches the wire: Darwin's placeholder as a source is exactly that frame.
+    let placeholder = [0x02, 0, 0, 0, 0, 0];
+    for (plan, tag) in [
+        (Plan::Macos, "m01_user_masked"),
+        (Plan::Linux, "l10_no_such_adapter"),
+        (Plan::Windows, "w08b_restricted_scan"),
+        // --iflist: no scanner frame either.
+        (Plan::Macos, "m07_user_iflist"),
+        (Plan::Linux, "l12_iflist"),
+    ] {
+        let mut sim = Sim::new(plan, tag);
+        assert_verdict(&judge(&sim), PASS);
+        let req = arp_from(placeholder, &sim.st, "198.18.0.2");
+        sim.insert(T0 + 0.5, req);
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert_eq!(r["safety_trip"], true, "{tag}");
+        let c = check(&r, "from a MAC other than the stand's scanner and peer");
+        assert_eq!(c["result"], FAIL, "{tag}");
+        assert!(
+            c["detail"].as_str().unwrap().contains("02:00:00:00:00:00"),
+            "{tag} {c}"
+        );
+    }
+}
+
+#[test]
+fn a_scan_with_an_extra_arp_request_from_the_zero_mac_is_fail() {
+    for (plan, tag) in [
+        (Plan::Linux, "l01_auto"),
+        (Plan::Macos, "m02_user_explicit"),
+        (Plan::Windows, "w01_auto"),
+        (Plan::MacosRoot, "m10_root_auto_mac"),
+    ] {
+        let mut sim = Sim::new(plan, tag);
+        let req = arp_from([0; 6], &sim.st, "198.18.0.2");
+        let t = sim.first_syn_time() - 0.05;
+        sim.insert(t, req);
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert_eq!(r["safety_trip"], true, "{tag}");
+        let c = check(&r, "from a MAC other than the stand's scanner and peer");
+        assert!(
+            c["detail"].as_str().unwrap().contains("00:00:00:00:00:00"),
+            "{tag} {c}"
+        );
+    }
+    // Any frame of a third device, not only ARP: a SYN-ACK from another MAC on the oracle's capture of l11.
+    let mut sim = Sim::new(Plan::Linux, "l11_parity");
+    let o = sim.oracle.as_mut().unwrap();
+    let i = o
+        .pcap
+        .iter()
+        .position(|(_, f)| f.get(47) == Some(&0x12) && f[12..14] == [8, 0])
+        .unwrap();
+    let mut third = o.pcap[i].1.clone();
+    third[6..12].copy_from_slice(&[0x02, 0xaa, 0, 0, 0, 0x33]);
+    let t = o.pcap[i].0 + 0.0001;
+    o.pcap.push((t, third));
+    o.pcap.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert_eq!(
+        check(&r, "no frame on the oracle capture from a MAC other")["result"],
+        FAIL
+    );
+    // An aborted run's capture is read by the safety walk with the same rule.
+    let root = scratch();
+    let mut kept = Sim::new(Plan::Linux, "l02_auto_multi");
+    kept.insert(T0 + 0.4, arp_from([0; 6], &kept.st, "198.18.0.2"));
+    let d = kept.write(&root);
+    fs::create_dir_all(root.join("runs_aborted")).unwrap();
+    fs::rename(&d, root.join("runs_aborted/l02_auto_multi.n1")).unwrap();
+    let res = verify_dir(&root);
+    assert_eq!(res["overall"], FAIL, "{:#?}", res["safety_scan"]);
+    assert_eq!(
+        res["safety_trips"],
+        json!(["runs_aborted/l02_auto_multi.n1"])
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn every_synthetic_stand_capture_holds_only_the_stand_macs() {
+    // The generator's runs of every case (markers, scanner, peer, the Windows guest kernel's ARP): no finding.
+    for plan in [Plan::Linux, Plan::Macos, Plan::MacosRoot, Plan::Windows] {
+        for tag in planned_tags(plan) {
+            let sim = Sim::new(plan, tag);
+            assert!(foreign_frames(&sim.peer, &sim.st).is_empty(), "{tag}");
+            if let Some(o) = &sim.oracle {
+                assert!(foreign_frames(&o.pcap, &sim.st).is_empty(), "{tag} oracle");
+            }
+        }
+    }
+    // The lab markers are exempt whoever sent them; any other frame of that MAC, and a frame too short to name its
+    // source, is a finding.
+    let st = stand(Plan::Linux);
+    let marker = marker_frame(st.scanner_mac, [2, 0xbb, 0, 0, 0, 1], END_PAYLOAD);
+    assert!(foreign_frames(&vec![(T0, marker.clone())], &st).is_empty());
+    let mut other = marker;
+    other[14..].fill(0);
+    assert_eq!(
+        foreign_frames(&vec![(T0, other), (T0, vec![0; 8])], &st),
+        [
+            "02:bb:00:00:00:01 ethertype 88b5",
+            "a 8-byte frame without an Ethernet header"
+        ]
+    );
+}
+
+#[test]
+fn committed_stand_captures_hold_only_the_stand_macs() {
+    // Real witness captures of the same three stands from earlier acceptances: the allowed set derived from the
+    // stand table (scanner NIC and peer) is what those wires carried, so the rule does not fail a correct live run.
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/experiments");
+    for (plan, dir, only_peer) in [
+        (
+            Plan::Linux,
+            "2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/linux-functional-r1",
+            false,
+        ),
+        (
+            Plan::Macos,
+            "2026-10-25-rmasscan-macos-bpf-acceptance-raw/functional-r1",
+            true,
+        ),
+        (
+            Plan::Windows,
+            "2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/functional-r3",
+            true,
+        ),
+    ] {
+        let d = base.join(dir);
+        let st = stand(plan);
+        let mut files = 0;
+        let mut frames = 0;
+        for rel in crate::macos_verify::relative_files(&d) {
+            let name = Path::new(&rel)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if !name.ends_with(".pcap") || (only_peer && name != "peer.pcap") {
+                continue;
+            }
+            let (_, fr) = pcap::read_pcap_records(&fs::read(d.join(&rel)).unwrap()).unwrap();
+            let foreign = foreign_frames(&fr, &st);
+            assert!(foreign.is_empty(), "{dir}/{rel}: {foreign:?}");
+            files += 1;
+            frames += fr.len();
+        }
+        assert!(
+            files >= 10 && frames >= 500,
+            "{dir}: {files} captures, {frames} frames"
+        );
+    }
+}
+
+#[test]
+fn l12_with_the_oracles_raw_listing_kept_is_invalid() {
+    // R2 for the oracle too: masscan lists on stderr, and neither of its streams of the --iflist run is evidence.
+    let listing =
+        " 0  veth-a \t(No description available)\n 1  lo \t(No description available)\n\n";
+    for (name, text) in [("oracle/stderr.txt", listing), ("oracle/stdout.txt", "")] {
+        let mut sim = Sim::new(Plan::Linux, "l12_iflist");
+        sim.extra.push((name.into(), text.as_bytes().to_vec()));
+        let r = judge(&sim);
+        assert_verdict(&r, INVALID);
+        assert_eq!(
+            check(
+                &r,
+                &format!("the oracle's full --iflist output is not stored ({name} absent)")
+            )["result"],
+            INVALID
+        );
+    }
+}
+
+#[test]
+fn w08b_with_the_products_restricted_token_text_is_pass() {
+    // The product's text names the device through `{:?}`: its backslashes arrive doubled on stderr.
+    let sim = Sim::new(Plan::Windows, "w08b_restricted_scan");
+    let err = sim.det.error.clone().unwrap();
+    assert!(
+        err.contains(r#"no Npcap device named "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}": only loopback is visible"#),
+        "{err}"
+    );
+    assert!(sim.stderr_text().contains(r#""\\Device\\NPF_{"#));
+    assert_verdict(&judge(&sim), PASS);
+    // Another device behind the same escapes is still a name off the stand.
+    let mut sim = Sim::new(Plan::Windows, "w08b_restricted_scan");
+    sim.det.error = Some(err.replace(
+        "C4617223-A264-44F4-BDC8-0EA27F02CC40",
+        "11111111-2222-3333-4444-555555555555",
+    ));
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(check(&r, "privacy: guest-stderr.txt")["result"], INVALID);
+}
+
+#[test]
+fn quoted_values_undo_only_the_two_debug_escapes_of_a_name() {
+    assert_eq!(
+        quoted_values(r#"named "\\Device\\NPF_{X}": only loopback"#),
+        [r"\Device\NPF_{X}"]
+    );
+    // The C-form texts quote names as they are: a single backslash stays.
+    assert_eq!(
+        quoted_values(r#"no such interface "\Device\NPF_{X}""#),
+        [r"\Device\NPF_{X}"]
+    );
+    // `\"` stays inside the value; `\t`, `\n`, `\u{..}` are not undone (narrow), and an open quote is still read.
+    assert_eq!(
+        quoted_values(r#"a "say \"hi\"" b "t\tab" c "open"#),
+        [r#"say "hi""#, r"t\tab", "open"]
+    );
+    assert_eq!(
+        quoted_values(r#"for router veth-a: "198.18.0.9""#),
+        ["198.18.0.9"]
+    );
+    // Through the privacy rule: the stand's device escaped is the stand's device; escaped otherwise it is not.
+    assert!(
+        name_problems(refusal_names(
+            r#"x "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}""#
+        ))
+        .is_empty()
+    );
+    assert!(
+        !name_problems(refusal_names(
+            r#"x "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}\t""#
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_linux_run_without_a_sealed_after_state_is_invalid() {
+    // The seal after the run (`isolation-post.json`) is judged offline like the seal before it. It is taken once
+    // the scanner has run, so missing or broken it is unproven evidence: INVALID, never NOT RUN.
+    let mut open = json!({});
+    let mut default_mode = json!({});
+    for (n, b) in Sim::new(Plan::Linux, "l01_auto").files() {
+        if n == "isolation.json" {
+            open = serde_json::from_slice(&b).unwrap();
+            default_mode = open.clone();
+        }
+    }
+    // A stand that is no longer the autodetect seal: a default route in the peer namespace, or the default mode.
+    open["default_route"]["peer_ns"] = json!("via 198.18.0.1 dev veth-b");
+    default_mode["mode"] = json!("default");
+    for (why, post) in [
+        ("missing", None),
+        ("not JSON", Some(b"{\"mode\":".to_vec())),
+        ("not permitting", Some(serde_json::to_vec(&open).unwrap())),
+        (
+            "another mode",
+            Some(serde_json::to_vec(&default_mode).unwrap()),
+        ),
+    ] {
+        let mut sim = Sim::new(Plan::Linux, "l01_auto");
+        sim.omit.push("isolation-post.json");
+        sim.extra
+            .extend(post.map(|b| ("isolation-post.json".to_owned(), b)));
+        let r = judge(&sim);
+        assert_verdict(&r, INVALID);
+        assert_eq!(
+            check(
+                &r,
+                "isolation-post.json: the stand still sealed after the run"
+            )["result"],
+            INVALID,
+            "{why}"
+        );
+        assert_eq!(r["behaviour_fail"], false, "{why}");
+    }
+    // The generator writes the record the suite writes, and a consistent run passes with it.
+    let sim = Sim::new(Plan::Linux, "l01_auto");
+    assert!(sim.files().iter().any(|(n, _)| n == "isolation-post.json"));
+    let r = judge(&sim);
+    assert_verdict(&r, PASS);
+    assert_eq!(
+        check(
+            &r,
+            "isolation-post.json: the stand still sealed after the run"
+        )["result"],
+        PASS
+    );
+}
+
+#[test]
+fn a_linux_directory_without_the_teardown_record_is_invalid() {
+    // The undo of the Linux stand is evidence: both namespaces deleted, none of the run left behind.
+    let teardown = |text: Option<&str>| {
+        let root = scratch();
+        write_plan(&root, Plan::Linux);
+        let p = root.join("teardown.json");
+        match text {
+            Some(t) => fs::write(&p, t).unwrap(),
+            None => fs::remove_file(&p).unwrap(),
+        }
+        let res = verify_dir(&root);
+        fs::remove_dir_all(root).unwrap();
+        res
+    };
+    let res = teardown(Some(TEARDOWN));
+    assert_eq!(res["overall"], PASS, "{res:#}");
+    let name = "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left";
+    assert_eq!(check(&run_of(&res, "manifest"), name)["result"], PASS);
+    for (why, text) in [
+        ("missing", None),
+        ("not JSON", Some("{\"namespaces_left\":")),
+        (
+            "the namespace list could not be read",
+            Some(r#"{"namespaces_deleted":[],"namespaces_left":null}"#),
+        ),
+        (
+            "a namespace left",
+            Some(r#"{"namespaces_deleted":["wl-scan-RUNID"],"namespaces_left":1}"#),
+        ),
+        (
+            "a namespace of the lab still listed, both deleted",
+            Some(r#"{"namespaces_deleted":["wl-scan-RUNID","wl-peer-RUNID"],"namespaces_left":1}"#),
+        ),
+        (
+            "the peer namespace not deleted",
+            Some(r#"{"namespaces_deleted":["wl-scan-RUNID"],"namespaces_left":0}"#),
+        ),
+        (
+            "not the stand's namespaces",
+            Some(r#"{"namespaces_deleted":["wl-scan-RUNID","other"],"namespaces_left":0}"#),
+        ),
+        (
+            "a field of another record",
+            Some(
+                r#"{"namespaces_deleted":["wl-scan-RUNID","wl-peer-RUNID"],"namespaces_left":0,"ok":true}"#,
+            ),
+        ),
+    ] {
+        let res = teardown(text);
+        let m = run_of(&res, "manifest");
+        assert_eq!(check(&m, name)["result"], INVALID, "{why}");
+        assert_eq!(verdict(&m), INVALID, "{why}");
+        assert_eq!(res["overall"], INVALID, "{why}");
+        assert_eq!(res["safety_trips"], json!([]), "{why}");
+    }
+    // Only the Linux stand is set up and torn down by wire-lab.sh: the other plans have no such record.
+    for plan in [Plan::Macos, Plan::MacosRoot, Plan::Windows] {
+        let root = scratch();
+        write_plan(&root, plan);
+        let res = verify_dir(&root);
+        assert_eq!(res["overall"], PASS, "{plan:?}");
+        assert!(
+            !run_of(&res, "manifest")["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["name"].as_str().unwrap().starts_with("teardown.json"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn a_macos_privacy_filter_that_does_not_add_up_is_invalid() {
+    // The macOS peer capture is published without the host's mDNS: capture.json says what was left out, and the
+    // counts must add up to the capture the witness judged (kept = peer.pcap, kept + dropped = unfiltered).
+    let name = "capture.json: the macOS privacy filter";
+    let record = |sim: &Sim| -> Value {
+        let b = sim
+            .files()
+            .into_iter()
+            .find(|(n, _)| n == "capture.json")
+            .unwrap()
+            .1;
+        serde_json::from_slice(&b).unwrap()
+    };
+    for (plan, tag) in [
+        (Plan::Macos, "m02_user_explicit"),
+        (Plan::Macos, "m01_user_masked"),
+        (Plan::MacosRoot, "m11_root_iflist"),
+    ] {
+        let sim = Sim::new(plan, tag);
+        let rec = record(&sim);
+        assert_eq!(
+            rec["privacy_filter"]["frames_kept"],
+            sim.peer.len(),
+            "{tag}"
+        );
+        let r = judge(&sim);
+        assert_verdict(&r, PASS);
+        assert_eq!(check(&r, name)["result"], PASS, "{tag}");
+        type Edit = (&'static str, fn(&mut Value));
+        let edits: [Edit; 6] = [
+            ("no privacy_filter", |v| {
+                v.as_object_mut().unwrap().remove("privacy_filter");
+            }),
+            ("no unfiltered count", |v| {
+                v.as_object_mut().unwrap().remove("unfiltered");
+            }),
+            ("kept is not peer.pcap", |v| {
+                v["privacy_filter"]["frames_kept"] = json!(v["pcap_frames"].as_u64().unwrap() + 1);
+                v["unfiltered"]["pcap_frames"] =
+                    json!(v["unfiltered"]["pcap_frames"].as_u64().unwrap() + 1);
+            }),
+            ("kept + dropped is not the witness's capture", |v| {
+                v["privacy_filter"]["frames_dropped"] = json!(3);
+            }),
+            ("a count that is not a number", |v| {
+                v["privacy_filter"]["frames_dropped"] = json!("2");
+            }),
+            ("another filter", |v| {
+                v["privacy_filter"]["published"] = json!("not udp port 5353");
+            }),
+        ];
+        for (why, edit) in edits {
+            let mut sim = Sim::new(plan, tag);
+            let mut rec = record(&sim);
+            edit(&mut rec);
+            sim.omit.push("capture.json");
+            sim.extra.push((
+                "capture.json".into(),
+                serde_json::to_vec_pretty(&rec).unwrap(),
+            ));
+            let r = judge(&sim);
+            assert_verdict(&r, INVALID);
+            assert_eq!(check(&r, name)["result"], INVALID, "{tag} {why}");
+            assert_eq!(r["behaviour_fail"], false, "{tag} {why}");
+        }
+    }
+    // The other stands publish their witness as it captured: no filter, no such check.
+    for (plan, tag) in [(Plan::Linux, "l01_auto"), (Plan::Windows, "w01_auto")] {
+        let r = judge(&Sim::new(plan, tag));
+        assert!(
+            !r["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["name"].as_str().unwrap().starts_with(name)),
+            "{tag}"
+        );
     }
 }

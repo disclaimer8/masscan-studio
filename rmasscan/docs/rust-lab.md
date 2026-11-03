@@ -406,32 +406,40 @@ checkout under test, in a private target directory.
 **Linux.** `wire-lab.sh --suite autodetect` поднимает прежний стенд из двух netns и делает в нём одно
 контролируемое изменение, только внутри netns сканера: IPv4 `198.18.0.1/24` на `veth-a`, маршрут по умолчанию
 `via 198.18.0.2 dev veth-a` и постоянные соседские записи `198.18.0.2–.5 → 02:aa:00:00:00:02`. Seal-проверки и
-`capture isolation --mode autodetect` подтверждают ровно это до каждого прогона и после него. Отмена: cleanup
-скрипта удаляет обе netns. Скрипт сам перезапускает себя через `sudo -n`; suite `sudo` не вызывает. Из каталога
-`rmasscan/` экспорта коммита на minipc:
+`capture isolation --mode autodetect` подтверждают ровно это до каждого прогона и после него (`isolation.json` и
+`isolation-post.json` прогона, верификатор судит оба). Отмена: cleanup скрипта удаляет обе netns и записывает это в
+`OUT/teardown.json` (`namespaces_deleted`, `namespaces_left`). `autodetect-verify` требует его в каталоге Linux: нет
+записи, она не читается или netns осталась — INVALID. Если suite не смог скопировать прогон в каталог evidence, он
+оставляет рабочий каталог прогона и метку `OUT/.work/work-kept.txt`, и cleanup тогда `OUT/.work` не удаляет. `OUT`
+с `teardown.json` или такой меткой скрипт не принимает (FATAL, rc 2): каждая лаборатория идёт в новый `--out`.
+Скрипт сам перезапускает себя через `sudo -n`; suite `sudo` не вызывает. `--out` всегда вне репозитория, в
+приватном `$SCRATCH` (например `mktemp -d`), в репозиторий каталог попадает только шагом «Evidence в репозиторий»
+ниже. Из каталога `rmasscan/` экспорта коммита на minipc:
 
 ```sh
 cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
+OUT=$SCRATCH/autodetect-out/linux-r1
 RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite autodetect \
-  --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out OUT
-target/release/rmasscan-lab autodetect-verify --dir OUT --out OUT/verdict.json
+  --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"
+target/release/rmasscan-lab autodetect-verify --dir "$OUT" --out "$OUT/verdict.json"
 ```
 
 **Windows.** `rmasscan.exe` собирается на госте так же, как `wire_scan.exe` в шаге 4 раздела «Deployment»: тот же
 `git archive` коммита, release, статический CRT, тот же `RUSTFLAGS` с `/DEPENDENTLOADFLAG:0x800`. Отличие одно:
 `cargo build --locked --release -p rmasscan-cli` вместо `-p rmasscan-net --example wire_scan`. Затем `dumpbin /loadconfig rmasscan.exe`
-(флаг `0x800`) и копия в `C:\Users\lab\t4\rmasscan.exe`. Шаги 1–3 и 5 те же. Команды из корня репозитория:
+(флаг `0x800`) и копия в `C:\Users\lab\t4\rmasscan.exe`. Шаги 1–3 и 5 те же. `--out` — в приватном `$SCRATCH`
+вне репозитория (там же `.work` оркестратора: после аварии в нём может остаться полный гостевой `--iflist`). Команды
+из корня репозитория:
 
 ```sh
+OUT=$SCRATCH/autodetect-out/windows-r1
 rmasscan/target/release/rmasscan-lab windows-suite --list --plan autodetect   # девять кейсов, ничего не запускает
 rmasscan/target/release/rmasscan-lab windows-suite \
-  --out docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/windows-r1 \
+  --out "$OUT" \
   --suite windows-r1 --plan autodetect --commit $COMMIT --repo . \
   --guest-exe 'C:\Users\lab\t4\rmasscan.exe' \
   --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
-rmasscan/target/release/rmasscan-lab windows-verify \
-  --dir docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/windows-r1 \
-  --out docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/windows-r1/verdict.json
+rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT" --out "$OUT/verdict.json"
 ```
 
 План `autodetect` проходит каждый кейс через прежние шаги wire_scan-планов:
@@ -490,7 +498,31 @@ rmasscan/target/release/rmasscan-lab windows-verify \
 | Windows | `guest-stdout.txt` (не у `w07`, `w08a`), `guest-stderr.txt`, `guest-exit.txt`, `eno1.pcap`, `eno1.err`, `peer.err`, `status-pre.json`, `status-post.json`, `guest-verify*.json`/`.txt`, `listeners.json`, `runner-argv.json`, `guest-runner.json`, `nic.json`, `meta.json`, `pcap-hashes-on-home-pc.txt`, `run-artifacts.json`; `w01`, `w06`: `preflight.txt`, `runner-preflight-argv.json`; `w08a`, `w08b`: `guest-runner.log`, `guest-runner-rc.txt` |
 | macOS | `stdout.txt`, `stderr.txt`, `exit.txt`, `peer.err`, `uplink.pcap`, `uplink.err`, `status-pre.json`, `status-post.json`, `alf.txt`, `listeners.json`; `m05`: `preflight.txt`, `preflight-argv.json` |
 
-Файлы evidence несут только расширения `json pcap txt log err sha256 md`. Полный вывод `--iflist` не хранится нигде.
+В корне каталога Linux ещё `teardown.json` (отмена стенда, см. выше). Файлы evidence несут только расширения
+`json pcap txt log err sha256 md`. Полный вывод `--iflist` не хранится нигде, ни у `rmasscan`, ни у оракула (masscan
+печатает список на stderr; `l12_iflist` с `oracle/stdout.txt` или `oracle/stderr.txt` — INVALID). Кадр на захвате
+стенда (пир, оракул) с MAC, который не равен ни MAC сканера, ни MAC пира стенда (маркеры не в счёт), — FAIL
+безопасности в любом кейсе. На macOS `capture.json` обязан сводить `privacy_filter` с захватом: `frames_kept` равно
+числу кадров `peer.pcap`, `frames_kept + frames_dropped` — `unfiltered.pcap_frames`, иначе INVALID.
+
+**Evidence в репозиторий** (план, задача 7, «Evidence»). Каталог из `$SCRATCH` копируется в
+`docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/<linux-r1|windows-r1|macos-r1|macos-root-r1>` только
+так, на Mac из корня репозитория (каталог Linux сначала забирается с minipc в `$SCRATCH` Mac:
+`rsync -a --exclude .work minipc:"$OUT"/ "$SRC"/`):
+
+```sh
+SRC=$SCRATCH/autodetect-out/windows-r1   # каталог --out
+DST=docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/windows-r1
+test ! -e "$SRC/.work" || test -z "$(ls -A "$SRC/.work")" || echo "STOP: $SRC/.work is not empty (an unfinished copy)"
+for d in "$SRC"/runs/*/; do (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"; done
+grep -rIlE "$(hostname -s)|$(id -un)|_tcp\.local" "$SRC" && echo "STOP: privacy"   # 0 совпадений
+mkdir -p "$DST" && rsync -a --exclude .work "$SRC"/ "$DST"/
+for d in "$DST"/runs/*/; do (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"; done
+rmasscan/target/release/rmasscan-lab autodetect-verify --dir "$DST" --out "$DST/verdict.json"   # тот же вердикт
+```
+
+Любой `STOP` — копия не делается или удаляется. Дальше `MANIFEST.sha256`, `README.md` каталога и `verification/`,
+как в плане. `.work` в репозиторий не попадает никогда (он не в `.gitignore`).
 
 **Коды.** `autodetect-verify --dir DIR [--out FILE]` (и `windows-verify` для такого каталога): 0 PASS, 1 FAIL,
 2 INVALID или NOT RUN. `autodetect-suite`: 0 все выбранные прогоны выполнены, 2 NOT RUN, 10 ABORT, 13 ISOLATION

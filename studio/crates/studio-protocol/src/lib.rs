@@ -3,6 +3,7 @@
 pub mod acceptance;
 mod network;
 pub mod sealed_fixture;
+pub mod single_target;
 pub use network::*;
 use rmasscan_core::{
     config::{Operation, ScanConfig, validate},

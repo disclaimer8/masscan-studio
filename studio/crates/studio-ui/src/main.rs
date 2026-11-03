@@ -13,6 +13,7 @@ use studio_table::{Change, Table};
 mod network_tests;
 mod network_ui;
 mod smoke_feth;
+mod smoke_history;
 mod smoke_network;
 mod smoke_session;
 mod table_controls;
@@ -391,6 +392,8 @@ fn save_screenshot(ui: &MainWindow) {
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut history_driver = smoke_history::Driver::prepare(&std::env::args().collect::<Vec<_>>())?;
+    let history_active = history_driver.is_some();
     let smoke = std::env::args().any(|s| s == "--smoke");
     let pause_smoke = std::env::args().any(|s| s == "--smoke-pause");
     let stop_smoke = std::env::args().any(|s| s == "--smoke-stop-race");
@@ -909,6 +912,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move || {
             let Some(ui) = w.upgrade() else { return };
             let updates = a.borrow_mut().poll();
+            if let Some(driver) = &mut history_driver { driver.observe(&updates); }
             if let Some(driver) = native.borrow_mut().as_mut() { driver.observe(&updates); }
             if let Some(driver) = &mut session_driver { driver.observe(&updates); }
             // The `--smoke-feth` driver sees every update first, in order, and answers with the steps a user's
@@ -1113,6 +1117,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             m.summary(&ui);
+            if let Some(driver) = &mut history_driver {
+                let result = driver.tick(&ui, &m, &h.borrow(), coverage.borrow().as_ref());
+                if !matches!(result, Ok(false)) {
+                    let result = match driver.finish(&result) { Ok(()) => result, Err(e) => Err(e) };
+                    *finished.borrow_mut() = Some(match result { Ok(_) => (true, String::new()), Err(e) => (false, e) });
+                    history_driver = None;
+                    let _ = slint::quit_event_loop();
+                }
+            }
             if let Some(driver) = native.borrow_mut().as_mut() {
                 match driver.tick(&ui, m.row_count()) {
                     Ok(false) => {},
@@ -1213,7 +1226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     ui.run()?;
     timer.stop();
-    if driver_active || session_active || network_active {
+    if driver_active || session_active || network_active || history_active {
         match outcome.borrow().as_ref() {
             Some((true, _)) => {}
             Some((false, reason)) => return Err(format!("UI acceptance failed: {reason}").into()),

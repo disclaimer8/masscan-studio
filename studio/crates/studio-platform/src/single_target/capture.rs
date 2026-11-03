@@ -117,6 +117,15 @@ pub struct CapturePin {
     rejected: bool,
 }
 impl CapturePin {
+    pub fn pinned(&self) -> Result<(&CaptureWitness, Instant)> {
+        if self.rejected {
+            return Err("Capture pin invalidated".into());
+        }
+        Ok((
+            self.value.as_ref().ok_or("Capture not pinned")?,
+            self.deadline.ok_or("Capture deadline missing")?,
+        ))
+    }
     pub fn check(&mut self, witness: &CaptureWitness, now_wall: u64) -> Result<()> {
         self.check_at(witness, now_wall, Instant::now())
     }

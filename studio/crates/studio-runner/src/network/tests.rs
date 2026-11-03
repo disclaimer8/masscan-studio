@@ -9,6 +9,7 @@ struct Fake {
     calls: Mutex<Vec<&'static str>>,
     deadlines: Mutex<Vec<(&'static str, Instant)>>,
     late_open: AtomicBool,
+    refuse_attempt: AtomicBool,
     io: rmasscan_engine::fake::FakeAdapter,
 }
 impl Fake {
@@ -33,12 +34,23 @@ impl Fake {
                 calls: Mutex::new(vec![]),
                 deadlines: Mutex::new(vec![]),
                 late_open: AtomicBool::new(false),
+                refuse_attempt: AtomicBool::new(false),
                 io: rmasscan_engine::fake::FakeAdapter::new(),
             },
         )
     }
 }
 impl Environment for Fake {
+    fn begin_attempt(&self, _job: &Job, attempt: Id, resuming: bool) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(if resuming { "resume-begin" } else { "begin" });
+        if attempt == [0; 16] || self.refuse_attempt.load(Ordering::Relaxed) {
+            return Err("Attempt refused".into());
+        }
+        Ok(())
+    }
     fn authorize(&self) -> Result<(), String> {
         self.calls.lock().unwrap().push("authorize");
         Ok(())
@@ -127,7 +139,7 @@ fn preparation_keeps_full_routes_and_truthful_partial_coverage_without_tcp() {
     assert_eq!(job.prepare_network(&p.report).unwrap().range(), 2);
     assert_eq!(
         *env.calls.lock().unwrap(),
-        vec!["authorize", "observe", "arp", "observe"]
+        vec!["authorize", "begin", "observe", "arp", "observe"]
     );
 }
 #[test]
@@ -140,6 +152,19 @@ fn invalid_job_and_masked_source_fail_before_arp() {
     env.routes.lock().unwrap().source_mac = None;
     assert!(prepare(&env, job, [1; 16], [2; 16], None, &|| false).is_err());
     assert!(!env.calls.lock().unwrap().contains(&"arp"));
+}
+#[test]
+fn refused_attempt_cannot_observe_routes_or_open_packet_adapters() {
+    let (job, env) = Fake::new();
+    env.refuse_attempt.store(true, Ordering::Relaxed);
+    assert!(
+        prepare(&env, job, [1; 16], [2; 16], None, &|| false)
+            .err()
+            .unwrap()
+            .contains("Attempt refused")
+    );
+    assert_eq!(*env.calls.lock().unwrap(), vec!["authorize", "begin"]);
+    assert_eq!(env.io.alive_handles(), 0);
 }
 #[test]
 fn all_unresolved_still_returns_persistable_report() {
@@ -307,7 +332,10 @@ fn full_effective_probe_admission_precedes_arp_even_when_most_hosts_would_be_unr
     job.ports = "1-65535".into();
     env.routes.lock().unwrap().next_hops = (1..=17).map(|n| (ip(n), ip(n))).collect();
     assert!(prepare(&env, job, [1; 16], [2; 16], None, &|| false).is_err());
-    assert_eq!(*env.calls.lock().unwrap(), vec!["authorize", "observe"]);
+    assert_eq!(
+        *env.calls.lock().unwrap(),
+        vec!["authorize", "begin", "observe"]
+    );
 }
 #[test]
 fn mismatched_route_partition_is_rejected_before_arp_and_native_authorization_remains_required() {

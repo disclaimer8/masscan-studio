@@ -16,6 +16,29 @@ pub struct Intent {
     pub seed: u64,
 }
 impl Intent {
+    /// Exact canonical shape selection, not a permission or a fallback gate.
+    pub fn from_job(job: &Job) -> Result<Self, String> {
+        let intent = Self {
+            target: job
+                .targets
+                .parse()
+                .map_err(|_| "Single-target job needs one literal IPv4")?,
+            ports: job
+                .ports
+                .split(',')
+                .map(|s| {
+                    s.parse::<u16>()
+                        .map_err(|_| "Single-target job needs explicit ports".to_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            seed: job.seed.parse().map_err(|_| "Invalid single-target seed")?,
+        };
+        intent.validate()?;
+        if &intent.job() != job {
+            return Err("Single-target job is not canonical".into());
+        }
+        Ok(intent)
+    }
     pub fn validate(&self) -> Result<(), String> {
         if !public_candidate(self.target)
             || self.ports.is_empty()
@@ -45,6 +68,28 @@ impl Intent {
             rate: 1,
         }
     }
+}
+/// Unprivileged durable-report veto only. Root permit/capture/claim checks remain
+/// mandatory in the helper; these persisted bytes do not grant adapter access.
+pub fn validate_persisted(job: &Job, bytes: Option<&[u8]>) -> Result<(), String> {
+    let intent = Intent::from_job(job)?;
+    let report = NetworkReport::decode(bytes.ok_or("Single-target persisted report missing")?)?;
+    report.validate_for(job)?;
+    let suffix = report
+        .routes
+        .interface_name
+        .strip_prefix("en")
+        .unwrap_or("");
+    if suffix.is_empty()
+        || suffix.len() > 4
+        || !suffix.bytes().all(|b| b.is_ascii_digit())
+        || report.routes.next_hops.len() != 1
+        || !report.routes.next_hops.contains_key(&intent.target)
+        || !report.routes.excluded.is_empty()
+    {
+        return Err("Single-target persisted route shape differs".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,6 +333,54 @@ mod tests {
                 source_mac: [2, 1, 2, 3, 4, 5],
                 next_hop: "10.0.0.1".parse().unwrap(),
             },
+        }
+    }
+    #[test]
+    fn canonical_job_selector_refuses_every_expansion_or_alternate_spelling() {
+        let p = permit();
+        let job = p.job();
+        assert_eq!(Intent::from_job(&job).unwrap(), p.intent());
+        for kind in 0..10 {
+            let mut bad = job.clone();
+            match kind {
+                0 => bad.targets.push_str("/32"),
+                1 => bad.targets = "scanme.nmap.org".into(),
+                2 => bad.ports = "22-80".into(),
+                3 => bad.ports = "22,080,443,65000".into(),
+                4 => bad.seed = "00042".into(),
+                5 => bad.rate = 2,
+                6 => bad.exclusions = job.targets.clone(),
+                7 => bad.backend = Backend::Simulation,
+                8 => bad.targets = "10.0.0.1".into(),
+                _ => bad.targets = format!("{} ", job.targets),
+            };
+            assert!(Intent::from_job(&bad).is_err());
+        }
+    }
+    #[test]
+    fn durable_public_report_predicate_checks_exact_job_and_physical_route_shape() {
+        let p = permit();
+        let job = p.job();
+        let report = NetworkReport {
+            job_digest: job.original_digest().unwrap(),
+            routes: p.plan(),
+            destinations: [(p.target, [2, 6, 7, 8, 9, 10])].into(),
+            unresolved: vec![],
+        };
+        validate_persisted(&job, Some(&report.encode().unwrap())).unwrap();
+        assert!(validate_persisted(&job, None).is_err());
+        for kind in 0..3 {
+            let mut bad = report.clone();
+            match kind {
+                0 => bad.routes.interface_name = "utun3".into(),
+                1 => bad.job_digest[0] ^= 1,
+                _ => {
+                    let other = "1.1.1.1".parse().unwrap();
+                    bad.routes.next_hops.insert(other, p.interface.next_hop);
+                    bad.destinations.insert(other, [2, 6, 7, 8, 9, 10]);
+                }
+            };
+            assert!(validate_persisted(&job, Some(&bad.encode().unwrap())).is_err());
         }
     }
     #[test]

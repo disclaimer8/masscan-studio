@@ -104,3 +104,29 @@ regression and final GREEN tests establish the fix. Review approved this offline
 scope with no remaining Critical/Important findings. Logs: `packet-red.log`,
 `options-red.log`, `packet-final.log`, `witness-workspace.log` (tests passed;
 initial lint errors retained) and `witness-clippy.log` (final lint pass).
+
+## Clean package and cross-platform CI
+
+Exact source `6a72a49eefd8cbe9dddc0145507f0296ce7323b3` passed
+[Studio CI 41637813292](https://github.com/disclaimer8/masscan-studio/actions/runs/41637813292)
+on macOS, Ubuntu and Windows. These are the workflow's scoped offline/platform
+checks, not physical-network or manual Windows UAC acceptance.
+
+Clean optimized macOS package: `studio/dist/build-1793709707688/Masscan Studio.app`,
+manifest `dirty:false`, source exactly as above. Strict deep codesign verification
+and all four manifest hashes passed. GUI SHA256
+`66fe7bb50d581a07b3d0c4bf31c00aaf34cc778bf60bc6033988228da8a3ebe6`;
+helper SHA256 `fbabdc09f72151616066c76d8ba7dce5bc03a74bdafcf9d4892248851c2d4d6e`.
+This helper was not installed or selected by the retained working host.
+
+The packaged launcher passed Simulation Complete (8 rows), Pause/Resume/Stop
+(2 rows) and Stop during startup (1 row), with terminal status/checkpoint cleanup
+and SQLite integrity checked. Three copied native histories restored 96/5/96
+rows with original databases unchanged; all 24 JSON/CSV exports matched saved
+rows, settings and coverage. Actual Slint terminal/history snapshots were
+inspected. This does not cover manual input or the native save-file dialog.
+
+Evidence: `.superpowers/sdd/2026-11-03-single-target/package-verification/verified.json`,
+`package-release.log`, `package-verification.log` and `ci-final.json`.
+The retained host was rechecked ready, PID 49278, active 0, with the original
+selected fixture tool and helper hashes unchanged.

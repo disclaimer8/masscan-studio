@@ -10,8 +10,10 @@ The next work is ordered by user-visible outcome, not by test count.
 - [x] Reuse the existing development work session without another password.
 - [x] Exercise GUI authorization, simulation completion, Stop and another Start;
   compare displayed results with durable history.
-- [ ] Run the packaged GUI against the sealed multi-peer/routed fixture for
-  Complete, Stop and another Complete; require independent root packet evidence.
+- [x] Run the optimized packaged GUI against the sealed multi-peer/routed fixture
+  for Complete, Stop and another Complete in separate launches; independent root
+  packet evidence passed (96, 5, 96 saved results on November 3).
+- [ ] Verify same-window native Stop/Start and native Pause/Resume on this package.
 - [ ] Check saved History, repeat settings and exports using those real results.
 
 ## 2. Admit a concrete owned physical target
@@ -31,7 +33,8 @@ scan targets merely because they appear in routes or neighbour tables.
 
 ## 3. Make the accepted build installable and understandable
 
-- [ ] Verify the optimized release build with its exact packaged helper.
+- [x] Verify the optimized release build with its exact packaged helper on the
+  isolated local fixture. Physical-interface acceptance remains separate above.
 - [ ] Check first install, denied authorization, retry, update and reopening saved
   history in the native GUI. Keep development host maintenance separate from the
   ordinary application's helper session.

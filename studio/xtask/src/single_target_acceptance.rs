@@ -1,5 +1,4 @@
-//! Offline packet-content witness for one explicitly permitted physical target.
-//! No adapter, host operation or network access is available through this command.
+//! Offline packet verification and the fixed root capture child entry point.
 use rmasscan_core::probe::ProbeCursor;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -363,6 +362,17 @@ fn read(path: &str, limit: usize) -> Result<Vec<u8>> {
 }
 pub fn main_entry() -> super::Result<()> {
     let args: Vec<_> = std::env::args().skip(2).collect();
+    #[cfg(target_os = "macos")]
+    if let [action, uid, generation] = args.as_slice()
+        && action == "capture"
+    {
+        let result = studio_platform::single_target::recording::run(uid.parse()?, generation)?;
+        println!("{}", serde_json::to_string(&result)?);
+        if result.measurements.error.is_some() {
+            return Err("Capture failed; partial root evidence retained".into());
+        }
+        return Ok(());
+    }
     let [action, permit, report, pcap, stats] = args.as_slice() else {
         return Err(
             "Usage: single-target-acceptance verify PERMIT.json REPORT.bin CAPTURE.pcap STATS.json"

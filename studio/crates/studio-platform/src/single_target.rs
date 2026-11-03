@@ -14,7 +14,12 @@ type Result<T> = std::result::Result<T, String>;
 const DIRECTORY: &str = "/Library/PrivilegedHelperTools/MasscanStudio/single-target-v1";
 const LIMIT: u64 = 16384;
 mod capture;
-pub use capture::{CAPTURE_HEADER, CAPTURE_SECONDS, CapturePin, CaptureWitness};
+mod capture_lock;
+pub use capture::{
+    CAPTURE_HEADER, CAPTURE_SECONDS, CaptureCompletion, CaptureFinish, CaptureLease, CapturePin,
+    CaptureStatistics, CaptureWitness,
+};
+pub mod recording;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claim {
@@ -129,6 +134,9 @@ impl Store {
         Ok(file)
     }
     fn read(&self, path: &Path, deadline: Instant) -> Result<Vec<u8>> {
+        self.read_limit(path, deadline, LIMIT)
+    }
+    fn read_limit(&self, path: &Path, deadline: Instant, limit: u64) -> Result<Vec<u8>> {
         trusted(path, self.owner, false, deadline)?;
         let file = OpenOptions::new()
             .read(true)
@@ -137,12 +145,12 @@ impl Store {
             .map_err(err)?;
         let before = file.metadata().map_err(err)?;
         metadata(&before, self.owner, false)?;
-        if before.len() > LIMIT {
+        if before.len() > limit {
             return Err("Oversized single-target record".into());
         }
         let mut bytes = Vec::new();
         (&file)
-            .take(LIMIT + 1)
+            .take(limit + 1)
             .read_to_end(&mut bytes)
             .map_err(err)?;
         let after = fs::symlink_metadata(path).map_err(err)?;
@@ -152,7 +160,7 @@ impl Store {
             || before.len() != after.len()
             || before.mtime() != after.mtime()
             || before.mtime_nsec() != after.mtime_nsec()
-            || bytes.len() as u64 > LIMIT
+            || bytes.len() as u64 > limit
         {
             return Err("Single-target record changed during read or exceeds limit".into());
         }

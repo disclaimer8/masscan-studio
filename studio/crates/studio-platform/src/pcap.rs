@@ -48,6 +48,62 @@ unsafe extern "C" {
     fn pcap_geterr(p: *mut c_void) -> *const c_char;
     fn pcap_close(p: *mut c_void);
     fn pcap_lib_version() -> *const c_char;
+    #[cfg(test)]
+    fn pcap_open_dead(linktype: c_int, snaplen: c_int) -> *mut c_void;
+    #[cfg(test)]
+    fn pcap_offline_filter(
+        program: *const Program,
+        header: *const Header,
+        packet: *const u8,
+    ) -> u32;
+}
+/// Exercise the system BPF compiler/interpreter without opening any device.
+#[cfg(test)]
+pub(crate) fn filter_matches(filter: &str, packets: &[Vec<u8>]) -> Result<Vec<bool>, String> {
+    let filter = CString::new(filter).map_err(|e| e.to_string())?;
+    // SAFETY: fixed Ethernet type and bounded snaplen; dead handles own no device.
+    let capture = Capture {
+        handle: NonNull::new(unsafe { pcap_open_dead(1, 131072) })
+            .ok_or("Cannot create offline pcap compiler")?,
+    };
+    let mut program = Program {
+        len: 0,
+        insns: ptr::null_mut(),
+    };
+    // SAFETY: live dead-handle, writable program and valid NUL-terminated filter.
+    if unsafe {
+        pcap_compile(
+            capture.handle.as_ptr(),
+            &mut program,
+            filter.as_ptr(),
+            1,
+            u32::MAX,
+        )
+    } != 0
+    {
+        return Err(capture.error());
+    }
+    let results = packets
+        .iter()
+        .map(|bytes| {
+            let header = Header {
+                ts: libc::timeval {
+                    tv_sec: 0,
+                    tv_usec: 0,
+                },
+                captured: bytes.len() as u32,
+                original: bytes.len() as u32,
+                comment: [0; 256],
+            };
+            // SAFETY: compiled BPF, matching bounded slice length and live header.
+            unsafe { pcap_offline_filter(&program, &header, bytes.as_ptr()) != 0 }
+        })
+        .collect();
+    // SAFETY: successfully compiled program freed exactly once after interpretation.
+    unsafe {
+        pcap_freecode(&mut program);
+    }
+    Ok(results)
 }
 pub struct Packet {
     pub seconds: u32,

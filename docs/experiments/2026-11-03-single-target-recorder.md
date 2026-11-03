@@ -49,3 +49,7 @@ capture record was created, no host replaced, and no public/hotel target scanned
 Typed host capture dispatch/export, hard child supervision, permit-aware scanner
 admission, GUI integration and terminal/quiet-window proof remain the next work.
 Keep draft and undistributed; preserve the current administrative session.
+
+Exact source `03f64a1404a48098155ded6e791050488d861b76` also passed all three OS
+jobs in [Studio CI 41645604514](https://github.com/disclaimer8/masscan-studio/actions/runs/41645604514).
+The CI package checks are separate from native capture and host installation.

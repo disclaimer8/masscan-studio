@@ -22,6 +22,7 @@ use studio_platform::{
 };
 type Result<T> = std::result::Result<T, String>;
 const WAIT: Duration = Duration::from_millis(20);
+mod single_capture;
 struct State {
     active: usize,
     helpers: usize,
@@ -30,6 +31,7 @@ struct State {
     closing: bool,
     generation: Option<String>,
     single_target: Option<String>,
+    capture_busy: bool,
     runs: BTreeSet<String>,
     stopping: bool,
     selected: Option<(String, String)>,
@@ -45,6 +47,7 @@ impl State {
             closing: false,
             generation: None,
             single_target: None,
+            capture_busy: false,
             runs: BTreeSet::new(),
             stopping: false,
             selected: None,
@@ -238,6 +241,15 @@ fn single_target(
     operation: SingleTarget,
 ) -> Result<()> {
     use studio_protocol::single_target::Context;
+    match &operation {
+        SingleTarget::Capture { generation } => {
+            return single_capture::capture(shared, stream, generation);
+        }
+        SingleTarget::ExportCapture { generation } => {
+            return single_capture::export(shared, stream, generation);
+        }
+        _ => {}
+    }
     // Revoke remains available with active helpers. The future permit-aware
     // environment must recheck this record; current native scanning is fixture-only.
     let exclusive = matches!(operation, SingleTarget::CreatePermit { .. });
@@ -294,6 +306,9 @@ fn single_target(
         }
         SingleTarget::Inspect {} => {}
         SingleTarget::Revoke { generation } => revoke_single_target(shared, &generation)?,
+        SingleTarget::Capture { .. } | SingleTarget::ExportCapture { .. } => {
+            unreachable!("capture dispatched before permit reservation")
+        }
     }
     wire::write(
         stream,
@@ -740,8 +755,9 @@ fn handle(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
         Request::Capabilities {} => wire::write(
             &mut stream,
             &Response::Capabilities {
-                version: 1,
+                version: 2,
                 single_target_permits: true,
+                single_target_capture: true,
             },
         ),
         Request::SingleTarget { operation } => single_target(shared, &mut stream, operation),
@@ -926,7 +942,16 @@ fn request(request: Request) -> Result<()> {
     let negotiated = if matches!(&request, Request::SingleTarget { .. }) {
         let (mut stream, config) =
             wire::connect()?.ok_or("No working session; a reviewed host upgrade is required")?;
-        wire::require_single_target_permits(&mut stream)?;
+        if matches!(
+            &request,
+            Request::SingleTarget {
+                operation: SingleTarget::Capture { .. } | SingleTarget::ExportCapture { .. }
+            }
+        ) {
+            wire::require_single_target_capture(&mut stream)?;
+        } else {
+            wire::require_single_target_permits(&mut stream)?;
+        }
         Some(config)
     } else {
         None
@@ -944,10 +969,11 @@ fn request(request: Request) -> Result<()> {
             Response::Capabilities {
                 version,
                 single_target_permits,
+                single_target_capture,
             } => {
                 println!(
                     "{}",
-                    serde_json::json!({"version":version,"single_target_permits":single_target_permits})
+                    serde_json::json!({"version":version,"single_target_permits":single_target_permits,"single_target_capture":single_target_capture})
                 );
                 return Ok(());
             }
@@ -963,6 +989,40 @@ fn request(request: Request) -> Result<()> {
                 return Ok(());
             }
             Response::Started {} => {}
+            Response::CaptureReady { witness }
+                if matches!(
+                    &request,
+                    Request::SingleTarget {
+                        operation: SingleTarget::Capture { .. }
+                    }
+                ) =>
+            {
+                println!("{}", serde_json::json!({"capture_ready":witness}));
+                std::io::stdout().flush().map_err(error)?;
+                let mut control = stream.try_clone().map_err(error)?;
+                std::thread::spawn(move || {
+                    let mut byte = [0];
+                    if std::io::stdin().read_exact(&mut byte).is_ok() && byte == *b"S" {
+                        let _ = control.write_all(&byte);
+                    } else {
+                        let _ = control.shutdown(std::net::Shutdown::Write);
+                    }
+                });
+            }
+            Response::CaptureEvidence { permit, completion }
+                if matches!(
+                    &request,
+                    Request::SingleTarget {
+                        operation: SingleTarget::ExportCapture { .. }
+                    }
+                ) =>
+            {
+                println!(
+                    "{}",
+                    serde_json::json!({"permit":permit,"completion":completion})
+                );
+                std::io::stdout().flush().map_err(error)?;
+            }
             Response::Output { stderr, bytes } => {
                 if stderr {
                     std::io::stderr().write_all(&bytes).map_err(error)?;
@@ -1082,6 +1142,8 @@ pub fn main_entry(root: &Path) -> Result<()> {
     match a.as_slice(){
   ["capabilities"]=>request(Request::Capabilities{}),
   ["single-target","inspect"]=>request(Request::SingleTarget{operation:SingleTarget::Inspect{}}),
+  ["single-target","capture",generation]=>request(Request::SingleTarget{operation:SingleTarget::Capture{generation:(*generation).into()}}),
+  ["single-target","export",generation]=>request(Request::SingleTarget{operation:SingleTarget::ExportCapture{generation:(*generation).into()}}),
   ["single-target","revoke",generation]=>request(Request::SingleTarget{operation:SingleTarget::Revoke{generation:(*generation).into()}}),
   ["single-target","create",target,ports,seed]=>{
       let intent=studio_protocol::single_target::Intent{target:target.parse().map_err(error)?,ports:ports.split(',').map(|p|p.parse().map_err(error)).collect::<Result<Vec<_>>>()?,seed:seed.parse().map_err(error)?};
@@ -1100,7 +1162,7 @@ pub fn main_entry(root: &Path) -> Result<()> {
   ["fixture","supervise",case,driver]=>request(Request::Fixture{operation:Fixture::Supervise{case:(*case).into(),driver:(*driver).into(),prior:None}}),
   ["fixture","supervise",case,driver,prior]=>request(Request::Fixture{operation:Fixture::Supervise{case:(*case).into(),driver:(*driver).into(),prior:Some((*prior).into())}}),
   ["export",nonce]=>request(Request::Export{nonce:(*nonce).into()}),
-  _=>Err("Usage: work-session start/replace RUNNER | stage TOOL RUNNER | status | stop | probe RUNNER | fixture up/down/status | fixture supervise CASE DIR [PAUSE_NONCE] | export NONCE | capabilities | single-target create IP PORT[,PORT] SEED | single-target inspect | single-target revoke GENERATION".into())
+  _=>Err("Usage: work-session start/replace RUNNER | stage TOOL RUNNER | status | stop | probe RUNNER | fixture up/down/status | fixture supervise CASE DIR [PAUSE_NONCE] | export NONCE | capabilities | single-target create IP PORT[,PORT] SEED | single-target inspect | single-target revoke/capture/export GENERATION".into())
  }
 }
 
@@ -1108,7 +1170,7 @@ pub fn main_entry(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
-    fn shared() -> Arc<Shared> {
+    pub(super) fn shared() -> Arc<Shared> {
         let owner = Identity::current().unwrap();
         let path = std::env::temp_dir().join(format!(
             "studio-work-test-{}",

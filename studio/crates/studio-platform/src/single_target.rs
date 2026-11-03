@@ -16,8 +16,8 @@ const LIMIT: u64 = 16384;
 mod capture;
 mod capture_lock;
 pub use capture::{
-    CAPTURE_HEADER, CAPTURE_SECONDS, CaptureCompletion, CaptureFinish, CaptureLease, CapturePin,
-    CaptureStatistics, CaptureWitness,
+    CAPTURE_HEADER, CAPTURE_SECONDS, CaptureCompletion, CaptureEvidence, CaptureFinish,
+    CaptureLease, CapturePin, CaptureStatistics, CaptureWitness,
 };
 pub mod recording;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

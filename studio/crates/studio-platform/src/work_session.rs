@@ -72,9 +72,24 @@ pub enum Fixture {
         prior: Option<String>,
     },
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "op", deny_unknown_fields)]
+pub enum SingleTarget {
+    CreatePermit {
+        intent: studio_protocol::single_target::Intent,
+    },
+    Inspect {},
+    Revoke {
+        generation: String,
+    },
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "request", deny_unknown_fields)]
 pub enum Request {
+    Capabilities {},
+    SingleTarget {
+        operation: SingleTarget,
+    },
     Status {},
     Stop {},
     Stage {
@@ -96,12 +111,46 @@ pub enum Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "response", deny_unknown_fields)]
 pub enum Response {
-    Status { config: Config, active: usize },
+    Capabilities {
+        version: u16,
+        single_target_permits: bool,
+    },
+    SingleTarget {
+        record: Option<crate::single_target::Record>,
+    },
+    Status {
+        config: Config,
+        active: usize,
+    },
     HelperStarted,
     Started {},
-    Output { stderr: bool, bytes: Vec<u8> },
-    Done { code: i32 },
-    Error { message: String },
+    Output {
+        stderr: bool,
+        bytes: Vec<u8>,
+    },
+    Done {
+        code: i32,
+    },
+    Error {
+        message: String,
+    },
+}
+/// Must succeed before reconnecting to the same host for a new typed mutation.
+/// An old host receives only this read-only request and remains running.
+pub fn require_single_target_permits(stream: &mut UnixStream) -> Result<()> {
+    let result = (|| {
+        write(stream, &Request::Capabilities {})?;
+        match read(stream, Duration::from_secs(3), &AtomicBool::new(false))? {
+            Response::Capabilities {
+                version: 1,
+                single_target_permits: true,
+            } => Ok(()),
+            _ => Err("Host does not support single-target permits".into()),
+        }
+    })();
+    result.map_err(|e: String| {
+        format!("Reviewed work-session host upgrade required; retained session unchanged: {e}")
+    })
 }
 pub fn valid_hex(s: &str, n: usize) -> bool {
     s.len() == n
@@ -124,6 +173,14 @@ pub fn validate_request(r: &Request, c: &Config, peer: &Identity) -> Result<()> 
         return Err("Work-session caller account differs".into());
     }
     match r {
+        Request::SingleTarget {
+            operation: SingleTarget::CreatePermit { intent },
+        } => intent.validate()?,
+        Request::SingleTarget {
+            operation: SingleTarget::Revoke { generation },
+        } if !valid_hex(generation, 32) || generation.bytes().all(|b| b == b'0') => {
+            return Err("Invalid single-target revocation generation".into());
+        }
         Request::Stage { tool, runner } => {
             tool.validate()?;
             runner.validate()?;
@@ -406,6 +463,87 @@ pub fn helper(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn single_target_wire_rejects_expansion_and_paths() {
+        let uid = Identity::current().unwrap();
+        let config = Config {
+            uid: uid.uid,
+            pid: 123,
+            tool_hash: "a".repeat(64),
+            runner_hash: "b".repeat(64),
+            caller_hash: "c".repeat(64),
+        };
+        let intent = studio_protocol::single_target::Intent {
+            target: "45.33.32.156".parse().unwrap(),
+            ports: vec![80],
+            seed: 42,
+        };
+        validate_request(
+            &Request::SingleTarget {
+                operation: SingleTarget::CreatePermit {
+                    intent: intent.clone(),
+                },
+            },
+            &config,
+            &uid,
+        )
+        .unwrap();
+        assert!(
+            validate_request(
+                &Request::SingleTarget {
+                    operation: SingleTarget::CreatePermit {
+                        intent: studio_protocol::single_target::Intent {
+                            ports: vec![0],
+                            ..intent
+                        }
+                    }
+                },
+                &config,
+                &uid
+            )
+            .is_err()
+        );
+        assert!(
+            validate_request(
+                &Request::SingleTarget {
+                    operation: SingleTarget::Revoke {
+                        generation: "../permit-501".into()
+                    }
+                },
+                &config,
+                &uid
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_value::<Request>(serde_json::json!({"request":"SingleTarget","operation":{"op":"Inspect","path":"/tmp/permit"}})).is_err());
+    }
+    #[test]
+    fn old_or_incompatible_host_receives_only_read_only_negotiation() {
+        for response in [
+            Response::Error {
+                message: "unknown request Capabilities".into(),
+            },
+            Response::Capabilities {
+                version: 1,
+                single_target_permits: false,
+            },
+            Response::Capabilities {
+                version: 2,
+                single_target_permits: true,
+            },
+        ] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || {
+                let request: Request =
+                    read(&mut server, Duration::from_secs(1), &AtomicBool::new(false)).unwrap();
+                assert!(matches!(request, Request::Capabilities {}));
+                write(&mut server, &response).unwrap();
+            });
+            assert!(require_single_target_permits(&mut client).is_err());
+            drop(client);
+            worker.join().unwrap();
+        }
+    }
     #[test]
     fn build_descriptor_refuses_links_special_files_other_owner_and_oversize() {
         let dir = std::env::temp_dir().join(format!(

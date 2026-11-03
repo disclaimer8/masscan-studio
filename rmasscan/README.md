@@ -60,11 +60,24 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 - `--adapter` на Windows принимает `\Device\NPF_{GUID}` или имя адаптера; числовых индексов нет. Wi-Fi
   (IfType 71) принимается как Ethernet (как C и Npcap `DLT_EN10MB`).
 - Явный не-Ethernet `--adapter` отказывает (masscan проверяет тип только при автовыборе).
+- Отказы обнаружения, которых у masscan нет (в форме C `[-] FAIL: …` и `[hint]`): цель это адрес самого хоста
+  (`LocalTarget`, `is an address of this host`), первая и последняя цель идут разными маршрутами (`SplitRoutes`,
+  `targets are routed differently`; оба и с `--adapter`, если не заданы `--router-ip`/`--router-mac`), среди целей
+  нет unicast-адресов (`NoUnicastTargets`), MAC интерфейса скрыт ОС (`MacMasked`, `os-masked`), `--adapter` не
+  совпадает с интерфейсом маршрута к целям (`RouteNotViaAdapter`, `route doesn't match interface` с подсказками
+  маршрутизатора; masscan на macOS/BSD печатает `ERROR: ROUTE DOESN'T MATCH INTERFACE` и завершается,
+  `rawsock-getroute.c:211–213`).
+- Явный `--adapter-mac 02-00-00-00-00-00` (заполнитель скрытого MAC Darwin) или групповой MAC отказывает
+  (`failed to detect MAC address`); masscan принимает любой ненулевой MAC.
 - Туннели (VPN, `DLT_NULL`), VLAN и IPv6 не поддержаны.
 - ARP-таймаут 10 с: 10 запросов с шагом 1 с (masscan около 12 запросов за 11 с); ответ принимается строже C.
+- Отказ ARP-таймаута печатает адрес, который разрешался, а для единственной on-link цели пишет
+  `for next hop (target) IF: "IP"`; masscan всегда пишет `for router` и печатает заданный `--router-ip`, то есть
+  `0.0.0.0`, если шлюз определён сам (`main-initadapter.c:195–196`).
 - `--offline` с явными `--adapter-ip`, `--adapter-mac` и `--source-port` не опрашивает ОС вовсе (masscan и в
-  offline ищет интерфейс по умолчанию без `--interface`). MAC шлюза в `--offline` всегда `66-55-44-33-22-11`,
-  в том числе при `--router-mac`, и маршрутизатор не ищется (как C).
+  offline ищет интерфейс по умолчанию без `--interface`) и без `--adapter` печатает
+  `[+] interface = none (offline)`. MAC шлюза в `--offline` всегда `66-55-44-33-22-11`, в том числе при
+  `--router-mac`, и маршрутизатор не ищется (как C).
 - Обнаружение, `--offline` и `--iflist` не требуют привилегий и ничего не открывают (masscan открывает адаптер до
   определения MAC и IP). Скрытый ОС MAC (macOS без root) и нулевой MAC не становятся source MAC: отказ с
   подсказкой `--source-mac`.

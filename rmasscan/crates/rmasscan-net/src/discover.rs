@@ -116,7 +116,8 @@ pub enum DetectError {
     )]
     LocalTarget { ip: Ipv4Addr, ifname: String },
     #[error("FAIL: targets are routed differently ({} via {}, {} via {})\n    [hint] try \"--interface ethX\"", .first.0, .first.1, .last.0, .last.1)]
-    /// Первая и последняя цель идут разными маршрутами (только без `--adapter`).
+    /// Первая и последняя цель идут разными маршрутами (интерфейс или шлюз): без `--adapter` при выборе интерфейса, с
+    /// `--adapter` при поиске следующего хопа, если не заданы `--router-ip`/`--router-mac` (как и `LocalTarget`).
     SplitRoutes {
         first: (Ipv4Addr, String),
         last: (Ipv4Addr, String),

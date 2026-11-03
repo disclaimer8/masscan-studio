@@ -472,11 +472,13 @@ fn effective(
         resume_count: cfg.resume_count,
         blackrock_rounds: cfg.blackrock_rounds,
         wait_secs: cfg.wait_secs,
-        adapter_ip: cfg.adapter_ip,
+        // main-initadapter.c:122-126: source IP 0 значит «не задан», C берёт адрес интерфейса.
+        adapter_ip: cfg.adapter_ip.filter(|&ip| ip != 0),
         // main-conf.c:2552: C никогда не хранит нулевой MAC.
         adapter_mac: cfg.adapter_mac.filter(|m| *m != [0u8; 6]),
         router_ip: cfg.router_ip,
-        router_mac: cfg.router_mac,
+        // main-initadapter.c:170: нулевой MAC шлюза значит «не задан», C ищет шлюз ARP-ом.
+        router_mac: cfg.router_mac.filter(|m| *m != [0u8; 6]),
         source_port: cfg.source_port,
         adapter_name: cfg.adapter_name.clone(),
         offline: cfg.offline,
@@ -1555,6 +1557,38 @@ mod tests {
         assert!(!s.contains("adapter-mac"));
         let back = read_paused_conf("adapter-mac = 00-00-00-00-00-00\n").unwrap();
         assert_eq!(back.adapter_mac, None);
+    }
+
+    /// C `main-initadapter.c:122–126`: source IP 0 значит «определить у интерфейса»; `:170`: нулевой MAC шлюза
+    /// значит «искать ARP-ом». Скан и `--echo` (которое их тоже не печатает) согласны.
+    #[test]
+    fn zero_adapter_ip_and_router_mac_mean_not_given() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.adapter_ip = Some(0);
+        cfg.router_mac = Some([0; 6]);
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        assert_eq!(eff.adapter_ip(), None);
+        assert_eq!(eff.router_mac(), None);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(
+            !s.contains("adapter-ip") && !s.contains("router-mac"),
+            "{s}"
+        );
+        let back = read_paused_conf(
+            "seed = 1\nrange = 10.0.0.0/30\nports = 80\nadapter-ip = 0.0.0.0\n\
+             router-mac = 00-00-00-00-00-00\n",
+        )
+        .unwrap();
+        let eff = validate(&back, Operation::Scan).unwrap();
+        assert_eq!(eff.adapter_ip(), None, "paused.conf adapter-ip = 0.0.0.0");
+        assert_eq!(eff.router_mac(), None, "paused.conf router-mac zero");
+        // Ненулевые значения проходят без изменений.
+        cfg.adapter_ip = Some(0x0aff_0001);
+        cfg.router_mac = Some([6, 5, 4, 3, 2, 1]);
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        assert_eq!(eff.adapter_ip(), Some(0x0aff_0001));
+        assert_eq!(eff.router_mac(), Some([6, 5, 4, 3, 2, 1]));
     }
 
     #[test]

@@ -91,17 +91,16 @@ impl Driver {
                     .map_err(|e| e.to_string())?;
             let (_, host) = studio_platform::work_session::connect()?
                 .ok_or("Retained work session required")?;
-            let seal = studio_platform::sealed_fixture::load(
-                Instant::now() + Duration::from_secs(3),
-                &|| false,
-            )?;
             let owner = studio_platform::unix::Identity::current()?;
             let begin = Instant::now();
             let driver_started = Stamp::now(begin)?;
             if owner.uid == 0
                 || ticket.case != case
-                || ticket.seal_generation != seal.generation
-                || ticket.tooling_sha256 != seal.tooling_sha256
+                // The private seal belongs to the root helper/supervisor. The
+                // ordinary GUI validates the exported ticket against its trusted
+                // host; the helper pins/rechecks the actual seal before raw I/O.
+                || !studio_platform::work_session::valid_hex(&ticket.seal_generation, 32)
+                || !studio_platform::work_session::valid_hex(&ticket.nonce, 32)
                 || ticket.tooling_sha256 != host.caller_hash
                 || ticket.runner_sha256 != host.runner_hash
                 || ticket.runner_sha256 != studio_platform::trusted::file_hash(runner)?

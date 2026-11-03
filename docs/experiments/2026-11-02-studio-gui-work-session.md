@@ -42,6 +42,16 @@ helper SHA256 `f63fedf885e7b0ac4ad7ecbddeb18205ee91889c79e500e4333f60914235ca2f`
 This development artifact was built from an uncommitted worktree; it is evidence
 for that package, not a clean release candidate.
 
+The clean optimized package `studio/dist/build-1793584709600/Masscan Studio.app`
+at `4a2883e` also passed the two-authorizations/Complete/Stop/Start GUI scenario
+(8, 2 and 16 retained rows). GUI hash
+`1b66166d8583fc3753bda528232fe4bd135ba65db712e03ea9598ba63cfafaff`;
+helper `5a36e5206db04e9a4314b9890f9ddecfedff87e107ee7798e9f43623eab70238`.
+Studio CI `41375100205` and engine CI `41375100245` passed on all three OSes.
+The prior Studio CI failed only a test's hardcoded Unix absolute path on Windows;
+`4a2883e` uses an absolute path from the current platform. Runtime behavior was
+unchanged by that correction.
+
 ## Native GUI candidate
 
 `--smoke-network-case=complete|stop-running` uses the real GUI form and button
@@ -82,3 +92,21 @@ Local evidence: `.superpowers/sdd/2026-11-02-studio-gui-session/`, including
 `green-bundle/verified.json`, screenshots, initial failures, package/signature
 probes and `reviewed-tests.log`. Earlier native fixture evidence remains in the
 [October 31 capture report](2026-10-31-studio-macos-network-capture.md).
+
+## November 3: first native GUI attempt and privilege-boundary correction
+
+The retained host was still ready with active 0. The optimized GUI's first
+supervised attempt `d0667dcac65042d6300b15b607f0d906` failed before Controller
+creation: the acceptance driver tried to read the root-only fixture journal from
+the ordinary GUI process. The file namespace remains root-owned mode 0700; its
+permissions were not changed. Driver and supervisor exited 1, export and owned
+fixture cleanup exited 0, and the original host PID 49278 remained ready/idle.
+The failed archive is retained with SHA256
+`d05da234451ef255404698f5728dcd70cdd83e763c15878386ad029bcc2e0320`.
+
+The correction aligns the GUI with the existing unprivileged CLI driver: validate
+the exported ticket syntax, helper bytes, trusted host selection and deadline;
+leave privileged seal reading/pinning and pre-I/O checks in the root helper.
+The independent root supervisor still requires its exact issued ticket when
+accepting evidence. Syntax checks alone do not authenticate the ticket.
+No helper, engine, fixture ownership or packet-verifier policy was weakened.

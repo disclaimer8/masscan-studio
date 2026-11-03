@@ -2,7 +2,8 @@
 
 Branch `acceptance/studio-single-target-capture` follows the reviewed foundation
 in draft PR #44. Its base `bb8f54c` records clean package/three-OS CI acceptance
-at exact executable source `6a72a49`. No installed executable has been changed.
+at exact executable source `6a72a49`. The initial offline work changed no installed
+executable; the packet-free follow-on below installed exact reviewed versions.
 
 ## Added and checked
 
@@ -90,3 +91,39 @@ After the reader refactor, the full local `cargo xtask test` finished with
 **375 passed, 0 failed, 2 ignored**, warnings-denied Clippy and formatting passed.
 Independent read-only review approved the reader while explicitly separating
 trusted metadata from host liveness and execution authority.
+
+## Clean package and retained-session acceptance
+
+Exact executable source `be9e6976b868a3aef7a93b2aaf558781149a2fa4` passed
+[Studio CI 41641067757](https://github.com/disclaimer8/masscan-studio/actions/runs/41641067757)
+on macOS, Linux and Windows. Clean optimized package
+`studio/dist/build-1793711083564/Masscan Studio.app` reports that source with
+`dirty: false`. All manifest hashes and strict deep codesigning verified.
+
+The retained maintenance host staged these exact immutable versions:
+
+- GUI `709c8f8626c6ecf2d147cd378ecd33a9b53b49f2d1f91d2bf9dfc2af4c8df969`
+- helper `4bb38ef5c7e27b06e16d5a819e4c21b480dfa110183f7d440cba3931b7bd0b90`
+
+The reviewed local `verify-retained-session.py` pinned the clean source, all four
+package binary hashes, exact Studio workflow and three successful OS jobs, and
+the original host/PID/selected binaries before any staging. Packaged
+`--smoke-work-session` then completed two actual authenticated helper connections
+and Simulation Completed 8, Stopped 2, Completed 16. SQLite integrity passed,
+with no checkpoints or network reports. Slint snapshots showed Ready/Lock and
+Completed with 16 saved Simulation results. This is automated rendering and IPC
+acceptance, not manual UI or native file-picker acceptance.
+
+The original `89cf...` tool and `5a36...` helper selection was restored, with the
+same `ae8b...` host PID 49278 and active count zero. The new immutable versions
+and GUI caller authorization intentionally remain installed; original binaries
+and both new binaries were independently hash/stat checked as root-owned 0755.
+The installed helper also passed strict codesign verification. No new OS password
+prompt or host replacement occurred. The single-target root namespace remains
+absent. No permit creation, root capture publication, adapter access or scan was
+performed by this test. Independent read-only review confirmed the bounded PASS
+and found no cleanup issue.
+
+Evidence: `capture-session.log`, `capture-session/{before,selected,after,ci,session,verified}.json`,
+`capture-session/data/history.sqlite3` and its five Slint snapshots under
+`.superpowers/sdd/2026-11-03-single-target/`.

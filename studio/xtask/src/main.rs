@@ -12,6 +12,8 @@ mod runner_setup;
 #[cfg(windows)]
 #[path = "runner_setup_windows.rs"]
 mod runner_setup;
+#[cfg(any(target_os = "macos", test))]
+mod single_target_acceptance;
 #[cfg(windows)]
 mod windows_acceptance;
 use std::{
@@ -71,6 +73,8 @@ fn main() -> Result<()> {
         "work-session" => work_session::main_entry(&root)?,
         #[cfg(any(target_os = "macos", test))]
         "network-acceptance" => network_acceptance::main_entry()?,
+        #[cfg(any(target_os = "macos", test))]
+        "single-target-acceptance" => single_target_acceptance::main_entry()?,
         #[cfg(any(target_os="macos", target_os="linux", windows))]
         "prepare-runner" => runner_setup::prepare(&root)?,
         #[cfg(windows)]

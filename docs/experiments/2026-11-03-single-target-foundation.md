@@ -74,3 +74,33 @@ application-side durable-report veto, package/CI checks, reviewed host upgrade,
 and one explicitly permitted captured run remain outstanding. The current native
 scanner still accepts only the sealed local fixture. Release distribution,
 manual/native file-picker and broader network acceptance are not established.
+
+## Offline packet-content verifier
+
+The follow-on command `single-target-acceptance verify PERMIT.json REPORT.bin
+CAPTURE.pcap STATS.json` reads bounded evidence without opening any adapter. It
+requires complete classic Ethernet PCAP records and an exact recorded packet
+count with no reported capture drops, a valid permit/report, observed next-hop
+ARP resolution before TCP, exact permitted tuples/MACs, complete unique probe
+order/cookies, and probe spacing of at least 950 ms (50 ms capture-timestamp
+tolerance for the configured 1 pps). IPv4/TCP checksums, fragmentation, header
+bounds, options and known TCP option lengths are checked independently of the
+scanner's receive parser.
+
+SYN-ACK/RST-ACK replies must correlate with prior probes; duplicate responses are
+reported separately, conflicting states fail, and kernel resets require a prior
+matching open reply. Silent ports are listed as unanswered and generate no
+invented port-state row. This command proves packet-content consistency only: its
+input files alone do not prove root provenance, capture readiness, a live grant,
+GUI persistence or terminal/quiet windows. Those remain native integration work.
+
+The full local workspace now has **370 passing tests, 0 failed, 2 ignored**. The
+subsequent Clippy run and formatting check pass after test-style corrections.
+Seven packet cases cover silence, real reply shapes/options, duplicate replies,
+correlated resets, missing ARP, count/lifetime mismatch, reordered/duplicate/fast
+or corrupted probes, early/foreign/fragmented replies, and capture loss. An
+independent review caught malformed known TCP option lengths; the retained RED
+regression and final GREEN tests establish the fix. Review approved this offline
+scope with no remaining Critical/Important findings. Logs: `packet-red.log`,
+`options-red.log`, `packet-final.log`, `witness-workspace.log` (tests passed;
+initial lint errors retained) and `witness-clippy.log` (final lint pass).

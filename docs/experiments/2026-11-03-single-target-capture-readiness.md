@@ -40,7 +40,7 @@ selected tool `89cf...`, helper `5a36...`; no root permission was relinquished.
 
 ## Concrete remaining sequence
 
-1. Add a bounded trusted host-config reader for an authenticated owner UID.
+1. Use the trusted host-config reader below for the authenticated owner UID.
 2. Implement the fixed forty-second root capture child in the installed issuer
    executable. Open nonpromiscuous system libpcap with a filter restricted to the
    Mac's MAC address, scanner TCP source/destination port 40000 and its own ARP.
@@ -66,3 +66,27 @@ selected tool `89cf...`, helper `5a36...`; no root permission was relinquished.
    process cleanup, permit/attempt IDs, the terminal/quiet window, exact TCP
    probes and actual persisted rows together. No unattended retry or hotel
    device/gateway scan is authorized by this plan.
+
+## Trusted host metadata reader
+
+`work_session::host_config(uid)` reads only the fixed protected host namespace,
+refuses owner UID zero, and uses bounded descriptor-based reads. It rejects
+wrong owner/mode, links, ACLs, special files, oversized/unknown JSON fields and
+file replacement during reading. The ordinary `connect` path now uses this
+reader and retains its socket audit-peer and installed-executable verification.
+The returned metadata alone is not proof of liveness or execution authority.
+
+The new reader passed its filesystem regression after an observed RED failure.
+A read-only Status request from the newly compiled, unenrolled tool reached the
+retained host and was correctly refused with `Caller build is not authorized
+for this working session`. The approved old client then still reported PID
+49278 ready, active 0 and unchanged selected hashes. This verifies the real
+namespace reader and expected caller refusal; it grants no new authority.
+
+Logs: `config-red.log`, `config-final.log`, `config-live-refusal.log` and
+`config-workspace.log` in the same local evidence directory.
+
+After the reader refactor, the full local `cargo xtask test` finished with
+**375 passed, 0 failed, 2 ignored**, warnings-denied Clippy and formatting passed.
+Independent read-only review approved the reader while explicitly separating
+trusted metadata from host liveness and execution authority.

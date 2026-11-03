@@ -73,6 +73,8 @@ fn full_iflist(stand_line: &str) -> String {
 const ORACLE_IFLIST: &str = " 0  veth-a \t(No description available)\n 1  any \t(Pseudo-device that captures on all interfaces)\n 2  lo \t(No description available)\n 3  wlp2s0 \t(No description available)\n 4  nflog \t(Linux netfilter log (NFLOG) interface)\n 5  nfqueue \t(Linux netfilter queue (NFQUEUE) interface)\n\n";
 /// The six adapters of [`ORACLE_IFLIST`]; its blank last line is not one.
 const ORACLE_ADAPTERS: u64 = 6;
+/// The stand NIC's line of [`ORACLE_IFLIST`].
+const ORACLE_STAND_LINE: &str = " 0  veth-a \t(No description available)";
 /// The host name an mDNS announcement carries: it must never reach the evidence.
 const HOST: &[u8] = b"\x09owner-mbp\x05local\x00";
 const PEER: [u8; 6] = crate::link::STAND_PEER_MAC;
@@ -422,6 +424,8 @@ fn linux_setup(tags: &[&'static str]) -> LinuxSetup {
         oracle.to_str().unwrap(),
         "--conf-masked",
         "1",
+        "--lab-id",
+        av::tests::LAB_ID,
     ]);
     if tags.len() < av::planned_tags(Plan::Linux).len() {
         args.push("--only".into());
@@ -793,32 +797,31 @@ fn iflist_cases_store_only_the_redacted_form() {
     for host in ["wlp2s0", "3c-22-fb", "192.168.1.20", "lo index"] {
         assert!(!text.contains(host), "{host} in {text}");
     }
-    // The oracle's record has no line at all; a listing without the stand NIC has none either.
-    assert_eq!(reduce_iflist(0, ORACLE_IFLIST, None).stand_line, None);
+    // A listing without the stand NIC has no stand line.
     assert_eq!(
         reduce_iflist(0, "lo index=1 mac=none\n", Some("veth-a")).stand_line,
         None
     );
-    // C's form: one line per adapter (the stand line ` 0  veth-a \t(...)` among them), the closing blank line not
-    // counted; masscan's own form is never read as rmasscan's `NAME index=` line, even when asked for the stand NIC.
-    let c = reduce_iflist(0, ORACLE_IFLIST, None);
+    // C's form (the oracle): one line per adapter, the closing blank line not counted, and its stand line is masscan's
+    // ` N  veth-a \t(DESC)`. Each reducer reads only its own form, and an adapter whose name merely starts with the
+    // stand's is not the stand's.
+    let c = reduce_masscan_iflist(0, ORACLE_IFLIST, "veth-a");
     assert_eq!(
-        (c.rc, c.lines, c.sha256.as_str()),
+        (c.rc, c.lines, c.sha256.as_str(), c.stand_line.as_deref()),
         (
             0,
             ORACLE_ADAPTERS,
-            crate::verify::sha(ORACLE_IFLIST.as_bytes()).as_str()
+            crate::verify::sha(ORACLE_IFLIST.as_bytes()).as_str(),
+            Some(ORACLE_STAND_LINE)
         )
-    );
-    assert!(
-        ORACLE_IFLIST
-            .lines()
-            .any(|l| l.starts_with(" 0  veth-a \t("))
     );
     assert_eq!(
         reduce_iflist(0, ORACLE_IFLIST, Some("veth-a")).stand_line,
         None
     );
+    assert_eq!(reduce_masscan_iflist(0, &full, "veth-a").stand_line, None);
+    let near = " 0  veth-ab \t(No description available)\n 1  lo \t(No description available)\n\n";
+    assert_eq!(reduce_masscan_iflist(0, near, "veth-a").stand_line, None);
     // masscan without any adapter prints one error line and the blank line, still exit 0: one line, never two.
     let none = "ERR:libpcap: no adapters found, are you sure you are root?\n\n";
     assert_eq!(reduce_iflist(0, none, None).lines, 1);
@@ -841,8 +844,8 @@ fn iflist_cases_store_only_the_redacted_form() {
     let rec: av::IflistRecord =
         serde_json::from_slice(&fs::read(run.join(av::ORACLE_IFLIST_JSON)).unwrap()).unwrap();
     assert_eq!(
-        (rec.rc, rec.lines, rec.stand_line),
-        (0, ORACLE_ADAPTERS, None)
+        (rec.rc, rec.lines, rec.stand_line.as_deref()),
+        (0, ORACLE_ADAPTERS, Some(ORACLE_STAND_LINE))
     );
     assert_eq!(rec.sha256, crate::verify::sha(ORACLE_IFLIST.as_bytes()));
     assert!(!run.join(av::ORACLE_STDERR).exists() && !run.join(av::ORACLE_STDOUT).exists());
@@ -930,10 +933,10 @@ fn a_linux_suite_directory_passes_autodetect_verify() {
     let res = av::verify_dir(&s.out);
     assert_eq!(res["overall"], "PASS", "{:#?}", bad(&res));
     assert_eq!(res["runs"].as_array().unwrap().len(), tags.len() + 1);
-    assert_eq!(
-        read_json(s.out.join("manifest.json")).unwrap()["autodetect"],
-        "linux"
-    );
+    let manifest = read_json(s.out.join("manifest.json")).unwrap();
+    assert_eq!(manifest["autodetect"], "linux");
+    // The lab id wire-lab.sh gave the suite: the teardown record of this lab carries the same.
+    assert_eq!(manifest["lab_id"], av::tests::LAB_ID);
     assert_eq!(
         read_json(s.out.join("env.json")).unwrap()["oracle"]["path"],
         "$HOME/masscan/bin/masscan"
@@ -1010,6 +1013,8 @@ fn the_linux_suite_refuses_another_stand_before_anything_starts() {
         ("--ns-b", "wl-scan-41-42"),
         ("--conf-masked", "2"),
         ("--rmasscan", "relative/rmasscan"),
+        ("--lab-id", "a b"),
+        ("--lab-id", ""),
     ] {
         let s = linux_setup(&["l01_auto"]);
         let mut args = s.args.clone();
@@ -1973,22 +1978,68 @@ fn wire_lab_records_the_teardown_and_keeps_a_work_directory_the_suite_marked() {
         "{f}"
     );
     assert!(
-        f.contains(r#"'{"namespaces_deleted":[%s],"namespaces_left":%s}\n'"#),
+        f.contains(r#"'{"lab_id":"%s","namespaces_deleted":[%s],"namespaces_left":%s}\n'"#)
+            && f.contains(r#""$LAB_ID" "$deleted" "$left""#),
         "{f}"
     );
     let t: av::TeardownRecord = serde_json::from_str(av::tests::TEARDOWN).unwrap();
     assert_eq!(t.namespaces_left, 0);
+    // The record is bound to the lab: the same id goes to the suite (manifest.json) and into teardown.json.
+    let suite = text
+        .split("start_suite_group \"$OUT/suite.log\" \"$LAB_BIN\" autodetect-suite linux")
+        .nth(1)
+        .and_then(|t| t.split("SUITE_PID=").next())
+        .expect("the autodetect suite's start");
+    assert!(suite.contains(r#"--lab-id "$LAB_ID""#), "{suite}");
+    assert!(text.contains("LAB_ID=$(cat /proc/sys/kernel/random/uuid)"));
+    // M2: this lab's namespaces are counted by their exact names, in the record and in the cleanup's own count
+    // (a substring match would count wl-scan-14321-123456 for the RUN_ID 4321-12345).
+    let exact = r#"grep -cE "^wl-(scan|peer)-$RUN_ID( |\$)""#;
+    assert!(f.contains(exact), "{f}");
+    assert!(cleanup.contains(exact) && !text.contains(r#"grep -c -- "$RUN_ID""#));
     // M4: the work directory the suite marked survives; every other one is removed as before.
     let keep = at(&format!(
         r#"if [ "$SUITE" = autodetect ] && [ -e "$WORK/{WORK_KEPT}" ]; then"#
     ));
     assert!(keep < at(r#"rm -rf "$WORK""#));
-    // A later lab never reuses such a directory, so neither the record nor the kept work is lost at its start.
+    // A later lab never reuses a directory that holds any earlier suite output, so neither the record nor the kept
+    // work is lost at its start, and no record of a later lab can stand beside an earlier lab's runs.
     let guard = text
         .find(&format!(
-            r#"for f in "$OUT/{}" "$OUT/.work/{WORK_KEPT}"; do"#,
+            r#"for f in {} runs runs_aborted {} .work; do"#,
+            av::MANIFEST_JSON,
             av::TEARDOWN_JSON
         ))
         .expect("the reuse guard");
     assert!(guard < text.find(r#"WORK="$OUT/.work"; rm -rf "$WORK""#).unwrap());
+}
+
+#[test]
+fn a_linux_directory_is_never_extended_by_another_lab() {
+    // Without --lab-id (wire-lab.sh always passes one) nothing starts.
+    let s = linux_setup(&["l01_auto"]);
+    let i = s.args.iter().position(|a| a == "--lab-id").unwrap();
+    let mut args = s.args.clone();
+    args.drain(i..i + 2);
+    assert!(matches!(
+        linux_with(&args, &s.fake, &s.lab),
+        Err(SuiteError::NotRun(_))
+    ));
+    assert!(s.fake.nothing_started());
+    // A directory of one lab is not extended by another (its teardown record would not speak for both).
+    assert_eq!(linux_with(&s.args, &s.fake, &s.lab).unwrap(), 0);
+    let mut args = s.args.clone();
+    set_arg(
+        &mut args,
+        "--lab-id",
+        "0b1e6f3d-2a4c-4f85-8d9e-7c3a1b5e2f60",
+    );
+    set_arg(&mut args, "--only", "l02_auto_multi");
+    let e = linux_with(&args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(e, SuiteError::NotRun(_)) && e.message().contains("lab_id"),
+        "{e:?}"
+    );
+    assert!(!s.out.join("runs/l02_auto_multi").exists());
+    fs::remove_dir_all(s.root).unwrap();
 }

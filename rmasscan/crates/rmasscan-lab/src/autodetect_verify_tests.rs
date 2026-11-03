@@ -439,11 +439,12 @@ impl Sim {
                     stand_line: Some(line),
                 });
                 if c.tag == "l12_iflist" {
+                    // masscan's own line of the stand NIC (`rawsock_list_adapters`).
                     oracle_iflist = Some(IflistRecord {
                         rc: 0,
                         lines: 3,
                         sha256: sha_of(b"the oracle's --iflist output"),
-                        stand_line: None,
+                        stand_line: Some(" 1  veth-a \t(No description available)".into()),
                     });
                 }
             }
@@ -697,7 +698,12 @@ impl Sim {
     pub(crate) fn write(&self, root: &Path) -> PathBuf {
         let man = root.join("manifest.json");
         if !man.exists() {
-            fs::write(&man, json!({"autodetect": self.case.plan}).to_string()).unwrap();
+            let mut m = json!({"autodetect": self.case.plan});
+            if self.case.plan == Plan::Linux {
+                // The lab id wire-lab.sh gave the suite (and writes into teardown.json).
+                m["lab_id"] = json!(LAB_ID);
+            }
+            fs::write(&man, m.to_string()).unwrap();
         }
         let d = root.join("runs").join(self.tag());
         fs::create_dir_all(&d).unwrap();
@@ -722,8 +728,11 @@ fn json<T: Serialize>(v: &T) -> Vec<u8> {
 }
 
 /// `teardown.json` as `wire-lab.sh --suite autodetect` writes it after a clean teardown (namespace names scrubbed).
-pub(crate) const TEARDOWN: &str =
-    r#"{"namespaces_deleted":["wl-scan-RUNID","wl-peer-RUNID"],"namespaces_left":0}"#;
+/// The id of one Linux lab: `wire-lab.sh` passes it to the suite (`--lab-id`, kept in `manifest.json`) and writes it
+/// into `teardown.json`.
+pub(crate) const LAB_ID: &str = "3f2c9e1a-7b4d-4c3e-9a51-0d6e2b8f4c17";
+/// `teardown.json` as `wire-lab.sh --suite autodetect` writes it after a clean teardown of lab [`LAB_ID`].
+pub(crate) const TEARDOWN: &str = r#"{"lab_id":"3f2c9e1a-7b4d-4c3e-9a51-0d6e2b8f4c17","namespaces_deleted":["wl-scan-RUNID","wl-peer-RUNID"],"namespaces_left":0}"#;
 
 /// Every planned run of `plan` and, on Linux, the root's teardown record: a whole evidence directory.
 fn write_plan(root: &Path, plan: Plan) {
@@ -2573,5 +2582,131 @@ fn a_macos_privacy_filter_that_does_not_add_up_is_invalid() {
                 .any(|c| c["name"].as_str().unwrap().starts_with(name)),
             "{tag}"
         );
+    }
+}
+
+#[test]
+fn a_teardown_record_of_another_lab_is_invalid() {
+    // The record is bound to the lab whose runs it closes. Lab 1's cleanup died before writing it; lab 2, started
+    // into the same --out, wrote a clean record of its own namespaces: lab 1's runs must not pass with it.
+    let name = "teardown.json belongs to the lab of manifest.json (lab_id)";
+    let t: TeardownRecord = serde_json::from_str(TEARDOWN).unwrap();
+    assert_eq!(t.lab_id, LAB_ID);
+    let dir = |manifest_id: Option<&str>, teardown: &str| {
+        let root = scratch();
+        write_plan(&root, Plan::Linux);
+        let mut m = json!({"autodetect": "linux"});
+        if let Some(id) = manifest_id {
+            m["lab_id"] = json!(id);
+        }
+        fs::write(root.join("manifest.json"), m.to_string()).unwrap();
+        fs::write(root.join("teardown.json"), teardown).unwrap();
+        let res = verify_dir(&root);
+        fs::remove_dir_all(root).unwrap();
+        res
+    };
+    let other = TEARDOWN.replace(LAB_ID, "0b1e6f3d-2a4c-4f85-8d9e-7c3a1b5e2f60");
+    for (why, manifest_id, teardown) in [
+        ("another lab's record", Some(LAB_ID), other.as_str()),
+        ("a manifest without a lab id", None, TEARDOWN),
+        (
+            "an empty lab id on both sides",
+            Some(""),
+            &TEARDOWN.replace(LAB_ID, ""),
+        ),
+        (
+            "a lab id that is not an id",
+            Some("a b"),
+            &TEARDOWN.replace(LAB_ID, "a b"),
+        ),
+    ] {
+        let res = dir(manifest_id, teardown);
+        assert_eq!(res["overall"], INVALID, "{why}");
+        assert_eq!(res["safety_trips"], json!([]), "{why}");
+        assert_eq!(
+            check(&run_of(&res, "manifest"), name)["result"],
+            INVALID,
+            "{why}"
+        );
+    }
+    let res = dir(Some(LAB_ID), TEARDOWN);
+    assert_eq!(res["overall"], PASS, "{res:#}");
+    assert_eq!(check(&run_of(&res, "manifest"), name)["result"], PASS);
+    // A record without a lab id is not a teardown record at all.
+    let res = dir(
+        Some(LAB_ID),
+        r#"{"namespaces_deleted":["wl-scan-RUNID","wl-peer-RUNID"],"namespaces_left":0}"#,
+    );
+    assert_eq!(res["overall"], INVALID);
+    assert_eq!(
+        check(
+            &run_of(&res, "manifest"),
+            "teardown.json: wire-lab.sh deleted both namespaces"
+        )["result"],
+        INVALID
+    );
+}
+
+#[test]
+fn the_oracles_iflist_json_names_the_stand_in_masscans_form() {
+    // Ruling: the oracle's record is reduced like rmasscan's, its stand line included (in masscan's form).
+    let name = "the oracle's iflist.json stand line names the stand NIC in masscan's form";
+    let sim = Sim::new(Plan::Linux, "l12_iflist");
+    let r = judge(&sim);
+    assert_verdict(&r, PASS);
+    assert_eq!(check(&r, name)["result"], PASS);
+    for (why, line) in [
+        ("no stand line", None),
+        (
+            "another adapter",
+            Some(" 2  lo \t(No description available)"),
+        ),
+        (
+            "rmasscan's form",
+            Some("veth-a index=2 mac=02-aa-00-00-00-01 ipv4=198.18.0.1 up ethernet"),
+        ),
+        (
+            "a name that only starts with the stand's",
+            Some(" 1  veth-ab \t(No description available)"),
+        ),
+        (
+            "not masscan's form",
+            Some("1 veth-a (No description available)"),
+        ),
+    ] {
+        let mut sim = Sim::new(Plan::Linux, "l12_iflist");
+        sim.oracle_iflist.as_mut().unwrap().stand_line = line.map(Into::into);
+        let r = judge(&sim);
+        assert_verdict(&r, INVALID);
+        assert_eq!(check(&r, name)["result"], INVALID, "{why}");
+        assert_eq!(r["behaviour_fail"], false, "{why}");
+    }
+    // The stored line is held to the same privacy rules as rmasscan's: a host NIC, or an address in the description.
+    for line in [
+        " 3  wlp2s0 \t(No description available)",
+        " 1  veth-a \t(192.168.1.20)",
+    ] {
+        let mut sim = Sim::new(Plan::Linux, "l12_iflist");
+        sim.oracle_iflist.as_mut().unwrap().stand_line = Some(line.into());
+        let r = judge(&sim);
+        assert_verdict(&r, INVALID);
+        assert_eq!(
+            check(&r, "privacy: oracle/iflist.json")["result"],
+            INVALID,
+            "{line}"
+        );
+    }
+    assert_eq!(
+        masscan_iflist_name(" 12  veth-a \t(No description available)\r"),
+        Some("veth-a")
+    );
+    for not in [
+        "veth-a index=2 mac=none",
+        " 0 veth-a \t(x)",
+        "  veth-a \t(x)",
+        " 0  veth-a (x)",
+        " 0   \t(x)",
+    ] {
+        assert_eq!(masscan_iflist_name(not), None, "{not:?}");
     }
 }

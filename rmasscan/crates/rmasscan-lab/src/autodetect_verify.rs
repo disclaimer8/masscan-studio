@@ -22,7 +22,7 @@
 //!   status-post.json`;
 //! - `preflight.txt` for `w01`, `w06`, `m05`: `rc N`, then the stderr of the `rmasscan --offline` preflight;
 //! - `l11_parity` also `oracle/{stdout,stderr,exit}.txt`, `oracle.pcap` and its witness `oracle-capture.json`;
-//!   `l12_iflist` also `oracle/iflist.json` (`rc`, `lines`, `sha256` only);
+//!   `l12_iflist` also `oracle/iflist.json` (reduced the same way, its stand line in masscan's own form);
 //! - `hashes-before-copy.txt` (sha256sum form, every other file, nested paths with `/`).
 //!
 //! Evidence files carry only the extensions json pcap txt log err sha256 md.
@@ -89,6 +89,10 @@ pub enum Plan {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     pub autodetect: Plan,
+    /// Linux: the id `wire-lab.sh` generated for its lab and gave the suite (`--lab-id`); its `teardown.json`
+    /// carries the same, which binds the record of the undo to this lab's runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lab_id: Option<String>,
 }
 
 /// What a case does, pinned per tag by [`case_kind`].
@@ -248,7 +252,8 @@ pub struct ExpectRecord {
 
 /// `iflist.json`: the `--iflist` output reduced on the spot (the full listing is an inventory of the host and is
 /// never stored): exit code, line count, sha256 of the whole output, and the one line of the stand NIC (`None`
-/// when it was not in the output). The oracle's record has no `stand_line`.
+/// when it was not in the output). The oracle's record (`oracle/iflist.json`) is the same reduction of masscan's
+/// listing, its stand line in masscan's own form ([`masscan_iflist_name`]).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct IflistRecord {
@@ -260,12 +265,13 @@ pub struct IflistRecord {
 }
 
 /// `teardown.json`: the undo of the Linux stand, written by `wire-lab.sh --suite autodetect` at its cleanup, after
-/// the two namespaces were deleted. `namespaces_deleted` names those of this lab that are gone (scrubbed to
-/// `wl-scan-RUNID`, `wl-peer-RUNID`), `namespaces_left` counts its namespaces still listed (`null` when `ip netns
-/// list` failed, which no number stands in for).
+/// the two namespaces were deleted. `lab_id` is the lab's id (the one in `manifest.json`), `namespaces_deleted` names
+/// its namespaces that are gone (scrubbed to `wl-scan-RUNID`, `wl-peer-RUNID`), `namespaces_left` counts its
+/// namespaces still listed (`null` when `ip netns list` failed, which no number stands in for).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TeardownRecord {
+    pub lab_id: String,
     pub namespaces_deleted: Vec<String>,
     pub namespaces_left: u64,
 }
@@ -1237,6 +1243,19 @@ pub fn parse_preflight(text: &str) -> Result<(i32, DetectedRecord), String> {
     Ok((rc, parse_stderr(rest)?))
 }
 
+/// The adapter name of a line of masscan's `--iflist` (`rawsock_list_adapters`, rawsock.c:198-225: `" %d  %s \t"`,
+/// then `"(%s)\n"` or `"(No description available)\n"`), `None` for any other line. The oracle's stand line is the
+/// one that names the stand NIC.
+pub fn masscan_iflist_name(line: &str) -> Option<&str> {
+    let rest = line.trim_end_matches('\r').strip_prefix(' ')?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let (name, desc) = rest[digits..].strip_prefix("  ")?.split_once(" \t(")?;
+    (!name.is_empty() && !name.contains(char::is_whitespace) && desc.ends_with(')')).then_some(name)
+}
+
 /// The CLI's result line (`output.c:781-795`): `Discovered open port P/tcp on IP`, spaces to 79 characters, `\n`.
 pub fn discovered_line(ip: Ipv4Addr, port: u16) -> String {
     format!(
@@ -1564,11 +1583,18 @@ fn output_problems(rel: &str, text: &str) -> Vec<String> {
                         .chain(x.iflist.map(|i| i.name)),
                 )
             }),
-        IFLIST_JSON | ORACLE_IFLIST_JSON => serde_json::from_str::<IflistRecord>(text)
+        IFLIST_JSON => serde_json::from_str::<IflistRecord>(text)
             .ok()
             .and_then(|r| r.stand_line)
             .map_or_else(Vec::new, |l| {
                 name_problems([l.split(" index=").next().unwrap_or("").to_owned()])
+            }),
+        // The same rule on masscan's form; a line that is not in it counts as a name whole.
+        ORACLE_IFLIST_JSON => serde_json::from_str::<IflistRecord>(text)
+            .ok()
+            .and_then(|r| r.stand_line)
+            .map_or_else(Vec::new, |l| {
+                name_problems([masscan_iflist_name(&l).unwrap_or(&l).to_owned()])
             }),
         _ => Vec::new(),
     }
@@ -2817,18 +2843,25 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
     if ev.tag == "l12_iflist"
         && let Some(o) = typed::<IflistRecord>(r, d, ORACLE_IFLIST_JSON)
     {
-        // The oracle's listing proves the stand, not rmasscan.
+        // The oracle's listing proves the stand, not rmasscan: reduced like rmasscan's, with masscan's own line of the
+        // stand NIC.
         r.inv(
             "the oracle's --iflist exited 0 and listed at least two lines",
             o.rc == 0 && o.lines >= 2,
             format!("rc {}, lines {}", o.rc, o.lines),
         );
         r.inv(
-            "the oracle's iflist.json stores only rc, lines and a sha256",
-            o.stand_line.is_none()
-                && o.sha256.len() == 64
-                && o.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
-            format!("{o:?}"),
+            "the oracle's iflist.json sha256 is a sha256",
+            o.sha256.len() == 64 && o.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            &o.sha256,
+        );
+        r.inv(
+            "the oracle's iflist.json stand line names the stand NIC in masscan's form",
+            o.stand_line.as_deref().and_then(masscan_iflist_name) == Some(ev.st.iface),
+            format!(
+                "{:?}, expected masscan's line of {}",
+                o.stand_line, ev.st.iface
+            ),
         );
     }
 }
@@ -2839,7 +2872,9 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
 /// left. Missing or unreadable it is unproven; a namespace left behind means the stand change was not undone. Both
 /// are INVALID: the record proves the stand, not the scanner, and a namespace pair without an uplink carries no frame
 /// onto a real network (a frame that reached one is a safety FAIL of the captures). A symbolic link is not read.
-fn teardown(m: &mut Run, root: &Path, links: &[String]) {
+/// The record must also be this lab's: its `lab_id` equal to `manifest.json`'s (`manifest_lab_id`), or a later
+/// lab's clean record started into the same `--out` would stand in for a cleanup that never wrote one.
+fn teardown(m: &mut Run, root: &Path, links: &[String], manifest_lab_id: Option<&str>) {
     let name = "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left";
     if links.iter().any(|l| l == TEARDOWN_JSON) {
         m.inv(name, false, "a symbolic link (not followed)");
@@ -2872,6 +2907,12 @@ fn teardown(m: &mut Run, root: &Path, links: &[String]) {
                     "deleted {:?}, left {}",
                     t.namespaces_deleted, t.namespaces_left
                 ),
+            );
+            m.inv(
+                "teardown.json belongs to the lab of manifest.json (lab_id)",
+                manifest_lab_id
+                    .is_some_and(|id| crate::windows_suite::safe_id(id) && id == t.lab_id),
+                format!("manifest {manifest_lab_id:?}, teardown {:?}", t.lab_id),
             );
         }
     }
@@ -2958,11 +2999,11 @@ pub fn verify_dir(root: &Path) -> Value {
         format!("{:?}", t.links),
     );
     let manifest_linked = t.links.iter().any(|l| l == MANIFEST_JSON);
-    let plan = (!manifest_linked)
+    let manifest = (!manifest_linked)
         .then(|| read_json(root.join(MANIFEST_JSON)))
         .flatten()
-        .and_then(|v| serde_json::from_value::<Manifest>(v).ok())
-        .map(|x| x.autodetect);
+        .and_then(|v| serde_json::from_value::<Manifest>(v).ok());
+    let plan = manifest.as_ref().map(|x| x.autodetect);
     m.check(
         "manifest.json names the autodetect plan (linux, macos, macos-root or windows)",
         plan.is_some(),
@@ -3005,7 +3046,8 @@ pub fn verify_dir(root: &Path) -> Value {
         format!("{unplanned:?}"),
     );
     if plan == Some(Plan::Linux) {
-        teardown(&mut m, root, &t.links);
+        let id = manifest.as_ref().and_then(|x| x.lab_id.as_deref());
+        teardown(&mut m, root, &t.links, id);
     }
     let mut runs = vec![m.summary()];
     if let Some(plan) = plan {

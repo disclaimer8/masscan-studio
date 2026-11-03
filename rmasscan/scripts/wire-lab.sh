@@ -11,8 +11,8 @@
 # seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
 # 198.18.0.2-5, so the rmasscan CLI can auto-detect its interface, source IP and router. The peer namespace
 # still has no default route; the stand is fixed inside this script (the WIRELAB_* stand overrides, MACs, ports and cases file included, are ignored).
-# Its cleanup records the undo in OUT/teardown.json and keeps OUT/.work when the suite marked it (work-kept.txt);
-# an OUT holding either is refused, so every autodetect lab gets a new --out.
+# Its cleanup records the undo in OUT/teardown.json under the lab id it gave the suite, and keeps OUT/.work when the
+# suite marked it (work-kept.txt); an OUT holding earlier suite output is refused: every lab gets a new --out.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -96,12 +96,19 @@ SEED=1; RATE=100
 CREATED_A=0; CREATED_B=0; PIDS=()
 STOP_GRACE=45   # witness: quiet wait <= 20 s + end markers <= 15 s + tcpdump stop <= 30 s, but normally 2-3 s
 mkdir -p "$OUT"; OUT=$(readlink -f "$OUT")
+LAB_ID=""
 if [ "$SUITE" = autodetect ]; then
-  # An earlier autodetect lab's directory is never reused: its teardown record and a work directory the suite kept
-  # after a failed evidence copy must survive (the rm below would wipe the latter), so a new lab needs a new --out.
-  for f in "$OUT/teardown.json" "$OUT/.work/work-kept.txt"; do
-    [ ! -e "$f" ] || { echo "FATAL: $f exists: $OUT holds an earlier autodetect lab; use a new --out" >&2; exit 2; }
+  # An earlier lab's directory is never reused: its runs, its teardown record (or the lack of one, if its cleanup
+  # died) and a work directory the suite kept after a failed evidence copy (the rm below would wipe it) all stay
+  # its own, so a new lab needs a new --out.
+  for f in manifest.json runs runs_aborted teardown.json .work; do
+    if [ -e "$OUT/$f" ] || [ -L "$OUT/$f" ]; then
+      echo "FATAL: $OUT/$f exists: $OUT holds the output of an earlier autodetect lab; use a new --out" >&2; exit 2
+    fi
   done
+  # This lab's id: the suite keeps it in manifest.json and the cleanup writes it into teardown.json, which binds the
+  # record of the undo to this lab's runs.
+  LAB_ID=$(cat /proc/sys/kernel/random/uuid) || { echo "FATAL: cannot generate the lab id" >&2; exit 2; }
 fi
 WORK="$OUT/.work"; rm -rf "$WORK"; mkdir -p "$WORK"
 : >"$OUT/commands.txt"
@@ -109,13 +116,14 @@ WORK="$OUT/.work"; rm -rf "$WORK"; mkdir -p "$WORK"
 log() { echo "[wire-lab] $*"; }
 note_cmd() { echo "$*" >>"$OUT/commands.txt"; }
 
-# The undo of the autodetect stand as evidence ($OUT/teardown.json, judged by autodetect-verify): which of this
-# run's namespaces are gone once cleanup deleted them (names scrubbed like env.json), and how many are still
-# listed; null when `ip netns list` fails, so that no count stands in for an unread list.
+# The undo of the autodetect stand as evidence ($OUT/teardown.json, judged by autodetect-verify): the lab id the
+# suite has in manifest.json, which of this run's namespaces are gone once cleanup deleted them (names scrubbed like
+# env.json), and how many are still listed, by exact name; null when `ip netns list` fails, so that no count stands
+# in for an unread list.
 autodetect_teardown() {
   local list names left=null deleted="" created_ns created ns
   if list=$(ip netns list 2>/dev/null); then
-    left=$(printf '%s\n' "$list" | grep -c -- "$RUN_ID")
+    left=$(printf '%s\n' "$list" | grep -cE "^wl-(scan|peer)-$RUN_ID( |\$)")
     names=$(printf '%s\n' "$list" | awk '{print $1}')
     for created_ns in "$CREATED_A:$NS_A" "$CREATED_B:$NS_B"; do
       created=${created_ns%%:*}; ns=${created_ns#*:}
@@ -124,7 +132,7 @@ autodetect_teardown() {
       deleted="$deleted${deleted:+,}\"$(printf '%s' "$ns" | sed -E 's/wl-(scan|peer)-[0-9]+-[0-9]+/wl-\1-RUNID/')\""
     done
   fi
-  printf '{"namespaces_deleted":[%s],"namespaces_left":%s}\n' "$deleted" "$left" >"$OUT/teardown.json"
+  printf '{"lab_id":"%s","namespaces_deleted":[%s],"namespaces_left":%s}\n' "$LAB_ID" "$deleted" "$left" >"$OUT/teardown.json"
 }
 
 cleanup() {
@@ -141,7 +149,8 @@ cleanup() {
   [ "$CREATED_B" = 1 ] && ip netns del "$NS_B" 2>/dev/null
   # nothing of this run may outlive it: no tcpdump writing into OUT, no live member of a tracked session
   stray=$((stray + $(stray_processes tcpdump "$OUT/")))
-  local left; left=$(ip netns list 2>/dev/null | grep -c -- "$RUN_ID")
+  # this run's two namespaces by exact name (a substring would also count wl-scan-14321-123456 for RUN_ID 4321-12345)
+  local left; left=$(ip netns list 2>/dev/null | grep -cE "^wl-(scan|peer)-$RUN_ID( |\$)")
   [ "$SUITE" != autodetect ] || autodetect_teardown
   # The autodetect suite marks a work directory it kept after a failed evidence copy: that one stays for inspection.
   if [ "$SUITE" = autodetect ] && [ -e "$WORK/work-kept.txt" ]; then
@@ -357,7 +366,7 @@ if [ "$SUITE" = autodetect ]; then
   note_cmd "rmasscan-lab autodetect-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
   start_suite_group "$OUT/suite.log" "$LAB_BIN" autodetect-suite linux --out "$OUT" --work "$WORK" \
     --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
-    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED"
+    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
   SUITE_PID=$SUITE_PGID
   SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
   stop_suite_group

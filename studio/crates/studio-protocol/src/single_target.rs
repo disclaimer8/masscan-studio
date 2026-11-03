@@ -7,6 +7,46 @@ use rmasscan_net::PhysicalRoutePlan;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 
+/// Bounded operator intent. Interface identity and executable hashes come from root.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Intent {
+    pub target: Ipv4Addr,
+    pub ports: Vec<u16>,
+    pub seed: u64,
+}
+impl Intent {
+    pub fn validate(&self) -> Result<(), String> {
+        if !public_candidate(self.target)
+            || self.ports.is_empty()
+            || self.ports.len() > 4
+            || self.ports.contains(&0)
+            || self.ports.windows(2).any(|p| p[0] >= p[1])
+            || self.seed == 0
+        {
+            return Err(
+                "Permit requires one public target and one to four sorted unique TCP ports".into(),
+            );
+        }
+        self.job().validate()
+    }
+    pub fn job(&self) -> Job {
+        Job {
+            backend: Backend::MacNetwork,
+            targets: self.target.to_string(),
+            ports: self
+                .ports
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            exclusions: String::new(),
+            seed: self.seed.to_string(),
+            rate: 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterfaceBinding {
@@ -61,17 +101,7 @@ impl Permit {
         {
             return Err("Single-target permit expired or invalid lifetime".into());
         }
-        if !public_candidate(self.target)
-            || self.ports.is_empty()
-            || self.ports.len() > 4
-            || self.ports.contains(&0)
-            || self.ports.windows(2).any(|p| p[0] >= p[1])
-            || self.seed == 0
-        {
-            return Err(
-                "Permit requires one public target and one to four sorted unique TCP ports".into(),
-            );
-        }
+        self.intent().validate()?;
         let number = self.interface.name.strip_prefix("en").unwrap_or("");
         if number.is_empty() || number.len() > 4 || !number.bytes().all(|b| b.is_ascii_digit()) {
             return Err("Single-target acceptance requires a physical en interface".into());
@@ -81,20 +111,15 @@ impl Permit {
             .map_err(|e| e.to_string())?;
         self.job().validate()
     }
-    pub fn job(&self) -> Job {
-        Job {
-            backend: Backend::MacNetwork,
-            targets: self.target.to_string(),
-            ports: self
-                .ports
-                .iter()
-                .map(u16::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-            exclusions: String::new(),
-            seed: self.seed.to_string(),
-            rate: 1,
+    pub fn intent(&self) -> Intent {
+        Intent {
+            target: self.target,
+            ports: self.ports.clone(),
+            seed: self.seed,
         }
+    }
+    pub fn job(&self) -> Job {
+        self.intent().job()
     }
     pub fn admit_job(&self, job: &Job, context: &Context<'_>) -> Result<(), String> {
         self.validate(context)?;
@@ -264,6 +289,51 @@ mod tests {
                 next_hop: "10.0.0.1".parse().unwrap(),
             },
         }
+    }
+    #[test]
+    fn intent_refuses_private_targets_and_port_expansion_before_route_observation() {
+        let valid = Intent {
+            target: "45.33.32.156".parse().unwrap(),
+            ports: vec![22, 80, 443, 65535],
+            seed: 42,
+        };
+        valid.validate().unwrap();
+        assert_eq!(valid.job().rate, 1);
+        for ports in [
+            vec![],
+            vec![0],
+            vec![80, 80],
+            vec![443, 80],
+            vec![1, 2, 3, 4, 5],
+        ] {
+            assert!(
+                Intent {
+                    ports,
+                    ..valid.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            Intent {
+                target: "10.0.0.1".parse().unwrap(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Intent {
+                seed: 0,
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        let mut value = serde_json::to_value(&valid).unwrap();
+        value["interface"] = serde_json::json!("en0");
+        assert!(serde_json::from_value::<Intent>(value).is_err());
     }
     #[test]
     fn only_exact_single_host_ports_rate_and_seed_are_admitted() {

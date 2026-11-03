@@ -1177,6 +1177,27 @@ pub fn parse_stderr(text: &str) -> Result<DetectedRecord, String> {
     Ok(d)
 }
 
+/// Does `preflight.txt` show what the case expects before its live run may start (R1)? The NIC must be the one the
+/// route to the case's first target names, not one given on the command line; a refusal must be exactly its text
+/// with exit 1. A case without a preflight shows nothing. The suites refuse to start the live run on `false`, and
+/// the verifier judges the stored file with the same rule.
+pub fn preflight_shows(spec: &CaseSpec, text: &str) -> bool {
+    let Some(pre) = spec.expect().preflight else {
+        return false;
+    };
+    parse_preflight(text).is_ok_and(|(rc, p)| match pre {
+        ExpectPreflight::Interface(name) => {
+            rc == 0
+                && p.interface
+                    == Some(Sourced {
+                        value: name,
+                        source: format!("detected: route to {}", spec.first_target()),
+                    })
+        }
+        ExpectPreflight::Refusal(text) => rc == 1 && p.fail.as_deref() == Some(text.as_str()),
+    })
+}
+
 /// `preflight.txt`: `rc N`, then the stderr of the `--offline` run.
 pub fn parse_preflight(text: &str) -> Result<(i32, DetectedRecord), String> {
     let t = text.trim_start_matches('\u{feff}');
@@ -2096,21 +2117,9 @@ fn verify_run(root: &Path, spec: &CaseSpec, root_links: &[String]) -> Run {
     if let Some(pre) = &want.preflight
         && let Some(text) = need(&mut r, &d, PREFLIGHT_TXT)
     {
-        // The NIC must be the one the route to the case's first target names, not one given on the command line.
-        let ok = parse_preflight(&text).is_ok_and(|(rc, p)| match pre {
-            ExpectPreflight::Interface(name) => {
-                rc == 0
-                    && p.interface
-                        == Some(Sourced {
-                            value: name.clone(),
-                            source: format!("detected: route to {}", spec.first_target()),
-                        })
-            }
-            ExpectPreflight::Refusal(text) => rc == 1 && p.fail.as_deref() == Some(text),
-        });
         r.check(
             "preflight equals the expected detection of the case",
-            ok,
+            preflight_shows(spec, &text),
             format!("expected {pre:?}"),
             NOT_RUN,
             false,
@@ -2868,6 +2877,8 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     })
 }
 
+/// The synthetic run generator is shared with the suite's tests, which feed its outputs through the suite's own
+/// writer and back into this verifier.
 #[cfg(test)]
 #[path = "autodetect_verify_tests.rs"]
-mod tests;
+pub(crate) mod tests;

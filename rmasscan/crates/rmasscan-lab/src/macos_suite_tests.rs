@@ -1072,7 +1072,6 @@ fn a_scanner_that_ignores_int_is_killed_before_the_witnesses_stop() {
     }
     let rig = Rig::new();
     let st = Fake::new(&rig.wire);
-    let s = rig.suite(&st, "functional");
     let mut t = Tools::default();
     t.scanner = Some(Box::new(Stubborn(st.log.clone())));
     t.witness = Some(Box::new(FakeProc {
@@ -1084,7 +1083,7 @@ fn a_scanner_that_ignores_int_is_killed_before_the_witnesses_stop() {
         polls: 0,
         pgid: 1,
     }));
-    s.stop_tools(&mut t);
+    stop_tools(&st, &mut t);
     let log = st.log.borrow().clone();
     assert_eq!(
         log[..3],

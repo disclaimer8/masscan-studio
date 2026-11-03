@@ -259,7 +259,8 @@ pub fn scrub(v: &mut Value) {
         _ => {}
     }
 }
-fn scrub_str(s: &str) -> String {
+/// [`scrub`] of one string (a log line, an error message).
+pub(crate) fn scrub_str(s: &str) -> String {
     let home = scrub_home(s);
     scrub_namespaces(&home)
 }

@@ -22,7 +22,7 @@ fn stop_requested() -> bool {
 }
 /// Signal a process directly. `command()` kills its own child as soon as the stop flag is up, so a
 /// cleanup kill sent through it would die before it ran (final review M-2).
-fn signal_process(sig: &str, pid: u32) {
+pub(crate) fn signal_process(sig: &str, pid: u32) {
     let _ = Command::new("kill")
         .arg(format!("-{sig}"))
         .arg(pid.to_string())
@@ -124,7 +124,7 @@ fn sorted_replies(s: &Value) -> Vec<String> {
     r.sort();
     r
 }
-fn spawn(a: &[String], out: &Path, err: &Path) -> Result<Child, String> {
+pub(crate) fn spawn(a: &[String], out: &Path, err: &Path) -> Result<Child, String> {
     Command::new(&a[0])
         .args(&a[1..])
         .stdout(Stdio::from(

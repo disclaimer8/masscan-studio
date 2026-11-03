@@ -538,6 +538,13 @@ pub(crate) fn mac_dump_iface_allowed(iface: &str, uplink: Option<&str>) -> bool 
         || (uplink == Some(iface) && !iface.starts_with("feth"))
 }
 
+/// `capture dump --filter`: the only filter a witness may carry is the macOS privacy filter on the peer interface
+/// (`macos_verify::PEER_FILTER`: the host's own mDNS announcements, which name the host, are left out; nothing else
+/// is). Any other filter, or a filter on any other interface or OS, would hide frames from the witness.
+pub(crate) fn witness_filter_allowed(iface: &str, filter: &str, macos: bool) -> bool {
+    macos && iface == "feth4202" && filter == crate::macos_verify::PEER_FILTER
+}
+
 /// A `Tx` that writes nothing: a capture on an interface the lab may only read.
 #[cfg(target_os = "macos")]
 struct ReadOnlyTx;
@@ -562,6 +569,15 @@ pub fn run(a: &BTreeMap<String, String>) -> Result<i32, String> {
         return Err("invalid interface".into());
     }
     let dst = link::parse_mac(get(a, "end-dst")?)?;
+    let filter = a.get("filter").map(String::as_str);
+    if let Some(f) = filter
+        && !witness_filter_allowed(iface, f, cfg!(target_os = "macos"))
+    {
+        return Err(format!(
+            "capture dump --filter accepts only {:?} on feth4202 (macOS); not {f:?} on {iface}",
+            crate::macos_verify::PEER_FILTER
+        ));
+    }
     #[allow(unused_mut)]
     let mut cfg = Config::standard(
         iface,
@@ -571,7 +587,7 @@ pub fn run(a: &BTreeMap<String, String>) -> Result<i32, String> {
     );
     #[cfg(target_os = "macos")]
     {
-        cfg.argv = tcpdump_argv_macos(iface, get(a, "pcap")?, None);
+        cfg.argv = tcpdump_argv_macos(iface, get(a, "pcap")?, filter);
     }
     #[cfg(target_os = "macos")]
     {

@@ -57,6 +57,36 @@ pub struct CaptureCompletion {
     pub pcap_bytes: u64,
     pub pcap_sha256: String,
 }
+pub struct CaptureEvidence {
+    pub permit: Permit,
+    pub completion: CaptureCompletion,
+    pub pcap: Vec<u8>,
+}
+impl CaptureCompletion {
+    /// Pure exported-content consistency check, never proof of root provenance or
+    /// a live capture. Issued permits use the canonical serde encoding below.
+    pub fn validate_export(&self, permit: &Permit, pcap: &[u8]) -> Result<()> {
+        self.witness.validate(
+            permit,
+            &digest(&serde_json::to_vec(permit).map_err(err)?),
+            &Context {
+                now: self.witness.created,
+                owner_uid: permit.owner_uid,
+                tooling_sha256: &permit.tooling_sha256,
+                helper_sha256: &permit.helper_sha256,
+            },
+            &self.witness.process,
+        )?;
+        self.measurements.validate(&self.witness, self.finished)?;
+        if pcap.len() > super::recording::MAX_BYTES
+            || self.pcap_bytes != pcap.len() as u64
+            || self.pcap_sha256 != digest(pcap)
+        {
+            return Err("Exported capture size or hash differs".into());
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureWitness {
@@ -169,6 +199,55 @@ fn digest(bytes: &[u8]) -> String {
         .collect()
 }
 impl Store {
+    /// Read only completed fixed-name evidence belonging to the authenticated UID.
+    /// A revoked/expired permit may be exported; this never grants execution.
+    pub fn capture_evidence(&self, uid: u32, generation: &str) -> Result<CaptureEvidence> {
+        let deadline = budget();
+        let _lock = self.lock(deadline)?;
+        let bytes = self.read(&self.marker("capture-permit", generation)?, deadline)?;
+        let permit: Permit = serde_json::from_slice(&bytes).map_err(err)?;
+        if uid == 0 || permit.owner_uid != uid || permit.generation != generation {
+            return Err("Capture evidence owner or generation differs".into());
+        }
+        let completion: CaptureCompletion = serde_json::from_slice(
+            &self.read(&self.marker("capture-result", generation)?, deadline)?,
+        )
+        .map_err(err)?;
+        let w = &completion.witness;
+        w.validate(
+            &permit,
+            &digest(&bytes),
+            &Context {
+                now: w.created,
+                owner_uid: uid,
+                tooling_sha256: &permit.tooling_sha256,
+                helper_sha256: &permit.helper_sha256,
+            },
+            &w.process,
+        )?;
+        completion.measurements.validate(w, completion.finished)?;
+        for prefix in ["capture-ready", "capture-ended"] {
+            let stored: CaptureWitness =
+                serde_json::from_slice(&self.read(&self.marker(prefix, generation)?, deadline)?)
+                    .map_err(err)?;
+            if &stored != w {
+                return Err("Capture evidence witness differs".into());
+            }
+        }
+        let pcap = self.read_limit(
+            &self.capture_path(generation)?,
+            deadline,
+            super::recording::MAX_BYTES as u64,
+        )?;
+        if completion.pcap_bytes != pcap.len() as u64 || completion.pcap_sha256 != digest(&pcap) {
+            return Err("Capture evidence bytes or hash differ".into());
+        }
+        Ok(CaptureEvidence {
+            permit,
+            completion,
+            pcap,
+        })
+    }
     pub fn capture_lease(&self, permit: &Permit, context: &Context<'_>) -> Result<CaptureLease> {
         let deadline = budget();
         let _lock = self.lock(deadline)?;
@@ -668,6 +747,20 @@ mod tests {
         assert_eq!(fs::metadata(&output).unwrap().mode() & 0o777, 0o600);
         let saved: CaptureCompletion = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
         assert_eq!(saved, result);
+        let evidence = store.capture_evidence(p.owner_uid, &p.generation).unwrap();
+        assert_eq!(evidence.pcap, CAPTURE_HEADER);
+        assert_eq!(evidence.completion, result);
+        result.validate_export(&p, &evidence.pcap).unwrap();
+        let mut invalid = result.clone();
+        invalid.witness.permit_sha256 = "0".repeat(64);
+        assert!(invalid.validate_export(&p, &evidence.pcap).is_err());
+        assert!(
+            store
+                .capture_evidence(p.owner_uid + 1, &p.generation)
+                .is_err()
+        );
+        fs::write(store.capture_path(&p.generation).unwrap(), b"changed").unwrap();
+        assert!(store.capture_evidence(p.owner_uid, &p.generation).is_err());
         fs::remove_dir_all(path).unwrap();
     }
     #[test]

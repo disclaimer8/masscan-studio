@@ -75,6 +75,12 @@ pub enum Fixture {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", deny_unknown_fields)]
 pub enum SingleTarget {
+    Capture {
+        generation: String,
+    },
+    ExportCapture {
+        generation: String,
+    },
     CreatePermit {
         intent: studio_protocol::single_target::Intent,
     },
@@ -114,6 +120,15 @@ pub enum Response {
     Capabilities {
         version: u16,
         single_target_permits: bool,
+        #[serde(default)]
+        single_target_capture: bool,
+    },
+    CaptureReady {
+        witness: Box<crate::single_target::CaptureWitness>,
+    },
+    CaptureEvidence {
+        permit: Box<studio_protocol::single_target::Permit>,
+        completion: Box<crate::single_target::CaptureCompletion>,
     },
     SingleTarget {
         record: Option<crate::single_target::Record>,
@@ -138,13 +153,24 @@ pub enum Response {
 /// Must succeed before reconnecting to the same host for a new typed mutation.
 /// An old host receives only this read-only request and remains running.
 pub fn require_single_target_permits(stream: &mut UnixStream) -> Result<()> {
+    require_single_target(stream, false)
+}
+pub fn require_single_target_capture(stream: &mut UnixStream) -> Result<()> {
+    require_single_target(stream, true)
+}
+fn require_single_target(stream: &mut UnixStream, capture: bool) -> Result<()> {
     let result = (|| {
         write(stream, &Request::Capabilities {})?;
         match read(stream, Duration::from_secs(3), &AtomicBool::new(false))? {
             Response::Capabilities {
-                version: 1,
+                version,
                 single_target_permits: true,
-            } => Ok(()),
+                single_target_capture,
+            } if matches!(version, 1 | 2)
+                && (!capture || (version == 2 && single_target_capture)) =>
+            {
+                Ok(())
+            }
             _ => Err("Host does not support single-target permits".into()),
         }
     })();
@@ -177,9 +203,12 @@ pub fn validate_request(r: &Request, c: &Config, peer: &Identity) -> Result<()> 
             operation: SingleTarget::CreatePermit { intent },
         } => intent.validate()?,
         Request::SingleTarget {
-            operation: SingleTarget::Revoke { generation },
+            operation:
+                SingleTarget::Revoke { generation }
+                | SingleTarget::Capture { generation }
+                | SingleTarget::ExportCapture { generation },
         } if !valid_hex(generation, 32) || generation.bytes().all(|b| b == b'0') => {
-            return Err("Invalid single-target revocation generation".into());
+            return Err("Invalid single-target generation".into());
         }
         Request::Stage { tool, runner } => {
             tool.validate()?;
@@ -657,10 +686,12 @@ mod tests {
             Response::Capabilities {
                 version: 1,
                 single_target_permits: false,
+                single_target_capture: false,
             },
             Response::Capabilities {
-                version: 2,
+                version: 3,
                 single_target_permits: true,
+                single_target_capture: false,
             },
         ] {
             let (mut client, mut server) = UnixStream::pair().unwrap();
@@ -899,5 +930,44 @@ mod tests {
         drop(Lease { stream: control }.watch(&direct).unwrap());
         assert_eq!(host.read(&mut [0]).unwrap(), 0);
         assert!(runner.read(&mut [0]).is_err());
+    }
+    #[test]
+    fn capture_requires_version_two_and_an_explicit_capability() {
+        for (version, enabled, expected) in [
+            (1, false, false),
+            (1, true, false),
+            (2, false, false),
+            (2, true, true),
+            (3, true, false),
+        ] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || {
+                let request: Request =
+                    read(&mut server, Duration::from_secs(1), &AtomicBool::new(false)).unwrap();
+                assert!(matches!(request, Request::Capabilities {}));
+                write(
+                    &mut server,
+                    &Response::Capabilities {
+                        version,
+                        single_target_permits: true,
+                        single_target_capture: enabled,
+                    },
+                )
+                .unwrap();
+            });
+            assert_eq!(require_single_target_capture(&mut client).is_ok(), expected);
+            worker.join().unwrap();
+        }
+        let old: Response = serde_json::from_str(
+            r#"{"response":"Capabilities","version":1,"single_target_permits":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            old,
+            Response::Capabilities {
+                single_target_capture: false,
+                ..
+            }
+        ));
     }
 }

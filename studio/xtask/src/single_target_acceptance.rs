@@ -363,6 +363,21 @@ fn read(path: &str, limit: usize) -> Result<Vec<u8>> {
 pub fn main_entry() -> super::Result<()> {
     let args: Vec<_> = std::env::args().skip(2).collect();
     #[cfg(target_os = "macos")]
+    if let [action, evidence, report] = args.as_slice()
+        && action == "verify-evidence"
+    {
+        let bytes = read(
+            evidence,
+            super::network_acceptance::witness::MAX_CAPTURE + 16385,
+        )?;
+        let report = NetworkReport::decode(&read(report, studio_protocol::MAX_NETWORK_BLOB)?)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&verify_evidence(&bytes, &report)?)?
+        );
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
     if let [action, uid, generation] = args.as_slice()
         && action == "capture"
     {
@@ -375,12 +390,12 @@ pub fn main_entry() -> super::Result<()> {
     }
     let [action, permit, report, pcap, stats] = args.as_slice() else {
         return Err(
-            "Usage: single-target-acceptance verify PERMIT.json REPORT.bin CAPTURE.pcap STATS.json"
+            "Usage: single-target-acceptance verify PERMIT.json REPORT.bin CAPTURE.pcap STATS.json | verify-evidence EXPORT.bin REPORT.bin | capture UID GENERATION (installed root child only)"
                 .into(),
         );
     };
     if action != "verify" {
-        return Err("Only offline verify is implemented".into());
+        return Err("Unknown single-target acceptance command".into());
     }
     let permit: Permit = serde_json::from_slice(&read(permit, 16384)?)?;
     let report = NetworkReport::decode(&read(report, studio_protocol::MAX_NETWORK_BLOB)?)?;
@@ -393,6 +408,69 @@ pub fn main_entry() -> super::Result<()> {
     )?;
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
+}
+#[cfg(target_os = "macos")]
+fn verify_evidence(bytes: &[u8], report: &NetworkReport) -> Result<Verified> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Metadata {
+        permit: Permit,
+        completion: studio_platform::single_target::CaptureCompletion,
+    }
+    let boundary = bytes
+        .iter()
+        .take(16385)
+        .position(|b| *b == b'\n')
+        .ok_or("Missing or oversized capture metadata header")?;
+    let metadata: Metadata =
+        serde_json::from_slice(&bytes[..boundary]).map_err(|e| e.to_string())?;
+    let pcap = &bytes[boundary + 1..];
+    metadata
+        .completion
+        .validate_export(&metadata.permit, pcap)?;
+    // Completion has second resolution: include its final second, never the
+    // following second. Buffered background packets may predate publication;
+    // scanner SYNs must not predate the readiness second.
+    let end = metadata
+        .completion
+        .finished
+        .checked_add(1)
+        .and_then(|t| t.checked_mul(1_000_000_000))
+        .ok_or("Capture completion time overflow")?;
+    let ready = metadata
+        .completion
+        .witness
+        .created
+        .checked_mul(1_000_000_000)
+        .ok_or("Capture readiness time overflow")?;
+    for packet in super::network_acceptance::witness::frames(pcap)? {
+        if packet.time_ns >= end {
+            return Err("Packet occurs after capture completion".into());
+        }
+    }
+    let measurements = &metadata.completion.measurements;
+    if measurements.error.is_some() {
+        return Err("Capture producer reported failure; evidence cannot pass".into());
+    }
+    let stats = measurements
+        .statistics
+        .as_ref()
+        .ok_or("Missing capture statistics")?;
+    let verified = verify(
+        &metadata.permit,
+        report,
+        pcap,
+        &Stats {
+            recorded: measurements.recorded,
+            received: stats.received,
+            dropped: stats.dropped,
+            interface_dropped: stats.interface_dropped,
+        },
+    )?;
+    if verified.first_probe_ns.is_some_and(|first| first < ready) {
+        return Err("Probe precedes capture readiness".into());
+    }
+    Ok(verified)
 }
 #[cfg(test)]
 mod tests {
@@ -555,6 +633,83 @@ mod tests {
         assert!(out.results.is_empty());
         assert_eq!(out.unanswered_ports, p.ports);
         assert_eq!(out.minimum_gap_ns, Some(1_000_000_000));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn export_envelope_checks_hash_identity_failure_and_exact_packet_results() {
+        use sha2::{Digest, Sha256};
+        use studio_platform::single_target::{
+            CaptureCompletion, CaptureFinish, CaptureStatistics, CaptureWitness,
+        };
+        let hash = |bytes: &[u8]| {
+            Sha256::digest(bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        let (permit, report, frames) = setup();
+        let bytes = pcap(&spaced(&frames));
+        let count = super::super::network_acceptance::witness::frames(&bytes)
+            .unwrap()
+            .len();
+        let completion = CaptureCompletion {
+            witness: CaptureWitness {
+                generation: permit.generation.clone(),
+                nonce: "2".repeat(32),
+                permit_sha256: hash(&serde_json::to_vec(&permit).unwrap()),
+                created: 1000,
+                process: studio_platform::unix::Identity {
+                    uid: 0,
+                    pid: 123,
+                    birth: [1, 2],
+                    executable: studio_platform::macos::installed_path(&permit.tooling_sha256)
+                        .unwrap(),
+                },
+                lease_file: [1, 2],
+            },
+            finished: 1006,
+            measurements: CaptureFinish {
+                elapsed_millis: 6000,
+                recorded: count as u64,
+                statistics: Some(CaptureStatistics {
+                    received: count as u32,
+                    dropped: 0,
+                    interface_dropped: 0,
+                }),
+                error: None,
+            },
+            pcap_bytes: bytes.len() as u64,
+            pcap_sha256: hash(&bytes),
+        };
+        let envelope = |c: &CaptureCompletion, p: &Permit, pcap: &[u8]| {
+            let mut out =
+                serde_json::to_vec(&serde_json::json!({"permit":p,"completion":c})).unwrap();
+            out.push(b'\n');
+            out.extend_from_slice(pcap);
+            out
+        };
+        let result = verify_evidence(&envelope(&completion, &permit, &bytes), &report).unwrap();
+        assert_eq!(result.probes, 4);
+        assert!(result.results.is_empty());
+        for kind in 0..7 {
+            let mut bad = completion.clone();
+            match kind {
+                0 => bad.pcap_sha256 = "0".repeat(64),
+                1 => bad.witness.permit_sha256 = "0".repeat(64),
+                2 => bad.measurements.error = Some("control lost".into()),
+                3 => bad.measurements.statistics.as_mut().unwrap().dropped = 1,
+                4 => bad.measurements.recorded += 1,
+                5 => {
+                    bad.finished = 1001;
+                    bad.measurements.elapsed_millis = 1000;
+                }
+                _ => {
+                    bad.witness.created = 1002;
+                }
+            };
+            assert!(verify_evidence(&envelope(&bad, &permit, &bytes), &report).is_err());
+        }
+        assert!(verify_evidence(&vec![b'x'; 16385], &report).is_err());
     }
     #[test]
     fn correlated_replies_with_options_and_duplicates_have_exact_unique_states() {

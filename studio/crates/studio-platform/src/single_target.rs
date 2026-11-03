@@ -13,6 +13,8 @@ use studio_protocol::single_target::{Context, Permit};
 type Result<T> = std::result::Result<T, String>;
 const DIRECTORY: &str = "/Library/PrivilegedHelperTools/MasscanStudio/single-target-v1";
 const LIMIT: u64 = 16384;
+mod capture;
+pub use capture::{CAPTURE_HEADER, CAPTURE_SECONDS, CapturePin, CaptureWitness};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claim {

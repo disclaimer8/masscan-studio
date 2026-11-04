@@ -327,8 +327,10 @@ mod rtsock {
 
     use super::AF_INET;
     use super::bytes::{i32_at, ipv4_at, u16_at};
-    use crate::discover::Route;
+    use crate::discover::{Iface, Route};
 
+    /// Loopback Darwin: через него ядро доставляет пакеты на собственные адреса хоста.
+    pub(crate) const LO0: &str = "lo0";
     /// `sizeof(struct rt_msghdr)` Darwin: 9 полей по 2/4 байта и `rt_metrics` (14 × u32).
     pub(crate) const RT_MSGHDR_LEN: usize = 92;
     pub(crate) const RTM_VERSION: u8 = 5;
@@ -484,7 +486,8 @@ mod rtsock {
     }
 
     /// Ответ → [`Route`]: `RTF_LOCAL` или `lo0` это адрес хоста; шлюз только `sockaddr_in` при `RTF_GATEWAY`
-    /// (`sockaddr_dl` это on-link); `RTF_REJECT`/`RTF_BLACKHOLE` без `RTF_LLINFO` это «нет маршрута».
+    /// (`sockaddr_dl` это on-link); `RTF_REJECT`/`RTF_BLACKHOLE` без `RTF_LLINFO` это «нет маршрута». Адреса
+    /// интерфейсов, о которых ответ может не знать, добавляет [`lookup_from_rt`].
     pub(crate) fn route_from_rt(r: &RtReply) -> Option<Route> {
         // llinfo-маршрут хоста с RTF_REJECT это сосед, чей ARP только что не удался (XNU `arpt_down`): он остаётся
         // on-link, иначе следующий скан той же цели получил бы «нет маршрута».
@@ -492,7 +495,7 @@ mod rtsock {
             return None;
         }
         let ifname = r.ifp.clone().unwrap_or_default();
-        let local = r.flags & RTF_LOCAL != 0 || ifname == "lo0";
+        let local = r.flags & RTF_LOCAL != 0 || ifname == LO0;
         let via_gateway = r.flags & RTF_GATEWAY != 0 && !r.gateway_is_link;
         Some(Route {
             ifindex: r.ifindex,
@@ -504,6 +507,41 @@ mod rtsock {
             },
             local,
         })
+    }
+
+    /// `RouteTable::lookup` Darwin: ответ `RTM_GET` к `dst` (`None`: маршрута нет) и интерфейсы `getifaddrs` →
+    /// [`Route`]. Через неё идут `macos::route::OsRoutes` и герметичная таблица стенда m1 в тестах.
+    ///
+    /// `dst`, равный IPv4-адресу любого интерфейса, это адрес хоста через `lo0`, что бы ни ответил `RTM_GET` (так Darwin
+    /// доставляет на свои адреса). Маршрут хоста `dst … lo0` с `RTF_LOCAL` Darwin клонирует из маршрута подсети только
+    /// после того, как хост сам отправит на этот адрес; до того `RTM_GET` отвечает маршрутом подсети через интерфейс
+    /// адреса (`<UP,DONE,CLONING>`), и без этой проверки ответ зависел бы от истории кеша маршрутов. Индекс такого
+    /// маршрута это индекс `lo0` в списке (0, если `lo0` там нет). Иначе [`route_from_rt`]: `RTF_LOCAL` или `lo0`
+    /// ответа тоже адрес хоста.
+    pub(crate) fn lookup_from_rt(
+        reply: Option<&RtReply>,
+        dst: Ipv4Addr,
+        ifaces: &[Iface],
+    ) -> Option<Route> {
+        if ifaces.iter().any(|i| i.ipv4.contains(&dst)) {
+            return Some(Route {
+                ifindex: ifaces.iter().find(|i| i.name == LO0).map_or(0, |i| i.index),
+                ifname: LO0.into(),
+                gateway: None,
+                local: true,
+            });
+        }
+        reply.and_then(route_from_rt)
+    }
+
+    /// `RouteTable::default_routes` Darwin: ответ `RTM_GET 0.0.0.0` (C `rawsock-getif.c`) → один маршрут или пусто
+    /// (маршрута нет или он локальный).
+    pub(crate) fn defaults_from_rt(reply: Option<&RtReply>) -> Vec<Route> {
+        reply
+            .and_then(route_from_rt)
+            .filter(|r| !r.local)
+            .into_iter()
+            .collect()
     }
 }
 

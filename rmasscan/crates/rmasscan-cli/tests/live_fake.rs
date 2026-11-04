@@ -3,7 +3,8 @@
 //! `reply_to_syn`, `ManualClock` для резолвера и engine, фиксированные энтропия и время. Ни один тест не достигает ОС:
 //! `OsBackend` существует только в бинарнике, а `open` здесь выдаёт `FakeAdapter` или паникует (`panic_on_open`).
 //! Адреса и MAC только документационные (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) и локальные `02:…`,
-//! кроме гостя n2: он воспроизводит лабораторный стенд (`198.18.0.0/30`) и NIC QEMU (`10.0.2.0/24`, `52:54:00:…`).
+//! кроме гостя n2 и Mac стенда m1: они воспроизводят лабораторные стенды (`198.18.0.0/30`), n2 ещё и NIC QEMU
+//! (`10.0.2.0/24`, `52:54:00:…`).
 
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
@@ -1349,6 +1350,231 @@ fn guest_n2_single_broadcast_target_resolves_itself_on_link_and_own_address_refu
          [hint] targets must include an address outside 0.0.0.0/8, 127.0.0.0/8 and 224.0.0.0/3"
     );
     assert!(log.is_empty() && b.lookups().is_empty(), "{log}");
+}
+
+// ---------- Mac стенда m1 (autodetect-suite macos, m01–m11; PF4) ----------
+
+const M1_SCANNER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 1];
+const M1_PEER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 2];
+
+/// Mac стенда m1: feth4201 (сканер, без IPv4), feth4202 198.18.0.2/30 (IP-стек Mac в роли пира), lo0 и uplink en0
+/// (документационные 192.0.2.10/24 через 192.0.2.1). Маршруты это то, что `route_parse` (route socket) теперь выдаёт
+/// для ответов `RTM_GET` Mac при любом состоянии кеша маршрутов; в `rmasscan-net` это закрепляет
+/// `route_parse_tests::mac_m1_only_addresses_of_this_host_are_local_and_they_route_via_lo0` на ответах из окна:
+/// 198.18.0.2 (адрес feth4202), 127.0.0.0/8 и адрес en0 это адреса хоста через lo0, остальное в /30 on-link через
+/// feth4202, прочее через en0. `root`: MAC видны, иначе скрыты ОС. Открытие адаптера паникует.
+fn mac_m1(root: bool) -> FakeBackend {
+    let lo0 = Route {
+        ifindex: 1,
+        ifname: "lo0".into(),
+        gateway: None,
+        local: true,
+    };
+    let peer = Route {
+        ifindex: 36,
+        ifname: "feth4202".into(),
+        gateway: None,
+        local: false,
+    };
+    let en0 = |gateway| Route {
+        ifindex: 14,
+        ifname: "en0".into(),
+        gateway,
+        local: false,
+    };
+    let nic = |name: &str, index, mac: Option<[u8; 6]>, ethernet, ipv4| Iface {
+        name: name.into(),
+        index,
+        device_id: name.into(),
+        description: None,
+        mac: mac.filter(|_| root),
+        mac_masked: mac.is_some() && !root,
+        ethernet,
+        up: true,
+        ipv4,
+    };
+    let v4 = |a, b, c, d| u32::from(Ipv4Addr::new(a, b, c, d));
+    let mut b = FakeBackend::new();
+    b.routes.rules = vec![
+        (v4(198, 18, 0, 2), v4(198, 18, 0, 2), Some(lo0.clone())),
+        (v4(198, 18, 0, 0), v4(198, 18, 0, 3), Some(peer)),
+        (v4(127, 0, 0, 0), v4(127, 255, 255, 255), Some(lo0.clone())),
+        (v4(192, 0, 2, 10), v4(192, 0, 2, 10), Some(lo0)),
+        (v4(192, 0, 2, 0), v4(192, 0, 2, 255), Some(en0(None))),
+        (0, u32::MAX, Some(en0(Some(GW)))),
+    ];
+    b.routes.defaults = vec![en0(Some(GW))];
+    b.ifaces = vec![
+        nic("lo0", 1, None, false, vec![Ipv4Addr::LOCALHOST]),
+        nic(
+            "en0",
+            14,
+            Some([0x02, 0xbb, 0, 0, 0, 14]),
+            true,
+            vec![Ipv4Addr::new(192, 0, 2, 10)],
+        ),
+        nic("feth4201", 35, Some(M1_SCANNER_MAC), true, vec![]),
+        nic(
+            "feth4202",
+            36,
+            Some(M1_PEER_MAC),
+            true,
+            vec![Ipv4Addr::new(198, 18, 0, 2)],
+        ),
+    ];
+    b.neighbors.clear();
+    b.panic_on_open = true;
+    b
+}
+
+/// argv строки `MACOS_CASES` (rmasscan-lab `autodetect_verify.rs`, `CaseSpec::argv`): цель 198.18.0.2, `-p` строк
+/// `MACOS`/`MACOS_REFUSAL`, флаги строки и `COMMON_ARGS`.
+fn m1_argv(flags: &[&'static str]) -> Vec<&'static str> {
+    ["198.18.0.2", "-p8000-8007,9000-9003"]
+        .into_iter()
+        .chain(flags.iter().copied())
+        .chain(["--seed", "1", "--rate", "100", "--wait", "3"])
+        .collect()
+}
+
+/// Отказ строки m05_user_no_adapter дословно: `[-] FAIL: ` и `LOCAL_TARGET` (его же ждёт
+/// `preflight_expectation("m05_user_no_adapter")`, `Preflight::Refusal`), затем `LOCAL_HINT`.
+const M05_REFUSAL: &str = "[-] FAIL: 198.18.0.2 is an address of this host (route via lo0)\n    \
+                           [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\"";
+
+/// m05_user_no_adapter: его preflight (argv строки и `--offline` в конце, `autodetect_suite::preflight_argv`) и живой
+/// argv печатают ровно отказ и подсказку строки, без единой строки `[+]`, после одного lookup и без открытия; под root
+/// тоже. В окне на b7e397a этот preflight напечатал `[-] FAIL: MAC of interface "feth4202" is os-masked (…)`: маршрут
+/// подсети через feth4202 не считался адресом хоста (герметичный RED/GREEN этого в `route_parse_tests::mac_m1_*`).
+#[test]
+fn mac_m1_m05_preflight_and_live_run_print_the_local_target_refusal() {
+    for root in [false, true] {
+        for argv in [with(&m1_argv(&[]), &["--offline"]), m1_argv(&[])] {
+            let b = mac_m1(root);
+            let (r, out, log) = cli(&b, &argv);
+            let e = r.unwrap_err();
+            assert_eq!(e, M05_REFUSAL, "root {root}, {argv:?}");
+            assert_eq!(rmasscan_cli::error_text(&e), e, "C form, no wrapper");
+            assert!(out.is_empty() && log.is_empty(), "{log}");
+            assert_eq!(b.lookups(), [Ipv4Addr::new(198, 18, 0, 2)]);
+            assert!(b.attempts().is_empty(), "nothing is opened");
+        }
+    }
+}
+
+/// Остальные строки `MACOS_CASES` и `MACOS_ROOT_CASES` с их argv: у случаев с `--adapter` и `--router-ip`/`--router-mac`
+/// маршруты не ищутся вовсе. Обнаружение печатает строки `[+]` по `detection`, `router_ip`, `router_mac` строки (строку
+/// ARP `router-mac … (arp: …)` печатает живой путь после резолвера), отказы m01 и m06 это `fail` и `hints` строк,
+/// `--iflist` (m07, m11) показывает строку стенда feth4201 с MAC `masked` без root и настоящим MAC под root. Ничего не
+/// открывается.
+#[test]
+fn mac_m1_adapter_cases_skip_the_route_lookup_and_print_the_table_lines() {
+    let scanner = ["--adapter", "feth4201", "--adapter-ip", "198.18.0.1"];
+    let mac = ["--adapter-mac", "02-ac-00-00-00-01"];
+    let router = ["--router-ip", "198.18.0.2"];
+    let given_lines = "[+] interface = feth4201 (given)\n\
+                       [+] source-mac = 02-ac-00-00-00-01 (given)\n\
+                       [+] source-ip = 198.18.0.1 (given)\n";
+    for (tag, root, flags, lines) in [
+        (
+            "m02_user_explicit",
+            false,
+            [&scanner[..], &mac, &router].concat(),
+            format!("{given_lines}[+] router-ip = 198.18.0.2 (given)\n"),
+        ),
+        (
+            "m03_user_router_mac",
+            false,
+            [
+                &scanner[..],
+                &mac,
+                &router,
+                &["--router-mac", "02-ac-00-00-00-02"],
+            ]
+            .concat(),
+            format!(
+                "{given_lines}[+] router-ip = 198.18.0.2 (given)\n\
+                 [+] router-mac = 02-ac-00-00-00-02 (given)\n"
+            ),
+        ),
+        (
+            "m04_user_arp_timeout",
+            false,
+            [&scanner[..], &mac, &["--router-ip", "198.18.0.3"]].concat(),
+            format!("{given_lines}[+] router-ip = 198.18.0.3 (given)\n"),
+        ),
+        (
+            "m10_root_auto_mac",
+            true,
+            [&scanner[..], &router].concat(),
+            "[+] interface = feth4201 (given)\n\
+             [+] source-mac = 02-ac-00-00-00-01 (detected)\n\
+             [+] source-ip = 198.18.0.1 (given)\n\
+             [+] router-ip = 198.18.0.2 (given)\n"
+                .to_string(),
+        ),
+    ] {
+        let b = mac_m1(root);
+        let p = live::prepare(&config(&m1_argv(&flags)), SeedPolicy::Required, &b, false)
+            .unwrap_or_else(|e| panic!("{tag}: {e}"));
+        let mut log = Vec::new();
+        live::print_detection(&p, &mut log).unwrap();
+        assert_eq!(String::from_utf8(log).unwrap(), lines, "{tag}");
+        assert!(b.lookups().is_empty(), "{tag}: no route lookup");
+        assert!(b.attempts().is_empty(), "{tag}: nothing is opened");
+    }
+
+    for (tag, flags, refusal) in [
+        (
+            "m01_user_masked",
+            [&scanner[..], &router].concat(),
+            "[-] FAIL: MAC of interface \"feth4201\" is os-masked (Darwin hides MACs from unprivileged processes)\n    \
+             [hint] run as root, or try something like \"--source-mac 00-11-22-33-44-55\"",
+        ),
+        (
+            "m06_user_no_ip",
+            [&["--adapter", "feth4201"][..], &mac, &router].concat(),
+            "[-] FAIL: failed to detect IP of interface \"feth4201\"\n    \
+             [hint] did you spell the name correctly?\n    \
+             [hint] if it has no IP address, manually set with something like \"--source-ip 198.51.100.17\"",
+        ),
+    ] {
+        let b = mac_m1(false);
+        let (r, out, log) = cli(&b, &m1_argv(&flags));
+        assert_eq!(r.unwrap_err(), refusal, "{tag}");
+        assert!(out.is_empty() && log.is_empty(), "{tag}: {log}");
+        assert!(b.lookups().is_empty(), "{tag}: no route lookup");
+    }
+
+    for (tag, root, macs) in [
+        ("m07_user_iflist", false, ["masked"; 3]),
+        (
+            "m11_root_iflist",
+            true,
+            [
+                "02-bb-00-00-00-0e",
+                "02-ac-00-00-00-01",
+                "02-ac-00-00-00-02",
+            ],
+        ),
+    ] {
+        let b = mac_m1(root);
+        let (r, out, log) = cli(&b, &["--iflist"]);
+        r.unwrap();
+        assert_eq!(
+            out,
+            format!(
+                "lo0 index=1 mac=none ipv4=127.0.0.1 up other\n\
+                 en0 index=14 mac={} ipv4=192.0.2.10 up ethernet\n\
+                 feth4201 index=35 mac={} ipv4=- up ethernet\n\
+                 feth4202 index=36 mac={} ipv4=198.18.0.2 up ethernet\n\
+                 default via 192.0.2.1 dev en0\n",
+                macs[0], macs[1], macs[2]
+            ),
+            "{tag}"
+        );
+        assert!(log.is_empty() && b.lookups().is_empty(), "{tag}: {log}");
+    }
 }
 
 /// `OsBackend` недостижим из тестов: модуль и `fn main` бинарника под `cfg(not(test))`, библиотека его не знает,

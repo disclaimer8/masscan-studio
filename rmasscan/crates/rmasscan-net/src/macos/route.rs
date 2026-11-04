@@ -14,7 +14,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use super::ifinfo;
 use crate::NetError;
 use crate::discover::{Iface, Interfaces, Route, RouteTable};
-use crate::route_parse::{RtReply, parse_rt_reply, route_from_rt, rt_get_request};
+use crate::route_parse::{
+    RtReply, defaults_from_rt, lookup_from_rt, parse_rt_reply, rt_get_request,
+};
 
 /// Таймаут чтения и записи сокета (как C: `SO_RCVTIMEO`/`SO_SNDTIMEO` 1 с).
 const IO_TIMEOUT_SECS: libc::time_t = 1;
@@ -125,22 +127,21 @@ fn rt_get(dst: Ipv4Addr) -> Result<Option<RtReply>, NetError> {
     )))
 }
 
-/// Таблица маршрутов ядра (route socket).
+/// Таблица маршрутов ядра (route socket). Правила классификации в переносимом `route_parse` (`lookup_from_rt`,
+/// `defaults_from_rt`), где их проверяют тесты любой ОС.
 pub(crate) struct OsRoutes;
 
 impl RouteTable for OsRoutes {
+    /// `RTM_GET` к `dst` и тот же список интерфейсов, что у [`OsIfaces`] (`getifaddrs`): адрес любого интерфейса это
+    /// адрес хоста через `lo0`, как бы ни ответил `RTM_GET`.
     fn lookup(&self, dst: Ipv4Addr) -> Result<Option<Route>, NetError> {
-        Ok(rt_get(dst)?.as_ref().and_then(route_from_rt))
+        let reply = rt_get(dst)?;
+        Ok(lookup_from_rt(reply.as_ref(), dst, &OsIfaces.list()?))
     }
 
     /// Darwin отдаёт один маршрут по умолчанию: `RTM_GET 0.0.0.0` (C `rawsock-getif.c`); нет его → пусто.
     fn default_routes(&self) -> Result<Vec<Route>, NetError> {
-        Ok(rt_get(Ipv4Addr::UNSPECIFIED)?
-            .as_ref()
-            .and_then(route_from_rt)
-            .filter(|r| !r.local)
-            .into_iter()
-            .collect())
+        Ok(defaults_from_rt(rt_get(Ipv4Addr::UNSPECIFIED)?.as_ref()))
     }
 }
 

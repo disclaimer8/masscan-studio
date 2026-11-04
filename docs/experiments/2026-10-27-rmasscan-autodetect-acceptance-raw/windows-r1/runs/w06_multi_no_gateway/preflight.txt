@@ -1,0 +1,8 @@
+rc 0
+[+] interface = Ethernet 2 (detected: route to 198.18.0.2)
+[+] source-mac = 52-54-00-04-80-a9 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = none (offline)
+[+] router-mac = 66-55-44-33-22-11 (offline)
+[+] seed = 1 (given)
+[+] source-port = 41377 (time)

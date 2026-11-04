@@ -1,0 +1,2 @@
+crw-------  1 root  wheel  0x17000000 Jan  1  1970 /dev/bpf0
+crw-------  1 root  wheel  0x17000003 Nov  4 09:32 /dev/bpf3

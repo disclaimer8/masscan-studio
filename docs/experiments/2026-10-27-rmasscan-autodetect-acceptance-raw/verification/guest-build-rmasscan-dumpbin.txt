@@ -1,0 +1,18 @@
+[31;1m   Compiling rmasscan-net v0.1.0 (C:\Users\lab\src\full-6c87e942ea0ae349a62bd3ce507a1620233c575f\rmasscan\crates\rmasscan-net)
+[31;1m   Compiling rmasscan-cli v0.1.0 (C:\Users\lab\src\full-6c87e942ea0ae349a62bd3ce507a1620233c575f\rmasscan\crates\rmasscan-cli)
+[31;1m    Finished `release` profile [optimized] target(s) in 3.68s
+BUILD_EXIT=0
+rmasscan.exe sha256 E8A9C967A07A761A44A140CE26080FE0B0BB3CE0CD329C7400569A8FEE1CC268
+OK C:\Users\lab\t4\rmasscan.exe : 0800 Dependent Load Flag
+CHECK_EXIT=0
+File Type: EXECUTABLE IMAGE
+                0800 Dependent Load Flag
+bcryptprimitives.dll
+kernel32.dll
+iphlpapi.dll
+ntdll.dll
+version.dll
+api-ms-win-core-synch-l1-2-0.dll
+KERNEL32.dll
+rmasscan 0.1.0
+rustc 1.99.1 (58cf8f9c3 2026-10-13)

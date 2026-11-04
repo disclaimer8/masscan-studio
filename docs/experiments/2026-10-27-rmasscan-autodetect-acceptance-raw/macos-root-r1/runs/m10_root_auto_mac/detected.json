@@ -1,0 +1,40 @@
+{
+  "interface": {
+    "value": "feth4201",
+    "source": "given"
+  },
+  "source_mac": {
+    "value": "02-ac-00-00-00-01",
+    "source": "detected"
+  },
+  "source_ip": {
+    "value": "198.18.0.1",
+    "source": "given"
+  },
+  "router_ip": {
+    "value": "198.18.0.2",
+    "source": "given"
+  },
+  "router_mac": {
+    "value": "02-ac-00-00-00-02",
+    "source": "arp",
+    "arp": {
+      "requests": 1,
+      "ms": 0
+    }
+  },
+  "seed": {
+    "value": "1",
+    "source": "given"
+  },
+  "source_port": {
+    "value": "41115",
+    "source": "time"
+  },
+  "finished": {
+    "reason": "Completed",
+    "sent": 12,
+    "replies": 9,
+    "open": 8
+  }
+}

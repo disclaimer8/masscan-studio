@@ -1,0 +1,12 @@
+6c87e942ea0ae349a62bd3ce507a1620233c575f
+       0
+  interface: en0
+FMT_EXIT=0
+CLIPPY_EXIT=0
+TEST_WS_STRICT_EXIT=0
+LANG_EXIT=0
+TOTAL passed 1553 failed 0 ignored 23
+XTASK_EXIT=1
+test feth_acceptance::tests::a_clean_window_writes_every_file_of_the_contract_in_order ... FAILED
+test feth_acceptance::tests::guard_window_keeps_witnesses_until_restoration ... FAILED
+test feth_acceptance::tests::pause_stage_uses_shared_history_without_changing_standard_mode ... FAILED

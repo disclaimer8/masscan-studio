@@ -327,6 +327,143 @@ fn scrub_namespaces_tail(mut head: String, tail: &str) -> String {
     head.push_str(&scrub_namespaces(tail));
     head
 }
+/// What an autodetect suite rewrites in everything it writes to evidence, on top of [`scrub`]: its own `--out` (to
+/// `$OUT`) and private work directory (to `$WORK`), by their paths as given, made absolute and resolved, and the
+/// account that started it (to `$USER`, see [`account`]): a bare name, and the dash-joined forms `-Users-NAME`,
+/// `-home-NAME` a tool makes of a path. One helper for the Linux, macOS and Windows suites.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Scrubber {
+    /// (path, placeholder), the longest path first.
+    prefixes: Vec<(String, &'static str)>,
+    account: Option<String>,
+}
+/// A character of a path component or a name: a path or a name ends at any other.
+fn name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')
+}
+impl Scrubber {
+    pub(crate) fn new(out: &Path, work: Option<&Path>, account: Option<&str>) -> Self {
+        let mut prefixes: Vec<(String, &'static str)> = Vec::new();
+        for (p, placeholder) in std::iter::once((out, "$OUT")).chain(work.map(|w| (w, "$WORK"))) {
+            let raw = p.to_string_lossy().into_owned();
+            // A relative form only with a separator in it: a bare `out` would also be a word of a message.
+            let forms = [
+                raw.contains(['/', '\\']).then_some(raw),
+                std::path::absolute(p)
+                    .ok()
+                    .map(|a| a.to_string_lossy().into_owned()),
+                fs::canonicalize(p)
+                    .ok()
+                    .map(|a| a.to_string_lossy().into_owned()),
+            ];
+            for f in forms.into_iter().flatten() {
+                let f = f.trim_end_matches(['/', '\\']).to_owned();
+                if f.len() > 1 && !prefixes.iter().any(|(q, _)| *q == f) {
+                    prefixes.push((f, placeholder));
+                }
+            }
+        }
+        prefixes.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
+        Scrubber {
+            prefixes,
+            account: account.map(str::to_owned),
+        }
+    }
+    /// One string (a record's value or key, a log line).
+    pub(crate) fn str(&self, s: &str) -> String {
+        let mut t = s.to_owned();
+        for (p, placeholder) in &self.prefixes {
+            // A path, not the start of a longer name (`--out` `/x/out` is not `/x/out.bak` or `/x/outer`).
+            t = replace_bounded(&t, p, placeholder, |head, after| {
+                !head.chars().next_back().is_some_and(name_char) && !after.is_some_and(name_char)
+            });
+        }
+        if let Some(a) = &self.account {
+            // The name as a word (`alice`, `\Users\alice`, `alice.local`, `alice@host`; not `malice`, `alice_x`,
+            // `alice-mbp`, `--alice`), or as the tail of a dash-joined path (`-Users-alice/`, `-Users-alice-repo`). A `:`
+            // joins a word too: a short name that is hex (`a1`) never rewrites a byte of a MAC or IPv6 address.
+            let word = |c: Option<char>| {
+                c.is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':'))
+            };
+            t = replace_bounded(&t, a, "$USER", |head, after| {
+                let dashed = head.ends_with("-Users-") || head.ends_with("-home-");
+                (!word(head.chars().next_back()) && !word(after))
+                    || (dashed && !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'))
+            });
+        }
+        scrub_str(&t)
+    }
+    /// Every string of a record, keys included.
+    pub(crate) fn value(&self, v: &mut Value) {
+        match v {
+            Value::String(s) => *s = self.str(s),
+            Value::Array(a) => a.iter_mut().for_each(|x| self.value(x)),
+            Value::Object(m) => {
+                let old = std::mem::take(m);
+                for (k, mut val) in old {
+                    self.value(&mut val);
+                    m.insert(self.str(&k), val);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// A text record another tool wrote into the run (`macos-lab status`), rewritten in place when it changes. A
+    /// file that is not UTF-8 is left as it is (the verifier still scans it).
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn file(&self, path: &Path) -> Result<(), String> {
+        let b = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let Ok(text) = String::from_utf8(b) else {
+            return Ok(());
+        };
+        let s = self.str(&text);
+        if s != text {
+            fs::write(path, s).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    }
+}
+/// `s` with every occurrence of `needle` that `bounded(text before it, char after it)` accepts replaced by `with`.
+fn replace_bounded(
+    s: &str,
+    needle: &str,
+    with: &str,
+    bounded: impl Fn(&str, Option<char>) -> bool,
+) -> String {
+    if needle.is_empty() {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    for (i, _) in s.match_indices(needle) {
+        let end = i + needle.len();
+        if bounded(&s[..i], s[end..].chars().next()) {
+            out.push_str(&s[last..i]);
+            out.push_str(with);
+            last = end;
+        }
+    }
+    out.push_str(&s[last..]);
+    out
+}
+/// The account a suite was started by, which its evidence never names: `$SUDO_USER` when it is set and not root,
+/// else `$USER`. Root names no one (it is the lab's own account, and a word of the stand's texts: "root verified"),
+/// so it is never rewritten.
+pub(crate) fn account(sudo_user: Option<&str>, user: Option<&str>) -> Option<String> {
+    let named = |u: Option<&str>| {
+        u.map(str::trim)
+            .filter(|u| !u.is_empty() && *u != "root")
+            .map(str::to_owned)
+    };
+    named(sudo_user).or_else(|| named(user))
+}
+/// [`account`] of this process's environment.
+pub(crate) fn account_from_env() -> Option<String> {
+    account(
+        std::env::var("SUDO_USER").ok().as_deref(),
+        std::env::var("USER").ok().as_deref(),
+    )
+}
 fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     fn checked(args: &[&str]) -> Result<String, String> {
         let o = Command::new(args[0])
@@ -797,6 +934,106 @@ mod tests {
             v["h"], "00ff/home/",
             "an empty user name is not a home path"
         );
+    }
+
+    #[test]
+    fn a_suites_scrubber_writes_its_out_work_and_account_as_placeholders() {
+        // The first macOS window at 6c87e94: `--out` under a scratch directory whose path names the account.
+        let out = Path::new(
+            "/private/tmp/claude-501/-Users-alice/0946/scratchpad/autodetect-out/macos-r1",
+        );
+        let o = out.display();
+        // Strings, not joins: the hermetic tests also run on Windows.
+        let work = format!("{o}/.work");
+        let sc = Scrubber::new(out, Some(Path::new(&work)), Some("alice"));
+        for (input, want) in [
+            (
+                format!("{o}/.work/m01_user_masked.r1/peer.unfiltered"),
+                "$WORK/m01_user_masked.r1/peer.unfiltered",
+            ),
+            (format!("--dir {o}"), "--dir $OUT"),
+            (
+                format!("'{o}/runs/m01_user_masked'"),
+                "'$OUT/runs/m01_user_masked'",
+            ),
+            (format!("{o}"), "$OUT"),
+            // A sibling of --out is not --out; its account name still goes.
+            (
+                format!("{o}.bak/x"),
+                "/private/tmp/claude-501/-Users-$USER/0946/scratchpad/autodetect-out/macos-r1.bak/x",
+            ),
+            (
+                "-Users-alice-masscan-studio".into(),
+                "-Users-$USER-masscan-studio",
+            ),
+            ("/x/-home-alice/masscan".into(), "/x/-home-$USER/masscan"),
+            ("/Users/alice/x".into(), "$HOME/x"),
+            ("/home/alice".into(), "$HOME"),
+            ("C:\\Users\\alice\\t4".into(), "C:\\Users\\$USER\\t4"),
+            ("run by alice.".into(), "run by $USER."),
+            ("alice@host".into(), "$USER@host"),
+            // Words that only contain the name, and the namespace rule of `scrub`.
+            (
+                "malice alice_x alice-mbp --alice".into(),
+                "malice alice_x alice-mbp --alice",
+            ),
+            ("ns wl-scan-12-34".into(), "ns wl-scan-RUNID"),
+        ] {
+            assert_eq!(sc.str(&input), want, "{input}");
+        }
+        // Values and keys of a record, and nothing else of it.
+        let mut v = json!({format!("{o}/k"): [format!("{o}/.work/a"), "alice", 5, true]});
+        sc.value(&mut v);
+        assert_eq!(v, json!({"$OUT/k": ["$WORK/a", "$USER", 5, true]}));
+        // A short hex account name never rewrites a byte of a MAC, an IPv6 address or a hash; as a word it goes.
+        let sc = Scrubber::new(out, None, Some("a1"));
+        assert_eq!(
+            sc.str("link/ether 02:a1:00:00:00:01 fe80::a1 a1b2 /home/a1/x run by a1"),
+            "link/ether 02:a1:00:00:00:01 fe80::a1 a1b2 $HOME/x run by $USER"
+        );
+        // Without a work directory or an account, only --out goes.
+        let sc = Scrubber::new(out, None, None);
+        assert_eq!(sc.str(&format!("{o}/.work/a alice")), "$OUT/.work/a alice");
+        // A trailing separator on --out changes nothing.
+        let sc = Scrubber::new(Path::new("/srv/out/"), None, None);
+        assert_eq!(sc.str("/srv/out/.work/a /srv/out"), "$OUT/.work/a $OUT");
+        assert_eq!(sc.str("/srv/outer/a"), "/srv/outer/a");
+    }
+
+    #[test]
+    fn a_tools_text_record_is_rewritten_in_place_and_other_bytes_are_left_alone() {
+        let d =
+            std::env::temp_dir().join(format!("rml-scrub-file-{}", crate::windows_suite::nonce()));
+        fs::create_dir_all(&d).unwrap();
+        let out = format!("{}/out", d.display());
+        let sc = Scrubber::new(Path::new(&out), None, Some("alice"));
+        let status = d.join("status-pre.json");
+        fs::write(&status, format!("{{\"note\":\"alice in {out}/.work\"}}\n")).unwrap();
+        sc.file(&status).unwrap();
+        assert_eq!(
+            fs::read_to_string(&status).unwrap(),
+            "{\"note\":\"$USER in $OUT/.work\"}\n"
+        );
+        // Not UTF-8: untouched (the verifier still scans it); a missing file is an error.
+        let raw = d.join("x.txt");
+        let bytes = [b'a', 0xff, b'l', b'i', b'c', b'e'];
+        fs::write(&raw, bytes).unwrap();
+        sc.file(&raw).unwrap();
+        assert_eq!(fs::read(&raw).unwrap(), bytes);
+        assert!(sc.file(&d.join("missing.json")).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_account_is_sudo_user_unless_root_then_user_and_root_is_none() {
+        assert_eq!(
+            account(Some("alice"), Some("root")).as_deref(),
+            Some("alice")
+        );
+        assert_eq!(account(Some("root"), Some("bob")).as_deref(), Some("bob"));
+        assert_eq!(account(None, Some("bob")).as_deref(), Some("bob"));
+        assert_eq!(account(Some(""), Some("root")), None);
+        assert_eq!(account(None, None), None);
     }
 
     #[test]

@@ -402,6 +402,11 @@ pub(crate) trait Exec {
     fn provenance(&self, repo: &Path) -> Value {
         crate::provenance::collect(repo)
     }
+    /// The account that started the orchestrator ([`crate::capture::account`]): the autodetect plan's evidence
+    /// never names it. A recording stand names none unless a test gives one.
+    fn account(&self) -> Option<String> {
+        None
+    }
 }
 pub(crate) struct Real;
 impl Exec for Real {
@@ -413,6 +418,9 @@ impl Exec for Real {
     }
     fn lock_suite(&self) -> Result<LockGuard, String> {
         lock_session("ssh", &lock_ssh_args())
+    }
+    fn account(&self) -> Option<String> {
+        crate::capture::account_from_env()
     }
     fn file_at_commit(&self, repo: &Path, commit: &str, path: &str) -> Result<Vec<u8>, String> {
         if !crate::deploy::full_commit(commit) || path.starts_with('-') || path.contains("..") {
@@ -572,6 +580,17 @@ impl SuiteError {
             | Self::SchemaTooOld(m)
             | Self::Isolation(m)
             | Self::Interrupted(m) => m,
+        }
+    }
+    /// The same error with its message rewritten (a suite's [`crate::capture::Scrubber`]).
+    pub(crate) fn map_message(self, f: impl FnOnce(&str) -> String) -> Self {
+        match self {
+            Self::NotRun(m) => Self::NotRun(f(&m)),
+            Self::Abort(m) => Self::Abort(f(&m)),
+            Self::RerunRefused(m) => Self::RerunRefused(f(&m)),
+            Self::SchemaTooOld(m) => Self::SchemaTooOld(f(&m)),
+            Self::Isolation(m) => Self::Isolation(f(&m)),
+            Self::Interrupted(m) => Self::Interrupted(f(&m)),
         }
     }
 }
@@ -747,6 +766,8 @@ struct Suite<'a> {
     runner_invoked: Cell<bool>,
     /// The suite lock held for this invocation; once its session is gone no new remote action may start.
     lock: Option<&'a LockGuard>,
+    /// The autodetect plan's evidence names `--out` and the account that started the orchestrator by placeholder.
+    scrub: crate::capture::Scrubber,
 }
 /// Why a run stops when the lock session dies (the remote flock is released, so another orchestrator may start).
 const LOCK_LOST: &str = "the suite lock session to home-pc was lost; the lock is no longer held, so no further remote action is started. Check home-pc for leftovers, then start again.";
@@ -925,7 +946,7 @@ impl Suite<'_> {
         )?;
         // Evidence of the autodetect plan carries no personal path (the status may name files under the home).
         let text = if self.autodetect() {
-            crate::capture::scrub_str(&r.stdout)
+            self.scrub.str(&r.stdout)
         } else {
             r.stdout.clone()
         };
@@ -1795,7 +1816,7 @@ impl Suite<'_> {
             {
                 rec[k] = v.clone();
             }
-            crate::capture::scrub(&mut rec);
+            self.scrub.value(&mut rec);
             write_json(ev.join("capture.json"), &rec)?;
         } else {
             write_json(ev.join("capture.json"), &cap)?;
@@ -2213,6 +2234,8 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         return Ok(0);
     }
     let out = PathBuf::from(required(&o, "out")?);
+    // The account, taken once. The autodetect plan's work directory is `--out/.work`, so `$OUT/.work` names it.
+    let scrub = crate::capture::Scrubber::new(&out, None, exec.account().as_deref());
     let commit = required(&o, "commit")?;
     if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("--commit requires full SHA".to_string().into());
@@ -2317,6 +2340,15 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
                     out.display()
                 )));
             }
+            // An earlier attempt (a preflight NOT RUN, an abort) counts as a run: a later run would overtake it.
+            let earlier = av::aborted_attempts(&out, t);
+            if !earlier.is_empty() {
+                return Err(SuiteError::NotRun(format!(
+                    "{t} has an aborted attempt in {} ({}); a case runs once into one --out, use a new one",
+                    out.display(),
+                    earlier.join(", ")
+                )));
+            }
         }
     }
     let mut moves = vec![];
@@ -2351,7 +2383,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     let deploy_dir = out.join("deploy");
     // The wire_scan plans keep the exact bytes sent to the guest as evidence. The autodetect plan stages them in its
     // work directory only (`.ps1`/`.cmd` are no evidence extensions): their hashes are in the preflight record, the
-    // guest hashes its copies, and the copy of the deploy manifest has the home directory scrubbed.
+    // guest hashes its copies, and the copy of the deploy manifest has the home directory, --out and the account scrubbed.
     let stage = if autodetect {
         out.join(WORK).join("guest-scripts")
     } else {
@@ -2359,7 +2391,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     };
     if autodetect {
         let mut d = deploy.clone();
-        crate::capture::scrub(&mut d);
+        scrub.value(&mut d);
         fs::create_dir_all(&deploy_dir).map_err(|e| e.to_string())?;
         write_json(deploy_dir.join("deploy-manifest.json"), &d)?;
     } else {
@@ -2386,6 +2418,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         cleanup: Cell::new(false),
         runner_invoked: Cell::new(false),
         lock: None,
+        scrub,
     };
     let lock = exec.lock_suite().map_err(lock_error)?;
     if lock.lost() {
@@ -2498,9 +2531,9 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             "path": "deploy/deploy-manifest.json",
             "sha256": hash(deploy_dir.join("deploy-manifest.json"))?,
             "scrubbed": true,
-            "note": "deploy_manifest_sha256 is the --deploy-manifest file on the orchestrating machine; this copy has the home directory replaced by $HOME",
+            "note": "deploy_manifest_sha256 is the --deploy-manifest file on the orchestrating machine; this copy has the home directory, --out and the account that started the orchestrator replaced by $HOME, $OUT and $USER",
         });
-        crate::capture::scrub(&mut preflight);
+        s.scrub.value(&mut preflight);
     }
     write_json(
         deploy_dir.join(format!("preflight-{}.json", s.run_id)),
@@ -2577,7 +2610,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
                     m.remove(k);
                 }
             }
-            crate::capture::scrub(&mut man);
+            s.scrub.value(&mut man);
         } else {
             // The exe comes from this code, which has the final-review I1 fix: a restricted-token
             // scan must be refused with PermissionDenied (exit 5), never InterfaceMismatch.

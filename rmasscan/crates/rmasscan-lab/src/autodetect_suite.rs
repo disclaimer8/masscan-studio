@@ -22,14 +22,17 @@
 //! recording hosts and nothing in them can reach an interface.
 //!
 //! Personal paths and run-specific namespace names are scrubbed from everything the suite writes or prints (on
-//! Linux its stdout is `suite.log` in the evidence directory).
+//! Linux its stdout is `suite.log` in the evidence directory). Every record it writes, and on Linux what it prints,
+//! also names its `--out` `$OUT`, its private work directory `$WORK` (macOS: `$OUT/.work`) and the account that
+//! started it `$USER`, through one [`capture::Scrubber`] the Windows plan shares. A case with a run or an aborted
+//! attempt in `--out` is not run again there.
 use crate::{
     autodetect_verify::{
         self as av, ARGV_JSON, ArgvRecord, CAPTURE_JSON, CaseKind, CaseSpec, DETECTED_JSON,
         EXPECT_JSON, ExpectRecord, HASHES, IFLIST_JSON, ISOLATION_POST_JSON, IflistRecord,
         MANIFEST_JSON, ORACLE_CAPTURE_JSON, ORACLE_IFLIST_JSON, ORACLE_PCAP, PEER_PCAP, Plan,
     },
-    capture::{self, IsolationMode, isolation_permits, scrub_str},
+    capture::{self, IsolationMode, Scrubber, isolation_permits, scrub_str},
     macos_verify::{hashes_match_tree, tree},
     windows_suite::{
         Output, SuiteError, epoch, hash, nonce, options_for, read_json, required, safe_id,
@@ -437,8 +440,8 @@ pub(crate) fn hash_and_copy(work: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// Before the first run: no lab-isolation finding anywhere in `out` (a breach makes the directory FAIL for good),
-/// no run of a selected case yet, and no manifest of another plan, build (rmasscan, oracle, rmasscan-lab), stand or
-/// Linux lab (`lab_id`).
+/// no run and no aborted attempt of a selected case yet, and no manifest of another plan, build (rmasscan, oracle,
+/// rmasscan-lab), stand or Linux lab (`lab_id`).
 fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteError> {
     io(fs::create_dir_all(out), "--out")?;
     let trips = av::verify_dir(out)["safety_trips"]
@@ -455,6 +458,16 @@ fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteErr
         return Err(not_run(format!(
             "{t} already has a run in this directory; run it again into a new --out"
         )));
+    }
+    // An earlier attempt counts as a run: a later run of the case would overtake it (the verifier never passes one).
+    for t in tags {
+        let earlier = av::aborted_attempts(out, t);
+        if !earlier.is_empty() {
+            return Err(not_run(format!(
+                "{t} has an aborted attempt in this directory ({}); a case runs once into one --out, run it again into a new --out",
+                earlier.join(", ")
+            )));
+        }
     }
     let path = out.join(MANIFEST_JSON);
     if path.exists() {
@@ -482,14 +495,14 @@ fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteErr
     Ok(())
 }
 /// `manifest.json` (key `autodetect` names the plan), written once, scrubbed.
-fn write_manifest(out: &Path, identity: &Value) -> Result<(), String> {
+fn write_manifest(out: &Path, identity: &Value, sc: &Scrubber) -> Result<(), String> {
     let path = out.join(MANIFEST_JSON);
     if path.exists() {
         return Ok(());
     }
     let mut v = identity.clone();
     v["created_utc"] = json!(epoch());
-    capture::scrub(&mut v);
+    sc.value(&mut v);
     write_record(&path, &v)
 }
 /// The binaries the manifest vouches for (path, sha256) are still the files on disk: checked before every run.
@@ -532,6 +545,8 @@ pub(crate) trait LinuxHost {
         stderr: &Path,
     ) -> Result<Box<dyn Running>, String>;
     fn euid(&self) -> Result<u32, String>;
+    /// The account that started the suite ([`capture::account`]), taken once at the start.
+    fn account(&self) -> Option<String>;
     fn pause(&self, d: Duration);
     fn stopped(&self) -> bool;
 }
@@ -575,6 +590,9 @@ impl LinuxHost for RealLinux {
             .trim()
             .parse()
             .map_err(|_| format!("{ID} -u printed no uid"))
+    }
+    fn account(&self) -> Option<String> {
+        capture::account_from_env()
     }
     fn pause(&self, d: Duration) {
         std::thread::sleep(d);
@@ -629,6 +647,8 @@ struct Linux<'a> {
     lab: String,
     /// rmasscan, the oracle and rmasscan-lab as the manifest vouches for them (path, sha256).
     binaries: Vec<(String, String)>,
+    /// `--out`, `--work` and the account as placeholders in every record it writes.
+    scrub: Scrubber,
 }
 
 impl Linux<'_> {
@@ -682,7 +702,7 @@ impl Linux<'_> {
                 v["default_route"]
             ));
         }
-        capture::scrub(&mut v);
+        self.scrub.value(&mut v);
         write_record(path, &v)
     }
 
@@ -816,7 +836,7 @@ impl Linux<'_> {
             )));
         }
         let mut meta = read_json(&w.meta)?;
-        capture::scrub(&mut meta);
+        self.scrub.value(&mut meta);
         write_record(&run.join(record), &meta)?;
         io(
             fs::rename(format!("{}.tcpdump.err", p2s(&w.pcap)), run.join(err)),
@@ -1044,6 +1064,24 @@ pub(crate) fn linux_with(
         return Ok(0);
     }
     euid_rule(Plan::Linux, host.euid()?)?;
+    let (out, work) = (
+        PathBuf::from(required(&o, "out")?),
+        PathBuf::from(required(&o, "work")?),
+    );
+    // The account is taken once, here. The suite's stdout and stderr are `suite.log` in the evidence directory: what
+    // it prints names --out, --work and the account by placeholder too.
+    let sc = Scrubber::new(&out, Some(&work), host.account().as_deref());
+    linux_run(&o, host, lab, out, work, &sc).map_err(|e| e.map_message(|m| sc.str(m)))
+}
+/// The Linux suite once its `--out`, `--work` and account are known: every record goes through `sc`.
+fn linux_run(
+    o: &BTreeMap<String, Vec<String>>,
+    host: &dyn LinuxHost,
+    lab: &Path,
+    out: PathBuf,
+    work: PathBuf,
+    sc: &Scrubber,
+) -> Result<i32, SuiteError> {
     // The stand is wire-lab.sh's fixed autodetect stand, nothing else.
     let st = av::stand(Plan::Linux);
     for (k, want) in [
@@ -1052,14 +1090,14 @@ pub(crate) fn linux_with(
         ("mac-a", colon(st.scanner_mac)),
         ("mac-b", colon(st.peer_mac)),
     ] {
-        let v = required(&o, k)?;
+        let v = required(o, k)?;
         if v != want {
             return Err(not_run(format!(
                 "--{k} {v} is not the autodetect stand's {want} (wire-lab.sh --suite autodetect fixes the stand)"
             )));
         }
     }
-    let (ns_a, ns_b) = (required(&o, "ns-a")?, required(&o, "ns-b")?);
+    let (ns_a, ns_b) = (required(o, "ns-a")?, required(o, "ns-b")?);
     if !safe_id(&ns_a) || !safe_id(&ns_b) || ns_a == ns_b {
         return Err(not_run(
             "--ns-a and --ns-b must be two different safe namespace names",
@@ -1067,22 +1105,18 @@ pub(crate) fn linux_with(
     }
     // wire-lab.sh's id of this lab: kept in manifest.json, and its teardown.json carries the same (the verifier binds
     // the record of the undo to these runs with it).
-    let lab_id = required(&o, "lab-id")?;
+    let lab_id = required(o, "lab-id")?;
     if !safe_id(&lab_id) {
         return Err(not_run("--lab-id must be a safe identifier"));
     }
-    let masked = match required(&o, "conf-masked")?.as_str() {
+    let masked = match required(o, "conf-masked")?.as_str() {
         "0" => false,
         "1" => true,
         v => return Err(not_run(format!("--conf-masked must be 0 or 1, not {v}"))),
     };
-    let rmasscan = absolute_file(&o, "rmasscan")?;
-    let oracle = absolute_file(&o, "oracle")?;
-    let (out, work) = (
-        PathBuf::from(required(&o, "out")?),
-        PathBuf::from(required(&o, "work")?),
-    );
-    let tags = selected_tags(Plan::Linux, only_of(&o)?)?;
+    let rmasscan = absolute_file(o, "rmasscan")?;
+    let oracle = absolute_file(o, "oracle")?;
+    let tags = selected_tags(Plan::Linux, only_of(o)?)?;
     let cases = specs(Plan::Linux, &tags);
     for spec in &cases {
         let bad = addresses_outside_the_lab(&spec.argv());
@@ -1117,10 +1151,10 @@ pub(crate) fn linux_with(
             "open_ports": st.open_ports, "default_route": "via 198.18.0.2 dev veth-a (scanner namespace only)"},
         "conf_masked": masked, "lab_id": lab_id});
     check_out(&out, &tags, &identity)?;
-    write_manifest(&out, &identity)?;
-    // wire-lab.sh's env.json names the oracle by its path, which may be under a home directory.
+    write_manifest(&out, &identity, sc)?;
+    // wire-lab.sh's env.json names the oracle by its path, which may be under a home directory or name the account.
     if let Ok(mut env) = read_json(out.join("env.json")) {
-        capture::scrub(&mut env);
+        sc.value(&mut env);
         write_json(out.join("env.json"), &env)?;
     }
     io(fs::create_dir_all(&work), "--work")?;
@@ -1137,6 +1171,7 @@ pub(crate) fn linux_with(
         masked,
         lab,
         binaries,
+        scrub: sc.clone(),
     };
     for spec in &cases {
         if host.stopped() {
@@ -1148,10 +1183,10 @@ pub(crate) fn linux_with(
         suite.one(spec)?;
         say(&format!("done {0} -> runs/{0}", spec.tag));
     }
-    say(&format!(
+    say(&sc.str(&format!(
         "all selected runs executed; verify offline with rmasscan-lab autodetect-verify --dir {}",
         out.display()
-    ));
+    )));
     Ok(0)
 }
 
@@ -1210,13 +1245,18 @@ mod mac {
 
     /// Publish the peer capture into `run`: `peer.pcap` without the host's own mDNS and, with the witness's record,
     /// `capture.json`. The unfiltered file is deleted whatever happens.
-    fn publish(f: &WitnessFiles, run: &Path, witness: Option<Value>) -> Result<(), String> {
+    fn publish(
+        f: &WitnessFiles,
+        run: &Path,
+        witness: Option<Value>,
+        sc: &Scrubber,
+    ) -> Result<(), String> {
         let published = (|| -> Result<(), String> {
             let raw = io(fs::read(&f.peer_pcap), "the unfiltered peer capture")?;
             let (kept, record) = match witness {
                 Some(w) => {
                     let (kept, mut rec) = publish_peer_capture(&raw, w)?;
-                    capture::scrub(&mut rec);
+                    sc.value(&mut rec);
                     (kept, Some(rec))
                 }
                 None => (keep_records(&raw, |fr| !is_peer_mdns(fr))?.0, None),
@@ -1239,6 +1279,8 @@ mod mac {
         /// macos-suite's lock (one suite on the stand at a time); the live children's process groups go into it.
         lock: Option<PathBuf>,
         children: RefCell<BTreeSet<u32>>,
+        /// `--out` and the account as placeholders in every record it writes (its work directory is `$OUT/.work`).
+        scrub: Scrubber,
     }
 
     impl Mac<'_> {
@@ -1275,12 +1317,13 @@ mod mac {
                     stop_tools(self.st, &mut t);
                     if files.peer_pcap.exists() {
                         let w = read_json(base.join("peer-witness.json")).ok();
-                        if let Err(x) = publish(&files, &run, w) {
+                        if let Err(x) = publish(&files, &run, w, &self.scrub) {
                             warn(&format!(
                                 "the aborted run's peer capture was not published ({x}); it is deleted"
                             ));
                         }
                     }
+                    self.scrub_status(&run);
                     let e = abort_run(self.st, &self.out, &run, &name, &mut t, e);
                     if !run.exists() {
                         let _ = fs::remove_dir_all(&base);
@@ -1294,6 +1337,19 @@ mod mac {
             result
         }
 
+        /// `macos-lab status`'s records of a run, as it printed them, rewritten before the run is hashed and copied
+        /// (kept or aborted). One that cannot be rewritten stays as it is: the verifier still scans it.
+        fn scrub_status(&self, run: &Path) {
+            for name in ["status-pre.json", "status-post.json"] {
+                let p = run.join(name);
+                if p.is_file()
+                    && let Err(e) = self.scrub.file(&p)
+                {
+                    warn(&format!("{name} was not rewritten ({e})"));
+                }
+            }
+        }
+
         /// A finished run goes to `runs/<tag>`; a stand that is not sealed afterwards stops the suite.
         fn keep(
             &self,
@@ -1304,6 +1360,7 @@ mod mac {
         ) -> Result<PathBuf, SuiteError> {
             let dest = self.out.join("runs").join(tag);
             io(fs::create_dir_all(self.out.join("runs")), "runs directory")?;
+            self.scrub_status(run);
             hash_and_copy(run, &dest).map_err(SuiteError::Abort)?;
             io(fs::remove_dir_all(base), "remove the work directory")?;
             if !sealed {
@@ -1405,7 +1462,7 @@ mod mac {
             }
             // 5. The witnesses stop (peer first); the peer capture is published without the host's own mDNS.
             let (witness, _, _) = stop_witnesses(self.st, t, files)?;
-            publish(files, run, Some(witness))?;
+            publish(files, run, Some(witness), &self.scrub)?;
             // 6. The listeners after the witness, the stand after the run, then the interlock before a byte is copied.
             stop_listener(self.st, t);
             let (post_rc, post) = lab_status(self.st, &self.status, run, "status-post.json")?;
@@ -1415,12 +1472,14 @@ mod mac {
     }
 
     /// `autodetect-suite macos [--root-case]`. `exe` is this binary (`--lab` must be it); `sudo_user` is `$SUDO_USER`,
-    /// who gets the directory back after a root case; `lock_path` is macos-suite's one-suite lock.
+    /// who gets the directory back after a root case, and with `login` (`$USER`) names the account the evidence never
+    /// names ([`capture::account`]); `lock_path` is macos-suite's one-suite lock.
     pub(crate) fn macos_with(
         args: &[String],
         st: &dyn Stand,
         exe: &Path,
         sudo_user: Option<&str>,
+        login: Option<&str>,
         lock_path: &dyn Fn() -> Result<PathBuf, String>,
     ) -> Result<i32, SuiteError> {
         let o = options_for("autodetect-suite macos", args, MACOS_OPTIONS)?;
@@ -1462,6 +1521,10 @@ mod mac {
             return Err(not_run("--run-id must be a safe identifier"));
         }
         let out = PathBuf::from(required(&o, "out")?);
+        // The account, taken once: `$SUDO_USER` for the root case, `$USER` for the user window. The work directory is
+        // `--out/.work`, so `$OUT/.work` names it.
+        let account = capture::account(sudo_user, login);
+        let scrub = Scrubber::new(&out, None, account.as_deref());
         let identity = json!({"autodetect": plan, "schema": 1, "suite": "autodetect-suite macos",
             "rmasscan": binary(&rmasscan)?, "lab": binary(&lab)?, "run_id": run_id, "euid": euid,
             "stand": {"scanner_if": SCANNER_IF, "peer_if": PEER_IF, "scanner_mac": SCANNER_MAC, "peer_mac": PEER_MAC,
@@ -1486,6 +1549,7 @@ mod mac {
             lab,
             lock: Some(lock.path().to_path_buf()),
             children: RefCell::default(),
+            scrub,
         };
         let result = run_cases(&suite, &specs(plan, &tags), &identity);
         let _ = fs::remove_dir(out.join(".work"));
@@ -1523,7 +1587,7 @@ mod mac {
             )));
         }
         s.stand_macs()?;
-        write_manifest(&s.out, identity)?;
+        write_manifest(&s.out, identity, &s.scrub)?;
         for spec in cases {
             if s.st.stopped() {
                 return Err(SuiteError::Interrupted(format!(
@@ -1630,6 +1694,7 @@ fn macos_entry(args: &[String], exe: &Path) -> Result<i32, SuiteError> {
         &crate::macos_suite::RealStand,
         exe,
         std::env::var("SUDO_USER").ok().as_deref(),
+        std::env::var("USER").ok().as_deref(),
         &crate::macos_suite::lock_path,
     )
 }

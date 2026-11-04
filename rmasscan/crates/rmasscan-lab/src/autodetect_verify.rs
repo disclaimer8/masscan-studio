@@ -25,7 +25,14 @@
 //!   `l12_iflist` also `oracle/iflist.json` (reduced the same way, its stand line in masscan's own form);
 //! - `hashes-before-copy.txt` (sha256sum form, every other file, nested paths with `/`).
 //!
-//! Evidence files carry only the extensions json pcap txt log err sha256 md.
+//! An attempt that did not become a run is kept as `runs_aborted/<tag>.<run id>/`. Each entry is listed under
+//! `aborted` in the verdict with what it holds; a case runs once into one `--out`, so a planned case with an attempt
+//! there is never PASS (INVALID beside a run of it, NOT RUN without one), and an entry that is no attempt of a planned
+//! case makes the directory INVALID. Its captures are judged in `safety_scan`.
+//!
+//! Evidence files carry only the extensions json pcap txt log err sha256 md. No text file names a personal path
+//! (`/Users/NAME`, `/home/NAME`, `\Users\NAME`, or one joined with dashes, `-Users-NAME`) or a per-user scratch root
+//! (`claude-<uid>`, `/var/folders/`); the suites write `$OUT`, `$WORK`, `$HOME` and `$USER` instead.
 use crate::{
     capture::{IsolationMode, isolation_permits},
     link::{END_PAYLOAD, MARKER_ETHERTYPE, START_PAYLOAD},
@@ -804,6 +811,31 @@ fn any_case(tag: &str) -> Option<CaseSpec> {
         .into_iter()
         .find_map(|p| case_spec(p, tag))
 }
+/// The planned case of `plan` an entry of `runs_aborted/` is an attempt of. Every suite keeps an aborted run as
+/// `runs_aborted/<tag>.<run id>`; any other name is no attempt of a planned case.
+pub(crate) fn aborted_case(plan: Plan, name: &str) -> Option<&'static str> {
+    let (tag, id) = name.split_once('.')?;
+    if id.is_empty() || id.contains(['/', '\\']) {
+        return None;
+    }
+    planned_tags(plan).into_iter().find(|t| *t == tag)
+}
+/// The earlier attempts of `tag` in the evidence directory `root` (`runs_aborted/<tag>.<run id>`, links included),
+/// sorted. A suite refuses to run a case that has one, as it refuses one that has a run: a case runs once into one
+/// `--out`, and the verifier never lets a later run of it pass.
+pub(crate) fn aborted_attempts(root: &Path, tag: &str) -> Vec<String> {
+    let lead = format!("{tag}.");
+    let mut out: Vec<String> = fs::read_dir(root.join("runs_aborted"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.len() > lead.len() && n.starts_with(&lead))
+        .map(|n| format!("runs_aborted/{n}"))
+        .collect();
+    out.sort();
+    out
+}
 /// The kind of a planned case (`None`: not a case of any plan).
 pub fn case_kind(tag: &str) -> Option<CaseKind> {
     any_case(tag).map(|c| c.kind)
@@ -1391,13 +1423,23 @@ fn host_tokens(text: &str) -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
-/// `/Users/NAME`, `/home/NAME`, `\Users\NAME` with a name other than the guest's lab account or a scrubbed `$VAR`.
+/// `/Users/NAME`, `/home/NAME`, `\Users\NAME`, and the same path joined with dashes into one name (`-Users-NAME`,
+/// `-home-NAME`: how a tool names a per-project scratch directory after its path), with a name other than the guest's
+/// lab account or a scrubbed `$VAR`. A dash-joined form starts a name: `on-home-pc` is no path.
 fn home_paths(text: &str) -> Vec<String> {
     let norm = text.replace("\\\\", "\\");
     let lower = norm.to_ascii_lowercase();
     let mut out = Vec::new();
-    for lead in ["/users/", "/home/", "\\users\\"] {
+    for lead in ["/users/", "/home/", "\\users\\", "-users-", "-home-"] {
         for (i, _) in lower.match_indices(lead) {
+            if lead.starts_with('-')
+                && lower[..i]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_ascii_alphanumeric())
+            {
+                continue;
+            }
             let rest = &norm[i + lead.len()..];
             let seg: String = rest
                 .chars()
@@ -1412,6 +1454,26 @@ fn home_paths(text: &str) -> Vec<String> {
                 out.push(format!("{}{seg}", &norm[i..i + lead.len()]));
             }
         }
+    }
+    out
+}
+/// Per-user scratch roots: `claude-<uid>` (an agent's temporary root) and the macOS per-user temporary directory
+/// (`/var/folders/`, also as `/private/var/folders/`). A neutral absolute path such as `/private/tmp/rmasscan-ad.X`
+/// is none of them.
+fn scratch_roots(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let mut out: Vec<String> = lower
+        .match_indices("claude-")
+        .filter_map(|(i, lead)| {
+            let digits = lower[i + lead.len()..]
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .count();
+            (digits > 0).then(|| text[i..i + lead.len() + digits].to_owned())
+        })
+        .collect();
+    if lower.contains("/var/folders/") {
+        out.push("/var/folders/".to_owned());
     }
     out
 }
@@ -1447,6 +1509,11 @@ fn token_problems(text: &str, scanner_text: bool) -> Vec<String> {
         home_paths(text)
             .into_iter()
             .map(|h| format!("personal path {h}")),
+    );
+    p.extend(
+        scratch_roots(text)
+            .into_iter()
+            .map(|h| format!("per-user scratch directory {h}")),
     );
     let n = iflist_entries(text);
     if n >= 2 {
@@ -3045,21 +3112,123 @@ pub fn verify_dir(root: &Path) -> Value {
         unplanned.is_empty(),
         format!("{unplanned:?}"),
     );
+    let attempts = aborted_entries(plan, &t);
+    let strays: Vec<&str> = attempts
+        .iter()
+        .filter(|a| a.case.is_none())
+        .map(|a| a.name.as_str())
+        .collect();
+    if !attempts.is_empty() {
+        m.inv(
+            "runs_aborted/ holds only attempts of planned cases (<tag>.<run id>)",
+            strays.is_empty(),
+            format!("{strays:?}"),
+        );
+    }
     if plan == Some(Plan::Linux) {
         let id = manifest.as_ref().and_then(|x| x.lab_id.as_deref());
         teardown(&mut m, root, &t.links, id);
     }
     let mut runs = vec![m.summary()];
     if let Some(plan) = plan {
-        runs.extend(
-            cases(plan)
+        runs.extend(cases(plan).iter().map(|spec| {
+            let mut r = verify_run(root, spec, &t.links);
+            // A case runs once into one --out: the run of a case with an earlier attempt is not that case's single
+            // run, so it proves nothing (INVALID), whatever it shows; the attempt itself proves no misbehaviour, and
+            // a case without a run stays NOT RUN.
+            let earlier: Vec<String> = attempts
                 .iter()
-                .map(|spec| verify_run(root, spec, &t.links).summary()),
-        );
+                .filter(|a| a.case == Some(spec.tag))
+                .map(|a| format!("runs_aborted/{}", a.name))
+                .collect();
+            if !earlier.is_empty() {
+                r.inv(
+                    "no aborted attempt of this case in runs_aborted/ (a case runs once into one --out)",
+                    false,
+                    earlier.join(", "),
+                );
+            }
+            r.summary()
+        }));
     }
     result["runs"] = json!(runs);
+    result["aborted"] = json!(attempts.iter().map(Attempt::summary).collect::<Vec<_>>());
     result["safety_scan"] = json!(stray_scan(root, plan, &tags, &t));
     verify::finish(result)
+}
+
+/// One entry of `runs_aborted/`: an attempt that did not become a run.
+struct Attempt {
+    name: String,
+    /// The planned case it is an attempt of ([`aborted_case`]).
+    case: Option<&'static str>,
+    kind: &'static str,
+    /// Its files, relative to the entry.
+    files: Vec<String>,
+}
+impl Attempt {
+    /// Its entry under `aborted` in the verdict: what is there, and that it is no run. Its captures' lab-isolation
+    /// checks are in `safety_scan` with every other directory the plan does not judge.
+    fn summary(&self) -> Value {
+        let mut r = Run::new(&self.name);
+        r.check(
+            "an aborted attempt of a planned case: no run of it (its captures are judged in safety_scan)",
+            false,
+            format!("runs_aborted/{} ({})", self.name, self.kind),
+            if self.case.is_some() {
+                NOT_RUN
+            } else {
+                INVALID
+            },
+            false,
+        );
+        r.notes.insert("case".into(), json!(self.case));
+        r.notes.insert("kind".into(), json!(self.kind));
+        r.notes.insert("files".into(), json!(self.files));
+        r.summary()
+    }
+}
+/// Every entry of `runs_aborted/` in the tree `t`, by name. Links are listed, never followed.
+fn aborted_entries(plan: Option<Plan>, t: &Tree) -> Vec<Attempt> {
+    let top = |p: &String| {
+        p.strip_prefix("runs_aborted/")
+            .map(|r| r.split('/').next().unwrap_or(r).to_owned())
+    };
+    let names: BTreeSet<String> = t
+        .dirs
+        .iter()
+        .chain(&t.files)
+        .chain(&t.links)
+        .filter_map(top)
+        .collect();
+    names
+        .into_iter()
+        .map(|name| {
+            let rel = format!("runs_aborted/{name}");
+            let kind = if t.links.contains(&rel) {
+                "symbolic link"
+            } else if t.files.contains(&rel) {
+                "file"
+            } else {
+                "directory"
+            };
+            let lead = format!("{rel}/");
+            let files = t
+                .files
+                .iter()
+                .chain(&t.links)
+                .filter_map(|f| f.strip_prefix(&lead).map(str::to_owned))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            Attempt {
+                case: plan.and_then(|p| aborted_case(p, &name)),
+                name,
+                kind,
+                files,
+            }
+        })
+        .collect()
 }
 
 /// `autodetect-verify --dir DIR [--out FILE]`: 0 PASS, 1 FAIL, 2 INVALID or NOT RUN.

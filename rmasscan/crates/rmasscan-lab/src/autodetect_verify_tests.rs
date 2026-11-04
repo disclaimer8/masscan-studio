@@ -2710,3 +2710,227 @@ fn the_oracles_iflist_json_names_the_stand_in_masscans_form() {
         assert_eq!(masscan_iflist_name(not), None, "{not:?}");
     }
 }
+
+// ------------------------------------------------------------------ final review
+
+/// Where the first macOS window at 6c87e94 wrote `--out`: a scratch directory whose path names the account, joined
+/// with dashes (`-Users-<account>`) under the per-user root `claude-<uid>`.
+pub(crate) const SCRATCHPAD_OUT: &str = "/private/tmp/claude-501/-Users-alice/094668fe-1658-4758-aa06-f35202b4089e/scratchpad/autodetect-out/macos-r1";
+/// The neutral `--out` of the committed macOS directories (`mktemp -d /private/tmp/rmasscan-ad.XXXXXX`).
+const NEUTRAL_OUT: &str = "/private/tmp/rmasscan-ad.6qCSaM/autodetect-out/macos-r1";
+
+#[test]
+fn flattened_account_paths_and_per_user_scratch_roots_are_flagged() {
+    let problems = |text: &str| token_problems(text, false);
+    for bad in [
+        SCRATCHPAD_OUT,
+        "-Users-alice",
+        "\"-home-bob/scratch\"",
+        "/private/tmp/claude-501/x",
+        "claude-0",
+        "/private/var/folders/c3/j210wv292jl3t_dn4z86k8040000gn/T/rml-1/out",
+    ] {
+        assert!(!problems(bad).is_empty(), "{bad}");
+    }
+    // The placeholders the suites write, neutral absolute paths, and names that only contain the words.
+    let neutral = format!(
+        "{NEUTRAL_OUT}/.work/m01_user_masked.r69088813212522901048b64317ab8605/peer.unfiltered"
+    );
+    for ok in [
+        "$OUT/.work/m01_user_masked.r69088813212522901048b64317ab8605/peer.unfiltered",
+        "$WORK/l01_auto.r1/run/peer.pcap",
+        "$HOME/rmasscan-ad-scratch.0jbUfd/autodetect-out/linux-r1",
+        "-Users-$USER/x",
+        "-home-$USER",
+        "$USER",
+        &neutral,
+        "/private/tmp/x",
+        "/private/var/run/rmasscan-lab/m1.json",
+        "pcap-hashes-on-home-pc.txt",
+        "abort-hashes-on-home-pc.txt",
+        "claude",
+        "claude-code",
+    ] {
+        assert!(problems(ok).is_empty(), "{ok}: {:?}", problems(ok));
+    }
+}
+
+/// `sim` with the witness's `-w` path in `capture.json` set to `w`.
+fn with_witness_path(mut sim: Sim, w: &str) -> Sim {
+    let mut rec: Value = serde_json::from_slice(&Sim::published_witness(&sim.peer)).unwrap();
+    rec["tcpdump_argv"][9] = json!(w);
+    sim.omit.push("capture.json");
+    sim.extra.push((
+        "capture.json".into(),
+        serde_json::to_vec_pretty(&rec).unwrap(),
+    ));
+    sim
+}
+
+#[test]
+fn a_scratchpad_out_path_in_capture_json_is_invalid() {
+    // The leak of the first macOS window at 6c87e94: every capture.json named the account through the witness's `-w`
+    // path into `.work`, and the verifier passed it. Now the run is INVALID with the file named.
+    let tag = "m01_user_masked";
+    let unfiltered = |out: &str| format!("{out}/.work/{tag}.r1/peer.unfiltered");
+    let r = judge(&with_witness_path(
+        Sim::new(Plan::Macos, tag),
+        &unfiltered(SCRATCHPAD_OUT),
+    ));
+    assert_verdict(&r, INVALID);
+    let c = check(&r, "privacy: capture.json");
+    assert_eq!(c["result"], INVALID);
+    let detail = c["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("-Users-alice") && detail.contains("claude-501"),
+        "{detail}"
+    );
+    // The committed directories' neutral path, and the placeholder the suites now write, pass.
+    for w in [unfiltered(NEUTRAL_OUT), unfiltered("$OUT")] {
+        let r = judge(&with_witness_path(Sim::new(Plan::Macos, tag), &w));
+        assert_verdict(&r, PASS);
+    }
+    // The macOS per-user temporary directory in a stand record is flagged as well.
+    let mut sim = Sim::new(Plan::Linux, "l01_auto");
+    sim.extra.push((
+        "notes.txt".into(),
+        b"work in /private/var/folders/c3/j210/T/tmp.x\n".to_vec(),
+    ));
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(check(&r, "privacy: notes.txt")["result"], INVALID);
+}
+
+/// `runs_aborted/<name>/` with `files` (relative path, bytes) under `root`.
+fn write_aborted(root: &Path, name: &str, files: &[(&str, &[u8])]) {
+    for (rel, b) in files {
+        let p = root.join("runs_aborted").join(name).join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, b).unwrap();
+    }
+}
+
+#[test]
+fn an_aborted_attempt_is_listed_and_a_later_run_of_its_case_never_passes() {
+    // A Windows preflight NOT RUN keeps the orchestrator's records under runs_aborted/<tag>.<run id>/work/ (json and
+    // txt only); a later `--only <tag>` into the same --out wrote runs/<tag>. That PASS must not overtake the attempt.
+    let preflight = b"rc 0\n[+] interface = Ethernet (detected: route to 198.18.0.2)\n".as_slice();
+    let root = scratch();
+    write_plan(&root, Plan::Windows);
+    assert_eq!(verify_dir(&root)["overall"], PASS);
+    write_aborted(
+        &root,
+        "w06_multi_no_gateway.r1",
+        &[("work/preflight.txt", preflight), ("work/argv.json", b"{}")],
+    );
+    let res = verify_dir(&root);
+    assert_eq!(res["overall"], INVALID, "{:#}", res["aborted"]);
+    let aborted = res["aborted"].as_array().unwrap();
+    assert_eq!(aborted.len(), 1, "{aborted:#?}");
+    assert_eq!(aborted[0]["tag"], "w06_multi_no_gateway.r1");
+    assert_eq!(aborted[0]["notes"]["case"], "w06_multi_no_gateway");
+    assert_eq!(
+        aborted[0]["notes"]["files"],
+        json!(["work/argv.json", "work/preflight.txt"])
+    );
+    assert_eq!(aborted[0]["safety_trip"], false);
+    let r = run_of(&res, "w06_multi_no_gateway");
+    assert_verdict(&r, INVALID);
+    let c = check(&r, "no aborted attempt of this case");
+    assert_eq!(c["result"], INVALID);
+    assert!(
+        c["detail"]
+            .as_str()
+            .unwrap()
+            .contains("runs_aborted/w06_multi_no_gateway.r1"),
+        "{c}"
+    );
+    // Every other case is untouched, and nothing is a safety finding.
+    assert_verdict(&run_of(&res, "w01_auto"), PASS);
+    assert_verdict(&run_of(&res, "manifest"), PASS);
+    assert_eq!(res["safety_trips"], json!([]));
+    // The text report names it.
+    let lines = crate::verify::safety_report_lines(&res);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("ABORTED") && l.contains("w06_multi_no_gateway.r1")),
+        "{lines:?}"
+    );
+    fs::remove_dir_all(&root).unwrap();
+
+    // An attempt of a case that never got a run: the case stays NOT RUN (never INVALID or PASS).
+    let root = scratch();
+    for tag in planned_tags(Plan::Linux)
+        .into_iter()
+        .filter(|t| *t != "l03_adapter")
+    {
+        Sim::new(Plan::Linux, tag).write(&root);
+    }
+    fs::write(root.join("teardown.json"), format!("{TEARDOWN}\n")).unwrap();
+    write_aborted(&root, "l03_adapter.n1", &[("isolation.json", b"{}")]);
+    let res = verify_dir(&root);
+    assert_eq!(res["overall"], NOT_RUN);
+    assert_verdict(&run_of(&res, "l03_adapter"), NOT_RUN);
+    assert_eq!(res["aborted"][0]["notes"]["case"], "l03_adapter");
+    fs::remove_dir_all(&root).unwrap();
+
+    // An entry that is no attempt of a planned case (another tag, no run id, a loose file) is an INVALID directory.
+    for (name, rel) in [
+        ("x99_other.n1", "a.txt"),
+        ("w01_auto", "a.txt"),
+        ("w01_autox.n1", "a.txt"),
+    ] {
+        let root = scratch();
+        write_plan(&root, Plan::Windows);
+        write_aborted(&root, name, &[(rel, b"a\n")]);
+        let res = verify_dir(&root);
+        assert_eq!(res["overall"], INVALID, "{name}");
+        let m = run_of(&res, "manifest");
+        let c = check(&m, "runs_aborted/ holds only attempts");
+        assert_eq!(c["result"], INVALID, "{name}");
+        assert!(c["detail"].as_str().unwrap().contains(name), "{c}");
+        assert_eq!(res["aborted"][0]["tag"], name);
+        assert!(res["aborted"][0]["notes"]["case"].is_null(), "{name}");
+        fs::remove_dir_all(&root).unwrap();
+    }
+    let root = scratch();
+    write_plan(&root, Plan::Windows);
+    fs::create_dir_all(root.join("runs_aborted")).unwrap();
+    fs::write(root.join("runs_aborted/notes.txt"), "a\n").unwrap();
+    let res = verify_dir(&root);
+    assert_eq!(res["overall"], INVALID);
+    assert_eq!(res["aborted"][0]["tag"], "notes.txt");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_aborted_attempt_names_are_the_suites_rule() {
+    // `<tag>.<run id>` of a planned tag, the rule the suites refuse a repeat by.
+    assert_eq!(
+        aborted_case(Plan::Windows, "w06_multi_no_gateway.r6af22fc1"),
+        Some("w06_multi_no_gateway")
+    );
+    assert_eq!(aborted_case(Plan::Linux, "l01_auto.n1"), Some("l01_auto"));
+    for (plan, name) in [
+        (Plan::Linux, "l01_auto"),
+        (Plan::Linux, "l01_auto."),
+        (Plan::Linux, "l01_autox.n1"),
+        (Plan::Linux, "w01_auto.r1"),
+        (Plan::Macos, "m10_root_auto_mac.n1"),
+        (Plan::Linux, "l01_auto.n1/x"),
+    ] {
+        assert_eq!(aborted_case(plan, name), None, "{plan:?} {name}");
+    }
+    let root = scratch();
+    assert!(aborted_attempts(&root, "l01_auto").is_empty());
+    write_aborted(&root, "l01_auto.n1", &[("a.txt", b"a\n")]);
+    write_aborted(&root, "l01_auto.n2", &[("a.txt", b"a\n")]);
+    write_aborted(&root, "l02_auto_multi.n1", &[("a.txt", b"a\n")]);
+    assert_eq!(
+        aborted_attempts(&root, "l01_auto"),
+        ["runs_aborted/l01_auto.n1", "runs_aborted/l01_auto.n2"]
+    );
+    assert!(aborted_attempts(&root, "l03_adapter").is_empty());
+    fs::remove_dir_all(&root).unwrap();
+}

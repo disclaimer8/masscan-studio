@@ -138,6 +138,13 @@ fn with_mdns(frames: &pcap::Frames) -> pcap::Frames {
 fn holds(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
+/// The `capture dump` record of `frames` as the witness writes it: its tcpdump argv names the real `-w` file.
+fn witness_at(frames: &pcap::Frames, pcap: &Path) -> Vec<u8> {
+    let mut v: Value = serde_json::from_slice(&Sim::witness(frames)).unwrap();
+    assert_eq!(v["tcpdump_argv"][8], "-w");
+    v["tcpdump_argv"][9] = json!(p2s(pcap));
+    serde_json::to_vec_pretty(&v).unwrap()
+}
 
 // ------------------------------------------------------------------ a recording Linux host
 
@@ -197,6 +204,8 @@ struct FakeLinux {
     replace_on_scan: RefCell<Option<PathBuf>>,
     /// A directory created when rmasscan starts (something takes the run's place in the evidence directory).
     occupy_on_scan: RefCell<Option<PathBuf>>,
+    /// The account that started the suite (none unless a test names one).
+    account: RefCell<Option<String>>,
 }
 impl FakeLinux {
     fn new(tags: &[&'static str], rmasscan: &Path, oracle: &Path) -> Self {
@@ -219,6 +228,7 @@ impl FakeLinux {
             isolation_calls: Cell::new(0),
             replace_on_scan: RefCell::default(),
             occupy_on_scan: RefCell::default(),
+            account: RefCell::default(),
         }
     }
     /// The run a command belongs to, from the work directory its paths name (`<work>/<tag>.<nonce>/...`).
@@ -332,7 +342,7 @@ impl LinuxHost for FakeLinux {
             let meta = PathBuf::from(after(argv, "--meta"));
             let stop = move || {
                 fs::write(&pcap_path, pcap::encode(&frames)).unwrap();
-                fs::write(&meta, Sim::witness(&frames)).unwrap();
+                fs::write(&meta, witness_at(&frames, &pcap_path)).unwrap();
                 fs::write(
                     format!("{}.tcpdump.err", pcap_path.display()),
                     format!("tcpdump: listening on veth-b, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n{0} packets captured\n{0} packets received by filter\n0 packets dropped by kernel\n", frames.len()),
@@ -367,6 +377,9 @@ impl LinuxHost for FakeLinux {
     fn euid(&self) -> Result<u32, String> {
         Ok(self.euid)
     }
+    fn account(&self) -> Option<String> {
+        self.account.borrow().clone()
+    }
     fn pause(&self, _d: Duration) {}
     fn stopped(&self) -> bool {
         false
@@ -383,8 +396,12 @@ struct LinuxSetup {
     args: Vec<String>,
 }
 fn linux_setup(tags: &[&'static str]) -> LinuxSetup {
+    linux_setup_in(tags, "")
+}
+/// [`linux_setup`] with `--out` under `sub` of the scratch directory.
+fn linux_setup_in(tags: &[&'static str], sub: &str) -> LinuxSetup {
     let root = scratch();
-    let out = root.join("linux-r1");
+    let out = root.join(sub).join("linux-r1");
     let work = out.join(".work");
     fs::create_dir_all(&work).unwrap();
     fs::write(work.join("host-links-before.txt"), "eno1\nlo\n").unwrap();
@@ -1324,6 +1341,8 @@ mod mac {
         /// The lock file, read when rmasscan starts.
         pub(super) lock_file: RefCell<Option<PathBuf>>,
         pub(super) lock_at_scanner: RefCell<String>,
+        /// A field `note` the status names besides the stand.s own (a path, a name).
+        pub(super) status_note: RefCell<Option<String>>,
     }
     impl FakeMac {
         pub(super) fn new(plan: Plan, rmasscan: &Path) -> Self {
@@ -1343,6 +1362,7 @@ mod mac {
                 ps: RefCell::default(),
                 lock_file: RefCell::default(),
                 lock_at_scanner: RefCell::default(),
+                status_note: RefCell::default(),
             }
         }
         fn note(&self, all: &[String]) {
@@ -1380,11 +1400,11 @@ mod mac {
             self.execs.borrow_mut().push(argv.to_vec());
             if argv.iter().any(|a| a == "status") {
                 let s = Sim::new(Plan::Macos, "m01_user_masked");
-                return Ok(out(
-                    0,
-                    &String::from_utf8(file_of(&s, "status-pre.json")).unwrap(),
-                    "",
-                ));
+                let mut v: Value = serde_json::from_slice(&file_of(&s, "status-pre.json")).unwrap();
+                if let Some(n) = self.status_note.borrow().as_ref() {
+                    v["note"] = json!(n);
+                }
+                return Ok(out(0, &serde_json::to_string_pretty(&v).unwrap(), ""));
             }
             if argv[0].ends_with("socketfilterfw") {
                 return Ok(out(0, "Firewall is disabled. (State = 0)\n", ""));
@@ -1486,7 +1506,7 @@ mod mac {
                 let frames = with_mdns(&sim.peer);
                 return Ok(running(Box::new(move || {
                     fs::write(&pcap_path, pcap::encode(&frames)).unwrap();
-                    fs::write(&meta, Sim::witness(&frames)).unwrap();
+                    fs::write(&meta, witness_at(&frames, &pcap_path)).unwrap();
                     fs::write(
                         format!("{}.tcpdump.err", pcap_path.display()),
                         format!("tcpdump: listening on feth4202, link-type EN10MB (Ethernet), snapshot length 524288 bytes\n{0} packets captured\n{0} packets received by filter\n0 packets dropped by kernel\n", frames.len()),
@@ -1564,8 +1584,12 @@ mod mac {
         pub(super) args: Vec<String>,
     }
     pub(super) fn setup(plan: Plan, only: &[&str]) -> MacSetup {
+        setup_in(plan, only, "")
+    }
+    /// [`setup`] with `--out` under `sub` of the scratch directory.
+    pub(super) fn setup_in(plan: Plan, only: &[&str], sub: &str) -> MacSetup {
         let root = scratch();
-        let out = root.join(if plan == Plan::MacosRoot {
+        let out = root.join(sub).join(if plan == Plan::MacosRoot {
             "macos-root-r1"
         } else {
             "macos-r1"
@@ -1604,7 +1628,16 @@ mod mac {
         args: &[String],
         sudo: Option<&str>,
     ) -> Result<i32, SuiteError> {
-        macos_with(args, &s.fake, &s.exe, sudo, &|| Ok(s.lock.clone()))
+        run_as(s, args, sudo, None)
+    }
+    /// [`run`] with `$USER` set to `user`.
+    pub(super) fn run_as(
+        s: &MacSetup,
+        args: &[String],
+        sudo: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<i32, SuiteError> {
+        macos_with(args, &s.fake, &s.exe, sudo, user, &|| Ok(s.lock.clone()))
     }
     /// No file under `out` keeps the unfiltered capture or the host name.
     fn no_host_data(out: &Path) {
@@ -1876,6 +1909,47 @@ mod mac {
         );
         fs::remove_dir_all(&s.root).unwrap();
     }
+
+    pub(super) fn out_and_account_are_placeholders() {
+        // The leak of the first window at 6c87e94: `--out` under a scratch directory that names the account went
+        // into every capture.json through the witness's `-w` path into `.work`. The user window and the root case
+        // (the account is `$SUDO_USER` there, never root) write `$OUT` and `$USER` instead.
+        for (plan, sudo, user) in [
+            (Plan::Macos, None, "alice"),
+            (Plan::MacosRoot, Some("alice"), "root"),
+        ] {
+            let s = setup_in(plan, &[], SCRATCHPAD);
+            *s.fake.status_note.borrow_mut() =
+                Some(format!("lab of alice, evidence in {}", s.out.display()));
+            assert_eq!(
+                run_as(&s, &s.args, sudo, Some(user)).unwrap(),
+                0,
+                "{plan:?}"
+            );
+            names_nothing_of_the_host(&s.out, &s.root, "$OUT/.work/");
+            let tag = av::planned_tags(plan)[0];
+            let status = read_json(s.out.join("runs").join(tag).join("status-pre.json")).unwrap();
+            assert_eq!(status["note"], "lab of $USER, evidence in $OUT", "{plan:?}");
+            let res = av::verify_dir(&s.out);
+            assert_eq!(res["overall"], "PASS", "{plan:?} {:#?}", bad(&res));
+            fs::remove_dir_all(&s.root).unwrap();
+        }
+    }
+
+    pub(super) fn an_aborted_attempt_refuses_its_case() {
+        let s = setup(Plan::Macos, &["m01_user_masked"]);
+        let attempt = s.out.join("runs_aborted/m01_user_masked.r1");
+        fs::create_dir_all(&attempt).unwrap();
+        fs::write(attempt.join("status-pre.json"), "{}\n").unwrap();
+        let e = run(&s, &s.args, None).unwrap_err();
+        assert!(
+            matches!(&e, SuiteError::NotRun(m) if m.contains("runs_aborted/m01_user_masked.r1")),
+            "{e:?}"
+        );
+        assert!(s.fake.nothing_started());
+        assert!(!s.out.join("manifest.json").exists() && !s.out.join("runs").exists());
+        fs::remove_dir_all(&s.root).unwrap();
+    }
 }
 
 #[test]
@@ -2042,4 +2116,104 @@ fn a_linux_directory_is_never_extended_by_another_lab() {
     );
     assert!(!s.out.join("runs/l02_auto_multi").exists());
     fs::remove_dir_all(s.root).unwrap();
+}
+
+// ------------------------------------------------------------------ final review
+
+/// Where the first macOS window at 6c87e94 wrote `--out`, below the scratch: a directory whose path names the account,
+/// joined with dashes, under the per-user root `claude-<uid>`.
+const SCRATCHPAD: &str = "claude-501/-Users-alice/094668fe/scratchpad/autodetect-out";
+
+/// No file under `out` names the scratch it lies in, the account, or its per-user root; every published witness
+/// record names its `-w` file by `placeholder`.
+fn names_nothing_of_the_host(out: &Path, root: &Path, placeholder: &str) {
+    for f in crate::macos_verify::relative_files(out) {
+        let b = fs::read(out.join(&f)).unwrap();
+        for needle in [p2s(root).as_str(), "alice", "claude-501"] {
+            assert!(!holds(&b, needle.as_bytes()), "{f} holds {needle:?}");
+        }
+        if f.ends_with(CAPTURE_JSON) || f.ends_with(ORACLE_CAPTURE_JSON) {
+            let w = read_json(out.join(&f)).unwrap()["tcpdump_argv"][9].clone();
+            // Either separator: the hermetic tests also run on the Windows CI runner.
+            assert!(
+                w.as_str()
+                    .is_some_and(|w| w.replace('\\', "/").starts_with(placeholder)),
+                "{f}: {w}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_linux_suite_writes_its_out_work_and_account_as_placeholders() {
+    // Every path the suite records under --out or --work (the witnesses' `-w` files among them) and the account that
+    // started it go into the evidence as `$OUT`, `$WORK` and `$USER`, whatever directory the operator chose.
+    let tags = ["l01_auto", "l11_parity"];
+    let s = linux_setup_in(&tags, SCRATCHPAD);
+    *s.fake.account.borrow_mut() = Some("alice".into());
+    fs::write(
+        s.out.join("env.json"),
+        json!({"oracle":{"path":"/srv/lab/-home-alice/masscan"},"note":"built by alice"})
+            .to_string(),
+    )
+    .unwrap();
+    assert_eq!(linux_with(&s.args, &s.fake, &s.lab).unwrap(), 0);
+    fs::write(s.out.join(av::TEARDOWN_JSON), av::tests::TEARDOWN).unwrap();
+    names_nothing_of_the_host(&s.out, &s.root, "$WORK/");
+    let cap = read_json(s.out.join("runs/l11_parity").join(ORACLE_CAPTURE_JSON)).unwrap();
+    let w = cap["tcpdump_argv"][9].as_str().unwrap().replace('\\', "/");
+    assert!(
+        w.starts_with("$WORK/l11_parity.") && w.ends_with("/run/oracle.pcap"),
+        "{w}"
+    );
+    assert_eq!(
+        read_json(s.out.join("env.json")).unwrap(),
+        json!({"oracle":{"path":"/srv/lab/-home-$USER/masscan"},"note":"built by $USER"})
+    );
+    let res = av::verify_dir(&s.out);
+    for tag in ["manifest", "l01_auto", "l11_parity"] {
+        let run = res["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["tag"] == tag)
+            .unwrap();
+        assert_eq!(run["verdict"], "PASS", "{tag}: {:#?}", bad(&res));
+    }
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[test]
+fn a_linux_case_with_an_aborted_attempt_is_never_run_again_into_the_same_out() {
+    // A case runs once into one --out: an earlier attempt kept under runs_aborted/<tag>.<run id> refuses it, as a
+    // run in runs/<tag> does, before anything starts; another case of the directory still runs.
+    let s = linux_setup(&["l01_auto", "l02_auto_multi"]);
+    let attempt = s.out.join("runs_aborted/l01_auto.n1");
+    fs::create_dir_all(&attempt).unwrap();
+    fs::write(attempt.join("isolation.json"), "{}\n").unwrap();
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("runs_aborted/l01_auto.n1")),
+        "{e:?}"
+    );
+    assert!(s.fake.nothing_started());
+    assert!(!s.out.join("manifest.json").exists() && !s.out.join("runs").exists());
+    let i = s.args.iter().position(|a| a == "--only").unwrap();
+    let mut args = s.args[..i].to_vec();
+    args.extend(strings(&["--only", "l02_auto_multi"]));
+    assert_eq!(linux_with(&args, &s.fake, &s.lab).unwrap(), 0);
+    assert!(s.out.join("runs/l02_auto_multi").is_dir() && !s.out.join("runs/l01_auto").exists());
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_suite_writes_its_out_and_account_as_placeholders() {
+    mac::out_and_account_are_placeholders();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_macos_case_with_an_aborted_attempt_is_never_run_again_into_the_same_out() {
+    mac::an_aborted_attempt_refuses_its_case();
 }

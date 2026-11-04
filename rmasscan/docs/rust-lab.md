@@ -397,6 +397,28 @@ checkout under test, in a private target directory.
 `safety_trips`, отчёт и rc те же. Прежние каталоги (`functional-r3`, `perf-r1` и другие) этих ключей не имеют и
 судятся прежним верификатором с прежними вердиктами.
 
+**Пути и учётная запись.** `--out` (на Mac и место бинарников) — нейтральный путь без имени учётной записи, например
+`mktemp -d /private/tmp/rmasscan-ad.XXXXXX` на Mac и `mktemp -d /tmp/rmasscan-ad.XXXXXX` на minipc; не scratch агента
+(`/private/tmp/claude-<uid>/-Users-<имя>/…`) и не `$TMPDIR` (`/var/folders/…`). Первое окно macOS на `6c87e94` писало
+`--out` в такой scratch, и имя попало в каждый `capture.json` (путь `-w` в `.work`). Теперь каждый suite (Linux,
+macOS пользовательский и root, Windows) одним общим помощником (`capture::Scrubber`) пишет во всё, что попадает в
+evidence (записи прогонов, `capture.json`, манифест, статусы, записи `deploy/`; на Linux ещё `suite.log`), свой
+`--out` как `$OUT`, рабочий каталог как `$WORK` (Linux; на macOS и Windows это `$OUT/.work`), домашний каталог как
+`$HOME`, а учётную запись, взятую один раз при старте (`$SUDO_USER`, если задан и не `root`, иначе `$USER`; `root` не
+заменяется), как `$USER`. `autodetect-verify` в любом текстовом файле evidence находит, кроме `/Users/ИМЯ`,
+`/home/ИМЯ`, `\Users\ИМЯ`, ещё формы через дефис `-Users-ИМЯ`, `-home-ИМЯ` (в начале имени: `on-home-pc` не путь) и
+корни scratch одного пользователя `claude-<цифры>` и `/var/folders/` (в том числе `/private/var/folders/`): INVALID
+с именем файла. `$OUT`, `$WORK`, `$HOME`, `$USER` и нейтральные абсолютные пути (`/private/tmp/rmasscan-ad.<x>/…`)
+он принимает.
+
+**Прерванные попытки.** Попытка, не ставшая прогоном, остаётся как `runs_aborted/<tag>.<run id>/` (прерванный
+прогон; на Windows и NOT RUN preflight). `autodetect-verify` перечисляет каждую запись `runs_aborted/` в `aborted`
+вердикта (тег, кейс, вид, файлы). Кейс прогоняется в один `--out` один раз, поэтому кейс с такой попыткой не бывает
+PASS: прогон рядом с ней — INVALID (он не единственный прогон кейса), без прогона кейс NOT RUN. Запись, которая не
+`<плановый тег>.<run id>`, делает каталог INVALID. Захваты попыток судит `safety_scan`, как и прежде. Все три suite
+отказывают (NOT RUN, до любого изменения стенда и любого удалённого шага) кейсу, у которого в `--out` уже есть
+`runs/<tag>` или `runs_aborted/<tag>.*`; повтор идёт в новый `--out`.
+
 | Стенд | Команда | Кейсы |
 | --- | --- | --- |
 | Linux netns (minipc) | `scripts/wire-lab.sh --suite autodetect` запускает внутри `autodetect-suite linux` | `l01`–`l12` |
@@ -417,12 +439,12 @@ checkout under test, in a private target directory.
 прежней лаборатории (`manifest.json`, `runs/`, `runs_aborted/`, `teardown.json`, `.work/`), скрипт не принимает
 (FATAL, rc 2): каждая лаборатория идёт в новый `--out`.
 Скрипт сам перезапускает себя через `sudo -n`; suite `sudo` не вызывает. `--out` всегда вне репозитория, в
-приватном `$SCRATCH` (например `mktemp -d`), в репозиторий каталог попадает только шагом «Evidence в репозиторий»
-ниже. Из каталога `rmasscan/` экспорта коммита на minipc:
+нейтральном каталоге без имени учётной записи (см. «Пути и учётная запись»), в репозиторий каталог попадает только
+шагом «Evidence в репозиторий» ниже. Из каталога `rmasscan/` экспорта коммита на minipc:
 
 ```sh
 cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
-OUT=$SCRATCH/autodetect-out/linux-r1
+OUT=$(mktemp -d /tmp/rmasscan-ad.XXXXXX)/autodetect-out/linux-r1
 RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite autodetect \
   --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"
 target/release/rmasscan-lab autodetect-verify --dir "$OUT" --out "$OUT/verdict.json"
@@ -431,12 +453,12 @@ target/release/rmasscan-lab autodetect-verify --dir "$OUT" --out "$OUT/verdict.j
 **Windows.** `rmasscan.exe` собирается на госте так же, как `wire_scan.exe` в шаге 4 раздела «Deployment»: тот же
 `git archive` коммита, release, статический CRT, тот же `RUSTFLAGS` с `/DEPENDENTLOADFLAG:0x800`. Отличие одно:
 `cargo build --locked --release -p rmasscan-cli` вместо `-p rmasscan-net --example wire_scan`. Затем `dumpbin /loadconfig rmasscan.exe`
-(флаг `0x800`) и копия в `C:\Users\lab\t4\rmasscan.exe`. Шаги 1–3 и 5 те же. `--out` — в приватном `$SCRATCH`
-вне репозитория (там же `.work` оркестратора: после аварии в нём может остаться полный гостевой `--iflist`). Команды
-из корня репозитория:
+(флаг `0x800`) и копия в `C:\Users\lab\t4\rmasscan.exe`. Шаги 1–3 и 5 те же. `--out` — вне репозитория, в
+нейтральном каталоге без имени учётной записи (там же `.work` оркестратора: после аварии в нём может остаться
+полный гостевой `--iflist`). Команды из корня репозитория:
 
 ```sh
-OUT=$SCRATCH/autodetect-out/windows-r1
+OUT=$(mktemp -d /private/tmp/rmasscan-ad.XXXXXX)/autodetect-out/windows-r1
 rmasscan/target/release/rmasscan-lab windows-suite --list --plan autodetect   # девять кейсов, ничего не запускает
 rmasscan/target/release/rmasscan-lab windows-suite \
   --out "$OUT" \
@@ -468,7 +490,8 @@ rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT" --out "$OUT/ver
   захват, ни скан не запускаются. Это не прерванный прогон: удалённый scratch (отчёт ворот и маркер, захвата нет)
   удаляется на home-pc, а не копируется домой, и маркер в evidence не попадает. Записи ворот и `preflight.txt`
   остаются в `runs_aborted/<tag>.<run id>/work/`; каталог — NOT RUN, не INVALID. Если удалить scratch не удалось,
-  маркер остаётся, и следующий старт отказывает.
+  маркер остаётся, и следующий старт отказывает. Повторный `--only <tag>` в тот же `--out` отклоняется (NOT RUN до
+  любого удалённого шага), а прогон кейса рядом с такой попыткой верификатор считает INVALID.
 - Гостевые файлы переносятся как `guest-stdout.txt`, `guest-stderr.txt`, `guest-exit.txt`. Код ограниченного
   runner переносится как `guest-runner-rc.txt` (`.rc` не входит в allowlist). `detected.json` — разбор
   `guest-stderr.txt` парсером верификатора.
@@ -487,7 +510,8 @@ rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT" --out "$OUT/ver
 - Манифест: `"autodetect": "windows"`, `exe.build` `Rust static CRT rmasscan CLI from code_commit`, `binding` по
   кейсу (ожидаемое обнаружение из `expect.json`). Полей `oracle`, `pause`, `tx_mode_expected` нет. Скрипты гостя
   проходят только через `.work`, их хэши записаны в `deploy/preflight-<run>.json`. Пути под домашним каталогом в
-  манифесте, статусах, `capture.json` и `deploy/` заменены на `$HOME`. Поэтому копия `deploy/deploy-manifest.json`
+  манифесте, статусах, `capture.json` и `deploy/` заменены на `$HOME`, `--out` на `$OUT`, учётная запись оркестратора
+  на `$USER`. Поэтому копия `deploy/deploy-manifest.json`
   уже не совпадает с исходным файлом: в `deploy/preflight-<run>.json` `deploy_manifest_sha256` — хэш исходного
   `--deploy-manifest` на этой машине, `deploy_manifest_copy.sha256` — хэш копии в каталоге. В каждом прогоне
   `guest-runner.json` обязан назвать `--guest-exe` (`exe`) и sha256 из манифеста (`exe_sha256`); продолжение

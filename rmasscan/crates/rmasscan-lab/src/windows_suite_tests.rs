@@ -45,6 +45,8 @@ struct Knobs {
     exe_hash: Option<String>,
     /// The executable the guest runner reports it ran (`runner.json` `exe`; default: the plan's own scanner).
     runner_exe: Option<String>,
+    /// The account that started the orchestrator (`Exec::account`; default: none).
+    account: Option<String>,
 }
 struct Stand {
     src: PathBuf,
@@ -467,6 +469,9 @@ impl Exec for Stand {
     fn stopped(&self) -> bool {
         self.knobs.borrow().stopped
     }
+    fn account(&self) -> Option<String> {
+        self.knobs.borrow().account.clone()
+    }
     fn lock_suite(&self) -> Result<LockGuard, String> {
         if self.knobs.borrow().lock_held {
             return Err(LOCK_BUSY.into());
@@ -572,6 +577,7 @@ fn suite<'a>(stand: &'a Stand, root: &Path) -> Suite<'a> {
         cleanup: Cell::new(false),
         runner_invoked: Cell::new(false),
         lock: None,
+        scrub: Default::default(),
     }
 }
 const TAG: &str = "perm_elevated_control";
@@ -1634,6 +1640,7 @@ mod local_sweep {
             cleanup: Cell::new(false),
             runner_invoked: Cell::new(false),
             lock: None,
+            scrub: Default::default(),
         };
         // The real wrapper of `Suite::bg`, around a TERM-ignoring shell.
         let tool = format!(
@@ -1704,6 +1711,7 @@ mod local_sweep {
             cleanup: Cell::new(true),
             runner_invoked: Cell::new(false),
             lock: Some(&lock),
+            scrub: Default::default(),
         };
         // Two TERM-ignoring tools in the real `Suite::bg` wrapper: ours, and one of another orchestrator's run.
         let start = |dir: &Path| -> i32 {
@@ -3857,6 +3865,70 @@ fn an_autodetect_directory_never_runs_a_case_twice_or_over_a_work_directory() {
         "{e:?}"
     );
     assert!(stand.calls().is_empty());
+}
+
+#[test]
+fn an_autodetect_case_with_an_aborted_attempt_is_not_run_and_nothing_is_started() {
+    // A preflight NOT RUN of an earlier start kept the orchestrator's records under runs_aborted/<tag>.<run id>/work/.
+    // A later `--only <tag>` into the same --out is refused before any remote change, as a case with a run is.
+    let w = World::autodetect("aborted-again", |_| {});
+    let attempt = w.root.join("runs_aborted/w06_multi_no_gateway.r1/work");
+    fs::create_dir_all(&attempt).unwrap();
+    fs::write(attempt.join(av::PREFLIGHT_TXT), "rc 0\n").unwrap();
+    let stand = autodetect_stand(&w);
+    let e = run_with(
+        &autodetect_args(&w, &["--only", "w06_multi_no_gateway"]),
+        &stand,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("runs_aborted/w06_multi_no_gateway.r1")),
+        "{e:?}"
+    );
+    assert_eq!(e.code(), 2);
+    assert!(stand.calls().is_empty() && stand.locks.get() == 0);
+    // Another case of the directory still runs; the attempt stays visible and its case NOT RUN.
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w01_auto"]), &stand).unwrap(),
+        0
+    );
+    let res = av::verify_dir(&w.root);
+    assert_eq!(ad_verdict(&res, "w01_auto"), "PASS", "{:#?}", ad_bad(&res));
+    assert_eq!(ad_verdict(&res, "w06_multi_no_gateway"), "NOT RUN");
+    assert_eq!(res["aborted"][0]["tag"], "w06_multi_no_gateway.r1");
+}
+
+#[test]
+fn the_windows_autodetect_records_carry_out_and_account_as_placeholders() {
+    // The orchestrator's records (the deploy manifest copy among them) go through the suites' one scrubber: its
+    // --out and the account that started it are `$OUT` and `$USER` in the evidence.
+    let w = World::autodetect("scrub", |_| {});
+    let mut deploy =
+        crate::deploy::build_manifest(COMMIT, REMOTE_LAB, LAB_BINARY, "rustc test", 1.0);
+    deploy["toolchain"] = json!(format!(
+        "rustc test, built by alice for {}",
+        w.root.display()
+    ));
+    write_json(&w.deploy, &deploy).unwrap();
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().account = Some("alice".into());
+    assert_eq!(run_with(&autodetect_args(&w, &[]), &stand).unwrap(), 0);
+    let copy = read_json(w.root.join("deploy/deploy-manifest.json")).unwrap();
+    assert_eq!(copy["toolchain"], "rustc test, built by $USER for $OUT");
+    let root = w.root.to_string_lossy().into_owned();
+    for f in every_file(&w.root) {
+        let b = fs::read(&f).unwrap();
+        for needle in [root.as_str(), "alice"] {
+            assert!(
+                !b.windows(needle.len()).any(|x| x == needle.as_bytes()),
+                "{} holds {needle:?}",
+                f.display()
+            );
+        }
+    }
+    let res = av::verify_dir(&w.root);
+    assert_eq!(res["overall"], "PASS", "{:#?}", ad_bad(&res));
 }
 
 #[test]

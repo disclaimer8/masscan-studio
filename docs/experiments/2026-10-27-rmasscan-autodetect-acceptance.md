@@ -435,10 +435,41 @@ Preflight `m05` (`--offline` с теми же целями) дал rc 1 и то�
 
 ## 11. Перепроверка после итогового ревью
 
-**PENDING**: заполняется после итогового ревью. По плану: если ревью изменит `rmasscan-cli`, `rmasscan-net`,
-`rmasscan-core` или `rmasscan-engine`, повторяются окна минимум `l01`, `l11`, `w01`, `m02` (и B/F на Mac) на исправленном
-коммите; если только `rmasscan-lab` или документы — архив пересчитывается исправленным верификатором с неизменными
-вердиктами.
+По плану: если ревью изменит `rmasscan-cli`, `rmasscan-net`, `rmasscan-core` или `rmasscan-engine`, повторяются окна
+минимум `l01`, `l11`, `w01`, `m02` (и B/F на Mac) на исправленном коммите; если только `rmasscan-lab` или документы —
+архив пересчитывается исправленным верификатором с неизменными вердиктами.
+
+Итоговое ревью продуктовый код приняло. Его находки касались только лаборатории и документов, поэтому окна не
+повторялись: исправление одно, коммит `fix(lab): evidence scrubs the out path and account name, the verifier flags
+them, aborted attempts stay visible` (следующий за `435279f`), только `rmasscan-lab` и документы.
+
+- **Privacy-ворота.** Первое окно macOS на `6c87e94` (раздел 8, п. 3) писало `--out` в scratch, путь которого несёт
+  имя учётной записи через дефис (`/private/tmp/claude-501/-Users-<учётная запись>/…`); `autodetect-verify` дал ему
+  PASS 8/8, утечку нашёл только grep оператора. Теперь каждый suite (Linux, macOS пользовательский и root, Windows)
+  одним общим помощником `capture::Scrubber` пишет во всё, что попадает в evidence, свой `--out` как `$OUT`, рабочий
+  каталог как `$WORK` (macOS, Windows: `$OUT/.work`) и учётную запись (`$SUDO_USER`, если задан и не `root`, иначе
+  `$USER`) как `$USER`. Верификатор в любом текстовом файле находит ещё `-Users-ИМЯ`, `-home-ИМЯ`, `claude-<цифры>` и
+  `/var/folders/` (в том числе `/private/var/folders/`): INVALID с именем файла. Синтетический прогон с путём того
+  окна в `capture.json` раньше был PASS, теперь INVALID. Нейтральные пути (`/private/tmp/rmasscan-ad.6qCSaM/…` в
+  `macos-r1` и `macos-root-r1`) и `$OUT`, `$WORK`, `$HOME`, `$USER` проходят.
+- **Прерванные попытки.** Каждая запись `runs_aborted/` теперь в `aborted` вердикта (тег, кейс, вид, файлы). Кейс с
+  попыткой не бывает PASS: прогон рядом с ней INVALID, без прогона NOT RUN; запись, которая не `<плановый
+  тег>.<run id>`, делает каталог INVALID. Все три suite отказывают (NOT RUN, до любого изменения) кейсу, у которого в
+  `--out` есть `runs/<tag>` или `runs_aborted/<tag>.*`.
+- **Документы.** `rust-lab.md` и `macos-feth-lab.md`: `--out` и бинарники в нейтральном каталоге
+  (`mktemp -d /private/tmp/rmasscan-ad.XXXXXX`), что пишет suite и что ловит верификатор; `README.md`, «Ограничения»:
+  маршруты по умолчанию Linux через nexthop-объект или multipath и macOS только основной маршрут (`--router-ip`).
+
+Перепроверка архива: `autodetect-verify`, собранный из этого коммита, на четырёх закоммиченных каталогах (и
+`windows-verify` на `windows-r1`) дал вердикты, **байт в байт равные** закоммиченным `verdict.json`; ни один файл
+evidence не менялся (`MANIFEST.sha256`: 566 файлов сходятся). Вердикты не изменились:
+
+| Каталог | Вердикт | sha256 `verdict.json` (закоммиченный = пересчитанный) |
+| --- | --- | --- |
+| `linux-r1` | PASS 13/13, rc 0 | `64c9e6aabad7207e6487c847cc33a7fdaaa903939cd00a41332184f643e49e8a` |
+| `windows-r1` | PASS 10/10, rc 0 (оба верификатора) | `94b72583ced9e921f046d62979c4344aefc903aab66f5746bd2b99e2eae7fa38` |
+| `macos-r1` | PASS 8/8, rc 0 | `e3dafaf7779aefd1f16cbc2df80efae68592ad949f5911a6f7935a5e3b0afa63` |
+| `macos-root-r1` | PASS 3/3, rc 0 | `26ff9103dbfc121c0ab18ec924cf9115799bba395dbead12ce51738f7addbfcb` |
 
 ## 12. CI
 

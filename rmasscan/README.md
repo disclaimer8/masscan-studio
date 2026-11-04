@@ -145,14 +145,30 @@ CI; raw-сокеты в лабораторных тестах `rmasscan-net` (н
 через один адаптер и один следующий хоп (IPv4, TCP SYN, по одному потоку TX и RX, без `--retries`, shard 1/1);
 туннели, VLAN и IPv6 не поддержаны; строки статуса нет.
 
+Живой скан из CLI поддержан и принят только на запечатанных лабораторных стендах (Linux netns и veth, Windows VM с Npcap
+в режиме Admin-only, пара `feth` на Mac); на физических NIC он не проверялся (NOT RUN). Вживую не проверены шлюз маршрута
+к цели за маршрутизатором (`router-ip … (route gateway)`: на стендах все цели on-link, ветка покрыта офлайн-тестами) и
+маршрут к единственной цели на macOS (на одном Mac цель стенда это адрес самого хоста, проверены отказ и
+переопределения); MAC под root на macOS доказан одним кейсом. Порт источника по умолчанию один, а не два, как у
+masscan; Ctrl-C не перехватывается, `paused.conf` не пишется; полный вывод `--iflist` в evidence не хранится (только
+строка стенда, число строк и sha256). Подробности: `../docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`,
+разделы 1 и 9.
+
 ## Статус
 
-Состояние на commit `27e3042` (код; evidence `8479ff2`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
+Живой скан CLI с автоопределением интерфейса, адреса и MAC источника и следующего хопа (код `6c87e94`, evidence
+`00110f9`, 2026-11-04, ветка `feat/rmasscan-autodetect`) принят на трёх запечатанных стендах: Linux netns PASS 13/13
+(паритет с C-оракулом по байтам ARP-запроса, порядку SYN и строкам `Discovered`), Windows VM PASS 10/10, Mac `feth`
+PASS 8/8 и под root 3/3; `[+] finished … sent N` равен числу SYN на проводе, до скана уходит только 60-байтовый
+ARP-запрос к напечатанному `router-ip`. GO (stands) условно: итоговое ревью ветки и зелёный CI на точном HEAD ещё не
+пройдены. Физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`.
+
+Состояние остальных слоёв на commit `27e3042` (код; evidence `8479ff2`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
 полная таблица (capability / слой / реализовано / проверка / ограничение / следующий этап)
 находится в §0.2 спеки Studio. Кратко: raw I/O: Linux AF_PACKET
 (замкнутый стенд); Windows (Npcap) реализован и принят на виртуальной машине (физический NIC открыт); macOS (BPF) реализован, живая приёмка выполнена на паре `feth` (части A и C PASS, часть B с одним INVALID `linkloss`), физический NIC открыт, см. `../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance.md`. Дедупликация живёт в engine
-(ограниченный FIFO), не в core. VLAN не поддержан (`Unsupported`). ARP: только кодек,
-resolver нет. Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
+(ограниченный FIFO), не в core. VLAN не поддержан (`Unsupported`). ARP: кодек в core,
+резолвер следующего хопа (`arp_resolve`) и обнаружение шлюза (`discover`) в `rmasscan-net` (с `6c87e94`). Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
 контроль достоверности приёма (`Rx::health`, `RxLoss`/`RxStatsUnavailable`/`RxError`,
 `Outcome.rx_health`) и watchdog TX (`EngineOptions::tx_stall_timeout`, 10 с,
 `TxStalled`); `Completed` означает завершение с доступной статистикой без kernel drops,

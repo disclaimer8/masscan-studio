@@ -18,9 +18,10 @@ pub struct Route {
     pub ifindex: u32,
     pub ifname: String,
     pub gateway: Option<Ipv4Addr>,
-    /// Назначение это адрес самого хоста: Linux RTN_LOCAL; macOS RTF_LOCAL или ifp lo0; Windows dst равен
-    /// unicast-адресу адаптера или маршрут идёт через IfType 24 (software loopback); флаг MIB Loopback строки сам по
-    /// себе нет (Windows ставит его и /32 широковещательного адреса подсети, а это on-link назначение).
+    /// Назначение это адрес самого хоста: Linux RTN_LOCAL; macOS dst равен IPv4-адресу интерфейса (маршрут через lo0,
+    /// каким бы ни был ответ RTM_GET), RTF_LOCAL или ifp lo0; Windows dst равен unicast-адресу адаптера или маршрут
+    /// идёт через IfType 24 (software loopback); флаг MIB Loopback строки сам по себе нет (Windows ставит его и /32
+    /// широковещательного адреса подсети, а это on-link назначение).
     pub local: bool,
 }
 

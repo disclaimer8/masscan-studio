@@ -1,0 +1,24 @@
+{
+  "interface": {
+    "value": "feth4201",
+    "source": "given"
+  },
+  "source_mac": {
+    "value": "02-ac-00-00-00-01",
+    "source": "given"
+  },
+  "source_ip": {
+    "value": "198.18.0.1",
+    "source": "given"
+  },
+  "router_ip": {
+    "value": "198.18.0.3",
+    "source": "given"
+  },
+  "fail": "ARP timed-out resolving MAC address for router feth4201: \"198.18.0.3\"",
+  "hints": [
+    "    [hint] try \"--router-ip 192.0.2.1\" to specify different router",
+    "    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP",
+    "    [hint] try \"--interface eth0\" to change interface"
+  ]
+}

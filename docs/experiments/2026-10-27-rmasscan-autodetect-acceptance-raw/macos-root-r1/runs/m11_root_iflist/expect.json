@@ -1,0 +1,8 @@
+{
+  "tag": "m11_root_iflist",
+  "kind": "iflist",
+  "iflist": {
+    "name": "feth4201",
+    "mac": "02-ac-00-00-00-01"
+  }
+}

@@ -8,7 +8,7 @@ license.workspace = true
 studio-protocol.workspace = true
 studio-inspection.workspace = true
 serde_json.workspace = true
-rusqlite = { version = "=0.41.0", default-features = false, features = ["backup"] }
+rusqlite = { version = "=0.41.1", default-features = false, features = ["backup"] }
 
 [dev-dependencies]
 rmasscan-engine.workspace = true

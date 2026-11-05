@@ -165,8 +165,8 @@ masscan; Ctrl-C не перехватывается, `paused.conf` не пише
 `00110f9`, 2026-11-04, ветка `feat/rmasscan-autodetect`) принят на трёх запечатанных стендах: Linux netns PASS 13/13
 (паритет с C-оракулом по байтам ARP-запроса, порядку SYN и строкам `Discovered`), Windows VM PASS 10/10, Mac `feth`
 PASS 8/8 и под root 3/3; `[+] finished … sent N` равен числу SYN на проводе, до скана уходит только 60-байтовый
-ARP-запрос к напечатанному `router-ip`. GO (stands) условно: итоговое ревью ветки и зелёный CI на точном HEAD ещё не
-пройдены. Физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`.
+ARP-запрос к напечатанному `router-ip`. GO (stands): итоговое ревью ветки APPROVED, CI зелёный на точном HEAD.
+Физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`.
 
 Состояние остальных слоёв на commit `27e3042` (код; evidence `8479ff2`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
 полная таблица (capability / слой / реализовано / проверка / ограничение / следующий этап)

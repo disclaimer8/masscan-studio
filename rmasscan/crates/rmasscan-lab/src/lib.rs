@@ -1,6 +1,8 @@
 //! Rust-only laboratory tooling. No script interpreter or embedded runtime.
 #![forbid(unsafe_code)]
 
+pub mod autodetect_suite;
+pub mod autodetect_verify;
 pub mod capture;
 pub mod deploy;
 pub mod dump;

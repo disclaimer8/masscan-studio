@@ -1,0 +1,3 @@
+done m10_root_auto_mac -> runs/m10_root_auto_mac
+done m11_root_iflist -> runs/m11_root_iflist
+all selected runs executed; verify offline with rmasscan-lab autodetect-verify --dir /private/tmp/rmasscan-ad.6qCSaM/autodetect-out/macos-root-r1

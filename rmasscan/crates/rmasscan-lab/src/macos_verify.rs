@@ -200,7 +200,7 @@ fn load_if_present(r: &mut Run, p: &Path) -> Option<(Frames, Vec<u8>)> {
 /// Packets tcpdump stored or tried to store, from its own statistics. On macOS `packets received by filter` is the
 /// count before the kernel filter (xnu `bd_rcount`), so it says nothing about lab frames and is never used for that:
 /// only `captured` (what passed the lab filter) is.
-fn captured_in(dir: &Path, err: &str) -> Option<u64> {
+pub(crate) fn captured_in(dir: &Path, err: &str) -> Option<u64> {
     let text = fs::read_to_string(dir.join(err)).ok()?;
     parse_tcpdump(&text)["captured"].as_u64()
 }
@@ -310,6 +310,63 @@ pub(crate) fn capture_command(
 /// `hashes-before-copy.txt`: sha256sum format, every file of the directory but itself, each hash
 /// recomputed from the copy.
 fn hashes_match(d: &Path) -> Result<(), String> {
+    hashes_match_tree(d, false)
+}
+
+/// The entries below a directory, as relative paths joined with `/`, sorted. A symbolic link is listed in
+/// `links` and never followed (it could lead out of the evidence or into a loop); real directories are walked.
+#[derive(Debug, Default)]
+pub(crate) struct Tree {
+    pub(crate) files: Vec<String>,
+    pub(crate) dirs: Vec<String>,
+    pub(crate) links: Vec<String>,
+}
+
+pub(crate) fn tree(d: &Path) -> Tree {
+    fn walk(base: &Path, dir: &Path, t: &mut Tree) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(rel) = p.strip_prefix(base) else {
+                continue;
+            };
+            let rel = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            // `DirEntry::file_type` does not follow a link.
+            match e.file_type() {
+                Ok(ft) if ft.is_symlink() => t.links.push(rel),
+                Ok(ft) if ft.is_dir() => {
+                    t.dirs.push(rel);
+                    walk(base, &p, t);
+                }
+                _ => t.files.push(rel),
+            }
+        }
+    }
+    let mut t = Tree::default();
+    walk(d, d, &mut t);
+    t.files.sort();
+    t.dirs.sort();
+    t.links.sort();
+    t
+}
+
+/// Every file and link below `d` ([`tree`]), sorted.
+pub(crate) fn relative_files(d: &Path) -> Vec<String> {
+    let t = tree(d);
+    let mut out = t.files;
+    out.extend(t.links);
+    out.sort();
+    out
+}
+
+/// [`hashes_match`]; with `nested`, a file in a subdirectory is listed by its relative path (`oracle/exit.txt`)
+/// and every file below `d` must be listed. Without it (every caller but the autodetect verifier) the rule is
+/// the flat one: one component per name, and every entry of `d`, a directory included, must be listed.
+pub(crate) fn hashes_match_tree(d: &Path, nested: bool) -> Result<(), String> {
     let text = fs::read_to_string(d.join(HASHES)).map_err(|_| format!("{HASHES} missing"))?;
     let mut want = BTreeMap::new();
     for l in text.lines().filter(|l| !l.is_empty()) {
@@ -317,7 +374,15 @@ fn hashes_match(d: &Path) -> Result<(), String> {
         if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("malformed hash for {name}"));
         }
-        if Path::new(name).components().count() != 1 || name == HASHES {
+        let p = Path::new(name);
+        let well_formed = if nested {
+            p.components().count() >= 1
+                && p.components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+        } else {
+            p.components().count() == 1
+        };
+        if !well_formed || name == HASHES {
             return Err(format!("bad name {name}"));
         }
         if want.insert(name.to_owned(), h.to_owned()).is_some() {
@@ -325,10 +390,14 @@ fn hashes_match(d: &Path) -> Result<(), String> {
         }
     }
     let mut have = BTreeSet::new();
-    for e in fs::read_dir(d).map_err(|e| e.to_string())?.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if name != HASHES {
-            have.insert(name);
+    if nested {
+        have.extend(relative_files(d).into_iter().filter(|n| n != HASHES));
+    } else {
+        for e in fs::read_dir(d).map_err(|e| e.to_string())?.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name != HASHES {
+                have.insert(name);
+            }
         }
     }
     let listed: BTreeSet<String> = want.keys().cloned().collect();
@@ -338,6 +407,9 @@ fn hashes_match(d: &Path) -> Result<(), String> {
         return Err(format!("unlisted files {extra:?}, missing files {gone:?}"));
     }
     for (name, h) in &want {
+        if nested && fs::symlink_metadata(d.join(name)).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("{name} is a symbolic link; it is not followed"));
+        }
         let bytes = fs::read(d.join(name)).map_err(|e| format!("{name}: {e}"))?;
         if sha(&bytes) != *h {
             return Err(format!(

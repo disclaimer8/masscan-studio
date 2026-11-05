@@ -1,5 +1,7 @@
 //! Настоящий загрузчик на WinAPI: `LoadLibraryExW`/`GetProcAddress`/
-//! `FreeLibrary` без libloading. Компилируется только на Windows.
+//! `FreeLibrary` без libloading, а также чтение адаптеров и маршрутов IP Helper
+//! для обнаружения (`adapters`, `best_route`, `forward_table`; только запросы).
+//! Компилируется только на Windows.
 //!
 //! Безопасность загрузки:
 //! - системный каталог берётся из `GetSystemDirectoryW`, а не из переменных
@@ -12,6 +14,7 @@
 //!   wpcap.dll, и сохраняем пути, версии и SHA-256 обеих DLL.
 
 use std::ffi::{CStr, c_void};
+use std::net::Ipv4Addr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::Arc;
 
@@ -32,6 +35,7 @@ use super::loader::{
     ApiSlot, DllInfo, LoadFailure, Loader, Module, NpcapApi, npcap_dll_path, sha256_hex,
 };
 use crate::NetError;
+use crate::route_parse::{Fwd, WinAdapter};
 
 const SEARCH_FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
 
@@ -154,59 +158,299 @@ pub(crate) fn file_version(path: &str) -> Option<String> {
     ))
 }
 
-/// MAC адаптера ОС по GUID `{...}` (`GetAdaptersAddresses`); `None`, если
-/// адаптера нет или вызов не удался. Только чтение системного состояния.
-pub(crate) fn adapter_mac_by_guid(guid: &str) -> Option<[u8; 6]> {
-    use windows_sys::Win32::Foundation::ERROR_BUFFER_OVERFLOW;
-    use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-        GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
-    };
-    use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
+/// Флаги `GetAdaptersAddresses`: адреса anycast/multicast и DNS не нужны.
+const GAA_FLAGS: u32 = windows_sys::Win32::NetworkManagement::IpHelper::GAA_FLAG_SKIP_ANYCAST
+    | windows_sys::Win32::NetworkManagement::IpHelper::GAA_FLAG_SKIP_MULTICAST
+    | windows_sys::Win32::NetworkManagement::IpHelper::GAA_FLAG_SKIP_DNS_SERVER;
 
-    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+/// Буфер `GetAdaptersAddresses(family)`: выровнен по 8 (как требует `IP_ADAPTER_ADDRESSES_LH`), растёт по
+/// `ERROR_BUFFER_OVERFLOW` до 4 попыток. `Ok(None)`: адаптеров нет (`ERROR_NO_DATA`); `Err(код)` иначе.
+fn adapters_buffer(family: u32) -> Result<Option<Vec<u64>>, u32> {
+    use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA};
+    use windows_sys::Win32::NetworkManagement::IpHelper::GetAdaptersAddresses;
+
     let mut size: u32 = 32 * 1024;
-    // u64: выравнивание 8, как требует IP_ADAPTER_ADDRESSES_LH.
     let mut buf: Vec<u64> = vec![0; (size as usize).div_ceil(8)];
     for _ in 0..4 {
         // SAFETY: buf имеет не менее `size` байт и выровнен по 8; size это
         // входной/выходной параметр API; reserved обязан быть NULL.
         let rc = unsafe {
             GetAdaptersAddresses(
-                u32::from(AF_UNSPEC),
-                flags,
+                family,
+                GAA_FLAGS,
                 std::ptr::null(),
                 buf.as_mut_ptr().cast(),
                 &mut size,
             )
         };
-        if rc == ERROR_BUFFER_OVERFLOW {
-            buf = vec![0; (size as usize).div_ceil(8)];
-            continue;
+        match rc {
+            0 => return Ok(Some(buf)),
+            ERROR_BUFFER_OVERFLOW => buf = vec![0; (size as usize).div_ceil(8)],
+            ERROR_NO_DATA => return Ok(None),
+            e => return Err(e),
         }
-        if rc != 0 {
-            return None;
-        }
-        let mut p = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
-        while !p.is_null() {
-            // SAFETY: p указывает на узел списка внутри buf (заполнен API,
-            // buf жив); Next ведёт в тот же буфер или NULL.
-            let a = unsafe { &*p };
-            if !a.AdapterName.is_null() {
-                // SAFETY: AdapterName это NUL-терминированная строка внутри buf.
-                let name = unsafe { std::ffi::CStr::from_ptr(a.AdapterName.cast()) };
-                if name.to_string_lossy().eq_ignore_ascii_case(guid) && a.PhysicalAddressLength == 6
-                {
-                    let mut mac = [0u8; 6];
-                    mac.copy_from_slice(&a.PhysicalAddress[..6]);
-                    return Some(mac);
-                }
-            }
-            p = a.Next;
-        }
+    }
+    Err(ERROR_BUFFER_OVERFLOW)
+}
+
+/// Узлы списка адаптеров внутри `buf`, заполненного [`adapters_buffer`].
+fn adapter_nodes(
+    buf: &[u64],
+) -> Vec<&windows_sys::Win32::NetworkManagement::IpHelper::IP_ADAPTER_ADDRESSES_LH> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::IP_ADAPTER_ADDRESSES_LH;
+
+    let mut out = Vec::new();
+    let mut p = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+    while !p.is_null() {
+        // SAFETY: p указывает на узел списка внутри buf (заполнен API, buf жив
+        // дольше возвращаемых ссылок); Next ведёт в тот же буфер или NULL. В
+        // узле только целые, массивы, объединения целых и указатели.
+        let a = unsafe { &*p };
+        out.push(a);
+        p = a.Next;
+    }
+    out
+}
+
+/// NUL-терминированная строка ANSI внутри буфера адаптеров.
+fn ansi_string(p: windows_sys::core::PSTR) -> Option<String> {
+    if p.is_null() {
         return None;
     }
-    None
+    // SAFETY: p не null и указывает на NUL-терминированную строку внутри буфера
+    // адаптеров, который жив на время вызова; строка сразу копируется.
+    Some(
+        unsafe { CStr::from_ptr(p.cast()) }
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+/// NUL-терминированная строка UTF-16 внутри буфера адаптеров (не длиннее 1024 единиц).
+fn wide_string(p: windows_sys::core::PWSTR) -> Option<String> {
+    const MAX_UNITS: usize = 1024;
+    if p.is_null() {
+        return None;
+    }
+    let mut units = Vec::new();
+    while units.len() < MAX_UNITS {
+        // SAFETY: p указывает на NUL-терминированную строку UTF-16 внутри живого
+        // буфера адаптеров; чтение останавливается на NUL, поэтому `p + len` не
+        // выходит за строку.
+        let c = unsafe { p.add(units.len()).read() };
+        if c == 0 {
+            break;
+        }
+        units.push(c);
+    }
+    Some(String::from_utf16_lossy(&units))
+}
+
+/// IPv4-адреса списка `FirstUnicastAddress` по порядку.
+fn unicast_v4(
+    mut p: *mut windows_sys::Win32::NetworkManagement::IpHelper::IP_ADAPTER_UNICAST_ADDRESS_LH,
+) -> Vec<Ipv4Addr> {
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+
+    let mut out = Vec::new();
+    while !p.is_null() {
+        // SAFETY: p это узел списка unicast внутри живого буфера адаптеров; Next
+        // ведёт в тот же буфер или NULL; в узле только целые, объединения целых и указатели.
+        let u = unsafe { &*p };
+        let sa = u.Address.lpSockaddr;
+        // `iSockaddrLength` это i32: отрицательная длина не годится (`as usize` дал бы огромное значение).
+        if !sa.is_null()
+            && usize::try_from(u.Address.iSockaddrLength)
+                .is_ok_and(|len| len >= std::mem::size_of::<SOCKADDR_IN>())
+        {
+            // SAFETY: sa не null и указывает на iSockaddrLength >= sizeof(SOCKADDR_IN)
+            // байт (длина неотрицательна) внутри буфера; read_unaligned не предполагает выравнивания.
+            let sin = unsafe { sa.cast::<SOCKADDR_IN>().read_unaligned() };
+            if sin.sin_family == AF_INET {
+                // SAFETY: IN_ADDR это объединение целых представлений одного u32.
+                let raw = unsafe { sin.sin_addr.S_un.S_addr };
+                out.push(Ipv4Addr::from(raw.to_ne_bytes()));
+            }
+        }
+        p = u.Next;
+    }
+    out
+}
+
+/// MAC адаптера ОС по GUID `{...}` (`GetAdaptersAddresses`); `None`, если
+/// адаптера нет или вызов не удался. Только чтение системного состояния.
+pub(crate) fn adapter_mac_by_guid(guid: &str) -> Option<[u8; 6]> {
+    use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
+
+    let buf = adapters_buffer(u32::from(AF_UNSPEC)).ok()??;
+    adapter_nodes(&buf).into_iter().find_map(|a| {
+        let name = ansi_string(a.AdapterName)?;
+        (name.eq_ignore_ascii_case(guid) && a.PhysicalAddressLength == 6).then(|| {
+            let mut mac = [0u8; 6];
+            mac.copy_from_slice(&a.PhysicalAddress[..6]);
+            mac
+        })
+    })
+}
+
+/// Адаптеры IPv4 (`GetAdaptersAddresses(AF_INET)`), скопированные в безопасные типы. Только чтение.
+pub(crate) fn adapters() -> Result<Vec<WinAdapter>, NetError> {
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+    let Some(buf) = adapters_buffer(u32::from(AF_INET))
+        .map_err(|e| NetError::System(format!("GetAdaptersAddresses error {e}")))?
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(adapter_nodes(&buf)
+        .into_iter()
+        .map(|a| {
+            // SAFETY: оба варианта объединения это целые (`Alignment: u64` или
+            // `{Length, IfIndex}`), любой образ битов допустим.
+            let if_index = unsafe { a.Anonymous1.Anonymous.IfIndex };
+            WinAdapter {
+                if_index,
+                if_type: a.IfType,
+                oper_up: a.OperStatus == IfOperStatusUp,
+                adapter_name: ansi_string(a.AdapterName).unwrap_or_default(),
+                friendly_name: wide_string(a.FriendlyName).filter(|n| !n.is_empty()),
+                mac: (a.PhysicalAddressLength == 6).then(|| {
+                    let mut mac = [0u8; 6];
+                    mac.copy_from_slice(&a.PhysicalAddress[..6]);
+                    mac
+                }),
+                ipv4: unicast_v4(a.FirstUnicastAddress),
+            }
+        })
+        .collect())
+}
+
+/// Строка `MIB_IPFORWARD_ROW2` → [`Fwd`]; `mib_loopback` это флаг `Loopback` строки, `loopback_if` здесь всегда
+/// `false` (IfType 24 отмечает `route_parse::mark_loopback`).
+///
+/// # Safety
+/// `p` указывает на строку, заполненную IP Helper и живую на время вызова.
+unsafe fn fwd_from_row(
+    p: *const windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2,
+) -> Fwd {
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+    // SAFETY: по контракту функции p валиден. Поля читаются по месту, без копии
+    // всей строки: целые как есть; объединение NextHop сначала по общему полю
+    // si_family, затем как IPv4 (целые); BOOLEAN Loopback читается как u8, так что
+    // значение, отличное от 0/1, никогда не читается как bool.
+    unsafe {
+        let next_hop = &raw const (*p).NextHop;
+        let gateway = if (*next_hop).si_family == AF_INET {
+            Ipv4Addr::from((*next_hop).Ipv4.sin_addr.S_un.S_addr.to_ne_bytes())
+        } else {
+            Ipv4Addr::UNSPECIFIED
+        };
+        Fwd {
+            ifindex: (*p).InterfaceIndex,
+            prefix_len: (*p).DestinationPrefix.PrefixLength,
+            next_hop: gateway,
+            metric: (*p).Metric,
+            mib_loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
+            loopback_if: false,
+        }
+    }
+}
+
+/// Лучший маршрут к `dst` (`GetBestRoute2`); `None`, если маршрута нет
+/// (`ERROR_NOT_FOUND`/`ERROR_NETWORK_UNREACHABLE`/`ERROR_HOST_UNREACHABLE`). Только чтение.
+pub(crate) fn best_route(dst: Ipv4Addr) -> Result<Option<Fwd>, NetError> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_HOST_UNREACHABLE, ERROR_NETWORK_UNREACHABLE, ERROR_NOT_FOUND, NO_ERROR,
+    };
+    use windows_sys::Win32::NetworkManagement::IpHelper::{GetBestRoute2, MIB_IPFORWARD_ROW2};
+    use windows_sys::Win32::Networking::WinSock::{
+        AF_INET, IN_ADDR, IN_ADDR_0, SOCKADDR_IN, SOCKADDR_INET,
+    };
+
+    let mut to = SOCKADDR_INET::default();
+    to.Ipv4 = SOCKADDR_IN {
+        sin_family: AF_INET,
+        sin_port: 0,
+        sin_addr: IN_ADDR {
+            S_un: IN_ADDR_0 {
+                S_addr: u32::from_ne_bytes(dst.octets()),
+            },
+        },
+        sin_zero: [0; 8],
+    };
+    let mut row = std::mem::MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();
+    let mut source = SOCKADDR_INET::default();
+    // SAFETY: `to` и `source` живые локальные объекты; `row` это обнулённый
+    // буфер ровно этого типа; NULL InterfaceLuid и SourceAddress (индекс 0)
+    // документированы как необязательные.
+    let rc = unsafe {
+        GetBestRoute2(
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            &to,
+            0,
+            row.as_mut_ptr(),
+            &mut source,
+        )
+    };
+    match rc {
+        NO_ERROR => {}
+        ERROR_NOT_FOUND | ERROR_NETWORK_UNREACHABLE | ERROR_HOST_UNREACHABLE => return Ok(None),
+        e => return Err(NetError::System(format!("GetBestRoute2 error {e}"))),
+    }
+    // SAFETY: при NO_ERROR API заполнил `row`, который жив до конца функции.
+    Ok(Some(unsafe { fwd_from_row(row.as_ptr()) }))
+}
+
+/// Таблица IP Helper, освобождаемая `FreeMibTable` ровно один раз.
+struct MibTable(*mut windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_TABLE2);
+
+impl Drop for MibTable {
+    fn drop(&mut self) {
+        // SAFETY: указатель получен из успешного GetIpForwardTable2 (не null),
+        // наружу не копируется и освобождается ровно один раз.
+        unsafe { windows_sys::Win32::NetworkManagement::IpHelper::FreeMibTable(self.0.cast()) };
+    }
+}
+
+/// Все маршруты IPv4 (`GetIpForwardTable2(AF_INET)`). Только чтение.
+pub(crate) fn forward_table() -> Result<Vec<Fwd>, NetError> {
+    use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetIpForwardTable2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+    let mut t: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+    // SAFETY: выходной указатель на живой локальный объект; при успехе API
+    // выделяет таблицу, которую освобождает `MibTable`.
+    let rc = unsafe { GetIpForwardTable2(AF_INET, &mut t) };
+    match rc {
+        NO_ERROR => {}
+        ERROR_NOT_FOUND => return Ok(Vec::new()),
+        e => return Err(NetError::System(format!("GetIpForwardTable2 error {e}"))),
+    }
+    if t.is_null() {
+        return Ok(Vec::new());
+    }
+    let table = MibTable(t);
+    // SAFETY: table.0 это таблица, выделенная API и живая до конца `table`;
+    // NumEntries строк лежат подряд с `Table[0]` в том же выделении.
+    let (n, base) = unsafe {
+        (
+            (*table.0).NumEntries as usize,
+            (&raw const (*table.0).Table).cast::<MIB_IPFORWARD_ROW2>(),
+        )
+    };
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        // SAFETY: i < NumEntries, строка лежит внутри живого выделения таблицы.
+        out.push(unsafe { fwd_from_row(base.add(i)) });
+    }
+    Ok(out)
 }
 
 /// Версия ОС `major.minor.build[.revision]`. `RtlGetVersion` не подвержена
@@ -287,6 +531,34 @@ mod tests {
         let e = NpcapApi::load_with(&OsLoader, "C:\\rmasscan-no-such-dir\\Npcap\\wpcap.dll")
             .unwrap_err();
         assert!(matches!(e, NetError::DriverUnavailable(_)), "{e:?}");
+    }
+
+    /// Узел unicast с отрицательной или короткой `iSockaddrLength` пропускается, адрес не читается.
+    #[test]
+    fn unicast_with_negative_or_short_sockaddr_length_is_skipped() {
+        use windows_sys::Win32::NetworkManagement::IpHelper::IP_ADAPTER_UNICAST_ADDRESS_LH;
+        use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR, SOCKADDR_IN};
+
+        let mut sin = SOCKADDR_IN {
+            sin_family: AF_INET,
+            ..Default::default()
+        };
+        sin.sin_addr.S_un.S_addr = u32::from_ne_bytes([198, 18, 0, 1]);
+        let full = i32::try_from(std::mem::size_of::<SOCKADDR_IN>()).unwrap();
+        let mut node = IP_ADAPTER_UNICAST_ADDRESS_LH::default();
+        node.Address.lpSockaddr = (&raw mut sin).cast::<SOCKADDR>();
+        node.Address.iSockaddrLength = full;
+        assert_eq!(
+            unicast_v4(&raw mut node),
+            vec![Ipv4Addr::new(198, 18, 0, 1)]
+        );
+        for len in [-1, i32::MIN, 0, full - 1] {
+            node.Address.iSockaddrLength = len;
+            assert!(
+                unicast_v4(&raw mut node).is_empty(),
+                "iSockaddrLength {len}"
+            );
+        }
     }
 
     #[test]

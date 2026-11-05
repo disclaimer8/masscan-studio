@@ -1,0 +1,8 @@
+done m01_user_masked -> runs/m01_user_masked
+done m02_user_explicit -> runs/m02_user_explicit
+done m03_user_router_mac -> runs/m03_user_router_mac
+done m04_user_arp_timeout -> runs/m04_user_arp_timeout
+done m05_user_no_adapter -> runs/m05_user_no_adapter
+done m06_user_no_ip -> runs/m06_user_no_ip
+done m07_user_iflist -> runs/m07_user_iflist
+all selected runs executed; verify offline with rmasscan-lab autodetect-verify --dir /private/tmp/rmasscan-ad.6qCSaM/autodetect-out/macos-r1

@@ -1,0 +1,6 @@
+    Checking rmasscan-core v0.1.0 (C:\Users\lab\src\full-6c87e942ea0ae349a62bd3ce507a1620233c575f\rmasscan\crates\rmasscan-core)
+    Checking rmasscan-engine v0.1.0 (C:\Users\lab\src\full-6c87e942ea0ae349a62bd3ce507a1620233c575f\rmasscan\crates\rmasscan-engine)
+    Checking rmasscan-net v0.1.0 (C:\Users\lab\src\full-6c87e942ea0ae349a62bd3ce507a1620233c575f\rmasscan\crates\rmasscan-net)
+    Checking rmasscan-lab v0.1.0 (C:\Users\lab\src\full-6c87e942ea0ae349a62bd3ce507a1620233c575f\rmasscan\crates\rmasscan-lab)
+    Checking rmasscan-cli v0.1.0 (C:\Users\lab\src\full-6c87e942ea0ae349a62bd3ce507a1620233c575f\rmasscan\crates\rmasscan-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.67s

@@ -1,0 +1,6 @@
+{
+  "fail": "MAC of interface \"feth4201\" is os-masked (Darwin hides MACs from unprivileged processes)",
+  "hints": [
+    "    [hint] run as root, or try something like \"--source-mac 00-11-22-33-44-55\""
+  ]
+}

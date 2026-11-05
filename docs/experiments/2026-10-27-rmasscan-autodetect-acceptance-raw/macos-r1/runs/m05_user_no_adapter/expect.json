@@ -1,0 +1,13 @@
+{
+  "tag": "m05_user_no_adapter",
+  "kind": "refusal",
+  "refusal": {
+    "fail": "198.18.0.2 is an address of this host (route via lo0)",
+    "hints": [
+      "    [hint] try \"--interface ethX\" and \"--router-ip 192.0.2.1\""
+    ]
+  },
+  "preflight": {
+    "refusal": "198.18.0.2 is an address of this host (route via lo0)"
+  }
+}

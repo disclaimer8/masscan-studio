@@ -452,6 +452,90 @@ Linux are unchanged):
 - A lab SYN-ACK retransmit of an in-window reply after the last end marker (the listeners now stop after the
   witness) is the note `post_run_synack_retransmits`; any other frame there is still an unflushed tail (INVALID).
 
+## Autodetect window
+
+Окно приёмки CLI с автоопределением идёт на том же стенде `m1`, стенд не меняется. `autodetect-suite macos` ведёт
+кейсы таблицы верификатора (`m01`–`m07`, `m10`–`m11`) и пишет каталоги, которые судит офлайн `autodetect-verify`
+(см. `rust-lab.md`, «Autodetect suite»). Сам suite `sudo` не вызывает. Режимов два:
+
+- **Пользовательский** (`m01`–`m07`): запускается без `sudo`, в окне гранта, как пользователь. При euid 0 — NOT RUN.
+  Он проверяет, что Darwin прячет MAC от непривилегированного процесса: `m01` отказ «os-masked», `m07`
+  `iflist.json` со строкой `feth4201 … mac=masked`. Остальные кейсы проверяют ARP и скан с явными
+  переопределениями, ARP-таймаут и отказы.
+- **`--root-case`** (`m10`, `m11`): запускает пользователь через `sudo`. Обязательны euid 0 и `$SUDO_USER`,
+  отличный от `root`. Идут только `m10` и `m11`: MAC определяется под root, у `m11` в `iflist.json` настоящий MAC.
+  В конце, при успехе и при ошибке, suite выполняет `chown -R $SUDO_USER` каталога вывода. Каталог блокировки
+  возвращается через `chown -h`, если root его создал.
+
+Все `sudo` делает пользователь голыми командами Terminal, ровно два раза за окно. Подстановки сообщает оператор, все
+три в нейтральном каталоге без имени учётной записи, например `D=$(mktemp -d /private/tmp/rmasscan-ad.XXXXXX)`:
+`$LAB` (`rmasscan-lab` коммита, скопированный в `$D/bin/`), `$RM` (`rmasscan` там же), `$OUT` (`$D/autodetect-out`).
+Не scratch агента (`/private/tmp/claude-<uid>/-Users-<имя>/…`) и не `$TMPDIR` (`/var/folders/…`): первое окно на
+`6c87e94` писало `--out` в такой scratch, и имя учётной записи попало в каждый `capture.json`. Пароль вводится только
+в запросе `sudo`.
+
+| № | Команда | Что меняет | Отмена |
+| --- | --- | --- | --- |
+| B | `sudo "$LAB" macos-lab up --run-id m1 && sudo "$LAB" macos-lab bpf-access --run-id m1 --grant && sudo "$LAB" autodetect-suite macos --root-case --out "$OUT/macos-root-r1" --rmasscan "$RM" --lab "$LAB"` (один запрос пароля; прочитать предупреждение гранта выше, «Risk of a granted session»; root-кейс длится около 30 с) | создаёт пару `feth4201/4202`, ARP, манифест `/var/run/rmasscan-lab/m1.json`; `/dev/bpf0..15` → `0660 root:staff` на сессию; пишет `$OUT/macos-root-r1` (chown на пользователя в конце) | `sudo "$LAB" macos-lab down --run-id m1` (снимает стенд и ставит `0600 root:wheel`); каталог `$OUT/macos-root-r1` удаляется `rm -r` |
+| F | `sudo "$LAB" macos-lab down --run-id m1` | удаляет пару, ARP, манифест; `/dev/bpf*` → `0600 root:wheel` (это и есть revoke) | повторный подъём = действие B |
+
+Revoke и grant посреди окна не делаются. Между B и F оператор работает как пользователь, без `sudo`:
+
+```sh
+"$LAB" macos-lab status --run-id m1   # rc 0, raw_run_allowed: true, bpf_access: granted
+"$LAB" autodetect-suite macos --out "$OUT/macos-r1" --rmasscan "$RM" --lab "$LAB"
+"$LAB" autodetect-verify --dir "$OUT/macos-r1" --out "$OUT/macos-r1/verdict.json"
+"$LAB" autodetect-verify --dir "$OUT/macos-root-r1" --out "$OUT/macos-root-r1/verdict.json"
+```
+
+`$OUT` всегда вне репозитория, в нейтральном каталоге: `--out` никогда не пишется в `docs/experiments/`. Suite пишет
+во всё, что попадает в evidence (`capture.json`, `status-pre.json`, `status-post.json`, манифест), свой `--out` как
+`$OUT` (рабочий каталог — `$OUT/.work`), домашний каталог как `$HOME` и учётную запись как `$USER`: в
+пользовательском режиме это `$USER`, в `--root-case` — `$SUDO_USER` (`root` не заменяется). `autodetect-verify`
+находит в текстовых файлах формы `-Users-ИМЯ`, `-home-ИМЯ`, `claude-<цифры>` и `/var/folders/` (INVALID с именем
+файла) и принимает `$OUT`, `$HOME`, `$USER` и нейтральные пути вроде `/private/tmp/rmasscan-ad.<x>/…` (см.
+`rust-lab.md`, «Autodetect suite», «Пути и учётная запись»). В репозиторий
+`macos-r1` и `macos-root-r1` попадают только после действия F, шагом «Evidence в репозиторий» из `rust-lab.md`
+(«Autodetect suite»): проверка хэшей, privacy-скан, копия без `.work`, повторная проверка и `autodetect-verify`
+копии.
+
+Перед первым прогоном suite проверяет:
+
+- `--lab` — это запущенный бинарник (sha256 совпадает), `--rmasscan` — абсолютный путь к существующему файлу;
+- блокировку `macos-suite` (`$HOME/.rmasscan-lab/macos-suite.lock`): одновременно работает один suite;
+- `macos-lab status`: rc 0, `raw_run_allowed`, `bpf_access: granted`;
+- `--out`: находка изоляции в нём — код 13; уже существующий `runs/<tag>` или прерванная попытка
+  `runs_aborted/<tag>.*` выбранного кейса, манифест другой сборки или другого `--run-id`, непустой `.work` — NOT RUN.
+
+Каждый прогон идёт в таком порядке:
+
+1. Ворота `macos-suite`: оставшиеся процессы лаборатории (включая любой `rmasscan`), тишина пары,
+   `status-pre.json`, Application Firewall (`alf.txt`), неизменные хэши бинарников и MAC стенда.
+2. Только для `m05`: preflight `rmasscan --offline` с теми же целями. Он обязан дать отказ `LocalTarget`
+   «198.18.0.2 is an address of this host (route via lo0)» с rc 1. Иначе кейс NOT RUN, и ни слушатель, ни захват, ни
+   скан не запускаются.
+3. Слушатели `peer listen --open 8000-8007`: готовность доказана, молчащих портов нет (у Darwin их не бывает).
+4. Захват uplink с фильтром лаборатории (`UPLINK_FILTER`) и свидетель `capture dump` на `feth4202`.
+5. `rmasscan` с argv кейса; `--iflist` редуцируется в памяти, полный список нигде не пишется.
+6. Остановка свидетелей, `status-post.json`, интерлок uplink (кадр лаборатории — код 13).
+7. `hashes-before-copy.txt` в рабочем каталоге, копия в `runs/<tag>`, проверка копии правилом верификатора.
+
+Свидетель пира пишет каждый кадр `feth4202` в приватный рабочий каталог `$OUT/…/.work/<tag>.<nonce>/peer.unfiltered`
+(в `tcpdump_argv` записи `capture.json` этот путь стоит как `$OUT/.work/<tag>.<nonce>/peer.unfiltered`).
+Suite публикует его как `peer.pcap` без собственного mDNS хоста, по правилу фильтра приватности
+`not (ether src 02:ac:00:00:00:02 and udp port 5353)`. Число выброшенных кадров записано в `capture.json`
+(`privacy_filter`), нефильтрованный файл удаляется. `autodetect-verify` сверяет запись с захватом: `frames_kept`
+равно числу кадров `peer.pcap`, `frames_kept + frames_dropped` — числу кадров свидетеля (`unfiltered.pcap_frames`),
+фильтр — этот; иначе INVALID.
+
+Коды `autodetect-suite`: 0 все выбранные прогоны выполнены, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH (кадр
+лаборатории на uplink), 130 INTERRUPTED. PASS или FAIL выносит `autodetect-verify`: 0 PASS, 1 FAIL, 2 INVALID или
+NOT RUN. Повтора (`--rerun`) нет: кейс прогоняется в один `--out` один раз, новый прогон идёт в новый `--out`.
+Прогон, упавший после того, как кадр мог уйти, остаётся в `runs_aborted/`: верификатор называет его в `aborted`,
+кейс без прогона — NOT RUN, а повтор кейса в тот же `--out` suite не запускает. Если в `.work` остался
+`peer.unfiltered` после аварии, следующий старт отказывает, а верификатор считает каталог INVALID. Такой файл
+удаляют руками, после того как посмотрели.
+
 ## Studio acceptance (`studio-verify`)
 
 Restart/guard extension: `studio-verify --dir RESUME --pause-dir PAUSE --out FILE`

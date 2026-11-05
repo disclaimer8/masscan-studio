@@ -1,3 +1,10 @@
+use crate::{
+    autodetect_suite::{
+        hash_and_copy, preflight_argv, preflight_text, reduce_iflist, write_case_records,
+        write_detected, write_record,
+    },
+    autodetect_verify::{self as av, CaseKind, CaseSpec, Plan},
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -391,6 +398,15 @@ pub(crate) trait Exec {
     fn pause(&self, d: Duration) {
         thread::sleep(d);
     }
+    /// The build of this orchestrator and the `--repo` checkout (`git`), recorded with the evidence.
+    fn provenance(&self, repo: &Path) -> Value {
+        crate::provenance::collect(repo)
+    }
+    /// The account that started the orchestrator ([`crate::capture::account`]): the autodetect plan's evidence
+    /// never names it. A recording stand names none unless a test gives one.
+    fn account(&self) -> Option<String> {
+        None
+    }
 }
 pub(crate) struct Real;
 impl Exec for Real {
@@ -402,6 +418,9 @@ impl Exec for Real {
     }
     fn lock_suite(&self) -> Result<LockGuard, String> {
         lock_session("ssh", &lock_ssh_args())
+    }
+    fn account(&self) -> Option<String> {
+        crate::capture::account_from_env()
     }
     fn file_at_commit(&self, repo: &Path, commit: &str, path: &str) -> Result<Vec<u8>, String> {
         if !crate::deploy::full_commit(commit) || path.starts_with('-') || path.contains("..") {
@@ -563,6 +582,17 @@ impl SuiteError {
             | Self::Interrupted(m) => m,
         }
     }
+    /// The same error with its message rewritten (a suite's [`crate::capture::Scrubber`]).
+    pub(crate) fn map_message(self, f: impl FnOnce(&str) -> String) -> Self {
+        match self {
+            Self::NotRun(m) => Self::NotRun(f(&m)),
+            Self::Abort(m) => Self::Abort(f(&m)),
+            Self::RerunRefused(m) => Self::RerunRefused(f(&m)),
+            Self::SchemaTooOld(m) => Self::SchemaTooOld(f(&m)),
+            Self::Isolation(m) => Self::Isolation(f(&m)),
+            Self::Interrupted(m) => Self::Interrupted(f(&m)),
+        }
+    }
 }
 impl From<String> for SuiteError {
     fn from(m: String) -> Self {
@@ -598,8 +628,124 @@ pub(crate) fn capture_commands(netns: &str, rev: &str, pm: &str) -> (String, Str
     (peer, eno, filter)
 }
 const GUEST: &str = "C:\\Users\\lab\\t4";
-const IFACE: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
-const MAC: &str = "52:54:00:04:80:a9";
+/// The plan of the rmasscan CLI autodetect cases `w01`-`w08b` (the verifier's case table, `Plan::Windows`): the same
+/// stand, gate, listener, captures and guest runner as the wire_scan plans, the scanner `rmasscan.exe` with each case's
+/// own argv, and run directories that `autodetect-verify` judges (`windows-verify` hands them over).
+pub(crate) const AUTODETECT: &str = "autodetect";
+/// The scanner of the autodetect plan on the guest, built there like `wire_scan.exe`.
+const AUTODETECT_EXE: &str = "rmasscan.exe";
+/// The orchestrator's private work directory inside `--out` (autodetect plan only): a run is written under
+/// `.work/<tag>.<run id>/run` and reaches `runs/<tag>` only complete and hashed (`hash_and_copy`); a guest `--iflist`
+/// listing is reduced next to it. Anything left there (a crash) stops the next start until someone has looked.
+const WORK: &str = ".work";
+/// Every message about a preflight that did not show the case's expected detection (R1) carries this text: the case is
+/// NOT RUN (exit 2), and nothing but the read-only preflight ran.
+pub(crate) const PREFLIGHT_MARK: &str =
+    "the --offline preflight does not show the expected detection";
+/// The autodetect plan as `--list` and the run loop see it: every case of the table in its order, its kind, and
+/// whether it runs under the restricted token.
+pub(crate) fn autodetect_items() -> Vec<Value> {
+    av::cases(Plan::Windows)
+        .iter()
+        .map(|c| json!({"tag": c.tag, "kind": c.kind, "restricted": c.restricted}))
+        .collect()
+}
+/// The manifest's `binding` of the autodetect plan: per case, the detection its `expect.json` expects (`null` for a
+/// refusal or `--iflist`). The scanner finds its binding itself; this is what it must find.
+fn autodetect_binding() -> Value {
+    Value::Object(
+        av::cases(Plan::Windows)
+            .iter()
+            .map(|c| (c.tag.to_owned(), json!(c.expect().detection)))
+            .collect(),
+    )
+}
+/// Remove a file or directory of the autodetect plan's work area. A failure is printed, never swallowed; whatever
+/// stays in `.work` stops the next start until someone has looked (fail-closed).
+fn discard(path: &Path) {
+    let r = if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    };
+    if let Err(e) = r
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "WARN: could not remove {} ({e}); the next start refuses while {WORK} holds it",
+            path.display()
+        );
+    }
+}
+/// `.work` itself goes once it is empty; while it still holds something it stays, and the next start refuses.
+fn drop_empty_work(out: &Path) {
+    let _ = fs::remove_dir(out.join(WORK));
+}
+/// The exit code a guest runner wrote (`exit.txt`, UTF-8, maybe with a BOM).
+fn guest_exit(text: &str) -> Result<i32, String> {
+    text.trim_start_matches('\u{feff}')
+        .trim()
+        .parse::<i32>()
+        .map_err(|e| e.to_string())
+}
+/// The `capture dump` view of a run's peer capture (`valid`, `invalid_reasons`, `pcap_sha256`, `pcap_frames`, the
+/// facts behind them), judged with the witness's own completeness rule ([`crate::dump::problems`]) on what the suite
+/// measured: the markers in the pcap, tcpdump's statistics and exit, the lab0 drop delta, the quiescence wait and the
+/// rx+tx counter window from `listening` to the end markers (lo) and from before the capture (hi).
+pub(crate) fn peer_witness(cap: &Value, pcap: &[u8]) -> Value {
+    use crate::link::{END_PAYLOAD, START_PAYLOAD, count_markers};
+    let p = &cap["peer"];
+    let (frames, pcap_error) = match crate::pcap::read_pcap_records(pcap) {
+        Ok((_, f)) => (f, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let it = || frames.iter().map(|(_, f)| f.as_slice());
+    let at = |k: &str| {
+        let c = &p["counters"];
+        c[format!("rx_{k}")]
+            .as_u64()
+            .zip(c[format!("tx_{k}")].as_u64())
+            .and_then(|(rx, tx)| rx.checked_add(tx))
+    };
+    let window = |from: &str| at("end")?.checked_sub(at(from)?);
+    let st = &p["tcpdump"];
+    let facts = crate::dump::Facts {
+        start_markers: count_markers(it(), START_PAYLOAD),
+        end_markers: count_markers(it(), END_PAYLOAD),
+        quiesced: cap["quiet"]["reached"] == true,
+        captured: st["captured"].as_u64(),
+        received: st["received"].as_u64(),
+        dropped_kernel: st["dropped_kernel"].as_u64(),
+        dropped_if: st["dropped_if"].as_u64(),
+        interface_drop_delta: p["interface_drop_delta"].as_u64(),
+        received_is_prefilter: false,
+        pcap_frames: frames.len() as u64,
+        pcap_error,
+        tcpdump_exited: p["exited"] == true,
+        window_lo: window("ready"),
+        window_hi: window("before"),
+    };
+    let why = crate::dump::problems(&facts);
+    json!({
+        "valid": why.is_empty(), "invalid_reasons": why,
+        "pcap_sha256": crate::verify::sha(pcap), "pcap_frames": facts.pcap_frames, "pcap_size_bytes": pcap.len(),
+        "start_marker_frames": facts.start_markers, "end_marker_frames": facts.end_markers,
+        "iface_rxtx_delta_lo": facts.window_lo, "iface_rxtx_delta_hi": facts.window_hi,
+        "quiesced_before_stop": facts.quiesced,
+    })
+}
+pub(crate) const IFACE: &str = "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}";
+pub(crate) const MAC: &str = "52:54:00:04:80:a9";
+/// Which run of the guest runner a call is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Invocation {
+    /// The scanner run of the case: from here on frames may have been sent.
+    Scan,
+    /// The forging run of a checkpoint refusal (failure plan), before the scan.
+    Forge,
+    /// The read-only `--offline` preflight of an autodetect case (R1), before any listener or capture starts.
+    Preflight,
+}
 struct Suite<'a> {
     exec: &'a dyn Exec,
     out: PathBuf,
@@ -620,6 +766,8 @@ struct Suite<'a> {
     runner_invoked: Cell<bool>,
     /// The suite lock held for this invocation; once its session is gone no new remote action may start.
     lock: Option<&'a LockGuard>,
+    /// The autodetect plan's evidence names `--out` and the account that started the orchestrator by placeholder.
+    scrub: crate::capture::Scrubber,
 }
 /// Why a run stops when the lock session dies (the remote flock is released, so another orchestrator may start).
 const LOCK_LOST: &str = "the suite lock session to home-pc was lost; the lock is no longer held, so no further remote action is started. Check home-pc for leftovers, then start again.";
@@ -796,7 +944,13 @@ impl Suite<'_> {
             ),
             true,
         )?;
-        fs::write(ev.join(name), &r.stdout).map_err(|e| e.to_string())?;
+        // Evidence of the autodetect plan carries no personal path (the status may name files under the home).
+        let text = if self.autodetect() {
+            self.scrub.str(&r.stdout)
+        } else {
+            r.stdout.clone()
+        };
+        fs::write(ev.join(name), text).map_err(|e| e.to_string())?;
         serde_json::from_str(&r.stdout).map_err(|e| e.to_string())
     }
     /// The per-run raw-run gate. Returns the guest Verify exit code (always 0 on success) so
@@ -879,16 +1033,19 @@ impl Suite<'_> {
         ev: &Path,
         tag: &str,
         argv: &[String],
-        forge: bool,
+        invocation: Invocation,
         restricted: bool,
     ) -> Result<String, String> {
-        if !forge {
+        if invocation == Invocation::Scan {
             self.runner_invoked.set(true);
         }
-        let name = if forge {
-            "forge-argv.json"
-        } else {
-            "argv.json"
+        // The runner's input lands in the run directory as evidence; in the autodetect plan `argv.json` is the case's
+        // own record (`ArgvRecord`), so the input of the scan is `runner-argv.json` there.
+        let (name, suffix) = match invocation {
+            Invocation::Scan if self.autodetect() => ("runner-argv.json", ""),
+            Invocation::Scan => ("argv.json", ""),
+            Invocation::Forge => ("forge-argv.json", ".forge"),
+            Invocation::Preflight => ("runner-preflight-argv.json", ".preflight"),
         };
         write_json(
             ev.join(name),
@@ -897,10 +1054,8 @@ impl Suite<'_> {
         let input = format!("t4/in/{}.{}.{}.{}", self.suite, self.run_id, tag, name);
         self.transfer(true, true, &ev.join(name), &input, true)?;
         let gout = format!(
-            "{GUEST}\\out\\{}\\{}\\{tag}{}",
-            self.suite,
-            self.run_id,
-            if forge { ".forge" } else { "" }
+            "{GUEST}\\out\\{}\\{}\\{tag}{suffix}",
+            self.suite, self.run_id,
         );
         let gi = format!("C:\\Users\\lab\\{}", input.replace('/', "\\"));
         let cmd = if restricted {
@@ -932,7 +1087,19 @@ impl Suite<'_> {
         if !safe_id(tag) {
             return Err("unsafe tag".into());
         }
-        let ev = self.out.join("runs").join(tag);
+        let dest = self.out.join("runs").join(tag);
+        // The autodetect plan writes the run in its work directory and copies it to `runs/<tag>` only when complete.
+        let ev = if self.autodetect() {
+            if dest.exists() {
+                return Err(format!("{} already exists", dest.display()));
+            }
+            self.out
+                .join(WORK)
+                .join(format!("{tag}.{}", self.run_id))
+                .join("run")
+        } else {
+            dest.clone()
+        };
         if ev.exists() {
             return Err(format!("{} already exists", ev.display()));
         }
@@ -953,10 +1120,26 @@ impl Suite<'_> {
         if let Err(e) = result {
             // From here every remote call ignores a pending stop request: the cleanup must run.
             self.cleanup.set(true);
-            return Err(self.abort_evidence(tag, &rev, e));
+            if self.autodetect() && !self.runner_invoked.get() && e.contains(PREFLIGHT_MARK) {
+                return Err(self.preflight_not_run(tag, &ev, &rev, e));
+            }
+            let e = self.abort_evidence(tag, &rev, e);
+            return Err(if self.autodetect() {
+                self.keep_aborted_work(tag, &ev, e)
+            } else {
+                e
+            });
         }
         for n in ["listener", "inject", "flood", "linkloss", "peer", "eno1"] {
             self.stop(&format!("{rev}/{n}.pid"), "TERM");
+        }
+        if self.autodetect() {
+            // Hashed in the work directory, then copied and checked with the verifier's rule (the other suites' writer).
+            // A failure keeps the work directory and the marked remote scratch, so the next start refuses.
+            fs::create_dir_all(self.out.join("runs")).map_err(|e| e.to_string())?;
+            hash_and_copy(&ev, &dest)?;
+            discard(ev.parent().unwrap_or(&ev));
+            drop_empty_work(&self.out);
         }
         // Successful copies were hash checked before this point.
         self.home(&remove_scratch_command(&rev), true)?;
@@ -1087,6 +1270,121 @@ impl Suite<'_> {
         eno1_from_output(&out.stdout)
     }
 }
+/// The autodetect plan's own steps of a run.
+impl Suite<'_> {
+    fn autodetect(&self) -> bool {
+        self.plan == AUTODETECT
+    }
+    /// The case table's entry of `tag` when this is the autodetect plan.
+    fn spec(&self, tag: &str) -> Option<CaseSpec> {
+        if self.autodetect() {
+            av::case_spec(Plan::Windows, tag)
+        } else {
+            None
+        }
+    }
+    /// The `--offline` preflight of a case (R1) through the same guest runner, after the gate and before any listener
+    /// or capture: `preflight.txt` (`rc N`, then the preflight's stderr) goes into the run, the guest's two files only
+    /// pass through the work directory. The live case runs only when the preflight shows the case's expected
+    /// detection; otherwise it is NOT RUN ([`PREFLIGHT_MARK`]) and nothing raw has started.
+    fn preflight(&self, spec: &CaseSpec, base: &Path, ev: &Path) -> Result<(), String> {
+        let gout = self.runner(
+            ev,
+            spec.tag,
+            &preflight_argv(spec),
+            Invocation::Preflight,
+            spec.restricted,
+        )?;
+        let (err, exit) = (
+            base.join("preflight-stderr.txt"),
+            base.join("preflight-exit.txt"),
+        );
+        let read = (|| -> Result<String, String> {
+            self.transfer(true, false, &err, &format!("{gout}\\stderr.txt"), true)?;
+            self.transfer(true, false, &exit, &format!("{gout}\\exit.txt"), true)?;
+            let rc = guest_exit(&fs::read_to_string(&exit).map_err(|e| e.to_string())?)?;
+            let stderr = fs::read(&err).map_err(|e| e.to_string())?;
+            Ok(preflight_text(rc, &String::from_utf8_lossy(&stderr)))
+        })();
+        discard(&err);
+        discard(&exit);
+        let text = read?;
+        fs::write(ev.join(av::PREFLIGHT_TXT), &text).map_err(|e| e.to_string())?;
+        if av::preflight_shows(spec, &text) {
+            return Ok(());
+        }
+        Err(format!(
+            "{}: {PREFLIGHT_MARK} {:?} (it printed: {}); the live case is NOT RUN",
+            spec.tag,
+            spec.expect().preflight,
+            text.trim().replace('\n', " | ")
+        ))
+    }
+    /// `iflist.json` of an `--iflist` case (R2, M6). The guest runner's stdout is the guest's full interface list: it is
+    /// copied into the work directory next to the run (never into it), reduced there with the rule of the other suites
+    /// ([`reduce_iflist`]: rc, line count, sha256, the stand NIC's line) and deleted at once. `guest-stdout.txt` is
+    /// never written.
+    fn reduce_guest_iflist(
+        &self,
+        gout: &str,
+        base: &Path,
+        ev: &Path,
+        rc: i32,
+    ) -> Result<(), String> {
+        // `raw` is no evidence extension: a copy a crash left behind can never pass as evidence.
+        let raw = base.join("guest-iflist.raw");
+        let listing = self
+            .transfer(true, false, &raw, &format!("{gout}\\stdout.txt"), true)
+            .and_then(|()| fs::read(&raw).map_err(|e| e.to_string()));
+        discard(&raw);
+        let rec = reduce_iflist(
+            rc,
+            &String::from_utf8_lossy(&listing?),
+            Some(av::stand(Plan::Windows).iface),
+        );
+        write_record(&ev.join(av::IFLIST_JSON), &rec)
+    }
+    /// A preflight that did not show the case's expected detection (R1) is NOT RUN, not an aborted run: the scanner
+    /// never ran and nothing was captured. The remote scratch (the gate's report and the keep marker, no capture) is
+    /// removed on home-pc instead of being copied home, so no marker or failure copy lands in the evidence; only the
+    /// orchestrator's records (gate, `preflight.txt`) are kept as `runs_aborted/<tag>.<run id>/work/`. If the removal
+    /// fails, the marker stays and the next start refuses.
+    fn preflight_not_run(&self, tag: &str, ev: &Path, rev: &str, err: String) -> String {
+        let remote = match self.home(&remove_scratch_command(rev), true) {
+            Ok(_) => "nothing ran: the remote scratch and its keep marker are removed".to_owned(),
+            Err(x) => format!(
+                "the remote scratch {rev} could not be removed ({x}): its keep marker stops the next start until it is looked at"
+            ),
+        };
+        self.keep_aborted_work(tag, ev, format!("{err}; {remote}"))
+    }
+    /// An aborted autodetect run: the remote scratch is already under `runs_aborted/<tag>.<run id>/` (the shared
+    /// failure path); the orchestrator's own part of the run (gate records, case records, preflight, whatever was
+    /// copied before the failure) joins it as `work/`, hashed before the copy. `runs/<tag>` is never written.
+    fn keep_aborted_work(&self, tag: &str, ev: &Path, err: String) -> String {
+        let base = ev.parent().unwrap_or(ev);
+        let dest = self
+            .out
+            .join("runs_aborted")
+            .join(format!("{tag}.{}", self.run_id))
+            .join("work");
+        let note = match fs::create_dir_all(dest.parent().unwrap_or(&dest))
+            .map_err(|e| e.to_string())
+            .and_then(|()| hash_and_copy(ev, &dest))
+        {
+            Ok(()) => {
+                discard(base);
+                drop_empty_work(&self.out);
+                format!(
+                    "the orchestrator's part of the run is kept in {}",
+                    dest.display()
+                )
+            }
+            Err(e) => format!("{e}; the work directory {} is kept", base.display()),
+        };
+        format!("{err}; {note}")
+    }
+}
 /// Read-only remote command: eno1 pcap size, frame count and the tcpdump log of a run directory.
 fn eno1_read_command(dir: &str) -> String {
     format!(
@@ -1132,7 +1430,20 @@ impl Suite<'_> {
     ) -> Result<(), String> {
         let tag = item["tag"].as_str().ok_or("tag missing")?;
         let kind = item["kind"].as_str().unwrap_or("");
+        let spec = self.spec(tag);
+        if self.autodetect() && spec.is_none() {
+            return Err(format!("{tag} is not a case of the autodetect plan"));
+        }
+        // The autodetect plan's work directory next to the run (the run directory is `ev`).
+        let base = ev.parent().unwrap_or(ev);
         let verify_exit = self.gate(ev, rev, tag)?;
+        if let Some(spec) = &spec {
+            if spec.preflight.is_some() {
+                self.preflight(spec, base, ev)?;
+            }
+            // One schema, one case table: the run's argv.json and expect.json are the table's.
+            write_case_records(ev, spec)?;
+        }
         if kind == "resume" {
             let n = item["n"].as_u64().ok_or("resume n missing")?;
             let saved = self
@@ -1143,7 +1454,7 @@ impl Suite<'_> {
             self.transfer(true, true, &saved, &self.cp(n), true)?;
         }
         if let Some(forge) = forge {
-            let out = self.runner(ev, tag, &forge, true, false)?;
+            let out = self.runner(ev, tag, &forge, Invocation::Forge, false)?;
             self.transfer(
                 true,
                 false,
@@ -1261,9 +1572,15 @@ impl Suite<'_> {
             self.exec.pause(Duration::from_millis(500));
         }
         let gstart = epoch();
-        let gout = self.runner(ev, tag, argv, false, kind == "perm_restricted")?;
+        let restricted = kind == "perm_restricted" || spec.is_some_and(|s| s.restricted);
+        let gout = self.runner(ev, tag, argv, Invocation::Scan, restricted)?;
         let gend = epoch();
-        let mut meta = json!({"tag":tag,"kind":kind,"argv_file":"argv.json","invocation_nonce":invocation_nonce(&self.run_id,tag),"guest_started_utc":gstart,"guest_finished_utc":gend,"guest_ssh_rc":0,"capture_started_utc":cap_start});
+        let argv_file = if spec.is_some() {
+            "runner-argv.json"
+        } else {
+            "argv.json"
+        };
+        let mut meta = json!({"tag":tag,"kind":kind,"argv_file":argv_file,"invocation_nonce":invocation_nonce(&self.run_id,tag),"guest_started_utc":gstart,"guest_finished_utc":gend,"guest_ssh_rc":0,"capture_started_utc":cap_start});
         if matches!(kind, "linkloss" | "rxloss")
             && let Some(cp) = arg_value(argv, "--checkpoint-out")
         {
@@ -1273,7 +1590,7 @@ impl Suite<'_> {
                     .contains("yes")
             );
         }
-        if kind == "perm_restricted" {
+        if restricted {
             meta["restricted_via"] = json!("runas /trustlevel:0x20000 (windows_wire_runas.cmd)");
         }
         if flood {
@@ -1343,19 +1660,31 @@ impl Suite<'_> {
                 v["size"] = json!(p[1].parse::<u64>().map_err(|e| e.to_string())?);
             }
         }
-        for n in [
-            "peer.pcap",
-            "eno1.pcap",
-            "peer.err",
-            "eno1.err",
-            "listener.err",
-            "inject.err",
-            "injector.json",
-            "flood.json",
-            "flood.err",
-            "linkloss.json",
-            "linkloss.err",
-        ] {
+        let tool_files: &[&str] = if spec.is_some() {
+            // No injector, flood or link-loss tool runs in the autodetect plan.
+            &[
+                "peer.pcap",
+                "eno1.pcap",
+                "peer.err",
+                "eno1.err",
+                "listener.err",
+            ]
+        } else {
+            &[
+                "peer.pcap",
+                "eno1.pcap",
+                "peer.err",
+                "eno1.err",
+                "listener.err",
+                "inject.err",
+                "injector.json",
+                "flood.json",
+                "flood.err",
+                "linkloss.json",
+                "linkloss.err",
+            ]
+        };
+        for &n in tool_files {
             self.transfer(
                 false,
                 false,
@@ -1373,10 +1702,21 @@ impl Suite<'_> {
             "runner.log",
             "runner.rc",
         ] {
+            let iflist = spec.is_some_and(|s| s.kind == CaseKind::Iflist);
+            if n == "stdout.txt" && iflist {
+                // R2: the full listing is reduced in the work directory below, never copied into the run.
+                continue;
+            }
+            // `.rc` is no evidence extension: the autodetect plan keeps the restricted runner's code as a `.txt`.
+            let local = if n == "runner.rc" && spec.is_some() {
+                "guest-runner-rc.txt".to_owned()
+            } else {
+                format!("guest-{n}")
+            };
             self.transfer(
                 true,
                 false,
-                &ev.join(format!("guest-{n}")),
+                &ev.join(local),
                 &if matches!(n, "runner.log" | "runner.rc") {
                     format!("{gout}.{n}")
                 } else {
@@ -1389,31 +1729,50 @@ impl Suite<'_> {
             )?;
         }
         let post = self.status(ev, "status-post.json")?;
-        let so = fs::read_to_string(ev.join("guest-stdout.txt")).map_err(|e| e.to_string())?;
-        if let Some(line) = so
-            .trim_start_matches('\u{feff}')
-            .lines()
-            .rev()
-            .find(|l| l.starts_with('{'))
-        {
-            write_json(
-                ev.join("run.json"),
-                &serde_json::from_str(line).map_err(|e| e.to_string())?,
-            )?;
+        // wire_scan reports in a JSON line on stdout; rmasscan prints none, so the autodetect plan builds no run.json.
+        if spec.is_none() {
+            let so = fs::read_to_string(ev.join("guest-stdout.txt")).map_err(|e| e.to_string())?;
+            if let Some(line) = so
+                .trim_start_matches('\u{feff}')
+                .lines()
+                .rev()
+                .find(|l| l.starts_with('{'))
+            {
+                write_json(
+                    ev.join("run.json"),
+                    &serde_json::from_str(line).map_err(|e| e.to_string())?,
+                )?;
+            }
         }
         let runner = read_json(ev.join("guest-runner.json"))?;
         meta["exe_sha256"] = runner["exe_sha256"].clone();
         meta["guest_times"] = runner["times"].clone();
         meta["guest_verify_exit"] = json!(verify_exit);
-        meta["guest_exit"] = json!(
-            fs::read_to_string(ev.join("guest-exit.txt"))
-                .map_err(|e| e.to_string())?
-                .trim_start_matches('\u{feff}')
-                .trim()
-                .parse::<i32>()
-                .map_err(|e| e.to_string())?
-        );
+        let guest_rc =
+            guest_exit(&fs::read_to_string(ev.join("guest-exit.txt")).map_err(|e| e.to_string())?)?;
+        meta["guest_exit"] = json!(guest_rc);
         fs::rename(ev.join("guest-nic.json"), ev.join("nic.json")).map_err(|e| e.to_string())?;
+        if let Some(spec) = &spec {
+            // The scanner that ran is the one the manifest vouches for (the verifier reads no exe hash).
+            let vouched = read_json(self.out.join("manifest.json"))?["exe"]["sha256"].clone();
+            if runner["exe_sha256"] != vouched {
+                return Err(format!(
+                    "the guest runner ran an executable with sha256 {} but the manifest vouches for {vouched}",
+                    runner["exe_sha256"]
+                ));
+            }
+            if runner["exe"] != self.guest_exe.as_str() {
+                return Err(format!(
+                    "the guest runner ran {} but the plan runs {} (--guest-exe)",
+                    runner["exe"], self.guest_exe
+                ));
+            }
+            if spec.kind == CaseKind::Iflist {
+                self.reduce_guest_iflist(&gout, base, ev, guest_rc)?;
+            } else {
+                write_detected(ev, "guest-stderr.txt")?;
+            }
+        }
         let mut cap = json!({"capture_schema":CAPTURE_SCHEMA,"quiet":{"reached":quiet,"quiet_s":if quiet{1.5}else{0.0}},"status_post_raw_run_allowed":post["raw_run_allowed"]});
         for (n, cmd, exited, filt) in [
             ("peer", &peer_cmd, ep, "(none: every frame on lab0)"),
@@ -1446,17 +1805,43 @@ impl Suite<'_> {
         cap["peer"]["counters"] = json!({"rx_before":c0.0,"tx_before":c0.1,"rx_ready":c1.0,"tx_ready":c1.1,"rx_end":c2.0,"tx_end":c2.1});
         cap["peer"]["interface_drop_delta"] = json!(drops1.0.checked_sub(drops0.0));
         cap["eno1"]["interface_drop_delta"] = json!(drops1.1.checked_sub(drops0.1));
-        write_json(ev.join("capture.json"), &cap)?;
+        if spec.is_some() {
+            // autodetect-verify reads capture.json in the `capture dump` shape: the peer witness's own verdict on
+            // top of the suite's record, with the scratch paths of the tcpdump command lines scrubbed.
+            let peer = fs::read(ev.join("peer.pcap")).map_err(|e| e.to_string())?;
+            let mut rec = cap.clone();
+            for (k, v) in peer_witness(&cap, &peer)
+                .as_object()
+                .ok_or("witness record")?
+            {
+                rec[k] = v.clone();
+            }
+            self.scrub.value(&mut rec);
+            write_json(ev.join("capture.json"), &rec)?;
+        } else {
+            write_json(ev.join("capture.json"), &cap)?;
+        }
         write_json(ev.join("meta.json"), &meta)?;
         let mut artifact_hashes = serde_json::Map::new();
-        for file in [
-            "argv.json",
-            "run.json",
-            "guest-runner.json",
-            "guest-verify.json",
-            "guest-verify-stdout.txt",
-            "guest-verify-stderr.txt",
-        ] {
+        let proven: &[&str] = if spec.is_some() {
+            &[
+                "runner-argv.json",
+                "guest-runner.json",
+                "guest-verify.json",
+                "guest-verify-stdout.txt",
+                "guest-verify-stderr.txt",
+            ]
+        } else {
+            &[
+                "argv.json",
+                "run.json",
+                "guest-runner.json",
+                "guest-verify.json",
+                "guest-verify-stdout.txt",
+                "guest-verify-stderr.txt",
+            ]
+        };
+        for &file in proven {
             artifact_hashes.insert(file.into(), json!(hash(ev.join(file))?));
         }
         write_json(
@@ -1778,21 +2163,34 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     let o = options_for("windows-suite", args, WINDOWS_SUITE_OPTIONS)?;
     if o.contains_key("help") {
         println!(
-            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure|perf] [--only TAG ...] [--rerun] [--list] [--tx-mode sendqueue|single]\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old, 13 isolation breach (a lab frame on eno1, or a lab-isolation finding in --out), 130 interrupted (Ctrl-C)"
+            "windows-suite --out DIR --commit SHA --guest-exe PATH --fixtures DIR --remote-lab /absolute/linux/rmasscan-lab --deploy-manifest FILE [--repo DIR] [--suite ID] [--plan functional|failure|perf] [--only TAG ...] [--rerun] [--list] [--tx-mode sendqueue|single]\nwindows-suite --plan autodetect --suite ID --guest-exe 'C:\\Users\\lab\\t4\\rmasscan.exe' --out DIR --commit SHA --remote-lab PATH --deploy-manifest FILE [--repo DIR] [--only TAG ...] [--list]   the rmasscan CLI cases w01-w08b (no --fixtures, --rerun or --tx-mode); verify with windows-verify or autodetect-verify\nwindows-suite --cleanup [--suite ID]   stop every recorded remote process, remove the suite scratch directory\nExit codes: 0 done, 1 reserved, 2 NOT RUN (refused before any remote change), 10 aborted, 11 rerun refused, 12 directory capture schema too old, 13 isolation breach (a lab frame on eno1, or a lab-isolation finding in --out), 130 interrupted (Ctrl-C)"
         );
         return Ok(0);
     }
     let plan = opt(&o, "plan", "functional");
-    if !matches!(plan.as_str(), "functional" | "failure" | "perf") {
+    if !matches!(
+        plan.as_str(),
+        "functional" | "failure" | "perf" | AUTODETECT
+    ) {
         return Err("unknown suite plan".to_string().into());
     }
-    let items = crate::verify::planned(&json!({"plan":plan}));
+    let autodetect = plan == AUTODETECT;
+    let items = if autodetect {
+        autodetect_items()
+    } else {
+        crate::verify::planned(&json!({"plan":plan}))
+    };
     if o.contains_key("list") {
         for i in items {
             println!(
-                "{} {}",
+                "{} {}{}",
                 i["tag"].as_str().unwrap_or(""),
-                i["kind"].as_str().unwrap_or("")
+                i["kind"].as_str().unwrap_or(""),
+                if i["restricted"] == true {
+                    " (restricted token)"
+                } else {
+                    ""
+                }
             );
         }
         return Ok(0);
@@ -1804,7 +2202,19 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             "--tx-mode must be sendqueue or single".into(),
         ));
     }
+    if autodetect && o.contains_key("tx-mode") {
+        return Err(SuiteError::NotRun(
+            "--tx-mode is the TX path wire_scan reports; --plan autodetect runs the rmasscan CLI and records none"
+                .into(),
+        ));
+    }
     let suite = opt(&o, "suite", "functional");
+    if autodetect && !o.contains_key("suite") {
+        return Err(SuiteError::NotRun(
+            "--plan autodetect needs an explicit --suite ID (for example windows-r1): the default would reuse the functional suite id"
+                .into(),
+        ));
+    }
     if plan == "perf" && !o.contains_key("suite") {
         return Err(SuiteError::NotRun(
             "--plan perf needs an explicit --suite ID (for example perf-r1): the default would reuse the functional suite id"
@@ -1824,6 +2234,8 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         return Ok(0);
     }
     let out = PathBuf::from(required(&o, "out")?);
+    // The account, taken once. The autodetect plan's work directory is `--out/.work`, so `$OUT/.work` names it.
+    let scrub = crate::capture::Scrubber::new(&out, None, exec.account().as_deref());
     let commit = required(&o, "commit")?;
     if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("--commit requires full SHA".to_string().into());
@@ -1836,19 +2248,51 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     }
     let guest_exe = required(&o, "guest-exe")?;
     cmdquote(&guest_exe)?;
+    if autodetect
+        && !guest_exe
+            .rsplit('\\')
+            .next()
+            .is_some_and(|n| n.eq_ignore_ascii_case(AUTODETECT_EXE))
+    {
+        return Err(SuiteError::NotRun(format!(
+            "--plan autodetect runs the rmasscan CLI: --guest-exe must name {AUTODETECT_EXE} on the guest, not {guest_exe}"
+        )));
+    }
     let deploy_path = PathBuf::from(required(&o, "deploy-manifest")?);
     let deploy = read_json(&deploy_path)?;
     let allowed = crate::deploy::allowed_binary_hashes(&deploy, &commit, &remote)?;
-    let fixtures = PathBuf::from(required(&o, "fixtures")?);
-    let fx = read_json(fixtures.join("manifest.json"))?;
-    if fx["all_valid"] != true {
-        return Err("oracle fixtures are not all valid".to_string().into());
-    }
+    // The oracle fixtures belong to the wire_scan plans: the autodetect plan has no oracle and never reads them.
+    let fixtures = if autodetect {
+        if o.contains_key("fixtures") {
+            eprintln!(
+                "NOTICE: --plan autodetect has no oracle: --fixtures is neither read nor copied"
+            );
+        }
+        None
+    } else {
+        Some(PathBuf::from(required(&o, "fixtures")?))
+    };
+    let fx = match &fixtures {
+        Some(f) => {
+            let fx = read_json(f.join("manifest.json"))?;
+            if fx["all_valid"] != true {
+                return Err("oracle fixtures are not all valid".to_string().into());
+            }
+            Some(fx)
+        }
+        None => None,
+    };
     let only = o.get("only").cloned().unwrap_or_default();
     for tag in &only {
         if !safe_id(tag) || !items.iter().any(|i| i["tag"] == *tag) {
             return Err(format!("unknown/unsafe tag {tag}").into());
         }
+    }
+    if autodetect && o.contains_key("rerun") {
+        return Err(SuiteError::NotRun(
+            "--rerun is not part of --plan autodetect: a case runs once into one --out (autodetect-verify judges no discarded run); use a new --out"
+                .into(),
+        ));
     }
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let old = read_json(out.join("manifest.json")).ok();
@@ -1876,6 +2320,37 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             trips.join(", ")
         )));
     }
+    if autodetect {
+        // A case runs once into one --out, and nothing an earlier run left in the work directory is overwritten.
+        let work = out.join(WORK);
+        if fs::read_dir(&work).is_ok_and(|mut d| d.next().is_some()) {
+            return Err(SuiteError::NotRun(format!(
+                "{} holds what an earlier run left behind (a crash); look at it and remove it, then start again: nothing was started",
+                work.display()
+            )));
+        }
+        let selected = items
+            .iter()
+            .filter_map(|i| i["tag"].as_str())
+            .filter(|t| only.is_empty() || only.iter().any(|o| o == t));
+        for t in selected {
+            if out.join("runs").join(t).exists() {
+                return Err(SuiteError::NotRun(format!(
+                    "{t} already has a run in {}; a case runs once into one --out, use a new one",
+                    out.display()
+                )));
+            }
+            // An earlier attempt (a preflight NOT RUN, an abort) counts as a run: a later run would overtake it.
+            let earlier = av::aborted_attempts(&out, t);
+            if !earlier.is_empty() {
+                return Err(SuiteError::NotRun(format!(
+                    "{t} has an aborted attempt in {} ({}); a case runs once into one --out, use a new one",
+                    out.display(),
+                    earlier.join(", ")
+                )));
+            }
+        }
+    }
     let mut moves = vec![];
     if o.contains_key("rerun") {
         if only.is_empty() {
@@ -1898,7 +2373,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     // evidence next to the deploy manifest that vouches for the remote binary.
     let repo = PathBuf::from(opt(&o, "repo", "."));
     // Which build of this tool orchestrates the run (it is also the verifier of its evidence).
-    let orchestrator = crate::provenance::collect(&repo);
+    let orchestrator = exec.provenance(&repo);
     if let Some(why) = crate::provenance::problem(&orchestrator) {
         return Err(SuiteError::NotRun(format!(
             "cannot establish the orchestrator build provenance ({why}); run from the work tree of the commit under test or pass --repo: {orchestrator}"
@@ -1906,8 +2381,24 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     }
     let staged = crate::deploy::StagedScripts::load(|p| exec.file_at_commit(&repo, &commit, p))?;
     let deploy_dir = out.join("deploy");
-    staged.write_to(&deploy_dir.join("guest-scripts"))?;
-    fs::copy(&deploy_path, deploy_dir.join("deploy-manifest.json")).map_err(|e| e.to_string())?;
+    // The wire_scan plans keep the exact bytes sent to the guest as evidence. The autodetect plan stages them in its
+    // work directory only (`.ps1`/`.cmd` are no evidence extensions): their hashes are in the preflight record, the
+    // guest hashes its copies, and the copy of the deploy manifest has the home directory, --out and the account scrubbed.
+    let stage = if autodetect {
+        out.join(WORK).join("guest-scripts")
+    } else {
+        deploy_dir.join("guest-scripts")
+    };
+    if autodetect {
+        let mut d = deploy.clone();
+        scrub.value(&mut d);
+        fs::create_dir_all(&deploy_dir).map_err(|e| e.to_string())?;
+        write_json(deploy_dir.join("deploy-manifest.json"), &d)?;
+    } else {
+        staged.write_to(&stage)?;
+        fs::copy(&deploy_path, deploy_dir.join("deploy-manifest.json"))
+            .map_err(|e| e.to_string())?;
+    }
     let mut s = Suite {
         exec,
         out,
@@ -1927,6 +2418,7 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         cleanup: Cell::new(false),
         runner_invoked: Cell::new(false),
         lock: None,
+        scrub,
     };
     let lock = exec.lock_suite().map_err(lock_error)?;
     if lock.lost() {
@@ -1972,29 +2464,42 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     if !valid_mac(&s.pm) {
         return Err("invalid peer MAC".to_string().into());
     }
-    let stage = deploy_dir.join("guest-scripts");
-    for (name, guest, _, _) in &staged.files {
-        s.transfer(true, true, &stage.join(name), guest, true)?;
+    if autodetect && let Err(e) = staged.write_to(&stage) {
+        // A partial stage never stays behind unnoticed.
+        discard(&stage);
+        drop_empty_work(&s.out);
+        return Err(e.into());
     }
-    // What sits on the guest is what the commit contains, byte for byte.
-    for (name, guest, bytes, sha) in &staged.files {
-        let abs = format!("C:\\Users\\lab\\{}", guest.replace('/', "\\"));
-        let reply = s
-            .guest(
-                &format!(
-                    "pwsh -NoProfile -File {GUEST}\\windows_wire_hash.ps1 -Path {}",
-                    cmdquote(&abs)?
-                ),
-                true,
-            )?
-            .stdout;
-        let seen = reply.split_whitespace().collect::<Vec<_>>();
-        if seen.len() != 2 || seen[0] != sha || seen[1] != bytes.len().to_string() {
-            return Err(
-                format!("guest copy of {name} does not match the commit: {reply:?}").into(),
-            );
+    let sent = (|| -> Result<(), SuiteError> {
+        for (name, guest, _, _) in &staged.files {
+            s.transfer(true, true, &stage.join(name), guest, true)?;
         }
+        // What sits on the guest is what the commit contains, byte for byte.
+        for (name, guest, bytes, sha) in &staged.files {
+            let abs = format!("C:\\Users\\lab\\{}", guest.replace('/', "\\"));
+            let reply = s
+                .guest(
+                    &format!(
+                        "pwsh -NoProfile -File {GUEST}\\windows_wire_hash.ps1 -Path {}",
+                        cmdquote(&abs)?
+                    ),
+                    true,
+                )?
+                .stdout;
+            let seen = reply.split_whitespace().collect::<Vec<_>>();
+            if seen.len() != 2 || seen[0] != sha || seen[1] != bytes.len().to_string() {
+                return Err(
+                    format!("guest copy of {name} does not match the commit: {reply:?}").into(),
+                );
+            }
+        }
+        Ok(())
+    })();
+    if autodetect {
+        discard(&stage);
+        drop_empty_work(&s.out);
     }
+    sent?;
     // record-guest rejects a Verify report outside +5/-60 s of the home-pc clock.
     let home_clock = |s: &Suite| -> Result<f64, String> {
         crate::deploy::parse_epoch(&s.home("date -u +%s.%N", true)?.stdout)
@@ -2009,18 +2514,30 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
     )?;
     let after = home_clock(&s)?;
     let clock = crate::deploy::clock_verdict(before, guest_clock, after)?;
+    let mut preflight = json!({
+        "run_id": s.run_id, "suite": s.suite, "commit": commit,
+        "deploy_manifest_sha256": hash(&deploy_path)?,
+        "remote_lab": {"path": s.remote, "sha256": remote_sha},
+        "guest_scripts": staged.record(),
+        "orchestrator": orchestrator,
+        "clock": {"guest_minus_home_s": clock.offset, "uncertainty_s": clock.uncertainty,
+                  "limits": {"guest_ahead_s": crate::vm_lab::VERIFY_FUTURE_SKEW_S, "guest_behind_s": crate::vm_lab::VERIFY_MAX_AGE_S}},
+        "checked_utc": epoch(),
+    });
+    if autodetect {
+        // deploy_manifest_sha256 is the anchor on this machine; the copy in the directory is scrubbed, so its own
+        // hash is recorded beside it.
+        preflight["deploy_manifest_copy"] = json!({
+            "path": "deploy/deploy-manifest.json",
+            "sha256": hash(deploy_dir.join("deploy-manifest.json"))?,
+            "scrubbed": true,
+            "note": "deploy_manifest_sha256 is the --deploy-manifest file on the orchestrating machine; this copy has the home directory, --out and the account that started the orchestrator replaced by $HOME, $OUT and $USER",
+        });
+        s.scrub.value(&mut preflight);
+    }
     write_json(
         deploy_dir.join(format!("preflight-{}.json", s.run_id)),
-        &json!({
-            "run_id": s.run_id, "suite": s.suite, "commit": commit,
-            "deploy_manifest_sha256": hash(&deploy_path)?,
-            "remote_lab": {"path": s.remote, "sha256": remote_sha},
-            "guest_scripts": staged.record(),
-            "orchestrator": orchestrator,
-            "clock": {"guest_minus_home_s": clock.offset, "uncertainty_s": clock.uncertainty,
-                      "limits": {"guest_ahead_s": crate::vm_lab::VERIFY_FUTURE_SKEW_S, "guest_behind_s": crate::vm_lab::VERIFY_MAX_AGE_S}},
-            "checked_utc": epoch(),
-        }),
+        &preflight,
     )?;
     s.guest(
         &format!(
@@ -2036,16 +2553,8 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         let leaf = p.file_name().ok_or("run filename")?.to_string_lossy();
         fs::rename(&p, dst.join(format!("{leaf}.{}", s.run_id))).map_err(|e| e.to_string())?;
     }
-    let man = if let Some(old) = old {
-        if old["code_commit"] != commit
-            || old["plan"] != s.plan
-            || old["suite"] != s.suite
-            || old.get("tx_mode_expected").is_some_and(|v| *v != s.tx_mode)
-        {
-            return Err("existing manifest identity differs".to_string().into());
-        }
-        old
-    } else {
+    // The sha256 and size of the scanner on the guest (`windows_wire_hash.ps1`).
+    let exe_hash = |s: &Suite| -> Result<(String, u64), SuiteError> {
         let eh = s
             .guest(
                 &format!(
@@ -2059,15 +2568,58 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
         if eh.len() != 2 {
             return Err("invalid executable hash response".to_string().into());
         }
-        let mut man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":eh[0],"size":eh[1].parse::<u64>().map_err(|e|e.to_string())?,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"tx_mode_expected":s.tx_mode,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx["oracle"],"orchestrator":orchestrator,"created_utc":epoch()});
+        Ok((
+            eh[0].to_owned(),
+            eh[1].parse::<u64>().map_err(|e| e.to_string())?,
+        ))
+    };
+    let man = if let Some(old) = old {
+        if old["code_commit"] != commit
+            || old["plan"] != s.plan
+            || old["suite"] != s.suite
+            || old.get("tx_mode_expected").is_some_and(|v| *v != s.tx_mode)
+        {
+            return Err("existing manifest identity differs".to_string().into());
+        }
+        if autodetect {
+            // An extended directory keeps the scanner it started with (autodetect-verify reads no exe hash).
+            let (sha, _) = exe_hash(&s)?;
+            if old["exe"]["sha256"] != sha.as_str() {
+                return Err(SuiteError::NotRun(format!(
+                    "the guest executable's sha256 {sha} is not {} of the manifest in {}; use a new --out",
+                    old["exe"]["sha256"],
+                    s.out.display()
+                )));
+            }
+        }
+        old
+    } else {
+        let (sha, size) = exe_hash(&s)?;
+        let mut man = json!({"schema":1,"capture_schema":CAPTURE_SCHEMA,"suite":s.suite,"code_commit":commit,"exe":{"sha256":sha,"size":size,"guest_path":s.guest_exe,"build":"Rust static CRT wire_scan from code_commit"},"binding":{"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":s.pm,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3},"stand":{"run_id":"n2","netns":"wvp-n2","manifest":s.manifest},"listeners":{"open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"silent":if s.plan=="failure"{(vec![8099]).into_iter().chain(8100..8120).collect::<Vec<_>>()}else{vec![8099]}},"plan":s.plan,"tx_mode_expected":s.tx_mode,"pause":{"case":"c03_multi_ports","n":[0,1,8,15]},"oracle":fx.as_ref().map_or(Value::Null, |f| f["oracle"].clone()),"orchestrator":orchestrator,"created_utc":epoch()});
         if s.plan == "perf" {
             man["perf"] = json!({"rates":crate::verify::PERF_RATES,"reps":crate::verify::PERF_REPS,"order":"rep-major","target":"198.18.0.2"});
         }
-        // The exe comes from this code, which has the final-review I1 fix: a restricted-token
-        // scan must be refused with PermissionDenied (exit 5), never InterfaceMismatch.
-        man["perm_restricted_refusal"] = json!("PermissionDenied");
+        if autodetect {
+            // The rmasscan CLI finds its binding itself: the manifest records what each case's expect.json expects,
+            // and `autodetect` names the plan for the verifier. Nothing of wire_scan's plans, no personal path.
+            man["exe"]["build"] = json!("Rust static CRT rmasscan CLI from code_commit");
+            man["binding"] = autodetect_binding();
+            man["autodetect"] = json!(Plan::Windows);
+            if let Some(m) = man.as_object_mut() {
+                for k in ["oracle", "pause", "tx_mode_expected"] {
+                    m.remove(k);
+                }
+            }
+            s.scrub.value(&mut man);
+        } else {
+            // The exe comes from this code, which has the final-review I1 fix: a restricted-token
+            // scan must be refused with PermissionDenied (exit 5), never InterfaceMismatch.
+            man["perm_restricted_refusal"] = json!("PermissionDenied");
+        }
         write_json(s.out.join("manifest.json"), &man)?;
-        copy_tree(&fixtures, &s.out.join("fixtures"))?;
+        if let Some(f) = &fixtures {
+            copy_tree(f, &s.out.join("fixtures"))?;
+        }
         man
     };
     let base_timeout = s.timeout;
@@ -2081,39 +2633,45 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
             s.timeout = perf_run_timeout(&item, base_timeout);
         }
         let kind = item["kind"].as_str().unwrap_or("");
-        let cp = if matches!(kind, "pause" | "resume") {
-            s.cp(item["n"].as_u64().ok_or("pause n")?)
-        } else if kind == "complete_nopause" {
-            s.cp(16)
-        } else if kind == "refuse_completed" {
-            s.cp(99)
+        // The autodetect plan runs each case's own argv from the table: no checkpoint, no forging run.
+        let (argv, forge, cp) = if let Some(spec) = s.spec(tag) {
+            (spec.argv(), None, None)
         } else {
-            format!("{GUEST}\\cp\\{}\\{}\\{tag}.bin", s.suite, s.run_id)
-        };
-        let mut paths = BTreeMap::new();
-        paths.insert("--checkpoint-out".into(), cp.clone());
-        paths.insert("--resume-checkpoint".into(), cp.clone());
-        let argv = crate::verify::expected_args(&item, &man, &paths)?;
-        let mut forge = None;
-        if matches!(kind, "refuse_completed" | "ckpt_refuse") {
-            let mut base_item = item.clone();
-            base_item["forge"] = json!(true);
-            let mut a = crate::verify::expected_args(&base_item, &man, &paths)?;
-            if kind == "ckpt_refuse" {
-                let p = a
-                    .iter()
-                    .position(|v| v == "--checkpoint-out")
-                    .ok_or("forge output missing")?;
-                a[p + 1] = format!("{cp}.forged");
+            let cp = if matches!(kind, "pause" | "resume") {
+                s.cp(item["n"].as_u64().ok_or("pause n")?)
+            } else if kind == "complete_nopause" {
+                s.cp(16)
+            } else if kind == "refuse_completed" {
+                s.cp(99)
+            } else {
+                format!("{GUEST}\\cp\\{}\\{}\\{tag}.bin", s.suite, s.run_id)
+            };
+            let mut paths = BTreeMap::new();
+            paths.insert("--checkpoint-out".into(), cp.clone());
+            paths.insert("--resume-checkpoint".into(), cp.clone());
+            let argv = crate::verify::expected_args(&item, &man, &paths)?;
+            let mut forge = None;
+            if matches!(kind, "refuse_completed" | "ckpt_refuse") {
+                let mut base_item = item.clone();
+                base_item["forge"] = json!(true);
+                let mut a = crate::verify::expected_args(&base_item, &man, &paths)?;
+                if kind == "ckpt_refuse" {
+                    let p = a
+                        .iter()
+                        .position(|v| v == "--checkpoint-out")
+                        .ok_or("forge output missing")?;
+                    a[p + 1] = format!("{cp}.forged");
+                }
+                forge = Some(a);
             }
-            forge = Some(a);
-        }
+            (argv, forge, Some(cp))
+        };
         if exec.stopped() {
             return Err(SuiteError::Interrupted(format!(
                 "stop requested before {tag} started; nothing was left running"
             )));
         }
-        if let Err(m) = s.one(&item, argv, forge, Some(cp)) {
+        if let Err(m) = s.one(&item, argv, forge, cp) {
             let stopped = exec.stopped();
             if stopped && !s.lock.is_some_and(LockGuard::lost) {
                 // Suite-wide TERM, 12 s, KILL: through the uninterruptible exec path, so the stop flag cannot kill it.
@@ -2126,14 +2684,22 @@ fn run_inner(args: &[String], exec: &dyn Exec) -> Result<i32, SuiteError> {
                 SuiteError::Abort(m)
             } else if stopped {
                 SuiteError::Interrupted(m)
+            } else if m.contains(PREFLIGHT_MARK) {
+                // R1: only the read-only preflight ran; the case is NOT RUN.
+                SuiteError::NotRun(m)
             } else {
                 SuiteError::Abort(m)
             });
         }
     }
     println!(
-        "all planned runs executed; verify offline with rmasscan-lab windows-verify --dir {}",
-        s.out.display()
+        "all planned runs executed; verify offline with rmasscan-lab windows-verify --dir {}{}",
+        s.out.display(),
+        if autodetect {
+            " (it hands an autodetect directory to autodetect-verify)"
+        } else {
+            ""
+        }
     );
     Ok(0)
 }

@@ -196,7 +196,7 @@ impl PacketIo for PacketFd {
 /// Не требует привилегий.
 pub(super) struct OsIface;
 
-fn ifreq_for(name: &str) -> Result<libc::ifreq, Errno> {
+pub(super) fn ifreq_for(name: &str) -> Result<libc::ifreq, Errno> {
     let bytes = name.as_bytes();
     if bytes.len() >= libc::IFNAMSIZ || bytes.contains(&0) {
         return Err(libc::EINVAL);

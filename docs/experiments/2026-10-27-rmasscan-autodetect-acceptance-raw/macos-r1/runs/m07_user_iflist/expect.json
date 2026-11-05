@@ -1,0 +1,8 @@
+{
+  "tag": "m07_user_iflist",
+  "kind": "iflist",
+  "iflist": {
+    "name": "feth4201",
+    "mac": "masked"
+  }
+}

@@ -2248,7 +2248,7 @@ fn permission(r: &mut Run, ctx: &Ctx, it: &Value, man: &Value) {
 /// binding and the run kind, so they run before any other evidence is looked at: a missing meta, an
 /// incomplete capture, a failed gate leg or a wrong argv cannot hide them (final review I-1, I-2).
 /// `packets received by filter` of the run directory's own `eno1.err`, when it is there.
-fn eno1_err_received(dir: &Path) -> Option<u64> {
+pub(crate) fn eno1_err_received(dir: &Path) -> Option<u64> {
     let text = fs::read_to_string(dir.join("eno1.err")).ok()?;
     crate::windows_suite::parse_tcpdump(&text)["received"].as_u64()
 }
@@ -3153,9 +3153,24 @@ fn pcap_dir_findings(root: &Path, sub: &str, man: &Value) -> Vec<Value> {
     }
     out
 }
+/// Does `man` describe an autodetect evidence directory (`windows-suite --plan autodetect`, the autodetect suites)?
+/// `windows-verify` hands such a directory to `autodetect-verify` whole: none of the Windows rules judges it, and its
+/// verdict is exactly `autodetect-verify`'s. No committed Windows directory has either key.
+pub(crate) fn is_autodetect(man: &Value) -> bool {
+    man.get("autodetect").is_some() || man["plan"] == "autodetect"
+}
+fn autodetect_dir(root: &Path) -> bool {
+    read_json(root.join("manifest.json")).is_some_and(|m| is_autodetect(&m))
+}
 /// Every run of `root` (kept, discarded or aborted) whose lab-isolation checks tripped. The suite
 /// refuses to start or to `--rerun` in a directory where this is not empty.
 pub fn safety_trips(root: &Path) -> Vec<String> {
+    if autodetect_dir(root) {
+        return array(&crate::autodetect_verify::verify_dir(root)["safety_trips"])
+            .iter()
+            .map(|t| s(t).to_owned())
+            .collect();
+    }
     let man = read_json(root.join("manifest.json")).unwrap_or(Value::Null);
     ["runs", "runs_discarded", "runs_aborted"]
         .iter()
@@ -3168,6 +3183,9 @@ pub fn safety_trips(root: &Path) -> Vec<String> {
         .collect()
 }
 pub fn verify_dir(root: &Path) -> Value {
+    if autodetect_dir(root) {
+        return crate::autodetect_verify::verify_dir(root);
+    }
     let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[],"aborted":[]});
     let Some(man) = read_json(root.join("manifest.json")) else {
         let mut r = Run::new("manifest");
@@ -3281,6 +3299,15 @@ pub fn verify_dir(root: &Path) -> Value {
     finish(result)
 }
 pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
+    if autodetect_dir(root) {
+        let v = crate::autodetect_verify::verify_dir(root);
+        return array(&v["runs"])
+            .iter()
+            .find(|r| s(&r["tag"]) == tag)
+            .map_or((NOT_RUN.into(), false), |r| {
+                (s(&r["verdict"]).to_owned(), r["behaviour_fail"] == true)
+            });
+    }
     let Some(man) = read_json(root.join("manifest.json")) else {
         return (NOT_RUN.into(), false);
     };
@@ -3337,6 +3364,10 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         }
     }
     let root = Path::new(dir.ok_or("--dir required")?);
+    if autodetect_dir(root) {
+        // The verdict and the report are autodetect-verify's.
+        return crate::autodetect_verify::run(args);
+    }
     let res = verify_dir(root);
     if let Some(out) = out {
         fs::write(

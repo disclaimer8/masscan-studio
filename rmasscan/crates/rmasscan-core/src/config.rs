@@ -110,6 +110,8 @@ pub struct ScanConfig {
     pub wait_secs: u32,
     pub adapter_ip: Option<u32>,
     pub adapter_mac: Option<[u8; 6]>,
+    /// `--router-ip` (main-conf.c:2626-2641): ровно один адрес IPv4.
+    pub router_ip: Option<u32>,
     /// Один MAC на ipv4 и ipv6 (`--router-mac` ставит оба).
     pub router_mac: Option<[u8; 6]>,
     /// `(first, last)` включительно.
@@ -134,6 +136,7 @@ impl Default for ScanConfig {
             wait_secs: 10,
             adapter_ip: None,
             adapter_mac: None,
+            router_ip: None,
             router_mac: None,
             source_port: None,
             adapter_name: None,
@@ -164,6 +167,7 @@ pub struct EffectiveConfig {
     wait_secs: u32,
     adapter_ip: Option<u32>,
     adapter_mac: Option<[u8; 6]>,
+    router_ip: Option<u32>,
     router_mac: Option<[u8; 6]>,
     source_port: Option<(u16, u16)>,
     adapter_name: Option<String>,
@@ -206,6 +210,10 @@ impl EffectiveConfig {
     }
     pub fn adapter_mac(&self) -> Option<[u8; 6]> {
         self.adapter_mac
+    }
+    /// `0.0.0.0` значит «не задан» (C `main-initadapter.c:176` тогда ищет шлюз), и в argv, и в `paused.conf`.
+    pub fn router_ip(&self) -> Option<u32> {
+        self.router_ip.filter(|&ip| ip != 0)
     }
     pub fn router_mac(&self) -> Option<[u8; 6]> {
         self.router_mac
@@ -464,10 +472,13 @@ fn effective(
         resume_count: cfg.resume_count,
         blackrock_rounds: cfg.blackrock_rounds,
         wait_secs: cfg.wait_secs,
-        adapter_ip: cfg.adapter_ip,
+        // main-initadapter.c:122-126: source IP 0 значит «не задан», C берёт адрес интерфейса.
+        adapter_ip: cfg.adapter_ip.filter(|&ip| ip != 0),
         // main-conf.c:2552: C никогда не хранит нулевой MAC.
         adapter_mac: cfg.adapter_mac.filter(|m| *m != [0u8; 6]),
-        router_mac: cfg.router_mac,
+        router_ip: cfg.router_ip,
+        // main-initadapter.c:170: нулевой MAC шлюза значит «не задан», C ищет шлюз ARP-ом.
+        router_mac: cfg.router_mac.filter(|m| *m != [0u8; 6]),
         source_port: cfg.source_port,
         adapter_name: cfg.adapter_name.clone(),
         offline: cfg.offline,
@@ -636,6 +647,10 @@ pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
     }
     if let Some(mac) = cfg.adapter_mac.filter(|m| *m != [0u8; 6]) {
         let _ = writeln!(out, "adapter-mac = {}", fmt_mac(mac));
+    }
+    // main-conf.c:376-378: после adapter-mac, перед router-mac.
+    if let Some(ip) = cfg.router_ip.filter(|&ip| ip != 0) {
+        let _ = writeln!(out, "router-ip = {}", Ipv4Addr::from(ip));
     }
     if let Some(mac) = cfg.router_mac.filter(|m| *m != [0u8; 6]) {
         let _ = writeln!(out, "router-mac-ipv4 = {}", fmt_mac(mac));
@@ -853,6 +868,10 @@ pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
             "adaptermac" | "sourcemac" => {
                 // main-conf.c:2552: нулевой MAC C не сохраняет.
                 cfg.adapter_mac = Some(parse_mac(value)?).filter(|m| *m != [0u8; 6]);
+            }
+            "routerip" => {
+                let ip: Ipv4Addr = value.parse().map_err(|_| bad())?;
+                cfg.router_ip = Some(ip.into());
             }
             "routermac" => {
                 let m = parse_mac(value)?;
@@ -1284,6 +1303,64 @@ mod tests {
     }
 
     #[test]
+    fn router_ip_round_trips_through_echo_and_paused_conf() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.adapter_mac = Some([1, 2, 3, 4, 5, 6]);
+        cfg.router_ip = Some(0xc612_0002);
+        cfg.router_mac = Some([6, 5, 4, 3, 2, 1]);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        // Позиция masscan_echo_nic: adapter-mac, router-ip, router-mac.
+        let a = s.find("adapter-mac = ").unwrap();
+        let r = s.find("router-ip = 198.18.0.2\n").unwrap();
+        let m = s.find("router-mac-ipv4 = ").unwrap();
+        assert!(a < r && r < m, "{s}");
+        let back = read_paused_conf(&s).unwrap();
+        assert_eq!(back.router_ip, Some(0xc612_0002));
+        let mut s2 = String::new();
+        echo(&back, false, &mut s2);
+        assert_eq!(s, s2);
+    }
+
+    #[test]
+    fn echo_without_router_ip_is_unchanged() {
+        let cfg = cfg_with("10.0.0.0/30", "80");
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(!s.contains("router-ip"), "{s}");
+    }
+
+    #[test]
+    fn validate_keeps_router_ip() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        assert_eq!(validate(&cfg, Operation::Scan).unwrap().router_ip(), None);
+        cfg.router_ip = Some(0x0a00_0001);
+        assert_eq!(
+            validate(&cfg, Operation::Scan).unwrap().router_ip(),
+            Some(0x0a00_0001)
+        );
+    }
+
+    /// C `main-initadapter.c:176`: router_ip 0 значит «не задан» (ищется шлюз).
+    #[test]
+    fn router_ip_zero_means_not_given() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.router_ip = Some(0);
+        assert_eq!(validate(&cfg, Operation::Scan).unwrap().router_ip(), None);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(!s.contains("router-ip"), "{s}");
+        let back =
+            read_paused_conf("seed = 1\nrange = 10.0.0.0/30\nports = 80\nrouter-ip = 0.0.0.0\n")
+                .unwrap();
+        assert_eq!(
+            validate(&back, Operation::Scan).unwrap().router_ip(),
+            None,
+            "paused.conf router-ip = 0.0.0.0"
+        );
+    }
+
+    #[test]
     fn echo_prints_cidr_single_and_dashed_ranges() {
         let cfg = cfg_with("10.0.0.0/24,10.0.2.5,10.0.3.1-10.0.3.5,0.0.0.0/8", "1-3,80");
         let mut s = String::new();
@@ -1482,6 +1559,38 @@ mod tests {
         assert_eq!(back.adapter_mac, None);
     }
 
+    /// C `main-initadapter.c:122–126`: source IP 0 значит «определить у интерфейса»; `:170`: нулевой MAC шлюза
+    /// значит «искать ARP-ом». Скан и `--echo` (которое их тоже не печатает) согласны.
+    #[test]
+    fn zero_adapter_ip_and_router_mac_mean_not_given() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.adapter_ip = Some(0);
+        cfg.router_mac = Some([0; 6]);
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        assert_eq!(eff.adapter_ip(), None);
+        assert_eq!(eff.router_mac(), None);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(
+            !s.contains("adapter-ip") && !s.contains("router-mac"),
+            "{s}"
+        );
+        let back = read_paused_conf(
+            "seed = 1\nrange = 10.0.0.0/30\nports = 80\nadapter-ip = 0.0.0.0\n\
+             router-mac = 00-00-00-00-00-00\n",
+        )
+        .unwrap();
+        let eff = validate(&back, Operation::Scan).unwrap();
+        assert_eq!(eff.adapter_ip(), None, "paused.conf adapter-ip = 0.0.0.0");
+        assert_eq!(eff.router_mac(), None, "paused.conf router-mac zero");
+        // Ненулевые значения проходят без изменений.
+        cfg.adapter_ip = Some(0x0aff_0001);
+        cfg.router_mac = Some([6, 5, 4, 3, 2, 1]);
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        assert_eq!(eff.adapter_ip(), Some(0x0aff_0001));
+        assert_eq!(eff.router_mac(), Some([6, 5, 4, 3, 2, 1]));
+    }
+
     #[test]
     fn read_ignores_display_only_keys_but_not_semantic_ones() {
         let cfg = read_paused_conf(
@@ -1490,7 +1599,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.seed, 8);
-        for key in ["banners", "router-ip", "min-packet", "top-ports"] {
+        for key in ["banners", "min-packet", "top-ports"] {
             assert_eq!(
                 read_paused_conf(&format!("{key} = 1\n")).unwrap_err(),
                 ConfigError::UnknownKey(key.into())

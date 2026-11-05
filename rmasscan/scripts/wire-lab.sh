@@ -5,6 +5,14 @@
 #   wire-lab.sh --oracle /path/to/masscan --out DIR                       # C oracle capture (default suite)
 #   wire-lab.sh --oracle BIN --out DIR --suite rust --rust-bin WIRE_SCAN --fixtures tests/golden/wire
 #   wire-lab.sh --oracle BIN --out DIR --suite perf --rust-bin WIRE_SCAN [--reps 5] [--rates 100,1000,10000,100000]
+#   wire-lab.sh --oracle BIN --out DIR --suite autodetect --rmasscan RMASSCAN_CLI
+#
+# Suite autodetect runs rmasscan-lab autodetect-suite linux inside the lab, with ONE controlled change to the
+# seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
+# 198.18.0.2-5, so the rmasscan CLI can auto-detect its interface, source IP and router. The peer namespace
+# still has no default route; the stand is fixed inside this script (the WIRELAB_* stand overrides, MACs, ports and cases file included, are ignored).
+# Its cleanup records the undo in OUT/teardown.json under the lab id it gave the suite, and keeps OUT/.work when the
+# suite marked it (work-kept.txt); an OUT holding earlier suite output is refused: every lab gets a new --out.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -24,7 +32,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$HERE/lab-process-group.sh"
 LAB_BIN="${RMASSCAN_LAB_BIN:-$HERE/../target/release/rmasscan-lab}"
 [ -x "$LAB_BIN" ] || { echo "Build rmasscan-lab or set RMASSCAN_LAB_BIN" >&2; exit 2; }
-ORACLE=""; OUT=""; SUITE=oracle; RUST_BIN=""; FIXTURES=""; REPS=5; RATES=100,1000,10000,100000
+ORACLE=""; OUT=""; SUITE=oracle; RUST_BIN=""; RMASSCAN_BIN=""; FIXTURES=""; REPS=5; RATES=100,1000,10000,100000
 while [ $# -gt 0 ]; do
   case "$1" in
     --oracle) ORACLE=$2; shift 2 ;;
@@ -32,20 +40,22 @@ while [ $# -gt 0 ]; do
     --suite) SUITE=$2; shift 2 ;;
     --rust-bin) RUST_BIN=$2; shift 2 ;;
     --fixtures) FIXTURES=$2; shift 2 ;;
+    --rmasscan) RMASSCAN_BIN=$2; shift 2 ;;
     --reps) REPS=$2; shift 2 ;;
     --rates) RATES=$2; shift 2 ;;
-    -h|--help) sed -n 2,16p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,25p "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 [ -n "$ORACLE" ] && [ -n "$OUT" ] || { echo "usage: wire-lab.sh --oracle BIN --out DIR" >&2; exit 64; }
-case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
+case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
 [ "$SUITE" != rust ] || [ -n "$FIXTURES" ] || { echo "--suite rust needs --fixtures" >&2; exit 64; }
 [ "$(uname -s)" = Linux ] || { echo "FATAL: Linux only" >&2; exit 2; }
 if [ "$(id -u)" != 0 ]; then
   mkdir -p "$OUT"
   REEXEC=(--oracle "$(readlink -f "$ORACLE")" --out "$(readlink -f "$OUT")" --suite "$SUITE" --reps "$REPS" --rates "$RATES")
   [ -z "$RUST_BIN" ] || REEXEC+=(--rust-bin "$(readlink -f "$RUST_BIN")")
+  [ -z "$RMASSCAN_BIN" ] || REEXEC+=(--rmasscan "$(readlink -f "$RMASSCAN_BIN")")
   [ -z "$FIXTURES" ] || REEXEC+=(--fixtures "$(readlink -f "$FIXTURES")")
   exec sudo -n env "RMASSCAN_LAB_BIN=$LAB_BIN" "WIRELAB_INJECT=${WIRELAB_INJECT:-}" \
     ${RMASSCAN_DEPLOY_MANIFEST:+"RMASSCAN_DEPLOY_MANIFEST=$(readlink -f "$RMASSCAN_DEPLOY_MANIFEST")"} \
@@ -74,15 +84,56 @@ PEER_IPS=${WIRELAB_PEER_IPS:-"10.200.0.2 10.200.0.3 10.200.0.4 10.200.0.5"}
 PEER_PREFIX=${WIRELAB_PEER_PREFIX:-24}
 OPEN_PORTS=${WIRELAB_OPEN_PORTS:-80,8080}               # responder listens here; every other port gets RST
 CASES_FILE=${WIRELAB_CASES_FILE:-}                      # optional "name|syn|synack|rst|masscan args" lines
+DEFAULT_VIA=""
+if [ "$SUITE" = autodetect ]; then
+  # Fixed stand of the autodetect suite (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
+  # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
+  IP_A_LINK=198.18.0.1; IP_ADAPTER=198.18.0.1; PEER_IPS="198.18.0.2 198.18.0.3 198.18.0.4 198.18.0.5"; PEER_PREFIX=24
+  DEFAULT_VIA=198.18.0.2
+  MAC_A=02:aa:00:00:00:01; MAC_B=02:aa:00:00:00:02; OPEN_PORTS=80,8080; CASES_FILE=""
+fi
 SEED=1; RATE=100
 CREATED_A=0; CREATED_B=0; PIDS=()
 STOP_GRACE=45   # witness: quiet wait <= 20 s + end markers <= 15 s + tcpdump stop <= 30 s, but normally 2-3 s
 mkdir -p "$OUT"; OUT=$(readlink -f "$OUT")
+LAB_ID=""
+if [ "$SUITE" = autodetect ]; then
+  # An earlier lab's directory is never reused: its runs, its teardown record (or the lack of one, if its cleanup
+  # died) and a work directory the suite kept after a failed evidence copy (the rm below would wipe it) all stay
+  # its own, so a new lab needs a new --out.
+  for f in manifest.json runs runs_aborted teardown.json .work; do
+    if [ -e "$OUT/$f" ] || [ -L "$OUT/$f" ]; then
+      echo "FATAL: $OUT/$f exists: $OUT holds the output of an earlier autodetect lab; use a new --out" >&2; exit 2
+    fi
+  done
+  # This lab's id: the suite keeps it in manifest.json and the cleanup writes it into teardown.json, which binds the
+  # record of the undo to this lab's runs.
+  LAB_ID=$(cat /proc/sys/kernel/random/uuid) || { echo "FATAL: cannot generate the lab id" >&2; exit 2; }
+fi
 WORK="$OUT/.work"; rm -rf "$WORK"; mkdir -p "$WORK"
 : >"$OUT/commands.txt"
 
 log() { echo "[wire-lab] $*"; }
 note_cmd() { echo "$*" >>"$OUT/commands.txt"; }
+
+# The undo of the autodetect stand as evidence ($OUT/teardown.json, judged by autodetect-verify): the lab id the
+# suite has in manifest.json, which of this run's namespaces are gone once cleanup deleted them (names scrubbed like
+# env.json), and how many are still listed, by exact name; null when `ip netns list` fails, so that no count stands
+# in for an unread list.
+autodetect_teardown() {
+  local list names left=null deleted="" created_ns created ns
+  if list=$(ip netns list 2>/dev/null); then
+    left=$(printf '%s\n' "$list" | grep -cE "^wl-(scan|peer)-$RUN_ID( |\$)")
+    names=$(printf '%s\n' "$list" | awk '{print $1}')
+    for created_ns in "$CREATED_A:$NS_A" "$CREATED_B:$NS_B"; do
+      created=${created_ns%%:*}; ns=${created_ns#*:}
+      [ "$created" = 1 ] || continue
+      case $'\n'"$names"$'\n' in *$'\n'"$ns"$'\n'*) continue ;; esac
+      deleted="$deleted${deleted:+,}\"$(printf '%s' "$ns" | sed -E 's/wl-(scan|peer)-[0-9]+-[0-9]+/wl-\1-RUNID/')\""
+    done
+  fi
+  printf '{"lab_id":"%s","namespaces_deleted":[%s],"namespaces_left":%s}\n' "$LAB_ID" "$deleted" "$left" >"$OUT/teardown.json"
+}
 
 cleanup() {
   local rc=$?
@@ -98,8 +149,15 @@ cleanup() {
   [ "$CREATED_B" = 1 ] && ip netns del "$NS_B" 2>/dev/null
   # nothing of this run may outlive it: no tcpdump writing into OUT, no live member of a tracked session
   stray=$((stray + $(stray_processes tcpdump "$OUT/")))
-  local left; left=$(ip netns list 2>/dev/null | grep -c -- "$RUN_ID")
-  rm -rf "$WORK"
+  # this run's two namespaces by exact name (a substring would also count wl-scan-14321-123456 for RUN_ID 4321-12345)
+  local left; left=$(ip netns list 2>/dev/null | grep -cE "^wl-(scan|peer)-$RUN_ID( |\$)")
+  [ "$SUITE" != autodetect ] || autodetect_teardown
+  # The autodetect suite marks a work directory it kept after a failed evidence copy: that one stays for inspection.
+  if [ "$SUITE" = autodetect ] && [ -e "$WORK/work-kept.txt" ]; then
+    log "cleanup: $WORK kept: the suite could not copy a run into the evidence directory (see work-kept.txt); inspect it, never publish it"
+  else
+    rm -rf "$WORK"
+  fi
   [ -n "${SUDO_UID:-}" ] && chown -R "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$OUT" 2>/dev/null
   log "cleanup: rc=$rc own_pids=${#PIDS[@]} stray_processes=$stray namespaces_left=$left"
   # a leftover process or namespace is a failure of the run even when the body succeeded
@@ -161,6 +219,12 @@ ip -n "$NS_B" neigh add "$IP_ADAPTER" lladdr "$MAC_A" dev "$IF_B" nud permanent 
 for ns in "$NS_A" "$NS_B"; do ip -n "$ns" link set lo up; done
 ip -n "$NS_A" link set "$IF_A" up
 ip -n "$NS_B" link set "$IF_B" up
+if [ -n "$DEFAULT_VIA" ]; then
+  # autodetect: the one controlled change. Default route via the peer and permanent neighbours, both in NS_A only.
+  ip -n "$NS_A" route add default via "$DEFAULT_VIA" dev "$IF_A"
+  for ip_ in $PEER_IPS; do ip -n "$NS_A" neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done
+  note_cmd "ip -n \$NS_A route add default via $DEFAULT_VIA dev $IF_A; ip -n \$NS_A neigh add {$PEER_IPS} lladdr $MAC_B dev $IF_A nud permanent   # autodetect stand"
+fi
 if [ "$SUITE" != oracle ]; then
   # veth hands CHECKSUM_PARTIAL frames to AF_PACKET readers: the peer kernel's SYN-ACK arrives with
   # an unfinished TCP checksum, which a verifying receiver (the Rust engine, unlike C) must reject.
@@ -174,19 +238,33 @@ fi
 # ---- seal assertions (fail closed) ------------------------------------------
 fail() { echo "FATAL: $*" >&2; exit 3; }
 for ns in "$NS_A" "$NS_B"; do
-  [ -z "$(ip -n "$ns" route show default)" ] || fail "$ns has a default route"
+  if [ -n "$DEFAULT_VIA" ] && [ "$ns" = "$NS_A" ]; then :; else
+    [ -z "$(ip -n "$ns" route show default)" ] || fail "$ns has a default route"
+  fi
   [ -z "$(ip -n "$ns" -6 route show default)" ] || fail "$ns has an IPv6 default route"
   links=$(ip -n "$ns" -o link | awk -F': ' '{print $2}' | sed 's/@.*//' | sort | tr '\n' ' ')
   case "$ns" in "$NS_A") want="lo $IF_A ";; *) want="lo $IF_B ";; esac
   [ "$links" = "$want" ] || fail "$ns links '$links' != '$want'"
   ip -n "$ns" -d link | grep -Eq 'bridge|master|bond|vlan|macvlan' && fail "$ns has a bridge/master/virtual upper device"
   [ "$(ip netns exec "$ns" cat /proc/sys/net/ipv4/ip_forward)" = 0 ] || fail "$ns ip_forward != 0"
-  ip netns exec "$ns" ip route get 8.8.8.8 >/dev/null 2>&1 && fail "$ns can route to 8.8.8.8"
-  [ "$(ip -n "$ns" route show | grep -c .)" -le 1 ] || fail "$ns has more than the connected route"
+  if [ -n "$DEFAULT_VIA" ] && [ "$ns" = "$NS_A" ]; then
+    # autodetect scanner namespace: exactly the connected route and the default route via the peer
+    [ "$(ip -n "$ns" route show | grep -c .)" = 2 ] || fail "$ns routes are not exactly two"
+    ip -n "$ns" route show | grep -Eq "^198\.18\.0\.0/24 dev $IF_A( |\$)" || fail "$ns lacks 198.18.0.0/24 dev $IF_A"
+    ip -n "$ns" route show | grep -Eq "^default via $DEFAULT_VIA dev $IF_A( |\$)" || fail "$ns lacks default via $DEFAULT_VIA dev $IF_A"
+    ip netns exec "$ns" ip route get 8.8.8.8 | head -n1 | grep -Eq "^8\.8\.8\.8 via $DEFAULT_VIA dev $IF_A( |\$)" || fail "$ns route get 8.8.8.8 is not via $DEFAULT_VIA dev $IF_A"
+  else
+    ip netns exec "$ns" ip route get 8.8.8.8 >/dev/null 2>&1 && fail "$ns can route to 8.8.8.8"
+    [ "$(ip -n "$ns" route show | grep -c .)" -le 1 ] || fail "$ns has more than the connected route"
+  fi
 done
 [ "$(ip -o link | awk -F': ' '{print $2}' | sort)" = "$host_links_before" ] || fail "host link list changed"
-note_cmd "ip -n \$NS route show default (empty); ip -n \$NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces"
-"$LAB_BIN" capture isolation --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
+if [ -n "$DEFAULT_VIA" ]; then
+  note_cmd "ip -n \$NS_A route show (exactly: 198.18.0.0/24 dev $IF_A; default via $DEFAULT_VIA dev $IF_A); ip -n \$NS_A route get 8.8.8.8 (via $DEFAULT_VIA dev $IF_A); ip -n \$NS_B route show default (empty); ip -n \$NS_B route get 8.8.8.8 (fails)  # seal assertions, autodetect stand"
+else
+  note_cmd "ip -n \$NS route show default (empty); ip -n \$NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces"
+fi
+"$LAB_BIN" capture isolation ${DEFAULT_VIA:+--mode autodetect} --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
 
 topo() {  # topo FILE : save topology + routes of both namespaces
   { echo "# host namespace links (must not contain veth-a/veth-b)"; ip -o link | awk -F': ' '{print $2}'
@@ -214,7 +292,11 @@ else
   # rust/perf suites: rmasscan-lab wire-suite restarts its own responder before EVERY run, because the peer kernel
   # keeps retransmitting SYN-ACKs of half-open sockets for ~1 minute (the Rust scanner never RSTs them)
   # and those would bleed into the next run's capture.
-  note_cmd "(rmasscan-lab wire-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # restarted before every run"
+  if [ "$SUITE" = autodetect ]; then
+    note_cmd "(rmasscan-lab autodetect-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # started by the suite"
+  else
+    note_cmd "(rmasscan-lab wire-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # restarted before every run"
+  fi
 fi
 
 "$LAB_BIN" capture env --out "$OUT/env.json" --oracle "$ORACLE" --ns-a "$NS_A" --ns-b "$NS_B" \
@@ -279,7 +361,17 @@ done
 
 fi
 
-if [ "$SUITE" != oracle ]; then
+if [ "$SUITE" = autodetect ]; then
+  # ---- autodetect suite: the Rust driver runs inside this sealed lab and starts its own responders/witnesses
+  note_cmd "rmasscan-lab autodetect-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_suite_group "$OUT/suite.log" "$LAB_BIN" autodetect-suite linux --out "$OUT" --work "$WORK" \
+    --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
+    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
+  SUITE_PID=$SUITE_PGID
+  SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  stop_suite_group
+  log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
+elif [ "$SUITE" != oracle ]; then
   # ---- Rust suites: driver runs inside this sealed lab; its own children die with it
   note_cmd "rmasscan-lab wire-suite --suite $SUITE ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
   start_suite_group "$OUT/suite.log" "$LAB_BIN" wire-suite --suite "$SUITE" --out "$OUT" --work "$WORK" \
@@ -297,6 +389,9 @@ topo "$OUT/topology-after.txt"
 if [ "$SUITE" = oracle ]; then
   "$LAB_BIN" capture manifest --dir "$OUT"
   log "done: $OUT/manifest.json"
+elif [ "$SUITE" = autodetect ]; then
+  log "done: $OUT"
+  exit "${SUITE_RC:-0}"
 else
   log "done: $OUT/results.json"
   exit "${SUITE_RC:-0}"

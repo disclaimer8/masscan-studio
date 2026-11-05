@@ -1,0 +1,8 @@
+[+] interface = Ethernet 2 (detected: route to 198.18.0.2)
+[+] source-mac = 52-54-00-04-80-a9 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = 198.18.0.3 (given)
+[-] FAIL: ARP timed-out resolving MAC address for router Ethernet 2: "198.18.0.3"
+    [hint] try "--router-ip 192.0.2.1" to specify different router
+    [hint] try "--router-mac 66-55-44-33-22-11" instead to bypass ARP
+    [hint] try "--interface eth0" to change interface

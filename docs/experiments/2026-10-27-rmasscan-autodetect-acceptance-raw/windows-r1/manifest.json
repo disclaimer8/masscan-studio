@@ -1,0 +1,153 @@
+{
+  "autodetect": "windows",
+  "binding": {
+    "w01_auto": {
+      "interface": {
+        "source": "detected: route to 198.18.0.2",
+        "value": "Ethernet 2"
+      },
+      "router_ip": {
+        "source": "on-link target",
+        "value": "198.18.0.2"
+      },
+      "router_mac": {
+        "source": "arp",
+        "value": "02-57-4c-3d-2e-9b"
+      },
+      "source_ip": {
+        "source": "detected",
+        "value": "198.18.0.1"
+      },
+      "source_mac": {
+        "source": "detected",
+        "value": "52-54-00-04-80-a9"
+      }
+    },
+    "w02_adapter_npf": {
+      "interface": {
+        "source": "given",
+        "value": "Ethernet 2"
+      },
+      "router_ip": {
+        "source": "on-link target",
+        "value": "198.18.0.2"
+      },
+      "router_mac": {
+        "source": "arp",
+        "value": "02-57-4c-3d-2e-9b"
+      },
+      "source_ip": {
+        "source": "detected",
+        "value": "198.18.0.1"
+      },
+      "source_mac": {
+        "source": "detected",
+        "value": "52-54-00-04-80-a9"
+      }
+    },
+    "w03_adapter_friendly": {
+      "interface": {
+        "source": "given",
+        "value": "Ethernet 2"
+      },
+      "router_ip": {
+        "source": "on-link target",
+        "value": "198.18.0.2"
+      },
+      "router_mac": {
+        "source": "arp",
+        "value": "02-57-4c-3d-2e-9b"
+      },
+      "source_ip": {
+        "source": "detected",
+        "value": "198.18.0.1"
+      },
+      "source_mac": {
+        "source": "detected",
+        "value": "52-54-00-04-80-a9"
+      }
+    },
+    "w04_router_mac": {
+      "interface": {
+        "source": "detected: route to 198.18.0.2",
+        "value": "Ethernet 2"
+      },
+      "router_mac": {
+        "source": "given",
+        "value": "02-57-4c-3d-2e-9b"
+      },
+      "source_ip": {
+        "source": "detected",
+        "value": "198.18.0.1"
+      },
+      "source_mac": {
+        "source": "detected",
+        "value": "52-54-00-04-80-a9"
+      }
+    },
+    "w05_arp_timeout": {
+      "interface": {
+        "source": "detected: route to 198.18.0.2",
+        "value": "Ethernet 2"
+      },
+      "router_ip": {
+        "source": "given",
+        "value": "198.18.0.3"
+      },
+      "source_ip": {
+        "source": "detected",
+        "value": "198.18.0.1"
+      },
+      "source_mac": {
+        "source": "detected",
+        "value": "52-54-00-04-80-a9"
+      }
+    },
+    "w06_multi_no_gateway": null,
+    "w07_iflist": null,
+    "w08a_restricted_iflist": null,
+    "w08b_restricted_scan": null
+  },
+  "capture_schema": 3,
+  "code_commit": "6c87e942ea0ae349a62bd3ce507a1620233c575f",
+  "created_utc": 1793780159.17274,
+  "exe": {
+    "build": "Rust static CRT rmasscan CLI from code_commit",
+    "guest_path": "C:\\Users\\lab\\t4\\rmasscan.exe",
+    "sha256": "e8a9c967a07a761a44a140ce26080fe0b0bb3ce0cd329c7400569a8fee1cc268",
+    "size": 1183232
+  },
+  "listeners": {
+    "open": [
+      80,
+      443,
+      8000,
+      8001,
+      8002,
+      8003,
+      8004,
+      8005,
+      8006,
+      8007
+    ],
+    "silent": [
+      8099
+    ]
+  },
+  "orchestrator": {
+    "binary_name": "rmasscan-lab",
+    "binary_sha256": "1639f5913460745792aaaf31ab28e96a2e45b6759761c4c983db35ca952ddc9f",
+    "build_commit": "6c87e942ea0ae349a62bd3ce507a1620233c575f",
+    "errors": [],
+    "git_commit": "6c87e942ea0ae349a62bd3ce507a1620233c575f",
+    "git_dirty": false
+  },
+  "plan": "autodetect",
+  "schema": 1,
+  "stand": {
+    "manifest": "$HOME/winvm/lab/n2.json",
+    "netns": "wvp-n2",
+    "run_id": "n2"
+  },
+  "suite": "windows-r1"
+}

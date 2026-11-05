@@ -1,0 +1,9 @@
+PASS     manifest 
+PASS     m01_user_masked 
+PASS     m02_user_explicit 
+PASS     m03_user_router_mac 
+PASS     m04_user_arp_timeout 
+PASS     m05_user_no_adapter 
+PASS     m06_user_no_ip 
+PASS     m07_user_iflist 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":8}

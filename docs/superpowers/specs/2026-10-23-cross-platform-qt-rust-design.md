@@ -119,19 +119,21 @@ rx_health }`, причины `Reason::{Completed, Stopped, Paused, Failed(FailRe
 Продукт (Studio) и библиотеки (rmasscan) разделены. Столбец «реализовано» это
 факт на `27e3042` для этой ветки; Studio живёт в другом дереве и здесь не
 собирается. Модуль runtime API здесь не вводится: таблица описывает только
-существующие типы и документы.
+существующие типы и документы. Строки CLI и ARP обновлены 2026-11-04 по ветке
+`feat/rmasscan-autodetect` (код `6c87e94`, evidence `00110f9`); остальные строки по-прежнему
+описывают `27e3042`.
 
 **Библиотеки rmasscan**
 
 | Capability | Слой | Реализовано | Проверка | Ограничение | Следующий этап |
 | --- | --- | --- | --- | --- | --- |
 | Цели, порты, исключения, BlackRock, cookie, SYN, throttle, `-sL`, `--echo` | core | да | golden-фикстуры C, дифференциалы, `selftest_parity` | IPv4/TCP; IPv6, UDP, баннеры вне v1 | поддержка |
-| `--echo-all`, `--offline --packet-trace` | cli | да, описанное подмножество | тесты CLI; README | живой скан из CLI не поддержан | Runner/Studio |
+| `--echo-all`, `--offline --packet-trace`, `--offline` (обнаружение только чтением), `--iflist`, живой скан CLI | cli | да (`6c87e94`): без флага операции живой скан IPv4/TCP SYN с автоопределением интерфейса, source IP/MAC и следующего хопа; `--offline` печатает обнаружение без единого кадра; описанное подмножество masscan | тесты CLI на fake-бэкенде (`live_fake`; бинарник в тестах только через `spawn_readonly` с `--iflist`/`--offline`/`-sL`/`--echo`/`--help`); живая приёмка на трёх запечатанных стендах: Linux netns 13/13 с паритетом C-оракула, Windows VM `n2` 10/10, Mac `feth` 8/8 и root 3/3 (`docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`) | один адаптер и один следующий хоп; нет форматов вывода `-oL`/`-oJ`/`-oG`, строки статуса, перехвата Ctrl-C и `paused.conf`; VPN/туннели, VLAN, IPv6 не поддержаны; физические NIC не проверены (NOT RUN); GO (stands) объявлен после итогового ревью и зелёного CI | этап 2: форматы вывода через `Sink` |
 | Разбор RX-кадров | core | да | unit/property тесты | VLAN возвращает `Unsupported` (не разбирается); чужие и обрезанные кадры отбрасываются | по решению |
 | Дедупликация ответов | engine | да, ограниченный FIFO-кэш (`DedupCache`, до `MAX_DEDUP_ENTRIES`) | тесты engine | не буквальный порт C `dedup_selftest` и не полная C-семантика; в core не переносится | по решению |
 | Runtime: Pause/Stop, checkpoint/resume | engine | да | fake-адаптер, ManualClock, лабораторный pause/resume (повторно проверен на `27e3042`: functional 141/0/0) | один NIC, TX=1, RX=1, shard 1/1, retries 0 | расширения по плану |
 | RX integrity, TX stall | engine | да (`364ee49`, `c31ae16`) | fake-адаптеры, ManualClock; lab wire netns/veth на `27e3042`: functional 141/0/0, perf 40/40 VALID, `rx_health` 0 в 20/20, переполнение → `Failed(RxLoss)` | см. §0.1; физический NIC, >100k pps, Windows/macOS не проверены | Windows/macOS-адаптеры |
-| ARP | core | только кодек | unit-тесты | resolver и discovery шлюза отсутствуют | сетевая интеграция |
+| ARP и обнаружение шлюза | core, net | да (`6c87e94`): кодек в core; резолвер следующего хопа (`arp_resolve`) и обнаружение интерфейса, source и шлюза (`discover`, `route_parse`; FFI `linux::route`, `macos::route`, `windows::sys`) в net | unit- и seam-тесты (fake-таблицы маршрутов, `FakeAdapter`, `ManualClock`); живьём на трёх стендах: 60-байтовый запрос только к напечатанному `router-ip`, ровно 10 запросов с шагом 1 ± 0.3 с при таймауте, байты запроса равны C-оракулу (Linux) | IPv4, один следующий хоп; 10 запросов за 10 с (C: около 12 за около 11 с); шлюз маршрута к цели за маршрутизатором вживую не проверен (цели стендов on-link); физические NIC не проверены | Studio: сетевая идентичность через `discover` |
 | Парсер paused.conf | core | да | unit-тесты | пользовательского импорта нет | Runner/Studio |
 | Linux AF_PACKET (явный binding) | net | да | замкнутый стенд netns+veth против C-oracle: сохранённые отчёты 2B-Linux | приёмка выполнена на `27e3042` (отчёт 2B-Linux, evidence `8479ff2`); CI на точном HEAD не запускался; физический NIC, >100k pps не проверены | CI на точном HEAD; физический NIC |
 | Windows (Npcap), macOS (BPF) raw I/O | net | нет | CI собирает и гоняет offline-тесты; raw I/O не запускался | raw I/O только Linux | 2B-Windows, затем macOS |

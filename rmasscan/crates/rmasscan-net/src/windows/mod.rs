@@ -9,6 +9,8 @@
 //! `unsafe` разрешён только в FFI-модулях `ffi`, `handle`, `loader`, `process`,
 //! `sys` (и в тестовой подставной таблице); `process` (Toolhelp, токен, память
 //! процесса) нужен лабораторному harness, но собирается и в продуктовой сборке.
+//! Чтение адаптеров и маршрутов для обнаружения тоже живёт в `sys`; безопасная
+//! обёртка `os` реализует над ним `RouteTable`/`Interfaces`.
 //! `adapter` (логика TX/RX, фильтрация, счётчики, health) полностью безопасный и работает через `PcapHandle`.
 
 pub(crate) mod adapter;
@@ -28,6 +30,48 @@ pub(crate) mod sys;
 
 #[cfg(windows)]
 pub(crate) use adapter::open;
+
+#[cfg(windows)]
+pub(crate) use os::{OsIfaces, OsRoutes};
+
+/// Обнаружение над IP Helper: безопасная обёртка над `sys::{adapters, best_route, forward_table}`; правила
+/// (IfType 6/71 это Ethernet, 24 это loopback, `Route::local`, порядок по Metric) и сама склейка строк с адаптерами
+/// (`lookup_from_best`, `defaults_from_rows`) в переносимом `route_parse`, где их проверяют тесты любой ОС.
+#[cfg(windows)]
+mod os {
+    use std::net::Ipv4Addr;
+
+    use super::sys;
+    use crate::NetError;
+    use crate::discover::{Iface, Interfaces, Route, RouteTable};
+    use crate::route_parse::{defaults_from_rows, iface_from_adapter, lookup_from_best};
+
+    /// Таблица маршрутов IP Helper (`GetBestRoute2`, `GetIpForwardTable2`).
+    pub(crate) struct OsRoutes;
+
+    impl RouteTable for OsRoutes {
+        fn lookup(&self, dst: Ipv4Addr) -> Result<Option<Route>, NetError> {
+            let Some(row) = sys::best_route(dst)? else {
+                return Ok(None);
+            };
+            Ok(Some(lookup_from_best(row, dst, &sys::adapters()?)))
+        }
+
+        fn default_routes(&self) -> Result<Vec<Route>, NetError> {
+            let rows = sys::forward_table()?;
+            Ok(defaults_from_rows(rows, &sys::adapters()?))
+        }
+    }
+
+    /// Адаптеры IPv4 (`GetAdaptersAddresses(AF_INET)`).
+    pub(crate) struct OsIfaces;
+
+    impl Interfaces for OsIfaces {
+        fn list(&self) -> Result<Vec<Iface>, NetError> {
+            Ok(sys::adapters()?.iter().map(iface_from_adapter).collect())
+        }
+    }
+}
 
 #[cfg(test)]
 #[allow(unsafe_code)]

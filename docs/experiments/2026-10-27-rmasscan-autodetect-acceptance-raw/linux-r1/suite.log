@@ -1,0 +1,13 @@
+done l01_auto -> runs/l01_auto
+done l02_auto_multi -> runs/l02_auto_multi
+done l03_adapter -> runs/l03_adapter
+done l04_adapter_ip -> runs/l04_adapter_ip
+done l05_adapter_mac -> runs/l05_adapter_mac
+done l06_router_ip -> runs/l06_router_ip
+done l07_router_mac -> runs/l07_router_mac
+done l08_source_port -> runs/l08_source_port
+done l09_arp_timeout -> runs/l09_arp_timeout
+done l10_no_such_adapter -> runs/l10_no_such_adapter
+done l11_parity -> runs/l11_parity
+done l12_iflist -> runs/l12_iflist
+all selected runs executed; verify offline with rmasscan-lab autodetect-verify --dir $HOME/rmasscan-ad-scratch.0jbUfd/autodetect-out/linux-r1

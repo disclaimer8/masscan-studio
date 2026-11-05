@@ -1,0 +1,11 @@
+PASS     manifest 
+PASS     w01_auto 
+PASS     w02_adapter_npf 
+PASS     w03_adapter_friendly 
+PASS     w04_router_mac 
+PASS     w05_arp_timeout 
+PASS     w06_multi_no_gateway 
+PASS     w07_iflist 
+PASS     w08a_restricted_iflist 
+PASS     w08b_restricted_scan 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":10}

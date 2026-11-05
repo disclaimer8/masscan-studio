@@ -1,0 +1,4 @@
+PASS     manifest 
+PASS     m10_root_auto_mac 
+PASS     m11_root_iflist 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":3}

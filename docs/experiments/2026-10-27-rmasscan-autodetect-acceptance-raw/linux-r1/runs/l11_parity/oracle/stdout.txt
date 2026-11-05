@@ -1,0 +1,8 @@
+Discovered open port 80/tcp on 198.18.0.2                                      
+Discovered open port 8080/tcp on 198.18.0.5                                    
+Discovered open port 8080/tcp on 198.18.0.2                                    
+Discovered open port 8080/tcp on 198.18.0.3                                    
+Discovered open port 80/tcp on 198.18.0.3                                      
+Discovered open port 80/tcp on 198.18.0.4                                      
+Discovered open port 80/tcp on 198.18.0.5                                      
+Discovered open port 8080/tcp on 198.18.0.4                                    

@@ -1,0 +1,30 @@
+{
+  "autodetect": "macos-root",
+  "created_utc": 1793781113.311897,
+  "euid": 0,
+  "lab": {
+    "sha256": "1639f5913460745792aaaf31ab28e96a2e45b6759761c4c983db35ca952ddc9f",
+    "size": 4277472
+  },
+  "peer_capture": {
+    "published": "not (ether src 02:ac:00:00:00:02 and udp port 5353)",
+    "witness": "capture dump on feth4202, every frame, into the private work directory"
+  },
+  "rmasscan": {
+    "sha256": "e788409b2ae110b07dcb174311c8b0f3b838c20aaf15f05278a017c8a80c2812",
+    "size": 1375136
+  },
+  "run_id": "m1",
+  "schema": 1,
+  "stand": {
+    "listeners": "8000-8007",
+    "peer_if": "feth4202",
+    "peer_ip": "198.18.0.2",
+    "peer_mac": "02:ac:00:00:00:02",
+    "scanner_if": "feth4201",
+    "scanner_ip": "198.18.0.1",
+    "scanner_mac": "02:ac:00:00:00:01"
+  },
+  "suite": "autodetect-suite macos",
+  "uplink_filter": "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 02:ac:00:00:00:01 or ether host 02:ac:00:00:00:02 or ether proto 0x88b5"
+}

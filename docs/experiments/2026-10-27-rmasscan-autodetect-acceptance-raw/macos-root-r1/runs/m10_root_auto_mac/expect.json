@@ -1,0 +1,26 @@
+{
+  "tag": "m10_root_auto_mac",
+  "kind": "scan",
+  "detection": {
+    "interface": {
+      "value": "feth4201",
+      "source": "given"
+    },
+    "source_mac": {
+      "value": "02-ac-00-00-00-01",
+      "source": "detected"
+    },
+    "source_ip": {
+      "value": "198.18.0.1",
+      "source": "given"
+    },
+    "router_ip": {
+      "value": "198.18.0.2",
+      "source": "given"
+    },
+    "router_mac": {
+      "value": "02-ac-00-00-00-02",
+      "source": "arp"
+    }
+  }
+}

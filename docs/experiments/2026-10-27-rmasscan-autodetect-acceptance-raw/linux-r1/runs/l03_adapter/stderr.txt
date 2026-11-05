@@ -1,0 +1,8 @@
+[+] interface = veth-a (given)
+[+] source-mac = 02-aa-00-00-00-01 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = 198.18.0.2 (on-link target)
+[+] router-mac = 02-aa-00-00-00-02 (arp: 1 requests, 0 ms)
+[+] seed = 1 (given)
+[+] source-port = 59693 (time)
+[+] finished: Completed, sent 3, replies 3, open 2

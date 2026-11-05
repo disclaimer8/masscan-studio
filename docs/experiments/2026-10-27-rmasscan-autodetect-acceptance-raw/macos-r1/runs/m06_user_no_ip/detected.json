@@ -1,0 +1,7 @@
+{
+  "fail": "failed to detect IP of interface \"feth4201\"",
+  "hints": [
+    "    [hint] did you spell the name correctly?",
+    "    [hint] if it has no IP address, manually set with something like \"--source-ip 198.51.100.17\""
+  ]
+}

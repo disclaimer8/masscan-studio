@@ -386,6 +386,205 @@ Known gap (M-6, deferred to the next Linux acceptance): `oracle-fixtures` still 
 next to the checkout that built the binary (`CARGO_MANIFEST_DIR` at compile time). Build it from the
 checkout under test, in a private target directory.
 
+## Autodetect suite
+
+Приёмка живого скана CLI с автоопределением адаптера и шлюза идёт на тех же трёх запечатанных стендах, что и прежние
+приёмки. Кейсы, их argv и ожидания определены в одном месте, в таблице верификатора (`autodetect_verify.rs`,
+`CaseSpec`): suite пишет `argv.json` из `CaseSpec::argv()` и `expect.json` из `CaseSpec::expect()` как есть и своих
+кейсов не определяет. Вердикт выносит офлайн `autodetect-verify` (без сети и процессов). INVALID и NOT RUN никогда не
+повышаются. Кадр лаборатории на uplink/`eno1` или чужой SYN делает FAIL весь каталог. `windows-verify` отдаёт каталог,
+манифест которого несёт ключ `autodetect` (или `plan: autodetect`), `autodetect-verify` целиком: вердикт,
+`safety_trips`, отчёт и rc те же. Прежние каталоги (`functional-r3`, `perf-r1` и другие) этих ключей не имеют и
+судятся прежним верификатором с прежними вердиктами.
+
+**Пути и учётная запись.** `--out` (на Mac и место бинарников) — нейтральный путь без имени учётной записи, например
+`mktemp -d /private/tmp/rmasscan-ad.XXXXXX` на Mac и `mktemp -d /tmp/rmasscan-ad.XXXXXX` на minipc; не scratch агента
+(`/private/tmp/claude-<uid>/-Users-<имя>/…`) и не `$TMPDIR` (`/var/folders/…`). Первое окно macOS на `6c87e94` писало
+`--out` в такой scratch, и имя попало в каждый `capture.json` (путь `-w` в `.work`). Теперь каждый suite (Linux,
+macOS пользовательский и root, Windows) одним общим помощником (`capture::Scrubber`) пишет во всё, что попадает в
+evidence (записи прогонов, `capture.json`, манифест, статусы, записи `deploy/`; на Linux ещё `suite.log`), свой
+`--out` как `$OUT`, рабочий каталог как `$WORK` (Linux; на macOS и Windows это `$OUT/.work`), домашний каталог как
+`$HOME`, а учётную запись, взятую один раз при старте (`$SUDO_USER`, если задан и не `root`, иначе `$USER`; `root` не
+заменяется), как `$USER`. `autodetect-verify` в любом текстовом файле evidence находит, кроме `/Users/ИМЯ`,
+`/home/ИМЯ`, `\Users\ИМЯ`, ещё формы через дефис `-Users-ИМЯ`, `-home-ИМЯ` (в начале имени: `on-home-pc` не путь) и
+корни scratch одного пользователя `claude-<цифры>` и `/var/folders/` (в том числе `/private/var/folders/`): INVALID
+с именем файла. `$OUT`, `$WORK`, `$HOME`, `$USER` и нейтральные абсолютные пути (`/private/tmp/rmasscan-ad.<x>/…`)
+он принимает.
+
+**Прерванные попытки.** Попытка, не ставшая прогоном, остаётся как `runs_aborted/<tag>.<run id>/` (прерванный
+прогон; на Windows и NOT RUN preflight). `autodetect-verify` перечисляет каждую запись `runs_aborted/` в `aborted`
+вердикта (тег, кейс, вид, файлы). Кейс прогоняется в один `--out` один раз, поэтому кейс с такой попыткой не бывает
+PASS: прогон рядом с ней — INVALID (он не единственный прогон кейса), без прогона кейс NOT RUN. Запись, которая не
+`<плановый тег>.<run id>`, делает каталог INVALID. Захваты попыток судит `safety_scan`, как и прежде. Все три suite
+отказывают (NOT RUN, до любого изменения стенда и любого удалённого шага) кейсу, у которого в `--out` уже есть
+`runs/<tag>` или `runs_aborted/<tag>.*`; повтор идёт в новый `--out`.
+
+| Стенд | Команда | Кейсы |
+| --- | --- | --- |
+| Linux netns (minipc) | `scripts/wire-lab.sh --suite autodetect` запускает внутри `autodetect-suite linux` | `l01`–`l12` |
+| Windows VM `n2` (home-pc) | `windows-suite --plan autodetect` | `w01`–`w08b` |
+| macOS `feth` (Mac) | `autodetect-suite macos`, `--root-case` | `m01`–`m07`, `m10`–`m11`; см. `macos-feth-lab.md`, «Autodetect window» |
+
+**Linux.** `wire-lab.sh --suite autodetect` поднимает прежний стенд из двух netns и делает в нём одно
+контролируемое изменение, только внутри netns сканера: IPv4 `198.18.0.1/24` на `veth-a`, маршрут по умолчанию
+`via 198.18.0.2 dev veth-a` и постоянные соседские записи `198.18.0.2–.5 → 02:aa:00:00:00:02`. Seal-проверки и
+`capture isolation --mode autodetect` подтверждают ровно это до каждого прогона и после него (`isolation.json` и
+`isolation-post.json` прогона, верификатор судит оба). Отмена: cleanup скрипта удаляет обе netns и записывает это в
+`OUT/teardown.json` (`lab_id`, `namespaces_deleted`, `namespaces_left`; netns считаются по точному имени).
+`lab_id` — id лаборатории: скрипт берёт его при старте из `/proc/sys/kernel/random/uuid` и передаёт suite
+(`--lab-id`, suite пишет его в `manifest.json`). `autodetect-verify` требует запись в каталоге Linux: нет записи,
+она не читается, netns осталась или её `lab_id` не равен `lab_id` манифеста — INVALID (запись чужой лаборатории не
+закрывает эти прогоны). Если suite не смог скопировать прогон в каталог evidence, он оставляет рабочий каталог
+прогона и метку `OUT/.work/work-kept.txt`, и cleanup тогда `OUT/.work` не удаляет. `OUT`, где уже есть вывод
+прежней лаборатории (`manifest.json`, `runs/`, `runs_aborted/`, `teardown.json`, `.work/`), скрипт не принимает
+(FATAL, rc 2): каждая лаборатория идёт в новый `--out`.
+Скрипт сам перезапускает себя через `sudo -n`; suite `sudo` не вызывает. `--out` всегда вне репозитория, в
+нейтральном каталоге без имени учётной записи (см. «Пути и учётная запись»), в репозиторий каталог попадает только
+шагом «Evidence в репозиторий» ниже. Из каталога `rmasscan/` экспорта коммита на minipc:
+
+```sh
+cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
+OUT=$(mktemp -d /tmp/rmasscan-ad.XXXXXX)/autodetect-out/linux-r1
+RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite autodetect \
+  --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"
+target/release/rmasscan-lab autodetect-verify --dir "$OUT" --out "$OUT/verdict.json"
+```
+
+**Windows.** `rmasscan.exe` собирается на госте так же, как `wire_scan.exe` в шаге 4 раздела «Deployment»: тот же
+`git archive` коммита, release, статический CRT, тот же `RUSTFLAGS` с `/DEPENDENTLOADFLAG:0x800`. Отличие одно:
+`cargo build --locked --release -p rmasscan-cli` вместо `-p rmasscan-net --example wire_scan`. Затем `dumpbin /loadconfig rmasscan.exe`
+(флаг `0x800`) и копия в `C:\Users\lab\t4\rmasscan.exe`. Шаги 1–3 и 5 те же. `--out` — вне репозитория, в
+нейтральном каталоге без имени учётной записи (там же `.work` оркестратора: после аварии в нём может остаться
+полный гостевой `--iflist`). Команды из корня репозитория:
+
+```sh
+OUT=$(mktemp -d /private/tmp/rmasscan-ad.XXXXXX)/autodetect-out/windows-r1
+rmasscan/target/release/rmasscan-lab windows-suite --list --plan autodetect   # девять кейсов, ничего не запускает
+rmasscan/target/release/rmasscan-lab windows-suite \
+  --out "$OUT" \
+  --suite windows-r1 --plan autodetect --commit $COMMIT --repo . \
+  --guest-exe 'C:\Users\lab\t4\rmasscan.exe' \
+  --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT" --out "$OUT/verdict.json"
+```
+
+План `autodetect` проходит каждый кейс через прежние шаги wire_scan-планов:
+
+- ворота: гостевой Verify с nonce, `record-guest`, `status-pre.json`;
+- слушатели пира `80,443,8000-8007`, молчащий `8099`;
+- захваты `lab0` (пир) и `eno1` (интерлок, код 13);
+- тот же гостевой runner: `windows_wire_run.ps1`, для `w08a` и `w08b` `windows_wire_runas.cmd` под ограниченным
+  токеном (два отдельных запуска runner: `--iflist` и скан);
+- `status-post.json`, хэши pcap на home-pc до копирования.
+
+Своё у плана:
+
+- `--guest-exe` обязан называть `rmasscan.exe`, `--suite` обязателен. `--fixtures` не нужен: если он дан, он не
+  читается и не копируется. `--rerun` и `--tx-mode` отклоняются (NOT RUN): кейс прогоняется в один `--out` один раз,
+  повтор идёт в новый `--out`.
+- runner получает `rmasscan.exe` и argv кейса из таблицы (`runner-argv.json` в каталоге прогона). Опций `wire_scan`
+  нет, `run.json` из JSON-строки stdout не строится (у `rmasscan` её нет).
+- Перед `w01` и `w06` после ворот тем же runner идёт preflight `rmasscan --offline` с теми же целями
+  (`runner-preflight-argv.json`, `preflight.txt`). Живой кейс идёт, только если preflight показал
+  `[+] interface = Ethernet 2 (detected: route to 198.18.0.2)`. Иначе кейс NOT RUN (код 2), и ни слушатель, ни
+  захват, ни скан не запускаются. Это не прерванный прогон: удалённый scratch (отчёт ворот и маркер, захвата нет)
+  удаляется на home-pc, а не копируется домой, и маркер в evidence не попадает. Записи ворот и `preflight.txt`
+  остаются в `runs_aborted/<tag>.<run id>/work/`; каталог — NOT RUN, не INVALID. Если удалить scratch не удалось,
+  маркер остаётся, и следующий старт отказывает. Повторный `--only <tag>` в тот же `--out` отклоняется (NOT RUN до
+  любого удалённого шага), а прогон кейса рядом с такой попыткой верификатор считает INVALID.
+- Гостевые файлы переносятся как `guest-stdout.txt`, `guest-stderr.txt`, `guest-exit.txt`. Код ограниченного
+  runner переносится как `guest-runner-rc.txt` (`.rc` не входит в allowlist). `detected.json` — разбор
+  `guest-stderr.txt` парсером верификатора.
+- `w07` и `w08a` (`--iflist`): гостевой `stdout.txt` (полный список интерфейсов гостя) копируется в рабочий
+  каталог оркестратора `<out>/.work/<tag>.<run id>/`, а не в каталог прогона. Там он редуцируется в `iflist.json`
+  (`rc`, число строк, sha256, строка `Ethernet 2`) тем же правилом, что у Linux и macOS, и сразу удаляется.
+  `guest-stdout.txt` не создаётся.
+- `capture.json`: запись suite плюс поля `capture dump` (`valid`, `invalid_reasons`, `pcap_sha256`, `pcap_frames`).
+  Их считает правило полноты свидетеля (`dump::problems`): маркеры, статистика tcpdump, дельта дропов `lab0`, окно
+  счётчиков, тишина, выход tcpdump.
+- Прогон пишется в `<out>/.work/` и попадает в `runs/<tag>` только целиком, через `hashes-before-copy.txt` и
+  проверку копии правилом верификатора. Прерванный прогон: удалённый scratch уходит в
+  `runs_aborted/<tag>.<run id>/` (прежний путь, с маркером и pid-файлами: каталог после этого INVALID), часть
+  оркестратора — туда же в `work/`. Непустой `.work` останавливает следующий старт; что не удалось удалить из
+  `.work`, suite называет строкой `WARN`.
+- Манифест: `"autodetect": "windows"`, `exe.build` `Rust static CRT rmasscan CLI from code_commit`, `binding` по
+  кейсу (ожидаемое обнаружение из `expect.json`). Полей `oracle`, `pause`, `tx_mode_expected` нет. Скрипты гостя
+  проходят только через `.work`, их хэши записаны в `deploy/preflight-<run>.json`. Пути под домашним каталогом в
+  манифесте, статусах, `capture.json` и `deploy/` заменены на `$HOME`, `--out` на `$OUT`, учётная запись оркестратора
+  на `$USER`. Поэтому копия `deploy/deploy-manifest.json`
+  уже не совпадает с исходным файлом: в `deploy/preflight-<run>.json` `deploy_manifest_sha256` — хэш исходного
+  `--deploy-manifest` на этой машине, `deploy_manifest_copy.sha256` — хэш копии в каталоге. В каждом прогоне
+  `guest-runner.json` обязан назвать `--guest-exe` (`exe`) и sha256 из манифеста (`exe_sha256`); продолжение
+  каталога с другим `rmasscan.exe` отклоняется.
+
+**Каталог прогона** `runs/<tag>/`:
+
+| Стенд | Файлы |
+| --- | --- |
+| все | `argv.json`, `expect.json`, `peer.pcap`, `capture.json`, `hashes-before-copy.txt`; скан и отказ: `detected.json`; `--iflist`: `iflist.json` вместо stdout |
+| Linux | `stdout.txt`, `stderr.txt`, `exit.txt`, `peer.err`, `isolation.json`, `isolation-post.json`; `l11_parity`: `oracle/{stdout,stderr,exit}.txt`, `oracle.pcap`, `oracle-capture.json`, `oracle.err`; `l12_iflist`: `oracle/iflist.json` |
+| Windows | `guest-stdout.txt` (не у `w07`, `w08a`), `guest-stderr.txt`, `guest-exit.txt`, `eno1.pcap`, `eno1.err`, `peer.err`, `status-pre.json`, `status-post.json`, `guest-verify*.json`/`.txt`, `listeners.json`, `runner-argv.json`, `guest-runner.json`, `nic.json`, `meta.json`, `pcap-hashes-on-home-pc.txt`, `run-artifacts.json`; `w01`, `w06`: `preflight.txt`, `runner-preflight-argv.json`; `w08a`, `w08b`: `guest-runner.log`, `guest-runner-rc.txt` |
+| macOS | `stdout.txt`, `stderr.txt`, `exit.txt`, `peer.err`, `uplink.pcap`, `uplink.err`, `status-pre.json`, `status-post.json`, `alf.txt`, `listeners.json`; `m05`: `preflight.txt`, `preflight-argv.json` |
+
+В корне каталога Linux ещё `teardown.json` (отмена стенда, см. выше). Файлы evidence несут только расширения
+`json pcap txt log err sha256 md`. Полный вывод `--iflist` не хранится нигде, ни у `rmasscan`, ни у оракула (masscan
+печатает список на stderr; `l12_iflist` с `oracle/stdout.txt` или `oracle/stderr.txt` — INVALID). `oracle/iflist.json`
+редуцируется так же, как у `rmasscan`, со строкой стенда в форме masscan (` N  veth-a \t(…)`); её нет или она не
+называет `veth-a` — INVALID, к ней те же правила приватности, что к строке `rmasscan`. Кадр на захвате
+стенда (пир, оракул) с MAC, который не равен ни MAC сканера, ни MAC пира стенда (маркеры не в счёт), — FAIL
+безопасности в любом кейсе. На macOS `capture.json` обязан сводить `privacy_filter` с захватом: `frames_kept` равно
+числу кадров `peer.pcap`, `frames_kept + frames_dropped` — `unfiltered.pcap_frames`, иначе INVALID.
+
+**Evidence в репозиторий** (план, задача 7, «Evidence»). Каталог из `$SCRATCH` копируется в
+`docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/<linux-r1|windows-r1|macos-r1|macos-root-r1>` только
+так, на Mac из корня репозитория. Каталог Linux сначала забирается с minipc; путь на minipc пишется целиком (`$OUT`
+и `$SCRATCH` Mac — не пути minipc), и `.work` проверяется там, до копии:
+
+```sh
+LINUX_OUT=/home/a1/<scratch>/autodetect-out/linux-r1   # --out на minipc, буквально
+ssh minipc "test ! -e '$LINUX_OUT/.work'" || echo "STOP: minipc kept $LINUX_OUT/.work (an unfinished copy)"
+rsync -a minipc:"$LINUX_OUT"/ "$SCRATCH/autodetect-out/linux-r1"/
+```
+
+Затем для каждого каталога (`NAMES` — имена хостов и учётных записей всех машин, через которые каталог прошёл, без
+учётной записи гостя `lab`, которая разрешена):
+
+```sh
+names() { tr -d '\r' | grep -vx lab | paste -sd'|' -; }
+NAMES=$( { hostname -s; id -un; } | names )   # Mac: macos-r1, macos-root-r1
+# linux-r1:   NAMES="$NAMES|$(ssh minipc 'hostname -s; id -un' | names)"
+# windows-r1: NAMES="$NAMES|$( { ssh home-pc 'hostname -s; id -un'; ssh -J home-pc -p 2222 lab@127.0.0.1 hostname; } | names )"
+SRC=$SCRATCH/autodetect-out/windows-r1   # каталог --out (linux-r1: забранная копия)
+DST=docs/experiments/2026-10-27-rmasscan-autodetect-acceptance-raw/windows-r1
+test ! -e "$SRC/.work" || test -z "$(ls -A "$SRC/.work")" || echo "STOP: $SRC/.work is not empty (an unfinished copy)"
+for d in "$SRC"/runs/*/ "$SRC"/runs_aborted/*/; do
+  [ ! -d "$d" ] || (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"
+done
+grep -ralwE "$NAMES|_tcp\.local|_udp\.local" "$SRC" && echo "STOP: privacy"   # каждый файл, pcap тоже (-a): 0 совпадений
+mkdir -p "$DST" && rsync -a --exclude .work "$SRC"/ "$DST"/
+for d in "$DST"/runs/*/ "$DST"/runs_aborted/*/; do
+  [ ! -d "$d" ] || (cd "$d" && shasum -a 256 -c --quiet hashes-before-copy.txt) || echo "STOP: $d"
+done
+rmasscan/target/release/rmasscan-lab autodetect-verify --dir "$DST" --out "$DST/verdict.json"   # тот же вердикт
+```
+
+Любой `STOP` — копия не делается или удаляется. Совпадение privacy-скана смотрят глазами: настоящее имя — копии нет;
+случайное совпадение короткого имени (`a1`) в байтах pcap записывается в `README.md` каталога. Дальше `MANIFEST.sha256`, `README.md` каталога и `verification/`,
+как в плане. `.work` в репозиторий не попадает никогда (он не в `.gitignore`).
+
+**Коды.** `autodetect-verify --dir DIR [--out FILE]` (и `windows-verify` для такого каталога): 0 PASS, 1 FAIL,
+2 INVALID или NOT RUN. `autodetect-suite`: 0 все выбранные прогоны выполнены, 2 NOT RUN, 10 ABORT, 13 ISOLATION
+BREACH, 130 INTERRUPTED. `windows-suite --plan autodetect` — коды `windows-suite` из таблицы «Exit codes of
+`windows-suite`» выше; NOT RUN (2) ещё и у preflight, который не показал ожидаемое обнаружение. Код suite говорит только о том, выполнены ли прогоны.
+PASS или FAIL выносит верификатор.
+
+**`RMASSCAN_EXPECT_DEFAULT_ROUTE`.** Офлайн-тесты `cargo test --locked --workspace` читают настоящую таблицу маршрутов
+(`rmasscan-cli/tests/detect_readonly.rs`, только чтение, без кадров). С `RMASSCAN_EXPECT_DEFAULT_ROUTE=1` ожидания
+строгие: первый маршрут по умолчанию обязан идти через шлюз, у `8.8.8.8` обязан быть маршрут, и `--offline` не может
+отказать с `NoRoute`. Так запускают на хостах с известным маршрутом по умолчанию: dev Mac без VPN, minipc, гость Windows. Без переменной (CI)
+тесты терпимы к хосту без такого маршрута. Строгий режим на Mac предполагает, что маршрут по умолчанию не идёт через
+VPN `utun`.
+
 ## macOS (`feth` stand)
 
 Build as above on the Mac. `macos-lab`, `macos-suite` and the live peer-side tools exist on macOS only (on

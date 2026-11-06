@@ -19,7 +19,7 @@ pub mod output;
 use std::io::Write;
 
 use args::{Cli, SeedPolicy, seed_policy};
-use output::{Interactive, io_fail};
+use output::{OutputEnv, OutputOptions, Pipeline, io_fail, services};
 use rmasscan_core::config::{Operation, echo, validate};
 use rmasscan_core::scan::{format_list_line, list_scan};
 
@@ -100,7 +100,18 @@ pub fn run(
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
-    live::run_live(&cfg, backend, &mut Interactive::new(&mut *out), log)?;
+    let env = OutputEnv {
+        wall: backend,
+        services: services::empty(),
+        tcp_ports: Vec::new(),
+        scan_started: None,
+    };
+    live::run_live(
+        &cfg,
+        backend,
+        &mut Pipeline::new(OutputOptions::default(), &mut *out, env),
+        log,
+    )?;
     finish(out)
 }
 
@@ -171,6 +182,15 @@ mod tests {
         }
     }
 
+    impl output::Wall for FakeBackend {
+        fn unix_time(&self) -> u64 {
+            1_800_000_000
+        }
+        fn utc_offset_secs(&self, _: u64) -> i32 {
+            0
+        }
+    }
+
     impl live::Backend for FakeBackend {
         fn routes(&self) -> Result<Box<dyn RouteTable>, NetError> {
             Ok(Box::new(Routes))
@@ -183,9 +203,6 @@ mod tests {
         }
         fn entropy64(&self) -> u64 {
             0x1234_5678_9abc_def1
-        }
-        fn unix_time(&self) -> u64 {
-            1_800_000_000
         }
         fn arp_policy(&self) -> ArpPolicy {
             ArpPolicy::default()

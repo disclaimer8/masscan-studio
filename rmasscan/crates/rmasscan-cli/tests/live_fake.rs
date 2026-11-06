@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use rmasscan_cli::args::{Cli, SeedPolicy};
 use rmasscan_cli::live::{self, Backend};
-use rmasscan_cli::output::{Interactive, Sink, discovered_line};
+use rmasscan_cli::output::{Interactive, Sink, Wall, discovered_line};
 use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::packet::LinkType;
@@ -239,6 +239,16 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
     }
 }
 
+impl Wall for FakeBackend {
+    fn unix_time(&self) -> u64 {
+        assert!(!self.entropy_and_time_panic, "time must not be read");
+        self.unix_time
+    }
+    fn utc_offset_secs(&self, _: u64) -> i32 {
+        0
+    }
+}
+
 impl Backend for FakeBackend {
     fn routes(&self) -> Result<Box<dyn RouteTable>, NetError> {
         assert!(!self.tables_panic, "the route table must not be queried");
@@ -276,10 +286,6 @@ impl Backend for FakeBackend {
     fn entropy64(&self) -> u64 {
         assert!(!self.entropy_and_time_panic, "entropy must not be read");
         ENTROPY
-    }
-    fn unix_time(&self) -> u64 {
-        assert!(!self.entropy_and_time_panic, "time must not be read");
-        self.unix_time
     }
     fn arp_policy(&self) -> ArpPolicy {
         ArpPolicy::default()
@@ -1000,6 +1006,9 @@ struct FailingSink {
 const SINK_ERROR: &str = "write failed: No space left on device (os error 28)";
 
 impl Sink for FailingSink {
+    fn open(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
         self.reports += 1;
         if reply.status == PortStatus::Open && !self.on_finish {
@@ -1589,7 +1598,20 @@ fn os_backend_is_absent_under_test() {
     for (name, src) in [
         ("lib.rs", include_str!("../src/lib.rs")),
         ("live.rs", include_str!("../src/live.rs")),
-        ("output.rs", include_str!("../src/output.rs")),
+        ("output/mod.rs", include_str!("../src/output/mod.rs")),
+        ("output/record.rs", include_str!("../src/output/record.rs")),
+        (
+            "output/formats.rs",
+            include_str!("../src/output/formats.rs"),
+        ),
+        (
+            "output/pipeline.rs",
+            include_str!("../src/output/pipeline.rs"),
+        ),
+        (
+            "output/services.rs",
+            include_str!("../src/output/services.rs"),
+        ),
         ("args.rs", include_str!("../src/args.rs")),
     ] {
         assert!(!src.contains("mod os_backend"), "{name}");

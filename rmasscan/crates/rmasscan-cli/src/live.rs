@@ -36,14 +36,14 @@ use rmasscan_net::{
 };
 
 use crate::args::SeedPolicy;
-use crate::output::{Sink, io_fail};
+use crate::output::{Sink, Wall, io_fail};
 
 /// Префикс отказов обнаружения и ARP в форме C (`[-] FAIL: …` и подсказки); [`crate::error_text`] не оборачивает их.
 pub const REFUSAL_PREFIX: &str = "[-] ";
 
 /// Всё, что CLI берёт у ОС. Тесты подставляют fake (его `open` паникует или выдаёт `FakeAdapter`); настоящая
 /// реализация (`OsBackend`) живёт только в бинарнике, в `src/os_backend.rs` под `#[cfg(not(test))]`.
-pub trait Backend {
+pub trait Backend: Wall {
     /// Таблица маршрутов (только чтение, без привилегий).
     fn routes(&self) -> Result<Box<dyn RouteTable>, NetError>;
     /// Список интерфейсов (только чтение, без привилегий).
@@ -52,8 +52,6 @@ pub trait Backend {
     fn open(&self, binding: &AdapterBinding) -> Result<AdapterPair, NetError>;
     /// 64 бита энтропии ОС, не 0 (seed живого скана, идентификаторы запуска).
     fn entropy64(&self) -> u64;
-    /// Секунды Unix-времени (порт источника по умолчанию `40000 + t % 20000`).
-    fn unix_time(&self) -> u64;
     /// Интервал и срок ARP.
     fn arp_policy(&self) -> ArpPolicy;
     /// Часы резолвера ARP, engine и трассы `--packet-trace` (одни и те же).
@@ -362,6 +360,8 @@ pub fn run_live(
     // Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
     ReadyPlan::new(p.eff.clone(), p.binding.clone()).map_err(|e| e.to_string())?;
     print_detection(&p, log)?;
+    // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
+    sink.open()?;
     let clock = backend.clock();
     let mut binding = p.binding.clone();
     let name = p.detected.iface.name.as_str();

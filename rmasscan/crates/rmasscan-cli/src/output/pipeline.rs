@@ -372,6 +372,27 @@ mod tests {
     }
 
     #[test]
+    fn grepable_and_unicornscan_create_their_files() {
+        for (f, name, head) in [
+            (
+                Format::Grepable,
+                "g.gnmap",
+                "# Masscan 1.3.9-integration scan initiated",
+            ),
+            (Format::Unicornscan, "u.txt", "#masscan\n"),
+        ] {
+            let path = tmp(name);
+            std::fs::write(&path, "stale").unwrap();
+            let o = opts(f, path.to_str());
+            assert!(run(o, &[open_rec()]).is_empty());
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.starts_with(head), "{text}");
+            assert!(!text.contains("stale"));
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    #[test]
     fn stdout_dash_writes_the_format_to_stdout() {
         let out = run(opts(Format::List, Some("-")), &[open_rec()]);
         assert_eq!(

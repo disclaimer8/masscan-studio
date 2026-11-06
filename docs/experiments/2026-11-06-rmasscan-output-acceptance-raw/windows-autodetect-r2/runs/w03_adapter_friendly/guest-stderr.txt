@@ -1,0 +1,21 @@
+[+] interface = Ethernet 2 (given)
+[+] source-mac = 52-54-00-04-80-a9 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = 198.18.0.2 (on-link target)
+[+] router-mac = 02-57-4c-3d-2e-9b (arp: 1 requests, 0 ms)
+[+] seed = 1 (given)
+[+] source-port = 40724 (time)
+rate:  0.09-kpps, 100.00% done, waiting 3-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 3-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 3-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 3-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 2-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 2-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 2-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 2-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 1-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 1-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 1-secs, found=10       
+rate:  0.09-kpps, 100.00% done, waiting 1-secs, found=10       
+                                                                             
+[+] finished: Completed, sent 11, replies 10, open 10

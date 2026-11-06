@@ -1,0 +1,7 @@
+# commit 2b0e92ce7af3d0ba5ae68af881de22a0e99a3590; every build from git archive of it, release, CARGO_INCREMENTAL=0,
+# RMASSCAN_LAB_BUILD_COMMIT set to the commit; rustc 1.99.1 (58cf8f9c3 2026-10-13)
+d145c90c5720b5ba0b2b76145a653189002ec53b2ff8688c6437dc7cfe9eb438  minipc rmasscan-lab (linux-output-r1, linux-autodetect-r2)
+41d92bb8443c2714d94e441fca45e0dd6055d813108ad83de4fbb9010d1adcbf  minipc rmasscan (linux-output-r1, linux-autodetect-r2)
+8bf8c06b527eba9e0088976a9d84298b5b06c84153b6bca0a164f963e0fbbae7  home-pc rmasscan-lab (~/winvm/lab/bin, deploy-manifest)
+dde1d277e5ba32d6dcac7015fd1d60de18a02478a14508d033993fc4abeccc57  guest rmasscan.exe (static CRT, /DEPENDENTLOADFLAG:0x800)
+266b0b21046f7bb6ef2580824034d6dc26cbe59627cc6bce083c44dd4e4952bf  Mac rmasscan-lab (windows-suite orchestrator, windows-verify)

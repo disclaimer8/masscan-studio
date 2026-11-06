@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- masscan v1.0 scan -->
+<?xml-stylesheet href="http://nmap.org/svn/docs/nmap.xsl" type="text/xsl"?>
+<nmaprun scanner="masscan" start="1793982907" version="1.0-BETA"  xmloutputversion="1.03">
+<scaninfo type="syn" protocol="tcp" />
+<host endtime="1701388800"><address addr="0.0.0.1" addrtype="ipv4"/><ports><port protocol="tcp" portid="0"><state state="open" reason="syn-ack" reason_ttl="0"/></port></ports></host>
+<host endtime="1701388801"><address addr="192.0.2.1" addrtype="ipv4"/><ports><port protocol="tcp" portid="47001"><state state="open" reason="none" reason_ttl="64"/></port></ports></host>
+<host endtime="1701388801"><address addr="192.0.2.2" addrtype="ipv4"/><ports><port protocol="tcp" portid="65535"><state state="open" reason="fin-syn-rst-psh-ack-urg-ece-cwr" reason_ttl="255"/></port></ports></host>
+<host endtime="1701475199"><address addr="255.255.255.255" addrtype="ipv4"/><ports><port protocol="tcp" portid="0"><state state="open" reason="rst" reason_ttl="128"/></port></ports></host>
+<runstats>
+<finished time="1793982907" timestr="2026-11-06 16:35:07" elapsed="0" />
+<hosts up="4" down="0" total="4" />
+</runstats>
+</nmaprun>

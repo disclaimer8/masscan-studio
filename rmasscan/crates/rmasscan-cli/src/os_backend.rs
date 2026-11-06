@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rmasscan_cli::live::Backend;
+use rmasscan_cli::output::Wall;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::throttle::{Clock, SystemClock};
 use rmasscan_engine::AdapterPair;
@@ -13,6 +14,19 @@ use rmasscan_net::arp_resolve::ArpPolicy;
 use rmasscan_net::{Interfaces, NetError, RouteTable};
 
 pub struct OsBackend;
+
+impl Wall for OsBackend {
+    fn unix_time(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    }
+
+    /// Настоящее смещение местного времени даёт Задача 4.
+    fn utc_offset_secs(&self, _: u64) -> i32 {
+        0
+    }
+}
 
 impl Backend for OsBackend {
     fn routes(&self) -> Result<Box<dyn RouteTable>, NetError> {
@@ -35,12 +49,6 @@ impl Backend for OsBackend {
                 return v;
             }
         }
-    }
-
-    fn unix_time(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
     }
 
     fn arp_policy(&self) -> ArpPolicy {

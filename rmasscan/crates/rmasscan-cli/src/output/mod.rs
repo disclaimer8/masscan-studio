@@ -2,14 +2,29 @@
 //! Robert David Graham: строка `Discovered open port N/tcp on IP`,
 //! дополненная пробелами до 79 символов, `\n`, flush на каждую строку.
 //! Closed не печатается (`is_show_closed = 0`).
+//!
+//! Модуль объединяет приёмник [`Sink`], записи ([`record`]), форматы ([`formats`]), имена сервисов ([`services`])
+//! и конвейер вывода [`pipeline`] (порт `output.c`).
+
+pub mod formats;
+pub mod pipeline;
+pub mod record;
+pub mod services;
 
 use std::io::{self, Write};
 use std::net::Ipv4Addr;
 
 use rmasscan_core::receive::{PortStatus, Reply};
 
+pub use formats::{Counts, FileCtx, Format, Formatter, formatter};
+pub use pipeline::{OutputEnv, OutputOptions, Pipeline, Wall};
+pub use record::{MASSCAN_VERSION, Record, Status, reason_string, status_str};
+pub use services::ServiceNames;
+
 /// Куда идут результаты. Приёмник этапа 2 реализует тот же трейт.
 pub trait Sink {
+    /// Открывает выходной файл до ARP и engine (Р8); ошибка значит «ни одного кадра».
+    fn open(&mut self) -> Result<(), String>;
     fn report(&mut self, reply: &Reply) -> Result<(), String>;
     fn finish(&mut self) -> Result<(), String>;
 }
@@ -43,6 +58,10 @@ impl<W: Write> Interactive<W> {
 }
 
 impl<W: Write> Sink for Interactive<W> {
+    fn open(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
         if reply.status != PortStatus::Open {
             return Ok(());

@@ -20,6 +20,14 @@
 //! comparison and checked against the run's capture window instead; so are the clock fields of headers and footers
 //! (XML `start`, `finished`, `timestr`, `elapsed`, the grepable times, the binary `s:`). The order of records is
 //! normalised, since replies may arrive in another order.
+//!
+//! The oracle never finishes a live scan on this stand: its receive thread does not return on the silent link, so
+//! after the wait window masscan prints `[-] Passed the wait window but still running, forcing exit...` and exits 0
+//! (main.c:1489-1496) before `output_destroy` writes the footer. Its records and header are flushed and compared; a
+//! missing oracle footer is expected with that line on its stderr (`oracle_forced_exit` in the run's notes) and
+//! unproven evidence without it, and a footer it did write is compared. rmasscan's own footer must be its format's,
+//! rendered from its own records (footer byte parity with C is proven offline by the `--readscan` goldens,
+//! tests/golden/formats).
 use crate::{
     autodetect_verify::{
         self as av, ArgvRecord, CAPTURE_JSON, EVIDENCE_EXTENSIONS, MANIFEST_JSON,
@@ -56,6 +64,8 @@ pub const READSCAN_INPUTS: [&str; 2] = ["input-rmasscan.bin", "input-oracle.bin"
 pub const BINARY_TAG: &str = "o06_binary";
 pub const INTERRUPT_JSON: &str = "interrupt.json";
 pub const ORACLE_DIR: &str = "oracle";
+/// masscan's forced exit after the wait window (main.c:1489-1496): its output files lose their footer.
+pub const FORCED_EXIT: &str = "[-] Passed the wait window but still running, forcing exit...";
 
 /// A masscan output format (`-o<letter>`).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,9 +168,8 @@ pub struct OutputCase {
     pub interactive: bool,
     pub nostatus: bool,
     /// The C oracle runs the same argv after rmasscan. Not for the open failure and the interrupts (rmasscan's own
-    /// behaviour), nor for `--nostatus`: masscan `8e6b3b0` never ends a live `--nostatus` scan with `--wait` above 0
-    /// (main.c:1509-1520 joins the transmit thread, which waits for `is_rx_done`, main.c:470, that only the status
-    /// loop or a second Ctrl-C sets).
+    /// behaviour); `o12_nostatus` simply has no oracle run (the oracle never finishes a live scan on this stand: see
+    /// the module's notes on its forced exit).
     pub oracle: bool,
 }
 
@@ -931,6 +940,41 @@ pub(crate) fn c_time(s: &str) -> Option<u64> {
     );
     (printed == s && days >= 0).then(|| (days * 86_400 + t[0] * 3600 + t[1] * 60 + t[2]) as u64)
 }
+/// The footer of `fmt` over `records`, in [`Doc::footer`]'s masked form (reference §1): list and unicornscan `# end`,
+/// JSON `]`, grepable `# Masscan done at <T>`, XML `<runstats>` with `<hosts up down total>` counted from the records
+/// (`finished time`, `timestr`, `elapsed` masked), binary the 99-byte `masscan/1.1` and zeros; none for ndjson and
+/// hostonly, nor for a document without a record.
+pub(crate) fn rendered_footer(fmt: Format, records: &[Rec]) -> String {
+    if records.is_empty() {
+        return String::new();
+    }
+    match fmt {
+        Format::List | Format::Unicornscan => "# end".into(),
+        Format::Json => "]".into(),
+        Format::Ndjson | Format::Hostonly => String::new(),
+        Format::Grepable => fill(GREPABLE_FOOT, &[MASK]),
+        Format::Binary => "masscan/1.1 (99 bytes)".into(),
+        Format::Xml => {
+            let up = records
+                .iter()
+                .filter(|x| x.status == Some(Status::Open))
+                .count();
+            let (up, down, total) = (
+                up.to_string(),
+                (records.len() - up).to_string(),
+                records.len().to_string(),
+            );
+            [
+                XML_FOOT[0].to_owned(),
+                fill(XML_FOOT[1], &[MASK, MASK, MASK]),
+                fill(XML_FOOT[2], &[&up, &down, &total]),
+                XML_FOOT[3].to_owned(),
+                XML_FOOT[4].to_owned(),
+            ]
+            .join("\r\n")
+        }
+    }
+}
 /// `--readscan` of `inputs` into `-oL` with `--show open,closed`: every status record in file order, its own time.
 pub(crate) fn readscan_list(inputs: &[&[u8]]) -> Result<Vec<u8>, String> {
     let mut lines = Vec::new();
@@ -1175,6 +1219,15 @@ struct Side {
     /// Its document's raw bytes (`o17_readscan` compares them).
     raw: Option<Vec<u8>>,
     frames: Option<Frames>,
+    /// Its stderr carries [`FORCED_EXIT`] (only the oracle's is read for it).
+    forced_exit: bool,
+}
+
+/// Does a scanner's stderr carry masscan's forced exit (a line or the text after a `\r`)?
+fn forced_exit(stderr: &str) -> bool {
+    stderr
+        .split(['\n', '\r'])
+        .any(|s| s.trim_end() == FORCED_EXIT)
 }
 
 fn read_side(r: &mut Run, d: &Path, c: &OutputCase, who: Who, frames: Option<Frames>) -> Side {
@@ -1226,6 +1279,7 @@ fn read_side(r: &mut Run, d: &Path, c: &OutputCase, who: Who, frames: Option<Fra
     Side {
         who,
         exit,
+        forced_exit: who == Who::Oracle && stderr.as_deref().is_some_and(forced_exit),
         stdout,
         stderr,
         doc,
@@ -1279,12 +1333,19 @@ fn doc_checks(r: &mut Run, c: &OutputCase, s: &Side, w: Option<&av::Wire>) {
     }
     match c.kind {
         OutputKind::Scan => {
-            who.beh(
-                r,
-                &format!("{name} is complete (its footer written)"),
-                doc.complete,
-                "",
-            );
+            // The oracle's forced exit after the wait window leaves its file without the footer (module notes).
+            if !(who == Who::Oracle && !doc.complete && s.forced_exit) {
+                who.beh(
+                    r,
+                    &format!("{name} is complete (its footer written)"),
+                    doc.complete,
+                    if who == Who::Oracle && !doc.complete {
+                        "no footer, and no forced exit on the oracle's stderr"
+                    } else {
+                        ""
+                    },
+                );
+            }
             let want = project(c.format, stand_replies(c));
             who.beh(
                 r,
@@ -1307,6 +1368,14 @@ fn doc_checks(r: &mut Run, c: &OutputCase, s: &Side, w: Option<&av::Wire>) {
             );
         }
         _ => {}
+    }
+    if who == Who::Rmasscan && matches!(c.kind, OutputKind::Scan | OutputKind::Interrupt) {
+        let want = rendered_footer(c.format, &doc.records);
+        r.beh(
+            &format!("{name} footer is its format's, rendered from its own records (clock masked)"),
+            doc.footer == want,
+            format!("{:?}, rendered {want:?}", doc.footer),
+        );
     }
     let (Some(fr), Some(w)) = (&s.frames, w) else {
         return;
@@ -1860,14 +1929,21 @@ fn parity(r: &mut Run, c: &OutputCase, rm: &Side, or: &Side) {
             format!("rmasscan {}, oracle {}", a.records.len(), b.records.len()),
         );
         r.beh(
-            &format!("{name} header and footer equal the oracle's after masking the clock"),
-            a.header == b.header && a.footer == b.footer,
-            format!(
-                "rmasscan {:?} {:?}, oracle {:?} {:?}",
-                a.header, a.footer, b.header, b.footer
-            ),
+            &format!("{name} header equals the oracle's after masking the clock"),
+            a.header == b.header,
+            format!("rmasscan {:?}, oracle {:?}", a.header, b.header),
         );
+        // A footer the oracle wrote is compared; its forced exit writes none (module notes).
+        if b.complete {
+            r.beh(
+                &format!("{name} footer equals the oracle's after masking the clock"),
+                a.footer == b.footer,
+                format!("rmasscan {:?}, oracle {:?}", a.footer, b.footer),
+            );
+        }
     }
+    r.notes
+        .insert("oracle_forced_exit".into(), json!(or.forced_exit));
     if c.stdout() == StdoutForm::Discovered
         && let (Some(a), Some(b)) = (&rm.stdout, &or.stdout)
     {

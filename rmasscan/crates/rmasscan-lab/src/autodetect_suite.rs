@@ -447,14 +447,9 @@ pub(crate) fn hash_and_copy(work: &Path, dest: &Path) -> Result<(), String> {
     })
 }
 
-/// Before the first run: no lab-isolation finding anywhere in `out` (a breach makes the directory FAIL for good),
-/// no run and no aborted attempt of a selected case yet, and no manifest of another plan, build (rmasscan, oracle,
-/// rmasscan-lab), stand or Linux lab (`lab_id`).
-fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteError> {
-    check_out_for(out, tags, identity, "autodetect", av::verify_dir)
-}
-/// [`check_out`] for a plan whose manifest names it under `plan_key`, with that plan's verifier (`verify`) for the
-/// lab-isolation findings already in `out`.
+/// Before the first run: no lab-isolation finding anywhere in `out` (a breach makes the directory FAIL for good; `verify`
+/// is the plan's verifier), no run and no aborted attempt of a selected case yet, and no manifest of another plan (its
+/// key `plan_key`), build (rmasscan, oracle, rmasscan-lab), stand or Linux lab (`lab_id`).
 pub(crate) fn check_out_for(
     out: &Path,
     tags: &[&str],
@@ -1658,7 +1653,7 @@ mod mac {
 
     fn run_cases(s: &Mac, cases: &[CaseSpec], identity: &Value) -> Result<i32, SuiteError> {
         let tags: Vec<&str> = cases.iter().map(|c| c.tag).collect();
-        check_out(&s.out, &tags, identity)?;
+        check_out_for(&s.out, &tags, identity, "autodetect", av::verify_dir)?;
         // The stand must be sealed, with BPF granted, before anything is written into --out.
         let probe = s.out.join(".work");
         if fs::read_dir(&probe).is_ok_and(|mut d| d.next().is_some()) {

@@ -318,6 +318,21 @@ fn setup(tags: &[&'static str]) -> Setup {
         args,
     }
 }
+/// The case and the directory name of a scanner's working directory `<work>/<tag>.<run id>/cwd-<who>`, read by
+/// path components (the hermetic tests also run on the Windows CI runner).
+fn cwd_of(dir: &str) -> (String, String) {
+    let p = Path::new(dir);
+    let name = |p: Option<&Path>| {
+        p.and_then(Path::file_name)
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let run = name(p.parent());
+    (
+        run.split('.').next().unwrap_or_default().to_owned(),
+        name(Some(p)),
+    )
+}
 fn set_arg(args: &mut [String], k: &str, v: &str) {
     let i = args.iter().position(|x| x == k).unwrap();
     args[i + 1] = v.into();
@@ -341,7 +356,7 @@ fn an_output_suite_directory_passes_output_verify() {
     for c in ov::cases() {
         let mine: Vec<&Vec<String>> = scans
             .iter()
-            .filter(|a| a.ends_with(&c.argv()) && a[7].contains(&format!("/{}.", c.tag)))
+            .filter(|a| a.ends_with(&c.argv()) && cwd_of(&a[7]).0 == c.tag)
             .collect();
         assert_eq!(mine.len(), 1, "{}", c.tag);
         let a = mine[0];
@@ -357,7 +372,7 @@ fn an_output_suite_directory_passes_output_verify() {
                 IN_DIR_SCRIPT
             ])[..]
         );
-        assert!(a[7].ends_with("/cwd-rmasscan"), "{a:?}");
+        assert_eq!(cwd_of(&a[7]).1, "cwd-rmasscan", "{a:?}");
         assert_eq!(a[8], s.fake.rmasscan);
     }
     // The oracle runs exactly the oracle cases, the same argv, /etc/masscan masked, in a directory of its own.
@@ -368,11 +383,11 @@ fn an_output_suite_directory_passes_output_verify() {
     );
     for a in &oracle {
         assert_eq!(&a[4..7], &strings(&[SH, "-c", IN_DIR_SCRIPT])[..]);
-        assert!(a[7].ends_with("/cwd-oracle"), "{a:?}");
+        assert_eq!(cwd_of(&a[7]).1, "cwd-oracle", "{a:?}");
         assert_eq!(&a[8..11], &strings(&[UNSHARE, "-m", SH])[..]);
         let c = ov::cases()
             .iter()
-            .find(|c| a[7].contains(&format!("/{}.", c.tag)))
+            .find(|c| cwd_of(&a[7]).0 == c.tag)
             .unwrap();
         assert!(c.oracle && a.ends_with(&c.argv()), "{}", c.tag);
     }

@@ -155,6 +155,25 @@ pub(crate) fn render(fmt: Format, recs: &[R], start: u64, end: u64) -> Vec<u8> {
     }
     o.into_bytes()
 }
+/// `doc` without its footer: what masscan leaves when it is forced out before `output_destroy`.
+pub(crate) fn cut_footer(fmt: Format, doc: &[u8]) -> Vec<u8> {
+    let text = || String::from_utf8(doc.to_vec()).unwrap();
+    match fmt {
+        Format::List | Format::Unicornscan => text().strip_suffix("# end\n").unwrap().into(),
+        Format::Json => text().strip_suffix("]\n").unwrap().into(),
+        Format::Grepable => {
+            let t = text();
+            let last = t[..t.len() - 1].rfind('\n').unwrap();
+            t[..=last].into()
+        }
+        Format::Xml => {
+            let t = text();
+            t[..t.find("<runstats>\r\n").unwrap()].into()
+        }
+        Format::Binary => doc[..doc.len() - 99].to_vec(),
+        Format::Ndjson | Format::Hostonly => doc.to_vec(),
+    }
+}
 /// `%c` of the C locale in GMT for the two clocks the generator uses (checked with `date -u -r`).
 fn ctime(t: u64) -> String {
     let s = t - 1_800_000_000;
@@ -177,6 +196,9 @@ pub(crate) struct Side {
     pub(crate) pcap: Frames,
     /// The records of its document, in file order.
     pub(crate) recs: Vec<R>,
+    /// Its document with the footer, as a scanner that ends writes it (the live oracle is forced out before it writes
+    /// the footer, main.c:1489-1496).
+    pub(crate) whole: Vec<u8>,
 }
 
 /// One simulated run directory; tests change fields before `write`. The suite's tests play its sides.
@@ -202,7 +224,7 @@ fn ends(fr: &mut Frames, last: f64) {
 /// The detection lines rmasscan prints on the stand before the output file opens (rmasscan-cli `live.rs`).
 const DETECTION: &str = "[+] interface = veth-a (detected: route to 198.18.0.2)\n[+] source-mac = 02-aa-00-00-00-01 (detected)\n[+] source-ip = 198.18.0.1 (detected)\n[+] router-ip = 198.18.0.2 (interface default gateway)\n";
 /// masscan's stderr of a scan: banner, status lines rewritten after `\r`, the erase.
-const ORACLE_STDERR: &str = "Starting masscan 1.3.9-integration (http://bit.ly/14GZzcT) at 2027-01-15 08:01:40 GMT\nInitiating SYN Stealth Scan\nScanning 4 hosts [3 ports/host]\nrate:  0.00-kpps, 100.00% done, waiting 3-secs, found=8       \r                                                                             \r\n";
+const ORACLE_STDERR: &str = "Starting masscan 1.3.9-integration (http://bit.ly/14GZzcT) at 2027-01-15 08:01:40 GMT\nInitiating SYN Stealth Scan\nScanning 4 hosts [3 ports/host]\nrate:  0.00-kpps, 100.00% done, waiting 3-secs, found=8       \rrate:  0.00-kpps, 100.00% done, waiting -10-secs, found=8       \r[-] Passed the wait window but still running, forcing exit...\n";
 
 /// A scan of the stand from `t0` on: ARP, SYNs of the plan, the peer's answers (SYN-ACK on 80 and 8080, RST
 /// otherwise) and the scanner kernel's RST, the records and what the scanner prints.
@@ -256,7 +278,13 @@ fn live_side(c: &OutputCase, t0: f64, sp: &str, oracle: bool) -> Side {
         .filter(|r| r.open || c.show_closed)
         .cloned()
         .collect();
-    let doc = render(c.format, &recs, t0 as u64, (last + 0.5) as u64);
+    let whole = render(c.format, &recs, t0 as u64, (last + 0.5) as u64);
+    // The live oracle never ends on this stand: forced out after the wait window, it writes no footer.
+    let doc = if oracle && c.kind == OutputKind::Scan {
+        cut_footer(c.format, &whole)
+    } else {
+        whole.clone()
+    };
     let open = all.iter().filter(|r| r.open).count();
     let stdout = match c.stdout() {
         StdoutForm::Silent => Vec::new(),
@@ -301,6 +329,7 @@ fn live_side(c: &OutputCase, t0: f64, sp: &str, oracle: bool) -> Side {
         file: c.writes_file().then(|| (c.format.file().to_owned(), doc)),
         pcap: fr,
         recs,
+        whole,
     }
 }
 /// A side that sends nothing: markers only.
@@ -342,6 +371,7 @@ impl Sim {
                     file: None,
                     pcap: quiet(T0),
                     recs: Vec::new(),
+                    whole: Vec::new(),
                 },
                 None,
             ),
@@ -363,6 +393,7 @@ impl Sim {
                     file: Some(("output.txt".into(), render(Format::List, &recs, 0, 0))),
                     pcap: quiet(t0),
                     recs: recs.clone(),
+                    whole: render(Format::List, &recs, 0, 0),
                 };
                 (side(T0), Some(side(T0 + ORACLE_AT)))
             }
@@ -1000,4 +1031,152 @@ fn verdict_never_upgrades() {
         .push(("expect.json".into(), serde_json::to_vec_pretty(&x).unwrap()));
     sim.omit.push("expect.json");
     assert_verdict(&judge(&sim), INVALID);
+}
+
+// ------------------------------------------------------------------ fix round 1: the oracle's forced exit
+
+/// The dual live cases, whose oracle runs a live scan.
+fn dual_live() -> Vec<&'static str> {
+    cases()
+        .iter()
+        .filter(|c| c.oracle && c.kind == OutputKind::Scan)
+        .map(|c| c.tag)
+        .collect()
+}
+/// `sim`'s oracle as a scanner that ends: its footer written, no forced exit on its stderr.
+fn oracle_that_ends(sim: &mut Sim) {
+    let c = sim.case;
+    let o = sim.oracle.as_mut().unwrap();
+    o.stderr = o.stderr.replace(&format!("{FORCED_EXIT}\n"), "");
+    match c.target {
+        Target::Stdout => o.stdout = o.whole.clone(),
+        _ => o.file.as_mut().unwrap().1 = o.whole.clone(),
+    }
+}
+fn oracle_doc(sim: &mut Sim) -> &mut Vec<u8> {
+    let o = sim.oracle.as_mut().unwrap();
+    if sim.case.target == Target::Stdout {
+        &mut o.stdout
+    } else {
+        &mut o.file.as_mut().unwrap().1
+    }
+}
+
+#[test]
+fn an_oracle_forced_out_after_the_wait_window_without_a_footer_is_pass() {
+    // What masscan 8e6b3b0 does on the stand (live, 2026-11-06): its receive thread never returns, the wait window
+    // ends in `[-] Passed the wait window but still running, forcing exit...`, and output_destroy never writes the
+    // footer. Records and header still equal rmasscan's.
+    assert_eq!(
+        dual_live(),
+        [
+            "o01_list",
+            "o02_json",
+            "o03_ndjson",
+            "o04_grepable",
+            "o05_xml",
+            "o06_binary",
+            "o07_hostonly",
+            "o08_unicornscan",
+            "o09_json_default_show",
+            "o10_list_stdout",
+            "o11_interactive"
+        ]
+    );
+    for tag in dual_live() {
+        let mut sim = Sim::new(tag);
+        let fmt = sim.case.format;
+        if !matches!(fmt, Format::Ndjson | Format::Hostonly) {
+            let whole = sim.oracle.as_ref().unwrap().whole.clone();
+            assert_ne!(*oracle_doc(&mut sim), whole, "{tag}");
+        }
+        let r = judge(&sim);
+        assert_verdict(&r, PASS);
+        assert_eq!(r["notes"]["oracle_forced_exit"], true, "{tag}");
+        assert_eq!(check(&r, "header equals the oracle's")["result"], PASS);
+        // A footer the oracle did write is compared, and must equal rmasscan's.
+        let mut sim = Sim::new(tag);
+        oracle_that_ends(&mut sim);
+        let r = judge(&sim);
+        assert_verdict(&r, PASS);
+        assert_eq!(r["notes"]["oracle_forced_exit"], false, "{tag}");
+        if !matches!(fmt, Format::Ndjson | Format::Hostonly) {
+            assert_eq!(
+                check(&r, "footer equals the oracle's")["result"],
+                PASS,
+                "{tag}"
+            );
+        }
+    }
+    // An oracle footer that differs from rmasscan's (its <hosts> off by one) fails the parity.
+    let mut sim = Sim::new("o05_xml");
+    oracle_that_ends(&mut sim);
+    let doc = oracle_doc(&mut sim);
+    *doc = String::from_utf8(doc.clone())
+        .unwrap()
+        .replace(
+            "<hosts up=\"8\" down=\"4\" total=\"12\" />",
+            "<hosts up=\"8\" down=\"4\" total=\"13\" />",
+        )
+        .into_bytes();
+    let r = judge(&sim);
+    assert_ne!(r["verdict"], PASS);
+    assert_eq!(check(&r, "footer equals the oracle's")["result"], FAIL);
+}
+
+#[test]
+fn an_oracle_without_its_footer_or_the_forced_exit_is_invalid() {
+    // The footer is missing, yet the oracle did not say it was forced out: its document is unproven.
+    for tag in ["o01_list", "o05_xml", "o06_binary", "o10_list_stdout"] {
+        let mut sim = Sim::new(tag);
+        let o = sim.oracle.as_mut().unwrap();
+        o.stderr = o.stderr.replace(&format!("{FORCED_EXIT}\n"), "");
+        let r = judge(&sim);
+        assert_verdict(&r, INVALID);
+        let complete = array(&r["checks"])
+            .iter()
+            .find(|c| {
+                c["name"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with("oracle/") && n.contains("is complete"))
+            })
+            .cloned()
+            .unwrap();
+        assert_eq!(complete["result"], INVALID, "{tag}");
+        assert_eq!(r["notes"]["oracle_forced_exit"], false);
+    }
+}
+
+#[test]
+fn a_wrong_rmasscan_footer_is_fail() {
+    // rmasscan's own footer is its format's, counted from its own records: an XML <hosts> up off by one.
+    let mut sim = Sim::new("o05_xml");
+    edit_doc(&mut sim, |t| {
+        t.replace("<hosts up=\"8\" down=\"4\"", "<hosts up=\"9\" down=\"4\"")
+    });
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert_eq!(check(&r, "footer is its format's")["result"], FAIL);
+    // A JSON without its `]`.
+    let mut sim = Sim::new("o02_json");
+    edit_doc(&mut sim, |t| t.strip_suffix("]\n").unwrap().to_owned());
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert_eq!(check(&r, "output.txt is complete")["result"], FAIL);
+    assert_eq!(check(&r, "footer is its format's")["result"], FAIL);
+    // rmasscan writes no footer where the oracle was forced out: still a failure of rmasscan.
+    let mut sim = Sim::new("o06_binary");
+    let (_, b) = sim.rm.file.as_mut().unwrap();
+    b.truncate(b.len() - 99);
+    assert_verdict(&judge(&sim), FAIL);
+    // Every format's rendered footer is the one the parser reads back from a whole document.
+    for tag in dual_live() {
+        let sim = Sim::new(tag);
+        let d = parse_doc(sim.case.format, &sim.rm.whole).unwrap();
+        assert_eq!(
+            d.footer,
+            rendered_footer(sim.case.format, &d.records),
+            "{tag}"
+        );
+    }
 }

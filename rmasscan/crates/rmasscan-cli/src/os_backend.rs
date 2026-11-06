@@ -1,12 +1,13 @@
 //! Настоящая реализация шва `Backend` (AGPL-3.0). Включается только в бинарник вне `cfg(test)` и является
 //! единственным местом, где CLI открывает адаптер (`rmasscan_net::open_explicit`). Таблицы маршрутов и интерфейсов
-//! читаются в процессе и без привилегий; энтропия из `getrandom`; часы `SystemClock`.
+//! читаются в процессе и без привилегий; энтропия из `getrandom`; часы `SystemClock`; смещение местного времени
+//! `rmasscan_net::localtime`; имена сервисов из файла services хоста.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rmasscan_cli::live::Backend;
-use rmasscan_cli::output::Wall;
+use rmasscan_cli::output::{ServiceNames, Wall};
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::throttle::{Clock, SystemClock};
 use rmasscan_engine::AdapterPair;
@@ -22,9 +23,12 @@ impl Wall for OsBackend {
             .map_or(0, |d| d.as_secs())
     }
 
-    /// Настоящее смещение местного времени даёт Задача 4.
-    fn utc_offset_secs(&self, _: u64) -> i32 {
-        0
+    /// Ошибка ОС (или время вне `time_t`) даёт 0: подвал `-oX` тогда печатает UTC, запись не теряется.
+    fn utc_offset_secs(&self, unix: u64) -> i32 {
+        i64::try_from(unix)
+            .ok()
+            .and_then(|t| rmasscan_net::localtime::utc_offset_secs(t).ok())
+            .unwrap_or(0)
     }
 }
 
@@ -57,5 +61,9 @@ impl Backend for OsBackend {
 
     fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
         Arc::new(SystemClock::new())
+    }
+
+    fn services(&self) -> ServiceNames {
+        ServiceNames::host()
     }
 }

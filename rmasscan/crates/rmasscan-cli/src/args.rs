@@ -5,12 +5,33 @@
 //!
 //! Любая опция вне подмножества v1 (например `--banners`) - ошибка clap,
 //! а не молчаливый пропуск (Review Focus №5).
+//!
+//! Опции вывода (`SET_output_*`, main-conf.c:1616–1806, `-o<буква>` :3401–3459) разбираются с семантикой C:
+//! `-o<буква> FILE` переводится в длинные опции до clap, повтор опции вывода побеждает последним (Р17), `--show`,
+//! `--noshow` и `--open` применяются в порядке командной строки. Отклонения от C: неизвестный `--output-format` -
+//! ошибка (Р6); redis, certs и ротация отклоняются с причиной (Р1).
 
+use std::fmt;
 use std::net::Ipv4Addr;
 
-use clap::Parser;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 use rmasscan_core::config::{ScanConfig, parse_mac, parse_rate, parse_shard, parse_source_port};
 use rmasscan_core::targets::{add_target_string, parse_ports};
+
+use crate::output::{Format, OutputOptions};
+
+/// `--webxml` (main-conf.c:3033–3034).
+const NMAP_XSL: &str = "http://nmap.org/svn/docs/nmap.xsl";
+
+/// Допустимые значения `--output-format` в тексте отказа (Р6).
+const FORMAT_NAMES: &str =
+    "list, json, ndjson, grepable, xml, binary, hostonly, unicornscan, interactive, none";
+
+/// Отказы Р1 с причиной.
+const REDIS_REFUSAL: &str =
+    "--output-format redis is not supported (rmasscan writes results only to a file or stdout)";
+const CERTS_REFUSAL: &str =
+    "--output-format certs is not supported (it needs --banners, which rmasscan does not grab)";
 
 // Опции v1. Значения, у которых в C своя грамматика (`--rate`, `--shard`,
 // MAC, `--source-port`), хранятся строками и разбираются функциями ядра.
@@ -18,9 +39,9 @@ use rmasscan_core::targets::{add_target_string, parse_ports};
 #[command(
     name = "rmasscan",
     version,
-    about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, --offline, -sL, --echo and --iflist",
+    about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, masscan output formats, --readscan, --offline, -sL, --echo and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. Detection, --offline and --iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
+    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout). With a file format stdout is silent\nunless --interactive is given.\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. Detection, --offline and --iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
@@ -177,34 +198,380 @@ pub struct Cli {
         help = "Same as --echo (C prints the same for both)"
     )]
     pub echo_all: bool,
+    // `--readscan f1 f2 …` (main-conf.c:3266–3278): все следующие аргументы без `-` это файлы; цели и порты
+    // фильтра идут раньше.
+    #[arg(
+        long,
+        value_name = "FILE",
+        num_args = 1..,
+        conflicts_with_all = ["list", "echo", "echo_all", "offline", "iflist", "packet_trace"],
+        help = "Read masscan -oB files (TCP status records) and write them with the output options; targets and ports given before it filter the records"
+    )]
+    pub readscan: Vec<String>,
+    // Каждое вхождение проверяется (Р6), побеждает последнее (Р17).
+    #[arg(
+        long = "output-format",
+        value_name = "FORMAT",
+        value_parser = output_format_value,
+        overrides_with = "output_format",
+        help = "list, json, ndjson, grepable, xml, binary, hostonly, unicornscan, interactive or none"
+    )]
+    pub output_format: Option<String>,
+    // main-conf.c:1643–1657: без формата значит XML.
+    #[arg(
+        long = "output-filename",
+        alias = "output-file",
+        value_name = "FILE",
+        overrides_with = "output_filename",
+        help = "Output file, - is stdout (without --output-format: XML; alias: --output-file)"
+    )]
+    pub output_filename: Option<String>,
+    #[arg(
+        long = "append-output",
+        alias = "output-append",
+        overrides_with = "append_output",
+        help = "Append to the output file instead of truncating it (alias: --output-append)"
+    )]
+    pub append_output: bool,
+    #[arg(
+        long = "output-flush",
+        overrides_with = "output_flush",
+        help = "Flush the output file after every record"
+    )]
+    pub output_flush: bool,
+    #[arg(
+        long,
+        alias = "open-only",
+        overrides_with = "open",
+        help = "Report only open ports (the default; resets --show; alias: --open-only)"
+    )]
+    pub open: bool,
+    #[arg(
+        long,
+        aliases = ["output-show", "output-status"],
+        value_name = "LIST",
+        help = "Also report: comma list of open, closed, host, all"
+    )]
+    pub show: Vec<String>,
+    #[arg(
+        long,
+        alias = "output-noshow",
+        value_name = "LIST",
+        help = "Do not report: comma list of open, closed, host, all"
+    )]
+    pub noshow: Vec<String>,
+    #[arg(
+        long,
+        overrides_with_all = ["interactive", "nointeractive"],
+        help = "Print the Discovered lines on stdout also with a file format"
+    )]
+    pub interactive: bool,
+    #[arg(
+        long,
+        overrides_with_all = ["interactive", "nointeractive"],
+        help = "Undo --interactive"
+    )]
+    pub nointeractive: bool,
+    #[arg(
+        long,
+        value_name = "URL",
+        overrides_with = "stylesheet",
+        conflicts_with = "webxml",
+        help = "XML stylesheet reference (without --output-format: XML)"
+    )]
+    pub stylesheet: Option<String>,
+    #[arg(
+        long,
+        overrides_with = "webxml",
+        help = "Same as --stylesheet http://nmap.org/svn/docs/nmap.xsl"
+    )]
+    pub webxml: bool,
+    #[arg(
+        long,
+        overrides_with_all = ["status", "nostatus"],
+        help = "Show the status line on stderr (the default)"
+    )]
+    pub status: bool,
+    #[arg(
+        long,
+        overrides_with_all = ["status", "nostatus"],
+        help = "Do not show the status line"
+    )]
+    pub nostatus: bool,
+    #[arg(
+        long = "ndjson-status",
+        alias = "status-ndjson",
+        overrides_with = "ndjson_status",
+        help = "Print the status as NDJSON (alias: --status-ndjson)"
+    )]
+    pub ndjson_status: bool,
+    // Ротация (Р1): принимается, чтобы отказать с причиной, а не ошибкой «неизвестная опция».
+    #[arg(long, aliases = ["output-rotate", "rotate-output", "rotate-time"], hide = true)]
+    pub rotate: Option<String>,
+    #[arg(long = "rotate-dir", aliases = ["output-rotate-dir", "rotate-directory"], hide = true)]
+    pub rotate_dir: Option<String>,
+    #[arg(long = "rotate-offset", alias = "output-rotate-offset", hide = true)]
+    pub rotate_offset: Option<String>,
+    #[arg(long = "rotate-size", aliases = ["output-rotate-filesize", "rotate-filesize"], hide = true)]
+    pub rotate_size: Option<String>,
+    /// `--show`, `--noshow` и `--open` в порядке командной строки; заполняет [`Cli::try_parse_masscan`].
+    #[arg(skip)]
+    show_steps: Vec<ShowStep>,
+}
+
+/// Один шаг `SET_output_show` (`on`), `SET_output_noshow` (`!on`) или `SET_output_show_open`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShowStep {
+    List { on: bool, list: String },
+    OpenOnly,
+}
+
+/// Ошибка разбора: clap печатает свою (`e.exit()`, код clap), текст masscan печатается в stderr как есть, exit 1.
+#[derive(Debug)]
+pub enum ParseError {
+    Clap(clap::Error),
+    Masscan(String),
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::Clap(e) => write!(f, "{e}"),
+            ParseError::Masscan(t) => f.write_str(t),
+        }
+    }
+}
+
+/// Отказ значения `--output-format` из value parser clap; [`Cli::try_parse_masscan`] отдаёт его текст как
+/// [`ParseError::Masscan`].
+#[derive(Debug)]
+struct FormatRefusal(String);
+
+impl fmt::Display for FormatRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FormatRefusal {}
+
+fn output_format_value(name: &str) -> Result<String, FormatRefusal> {
+    parse_format(name)
+        .map(|_| name.to_string())
+        .map_err(FormatRefusal)
+}
+
+/// Ошибка clap, кроме отказа [`FormatRefusal`]: тот становится текстом masscan (exit 1, а не код clap).
+fn from_clap(e: clap::Error) -> ParseError {
+    match std::error::Error::source(&e).and_then(|s| s.downcast_ref::<FormatRefusal>()) {
+        Some(r) => ParseError::Masscan(r.0.clone()),
+        None => ParseError::Clap(e),
+    }
+}
+
+/// `-o<буква>` (main-conf.c:3401–3452): формат по третьему символу аргумента.
+fn dash_o_format(arg: &str) -> Result<&'static str, String> {
+    match arg.as_bytes().get(2) {
+        Some(b'L') => Ok("list"),
+        Some(b'J') => Ok("json"),
+        Some(b'D') => Ok("ndjson"),
+        Some(b'G') => Ok("grepable"),
+        Some(b'X') => Ok("xml"),
+        Some(b'B') => Ok("binary"),
+        Some(b'H') => Ok("hostonly"),
+        Some(b'U') => Ok("unicornscan"),
+        // `-oR` это redis (Р1).
+        Some(b'A' | b'N' | b'S' | b'R') => Err(format!("nmap({arg}): unsupported output format")),
+        _ => Err(format!("nmap({arg}): unknown output format")),
+    }
 }
 
 // Причуды masscan, которые clap не выражает.
 //
 // 1. `-sL` (nmap-стиль) - это один флаг, а
 //    clap прочёл бы его как `-s L`. Заменяется на `--list`.
+// 2. `-o<буква> FILE` (main-conf.c:3401–3459): буква слитно с `-o`, файл следующим argv (`-` значит stdout, иное
+//    начало с `-` или конец argv это `missing output filename`). Заменяется на `--output-format=<имя>
+//    --output-filename=<FILE>`; неподдерживаемая или неизвестная буква сообщается раньше проверки файла, как в C.
 //
 // Остальное clap обрабатывает как C: `-p80`, `-p0-65535` (короткая опция с
-// приклеенным значением), `-e lo`, `--opt=value`.
-pub fn preprocess_args<I, S>(args: I) -> Vec<String>
+// приклеенным значением), `-e lo`, `--opt=value`. Первый элемент (имя программы) не трогается.
+pub fn preprocess_args<I, S>(args: I) -> Result<Vec<String>, String>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    args.into_iter()
-        .map(Into::into)
-        .map(|a: String| if a == "-sL" { "--list".to_string() } else { a })
-        .collect()
+    let mut it = args.into_iter().map(Into::into);
+    let mut out: Vec<String> = it.next().into_iter().collect();
+    while let Some(a) = it.next() {
+        if a == "-sL" {
+            out.push("--list".into());
+        } else if a.starts_with("-o") {
+            let format = dash_o_format(&a)?;
+            let file = it
+                .next()
+                .filter(|f| !(f.starts_with('-') && f.len() > 1))
+                .ok_or_else(|| "missing output filename".to_string())?;
+            out.push(format!("--output-format={format}"));
+            out.push(format!("--output-filename={file}"));
+        } else {
+            out.push(a);
+        }
+    }
+    Ok(out)
+}
+
+/// Порядок `--show`, `--noshow` и `--open` по индексам clap. Из нескольких `--open` значим только последний (он
+/// сбрасывает всё до него), а его индекс clap и хранит.
+fn show_steps(m: &ArgMatches) -> Vec<ShowStep> {
+    let mut steps: Vec<(usize, ShowStep)> = Vec::new();
+    for (id, on) in [("show", true), ("noshow", false)] {
+        if let (Some(lists), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
+            let list = |l: &String| ShowStep::List {
+                on,
+                list: l.clone(),
+            };
+            steps.extend(indices.zip(lists.map(list)));
+        }
+    }
+    if m.get_flag("open")
+        && let Some(i) = m.index_of("open")
+    {
+        steps.push((i, ShowStep::OpenOnly));
+    }
+    steps.sort_by_key(|(i, _)| *i);
+    steps.into_iter().map(|(_, s)| s).collect()
+}
+
+/// `--output-format` (`SET_output_format`, main-conf.c:1659–1711), кроме причуды C продолжать с прежним форматом.
+fn parse_format(name: &str) -> Result<Format, String> {
+    Ok(match name {
+        "interactive" => Format::Interactive,
+        "list" => Format::List,
+        "unicornscan" => Format::Unicornscan,
+        "xml" => Format::Xml,
+        "binary" => Format::Binary,
+        "grepable" | "greppable" => Format::Grepable,
+        "json" => Format::Json,
+        "ndjson" => Format::Ndjson,
+        "none" => Format::None,
+        "hostonly" => Format::Hostonly,
+        "redis" => return Err(REDIS_REFUSAL.into()),
+        "certs" => return Err(CERTS_REFUSAL.into()),
+        other => {
+            return Err(format!(
+                "FAIL: unknown output-format: {other}\n  hint: {FORMAT_NAMES}"
+            ));
+        }
+    })
+}
+
+/// Цикл `SET_output_show`/`SET_output_noshow` (main-conf.c:1712–1790): элементы через запятую до первого пустого
+/// (`INDEX_OF`), повторные запятые пропускаются; неизвестный элемент - `FAIL` C (там `exit(1)`).
+fn apply_show(o: &mut OutputOptions, list: &str, on: bool) -> Result<(), String> {
+    let mut rest = list;
+    loop {
+        let len = rest.find(',').unwrap_or(rest.len());
+        if len == 0 {
+            return Ok(());
+        }
+        match &rest[..len] {
+            "open" => o.show_open = on,
+            "closed" | "close" => o.show_closed = on,
+            "host" => o.show_host = on,
+            "all" => (o.show_open, o.show_closed, o.show_host) = (on, on, on),
+            bad => {
+                let which = if on { "show" } else { "noshow" };
+                return Err(format!("FAIL: unknown '{which}' spec: {bad}"));
+            }
+        }
+        rest = rest[len..].trim_start_matches(',');
+    }
 }
 
 impl Cli {
-    // `try_parse_from` с предобработкой [`preprocess_args`].
-    pub fn try_parse_masscan<I, S>(args: I) -> Result<Cli, clap::Error>
+    /// Разбор argv в духе masscan: [`preprocess_args`], clap, порядок `--show`/`--noshow`/`--open` и проверка опций
+    /// вывода, которые C отклоняет при разборе (`FAIL: unknown 'show' spec`) или которых здесь нет (Р1, Р6).
+    pub fn try_parse_masscan<I, S>(args: I) -> Result<Cli, ParseError>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Cli::try_parse_from(preprocess_args(args))
+        let argv = preprocess_args(args).map_err(ParseError::Masscan)?;
+        let m = Cli::command()
+            .try_get_matches_from(argv)
+            .map_err(from_clap)?;
+        let mut cli = Cli::from_arg_matches(&m).map_err(ParseError::Clap)?;
+        cli.show_steps = show_steps(&m);
+        cli.output_options().map_err(ParseError::Masscan)?;
+        Ok(cli)
+    }
+
+    /// Задана ли хоть одна опция вывода или статуса (Р19: они допустимы только со сканом и `--readscan`).
+    pub fn output_flags_given(&self) -> bool {
+        self.output_format.is_some()
+            || self.output_filename.is_some()
+            || self.append_output
+            || self.output_flush
+            || self.open
+            || !self.show.is_empty()
+            || !self.noshow.is_empty()
+            || self.interactive
+            || self.nointeractive
+            || self.stylesheet.is_some()
+            || self.webxml
+            || self.status
+            || self.nostatus
+            || self.ndjson_status
+            || self.rotate.is_some()
+            || self.rotate_dir.is_some()
+            || self.rotate_offset.is_some()
+            || self.rotate_size.is_some()
+    }
+
+    /// Опции конвейера вывода с умолчаниями C (`main.c:1596`). Формат не задан, а файл или таблица стилей заданы -
+    /// значит XML (`SET_output_filename`, `SET_output_stylesheet`; от порядка это не зависит, потому что явный
+    /// формат всегда ненулевой). Реальный формат без файла здесь допустим: его отклоняет `run`.
+    pub fn output_options(&self) -> Result<OutputOptions, String> {
+        let rotation = [
+            (self.rotate.is_some(), "--rotate"),
+            (self.rotate_dir.is_some(), "--rotate-dir"),
+            (self.rotate_offset.is_some(), "--rotate-offset"),
+            (self.rotate_size.is_some(), "--rotate-size"),
+        ];
+        if let Some((_, name)) = rotation.iter().find(|(given, _)| *given) {
+            return Err(format!(
+                "{name} is not supported (output files are not rotated)"
+            ));
+        }
+        let stylesheet = if self.webxml {
+            Some(NMAP_XSL.to_string())
+        } else {
+            self.stylesheet.clone()
+        };
+        let format = match &self.output_format {
+            Some(f) => parse_format(f)?,
+            None if self.output_filename.is_some() || stylesheet.is_some() => Format::Xml,
+            None => Format::Default,
+        };
+        let mut o = OutputOptions {
+            format,
+            filename: self.output_filename.clone(),
+            append: self.append_output,
+            flush: self.output_flush,
+            interactive: self.interactive,
+            stylesheet,
+            ..OutputOptions::default()
+        };
+        for step in &self.show_steps {
+            match step {
+                ShowStep::List { on, list } => apply_show(&mut o, list, *on)?,
+                ShowStep::OpenOnly => {
+                    (o.show_open, o.show_closed, o.show_host) = (true, false, false);
+                }
+            }
+        }
+        Ok(o)
     }
 
     // Строит `ScanConfig`. В отличие от C (main-conf.c:2736-2741, ошибка
@@ -319,9 +686,330 @@ fn read_exclude_file(cfg: &mut ScanConfig, path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output::{Format, OutputOptions};
 
-    fn parse(a: &[&str]) -> Result<Cli, clap::Error> {
+    fn parse(a: &[&str]) -> Result<Cli, ParseError> {
         Cli::try_parse_masscan(std::iter::once("rmasscan").chain(a.iter().copied()))
+    }
+
+    fn opts(a: &[&str]) -> OutputOptions {
+        parse(a).unwrap().output_options().unwrap()
+    }
+
+    /// Отказ разбора с текстом masscan (печатается как есть, exit 1).
+    fn masscan_err(a: &[&str]) -> String {
+        match parse(a) {
+            Err(ParseError::Masscan(t)) => t,
+            other => panic!("{a:?}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dash_o_letters_map_to_formats() {
+        for (letter, format) in [
+            ('L', Format::List),
+            ('J', Format::Json),
+            ('D', Format::Ndjson),
+            ('G', Format::Grepable),
+            ('X', Format::Xml),
+            ('B', Format::Binary),
+            ('H', Format::Hostonly),
+            ('U', Format::Unicornscan),
+        ] {
+            let flag = format!("-o{letter}");
+            for file in ["out file.txt", "-"] {
+                let o = opts(&[&flag, file]);
+                assert_eq!(o.format, format, "{flag} {file}");
+                assert_eq!(o.filename.as_deref(), Some(file), "{flag} {file}");
+            }
+        }
+        // Остальная командная строка не трогается.
+        let cli = parse(&["10.0.0.0/30", "-oL", "x.txt", "-p80", "-sL"]).unwrap();
+        assert_eq!(cli.targets, ["10.0.0.0/30"]);
+        assert_eq!(cli.ports, ["80"]);
+        assert!(cli.list);
+        assert_eq!(
+            preprocess_args(["rmasscan", "-oX", "-", "-sL"]).unwrap(),
+            [
+                "rmasscan",
+                "--output-format=xml",
+                "--output-filename=-",
+                "--list"
+            ]
+        );
+    }
+
+    #[test]
+    fn dash_o_errors_match_c() {
+        for a in [
+            &["-oX"][..],
+            &["-oX", "-p80"][..],
+            &["-oL", "--seed"][..],
+            &["-oJ", "-oL", "x"][..],
+        ] {
+            assert_eq!(masscan_err(a), "missing output filename", "{a:?}");
+        }
+        // Неподдерживаемая или неизвестная буква сообщается до проверки имени файла (main-conf.c:3401–3452).
+        for f in ["-oA", "-oN", "-oS", "-oR"] {
+            let want = format!("nmap({f}): unsupported output format");
+            assert_eq!(masscan_err(&[f]), want);
+            assert_eq!(masscan_err(&[f, "x"]), want);
+        }
+        assert_eq!(
+            masscan_err(&["-oZ", "x"]),
+            "nmap(-oZ): unknown output format"
+        );
+        assert_eq!(masscan_err(&["-oZ"]), "nmap(-oZ): unknown output format");
+        assert_eq!(masscan_err(&["-o"]), "nmap(-o): unknown output format");
+        // Как в C, решает третий символ, а argv печатается целиком.
+        assert_eq!(
+            masscan_err(&["-oAx"]),
+            "nmap(-oAx): unsupported output format"
+        );
+        let o = opts(&["-oXyz", "f.xml"]);
+        assert_eq!(
+            (o.format, o.filename.as_deref()),
+            (Format::Xml, Some("f.xml"))
+        );
+    }
+
+    #[test]
+    fn output_filename_alone_means_xml() {
+        assert_eq!(opts(&[]), OutputOptions::default());
+        for a in [
+            &["--output-filename", "x"][..],
+            &["--output-file", "x"][..],
+            &["--output-filename=x"][..],
+        ] {
+            let o = opts(a);
+            assert_eq!(
+                (o.format, o.filename.as_deref()),
+                (Format::Xml, Some("x")),
+                "{a:?}"
+            );
+        }
+        for a in [
+            &["--output-filename", "x", "--output-format", "json"][..],
+            &["--output-format", "json", "--output-filename", "x"][..],
+        ] {
+            assert_eq!(opts(a).format, Format::Json, "{a:?}");
+        }
+        assert_eq!(
+            opts(&["--output-filename", "-"]).filename.as_deref(),
+            Some("-")
+        );
+    }
+
+    #[test]
+    fn unknown_output_format_is_an_error() {
+        for (name, f) in [
+            ("list", Format::List),
+            ("json", Format::Json),
+            ("ndjson", Format::Ndjson),
+            ("grepable", Format::Grepable),
+            ("greppable", Format::Grepable),
+            ("xml", Format::Xml),
+            ("binary", Format::Binary),
+            ("hostonly", Format::Hostonly),
+            ("unicornscan", Format::Unicornscan),
+            ("interactive", Format::Interactive),
+            ("none", Format::None),
+        ] {
+            assert_eq!(opts(&["--output-format", name]).format, f, "{name}");
+        }
+        let want = "FAIL: unknown output-format: nmap\n  hint: list, json, ndjson, grepable, xml, binary, \
+                    hostonly, unicornscan, interactive, none";
+        assert_eq!(masscan_err(&["--output-format", "nmap"]), want);
+        // Каждое вхождение проверяется, даже перекрытое последним (Р6 при Р17).
+        assert_eq!(masscan_err(&["--output-format", "nmap", "-oL", "x"]), want);
+        assert_eq!(masscan_err(&["-oL", "x", "--output-format=nmap"]), want);
+        assert_eq!(parse_format("nmap").unwrap_err(), want);
+    }
+
+    #[test]
+    fn redis_certs_rotate_are_refused() {
+        for (a, name) in [
+            (&["--output-format", "redis"][..], "--output-format redis"),
+            (&["--output-format", "certs"][..], "--output-format certs"),
+            (&["--rotate", "3600"][..], "--rotate"),
+            (&["--output-rotate", "hourly"][..], "--rotate"),
+            (&["--rotate-dir", "x"][..], "--rotate-dir"),
+            (&["--rotate-size", "1m"][..], "--rotate-size"),
+            (&["--rotate-offset", "60"][..], "--rotate-offset"),
+        ] {
+            let e = masscan_err(a);
+            assert!(
+                e.starts_with(&format!("{name} is not supported (")),
+                "{a:?}: {e}"
+            );
+        }
+        assert!(masscan_err(&["--output-format", "certs"]).contains("--banners"));
+        assert!(masscan_err(&["--rotate", "3600"]).contains("rotat"));
+    }
+
+    #[test]
+    fn show_and_noshow_tokens() {
+        let d = opts(&[]);
+        assert_eq!(
+            (d.show_open, d.show_closed, d.show_host),
+            (true, false, false)
+        );
+        let flags = |a: &[&str]| {
+            let o = opts(a);
+            (o.show_open, o.show_closed, o.show_host)
+        };
+        assert_eq!(flags(&["--show", "open,closed"]), (true, true, false));
+        assert_eq!(flags(&["--show", "close"]), (true, true, false));
+        assert_eq!(flags(&["--show", "all"]), (true, true, true));
+        assert_eq!(flags(&["--show", "host"]), (true, false, true));
+        assert_eq!(flags(&["--output-show", "closed"]), (true, true, false));
+        assert_eq!(flags(&["--output-status=closed"]), (true, true, false));
+        assert_eq!(flags(&["--noshow", "open"]), (false, false, false));
+        assert_eq!(flags(&["--output-noshow", "open"]), (false, false, false));
+        assert_eq!(
+            flags(&["--show", "all", "--noshow", "all"]),
+            (false, false, false)
+        );
+        // `INDEX_OF` C: пустой элемент обрывает список, повторные запятые пропускаются.
+        assert_eq!(flags(&["--show", ",closed"]), (true, false, false));
+        assert_eq!(flags(&["--show", "open,,closed,"]), (true, true, false));
+        assert_eq!(flags(&["--show", ""]), (true, false, false));
+        assert_eq!(
+            masscan_err(&["--show", "open,bogus"]),
+            "FAIL: unknown 'show' spec: bogus"
+        );
+        assert_eq!(
+            masscan_err(&["--noshow", "x,open"]),
+            "FAIL: unknown 'noshow' spec: x"
+        );
+        // Порядок командной строки, как в C: побеждает последнее.
+        assert_eq!(
+            flags(&["--show", "closed", "--noshow", "closed"]),
+            (true, false, false)
+        );
+        assert_eq!(
+            flags(&["--noshow", "closed", "--show", "closed"]),
+            (true, true, false)
+        );
+        // `--open` возвращает умолчание C.
+        assert_eq!(flags(&["--show", "all", "--open"]), (true, false, false));
+        assert_eq!(
+            flags(&["--noshow", "open", "--open-only"]),
+            (true, false, false)
+        );
+        assert_eq!(flags(&["--open", "--show", "closed"]), (true, true, false));
+        assert_eq!(
+            flags(&["--open", "--show", "closed", "--open"]),
+            (true, false, false)
+        );
+    }
+
+    #[test]
+    fn stylesheet_webxml_interactive_append_flush() {
+        let o = opts(&["--webxml"]);
+        assert_eq!(o.format, Format::Xml);
+        assert_eq!(
+            o.stylesheet.as_deref(),
+            Some("http://nmap.org/svn/docs/nmap.xsl")
+        );
+        let o = opts(&["--stylesheet", "s.xsl"]);
+        assert_eq!(
+            (o.format, o.stylesheet.as_deref()),
+            (Format::Xml, Some("s.xsl"))
+        );
+        let o = opts(&["--stylesheet", "s.xsl", "-oJ", "x"]);
+        assert_eq!(o.format, Format::Json);
+        assert!(opts(&["--interactive"]).interactive);
+        assert!(!opts(&["--interactive", "--nointeractive"]).interactive);
+        assert!(opts(&["--nointeractive", "--interactive"]).interactive);
+        let o = opts(&["--append-output", "--output-flush", "-oL", "x"]);
+        assert!(o.append && o.flush);
+        assert!(opts(&["--output-append"]).append);
+        assert!(!opts(&["-oL", "x"]).append);
+        // Флаги C можно повторять.
+        assert!(opts(&["--open", "--open", "--output-flush", "--output-flush"]).flush);
+    }
+
+    #[test]
+    fn last_output_option_wins() {
+        let o = opts(&["-oX", "a", "-oJ", "b"]);
+        assert_eq!((o.format, o.filename.as_deref()), (Format::Json, Some("b")));
+        let o = opts(&["--output-format", "xml", "--output-format", "list"]);
+        assert_eq!(o.format, Format::List);
+        let o = opts(&["--output-filename", "a", "--output-file", "b"]);
+        assert_eq!(o.filename.as_deref(), Some("b"));
+        let o = opts(&["--stylesheet", "a", "--stylesheet", "b"]);
+        assert_eq!(o.stylesheet.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn status_flags_are_stored() {
+        let c = parse(&["--nostatus"]).unwrap();
+        assert!(c.nostatus && !c.status && !c.ndjson_status);
+        let c = parse(&["--status", "--nostatus"]).unwrap();
+        assert!(!c.status && c.nostatus);
+        let c = parse(&["--nostatus", "--status"]).unwrap();
+        assert!(c.status && !c.nostatus);
+        assert!(parse(&["--ndjson-status"]).unwrap().ndjson_status);
+        assert!(parse(&["--status-ndjson"]).unwrap().ndjson_status);
+    }
+
+    #[test]
+    fn output_flags_given_counts_every_output_and_status_flag() {
+        assert!(
+            !parse(&["10.0.0.1", "-p80", "--seed", "1"])
+                .unwrap()
+                .output_flags_given()
+        );
+        for a in [
+            &["-oL", "x"][..],
+            &["--output-format", "none"][..],
+            &["--output-filename", "x"][..],
+            &["--append-output"][..],
+            &["--output-flush"][..],
+            &["--open"][..],
+            &["--open-only"][..],
+            &["--show", "closed"][..],
+            &["--noshow", "open"][..],
+            &["--interactive"][..],
+            &["--nointeractive"][..],
+            &["--stylesheet", "s"][..],
+            &["--webxml"][..],
+            &["--status"][..],
+            &["--nostatus"][..],
+            &["--ndjson-status"][..],
+        ] {
+            assert!(parse(a).unwrap().output_flags_given(), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn readscan_takes_every_following_non_dash_argument() {
+        let c = parse(&["-p80", "10.0.0.0/8", "--readscan", "a", "b", "-oL", "-"]).unwrap();
+        assert_eq!(c.readscan, ["a", "b"]);
+        assert_eq!(c.targets, ["10.0.0.0/8"]);
+        assert_eq!(c.ports, ["80"]);
+        // C глотает и то, что выглядит целью (main-conf.c:3266–3278).
+        let c = parse(&["--readscan", "a", "10.0.0.1"]).unwrap();
+        assert_eq!(c.readscan, ["a", "10.0.0.1"]);
+        assert!(c.targets.is_empty());
+        assert!(parse(&["--readscan"]).is_err());
+        for other in [
+            &["-sL"][..],
+            &["--echo"][..],
+            &["--echo-all"][..],
+            &["--offline"][..],
+            &["--iflist"][..],
+            &["--offline", "--packet-trace"][..],
+        ] {
+            let mut a = vec!["--readscan", "f"];
+            a.extend_from_slice(other);
+            assert!(matches!(parse(&a), Err(ParseError::Clap(_))), "{a:?}");
+        }
+        assert_eq!(
+            seed_policy(&parse(&["--readscan", "f"]).unwrap()),
+            SeedPolicy::Entropy
+        );
     }
 
     #[test]

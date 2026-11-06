@@ -36,7 +36,7 @@ use rmasscan_net::{
 };
 
 use crate::args::SeedPolicy;
-use crate::output::{Sink, Wall, io_fail};
+use crate::output::{ServiceNames, Sink, Wall, io_fail};
 
 /// Префикс отказов обнаружения и ARP в форме C (`[-] FAIL: …` и подсказки); [`crate::error_text`] не оборачивает их.
 pub const REFUSAL_PREFIX: &str = "[-] ";
@@ -56,6 +56,8 @@ pub trait Backend: Wall {
     fn arp_policy(&self) -> ArpPolicy;
     /// Часы резолвера ARP, engine и трассы `--packet-trace` (одни и те же).
     fn clock(&self) -> Arc<dyn Clock + Send + Sync>;
+    /// Имена TCP-сервисов для `-oG` и `-oU` (`getservbyport` C); [`crate::run`] читает их только для этих форматов.
+    fn services(&self) -> ServiceNames;
 }
 
 /// Подготовленный скан: проверенная конфигурация, обнаружение и binding. `binding.next_hop_mac` для

@@ -18,7 +18,7 @@ use std::net::Ipv4Addr;
 use rmasscan_core::receive::{PortStatus, Reply};
 
 pub use formats::{Counts, FileCtx, Format, Formatter, formatter};
-pub use pipeline::{OutputEnv, OutputOptions, Pipeline, Wall};
+pub use pipeline::{OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, Wall};
 pub use record::{MASSCAN_VERSION, Record, Status, reason_string, status_str};
 pub use services::ServiceNames;
 

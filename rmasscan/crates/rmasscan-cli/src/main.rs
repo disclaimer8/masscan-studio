@@ -13,9 +13,16 @@ mod os_backend;
 fn main() -> std::process::ExitCode {
     use std::io::Write;
 
-    let cli = match rmasscan_cli::args::Cli::try_parse_masscan(std::env::args()) {
+    use rmasscan_cli::args::{Cli, ParseError};
+
+    let cli = match Cli::try_parse_masscan(std::env::args()) {
         Ok(c) => c,
-        Err(e) => e.exit(),
+        Err(ParseError::Clap(e)) => e.exit(),
+        // Тексты masscan (`missing output filename`, `nmap(-oA): …`, `FAIL: …`) как есть, exit 1.
+        Err(ParseError::Masscan(text)) => {
+            eprintln!("{text}");
+            return std::process::ExitCode::FAILURE;
+        }
     };
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
@@ -24,7 +31,10 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(msg) => {
             let _ = out.flush();
-            eprintln!("{}", rmasscan_cli::error_text(&msg));
+            let text = rmasscan_cli::error_text(&msg);
+            if !text.is_empty() {
+                eprintln!("{text}");
+            }
             std::process::ExitCode::FAILURE
         }
     }

@@ -26,6 +26,12 @@ sudo target/release/rmasscan 198.51.100.0/24 -p80,443
 target/release/rmasscan --offline 198.51.100.0/24 -p80 --seed 1
 # интерфейсы и маршруты по умолчанию (свой формат, stdout, без привилегий)
 target/release/rmasscan --iflist
+# результат в файл: -oL, -oJ, -oD, -oG, -oX, -oB, -oH, -oU и имя файла следующим аргументом, «-» это stdout
+sudo target/release/rmasscan 198.51.100.0/24 -p80,443 -oJ scan.json
+sudo target/release/rmasscan 198.51.100.0/24 -p80,443 -oB scan.bin --show open,closed
+# конвертер без сети и без привилегий: прочитать файл -oB и записать любым форматом
+target/release/rmasscan --readscan scan.bin -oX scan.xml
+target/release/rmasscan --readscan scan.bin --output-format grepable --output-filename scan.gnmap
 cargo run -p rmasscan-cli -- -sL 10.0.0.0/30 -p80,443 --seed 1
 cargo run -p rmasscan-cli -- --echo 10.0.0.0/24 -p80 --seed 1
 cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \
@@ -42,6 +48,17 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 (`[-] FAIL: …` и строки `[hint]`), код выхода 1; итог `Completed`/`Stopped` даёт 0, любой другой 1.
 `-sL` и `--echo` побайтно совпадают с golden-фикстурами C.
 
+Вывод. Форматы `-oL` (list), `-oJ` (json), `-oD` (ndjson), `-oG` (grepable), `-oX` (xml), `-oB` (binary), `-oH`
+(hostonly), `-oU` (unicornscan) и `--output-format none` для записей статуса TCP-порта побайтно равны masscan `8e6b3b0`
+(кроме полей, которые C берёт из часов в момент записи; 74 эталона C в `tests/golden/formats/`). Опции:
+`--output-format`, `--output-filename`/`--output-file`, `--append-output`, `--output-flush`, `--open`, `--show`,
+`--noshow`, `--interactive`/`--nointeractive`, `--stylesheet`, `--webxml`, `--status`/`--nostatus`, `--ndjson-status`.
+С `-o…` stdout молчит (кроме `--interactive`), иначе идут строки `Discovered …`. `--readscan FILE…` читает файлы `-oB`
+(записи статуса TCP) и пишет их теми же форматами; цели и порты, заданные до него, фильтруют записи. На stderr
+скан печатает строку статуса masscan (`rate`, `done`, `found`) и стирает её 77 пробелами перед `[+] finished`.
+Ctrl-C: первое нажатие останавливает скан и дописывает файл вывода с подвалом (`[+] finished: Stopped`, код 0), второе
+выходит с кодом 1.
+
 ### Отличия от masscan
 
 - `--seed` обязателен для `-sL`, `--echo`, `--offline`; для живого скана берётся из энтропии и печатается
@@ -56,7 +73,39 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 - Порт источника по умолчанию один, `40000 + time % 20000` (masscan: два, {p, p+16}).
 - `--iflist` печатает свой формат на stdout (masscan: список `pcap_findalldevs` в stderr).
 - Строки `[+]` печатаются всегда (masscan только с `-v`), плюс `seed`, `source-port` и `finished`.
-- Ctrl-C не перехватывается: поведение ОС по умолчанию, `paused.conf` не пишется (прогресс теряется).
+- Ctrl-C (Р18 спеки этапа): после первого нажатия скан останавливается без фазы ожидания ответов, `paused.conf` не
+  пишется (прогресс не сохраняется), файл вывода дописывается с подвалом; в stderr строка C
+  `waiting several seconds to exit...`. Второе нажатие выходит сразу с кодом 1. У masscan первое нажатие
+  запускает фазу ожидания и пишет `paused.conf`.
+- Вывод (спека этапа `../docs/superpowers/specs/2026-11-06-rmasscan-output-formats-design.md`, §4 и §8):
+  - `-oR` (redis), `certs` и ротация (`--rotate`, `--rotate-dir`, `--rotate-offset`, `--rotate-size`) отказывают с
+    сообщением и кодом 1 (Р1); баннеры не поддержаны, поэтому нет и их записей (`--banners` не входит в этап).
+  - Неизвестное значение `--output-format` — ошибка с кодом 1 (C печатает FAIL и продолжает с прежним форматом, Р6).
+  - Файл вывода открывается до ARP и до engine; при отказе: `out: could not open file for writing` (или
+    `appending`), затем `<файл>: <ошибка ОС>`, код 1, ни одного кадра (Р8). C открывает файл в потоке приёма, уже
+    после старта передачи, и успевает отправить кадры; текст ошибки ОС у Rust другой.
+  - Формат файла без имени (`--output-format json` один) отказывает до любого кадра двумя строками `[-] ERR:` C
+    и кодом 1; C принимает такой запуск и молча отбрасывает все записи (`output.c:799–803`).
+  - Время записи — Unix-секунды в момент, когда CLI обрабатывает пачку результатов; без отставания кэша `global_now`
+    C (до около 1 с, Р9).
+  - Имена сервисов для `-oG` и `-oU` читаются из файла services хоста разбором на чистом Rust (`/etc/services`,
+    Windows `%SystemRoot%\System32\drivers\etc\services`), первая запись `порт/tcp`, иначе `unknown`; C зовёт
+    `getservbyport`, на хосте с NSS-источником помимо files имена могут разойтись (Р10).
+  - Одинаковые байты на всех ОС: `\n` не превращается в `\r\n` на Windows, XML сохраняет свои CRLF; C на Windows
+    пишет в текстовом режиме (Р12).
+  - `--readscan` читает только записи статуса TCP; баннеры, IPv6, ARP, записи не-TCP и устаревших типов — ошибка
+    `<файл>: unsupported record type N` и код 1 (Р13). Обрыв посреди записи — `[-] file corrupt` и код 1 (C молча
+    останавливается с кодом 0), пустой файл — сообщение о неизвестном формате (C: `file is empty`), для
+    отсутствующего файла перед строками `[-] FAIL` печатается `[+] --readscan <файл>` (C ничего не печатает); на
+    первом плохом файле чтение прекращается. `--seed` при `--readscan` игнорируется.
+  - `--stylesheet` и `--webxml` вместе — конфликт аргументов clap, код 2 (C: побеждает последний).
+  - `--infinite` нет (Р14).
+  - Флаги вывода и статуса допустимы только со сканом и `--readscan`; с `--echo`, `--echo-all`, `-sL`, `--offline`,
+    `--iflist` — отказ `output options apply only to a scan or --readscan`, код 1 (Р19). C печатает ключи вывода в
+    `--echo` и создаёт пустой файл при `--offline`.
+  - C 8e6b3b0 не заканчивает живой скан с `--nostatus`: поток передачи ждёт `is_rx_done` (`main.c:470`, ожидание
+    потока `main.c:1529`), а выставляет его только цикл статуса (`main.c:1509–1520`). rmasscan заканчивает скан и
+    печатает `N milliseconds elapsed`.
 - `--adapter` на Windows принимает `\Device\NPF_{GUID}` или имя адаптера; числовых индексов нет. Wi-Fi
   (IfType 71) принимается как Ethernet (как C и Npcap `DLT_EN10MB`).
 - Явный не-Ethernet `--adapter` отказывает (masscan проверяет тип только при автовыборе).
@@ -143,14 +192,14 @@ cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (n
 `--echo` или `--help`. Живые прогоны автоопределения выполняются только на запечатанных лабораторных стендах вне
 CI; raw-сокеты в лабораторных тестах `rmasscan-net` (нужны CAP_NET_RAW и замкнутый стенд) тоже вне CI. Скан идёт
 через один адаптер и один следующий хоп (IPv4, TCP SYN, по одному потоку TX и RX, без `--retries`, shard 1/1);
-туннели, VLAN и IPv6 не поддержаны; строки статуса нет.
+туннели, VLAN и IPv6 не поддержаны.
 
 Живой скан из CLI поддержан и принят только на запечатанных лабораторных стендах (Linux netns и veth, Windows VM с Npcap
 в режиме Admin-only, пара `feth` на Mac); на физических NIC он не проверялся (NOT RUN). Вживую не проверены шлюз маршрута
 к цели за маршрутизатором (`router-ip … (route gateway)`: на стендах все цели on-link, ветка покрыта офлайн-тестами) и
 маршрут к единственной цели на macOS (на одном Mac цель стенда это адрес самого хоста, проверены отказ и
 переопределения); MAC под root на macOS доказан одним кейсом. Порт источника по умолчанию один, а не два, как у
-masscan; Ctrl-C не перехватывается, `paused.conf` не пишется; полный вывод `--iflist` в evidence не хранится (только
+masscan; `paused.conf` не пишется (Ctrl-C останавливает скан и завершает файл вывода, фазы ожидания нет); полный вывод `--iflist` в evidence не хранится (только
 строка стенда, число строк и sha256). Подробности: `../docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`,
 разделы 1 и 9.
 
@@ -160,6 +209,15 @@ masscan; Ctrl-C не перехватывается, `paused.conf` не пише
 `utun`, скан LAN на `en0` получает `NoGateway` вместо шлюза `en0`. В обоих случаях шлюз задают явно, `--router-ip`.
 
 ## Статус
+
+Форматы вывода masscan, `--readscan`, строка статуса и Ctrl-C (код `2b0e92c`, evidence `86f384f`, 2026-11-06, ветка
+`feat/rmasscan-output-formats`): офлайн-паритет с C `8e6b3b0` на 74 эталонах `--readscan` (байты равны после маски только
+полей «часы в момент записи»); живая приёмка на Linux netns PASS 18/18 (записи и заголовок равны C-оракулу в `o01`–`o11`,
+подвал оракула в живом скане отсутствует, потому что C не заканчивает скан на этом стенде; подвал rmasscan равен подвалу
+своего формата из его записей; `--nostatus`, прерывание и открытие файла проверены без оракула), регрессия
+автоопределения Linux PASS 13/13 и Windows VM PASS 10/10. macOS живой, живой Ctrl-C на Windows и физические NIC:
+NOT RUN. GO (stands) условное: итоговое ревью и CI на точном HEAD. Отчёт:
+`../docs/experiments/2026-11-06-rmasscan-output-acceptance.md`.
 
 Живой скан CLI с автоопределением интерфейса, адреса и MAC источника и следующего хопа (код `6c87e94`, evidence
 `00110f9`, 2026-11-04, ветка `feat/rmasscan-autodetect`) принят на трёх запечатанных стендах: Linux netns PASS 13/13

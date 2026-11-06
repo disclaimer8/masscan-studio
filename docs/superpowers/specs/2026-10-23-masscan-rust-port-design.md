@@ -758,3 +758,11 @@ Handle::pause(), Handle::stop(), Handle::join()
   `blackrock_rounds >= 64` отвергается (в C это UB-сдвиг).
 - **(f) Запись pcap-файла.** §3 относит pcap-writer к этапу 1. Он не планировался и не
   делался в этапе 1; переносится в этап 2.
+- **(g) Форматы вывода CLI портируются побайтно.** Строка «Форматы вывода» в §3 (стр. ~145)
+  относит к переносу для CLI только list, NDJSON и interactive-строку, а XML/JSON/binary/
+  grepable/unicornscan/hostonly не переносить. Это следствие варианта B (CLI как оракул для
+  Studio) и больше не верно: цель пользователя — сам masscan на Rust. Этап вывода переносит
+  `-oL`, `-oJ`, `-oD`, `-oG`, `-oX`, `-oB`, `-oH`, `-oU` побайтно с C, а также `--readscan`
+  для файлов `-oB`; redis, certs и ротацию он отказывает явно (код 1). Решения и границы:
+  [спека этапа](2026-11-06-rmasscan-output-formats-design.md) (Р1–Р19, отличия от C в §8);
+  приёмка: [отчёт](../../experiments/2026-11-06-rmasscan-output-acceptance.md).

@@ -15,6 +15,7 @@
 pub mod args;
 pub mod live;
 pub mod output;
+pub mod readscan;
 
 use std::io::Write;
 

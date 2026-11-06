@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use rmasscan_cli::args::{Cli, SeedPolicy};
 use rmasscan_cli::live::{self, Backend};
 use rmasscan_cli::output::{Interactive, ServiceNames, Sink, Wall, discovered_line};
+use rmasscan_cli::status::normalize_stderr_line;
 use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::packet::LinkType;
@@ -351,7 +352,10 @@ fn syn_dst(f: &[u8]) -> (Ipv4Addr, u16) {
 }
 
 fn plus_lines(log: &str) -> Vec<&str> {
-    log.lines().filter(|l| l.starts_with("[+] ")).collect()
+    log.lines()
+        .map(normalize_stderr_line)
+        .filter(|l| l.starts_with("[+] "))
+        .collect()
 }
 
 #[test]
@@ -1822,4 +1826,63 @@ fn os_backend_is_absent_under_test() {
     }
     let os = include_str!("../src/os_backend.rs");
     assert!(os.contains("open_explicit("));
+}
+
+const LIVE5: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "5"];
+
+/// Фрагменты статуса (`\r`-терминированные) из stderr.
+fn status_fragments(log: &str) -> Vec<&str> {
+    log.split(['\r', '\n'])
+        .filter(|l| l.starts_with("rate:") || l.starts_with("{\"state\""))
+        .collect()
+}
+
+#[test]
+fn status_lines_on_stderr_by_default() {
+    let b = FakeBackend::new();
+    // Каждый sleep ManualClock двигает время; ждём достаточно долго, чтобы прошли отсчёты по 250 мс.
+    let (r, _, log) = cli(&b, &with(&LIVE5, &[]));
+    r.unwrap();
+    let frags = status_fragments(&log);
+    assert!(!frags.is_empty(), "no status line: {log:?}");
+    assert!(frags.iter().all(|f| f.contains("-kpps")), "{frags:?}");
+    // Последний фрагмент затёрт 77 пробелами, после него отдельная строка [+] finished.
+    let last = log.lines().last().unwrap();
+    assert!(
+        last.starts_with(&" ".repeat(77)) || last.contains(&format!("{}\r", " ".repeat(77))),
+        "{last:?}"
+    );
+    assert!(
+        normalize_stderr_line(last).starts_with("[+] finished: "),
+        "{last:?}"
+    );
+}
+
+#[test]
+fn nostatus_prints_elapsed_to_stdout() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["--nostatus"]));
+    r.unwrap();
+    assert!(!log.contains("rate:") && !log.contains('\r'), "{log:?}");
+    let last = out.lines().last().unwrap();
+    let ms = last.strip_suffix(" milliseconds elapsed").unwrap();
+    assert!(ms.parse::<u64>().is_ok(), "{out:?}");
+    assert!(out.ends_with(" milliseconds elapsed\n"));
+}
+
+#[test]
+fn ndjson_status_lines() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE5, &["--ndjson-status"]));
+    r.unwrap();
+    let frags = status_fragments(&log);
+    assert!(!frags.is_empty(), "no ndjson status: {log:?}");
+    assert!(
+        frags
+            .iter()
+            .all(|f| f.ends_with("}}") || f.ends_with("}}}")),
+        "{frags:?}"
+    );
+    assert!(!out.contains("milliseconds elapsed"), "{out:?}");
+    assert!(!log.contains("rate:"), "{log:?}");
 }

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
+use crate::status::{StatusLine, StatusMode};
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{
@@ -357,6 +358,18 @@ pub fn run_live(
     sink: &mut dyn Sink,
     log: &mut dyn Write,
 ) -> Result<Outcome, String> {
+    run_live_with(cfg, backend, sink, log, StatusMode::Text).map(|(outcome, _)| outcome)
+}
+
+/// [`run_live`] с режимом строки статуса. Второе значение результата это миллисекунды от открытия адаптера до
+/// конца скана на часах бэкенда (`usec_start` в `main.c:1548`); их печатает `--nostatus`.
+pub fn run_live_with(
+    cfg: &ScanConfig,
+    backend: &dyn Backend,
+    sink: &mut dyn Sink,
+    log: &mut dyn Write,
+    mode: StatusMode,
+) -> Result<(Outcome, u64), String> {
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
     // Ограничения runtime v1 (`--retries`, `--shard`, rounds, legacy resume) до ARP: отказ плана не стоит кадра.
     // Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
@@ -406,12 +419,37 @@ pub fn run_live(
     let io = open(backend, name, &binding)?;
     let options = EngineOptions::new(ids(backend), ids(backend));
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
-    let handle = Engine::start_with_clock(plan, io, options, clock)
+    let started = clock.now_micros();
+    let handle = Engine::start_with_clock(plan, io, options, clock.clone())
         .map_err(|e| format!("cannot start the scan: {e}"))?;
     let (mut replies, mut open_count) = (0u64, 0u64);
     let mut sink_error = None;
+    let wait_secs = i64::from(cfg.wait_secs);
+    let mut status = StatusLine::new(mode, started);
+    let (mut max_count, mut tx_done_at) = (0u64, None::<u64>);
     'events: loop {
         match handle.recv_event_timeout(Duration::from_millis(250)) {
+            Ok(Event::Started { range }) => max_count = range,
+            Ok(Event::Progress(prog)) => {
+                let now = clock.now_micros();
+                // main.c:1427 и 1496: конец передачи это `index >= range`; ожидание отсчитывается от него.
+                if prog.next_index >= max_count {
+                    tx_done_at.get_or_insert(now);
+                }
+                let exiting = tx_done_at
+                    .map(|t| wait_secs.saturating_sub((now.saturating_sub(t) / 1_000_000) as i64));
+                status
+                    .tick(
+                        now,
+                        prog.next_index,
+                        max_count,
+                        prog.rate,
+                        open_count,
+                        exiting,
+                        log,
+                    )
+                    .map_err(|e| format!("cannot write the status line: {e}"))?;
+            }
             Ok(Event::Results { replies: batch }) => {
                 for r in &batch {
                     replies += 1;
@@ -432,6 +470,10 @@ pub fn run_live(
     let outcome = handle
         .join()
         .map_err(|e| format!("scan engine error: {e}"))?;
+    let elapsed_ms = clock.now_micros().saturating_sub(started) / 1000;
+    status
+        .finish(log)
+        .map_err(|e| format!("cannot write the status line: {e}"))?;
     let sunk = match sink_error {
         Some(e) => Err(e),
         None => sink.finish(),
@@ -442,7 +484,7 @@ pub fn run_live(
         return Err(e);
     }
     conclude(&outcome, replies, open_count, log)?;
-    Ok(outcome)
+    Ok((outcome, elapsed_ms))
 }
 
 /// Поток кадров `transmit_thread` без сети (генерация в `rmasscan_core::probe`); ошибка callback останавливает

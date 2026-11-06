@@ -7,6 +7,7 @@
 //! и конвейер вывода [`pipeline`] (порт `output.c`).
 
 pub mod formats;
+pub mod grepable;
 pub mod pipeline;
 pub mod record;
 pub mod services;

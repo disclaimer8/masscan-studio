@@ -5,6 +5,7 @@
 
 use std::io::{self, Write};
 
+use super::grepable::{Grepable, Unicornscan};
 use super::record::{Record, Status, civil, reason_string, status_str};
 use super::services::ServiceNames;
 
@@ -50,7 +51,7 @@ pub trait Formatter {
     fn footer(&mut self, w: &mut dyn Write, cx: &FileCtx) -> io::Result<()>;
 }
 
-/// `None` для `Default`/`Interactive`/`None` (это `null_output` C). Grepable и Unicornscan подключает Задача 2.
+/// `None` для `Default`/`Interactive`/`None` (это `null_output` C).
 pub fn formatter(f: Format) -> Option<Box<dyn Formatter>> {
     match f {
         Format::List => Some(Box::new(List)),
@@ -59,11 +60,9 @@ pub fn formatter(f: Format) -> Option<Box<dyn Formatter>> {
         Format::Xml => Some(Box::new(Xml)),
         Format::Binary => Some(Box::new(Binary)),
         Format::Hostonly => Some(Box::new(Hostonly)),
-        Format::Default
-        | Format::Interactive
-        | Format::None
-        | Format::Grepable
-        | Format::Unicornscan => None,
+        Format::Grepable => Some(Box::new(Grepable)),
+        Format::Unicornscan => Some(Box::new(Unicornscan)),
+        Format::Default | Format::Interactive | Format::None => None,
     }
 }
 
@@ -411,14 +410,8 @@ mod tests {
     }
 
     #[test]
-    fn grepable_and_unicornscan_have_no_formatter_yet() {
-        for f in [
-            Format::Default,
-            Format::Interactive,
-            Format::None,
-            Format::Grepable,
-            Format::Unicornscan,
-        ] {
+    fn null_formats_have_no_formatter() {
+        for f in [Format::Default, Format::Interactive, Format::None] {
             assert!(formatter(f).is_none());
         }
     }

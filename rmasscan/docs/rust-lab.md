@@ -585,6 +585,38 @@ PASS или FAIL выносит верификатор.
 тесты терпимы к хосту без такого маршрута. Строгий режим на Mac предполагает, что маршрут по умолчанию не идёт через
 VPN `utun`.
 
+**Строка статуса.** С этапа форматов вывода живой скан CLI пишет в stderr строку статуса masscan (`rate:…\r`, в конце
+77 пробелов и `\r` перед `[+] finished`; после первого Ctrl-C — `waiting several seconds to exit...` и 44 пробела).
+`autodetect-verify` читает stderr так, как его показывает терминал: видимый текст строки — то, что после её последнего
+`\r`; каждый фрагмент перед `\r` обязан быть формой статуса по собственной копии грамматики лаборатории
+(`autodetect_verify.rs`, `screen`), иначе это ошибка разбора, а не пропущенная строка. Вердикты закоммиченных
+каталогов autodetect от этого не меняются.
+
+## Output suite
+
+Живой паритет форматов вывода (спека `2026-11-06-rmasscan-output-formats-design.md` §6.2) идёт на том же стенде Linux,
+что и autodetect: `wire-lab.sh --suite output` поднимает его так же (печать, `lab_id`, `teardown.json`, отказ от
+`--out` прежней лаборатории) и запускает внутри `output-suite linux`. Кейсы `o01`–`o17` с argv и ожиданиями — одна
+таблица верификатора (`output_verify.rs`, `OutputCase`); C-оракул идёт на кейсах с `oracle` (все форматы, `--show`,
+`-oL -`, `--interactive`, `--readscan`), только rmasscan — `o12_nostatus` (masscan `8e6b3b0` не завершает живой
+`--nostatus` при `--wait` больше 0), `o13_open_fail` и прерывания `o14`–`o16` (SIGINT процессу rmasscan через ~2 с,
+30 с на выход, затем SIGKILL; время сигнала в `interrupt.json`). Каждый сканер работает в своём каталоге внутри
+рабочего каталога прогона, поэтому файлы вывода в argv — относительные имена (`-oL output.txt`), а в evidence они
+лежат байт в байт под нейтральными именами `output.txt`/`output.bin` (оракул — в `oracle/`). `o17_readscan` читает
+оба `-oB` из `runs/o06_binary` того же `--out` (без него suite отказывает до запуска). Вердикт выносит офлайн
+`output-verify` (0 PASS, 1 FAIL, 2 INVALID или NOT RUN): записи C и rmasscan равны после маски времени, время записей
+и часы заголовков в окне захвата, записи равны ответам стенда и ответам на проводе, структура каждого формата,
+молчание stdout, строка статуса по грамматике, `sent` равен SYN на проводе, ноль кадров сканера при отказе открытия
+файла и при `--readscan`; privacy — как у autodetect, плюс разбор `-oB` по записям.
+
+```sh
+cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
+OUT=$(mktemp -d /tmp/rmasscan-out.XXXXXX)/output-out/linux-output-r1
+RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite output \
+  --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"
+target/release/rmasscan-lab output-verify --dir "$OUT" --out "$OUT/verdict.json"
+```
+
 ## macOS (`feth` stand)
 
 Build as above on the Mac. `macos-lab`, `macos-suite` and the live peer-side tools exist on macOS only (on

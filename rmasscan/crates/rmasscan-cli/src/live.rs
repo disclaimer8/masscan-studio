@@ -443,15 +443,22 @@ pub fn run_live_with(
     let mut status = StatusLine::new(mode, started);
     let (mut max_count, mut tx_done_at) = (0u64, None::<u64>);
     let mut interrupted = false;
+    // Первая ошибка записи в `log` (строка Ctrl-C, строка статуса). Она останавливает engine, но не обрывает цикл:
+    // приёмник получает всё принятое и подвал, ошибка возвращается только после `sink.finish()` (exit 1). Иначе
+    // мёртвый stderr (`2>&1 | tee` после Ctrl-C) оставил бы файл вывода без подвала. После неё в `log` не пишется.
+    let mut log_error: Option<String> = None;
     'events: loop {
         // Р18: счётчик проверяется на каждой итерации (не реже раза в 250 мс). После остановки цикл дочитывает
         // события до `Finished`, поэтому приёмник получает каждый принятый ответ.
         if !interrupted && backend.interrupts() > 0 {
             interrupted = true;
-            // C печатает строку и не проверяет `fprintf`; сбой stderr не должен помешать дописать файлы вывода.
-            let _ = log
-                .write_all(INTERRUPT_LINE.as_bytes())
-                .and_then(|()| log.flush());
+            if log_error.is_none()
+                && let Err(e) = log
+                    .write_all(INTERRUPT_LINE.as_bytes())
+                    .and_then(|()| log.flush())
+            {
+                log_error = Some(format!("write failed: {e}"));
+            }
             handle.stop();
         }
         match handle.recv_event_timeout(Duration::from_millis(250)) {
@@ -464,8 +471,8 @@ pub fn run_live_with(
                 }
                 let exiting = tx_done_at
                     .map(|t| wait_secs.saturating_sub((now.saturating_sub(t) / 1_000_000) as i64));
-                status
-                    .tick(
+                if log_error.is_none()
+                    && let Err(e) = status.tick(
                         now,
                         prog.next_index,
                         max_count,
@@ -474,7 +481,10 @@ pub fn run_live_with(
                         exiting,
                         log,
                     )
-                    .map_err(|e| format!("cannot write the status line: {e}"))?;
+                {
+                    log_error = Some(format!("cannot write the status line: {e}"));
+                    handle.stop();
+                }
             }
             Ok(Event::Results { replies: batch }) => {
                 for r in &batch {
@@ -493,20 +503,28 @@ pub fn run_live_with(
             Ok(_) | Err(TryRecvError::Empty) => {}
         }
     }
-    let outcome = handle
-        .join()
-        .map_err(|e| format!("scan engine error: {e}"))?;
+    // `join` и `sink.finish()` идут всегда, до любого `?`: ни ошибка engine, ни ошибка `log` не оставляют файл
+    // вывода без подвала.
+    let joined = handle.join().map_err(|e| format!("scan engine error: {e}"));
     let elapsed_ms = clock.now_micros().saturating_sub(started) / 1000;
-    status
-        .finish(log)
-        .map_err(|e| format!("cannot write the status line: {e}"))?;
+    if log_error.is_none()
+        && let Err(e) = status.finish(log)
+    {
+        log_error = Some(format!("cannot write the status line: {e}"));
+    }
     let sunk = match sink_error {
         Some(e) => Err(e),
         None => sink.finish(),
     };
+    let outcome = joined?;
     if let Err(e) = sunk {
         // Ошибка приёмника (EPIPE уже завершил процесс в `io_fail`) не прячет `sent` engine; exit 1 от неё.
-        print_finished(&outcome, replies, open_count, log)?;
+        if log_error.is_none() {
+            print_finished(&outcome, replies, open_count, log)?;
+        }
+        return Err(e);
+    }
+    if let Some(e) = log_error {
         return Err(e);
     }
     conclude(&outcome, replies, open_count, log)?;

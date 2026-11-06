@@ -21,7 +21,7 @@ fn main() -> std::process::ExitCode {
         Err(ParseError::Clap(e)) => e.exit(),
         // Тексты masscan (`missing output filename`, `nmap(-oA): …`, `FAIL: …`) как есть, exit 1.
         Err(ParseError::Masscan(text)) => {
-            eprintln!("{text}");
+            let _ = writeln!(std::io::stderr(), "{text}");
             return std::process::ExitCode::FAILURE;
         }
     };
@@ -33,8 +33,9 @@ fn main() -> std::process::ExitCode {
         Err(msg) => {
             let _ = out.flush();
             let text = rmasscan_cli::error_text(&msg);
+            // Мёртвый stderr (EPIPE) не превращает exit 1 в панику `eprintln!` (101).
             if !text.is_empty() {
-                eprintln!("{text}");
+                let _ = writeln!(std::io::stderr(), "{text}");
             }
             std::process::ExitCode::FAILURE
         }

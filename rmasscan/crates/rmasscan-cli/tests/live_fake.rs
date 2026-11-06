@@ -1,17 +1,21 @@
 //! Живой путь CLI end-to-end на fake-бэкенде (AGPL-3.0): обнаружение → `[+]` → ARP → `ReadyPlan` → `open` → engine →
-//! `Sink`, `--offline` и `--iflist`. Синтетические таблицы маршрутов и интерфейсов, `FakeAdapter` с ответчиком ARP и
-//! `reply_to_syn`, `ManualClock` для резолвера и engine, фиксированные энтропия и время. Ни один тест не достигает ОС:
-//! `OsBackend` существует только в бинарнике, а `open` здесь выдаёт `FakeAdapter` или паникует (`panic_on_open`).
+//! `Sink`, Ctrl-C (счётчик нажатий fake), `--offline` и `--iflist`. Синтетические таблицы маршрутов и интерфейсов,
+//! `FakeAdapter` с ответчиком ARP и `reply_to_syn`, `ManualClock` для резолвера и engine, фиксированные энтропия и
+//! время. Ни один тест не достигает ОС: `OsBackend` существует только в бинарнике, а `open` здесь выдаёт
+//! `FakeAdapter` или паникует (`panic_on_open`).
 //! Адреса и MAC только документационные (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) и локальные `02:…`,
 //! кроме гостя n2 и Mac стенда m1: они воспроизводят лабораторные стенды (`198.18.0.0/30`), n2 ещё и NIC QEMU
 //! (`10.0.2.0/24`, `52:54:00:…`).
 
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmasscan_cli::args::{Cli, SeedPolicy};
 use rmasscan_cli::live::{self, Backend};
-use rmasscan_cli::output::{Interactive, ServiceNames, Sink, Wall, discovered_line};
+use rmasscan_cli::output::{
+    Interactive, OutputEnv, Pipeline, ServiceNames, Sink, Wall, discovered_line,
+};
 use rmasscan_cli::status::normalize_stderr_line;
 use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::ScanConfig;
@@ -114,11 +118,13 @@ impl Interfaces for FakeIfaces {
     }
 }
 
-/// Один открытый адаптер: binding, его фиктивный адаптер и сколько handle прежних адаптеров жили в момент открытия.
+/// Один открытый адаптер: binding, его фиктивный адаптер, сколько handle прежних адаптеров жили в момент открытия и
+/// сколько раз до открытия опрошен счётчик Ctrl-C.
 struct Opened {
     binding: AdapterBinding,
     adapter: FakeAdapter,
     alive_before: usize,
+    polls_before: usize,
 }
 
 struct FakeBackend {
@@ -140,6 +146,14 @@ struct FakeBackend {
     attempts: Mutex<Vec<AdapterBinding>>,
     /// Общий журнал TX: каждый успешно отправленный кадр любого адаптера, по порядку.
     tx: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Нажатия Ctrl-C, которые видит `interrupts()`; поднимают их тест или ответчик ARP (`press_during_arp`).
+    presses: Arc<AtomicU32>,
+    /// Вызовы `interrupts()`.
+    polls: AtomicUsize,
+    /// Ctrl-C во время ARP: уход ARP-запроса считается одним нажатием.
+    press_during_arp: bool,
+    /// Цели молчат: SYN остаётся без ответа (ARP отвечает как обычно).
+    silent_targets: bool,
 }
 
 impl FakeBackend {
@@ -194,6 +208,10 @@ impl FakeBackend {
             opened: Mutex::new(Vec::new()),
             attempts: Mutex::new(Vec::new()),
             tx: Arc::new(Mutex::new(Vec::new())),
+            presses: Arc::new(AtomicU32::new(0)),
+            polls: AtomicUsize::new(0),
+            press_during_arp: false,
+            silent_targets: false,
         }
     }
 
@@ -211,6 +229,14 @@ impl FakeBackend {
 
     fn opened(&self) -> std::sync::MutexGuard<'_, Vec<Opened>> {
         self.opened.lock().unwrap()
+    }
+
+    fn polls(&self) -> usize {
+        self.polls.load(Ordering::SeqCst)
+    }
+
+    fn presses(&self) -> u32 {
+        self.presses.load(Ordering::SeqCst)
     }
 }
 
@@ -272,8 +298,16 @@ impl Backend for FakeBackend {
             adapter.set_health(h.clone());
         }
         let (neighbors, tx) = (self.neighbors.clone(), self.tx.clone());
+        let (presses, press_during_arp) = (self.presses.clone(), self.press_during_arp);
+        let silent_targets = self.silent_targets;
         adapter.set_responder(move |f| {
             tx.lock().unwrap().push(f.to_vec());
+            if press_during_arp && is_arp(f) {
+                presses.fetch_max(1, Ordering::SeqCst);
+            }
+            if silent_targets && !is_arp(f) {
+                return vec![];
+            }
             respond(f, &neighbors)
         });
         let pair = adapter.pair();
@@ -281,6 +315,7 @@ impl Backend for FakeBackend {
             binding: binding.clone(),
             adapter,
             alive_before,
+            polls_before: self.polls(),
         });
         Ok(pair)
     }
@@ -296,6 +331,10 @@ impl Backend for FakeBackend {
     }
     fn services(&self) -> ServiceNames {
         ServiceNames::parse("http 80/tcp\n")
+    }
+    fn interrupts(&self) -> u32 {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        self.presses()
     }
 }
 
@@ -1885,4 +1924,206 @@ fn ndjson_status_lines() {
     );
     assert!(!out.contains("milliseconds elapsed"), "{out:?}");
     assert!(!log.contains("rate:"), "{log:?}");
+}
+
+// ---------- Ctrl-C (Р18) ----------
+
+/// Ожидание `--wait 3600` идёт по `ManualClock` (72 000 пустых `recv`): скан не успевает закончиться сам раньше, чем
+/// цикл событий увидит нажатие, поэтому итог `Stopped` детерминирован.
+const LONG_WAIT: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "3600"];
+
+/// Строка C первого Ctrl-C (`main.c:1136–1139`): текст, 44 пробела, `\n`.
+fn waiting_line() -> String {
+    format!("waiting several seconds to exit...{}\n", " ".repeat(44))
+}
+
+/// Конвейер вывода, который «нажимает Ctrl-C» на первом открытом ответе: счётчик fake поднимается посреди первой
+/// пачки `Results`, цикл событий увидит его на следующей итерации. Запоминает каждый переданный ответ.
+struct PressOnFirstOpen<'a> {
+    pipeline: Pipeline<'a>,
+    presses: Arc<AtomicU32>,
+    reported: Vec<Reply>,
+}
+
+impl Sink for PressOnFirstOpen<'_> {
+    fn open(&mut self) -> Result<(), String> {
+        self.pipeline.open()
+    }
+    fn report(&mut self, reply: &Reply) -> Result<(), String> {
+        self.pipeline.report(reply)?;
+        if reply.status == PortStatus::Open {
+            self.presses.fetch_max(1, Ordering::SeqCst);
+        }
+        self.reported.push(*reply);
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<(), String> {
+        self.pipeline.finish()
+    }
+}
+
+/// `-oJ` с записями `open` (время стенки fake): `[`, записи через `,`, `]`.
+fn json_file(open: &[Reply]) -> String {
+    let records: Vec<String> = open
+        .iter()
+        .map(|r| {
+            format!(
+                "{{   \"ip\": \"{}\",   \"timestamp\": \"{UNIX_TIME}\", \"ports\": [ {{\"port\": {}, \"proto\": \
+                 \"tcp\", \"status\": \"open\", \"reason\": \"syn-ack\", \"ttl\": {}}} ] }}\n",
+                Ipv4Addr::from(r.remote_ip),
+                r.remote_port,
+                r.ttl
+            )
+        })
+        .collect();
+    format!("[\n{}]\n", records.join(",\n"))
+}
+
+/// `-oX` с записями `open`: заголовок, записи и подвал `runstats` (`2027-01-15 11:25:45` это `UNIX_TIME` в UTC).
+fn xml_file(open: &[Reply]) -> String {
+    let mut s = format!(
+        "<?xml version=\"1.0\"?>\r\n<!-- masscan v1.0 scan -->\r\n<nmaprun scanner=\"masscan\" \
+         start=\"{UNIX_TIME}\" version=\"1.0-BETA\"  xmloutputversion=\"1.03\">\r\n\
+         <scaninfo type=\"syn\" protocol=\"tcp\" />\r\n"
+    );
+    for r in open {
+        s.push_str(&format!(
+            "<host endtime=\"{UNIX_TIME}\"><address addr=\"{}\" addrtype=\"ipv4\"/><ports><port protocol=\"tcp\" \
+             portid=\"{}\"><state state=\"open\" reason=\"syn-ack\" reason_ttl=\"{}\"/></port></ports></host>\r\n",
+            Ipv4Addr::from(r.remote_ip),
+            r.remote_port,
+            r.ttl
+        ));
+    }
+    let n = open.len();
+    s.push_str(&format!(
+        "<runstats>\r\n<finished time=\"{UNIX_TIME}\" timestr=\"2027-01-15 11:25:45\" elapsed=\"0\" />\r\n\
+         <hosts up=\"{n}\" down=\"0\" total=\"{n}\" />\r\n</runstats>\r\n</nmaprun>\r\n"
+    ));
+    s
+}
+
+/// Р18: первое Ctrl-C посреди скана печатает строку C, останавливает engine; приёмник дописывает записи и подвал
+/// (`-oJ` закрыт `]\n`, `-oX` закрыт `</nmaprun>\r\n`), `[+] finished: Stopped`, `Ok` (exit 0). Ни один принятый
+/// ответ не теряется: в файле ровно открытые ответы, переданные приёмнику, включая пачки после остановки.
+#[test]
+fn first_interrupt_stops_and_finishes_outputs() {
+    for format in ["-oJ", "-oX"] {
+        let path = tmp(&format!("interrupt{format}"));
+        let b = FakeBackend::new();
+        let parsed = parse(&with(&LONG_WAIT, &[format, path.to_str().unwrap()]));
+        let (mut stdout, mut log) = (Vec::new(), Vec::new());
+        let (r, reported) = {
+            let env = OutputEnv {
+                wall: &b,
+                services: ServiceNames::empty(),
+                tcp_ports: Vec::new(),
+                scan_started: None,
+            };
+            let mut sink = PressOnFirstOpen {
+                pipeline: Pipeline::new(parsed.output_options().unwrap(), &mut stdout, env),
+                presses: b.presses.clone(),
+                reported: Vec::new(),
+            };
+            let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
+            (r, sink.reported)
+        };
+        let log = String::from_utf8(log).unwrap();
+        assert_eq!(
+            r.unwrap().reason,
+            Reason::Stopped,
+            "{format}: {:?}",
+            plus_lines(&log)
+        );
+        assert_eq!(b.presses(), 1, "one press");
+        assert_eq!(
+            log.matches(&waiting_line()).count(),
+            1,
+            "{:?}",
+            plus_lines(&log)
+        );
+        let open: Vec<Reply> = reported
+            .iter()
+            .copied()
+            .filter(|r| r.status == PortStatus::Open)
+            .collect();
+        assert!(!open.is_empty(), "the press came after an open reply");
+        let sent = b.opened()[1].adapter.sent_count();
+        let finished = format!(
+            "[+] finished: Stopped, sent {sent}, replies {}, open {}",
+            reported.len(),
+            open.len()
+        );
+        assert_eq!(plus_lines(&log).last().copied(), Some(finished.as_str()));
+        assert!(log.find(&waiting_line()).unwrap() < log.find("[+] finished: ").unwrap());
+        assert!(stdout.is_empty(), "stdout is silent with a file format");
+        let want = if format == "-oJ" {
+            json_file(&open)
+        } else {
+            xml_file(&open)
+        };
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), want, "{format}");
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Review Focus 5: Ctrl-C до первой записи (во время ARP; цели молчат): файл остаётся 0 байт, без заголовка и
+/// подвала, `[+] finished: Stopped`, exit 0, второго нажатия не нужно. Обработчик ставится ровно один раз, до
+/// открытия адаптера ARP.
+#[test]
+fn interrupt_without_records_leaves_empty_file() {
+    for format in ["-oJ", "-oX"] {
+        let path = tmp(&format!("interrupt-empty{format}"));
+        let mut b = FakeBackend::new();
+        b.press_during_arp = true;
+        b.silent_targets = true;
+        let (r, out, log) = cli(&b, &with(&LONG_WAIT, &[format, path.to_str().unwrap()]));
+        r.unwrap();
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"", "{format}");
+        assert_eq!(b.presses(), 1, "one press");
+        assert_eq!(
+            log.matches(&waiting_line()).count(),
+            1,
+            "{:?}",
+            plus_lines(&log)
+        );
+        let sent = b.opened()[1].adapter.sent_count();
+        assert_eq!(
+            plus_lines(&log).last().copied(),
+            Some(format!("[+] finished: Stopped, sent {sent}, replies 0, open 0").as_str())
+        );
+        assert_eq!(
+            b.opened()[0].polls_before,
+            1,
+            "the handler is installed once, before the ARP adapter opens"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Ctrl-C перехватывает только живой скан: `--readscan`, `-sL`, `--echo`, `--offline` и `--iflist` не ставят
+/// обработчик (поведение ОС по умолчанию), `interrupts()` у них не зовётся ни разу.
+#[test]
+fn only_a_live_scan_traps_ctrl_c() {
+    let path = tmp("trap.scan");
+    let file = path.to_str().unwrap();
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &with(&LIVE, &["-oB", file]));
+    r.unwrap();
+    assert_eq!(b.opened()[0].polls_before, 1, "installed before ARP");
+    assert!(b.polls() > 1, "the event loop polls the counter");
+    for args in [
+        &["--readscan", file, "-oL", "-"][..],
+        &["-sL", "198.51.100.1", "-p80", "--seed", "1"][..],
+        &["--echo", "198.51.100.1", "-p80", "--seed", "1"][..],
+        &TRACE[..],
+        &["--iflist"][..],
+    ] {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, args);
+        assert!(r.is_ok(), "{args:?}: {r:?} {log}");
+        assert_eq!(b.polls(), 0, "{args:?}");
+    }
+    let _ = std::fs::remove_file(path);
 }

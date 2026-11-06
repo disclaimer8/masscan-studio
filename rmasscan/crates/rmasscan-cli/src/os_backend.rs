@@ -1,7 +1,7 @@
 //! Настоящая реализация шва `Backend` (AGPL-3.0). Включается только в бинарник вне `cfg(test)` и является
 //! единственным местом, где CLI открывает адаптер (`rmasscan_net::open_explicit`). Таблицы маршрутов и интерфейсов
 //! читаются в процессе и без привилегий; энтропия из `getrandom`; часы `SystemClock`; смещение местного времени
-//! `rmasscan_net::localtime`; имена сервисов из файла services хоста.
+//! `rmasscan_net::localtime`; имена сервисов из файла services хоста; счётчик Ctrl-C `rmasscan_net::interrupt`.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,5 +65,12 @@ impl Backend for OsBackend {
 
     fn services(&self) -> ServiceNames {
         ServiceNames::host()
+    }
+
+    /// Первый вызов ставит обработчик (`install` идемпотентен). Сбой установки оставляет поведение ОС по умолчанию:
+    /// Ctrl-C завершает процесс, счётчик остаётся 0; C тоже не проверяет итог `signal(SIGINT, …)` (`main.c:1338`).
+    fn interrupts(&self) -> u32 {
+        let _ = rmasscan_net::interrupt::install();
+        rmasscan_net::interrupt::presses()
     }
 }

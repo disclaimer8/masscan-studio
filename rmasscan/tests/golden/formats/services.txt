@@ -1,0 +1,4 @@
+ssh                   22/tcp
+http                  80/tcp www
+https                 443/tcp
+http-alt              8080/tcp webcache

@@ -1,0 +1,9 @@
+[
+{   "ip": "0.0.0.1",   "timestamp": "1701388800", "ports": [ {"port": 0, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 0} ] }
+,
+{   "ip": "192.0.2.1",   "timestamp": "1701388801", "ports": [ {"port": 47001, "proto": "tcp", "status": "open", "reason": "none", "ttl": 64} ] }
+,
+{   "ip": "192.0.2.2",   "timestamp": "1701388801", "ports": [ {"port": 65535, "proto": "tcp", "status": "open", "reason": "fin-syn-rst-psh-ack-urg-ece-cwr", "ttl": 255} ] }
+,
+{   "ip": "255.255.255.255",   "timestamp": "1701475199", "ports": [ {"port": 0, "proto": "tcp", "status": "open", "reason": "rst", "ttl": 128} ] }
+]

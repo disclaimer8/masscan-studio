@@ -1,0 +1,8 @@
+{"ip":"10.0.0.1","timestamp":"1700000000","port":80,"proto":"tcp","rec_type":"status","data":{"status":"open","reason":"syn-ack","ttl":64}}
+{"ip":"10.0.0.1","timestamp":"1700000000","port":443,"proto":"tcp","rec_type":"status","data":{"status":"closed","reason":"rst-ack","ttl":64}}
+{"ip":"10.0.0.2","timestamp":"1700000001","port":8080,"proto":"tcp","rec_type":"status","data":{"status":"open","reason":"syn-ack","ttl":57}}
+{"ip":"10.0.0.2","timestamp":"1700000001","port":22,"proto":"tcp","rec_type":"status","data":{"status":"closed","reason":"rst","ttl":57}}
+{"ip":"10.0.0.3","timestamp":"1700000002","port":22,"proto":"tcp","rec_type":"status","data":{"status":"open","reason":"syn-ack","ttl":128}}
+{"ip":"10.0.0.3","timestamp":"1700000002","port":80,"proto":"tcp","rec_type":"status","data":{"status":"closed","reason":"rst-ack","ttl":128}}
+{"ip":"192.0.2.7","timestamp":"1700000003","port":443,"proto":"tcp","rec_type":"status","data":{"status":"open","reason":"syn-ack","ttl":255}}
+{"ip":"192.0.2.7","timestamp":"1700000003","port":8080,"proto":"tcp","rec_type":"status","data":{"status":"closed","reason":"rst-ack","ttl":1}}

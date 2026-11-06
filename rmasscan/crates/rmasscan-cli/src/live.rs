@@ -8,8 +8,11 @@
 //! (`--retries`, `--shard`, rounds, legacy resume) до ARP, чтобы отклонённый engine скан не стоил ни одного ARP-кадра;
 //! настоящий план строится после ARP, потому что binding неизменяем. Всё состояние ОС приходит через шов
 //! [`Backend`]; обнаружение, `--offline` и `--iflist` ничего не открывают. Единственный кадр до engine это ARP-запрос
-//! резолвера с отдельного короткоживущего адаптера, закрытого до открытия адаптера скана. Ctrl-C не перехватывается,
-//! `paused.conf` не пишется.
+//! резолвера с отдельного короткоживущего адаптера, закрытого до открытия адаптера скана. Ctrl-C (Р18, порт
+//! `control_c_handler`, `main.c:1131–1155`): [`Backend::interrupts`] ставит обработчик до ARP, цикл событий видит
+//! первое нажатие, печатает строку C и останавливает engine, приёмник дописывает принятое и подвал, итог `Stopped`
+//! (exit 0); второе нажатие завершает процесс с кодом 1 из самого обработчика. Фазы ожидания поздних ответов после
+//! Ctrl-C нет, `paused.conf` не пишется.
 
 #![forbid(unsafe_code)]
 
@@ -42,6 +45,12 @@ use crate::output::{ServiceNames, Sink, Wall, io_fail};
 /// Префикс отказов обнаружения и ARP в форме C (`[-] FAIL: …` и подсказки); [`crate::error_text`] не оборачивает их.
 pub const REFUSAL_PREFIX: &str = "[-] ";
 
+/// Строка C первого Ctrl-C (`main.c:1136–1139`): 44 пробела затирают хвост строки статуса.
+const INTERRUPT_LINE: &str = concat!(
+    "waiting several seconds to exit...",
+    "                                            \n"
+);
+
 /// Всё, что CLI берёт у ОС. Тесты подставляют fake (его `open` паникует или выдаёт `FakeAdapter`); настоящая
 /// реализация (`OsBackend`) живёт только в бинарнике, в `src/os_backend.rs` под `#[cfg(not(test))]`.
 pub trait Backend: Wall {
@@ -59,6 +68,9 @@ pub trait Backend: Wall {
     fn clock(&self) -> Arc<dyn Clock + Send + Sync>;
     /// Имена TCP-сервисов для `-oG` и `-oU` (`getservbyport` C); [`crate::run`] читает их только для этих форматов.
     fn services(&self) -> ServiceNames;
+    /// Нажатия Ctrl-C (Р18). Первый вызов ставит обработчик; его делает только [`run_live_with`], один раз до ARP, и
+    /// затем опрашивает счётчик в цикле событий. Остальные операции не зовут его, у них поведение ОС по умолчанию.
+    fn interrupts(&self) -> u32;
 }
 
 /// Подготовленный скан: проверенная конфигурация, обнаружение и binding. `binding.next_hop_mac` для
@@ -350,8 +362,8 @@ pub fn conclude(
     }
 }
 
-/// Живой скан: `prepare` → проверка плана → `[+]` → ARP (если нужен) → `ReadyPlan` → `open` → engine → `sink` →
-/// `join`.
+/// Живой скан: `prepare` → проверка плана → `[+]` → файл вывода → обработчик Ctrl-C → ARP (если нужен) → `ReadyPlan`
+/// → `open` → engine → `sink` → `join`.
 pub fn run_live(
     cfg: &ScanConfig,
     backend: &dyn Backend,
@@ -377,6 +389,9 @@ pub fn run_live_with(
     print_detection(&p, log)?;
     // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
     sink.open()?;
+    // Р18: обработчик Ctrl-C ставится до ARP и держится весь скан. Резолвер ARP счётчик не смотрит: нажатие во время
+    // ARP цикл событий увидит на первой итерации после старта engine.
+    backend.interrupts();
     let clock = backend.clock();
     let mut binding = p.binding.clone();
     let name = p.detected.iface.name.as_str();
@@ -427,7 +442,18 @@ pub fn run_live_with(
     let wait_secs = i64::from(cfg.wait_secs);
     let mut status = StatusLine::new(mode, started);
     let (mut max_count, mut tx_done_at) = (0u64, None::<u64>);
+    let mut interrupted = false;
     'events: loop {
+        // Р18: счётчик проверяется на каждой итерации (не реже раза в 250 мс). После остановки цикл дочитывает
+        // события до `Finished`, поэтому приёмник получает каждый принятый ответ.
+        if !interrupted && backend.interrupts() > 0 {
+            interrupted = true;
+            // C печатает строку и не проверяет `fprintf`; сбой stderr не должен помешать дописать файлы вывода.
+            let _ = log
+                .write_all(INTERRUPT_LINE.as_bytes())
+                .and_then(|()| log.flush());
+            handle.stop();
+        }
         match handle.recv_event_timeout(Duration::from_millis(250)) {
             Ok(Event::Started { range }) => max_count = range,
             Ok(Event::Progress(prog)) => {

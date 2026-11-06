@@ -324,6 +324,9 @@ mod tests {
             self.services_calls.set(self.services_calls.get() + 1);
             output::ServiceNames::parse("http 80/tcp\n")
         }
+        fn interrupts(&self) -> u32 {
+            panic!("library unit tests never trap Ctrl-C")
+        }
     }
 
     fn run_with(b: &FakeBackend, args: &[&str]) -> Result<String, String> {

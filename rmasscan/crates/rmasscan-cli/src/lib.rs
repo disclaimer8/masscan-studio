@@ -17,6 +17,7 @@ pub mod args;
 pub mod live;
 pub mod output;
 pub mod readscan;
+pub mod status;
 
 use std::io::Write;
 
@@ -200,7 +201,24 @@ pub fn run(
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     let env = output_env(backend, &opts, &cfg, None);
-    live::run_live(&cfg, backend, &mut Pipeline::new(opts, &mut *out, env), log)?;
+    let mode = if cli.nostatus {
+        status::StatusMode::Off
+    } else if cli.ndjson_status {
+        status::StatusMode::Ndjson
+    } else {
+        status::StatusMode::Text
+    };
+    let (_, scan_millis) = live::run_live_with(
+        &cfg,
+        backend,
+        &mut Pipeline::new(opts, &mut *out, env),
+        log,
+        mode,
+    )?;
+    if mode == status::StatusMode::Off {
+        // main.c:1548-1552: без строки статуса C пишет в stdout время скана.
+        write_out(out, &format!("{scan_millis} milliseconds elapsed\n"))?;
+    }
     finish(out)
 }
 

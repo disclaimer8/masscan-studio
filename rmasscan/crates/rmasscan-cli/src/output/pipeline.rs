@@ -14,6 +14,9 @@ use super::record::{Record, Status, status_str};
 use super::services::ServiceNames;
 use super::{Sink, io_fail};
 
+/// Начало отказа открытия файла (`output.c:180–239`, `open_rotate`); `crate::error_text` печатает его как есть.
+pub const OPEN_FAILURE_PREFIX: &str = "out: could not open file for ";
+
 /// Часы стенки: Unix-время и смещение местного времени от UTC. Все `Backend` их реализуют.
 pub trait Wall {
     fn unix_time(&self) -> u64;
@@ -129,7 +132,8 @@ impl<'a> Pipeline<'a> {
             return Ok(());
         };
         if matches!(self.target, Target::Closed) {
-            // C: нет файла и формат не интерактивный; запись теряется (Задача 4 сообщает об этом заранее).
+            // Реальный формат без файла: C молча теряет запись (`output.c:799–803`). Из `crate::run` сюда не дойти:
+            // он отклоняет такие опции до скана и до чтения `--readscan`.
             return Ok(());
         }
         match r.status {
@@ -195,7 +199,7 @@ impl Sink for Pipeline<'_> {
                     } else {
                         "writing"
                     };
-                    return Err(format!("out: could not open file for {how}\n{name}: {e}"));
+                    return Err(format!("{OPEN_FAILURE_PREFIX}{how}\n{name}: {e}"));
                 }
             }
         };

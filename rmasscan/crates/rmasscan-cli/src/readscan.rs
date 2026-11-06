@@ -14,6 +14,7 @@ use std::net::Ipv4Addr;
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::massip::MassIp;
 
+use crate::LOGGED;
 use crate::output::{Pipeline, Record, Sink, Status, io_fail};
 
 /// `BUF_MAX` C: наибольшая длина тела записи.
@@ -190,8 +191,9 @@ impl ReadFilter {
     }
 }
 
-/// `readscan_binary_scanfile`: файлы по порядку в один вывод. На первой ошибке пишет текст C в `log`, всё равно
-/// закрывает вывод (`sink.finish()` даёт подвал) и возвращает `Err`.
+/// `readscan_binary_scanfile`: файлы по порядку в один вывод. На первой ошибке чтения пишет текст C в `log`, всё
+/// равно закрывает вывод (`sink.finish()` даёт подвал) и возвращает `Err(LOGGED)`: текст уже напечатан. Ошибки
+/// открытия и записи вывода возвращаются своим текстом (их печатает вызывающий).
 pub fn run_readscan(
     files: &[String],
     filter: &ReadFilter,
@@ -226,7 +228,7 @@ fn read_one(
         Err(e) => {
             log.write_all(format!("[-] FAIL: --readscan\n[-] {name}: {e}\n").as_bytes())
                 .map_err(io_fail)?;
-            return Err(format!("{name}: {e}"));
+            return Err(LOGGED.into());
         }
     };
     let mut reader = BufReader::new(file);
@@ -260,7 +262,7 @@ fn read_one(
     if let Err(e) = res {
         log.write_all(e.log_line(name).as_bytes())
             .map_err(io_fail)?;
-        return Err(format!("{name}: {e}"));
+        return Err(LOGGED.into());
     }
     Ok(())
 }

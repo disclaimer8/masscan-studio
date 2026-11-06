@@ -1,7 +1,8 @@
-//! CLI порта masscan (AGPL-3.0): живой скан с обнаружением адаптера и шлюза, `--offline` (с `--packet-trace`),
-//! `-sL`, `--echo`/`--echo-all` и `--iflist` поверх `rmasscan-core`, `rmasscan-engine` и `rmasscan-net`. Порт
-//! `src/main.c` (`main` :1595-1805, `main_scan`), `src/main-initadapter.c`, `src/main-listscan.c` и
-//! `src/main-ptrace.c` из masscan © Robert David Graham (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
+//! CLI порта masscan (AGPL-3.0): живой скан с обнаружением адаптера и шлюза и форматами вывода masscan,
+//! `--readscan`, `--offline` (с `--packet-trace`), `-sL`, `--echo`/`--echo-all` и `--iflist` поверх `rmasscan-core`,
+//! `rmasscan-engine` и `rmasscan-net`. Порт `src/main.c` (`main` :1595-1805, `main_scan`), `src/main-initadapter.c`,
+//! `src/main-listscan.c`, `src/main-ptrace.c` и `src/in-binary.c` из masscan © Robert David Graham
+//! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
 //! Библиотека: бинарник `rmasscan` тонкий и зовёт [`run`] с настоящим `Backend`; все тесты идут через fake (ни один
 //! не достигает ОС). Настоящая реализация шва библиотеке недоступна:
@@ -20,9 +21,23 @@ pub mod readscan;
 use std::io::Write;
 
 use args::{Cli, SeedPolicy, seed_policy};
-use output::{OutputEnv, OutputOptions, Pipeline, io_fail, services};
-use rmasscan_core::config::{Operation, echo, validate};
+use output::{
+    Format, OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, ServiceNames, io_fail,
+};
+use rmasscan_core::config::{Operation, ScanConfig, echo, validate};
 use rmasscan_core::scan::{format_list_line, list_scan};
+
+/// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
+/// corrupt`, `in-binary.c`): exit 1 без второй копии. [`error_text`] даёт для неё пустую строку.
+pub const LOGGED: &str = "(the error lines are already in the log)";
+
+/// Р19.
+const OUTPUT_OUTSIDE_SCAN: &str = "output options apply only to a scan or --readscan";
+
+/// Две строки `ERRMSG` C (`output.c:799–803`) для реального формата без файла: C на этом молча теряет каждую
+/// запись, здесь это отказ до любого кадра и любого чтения (решение 2 контроллера).
+const NO_OUTPUT_FILE: &str = "[-] ERR: no output file, use `--output-filename <filename>` to set one\n\
+                              [-] ERR: for `stdout`, use `--output-filename -`";
 
 fn write_out(out: &mut dyn Write, s: &str) -> Result<(), String> {
     out.write_all(s.as_bytes()).map_err(io_fail)
@@ -33,25 +48,106 @@ fn finish(out: &mut dyn Write) -> Result<(), String> {
     out.flush().map_err(io_fail)
 }
 
-/// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) как есть, прочие ошибки
-/// с обёрткой `rmasscan: error:`. Любая ошибка даёт exit 1.
+/// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) и отказ открытия файла
+/// вывода (`out: could not open file for …`) как есть, [`LOGGED`] пусто (уже в `log`), прочие ошибки с обёрткой
+/// `rmasscan: error:`. Любая ошибка даёт exit 1.
 pub fn error_text(msg: &str) -> String {
-    if msg.starts_with(live::REFUSAL_PREFIX) {
+    if msg == LOGGED {
+        String::new()
+    } else if msg.starts_with(live::REFUSAL_PREFIX) || msg.starts_with(OPEN_FAILURE_PREFIX) {
         msg.to_string()
     } else {
         format!("rmasscan: error: {msg}")
     }
 }
 
+/// Опции вывода скана и `--readscan`: реальный формат требует файл (`-` это stdout).
+fn checked_output_options(cli: &Cli) -> Result<OutputOptions, String> {
+    let o = cli.output_options()?;
+    let needs_file = !matches!(
+        o.format,
+        Format::Default | Format::Interactive | Format::None
+    );
+    if needs_file && o.filename.is_none() {
+        return Err(NO_OUTPUT_FILE.into());
+    }
+    Ok(o)
+}
+
+/// Порты TCP целей за вычетом исключений, отсортированные и слитые: `masscan->targets.ports` после
+/// `massip_apply_excludes` и `massip_optimize` (main.c:1672–1684), строка `# Ports scanned` заголовка `-oG`.
+fn tcp_ports(cfg: &ScanConfig) -> Vec<(u16, u16)> {
+    let mut targets = cfg.targets.clone();
+    targets.apply_excludes(&mut cfg.excludes.clone());
+    targets.optimize();
+    targets
+        .ports()
+        .as_slice()
+        .iter()
+        .filter(|r| r.begin <= 0xFFFF)
+        .map(|r| (r.begin as u16, r.end.min(0xFFFF) as u16))
+        .collect()
+}
+
+/// Окружение конвейера: часы бэкенда; файл services читается только для `-oG` и `-oU`.
+fn output_env<'a>(
+    backend: &'a dyn live::Backend,
+    opts: &OutputOptions,
+    cfg: &ScanConfig,
+    scan_started: Option<u64>,
+) -> OutputEnv<'a> {
+    let services = if matches!(opts.format, Format::Grepable | Format::Unicornscan) {
+        backend.services()
+    } else {
+        ServiceNames::empty()
+    };
+    OutputEnv {
+        wall: backend,
+        services,
+        tcp_ports: tcp_ports(cfg),
+        scan_started,
+    }
+}
+
+/// `--readscan` (main.c:1764, `readscan_binary_scanfile`): файлы `-oB` через конвейер вывода. Адаптер не
+/// открывается, маршруты не читаются, `--seed` и права не нужны; начало скана берётся из первой записи
+/// (`when_scan_started = 0`).
+fn readscan(
+    cli: &Cli,
+    cfg: &ScanConfig,
+    backend: &dyn live::Backend,
+    out: &mut dyn Write,
+    log: &mut dyn Write,
+) -> Result<(), String> {
+    let opts = checked_output_options(cli)?;
+    let filter = readscan::ReadFilter::from_config(cfg);
+    let env = output_env(backend, &opts, cfg, Some(0));
+    readscan::run_readscan(
+        &cli.readscan,
+        &filter,
+        &mut Pipeline::new(opts, &mut *out, env),
+        log,
+    )?;
+    finish(out)
+}
+
 /// Выполняет разобранную командную строку. `backend` - единственный шов к ОС; `out` получает stdout (строки
-/// `Discovered`, трассу, `-sL`, `--echo`, `--iflist`), `log` строки `[+]`. `Ok` значит exit 0.
+/// `Discovered`, вывод `-o… -`, трассу, `-sL`, `--echo`, `--iflist`), `log` строки `[+]` и `[-]`. `Ok` значит
+/// exit 0.
 pub fn run(
     cli: &Cli,
     backend: &dyn live::Backend,
     out: &mut dyn Write,
     log: &mut dyn Write,
 ) -> Result<(), String> {
+    let other_op = cli.list || cli.echo || cli.echo_all || cli.offline || cli.iflist;
+    if cli.output_flags_given() && other_op {
+        return Err(OUTPUT_OUTSIDE_SCAN.into());
+    }
     let cfg = cli.to_config()?;
+    if !cli.readscan.is_empty() {
+        return readscan(cli, &cfg, backend, out, log);
+    }
     if cli.iflist {
         live::iflist(backend, out)?;
         return finish(out);
@@ -101,18 +197,10 @@ pub fn run(
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
-    let env = OutputEnv {
-        wall: backend,
-        services: services::empty(),
-        tcp_ports: Vec::new(),
-        scan_started: None,
-    };
-    live::run_live(
-        &cfg,
-        backend,
-        &mut Pipeline::new(OutputOptions::default(), &mut *out, env),
-        log,
-    )?;
+    // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
+    let opts = checked_output_options(cli)?;
+    let env = output_env(backend, &opts, &cfg, None);
+    live::run_live(&cfg, backend, &mut Pipeline::new(opts, &mut *out, env), log)?;
     finish(out)
 }
 
@@ -135,15 +223,18 @@ mod tests {
     const ETH0_IP: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 5);
 
     /// Одна сеть: `eth0` (Ethernet, `02:aa:00:00:00:01`, адреса `ipv4`), всё через шлюз `192.0.2.1`. `open`
-    /// паникует: unit-тесты библиотеки никогда не открывают адаптер.
+    /// паникует: unit-тесты библиотеки никогда не открывают адаптер. Таблица сервисов знает только `http 80/tcp`;
+    /// `services_calls` считает её чтения.
     struct FakeBackend {
         ipv4: Vec<Ipv4Addr>,
+        services_calls: std::cell::Cell<usize>,
     }
 
     impl Default for FakeBackend {
         fn default() -> Self {
             FakeBackend {
                 ipv4: vec![ETH0_IP],
+                services_calls: std::cell::Cell::new(0),
             }
         }
     }
@@ -211,6 +302,10 @@ mod tests {
         fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
             ManualClock::new()
         }
+        fn services(&self) -> output::ServiceNames {
+            self.services_calls.set(self.services_calls.get() + 1);
+            output::ServiceNames::parse("http 80/tcp\n")
+        }
     }
 
     fn run_with(b: &FakeBackend, args: &[&str]) -> Result<String, String> {
@@ -224,11 +319,381 @@ mod tests {
         run_with(&FakeBackend::default(), args)
     }
 
+    fn tmp(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("rmasscan-lib-{}-{name}", std::process::id()))
+    }
+
     #[test]
     fn unsupported_option_errors() {
         assert!(Cli::try_parse_masscan(["rmasscan", "--banners", "10.0.0.0/24", "-p80"]).is_err());
         assert!(Cli::try_parse_masscan(["rmasscan", "--nonsense"]).is_err());
-        assert!(Cli::try_parse_masscan(["rmasscan", "-oX", "x.xml"]).is_err());
+        // `-oX FILE` разбирается; без целей `run` отказывает раньше, чем тронет файл.
+        let path = tmp("no-targets.xml");
+        let e = run_args(&["rmasscan", "-oX", path.to_str().unwrap()]).unwrap_err();
+        assert!(e.contains("target IP address list empty"), "{e}");
+        assert!(!path.exists());
+    }
+
+    /// Р19: флаги вывода и статуса вне живого скана и `--readscan` отклоняются до любого вывода и любого файла.
+    #[test]
+    fn output_flags_refused_outside_scan_and_readscan() {
+        let path = tmp("r19.txt");
+        let file = path.to_str().unwrap();
+        for op in [
+            &["-sL", "10.0.0.0/30", "-p80", "--seed", "1"][..],
+            &["--echo", "10.0.0.0/30", "-p80", "--seed", "1"][..],
+            &["--echo-all", "10.0.0.0/30", "-p80", "--seed", "1"][..],
+            &["--offline", "10.0.0.1", "-p80", "--seed", "1"][..],
+            &[
+                "--offline",
+                "--packet-trace",
+                "10.0.0.1",
+                "-p80",
+                "--seed",
+                "1",
+            ][..],
+            &["--iflist"][..],
+        ] {
+            for flags in [
+                &["-oL", file][..],
+                &["--nostatus"][..],
+                &["--show", "closed"][..],
+                &["--interactive"][..],
+            ] {
+                let mut argv = vec!["rmasscan"];
+                argv.extend_from_slice(op);
+                argv.extend_from_slice(flags);
+                let cli = Cli::try_parse_masscan(argv.iter().copied()).unwrap();
+                let (mut out, mut log) = (Vec::new(), Vec::new());
+                let e = run(&cli, &FakeBackend::default(), &mut out, &mut log).unwrap_err();
+                assert_eq!(
+                    e, "output options apply only to a scan or --readscan",
+                    "{argv:?}"
+                );
+                assert!(out.is_empty() && log.is_empty(), "{argv:?}");
+                assert!(!path.exists(), "{argv:?}");
+            }
+        }
+    }
+
+    fn open_rec() -> output::Record {
+        output::Record {
+            timestamp: 1_700_000_000,
+            ip: Ipv4Addr::new(1, 2, 3, 4),
+            port: 80,
+            status: output::Status::Open,
+            reason: 0x12,
+            ttl: 57,
+        }
+    }
+
+    fn closed_rec() -> output::Record {
+        output::Record {
+            timestamp: 1_700_000_000,
+            ip: Ipv4Addr::new(10, 0, 0, 255),
+            port: 443,
+            status: output::Status::Closed,
+            reason: 0x14,
+            ttl: 64,
+        }
+    }
+
+    /// Файл `-oB` с записями `recs`, собранный писателем конвейера (часы 1_600_000_000, не время записей).
+    fn scan_file(name: &str, recs: &[output::Record]) -> std::path::PathBuf {
+        struct W;
+        impl output::Wall for W {
+            fn unix_time(&self) -> u64 {
+                1_600_000_000
+            }
+            fn utc_offset_secs(&self, _: u64) -> i32 {
+                0
+            }
+        }
+        let path = tmp(name);
+        let mut sink_out = Vec::new();
+        let env = OutputEnv {
+            wall: &W,
+            services: output::ServiceNames::empty(),
+            tcp_ports: Vec::new(),
+            scan_started: None,
+        };
+        let o = OutputOptions {
+            format: output::Format::Binary,
+            filename: Some(path.to_string_lossy().into_owned()),
+            show_closed: true,
+            ..OutputOptions::default()
+        };
+        let mut p = Pipeline::new(o, &mut sink_out, env);
+        output::Sink::open(&mut p).unwrap();
+        for r in recs {
+            p.report_record(r).unwrap();
+        }
+        output::Sink::finish(&mut p).unwrap();
+        path
+    }
+
+    /// `run` с `--readscan`: (итог, stdout, stderr).
+    fn readscan_run(b: &FakeBackend, args: &[&str]) -> (Result<(), String>, Vec<u8>, String) {
+        let mut argv = vec!["rmasscan"];
+        argv.extend_from_slice(args);
+        let cli = Cli::try_parse_masscan(argv).unwrap();
+        let (mut out, mut log) = (Vec::new(), Vec::new());
+        let r = run(&cli, b, &mut out, &mut log);
+        (r, out, String::from_utf8(log).unwrap())
+    }
+
+    /// `--readscan` через `run`: записи сохраняют своё время, начало скана из первой записи (1_700_000_000), часы
+    /// fake-бэкенда (1_800_000_000, смещение 0) дают только время открытия, заголовка XML и подвалов; имена сервисов
+    /// читаются только для `-oG` и `-oU`. Ожидания выписаны по байтам юнит-тестов форматов.
+    #[test]
+    fn readscan_converts_to_every_format() {
+        let input = scan_file("every.scan", &[open_rec(), closed_rec()]);
+        let input = input.to_str().unwrap();
+        let cases: [(&str, &[u8]); 8] = [
+            (
+                "-oL",
+                b"#masscan\nopen tcp 80 1.2.3.4 1700000000\nclosed tcp 443 10.0.0.255 1700000000\n# end\n",
+            ),
+            (
+                "-oJ",
+                concat!(
+                    "[\n",
+                    "{   \"ip\": \"1.2.3.4\",   \"timestamp\": \"1700000000\", \"ports\": [ {\"port\": 80, \"proto\": \"tcp\", \"status\": \"open\", \"reason\": \"syn-ack\", \"ttl\": 57} ] }\n",
+                    ",\n",
+                    "{   \"ip\": \"10.0.0.255\",   \"timestamp\": \"1700000000\", \"ports\": [ {\"port\": 443, \"proto\": \"tcp\", \"status\": \"closed\", \"reason\": \"rst-ack\", \"ttl\": 64} ] }\n",
+                    "]\n"
+                )
+                .as_bytes(),
+            ),
+            (
+                "-oD",
+                concat!(
+                    "{\"ip\":\"1.2.3.4\",\"timestamp\":\"1700000000\",\"port\":80,\"proto\":\"tcp\",\"rec_type\":\"status\",\"data\":{\"status\":\"open\",\"reason\":\"syn-ack\",\"ttl\":57}}\n",
+                    "{\"ip\":\"10.0.0.255\",\"timestamp\":\"1700000000\",\"port\":443,\"proto\":\"tcp\",\"rec_type\":\"status\",\"data\":{\"status\":\"closed\",\"reason\":\"rst-ack\",\"ttl\":64}}\n"
+                )
+                .as_bytes(),
+            ),
+            ("-oH", b"1.2.3.4\n10.0.0.255\n"),
+            (
+                "-oX",
+                concat!(
+                    "<?xml version=\"1.0\"?>\r\n<!-- masscan v1.0 scan -->\r\n",
+                    "<nmaprun scanner=\"masscan\" start=\"1800000000\" version=\"1.0-BETA\"  xmloutputversion=\"1.03\">\r\n",
+                    "<scaninfo type=\"syn\" protocol=\"tcp\" />\r\n",
+                    "<host endtime=\"1700000000\"><address addr=\"1.2.3.4\" addrtype=\"ipv4\"/><ports><port protocol=\"tcp\" portid=\"80\"><state state=\"open\" reason=\"syn-ack\" reason_ttl=\"57\"/></port></ports></host>\r\n",
+                    "<host endtime=\"1700000000\"><address addr=\"10.0.0.255\" addrtype=\"ipv4\"/><ports><port protocol=\"tcp\" portid=\"443\"><state state=\"closed\" reason=\"rst-ack\" reason_ttl=\"64\"/></port></ports></host>\r\n",
+                    "<runstats>\r\n<finished time=\"1800000000\" timestr=\"2027-01-15 08:00:00\" elapsed=\"0\" />\r\n",
+                    "<hosts up=\"1\" down=\"1\" total=\"2\" />\r\n</runstats>\r\n</nmaprun>\r\n"
+                )
+                .as_bytes(),
+            ),
+            (
+                "-oG",
+                concat!(
+                    "# Masscan 1.3.9-integration scan initiated Tue Nov 14 22:13:20 2023\n",
+                    "# Ports scanned: TCP(0;) UDP(0;) SCTP(0;) PROTOCOLS(0;)\n",
+                    "Timestamp: 1700000000\tHost: 1.2.3.4 ()\tPorts: 80/open/tcp//http//\n",
+                    "Timestamp: 1700000000\tHost: 10.0.0.255 ()\tPorts: 443/closed/tcp//unknown//\n",
+                    "# Masscan done at Fri Jan 15 08:00:00 2027\n"
+                )
+                .as_bytes(),
+            ),
+            (
+                "-oU",
+                concat!(
+                    "#masscan\n",
+                    "TCP open\t            http[   80]\t\tfrom 1.2.3.4  ttl 57 \n",
+                    "TCP closed\t         unknown[  443]\t\tfrom 10.0.0.255  ttl 64 \n",
+                    "# end\n"
+                )
+                .as_bytes(),
+            ),
+            ("-oB", &[]),
+        ];
+        for (flag, want) in cases {
+            let b = FakeBackend::default();
+            let (r, out, log) = readscan_run(
+                &b,
+                &["--readscan", input, "--show", "open,closed", flag, "-"],
+            );
+            r.unwrap();
+            assert_eq!(log, format!("[+] --readscan {input}\n"), "{flag}");
+            let services = usize::from(matches!(flag, "-oG" | "-oU"));
+            assert_eq!(
+                b.services_calls.get(),
+                services,
+                "{flag}: services read only for -oG/-oU"
+            );
+            if flag == "-oB" {
+                let mut head = b"masscan/1.1\ns:1700000000\n".to_vec();
+                head.resize(99, 0);
+                let mut foot = b"masscan/1.1".to_vec();
+                foot.resize(99, 0);
+                let ts = 1_700_000_000u32.to_be_bytes();
+                let mut want = head;
+                want.extend_from_slice(&[6, 13]);
+                want.extend_from_slice(&ts);
+                want.extend_from_slice(&[1, 2, 3, 4, 6, 0, 80, 0x12, 57]);
+                want.extend_from_slice(&[7, 13]);
+                want.extend_from_slice(&ts);
+                want.extend_from_slice(&[10, 0, 0, 255, 6, 0x01, 0xBB, 0x14, 64]);
+                want.extend_from_slice(&foot);
+                assert_eq!(out, want, "{flag}");
+            } else {
+                assert_eq!(
+                    String::from_utf8_lossy(&out),
+                    String::from_utf8_lossy(want),
+                    "{flag}"
+                );
+            }
+        }
+        // Без `-o…` и `--show` это интерактивная строка C, только open.
+        let (r, out, _) = readscan_run(&FakeBackend::default(), &["--readscan", input]);
+        r.unwrap();
+        assert_eq!(
+            out,
+            output::discovered_line(Ipv4Addr::new(1, 2, 3, 4), 80).into_bytes()
+        );
+        let _ = std::fs::remove_file(input);
+    }
+
+    /// Цели и порты перед `--readscan` фильтруют записи (`parse_status2`), порты попадают в заголовок `-oG`;
+    /// `--seed` не нужен, адаптер не открывается (`open` fake-бэкенда паникует).
+    #[test]
+    fn readscan_filters_by_the_targets_given_before_it() {
+        let input = scan_file("filter.scan", &[open_rec(), closed_rec()]);
+        let input = input.to_str().unwrap();
+        let (r, out, _) = readscan_run(
+            &FakeBackend::default(),
+            &[
+                "-p80",
+                "--readscan",
+                input,
+                "--show",
+                "open,closed",
+                "-oG",
+                "-",
+            ],
+        );
+        r.unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            concat!(
+                "# Masscan 1.3.9-integration scan initiated Tue Nov 14 22:13:20 2023\n",
+                "# Ports scanned: TCP(1;80-80) UDP(0;) SCTP(0;) PROTOCOLS(0;)\n",
+                "Timestamp: 1700000000\tHost: 1.2.3.4 ()\tPorts: 80/open/tcp//http//\n",
+                "# Masscan done at Fri Jan 15 08:00:00 2027\n"
+            )
+        );
+        let (r, out, _) = readscan_run(
+            &FakeBackend::default(),
+            &[
+                "10.0.0.0/24",
+                "-p443,80",
+                "--readscan",
+                input,
+                "--show",
+                "closed",
+                "-oL",
+                "-",
+            ],
+        );
+        r.unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "#masscan\nclosed tcp 443 10.0.0.255 1700000000\n# end\n"
+        );
+        let _ = std::fs::remove_file(input);
+    }
+
+    /// Ошибка чтения `--readscan` уже записана в `log` строками C; [`error_text`] для неё пуст, поэтому `main`
+    /// печатает её ровно один раз.
+    #[test]
+    fn readscan_error_is_reported_once() {
+        let missing = tmp("missing.scan");
+        let missing = missing.to_str().unwrap();
+        let (r, out, log) = readscan_run(
+            &FakeBackend::default(),
+            &["--readscan", missing, "-oL", "-"],
+        );
+        let e = r.unwrap_err();
+        assert!(out.is_empty());
+        assert_eq!(error_text(&e), "");
+        let line = format!("[-] {missing}: ");
+        assert_eq!(log.matches(&line).count(), 1, "{log}");
+        assert_eq!(log.matches("[-] FAIL: --readscan\n").count(), 1, "{log}");
+        // Неполный файл: `[-] file corrupt` один раз, подвал уже записанного вывода на месте.
+        let full = std::fs::read(scan_file("corrupt.scan", &[open_rec()])).unwrap();
+        let corrupt = tmp("corrupt.scan");
+        std::fs::write(&corrupt, &full[..99 + 9]).unwrap();
+        let corrupt = corrupt.to_str().unwrap();
+        let (r, out, log) = readscan_run(
+            &FakeBackend::default(),
+            &["--readscan", corrupt, "-oL", "-"],
+        );
+        assert_eq!(error_text(&r.unwrap_err()), "");
+        assert_eq!(log.matches("[-] file corrupt").count(), 1, "{log}");
+        assert!(out.is_empty(), "no record was read");
+        let _ = std::fs::remove_file(corrupt);
+    }
+
+    /// Решение 2 контроллера: реальный формат без имени файла (C молча теряет записи, `output.c:799–803`)
+    /// отклоняется двумя строками C до чтения входа и до любого кадра.
+    #[test]
+    fn file_format_without_a_filename_is_refused() {
+        let want = "[-] ERR: no output file, use `--output-filename <filename>` to set one\n\
+                    [-] ERR: for `stdout`, use `--output-filename -`";
+        for f in [
+            "list",
+            "json",
+            "ndjson",
+            "grepable",
+            "xml",
+            "binary",
+            "hostonly",
+            "unicornscan",
+        ] {
+            let (r, out, log) = readscan_run(
+                &FakeBackend::default(),
+                &["--readscan", "x.scan", "--output-format", f],
+            );
+            let e = r.unwrap_err();
+            assert_eq!(e, want, "{f}");
+            assert_eq!(error_text(&e), e, "C form, no wrapper");
+            assert!(out.is_empty() && log.is_empty(), "{f}: {log}");
+        }
+        let (r, _, _) = readscan_run(
+            &FakeBackend::default(),
+            &[
+                "--readscan",
+                "x.scan",
+                "--output-format",
+                "json",
+                "--interactive",
+            ],
+        );
+        assert_eq!(r.unwrap_err(), want);
+        // none, interactive и умолчание файла не требуют.
+        let input = scan_file("nofile.scan", &[open_rec()]);
+        let input = input.to_str().unwrap();
+        for (f, stdout) in [("none", false), ("interactive", true)] {
+            let (r, out, _) = readscan_run(
+                &FakeBackend::default(),
+                &["--readscan", input, "--output-format", f],
+            );
+            r.unwrap();
+            assert_eq!(!out.is_empty(), stdout, "{f}");
+        }
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn error_text_keeps_c_forms_unwrapped() {
+        let open = "out: could not open file for writing\n/x: Is a directory (os error 21)";
+        assert_eq!(error_text(open), open);
+        assert_eq!(error_text("[-] FAIL: x"), "[-] FAIL: x");
+        assert_eq!(error_text(LOGGED), "");
+        assert_eq!(error_text("x"), "rmasscan: error: x");
     }
 
     #[test]
@@ -557,7 +1022,10 @@ mod tests {
 
     #[test]
     fn packet_trace_without_adapter_ip_on_an_interface_without_ipv4_names_the_source_ip_hint() {
-        let b = FakeBackend { ipv4: vec![] };
+        let b = FakeBackend {
+            ipv4: vec![],
+            ..FakeBackend::default()
+        };
         let e = run_with(&b, &trace_without(&["--adapter-ip"])).unwrap_err();
         assert_eq!(
             e,

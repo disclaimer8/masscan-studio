@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use rmasscan_cli::args::{Cli, SeedPolicy};
 use rmasscan_cli::live::{self, Backend};
-use rmasscan_cli::output::{Interactive, Sink, Wall, discovered_line};
+use rmasscan_cli::output::{Interactive, ServiceNames, Sink, Wall, discovered_line};
 use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::packet::LinkType;
@@ -293,6 +293,9 @@ impl Backend for FakeBackend {
     fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
         self.clock.clone()
     }
+    fn services(&self) -> ServiceNames {
+        ServiceNames::parse("http 80/tcp\n")
+    }
 }
 
 fn parse(args: &[&str]) -> Cli {
@@ -303,7 +306,7 @@ fn config(args: &[&str]) -> ScanConfig {
     parse(args).to_config().unwrap()
 }
 
-fn with(base: &[&'static str], extra: &[&'static str]) -> Vec<&'static str> {
+fn with<'a>(base: &[&'a str], extra: &[&'a str]) -> Vec<&'a str> {
     base.iter().chain(extra).copied().collect()
 }
 
@@ -1584,6 +1587,201 @@ fn mac_m1_adapter_cases_skip_the_route_lookup_and_print_the_table_lines() {
         );
         assert!(log.is_empty() && b.lookups().is_empty(), "{tag}: {log}");
     }
+}
+
+fn tmp(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("rmasscan-live-{}-{name}", std::process::id()))
+}
+
+/// Открытые порты в порядке ответов (= порядок SYN адаптера скана).
+fn open_in_reply_order(b: &FakeBackend) -> Vec<(Ipv4Addr, u16)> {
+    b.opened()[1]
+        .adapter
+        .sent_frames()
+        .iter()
+        .map(|f| syn_dst(f))
+        .filter(|d| OPEN.contains(d))
+        .collect()
+}
+
+fn list_line((ip, port): (Ipv4Addr, u16)) -> String {
+    format!("open tcp {port} {ip} {UNIX_TIME}\n")
+}
+
+/// `-oL FILE`: записи с временем стенки в файл, stdout молчит (Р3), строки `[+]` те же.
+#[test]
+fn live_scan_writes_list_file_and_keeps_stdout_silent() {
+    let path = tmp("scan.list");
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["-oL", path.to_str().unwrap()]));
+    r.unwrap();
+    assert_eq!(out, "", "stdout is silent with a file format");
+    let open = open_in_reply_order(&b);
+    assert_eq!(open.len(), 2);
+    let body: String = open.into_iter().map(list_line).collect();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!("#masscan\n{body}# end\n")
+    );
+    assert_eq!(
+        plus_lines(&log).last().copied(),
+        Some("[+] finished: Completed, sent 4, replies 4, open 2"),
+        "{log}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+/// Review Focus 2: `--interactive -oL -` пишет обе ветки в один stdout в порядке C (`output.c:766–876`): строка
+/// `Discovered`, затем ленивый заголовок у первой записи, затем запись; подвал в конце.
+#[test]
+fn interactive_and_list_to_stdout_interleave_like_c() {
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(&b, &with(&LIVE, &["--interactive", "-oL", "-"]));
+    r.unwrap();
+    let open = open_in_reply_order(&b);
+    let mut want = String::new();
+    for (i, d) in open.iter().enumerate() {
+        want.push_str(&discovered_line(d.0, d.1));
+        if i == 0 {
+            want.push_str("#masscan\n");
+        }
+        want.push_str(&list_line(*d));
+    }
+    want.push_str("# end\n");
+    assert_eq!(out, want);
+}
+
+/// `-oG -`: заголовок называет порты конфигурации (слитые, как `massip_optimize`), имена сервисов из бэкенда.
+#[test]
+fn live_grepable_names_the_scanned_ports_and_backend_services() {
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(&b, &with(&LIVE, &["-oG", "-"]));
+    r.unwrap();
+    let mut want = String::from(
+        "# Masscan 1.3.9-integration scan initiated Fri Jan 15 11:25:45 2027\n\
+         # Ports scanned: TCP(2;80-81) UDP(0;) SCTP(0;) PROTOCOLS(0;)\n",
+    );
+    for (ip, port) in open_in_reply_order(&b) {
+        let name = if port == 80 { "http" } else { "unknown" };
+        want.push_str(&format!(
+            "Timestamp: {UNIX_TIME}\tHost: {ip} ()\tPorts: {port}/open/tcp//{name}//\n"
+        ));
+    }
+    want.push_str("# Masscan done at Fri Jan 15 11:25:45 2027\n");
+    assert_eq!(out, want);
+}
+
+/// Р8: файл не открылся (каталог вместо файла) - exit 1, текст C без обёртки, ни одного кадра и ни одного ARP.
+#[test]
+fn open_failure_sends_no_frame() {
+    let dir = std::env::temp_dir();
+    for (extra, word) in [
+        (&[][..], "writing"),
+        (&["--append-output"][..], "appending"),
+    ] {
+        let b = FakeBackend::new();
+        let mut args = with(&LIVE, extra);
+        args.extend(["-oL", dir.to_str().unwrap()]);
+        let (r, out, _) = cli(&b, &args);
+        let e = r.unwrap_err();
+        let mut lines = e.lines();
+        assert_eq!(
+            lines.next(),
+            Some(format!("out: could not open file for {word}").as_str())
+        );
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .starts_with(&format!("{}: ", dir.display())),
+            "{e}"
+        );
+        assert_eq!(rmasscan_cli::error_text(&e), e, "C form, no wrapper");
+        assert!(out.is_empty());
+        assert!(b.attempts().is_empty(), "no adapter was opened");
+        assert!(b.tx_journal().is_empty(), "no frame, not even ARP");
+    }
+}
+
+/// Решение 2 контроллера: реальный формат без имени файла отклоняется до обнаружения ARP и кадров.
+#[test]
+fn file_format_without_a_filename_sends_no_frame() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["--output-format", "json"]));
+    assert_eq!(
+        r.unwrap_err(),
+        "[-] ERR: no output file, use `--output-filename <filename>` to set one\n\
+         [-] ERR: for `stdout`, use `--output-filename -`"
+    );
+    assert!(out.is_empty() && log.is_empty(), "{log}");
+    assert!(b.attempts().is_empty() && b.tx_journal().is_empty());
+    // `none` скан идёт, но ничего не пишет: ни stdout, ни файла.
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(&b, &with(&LIVE, &["--output-format", "none"]));
+    r.unwrap();
+    assert_eq!(out, "");
+    assert_eq!(b.opened()[1].adapter.sent_count(), 4);
+}
+
+/// stdout, который отказывает (не EPIPE) после `limit` байт.
+struct FailAfter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl std::io::Write for FailAfter {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len() + b.len() > self.limit {
+            return Err(std::io::Error::other("No space left on device"));
+        }
+        self.bytes.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Review Focus 1: ошибка записи посреди скана останавливает engine, `[+] finished:` с `sent` печатается, итог `Err`
+/// (exit 1); подвал после ошибки не пишется.
+#[test]
+fn write_error_mid_scan_stops_and_fails() {
+    let b = FakeBackend::new();
+    let header_and_one = "#masscan\n".len() + list_line((T1, 80)).len();
+    let mut out = FailAfter {
+        bytes: Vec::new(),
+        limit: header_and_one,
+    };
+    let mut log = Vec::new();
+    let r = rmasscan_cli::run(&parse(&with(&LIVE, &["-oL", "-"])), &b, &mut out, &mut log);
+    let log = String::from_utf8(log).unwrap();
+    let e = r.unwrap_err();
+    assert_eq!(e, "write failed: No space left on device");
+    let first = open_in_reply_order(&b)[0];
+    assert_eq!(
+        String::from_utf8(out.bytes).unwrap(),
+        format!("#masscan\n{}", list_line(first))
+    );
+    let fin = plus_lines(&log).last().copied().unwrap_or_default();
+    assert!(fin.starts_with("[+] finished: "), "{log}");
+    assert!(
+        fin.contains(&format!("sent {}", b.opened()[1].adapter.sent_count())),
+        "{log}"
+    );
+}
+
+/// `--readscan` не открывает адаптер и не читает таблицы ОС.
+#[test]
+fn readscan_opens_nothing_and_reads_no_tables() {
+    let mut b = FakeBackend::new();
+    b.tables_panic = true;
+    b.panic_on_open = true;
+    let missing = tmp("missing.scan");
+    let (r, out, log) = cli(&b, &["--readscan", missing.to_str().unwrap(), "-oL", "-"]);
+    assert_eq!(rmasscan_cli::error_text(&r.unwrap_err()), "");
+    assert!(out.is_empty());
+    assert!(log.contains("[-] FAIL: --readscan\n"), "{log}");
+    assert!(b.lookups().is_empty() && b.attempts().is_empty());
 }
 
 /// `OsBackend` недостижим из тестов: модуль и `fn main` бинарника под `cfg(not(test))`, библиотека его не знает,

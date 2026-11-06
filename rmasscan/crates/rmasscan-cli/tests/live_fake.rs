@@ -2127,3 +2127,125 @@ fn only_a_live_scan_traps_ctrl_c() {
     }
     let _ = std::fs::remove_file(path);
 }
+
+/// Где ломается stderr (`BrokenPipe`, как EPIPE от умершего читателя `2>&1 | tee`).
+#[derive(Clone, Copy)]
+enum Breaks {
+    /// Каждая запись после строки первого Ctrl-C.
+    AfterWaitingLine,
+    /// Только затирание строки статуса в конце (`status_finish`: 77 пробелов и `\r`).
+    OnStatusFinish,
+}
+
+struct BrokenStderr {
+    bytes: Vec<u8>,
+    breaks: Breaks,
+}
+
+impl BrokenStderr {
+    fn new(breaks: Breaks) -> Self {
+        BrokenStderr {
+            bytes: Vec::new(),
+            breaks,
+        }
+    }
+}
+
+impl std::io::Write for BrokenStderr {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        let broken = match self.breaks {
+            Breaks::AfterWaitingLine => {
+                String::from_utf8_lossy(&self.bytes).contains(&waiting_line())
+            }
+            Breaks::OnStatusFinish => b == format!("{}\r", " ".repeat(77)).as_bytes(),
+        };
+        if broken {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Broken pipe",
+            ));
+        }
+        self.bytes.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Сбой stderr после первого Ctrl-C (`… -oJ out.json 2>&1 | tee scan.log`, SIGINT убил и `tee`): ошибка записи
+/// запоминается, engine уже остановлен, цикл дочитывает события, приёмник дописывает записи и подвал `]\n`; только
+/// затем возвращается ошибка stderr (exit 1). Строка `[+] finished` в мёртвый stderr не пишется.
+#[test]
+fn broken_stderr_after_the_first_press_still_finishes_the_file() {
+    let path = tmp("interrupt-broken-stderr.json");
+    let b = FakeBackend::new();
+    let parsed = parse(&with(&LONG_WAIT, &["-oJ", path.to_str().unwrap()]));
+    let mut stdout = Vec::new();
+    let mut log = BrokenStderr::new(Breaks::AfterWaitingLine);
+    let (r, reported) = {
+        let env = OutputEnv {
+            wall: &b,
+            services: ServiceNames::empty(),
+            tcp_ports: Vec::new(),
+            scan_started: None,
+        };
+        let mut sink = PressOnFirstOpen {
+            pipeline: Pipeline::new(parsed.output_options().unwrap(), &mut stdout, env),
+            presses: b.presses.clone(),
+            reported: Vec::new(),
+        };
+        let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
+        (r, sink.reported)
+    };
+    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    let text = String::from_utf8(log.bytes).unwrap();
+    assert_eq!(
+        text.matches(&waiting_line()).count(),
+        1,
+        "{:?}",
+        plus_lines(&text)
+    );
+    assert!(!text.contains("[+] finished"), "{:?}", plus_lines(&text));
+    let open: Vec<Reply> = reported
+        .iter()
+        .copied()
+        .filter(|r| r.status == PortStatus::Open)
+        .collect();
+    assert!(!open.is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
+    let _ = std::fs::remove_file(path);
+}
+
+/// Сбой только последней записи строки статуса (скан закончился сам): файл `-oJ` всё равно закрыт `]\n`, итог `Err`
+/// (exit 1) с текстом ошибки stderr.
+#[test]
+fn status_finish_failure_still_finishes_the_file() {
+    let path = tmp("status-finish-broken.json");
+    let b = FakeBackend::new();
+    let mut out = Vec::new();
+    let mut log = BrokenStderr::new(Breaks::OnStatusFinish);
+    let r = rmasscan_cli::run(
+        &parse(&with(&LIVE, &["-oJ", path.to_str().unwrap()])),
+        &b,
+        &mut out,
+        &mut log,
+    );
+    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    let open: Vec<Reply> = open_in_reply_order(&b)
+        .into_iter()
+        .map(|(ip, port)| Reply {
+            remote_ip: u32::from(ip),
+            remote_port: port,
+            local_ip: u32::from(MY_IP),
+            local_port: TIME_PORT,
+            status: PortStatus::Open,
+            tcp_flags: 0x12,
+            ttl: 64,
+        })
+        .collect();
+    assert_eq!(open.len(), 2);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
+    assert!(out.is_empty());
+    let _ = std::fs::remove_file(path);
+}

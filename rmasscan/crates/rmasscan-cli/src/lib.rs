@@ -204,13 +204,7 @@ pub fn run(
     // скана (`main.c:1551`): в stdout C остаётся только формат.
     let elapsed_to_stdout = !opts.format_to_stdout();
     let env = output_env(backend, &opts, &cfg, None);
-    let mode = if cli.nostatus {
-        status::StatusMode::Off
-    } else if cli.ndjson_status {
-        status::StatusMode::Ndjson
-    } else {
-        status::StatusMode::Text
-    };
+    let mode = cli.status_mode();
     let (_, scan_millis) = live::run_live_with(
         &cfg,
         backend,

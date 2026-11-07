@@ -102,7 +102,7 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
     формате (C: `file is empty`), для отсутствующего файла перед строками `[-] FAIL` печатается
     `[+] --readscan <файл>` (C ничего не печатает); на первом плохом файле чтение прекращается. `--seed` при
     `--readscan` игнорируется.
-  - `--stylesheet` и `--webxml` вместе — конфликт аргументов clap, код 2 (C: побеждает последний).
+  - `--json-status` и `--status-json` — отказ при разборе с двумя строками C (`[-] FAIL: … not supported, use --status-ndjson`), код 1 (C печатает их, но `masscan_set_parameter` отбрасывает ошибку, и скан продолжается).
   - `--infinite` нет (Р14).
   - Флаги вывода и статуса допустимы только со сканом и `--readscan`; с `--echo`, `--echo-all`, `-sL`, `--offline`,
     `--iflist` — отказ `output options apply only to a scan or --readscan`, код 1 (Р19). C печатает ключи вывода в

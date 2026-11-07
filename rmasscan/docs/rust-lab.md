@@ -598,8 +598,10 @@ VPN `utun`.
 что и autodetect: `wire-lab.sh --suite output` поднимает его так же (печать, `lab_id`, `teardown.json`, отказ от
 `--out` прежней лаборатории) и запускает внутри `output-suite linux`. Кейсы `o01`–`o17` с argv и ожиданиями — одна
 таблица верификатора (`output_verify.rs`, `OutputCase`); C-оракул идёт на кейсах с `oracle` (все форматы, `--show`,
-`-oL -`, `--interactive`, `--readscan`), только rmasscan — `o12_nostatus` (у этого кейса просто нет прогона
-оракула), `o13_open_fail` и прерывания `o14`–`o16` (SIGINT процессу rmasscan через ~2 с,
+`-oL -`, `--interactive`, `--readscan`), только rmasscan — `o12_nostatus` (с `--nostatus` masscan `8e6b3b0` висит
+вечно, не дойдя до принудительного выхода: первая итерация цикла ожидания ждёт поток передачи, `main.c:1530`, а тот
+крутится до `is_rx_done`, `main.c:470`, который выставили бы только вторая итерация, `main.c:1490–1491`, или ветка
+статуса, `main.c:1518`), `o13_open_fail` и прерывания `o14`–`o16` (SIGINT процессу rmasscan через ~2 с,
 30 с на выход, затем SIGKILL; время сигнала в `interrupt.json`). Каждый сканер работает в своём каталоге внутри
 рабочего каталога прогона, поэтому файлы вывода в argv — относительные имена (`-oL output.txt`), а в evidence они
 лежат байт в байт под нейтральными именами `output.txt`/`output.bin` (оракул — в `oracle/`). `o17_readscan` читает

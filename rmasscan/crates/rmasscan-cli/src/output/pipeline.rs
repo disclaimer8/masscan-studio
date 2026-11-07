@@ -268,6 +268,8 @@ mod tests {
     use crate::scratch::Scratch;
     use std::io;
     use std::net::Ipv4Addr;
+    // Used only by the #[cfg(unix)] dead-FIFO child test below; unused on Windows.
+    #[cfg(unix)]
     use std::path::PathBuf;
 
     struct FakeWall(u64);

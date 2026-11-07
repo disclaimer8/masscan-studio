@@ -339,8 +339,8 @@ fn read_one(
 mod tests {
     use super::*;
     use crate::output::{Format, OutputEnv, OutputOptions, Wall, services};
+    use crate::scratch::Scratch;
     use rmasscan_core::targets::{add_target_string, parse_ports};
-    use std::path::PathBuf;
 
     struct FakeWall(u64);
     impl Wall for FakeWall {
@@ -410,11 +410,8 @@ mod tests {
         (got, res)
     }
 
-    fn tmp_file(name: &str, bytes: &[u8]) -> String {
-        let p: PathBuf =
-            std::env::temp_dir().join(format!("rmasscan-readscan-{}-{name}", std::process::id()));
-        std::fs::write(&p, bytes).unwrap();
-        p.to_string_lossy().into_owned()
+    fn tmp_file(scratch: &Scratch, name: &str, bytes: &[u8]) -> String {
+        scratch.write(name, bytes).to_string_lossy().into_owned()
     }
 
     fn no_filter() -> ReadFilter {
@@ -543,6 +540,7 @@ mod tests {
 
     #[test]
     fn corrupt_inputs_finish_output_and_fail() {
+        let scratch = Scratch::new();
         let good = make_bin(&recs3()[..1]);
         // Заголовок и одна запись, без подвала.
         let ok_prefix = good[..BLOCK + 15].to_vec();
@@ -562,7 +560,7 @@ mod tests {
         uns.extend_from_slice(&[9, 0]);
         cases.push(("uns", uns, ": unsupported record type 9\n"));
         for (name, bytes, expect) in cases {
-            let path = tmp_file(name, &bytes);
+            let path = tmp_file(&scratch, name, &bytes);
             let (out, log, res) = convert(std::slice::from_ref(&path), Format::Json, &no_filter());
             assert!(res.is_err(), "{name}");
             assert!(log.contains(expect), "{name}: {log:?}");
@@ -576,26 +574,26 @@ mod tests {
                     "{name}: {s:?}"
                 );
             }
-            let _ = std::fs::remove_file(path);
         }
     }
 
     #[test]
     fn unknown_format_message_names_the_file() {
+        let scratch = Scratch::new();
         let mut bad = b"nmap".to_vec();
         bad.resize(BLOCK, 0);
-        let path = tmp_file("nmap", &bad);
+        let path = tmp_file(&scratch, "nmap", &bad);
         let (_, log, res) = convert(std::slice::from_ref(&path), Format::Json, &no_filter());
         assert!(res.is_err());
         assert!(log.contains(&format!(
             "[-] {path}: unknown file format (expected \"masscan/1.1\")\n"
         )));
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn missing_file_reports_fail_and_errors() {
-        let path = format!("{}/rmasscan-no-such-file", std::env::temp_dir().display());
+        let scratch = Scratch::new();
+        let path = scratch.path("no-such-file").to_string_lossy().into_owned();
         let (_, log, res) = convert(std::slice::from_ref(&path), Format::Json, &no_filter());
         assert!(res.is_err());
         // `in-binary.c:486-493`: `fopen` раньше `[+] --readscan`, на отсутствующем файле строки `[+]` нет.
@@ -608,12 +606,12 @@ mod tests {
     }
 
     /// Файл с заголовком `head` (дополняется нулями до 99 байт) и записями `recs` настоящего писателя.
-    fn file_with_header(name: &str, head: &[u8], recs: &[Record]) -> String {
+    fn file_with_header(scratch: &Scratch, name: &str, head: &[u8], recs: &[Record]) -> String {
         let bin = make_bin(recs);
         let mut v = head.to_vec();
         v.resize(BLOCK, 0);
         v.extend_from_slice(&bin[BLOCK..BLOCK + 15 * recs.len()]);
-        tmp_file(name, &v)
+        tmp_file(scratch, name, &v)
     }
 
     /// Первые 99 байт вывода `-oB` после `--readscan`.
@@ -633,31 +631,30 @@ mod tests {
     /// первой записи.
     #[test]
     fn header_s_timestamp_is_the_scan_start_for_version_2() {
-        let path = file_with_header("hdr2", b"masscan/1.1.2\ns:1234567890\n", &recs3());
+        let scratch = Scratch::new();
+        let path = file_with_header(&scratch, "hdr2", b"masscan/1.1.2\ns:1234567890\n", &recs3());
         assert_eq!(started_of(&path, &no_filter()), header_for(1_234_567_890));
         // Десятичное без ведущего нуля, 16-ричное с `0x` и восьмеричное с `0`: `strtoul(.., 0, 0)`.
         for (h, want) in [
             (&b"masscan/1.1.10\ns:0x10\n"[..], 16u64),
             (&b"masscan/1.1.2\ns:010\n"[..], 8),
         ] {
-            let p = file_with_header("hdr2b", h, &recs3());
+            let p = file_with_header(&scratch, "hdr2b", h, &recs3());
             assert_eq!(started_of(&p, &no_filter()), header_for(want));
-            let _ = std::fs::remove_file(p);
         }
-        let _ = std::fs::remove_file(path);
     }
 
     /// `N < 2` и версия без точки (`masscan/1.1`, как пишет `-oB`) заголовок `s:` не читают: начало скана это
     /// время первой записи.
     #[test]
     fn header_s_timestamp_is_ignored_below_version_2() {
+        let scratch = Scratch::new();
         for (name, h) in [
             ("hdr1", &b"masscan/1.1.1\ns:1234567890\n"[..]),
             ("hdr0", &b"masscan/1.1\ns:1234567890\n"[..]),
         ] {
-            let path = file_with_header(name, h, &recs3());
+            let path = file_with_header(&scratch, name, h, &recs3());
             assert_eq!(started_of(&path, &no_filter()), header_for(1_700_000_001));
-            let _ = std::fs::remove_file(path);
         }
     }
 
@@ -679,25 +676,24 @@ mod tests {
             parse_ports(cfg.targets.ports_mut(), "443").unwrap();
             ReadFilter::from_config(&cfg)
         };
-        let path = file_with_header("filt1", b"masscan/1.1\ns:1234567890\n", &recs);
+        let scratch = Scratch::new();
+        let path = file_with_header(&scratch, "filt1", b"masscan/1.1\ns:1234567890\n", &recs);
         assert_eq!(started_of(&path, &by_ip), header_for(1_700_000_001));
         // Порт 443 есть только у второй записи: первая (порт 80) отфильтрована, начало скана всё равно из неё.
         let mut recs443 = recs.clone();
         recs443[0].ip = Ipv4Addr::new(10, 0, 0, 1);
         recs443[1].port = 443;
-        let p443 = file_with_header("filt3", b"masscan/1.1\ns:1234567890\n", &recs443);
+        let p443 = file_with_header(&scratch, "filt3", b"masscan/1.1\ns:1234567890\n", &recs443);
         assert_eq!(started_of(&p443, &by_port), header_for(1_700_000_001));
-        let _ = std::fs::remove_file(p443);
         // С `masscan/1.1.2` приоритет у заголовка даже при отфильтрованной первой записи.
-        let p2 = file_with_header("filt2", b"masscan/1.1.2\ns:1234567890\n", &recs);
+        let p2 = file_with_header(&scratch, "filt2", b"masscan/1.1.2\ns:1234567890\n", &recs);
         assert_eq!(started_of(&p2, &by_ip), header_for(1_234_567_890));
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(p2);
     }
 
     #[test]
     fn scan_started_comes_from_the_first_record() {
-        let path = tmp_file("started", &make_bin(&recs3()));
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "started", &make_bin(&recs3()));
         let (out, _, res) = convert(std::slice::from_ref(&path), Format::Binary, &no_filter());
         res.unwrap();
         let mut head = b"masscan/1.1\ns:1700000001\n".to_vec();
@@ -707,18 +703,18 @@ mod tests {
         let (got, res) = read_all(&out);
         res.unwrap();
         assert_eq!(got, recs3());
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn filters_apply_like_c() {
+        let scratch = Scratch::new();
         let all = vec![
             rec(1, [10, 0, 0, 1], 80, Status::Open),
             rec(2, [10, 0, 0, 3], 443, Status::Open),
             rec(3, [10, 0, 0, 9], 80, Status::Open),
             rec(4, [11, 0, 0, 1], 80, Status::Open),
         ];
-        let path = tmp_file("filter", &make_bin(&all));
+        let path = tmp_file(&scratch, "filter", &make_bin(&all));
         let files = std::slice::from_ref(&path);
         let mut cfg = ScanConfig::default();
         add_target_string(cfg.targets.ipv4_mut(), "10.0.0.0/30").unwrap();
@@ -745,28 +741,26 @@ mod tests {
         // Без целей и портов пропускается всё.
         let (out, _, _) = convert(files, Format::Binary, &no_filter());
         assert_eq!(read_all(&out).0, all);
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn stderr_names_each_file() {
-        let a = tmp_file("a", &make_bin(&recs3()[..1]));
-        let b = tmp_file("b", &make_bin(&recs3()[1..]));
+        let scratch = Scratch::new();
+        let a = tmp_file(&scratch, "a", &make_bin(&recs3()[..1]));
+        let b = tmp_file(&scratch, "b", &make_bin(&recs3()[1..]));
         let (_, log, res) = convert(&[a.clone(), b.clone()], Format::Ndjson, &no_filter());
         res.unwrap();
         assert_eq!(log, format!("[+] --readscan {a}\n[+] --readscan {b}\n"));
-        let _ = std::fs::remove_file(a);
-        let _ = std::fs::remove_file(b);
     }
 
     #[test]
     fn progress_every_65536_records() {
+        let scratch = Scratch::new();
         // 65536 записей 'm' (по 2 байта: тип, длина 0).
         let tail: Vec<u8> = [0x6D, 0].repeat(65_536);
-        let path = tmp_file("progress", &with_header(&tail));
+        let path = tmp_file(&scratch, "progress", &with_header(&tail));
         let (_, log, res) = convert(std::slice::from_ref(&path), Format::Ndjson, &no_filter());
         res.unwrap();
         assert!(log.ends_with(&format!("[+] {path}:    65536\r")), "{log:?}");
-        let _ = std::fs::remove_file(path);
     }
 }

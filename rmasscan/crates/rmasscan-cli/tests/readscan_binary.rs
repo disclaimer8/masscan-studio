@@ -93,3 +93,20 @@ fn masscan_parse_refusals_print_the_c_text_and_exit_one() {
         assert_eq!(String::from_utf8_lossy(&out.stderr), want, "{argv:?}");
     }
 }
+
+/// `--json-status`/`--status-json` (`main-conf.c:1519-1531`): две строки C в stderr, exit 1, файлы не открываются.
+#[test]
+fn json_status_is_refused_with_the_c_lines() {
+    for name in ["json-status", "status-json"] {
+        let out = spawn_readonly(&[&format!("--{name}"), "--readscan", "missing-file.scan"]);
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        assert!(out.stdout.is_empty(), "{name}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            format!(
+                "[-] FAIL: {name} not supported, use --status-ndjson\n    hint: new-line delimited JSON status is what we use\n"
+            ),
+            "{name}"
+        );
+    }
+}

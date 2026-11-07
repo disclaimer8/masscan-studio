@@ -1217,16 +1217,13 @@ fn a_changed_hash_is_invalid() {
 fn a_hostname_in_stderr_is_invalid() {
     let mut sim = Sim::new(Plan::Macos, "m04_user_arp_timeout");
     sim.extra_stderr
-        .push("rmasscan: error: Denys-MacBook-Pro.local is unreachable".into());
+        .push("rmasscan: error: printer-7.local is unreachable".into());
     let r = judge(&sim);
     assert_verdict(&r, INVALID);
     let c = check(&r, "privacy: stderr.txt");
     assert_eq!(c["result"], INVALID);
     assert!(
-        c["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Denys-MacBook-Pro.local"),
+        c["detail"].as_str().unwrap().contains("printer-7.local"),
         "{c}"
     );
     // An interface name that is not the stand's, in a [+] line.
@@ -1239,7 +1236,7 @@ fn a_hostname_in_stderr_is_invalid() {
     let mut sim = Sim::new(Plan::Windows, "w03_adapter_friendly");
     sim.extra.push((
         "guest-runner.json".into(),
-        br#"{"exe":"C:\\Users\\HiMaxym\\t4\\rmasscan.exe"}"#.to_vec(),
+        br#"{"exe":"C:\\Users\\alice\\t4\\rmasscan.exe"}"#.to_vec(),
     ));
     let r = judge(&sim);
     assert_verdict(&r, INVALID);
@@ -1717,7 +1714,7 @@ fn privacy_tokens_allow_the_stand_and_anonymous_values_only() {
         "192.168.1.1",
         "93.184.216.34",
         "a4-83-e7-12-34-56",
-        "Denys-MacBook-Pro.local",
+        "printer-7.local",
     ] {
         assert!(flagged(bad, true), "{bad}");
     }
@@ -1738,9 +1735,9 @@ fn privacy_tokens_allow_the_stand_and_anonymous_values_only() {
         "ether a4:83:e7:12:34:56",
         "_airplay._tcp.local",
         "printer.lan",
-        "/Users/denys/masscan",
+        "/Users/alice/masscan",
         "/home/a1/winvm",
-        "C:\\\\Users\\\\HiMaxym\\\\t4",
+        "C:\\\\Users\\\\alice\\\\t4",
         "a index=1 mac=x\nb index=2 mac=y",
     ] {
         assert!(flagged(bad, false), "{bad}");
@@ -2230,7 +2227,7 @@ fn oracle_output_is_held_to_the_scanner_text_rules() {
         ),
         (
             "stderr",
-            "Initiating SYN Stealth Scan\nhello from denys-mbp\n",
+            "Initiating SYN Stealth Scan\nhello from printer-7\n",
             "not a line masscan prints",
         ),
         (

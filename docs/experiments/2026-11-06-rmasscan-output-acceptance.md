@@ -3,7 +3,8 @@
 Дата: 2026-11-06. Ветка `feat/rmasscan-output-formats` (черновой PR #50), база `438e58b` (слияние PR #49). Документ
 фиксирует измеренное и открытое. Статусы: PASS / FAIL / INVALID / NOT RUN / OPEN / PENDING, никогда не повышаются. «GO»
 здесь не статус таблицы. GO «rmasscan output formats (offline parity + Linux stand)» по критерию спеки (§6.4)
-**ожидает** итогового ревью ветки и зелёного CI на точном HEAD (разделы 1, 9, 10). Сырые данные:
+выполнен: итоговое ревью ветки одобрено после одной волны правок (раздел 12), CI зелёный на последнем коммите с
+кодом `9907de0` (раздел 9). Сырые данные:
 [`2026-11-06-rmasscan-output-acceptance-raw/`](2026-11-06-rmasscan-output-acceptance-raw/) (корневой
 [README](2026-11-06-rmasscan-output-acceptance-raw/README.md) и `MANIFEST.sha256`; у каждого из `linux-output-r1`,
 `linux-autodetect-r2`, `windows-autodetect-r2` свои `manifest.json`, `verdict.json` и `runs/<tag>/`; логи офлайн-прогонов
@@ -15,7 +16,8 @@
 
 ## 1. Итог и границы
 
-**rmasscan output formats (offline parity + Linux stand): GO (stands)**, условное. Выполнено на коде **C = `2b0e92c`**:
+**rmasscan output formats (offline parity + Linux stand): GO (stands).** Живые окна сняты на коде **C = `2b0e92c`**, CI
+и итоговое ревью — на последнем коммите с кодом `9907de0`:
 
 | Условие | Статус | Где |
 | --- | --- | --- |
@@ -23,7 +25,7 @@
 | Живой паритет Linux `linux-output-r1`: `o01`–`o11` с C-оракулом (записи и заголовок равны), `o12` и `o14`–`o16` только rmasscan (решение контролёра), `o13` без оракула по замыслу (C отправил бы кадры), раздел 6.2; `o17` оба сканера читают оба `-oB` | **PASS** 18/18 (17 прогонов и манифест), `safety_trips` [] | раздел 6.2 |
 | Регрессия автоопределения на коде этапа: Linux `linux-autodetect-r2`, Windows VM `windows-autodetect-r2`; живой stderr теперь несёт строку статуса, верификаторы разбирают её по грамматике | **PASS** 13/13 и 10/10 | раздел 6.3 |
 | CI на `2b0e92c`: `rmasscan` (macos-15, ubuntu-24.04, windows-2025, пакет windows-x64 wire lab) | **PASS** | раздел 9 |
-| Итоговое ревью ветки; CI на точном HEAD | **PENDING** | раздел 9, 10 |
+| Итоговое ревью ветки (два ревьюера: код продукта; лаборатория, CI и документы) и повторное ревью правок; CI на `9907de0` (`rmasscan`, `Studio`, `language-guard`) | **PASS**: ревью APPROVED после правок раздела 12, CI зелёный | разделы 9, 12 |
 
 Что принимается. К живому скану PR #49 добавлены: восемь файловых форматов (`-oL`, `-oJ`, `-oD`, `-oG`, `-oX`, `-oB`,
 `-oH`, `-oU`) и `--output-format none`, опции вокруг вывода (`--output-format`, `--output-filename`, `--append-output`,
@@ -50,7 +52,7 @@ certs, ротация (не цели этапа).
 | Код под живыми окнами (C) | `2b0e92ce7af3d0ba5ae68af881de22a0e99a3590` (2026-11-06) | сборки из `git archive C` на minipc и госте (полное дерево), home-pc и Mac (`rmasscan/`); release, `CARGO_INCREMENTAL=0`, `RMASSCAN_LAB_BUILD_COMMIT=C`, rustc 1.99.1 (README evidence, `verification/binaries.sha256.txt`) |
 | Evidence | `86f384f` (`test(cli): record output-format acceptance on the Linux stand and the autodetect regression on Linux and the Windows VM`) | только `docs/experiments/2026-11-06-rmasscan-output-acceptance-raw/` |
 | База | `438e58b` (PR #49) | без rebase |
-| HEAD | раздел 9 (точный SHA вносит контролёр при слиянии) | |
+| Последний коммит с кодом | `9907de0` (раздел 9); следующий коммит меняет только статусы в документах (этот отчёт, readiness, README) | |
 
 Ход ветки от `438e58b` (`git log --oneline 438e58b..86f384f`, 14 коммитов):
 
@@ -267,7 +269,10 @@ CI на `2b0e92c` (прогон `rmasscan` `42291016820`, черновой PR #5
 | --- | --- | --- |
 | `2b0e92c` | `rmasscan` | success (выше) |
 | `86f384f` | `language-guard` | success (`42301944790`) |
-| финальный HEAD (`rmasscan`, `Studio`, `language-guard`) | | заполняет контролёр при слиянии |
+| `7c9b378` | `rmasscan` | failure: `windows-2025`, clippy `dead_code` (константа FIFO-теста без `#[cfg(unix)]`), исправлено в `9907de0` |
+| `9907de0` | `rmasscan` | success (`42357661620`: `macos-15`, `ubuntu-24.04`, `windows-2025`, `windows-x64 wire lab package`) |
+| `9907de0` | `Studio` | success (`42357661615`: `application` на `macos-15`, `ubuntu-24.04`, `windows-2025`) |
+| `9907de0` | `language-guard` | success (`42357661619`) |
 
 CI собирает и гоняет только офлайн-тесты; живые прогоны не идут.
 
@@ -280,7 +285,7 @@ CI собирает и гоняет только офлайн-тесты; жив
 | Физические NIC (Linux, Windows, macOS) | **NOT RUN** |
 | Живой паритет подвалов с C | не измерен вживую (C не заканчивает живой скан на стенде, раздел 1); доказан офлайн 74 эталонами |
 | Живой паритет `--nostatus` и прерывания с C | нет: у C нет конечного исхода на этих кейсах (раздел 6.2) |
-| Итоговое ревью ветки; CI на точном HEAD | **PENDING** |
+| Итоговое ревью ветки; CI на последнем коммите с кодом | **PASS** (разделы 9, 12) |
 | Баннеры, redis, certs, ротация, UDP/SCTP/ICMP-записи, IPv6-записи | не цели этапа (Р1, Р13) |
 
 Отличия от C, которые войдут в README, перечислены в `rmasscan/README.md` («Отличия от masscan»), источники — спека §8
@@ -288,10 +293,10 @@ CI собирает и гоняет только офлайн-тесты; жив
 
 ## 11. Заявление о готовности
 
-**GO «rmasscan output formats (offline parity + Linux stand)» — условное:** выполнено на коде C = `2b0e92c`
+**GO «rmasscan output formats (offline parity + Linux stand)»:** выполнено на коде C = `2b0e92c`
 (офлайн-паритет 74/74, `linux-output-r1` PASS 18/18, регрессия Linux 13/13 и Windows VM 10/10, CI `rmasscan` на C зелёный).
-Условия снятия: итоговое ревью ветки APPROVED и зелёный CI (`rmasscan`, `Studio`, `language-guard`) на точном HEAD,
-их фиксирует контролёр при слиянии. Заявление не распространяется на строки раздела 10 со статусами NOT RUN и OPEN.
+Условия выполнены: итоговое ревью ветки APPROVED (после правок раздела 12) и зелёный CI (`rmasscan`, `Studio`,
+`language-guard`) на последнем коммите с кодом `9907de0` (раздел 9). Заявление не распространяется на строки раздела 10 со статусами NOT RUN и OPEN.
 Стенд никогда не заменяет физическую приёмку.
 
 ## 12. Исправления после итогового ревью
@@ -318,4 +323,8 @@ CI собирает и гоняет только офлайн-тесты; жив
 - Документы: README (оба сообщения Р13, короткий файл `--readscan`, строка времени при `--nostatus`, причина
   зависания C с `--nostatus`), `rust-lab.md`, разделы 1, 2, 6.2 и 8 этого отчёта, поправка к §6.2 спеки.
 
-Строка CI финального HEAD (разделы 1 и 9) остаётся PENDING.
+Повторное ревью правок подтвердило все пункты и нашло одну новую важную ошибку: константа FIFO-теста без
+`#[cfg(unix)]` давала `dead_code` в clippy на Windows (CI `windows-2025` упал на `7c9b378`). Исправлено в `9907de0` вместе
+с уточнением: C с `--nostatus` висит при `--wait` больше 0 и до второго Ctrl-C (`main.c:1150`). CI на `9907de0` зелёный
+(раздел 9). Ручной прогон `cargo test --locked --workspace` на `9907de0` на отдельном Linux-хосте (Ubuntu 26.04, полное
+дерево из `git archive`): 1533 passed, 0 failed, 14 ignored; лога в evidence нет.

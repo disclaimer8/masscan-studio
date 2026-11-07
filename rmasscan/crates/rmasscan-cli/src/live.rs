@@ -16,7 +16,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::Write;
+use std::io::{self, Write};
 use std::net::Ipv4Addr;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -213,6 +213,35 @@ fn given_or(s: Source, detected: &str) -> &str {
     }
 }
 
+/// `stderr` как в C: ошибки записи и сброса игнорируются (util-logger.c:25-31 `vfprintf`+`fflush` без проверки,
+/// main-status.c:216-280, main.c:1136-1140, in-binary.c:488-637). Первый сбой отключает `log` до конца вызова;
+/// код выхода определяют только скан, приёмник и stdout.
+pub(crate) struct BestEffort<'a> {
+    inner: &'a mut dyn Write,
+    dead: bool,
+}
+
+impl<'a> BestEffort<'a> {
+    pub(crate) fn new(inner: &'a mut dyn Write) -> Self {
+        BestEffort { inner, dead: false }
+    }
+}
+
+impl Write for BestEffort<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !self.dead && self.inner.write_all(buf).is_err() {
+            self.dead = true;
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.dead && self.inner.flush().is_err() {
+            self.dead = true;
+        }
+        Ok(())
+    }
+}
+
 fn line(log: &mut dyn Write, s: &str) -> Result<(), String> {
     writeln!(log, "[+] {s}").map_err(|e| format!("write failed: {e}"))
 }
@@ -382,6 +411,8 @@ pub fn run_live_with(
     log: &mut dyn Write,
     mode: StatusMode,
 ) -> Result<(Outcome, u64), String> {
+    let mut best_effort = BestEffort::new(log);
+    let log: &mut dyn Write = &mut best_effort;
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
     // Ограничения runtime v1 (`--retries`, `--shard`, rounds, legacy resume) до ARP: отказ плана не стоит кадра.
     // Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
@@ -443,22 +474,15 @@ pub fn run_live_with(
     let mut status = StatusLine::new(mode, started);
     let (mut max_count, mut tx_done_at) = (0u64, None::<u64>);
     let mut interrupted = false;
-    // Первая ошибка записи в `log` (строка Ctrl-C, строка статуса). Она останавливает engine, но не обрывает цикл:
-    // приёмник получает всё принятое и подвал, ошибка возвращается только после `sink.finish()` (exit 1). Иначе
-    // мёртвый stderr (`2>&1 | tee` после Ctrl-C) оставил бы файл вывода без подвала. После неё в `log` не пишется.
-    let mut log_error: Option<String> = None;
+    // `log` best-effort (`BestEffort`): мёртвый stderr (`2>&-`, `2>&1 | tee` после Ctrl-C) не останавливает скан и не
+    // меняет код выхода, как в C.
     'events: loop {
         // Р18: счётчик проверяется на каждой итерации (не реже раза в 250 мс). После остановки цикл дочитывает
         // события до `Finished`, поэтому приёмник получает каждый принятый ответ.
         if !interrupted && backend.interrupts() > 0 {
             interrupted = true;
-            if log_error.is_none()
-                && let Err(e) = log
-                    .write_all(INTERRUPT_LINE.as_bytes())
-                    .and_then(|()| log.flush())
-            {
-                log_error = Some(format!("write failed: {e}"));
-            }
+            let _ = log.write_all(INTERRUPT_LINE.as_bytes());
+            let _ = log.flush();
             handle.stop();
         }
         match handle.recv_event_timeout(Duration::from_millis(250)) {
@@ -471,20 +495,15 @@ pub fn run_live_with(
                 }
                 let exiting = tx_done_at
                     .map(|t| wait_secs.saturating_sub((now.saturating_sub(t) / 1_000_000) as i64));
-                if log_error.is_none()
-                    && let Err(e) = status.tick(
-                        now,
-                        prog.next_index,
-                        max_count,
-                        prog.rate,
-                        open_count,
-                        exiting,
-                        log,
-                    )
-                {
-                    log_error = Some(format!("cannot write the status line: {e}"));
-                    handle.stop();
-                }
+                let _ = status.tick(
+                    now,
+                    prog.next_index,
+                    max_count,
+                    prog.rate,
+                    open_count,
+                    exiting,
+                    log,
+                );
             }
             Ok(Event::Results { replies: batch }) => {
                 for r in &batch {
@@ -503,15 +522,11 @@ pub fn run_live_with(
             Ok(_) | Err(TryRecvError::Empty) => {}
         }
     }
-    // `join` и `sink.finish()` идут всегда, до любого `?`: ни ошибка engine, ни ошибка `log` не оставляют файл
+    // `join` и `sink.finish()` идут всегда, до любого `?`: ошибка engine не оставляет файл
     // вывода без подвала.
     let joined = handle.join().map_err(|e| format!("scan engine error: {e}"));
     let elapsed_ms = clock.now_micros().saturating_sub(started) / 1000;
-    if log_error.is_none()
-        && let Err(e) = status.finish(log)
-    {
-        log_error = Some(format!("cannot write the status line: {e}"));
-    }
+    let _ = status.finish(log);
     let sunk = match sink_error {
         Some(e) => Err(e),
         None => sink.finish(),
@@ -520,12 +535,7 @@ pub fn run_live_with(
     if let Err(e) = sunk {
         // Ошибка приёмника (EPIPE stdout уже завершил процесс в `write_failed`; EPIPE файла это обычная ошибка) не
         // прячет `sent` engine; exit 1 от неё.
-        if log_error.is_none() {
-            print_finished(&outcome, replies, open_count, log)?;
-        }
-        return Err(e);
-    }
-    if let Some(e) = log_error {
+        print_finished(&outcome, replies, open_count, log)?;
         return Err(e);
     }
     conclude(&outcome, replies, open_count, log)?;
@@ -588,6 +598,8 @@ pub fn run_offline(
     out: &mut dyn Write,
     log: &mut dyn Write,
 ) -> Result<(), String> {
+    let mut best_effort = BestEffort::new(log);
+    let log: &mut dyn Write = &mut best_effort;
     let p = prepare(cfg, SeedPolicy::Required, backend, true)?;
     print_detection(&p, log)?;
     print_parameters(&p, log)?;

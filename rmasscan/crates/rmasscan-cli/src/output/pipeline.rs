@@ -5,14 +5,14 @@
 //! на всех ОС.
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 
 use rmasscan_core::receive::Reply;
 
 use super::formats::{Counts, FileCtx, Format, Formatter, formatter};
 use super::record::{Record, Status, status_str};
 use super::services::ServiceNames;
-use super::{Sink, io_fail};
+use super::{Sink, WriteTarget, io_fail, write_failed};
 
 /// Начало отказа открытия файла (`output.c:180–239`, `open_rotate`); `crate::error_text` печатает его как есть.
 pub const OPEN_FAILURE_PREFIX: &str = "out: could not open file for ";
@@ -52,6 +52,14 @@ impl Default for OutputOptions {
             interactive: false,
             stylesheet: None,
         }
+    }
+}
+
+impl OutputOptions {
+    /// Формат пишется в stdout (`-o… -`): `open_rotate` берёт `stdout` для имени `-` (`output.c:215–216`), а файл
+    /// открывается только для формата с файлом (`output.c:479`).
+    pub fn format_to_stdout(&self) -> bool {
+        self.filename.as_deref() == Some("-") && formatter(self.format).is_some()
     }
 }
 
@@ -151,18 +159,19 @@ impl<'a> Pipeline<'a> {
             tcp_ports: &self.env.tcp_ports,
             services: &self.env.services,
         };
-        let w: &mut dyn Write = match &mut self.target {
-            Target::Stdout => &mut *self.stdout,
-            Target::File(f) => f,
+        let (w, to): (&mut dyn Write, WriteTarget) = match &mut self.target {
+            Target::Stdout => (&mut *self.stdout, WriteTarget::Stdout),
+            Target::File(f) => (f, WriteTarget::File),
             Target::Closed => return Ok(()),
         };
+        let fail = |e: io::Error| write_failed(to, e);
         if self.virgin {
-            fm.header(w, &cx).map_err(io_fail)?;
+            fm.header(w, &cx).map_err(fail)?;
             self.virgin = false;
         }
-        fm.record(w, &cx, r).map_err(io_fail)?;
+        fm.record(w, &cx, r).map_err(fail)?;
         if self.opts.flush {
-            w.flush().map_err(io_fail)?;
+            w.flush().map_err(fail)?;
         }
         Ok(())
     }
@@ -235,10 +244,11 @@ impl Sink for Pipeline<'_> {
                 }
             }
             Target::File(mut f) => {
+                let fail = |e: io::Error| write_failed(WriteTarget::File, e);
                 if let (false, Some(fm)) = (virgin, self.formatter.as_mut()) {
-                    fm.footer(&mut f, &cx).map_err(io_fail)?;
+                    fm.footer(&mut f, &cx).map_err(fail)?;
                 }
-                f.flush().map_err(io_fail)?;
+                f.flush().map_err(fail)?;
             }
         }
         self.stdout.flush().map_err(io_fail)
@@ -508,6 +518,68 @@ mod tests {
             );
             assert!(lines.next().unwrap().starts_with(dir.to_str().unwrap()));
         }
+    }
+
+    const FIFO_CHILD_ENV: &str = "RMASSCAN_DEAD_FIFO_CHILD";
+
+    /// Работает только в дочернем процессе `a_dead_fifo_reader_is_a_write_error`: файл вывода это FIFO, читатель
+    /// которого ушёл до первой записи. Запись и заголовок лежат в буфере, `finish` пишет подвал и flush получает
+    /// EPIPE. Итог `finish` печатается в stdout; тихий `exit(0)` внутри не напечатает ничего.
+    #[cfg(unix)]
+    #[test]
+    fn dead_fifo_reader_child() {
+        let Some(path) = std::env::var_os(FIFO_CHILD_ENV) else {
+            return;
+        };
+        let path = PathBuf::from(path);
+        let reader = {
+            let path = path.clone();
+            // Открытие FIFO на чтение ждёт писателя; читатель сразу закрывает свой конец.
+            std::thread::spawn(move || drop(File::open(path).unwrap()))
+        };
+        let wall = FakeWall(1_700_000_100);
+        let mut out = Vec::new();
+        let mut p = Pipeline::new(opts(Format::List, path.to_str()), &mut out, env(&wall));
+        p.open().unwrap();
+        reader.join().unwrap();
+        p.report_record(&open_rec()).unwrap();
+        let r = p.finish();
+        println!("finish: {r:?}");
+    }
+
+    /// FIFO (или `/dev/fd/N`), читатель которого ушёл, это обычная ошибка записи (`write failed: …`, скан
+    /// останавливается, код 1), а не тихий выход с 0, как у закрытого stdout.
+    #[cfg(unix)]
+    #[test]
+    fn a_dead_fifo_reader_is_a_write_error() {
+        let path = tmp("dead-reader.fifo");
+        let _ = std::fs::remove_file(&path);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo {}", path.display());
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "output::pipeline::tests::dead_fifo_reader_child",
+                "--nocapture",
+            ])
+            .env(FIFO_CHILD_ENV, &path)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains("finish: Err(\"write failed: Broken pipe"),
+            "{stdout}"
+        );
     }
 
     #[test]

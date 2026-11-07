@@ -5,9 +5,10 @@ Source of truth: masscan commit `8e6b3b0c07a81e8ea61d557c06134a21a6881614`
 
 Regenerate: copy `rmasscan/scripts/build-oracle.sh` to the oracle host and run
 `bash ~/rmasscan-oracle/build-oracle.sh`, then copy the results back with the exact command below.
-This README is hand-written and not generated, so the copy-back must exclude it:
+This README is hand-written and not generated, and `wire/` and `formats/` come from other scripts
+(`wire-lab.sh`, `build-format-goldens.sh`, see `formats/README.md`), so the copy-back must exclude them:
 
-    rsync -a --delete --exclude README.md minipc:rmasscan-oracle/golden/ rmasscan/tests/golden/
+    rsync -a --delete --exclude README.md --exclude wire/ --exclude formats/ minipc:rmasscan-oracle/golden/ rmasscan/tests/golden/
 
 The script refuses to run if HEAD differs from the pin, and runs every masscan
 invocation inside a fresh network namespace (`unshare -rn`, or `sudo unshare -n` when

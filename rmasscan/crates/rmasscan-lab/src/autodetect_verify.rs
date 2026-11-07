@@ -814,11 +814,15 @@ fn any_case(tag: &str) -> Option<CaseSpec> {
 /// The planned case of `plan` an entry of `runs_aborted/` is an attempt of. Every suite keeps an aborted run as
 /// `runs_aborted/<tag>.<run id>`; any other name is no attempt of a planned case.
 pub(crate) fn aborted_case(plan: Plan, name: &str) -> Option<&'static str> {
+    attempt_of(&planned_tags(plan), name)
+}
+/// [`aborted_case`] among the planned `tags` of any plan.
+pub(crate) fn attempt_of(tags: &[&'static str], name: &str) -> Option<&'static str> {
     let (tag, id) = name.split_once('.')?;
     if id.is_empty() || id.contains(['/', '\\']) {
         return None;
     }
-    planned_tags(plan).into_iter().find(|t| *t == tag)
+    tags.iter().copied().find(|t| *t == tag)
 }
 /// The earlier attempts of `tag` in the evidence directory `root` (`runs_aborted/<tag>.<run id>`, links included),
 /// sorted. A suite refuses to run a case that has one, as it refuses one that has a run: a case runs once into one
@@ -915,7 +919,7 @@ impl CaseSpec {
     }
 }
 
-fn dash(m: [u8; 6]) -> String {
+pub(crate) fn dash(m: [u8; 6]) -> String {
     m.iter()
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<_>>()
@@ -1189,17 +1193,169 @@ fn plus_line(d: &mut DetectedRecord, key: &str, body: &str) -> Result<(), String
     Ok(())
 }
 
+// ------------------------------------------------------------------ the status line
+
+/// The status line of a live scan (rmasscan-cli `status.rs`, masscan `main-status.c:229-230`, `:244-262`): the
+/// transmit phase, then the wait phase, each fragment ended by `\r`. The lab's own copy of the grammar, like
+/// [`ROUTER_HINTS`], so that a drift of the product's text is a finding.
+const STATUS_RUNNING: &str =
+    "rate:%6.2f-kpps, %5.2f%% done,%4u:%02u:%02u remaining, found=%u       ";
+const STATUS_WAITING: &str = "rate:%6.2f-kpps, %5.2f%% done, waiting %d-secs, found=%u       ";
+/// `--ndjson-status`, one `\n` line per tick (`json_fmt_running`, `json_fmt_waiting`, `main-status.c:71-125`).
+const NDJSON_RUNNING: &str = "{\"state\":\"running\",\"rate\":{\"kpps\":%.2f,\"pps\":%.2f},\"progress\":{\"percent\":%.2f,\"eta\":{\"hours\":%u,\"mins\":%u,\"seconds\":%u},\"syn\":{\"sent\":%u,\"total\":%u,\"remaining\":%u},\"found\":%u}}";
+const NDJSON_WAITING: &str = "{\"state\":\"waiting\",\"rate\":{\"kpps\":%.2f,\"pps\":%.2f},\"progress\":{\"percent\":%.2f,\"seconds\":%d,\"found\":%u,\"syn\":{\"sent\":%u,\"total\":%u,\"remaining\":%u}}}";
+/// `status_finish` (`main-status.c:276-280`): 77 spaces, then `\r`, erase the line before `[+] finished`.
+const STATUS_ERASE: usize = 77;
+/// The first Ctrl-C (`main.c:1136-1139`, rmasscan-cli `live.rs`): this text and 44 spaces, then `\n`.
+pub(crate) const INTERRUPT_TEXT: &str = "waiting several seconds to exit...";
+pub(crate) const INTERRUPT_PAD: usize = 44;
+
+/// One piece of rmasscan's stderr: a line as the terminal shows it, or a part of the status line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Piece {
+    /// The text after a line's last `\r` (rmasscan-cli `status::normalize_stderr_line`), not itself a status form.
+    Line(String),
+    /// `rate:… remaining, found=N` and its 7 spaces: a tick of the transmit phase.
+    Running,
+    /// `rate:… waiting N-secs, found=N` and its 7 spaces: a tick of the wait phase.
+    Waiting,
+    /// 77 spaces: the erase at the end of the scan.
+    Erase,
+    /// A `--ndjson-status` line.
+    Ndjson,
+    /// The first Ctrl-C's line.
+    Interrupt,
+}
+
+/// Does `s` print as the printf template `t` (`%W.Pf`, `%Wu`, `%0Wu`, `%d`, `%%`)? Each field is read as a number and
+/// printed again with its own conversion, so padding, digits and sign must be exactly what printf writes; `nan`,
+/// `inf`, a missing pad or a stray digit never match.
+fn printf_form(t: &str, s: &str) -> bool {
+    let (mut t, mut s) = (t, s);
+    while !t.is_empty() {
+        let Some(rest) = t.strip_prefix('%') else {
+            let lit = &t[..t.find('%').unwrap_or(t.len())];
+            match s.strip_prefix(lit) {
+                Some(r) => (t, s) = (&t[lit.len()..], r),
+                None => return false,
+            }
+            continue;
+        };
+        if let Some(r) = rest.strip_prefix('%') {
+            match s.strip_prefix('%') {
+                Some(x) => (t, s) = (r, x),
+                None => return false,
+            }
+            continue;
+        }
+        let spec_len = rest.find(['f', 'u', 'd']).map_or(rest.len(), |i| i + 1);
+        let (spec, conv) = rest[..spec_len].split_at(spec_len.saturating_sub(1));
+        t = &rest[spec_len..];
+        let zero = spec.starts_with('0');
+        let (width, prec) = spec.split_once('.').unwrap_or((spec, ""));
+        let width: usize = width.parse().unwrap_or(0);
+        // The field as printf wrote it: leading pad, a sign, digits and, for `f`, a fraction.
+        let b = s.as_bytes();
+        let mut n = b.iter().take_while(|c| **c == b' ').count();
+        n += usize::from(b.get(n) == Some(&b'-'));
+        let digits = b[n..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if digits == 0 {
+            return false;
+        }
+        n += digits;
+        if conv == "f" && b.get(n) == Some(&b'.') {
+            n += 1 + b[n + 1..].iter().take_while(|c| c.is_ascii_digit()).count();
+        }
+        let (field, r) = s.split_at(n);
+        let v = field.trim_start();
+        let again = match conv {
+            "f" => v
+                .parse::<f64>()
+                .ok()
+                .map(|x| format!("{x:>width$.prec$}", prec = prec.parse().unwrap_or(6))),
+            "u" if zero => v.parse::<u64>().ok().map(|x| format!("{x:0width$}")),
+            "u" => v.parse::<u64>().ok().map(|x| format!("{x:>width$}")),
+            "d" => v.parse::<i64>().ok().map(|x| format!("{x:>width$}")),
+            _ => None,
+        };
+        if again.as_deref() != Some(field) {
+            return false;
+        }
+        s = r;
+    }
+    s.is_empty()
+}
+
+/// The status form of a fragment that a `\r` ends: a tick of either phase or the erase.
+fn status_fragment(s: &str) -> Option<Piece> {
+    if s.len() == STATUS_ERASE && s.bytes().all(|b| b == b' ') {
+        Some(Piece::Erase)
+    } else if printf_form(STATUS_RUNNING, s) {
+        Some(Piece::Running)
+    } else if printf_form(STATUS_WAITING, s) {
+        Some(Piece::Waiting)
+    } else {
+        None
+    }
+}
+
+/// rmasscan's stderr as the terminal shows it, with the status line taken apart: a line's visible text is what
+/// follows its last `\r` (rmasscan-cli `status::normalize_stderr_line`), and every fragment before a `\r` must be a
+/// status form (a tick or the erase), or the text is an error, never a line to skip. A whole line can be a
+/// `--ndjson-status` tick or the first Ctrl-C's line; empty lines are dropped. A leading BOM and `\r\n` line ends
+/// (the Windows guest) are tolerated, as before.
+pub(crate) fn screen(text: &str) -> Result<Vec<Piece>, String> {
+    let mut out = Vec::new();
+    for raw in text.trim_start_matches('\u{feff}').split('\n') {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        let mut frags: Vec<&str> = line.split('\r').collect();
+        let visible = frags.pop().unwrap_or_default();
+        for f in frags {
+            out.push(status_fragment(f).ok_or_else(|| {
+                format!("a fragment before \\r that is not a status line: {f:?}")
+            })?);
+        }
+        if let Some(p) = status_fragment(visible) {
+            // A stderr cut right after a fragment (or a `\r\n` tolerance that took its `\r`).
+            out.push(p);
+        } else if visible
+            .strip_prefix(INTERRUPT_TEXT)
+            .is_some_and(|pad| pad.len() == INTERRUPT_PAD && pad.bytes().all(|b| b == b' '))
+        {
+            out.push(Piece::Interrupt);
+        } else if printf_form(NDJSON_RUNNING, visible) || printf_form(NDJSON_WAITING, visible) {
+            out.push(Piece::Ndjson);
+        } else if !visible.is_empty() {
+            out.push(Piece::Line(visible.to_owned()));
+        }
+    }
+    Ok(out)
+}
+
 /// Parses rmasscan's stderr: the `[+]` lines in the CLI's order (each at most once), then at most one refusal
 /// (`[-] FAIL: …` or `rmasscan: error: …`) and its hint lines. Any other line, a value in a form the CLI does not
 /// print, or a line out of order is an error. A leading BOM and `\r` line ends (the Windows guest) are tolerated.
+/// The status line is taken apart by [`screen`] first: its fragments are skipped, a fragment that is not a status
+/// form is an error, and the first Ctrl-C's line may stand once before `[+] finished`.
 pub fn parse_stderr(text: &str) -> Result<DetectedRecord, String> {
     let mut d = DetectedRecord::default();
     let mut next = 0;
-    for raw in text.trim_start_matches('\u{feff}').split('\n') {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        if line.is_empty() {
-            continue;
-        }
+    let mut interrupted = false;
+    for piece in screen(text)? {
+        let line = match piece {
+            Piece::Line(l) => l,
+            Piece::Interrupt => {
+                if interrupted || d.finished.is_some() || d.fail.is_some() || d.error.is_some() {
+                    return Err(
+                        "the Ctrl-C line twice, after [+] finished or after a refusal".into(),
+                    );
+                }
+                interrupted = true;
+                continue;
+            }
+            Piece::Running | Piece::Waiting | Piece::Erase | Piece::Ndjson => continue,
+        };
+        let line = line.as_str();
         let refused = d.fail.is_some() || d.error.is_some();
         if let Some(rest) = line.strip_prefix("[+] ") {
             if refused {
@@ -1296,7 +1452,7 @@ pub fn discovered_line(ip: Ipv4Addr, port: u16) -> String {
     )
 }
 /// The lines of a stdout file; empty, or exactly `"\n"` (the guest runner's empty output), has none.
-fn stdout_lines(text: &str) -> Vec<&str> {
+pub(crate) fn stdout_lines(text: &str) -> Vec<&str> {
     let t = text.strip_prefix('\u{feff}').unwrap_or(text);
     if t.is_empty() || t == "\n" {
         return Vec::new();
@@ -1304,7 +1460,7 @@ fn stdout_lines(text: &str) -> Vec<&str> {
     t.split_inclusive('\n').collect()
 }
 /// `(ip, port)` of a Discovered line, whatever its padding.
-fn discovered(line: &str) -> Option<(Ipv4Addr, u16)> {
+pub(crate) fn discovered(line: &str) -> Option<(Ipv4Addr, u16)> {
     let head = line
         .strip_prefix("Discovered open port ")?
         .trim_end_matches('\n')
@@ -1312,7 +1468,7 @@ fn discovered(line: &str) -> Option<(Ipv4Addr, u16)> {
     let (port, ip) = head.split_once("/tcp on ")?;
     Some((ip.parse().ok()?, port.parse().ok()?))
 }
-fn parse_exit(text: &str) -> Option<i32> {
+pub(crate) fn parse_exit(text: &str) -> Option<i32> {
     text.trim_start_matches('\u{feff}').trim().parse().ok()
 }
 
@@ -1334,7 +1490,7 @@ const SCANNER_TEXT: [&str; 12] = [
     IFLIST_JSON,
     ORACLE_IFLIST_JSON,
 ];
-const TEXT_EXTENSIONS: [&str; 6] = ["json", "txt", "err", "log", "md", "sha256"];
+pub(crate) const TEXT_EXTENSIONS: [&str; 6] = ["json", "txt", "err", "log", "md", "sha256"];
 /// Last labels of local host names (mDNS, home routers, private zones).
 const HOST_SUFFIXES: [&str; 7] = [
     "local",
@@ -1487,7 +1643,7 @@ fn iflist_entries(text: &str) -> usize {
         })
         .count()
 }
-fn token_problems(text: &str, scanner_text: bool) -> Vec<String> {
+pub(crate) fn token_problems(text: &str, scanner_text: bool) -> Vec<String> {
     let mut p = Vec::new();
     for ip in ipv4_tokens(text) {
         if !(stand_ipv4(ip) || (!scanner_text && anonymous_ipv4(ip))) {
@@ -1570,7 +1726,7 @@ fn name_problems(names: impl IntoIterator<Item = String>) -> Vec<String> {
 }
 /// The lines the C oracle writes on stderr during a scan (masscan's banner, status lines rewritten after `\r`,
 /// the forced exit after the wait window, and its own refusals), as recorded by every committed oracle run.
-fn oracle_stderr_problems(text: &str) -> Vec<String> {
+pub(crate) fn oracle_stderr_problems(text: &str) -> Vec<String> {
     let mut p = Vec::new();
     for seg in text.trim_start_matches('\u{feff}').split(['\n', '\r']) {
         let s = seg.trim_end();
@@ -1596,12 +1752,23 @@ fn oracle_stderr_problems(text: &str) -> Vec<String> {
 }
 
 /// Line forms and interface names of the files the scanner wrote.
-fn output_problems(rel: &str, text: &str) -> Vec<String> {
+pub(crate) fn output_problems(rel: &str, text: &str) -> Vec<String> {
     let stderr_lines = |t: &str| -> Vec<String> {
         let mut p = Vec::new();
+        // The status line's fragments are no lines: only the text after a line's last `\r` is ([`screen`]).
+        let mut lines = Vec::new();
         for raw in t.trim_start_matches('\u{feff}').lines() {
-            let line = raw.trim_end_matches('\r');
-            if line.is_empty() || line.starts_with("    [hint] ") || line.starts_with(" [hint] ") {
+            match screen(raw.trim_end_matches('\r')) {
+                Ok(pieces) => lines.extend(pieces.into_iter().filter_map(|piece| match piece {
+                    Piece::Line(l) => Some(l),
+                    _ => None,
+                })),
+                Err(e) => p.push(e),
+            }
+        }
+        for line in &lines {
+            let line = line.as_str();
+            if line.starts_with("    [hint] ") || line.starts_with(" [hint] ") {
                 continue;
             }
             if let Some(rest) = line.strip_prefix("[+] interface = ") {
@@ -1668,7 +1835,7 @@ fn output_problems(rel: &str, text: &str) -> Vec<String> {
 }
 
 /// One INVALID check per text file that names something outside the allowlist, or one PASS check for all.
-fn privacy(r: &mut Run, d: &Path, files: &[String]) {
+pub(crate) fn privacy(r: &mut Run, d: &Path, files: &[String]) {
     let mut clean = true;
     let mut seen = 0;
     for rel in files {
@@ -1715,18 +1882,18 @@ fn privacy(r: &mut Run, d: &Path, files: &[String]) {
 
 // ------------------------------------------------------------------ the wire
 
-fn is_marker(f: &[u8], payload: &[u8]) -> bool {
+pub(crate) fn is_marker(f: &[u8], payload: &[u8]) -> bool {
     f.get(12..14) == Some(&MARKER_ETHERTYPE[..])
         && f.get(14..).is_some_and(|b| b.starts_with(payload))
 }
 
 /// The frames of one capture, sorted by who sent them.
 #[derive(Default)]
-struct Wire {
-    starts: Vec<f64>,
-    ends: Vec<f64>,
+pub(crate) struct Wire {
+    pub(crate) starts: Vec<f64>,
+    pub(crate) ends: Vec<f64>,
     /// ARP requests from the scanner MAC, exactly 60 bytes with zero padding (N5).
-    scanner_arp: Vec<(f64, Vec<u8>)>,
+    pub(crate) scanner_arp: Vec<(f64, Vec<u8>)>,
     /// 42-byte ARP requests from the scanner MAC: the scanner host's kernel.
     os_requests: usize,
     /// ARP replies from the scanner MAC: the scanner host's kernel (the Windows guest answers `who-has .1`).
@@ -1734,12 +1901,12 @@ struct Wire {
     /// Any other ARP frame from the scanner MAC (neither form above).
     odd_arp: usize,
     /// TCP SYNs from the scanner MAC.
-    syns: Vec<(f64, Vec<u8>)>,
+    pub(crate) syns: Vec<(f64, Vec<u8>)>,
     /// Resets of the scanner host's kernel (half-open connections the scan provoked).
     rst_from_scanner: usize,
 }
 
-fn classify(fr: &Frames, mac: [u8; 6]) -> Wire {
+pub(crate) fn classify(fr: &Frames, mac: [u8; 6]) -> Wire {
     let mut w = Wire::default();
     for (t, f) in fr {
         if is_marker(f, START_PAYLOAD) {
@@ -1770,7 +1937,7 @@ fn classify(fr: &Frames, mac: [u8; 6]) -> Wire {
     w
 }
 /// The capture window of the run: last start marker to first end marker.
-fn window(w: &Wire) -> (f64, f64) {
+pub(crate) fn window(w: &Wire) -> (f64, f64) {
     (
         w.starts.iter().copied().fold(f64::NEG_INFINITY, f64::max),
         w.ends.iter().copied().fold(f64::INFINITY, f64::min),
@@ -1853,7 +2020,7 @@ fn names(plan: Plan) -> Names {
 }
 
 /// A file the verifier needs: its text, or a NOT RUN check.
-fn need(r: &mut Run, d: &Path, name: &str) -> Option<String> {
+pub(crate) fn need(r: &mut Run, d: &Path, name: &str) -> Option<String> {
     let t = fs::read(d.join(name))
         .ok()
         .map(|b| String::from_utf8_lossy(&b).into_owned());
@@ -1863,7 +2030,7 @@ fn need(r: &mut Run, d: &Path, name: &str) -> Option<String> {
     t
 }
 /// A schema file: NOT RUN when missing, INVALID when it does not follow its type.
-fn typed<T: DeserializeOwned>(r: &mut Run, d: &Path, name: &str) -> Option<T> {
+pub(crate) fn typed<T: DeserializeOwned>(r: &mut Run, d: &Path, name: &str) -> Option<T> {
     let text = need(r, d, name)?;
     match serde_json::from_str(&text) {
         Ok(v) => Some(v),
@@ -1875,7 +2042,12 @@ fn typed<T: DeserializeOwned>(r: &mut Run, d: &Path, name: &str) -> Option<T> {
 }
 
 /// A capture of a directory: `None`, with a check, when it is missing, broken, or a symbolic link (not followed).
-fn capture(r: &mut Run, d: &Path, name: &str, links: &[String]) -> Option<(Frames, Vec<u8>)> {
+pub(crate) fn capture(
+    r: &mut Run,
+    d: &Path,
+    name: &str,
+    links: &[String],
+) -> Option<(Frames, Vec<u8>)> {
     if links.iter().any(|l| l == name) {
         r.inv(
             &format!("{name} is a regular file, not a symbolic link"),
@@ -1890,7 +2062,7 @@ fn capture(r: &mut Run, d: &Path, name: &str, links: &[String]) -> Option<(Frame
 /// Lab-isolation checks that need nothing but the pcaps: a frame on the uplink (stored, or counted by tcpdump), a
 /// SYN that is not the scanner's, a frame from neither end of the stand. They cannot be hidden by any other missing
 /// or wrong file.
-fn safety(
+pub(crate) fn safety(
     r: &mut Run,
     plan: Plan,
     d: &Path,
@@ -1950,7 +2122,7 @@ fn safety(
 }
 
 /// The witness record of a capture and the run window it proves.
-fn witness(
+pub(crate) fn witness(
     r: &mut Run,
     d: &Path,
     pcap_name: &str,
@@ -2072,33 +2244,7 @@ fn gate(r: &mut Run, plan: Plan, d: &Path, files: &[String]) {
     let present: Vec<&str> = other.into_iter().filter(|n| d.join(n).exists()).collect();
     r.inv(label, present.is_empty(), format!("{present:?}"));
     if plan == Plan::Linux {
-        let sealed = |v: &Value| {
-            v["mode"] == "autodetect" && isolation_permits(v, IsolationMode::Autodetect)
-        };
-        match read_json(d.join("isolation.json")) {
-            None => r.add(
-                "isolation.json present",
-                NOT_RUN,
-                "missing or invalid JSON",
-                false,
-            ),
-            Some(v) => r.inv(
-                "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
-                sealed(&v),
-                v["default_route"].to_string(),
-            ),
-        }
-        // The seal after the run, under the same rule. It is taken once the scanner has run, so missing or broken it
-        // is unproven evidence (INVALID), as a changed `status-post.json` is on the other stands.
-        let post = read_json(d.join(ISOLATION_POST_JSON));
-        r.inv(
-            "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
-            post.as_ref().is_some_and(sealed),
-            post.map_or_else(
-                || "missing or invalid JSON".to_owned(),
-                |v| format!("mode {}, default_route {}", v["mode"], v["default_route"]),
-            ),
-        );
+        linux_seal(r, d);
         return;
     }
     for name in ["status-pre.json", "status-post.json"] {
@@ -2120,6 +2266,36 @@ fn gate(r: &mut Run, plan: Plan, d: &Path, files: &[String]) {
             r.inv(&label, ok, v["raw_run_allowed"].to_string());
         }
     }
+}
+
+/// The Linux stand's seal before and after a run (`isolation.json`, `isolation-post.json`).
+pub(crate) fn linux_seal(r: &mut Run, d: &Path) {
+    let sealed =
+        |v: &Value| v["mode"] == "autodetect" && isolation_permits(v, IsolationMode::Autodetect);
+    match read_json(d.join("isolation.json")) {
+        None => r.add(
+            "isolation.json present",
+            NOT_RUN,
+            "missing or invalid JSON",
+            false,
+        ),
+        Some(v) => r.inv(
+            "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+            sealed(&v),
+            v["default_route"].to_string(),
+        ),
+    }
+    // The seal after the run, under the same rule. It is taken once the scanner has run, so missing or broken it
+    // is unproven evidence (INVALID), as a changed `status-post.json` is on the other stands.
+    let post = read_json(d.join(ISOLATION_POST_JSON));
+    r.inv(
+        "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+        post.as_ref().is_some_and(sealed),
+        post.map_or_else(
+            || "missing or invalid JSON".to_owned(),
+            |v| format!("mode {}, default_route {}", v["mode"], v["default_route"]),
+        ),
+    );
 }
 
 /// Do the printed sources follow argv (a given value printed as given, the rest detected or chosen)?
@@ -2941,7 +3117,7 @@ fn iflist(r: &mut Run, ev: &Ev, d: &Path, det: &DetectedRecord, w: Option<&Wire>
 /// onto a real network (a frame that reached one is a safety FAIL of the captures). A symbolic link is not read.
 /// The record must also be this lab's: its `lab_id` equal to `manifest.json`'s (`manifest_lab_id`), or a later
 /// lab's clean record started into the same `--out` would stand in for a cleanup that never wrote one.
-fn teardown(m: &mut Run, root: &Path, links: &[String], manifest_lab_id: Option<&str>) {
+pub(crate) fn teardown(m: &mut Run, root: &Path, links: &[String], manifest_lab_id: Option<&str>) {
     let name = "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left";
     if links.iter().any(|l| l == TEARDOWN_JSON) {
         m.inv(name, false, "a symbolic link (not followed)");
@@ -2987,7 +3163,12 @@ fn teardown(m: &mut Run, root: &Path, links: &[String], manifest_lab_id: Option<
 
 /// Lab-isolation findings of every directory the plan does not judge itself (the root, unplanned tags, aborted or
 /// discarded runs, work directories): only their captures are read, and only those that are regular files.
-fn stray_scan(root: &Path, plan: Option<Plan>, tags: &[&'static str], t: &Tree) -> Vec<Value> {
+pub(crate) fn stray_scan(
+    root: &Path,
+    plan: Option<Plan>,
+    tags: &[&'static str],
+    t: &Tree,
+) -> Vec<Value> {
     let planned = |rel: &str| {
         tags.iter()
             .any(|tag| rel == format!("runs/{tag}") || rel.starts_with(&format!("runs/{tag}/")))
@@ -3158,10 +3339,10 @@ pub fn verify_dir(root: &Path) -> Value {
 }
 
 /// One entry of `runs_aborted/`: an attempt that did not become a run.
-struct Attempt {
-    name: String,
+pub(crate) struct Attempt {
+    pub(crate) name: String,
     /// The planned case it is an attempt of ([`aborted_case`]).
-    case: Option<&'static str>,
+    pub(crate) case: Option<&'static str>,
     kind: &'static str,
     /// Its files, relative to the entry.
     files: Vec<String>,
@@ -3169,7 +3350,7 @@ struct Attempt {
 impl Attempt {
     /// Its entry under `aborted` in the verdict: what is there, and that it is no run. Its captures' lab-isolation
     /// checks are in `safety_scan` with every other directory the plan does not judge.
-    fn summary(&self) -> Value {
+    pub(crate) fn summary(&self) -> Value {
         let mut r = Run::new(&self.name);
         r.check(
             "an aborted attempt of a planned case: no run of it (its captures are judged in safety_scan)",
@@ -3190,6 +3371,10 @@ impl Attempt {
 }
 /// Every entry of `runs_aborted/` in the tree `t`, by name. Links are listed, never followed.
 fn aborted_entries(plan: Option<Plan>, t: &Tree) -> Vec<Attempt> {
+    attempts(t, |name| plan.and_then(|p| aborted_case(p, name)))
+}
+/// [`aborted_entries`] with `case_of` naming the planned case of an entry.
+pub(crate) fn attempts(t: &Tree, case_of: impl Fn(&str) -> Option<&'static str>) -> Vec<Attempt> {
     let top = |p: &String| {
         p.strip_prefix("runs_aborted/")
             .map(|r| r.split('/').next().unwrap_or(r).to_owned())
@@ -3222,7 +3407,7 @@ fn aborted_entries(plan: Option<Plan>, t: &Tree) -> Vec<Attempt> {
                 .into_iter()
                 .collect();
             Attempt {
-                case: plan.and_then(|p| aborted_case(p, &name)),
+                case: case_of(&name),
                 name,
                 kind,
                 files,

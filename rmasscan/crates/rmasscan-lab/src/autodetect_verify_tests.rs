@@ -24,7 +24,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const T0: f64 = 1_800_000_000.0;
+pub(crate) const T0: f64 = 1_800_000_000.0;
 const TIME_PORT: &str = "41234";
 
 fn scratch() -> PathBuf {
@@ -152,6 +152,17 @@ fn plan_syns(
     sp: &str,
     router_mac: [u8; 6],
 ) -> Vec<Vec<u8>> {
+    plan_syns_at(st, targets, ports, sp, router_mac, "100")
+}
+/// [`plan_syns`] at `--rate rate` (the rate enters the probe order).
+pub(crate) fn plan_syns_at(
+    st: &Stand,
+    targets: &str,
+    ports: &str,
+    sp: &str,
+    router_mac: [u8; 6],
+    rate: &str,
+) -> Vec<Vec<u8>> {
     let mut ips = MassIp::new();
     add_target_string(ips.ipv4_mut(), targets).unwrap();
     parse_ports(ips.ports_mut(), ports).unwrap();
@@ -159,7 +170,7 @@ fn plan_syns(
     let cfg = ScanConfig {
         targets: ips,
         seed: 1,
-        max_rate: parse_rate("100").unwrap(),
+        max_rate: parse_rate(rate).unwrap(),
         wait_secs: 3,
         adapter_ip: Some(u32::from(st.scanner_ip)),
         adapter_mac: Some(st.scanner_mac),
@@ -193,7 +204,7 @@ fn plan_syns(
 }
 
 /// A TCP frame answering `syn` (peer to scanner, or the scanner kernel back to the peer with `back`).
-fn tcp_answer(syn: &[u8], flags: u8, peer_mac: [u8; 6], back: bool) -> Vec<u8> {
+pub(crate) fn tcp_answer(syn: &[u8], flags: u8, peer_mac: [u8; 6], back: bool) -> Vec<u8> {
     let o = 14 + usize::from(syn[14] & 15) * 4;
     let seq = u32::from_be_bytes(syn[o + 4..o + 8].try_into().unwrap());
     let mut b = vec![0u8; 54];
@@ -224,7 +235,7 @@ fn tcp_answer(syn: &[u8], flags: u8, peer_mac: [u8; 6], back: bool) -> Vec<u8> {
     b[47] = flags;
     b
 }
-fn syn_dst(syn: &[u8]) -> (Ipv4Addr, u16) {
+pub(crate) fn syn_dst(syn: &[u8]) -> (Ipv4Addr, u16) {
     let o = 14 + usize::from(syn[14] & 15) * 4;
     (
         Ipv4Addr::new(syn[30], syn[31], syn[32], syn[33]),
@@ -247,6 +258,8 @@ pub(crate) struct Sim {
     st: Stand,
     det: DetectedRecord,
     extra_stderr: Vec<String>,
+    /// Status fragments (`\r`-ended, as rmasscan-cli's `status.rs` prints them) right before the `[+] finished` line.
+    pub(crate) status: Vec<String>,
     pub(crate) stdout: Option<String>,
     pub(crate) exit: i32,
     pub(crate) peer: Frames,
@@ -261,10 +274,10 @@ pub(crate) struct Sim {
     syns: Vec<Vec<u8>>,
 }
 
-fn marker(st: &Stand, payload: &[u8]) -> Vec<u8> {
+pub(crate) fn marker(st: &Stand, payload: &[u8]) -> Vec<u8> {
     marker_frame(st.scanner_mac, st.peer_mac, payload)
 }
-fn arp_request(st: &Stand, target: Ipv4Addr) -> Vec<u8> {
+pub(crate) fn arp_request(st: &Stand, target: Ipv4Addr) -> Vec<u8> {
     encode_request(st.scanner_mac, u32::from(st.scanner_ip), u32::from(target)).to_vec()
 }
 
@@ -477,6 +490,7 @@ impl Sim {
             st,
             det,
             extra_stderr: vec![],
+            status: vec![],
             stdout,
             exit,
             peer: fr,
@@ -550,8 +564,12 @@ impl Sim {
         }
         if let Some(x) = &d.finished {
             put(format!(
-                "[+] finished: {}, sent {}, replies {}, open {}",
-                x.reason, x.sent, x.replies, x.open
+                "{}[+] finished: {}, sent {}, replies {}, open {}",
+                self.status.concat(),
+                x.reason,
+                x.sent,
+                x.replies,
+                x.open
             ));
         }
         if let Some(x) = &d.fail {
@@ -631,20 +649,9 @@ impl Sim {
         }
         match c.plan {
             Plan::Linux => {
-                let mut v = json!({"uplink":false,"bridge":false,"nat":false,"ip_forward":0,"ipv6":"disabled",
-                    "veth_created_inside_scanner_ns_peer_moved_to_peer_ns":true,"host_link_list_unchanged":true,
-                    "verified_by":"Rust capture isolation: live namespace links, routes, forwarding, IPv6 and host link baseline; plus wire-lab lifecycle assertions",
-                    "scanner_route_get_8_8_8_8":"8.8.8.8 via 198.18.0.2 dev veth-a src 198.18.0.1 uid 0",
-                    "peer_route_get_8_8_8_8":"RTNETLINK answers: Network is unreachable",
-                    "scanner_routes":["default via 198.18.0.2 dev veth-a","198.18.0.0/24 dev veth-a proto kernel scope link src 198.18.0.1"],
-                    "scanner_links":["1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00",
-                        "2: veth-a@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\\    link/ether 02:aa:00:00:00:01 brd ff:ff:ff:ff:ff:ff link-netns wl-peer-4242"],
-                    "peer_routes":["198.18.0.0/24 dev veth-b proto kernel scope link src 198.18.0.2"],
-                    "mode":"autodetect"});
-                v["default_route"] = isolation_default_route(IsolationMode::Autodetect, "veth-a");
                 // The seal before the run and after it (the suite takes `capture isolation` again).
                 for n in ["isolation.json", "isolation-post.json"] {
-                    f.push((n.into(), serde_json::to_vec_pretty(&v).unwrap()));
+                    f.push((n.into(), linux_isolation()));
                 }
             }
             Plan::Macos | Plan::MacosRoot => {
@@ -725,6 +732,22 @@ impl Sim {
 
 fn json<T: Serialize>(v: &T) -> Vec<u8> {
     serde_json::to_vec_pretty(v).unwrap()
+}
+
+/// `capture isolation --mode autodetect` of the sealed Linux stand, as the suite records it before and after a run.
+pub(crate) fn linux_isolation() -> Vec<u8> {
+    let mut v = json!({"uplink":false,"bridge":false,"nat":false,"ip_forward":0,"ipv6":"disabled",
+        "veth_created_inside_scanner_ns_peer_moved_to_peer_ns":true,"host_link_list_unchanged":true,
+        "verified_by":"Rust capture isolation: live namespace links, routes, forwarding, IPv6 and host link baseline; plus wire-lab lifecycle assertions",
+        "scanner_route_get_8_8_8_8":"8.8.8.8 via 198.18.0.2 dev veth-a src 198.18.0.1 uid 0",
+        "peer_route_get_8_8_8_8":"RTNETLINK answers: Network is unreachable",
+        "scanner_routes":["default via 198.18.0.2 dev veth-a","198.18.0.0/24 dev veth-a proto kernel scope link src 198.18.0.1"],
+        "scanner_links":["1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00",
+            "2: veth-a@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\\    link/ether 02:aa:00:00:00:01 brd ff:ff:ff:ff:ff:ff link-netns wl-peer-4242"],
+        "peer_routes":["198.18.0.0/24 dev veth-b proto kernel scope link src 198.18.0.2"],
+        "mode":"autodetect"});
+    v["default_route"] = isolation_default_route(IsolationMode::Autodetect, "veth-a");
+    serde_json::to_vec_pretty(&v).unwrap()
 }
 
 /// `teardown.json` as `wire-lab.sh --suite autodetect` writes it after a clean teardown (namespace names scrubbed).
@@ -1194,16 +1217,13 @@ fn a_changed_hash_is_invalid() {
 fn a_hostname_in_stderr_is_invalid() {
     let mut sim = Sim::new(Plan::Macos, "m04_user_arp_timeout");
     sim.extra_stderr
-        .push("rmasscan: error: Owner-MacBook-Pro.local is unreachable".into());
+        .push("rmasscan: error: printer-7.local is unreachable".into());
     let r = judge(&sim);
     assert_verdict(&r, INVALID);
     let c = check(&r, "privacy: stderr.txt");
     assert_eq!(c["result"], INVALID);
     assert!(
-        c["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Owner-MacBook-Pro.local"),
+        c["detail"].as_str().unwrap().contains("printer-7.local"),
         "{c}"
     );
     // An interface name that is not the stand's, in a [+] line.
@@ -1216,7 +1236,7 @@ fn a_hostname_in_stderr_is_invalid() {
     let mut sim = Sim::new(Plan::Windows, "w03_adapter_friendly");
     sim.extra.push((
         "guest-runner.json".into(),
-        br#"{"exe":"C:\\Users\\HiMaxym\\t4\\rmasscan.exe"}"#.to_vec(),
+        br#"{"exe":"C:\\Users\\alice\\t4\\rmasscan.exe"}"#.to_vec(),
     ));
     let r = judge(&sim);
     assert_verdict(&r, INVALID);
@@ -1556,6 +1576,105 @@ fn parse_stderr_reads_every_cli_line_form() {
     assert_eq!(parse_stderr("").unwrap(), DetectedRecord::default());
 }
 
+/// The status line of rmasscan-cli (`status.rs`, `live.rs`) in its own forms, written here and not with the verifier's
+/// grammar: a running and two waiting fragments each ended by `\r`, then the 77-space erase and its `\r`.
+pub(crate) fn status_fragments() -> Vec<String> {
+    vec![
+        "rate:  0.10-kpps, 25.00% done,   0:00:01 remaining, found=0       \r".into(),
+        "rate:  0.00-kpps, 100.00% done, waiting 3-secs, found=8       \r".into(),
+        "rate:  0.00-kpps, 100.00% done, waiting -1-secs, found=8       \r".into(),
+        format!("{}\r", " ".repeat(77)),
+    ]
+}
+/// The CLI's line of the first Ctrl-C (`live.rs` `INTERRUPT_LINE`): 44 spaces erase the status line's tail.
+pub(crate) fn interrupt_line() -> String {
+    format!("waiting several seconds to exit...{}\n", " ".repeat(44))
+}
+
+#[test]
+fn status_fragments_are_skipped() {
+    let plus = "[+] interface = veth-a (detected: route to 198.18.0.2)\n[+] source-mac = 02-aa-00-00-00-01 (detected)\n[+] source-ip = 198.18.0.1 (detected)\n[+] router-ip = 198.18.0.2 (interface default gateway)\n[+] router-mac = 02-aa-00-00-00-02 (arp: 1 requests, 2 ms)\n[+] seed = 1 (given)\n[+] source-port = 41234 (time)\n";
+    let finished = "[+] finished: Completed, sent 12, replies 12, open 8\n";
+    let erase = " ".repeat(77);
+    let plain = parse_stderr(&format!("{plus}{finished}")).unwrap();
+    // The brief's form: one running fragment and the erase before `[+] finished`, on the same `\n` line.
+    let brief = format!(
+        "[+] interface = veth-a (detected: route to 198.18.0.2)\nrate:  0.10-kpps, 25.00% done,   0:00:01 remaining, found=0       \r{erase}\r{finished}"
+    );
+    let d = parse_stderr(&brief).unwrap();
+    assert_eq!(
+        d.interface,
+        Some(sourced("veth-a", "detected: route to 198.18.0.2"))
+    );
+    assert_eq!(d.finished, plain.finished);
+    // Every fragment form the CLI prints, each line exactly as before.
+    let all = format!("{plus}{}{finished}", status_fragments().concat());
+    assert_eq!(parse_stderr(&all).unwrap(), plain);
+    // `--ndjson-status`: whole `{"state":…}` lines (`status.rs` ndjson_running/ndjson_waiting), no erase.
+    let ndjson = format!(
+        "{plus}{{\"state\":\"running\",\"rate\":{{\"kpps\":0.10,\"pps\":100.00}},\"progress\":{{\"percent\":25.00,\"eta\":{{\"hours\":0,\"mins\":0,\"seconds\":1}},\"syn\":{{\"sent\":3,\"total\":12,\"remaining\":9}},\"found\":0}}}}\n{{\"state\":\"waiting\",\"rate\":{{\"kpps\":0.00,\"pps\":0.00}},\"progress\":{{\"percent\":100.00,\"seconds\":3,\"found\":8,\"syn\":{{\"sent\":12,\"total\":12,\"remaining\":0}}}}}}\n{finished}"
+    );
+    assert_eq!(parse_stderr(&ndjson).unwrap(), plain);
+    // The first Ctrl-C's line is a line of its own between the fragments; the scan then stops.
+    let stopped = format!(
+        "{plus}rate:  0.02-kpps,  1.00% done,   0:03:18 remaining, found=0       \r{}rate:  0.00-kpps,  1.05% done,   0:03:20 remaining, found=0       \r{erase}\r[+] finished: Stopped, sent 42, replies 40, open 0\n",
+        interrupt_line()
+    );
+    let s = parse_stderr(&stopped).unwrap();
+    assert_eq!(
+        s.finished.as_ref().map(|f| f.reason.as_str()),
+        Some("Stopped")
+    );
+    assert_eq!(s.source_port, plain.source_port);
+    // A fragment before `\r` that is not a status line, a status form the CLI does not print, or a misplaced
+    // Ctrl-C line is an error, not a line to skip.
+    for bad in [
+        format!("{plus}garbage\r{finished}"),
+        format!("{plus}rate:  0.10-kpps\r{finished}"),
+        format!(
+            "{plus}rate:   nan-kpps, 25.00% done,   0:00:01 remaining, found=0       \r{finished}"
+        ),
+        format!(
+            "{plus}rate:  0.10-kpps, 25.00% done,   0:00:01 remaining, found=0      \r{finished}"
+        ),
+        format!(
+            "{plus}rate:  0.10-kpps, 25.00% done,   0:0:01 remaining, found=0       \r{finished}"
+        ),
+        format!("{plus}{}\r{finished}", " ".repeat(76)),
+        format!("{plus}{}\r{finished}", " ".repeat(78)),
+        format!("{plus}[+] seed = 1 (given)\r{finished}"),
+        format!("{plus}{{\"state\":\"running\"}}\r{finished}"),
+        format!("{plus}{{\"state\":\"running\"}}\n{finished}"),
+        format!(
+            "{plus}waiting several seconds to exit...{}\n{finished}",
+            " ".repeat(43)
+        ),
+        format!("{plus}{0}{0}{finished}", interrupt_line()),
+        format!("{plus}{finished}{}", interrupt_line()),
+    ] {
+        assert!(parse_stderr(&bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn status_lines_keep_a_consistent_run_pass() {
+    // The same consistent runs, now with rmasscan's status line on stderr: parse, detected.json and privacy pass.
+    for tag in ["l01_auto", "l11_parity"] {
+        let mut sim = Sim::new(Plan::Linux, tag);
+        sim.status = status_fragments();
+        assert!(sim.stderr_text().contains('\r'));
+        assert_verdict(&judge(&sim), PASS);
+    }
+    let mut sim = Sim::new(Plan::Windows, "w04_router_mac");
+    sim.status = status_fragments();
+    assert_verdict(&judge(&sim), PASS);
+    // A fragment that is not a status line still fails the parse.
+    let mut sim = Sim::new(Plan::Linux, "l01_auto");
+    sim.status = vec!["[+] seed = 9 (given)\r".into()];
+    let r = judge(&sim);
+    assert_eq!(check(&r, "parses into")["result"], INVALID);
+}
+
 #[test]
 fn stand_matches_the_other_lab_modules() {
     let w = stand(Plan::Windows);
@@ -1595,7 +1714,7 @@ fn privacy_tokens_allow_the_stand_and_anonymous_values_only() {
         "192.168.1.1",
         "93.184.216.34",
         "a4-83-e7-12-34-56",
-        "Owner-MacBook-Pro.local",
+        "printer-7.local",
     ] {
         assert!(flagged(bad, true), "{bad}");
     }
@@ -1616,9 +1735,9 @@ fn privacy_tokens_allow_the_stand_and_anonymous_values_only() {
         "ether a4:83:e7:12:34:56",
         "_airplay._tcp.local",
         "printer.lan",
-        "/Users/owner/masscan",
+        "/Users/alice/masscan",
         "/home/a1/winvm",
-        "C:\\\\Users\\\\HiMaxym\\\\t4",
+        "C:\\\\Users\\\\alice\\\\t4",
         "a index=1 mac=x\nb index=2 mac=y",
     ] {
         assert!(flagged(bad, false), "{bad}");
@@ -2108,7 +2227,7 @@ fn oracle_output_is_held_to_the_scanner_text_rules() {
         ),
         (
             "stderr",
-            "Initiating SYN Stealth Scan\nhello from owner-mbp\n",
+            "Initiating SYN Stealth Scan\nhello from printer-7\n",
             "not a line masscan prints",
         ),
         (

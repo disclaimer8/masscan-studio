@@ -9,14 +9,16 @@
 
 use std::process::{Command, Output};
 
-/// Аргументы, при наличии любого из которых бинарник не открывает адаптер.
-const READONLY_MARKERS: [&str; 8] = [
+/// Аргументы, при наличии любого из которых бинарник не открывает адаптер (`--readscan` только читает файлы
+/// `-oB` и конфликтует с остальными операциями).
+const READONLY_MARKERS: [&str; 9] = [
     "--iflist",
     "--offline",
     "-sL",
     "--list",
     "--echo",
     "--echo-all",
+    "--readscan",
     "--help",
     "-V",
 ];

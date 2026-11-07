@@ -2,25 +2,75 @@
 //! Robert David Graham: строка `Discovered open port N/tcp on IP`,
 //! дополненная пробелами до 79 символов, `\n`, flush на каждую строку.
 //! Closed не печатается (`is_show_closed = 0`).
+//!
+//! Модуль объединяет приёмник [`Sink`], записи ([`record`]), форматы ([`formats`]), имена сервисов ([`services`])
+//! и конвейер вывода [`pipeline`] (порт `output.c`).
+
+pub mod formats;
+pub mod grepable;
+pub mod pipeline;
+pub mod record;
+pub mod services;
 
 use std::io::{self, Write};
 use std::net::Ipv4Addr;
 
 use rmasscan_core::receive::{PortStatus, Reply};
 
+pub use formats::{Counts, FileCtx, Format, Formatter, formatter};
+pub use pipeline::{OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, Wall};
+pub use record::{MASSCAN_VERSION, Record, Status, reason_string, status_str};
+pub use services::ServiceNames;
+
 /// Куда идут результаты. Приёмник этапа 2 реализует тот же трейт.
 pub trait Sink {
+    /// Открывает выходной файл до ARP и engine (Р8); ошибка значит «ни одного кадра».
+    fn open(&mut self) -> Result<(), String>;
     fn report(&mut self, reply: &Reply) -> Result<(), String>;
     fn finish(&mut self) -> Result<(), String>;
 }
 
-/// Ошибка записи в stdout. Закрытый канал (`| head`) в C убивает SIGPIPE, поэтому
-/// выходим сразу и тихо, не доделывая работу.
-pub fn io_fail(e: io::Error) -> String {
-    if e.kind() == io::ErrorKind::BrokenPipe {
-        std::process::exit(0);
+/// Куда шла запись, которая не удалась.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteTarget {
+    /// stdout процесса, в том числе файл вывода `-`.
+    Stdout,
+    /// Файл `-o…` по имени, в том числе FIFO и `/dev/fd/N`.
+    File,
+}
+
+/// Чем кончается ошибка записи.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WriteFailure {
+    /// Читатель stdout ушёл (`| head`): C убивает SIGPIPE, rmasscan выходит сразу, тихо и с кодом 0.
+    ExitQuietly,
+    /// Ошибка приёмника: скан останавливается, `[+] finished` печатается, код 1.
+    Error(String),
+}
+
+/// Решение по ошибке записи без побочных эффектов: тихий выход только для закрытого stdout. EPIPE файла (FIFO или
+/// `/dev/fd/N`, читатель которого умер) это обычная ошибка записи.
+pub fn write_failure(target: WriteTarget, e: &io::Error) -> WriteFailure {
+    if target == WriteTarget::Stdout && e.kind() == io::ErrorKind::BrokenPipe {
+        WriteFailure::ExitQuietly
+    } else {
+        WriteFailure::Error(format!("write failed: {e}"))
     }
-    format!("write failed: {e}")
+}
+
+/// Текст ошибки записи в `target` по [`write_failure`]; закрытый stdout завершает процесс с кодом 0, не доделывая
+/// работу.
+pub fn write_failed(target: WriteTarget, e: io::Error) -> String {
+    match write_failure(target, &e) {
+        WriteFailure::ExitQuietly => std::process::exit(0),
+        WriteFailure::Error(msg) => msg,
+    }
+}
+
+/// Ошибка записи в поток процесса (stdout, у `--readscan` ещё и журнал stderr): [`write_failed`] для
+/// [`WriteTarget::Stdout`].
+pub fn io_fail(e: io::Error) -> String {
+    write_failed(WriteTarget::Stdout, e)
 }
 
 /// `Discovered open port {port}/tcp on {ip}`, пробелы до 79 символов, `\n`.
@@ -43,6 +93,10 @@ impl<W: Write> Interactive<W> {
 }
 
 impl<W: Write> Sink for Interactive<W> {
+    fn open(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
         if reply.status != PortStatus::Open {
             return Ok(());
@@ -133,6 +187,37 @@ mod tests {
         }
         assert_eq!(w.flushes, 3);
         assert_eq!(w.bytes.len(), 3 * 80);
+    }
+
+    /// Тихий выход только для закрытого stdout (`| head`); EPIPE файла (FIFO, `/dev/fd/N`) и любая другая ошибка
+    /// на любой цели это текст ошибки приёмника.
+    #[test]
+    fn only_a_broken_stdout_exits_quietly() {
+        let pipe = || io::Error::new(io::ErrorKind::BrokenPipe, "Broken pipe");
+        assert_eq!(
+            write_failure(WriteTarget::Stdout, &pipe()),
+            WriteFailure::ExitQuietly
+        );
+        assert_eq!(
+            write_failure(WriteTarget::File, &pipe()),
+            WriteFailure::Error("write failed: Broken pipe".into())
+        );
+        for target in [WriteTarget::Stdout, WriteTarget::File] {
+            let full = io::Error::other("No space left on device");
+            assert_eq!(
+                write_failure(target, &full),
+                WriteFailure::Error("write failed: No space left on device".into()),
+                "{target:?}"
+            );
+            assert_eq!(
+                write_failed(target, full),
+                "write failed: No space left on device"
+            );
+        }
+        assert_eq!(
+            write_failed(WriteTarget::File, pipe()),
+            "write failed: Broken pipe"
+        );
     }
 
     struct Broken;

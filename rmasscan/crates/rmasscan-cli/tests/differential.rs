@@ -190,6 +190,26 @@ fn broken_pipe_stops_work_quickly() {
     }
 }
 
+/// A dead stderr (the reader of `2>&1 | tee` is gone, EPIPE) ends the error path with exit 1, not a panic (101):
+/// both the `run` error text and the masscan parse error text are written without `eprintln!`. The read end of
+/// the pipe is closed before the spawn, so the very first stderr write fails.
+#[test]
+fn dead_stderr_error_exits_one_not_panic() {
+    for args in [
+        &["-sL", "bogus", "-p80", "--seed", "1"][..],
+        &["--offline", "10.0.0.1", "-p80", "--seed", "1", "-oA", "x"][..],
+    ] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let st = readonly_command(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(writer)
+            .status()
+            .unwrap();
+        assert_eq!(st.code(), Some(1), "{args:?}");
+    }
+}
+
 /// Launches the CLI once (`--help`) and waits for it, outside any timed region,
 /// so the OS loader / antivirus cost of a freshly linked EXE is paid up front.
 /// Bounded: a hanging `--help` is killed and fails the test after 60 s instead of

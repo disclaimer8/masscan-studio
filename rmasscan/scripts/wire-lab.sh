@@ -6,6 +6,7 @@
 #   wire-lab.sh --oracle BIN --out DIR --suite rust --rust-bin WIRE_SCAN --fixtures tests/golden/wire
 #   wire-lab.sh --oracle BIN --out DIR --suite perf --rust-bin WIRE_SCAN [--reps 5] [--rates 100,1000,10000,100000]
 #   wire-lab.sh --oracle BIN --out DIR --suite autodetect --rmasscan RMASSCAN_CLI
+#   wire-lab.sh --oracle BIN --out DIR --suite output --rmasscan RMASSCAN_CLI
 #
 # Suite autodetect runs rmasscan-lab autodetect-suite linux inside the lab, with ONE controlled change to the
 # seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
@@ -13,6 +14,8 @@
 # still has no default route; the stand is fixed inside this script (the WIRELAB_* stand overrides, MACs, ports and cases file included, are ignored).
 # Its cleanup records the undo in OUT/teardown.json under the lab id it gave the suite, and keeps OUT/.work when the
 # suite marked it (work-kept.txt); an OUT holding earlier suite output is refused: every lab gets a new --out.
+# Suite output runs rmasscan-lab output-suite linux on the same autodetect stand (same seal, lab id, teardown record,
+# kept work and refusal of an earlier lab's OUT): the C oracle and rmasscan in every masscan output format.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -43,12 +46,12 @@ while [ $# -gt 0 ]; do
     --rmasscan) RMASSCAN_BIN=$2; shift 2 ;;
     --reps) REPS=$2; shift 2 ;;
     --rates) RATES=$2; shift 2 ;;
-    -h|--help) sed -n 2,25p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,28p "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 [ -n "$ORACLE" ] && [ -n "$OUT" ] || { echo "usage: wire-lab.sh --oracle BIN --out DIR" >&2; exit 64; }
-case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
+case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
 [ "$SUITE" != rust ] || [ -n "$FIXTURES" ] || { echo "--suite rust needs --fixtures" >&2; exit 64; }
 [ "$(uname -s)" = Linux ] || { echo "FATAL: Linux only" >&2; exit 2; }
 if [ "$(id -u)" != 0 ]; then
@@ -85,8 +88,8 @@ PEER_PREFIX=${WIRELAB_PEER_PREFIX:-24}
 OPEN_PORTS=${WIRELAB_OPEN_PORTS:-80,8080}               # responder listens here; every other port gets RST
 CASES_FILE=${WIRELAB_CASES_FILE:-}                      # optional "name|syn|synack|rst|masscan args" lines
 DEFAULT_VIA=""
-if [ "$SUITE" = autodetect ]; then
-  # Fixed stand of the autodetect suite (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
+if [ "$SUITE" = autodetect ] || [ "$SUITE" = output ]; then
+  # Fixed stand of the autodetect and output suites (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
   # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
   IP_A_LINK=198.18.0.1; IP_ADAPTER=198.18.0.1; PEER_IPS="198.18.0.2 198.18.0.3 198.18.0.4 198.18.0.5"; PEER_PREFIX=24
   DEFAULT_VIA=198.18.0.2
@@ -97,13 +100,13 @@ CREATED_A=0; CREATED_B=0; PIDS=()
 STOP_GRACE=45   # witness: quiet wait <= 20 s + end markers <= 15 s + tcpdump stop <= 30 s, but normally 2-3 s
 mkdir -p "$OUT"; OUT=$(readlink -f "$OUT")
 LAB_ID=""
-if [ "$SUITE" = autodetect ]; then
+if [ "$SUITE" = autodetect ] || [ "$SUITE" = output ]; then
   # An earlier lab's directory is never reused: its runs, its teardown record (or the lack of one, if its cleanup
   # died) and a work directory the suite kept after a failed evidence copy (the rm below would wipe it) all stay
   # its own, so a new lab needs a new --out.
   for f in manifest.json runs runs_aborted teardown.json .work; do
     if [ -e "$OUT/$f" ] || [ -L "$OUT/$f" ]; then
-      echo "FATAL: $OUT/$f exists: $OUT holds the output of an earlier autodetect lab; use a new --out" >&2; exit 2
+      echo "FATAL: $OUT/$f exists: $OUT holds the output of an earlier $SUITE lab; use a new --out" >&2; exit 2
     fi
   done
   # This lab's id: the suite keeps it in manifest.json and the cleanup writes it into teardown.json, which binds the
@@ -152,8 +155,11 @@ cleanup() {
   # this run's two namespaces by exact name (a substring would also count wl-scan-14321-123456 for RUN_ID 4321-12345)
   local left; left=$(ip netns list 2>/dev/null | grep -cE "^wl-(scan|peer)-$RUN_ID( |\$)")
   [ "$SUITE" != autodetect ] || autodetect_teardown
+  [ "$SUITE" != output ] || autodetect_teardown
   # The autodetect suite marks a work directory it kept after a failed evidence copy: that one stays for inspection.
   if [ "$SUITE" = autodetect ] && [ -e "$WORK/work-kept.txt" ]; then
+    log "cleanup: $WORK kept: the suite could not copy a run into the evidence directory (see work-kept.txt); inspect it, never publish it"
+  elif [ "$SUITE" = output ] && [ -e "$WORK/work-kept.txt" ]; then
     log "cleanup: $WORK kept: the suite could not copy a run into the evidence directory (see work-kept.txt); inspect it, never publish it"
   else
     rm -rf "$WORK"
@@ -292,8 +298,8 @@ else
   # rust/perf suites: rmasscan-lab wire-suite restarts its own responder before EVERY run, because the peer kernel
   # keeps retransmitting SYN-ACKs of half-open sockets for ~1 minute (the Rust scanner never RSTs them)
   # and those would bleed into the next run's capture.
-  if [ "$SUITE" = autodetect ]; then
-    note_cmd "(rmasscan-lab autodetect-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # started by the suite"
+  if [ "$SUITE" = autodetect ] || [ "$SUITE" = output ]; then
+    note_cmd "(rmasscan-lab $SUITE-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # started by the suite"
   else
     note_cmd "(rmasscan-lab wire-suite) ip netns exec \$NS_B rmasscan-lab capture responder --ports $OPEN_PORTS ...   # restarted before every run"
   fi
@@ -371,6 +377,16 @@ if [ "$SUITE" = autodetect ]; then
   SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
   stop_suite_group
   log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
+elif [ "$SUITE" = output ]; then
+  # ---- output suite: the same driver on the same stand, every output format of the C oracle and rmasscan
+  note_cmd "rmasscan-lab output-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_suite_group "$OUT/suite.log" "$LAB_BIN" output-suite linux --out "$OUT" --work "$WORK" \
+    --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
+    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
+  SUITE_PID=$SUITE_PGID
+  SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  stop_suite_group
+  log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
 elif [ "$SUITE" != oracle ]; then
   # ---- Rust suites: driver runs inside this sealed lab; its own children die with it
   note_cmd "rmasscan-lab wire-suite --suite $SUITE ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
@@ -389,7 +405,7 @@ topo "$OUT/topology-after.txt"
 if [ "$SUITE" = oracle ]; then
   "$LAB_BIN" capture manifest --dir "$OUT"
   log "done: $OUT/manifest.json"
-elif [ "$SUITE" = autodetect ]; then
+elif [ "$SUITE" = autodetect ] || [ "$SUITE" = output ]; then
   log "done: $OUT"
   exit "${SUITE_RC:-0}"
 else

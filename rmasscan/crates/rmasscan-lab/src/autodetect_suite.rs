@@ -64,16 +64,16 @@ const ID: &str = "/usr/bin/id";
 /// is an empty directory, `$@` the oracle and its arguments. A constant script; no value is ever spliced into it.
 const MASK_SCRIPT: &str = "/bin/mount --bind \"$0\" /etc/masscan && exec \"$@\"";
 /// The peer end of the Linux stand (`wire-lab.sh` `IF_B`).
-const LINUX_PEER_IF: &str = "veth-b";
-const POLL: Duration = Duration::from_millis(50);
+pub(crate) const LINUX_PEER_IF: &str = "veth-b";
+pub(crate) const POLL: Duration = Duration::from_millis(50);
 /// The longest case is the ARP timeout (10 s); a scan of the stand takes a few seconds plus `--wait 3`.
 const SCAN_POLLS: u32 = 2400;
 const READY_POLLS: u32 = 600;
 const ACK_POLLS: u32 = 300;
 /// `capture dump` stops within 90 s: quiet <= 20 s, end markers <= 15 s, tcpdump stop <= 30 s.
 const WITNESS_POLLS: u32 = 1800;
-const RESPONDER_POLLS: u32 = 200;
-const EXEC_TIMEOUT: u64 = 60;
+pub(crate) const RESPONDER_POLLS: u32 = 200;
+pub(crate) const EXEC_TIMEOUT: u64 = 60;
 /// The Linux suite's mark in `--work` that a run could not be copied into the evidence directory and its work
 /// directory stays: `wire-lab.sh` then leaves `--work` in place at its cleanup (and refuses that `--out` next time).
 pub(crate) const WORK_KEPT: &str = "work-kept.txt";
@@ -102,25 +102,25 @@ pub(crate) const LINUX_OPTIONS: &[&str] = &[
 pub(crate) fn p2s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
-fn io<T>(r: std::io::Result<T>, what: &str) -> Result<T, String> {
+pub(crate) fn io<T>(r: std::io::Result<T>, what: &str) -> Result<T, String> {
     r.map_err(|e| format!("{what}: {e}"))
 }
-fn not_run(m: impl Into<String>) -> SuiteError {
+pub(crate) fn not_run(m: impl Into<String>) -> SuiteError {
     SuiteError::NotRun(m.into())
 }
 /// One line on stdout, scrubbed (the Linux suite's stdout is `suite.log` in the evidence directory). A broken pipe
 /// is ignored: the children must still be stopped in order.
-fn say(line: &str) {
+pub(crate) fn say(line: &str) {
     let mut o = std::io::stdout();
     let _ = writeln!(o, "{}", scrub_str(line));
     let _ = o.flush();
 }
-fn warn(line: &str) {
+pub(crate) fn warn(line: &str) {
     let mut o = std::io::stderr();
     let _ = writeln!(o, "{}", scrub_str(line));
     let _ = o.flush();
 }
-fn colon(m: [u8; 6]) -> String {
+pub(crate) fn colon(m: [u8; 6]) -> String {
     m.iter()
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<_>>()
@@ -132,14 +132,17 @@ pub(crate) fn write_record<T: Serialize>(path: &Path, v: &T) -> Result<(), Strin
     b.push(b'\n');
     io(fs::write(path, b), &p2s(path))
 }
-fn write_exit(dir: &Path, rc: i32) -> Result<(), String> {
+pub(crate) fn write_exit(dir: &Path, rc: i32) -> Result<(), String> {
     io(
         fs::write(dir.join("exit.txt"), format!("{rc}\n")),
         "exit.txt",
     )
 }
 /// `--KEY` naming an existing file by its absolute path.
-fn absolute_file(o: &BTreeMap<String, Vec<String>>, k: &str) -> Result<String, SuiteError> {
+pub(crate) fn absolute_file(
+    o: &BTreeMap<String, Vec<String>>,
+    k: &str,
+) -> Result<String, SuiteError> {
     let v = required(o, k)?;
     let p = Path::new(&v);
     if !p.is_absolute() || !p.is_file() {
@@ -150,7 +153,7 @@ fn absolute_file(o: &BTreeMap<String, Vec<String>>, k: &str) -> Result<String, S
     Ok(v)
 }
 /// Up to `polls` checks, `pause` apart; `true` as soon as `done` holds.
-fn poll(pause: &dyn Fn(Duration), polls: u32, mut done: impl FnMut() -> bool) -> bool {
+pub(crate) fn poll(pause: &dyn Fn(Duration), polls: u32, mut done: impl FnMut() -> bool) -> bool {
     for _ in 0..polls {
         if done() {
             return true;
@@ -160,7 +163,12 @@ fn poll(pause: &dyn Fn(Duration), polls: u32, mut done: impl FnMut() -> bool) ->
     done()
 }
 /// Signal `p` and wait up to `polls` for it; SIGKILL when it is still there. The exit code when it exited.
-fn stop(p: &mut dyn Running, sig: &str, pause: &dyn Fn(Duration), polls: u32) -> Option<i32> {
+pub(crate) fn stop(
+    p: &mut dyn Running,
+    sig: &str,
+    pause: &dyn Fn(Duration),
+    polls: u32,
+) -> Option<i32> {
     p.signal(sig);
     let mut rc = None;
     if !poll(pause, polls, || {
@@ -228,7 +236,7 @@ pub(crate) fn selected_tags(plan: Plan, only: &[String]) -> Result<Vec<&'static 
         .filter(|t| only.is_empty() || only.iter().any(|o| o == t))
         .collect())
 }
-fn only_of(o: &BTreeMap<String, Vec<String>>) -> Result<&[String], SuiteError> {
+pub(crate) fn only_of(o: &BTreeMap<String, Vec<String>>) -> Result<&[String], SuiteError> {
     match o.get("only") {
         Some(v) if v.is_empty() => Err(not_run("--only needs at least one tag")),
         Some(v) => Ok(v),
@@ -439,12 +447,18 @@ pub(crate) fn hash_and_copy(work: &Path, dest: &Path) -> Result<(), String> {
     })
 }
 
-/// Before the first run: no lab-isolation finding anywhere in `out` (a breach makes the directory FAIL for good),
-/// no run and no aborted attempt of a selected case yet, and no manifest of another plan, build (rmasscan, oracle,
-/// rmasscan-lab), stand or Linux lab (`lab_id`).
-fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteError> {
+/// Before the first run: no lab-isolation finding anywhere in `out` (a breach makes the directory FAIL for good; `verify`
+/// is the plan's verifier), no run and no aborted attempt of a selected case yet, and no manifest of another plan (its
+/// key `plan_key`), build (rmasscan, oracle, rmasscan-lab), stand or Linux lab (`lab_id`).
+pub(crate) fn check_out_for(
+    out: &Path,
+    tags: &[&str],
+    identity: &Value,
+    plan_key: &str,
+    verify: fn(&Path) -> Value,
+) -> Result<(), SuiteError> {
     io(fs::create_dir_all(out), "--out")?;
-    let trips = av::verify_dir(out)["safety_trips"]
+    let trips = verify(out)["safety_trips"]
         .as_array()
         .cloned()
         .unwrap_or_default();
@@ -476,14 +490,7 @@ fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteErr
                 "manifest.json is unreadable ({e}); use a new --out"
             ))
         })?;
-        for k in [
-            "autodetect",
-            "rmasscan",
-            "oracle",
-            "lab",
-            "run_id",
-            "lab_id",
-        ] {
+        for k in [plan_key, "rmasscan", "oracle", "lab", "run_id", "lab_id"] {
             if m[k] != identity[k] {
                 return Err(not_run(format!(
                     "the existing manifest.json has {k} {} where this suite has {}; use a new --out",
@@ -495,7 +502,7 @@ fn check_out(out: &Path, tags: &[&str], identity: &Value) -> Result<(), SuiteErr
     Ok(())
 }
 /// `manifest.json` (key `autodetect` names the plan), written once, scrubbed.
-fn write_manifest(out: &Path, identity: &Value, sc: &Scrubber) -> Result<(), String> {
+pub(crate) fn write_manifest(out: &Path, identity: &Value, sc: &Scrubber) -> Result<(), String> {
     let path = out.join(MANIFEST_JSON);
     if path.exists() {
         return Ok(());
@@ -506,7 +513,7 @@ fn write_manifest(out: &Path, identity: &Value, sc: &Scrubber) -> Result<(), Str
     write_record(&path, &v)
 }
 /// The binaries the manifest vouches for (path, sha256) are still the files on disk: checked before every run.
-fn binaries_unchanged(binaries: &[(String, String)]) -> Result<(), SuiteError> {
+pub(crate) fn binaries_unchanged(binaries: &[(String, String)]) -> Result<(), SuiteError> {
     for (path, sha) in binaries {
         if hash(path)? != *sha {
             let name = Path::new(path)
@@ -520,7 +527,7 @@ fn binaries_unchanged(binaries: &[(String, String)]) -> Result<(), SuiteError> {
     }
     Ok(())
 }
-fn binary(path: &str) -> Result<Value, String> {
+pub(crate) fn binary(path: &str) -> Result<Value, String> {
     Ok(json!({"sha256": hash(path)?, "size": fs::metadata(path).map(|m| m.len()).unwrap_or(0)}))
 }
 
@@ -549,11 +556,15 @@ pub(crate) trait LinuxHost {
     fn account(&self) -> Option<String>;
     fn pause(&self, d: Duration);
     fn stopped(&self) -> bool;
+    /// The wall clock, Unix seconds (the output suite records when it interrupts a scan).
+    fn now(&self) -> f64 {
+        epoch()
+    }
 }
 
 /// The lab host: children of this process. They stay in the suite's process group, which `wire-lab.sh` stops as a
 /// whole if the suite dies.
-struct RealLinux;
+pub(crate) struct RealLinux;
 struct RealChild(std::process::Child);
 impl Running for RealChild {
     fn try_wait(&mut self) -> Result<Option<i32>, String> {
@@ -607,12 +618,12 @@ impl LinuxHost for RealLinux {
 /// What one Linux run has started. Dropped with anything still running (an error, a panic), it stops the scanner
 /// first, then the witness and the responder, each with a short grace and then SIGKILL.
 #[derive(Default)]
-struct LinuxTools {
-    scanner: Option<Box<dyn Running>>,
-    witness: Option<Box<dyn Running>>,
-    responder: Option<Box<dyn Running>>,
+pub(crate) struct LinuxTools {
+    pub(crate) scanner: Option<Box<dyn Running>>,
+    pub(crate) witness: Option<Box<dyn Running>>,
+    pub(crate) responder: Option<Box<dyn Running>>,
     /// A frame may exist: the start marker is about to be sent.
-    frames_possible: bool,
+    pub(crate) frames_possible: bool,
 }
 impl Drop for LinuxTools {
     fn drop(&mut self) {
@@ -628,48 +639,49 @@ impl Drop for LinuxTools {
     }
 }
 /// One capture's witness: the pcap it writes and the record it leaves.
-struct Witness {
+pub(crate) struct Witness {
     pcap: PathBuf,
     meta: PathBuf,
 }
 
-struct Linux<'a> {
-    host: &'a dyn LinuxHost,
-    out: PathBuf,
-    work: PathBuf,
-    ns_a: String,
-    ns_b: String,
-    mac_a: String,
-    mac_b: String,
-    rmasscan: String,
-    oracle: String,
-    masked: bool,
-    lab: String,
+/// The driver of the Linux netns stand, shared by `autodetect-suite linux` and `output-suite linux`.
+pub(crate) struct Linux<'a> {
+    pub(crate) host: &'a dyn LinuxHost,
+    pub(crate) out: PathBuf,
+    pub(crate) work: PathBuf,
+    pub(crate) ns_a: String,
+    pub(crate) ns_b: String,
+    pub(crate) mac_a: String,
+    pub(crate) mac_b: String,
+    pub(crate) rmasscan: String,
+    pub(crate) oracle: String,
+    pub(crate) masked: bool,
+    pub(crate) lab: String,
     /// rmasscan, the oracle and rmasscan-lab as the manifest vouches for them (path, sha256).
-    binaries: Vec<(String, String)>,
+    pub(crate) binaries: Vec<(String, String)>,
     /// `--out`, `--work` and the account as placeholders in every record it writes.
-    scrub: Scrubber,
+    pub(crate) scrub: Scrubber,
 }
 
 impl Linux<'_> {
-    fn pause(&self) -> impl Fn(Duration) + '_ {
+    pub(crate) fn pause(&self) -> impl Fn(Duration) + '_ {
         |d| self.host.pause(d)
     }
-    fn ns(&self, ns: &str, tail: impl IntoIterator<Item = String>) -> Vec<String> {
+    pub(crate) fn ns(&self, ns: &str, tail: impl IntoIterator<Item = String>) -> Vec<String> {
         [IP, "netns", "exec", ns]
             .into_iter()
             .map(str::to_owned)
             .chain(tail)
             .collect()
     }
-    fn lab(&self, args: &[&str]) -> Vec<String> {
+    pub(crate) fn lab(&self, args: &[&str]) -> Vec<String> {
         std::iter::once(self.lab.clone())
             .chain(args.iter().map(|a| (*a).to_owned()))
             .collect()
     }
 
     /// `capture isolation --mode autodetect` now, into `path` (scrubbed): the seal of the stand, proven again.
-    fn isolation(&self, path: &Path) -> Result<(), String> {
+    pub(crate) fn isolation(&self, path: &Path) -> Result<(), String> {
         let links = self.work.join("host-links-before.txt");
         let o = self.host.exec(
             &self.lab(&[
@@ -708,7 +720,7 @@ impl Linux<'_> {
 
     /// The peer's listeners (the stand's open ports; every other port is reset), restarted for every capture so
     /// that half-open connections of an earlier scan never answer into the next one.
-    fn responder(&self, base: &Path, t: &mut LinuxTools) -> Result<(), SuiteError> {
+    pub(crate) fn responder(&self, base: &Path, t: &mut LinuxTools) -> Result<(), SuiteError> {
         if let Some(mut p) = t.responder.take() {
             stop(p.as_mut(), "TERM", &self.pause(), RESPONDER_POLLS);
         }
@@ -745,7 +757,7 @@ impl Linux<'_> {
 
     /// The witness of one capture on the peer veth (`capture dump`), proven live by a start marker from the
     /// scanner side.
-    fn witness(
+    pub(crate) fn witness(
         &self,
         base: &Path,
         run: &Path,
@@ -820,7 +832,7 @@ impl Linux<'_> {
     }
 
     /// Stop the witness (quiet, end markers, tcpdump stop) and keep its record, scrubbed, and tcpdump's statistics.
-    fn finish_witness(
+    pub(crate) fn finish_witness(
         &self,
         w: &Witness,
         t: &mut LinuxTools,
@@ -845,7 +857,7 @@ impl Linux<'_> {
         Ok(())
     }
 
-    fn wait(&self, t: &mut LinuxTools, tag: &str) -> Result<i32, SuiteError> {
+    pub(crate) fn wait(&self, t: &mut LinuxTools, tag: &str) -> Result<i32, SuiteError> {
         let rc = wait_scanner(
             tag,
             || {
@@ -863,6 +875,10 @@ impl Linux<'_> {
 
     /// The C oracle's argv in the scanner namespace, `/etc/masscan` masked when the host has a config.
     fn oracle_argv(&self, base: &Path, args: Vec<String>) -> Result<Vec<String>, String> {
+        Ok(self.ns(&self.ns_a, self.oracle_cmd(base, args)?))
+    }
+    /// [`Self::oracle_argv`] without the namespace: what runs inside it.
+    pub(crate) fn oracle_cmd(&self, base: &Path, args: Vec<String>) -> Result<Vec<String>, String> {
         let mut a = Vec::new();
         if self.masked {
             let empty = base.join("empty-etc-masscan");
@@ -872,7 +888,7 @@ impl Linux<'_> {
         }
         a.push(self.oracle.clone());
         a.extend(args);
-        Ok(self.ns(&self.ns_a, a))
+        Ok(a)
     }
 
     /// `--iflist` of rmasscan and of the C oracle in the scanner namespace, reduced in memory, each with its line of
@@ -897,16 +913,26 @@ impl Linux<'_> {
     }
 
     fn one(&self, spec: &CaseSpec) -> Result<PathBuf, SuiteError> {
-        let name = format!("{}.{}", spec.tag, nonce());
+        self.one_with(spec.tag, |base, run, t| self.one_inner(spec, base, run, t))
+    }
+    /// One run of case `tag`: `body` fills the run directory (`run`, inside the work directory `base`) with the tools
+    /// it starts in `t`; the run is then hashed and copied to `runs/<tag>`, or kept under `runs_aborted` on a failure
+    /// once a frame may exist ([`Self::abort`]).
+    pub(crate) fn one_with(
+        &self,
+        tag: &str,
+        body: impl FnOnce(&Path, &Path, &mut LinuxTools) -> Result<(), SuiteError>,
+    ) -> Result<PathBuf, SuiteError> {
+        let name = format!("{tag}.{}", nonce());
         let base = self.work.join(&name);
         let run = base.join("run");
         io(fs::create_dir_all(&run), "work directory")?;
         let mut t = LinuxTools::default();
-        if let Err(e) = self.one_inner(spec, &base, &run, &mut t) {
+        if let Err(e) = body(&base, &run, &mut t) {
             return Err(self.abort(&base, &run, &name, t, e));
         }
         drop(t);
-        let dest = self.out.join("runs").join(spec.tag);
+        let dest = self.out.join("runs").join(tag);
         io(fs::create_dir_all(self.out.join("runs")), "runs directory")
             .and_then(|()| hash_and_copy(&run, &dest))
             .map_err(|e| SuiteError::Abort(self.keep_work(&base, &e)))?;
@@ -1082,6 +1108,63 @@ fn linux_run(
     work: PathBuf,
     sc: &Scrubber,
 ) -> Result<i32, SuiteError> {
+    const SUITE: &str = "wire-lab.sh --suite autodetect";
+    let a = linux_args(o, SUITE)?;
+    let tags = selected_tags(Plan::Linux, only_of(o)?)?;
+    let cases = specs(Plan::Linux, &tags);
+    for spec in &cases {
+        let bad = addresses_outside_the_lab(&spec.argv());
+        if !bad.is_empty() {
+            return Err(not_run(format!(
+                "{} names addresses outside 198.18.0.0/24: {bad:?}",
+                spec.tag
+            )));
+        }
+    }
+    attested_stand(&out, SUITE)?;
+    let plan = ("autodetect", json!(Plan::Linux), "autodetect-suite linux");
+    let suite = linux_driver(
+        host,
+        lab,
+        out.clone(),
+        work,
+        a,
+        sc,
+        &tags,
+        plan,
+        av::verify_dir,
+    )?;
+    for spec in &cases {
+        if host.stopped() {
+            return Err(SuiteError::Interrupted(format!(
+                "stop requested before {} started; nothing was left running",
+                spec.tag
+            )));
+        }
+        suite.one(spec)?;
+        say(&format!("done {0} -> runs/{0}", spec.tag));
+    }
+    say(&sc.str(&format!(
+        "all selected runs executed; verify offline with rmasscan-lab autodetect-verify --dir {}",
+        out.display()
+    )));
+    Ok(0)
+}
+
+/// The Linux stand's options as `wire-lab.sh` passes them: its fixed stand (`suite`, the script's mode, names it in
+/// the refusal), the two namespaces, the lab id, whether `/etc/masscan` is masked, and the two scanners.
+pub(crate) struct LinuxArgs {
+    ns_a: String,
+    ns_b: String,
+    lab_id: String,
+    masked: bool,
+    rmasscan: String,
+    oracle: String,
+}
+pub(crate) fn linux_args(
+    o: &BTreeMap<String, Vec<String>>,
+    suite: &str,
+) -> Result<LinuxArgs, SuiteError> {
     // The stand is wire-lab.sh's fixed autodetect stand, nothing else.
     let st = av::stand(Plan::Linux);
     for (k, want) in [
@@ -1093,7 +1176,7 @@ fn linux_run(
         let v = required(o, k)?;
         if v != want {
             return Err(not_run(format!(
-                "--{k} {v} is not the autodetect stand's {want} (wire-lab.sh --suite autodetect fixes the stand)"
+                "--{k} {v} is not the autodetect stand's {want} ({suite} fixes the stand)"
             )));
         }
     }
@@ -1114,22 +1197,20 @@ fn linux_run(
         "1" => true,
         v => return Err(not_run(format!("--conf-masked must be 0 or 1, not {v}"))),
     };
-    let rmasscan = absolute_file(o, "rmasscan")?;
-    let oracle = absolute_file(o, "oracle")?;
-    let tags = selected_tags(Plan::Linux, only_of(o)?)?;
-    let cases = specs(Plan::Linux, &tags);
-    for spec in &cases {
-        let bad = addresses_outside_the_lab(&spec.argv());
-        if !bad.is_empty() {
-            return Err(not_run(format!(
-                "{} names addresses outside 198.18.0.0/24: {bad:?}",
-                spec.tag
-            )));
-        }
-    }
+    Ok(LinuxArgs {
+        ns_a,
+        ns_b,
+        lab_id,
+        masked,
+        rmasscan: absolute_file(o, "rmasscan")?,
+        oracle: absolute_file(o, "oracle")?,
+    })
+}
+/// `wire-lab.sh`'s own `isolation.json` in `out`: the sealed autodetect stand (`suite` is the script's mode).
+pub(crate) fn attested_stand(out: &Path, suite: &str) -> Result<(), SuiteError> {
     let iso = read_json(out.join("isolation.json")).map_err(|e| {
         not_run(format!(
-            "wire-lab.sh's isolation.json is missing ({e}); the suite runs only inside wire-lab.sh --suite autodetect"
+            "wire-lab.sh's isolation.json is missing ({e}); the suite runs only inside {suite}"
         ))
     })?;
     if iso["mode"] != "autodetect" || !isolation_permits(&iso, IsolationMode::Autodetect) {
@@ -1138,19 +1219,38 @@ fn linux_run(
             iso["mode"], iso["default_route"]
         )));
     }
+    Ok(())
+}
+/// The driver of the stand once the cases are chosen: `manifest.json` (the stand, the builds and the lab id; `plan` is
+/// its key, value and suite name), the evidence directory's checks ([`check_out_for`] with `verify`), `env.json`
+/// scrubbed, and the work directory.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn linux_driver<'a>(
+    host: &'a dyn LinuxHost,
+    lab: &Path,
+    out: PathBuf,
+    work: PathBuf,
+    a: LinuxArgs,
+    sc: &Scrubber,
+    tags: &[&str],
+    plan: (&str, Value, &str),
+    verify: fn(&Path) -> Value,
+) -> Result<Linux<'a>, SuiteError> {
+    let st = av::stand(Plan::Linux);
     let lab = p2s(lab);
-    let binaries = [&rmasscan, &oracle, &lab]
+    let binaries = [&a.rmasscan, &a.oracle, &lab]
         .into_iter()
         .map(|p| Ok((p.clone(), hash(p)?)))
         .collect::<Result<Vec<_>, String>>()?;
-    let identity = json!({"autodetect": Plan::Linux, "schema": 1, "suite": "autodetect-suite linux",
-        "rmasscan": binary(&rmasscan)?, "oracle": binary(&oracle)?, "lab": binary(&lab)?,
+    let mut identity = json!({"schema": 1, "suite": plan.2,
+        "rmasscan": binary(&a.rmasscan)?, "oracle": binary(&a.oracle)?, "lab": binary(&lab)?,
         "stand": {"scanner_if": st.iface, "peer_if": LINUX_PEER_IF, "scanner_mac": colon(st.scanner_mac),
             "peer_mac": colon(st.peer_mac), "scanner_ip": st.scanner_ip.to_string(),
             "peer_ips": st.peer_ips.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>(),
             "open_ports": st.open_ports, "default_route": "via 198.18.0.2 dev veth-a (scanner namespace only)"},
-        "conf_masked": masked, "lab_id": lab_id});
-    check_out(&out, &tags, &identity)?;
+        "conf_masked": a.masked, "lab_id": a.lab_id});
+    identity[plan.0] = plan.1;
+    check_out_for(&out, tags, &identity, plan.0, verify)?;
     write_manifest(&out, &identity, sc)?;
     // wire-lab.sh's env.json names the oracle by its path, which may be under a home directory or name the account.
     if let Ok(mut env) = read_json(out.join("env.json")) {
@@ -1158,36 +1258,21 @@ fn linux_run(
         write_json(out.join("env.json"), &env)?;
     }
     io(fs::create_dir_all(&work), "--work")?;
-    let suite = Linux {
+    Ok(Linux {
         host,
-        out: out.clone(),
+        out,
         work,
-        ns_a,
-        ns_b,
+        ns_a: a.ns_a,
+        ns_b: a.ns_b,
         mac_a: colon(st.scanner_mac),
         mac_b: colon(st.peer_mac),
-        rmasscan,
-        oracle,
-        masked,
+        rmasscan: a.rmasscan,
+        oracle: a.oracle,
+        masked: a.masked,
         lab,
         binaries,
         scrub: sc.clone(),
-    };
-    for spec in &cases {
-        if host.stopped() {
-            return Err(SuiteError::Interrupted(format!(
-                "stop requested before {} started; nothing was left running",
-                spec.tag
-            )));
-        }
-        suite.one(spec)?;
-        say(&format!("done {0} -> runs/{0}", spec.tag));
-    }
-    say(&sc.str(&format!(
-        "all selected runs executed; verify offline with rmasscan-lab autodetect-verify --dir {}",
-        out.display()
-    )));
-    Ok(0)
+    })
 }
 
 // ------------------------------------------------------------------ macOS
@@ -1568,7 +1653,7 @@ mod mac {
 
     fn run_cases(s: &Mac, cases: &[CaseSpec], identity: &Value) -> Result<i32, SuiteError> {
         let tags: Vec<&str> = cases.iter().map(|c| c.tag).collect();
-        check_out(&s.out, &tags, identity)?;
+        check_out_for(&s.out, &tags, identity, "autodetect", av::verify_dir)?;
         // The stand must be sealed, with BPF granted, before anything is written into --out.
         let probe = s.out.join(".work");
         if fs::read_dir(&probe).is_ok_and(|mut d| d.next().is_some()) {
@@ -1660,7 +1745,7 @@ mod mac {
 // ------------------------------------------------------------------ entry point
 
 /// The exit code of a suite result (the other suites' convention: NOT RUN through `Err`, printed by `main`).
-fn report(r: Result<i32, SuiteError>) -> Result<i32, String> {
+pub(crate) fn report(r: Result<i32, SuiteError>) -> Result<i32, String> {
     match r {
         Ok(code) => Ok(code),
         Err(SuiteError::NotRun(m)) => Err(scrub_str(&m)),

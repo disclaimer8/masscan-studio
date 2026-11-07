@@ -1,0 +1,4803 @@
+{
+  "aborted": [],
+  "behaviour_fail": [],
+  "dir": "linux-output-r1",
+  "discarded": [],
+  "discarded_totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 0
+  },
+  "groups": [],
+  "overall": "PASS",
+  "runs": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture anywhere in the evidence directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "no symbolic link in the evidence directory (links are never followed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.json names the output plan (linux)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "runs/ holds only the planned case directories",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "deleted [\"wl-scan-RUNID\", \"wl-peer-RUNID\"], left 0",
+          "name": "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest Some(\"ead6c3b5-82a1-4995-ad9d-57a73cc36801\"), teardown \"ead6c3b5-82a1-4995-ad9d-57a73cc36801\"",
+          "name": "teardown.json belongs to the lab of manifest.json (lab_id)",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "manifest",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999846.7597249 .. 1793999851.7743864",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999852.6935446 .. 1793999870.9665902",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o01_list\", kind: Scan, format: List, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"# end\", rendered \"# end\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999846.7597249 .. 1793999851.7743864",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999846.7597249 .. 1793999851.7743864",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999852.6935446 .. 1793999870.9665902",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999852.6935446 .. 1793999870.9665902",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"59846\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"#masscan\", oracle \"#masscan\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o01_list",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999872.0143201 .. 1793999877.0428295",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999877.9391558 .. 1793999895.975677",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oJ\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oJ\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o02_json\", kind: Scan, format: Json, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.txt is a well-formed json document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.txt is a well-formed json document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"]\", rendered \"]\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999872.0143201 .. 1793999877.0428295",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999872.0143201 .. 1793999877.0428295",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999877.9391558 .. 1793999895.975677",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999877.9391558 .. 1793999895.975677",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"59872\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"[\", oracle \"[\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o02_json",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999897.0741575 .. 1793999902.108472",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999903.002628 .. 1793999921.034658",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oD\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oD\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o03_ndjson\", kind: Scan, format: Ndjson, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.txt is a well-formed ndjson document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.txt is a well-formed ndjson document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"\", rendered \"\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999897.0741575 .. 1793999902.108472",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999897.0741575 .. 1793999902.108472",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle/output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999903.002628 .. 1793999921.034658",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999903.002628 .. 1793999921.034658",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"59897\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"\", oracle \"\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"\", oracle \"\"",
+          "name": "output.txt footer equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o03_ndjson",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999922.1341562 .. 1793999927.1550035",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999928.0565522 .. 1793999945.8367057",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oG\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oG\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o04_grepable\", kind: Scan, format: Grepable, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.txt is a well-formed grepable document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.txt is a well-formed grepable document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "# Masscan 1.3.9-integration scan initiated <T>\n# Ports scanned: TCP(3;80-80,443-443,8080-8080) UDP(0;) SCTP(0;) PROTOCOLS(0;)",
+          "name": "output.txt names the scanned ports",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"# Masscan done at <T>\", rendered \"# Masscan done at <T>\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999922.1341562 .. 1793999927.1550035",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999922.1341562 .. 1793999927.1550035",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "# Masscan 1.3.9-integration scan initiated <T>\n# Ports scanned: TCP(3;80-80,443-443,8080-8080) UDP(0;) SCTP(0;) PROTOCOLS(0;)",
+          "name": "oracle/output.txt names the scanned ports",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999928.0565522 .. 1793999945.8367057",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999928.0565522 .. 1793999945.8367057",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"59922\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"# Masscan 1.3.9-integration scan initiated <T>\\n# Ports scanned: TCP(3;80-80,443-443,8080-8080) UDP(0;) SCTP(0;) PROTOCOLS(0;)\", oracle \"# Masscan 1.3.9-integration scan initiated <T>\\n# Ports scanned: TCP(3;80-80,443-443,8080-8080) UDP(0;) SCTP(0;) PROTOCOLS(0;)\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o04_grepable",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999947.0162714 .. 1793999952.0440834",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999952.941214 .. 1793999971.0281134",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oX\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oX\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o05_xml\", kind: Scan, format: Xml, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.txt is a well-formed xml document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.txt is a well-formed xml document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "up 8 down 4 total 12, records 8 open 4 closed",
+          "name": "output.txt <hosts> up and down equal its open and closed records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"<runstats>\\r\\n<finished time=\\\"<T>\\\" timestr=\\\"<T>\\\" elapsed=\\\"<T>\\\" />\\r\\n<hosts up=\\\"8\\\" down=\\\"4\\\" total=\\\"12\\\" />\\r\\n</runstats>\\r\\n</nmaprun>\", rendered \"<runstats>\\r\\n<finished time=\\\"<T>\\\" timestr=\\\"<T>\\\" elapsed=\\\"<T>\\\" />\\r\\n<hosts up=\\\"8\\\" down=\\\"4\\\" total=\\\"12\\\" />\\r\\n</runstats>\\r\\n</nmaprun>\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999947.0162714 .. 1793999952.0440834",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999947.0162714 .. 1793999952.0440834",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999952.941214 .. 1793999971.0281134",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999952.941214 .. 1793999971.0281134",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"59947\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"<?xml version=\\\"1.0\\\"?>\\r\\n<!-- masscan v1.0 scan -->\\r\\n<nmaprun scanner=\\\"masscan\\\" start=\\\"<T>\\\" version=\\\"1.0-BETA\\\"  xmloutputversion=\\\"1.03\\\">\\r\\n<scaninfo type=\\\"syn\\\" protocol=\\\"tcp\\\" />\", oracle \"<?xml version=\\\"1.0\\\"?>\\r\\n<!-- masscan v1.0 scan -->\\r\\n<nmaprun scanner=\\\"masscan\\\" start=\\\"<T>\\\" version=\\\"1.0-BETA\\\"  xmloutputversion=\\\"1.03\\\">\\r\\n<scaninfo type=\\\"syn\\\" protocol=\\\"tcp\\\" />\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o05_xml",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999972.0770142 .. 1793999977.1056147",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999978.0034194 .. 1793999996.0389016",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o06_binary\", kind: Scan, format: Binary, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.bin is a well-formed binary document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.bin is a well-formed binary document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.bin holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.bin is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.bin records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"masscan/1.1 (99 bytes)\", rendered \"masscan/1.1 (99 bytes)\"",
+          "name": "output.bin footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.bin records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999972.0770142 .. 1793999977.1056147",
+          "name": "output.bin record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999972.0770142 .. 1793999977.1056147",
+          "name": "output.bin header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.bin holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.bin records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.bin records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999978.0034194 .. 1793999996.0389016",
+          "name": "oracle/output.bin record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1793999978.0034194 .. 1793999996.0389016",
+          "name": "oracle/output.bin header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"59972\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.bin records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"masscan/1.1 s:<T> (99 bytes)\", oracle \"masscan/1.1 s:<T> (99 bytes)\"",
+          "name": "output.bin header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o06_binary",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1793999997.1400256 .. 1794000002.1700203",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000003.0628157 .. 1794000020.8478045",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oH\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oH\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o07_hostonly\", kind: Scan, format: Hostonly, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.txt is a well-formed hostonly document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.txt is a well-formed hostonly document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"\", rendered \"\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999997.1400256 .. 1794000002.1700203",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1793999997.1400256 .. 1794000002.1700203",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle/output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000003.0628157 .. 1794000020.8478045",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000003.0628157 .. 1794000020.8478045",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"59997\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 0 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"\", oracle \"\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"\", oracle \"\"",
+          "name": "output.txt footer equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o07_hostonly",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000021.9028316 .. 1794000026.931292",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000027.829481 .. 1794000045.8679454",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oU\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oU\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o08_unicornscan\", kind: Scan, format: Unicornscan, target: File, show_closed: true, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "output.txt is a well-formed unicornscan document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle/output.txt is a well-formed unicornscan document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"# end\", rendered \"# end\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records, 12 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000021.9028316 .. 1794000026.931292",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000021.9028316 .. 1794000026.931292",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records, 12 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000027.829481 .. 1794000045.8679454",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000027.829481 .. 1794000045.8679454",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40021\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 12",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"#masscan\", oracle \"#masscan\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o08_unicornscan",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000046.9687538 .. 1794000051.9959538",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000052.895159 .. 1794000070.9325552",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oJ\", \"output.txt\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oJ\", \"output.txt\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o09_json_default_show\", kind: Scan, format: Json, target: File, show_closed: false, stdout: Silent, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "output.txt is a well-formed json document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records",
+          "name": "oracle/output.txt is a well-formed json document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"]\", rendered \"]\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000046.9687538 .. 1794000051.9959538",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000046.9687538 .. 1794000051.9959538",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records, 8 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records, 8 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000052.895159 .. 1794000070.9325552",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000052.895159 .. 1794000070.9325552",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40047\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 8",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 8, oracle 8",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"[\", oracle \"[\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o09_json_default_show",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "17",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000072.0356839 .. 1794000077.0622902",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000077.9628463 .. 1794000095.9997036",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "15 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"-\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"-\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o10_list_stdout\", kind: Scan, format: List, target: Stdout, show_closed: false, stdout: Document, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "stdout.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records",
+          "name": "oracle/stdout.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stdout.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 expected",
+          "name": "stdout.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"# end\", rendered \"# end\"",
+          "name": "stdout.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 replies",
+          "name": "stdout.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000072.0356839 .. 1794000077.0622902",
+          "name": "stdout.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000072.0356839 .. 1794000077.0622902",
+          "name": "stdout.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records, 8 expected",
+          "name": "oracle/stdout.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records, 8 replies",
+          "name": "oracle/stdout.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000077.9628463 .. 1794000095.9997036",
+          "name": "oracle/stdout.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000077.9628463 .. 1794000095.9997036",
+          "name": "oracle/stdout.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40072\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 8",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 8, oracle 8",
+          "name": "stdout.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"#masscan\", oracle \"#masscan\"",
+          "name": "stdout.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o10_list_stdout",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "19",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000097.1227615 .. 1794000102.151301",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000103.0507624 .. 1794000120.887999",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "17 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--interactive\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--interactive\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o11_interactive\", kind: Scan, format: List, target: File, show_closed: false, stdout: Discovered, status: Text, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "output.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records",
+          "name": "oracle/output.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 lines, 8 parsed, 8 open records",
+          "name": "stdout.txt holds a Discovered line of 80 bytes per open record (--interactive)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"# end\", rendered \"# end\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000097.1227615 .. 1794000102.151301",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000097.1227615 .. 1794000102.151301",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 lines, 8 parsed, 8 open records",
+          "name": "oracle/stdout.txt holds a Discovered line of 80 bytes per open record (--interactive)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records, 8 expected",
+          "name": "oracle/output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records, 8 replies",
+          "name": "oracle/output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000103.0507624 .. 1794000120.887999",
+          "name": "oracle/output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[] outside 1794000103.0507624 .. 1794000120.887999",
+          "name": "oracle/output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40097\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 8",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 8, oracle 8",
+          "name": "output.txt records equal the oracle's after masking the time (order normalised)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan \"#masscan\", oracle \"#masscan\"",
+          "name": "output.txt header equals the oracle's after masking the clock",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 8, oracle 8",
+          "name": "stdout.txt Discovered lines equal the oracle's",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "o11_interactive",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000121.9853148 .. 1794000127.0125666",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oJ\", \"output.txt\", \"--nostatus\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oJ\", \"output.txt\", \"--nostatus\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o12_nostatus\", kind: Scan, format: Json, target: File, show_closed: false, stdout: Elapsed, status: Off, oracle: false }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "output.txt is a well-formed json document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3132 milliseconds elapsed",
+          "name": "stdout.txt is `N milliseconds elapsed` of a scan that waited 3 s (--nostatus)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 expected",
+          "name": "output.txt records are the stand's replies (80 and 8080 open on every peer, 443 closed with --show open,closed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"]\", rendered \"]\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records, 8 replies",
+          "name": "output.txt records are the replies on the wire in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000121.9853148 .. 1794000127.0125666",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000121.9853148 .. 1794000127.0125666",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40122\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 ticks, 0 erases, 0 ndjson",
+          "name": "stderr.txt has no status line (--nostatus)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stderr.txt carries no Ctrl-C line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 8 replies 12, records 8 open of 8",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "o12_nostatus",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "6",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "11",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6 frames recorded, 6 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000128.062686 .. 1794000129.9726822",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "10 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"/nonexistent-rmasscan-dir/x\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"/nonexistent-rmasscan-dir/x\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o13_open_fail\", kind: OpenFailure, format: List, target: Unopenable, show_closed: false, stdout: Silent, status: None, oracle: false }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "exit.txt is 1",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Ok([\"[+] interface = veth-a (detected: route to 198.18.0.2)\", \"[+] source-mac = 02-aa-00-00-00-01 (detected)\", \"[+] source-ip = 198.18.0.1 (detected)\", \"[+] router-ip = 198.18.0.2 (interface default gateway)\", \"out: could not open file for writing\", \"/nonexistent-rmasscan-dir/x: No such file or directory (os error 2)\"])",
+          "name": "stderr.txt: the four [+] detection lines, then `out: could not open file for writing` and `<path>: <error>`, no status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "output.txt is not in the run (the file could not open)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no scanner frame (ARP or SYN, markers aside) when the output file does not open",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "o13_open_fail",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "90",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "13",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "90 frames recorded, 90 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000131.066739 .. 1794000135.0354936",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p1-1000\", \"-oJ\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"20\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p1-1000\", \"-oJ\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"20\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o14_interrupt_json\", kind: Interrupt, format: Json, target: File, show_closed: true, stdout: Silent, status: Text, oracle: false }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "41 records",
+          "name": "output.txt is a well-formed json document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete after the interrupt (JSON closed by ], XML by </nmaprun>, binary 99-byte footer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "41",
+          "name": "output.txt holds a record (only then does the interrupt prove the footer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"]\", rendered \"]\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a reply []",
+          "name": "output.txt records are replies on the wire (a subset after the stop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000131.066739 .. 1794000135.0354936",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000131.066739 .. 1794000135.0354936",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40131\", source: \"time\" }), finished: Some(Finished { reason: \"Stopped\", sent: 41, replies: 41, open: 0 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Stopped\", sent: 41, replies: 41, open: 0 })",
+          "name": "[+] finished: Stopped",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "stderr.txt carries the Ctrl-C line once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 0 replies 41, records 0 open of 41",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(41), wire 41",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "41 of 4000",
+          "name": "the interrupted scan stopped before its end (sent below the plan)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "41 SYNs",
+          "name": "the scanner SYNs are the plan's first ones, in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "InterruptRecord { signal: \"INT\", after_s: 2.0, signal_unix: Some(1794000133.1528726), exit_within_s: 30.0, killed: false }, window 1794000131.066739 .. 1794000135.0354936",
+          "name": "interrupt.json: SIGINT about 2 s after the start, inside the capture window, a 30 s exit timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(1794000133.1528726)",
+          "name": "rmasscan was still scanning when SIGINT came",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "false",
+          "name": "rmasscan exited within 30 s of SIGINT (no SIGKILL)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no SYN later than 1 s after SIGINT",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "o14_interrupt_json",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "92",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "13",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "92 frames recorded, 92 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000136.1409137 .. 1794000140.157502",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p1-1000\", \"-oX\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"20\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p1-1000\", \"-oX\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"20\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o15_interrupt_xml\", kind: Interrupt, format: Xml, target: File, show_closed: true, stdout: Silent, status: Text, oracle: false }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "42 records",
+          "name": "output.txt is a well-formed xml document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.txt holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "up 0 down 42 total 42, records 0 open 42 closed",
+          "name": "output.txt <hosts> up and down equal its open and closed records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.txt is complete after the interrupt (JSON closed by ], XML by </nmaprun>, binary 99-byte footer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "42",
+          "name": "output.txt holds a record (only then does the interrupt prove the footer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"<runstats>\\r\\n<finished time=\\\"<T>\\\" timestr=\\\"<T>\\\" elapsed=\\\"<T>\\\" />\\r\\n<hosts up=\\\"0\\\" down=\\\"42\\\" total=\\\"42\\\" />\\r\\n</runstats>\\r\\n</nmaprun>\", rendered \"<runstats>\\r\\n<finished time=\\\"<T>\\\" timestr=\\\"<T>\\\" elapsed=\\\"<T>\\\" />\\r\\n<hosts up=\\\"0\\\" down=\\\"42\\\" total=\\\"42\\\" />\\r\\n</runstats>\\r\\n</nmaprun>\"",
+          "name": "output.txt footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a reply []",
+          "name": "output.txt records are replies on the wire (a subset after the stop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000136.1409137 .. 1794000140.157502",
+          "name": "output.txt record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000136.1409137 .. 1794000140.157502",
+          "name": "output.txt header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40136\", source: \"time\" }), finished: Some(Finished { reason: \"Stopped\", sent: 42, replies: 42, open: 0 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Stopped\", sent: 42, replies: 42, open: 0 })",
+          "name": "[+] finished: Stopped",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "stderr.txt carries the Ctrl-C line once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 0 replies 42, records 0 open of 42",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(42), wire 42",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "42 of 4000",
+          "name": "the interrupted scan stopped before its end (sent below the plan)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "42 SYNs",
+          "name": "the scanner SYNs are the plan's first ones, in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "InterruptRecord { signal: \"INT\", after_s: 2.0, signal_unix: Some(1794000138.2256668), exit_within_s: 30.0, killed: false }, window 1794000136.1409137 .. 1794000140.157502",
+          "name": "interrupt.json: SIGINT about 2 s after the start, inside the capture window, a 30 s exit timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(1794000138.2256668)",
+          "name": "rmasscan was still scanning when SIGINT came",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "false",
+          "name": "rmasscan exited within 30 s of SIGINT (no SIGKILL)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no SYN later than 1 s after SIGINT",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "o15_interrupt_xml",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "92",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "13",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "92 frames recorded, 92 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000141.2084818 .. 1794000145.184154",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p1-1000\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"20\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p1-1000\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"20\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o16_interrupt_binary\", kind: Interrupt, format: Binary, target: File, show_closed: true, stdout: Silent, status: Text, oracle: false }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "42 records",
+          "name": "output.bin is a well-formed binary document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "output.bin holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "output.bin is complete after the interrupt (JSON closed by ], XML by </nmaprun>, binary 99-byte footer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "42",
+          "name": "output.bin holds a record (only then does the interrupt prove the footer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "\"masscan/1.1 (99 bytes)\", rendered \"masscan/1.1 (99 bytes)\"",
+          "name": "output.bin footer is its format's, rendered from its own records (clock masked)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a reply []",
+          "name": "output.bin records are replies on the wire (a subset after the stop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000141.2084818 .. 1794000145.184154",
+          "name": "output.bin record times lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[] outside 1794000141.2084818 .. 1794000145.184154",
+          "name": "output.bin header and footer clocks lie in the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "stderr.txt: every fragment before a \\r follows the status line grammar",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+] lines and the status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40141\", source: \"time\" }), finished: Some(Finished { reason: \"Stopped\", sent: 42, replies: 42, open: 0 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines are the stand's (veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP), seed 1 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Stopped\", sent: 42, replies: 42, open: 0 })",
+          "name": "[+] finished: Stopped",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 ticks, 1 erases, 0 ndjson, before [+] finished Some(Erase)",
+          "name": "stderr.txt: the status line ticks and ends with the 77-space erase right before [+] finished",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "stderr.txt carries the Ctrl-C line once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 0 replies 42, records 0 open of 42",
+          "name": "[+] finished reports open (-oH has no status) and, with --show open,closed, replies equal to the records",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(42), wire 42",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "42 of 4000",
+          "name": "the interrupted scan stopped before its end (sent below the plan)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "42 SYNs",
+          "name": "the scanner SYNs are the plan's first ones, in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "InterruptRecord { signal: \"INT\", after_s: 2.0, signal_unix: Some(1794000143.296419), exit_within_s: 30.0, killed: false }, window 1794000141.2084818 .. 1794000145.184154",
+          "name": "interrupt.json: SIGINT about 2 s after the start, inside the capture window, a 30 s exit timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(1794000143.296419)",
+          "name": "rmasscan was still scanning when SIGINT came",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "false",
+          "name": "rmasscan exited within 30 s of SIGINT (no SIGKILL)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no SYN later than 1 s after SIGINT",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "o16_interrupt_binary",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "6",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "21",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6 frames recorded, 6 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000146.2312932 .. 1794000148.1398966",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6 frames recorded, 6 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794000148.936614 .. 1794000150.8477097",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "19 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"--readscan\", \"input-rmasscan.bin\", \"input-oracle.bin\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\"], table [\"--readscan\", \"input-rmasscan.bin\", \"input-oracle.bin\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table OutputExpect { tag: \"o17_readscan\", kind: Readscan, format: List, target: File, show_closed: true, stdout: Silent, status: None, oracle: true }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "24 records",
+          "name": "output.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "24 records",
+          "name": "oracle/output.txt is a well-formed list document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle/stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "33d18bc4c9371e8f0ff0d5d3592047f07bda2b0ae3f6f48fcc6928d39b237e79 33d18bc4c9371e8f0ff0d5d3592047f07bda2b0ae3f6f48fcc6928d39b237e79",
+          "name": "input-rmasscan.bin is o06_binary's output.bin, byte for byte",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "4dc18b6ed8c25b32a8f8a429de0b7b7a37056c507da6c30664bb94bf9a9d0be5 4dc18b6ed8c25b32a8f8a429de0b7b7a37056c507da6c30664bb94bf9a9d0be5",
+          "name": "input-oracle.bin is o06_binary's oracle/output.bin, byte for byte",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the inputs are masscan -oB files",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "871 bytes, 871 expected",
+          "name": "output.txt is the list of the inputs' records in file order, each with its own time",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Ok([Line(\"[+] --readscan input-rmasscan.bin\"), Line(\"[+] --readscan input-oracle.bin\")])",
+          "name": "stderr.txt is one `[+] --readscan FILE` line per input, no status line",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no scanner frame during --readscan (markers aside)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "871 bytes, 871 expected",
+          "name": "oracle/output.txt is the list of the inputs' records in file order, each with its own time",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no scanner frame during oracle/--readscan (markers aside)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "871 and 871 bytes",
+          "name": "output.txt is byte for byte the oracle's",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "o17_readscan",
+      "verdict": "PASS"
+    }
+  ],
+  "safety_scan": [],
+  "safety_trips": [],
+  "schema": 1,
+  "totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 18
+  }
+}

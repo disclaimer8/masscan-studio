@@ -1,0 +1,19 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794001468.744435,
+  "capture_stopped_utc": 1794001519.490208,
+  "end_marker_seen": true,
+  "exe_sha256": "dde1d277e5ba32d6dcac7015fd1d60de18a02478a14508d033993fc4abeccc57",
+  "guest_exit": 0,
+  "guest_finished_utc": 1794001483.855543,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794001474.502697,
+  "guest_times": {
+    "finished_utc": 1794001483.309,
+    "started_utc": 1794001483.266
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "ra912f56732849a480eb7b36c07767095-02f3d4a5731d0e8f",
+  "kind": "iflist",
+  "tag": "w07_iflist"
+}

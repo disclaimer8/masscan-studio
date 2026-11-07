@@ -8,8 +8,11 @@
 //! (`--retries`, `--shard`, rounds, legacy resume) до ARP, чтобы отклонённый engine скан не стоил ни одного ARP-кадра;
 //! настоящий план строится после ARP, потому что binding неизменяем. Всё состояние ОС приходит через шов
 //! [`Backend`]; обнаружение, `--offline` и `--iflist` ничего не открывают. Единственный кадр до engine это ARP-запрос
-//! резолвера с отдельного короткоживущего адаптера, закрытого до открытия адаптера скана. Ctrl-C не перехватывается,
-//! `paused.conf` не пишется.
+//! резолвера с отдельного короткоживущего адаптера, закрытого до открытия адаптера скана. Ctrl-C (Р18, порт
+//! `control_c_handler`, `main.c:1131–1155`): [`Backend::interrupts`] ставит обработчик до ARP, цикл событий видит
+//! первое нажатие, печатает строку C и останавливает engine, приёмник дописывает принятое и подвал, итог `Stopped`
+//! (exit 0); второе нажатие завершает процесс с кодом 1 из самого обработчика. Фазы ожидания поздних ответов после
+//! Ctrl-C нет, `paused.conf` не пишется.
 
 #![forbid(unsafe_code)]
 
@@ -20,6 +23,7 @@ use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
+use crate::status::{StatusLine, StatusMode};
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{
@@ -36,14 +40,20 @@ use rmasscan_net::{
 };
 
 use crate::args::SeedPolicy;
-use crate::output::{Sink, io_fail};
+use crate::output::{ServiceNames, Sink, Wall, io_fail};
 
 /// Префикс отказов обнаружения и ARP в форме C (`[-] FAIL: …` и подсказки); [`crate::error_text`] не оборачивает их.
 pub const REFUSAL_PREFIX: &str = "[-] ";
 
+/// Строка C первого Ctrl-C (`main.c:1136–1139`): 44 пробела затирают хвост строки статуса.
+const INTERRUPT_LINE: &str = concat!(
+    "waiting several seconds to exit...",
+    "                                            \n"
+);
+
 /// Всё, что CLI берёт у ОС. Тесты подставляют fake (его `open` паникует или выдаёт `FakeAdapter`); настоящая
 /// реализация (`OsBackend`) живёт только в бинарнике, в `src/os_backend.rs` под `#[cfg(not(test))]`.
-pub trait Backend {
+pub trait Backend: Wall {
     /// Таблица маршрутов (только чтение, без привилегий).
     fn routes(&self) -> Result<Box<dyn RouteTable>, NetError>;
     /// Список интерфейсов (только чтение, без привилегий).
@@ -52,12 +62,15 @@ pub trait Backend {
     fn open(&self, binding: &AdapterBinding) -> Result<AdapterPair, NetError>;
     /// 64 бита энтропии ОС, не 0 (seed живого скана, идентификаторы запуска).
     fn entropy64(&self) -> u64;
-    /// Секунды Unix-времени (порт источника по умолчанию `40000 + t % 20000`).
-    fn unix_time(&self) -> u64;
     /// Интервал и срок ARP.
     fn arp_policy(&self) -> ArpPolicy;
     /// Часы резолвера ARP, engine и трассы `--packet-trace` (одни и те же).
     fn clock(&self) -> Arc<dyn Clock + Send + Sync>;
+    /// Имена TCP-сервисов для `-oG` и `-oU` (`getservbyport` C); [`crate::run`] читает их только для этих форматов.
+    fn services(&self) -> ServiceNames;
+    /// Нажатия Ctrl-C (Р18). Первый вызов ставит обработчик; его делает только [`run_live_with`], один раз до ARP, и
+    /// затем опрашивает счётчик в цикле событий. Остальные операции не зовут его, у них поведение ОС по умолчанию.
+    fn interrupts(&self) -> u32;
 }
 
 /// Подготовленный скан: проверенная конфигурация, обнаружение и binding. `binding.next_hop_mac` для
@@ -349,19 +362,36 @@ pub fn conclude(
     }
 }
 
-/// Живой скан: `prepare` → проверка плана → `[+]` → ARP (если нужен) → `ReadyPlan` → `open` → engine → `sink` →
-/// `join`.
+/// Живой скан: `prepare` → проверка плана → `[+]` → файл вывода → обработчик Ctrl-C → ARP (если нужен) → `ReadyPlan`
+/// → `open` → engine → `sink` → `join`.
 pub fn run_live(
     cfg: &ScanConfig,
     backend: &dyn Backend,
     sink: &mut dyn Sink,
     log: &mut dyn Write,
 ) -> Result<Outcome, String> {
+    run_live_with(cfg, backend, sink, log, StatusMode::Text).map(|(outcome, _)| outcome)
+}
+
+/// [`run_live`] с режимом строки статуса. Второе значение результата это миллисекунды от открытия адаптера до
+/// конца скана на часах бэкенда (`usec_start` в `main.c:1548`); их печатает `--nostatus`.
+pub fn run_live_with(
+    cfg: &ScanConfig,
+    backend: &dyn Backend,
+    sink: &mut dyn Sink,
+    log: &mut dyn Write,
+    mode: StatusMode,
+) -> Result<(Outcome, u64), String> {
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
     // Ограничения runtime v1 (`--retries`, `--shard`, rounds, legacy resume) до ARP: отказ плана не стоит кадра.
     // Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
     ReadyPlan::new(p.eff.clone(), p.binding.clone()).map_err(|e| e.to_string())?;
     print_detection(&p, log)?;
+    // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
+    sink.open()?;
+    // Р18: обработчик Ctrl-C ставится до ARP и держится весь скан. Резолвер ARP счётчик не смотрит: нажатие во время
+    // ARP цикл событий увидит на первой итерации после старта engine.
+    backend.interrupts();
     let clock = backend.clock();
     let mut binding = p.binding.clone();
     let name = p.detected.iface.name.as_str();
@@ -404,12 +434,58 @@ pub fn run_live(
     let io = open(backend, name, &binding)?;
     let options = EngineOptions::new(ids(backend), ids(backend));
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
-    let handle = Engine::start_with_clock(plan, io, options, clock)
+    let started = clock.now_micros();
+    let handle = Engine::start_with_clock(plan, io, options, clock.clone())
         .map_err(|e| format!("cannot start the scan: {e}"))?;
     let (mut replies, mut open_count) = (0u64, 0u64);
     let mut sink_error = None;
+    let wait_secs = i64::from(cfg.wait_secs);
+    let mut status = StatusLine::new(mode, started);
+    let (mut max_count, mut tx_done_at) = (0u64, None::<u64>);
+    let mut interrupted = false;
+    // Первая ошибка записи в `log` (строка Ctrl-C, строка статуса). Она останавливает engine, но не обрывает цикл:
+    // приёмник получает всё принятое и подвал, ошибка возвращается только после `sink.finish()` (exit 1). Иначе
+    // мёртвый stderr (`2>&1 | tee` после Ctrl-C) оставил бы файл вывода без подвала. После неё в `log` не пишется.
+    let mut log_error: Option<String> = None;
     'events: loop {
+        // Р18: счётчик проверяется на каждой итерации (не реже раза в 250 мс). После остановки цикл дочитывает
+        // события до `Finished`, поэтому приёмник получает каждый принятый ответ.
+        if !interrupted && backend.interrupts() > 0 {
+            interrupted = true;
+            if log_error.is_none()
+                && let Err(e) = log
+                    .write_all(INTERRUPT_LINE.as_bytes())
+                    .and_then(|()| log.flush())
+            {
+                log_error = Some(format!("write failed: {e}"));
+            }
+            handle.stop();
+        }
         match handle.recv_event_timeout(Duration::from_millis(250)) {
+            Ok(Event::Started { range }) => max_count = range,
+            Ok(Event::Progress(prog)) => {
+                let now = clock.now_micros();
+                // main.c:1427 и 1496: конец передачи это `index >= range`; ожидание отсчитывается от него.
+                if prog.next_index >= max_count {
+                    tx_done_at.get_or_insert(now);
+                }
+                let exiting = tx_done_at
+                    .map(|t| wait_secs.saturating_sub((now.saturating_sub(t) / 1_000_000) as i64));
+                if log_error.is_none()
+                    && let Err(e) = status.tick(
+                        now,
+                        prog.next_index,
+                        max_count,
+                        prog.rate,
+                        open_count,
+                        exiting,
+                        log,
+                    )
+                {
+                    log_error = Some(format!("cannot write the status line: {e}"));
+                    handle.stop();
+                }
+            }
             Ok(Event::Results { replies: batch }) => {
                 for r in &batch {
                     replies += 1;
@@ -427,20 +503,33 @@ pub fn run_live(
             Ok(_) | Err(TryRecvError::Empty) => {}
         }
     }
-    let outcome = handle
-        .join()
-        .map_err(|e| format!("scan engine error: {e}"))?;
+    // `join` и `sink.finish()` идут всегда, до любого `?`: ни ошибка engine, ни ошибка `log` не оставляют файл
+    // вывода без подвала.
+    let joined = handle.join().map_err(|e| format!("scan engine error: {e}"));
+    let elapsed_ms = clock.now_micros().saturating_sub(started) / 1000;
+    if log_error.is_none()
+        && let Err(e) = status.finish(log)
+    {
+        log_error = Some(format!("cannot write the status line: {e}"));
+    }
     let sunk = match sink_error {
         Some(e) => Err(e),
         None => sink.finish(),
     };
+    let outcome = joined?;
     if let Err(e) = sunk {
-        // Ошибка приёмника (EPIPE уже завершил процесс в `io_fail`) не прячет `sent` engine; exit 1 от неё.
-        print_finished(&outcome, replies, open_count, log)?;
+        // Ошибка приёмника (EPIPE stdout уже завершил процесс в `write_failed`; EPIPE файла это обычная ошибка) не
+        // прячет `sent` engine; exit 1 от неё.
+        if log_error.is_none() {
+            print_finished(&outcome, replies, open_count, log)?;
+        }
+        return Err(e);
+    }
+    if let Some(e) = log_error {
         return Err(e);
     }
     conclude(&outcome, replies, open_count, log)?;
-    Ok(outcome)
+    Ok((outcome, elapsed_ms))
 }
 
 /// Поток кадров `transmit_thread` без сети (генерация в `rmasscan_core::probe`); ошибка callback останавливает

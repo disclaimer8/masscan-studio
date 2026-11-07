@@ -2140,9 +2140,9 @@ fn first_interrupt_stops_and_finishes_outputs() {
     }
 }
 
-/// Review Focus 5: Ctrl-C до первой записи (во время ARP; цели молчат): файл остаётся 0 байт, без заголовка и
-/// подвала, `[+] finished: Stopped`, exit 0, второго нажатия не нужно. Обработчик ставится ровно один раз, до
-/// открытия адаптера ARP.
+/// Review Focus 5, Р18 (`main.c:1131-1154`): Ctrl-C во время ARP (ответ уже пришёл) до первой записи: файл остаётся
+/// 0 байт, без заголовка и подвала, `[+] finished: Stopped, sent 0, replies 0, open 0`, exit 0, адаптер скана не
+/// открывается и ни один SYN не уходит. Обработчик ставится ровно один раз, до открытия адаптера ARP.
 #[test]
 fn interrupt_without_records_leaves_empty_file() {
     for format in ["-oJ", "-oX"] {
@@ -2161,10 +2161,14 @@ fn interrupt_without_records_leaves_empty_file() {
             "{:?}",
             plus_lines(&log)
         );
-        let sent = b.opened()[1].adapter.sent_count();
         assert_eq!(
             plus_lines(&log).last().copied(),
-            Some(format!("[+] finished: Stopped, sent {sent}, replies 0, open 0").as_str())
+            Some("[+] finished: Stopped, sent 0, replies 0, open 0")
+        );
+        assert_eq!(b.opened().len(), 1, "only the ARP adapter is opened");
+        assert!(
+            b.tx.lock().unwrap().iter().all(|f| is_arp(f)),
+            "no SYN leaves the host"
         );
         assert_eq!(
             b.opened()[0].polls_before,
@@ -2173,6 +2177,50 @@ fn interrupt_without_records_leaves_empty_file() {
         );
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// Р18: Ctrl-C при молчащем роутере (ARP без ответа): сразу `Ok` и `Stopped`, а не отказ `ARP timed-out` через
+/// 10 с; адаптер скана не открывается, SYN нет, файл 0 байт.
+#[test]
+fn interrupt_during_unanswered_arp_stops_instead_of_timing_out() {
+    let path = tmp("interrupt-silent-arp.json");
+    let mut b = FakeBackend::new();
+    b.neighbors.clear();
+    b.press_during_arp = true;
+    let t0 = b.clock.now_micros();
+    let (r, out, log) = cli(&b, &with(&LONG_WAIT, &["-oJ", path.to_str().unwrap()]));
+    r.unwrap_or_else(|e| panic!("{e}\n{log}"));
+    assert!(out.is_empty(), "{out:?}");
+    assert!(!log.contains("timed-out"), "{log}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"");
+    assert_eq!(
+        plus_lines(&log).last().copied(),
+        Some("[+] finished: Stopped, sent 0, replies 0, open 0")
+    );
+    assert_eq!(log.matches(&waiting_line()).count(), 1, "{log:?}");
+    assert_eq!(b.opened().len(), 1, "only the ARP adapter is opened");
+    assert!(b.tx.lock().unwrap().iter().all(|f| is_arp(f)));
+    assert!(
+        b.clock.now_micros() - t0 < 10_000_000,
+        "the press ends ARP before the 10 s timeout"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+/// Р18: Ctrl-C до ARP (счётчик уже ненулевой при старте): ни адаптера, ни кадра.
+#[test]
+fn interrupt_before_arp_opens_no_adapter() {
+    let b = FakeBackend::new();
+    b.presses.store(1, Ordering::SeqCst);
+    let (r, out, log) = live_run(&b, &LIVE);
+    assert_eq!(r.unwrap().reason, Reason::Stopped);
+    assert!(out.is_empty() || !out.contains("Discovered"), "{out:?}");
+    assert!(b.opened().is_empty(), "no adapter is opened");
+    assert!(b.tx.lock().unwrap().is_empty());
+    assert_eq!(
+        plus_lines(&log).last().copied(),
+        Some("[+] finished: Stopped, sent 0, replies 0, open 0")
+    );
 }
 
 /// Ctrl-C перехватывает только живой скан: `--readscan`, `-sL`, `--echo`, `--offline` и `--iflist` не ставят

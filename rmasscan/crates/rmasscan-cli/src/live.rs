@@ -31,8 +31,10 @@ use rmasscan_core::probe::{
 };
 use rmasscan_core::receive::PortStatus;
 use rmasscan_core::throttle::Clock;
-use rmasscan_engine::{AdapterPair, Engine, EngineOptions, Event, Outcome, Reason};
-use rmasscan_net::arp_resolve::{ArpPolicy, NextHopKind, arp_binding, resolve_next_hop};
+use rmasscan_engine::{
+    AdapterPair, Engine, EngineOptions, Event, Outcome, Progress, Reason, RxHealth,
+};
+use rmasscan_net::arp_resolve::{ArpPolicy, NextHopKind, arp_binding, resolve_next_hop_until};
 use rmasscan_net::discover::{NextHopWhy, Source, usable_source_mac};
 use rmasscan_net::{
     DetectError, Detected, Iface, Interfaces, NetError, NextHop, Overrides, RouteTable, detect,
@@ -391,6 +393,32 @@ pub fn conclude(
     }
 }
 
+/// Остановка до старта engine: файл вывода закрывается (`sink.finish`, пустой остаётся 0 байт), строка статуса
+/// гасится, итог `Stopped, sent 0, replies 0, open 0`, выход 0 (C `main.c:1131–1154`, Р18).
+fn stopped_before_start(
+    mode: StatusMode,
+    now_micros: u64,
+    sink: &mut dyn Sink,
+    log: &mut dyn Write,
+) -> Result<(Outcome, u64), String> {
+    let _ = StatusLine::new(mode, now_micros).finish(log);
+    sink.finish()?;
+    let outcome = Outcome {
+        reason: Reason::Stopped,
+        progress: Progress {
+            sent: 0,
+            next_index: 0,
+            received: 0,
+            discarded: 0,
+            duplicates: 0,
+            rate: 0.0,
+        },
+        rx_health: RxHealth { kernel_drops: None },
+    };
+    conclude(&outcome, 0, 0, log)?;
+    Ok((outcome, 0))
+}
+
 /// Живой скан: `prepare` → проверка плана → `[+]` → файл вывода → обработчик Ctrl-C → ARP (если нужен) → `ReadyPlan`
 /// → `open` → engine → `sink` → `join`.
 pub fn run_live(
@@ -420,10 +448,18 @@ pub fn run_live_with(
     print_detection(&p, log)?;
     // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
     sink.open()?;
-    // Р18: обработчик Ctrl-C ставится до ARP и держится весь скан. Резолвер ARP счётчик не смотрит: нажатие во время
-    // ARP цикл событий увидит на первой итерации после старта engine.
-    backend.interrupts();
+    // Р18: обработчик Ctrl-C ставится до ARP и держится весь скан (первый же опрос его устанавливает). Нажатие до
+    // первого SYN останавливает скан без адаптера скана и без единого кадра (C `main.c:1131–1154`: первое нажатие
+    // только останавливает передачу; в C до `rawsock_init_adapter`/`main.c:1275` кадров ещё нет).
     let clock = backend.clock();
+    let early_stop = |log: &mut dyn Write, sink: &mut dyn Sink| {
+        let _ = log.write_all(INTERRUPT_LINE.as_bytes());
+        let _ = log.flush();
+        stopped_before_start(mode, clock.now_micros(), sink, log)
+    };
+    if backend.interrupts() > 0 {
+        return early_stop(log, sink);
+    }
     let mut binding = p.binding.clone();
     let name = p.detected.iface.name.as_str();
     if let NextHop::Resolve { ip, why } = p.detected.next_hop {
@@ -436,7 +472,7 @@ pub fn run_live_with(
         };
         let arp = arp_binding(&binding.interface_id, my_ip, my_mac, binding.source_ports);
         let mut pair = open(backend, name, &arp)?;
-        let r = resolve_next_hop(
+        let r = resolve_next_hop_until(
             &mut pair,
             name,
             my_mac,
@@ -445,10 +481,13 @@ pub fn run_live_with(
             kind,
             &backend.arp_policy(),
             clock.as_ref(),
+            &mut || backend.interrupts() > 0,
         );
         // Адаптер фазы ARP закрывается до открытия адаптера скана.
         drop(pair);
-        let report = r.map_err(refusal)?;
+        let Some(report) = r.map_err(refusal)? else {
+            return early_stop(log, sink);
+        };
         line(
             log,
             &format!(
@@ -462,6 +501,10 @@ pub fn run_live_with(
     }
     print_parameters(&p, log)?;
     let plan = ReadyPlan::new(p.eff, binding.clone()).map_err(|e| e.to_string())?;
+    // Нажатие, пришедшее после ARP, но до открытия адаптера скана: ни адаптера, ни SYN.
+    if backend.interrupts() > 0 {
+        return early_stop(log, sink);
+    }
     let io = open(backend, name, &binding)?;
     let options = EngineOptions::new(ids(backend), ids(backend));
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.

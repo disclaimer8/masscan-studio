@@ -51,8 +51,9 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 Вывод. Форматы `-oL` (list), `-oJ` (json), `-oD` (ndjson), `-oG` (grepable), `-oX` (xml), `-oB` (binary), `-oH`
 (hostonly), `-oU` (unicornscan) и `--output-format none` для записей статуса TCP-порта побайтно равны masscan `8e6b3b0`
 (кроме полей, которые C берёт из часов в момент записи; 74 эталона C в `tests/golden/formats/`). Опции:
-`--output-format`, `--output-filename`/`--output-file`, `--append-output`, `--output-flush`, `--open`, `--show`,
-`--noshow`, `--interactive`/`--nointeractive`, `--stylesheet`, `--webxml`, `--status`/`--nostatus`, `--ndjson-status`.
+`--output-format`, `--output-filename`/`--output-file`, `--append-output`/`--output-append`, `--output-flush`,
+`--open`/`--output-show-open`, `--show`, `--noshow`, `--interactive`/`--nointeractive`, `--stylesheet`, `--webxml`,
+`--no-stylesheet`, `--status`/`--nostatus`, `--ndjson-status`.
 С `-o…` stdout молчит (кроме `--interactive`), иначе идут строки `Discovered …`. `--readscan FILE…` читает файлы `-oB`
 (записи статуса TCP) и пишет их теми же форматами; цели и порты, заданные до него, фильтруют записи. На stderr
 скан печатает строку статуса masscan (`rate`, `done`, `found`) и стирает её 77 пробелами перед `[+] finished`.
@@ -103,6 +104,10 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
     `[+] --readscan <файл>` (C ничего не печатает); на первом плохом файле чтение прекращается. `--seed` при
     `--readscan` игнорируется.
   - `--json-status` и `--status-json` — отказ при разборе с двумя строками C (`[-] FAIL: … not supported, use --status-ndjson`), код 1 (C печатает их, но `masscan_set_parameter` отбрасывает ошибку, и скан продолжается).
+  - `--append-output`/`--output-append`, `--output-flush`, `--output-show-open` принимают голый флаг (= `true`) или
+    `=<bool>` (`1/0`, `true/false`, `yes/no`, `on/off`, `enable/disable`) и применяются в порядке argv (последнее
+    значение побеждает). Голый `--output-append` значит `true`; в C `--output-append` не `F_BOOL` и забирает следующий
+    argv как своё значение (`main-conf.c:2410`), только `--append-output` там одиночный флаг.
   - `--infinite` нет (Р14).
   - Флаги вывода и статуса допустимы только со сканом и `--readscan`; с `--echo`, `--echo-all`, `-sL`, `--offline`,
     `--iflist` — отказ `output options apply only to a scan or --readscan`, код 1 (Р19). C печатает ключи вывода в

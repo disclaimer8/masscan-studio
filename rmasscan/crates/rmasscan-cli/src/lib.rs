@@ -200,6 +200,9 @@ pub fn run(
     }
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
+    // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени
+    // скана (`main.c:1551`): в stdout C остаётся только формат.
+    let elapsed_to_stdout = !opts.format_to_stdout();
     let env = output_env(backend, &opts, &cfg, None);
     let mode = if cli.nostatus {
         status::StatusMode::Off
@@ -215,7 +218,7 @@ pub fn run(
         log,
         mode,
     )?;
-    if mode == status::StatusMode::Off {
+    if mode == status::StatusMode::Off && elapsed_to_stdout {
         // main.c:1548-1552: без строки статуса C пишет в stdout время скана.
         write_out(out, &format!("{scan_millis} milliseconds elapsed\n"))?;
     }

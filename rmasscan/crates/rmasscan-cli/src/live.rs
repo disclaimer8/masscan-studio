@@ -518,7 +518,8 @@ pub fn run_live_with(
     };
     let outcome = joined?;
     if let Err(e) = sunk {
-        // Ошибка приёмника (EPIPE уже завершил процесс в `io_fail`) не прячет `sent` engine; exit 1 от неё.
+        // Ошибка приёмника (EPIPE stdout уже завершил процесс в `write_failed`; EPIPE файла это обычная ошибка) не
+        // прячет `sent` engine; exit 1 от неё.
         if log_error.is_none() {
             print_finished(&outcome, replies, open_count, log)?;
         }

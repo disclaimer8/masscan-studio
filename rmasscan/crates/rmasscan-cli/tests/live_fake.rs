@@ -1909,6 +1909,35 @@ fn nostatus_prints_elapsed_to_stdout() {
     assert!(out.ends_with(" milliseconds elapsed\n"));
 }
 
+/// `-oJ - --nostatus`: stdout это файл вывода. C закрывает его в `close_rotate` (`fp = stdout` из `output.c:216`,
+/// `fclose` на `output.c:268`) до `printf` времени скана (`main.c:1551`), поэтому в stdout только документ JSON. С
+/// настоящим файлом строка времени остаётся в stdout.
+#[test]
+fn nostatus_with_stdout_format_keeps_stdout_pure() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["-oJ", "-", "--nostatus"]));
+    r.unwrap();
+    assert!(!log.contains("rate:") && !log.contains('\r'), "{log:?}");
+    let open = open_replies(&b);
+    assert_eq!(open.len(), 2);
+    assert_eq!(out, json_file(&open));
+
+    let path = tmp("nostatus.json");
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(
+        &b,
+        &with(&LIVE, &["-oJ", path.to_str().unwrap(), "--nostatus"]),
+    );
+    r.unwrap();
+    let ms = out.strip_suffix(" milliseconds elapsed\n").unwrap();
+    assert!(ms.parse::<u64>().is_ok(), "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        json_file(&open_replies(&b))
+    );
+    let _ = std::fs::remove_file(path);
+}
+
 #[test]
 fn ndjson_status_lines() {
     let b = FakeBackend::new();
@@ -1960,6 +1989,22 @@ impl Sink for PressOnFirstOpen<'_> {
     fn finish(&mut self) -> Result<(), String> {
         self.pipeline.finish()
     }
+}
+
+/// Ответы `open` фиктивной сети в порядке SYN адаптера скана, как их видит приёмник (`reply_to_syn`: TTL 64).
+fn open_replies(b: &FakeBackend) -> Vec<Reply> {
+    open_in_reply_order(b)
+        .into_iter()
+        .map(|(ip, port)| Reply {
+            remote_ip: u32::from(ip),
+            remote_port: port,
+            local_ip: u32::from(MY_IP),
+            local_port: TIME_PORT,
+            status: PortStatus::Open,
+            tcp_flags: 0x12,
+            ttl: 64,
+        })
+        .collect()
 }
 
 /// `-oJ` с записями `open` (время стенки fake): `[`, записи через `,`, `]`.
@@ -2232,18 +2277,7 @@ fn status_finish_failure_still_finishes_the_file() {
         &mut log,
     );
     assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
-    let open: Vec<Reply> = open_in_reply_order(&b)
-        .into_iter()
-        .map(|(ip, port)| Reply {
-            remote_ip: u32::from(ip),
-            remote_port: port,
-            local_ip: u32::from(MY_IP),
-            local_port: TIME_PORT,
-            status: PortStatus::Open,
-            tcp_flags: 0x12,
-            ttl: 64,
-        })
-        .collect();
+    let open = open_replies(&b);
     assert_eq!(open.len(), 2);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
     assert!(out.is_empty());

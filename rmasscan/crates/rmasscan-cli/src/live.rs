@@ -517,7 +517,7 @@ pub fn run_live_with(
     let mut status = StatusLine::new(mode, started);
     let (mut max_count, mut tx_done_at) = (0u64, None::<u64>);
     let mut interrupted = false;
-    // `log` best-effort (`BestEffort`): мёртвый stderr (`2>&-`, `2>&1 | tee` после Ctrl-C) не останавливает скан и не
+    // `log` best-effort (`BestEffort`): мёртвый stderr (EPIPE с первого байта или `2>&1 | tee` после Ctrl-C) не останавливает скан и не
     // меняет код выхода, как в C.
     'events: loop {
         // Р18: счётчик проверяется на каждой итерации (не реже раза в 250 мс). После остановки цикл дочитывает

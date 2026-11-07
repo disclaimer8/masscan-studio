@@ -198,6 +198,15 @@ pub fn run(
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
+    // main.c:1720-1742: пустые цели и порты отклоняются до `main_scan` (main.c:1743) и до `output_create`
+    // (output.c:799-803), поэтому раньше отказа «нет файла вывода». seed 0 (энтропия) проверяет `prepare`.
+    {
+        let mut probe = cfg.clone();
+        if probe.seed == 0 {
+            probe.seed = 1;
+        }
+        validate(&probe, Operation::Scan).map_err(|e| e.to_string())?;
+    }
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени

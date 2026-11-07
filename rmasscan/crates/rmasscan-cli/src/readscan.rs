@@ -200,6 +200,9 @@ pub fn run_readscan(
     sink: &mut Pipeline,
     log: &mut dyn Write,
 ) -> Result<(), String> {
+    // stderr best-effort (in-binary.c:488-637 не проверяет `fprintf`/`fflush`, util-logger.c:25-31).
+    let mut best_effort = crate::live::BestEffort::new(log);
+    let log: &mut dyn Write = &mut best_effort;
     sink.open()?;
     let mut failure: Option<String> = None;
     for name in files {

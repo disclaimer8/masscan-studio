@@ -1746,6 +1746,34 @@ fn open_failure_sends_no_frame() {
     }
 }
 
+/// main.c:1720-1742: цели и порты проверяются до `main_scan` и до `output_create` (output.c:799-803), поэтому
+/// отказ по целям/портам идёт раньше отказа «нет файла вывода».
+#[test]
+fn target_and_port_refusal_precedes_the_output_file_refusal() {
+    for (args, want) in [
+        (
+            &["--output-format", "json"][..],
+            "target IP address list empty",
+        ),
+        (
+            &["-p80", "--output-format", "json"][..],
+            "target IP address list empty",
+        ),
+        (
+            &["198.51.100.1", "--output-format", "json"][..],
+            "no ports were specified",
+        ),
+    ] {
+        let b = FakeBackend::new();
+        let (r, out, log) = cli(&b, args);
+        let e = r.unwrap_err();
+        assert!(!e.contains("no output file"), "{args:?}: {e}");
+        assert!(e.contains(want), "{args:?}: {e}");
+        assert!(out.is_empty() && log.is_empty(), "{args:?}: {log}");
+        assert!(b.attempts().is_empty() && b.tx_journal().is_empty());
+    }
+}
+
 /// Решение 2 контроллера: реальный формат без имени файла отклоняется до обнаружения ARP и кадров.
 #[test]
 fn file_format_without_a_filename_sends_no_frame() {
@@ -2218,9 +2246,9 @@ impl std::io::Write for BrokenStderr {
     }
 }
 
-/// Сбой stderr после первого Ctrl-C (`… -oJ out.json 2>&1 | tee scan.log`, SIGINT убил и `tee`): ошибка записи
-/// запоминается, engine уже остановлен, цикл дочитывает события, приёмник дописывает записи и подвал `]\n`; только
-/// затем возвращается ошибка stderr (exit 1). Строка `[+] finished` в мёртвый stderr не пишется.
+/// Сбой stderr после первого Ctrl-C (`… -oJ out.json 2>&1 | tee scan.log`, SIGINT убил и `tee`): запись в `log`
+/// best-effort (util-logger.c:25-31, main.c:1136-1140 игнорируют ошибки stderr), приёмник дописывает записи и подвал
+/// `]\n`, итог `Ok` (exit 0). Строка `[+] finished` в мёртвый stderr не попадает.
 #[test]
 fn broken_stderr_after_the_first_press_still_finishes_the_file() {
     let path = tmp("interrupt-broken-stderr.json");
@@ -2243,7 +2271,7 @@ fn broken_stderr_after_the_first_press_still_finishes_the_file() {
         let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
         (r, sink.reported)
     };
-    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    r.unwrap();
     let text = String::from_utf8(log.bytes).unwrap();
     assert_eq!(
         text.matches(&waiting_line()).count(),
@@ -2262,8 +2290,8 @@ fn broken_stderr_after_the_first_press_still_finishes_the_file() {
     let _ = std::fs::remove_file(path);
 }
 
-/// Сбой только последней записи строки статуса (скан закончился сам): файл `-oJ` всё равно закрыт `]\n`, итог `Err`
-/// (exit 1) с текстом ошибки stderr.
+/// Сбой только последней записи строки статуса (скан закончился сам; main-status.c:216-280 игнорирует ошибки
+/// stderr): файл `-oJ` закрыт `]\n`, итог `Ok` (exit 0).
 #[test]
 fn status_finish_failure_still_finishes_the_file() {
     let path = tmp("status-finish-broken.json");
@@ -2276,10 +2304,66 @@ fn status_finish_failure_still_finishes_the_file() {
         &mut out,
         &mut log,
     );
-    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    r.unwrap();
     let open = open_replies(&b);
     assert_eq!(open.len(), 2);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
     assert!(out.is_empty());
+    let _ = std::fs::remove_file(path);
+}
+
+/// stderr, закрытый с самого начала (`2>&-`): каждая запись и сброс отказывают.
+struct ClosedStderr;
+
+impl std::io::Write for ClosedStderr {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::from_raw_os_error(9))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::from_raw_os_error(9))
+    }
+}
+
+/// `2>&-` на живом скане (util-logger.c:25-31, main-status.c:216-280): все пробы отправлены, скан не остановлен
+/// раньше времени, файл `-oJ` полон, итог `Ok`.
+#[test]
+fn closed_stderr_live_scan_completes_all_probes() {
+    let path = tmp("closed-stderr.json");
+    let b = FakeBackend::new();
+    let mut out = Vec::new();
+    let r = rmasscan_cli::run(
+        &parse(&with(&LIVE, &["-oJ", path.to_str().unwrap()])),
+        &b,
+        &mut out,
+        &mut ClosedStderr,
+    );
+    r.unwrap();
+    assert_eq!(b.opened()[1].adapter.sent_count(), 4);
+    let open = open_replies(&b);
+    assert_eq!(open.len(), 2);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
+    assert!(out.is_empty());
+    let _ = std::fs::remove_file(path);
+}
+
+/// `2>&-` на `--readscan` (in-binary.c:488-637 игнорирует ошибки stderr): записи дошли до stdout, итог `Ok`.
+#[test]
+fn closed_stderr_readscan_still_reports() {
+    let path = tmp("closed-stderr.scan");
+    let file = path.to_str().unwrap();
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &with(&LIVE, &["-oB", file]));
+    r.unwrap();
+    let mut out = Vec::new();
+    let r = rmasscan_cli::run(
+        &parse(&["--readscan", file, "-oL", "-"]),
+        &b,
+        &mut out,
+        &mut ClosedStderr,
+    );
+    r.unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.starts_with("#masscan\n"), "{out}");
+    assert_eq!(out.matches("open tcp").count(), 2, "{out}");
     let _ = std::fs::remove_file(path);
 }

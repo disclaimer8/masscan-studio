@@ -7,9 +7,14 @@
 //! кроме гостя n2 и Mac стенда m1: они воспроизводят лабораторные стенды (`198.18.0.0/30`), n2 ещё и NIC QEMU
 //! (`10.0.2.0/24`, `52:54:00:…`).
 
+#[path = "common/scratch.rs"]
+mod scratch;
+
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
+use scratch::Scratch;
 
 use rmasscan_cli::args::{Cli, SeedPolicy};
 use rmasscan_cli::live::{self, Backend};
@@ -1632,10 +1637,6 @@ fn mac_m1_adapter_cases_skip_the_route_lookup_and_print_the_table_lines() {
     }
 }
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("rmasscan-live-{}-{name}", std::process::id()))
-}
-
 /// Открытые порты в порядке ответов (= порядок SYN адаптера скана).
 fn open_in_reply_order(b: &FakeBackend) -> Vec<(Ipv4Addr, u16)> {
     b.opened()[1]
@@ -1654,7 +1655,8 @@ fn list_line((ip, port): (Ipv4Addr, u16)) -> String {
 /// `-oL FILE`: записи с временем стенки в файл, stdout молчит (Р3), строки `[+]` те же.
 #[test]
 fn live_scan_writes_list_file_and_keeps_stdout_silent() {
-    let path = tmp("scan.list");
+    let scratch = Scratch::new();
+    let path = scratch.path("scan.list");
     let b = FakeBackend::new();
     let (r, out, log) = cli(&b, &with(&LIVE, &["-oL", path.to_str().unwrap()]));
     r.unwrap();
@@ -1671,7 +1673,6 @@ fn live_scan_writes_list_file_and_keeps_stdout_silent() {
         Some("[+] finished: Completed, sent 4, replies 4, open 2"),
         "{log}"
     );
-    let _ = std::fs::remove_file(path);
 }
 
 /// Review Focus 2: `--interactive -oL -` пишет обе ветки в один stdout в порядке C (`output.c:766–876`): строка
@@ -1717,7 +1718,8 @@ fn live_grepable_names_the_scanned_ports_and_backend_services() {
 /// Р8: файл не открылся (каталог вместо файла) - exit 1, текст C без обёртки, ни одного кадра и ни одного ARP.
 #[test]
 fn open_failure_sends_no_frame() {
-    let dir = std::env::temp_dir();
+    let scratch = Scratch::new();
+    let dir = scratch.dir();
     for (extra, word) in [
         (&[][..], "writing"),
         (&["--append-output"][..], "appending"),
@@ -1743,6 +1745,34 @@ fn open_failure_sends_no_frame() {
         assert!(out.is_empty());
         assert!(b.attempts().is_empty(), "no adapter was opened");
         assert!(b.tx_journal().is_empty(), "no frame, not even ARP");
+    }
+}
+
+/// main.c:1720-1742: цели и порты проверяются до `main_scan` и до `output_create` (output.c:799-803), поэтому
+/// отказ по целям/портам идёт раньше отказа «нет файла вывода».
+#[test]
+fn target_and_port_refusal_precedes_the_output_file_refusal() {
+    for (args, want) in [
+        (
+            &["--output-format", "json"][..],
+            "target IP address list empty",
+        ),
+        (
+            &["-p80", "--output-format", "json"][..],
+            "target IP address list empty",
+        ),
+        (
+            &["198.51.100.1", "--output-format", "json"][..],
+            "no ports were specified",
+        ),
+    ] {
+        let b = FakeBackend::new();
+        let (r, out, log) = cli(&b, args);
+        let e = r.unwrap_err();
+        assert!(!e.contains("no output file"), "{args:?}: {e}");
+        assert!(e.contains(want), "{args:?}: {e}");
+        assert!(out.is_empty() && log.is_empty(), "{args:?}: {log}");
+        assert!(b.attempts().is_empty() && b.tx_journal().is_empty());
     }
 }
 
@@ -1819,12 +1849,42 @@ fn readscan_opens_nothing_and_reads_no_tables() {
     let mut b = FakeBackend::new();
     b.tables_panic = true;
     b.panic_on_open = true;
-    let missing = tmp("missing.scan");
+    let scratch = Scratch::new();
+    let missing = scratch.path("missing.scan");
     let (r, out, log) = cli(&b, &["--readscan", missing.to_str().unwrap(), "-oL", "-"]);
     assert_eq!(rmasscan_cli::error_text(&r.unwrap_err()), "");
     assert!(out.is_empty());
     assert!(log.contains("[-] FAIL: --readscan\n"), "{log}");
     assert!(b.lookups().is_empty() && b.attempts().is_empty());
+}
+
+/// Все `.rs` под `dir`, рекурсивно, в стабильном порядке.
+fn rs_files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    entries.sort();
+    for p in entries {
+        if p.is_dir() {
+            found.extend(rs_files_under(&p));
+        } else if p.extension().is_some_and(|e| e == "rs") {
+            found.push(p);
+        }
+    }
+    found
+}
+
+/// Исходник вне `main.rs` и `os_backend.rs` не знает `OsBackend`: ни модуля, ни открытия адаптеров, ни таблиц ОС.
+fn assert_no_os_backend_reach(name: &str, src: &str) {
+    assert!(!src.contains("mod os_backend"), "{name}");
+    assert!(
+        !src.contains("open_explicit("),
+        "{name} must not open adapters"
+    );
+    assert!(!src.contains("os_route_table("), "{name}");
+    assert!(!src.contains("os_interfaces("), "{name}");
 }
 
 /// `OsBackend` недостижим из тестов: модуль и `fn main` бинарника под `cfg(not(test))`, библиотека его не знает,
@@ -1836,32 +1896,21 @@ fn os_backend_is_absent_under_test() {
     assert!(main.contains("#[cfg(not(test))]\nmod os_backend;"));
     assert!(main.contains("#[cfg(not(test))]\nfn main("));
     assert!(!main.contains("#[test]"), "unit tests live in the library");
-    for (name, src) in [
-        ("lib.rs", include_str!("../src/lib.rs")),
-        ("live.rs", include_str!("../src/live.rs")),
-        ("output/mod.rs", include_str!("../src/output/mod.rs")),
-        ("output/record.rs", include_str!("../src/output/record.rs")),
-        (
-            "output/formats.rs",
-            include_str!("../src/output/formats.rs"),
-        ),
-        (
-            "output/pipeline.rs",
-            include_str!("../src/output/pipeline.rs"),
-        ),
-        (
-            "output/services.rs",
-            include_str!("../src/output/services.rs"),
-        ),
-        ("args.rs", include_str!("../src/args.rs")),
-    ] {
-        assert!(!src.contains("mod os_backend"), "{name}");
-        assert!(
-            !src.contains("open_explicit("),
-            "{name} must not open adapters"
-        );
-        assert!(!src.contains("os_route_table("), "{name}");
-        assert!(!src.contains("os_interfaces("), "{name}");
+    // Каждый `.rs` под `src/` (кроме `main.rs` и `os_backend.rs`, у которых свои утверждения): новый модуль
+    // попадает под проверку сам, без правки списка.
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let files = rs_files_under(&src_dir);
+    assert!(
+        files.len() >= 10,
+        "the walk must see the whole tree: {files:?}"
+    );
+    for path in files {
+        let name = path.strip_prefix(&src_dir).unwrap().to_string_lossy();
+        if name == "main.rs" || name == "os_backend.rs" {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).unwrap();
+        assert_no_os_backend_reach(&name, &src);
     }
     let os = include_str!("../src/os_backend.rs");
     assert!(os.contains("open_explicit("));
@@ -1922,7 +1971,8 @@ fn nostatus_with_stdout_format_keeps_stdout_pure() {
     assert_eq!(open.len(), 2);
     assert_eq!(out, json_file(&open));
 
-    let path = tmp("nostatus.json");
+    let scratch = Scratch::new();
+    let path = scratch.path("nostatus.json");
     let b = FakeBackend::new();
     let (r, out, _) = cli(
         &b,
@@ -1935,7 +1985,6 @@ fn nostatus_with_stdout_format_keeps_stdout_pure() {
         std::fs::read_to_string(&path).unwrap(),
         json_file(&open_replies(&b))
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -2054,7 +2103,8 @@ fn xml_file(open: &[Reply]) -> String {
 #[test]
 fn first_interrupt_stops_and_finishes_outputs() {
     for format in ["-oJ", "-oX"] {
-        let path = tmp(&format!("interrupt{format}"));
+        let scratch = Scratch::new();
+        let path = scratch.path(&format!("interrupt{format}"));
         let b = FakeBackend::new();
         let parsed = parse(&with(&LONG_WAIT, &[format, path.to_str().unwrap()]));
         let (mut stdout, mut log) = (Vec::new(), Vec::new());
@@ -2108,17 +2158,17 @@ fn first_interrupt_stops_and_finishes_outputs() {
             xml_file(&open)
         };
         assert_eq!(std::fs::read_to_string(&path).unwrap(), want, "{format}");
-        let _ = std::fs::remove_file(path);
     }
 }
 
-/// Review Focus 5: Ctrl-C до первой записи (во время ARP; цели молчат): файл остаётся 0 байт, без заголовка и
-/// подвала, `[+] finished: Stopped`, exit 0, второго нажатия не нужно. Обработчик ставится ровно один раз, до
-/// открытия адаптера ARP.
+/// Review Focus 5, Р18 (`main.c:1131-1154`): Ctrl-C во время ARP (ответ уже пришёл) до первой записи: файл остаётся
+/// 0 байт, без заголовка и подвала, `[+] finished: Stopped, sent 0, replies 0, open 0`, exit 0, адаптер скана не
+/// открывается и ни один SYN не уходит. Обработчик ставится ровно один раз, до открытия адаптера ARP.
 #[test]
 fn interrupt_without_records_leaves_empty_file() {
     for format in ["-oJ", "-oX"] {
-        let path = tmp(&format!("interrupt-empty{format}"));
+        let scratch = Scratch::new();
+        let path = scratch.path(&format!("interrupt-empty{format}"));
         let mut b = FakeBackend::new();
         b.press_during_arp = true;
         b.silent_targets = true;
@@ -2133,25 +2183,73 @@ fn interrupt_without_records_leaves_empty_file() {
             "{:?}",
             plus_lines(&log)
         );
-        let sent = b.opened()[1].adapter.sent_count();
         assert_eq!(
             plus_lines(&log).last().copied(),
-            Some(format!("[+] finished: Stopped, sent {sent}, replies 0, open 0").as_str())
+            Some("[+] finished: Stopped, sent 0, replies 0, open 0")
+        );
+        assert_eq!(b.opened().len(), 1, "only the ARP adapter is opened");
+        assert!(
+            b.tx.lock().unwrap().iter().all(|f| is_arp(f)),
+            "no SYN leaves the host"
         );
         assert_eq!(
             b.opened()[0].polls_before,
             1,
             "the handler is installed once, before the ARP adapter opens"
         );
-        let _ = std::fs::remove_file(path);
     }
+}
+
+/// Р18: Ctrl-C при молчащем роутере (ARP без ответа): сразу `Ok` и `Stopped`, а не отказ `ARP timed-out` через
+/// 10 с; адаптер скана не открывается, SYN нет, файл 0 байт.
+#[test]
+fn interrupt_during_unanswered_arp_stops_instead_of_timing_out() {
+    let scratch = Scratch::new();
+    let path = scratch.path("interrupt-silent-arp.json");
+    let mut b = FakeBackend::new();
+    b.neighbors.clear();
+    b.press_during_arp = true;
+    let t0 = b.clock.now_micros();
+    let (r, out, log) = cli(&b, &with(&LONG_WAIT, &["-oJ", path.to_str().unwrap()]));
+    r.unwrap_or_else(|e| panic!("{e}\n{log}"));
+    assert!(out.is_empty(), "{out:?}");
+    assert!(!log.contains("timed-out"), "{log}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"");
+    assert_eq!(
+        plus_lines(&log).last().copied(),
+        Some("[+] finished: Stopped, sent 0, replies 0, open 0")
+    );
+    assert_eq!(log.matches(&waiting_line()).count(), 1, "{log:?}");
+    assert_eq!(b.opened().len(), 1, "only the ARP adapter is opened");
+    assert!(b.tx.lock().unwrap().iter().all(|f| is_arp(f)));
+    assert!(
+        b.clock.now_micros() - t0 < 10_000_000,
+        "the press ends ARP before the 10 s timeout"
+    );
+}
+
+/// Р18: Ctrl-C до ARP (счётчик уже ненулевой при старте): ни адаптера, ни кадра.
+#[test]
+fn interrupt_before_arp_opens_no_adapter() {
+    let b = FakeBackend::new();
+    b.presses.store(1, Ordering::SeqCst);
+    let (r, out, log) = live_run(&b, &LIVE);
+    assert_eq!(r.unwrap().reason, Reason::Stopped);
+    assert!(out.is_empty() || !out.contains("Discovered"), "{out:?}");
+    assert!(b.opened().is_empty(), "no adapter is opened");
+    assert!(b.tx.lock().unwrap().is_empty());
+    assert_eq!(
+        plus_lines(&log).last().copied(),
+        Some("[+] finished: Stopped, sent 0, replies 0, open 0")
+    );
 }
 
 /// Ctrl-C перехватывает только живой скан: `--readscan`, `-sL`, `--echo`, `--offline` и `--iflist` не ставят
 /// обработчик (поведение ОС по умолчанию), `interrupts()` у них не зовётся ни разу.
 #[test]
 fn only_a_live_scan_traps_ctrl_c() {
-    let path = tmp("trap.scan");
+    let scratch = Scratch::new();
+    let path = scratch.path("trap.scan");
     let file = path.to_str().unwrap();
     let b = FakeBackend::new();
     let (r, _, _) = cli(&b, &with(&LIVE, &["-oB", file]));
@@ -2170,7 +2268,6 @@ fn only_a_live_scan_traps_ctrl_c() {
         assert!(r.is_ok(), "{args:?}: {r:?} {log}");
         assert_eq!(b.polls(), 0, "{args:?}");
     }
-    let _ = std::fs::remove_file(path);
 }
 
 /// Где ломается stderr (`BrokenPipe`, как EPIPE от умершего читателя `2>&1 | tee`).
@@ -2218,12 +2315,13 @@ impl std::io::Write for BrokenStderr {
     }
 }
 
-/// Сбой stderr после первого Ctrl-C (`… -oJ out.json 2>&1 | tee scan.log`, SIGINT убил и `tee`): ошибка записи
-/// запоминается, engine уже остановлен, цикл дочитывает события, приёмник дописывает записи и подвал `]\n`; только
-/// затем возвращается ошибка stderr (exit 1). Строка `[+] finished` в мёртвый stderr не пишется.
+/// Сбой stderr после первого Ctrl-C (`… -oJ out.json 2>&1 | tee scan.log`, SIGINT убил и `tee`): запись в `log`
+/// best-effort (util-logger.c:25-31, main.c:1136-1140 игнорируют ошибки stderr), приёмник дописывает записи и подвал
+/// `]\n`, итог `Ok` (exit 0). Строка `[+] finished` в мёртвый stderr не попадает.
 #[test]
 fn broken_stderr_after_the_first_press_still_finishes_the_file() {
-    let path = tmp("interrupt-broken-stderr.json");
+    let scratch = Scratch::new();
+    let path = scratch.path("interrupt-broken-stderr.json");
     let b = FakeBackend::new();
     let parsed = parse(&with(&LONG_WAIT, &["-oJ", path.to_str().unwrap()]));
     let mut stdout = Vec::new();
@@ -2243,7 +2341,7 @@ fn broken_stderr_after_the_first_press_still_finishes_the_file() {
         let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
         (r, sink.reported)
     };
-    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    r.unwrap();
     let text = String::from_utf8(log.bytes).unwrap();
     assert_eq!(
         text.matches(&waiting_line()).count(),
@@ -2259,14 +2357,14 @@ fn broken_stderr_after_the_first_press_still_finishes_the_file() {
         .collect();
     assert!(!open.is_empty());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
-    let _ = std::fs::remove_file(path);
 }
 
-/// Сбой только последней записи строки статуса (скан закончился сам): файл `-oJ` всё равно закрыт `]\n`, итог `Err`
-/// (exit 1) с текстом ошибки stderr.
+/// Сбой только последней записи строки статуса (скан закончился сам; main-status.c:216-280 игнорирует ошибки
+/// stderr): файл `-oJ` закрыт `]\n`, итог `Ok` (exit 0).
 #[test]
 fn status_finish_failure_still_finishes_the_file() {
-    let path = tmp("status-finish-broken.json");
+    let scratch = Scratch::new();
+    let path = scratch.path("status-finish-broken.json");
     let b = FakeBackend::new();
     let mut out = Vec::new();
     let mut log = BrokenStderr::new(Breaks::OnStatusFinish);
@@ -2276,10 +2374,66 @@ fn status_finish_failure_still_finishes_the_file() {
         &mut out,
         &mut log,
     );
-    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    r.unwrap();
     let open = open_replies(&b);
     assert_eq!(open.len(), 2);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
     assert!(out.is_empty());
-    let _ = std::fs::remove_file(path);
+}
+
+/// stderr, мёртвый с первого байта (EPIPE: читатель канала ушёл до первой записи): каждая запись и сброс отказывают.
+/// Настоящий `2>&-` сюда не годится: стандартный `stderr` Rust глотает EBADF и ошибки не видит.
+struct ClosedStderr;
+
+impl std::io::Write for ClosedStderr {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::from_raw_os_error(9))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::from_raw_os_error(9))
+    }
+}
+
+/// Мёртвый с первого байта stderr (EPIPE) на живом скане (util-logger.c:25-31, main-status.c:216-280): все пробы отправлены, скан не остановлен
+/// раньше времени, файл `-oJ` полон, итог `Ok`.
+#[test]
+fn closed_stderr_live_scan_completes_all_probes() {
+    let scratch = Scratch::new();
+    let path = scratch.path("closed-stderr.json");
+    let b = FakeBackend::new();
+    let mut out = Vec::new();
+    let r = rmasscan_cli::run(
+        &parse(&with(&LIVE, &["-oJ", path.to_str().unwrap()])),
+        &b,
+        &mut out,
+        &mut ClosedStderr,
+    );
+    r.unwrap();
+    assert_eq!(b.opened()[1].adapter.sent_count(), 4);
+    let open = open_replies(&b);
+    assert_eq!(open.len(), 2);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
+    assert!(out.is_empty());
+}
+
+/// Мёртвый с первого байта stderr (EPIPE) на `--readscan` (in-binary.c:488-637 игнорирует ошибки stderr): записи дошли до stdout, итог `Ok`.
+#[test]
+fn closed_stderr_readscan_still_reports() {
+    let scratch = Scratch::new();
+    let path = scratch.path("closed-stderr.scan");
+    let file = path.to_str().unwrap();
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &with(&LIVE, &["-oB", file]));
+    r.unwrap();
+    let mut out = Vec::new();
+    let r = rmasscan_cli::run(
+        &parse(&["--readscan", file, "-oL", "-"]),
+        &b,
+        &mut out,
+        &mut ClosedStderr,
+    );
+    r.unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.starts_with("#masscan\n"), "{out}");
+    assert_eq!(out.matches("open tcp").count(), 2, "{out}");
 }

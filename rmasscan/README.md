@@ -51,8 +51,9 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 Вывод. Форматы `-oL` (list), `-oJ` (json), `-oD` (ndjson), `-oG` (grepable), `-oX` (xml), `-oB` (binary), `-oH`
 (hostonly), `-oU` (unicornscan) и `--output-format none` для записей статуса TCP-порта побайтно равны masscan `8e6b3b0`
 (кроме полей, которые C берёт из часов в момент записи; 74 эталона C в `tests/golden/formats/`). Опции:
-`--output-format`, `--output-filename`/`--output-file`, `--append-output`, `--output-flush`, `--open`, `--show`,
-`--noshow`, `--interactive`/`--nointeractive`, `--stylesheet`, `--webxml`, `--status`/`--nostatus`, `--ndjson-status`.
+`--output-format`, `--output-filename`/`--output-file`, `--append-output`/`--output-append`, `--output-flush`,
+`--open`/`--output-show-open`, `--show`, `--noshow`, `--interactive`/`--nointeractive`, `--stylesheet`, `--webxml`,
+`--no-stylesheet`, `--status`/`--nostatus`, `--ndjson-status`.
 С `-o…` stdout молчит (кроме `--interactive`), иначе идут строки `Discovered …`. `--readscan FILE…` читает файлы `-oB`
 (записи статуса TCP) и пишет их теми же форматами; цели и порты, заданные до него, фильтруют записи. На stderr
 скан печатает строку статуса masscan (`rate`, `done`, `found`) и стирает её 77 пробелами перед `[+] finished`.
@@ -98,11 +99,17 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
     устаревшие типы дают `<файл>: unsupported record type N`, запись статуса (тип 6 или 7) с протоколом не TCP —
     `<файл>: unsupported record protocol P`. Обрыв посреди записи — `[-] file corrupt` и код 1 (C молча
     останавливается с кодом 0); файл короче 99-байтового заголовка с верным началом `masscan/1.1` — тоже
-    `[-] file corrupt` и код 1 (C печатает `[-] <файл>: ` и `strerror(errno)`); пустой файл — сообщение о неизвестном
-    формате (C: `file is empty`), для отсутствующего файла перед строками `[-] FAIL` печатается
-    `[+] --readscan <файл>` (C ничего не печатает); на первом плохом файле чтение прекращается. `--seed` при
-    `--readscan` игнорируется.
-  - `--stylesheet` и `--webxml` вместе — конфликт аргументов clap, код 2 (C: побеждает последний).
+    `[-] file corrupt` и код 1 (C печатает `[-] <файл>: ` и `strerror(errno)`); пустой файл (0 байт) — сообщение о
+    неизвестном формате (C: `feof` до первого `fread` ложно, поэтому 0-байтовый файл доходит до `bytes_read < 'a'+2` и
+    печатает `[-] <файл>: ` и `strerror(errno)`, а не `file is empty`); на первом плохом файле чтение прекращается.
+    `--seed` при `--readscan` игнорируется.
+  - `--json-status` и `--status-json` — отказ при разборе с двумя строками C (`[-] FAIL: … not supported, use --status-ndjson`), код 1 (C печатает их, но `masscan_set_parameter` отбрасывает ошибку, и скан продолжается).
+  - `--append-output`/`--output-append` и `--output-flush` принимают голый флаг (= `true`) или `=<bool>`
+    (`1/0`, `true/false`, `yes/no`, `on/off`, `enable/disable`) в порядке argv, последнее значение побеждает — как в C.
+    `--output-show-open`/`--open`/`--open-only` тоже принимают `=<val>`, но значение игнорируют и всегда ставят
+    «только открытые» (как в C, `main-conf.c:1794–1806`). Отличие одно: голый `--output-append` значит `true`, тогда
+    как в C `--output-append` не `F_BOOL` и забирает следующий argv как своё значение (`main-conf.c:2410`); одиночным
+    флагом там работает только `--append-output`.
   - `--infinite` нет (Р14).
   - Флаги вывода и статуса допустимы только со сканом и `--readscan`; с `--echo`, `--echo-all`, `-sL`, `--offline`,
     `--iflist` — отказ `output options apply only to a scan or --readscan`, код 1 (Р19). C печатает ключи вывода в

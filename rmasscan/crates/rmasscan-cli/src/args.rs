@@ -19,6 +19,7 @@ use rmasscan_core::config::{ScanConfig, parse_mac, parse_rate, parse_shard, pars
 use rmasscan_core::targets::{add_target_string, parse_ports};
 
 use crate::output::{Format, OutputOptions};
+use crate::status::StatusMode;
 
 /// `--webxml` (main-conf.c:3033–3034).
 const NMAP_XSL: &str = "http://nmap.org/svn/docs/nmap.xsl";
@@ -226,26 +227,42 @@ pub struct Cli {
         help = "Output file, - is stdout (without --output-format: XML; alias: --output-file)"
     )]
     pub output_filename: Option<String>,
+    // `F_BOOL`-опции C (main-conf.c:2409-2411, `parseBoolean` :657-698): без значения - истина, `=<val>` - по
+    // `parseBoolean`; побеждает последнее вхождение (`SET_output_append` :1616, `SET_output_flush` :1631).
     #[arg(
         long = "append-output",
         alias = "output-append",
-        overrides_with = "append_output",
-        help = "Append to the output file instead of truncating it (alias: --output-append)"
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Append to the output file instead of truncating it (alias: --output-append; =false undoes it)"
     )]
-    pub append_output: bool,
+    pub append_output: Vec<String>,
     #[arg(
         long = "output-flush",
-        overrides_with = "output_flush",
-        help = "Flush the output file after every record"
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Flush the output file after every record (=false undoes it)"
     )]
-    pub output_flush: bool,
+    pub output_flush: Vec<String>,
+    // `SET_output_show_open` (main-conf.c:1794-1806) игнорирует значение: любое вхождение, даже `=false`, сбрасывает
+    // show в `open`.
     #[arg(
-        long,
-        alias = "open-only",
-        overrides_with = "open",
-        help = "Report only open ports (the default; resets --show; alias: --open-only)"
+        long = "output-show-open",
+        aliases = ["open", "open-only"],
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Report only open ports (the default; resets --show; aliases: --open, --open-only)"
     )]
-    pub open: bool,
+    pub open: Vec<String>,
     #[arg(
         long,
         aliases = ["output-show", "output-status"],
@@ -272,20 +289,27 @@ pub struct Cli {
         help = "Undo --interactive"
     )]
     pub nointeractive: bool,
+    // `--stylesheet`, `--webxml` и `--no-stylesheet` применяются в порядке командной строки (main-conf.c:2092-2105,
+    // :2983-2984, :3033-3034): последний побеждает; `fold_stylesheet` заполняет [`Cli::try_parse_masscan`].
     #[arg(
         long,
         value_name = "URL",
-        overrides_with = "stylesheet",
-        conflicts_with = "webxml",
+        action = clap::ArgAction::Append,
         help = "XML stylesheet reference (without --output-format: XML)"
     )]
-    pub stylesheet: Option<String>,
+    pub stylesheet: Vec<String>,
     #[arg(
         long,
-        overrides_with = "webxml",
+        action = clap::ArgAction::Count,
         help = "Same as --stylesheet http://nmap.org/svn/docs/nmap.xsl"
     )]
-    pub webxml: bool,
+    pub webxml: u8,
+    #[arg(
+        long = "no-stylesheet",
+        action = clap::ArgAction::Count,
+        help = "Drop the stylesheet set earlier (does not change the output format)"
+    )]
+    pub no_stylesheet: u8,
     #[arg(
         long,
         overrides_with_all = ["status", "nostatus"],
@@ -298,13 +322,18 @@ pub struct Cli {
         help = "Do not show the status line"
     )]
     pub nostatus: bool,
+    // `F_BOOL` (main-conf.c:3091): `=<val>` по `parseBoolean`, `is_status_ndjson` не зависит от `--status`.
     #[arg(
         long = "ndjson-status",
         alias = "status-ndjson",
-        overrides_with = "ndjson_status",
-        help = "Print the status as NDJSON (alias: --status-ndjson)"
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Print the status as NDJSON (alias: --status-ndjson; =false undoes it)"
     )]
-    pub ndjson_status: bool,
+    pub ndjson_status: Vec<String>,
     // Ротация (Р1): принимается, чтобы отказать с причиной, а не ошибкой «неизвестная опция».
     #[arg(long, aliases = ["output-rotate", "rotate-output", "rotate-time"], hide = true)]
     pub rotate: Option<String>,
@@ -317,6 +346,12 @@ pub struct Cli {
     /// `--show`, `--noshow` и `--open` в порядке командной строки; заполняет [`Cli::try_parse_masscan`].
     #[arg(skip)]
     show_steps: Vec<ShowStep>,
+    /// Итог `--stylesheet`/`--webxml`/`--no-stylesheet`; `None` - таблицы стилей нет.
+    #[arg(skip)]
+    style: Option<String>,
+    /// Был ли хоть один `--stylesheet` или `--webxml` (`SET_output_stylesheet` задаёт XML, если формата нет).
+    #[arg(skip)]
+    style_sets_xml: bool,
 }
 
 /// Один шаг `SET_output_show` (`on`), `SET_output_noshow` (`!on`) или `SET_output_show_open`.
@@ -324,6 +359,24 @@ pub struct Cli {
 enum ShowStep {
     List { on: bool, list: String },
     OpenOnly,
+}
+
+/// `--json-status` и `--status-json` (`SET_status_json`, main-conf.c:1519-1531, :2400): C печатает две строки в
+/// stderr (имя как набрано, до `=` или `:`); `masscan_set_parameter` отбрасывает `CONF_ERR`, но rmasscan отказывает
+/// при разборе (exit 1), потому что скан с опцией, которую C назвал неподдерживаемой, не нужен.
+fn refuse_json_status(argv: &[String]) -> Result<(), ParseError> {
+    for a in argv.iter().skip(1) {
+        let Some(rest) = a.strip_prefix("--") else {
+            continue;
+        };
+        let name = rest.split(['=', ':']).next().unwrap_or(rest);
+        if name.eq_ignore_ascii_case("json-status") || name.eq_ignore_ascii_case("status-json") {
+            return Err(ParseError::Masscan(format!(
+                "[-] FAIL: {name} not supported, use --status-ndjson\n    hint: new-line delimited JSON status is what we use"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Ошибка разбора: clap печатает свою (`e.exit()`, код clap), текст masscan печатается в stderr как есть, exit 1.
@@ -423,6 +476,64 @@ where
 
 /// Порядок `--show`, `--noshow` и `--open` по индексам clap. Из нескольких `--open` значим только последний (он
 /// сбрасывает всё до него), а его индекс clap и хранит.
+/// `parseBoolean` (main-conf.c:657-698): пустое значение и неизвестная буква - истина, цифра - `strtoul(…, 0, 0) != 0`.
+fn parse_boolean(v: &str) -> bool {
+    let b = v.as_bytes();
+    let Some(&c) = b.first() else { return true };
+    if c.is_ascii_digit() {
+        // strtoul с основанием 0: `0x…` - шестнадцатеричное, `0…` - восьмеричное, иначе десятичное; ненулевое значение
+        // есть тогда и только тогда, когда в разобранной серии цифр есть не `0` (переполнение тоже ненулевое).
+        let hex = matches!(b, [b'0', b'x' | b'X', d, ..] if d.is_ascii_hexdigit());
+        let digits: Vec<u8> = if hex {
+            b[2..]
+                .iter()
+                .copied()
+                .take_while(u8::is_ascii_hexdigit)
+                .collect()
+        } else if c == b'0' {
+            b.iter()
+                .copied()
+                .take_while(|d| (b'0'..=b'7').contains(d))
+                .collect()
+        } else {
+            b.iter().copied().take_while(u8::is_ascii_digit).collect()
+        };
+        return digits.iter().any(|&d| d != b'0');
+    }
+    match c.to_ascii_lowercase() {
+        b'd' | b'f' | b'n' => false,
+        b'o' => !matches!(b.get(1), Some(b'f' | b'F')),
+        _ => true,
+    }
+}
+
+/// Итог `--stylesheet`/`--webxml`/`--no-stylesheet` по индексам clap: последний побеждает. Возвращает таблицу стилей
+/// (пустая строка C - её нет) и был ли `--stylesheet`/`--webxml` (main-conf.c:2092-2105, :2983-2984, :3033-3034).
+fn fold_stylesheet(m: &ArgMatches) -> (Option<String>, bool) {
+    let mut steps: Vec<(usize, Option<String>)> = Vec::new();
+    if let (Some(values), Some(indices)) = (
+        m.get_many::<String>("stylesheet"),
+        m.indices_of("stylesheet"),
+    ) {
+        steps.extend(indices.zip(values).map(|(i, v)| (i, Some(v.clone()))));
+    }
+    // `Count` без вхождений всё равно хранит значение по умолчанию, поэтому сначала счётчик.
+    if m.get_count("webxml") > 0
+        && let Some(indices) = m.indices_of("webxml")
+    {
+        steps.extend(indices.map(|i| (i, Some(NMAP_XSL.to_string()))));
+    }
+    let sets_xml = !steps.is_empty();
+    if m.get_count("no_stylesheet") > 0
+        && let Some(indices) = m.indices_of("no_stylesheet")
+    {
+        steps.extend(indices.map(|i| (i, None)));
+    }
+    steps.sort_by_key(|(i, _)| *i);
+    let style = steps.pop().and_then(|(_, s)| s).filter(|s| !s.is_empty());
+    (style, sets_xml)
+}
+
 fn show_steps(m: &ArgMatches) -> Vec<ShowStep> {
     let mut steps: Vec<(usize, ShowStep)> = Vec::new();
     for (id, on) in [("show", true), ("noshow", false)] {
@@ -434,9 +545,7 @@ fn show_steps(m: &ArgMatches) -> Vec<ShowStep> {
             steps.extend(indices.zip(lists.map(list)));
         }
     }
-    if m.get_flag("open")
-        && let Some(i) = m.index_of("open")
-    {
+    if let Some(i) = m.indices_of("open").and_then(Iterator::max) {
         steps.push((i, ShowStep::OpenOnly));
     }
     steps.sort_by_key(|(i, _)| *i);
@@ -498,11 +607,13 @@ impl Cli {
         S: Into<String>,
     {
         let argv = preprocess_args(args).map_err(ParseError::Masscan)?;
+        refuse_json_status(&argv)?;
         let m = Cli::command()
             .try_get_matches_from(argv)
             .map_err(from_clap)?;
         let mut cli = Cli::from_arg_matches(&m).map_err(ParseError::Clap)?;
         cli.show_steps = show_steps(&m);
+        (cli.style, cli.style_sets_xml) = fold_stylesheet(&m);
         cli.output_options().map_err(ParseError::Masscan)?;
         Ok(cli)
     }
@@ -511,22 +622,36 @@ impl Cli {
     pub fn output_flags_given(&self) -> bool {
         self.output_format.is_some()
             || self.output_filename.is_some()
-            || self.append_output
-            || self.output_flush
-            || self.open
+            || !self.append_output.is_empty()
+            || !self.output_flush.is_empty()
+            || !self.open.is_empty()
             || !self.show.is_empty()
             || !self.noshow.is_empty()
             || self.interactive
             || self.nointeractive
-            || self.stylesheet.is_some()
-            || self.webxml
+            || !self.stylesheet.is_empty()
+            || self.webxml > 0
+            || self.no_stylesheet > 0
             || self.status
             || self.nostatus
-            || self.ndjson_status
+            || !self.ndjson_status.is_empty()
             || self.rotate.is_some()
             || self.rotate_dir.is_some()
             || self.rotate_offset.is_some()
             || self.rotate_size.is_some()
+    }
+
+    /// Режим строки статуса: `is_status_updates` (по умолчанию 1; `--status`/`--nostatus`) и `is_status_ndjson`
+    /// (по умолчанию 0; `--ndjson-status[=<val>]`) независимы, как в C (`main.c:1399, 1434-1437, 1499-1503`,
+    /// `main-conf.c:2842-2845`, `:1507-1517`): выключено, если нет обновлений, иначе NDJSON, если он включён.
+    pub fn status_mode(&self) -> StatusMode {
+        if self.nostatus {
+            StatusMode::Off
+        } else if self.ndjson_status.last().is_some_and(|v| parse_boolean(v)) {
+            StatusMode::Ndjson
+        } else {
+            StatusMode::Text
+        }
     }
 
     /// Опции конвейера вывода с умолчаниями C (`main.c:1596`). Формат не задан, а файл или таблица стилей заданы -
@@ -544,21 +669,17 @@ impl Cli {
                 "{name} is not supported (output files are not rotated)"
             ));
         }
-        let stylesheet = if self.webxml {
-            Some(NMAP_XSL.to_string())
-        } else {
-            self.stylesheet.clone()
-        };
+        let stylesheet = self.style.clone();
         let format = match &self.output_format {
             Some(f) => parse_format(f)?,
-            None if self.output_filename.is_some() || stylesheet.is_some() => Format::Xml,
+            None if self.output_filename.is_some() || self.style_sets_xml => Format::Xml,
             None => Format::Default,
         };
         let mut o = OutputOptions {
             format,
             filename: self.output_filename.clone(),
-            append: self.append_output,
-            flush: self.output_flush,
+            append: self.append_output.last().is_some_and(|v| parse_boolean(v)),
+            flush: self.output_flush.last().is_some_and(|v| parse_boolean(v)),
             interactive: self.interactive,
             stylesheet,
             ..OutputOptions::default()
@@ -943,15 +1064,165 @@ mod tests {
     }
 
     #[test]
+    fn stylesheet_webxml_no_stylesheet_in_argv_order() {
+        const XSL: &str = "http://nmap.org/svn/docs/nmap.xsl";
+        let sty = |a: &[&str]| {
+            let o = opts(a);
+            (o.format, o.stylesheet)
+        };
+        let some = |s: &str| Some(s.to_string());
+        // main-conf.c:2092-2105: любой --stylesheet/--webxml задаёт XML, если формата нет.
+        assert_eq!(
+            sty(&["--stylesheet", "a", "--webxml"]),
+            (Format::Xml, some(XSL))
+        );
+        assert_eq!(
+            sty(&["--webxml", "--stylesheet", "a"]),
+            (Format::Xml, some("a"))
+        );
+        assert_eq!(
+            sty(&["--stylesheet", "a", "--webxml", "--stylesheet", "b"]),
+            (Format::Xml, some("b"))
+        );
+        // main-conf.c:2983-2984: --no-stylesheet только стирает таблицу.
+        assert_eq!(sty(&["--no-stylesheet"]), (Format::Default, None));
+        assert_eq!(
+            sty(&["--stylesheet", "a", "--no-stylesheet"]),
+            (Format::Xml, None)
+        );
+        assert_eq!(sty(&["--webxml", "--no-stylesheet"]), (Format::Xml, None));
+        assert_eq!(
+            sty(&["--no-stylesheet", "--webxml"]),
+            (Format::Xml, some(XSL))
+        );
+        assert_eq!(sty(&["--webxml", "-oJ", "x"]), (Format::Json, some(XSL)));
+        assert!(parse(&["--no-stylesheet"]).unwrap().output_flags_given());
+    }
+
+    #[test]
+    fn parse_boolean_matches_c() {
+        for t in [
+            "", "1", "7", "0x1", "01", "true", "TRUE", "t", "yes", "Y", "on", "ON", "enable",
+            "enabled", "E", "x",
+        ] {
+            assert!(parse_boolean(t), "{t:?}");
+        }
+        for f in [
+            "0", "00", "0x0", "08", "08x1", "false", "F", "no", "N", "off", "OFF", "oF", "disable",
+            "disabled", "d",
+        ] {
+            assert!(!parse_boolean(f), "{f:?}");
+        }
+    }
+
+    #[test]
+    fn bool_flags_take_values_and_last_wins() {
+        assert!(opts(&["--output-append"]).append);
+        assert!(!opts(&["--append-output", "--output-append=false"]).append);
+        assert!(opts(&["--output-append=off", "--append-output"]).append);
+        assert!(opts(&["--output-append=0", "--output-append=yes"]).append);
+        assert!(opts(&["--output-flush"]).flush);
+        assert!(!opts(&["--output-flush", "--output-flush=0"]).flush);
+        assert!(opts(&["--output-flush=no", "--output-flush=1"]).flush);
+        // Значение --open/--output-show-open C игнорирует (main-conf.c:1794-1806).
+        for n in ["--output-show-open", "--open", "--open-only"] {
+            let o = opts(&["--show", "closed", &format!("{n}=false")]);
+            assert_eq!(
+                (o.show_open, o.show_closed, o.show_host),
+                (true, false, false),
+                "{n}"
+            );
+            assert!(parse(&[n]).unwrap().output_flags_given(), "{n}");
+            assert!(
+                parse(&[&format!("{n}=false")])
+                    .unwrap()
+                    .output_flags_given(),
+                "{n}=false"
+            );
+        }
+        let o = opts(&["--output-show-open", "--show", "closed"]);
+        assert_eq!((o.show_open, o.show_closed), (true, true));
+        for a in [
+            &["--output-append=false"][..],
+            &["--output-flush=false"][..],
+            &["--ndjson-status=false"][..],
+            &["--status-ndjson=0"][..],
+        ] {
+            assert!(parse(a).unwrap().output_flags_given(), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn status_mode_follows_c_flags() {
+        use crate::status::StatusMode::{Ndjson, Off, Text};
+        let m = |a: &[&str]| parse(a).unwrap().status_mode();
+        assert_eq!(m(&[]), Text);
+        assert_eq!(m(&["--status"]), Text);
+        assert_eq!(m(&["--nostatus"]), Off);
+        assert_eq!(m(&["--ndjson-status"]), Ndjson);
+        assert_eq!(m(&["--status-ndjson"]), Ndjson);
+        assert_eq!(m(&["--nostatus", "--ndjson-status"]), Off);
+        assert_eq!(m(&["--ndjson-status", "--nostatus"]), Off);
+        assert_eq!(m(&["--nostatus", "--ndjson-status", "--status"]), Ndjson);
+        assert_eq!(m(&["--ndjson-status", "--status"]), Ndjson);
+        assert_eq!(m(&["--ndjson-status", "--ndjson-status=false"]), Text);
+        assert_eq!(m(&["--ndjson-status=false", "--ndjson-status"]), Ndjson);
+        for (v, want) in [
+            ("1", Ndjson),
+            ("0", Text),
+            ("true", Ndjson),
+            ("no", Text),
+            ("on", Ndjson),
+            ("off", Text),
+            ("enabled", Ndjson),
+            ("disabled", Text),
+            ("", Ndjson),
+            ("x", Ndjson),
+        ] {
+            assert_eq!(m(&[&format!("--ndjson-status={v}")]), want, "{v:?}");
+        }
+    }
+
+    #[test]
+    fn json_status_is_refused_like_c() {
+        for n in [
+            "--json-status",
+            "--status-json",
+            "--json-status=1",
+            "--status-json:x",
+        ] {
+            let bare = n.trim_start_matches("--").split(['=', ':']).next().unwrap();
+            assert_eq!(
+                masscan_err(&[n]),
+                format!(
+                    "[-] FAIL: {bare} not supported, use --status-ndjson\n    hint: new-line delimited JSON status is what we use"
+                )
+            );
+        }
+        // В порядке командной строки раньше следующих ошибок разбора не стоит, но после -o: отказ -o идёт первым.
+        assert_eq!(masscan_err(&["-oJ"]), "missing output filename");
+    }
+
+    #[test]
     fn status_flags_are_stored() {
         let c = parse(&["--nostatus"]).unwrap();
-        assert!(c.nostatus && !c.status && !c.ndjson_status);
+        assert!(c.nostatus && !c.status && c.ndjson_status.is_empty());
         let c = parse(&["--status", "--nostatus"]).unwrap();
         assert!(!c.status && c.nostatus);
         let c = parse(&["--nostatus", "--status"]).unwrap();
         assert!(c.status && !c.nostatus);
-        assert!(parse(&["--ndjson-status"]).unwrap().ndjson_status);
-        assert!(parse(&["--status-ndjson"]).unwrap().ndjson_status);
+        assert!(
+            !parse(&["--ndjson-status"])
+                .unwrap()
+                .ndjson_status
+                .is_empty()
+        );
+        assert!(
+            !parse(&["--status-ndjson"])
+                .unwrap()
+                .ndjson_status
+                .is_empty()
+        );
     }
 
     #[test]

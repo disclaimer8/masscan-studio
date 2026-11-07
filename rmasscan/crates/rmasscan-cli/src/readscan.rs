@@ -4,8 +4,10 @@
 //! ARP, устаревшие 1/2) дают ошибку `Unsupported` (Р13), а не молчаливый пропуск.
 //!
 //! Записи уходят в [`Pipeline::report_record`] со своим исходным временем (никогда не штампуются заново).
-//! Начало скана `s:` берётся из первой записи, как `when_scan_started` C (`in-binary.c:65`).
+//! Начало скана `s:` берётся из заголовка `masscan/1.1.N` (N >= 2, `in-binary.c:518-534`), иначе из первой записи
+//! до фильтра, как `when_scan_started` C (`in-binary.c:128-129`).
 
+use std::cell::RefCell;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
@@ -15,7 +17,7 @@ use rmasscan_core::config::ScanConfig;
 use rmasscan_core::massip::MassIp;
 
 use crate::LOGGED;
-use crate::output::{Pipeline, Record, Sink, Status, io_fail};
+use crate::output::{Pipeline, Record, Sink, Status};
 
 /// `BUF_MAX` C: наибольшая длина тела записи.
 const BUF_MAX: u64 = 1024 * 1024;
@@ -95,12 +97,59 @@ fn read_varint(r: &mut dyn Read) -> Result<Option<u64>, ReadError> {
     Err(corrupt())
 }
 
+/// `strtoul(s, 0, 0)` C: пробелы и знак, затем `0x` (16-ричное), `0` (восьмеричное) или десятичное; остановка на
+/// первом неподходящем байте или `\0`; переполнение даёт `ULONG_MAX`, минус отрицает по модулю 2^64.
+fn strtoul(s: &[u8]) -> u64 {
+    let mut i = 0;
+    while s.get(i).is_some_and(|b| matches!(b, b' ' | b'\t'..=b'\r')) {
+        i += 1;
+    }
+    let neg = match s.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
+    };
+    let mut base = 10u32;
+    if s.get(i) == Some(&b'0') {
+        if matches!(s.get(i + 1), Some(b'x' | b'X'))
+            && s.get(i + 2).is_some_and(|b| b.is_ascii_hexdigit())
+        {
+            base = 16;
+            i += 2;
+        } else {
+            base = 8;
+        }
+    }
+    let mut v = 0u64;
+    let mut overflow = false;
+    while let Some(d) = s.get(i).and_then(|&b| char::from(b).to_digit(base)) {
+        match v
+            .checked_mul(u64::from(base))
+            .and_then(|x| x.checked_add(u64::from(d)))
+        {
+            Some(x) => v = x,
+            None => overflow = true,
+        }
+        i += 1;
+    }
+    if overflow {
+        return u64::MAX;
+    }
+    if neg { v.wrapping_neg() } else { v }
+}
+
 /// Читает записи типа 6/7 из файла `-oB`. `f` получает каждую; его ошибка прерывает чтение.
 pub fn read_records(
     r: &mut dyn Read,
     f: &mut dyn FnMut(Record) -> Result<(), String>,
 ) -> Result<(), ReadError> {
-    read_records_counted(r, f, &mut |_| {})
+    read_records_counted(r, f, &mut |_| {}, &mut |_| {})
 }
 
 /// То же, с обратным вызовом после каждой записи (в том числе `'m'`) с общим числом: для строки прогресса.
@@ -108,6 +157,7 @@ fn read_records_counted(
     r: &mut dyn Read,
     f: &mut dyn FnMut(Record) -> Result<(), String>,
     progress: &mut dyn FnMut(u64),
+    scan_start: &mut dyn FnMut(u64),
 ) -> Result<(), ReadError> {
     let mut head = [0u8; BLOCK];
     let n = read_up_to(r, &mut head).map_err(ReadError::Io)?;
@@ -117,6 +167,24 @@ fn read_records_counted(
     }
     if n < BLOCK {
         return Err(corrupt());
+    }
+    // `in-binary.c:518-534`: у `masscan/1.1.<N>`, `N >= 2`, начало скана записано в заголовке как `s:<время>`.
+    if head[11] == b'.' && strtoul(&head[12..]) >= 2 {
+        // Поле после первой строки; `'a'` (97) и `buf[i]` за пределами заголовка читаются как конец строки.
+        let mut i = head[..97]
+            .iter()
+            .position(|&b| b == 0 || b == b'\n')
+            .unwrap_or(97);
+        i += 1;
+        if head.get(i) == Some(&b's') {
+            i += 1;
+        }
+        if head.get(i) == Some(&b':') {
+            i += 1;
+        }
+        if i < 97 {
+            scan_start(strtoul(&head[i..]));
+        }
     }
     let mut total = 0u64;
     while let Some(ty) = read_varint(r)? {
@@ -200,6 +268,9 @@ pub fn run_readscan(
     sink: &mut Pipeline,
     log: &mut dyn Write,
 ) -> Result<(), String> {
+    // stderr best-effort (in-binary.c:488-637 не проверяет `fprintf`/`fflush`, util-logger.c:25-31).
+    let mut best_effort = crate::live::BestEffort::new(log);
+    let log: &mut dyn Write = &mut best_effort;
     sink.open()?;
     let mut failure: Option<String> = None;
     for name in files {
@@ -221,22 +292,23 @@ fn read_one(
     sink: &mut Pipeline,
     log: &mut dyn Write,
 ) -> Result<(), String> {
-    log.write_all(format!("[+] --readscan {name}\n").as_bytes())
-        .map_err(io_fail)?;
+    // `in-binary.c:486-493`: `fopen` раньше строки `[+] --readscan`, на отсутствующем файле её нет.
+    // `log` best-effort (`BestEffort` в `run_readscan`): запись в него не возвращает ошибок.
     let file = match File::open(name) {
         Ok(f) => f,
         Err(e) => {
-            log.write_all(format!("[-] FAIL: --readscan\n[-] {name}: {e}\n").as_bytes())
-                .map_err(io_fail)?;
+            let _ = log.write_all(format!("[-] FAIL: --readscan\n[-] {name}: {e}\n").as_bytes());
             return Err(LOGGED.into());
         }
     };
+    let _ = log.write_all(format!("[+] --readscan {name}\n").as_bytes());
     let mut reader = BufReader::new(file);
+    let sink = RefCell::new(sink);
     let mut sink_failure: Option<String> = None;
-    let mut log_failure: Option<io::Error> = None;
     let res = read_records_counted(
         &mut reader,
         &mut |rec: Record| {
+            let mut sink = sink.borrow_mut();
             sink.set_scan_started_if_unset(rec.timestamp);
             if filter.keeps(&rec) {
                 sink.report_record(&rec).inspect_err(|e| {
@@ -246,22 +318,18 @@ fn read_one(
             Ok(())
         },
         &mut |n| {
-            if n & 0xFFFF == 0
-                && let Err(e) = log.write_all(format!("[+] {name}: {n:8}\r").as_bytes())
-            {
-                log_failure.get_or_insert(e);
+            if n & 0xFFFF == 0 {
+                let _ = log.write_all(format!("[+] {name}: {n:8}\r").as_bytes());
             }
         },
+        // `in-binary.c:518-534`: `s:` заголовка перекрывает начало скана (C присваивает без проверки на ноль).
+        &mut |ts| sink.borrow_mut().set_scan_started(ts),
     );
     if let Some(msg) = sink_failure {
         return Err(msg);
     }
-    if let Some(e) = log_failure {
-        return Err(io_fail(e));
-    }
     if let Err(e) = res {
-        log.write_all(e.log_line(name).as_bytes())
-            .map_err(io_fail)?;
+        let _ = log.write_all(e.log_line(name).as_bytes());
         return Err(LOGGED.into());
     }
     Ok(())
@@ -271,8 +339,8 @@ fn read_one(
 mod tests {
     use super::*;
     use crate::output::{Format, OutputEnv, OutputOptions, Wall, services};
+    use crate::scratch::Scratch;
     use rmasscan_core::targets::{add_target_string, parse_ports};
-    use std::path::PathBuf;
 
     struct FakeWall(u64);
     impl Wall for FakeWall {
@@ -342,11 +410,8 @@ mod tests {
         (got, res)
     }
 
-    fn tmp_file(name: &str, bytes: &[u8]) -> String {
-        let p: PathBuf =
-            std::env::temp_dir().join(format!("rmasscan-readscan-{}-{name}", std::process::id()));
-        std::fs::write(&p, bytes).unwrap();
-        p.to_string_lossy().into_owned()
+    fn tmp_file(scratch: &Scratch, name: &str, bytes: &[u8]) -> String {
+        scratch.write(name, bytes).to_string_lossy().into_owned()
     }
 
     fn no_filter() -> ReadFilter {
@@ -475,6 +540,7 @@ mod tests {
 
     #[test]
     fn corrupt_inputs_finish_output_and_fail() {
+        let scratch = Scratch::new();
         let good = make_bin(&recs3()[..1]);
         // Заголовок и одна запись, без подвала.
         let ok_prefix = good[..BLOCK + 15].to_vec();
@@ -494,7 +560,7 @@ mod tests {
         uns.extend_from_slice(&[9, 0]);
         cases.push(("uns", uns, ": unsupported record type 9\n"));
         for (name, bytes, expect) in cases {
-            let path = tmp_file(name, &bytes);
+            let path = tmp_file(&scratch, name, &bytes);
             let (out, log, res) = convert(std::slice::from_ref(&path), Format::Json, &no_filter());
             assert!(res.is_err(), "{name}");
             assert!(log.contains(expect), "{name}: {log:?}");
@@ -508,37 +574,126 @@ mod tests {
                     "{name}: {s:?}"
                 );
             }
-            let _ = std::fs::remove_file(path);
         }
     }
 
     #[test]
     fn unknown_format_message_names_the_file() {
+        let scratch = Scratch::new();
         let mut bad = b"nmap".to_vec();
         bad.resize(BLOCK, 0);
-        let path = tmp_file("nmap", &bad);
+        let path = tmp_file(&scratch, "nmap", &bad);
         let (_, log, res) = convert(std::slice::from_ref(&path), Format::Json, &no_filter());
         assert!(res.is_err());
         assert!(log.contains(&format!(
             "[-] {path}: unknown file format (expected \"masscan/1.1\")\n"
         )));
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn missing_file_reports_fail_and_errors() {
-        let path = format!("{}/rmasscan-no-such-file", std::env::temp_dir().display());
+        let scratch = Scratch::new();
+        let path = scratch.path("no-such-file").to_string_lossy().into_owned();
         let (_, log, res) = convert(std::slice::from_ref(&path), Format::Json, &no_filter());
         assert!(res.is_err());
+        // `in-binary.c:486-493`: `fopen` раньше `[+] --readscan`, на отсутствующем файле строки `[+]` нет.
         assert!(
-            log.contains(&format!("[-] FAIL: --readscan\n[-] {path}: ")),
+            log.starts_with(&format!("[-] FAIL: --readscan\n[-] {path}: ")),
             "{log:?}"
         );
+        assert!(!log.contains("[+]"), "{log:?}");
+        assert_eq!(log.lines().count(), 2, "{log:?}");
+    }
+
+    /// Файл с заголовком `head` (дополняется нулями до 99 байт) и записями `recs` настоящего писателя.
+    fn file_with_header(scratch: &Scratch, name: &str, head: &[u8], recs: &[Record]) -> String {
+        let bin = make_bin(recs);
+        let mut v = head.to_vec();
+        v.resize(BLOCK, 0);
+        v.extend_from_slice(&bin[BLOCK..BLOCK + 15 * recs.len()]);
+        tmp_file(scratch, name, &v)
+    }
+
+    /// Первые 99 байт вывода `-oB` после `--readscan`.
+    fn started_of(path: &str, filter: &ReadFilter) -> Vec<u8> {
+        let (out, _, res) = convert(&[path.to_string()], Format::Binary, filter);
+        res.unwrap();
+        out[..BLOCK].to_vec()
+    }
+
+    fn header_for(ts: u64) -> Vec<u8> {
+        let mut h = format!("masscan/1.1\ns:{ts}\n").into_bytes();
+        h.resize(BLOCK, 0);
+        h
+    }
+
+    /// `in-binary.c:518-534`: у `masscan/1.1.N`, `N >= 2`, начало скана берётся из `s:<время>` заголовка, а не из
+    /// первой записи.
+    #[test]
+    fn header_s_timestamp_is_the_scan_start_for_version_2() {
+        let scratch = Scratch::new();
+        let path = file_with_header(&scratch, "hdr2", b"masscan/1.1.2\ns:1234567890\n", &recs3());
+        assert_eq!(started_of(&path, &no_filter()), header_for(1_234_567_890));
+        // Десятичное без ведущего нуля, 16-ричное с `0x` и восьмеричное с `0`: `strtoul(.., 0, 0)`.
+        for (h, want) in [
+            (&b"masscan/1.1.10\ns:0x10\n"[..], 16u64),
+            (&b"masscan/1.1.2\ns:010\n"[..], 8),
+        ] {
+            let p = file_with_header(&scratch, "hdr2b", h, &recs3());
+            assert_eq!(started_of(&p, &no_filter()), header_for(want));
+        }
+    }
+
+    /// `N < 2` и версия без точки (`masscan/1.1`, как пишет `-oB`) заголовок `s:` не читают: начало скана это
+    /// время первой записи.
+    #[test]
+    fn header_s_timestamp_is_ignored_below_version_2() {
+        let scratch = Scratch::new();
+        for (name, h) in [
+            ("hdr1", &b"masscan/1.1.1\ns:1234567890\n"[..]),
+            ("hdr0", &b"masscan/1.1\ns:1234567890\n"[..]),
+        ] {
+            let path = file_with_header(&scratch, name, h, &recs3());
+            assert_eq!(started_of(&path, &no_filter()), header_for(1_700_000_001));
+        }
+    }
+
+    /// `in-binary.c:128-129`: время первой записи берётся до фильтра по IP/порту, поэтому отфильтрованная первая
+    /// запись всё равно задаёт начало скана (и для `masscan/1.1`, и когда `s:` в заголовке не читается).
+    #[test]
+    fn filtered_first_record_still_sets_the_scan_start() {
+        let recs = vec![
+            rec(1_700_000_001, [11, 0, 0, 1], 80, Status::Open),
+            rec(1_700_000_005, [10, 0, 0, 1], 80, Status::Open),
+        ];
+        let by_ip = {
+            let mut cfg = ScanConfig::default();
+            add_target_string(cfg.targets.ipv4_mut(), "10.0.0.0/24").unwrap();
+            ReadFilter::from_config(&cfg)
+        };
+        let by_port = {
+            let mut cfg = ScanConfig::default();
+            parse_ports(cfg.targets.ports_mut(), "443").unwrap();
+            ReadFilter::from_config(&cfg)
+        };
+        let scratch = Scratch::new();
+        let path = file_with_header(&scratch, "filt1", b"masscan/1.1\ns:1234567890\n", &recs);
+        assert_eq!(started_of(&path, &by_ip), header_for(1_700_000_001));
+        // Порт 443 есть только у второй записи: первая (порт 80) отфильтрована, начало скана всё равно из неё.
+        let mut recs443 = recs.clone();
+        recs443[0].ip = Ipv4Addr::new(10, 0, 0, 1);
+        recs443[1].port = 443;
+        let p443 = file_with_header(&scratch, "filt3", b"masscan/1.1\ns:1234567890\n", &recs443);
+        assert_eq!(started_of(&p443, &by_port), header_for(1_700_000_001));
+        // С `masscan/1.1.2` приоритет у заголовка даже при отфильтрованной первой записи.
+        let p2 = file_with_header(&scratch, "filt2", b"masscan/1.1.2\ns:1234567890\n", &recs);
+        assert_eq!(started_of(&p2, &by_ip), header_for(1_234_567_890));
     }
 
     #[test]
     fn scan_started_comes_from_the_first_record() {
-        let path = tmp_file("started", &make_bin(&recs3()));
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "started", &make_bin(&recs3()));
         let (out, _, res) = convert(std::slice::from_ref(&path), Format::Binary, &no_filter());
         res.unwrap();
         let mut head = b"masscan/1.1\ns:1700000001\n".to_vec();
@@ -548,18 +703,18 @@ mod tests {
         let (got, res) = read_all(&out);
         res.unwrap();
         assert_eq!(got, recs3());
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn filters_apply_like_c() {
+        let scratch = Scratch::new();
         let all = vec![
             rec(1, [10, 0, 0, 1], 80, Status::Open),
             rec(2, [10, 0, 0, 3], 443, Status::Open),
             rec(3, [10, 0, 0, 9], 80, Status::Open),
             rec(4, [11, 0, 0, 1], 80, Status::Open),
         ];
-        let path = tmp_file("filter", &make_bin(&all));
+        let path = tmp_file(&scratch, "filter", &make_bin(&all));
         let files = std::slice::from_ref(&path);
         let mut cfg = ScanConfig::default();
         add_target_string(cfg.targets.ipv4_mut(), "10.0.0.0/30").unwrap();
@@ -586,28 +741,26 @@ mod tests {
         // Без целей и портов пропускается всё.
         let (out, _, _) = convert(files, Format::Binary, &no_filter());
         assert_eq!(read_all(&out).0, all);
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn stderr_names_each_file() {
-        let a = tmp_file("a", &make_bin(&recs3()[..1]));
-        let b = tmp_file("b", &make_bin(&recs3()[1..]));
+        let scratch = Scratch::new();
+        let a = tmp_file(&scratch, "a", &make_bin(&recs3()[..1]));
+        let b = tmp_file(&scratch, "b", &make_bin(&recs3()[1..]));
         let (_, log, res) = convert(&[a.clone(), b.clone()], Format::Ndjson, &no_filter());
         res.unwrap();
         assert_eq!(log, format!("[+] --readscan {a}\n[+] --readscan {b}\n"));
-        let _ = std::fs::remove_file(a);
-        let _ = std::fs::remove_file(b);
     }
 
     #[test]
     fn progress_every_65536_records() {
+        let scratch = Scratch::new();
         // 65536 записей 'm' (по 2 байта: тип, длина 0).
         let tail: Vec<u8> = [0x6D, 0].repeat(65_536);
-        let path = tmp_file("progress", &with_header(&tail));
+        let path = tmp_file(&scratch, "progress", &with_header(&tail));
         let (_, log, res) = convert(std::slice::from_ref(&path), Format::Ndjson, &no_filter());
         res.unwrap();
         assert!(log.ends_with(&format!("[+] {path}:    65536\r")), "{log:?}");
-        let _ = std::fs::remove_file(path);
     }
 }

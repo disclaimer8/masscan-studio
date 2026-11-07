@@ -23,6 +23,11 @@ use rmasscan_net::{Interfaces, NetError, RouteTable};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+#[path = "common/scratch.rs"]
+mod scratch;
+
+use scratch::Scratch;
+
 #[path = "../examples/format_inputs.rs"]
 #[allow(dead_code)]
 mod format_inputs;
@@ -231,27 +236,6 @@ fn first_difference(got: &[u8], want: &[u8]) -> String {
     )
 }
 
-/// Каталог для выходов одного теста; удаляется при выходе из теста.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(tag: &str) -> Scratch {
-        let p = std::env::temp_dir().join(format!(
-            "rmasscan-formats-golden-{}-{tag}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).expect("scratch directory");
-        Scratch(p)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 /// Один кейс: тот же argv через `run`, сверка выхода (после масок), stdout и stderr.
 fn check_case(
     case: &Case,
@@ -321,7 +305,7 @@ struct Tally {
 
 /// Все кейсы одного входа; пропуски только по [`SKIPS`], каждый печатается.
 fn check_input(m: &Manifest, input: &Input, tally: &mut Tally) {
-    let scratch = Scratch::new(&input.name);
+    let scratch = Scratch::new();
     let path = if input.stored {
         PathBuf::from(format!("{DIR}/inputs/{}", input.name))
     } else {
@@ -335,7 +319,7 @@ fn check_input(m: &Manifest, input: &Input, tally: &mut Tally) {
             "{}: generator drifted",
             input.name
         );
-        let p = scratch.0.join(&input.name);
+        let p = scratch.path(&input.name);
         fs::write(&p, bytes).expect("write generated input");
         p
     };
@@ -349,7 +333,7 @@ fn check_input(m: &Manifest, input: &Input, tally: &mut Tally) {
             tally.skipped += 1;
             continue;
         }
-        match check_case(c, &path, &backend, &scratch.0) {
+        match check_case(c, &path, &backend, scratch.dir()) {
             Ok(()) => tally.checked += 1,
             Err(e) => tally.failures.push(format!("{}: {e}", c.name)),
         }

@@ -301,6 +301,11 @@ fn interrupt(l: &Linux, t: &mut LinuxTools, tag: &str, run: &Path) -> Result<i32
             if rc.is_some() {
                 break;
             }
+            if l.host.stopped() {
+                return Err(SuiteError::Interrupted(format!(
+                    "stopped while the scanner of {tag} was exiting after SIGINT"
+                )));
+            }
             pause(POLL);
         }
         if rc.is_none() {

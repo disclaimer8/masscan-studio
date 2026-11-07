@@ -76,7 +76,7 @@ const ORACLE_ADAPTERS: u64 = 6;
 /// The stand NIC's line of [`ORACLE_IFLIST`].
 const ORACLE_STAND_LINE: &str = " 0  veth-a \t(No description available)";
 /// The host name an mDNS announcement carries: it must never reach the evidence.
-const HOST: &[u8] = b"\x09owner-mbp\x05local\x00";
+const HOST: &[u8] = b"\x09printer-7\x05local\x00";
 const PEER: [u8; 6] = crate::link::STAND_PEER_MAC;
 const SCANNER: [u8; 6] = crate::link::STAND_SCANNER_MAC;
 

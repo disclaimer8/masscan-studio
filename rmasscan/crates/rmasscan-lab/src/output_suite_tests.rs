@@ -91,6 +91,8 @@ struct FakeOutput {
     log: Rc<RefCell<Vec<String>>>,
     /// rmasscan keeps running through SIGINT.
     ignores_int: Cell<bool>,
+    /// The operator asks to stop once the scanner has had its SIGINT.
+    stop_after_int: Cell<bool>,
     /// The files each scanner found in its working directory when it started (tag, who, names).
     cwd_files: RefCell<Vec<(String, String, Vec<String>)>>,
 }
@@ -105,6 +107,7 @@ impl FakeOutput {
             spawned: RefCell::default(),
             log: Rc::default(),
             ignores_int: Cell::new(false),
+            stop_after_int: Cell::new(false),
             cwd_files: RefCell::default(),
         }
     }
@@ -244,7 +247,7 @@ impl LinuxHost for FakeOutput {
         self.log.borrow_mut().push("pause".into());
     }
     fn stopped(&self) -> bool {
-        false
+        self.stop_after_int.get() && self.log.borrow().iter().any(|x| x == "signal scanner:INT")
     }
     /// The generator's moment of the signal, so that `interrupt.json` matches its capture.
     fn now(&self) -> f64 {
@@ -516,6 +519,26 @@ fn a_scan_that_ignores_sigint_is_killed_and_the_kill_is_recorded() {
         .cloned()
         .unwrap();
     assert_eq!(r["verdict"], "FAIL", "{:#?}", bad(&res));
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+/// An operator stop while rmasscan is still exiting after its SIGINT is honoured at the next poll, as before the
+/// signal: INTERRUPTED at once (the abort then stops the scanner), not after the 30 s wait and a kill.
+#[test]
+fn an_operator_stop_after_sigint_is_honoured_at_once() {
+    let s = setup(&["o16_interrupt_binary"]);
+    s.fake.ignores_int.set(true);
+    s.fake.stop_after_int.set(true);
+    let e = linux_with(&s.args, &s.fake, &s.lab).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::Interrupted(m) if m.contains("o16_interrupt_binary")),
+        "{e:?}"
+    );
+    let log = s.fake.log.borrow().clone();
+    let int = log.iter().position(|x| x == "signal scanner:INT").unwrap();
+    // No poll after the suite's own SIGINT: the next entry is the abort's stop of the scanner.
+    assert_eq!(log[int + 1], "signal scanner:INT", "{log:?}");
+    assert!(!s.out.join("runs/o16_interrupt_binary").exists());
     fs::remove_dir_all(s.root).unwrap();
 }
 

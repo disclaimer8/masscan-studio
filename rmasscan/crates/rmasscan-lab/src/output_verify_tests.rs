@@ -687,7 +687,7 @@ fn private_token_is_fail() {
     );
     let mut sim = Sim::new("o17_readscan");
     let o = sim.oracle.as_mut().unwrap();
-    o.stderr.push_str("Owner-MacBook-Pro.local\n");
+    o.stderr.push_str("printer-7.local\n");
     let r = judge(&sim);
     assert_verdict(&r, INVALID);
     assert_eq!(

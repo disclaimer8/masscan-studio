@@ -1,17 +1,22 @@
 //! Живой путь CLI end-to-end на fake-бэкенде (AGPL-3.0): обнаружение → `[+]` → ARP → `ReadyPlan` → `open` → engine →
-//! `Sink`, `--offline` и `--iflist`. Синтетические таблицы маршрутов и интерфейсов, `FakeAdapter` с ответчиком ARP и
-//! `reply_to_syn`, `ManualClock` для резолвера и engine, фиксированные энтропия и время. Ни один тест не достигает ОС:
-//! `OsBackend` существует только в бинарнике, а `open` здесь выдаёт `FakeAdapter` или паникует (`panic_on_open`).
+//! `Sink`, Ctrl-C (счётчик нажатий fake), `--offline` и `--iflist`. Синтетические таблицы маршрутов и интерфейсов,
+//! `FakeAdapter` с ответчиком ARP и `reply_to_syn`, `ManualClock` для резолвера и engine, фиксированные энтропия и
+//! время. Ни один тест не достигает ОС: `OsBackend` существует только в бинарнике, а `open` здесь выдаёт
+//! `FakeAdapter` или паникует (`panic_on_open`).
 //! Адреса и MAC только документационные (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) и локальные `02:…`,
 //! кроме гостя n2 и Mac стенда m1: они воспроизводят лабораторные стенды (`198.18.0.0/30`), n2 ещё и NIC QEMU
 //! (`10.0.2.0/24`, `52:54:00:…`).
 
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmasscan_cli::args::{Cli, SeedPolicy};
 use rmasscan_cli::live::{self, Backend};
-use rmasscan_cli::output::{Interactive, Sink, discovered_line};
+use rmasscan_cli::output::{
+    Interactive, OutputEnv, Pipeline, ServiceNames, Sink, Wall, discovered_line,
+};
+use rmasscan_cli::status::normalize_stderr_line;
 use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::packet::LinkType;
@@ -113,11 +118,13 @@ impl Interfaces for FakeIfaces {
     }
 }
 
-/// Один открытый адаптер: binding, его фиктивный адаптер и сколько handle прежних адаптеров жили в момент открытия.
+/// Один открытый адаптер: binding, его фиктивный адаптер, сколько handle прежних адаптеров жили в момент открытия и
+/// сколько раз до открытия опрошен счётчик Ctrl-C.
 struct Opened {
     binding: AdapterBinding,
     adapter: FakeAdapter,
     alive_before: usize,
+    polls_before: usize,
 }
 
 struct FakeBackend {
@@ -139,6 +146,14 @@ struct FakeBackend {
     attempts: Mutex<Vec<AdapterBinding>>,
     /// Общий журнал TX: каждый успешно отправленный кадр любого адаптера, по порядку.
     tx: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Нажатия Ctrl-C, которые видит `interrupts()`; поднимают их тест или ответчик ARP (`press_during_arp`).
+    presses: Arc<AtomicU32>,
+    /// Вызовы `interrupts()`.
+    polls: AtomicUsize,
+    /// Ctrl-C во время ARP: уход ARP-запроса считается одним нажатием.
+    press_during_arp: bool,
+    /// Цели молчат: SYN остаётся без ответа (ARP отвечает как обычно).
+    silent_targets: bool,
 }
 
 impl FakeBackend {
@@ -193,6 +208,10 @@ impl FakeBackend {
             opened: Mutex::new(Vec::new()),
             attempts: Mutex::new(Vec::new()),
             tx: Arc::new(Mutex::new(Vec::new())),
+            presses: Arc::new(AtomicU32::new(0)),
+            polls: AtomicUsize::new(0),
+            press_during_arp: false,
+            silent_targets: false,
         }
     }
 
@@ -210,6 +229,14 @@ impl FakeBackend {
 
     fn opened(&self) -> std::sync::MutexGuard<'_, Vec<Opened>> {
         self.opened.lock().unwrap()
+    }
+
+    fn polls(&self) -> usize {
+        self.polls.load(Ordering::SeqCst)
+    }
+
+    fn presses(&self) -> u32 {
+        self.presses.load(Ordering::SeqCst)
     }
 }
 
@@ -239,6 +266,16 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
     }
 }
 
+impl Wall for FakeBackend {
+    fn unix_time(&self) -> u64 {
+        assert!(!self.entropy_and_time_panic, "time must not be read");
+        self.unix_time
+    }
+    fn utc_offset_secs(&self, _: u64) -> i32 {
+        0
+    }
+}
+
 impl Backend for FakeBackend {
     fn routes(&self) -> Result<Box<dyn RouteTable>, NetError> {
         assert!(!self.tables_panic, "the route table must not be queried");
@@ -261,8 +298,16 @@ impl Backend for FakeBackend {
             adapter.set_health(h.clone());
         }
         let (neighbors, tx) = (self.neighbors.clone(), self.tx.clone());
+        let (presses, press_during_arp) = (self.presses.clone(), self.press_during_arp);
+        let silent_targets = self.silent_targets;
         adapter.set_responder(move |f| {
             tx.lock().unwrap().push(f.to_vec());
+            if press_during_arp && is_arp(f) {
+                presses.fetch_max(1, Ordering::SeqCst);
+            }
+            if silent_targets && !is_arp(f) {
+                return vec![];
+            }
             respond(f, &neighbors)
         });
         let pair = adapter.pair();
@@ -270,6 +315,7 @@ impl Backend for FakeBackend {
             binding: binding.clone(),
             adapter,
             alive_before,
+            polls_before: self.polls(),
         });
         Ok(pair)
     }
@@ -277,15 +323,18 @@ impl Backend for FakeBackend {
         assert!(!self.entropy_and_time_panic, "entropy must not be read");
         ENTROPY
     }
-    fn unix_time(&self) -> u64 {
-        assert!(!self.entropy_and_time_panic, "time must not be read");
-        self.unix_time
-    }
     fn arp_policy(&self) -> ArpPolicy {
         ArpPolicy::default()
     }
     fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
         self.clock.clone()
+    }
+    fn services(&self) -> ServiceNames {
+        ServiceNames::parse("http 80/tcp\n")
+    }
+    fn interrupts(&self) -> u32 {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        self.presses()
     }
 }
 
@@ -297,7 +346,7 @@ fn config(args: &[&str]) -> ScanConfig {
     parse(args).to_config().unwrap()
 }
 
-fn with(base: &[&'static str], extra: &[&'static str]) -> Vec<&'static str> {
+fn with<'a>(base: &[&'a str], extra: &[&'a str]) -> Vec<&'a str> {
     base.iter().chain(extra).copied().collect()
 }
 
@@ -342,7 +391,10 @@ fn syn_dst(f: &[u8]) -> (Ipv4Addr, u16) {
 }
 
 fn plus_lines(log: &str) -> Vec<&str> {
-    log.lines().filter(|l| l.starts_with("[+] ")).collect()
+    log.lines()
+        .map(normalize_stderr_line)
+        .filter(|l| l.starts_with("[+] "))
+        .collect()
 }
 
 #[test]
@@ -1000,6 +1052,9 @@ struct FailingSink {
 const SINK_ERROR: &str = "write failed: No space left on device (os error 28)";
 
 impl Sink for FailingSink {
+    fn open(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
         self.reports += 1;
         if reply.status == PortStatus::Open && !self.on_finish {
@@ -1577,6 +1632,201 @@ fn mac_m1_adapter_cases_skip_the_route_lookup_and_print_the_table_lines() {
     }
 }
 
+fn tmp(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("rmasscan-live-{}-{name}", std::process::id()))
+}
+
+/// Открытые порты в порядке ответов (= порядок SYN адаптера скана).
+fn open_in_reply_order(b: &FakeBackend) -> Vec<(Ipv4Addr, u16)> {
+    b.opened()[1]
+        .adapter
+        .sent_frames()
+        .iter()
+        .map(|f| syn_dst(f))
+        .filter(|d| OPEN.contains(d))
+        .collect()
+}
+
+fn list_line((ip, port): (Ipv4Addr, u16)) -> String {
+    format!("open tcp {port} {ip} {UNIX_TIME}\n")
+}
+
+/// `-oL FILE`: записи с временем стенки в файл, stdout молчит (Р3), строки `[+]` те же.
+#[test]
+fn live_scan_writes_list_file_and_keeps_stdout_silent() {
+    let path = tmp("scan.list");
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["-oL", path.to_str().unwrap()]));
+    r.unwrap();
+    assert_eq!(out, "", "stdout is silent with a file format");
+    let open = open_in_reply_order(&b);
+    assert_eq!(open.len(), 2);
+    let body: String = open.into_iter().map(list_line).collect();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!("#masscan\n{body}# end\n")
+    );
+    assert_eq!(
+        plus_lines(&log).last().copied(),
+        Some("[+] finished: Completed, sent 4, replies 4, open 2"),
+        "{log}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+/// Review Focus 2: `--interactive -oL -` пишет обе ветки в один stdout в порядке C (`output.c:766–876`): строка
+/// `Discovered`, затем ленивый заголовок у первой записи, затем запись; подвал в конце.
+#[test]
+fn interactive_and_list_to_stdout_interleave_like_c() {
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(&b, &with(&LIVE, &["--interactive", "-oL", "-"]));
+    r.unwrap();
+    let open = open_in_reply_order(&b);
+    let mut want = String::new();
+    for (i, d) in open.iter().enumerate() {
+        want.push_str(&discovered_line(d.0, d.1));
+        if i == 0 {
+            want.push_str("#masscan\n");
+        }
+        want.push_str(&list_line(*d));
+    }
+    want.push_str("# end\n");
+    assert_eq!(out, want);
+}
+
+/// `-oG -`: заголовок называет порты конфигурации (слитые, как `massip_optimize`), имена сервисов из бэкенда.
+#[test]
+fn live_grepable_names_the_scanned_ports_and_backend_services() {
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(&b, &with(&LIVE, &["-oG", "-"]));
+    r.unwrap();
+    let mut want = String::from(
+        "# Masscan 1.3.9-integration scan initiated Fri Jan 15 11:25:45 2027\n\
+         # Ports scanned: TCP(2;80-81) UDP(0;) SCTP(0;) PROTOCOLS(0;)\n",
+    );
+    for (ip, port) in open_in_reply_order(&b) {
+        let name = if port == 80 { "http" } else { "unknown" };
+        want.push_str(&format!(
+            "Timestamp: {UNIX_TIME}\tHost: {ip} ()\tPorts: {port}/open/tcp//{name}//\n"
+        ));
+    }
+    want.push_str("# Masscan done at Fri Jan 15 11:25:45 2027\n");
+    assert_eq!(out, want);
+}
+
+/// Р8: файл не открылся (каталог вместо файла) - exit 1, текст C без обёртки, ни одного кадра и ни одного ARP.
+#[test]
+fn open_failure_sends_no_frame() {
+    let dir = std::env::temp_dir();
+    for (extra, word) in [
+        (&[][..], "writing"),
+        (&["--append-output"][..], "appending"),
+    ] {
+        let b = FakeBackend::new();
+        let mut args = with(&LIVE, extra);
+        args.extend(["-oL", dir.to_str().unwrap()]);
+        let (r, out, _) = cli(&b, &args);
+        let e = r.unwrap_err();
+        let mut lines = e.lines();
+        assert_eq!(
+            lines.next(),
+            Some(format!("out: could not open file for {word}").as_str())
+        );
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .starts_with(&format!("{}: ", dir.display())),
+            "{e}"
+        );
+        assert_eq!(rmasscan_cli::error_text(&e), e, "C form, no wrapper");
+        assert!(out.is_empty());
+        assert!(b.attempts().is_empty(), "no adapter was opened");
+        assert!(b.tx_journal().is_empty(), "no frame, not even ARP");
+    }
+}
+
+/// Решение 2 контроллера: реальный формат без имени файла отклоняется до обнаружения ARP и кадров.
+#[test]
+fn file_format_without_a_filename_sends_no_frame() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["--output-format", "json"]));
+    assert_eq!(
+        r.unwrap_err(),
+        "[-] ERR: no output file, use `--output-filename <filename>` to set one\n\
+         [-] ERR: for `stdout`, use `--output-filename -`"
+    );
+    assert!(out.is_empty() && log.is_empty(), "{log}");
+    assert!(b.attempts().is_empty() && b.tx_journal().is_empty());
+    // `none` скан идёт, но ничего не пишет: ни stdout, ни файла.
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(&b, &with(&LIVE, &["--output-format", "none"]));
+    r.unwrap();
+    assert_eq!(out, "");
+    assert_eq!(b.opened()[1].adapter.sent_count(), 4);
+}
+
+/// stdout, который отказывает (не EPIPE) после `limit` байт.
+struct FailAfter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl std::io::Write for FailAfter {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len() + b.len() > self.limit {
+            return Err(std::io::Error::other("No space left on device"));
+        }
+        self.bytes.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Review Focus 1: ошибка записи посреди скана останавливает engine, `[+] finished:` с `sent` печатается, итог `Err`
+/// (exit 1); подвал после ошибки не пишется.
+#[test]
+fn write_error_mid_scan_stops_and_fails() {
+    let b = FakeBackend::new();
+    let header_and_one = "#masscan\n".len() + list_line((T1, 80)).len();
+    let mut out = FailAfter {
+        bytes: Vec::new(),
+        limit: header_and_one,
+    };
+    let mut log = Vec::new();
+    let r = rmasscan_cli::run(&parse(&with(&LIVE, &["-oL", "-"])), &b, &mut out, &mut log);
+    let log = String::from_utf8(log).unwrap();
+    let e = r.unwrap_err();
+    assert_eq!(e, "write failed: No space left on device");
+    let first = open_in_reply_order(&b)[0];
+    assert_eq!(
+        String::from_utf8(out.bytes).unwrap(),
+        format!("#masscan\n{}", list_line(first))
+    );
+    let fin = plus_lines(&log).last().copied().unwrap_or_default();
+    assert!(fin.starts_with("[+] finished: "), "{log}");
+    assert!(
+        fin.contains(&format!("sent {}", b.opened()[1].adapter.sent_count())),
+        "{log}"
+    );
+}
+
+/// `--readscan` не открывает адаптер и не читает таблицы ОС.
+#[test]
+fn readscan_opens_nothing_and_reads_no_tables() {
+    let mut b = FakeBackend::new();
+    b.tables_panic = true;
+    b.panic_on_open = true;
+    let missing = tmp("missing.scan");
+    let (r, out, log) = cli(&b, &["--readscan", missing.to_str().unwrap(), "-oL", "-"]);
+    assert_eq!(rmasscan_cli::error_text(&r.unwrap_err()), "");
+    assert!(out.is_empty());
+    assert!(log.contains("[-] FAIL: --readscan\n"), "{log}");
+    assert!(b.lookups().is_empty() && b.attempts().is_empty());
+}
+
 /// `OsBackend` недостижим из тестов: модуль и `fn main` бинарника под `cfg(not(test))`, библиотека его не знает,
 /// а `open_explicit` зовёт только `os_backend.rs` (compile-time отсутствие экспорта проверяет doctest
 /// `compile_fail` в `lib.rs`).
@@ -1589,7 +1839,20 @@ fn os_backend_is_absent_under_test() {
     for (name, src) in [
         ("lib.rs", include_str!("../src/lib.rs")),
         ("live.rs", include_str!("../src/live.rs")),
-        ("output.rs", include_str!("../src/output.rs")),
+        ("output/mod.rs", include_str!("../src/output/mod.rs")),
+        ("output/record.rs", include_str!("../src/output/record.rs")),
+        (
+            "output/formats.rs",
+            include_str!("../src/output/formats.rs"),
+        ),
+        (
+            "output/pipeline.rs",
+            include_str!("../src/output/pipeline.rs"),
+        ),
+        (
+            "output/services.rs",
+            include_str!("../src/output/services.rs"),
+        ),
         ("args.rs", include_str!("../src/args.rs")),
     ] {
         assert!(!src.contains("mod os_backend"), "{name}");
@@ -1602,4 +1865,421 @@ fn os_backend_is_absent_under_test() {
     }
     let os = include_str!("../src/os_backend.rs");
     assert!(os.contains("open_explicit("));
+}
+
+const LIVE5: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "5"];
+
+/// Фрагменты статуса (`\r`-терминированные) из stderr.
+fn status_fragments(log: &str) -> Vec<&str> {
+    log.split(['\r', '\n'])
+        .filter(|l| l.starts_with("rate:") || l.starts_with("{\"state\""))
+        .collect()
+}
+
+#[test]
+fn status_lines_on_stderr_by_default() {
+    let b = FakeBackend::new();
+    // Каждый sleep ManualClock двигает время; ждём достаточно долго, чтобы прошли отсчёты по 250 мс.
+    let (r, _, log) = cli(&b, &with(&LIVE5, &[]));
+    r.unwrap();
+    let frags = status_fragments(&log);
+    assert!(!frags.is_empty(), "no status line: {log:?}");
+    assert!(frags.iter().all(|f| f.contains("-kpps")), "{frags:?}");
+    // Последний фрагмент затёрт 77 пробелами, после него отдельная строка [+] finished.
+    let last = log.lines().last().unwrap();
+    assert!(
+        last.starts_with(&" ".repeat(77)) || last.contains(&format!("{}\r", " ".repeat(77))),
+        "{last:?}"
+    );
+    assert!(
+        normalize_stderr_line(last).starts_with("[+] finished: "),
+        "{last:?}"
+    );
+}
+
+#[test]
+fn nostatus_prints_elapsed_to_stdout() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["--nostatus"]));
+    r.unwrap();
+    assert!(!log.contains("rate:") && !log.contains('\r'), "{log:?}");
+    let last = out.lines().last().unwrap();
+    let ms = last.strip_suffix(" milliseconds elapsed").unwrap();
+    assert!(ms.parse::<u64>().is_ok(), "{out:?}");
+    assert!(out.ends_with(" milliseconds elapsed\n"));
+}
+
+/// `-oJ - --nostatus`: stdout это файл вывода. C закрывает его в `close_rotate` (`fp = stdout` из `output.c:216`,
+/// `fclose` на `output.c:268`) до `printf` времени скана (`main.c:1551`), поэтому в stdout только документ JSON. С
+/// настоящим файлом строка времени остаётся в stdout.
+#[test]
+fn nostatus_with_stdout_format_keeps_stdout_pure() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE, &["-oJ", "-", "--nostatus"]));
+    r.unwrap();
+    assert!(!log.contains("rate:") && !log.contains('\r'), "{log:?}");
+    let open = open_replies(&b);
+    assert_eq!(open.len(), 2);
+    assert_eq!(out, json_file(&open));
+
+    let path = tmp("nostatus.json");
+    let b = FakeBackend::new();
+    let (r, out, _) = cli(
+        &b,
+        &with(&LIVE, &["-oJ", path.to_str().unwrap(), "--nostatus"]),
+    );
+    r.unwrap();
+    let ms = out.strip_suffix(" milliseconds elapsed\n").unwrap();
+    assert!(ms.parse::<u64>().is_ok(), "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        json_file(&open_replies(&b))
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn ndjson_status_lines() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &with(&LIVE5, &["--ndjson-status"]));
+    r.unwrap();
+    let frags = status_fragments(&log);
+    assert!(!frags.is_empty(), "no ndjson status: {log:?}");
+    assert!(
+        frags
+            .iter()
+            .all(|f| f.ends_with("}}") || f.ends_with("}}}")),
+        "{frags:?}"
+    );
+    assert!(!out.contains("milliseconds elapsed"), "{out:?}");
+    assert!(!log.contains("rate:"), "{log:?}");
+}
+
+// ---------- Ctrl-C (Р18) ----------
+
+/// Ожидание `--wait 3600` идёт по `ManualClock` (72 000 пустых `recv`): скан не успевает закончиться сам раньше, чем
+/// цикл событий увидит нажатие, поэтому итог `Stopped` детерминирован.
+const LONG_WAIT: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "3600"];
+
+/// Строка C первого Ctrl-C (`main.c:1136–1139`): текст, 44 пробела, `\n`.
+fn waiting_line() -> String {
+    format!("waiting several seconds to exit...{}\n", " ".repeat(44))
+}
+
+/// Конвейер вывода, который «нажимает Ctrl-C» на первом открытом ответе: счётчик fake поднимается посреди первой
+/// пачки `Results`, цикл событий увидит его на следующей итерации. Запоминает каждый переданный ответ.
+struct PressOnFirstOpen<'a> {
+    pipeline: Pipeline<'a>,
+    presses: Arc<AtomicU32>,
+    reported: Vec<Reply>,
+}
+
+impl Sink for PressOnFirstOpen<'_> {
+    fn open(&mut self) -> Result<(), String> {
+        self.pipeline.open()
+    }
+    fn report(&mut self, reply: &Reply) -> Result<(), String> {
+        self.pipeline.report(reply)?;
+        if reply.status == PortStatus::Open {
+            self.presses.fetch_max(1, Ordering::SeqCst);
+        }
+        self.reported.push(*reply);
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<(), String> {
+        self.pipeline.finish()
+    }
+}
+
+/// Ответы `open` фиктивной сети в порядке SYN адаптера скана, как их видит приёмник (`reply_to_syn`: TTL 64).
+fn open_replies(b: &FakeBackend) -> Vec<Reply> {
+    open_in_reply_order(b)
+        .into_iter()
+        .map(|(ip, port)| Reply {
+            remote_ip: u32::from(ip),
+            remote_port: port,
+            local_ip: u32::from(MY_IP),
+            local_port: TIME_PORT,
+            status: PortStatus::Open,
+            tcp_flags: 0x12,
+            ttl: 64,
+        })
+        .collect()
+}
+
+/// `-oJ` с записями `open` (время стенки fake): `[`, записи через `,`, `]`.
+fn json_file(open: &[Reply]) -> String {
+    let records: Vec<String> = open
+        .iter()
+        .map(|r| {
+            format!(
+                "{{   \"ip\": \"{}\",   \"timestamp\": \"{UNIX_TIME}\", \"ports\": [ {{\"port\": {}, \"proto\": \
+                 \"tcp\", \"status\": \"open\", \"reason\": \"syn-ack\", \"ttl\": {}}} ] }}\n",
+                Ipv4Addr::from(r.remote_ip),
+                r.remote_port,
+                r.ttl
+            )
+        })
+        .collect();
+    format!("[\n{}]\n", records.join(",\n"))
+}
+
+/// `-oX` с записями `open`: заголовок, записи и подвал `runstats` (`2027-01-15 11:25:45` это `UNIX_TIME` в UTC).
+fn xml_file(open: &[Reply]) -> String {
+    let mut s = format!(
+        "<?xml version=\"1.0\"?>\r\n<!-- masscan v1.0 scan -->\r\n<nmaprun scanner=\"masscan\" \
+         start=\"{UNIX_TIME}\" version=\"1.0-BETA\"  xmloutputversion=\"1.03\">\r\n\
+         <scaninfo type=\"syn\" protocol=\"tcp\" />\r\n"
+    );
+    for r in open {
+        s.push_str(&format!(
+            "<host endtime=\"{UNIX_TIME}\"><address addr=\"{}\" addrtype=\"ipv4\"/><ports><port protocol=\"tcp\" \
+             portid=\"{}\"><state state=\"open\" reason=\"syn-ack\" reason_ttl=\"{}\"/></port></ports></host>\r\n",
+            Ipv4Addr::from(r.remote_ip),
+            r.remote_port,
+            r.ttl
+        ));
+    }
+    let n = open.len();
+    s.push_str(&format!(
+        "<runstats>\r\n<finished time=\"{UNIX_TIME}\" timestr=\"2027-01-15 11:25:45\" elapsed=\"0\" />\r\n\
+         <hosts up=\"{n}\" down=\"0\" total=\"{n}\" />\r\n</runstats>\r\n</nmaprun>\r\n"
+    ));
+    s
+}
+
+/// Р18: первое Ctrl-C посреди скана печатает строку C, останавливает engine; приёмник дописывает записи и подвал
+/// (`-oJ` закрыт `]\n`, `-oX` закрыт `</nmaprun>\r\n`), `[+] finished: Stopped`, `Ok` (exit 0). Ни один принятый
+/// ответ не теряется: в файле ровно открытые ответы, переданные приёмнику, включая пачки после остановки.
+#[test]
+fn first_interrupt_stops_and_finishes_outputs() {
+    for format in ["-oJ", "-oX"] {
+        let path = tmp(&format!("interrupt{format}"));
+        let b = FakeBackend::new();
+        let parsed = parse(&with(&LONG_WAIT, &[format, path.to_str().unwrap()]));
+        let (mut stdout, mut log) = (Vec::new(), Vec::new());
+        let (r, reported) = {
+            let env = OutputEnv {
+                wall: &b,
+                services: ServiceNames::empty(),
+                tcp_ports: Vec::new(),
+                scan_started: None,
+            };
+            let mut sink = PressOnFirstOpen {
+                pipeline: Pipeline::new(parsed.output_options().unwrap(), &mut stdout, env),
+                presses: b.presses.clone(),
+                reported: Vec::new(),
+            };
+            let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
+            (r, sink.reported)
+        };
+        let log = String::from_utf8(log).unwrap();
+        assert_eq!(
+            r.unwrap().reason,
+            Reason::Stopped,
+            "{format}: {:?}",
+            plus_lines(&log)
+        );
+        assert_eq!(b.presses(), 1, "one press");
+        assert_eq!(
+            log.matches(&waiting_line()).count(),
+            1,
+            "{:?}",
+            plus_lines(&log)
+        );
+        let open: Vec<Reply> = reported
+            .iter()
+            .copied()
+            .filter(|r| r.status == PortStatus::Open)
+            .collect();
+        assert!(!open.is_empty(), "the press came after an open reply");
+        let sent = b.opened()[1].adapter.sent_count();
+        let finished = format!(
+            "[+] finished: Stopped, sent {sent}, replies {}, open {}",
+            reported.len(),
+            open.len()
+        );
+        assert_eq!(plus_lines(&log).last().copied(), Some(finished.as_str()));
+        assert!(log.find(&waiting_line()).unwrap() < log.find("[+] finished: ").unwrap());
+        assert!(stdout.is_empty(), "stdout is silent with a file format");
+        let want = if format == "-oJ" {
+            json_file(&open)
+        } else {
+            xml_file(&open)
+        };
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), want, "{format}");
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Review Focus 5: Ctrl-C до первой записи (во время ARP; цели молчат): файл остаётся 0 байт, без заголовка и
+/// подвала, `[+] finished: Stopped`, exit 0, второго нажатия не нужно. Обработчик ставится ровно один раз, до
+/// открытия адаптера ARP.
+#[test]
+fn interrupt_without_records_leaves_empty_file() {
+    for format in ["-oJ", "-oX"] {
+        let path = tmp(&format!("interrupt-empty{format}"));
+        let mut b = FakeBackend::new();
+        b.press_during_arp = true;
+        b.silent_targets = true;
+        let (r, out, log) = cli(&b, &with(&LONG_WAIT, &[format, path.to_str().unwrap()]));
+        r.unwrap();
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"", "{format}");
+        assert_eq!(b.presses(), 1, "one press");
+        assert_eq!(
+            log.matches(&waiting_line()).count(),
+            1,
+            "{:?}",
+            plus_lines(&log)
+        );
+        let sent = b.opened()[1].adapter.sent_count();
+        assert_eq!(
+            plus_lines(&log).last().copied(),
+            Some(format!("[+] finished: Stopped, sent {sent}, replies 0, open 0").as_str())
+        );
+        assert_eq!(
+            b.opened()[0].polls_before,
+            1,
+            "the handler is installed once, before the ARP adapter opens"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Ctrl-C перехватывает только живой скан: `--readscan`, `-sL`, `--echo`, `--offline` и `--iflist` не ставят
+/// обработчик (поведение ОС по умолчанию), `interrupts()` у них не зовётся ни разу.
+#[test]
+fn only_a_live_scan_traps_ctrl_c() {
+    let path = tmp("trap.scan");
+    let file = path.to_str().unwrap();
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &with(&LIVE, &["-oB", file]));
+    r.unwrap();
+    assert_eq!(b.opened()[0].polls_before, 1, "installed before ARP");
+    assert!(b.polls() > 1, "the event loop polls the counter");
+    for args in [
+        &["--readscan", file, "-oL", "-"][..],
+        &["-sL", "198.51.100.1", "-p80", "--seed", "1"][..],
+        &["--echo", "198.51.100.1", "-p80", "--seed", "1"][..],
+        &TRACE[..],
+        &["--iflist"][..],
+    ] {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, args);
+        assert!(r.is_ok(), "{args:?}: {r:?} {log}");
+        assert_eq!(b.polls(), 0, "{args:?}");
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+/// Где ломается stderr (`BrokenPipe`, как EPIPE от умершего читателя `2>&1 | tee`).
+#[derive(Clone, Copy)]
+enum Breaks {
+    /// Каждая запись после строки первого Ctrl-C.
+    AfterWaitingLine,
+    /// Только затирание строки статуса в конце (`status_finish`: 77 пробелов и `\r`).
+    OnStatusFinish,
+}
+
+struct BrokenStderr {
+    bytes: Vec<u8>,
+    breaks: Breaks,
+}
+
+impl BrokenStderr {
+    fn new(breaks: Breaks) -> Self {
+        BrokenStderr {
+            bytes: Vec::new(),
+            breaks,
+        }
+    }
+}
+
+impl std::io::Write for BrokenStderr {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        let broken = match self.breaks {
+            Breaks::AfterWaitingLine => {
+                String::from_utf8_lossy(&self.bytes).contains(&waiting_line())
+            }
+            Breaks::OnStatusFinish => b == format!("{}\r", " ".repeat(77)).as_bytes(),
+        };
+        if broken {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Broken pipe",
+            ));
+        }
+        self.bytes.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Сбой stderr после первого Ctrl-C (`… -oJ out.json 2>&1 | tee scan.log`, SIGINT убил и `tee`): ошибка записи
+/// запоминается, engine уже остановлен, цикл дочитывает события, приёмник дописывает записи и подвал `]\n`; только
+/// затем возвращается ошибка stderr (exit 1). Строка `[+] finished` в мёртвый stderr не пишется.
+#[test]
+fn broken_stderr_after_the_first_press_still_finishes_the_file() {
+    let path = tmp("interrupt-broken-stderr.json");
+    let b = FakeBackend::new();
+    let parsed = parse(&with(&LONG_WAIT, &["-oJ", path.to_str().unwrap()]));
+    let mut stdout = Vec::new();
+    let mut log = BrokenStderr::new(Breaks::AfterWaitingLine);
+    let (r, reported) = {
+        let env = OutputEnv {
+            wall: &b,
+            services: ServiceNames::empty(),
+            tcp_ports: Vec::new(),
+            scan_started: None,
+        };
+        let mut sink = PressOnFirstOpen {
+            pipeline: Pipeline::new(parsed.output_options().unwrap(), &mut stdout, env),
+            presses: b.presses.clone(),
+            reported: Vec::new(),
+        };
+        let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
+        (r, sink.reported)
+    };
+    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    let text = String::from_utf8(log.bytes).unwrap();
+    assert_eq!(
+        text.matches(&waiting_line()).count(),
+        1,
+        "{:?}",
+        plus_lines(&text)
+    );
+    assert!(!text.contains("[+] finished"), "{:?}", plus_lines(&text));
+    let open: Vec<Reply> = reported
+        .iter()
+        .copied()
+        .filter(|r| r.status == PortStatus::Open)
+        .collect();
+    assert!(!open.is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
+    let _ = std::fs::remove_file(path);
+}
+
+/// Сбой только последней записи строки статуса (скан закончился сам): файл `-oJ` всё равно закрыт `]\n`, итог `Err`
+/// (exit 1) с текстом ошибки stderr.
+#[test]
+fn status_finish_failure_still_finishes_the_file() {
+    let path = tmp("status-finish-broken.json");
+    let b = FakeBackend::new();
+    let mut out = Vec::new();
+    let mut log = BrokenStderr::new(Breaks::OnStatusFinish);
+    let r = rmasscan_cli::run(
+        &parse(&with(&LIVE, &["-oJ", path.to_str().unwrap()])),
+        &b,
+        &mut out,
+        &mut log,
+    );
+    assert_eq!(r.unwrap_err(), "cannot write the status line: Broken pipe");
+    let open = open_replies(&b);
+    assert_eq!(open.len(), 2);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
+    assert!(out.is_empty());
+    let _ = std::fs::remove_file(path);
 }

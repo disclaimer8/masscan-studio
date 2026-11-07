@@ -2,7 +2,8 @@
 //! настоящим `OsBackend`. Весь код и все unit-тесты живут в библиотеке; модуль
 //! `os_backend` и `fn main` существуют только вне `cfg(test)` (cargo собирает
 //! bin-таргет и под `cfg(test)`), поэтому ни один тест не может дойти до ОС.
-//! Ctrl-C не перехватывается: поведение ОС по умолчанию, `paused.conf` не пишется.
+//! Ctrl-C перехватывает только живой скан (`OsBackend::interrupts`, Р18); остальные операции оставляют поведение ОС
+//! по умолчанию. `paused.conf` не пишется.
 
 #![forbid(unsafe_code)]
 
@@ -13,9 +14,16 @@ mod os_backend;
 fn main() -> std::process::ExitCode {
     use std::io::Write;
 
-    let cli = match rmasscan_cli::args::Cli::try_parse_masscan(std::env::args()) {
+    use rmasscan_cli::args::{Cli, ParseError};
+
+    let cli = match Cli::try_parse_masscan(std::env::args()) {
         Ok(c) => c,
-        Err(e) => e.exit(),
+        Err(ParseError::Clap(e)) => e.exit(),
+        // Тексты masscan (`missing output filename`, `nmap(-oA): …`, `FAIL: …`) как есть, exit 1.
+        Err(ParseError::Masscan(text)) => {
+            let _ = writeln!(std::io::stderr(), "{text}");
+            return std::process::ExitCode::FAILURE;
+        }
     };
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
@@ -24,7 +32,11 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(msg) => {
             let _ = out.flush();
-            eprintln!("{}", rmasscan_cli::error_text(&msg));
+            let text = rmasscan_cli::error_text(&msg);
+            // Мёртвый stderr (EPIPE) не превращает exit 1 в панику `eprintln!` (101).
+            if !text.is_empty() {
+                let _ = writeln!(std::io::stderr(), "{text}");
+            }
             std::process::ExitCode::FAILURE
         }
     }

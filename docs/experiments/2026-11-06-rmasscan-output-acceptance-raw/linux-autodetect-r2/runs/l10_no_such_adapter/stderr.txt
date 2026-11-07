@@ -1,0 +1,2 @@
+[-] FAIL: no such interface "nosuch0"
+    [hint] did you spell the name correctly?

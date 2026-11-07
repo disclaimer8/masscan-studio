@@ -1,0 +1,24 @@
+tar sha256 CB432CACF98061CFAB1C96C5D78702CA3F368C0368472364D9039A49486B72CA
+TAR_EXIT=0
+GIT_INIT_FILES=10538
+elevated=True
+npcap AdminOnly=1
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+TEST_WS_EXIT=0
+CLIPPY_EXIT=0
+BUILD_EXIT=0
+rmasscan.exe sha256 DDE1D277E5BA32D6DCAC7015FD1D60DE18A02478A14508D033993FC4ABECCC57
+OK C:\Users\lab\t4\rmasscan.exe : 0800 Dependent Load Flag
+CHECK_EXIT=0
+File Type: EXECUTABLE IMAGE
+                0800 Dependent Load Flag
+bcryptprimitives.dll
+kernel32.dll
+iphlpapi.dll
+ntdll.dll
+version.dll
+api-ms-win-core-synch-l1-2-0.dll
+KERNEL32.dll
+rmasscan 0.1.0
+DONE
+SSH_EXIT=0

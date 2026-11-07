@@ -5,7 +5,9 @@
 //! * `linux::socket` (AF_PACKET), `linux::route` (rtnetlink и ioctl интерфейсов для обнаружения);
 //! * `macos::{sys, ifinfo, process, route}` (BPF ABI и sysctl, getifaddrs, метрики процесса, route socket);
 //! * `windows::{ffi, handle, loader, process, sys}` (Npcap; `process` это телеметрия процесса для harness, в
-//!   продуктовой сборке она тоже есть; `sys` также читает адаптеры и маршруты IP Helper для обнаружения).
+//!   продуктовой сборке она тоже есть; `sys` также читает адаптеры и маршруты IP Helper для обнаружения);
+//! * `localtime` (смещение местного времени: `localtime_r`, `SystemTimeToTzSpecificLocalTime`);
+//! * `interrupt` (счётчик Ctrl-C живого скана: `sigaction`, `SetConsoleCtrlHandler`).
 //!
 //! Вне продукта: `lab_io::imp` только с feature `lab` (её включает один rmasscan-lab: sigaction-флаг остановки и
 //! listener с backlog 0) и тестовые модули (`macos::spike`, `windows::{tests, live}`). Остальной код безопасный:
@@ -61,6 +63,14 @@ pub mod arp_resolve;
 
 // Безопасный переносимый разбор ответов ядра о маршрутах (rtnetlink, route socket Darwin, IP Helper).
 mod route_parse;
+
+// Смещение местного времени от UTC (`localtime_r`, Win32 `SystemTimeToTzSpecificLocalTime`) для подвала `-oX`.
+#[allow(unsafe_code)]
+pub mod localtime;
+
+// Ctrl-C живого скана (Р18): обработчик только считает нажатия, второе завершает процесс с кодом 1.
+#[allow(unsafe_code)]
+pub mod interrupt;
 
 pub use discover::{
     DetectError, Detected, Iface, Interfaces, NextHop, Overrides, Route, RouteTable, Targets,

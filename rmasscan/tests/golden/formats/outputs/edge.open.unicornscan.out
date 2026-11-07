@@ -1,0 +1,6 @@
+#masscan
+TCP open	         unknown[    0]		from 0.0.0.1  ttl 0  
+TCP open	         unknown[47001]		from 192.0.2.1  ttl 64 
+TCP open	         unknown[65535]		from 192.0.2.2  ttl 255
+TCP open	         unknown[    0]		from 255.255.255.255  ttl 128
+# end

@@ -1,0 +1,1500 @@
+{
+  "oracle": {
+    "git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "binary_sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "version": "1.3.9-integration"
+  },
+  "captured_at": "2026-11-06T16:35:12Z",
+  "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
+  "isolation": "sudo unshare -n",
+  "services_source": "getent services <port>/tcp on the oracle host",
+  "store_max_bytes": 65536,
+  "inputs": [
+    {
+      "name": "basic.scan.bin",
+      "sha256": "28ec1e2febbe54548d8f46f64d13b1c101f30bbb1a5af489d5f32b6b75d7e9ce",
+      "size_bytes": 318,
+      "records": 8,
+      "stored": true
+    },
+    {
+      "name": "edge.scan.bin",
+      "sha256": "a0fdcce735a7e9b47ebfb38574bd046ede9874bb636cc84d2884b1b0c94facef",
+      "size_bytes": 303,
+      "records": 7,
+      "stored": true
+    },
+    {
+      "name": "empty.scan.bin",
+      "sha256": "23666c865751751a4e017c9b1faac09afb430ef396e2cacbc9de30dc8b8afa3d",
+      "size_bytes": 198,
+      "records": 0,
+      "stored": true
+    },
+    {
+      "name": "many.scan.bin",
+      "sha256": "a7eb7a3430d5997255d3e3d1da4089234fb3ad63ddb24cc37e7d039490cd2e9c",
+      "size_bytes": 1050198,
+      "records": 70000,
+      "stored": false
+    }
+  ],
+  "cases": [
+    {
+      "name": "basic.open.list",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.list.out",
+      "sha256": "0ad1c7720536b4dbc76e25321193c05342f1acd2d06e739a9d7bd0b886c3de87",
+      "masked_sha256": "0ad1c7720536b4dbc76e25321193c05342f1acd2d06e739a9d7bd0b886c3de87",
+      "size_bytes": 147,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.json",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.json.out",
+      "sha256": "0f12d388de1d795e24d5783ed7bfe722413ea7134d81f5e567b128737f88020c",
+      "masked_sha256": "0f12d388de1d795e24d5783ed7bfe722413ea7134d81f5e567b128737f88020c",
+      "size_bytes": 596,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.ndjson",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.ndjson.out",
+      "sha256": "9e9dd36cf99cdf0b1c1780db02a28e5fed685f7e4cf8d7094a601876534fe649",
+      "masked_sha256": "9e9dd36cf99cdf0b1c1780db02a28e5fed685f7e4cf8d7094a601876534fe649",
+      "size_bytes": 566,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.grepable",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.grepable.out",
+      "sha256": "c781133f8cc6ebd4981c987395c199400693795c3007e0589d3f274eceeb23c5",
+      "masked_sha256": "37ddda66e6594f46f01a22a8b568e8dcdb3afabda256f1ba3bba98336f6d00ae",
+      "size_bytes": 443,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.xml",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.xml.out",
+      "sha256": "0ada512f1dbea892af505062ebaa1393875296a2941555cd405c27a877e7e1c7",
+      "masked_sha256": "b16e36dfc62ce83db5076dd2fb49f3d3c3f731f1d0d4c9ab7cb5a393382721d2",
+      "size_bytes": 1085,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.binary",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.binary.out",
+      "sha256": "929dfd97bc4f7c5d5239d42b84da7d1ced39ad4e0b1bce8a2c2e4c87f46155d9",
+      "masked_sha256": "929dfd97bc4f7c5d5239d42b84da7d1ced39ad4e0b1bce8a2c2e4c87f46155d9",
+      "size_bytes": 258,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.hostonly",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.hostonly.out",
+      "sha256": "4fabfc4d2791c20f47a4d0869b1cb3df76dc10cfae0ce4a713d225269f0d5cee",
+      "masked_sha256": "4fabfc4d2791c20f47a4d0869b1cb3df76dc10cfae0ce4a713d225269f0d5cee",
+      "size_bytes": 37,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.unicornscan",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/basic.open.unicornscan.out",
+      "sha256": "8ddc046edea115cacf23dcbc4863420a66cfa262e1a1156718f3f3590e77df08",
+      "masked_sha256": "8ddc046edea115cacf23dcbc4863420a66cfa262e1a1156718f3f3590e77df08",
+      "size_bytes": 244,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open.xml-webxml",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": "outputs/basic.open.xml-webxml.out",
+      "sha256": "5ede1fe2154ed0f6c25f854034bd66dfdc87fb27c741c1449865a8f261d60084",
+      "masked_sha256": "eaaaf16457ed5fda40304e43bb3017ed5f2d346dfbfccc1676b89e3b46f94e0c",
+      "size_bytes": 1162,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.list",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.list.out",
+      "sha256": "194daffa0877891fe7e6eb526a9561b6aad9a4082082e6470e42382089111135",
+      "masked_sha256": "194daffa0877891fe7e6eb526a9561b6aad9a4082082e6470e42382089111135",
+      "size_bytes": 287,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.json",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.json.out",
+      "sha256": "9425abb08311b9c64e817b268843ae1a7750b92f9619c0a8f4f11a57d64d6e1d",
+      "masked_sha256": "9425abb08311b9c64e817b268843ae1a7750b92f9619c0a8f4f11a57d64d6e1d",
+      "size_bytes": 1192,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.ndjson",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.ndjson.out",
+      "sha256": "71e4a84931e2ad24c09441e4f2e36161a37fe974f96093506642c5df58e974ac",
+      "masked_sha256": "71e4a84931e2ad24c09441e4f2e36161a37fe974f96093506642c5df58e974ac",
+      "size_bytes": 1134,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.grepable",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.grepable.out",
+      "sha256": "7ea69026df43731ba9d59f0e9b9dbff27d87af3048d0a1f71d4e61ac6e8380bf",
+      "masked_sha256": "5bc8f71ced3376e26a9490a1d9dcee1dca9c2c4f684db6a331f88ceec532ddcc",
+      "size_bytes": 727,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.xml",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.xml.out",
+      "sha256": "8b25dd5d425999ed49af6be046cd0e06876c077a280ea483233890d05e67aebd",
+      "masked_sha256": "6d0198661c80c95ceff757b9f2a7f87541501880f527f3d97fe25a607ebb5557",
+      "size_bytes": 1841,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.binary",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.binary.out",
+      "sha256": "28ec1e2febbe54548d8f46f64d13b1c101f30bbb1a5af489d5f32b6b75d7e9ce",
+      "masked_sha256": "28ec1e2febbe54548d8f46f64d13b1c101f30bbb1a5af489d5f32b6b75d7e9ce",
+      "size_bytes": 318,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.hostonly",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.hostonly.out",
+      "sha256": "1d70af880567ed38dcc3c0a28bbdc35e559c8e124c376877931cd420adc21c8a",
+      "masked_sha256": "1d70af880567ed38dcc3c0a28bbdc35e559c8e124c376877931cd420adc21c8a",
+      "size_bytes": 74,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.unicornscan",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.unicornscan.out",
+      "sha256": "7e8004a1b663051851dac35d56b59a9a6a3b5aa37744797695a5e0e5a01d38a9",
+      "masked_sha256": "7e8004a1b663051851dac35d56b59a9a6a3b5aa37744797695a5e0e5a01d38a9",
+      "size_bytes": 481,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "basic.open-closed.xml-webxml",
+      "input": "basic.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/basic.open-closed.xml-webxml.out",
+      "sha256": "965c8af7d0c0b7c8fbe9c7e802357b2e48510d5367e907b23e8a505ce915a1f8",
+      "masked_sha256": "296f24031441e11eef187170d31d7d1a361d5f125ba1e23333f4bc2f52f03d8d",
+      "size_bytes": 1918,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.list",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.list.out",
+      "sha256": "4a8331b8bcbc30e47c9836c9c792d055d34be9926501a50a3b699e989c8059cf",
+      "masked_sha256": "4a8331b8bcbc30e47c9836c9c792d055d34be9926501a50a3b699e989c8059cf",
+      "size_bytes": 155,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.json",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.json.out",
+      "sha256": "2a40525529f7e236e321c0d2a03cab7cde9a1cc1e15076fc239b0803709d4df6",
+      "masked_sha256": "2a40525529f7e236e321c0d2a03cab7cde9a1cc1e15076fc239b0803709d4df6",
+      "size_bytes": 620,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.ndjson",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.ndjson.out",
+      "sha256": "bec364b196caa7998fff050f218972207bf4714021eaf22fd47227f0dfd43d89",
+      "masked_sha256": "bec364b196caa7998fff050f218972207bf4714021eaf22fd47227f0dfd43d89",
+      "size_bytes": 590,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.grepable",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.grepable.out",
+      "sha256": "8d94e0cabf5b578c90c15c490e6d0bbfe540591782282fae747d0c4da72f4b72",
+      "masked_sha256": "518c380cd5dc68124ba929d2764a5c4ea0cf45c154347d166b48d07677e0788a",
+      "size_bytes": 459,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.xml",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.xml.out",
+      "sha256": "d8bf2429a52e41c3b03a071af2beb33df1e9ecf2acc45ecfb8c65a9032bcc09a",
+      "masked_sha256": "ac1ce0c7bdc886bdbe9b0ecaa3fdbc34450fc8ca0e492ef152e1d6590c014311",
+      "size_bytes": 1109,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.binary",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.binary.out",
+      "sha256": "19ed0c45a1369458cfc020e81798e85eb068f9974f3aef9ee675434b40d962d4",
+      "masked_sha256": "19ed0c45a1369458cfc020e81798e85eb068f9974f3aef9ee675434b40d962d4",
+      "size_bytes": 258,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.hostonly",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.hostonly.out",
+      "sha256": "3d2792b5dae2a68248f42e50ec8cf1d4ebe9b535da81719870e6fb7e6fa365f5",
+      "masked_sha256": "3d2792b5dae2a68248f42e50ec8cf1d4ebe9b535da81719870e6fb7e6fa365f5",
+      "size_bytes": 44,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.unicornscan",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/edge.open.unicornscan.out",
+      "sha256": "d8c32e11a07cacaa616dc76189e8fd64407f85f9fcbe97cca2d5abbe91491f6f",
+      "masked_sha256": "d8c32e11a07cacaa616dc76189e8fd64407f85f9fcbe97cca2d5abbe91491f6f",
+      "size_bytes": 251,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open.xml-webxml",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": "outputs/edge.open.xml-webxml.out",
+      "sha256": "94b000ec4a3508d1616373069a5ed935c4b61e722f1645cfbb95ac264460fe6d",
+      "masked_sha256": "dc51e15170e5ea46fd0b82f05412dbcdfdd42fcff4ca04a55e00b10f4d367cc6",
+      "size_bytes": 1186,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.list",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.list.out",
+      "sha256": "a3d391c2f14a36d9db9670fca8a5da57b99ee620960015c566d11ff1531e948d",
+      "masked_sha256": "a3d391c2f14a36d9db9670fca8a5da57b99ee620960015c566d11ff1531e948d",
+      "size_bytes": 269,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.json",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.json.out",
+      "sha256": "caf6b597db4e4128e28b06d948fe188d3366c6cc7cc3392cbe92599ca49da9c6",
+      "masked_sha256": "caf6b597db4e4128e28b06d948fe188d3366c6cc7cc3392cbe92599ca49da9c6",
+      "size_bytes": 1098,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.ndjson",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.ndjson.out",
+      "sha256": "f1d8076c4a53d324b1449c6d2c10d77ab0b8ea21e36d8cce685529082dfe576f",
+      "masked_sha256": "f1d8076c4a53d324b1449c6d2c10d77ab0b8ea21e36d8cce685529082dfe576f",
+      "size_bytes": 1047,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.grepable",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.grepable.out",
+      "sha256": "c7a0cec3a811c6320be71abdcf2c92b8bd0bd3f5f60350e35e94eabe287cc9ce",
+      "masked_sha256": "55193c4cbb0b599ad7ef8ea1cbf0e6a91654ae843d2efd6df8b4e26908796477",
+      "size_bytes": 687,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.xml",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.xml.out",
+      "sha256": "709aa009b6aaf555f4fa46f2f93637a9098219aac4abb507a8060b0bf17c326a",
+      "masked_sha256": "fbc7786b35007cae8807249527094119ef5294a21e08e65f2d1a227422f901b9",
+      "size_bytes": 1707,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.binary",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.binary.out",
+      "sha256": "a0fdcce735a7e9b47ebfb38574bd046ede9874bb636cc84d2884b1b0c94facef",
+      "masked_sha256": "a0fdcce735a7e9b47ebfb38574bd046ede9874bb636cc84d2884b1b0c94facef",
+      "size_bytes": 303,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.hostonly",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.hostonly.out",
+      "sha256": "95513052b632f69c7af163ef29c1e2009dff27c12fbbb79081787c5851a4cd81",
+      "masked_sha256": "95513052b632f69c7af163ef29c1e2009dff27c12fbbb79081787c5851a4cd81",
+      "size_bytes": 78,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.unicornscan",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.unicornscan.out",
+      "sha256": "5041350e305f301d5cd661328029b73c94452251e5f3c6a5476982b0b14f6085",
+      "masked_sha256": "5041350e305f301d5cd661328029b73c94452251e5f3c6a5476982b0b14f6085",
+      "size_bytes": 435,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "edge.open-closed.xml-webxml",
+      "input": "edge.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/edge.open-closed.xml-webxml.out",
+      "sha256": "19fb405e16184175b8f03a65db54db2af3181a916cb2d199e920b52827ac729a",
+      "masked_sha256": "f4923dfec5e12ecb8b0e563357233909b8be87c14b8f9938a1b8569440ffab4d",
+      "size_bytes": 1784,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.list",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.list.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.json",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.json.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.ndjson",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.ndjson.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.grepable",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.grepable.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.xml",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.xml.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.binary",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.binary.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.hostonly",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.hostonly.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.unicornscan",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/empty.open.unicornscan.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open.xml-webxml",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": "outputs/empty.open.xml-webxml.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.list",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.list.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.json",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.json.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.ndjson",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.ndjson.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.grepable",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.grepable.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.xml",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.xml.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.binary",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.binary.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.hostonly",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.hostonly.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.unicornscan",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.unicornscan.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "empty.open-closed.xml-webxml",
+      "input": "empty.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/empty.open-closed.xml-webxml.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "masked_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "many.open.list",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "5cdd751555f6389b6b80e495f52e3e1e349107f1511daff1bdcf40d26c99a92f",
+      "masked_sha256": "5cdd751555f6389b6b80e495f52e3e1e349107f1511daff1bdcf40d26c99a92f",
+      "size_bytes": 1671476,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.json",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "e4e7a2ad6454ebb4b18e8a2f955e9e81226957dc25ebcabe3052e7eba856cbef",
+      "masked_sha256": "e4e7a2ad6454ebb4b18e8a2f955e9e81226957dc25ebcabe3052e7eba856cbef",
+      "size_bytes": 7068968,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.ndjson",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "bcee17e0314381bddc132e28243539b7aa9be7e95d182cf57fb788269c92687d",
+      "masked_sha256": "bcee17e0314381bddc132e28243539b7aa9be7e95d182cf57fb788269c92687d",
+      "size_bytes": 6742297,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.grepable",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "70c32220f3adb52074614a3120f98e85232be9ad8e2e39c5fc47eb18f8677767",
+      "masked_sha256": "fb321b18ed1aed83621b585ff1e237e2adec5af6e84835e390909953c9eefcdb",
+      "size_bytes": 3351640,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.xml",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "141a3220a2125f8426c0f971d94dd506a579c0d58e9f1bc1bfe1b9dc7bcde1b1",
+      "masked_sha256": "ba933d0007133807b8e289881d4ad24837a4d7358431ad64d7883e6e092d572c",
+      "size_bytes": 8935985,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.binary",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "c6a229f8cff23688b97b02d12774108a2a8f9eb1bc3042c3ee69cb31bde3b9d0",
+      "masked_sha256": "c6a229f8cff23688b97b02d12774108a2a8f9eb1bc3042c3ee69cb31bde3b9d0",
+      "size_bytes": 700203,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.hostonly",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "3bf5572caf12fc7d99e38e3bcda90c7d22526aeb14a829aa77f7363d1c864203",
+      "masked_sha256": "3bf5572caf12fc7d99e38e3bcda90c7d22526aeb14a829aa77f7363d1c864203",
+      "size_bytes": 563120,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.unicornscan",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": null,
+      "sha256": "00cd03b64ca7f6a235540a1f121e68d25a9d2c208737254f863168476d762ecf",
+      "masked_sha256": "00cd03b64ca7f6a235540a1f121e68d25a9d2c208737254f863168476d762ecf",
+      "size_bytes": 2803151,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open.xml-webxml",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": null,
+      "sha256": "2271a4156c8ab09f9f509899c9806651d3be5c5302d8fb74e84a8ac04195e6d6",
+      "masked_sha256": "9bfdb719de988fbe232651733d979e39d252302f48bfb64aefe9068ebbc83177",
+      "size_bytes": 8936062,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.list",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "c22e53069abbfb4248959e847be1120905b7485bb0c06365cc47297e949d478b",
+      "masked_sha256": "c22e53069abbfb4248959e847be1120905b7485bb0c06365cc47297e949d478b",
+      "size_bytes": 2553857,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.json",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "3a7b85996da3b59845f18e23a58cd865c6fd2745fb4ed8c08c8f2642015f9171",
+      "masked_sha256": "3a7b85996da3b59845f18e23a58cd865c6fd2745fb4ed8c08c8f2642015f9171",
+      "size_bytes": 10650044,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.ndjson",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "66f7e32f81f8cc85b53e3ce7b96f8dd2e79f226fb3851ccc5711e5d3e901ec72",
+      "masked_sha256": "66f7e32f81f8cc85b53e3ce7b96f8dd2e79f226fb3851ccc5711e5d3e901ec72",
+      "size_bytes": 10160042,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.grepable",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "2b5eefd4dd5ccf90d769cd2e1d886039feebd8cccd8fd12983f0c3b65b799e18",
+      "masked_sha256": "49c4f11432c1866df6343c15b595b15434cea980b6b8a97283313906506c49b5",
+      "size_bytes": 5074009,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.xml",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "45b4aa28acc41279ee7caa7d02161a1e28ddd4e27ab492441137b1751afdf04b",
+      "masked_sha256": "49578a3e3fc3bd9f412c4fbc420c15cf4f74f50e20d2c06af018a3f380148417",
+      "size_bytes": 13450385,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.binary",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "a7eb7a3430d5997255d3e3d1da4089234fb3ad63ddb24cc37e7d039490cd2e9c",
+      "masked_sha256": "a7eb7a3430d5997255d3e3d1da4089234fb3ad63ddb24cc37e7d039490cd2e9c",
+      "size_bytes": 1050198,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.hostonly",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "1ce9ce48571c2853c2bffecceb021eee782995ec2191a36987ba7756ee1ce2e2",
+      "masked_sha256": "1ce9ce48571c2853c2bffecceb021eee782995ec2191a36987ba7756ee1ce2e2",
+      "size_bytes": 844676,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.unicornscan",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "fef6a67f6e579eab44e1146255f7d68584e851d1b82502e5a52cdf08096b011b",
+      "masked_sha256": "fef6a67f6e579eab44e1146255f7d68584e851d1b82502e5a52cdf08096b011b",
+      "size_bytes": 4251357,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "many.open-closed.xml-webxml",
+      "input": "many.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": "71c9cdde688e807e4ba77f52942ccc499de0587289b6dd994962234eef6f3988",
+      "masked_sha256": "8acdf2e6c027d626aed2147126bf541989af037bced0ce1dd22039828e9af54f",
+      "size_bytes": 13450462,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
+    },
+    {
+      "name": "filter.open.list",
+      "input": "basic.scan.bin",
+      "args": [
+        "--range",
+        "10.0.0.0/31",
+        "-p80",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.open.list.out",
+      "sha256": "5dd835ab4e37f39aef5535d8033e1e99facb772cd47cec20f311fd3f53dabd99",
+      "masked_sha256": "5dd835ab4e37f39aef5535d8033e1e99facb772cd47cec20f311fd3f53dabd99",
+      "size_bytes": 47,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.open.grepable",
+      "input": "basic.scan.bin",
+      "args": [
+        "--range",
+        "10.0.0.0/31",
+        "-p80",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.open.grepable.out",
+      "sha256": "e70c0a02c11db05160870af557f031604175818a386d1d7bccc8054e8d6e6d31",
+      "masked_sha256": "db4df266af12bb19c5b687a1357c8496d3c7ad3a55bb64c2190c8f136eb05723",
+      "size_bytes": 239,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    }
+  ]
+}

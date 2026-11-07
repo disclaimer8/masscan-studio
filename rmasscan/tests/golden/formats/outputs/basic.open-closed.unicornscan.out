@@ -1,0 +1,10 @@
+#masscan
+TCP open	            http[   80]		from 10.0.0.1  ttl 64 
+TCP closed	           https[  443]		from 10.0.0.1  ttl 64 
+TCP open	        http-alt[ 8080]		from 10.0.0.2  ttl 57 
+TCP closed	             ssh[   22]		from 10.0.0.2  ttl 57 
+TCP open	             ssh[   22]		from 10.0.0.3  ttl 128
+TCP closed	            http[   80]		from 10.0.0.3  ttl 128
+TCP open	           https[  443]		from 192.0.2.7  ttl 255
+TCP closed	        http-alt[ 8080]		from 192.0.2.7  ttl 1  
+# end

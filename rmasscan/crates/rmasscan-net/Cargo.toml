@@ -9,7 +9,7 @@ license.workspace = true
 # наследует workspace-линт `unsafe_code = "forbid"`: lib.rs ставит
 # `deny(unsafe_code)`, а unsafe разрешён только локально в private FFI-модулях
 # `linux::{socket, route}`, `macos::{sys, ifinfo, process, route}`,
-# `windows::{ffi, handle, loader, process, sys}`; вне продукта ещё `lab_io::imp`
+# `windows::{ffi, handle, loader, process, sys}`, `localtime`, `interrupt`; вне продукта ещё `lab_io::imp`
 # (feature `lab`, см. ниже) и тестовые модули.
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -40,12 +40,14 @@ windows-sys = { version = "=0.61.2", default-features = false, features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
     "Win32_Security",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
+    "Win32_System_Time",
     "Wdk_System_SystemServices",
 ] }
 

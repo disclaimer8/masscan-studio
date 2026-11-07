@@ -1,0 +1,4 @@
+SigIgn:	0000000000000004
+ 21:14:38 up 22 days,  2:06,  3 users,  load average: 0.87, 2.39, 1.65
+TEST_WS_R2_EXIT=0
+ 21:17:02 up 22 days,  2:09,  3 users,  load average: 1.71, 2.28, 1.72

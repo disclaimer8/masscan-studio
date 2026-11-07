@@ -520,6 +520,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     const FIFO_CHILD_ENV: &str = "RMASSCAN_DEAD_FIFO_CHILD";
 
     /// Работает только в дочернем процессе `a_dead_fifo_reader_is_a_write_error`: файл вывода это FIFO, читатель

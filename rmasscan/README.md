@@ -99,10 +99,10 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
     устаревшие типы дают `<файл>: unsupported record type N`, запись статуса (тип 6 или 7) с протоколом не TCP —
     `<файл>: unsupported record protocol P`. Обрыв посреди записи — `[-] file corrupt` и код 1 (C молча
     останавливается с кодом 0); файл короче 99-байтового заголовка с верным началом `masscan/1.1` — тоже
-    `[-] file corrupt` и код 1 (C печатает `[-] <файл>: ` и `strerror(errno)`); пустой файл — сообщение о неизвестном
-    формате (C: `file is empty`), для отсутствующего файла перед строками `[-] FAIL` печатается
-    `[+] --readscan <файл>` (C ничего не печатает); на первом плохом файле чтение прекращается. `--seed` при
-    `--readscan` игнорируется.
+    `[-] file corrupt` и код 1 (C печатает `[-] <файл>: ` и `strerror(errno)`); пустой файл (0 байт) — сообщение о
+    неизвестном формате (C: `feof` до первого `fread` ложно, поэтому 0-байтовый файл доходит до `bytes_read < 'a'+2` и
+    печатает `[-] <файл>: ` и `strerror(errno)`, а не `file is empty`); на первом плохом файле чтение прекращается.
+    `--seed` при `--readscan` игнорируется.
   - `--json-status` и `--status-json` — отказ при разборе с двумя строками C (`[-] FAIL: … not supported, use --status-ndjson`), код 1 (C печатает их, но `masscan_set_parameter` отбрасывает ошибку, и скан продолжается).
   - `--append-output`/`--output-append`, `--output-flush`, `--output-show-open` принимают голый флаг (= `true`) или
     `=<bool>` (`1/0`, `true/false`, `yes/no`, `on/off`, `enable/disable`) и применяются в порядке argv (последнее

@@ -649,6 +649,8 @@ mod tests {
         let line = format!("[-] {missing}: ");
         assert_eq!(log.matches(&line).count(), 1, "{log}");
         assert_eq!(log.matches("[-] FAIL: --readscan\n").count(), 1, "{log}");
+        // `in-binary.c:486-493`: `fopen` раньше `[+] --readscan`.
+        assert!(!log.contains("[+]"), "{log}");
         // Неполный файл: `[-] file corrupt` один раз, подвал уже записанного вывода на месте.
         let full = std::fs::read(scan_file("corrupt.scan", &[open_rec()])).unwrap();
         let corrupt = tmp("corrupt.scan");

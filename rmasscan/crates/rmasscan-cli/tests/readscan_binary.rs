@@ -59,7 +59,9 @@ fn readscan_read_errors_are_printed_once() {
     assert_eq!(err.matches(&format!("[-] {missing}: ")).count(), 1, "{err}");
     assert_eq!(err.matches("[-] FAIL: --readscan").count(), 1, "{err}");
     assert!(!err.contains("rmasscan: error:"), "{err}");
-    assert_eq!(err.lines().count(), 3, "{err}");
+    // `in-binary.c:486-493`: `fopen` раньше `[+] --readscan`, строки `[+]` для отсутствующего файла нет.
+    assert!(!err.contains("[+]"), "{err}");
+    assert_eq!(err.lines().count(), 2, "{err}");
 
     let corrupt = tmp("corrupt.scan");
     std::fs::write(&corrupt, &one_record_scan()[..99 + 9]).unwrap();

@@ -105,6 +105,11 @@ impl<'a> Pipeline<'a> {
         }
     }
 
+    /// `out->when_scan_started = strtoul(..)` из заголовка `masscan/1.1.N` (`in-binary.c:531-532`): без проверки на ноль.
+    pub fn set_scan_started(&mut self, ts: u64) {
+        self.scan_started = ts;
+    }
+
     /// `if (out->when_scan_started == 0) out->when_scan_started = record.timestamp` (`in-binary.c`).
     pub fn set_scan_started_if_unset(&mut self, ts: u64) {
         if self.scan_started == 0 {

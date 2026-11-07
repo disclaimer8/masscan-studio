@@ -105,6 +105,11 @@ impl<'a> Pipeline<'a> {
         }
     }
 
+    /// `out->when_scan_started = strtoul(..)` из заголовка `masscan/1.1.N` (`in-binary.c:531-532`): без проверки на ноль.
+    pub fn set_scan_started(&mut self, ts: u64) {
+        self.scan_started = ts;
+    }
+
     /// `if (out->when_scan_started == 0) out->when_scan_started = record.timestamp` (`in-binary.c`).
     pub fn set_scan_started_if_unset(&mut self, ts: u64) {
         if self.scan_started == 0 {
@@ -260,8 +265,11 @@ mod tests {
     use super::*;
     use crate::output::discovered_line;
     use crate::output::services;
+    use crate::scratch::Scratch;
     use std::io;
     use std::net::Ipv4Addr;
+    // Used only by the #[cfg(unix)] dead-FIFO child test below; unused on Windows.
+    #[cfg(unix)]
     use std::path::PathBuf;
 
     struct FakeWall(u64);
@@ -305,10 +313,6 @@ mod tests {
         }
     }
 
-    fn tmp(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("rmasscan-pipeline-{}-{name}", std::process::id()))
-    }
-
     /// `open`, записи, `finish`; возвращает stdout.
     fn run(opts: OutputOptions, recs: &[Record]) -> Vec<u8> {
         let wall = FakeWall(1_700_000_100);
@@ -343,8 +347,8 @@ mod tests {
 
     #[test]
     fn default_format_opens_no_file() {
-        let path = tmp("default-nofile");
-        let _ = std::fs::remove_file(&path);
+        let scratch = Scratch::new();
+        let path = scratch.path("default-nofile");
         let o = opts(Format::Default, path.to_str());
         run(o, &[open_rec()]);
         assert!(!path.exists());
@@ -363,7 +367,8 @@ mod tests {
 
     #[test]
     fn file_format_keeps_stdout_silent() {
-        let path = tmp("silent.list");
+        let scratch = Scratch::new();
+        let path = scratch.path("silent.list");
         let o = opts(Format::List, path.to_str());
         assert!(run(o, &[open_rec()]).is_empty());
         assert_eq!(
@@ -382,7 +387,6 @@ mod tests {
                 .unwrap()
                 .contains("open tcp 80")
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -395,14 +399,14 @@ mod tests {
             ),
             (Format::Unicornscan, "u.txt", "#masscan\n"),
         ] {
-            let path = tmp(name);
+            let scratch = Scratch::new();
+            let path = scratch.path(name);
             std::fs::write(&path, "stale").unwrap();
             let o = opts(f, path.to_str());
             assert!(run(o, &[open_rec()]).is_empty());
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(text.starts_with(head), "{text}");
             assert!(!text.contains("stale"));
-            let _ = std::fs::remove_file(&path);
         }
     }
 
@@ -417,14 +421,14 @@ mod tests {
 
     #[test]
     fn header_is_lazy_and_footer_needs_a_record() {
-        let path = tmp("lazy.json");
+        let scratch = Scratch::new();
+        let path = scratch.path("lazy.json");
         run(opts(Format::Json, path.to_str()), &[]);
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
         run(opts(Format::Json, path.to_str()), &[open_rec()]);
         let t = std::fs::read_to_string(&path).unwrap();
         assert!(t.starts_with("[\n{   \"ip\": \"1.2.3.4\""));
         assert!(t.ends_with("} ] }\n]\n"));
-        let _ = std::fs::remove_file(&path);
         assert!(run(opts(Format::Json, Some("-")), &[]).is_empty());
     }
 
@@ -484,8 +488,8 @@ mod tests {
 
     #[test]
     fn append_reopens_and_writes_header_again() {
-        let path = tmp("append.list");
-        let _ = std::fs::remove_file(&path);
+        let scratch = Scratch::new();
+        let path = scratch.path("append.list");
         let mut o = opts(Format::List, path.to_str());
         o.append = true;
         run(o.clone(), &[open_rec()]);
@@ -498,12 +502,12 @@ mod tests {
         // Без append файл усекается.
         run(opts(Format::List, path.to_str()), &[open_rec()]);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), one);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn open_failure_message_matches_c() {
-        let dir = std::env::temp_dir();
+        let scratch = Scratch::new();
+        let dir = scratch.dir();
         let wall = FakeWall(1);
         for (append, word) in [(false, "writing"), (true, "appending")] {
             let mut out = Vec::new();
@@ -553,8 +557,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_dead_fifo_reader_is_a_write_error() {
-        let path = tmp("dead-reader.fifo");
-        let _ = std::fs::remove_file(&path);
+        let scratch = Scratch::new();
+        let path = scratch.path("dead-reader.fifo");
         let made = std::process::Command::new("mkfifo")
             .arg(&path)
             .status()
@@ -569,7 +573,6 @@ mod tests {
             .env(FIFO_CHILD_ENV, &path)
             .output()
             .unwrap();
-        let _ = std::fs::remove_file(&path);
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert_eq!(
             out.status.code(),

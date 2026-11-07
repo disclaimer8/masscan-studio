@@ -279,3 +279,58 @@ fn timeout_text_names_router_or_target_and_three_hints() {
     assert_eq!(t.matches("[hint]").count(), 3);
     assert!(ArpResolveError::Uncertain.to_string().starts_with("FAIL: "));
 }
+
+fn run_until(
+    fake: &FakeAdapter,
+    clock: &Arc<ManualClock>,
+    mut interrupted: impl FnMut() -> bool,
+) -> Result<Option<ArpReport>, ArpResolveError> {
+    let mut io = fake.pair();
+    resolve_next_hop_until(
+        &mut io,
+        "veth-a",
+        MY_MAC,
+        MY_IP,
+        ROUTER,
+        NextHopKind::Router,
+        &ArpPolicy::default(),
+        &**clock,
+        &mut interrupted,
+    )
+}
+
+/// C `main.c:1131-1154`: Ctrl-C до первого запроса не стоит ни кадра и ни секунды часов.
+#[test]
+fn interrupt_before_the_first_request_sends_nothing() {
+    let (fake, clock) = setup();
+    let t0 = clock.now_micros();
+    let r = run_until(&fake, &clock, || true).unwrap();
+    assert_eq!(r, None);
+    assert_eq!(fake.sent_count(), 0);
+    assert_eq!(clock.now_micros(), t0);
+}
+
+/// Ctrl-C между запросами при молчащем роутере: возврат `Ok(None)` сразу, а не отказ через 10 с.
+#[test]
+fn interrupt_during_silent_arp_returns_none_without_further_requests() {
+    let (fake, clock) = setup();
+    let t0 = clock.now_micros();
+    let mut polls = 0;
+    let r = run_until(&fake, &clock, || {
+        polls += 1;
+        polls > 2
+    })
+    .unwrap();
+    assert_eq!(r, None);
+    assert!(fake.sent_count() <= 2, "{}", fake.sent_count());
+    assert!(clock.now_micros() - t0 < 10_000_000);
+}
+
+#[test]
+fn never_interrupted_behaves_like_resolve_next_hop() {
+    let (fake, clock) = setup();
+    answer_router(&fake);
+    let r = run_until(&fake, &clock, || false).unwrap().unwrap();
+    assert_eq!(r.mac, ROUTER_MAC);
+    assert_eq!(r.requests_sent, 1);
+}

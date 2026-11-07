@@ -19,6 +19,11 @@ pub mod output;
 pub mod readscan;
 pub mod status;
 
+/// Общий RAII-каталог тестов; тот же файл включают интеграционные тесты.
+#[cfg(test)]
+#[path = "../tests/common/scratch.rs"]
+mod scratch;
+
 use std::io::Write;
 
 use args::{Cli, SeedPolicy, seed_policy};
@@ -111,8 +116,9 @@ fn output_env<'a>(
 }
 
 /// `--readscan` (main.c:1764, `readscan_binary_scanfile`): файлы `-oB` через конвейер вывода. Адаптер не
-/// открывается, маршруты не читаются, `--seed` и права не нужны; начало скана берётся из первой записи
-/// (`when_scan_started = 0`).
+/// открывается, маршруты не читаются, `--seed` и права не нужны; начало скана берётся из `s:` заголовка
+/// `masscan/1.1.N` (N >= 2, `in-binary.c:518-534`), иначе из первой записи до фильтра (`when_scan_started = 0`,
+/// `in-binary.c:128-129`).
 fn readscan(
     cli: &Cli,
     cfg: &ScanConfig,
@@ -198,19 +204,22 @@ pub fn run(
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
+    // main.c:1720-1742: пустые цели и порты отклоняются до `main_scan` (main.c:1743) и до `output_create`
+    // (output.c:799-803), поэтому раньше отказа «нет файла вывода». seed 0 (энтропия) проверяет `prepare`.
+    {
+        let mut probe = cfg.clone();
+        if probe.seed == 0 {
+            probe.seed = 1;
+        }
+        validate(&probe, Operation::Scan).map_err(|e| e.to_string())?;
+    }
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени
     // скана (`main.c:1551`): в stdout C остаётся только формат.
     let elapsed_to_stdout = !opts.format_to_stdout();
     let env = output_env(backend, &opts, &cfg, None);
-    let mode = if cli.nostatus {
-        status::StatusMode::Off
-    } else if cli.ndjson_status {
-        status::StatusMode::Ndjson
-    } else {
-        status::StatusMode::Text
-    };
+    let mode = cli.status_mode();
     let (_, scan_millis) = live::run_live_with(
         &cfg,
         backend,
@@ -231,6 +240,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::sync::Arc;
 
+    use crate::scratch::Scratch;
     use args::SeedPolicy;
     use rmasscan_core::cookie::syn_cookie_ipv4;
     use rmasscan_core::probe::AdapterBinding;
@@ -343,8 +353,25 @@ mod tests {
         run_with(&FakeBackend::default(), args)
     }
 
-    fn tmp(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("rmasscan-lib-{}-{name}", std::process::id()))
+    /// P8: каталог `Scratch` уникален на экземпляр и исчезает вместе с файлами и при панике теста.
+    #[test]
+    fn scratch_dir_is_unique_and_removed_even_on_panic() {
+        let (a, b) = (Scratch::new(), Scratch::new());
+        assert_ne!(a.dir(), b.dir());
+        let seen = std::sync::Mutex::new(None);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let s = Scratch::new();
+            s.write("left-behind.txt", b"x");
+            *seen.lock().unwrap() = Some(s.dir().to_path_buf());
+            panic!("test body panics while the scratch dir is alive");
+        }));
+        assert!(r.is_err());
+        let dir = seen.lock().unwrap().take().unwrap();
+        assert!(!dir.exists(), "{} survived the panic", dir.display());
+        let kept = a.dir().to_path_buf();
+        drop(a);
+        assert!(!kept.exists());
+        assert!(b.dir().exists());
     }
 
     #[test]
@@ -352,7 +379,8 @@ mod tests {
         assert!(Cli::try_parse_masscan(["rmasscan", "--banners", "10.0.0.0/24", "-p80"]).is_err());
         assert!(Cli::try_parse_masscan(["rmasscan", "--nonsense"]).is_err());
         // `-oX FILE` разбирается; без целей `run` отказывает раньше, чем тронет файл.
-        let path = tmp("no-targets.xml");
+        let scratch = Scratch::new();
+        let path = scratch.path("no-targets.xml");
         let e = run_args(&["rmasscan", "-oX", path.to_str().unwrap()]).unwrap_err();
         assert!(e.contains("target IP address list empty"), "{e}");
         assert!(!path.exists());
@@ -361,7 +389,8 @@ mod tests {
     /// Р19: флаги вывода и статуса вне живого скана и `--readscan` отклоняются до любого вывода и любого файла.
     #[test]
     fn output_flags_refused_outside_scan_and_readscan() {
-        let path = tmp("r19.txt");
+        let scratch = Scratch::new();
+        let path = scratch.path("r19.txt");
         let file = path.to_str().unwrap();
         for op in [
             &["-sL", "10.0.0.0/30", "-p80", "--seed", "1"][..],
@@ -423,7 +452,7 @@ mod tests {
     }
 
     /// Файл `-oB` с записями `recs`, собранный писателем конвейера (часы 1_600_000_000, не время записей).
-    fn scan_file(name: &str, recs: &[output::Record]) -> std::path::PathBuf {
+    fn scan_file(scratch: &Scratch, name: &str, recs: &[output::Record]) -> std::path::PathBuf {
         struct W;
         impl output::Wall for W {
             fn unix_time(&self) -> u64 {
@@ -433,7 +462,7 @@ mod tests {
                 0
             }
         }
-        let path = tmp(name);
+        let path = scratch.path(name);
         let mut sink_out = Vec::new();
         let env = OutputEnv {
             wall: &W,
@@ -471,7 +500,8 @@ mod tests {
     /// читаются только для `-oG` и `-oU`. Ожидания выписаны по байтам юнит-тестов форматов.
     #[test]
     fn readscan_converts_to_every_format() {
-        let input = scan_file("every.scan", &[open_rec(), closed_rec()]);
+        let scratch = Scratch::new();
+        let input = scan_file(&scratch, "every.scan", &[open_rec(), closed_rec()]);
         let input = input.to_str().unwrap();
         let cases: [(&str, &[u8]); 8] = [
             (
@@ -578,14 +608,14 @@ mod tests {
             out,
             output::discovered_line(Ipv4Addr::new(1, 2, 3, 4), 80).into_bytes()
         );
-        let _ = std::fs::remove_file(input);
     }
 
     /// Цели и порты перед `--readscan` фильтруют записи (`parse_status2`), порты попадают в заголовок `-oG`;
     /// `--seed` не нужен, адаптер не открывается (`open` fake-бэкенда паникует).
     #[test]
     fn readscan_filters_by_the_targets_given_before_it() {
-        let input = scan_file("filter.scan", &[open_rec(), closed_rec()]);
+        let scratch = Scratch::new();
+        let input = scan_file(&scratch, "filter.scan", &[open_rec(), closed_rec()]);
         let input = input.to_str().unwrap();
         let (r, out, _) = readscan_run(
             &FakeBackend::default(),
@@ -627,14 +657,14 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "#masscan\nclosed tcp 443 10.0.0.255 1700000000\n# end\n"
         );
-        let _ = std::fs::remove_file(input);
     }
 
     /// Ошибка чтения `--readscan` уже записана в `log` строками C; [`error_text`] для неё пуст, поэтому `main`
     /// печатает её ровно один раз.
     #[test]
     fn readscan_error_is_reported_once() {
-        let missing = tmp("missing.scan");
+        let scratch = Scratch::new();
+        let missing = scratch.path("missing.scan");
         let missing = missing.to_str().unwrap();
         let (r, out, log) = readscan_run(
             &FakeBackend::default(),
@@ -646,9 +676,11 @@ mod tests {
         let line = format!("[-] {missing}: ");
         assert_eq!(log.matches(&line).count(), 1, "{log}");
         assert_eq!(log.matches("[-] FAIL: --readscan\n").count(), 1, "{log}");
+        // `in-binary.c:486-493`: `fopen` раньше `[+] --readscan`.
+        assert!(!log.contains("[+]"), "{log}");
         // Неполный файл: `[-] file corrupt` один раз, подвал уже записанного вывода на месте.
-        let full = std::fs::read(scan_file("corrupt.scan", &[open_rec()])).unwrap();
-        let corrupt = tmp("corrupt.scan");
+        let full = std::fs::read(scan_file(&scratch, "full.scan", &[open_rec()])).unwrap();
+        let corrupt = scratch.path("corrupt.scan");
         std::fs::write(&corrupt, &full[..99 + 9]).unwrap();
         let corrupt = corrupt.to_str().unwrap();
         let (r, out, log) = readscan_run(
@@ -658,7 +690,6 @@ mod tests {
         assert_eq!(error_text(&r.unwrap_err()), "");
         assert_eq!(log.matches("[-] file corrupt").count(), 1, "{log}");
         assert!(out.is_empty(), "no record was read");
-        let _ = std::fs::remove_file(corrupt);
     }
 
     /// Решение 2 контроллера: реальный формат без имени файла (C молча теряет записи, `output.c:799–803`)
@@ -698,7 +729,8 @@ mod tests {
         );
         assert_eq!(r.unwrap_err(), want);
         // none, interactive и умолчание файла не требуют.
-        let input = scan_file("nofile.scan", &[open_rec()]);
+        let scratch = Scratch::new();
+        let input = scan_file(&scratch, "nofile.scan", &[open_rec()]);
         let input = input.to_str().unwrap();
         for (f, stdout) in [("none", false), ("interactive", true)] {
             let (r, out, _) = readscan_run(
@@ -708,7 +740,6 @@ mod tests {
             r.unwrap();
             assert_eq!(!out.is_empty(), stdout, "{f}");
         }
-        let _ = std::fs::remove_file(input);
     }
 
     #[test]
@@ -838,10 +869,11 @@ mod tests {
 
     #[test]
     fn excludefile_applies() {
-        let dir = std::env::temp_dir().join(format!("rmasscan-ex-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("ex.txt");
-        std::fs::write(&f, "# comment\n10.0.0.0/31 # first two\n\n10.0.0.3\n").unwrap();
+        let scratch = Scratch::new();
+        let f = scratch.write(
+            "ex.txt",
+            b"# comment\n10.0.0.0/31 # first two\n\n10.0.0.3\n",
+        );
         let out = run_args(&[
             "rmasscan",
             "-sL",
@@ -854,7 +886,6 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(out, "10.0.0.2\n");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     const TRACE: [&str; 14] = [

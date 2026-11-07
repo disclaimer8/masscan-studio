@@ -6,17 +6,11 @@
 #[path = "common/spawn.rs"]
 mod spawn;
 
-use spawn::spawn_readonly;
+#[path = "common/scratch.rs"]
+mod scratch;
 
-fn tmp(name: &str) -> String {
-    std::env::temp_dir()
-        .join(format!(
-            "rmasscan-readscan-bin-{}-{name}",
-            std::process::id()
-        ))
-        .to_string_lossy()
-        .into_owned()
-}
+use scratch::Scratch;
+use spawn::spawn_readonly;
 
 /// Файл `-oB` по справке C: заголовок 99 байт, одна запись open 1.2.3.4:80 (15 байт), подвал 99 байт.
 fn one_record_scan() -> Vec<u8> {
@@ -33,8 +27,11 @@ fn one_record_scan() -> Vec<u8> {
 
 #[test]
 fn readscan_converts_to_list_on_stdout() {
-    let path = tmp("one.scan");
-    std::fs::write(&path, one_record_scan()).unwrap();
+    let scratch = Scratch::new();
+    let path = scratch
+        .write("one.scan", &one_record_scan())
+        .to_string_lossy()
+        .into_owned();
     let out = spawn_readonly(&["--readscan", &path, "-oL", "-"]);
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(
@@ -45,13 +42,13 @@ fn readscan_converts_to_list_on_stdout() {
         String::from_utf8_lossy(&out.stderr),
         format!("[+] --readscan {path}\n")
     );
-    let _ = std::fs::remove_file(path);
 }
 
 /// Решение 3 контроллера: `run_readscan` уже записал строки C в stderr; `main` выходит с 1 и не печатает их снова.
 #[test]
 fn readscan_read_errors_are_printed_once() {
-    let missing = tmp("missing.scan");
+    let scratch = Scratch::new();
+    let missing = scratch.path("missing.scan").to_string_lossy().into_owned();
     let out = spawn_readonly(&["--readscan", &missing, "-oL", "-"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
@@ -59,10 +56,14 @@ fn readscan_read_errors_are_printed_once() {
     assert_eq!(err.matches(&format!("[-] {missing}: ")).count(), 1, "{err}");
     assert_eq!(err.matches("[-] FAIL: --readscan").count(), 1, "{err}");
     assert!(!err.contains("rmasscan: error:"), "{err}");
-    assert_eq!(err.lines().count(), 3, "{err}");
+    // `in-binary.c:486-493`: `fopen` раньше `[+] --readscan`, строки `[+]` для отсутствующего файла нет.
+    assert!(!err.contains("[+]"), "{err}");
+    assert_eq!(err.lines().count(), 2, "{err}");
 
-    let corrupt = tmp("corrupt.scan");
-    std::fs::write(&corrupt, &one_record_scan()[..99 + 9]).unwrap();
+    let corrupt = scratch
+        .write("corrupt.scan", &one_record_scan()[..99 + 9])
+        .to_string_lossy()
+        .into_owned();
     let out = spawn_readonly(&["--readscan", &corrupt, "-oL", "-"]);
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
@@ -71,7 +72,6 @@ fn readscan_read_errors_are_printed_once() {
         format!("[+] --readscan {corrupt}\n[-] file corrupt\n"),
         "exactly once, no second copy from main"
     );
-    let _ = std::fs::remove_file(corrupt);
 }
 
 #[test]
@@ -91,5 +91,22 @@ fn masscan_parse_refusals_print_the_c_text_and_exit_one() {
         assert_eq!(out.status.code(), Some(1), "{argv:?}");
         assert!(out.stdout.is_empty(), "{argv:?}");
         assert_eq!(String::from_utf8_lossy(&out.stderr), want, "{argv:?}");
+    }
+}
+
+/// `--json-status`/`--status-json` (`main-conf.c:1519-1531`): две строки C в stderr, exit 1, файлы не открываются.
+#[test]
+fn json_status_is_refused_with_the_c_lines() {
+    for name in ["json-status", "status-json"] {
+        let out = spawn_readonly(&[&format!("--{name}"), "--readscan", "missing-file.scan"]);
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        assert!(out.stdout.is_empty(), "{name}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            format!(
+                "[-] FAIL: {name} not supported, use --status-ndjson\n    hint: new-line delimited JSON status is what we use\n"
+            ),
+            "{name}"
+        );
     }
 }

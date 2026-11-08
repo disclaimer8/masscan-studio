@@ -15,6 +15,7 @@
 //!   [`ControlFlow`].
 
 use std::collections::VecDeque;
+use std::iter::Peekable;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
 use crate::packet::{LinkType, TcpSynTemplate};
-use crate::scan::{ScanError, Shard, transmit_index_stream, transmit_scan_flow};
+use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
 
 /// Раунды BlackRock, которые принимает runtime v1 (masscan по умолчанию).
 pub const RUNTIME_BLACKROCK_ROUNDS: u32 = 14;
@@ -52,6 +53,18 @@ pub enum PlanError {
     PortDoesNotFit { port_them: u32, port_me: u32 },
     #[error("next index {next_index} is beyond the scan range {range}")]
     NextIndexBeyondRange { next_index: u64, range: u64 },
+    #[error("invalid shard {one}/{of}: need 1 <= one <= of")]
+    InvalidShard { one: u32, of: u32 },
+    #[error("retries must be at most 999, got {0}")]
+    TooManyRetries(u32),
+    #[error("blackrock rounds must be at least 1, got {0}")]
+    ZeroRounds(u32),
+    #[error("need 1..=8 adapters, got {0}")]
+    BadNicCount(usize),
+    #[error("adapter index {index} is out of range for {count} adapters")]
+    NicIndexOutOfRange { index: u32, count: usize },
+    #[error("invalid source addresses {first:#010x}-{last:#010x}: need first <= last")]
+    InvalidSourceIpv4 { first: u32, last: u32 },
     #[error(transparent)]
     Scan(#[from] ScanError),
 }
@@ -68,6 +81,31 @@ pub struct AdapterBinding {
     pub source_ports: (u16, u16),
 }
 
+/// Адаптер плана CLI: [`AdapterBinding`] плюс диапазон адресов источника и
+/// режим C для не-степени-двойки ширины портов. Студия остаётся на
+/// [`AdapterBinding`]: его 6 полей заморожены.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NicBinding {
+    pub binding: AdapterBinding,
+    /// Последний адрес источника (включительно); `ipv4_mask = last - first`
+    /// (main.c:183). Равен `binding.source_ipv4` для одного адреса.
+    pub source_ipv4_last: u32,
+    /// C сам пишет в `paused.conf` порты `p-(p+16)` (17 портов, не степень
+    /// двойки; main.c:1318, main-conf.c:3668). С флагом ширина принимается и
+    /// маска остаётся `last - first` (main.c:186).
+    pub legacy_c_17_port_mask: bool,
+}
+
+impl From<AdapterBinding> for NicBinding {
+    fn from(binding: AdapterBinding) -> NicBinding {
+        NicBinding {
+            source_ipv4_last: binding.source_ipv4,
+            legacy_c_17_port_mask: false,
+            binding,
+        }
+    }
+}
+
 /// Одна отправка SYN (main.c:371-402).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Probe {
@@ -81,11 +119,11 @@ pub struct Probe {
     pub frame: Vec<u8>,
 }
 
-fn check_source_ports(first: u16, last: u16) -> Result<(), PlanError> {
+fn check_source_ports(first: u16, last: u16, legacy_width: bool) -> Result<(), PlanError> {
     let width = u32::from(last)
         .wrapping_sub(u32::from(first))
         .wrapping_add(1);
-    if first == 0 || first > last || !width.is_power_of_two() {
+    if first == 0 || first > last || !(legacy_width || width.is_power_of_two()) {
         return Err(PlanError::InvalidSourcePorts { first, last });
     }
     Ok(())
@@ -98,16 +136,30 @@ struct Builder {
     ip_me0: u32,
     first: u16,
     port_mask: u32,
+    /// main.c:183 `ipv4_mask = ipv4.last - ipv4.first`.
+    ipv4_mask: u32,
     entropy: u64,
 }
 
 impl Builder {
     fn new(binding: &AdapterBinding, seed: u64) -> Result<Builder, PlanError> {
+        Builder::from_nic(&NicBinding::from(binding.clone()), seed)
+    }
+
+    fn from_nic(nic: &NicBinding, seed: u64) -> Result<Builder, PlanError> {
+        let binding = &nic.binding;
         let (first, last) = binding.source_ports;
-        check_source_ports(first, last)?;
+        check_source_ports(first, last, nic.legacy_c_17_port_mask)?;
+        if nic.source_ipv4_last < binding.source_ipv4 {
+            return Err(PlanError::InvalidSourceIpv4 {
+                first: binding.source_ipv4,
+                last: nic.source_ipv4_last,
+            });
+        }
         Ok(Builder {
             tmpl: TcpSynTemplate::new(binding.source_mac, binding.next_hop_mac, binding.link_type),
             ip_me0: binding.source_ipv4,
+            ipv4_mask: nic.source_ipv4_last - binding.source_ipv4,
             first,
             // main.c:183-186: port_mask = last - first.
             port_mask: u32::from(last - first),
@@ -124,8 +176,7 @@ impl Builder {
         ip_them: u32,
         port_them: u32,
     ) -> Result<(), PlanError> {
-        // ipv4_mask = 0, потому что адаптер даёт один адрес.
-        let ipv4_mask = 0u32;
+        let ipv4_mask = self.ipv4_mask;
         let (ip_me, port_me) = if ipv4_mask != 0 || self.port_mask != 0 {
             let n = i.wrapping_add(repeats);
             // main.c:379-384.
@@ -205,14 +256,15 @@ pub fn for_each_probe<B>(
 #[derive(Debug)]
 struct PlanInner {
     effective: EffectiveConfig,
-    binding: AdapterBinding,
+    nics: Vec<NicBinding>,
     range: u64,
     blackrock: BlackRock,
-    builder: Builder,
+    /// По одному на адаптер (у каждого свои адреса и порты источника).
+    builders: Vec<Builder>,
 }
 
 /// Проверенный план нового запуска. Поля приватны; создать можно только через
-/// [`ReadyPlan::new`].
+/// [`ReadyPlan::new`] или [`ReadyPlan::new_cli`].
 #[derive(Debug, Clone)]
 pub struct ReadyPlan {
     inner: Arc<PlanInner>,
@@ -245,7 +297,43 @@ impl ReadyPlan {
         if effective.blackrock_rounds() != RUNTIME_BLACKROCK_ROUNDS {
             return Err(PlanError::UnsupportedRounds(effective.blackrock_rounds()));
         }
-        let builder = Builder::new(&binding, effective.seed())?;
+        ReadyPlan::build(effective, vec![NicBinding::from(binding)])
+    }
+
+    /// План CLI: любой валидный shard, retries до 999, `resume_index` и
+    /// `resume_count` из конфигурации, 1..=8 адаптеров (main.c:212-223,
+    /// :269-273). `ReadyPlan::new` для Студии остаётся прежним.
+    pub fn new_cli(
+        effective: EffectiveConfig,
+        nics: Vec<NicBinding>,
+    ) -> Result<ReadyPlan, PlanError> {
+        if effective.operation() != Operation::Scan {
+            return Err(PlanError::NotScanOperation(effective.operation()));
+        }
+        let shard = effective.shard();
+        if shard.one == 0 || shard.one > shard.of {
+            return Err(PlanError::InvalidShard {
+                one: shard.one,
+                of: shard.of,
+            });
+        }
+        if effective.retries() > 999 {
+            return Err(PlanError::TooManyRetries(effective.retries()));
+        }
+        if effective.blackrock_rounds() < 1 {
+            return Err(PlanError::ZeroRounds(effective.blackrock_rounds()));
+        }
+        ReadyPlan::build(effective, nics)
+    }
+
+    fn build(effective: EffectiveConfig, nics: Vec<NicBinding>) -> Result<ReadyPlan, PlanError> {
+        if nics.is_empty() || nics.len() > 8 {
+            return Err(PlanError::BadNicCount(nics.len()));
+        }
+        let builders = nics
+            .iter()
+            .map(|n| Builder::from_nic(n, effective.seed()))
+            .collect::<Result<Vec<_>, _>>()?;
         if let Some(r) = effective
             .massip()
             .ports()
@@ -264,10 +352,10 @@ impl ReadyPlan {
         Ok(ReadyPlan {
             inner: Arc::new(PlanInner {
                 effective,
-                binding,
+                nics,
                 range,
                 blackrock,
-                builder,
+                builders,
             }),
         })
     }
@@ -276,13 +364,91 @@ impl ReadyPlan {
         &self.inner.effective
     }
 
+    /// Привязка первого адаптера (для плана `new` единственного).
     pub fn binding(&self) -> &AdapterBinding {
-        &self.inner.binding
+        &self.inner.nics[0].binding
+    }
+
+    /// Адаптеры плана по порядку `nic[0..n)`.
+    pub fn nics(&self) -> &[NicBinding] {
+        &self.inner.nics
     }
 
     /// Число probe плана (комбинации IP/порт).
     pub fn range(&self) -> u64 {
         self.inner.range
+    }
+
+    /// Конец цикла адаптера `nic_index`, `main.c:269-273`:
+    /// `min(range, start + resume_count) + retries * range`, где
+    /// `start = resume_index + (shard.one - 1) * nic_count + nic_index`.
+    pub fn effective_end(&self, nic_index: u32) -> u64 {
+        let (_, end) = self.bounds(nic_index, self.inner.effective.resume_index());
+        end
+    }
+
+    /// `(start, end)` потока адаптера при базе `resume_index` (main.c:269-273).
+    fn bounds(&self, nic_index: u32, base: u64) -> (u64, u64) {
+        let e = &self.inner.effective;
+        let (start, end, _) = transmit_bounds(
+            self.inner.range,
+            e.shard(),
+            self.inner.nics.len() as u32,
+            nic_index,
+            base,
+            e.resume_count(),
+            e.retries(),
+        );
+        (start, end)
+    }
+
+    /// Курсор потока адаптера `nic_index` (`main.c:212-223, :269-273, :328-334,
+    /// :421-431`). `resume_override` заменяет `resume.index` (база, к которой
+    /// C прибавляет смещение shard и NIC); `None` берёт его из конфигурации.
+    pub fn cursor_for_nic(
+        &self,
+        nic_index: u32,
+        resume_override: Option<u64>,
+    ) -> Result<ProbeCursor, PlanError> {
+        let count = self.inner.nics.len();
+        if nic_index as usize >= count {
+            return Err(PlanError::NicIndexOutOfRange {
+                index: nic_index,
+                count,
+            });
+        }
+        let e = &self.inner.effective;
+        let range = self.inner.range;
+        let base = resume_override.unwrap_or_else(|| e.resume_index());
+        if base > range {
+            return Err(PlanError::NextIndexBeyondRange {
+                next_index: base,
+                range,
+            });
+        }
+        let (start, end) = self.bounds(nic_index, base);
+        let stream = transmit_index_stream(
+            range,
+            e.shard(),
+            count as u32,
+            nic_index,
+            base,
+            e.resume_count(),
+            e.retries(),
+            e.max_rate(),
+        );
+        let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
+        let mut cursor = ProbeCursor {
+            plan: self.clone(),
+            nic_index: nic_index as usize,
+            stream: stream.peekable(),
+            loaded: VecDeque::new(),
+            ended: false,
+            position: start,
+            end,
+        };
+        cursor.refresh_position();
+        Ok(cursor)
     }
 }
 
@@ -291,13 +457,18 @@ impl ReadyPlan {
 /// загруженных.
 pub struct ProbeCursor {
     plan: ReadyPlan,
-    stream: Box<dyn Iterator<Item = (u64, u64)> + Send>,
+    nic_index: usize,
+    stream: Peekable<Box<dyn Iterator<Item = (u64, u64)> + Send>>,
     /// Загруженные, ещё не подтверждённые probe, по порядку индексов.
     loaded: VecDeque<Probe>,
     /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
     /// пропущенный индекс не сдвинул последовательность.
     ended: bool,
+    /// Внешний индекс `i` следующего неподтверждённого probe (main.c:431
+    /// `parms->my_index = i`), не число отправленных кадров.
     position: u64,
+    /// `effective_end` потока: позиция после последнего кадра.
+    end: u64,
 }
 
 impl std::fmt::Debug for ProbeCursor {
@@ -312,27 +483,19 @@ impl ProbeCursor {
     /// Курсор, начинающийся с индекса `next_index` (0 для нового запуска).
     /// `next_index == range` даёт пустой курсор; `> range` это ошибка.
     pub fn new(plan: &ReadyPlan, next_index: u64) -> Result<ProbeCursor, PlanError> {
-        let range = plan.range();
-        if next_index > range {
-            return Err(PlanError::NextIndexBeyondRange { next_index, range });
-        }
-        let stream = transmit_index_stream(
-            range,
-            Shard::default(),
-            1,
-            0,
-            next_index,
-            None,
-            0,
-            plan.effective().max_rate(),
-        );
-        Ok(ProbeCursor {
-            plan: plan.clone(),
-            stream: Box::new(stream),
-            loaded: VecDeque::new(),
-            ended: false,
-            position: next_index,
-        })
+        plan.cursor_for_nic(0, Some(next_index))
+    }
+
+    /// Ставит `position` по внешнему индексу: голова загруженных, иначе
+    /// следующий `i` потока, иначе `end`.
+    fn refresh_position(&mut self) {
+        self.position = match self.loaded.front() {
+            Some(p) => p.index,
+            None => match self.stream.peek() {
+                Some(&(i, _)) => i,
+                None => self.end,
+            },
+        };
     }
 
     /// Строит следующий probe потока и ставит его в хвост загруженных. `false`
@@ -346,12 +509,13 @@ impl ProbeCursor {
             return false;
         };
         let inner = &*self.plan.inner;
+        let builder = &inner.builders[self.nic_index];
         let xxx = inner.blackrock.shuffle(x);
         let (ip, port) = inner.effective.massip().pick(xxx);
         let mut p = Probe::default();
         // План уже проверил, что порты помещаются в TCP; при ошибке probe не
         // выдаётся (курсор заканчивается), а не паникует.
-        if inner.builder.fill(&mut p, i, 0, xxx, ip, port).is_ok() {
+        if builder.fill(&mut p, i, 0, xxx, ip, port).is_ok() {
             self.loaded.push_back(p);
             true
         } else {
@@ -387,7 +551,7 @@ impl ProbeCursor {
         }
     }
 
-    /// Подтверждает `k` первых загруженных probe: `position += k`. `k` больше
+    /// Подтверждает `k` первых загруженных probe; `position` идёт по внешнему индексу. `k` больше
     /// числа загруженных это ошибка вызывающего (debug assert); в release
     /// подтверждается столько, сколько загружено.
     pub fn advance_sent_n(&mut self, k: usize) {
@@ -398,11 +562,173 @@ impl ProbeCursor {
         );
         let k = k.min(self.loaded.len());
         self.loaded.drain(..k);
-        self.position += k as u64;
+        self.refresh_position();
     }
 
     /// Следующий неподтверждённый индекс.
     pub fn position(&self) -> u64 {
         self.position
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ScanConfig, validate};
+    use crate::massip::MassIp;
+    use crate::targets::{add_target_string, parse_ports};
+    use std::collections::BTreeSet;
+
+    const IP_ME: u32 = 0x0aff_0001;
+    const MAC_ME: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const MAC_NH: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
+
+    fn binding() -> AdapterBinding {
+        AdapterBinding {
+            interface_id: "test0".to_string(),
+            link_type: LinkType::Ethernet,
+            source_ipv4: IP_ME,
+            source_mac: MAC_ME,
+            next_hop_mac: MAC_NH,
+            source_ports: (40000, 40003),
+        }
+    }
+
+    fn nics(n: u32) -> Vec<NicBinding> {
+        (0..n)
+            .map(|k| {
+                let mut b = binding();
+                b.interface_id = format!("test{k}");
+                NicBinding::from(b)
+            })
+            .collect()
+    }
+
+    fn eff(targets: &str, ports: &str, f: impl FnOnce(&mut ScanConfig)) -> EffectiveConfig {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), targets).unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let mut cfg = ScanConfig {
+            targets: m,
+            seed: 0x1234_5678,
+            ..ScanConfig::default()
+        };
+        f(&mut cfg);
+        validate(&cfg, Operation::Scan).unwrap()
+    }
+
+    fn drain(cursor: &mut ProbeCursor) -> Vec<Probe> {
+        let mut out = Vec::new();
+        while let Some(p) = cursor.current().cloned() {
+            out.push(p);
+            cursor.advance_sent();
+        }
+        out
+    }
+
+    fn oracle(e: &EffectiveConfig) -> Vec<Probe> {
+        let mut out = Vec::new();
+        let flow = for_each_probe(e, &binding(), |p| {
+            out.push(p.clone());
+            ControlFlow::<()>::Continue(())
+        })
+        .unwrap();
+        assert_eq!(flow, ControlFlow::Continue(()));
+        out
+    }
+
+    // 37 целей: 198.18.0.0-198.18.0.36 x порт 80 (простой range, не кратный шагу).
+    const T37: &str = "198.18.0.0-198.18.0.36";
+
+    #[test]
+    fn shards_partition_full_range_without_gaps_or_overlaps() {
+        let all = oracle(&eff(T37, "80", |_| {}));
+        assert_eq!(all.len(), 37);
+        let want: BTreeSet<_> = all.iter().map(|p| (p.ip_them, p.port_them)).collect();
+        assert_eq!(want.len(), 37);
+        let mut seen = BTreeSet::new();
+        let mut total = 0;
+        for one in 1..=3 {
+            let e = eff(T37, "80", |c| c.shard = Shard { one, of: 3 });
+            let want_shard = oracle(&e);
+            let plan = ReadyPlan::new_cli(e, nics(1)).unwrap();
+            let got = drain(&mut plan.cursor_for_nic(0, None).unwrap());
+            assert_eq!(got, want_shard, "shard {one}/3 differs from for_each_probe");
+            total += got.len();
+            for p in got {
+                assert!(seen.insert((p.ip_them, p.port_them)), "overlap {p:?}");
+            }
+        }
+        assert_eq!(total, 37);
+        assert_eq!(seen, want);
+    }
+
+    #[test]
+    fn multi_nic_and_shards_match_c_increment() {
+        let mut all = BTreeSet::new();
+        let mut total = 0;
+        for one in 1..=3u32 {
+            let e = eff(T37, "80", |c| c.shard = Shard { one, of: 3 });
+            let plan = ReadyPlan::new_cli(e, nics(2)).unwrap();
+            for nic in 0..2u32 {
+                let idx: Vec<u64> = drain(&mut plan.cursor_for_nic(nic, None).unwrap())
+                    .iter()
+                    .map(|p| p.index)
+                    .collect();
+                // main.c:269 start = (one-1)*nic_count + nic_index, шаг main.c:223.
+                let start = u64::from((one - 1) * 2 + nic);
+                if one == 2 {
+                    assert_eq!(idx[0], 2 + u64::from(nic));
+                }
+                assert_eq!(idx[0], start);
+                assert!(idx.windows(2).all(|w| w[1] - w[0] == 6));
+                total += idx.len();
+                all.extend(idx);
+            }
+        }
+        assert_eq!(total, 37);
+        assert_eq!(all, (0..37).collect::<BTreeSet<u64>>());
+    }
+
+    #[test]
+    fn retries_stream_matches_for_each_probe() {
+        let e = eff("198.18.0.0-198.18.0.9", "80", |c| {
+            c.retries = 2;
+            c.max_rate = 7.0;
+        });
+        let want = oracle(&e);
+        assert_eq!(want.len(), (2 + 1) * (2 + 1) * 10);
+        let plan = ReadyPlan::new_cli(e, nics(1)).unwrap();
+        assert_eq!(plan.effective_end(0), 10 + 2 * 10);
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        let got = drain(&mut cursor);
+        assert_eq!(got.len(), 90);
+        assert_eq!(got, want);
+        assert_eq!(cursor.position(), 30);
+    }
+
+    #[test]
+    fn cursor_tracks_outer_index_across_retries_and_shards() {
+        let e = eff("198.18.0.0-198.18.0.9", "80", |c| {
+            c.retries = 2;
+            c.shard = Shard { one: 1, of: 2 };
+        });
+        let plan = ReadyPlan::new_cli(e, nics(1)).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        assert_eq!(cursor.position(), 0);
+        cursor.advance_sent();
+        assert_eq!(cursor.position(), 0);
+        cursor.advance_sent();
+        assert_eq!(cursor.position(), 0);
+        cursor.advance_sent();
+        assert_eq!(cursor.position(), 2);
+        // preload не двигает позицию; подтверждение k кадров из пачки тоже
+        // считается по внешнему индексу.
+        assert_eq!(cursor.preload(4).len(), 4);
+        assert_eq!(cursor.position(), 2);
+        cursor.advance_sent_n(2);
+        assert_eq!(cursor.position(), 2);
+        cursor.advance_sent_n(2);
+        assert_eq!(cursor.position(), 4);
     }
 }

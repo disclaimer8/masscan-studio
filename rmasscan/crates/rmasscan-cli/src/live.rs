@@ -27,7 +27,7 @@ use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 use crate::conf::{FullConf, format_paused_conf};
-use crate::status::{StatusLine, StatusMode};
+use crate::status::{InfiniteTotals, StatusLine, StatusMode};
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{
@@ -570,6 +570,7 @@ pub fn run_live_conf(
     let mut sink_error = None;
     let wait_secs = i64::from(cfg.wait_secs);
     let mut status = StatusLine::new(mode, started);
+    let infinite = p.eff.infinite();
     // Момент, с которого идёт обратный отсчёт `--wait`: конец передачи (`main.c:1427, 1496`) либо остановка передачи
     // паузой.
     let (mut max_count, mut wait_started) = (0u64, None::<u64>);
@@ -632,20 +633,31 @@ pub fn run_live_conf(
             Ok(Event::Progress(prog)) => {
                 let now = clock.now_micros();
                 // main.c:1427 и 1496: конец передачи это `index >= range`; ожидание отсчитывается от него.
-                if prog.next_index >= max_count.min(tx_end) {
+                // `--infinite` конца не имеет (`main.c:1425` `min_index >= range && !is_infinite`).
+                if !infinite && prog.next_index >= max_count.min(tx_end) {
                     wait_started.get_or_insert(now);
                 }
                 let exiting = wait_started
                     .map(|t| wait_secs.saturating_sub((now.saturating_sub(t) / 1_000_000) as i64));
-                let _ = status.tick(
-                    now,
-                    prog.next_index,
-                    max_count,
-                    prog.rate,
-                    open_count,
-                    exiting,
-                    log,
-                );
+                let _ = if infinite {
+                    // `status->is_infinite` (`main-status.c:210-225`): строка `*` вместо процента, и в передаче, и в ожидании.
+                    let totals = InfiniteTotals {
+                        syns: prog.sent,
+                        synacks: open_count,
+                        tcbs: 0,
+                    };
+                    status.tick_infinite(now, totals, prog.rate, exiting.is_some(), log)
+                } else {
+                    status.tick(
+                        now,
+                        prog.next_index,
+                        max_count,
+                        prog.rate,
+                        open_count,
+                        exiting,
+                        log,
+                    )
+                };
             }
             Ok(Event::Results { replies: batch }) => {
                 for r in &batch {

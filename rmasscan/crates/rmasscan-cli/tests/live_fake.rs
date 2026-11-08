@@ -10,6 +10,7 @@
 #[path = "common/scratch.rs"]
 mod scratch;
 
+use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -2846,4 +2847,42 @@ fn paused_conf_write_failure_exits_one() {
         .filter(|r| r.status == PortStatus::Open)
         .collect();
     assert_eq!(file, json_file(&open));
+}
+
+/// `--infinite` (Р5, `main.c:225-228, 445-449, 1447`): диапазон из 3 целей проходится заново с `seed + 1`, пока не
+/// придёт Ctrl-C; прерывание штатно завершает скан (exit 0) и не пишет `paused.conf`.
+#[test]
+fn infinite_scan_runs_multiple_passes_until_ctrl_c() {
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 10,
+        late_first: false,
+    });
+    let args = [
+        "198.51.100.1-198.51.100.3",
+        "-p80",
+        "--wait",
+        "1",
+        "--seed",
+        "7",
+        "--infinite",
+    ];
+    let (r, _, log) = cli(&b, &args);
+    r.unwrap();
+    assert_eq!(b.presses(), 1);
+    assert!(log.contains("finished: Paused"), "{:?}", plus_lines(&log));
+    assert!(!log.contains("saving resume file"), "{log}");
+    assert!(
+        b.paused_writes().is_empty(),
+        "no paused.conf for --infinite"
+    );
+    let frames = b.opened()[1].adapter.sent_frames();
+    assert!(frames.len() >= 9, "sent {}", frames.len());
+    let first: BTreeSet<_> = frames[..3].iter().map(|f| syn_dst(f)).collect();
+    assert_eq!(first.len(), 3, "pass 1 covers each target once");
+    let (passes, _) = frames.as_chunks::<3>();
+    for pass in passes {
+        let set: BTreeSet<_> = pass.iter().map(|f| syn_dst(f)).collect();
+        assert_eq!(set, first, "every pass is a permutation of the range");
+    }
 }

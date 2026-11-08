@@ -589,7 +589,8 @@ fn run_tx(
     let end = 'run: loop {
         // Конец последовательности сильнее паузы: next_index == range это
         // завершение, а не checkpoint с пустым остатком.
-        if cursor.current().is_none() {
+        // `--infinite` (`main.c:445-449`): конец прохода запускает следующий, пока не придёт команда остановки.
+        if cursor.current().is_none() && !cursor.advance_pass() {
             break END_NATURAL;
         }
         if halted() {
@@ -618,6 +619,10 @@ fn run_tx(
                 .min(MAX_TX_BATCH as u64) as usize;
             let probes = cursor.preload(want);
             if probes.is_empty() {
+                // `--infinite`: проход кончился посреди окна throttle, продолжаем со следующего прохода.
+                if cursor.advance_pass() {
+                    continue;
+                }
                 break 'run END_NATURAL;
             }
             // Пауза в середине пачки: досылаем только остаток этой пачки.

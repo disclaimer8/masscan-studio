@@ -39,6 +39,17 @@ pub struct StatusLine {
     printed: bool,
     rates: [f64; 8],
     samples: usize,
+    /// Прошлые итоги для скоростей `--infinite` (`status->total_syns` и др., `main-status.c:189-203`).
+    last_totals: InfiniteTotals,
+}
+
+/// Итоги, по которым `--infinite` считает скорости: отправленные SYN, SYN-ACK (open-ответы) и TCB (без баннеров
+/// всегда 0), `main-status.c:29-33`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InfiniteTotals {
+    pub syns: u64,
+    pub synacks: u64,
+    pub tcbs: u64,
 }
 
 impl StatusLine {
@@ -51,7 +62,68 @@ impl StatusLine {
             printed: false,
             rates: [0.0; 8],
             samples: 0,
+            last_totals: InfiniteTotals::default(),
         }
+    }
+
+    /// Отсчёт для `--infinite` (`status->is_infinite`, `main-status.c:210-225`): в C эта ветка идёт и в фазе
+    /// передачи, и в фазе ожидания, процента и остатка у неё нет. Скорость каждого итога это приращение за
+    /// `elapsed`, и только если итог не нулевой (`:189-203`); иначе 0. `waiting` выбирает период печати
+    /// (250 мс в ожидании, 750 мс при передаче).
+    pub fn tick_infinite(
+        &mut self,
+        now_micros: u64,
+        totals: InfiniteTotals,
+        pps: f64,
+        waiting: bool,
+        log: &mut dyn Write,
+    ) -> io::Result<()> {
+        if self.mode == StatusMode::Off {
+            return Ok(());
+        }
+        let interval = if waiting {
+            WAIT_INTERVAL_MICROS
+        } else {
+            TX_INTERVAL_MICROS
+        };
+        if self.printed && now_micros.saturating_sub(self.last_clock) < interval {
+            return Ok(());
+        }
+        if now_micros <= self.last_clock {
+            return Ok(());
+        }
+        let elapsed = (now_micros - self.last_clock) as f64 / 1_000_000.0;
+        let rate = |now: u64, last: u64| {
+            if now != 0 {
+                now.saturating_sub(last) as f64 / elapsed
+            } else {
+                0.0
+            }
+        };
+        let last = self.last_totals;
+        let tcb_rate = rate(totals.tcbs, last.tcbs);
+        let synack_rate = rate(totals.synacks, last.synacks);
+        let syn_rate = rate(totals.syns, last.syns);
+        let line = match self.mode {
+            StatusMode::Text => {
+                infinite_line(pps / 1000.0, syn_rate, synack_rate, tcb_rate, totals.tcbs)
+            }
+            _ => ndjson_infinite(
+                pps / 1000.0,
+                syn_rate,
+                synack_rate,
+                tcb_rate,
+                totals.tcbs,
+                pps,
+                totals.syns,
+            ),
+        };
+        log.write_all(line.as_bytes())?;
+        log.flush()?;
+        self.last_clock = now_micros;
+        self.last_totals = totals;
+        self.printed = true;
+        Ok(())
     }
 
     /// Один отсчёт (`status_print`). `count` это следующий индекс probe, `max_count` весь диапазон, `pps` текущая
@@ -179,6 +251,29 @@ pub fn ndjson_waiting(
     )
 }
 
+/// `--infinite`, текст (`main-status.c:214`): `rate:%6.2f-kpps, syn/s=%.0f ack/s=%.0f tcb-rate=%.0f, %u-tcbs,         \r`.
+pub fn infinite_line(kpps: f64, syn_ps: f64, ack_ps: f64, tcb_ps: f64, tcbs: u64) -> String {
+    format!(
+        "rate:{kpps:6.2}-kpps, syn/s={syn_ps:.0} ack/s={ack_ps:.0} tcb-rate={tcb_ps:.0}, {tcbs}-tcbs,         \r"
+    )
+}
+
+/// `--infinite`, NDJSON (`json_fmt_infinite`, `main-status.c:56-69`): `kpps`, `pps`, `synps`, `ackps`, `tcbps`,
+/// затем `tcb` (число TCB) и `syn` (всего отправлено SYN).
+pub fn ndjson_infinite(
+    kpps: f64,
+    syn_ps: f64,
+    ack_ps: f64,
+    tcb_ps: f64,
+    tcbs: u64,
+    pps: f64,
+    syns: u64,
+) -> String {
+    format!(
+        "{{\"state\":\"*\",\"rate\":{{\"kpps\":{kpps:.2},\"pps\":{pps:.2},\"synps\":{syn_ps:.0},\"ackps\":{ack_ps:.0},\"tcbps\":{tcb_ps:.0}}},\"tcb\":{tcbs},\"syn\":{syns}}}\n"
+    )
+}
+
 /// Текст строки stderr после последнего `\r`: то, что остаётся на терминале. Тесты и лаборатория сравнивают строки
 /// `[+] …`, перед которыми стоят фрагменты статуса.
 pub fn normalize_stderr_line(line: &str) -> &str {
@@ -283,5 +378,46 @@ mod tests {
     fn normalize_keeps_text_after_last_cr() {
         assert_eq!(normalize_stderr_line("a\rb\r[+] finished"), "[+] finished");
         assert_eq!(normalize_stderr_line("[+] x"), "[+] x");
+    }
+
+    #[test]
+    fn infinite_status_lines_match_c() {
+        assert_eq!(
+            infinite_line(0.10, 100.0, 5.0, 0.0, 0),
+            "rate:  0.10-kpps, syn/s=100 ack/s=5 tcb-rate=0, 0-tcbs,         \r"
+        );
+        assert_eq!(
+            ndjson_infinite(24.99, 27763.0, 4.0, 4.0, 33, 24985.49, 246648),
+            "{\"state\":\"*\",\"rate\":{\"kpps\":24.99,\"pps\":24985.49,\"synps\":27763,\"ackps\":4,\"tcbps\":4},\"tcb\":33,\"syn\":246648}\n"
+        );
+    }
+
+    #[test]
+    fn infinite_tick_diffs_totals_and_keeps_cadence() {
+        let mut l = StatusLine::new(StatusMode::Text, 0);
+        let tick = |l: &mut StatusLine, now: u64, syns: u64, acks: u64, waiting: bool| {
+            let mut b = Vec::new();
+            let t = InfiniteTotals {
+                syns,
+                synacks: acks,
+                tcbs: 0,
+            };
+            l.tick_infinite(now, t, 100.0, waiting, &mut b).unwrap();
+            String::from_utf8(b).unwrap()
+        };
+        assert_eq!(tick(&mut l, 0, 10, 1, false), "");
+        assert_eq!(
+            tick(&mut l, 1_000_000, 100, 5, false),
+            "rate:  0.10-kpps, syn/s=100 ack/s=5 tcb-rate=0, 0-tcbs,         \r"
+        );
+        // 750 мс при передаче, 250 мс в ожидании.
+        assert_eq!(tick(&mut l, 1_500_000, 150, 6, false), "");
+        assert!(tick(&mut l, 1_750_000, 175, 5, false).contains("syn/s=100 ack/s=0"));
+        assert!(tick(&mut l, 2_000_000, 200, 6, true).starts_with("rate:"));
+        let mut l = StatusLine::new(StatusMode::Ndjson, 0);
+        let s = tick(&mut l, 1_000_000, 100, 5, false);
+        assert!(s.starts_with("{\"state\":\"*\""), "{s}");
+        let mut l = StatusLine::new(StatusMode::Off, 0);
+        assert_eq!(tick(&mut l, 1_000_000, 100, 5, false), "");
     }
 }

@@ -458,6 +458,9 @@ impl ReadyPlan {
             stream: stream.peekable(),
             loaded: VecDeque::new(),
             ended: false,
+            failed: false,
+            blackrock: self.inner.blackrock,
+            repeats: 0,
             position: start,
             end,
         };
@@ -478,6 +481,13 @@ pub struct ProbeCursor {
     /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
     /// пропущенный индекс не сдвинул последовательность.
     ended: bool,
+    /// Probe не построился (порт не влез в TCP): конец не естественный, и `--infinite` не перезапускает проход.
+    failed: bool,
+    /// Перестановка текущего прохода: у прохода `n` это `BlackRock(seed + n)` (`main.c:225-228, 445-449`), у
+    /// прохода 0 перестановка плана.
+    blackrock: BlackRock,
+    /// Счётчик `--infinite` (`repeats` в C): номер прохода, входит в `(unsigned)(i + repeats)` (`main.c:379`).
+    repeats: u64,
     /// Внешний индекс `i` следующего неподтверждённого probe (main.c:431
     /// `parms->my_index = i`), не число отправленных кадров.
     position: u64,
@@ -533,18 +543,68 @@ impl ProbeCursor {
         };
         let inner = &*self.plan.inner;
         let builder = &inner.builders[self.nic_index];
-        let xxx = inner.blackrock.shuffle(x);
+        let xxx = self.blackrock.shuffle(x);
         let (ip, port) = inner.effective.massip().pick(xxx);
         let mut p = Probe::default();
         // План уже проверил, что порты помещаются в TCP; при ошибке probe не
         // выдаётся (курсор заканчивается), а не паникует.
-        if builder.fill(&mut p, i, 0, xxx, ip, port).is_ok() {
+        if builder.fill(&mut p, i, self.repeats, xxx, ip, port).is_ok() {
             self.loaded.push_back(p);
             true
         } else {
             self.ended = true;
+            self.failed = true;
             false
         }
+    }
+
+    /// Номер прохода `--infinite` (0 для первого).
+    pub fn repeats(&self) -> u64 {
+        self.repeats
+    }
+
+    /// Следующий проход `--infinite` (`main.c:445-449` `seed++; repeats++; goto infinite`, метка на `:251`).
+    /// Только когда `effective.infinite()` включён и текущий проход дошёл до `effective_end` (поток исчерпан и всё
+    /// отправлено): тогда пересоздаёт `BlackRock::new(range, seed + repeats + 1, rounds)` (`:262`), увеличивает
+    /// `repeats` и сбрасывает поток на начало (`:269-273`, `resume.index` конфигурации, не позиция паузы).
+    /// `entropy` построителя остаётся исходным `seed` (`:227` `entropy = masscan->seed` задан до метки), поэтому
+    /// `seqno` и порт источника проверяются приёмом для обоих проходов. `true`, если проход начат заново.
+    pub fn advance_pass(&mut self) -> bool {
+        let e = self.plan.effective();
+        if !e.infinite() || self.failed || !self.loaded.is_empty() || self.stream.peek().is_some() {
+            return false;
+        }
+        let inner = &*self.plan.inner;
+        let next = self.repeats.wrapping_add(1);
+        let Ok(blackrock) = BlackRock::try_new(
+            inner.range,
+            e.seed().wrapping_add(next),
+            e.blackrock_rounds(),
+        ) else {
+            return false;
+        };
+        let stream = transmit_index_stream(
+            inner.range,
+            e.shard(),
+            inner.nics.len() as u32,
+            self.nic_index as u32,
+            e.resume_index(),
+            e.resume_count(),
+            e.retries(),
+            e.max_rate(),
+        );
+        let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
+        let mut stream = stream.peekable();
+        // Пустой проход (`resume-index` за концом) не перезапускается: движок крутился бы вхолостую.
+        if stream.peek().is_none() {
+            return false;
+        }
+        self.stream = stream;
+        self.blackrock = blackrock;
+        self.repeats = next;
+        self.ended = false;
+        self.refresh_position();
+        true
     }
 
     /// Текущий неподтверждённый probe; повторный вызов не продвигает.
@@ -815,5 +875,65 @@ mod tests {
         assert_eq!(cursor.position(), 2);
         cursor.advance_sent_n(2);
         assert_eq!(cursor.position(), 4);
+    }
+
+    /// `--infinite` (main.c:225-228, :445-449): второй проход идёт с `seed + 1` и `repeats = 1`, а SYN-cookie
+    /// остаётся на исходном `entropy`, поэтому приём подтверждает SYN-ACK обоих проходов.
+    #[test]
+    fn infinite_restarts_with_incremented_seed_and_constant_entropy() {
+        let e = eff("198.18.0.0-198.18.0.3", "80", |c| {
+            c.seed = 10;
+            c.infinite = true;
+        });
+        let rounds = e.blackrock_rounds();
+        let first_oracle = oracle(&eff("198.18.0.0-198.18.0.3", "80", |c| c.seed = 10));
+        let plan = ReadyPlan::new_cli(e.clone(), nics(1)).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        // Проход не закончился: перезапуска нет.
+        assert!(!cursor.advance_pass());
+        let mut got = Vec::new();
+        for _ in 0..4 {
+            let p = cursor.current().cloned().unwrap();
+            got.push(p);
+            cursor.advance_sent();
+        }
+        assert_eq!(cursor.repeats(), 0);
+        assert_eq!(got, first_oracle, "pass 0 equals the seed=10 oracle");
+        assert!(cursor.current().is_none());
+        assert!(cursor.advance_pass());
+        assert_eq!(cursor.repeats(), 1);
+        assert_eq!(cursor.position(), 0);
+        let second = drain(&mut cursor);
+        assert_eq!(second.len(), 4);
+        // Порядок целей второго прохода это BlackRock(seed = 11); `seqno` и порт источника считаются с entropy = 10,
+        // а `i + repeats` (main.c:379) даёт `n = i + 1`.
+        let br = BlackRock::try_new(4, 11, rounds).unwrap();
+        for (i, p) in second.iter().enumerate() {
+            let xxx = br.shuffle(i as u64);
+            let (ip, port) = e.massip().pick(xxx);
+            assert_eq!((p.ip_them, u32::from(p.port_them)), (ip, port), "i={i}");
+            let n = i as u64 + 1;
+            let ck = syn_cookie_ipv4(n as u32, 0, xxx as u32, (xxx >> 32) as u32, 10);
+            assert_eq!(u32::from(p.port_me), 40000 + (ck as u32 & 3), "i={i}");
+            assert_eq!(p.ip_me, IP_ME);
+            let want = syn_cookie_ipv4(ip, port, p.ip_me, u32::from(p.port_me), 10) as u32;
+            assert_eq!(p.seqno, want, "i={i}: entropy stays the initial seed");
+            assert_eq!(p.index, i as u64);
+        }
+        let order = |v: &[Probe]| v.iter().map(|p| p.ip_them).collect::<Vec<_>>();
+        assert_ne!(order(&second), order(&got), "a new seed reshuffles");
+        // Третий проход: seed = 12, repeats = 2.
+        assert!(cursor.advance_pass());
+        assert_eq!(cursor.repeats(), 2);
+    }
+
+    #[test]
+    fn advance_pass_is_a_noop_without_infinite() {
+        let e = eff("198.18.0.0-198.18.0.3", "80", |_| {});
+        let plan = ReadyPlan::new_cli(e, nics(1)).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        assert_eq!(drain(&mut cursor).len(), 4);
+        assert!(!cursor.advance_pass());
+        assert!(cursor.current().is_none());
     }
 }

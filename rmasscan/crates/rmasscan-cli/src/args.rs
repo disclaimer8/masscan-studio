@@ -184,6 +184,12 @@ pub struct Cli {
         help = "Do not transmit: detect read-only and print the [+] lines (fake router MAC 66-55-44-33-22-11)"
     )]
     pub offline: bool,
+    // `SET_infinite` (main-conf.c:2836): без конца, проходы заново с `seed + 1`, пока не придёт Ctrl-C.
+    #[arg(
+        long,
+        help = "Scan the range again and again (seed + 1 each pass) until Ctrl-C; no paused.conf is written"
+    )]
+    pub infinite: bool,
     #[arg(
         long = "packet-trace",
         requires = "offline",
@@ -830,6 +836,7 @@ impl Cli {
                 read_exclude_file(cfg, f)?;
             }
             cfg.offline |= self.offline;
+            cfg.infinite |= self.infinite;
         }
         // seed == 0 в C значит "взять энтропию" (main.c:1640-1641). Явный 0
         // отклоняется; отсутствие --seed решает `run` по операции (см.

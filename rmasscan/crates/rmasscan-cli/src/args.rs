@@ -367,6 +367,13 @@ pub struct Cli {
     /// Ключи конфигурации, чьё последнее появление в argv стоит правее `--resume` (они переопределяют файл).
     #[arg(skip)]
     after_resume: HashSet<&'static str>,
+    /// Группы опций вывода (`format`, `filename`, `append`, `flush`, `style`, `show`), чьё последнее появление в
+    /// argv стоит правее `--resume`.
+    #[arg(skip)]
+    after_output: HashSet<&'static str>,
+    /// Разобранная конфигурация с `--resume`: файл читается один раз на `Cli`.
+    #[arg(skip)]
+    resolved: std::sync::OnceLock<Result<FullConf, String>>,
 }
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
@@ -663,6 +670,38 @@ impl Cli {
                         .is_some_and(|i| i > at)
                 })
                 .collect();
+            // `Count` без вхождений хранит значение по умолчанию, поэтому сначала счётчик (см. `fold_stylesheet`).
+            let counted =
+                |id: &str| !matches!(id, "webxml" | "no_stylesheet") || m.get_count(id) > 0;
+            let right = |ids: &[&str]| {
+                ids.iter().any(|id| {
+                    counted(id)
+                        && m.indices_of(id)
+                            .and_then(Iterator::max)
+                            .is_some_and(|i| i > at)
+                })
+            };
+            for (group, ids) in [
+                (
+                    "format",
+                    &[
+                        "output_format",
+                        "output_filename",
+                        "stylesheet",
+                        "webxml",
+                        "no_stylesheet",
+                    ][..],
+                ),
+                ("filename", &["output_filename"][..]),
+                ("append", &["append_output"][..]),
+                ("flush", &["output_flush"][..]),
+                ("style", &["stylesheet", "webxml", "no_stylesheet"][..]),
+                ("show", &["show", "noshow", "open"][..]),
+            ] {
+                if right(ids) {
+                    cli.after_output.insert(group);
+                }
+            }
         }
         cli.output_options().map_err(ParseError::Masscan)?;
         Ok(cli)
@@ -756,6 +795,12 @@ impl Cli {
     /// применяются первыми, затем файл (с его выводом, `pcap-filename` и `ndjson-status`), затем ключи правее
     /// (они переопределяют файл). Без `--resume` это обычный `to_config` с пустым [`FullConf::output`].
     pub fn resolve(&self) -> Result<FullConf, String> {
+        self.resolved
+            .get_or_init(|| self.resolve_uncached())
+            .clone()
+    }
+
+    fn resolve_uncached(&self) -> Result<FullConf, String> {
         let mut cfg = ScanConfig::default();
         self.apply_scan_fields(&mut cfg, false)?;
         let mut full = FullConf {
@@ -897,7 +942,7 @@ impl Cli {
     }
 
     /// Опции вывода с учётом `--resume`: поля файла (`output-filename`, `output-format`, ...) служат базой, а
-    /// явно заданные в командной строке опции вывода их переопределяют; `output-append` после `--resume`
+    /// опции вывода правее `--resume` их переопределяют, левее переопределяются файлом; `output-append` после `--resume`
     /// принудительно истина (main-conf.c:2926-2928). Без `--resume` совпадает с [`Cli::output_options`].
     pub fn resolved_output_options(&self) -> Result<OutputOptions, String> {
         let mut o = self.output_options()?;
@@ -918,25 +963,33 @@ fn set_nic0(cfg: &mut ScanConfig, f: impl FnOnce(&mut NicConfig)) {
     }
 }
 
-/// База из файла `--resume` под явно заданные опции вывода командной строки.
+/// Опции вывода по позиции относительно `--resume` (main-conf.c:3401-3457, 2926-2928: и `-o…`, и ключи файла
+/// применяются в порядке argv): опция правее файла побеждает файл, опция левее переопределяется файлом, если
+/// файл задаёт этот ключ; `output-append` после файла всегда истина, пока правее нет явного `--append-output`.
 fn merge_file_output(o: &mut OutputOptions, file: &OutputConfPatch, cli: &Cli) {
-    let flag_format_given =
-        cli.output_format.is_some() || cli.output_filename.is_some() || cli.style_sets_xml;
-    if !flag_format_given && let Some(f) = file.format {
+    let right = |g: &str| cli.after_output.contains(g);
+    if !right("format")
+        && let Some(f) = file.format
+    {
         o.format = f;
     }
-    if cli.output_filename.is_none() {
+    if !right("filename") && file.filename.is_some() {
         o.filename.clone_from(&file.filename);
     }
-    // `resume` ставит `output-append = true` после чтения файла (main-conf.c:2926-2928).
-    o.append = cli.append_output.last().is_none_or(|v| parse_boolean(v));
-    if cli.output_flush.is_empty() {
-        o.flush = file.flush.unwrap_or(false);
+    o.append = if right("append") {
+        cli.append_output.last().is_some_and(|v| parse_boolean(v))
+    } else {
+        true
+    };
+    if !right("flush")
+        && let Some(v) = file.flush
+    {
+        o.flush = v;
     }
-    if cli.style.is_none() {
+    if !right("style") && file.stylesheet.is_some() {
         o.stylesheet.clone_from(&file.stylesheet);
     }
-    if cli.show_steps.is_empty() {
+    if !right("show") {
         if let Some(v) = file.show_open {
             o.show_open = v;
         }
@@ -1518,9 +1571,9 @@ mod tests {
     /// `paused.conf` для тестов `--resume`: адаптер, порт источника, скорость, повторы, вывод.
     const RESUME_FILE: &str = "\n# resume information\nresume-index = 4\nseed = 9\nrate = 250.000000\n\
 retries = 2\nshard = 2/3\n\noutput-filename = a.json\noutput-format = json\n\n\
-adapter = eth0\nadapter-ip = 10.0.0.2\nadapter-mac = 02-00-00-00-00-01\n\
+adapter = eth0\nadapter-ip = 198.18.0.2\nadapter-mac = 02-00-00-00-00-01\n\
 router-mac-ipv4 = 02-00-00-00-00-02\nrouter-mac-ipv6 = 02-00-00-00-00-02\n\
-adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrange = 10.0.0.0/28\n";
+adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrange = 198.18.0.0/28\n";
 
     /// Т2 M-2 (Р1): `--resume <file>` разбирается в своей позиции argv. Ключи правее файла (`--rate`,
     /// `--adapter-ip`, `--source-port`, `--router-mac`, `--interface`) переопределяют его и попадают и в
@@ -1536,7 +1589,7 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         assert_eq!(plain.seed, 9);
         assert_eq!(plain.resume_index, 4);
         assert_eq!(plain.retries, 2);
-        assert_eq!(plain.adapter_ip, Some(0x0a00_0002));
+        assert_eq!(plain.adapter_ip, Some(0xc612_0002));
         assert_eq!(plain.source_port, Some((41234, 41234)));
 
         let over = parse(&[
@@ -1545,7 +1598,7 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
             "--rate",
             "500",
             "--adapter-ip",
-            "10.0.0.9",
+            "198.18.0.9",
             "--source-port",
             "5000-5003",
             "--router-mac",
@@ -1561,14 +1614,14 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         assert_eq!(over.max_rate, 500.0);
         assert_eq!(over.resume_index, 1);
         assert_eq!(over.seed, 9, "keys the CLI did not give stay from the file");
-        assert_eq!(over.adapter_ip, Some(0x0a00_0009));
+        assert_eq!(over.adapter_ip, Some(0xc612_0009));
         assert_eq!(over.source_port, Some((5000, 5003)));
         assert_eq!(over.router_mac, Some([2, 0, 0, 0, 0, 0x77]));
         assert_eq!(over.adapter_name.as_deref(), Some("eth9"));
         assert_eq!(over.adapter_mac, Some([2, 0, 0, 0, 0, 1]));
         // Одиночные поля и `nics[0]` не расходятся (иначе `paused.conf` напишет значение файла).
         let nic = &over.nics[0];
-        assert_eq!(nic.adapter_ip, Some((0x0a00_0009, 0x0a00_0009)));
+        assert_eq!(nic.adapter_ip, Some((0xc612_0009, 0xc612_0009)));
         assert_eq!(nic.source_port, Some((5000, 5003)));
         assert_eq!(nic.router_mac_ipv4, Some([2, 0, 0, 0, 0, 0x77]));
         assert_eq!(nic.router_mac_ipv6, Some([2, 0, 0, 0, 0, 0x77]));
@@ -1599,6 +1652,25 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         assert_eq!(o.filename.as_deref(), Some("a.json"));
         assert_eq!(o.format, Format::Json);
 
+        // Левее файла: файл переопределяет (-oX left.xml слева, файл говорит json a.json).
+        let o = parse(&["-oX", "left.xml", "--resume", f])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert_eq!(
+            (o.format, o.filename.as_deref()),
+            (Format::Json, Some("a.json"))
+        );
+        let o = parse(&["--append-output=false", "--resume", f])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert!(o.append, "the file's forced append wins over a left flag");
+        let o = parse(&["--resume", f, "--append-output=false"])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert!(!o.append);
         let o = parse(&["--resume", f, "-oX", "b.xml"])
             .unwrap()
             .resolved_output_options()
@@ -1610,7 +1682,7 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         // Без формата в файле имя файла даёт XML, а не `Default` (SET_output_filename, main-conf.c:1643).
         let bare = dir.write(
             "bare.conf",
-            b"output-filename = c.out\nports = 80\nrange = 10.0.0.1\n",
+            b"output-filename = c.out\nports = 80\nrange = 198.18.0.1\n",
         );
         let o = parse(&["--resume", bare.to_str().unwrap()])
             .unwrap()

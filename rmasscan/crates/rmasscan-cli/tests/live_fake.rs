@@ -587,8 +587,8 @@ fn detection_failure_opens_nothing() {
     }
 }
 
-/// Ограничения плана CLI (`ReadyPlan::new_cli`: rounds 1..64, `resume-index` не дальше `(retries + 1) * range`)
-/// проверяются до ARP: отказ плана не стоит ни одного кадра. `--retries`, `--shard`, `--resume-index` и
+/// Ограничения плана и конфигурации (rounds 0 и shard 4/3 отвергает `validate`/разбор, `resume-index` за
+/// `(retries + 1) * range` отвергает курсор плана `new_cli`) проверяются до ARP: отказ не стоит ни одного кадра. `--retries`, `--shard`, `--resume-index` и
 /// `--blackrock-rounds` в допустимых пределах скан запускают (Задача 3).
 #[test]
 fn unsupported_plan_options_are_refused_before_any_frame() {
@@ -631,6 +631,15 @@ fn retries_shard_and_resume_window_run_on_the_live_path() {
     a.sort();
     h.sort();
     assert_eq!(a, h, "shard 1/2 + 2/2 == shard 1/1");
+    // `--retries 1`: (1 + 1) * (4 + 4) = 16 кадров, каждая пара (ip, порт) по 4 раза.
+    let retried = sent(&["--seed", "7", "--retries", "1"]);
+    assert_eq!(retried.len(), 16);
+    for f in &all {
+        assert_eq!(
+            retried.iter().filter(|r| syn_dst(r) == syn_dst(f)).count(),
+            4
+        );
+    }
     // `--resume-index 1 --resume-count 2` шлёт ровно два кадра и завершается.
     assert_eq!(
         sent(&["--seed", "7", "--resume-index", "1", "--resume-count", "2"]),

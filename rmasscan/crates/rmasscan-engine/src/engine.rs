@@ -564,7 +564,9 @@ fn run_tx(
     // (`main.c:421-431`: `retries + 1` кадров на один `i`). Пауза не рвёт пачку:
     // `resume-index` хранит только внешний `i`, и возобновление с середины
     // пачки послало бы уже отправленные копии второй раз. Стоп и отказ рвут
-    // пачку сразу. Для `retries == 0` пачка из одного кадра, поведение прежнее.
+    // пачку сразу. Остаток пачки при паузе уходит одним неограниченным по скорости проходом (ниже), поэтому
+    // задержка Pause ограничена числом повторов, а не throttle. Для `retries == 0` пачка из одного кадра,
+    // поведение прежнее.
     let mid_burst = Cell::new(false);
     let halted = || {
         let h = shared.halted();
@@ -590,9 +592,17 @@ fn run_tx(
         if halted() {
             break END_HALTED;
         }
-        let batch = match throttler.next_batch_interruptible(my_sent, clock, halted) {
-            Ok(b) => b,
-            Err(_) => break END_HALTED,
+        // Пауза посреди пачки: остаток пачки уходит сразу, мимо throttle (не более `retries` кадров), иначе при
+        // малой скорости Pause ждал бы до `retries / rate` секунд. Любая команда прерывает сон throttle.
+        let pausing = || shared.halted() == PAUSE && mid_burst.get();
+        let batch = if pausing() {
+            u64::MAX
+        } else {
+            match throttler.next_batch_interruptible(my_sent, clock, || shared.halted() != RUN) {
+                Ok(b) => b,
+                Err(_) if pausing() => u64::MAX,
+                Err(_) => break END_HALTED,
+            }
         };
         shared.rate_bits[idx].store(throttler.current_rate().to_bits(), Ordering::Relaxed);
         // batch == 0 означает "вызвать снова".
@@ -905,7 +915,6 @@ impl Engine {
     /// входящие кадры до разбора. Для одного адаптера ведёт себя как
     /// [`Self::start_with_clock`] (кроме плана `new_cli`, который тот не
     /// отвергает).
-    #[doc(hidden)]
     pub fn start_cli_with_clock(
         plan: ReadyPlan,
         ios: Vec<AdapterPair>,
@@ -1257,6 +1266,7 @@ mod tests {
         shard: Shard,
         resume_index: u64,
         resume_count: Option<u64>,
+        rate: f64,
     }
 
     fn cli_plan(spec: &Spec) -> ReadyPlan {
@@ -1266,7 +1276,7 @@ mod tests {
         let cfg = ScanConfig {
             targets: m,
             seed: SEED,
-            max_rate: 1_000_000.0,
+            max_rate: spec.rate,
             wait_secs: 0,
             retries: spec.retries,
             shard: spec.shard,
@@ -1278,7 +1288,7 @@ mod tests {
         let nic = NicBinding::from(AdapterBinding {
             interface_id: "fake0".into(),
             link_type: LinkType::Ethernet,
-            source_ipv4: 0x0aff_0001,
+            source_ipv4: 0xc612_0063,
             source_mac: [0, 0x11, 0x22, 0x33, 0x44, 0x55],
             next_hop_mac: [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
             source_ports: (40000, 40015),
@@ -1289,12 +1299,13 @@ mod tests {
     /// range = 4 адреса x 3 порта = 12.
     fn plan12(retries: u32, shard: Shard, resume_index: u64) -> ReadyPlan {
         cli_plan(&Spec {
-            targets: "10.0.0.0/30",
+            targets: "198.18.0.0/30",
             ports: "80,443,8080",
             retries,
             shard,
             resume_index,
             resume_count: None,
+            rate: 1_000_000.0,
         })
     }
 
@@ -1302,6 +1313,8 @@ mod tests {
         frames: Vec<Vec<u8>>,
         outcome: Outcome,
         events: Vec<Event>,
+        /// Время часов `ManualClock` от старта до `Finished`.
+        elapsed_micros: u64,
     }
 
     /// Один прогон; `pause_after = Some(n)` подаёт Pause изнутри n-й отправки.
@@ -1323,7 +1336,8 @@ mod tests {
                 }
             });
         }
-        let c: Arc<dyn Clock + Send + Sync> = clock;
+        let t0 = clock.now_micros();
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
         let h = Engine::start_cli_with_clock(
             plan.clone(),
             vec![fake.pair()],
@@ -1358,6 +1372,7 @@ mod tests {
             frames: fake.sent_frames(),
             outcome,
             events,
+            elapsed_micros: clock.now_micros() - t0,
         }
     }
 
@@ -1414,18 +1429,49 @@ mod tests {
         }
     }
 
+    /// Пауза посреди пачки при малой скорости: остаток пачки уходит мимо throttle, `CheckpointReady` приходит
+    /// без долгого ожидания (по часам engine), пачка при этом доведена до конца.
+    #[test]
+    fn pause_mid_burst_at_a_low_rate_finishes_the_burst_unthrottled() {
+        let plan = cli_plan(&Spec {
+            targets: "198.18.0.0/30",
+            ports: "80,443,8080",
+            retries: 99,
+            shard: Shard::default(),
+            resume_index: 0,
+            resume_count: None,
+            rate: 1.0,
+        });
+        let leg = run_leg(&plan, Some(1));
+        assert_eq!(leg.outcome.reason, Reason::Paused);
+        // Пачка из `retries + 1` кадров одного `i` доведена до конца, дальше пауза.
+        assert_eq!(leg.frames.len(), 100);
+        assert!(
+            leg.events
+                .iter()
+                .any(|e| matches!(e, Event::CheckpointReady { next_index: 1 }))
+        );
+        // 99 кадров по 1 кадру/с заняли бы ~99 с; без throttle часы почти не движутся.
+        assert!(
+            leg.elapsed_micros < 5_000_000,
+            "burst was throttled: {} us",
+            leg.elapsed_micros
+        );
+    }
+
     /// Review Focus 4 (`main.c:269-273`, `:1425`): при `resume-count < range`
     /// и `retries > 0` C ждёт `min_index >= range` и зависает. Здесь каждый
     /// адаптер завершается по своему `effective_end`.
     #[test]
     fn resume_count_with_retries_terminates_cleanly() {
         let plan = cli_plan(&Spec {
-            targets: "10.0.0.0-10.0.0.49",
+            targets: "198.18.0.0-198.18.0.49",
             ports: "80,443",
             retries: 1,
             shard: Shard::default(),
             resume_index: 10,
             resume_count: Some(8),
+            rate: 1_000_000.0,
         });
         assert_eq!(plan.range(), 100);
         let leg = run_leg(&plan, None);

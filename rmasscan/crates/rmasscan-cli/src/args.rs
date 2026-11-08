@@ -682,16 +682,9 @@ impl Cli {
                 })
             };
             for (group, ids) in [
-                (
-                    "format",
-                    &[
-                        "output_format",
-                        "output_filename",
-                        "stylesheet",
-                        "webxml",
-                        "no_stylesheet",
-                    ][..],
-                ),
+                // Только `--output-format` ставит формат безусловно; имя файла и таблица стилей лишь подставляют XML
+                // при формате 0 (main-conf.c:1643, 2100), `--no-stylesheet` формат не трогает (:2983).
+                ("format", &["output_format"][..]),
                 ("filename", &["output_filename"][..]),
                 ("append", &["append_output"][..]),
                 ("flush", &["output_flush"][..]),
@@ -1671,6 +1664,29 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
             .resolved_output_options()
             .unwrap();
         assert!(!o.append);
+        // Имя файла и таблица стилей формат не ставят: формат файла (json) остаётся (main-conf.c:1643, 2100, 2983).
+        let o = parse(&["--resume", f, "--output-filename", "b.out"])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert_eq!(
+            (o.format, o.filename.as_deref()),
+            (Format::Json, Some("b.out"))
+        );
+        let o = parse(&["--resume", f, "--webxml"])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert_eq!(o.format, Format::Json);
+        assert_eq!(o.stylesheet.as_deref(), Some(NMAP_XSL));
+        let o = parse(&["--resume", f, "--no-stylesheet"])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert_eq!(
+            (o.format, o.filename.as_deref()),
+            (Format::Json, Some("a.json"))
+        );
         let o = parse(&["--resume", f, "-oX", "b.xml"])
             .unwrap()
             .resolved_output_options()

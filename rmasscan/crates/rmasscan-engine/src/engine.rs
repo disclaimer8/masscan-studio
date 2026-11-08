@@ -541,8 +541,11 @@ impl Drop for ExitGuard {
 ///
 /// 1 мс это НОВОЕ РЕШЕНИЕ плана 2B-Linux, а не результат измерения
 /// производительности: оно лишь убирает busy-spin и укладывается в контракт
-/// "Stop/Pause <= 1 с" (один сон короче любого лимита отмены). Значение можно
-/// пересмотреть после замеров на реальном адаптере.
+/// "Stop/Pause <= 1 с" (один сон короче любого лимита отмены). Пауза в середине
+/// пачки повторов шлёт остаток пачки сразу, мимо throttle, поэтому остаётся
+/// такой же быстрой; исключение одно: адаптер, застрявший на `WouldBlockUnsent`
+/// во время этой досылки, даёт `TxStalled` по окну `tx_stall_timeout` (решение
+/// be022ac). Значение можно пересмотреть после замеров на реальном адаптере.
 const WOULD_BLOCK_BACKOFF_MICROS: u64 = 1_000;
 
 fn run_tx(
@@ -1252,7 +1255,7 @@ mod tests {
     use rmasscan_core::config::{Operation, ScanConfig, validate};
     use rmasscan_core::massip::MassIp;
     use rmasscan_core::probe::{AdapterBinding, NicBinding};
-    use rmasscan_core::scan::{Shard, transmit_index_stream};
+    use rmasscan_core::scan::Shard;
     use rmasscan_core::targets::{add_target_string, parse_ports};
     use std::sync::OnceLock;
     use std::time::Instant;
@@ -1477,10 +1480,8 @@ mod tests {
         let leg = run_leg(&plan, None);
         assert_eq!(leg.outcome.reason, Reason::Completed);
 
-        let expected =
-            transmit_index_stream(100, Shard::default(), 1, 0, 10, Some(8), 1, 1e6).count();
-        assert!(expected > 0 && expected < 100 * 4, "expected {expected}");
-        assert_eq!(leg.frames.len(), expected);
+        // (min(100, 10 + 8) + 1 * 100 - 10) внешних `i` x (retries + 1) = 108 x 2 (main.c:269-273, 421-431).
+        assert_eq!(leg.frames.len(), 216);
         let mut cursor = plan.cursor_for_nic(0, None).unwrap();
         let mut reference = Vec::new();
         while let Some(p) = cursor.current() {

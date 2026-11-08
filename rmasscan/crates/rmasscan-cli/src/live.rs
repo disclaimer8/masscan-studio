@@ -4,8 +4,8 @@
 //! решений плана: интерфейс по маршруту к целям, ARP к следующему хопу, один порт источника по умолчанию.
 //!
 //! Порядок: `defaults (seed, порт) → validate → detect → пробная сборка ReadyPlan → печать [+] → ARP → ReadyPlan →
-//! open → Engine → события → Sink → join`. Пробный план (next hop ещё нулевой) проверяет ограничения runtime
-//! (`--retries`, `--shard`, rounds, legacy resume) до ARP, чтобы отклонённый engine скан не стоил ни одного ARP-кадра;
+//! open → Engine → события → Sink → join`. Пробный план (next hop ещё нулевой) проверяет ограничения плана
+//! (rounds, shard, `resume-index` за пределом) до ARP, чтобы отклонённый engine скан не стоил ни одного ARP-кадра;
 //! настоящий план строится после ARP, потому что binding неизменяем. Всё состояние ОС приходит через шов
 //! [`Backend`]; обнаружение, `--offline` и `--iflist` ничего не открывают. Единственный кадр до engine это ARP-запрос
 //! резолвера с отдельного короткоживущего адаптера, закрытого до открытия адаптера скана. Ctrl-C (Р18, порт
@@ -27,7 +27,7 @@ use crate::status::{StatusLine, StatusMode};
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{
-    AdapterBinding, Probe, ReadyPlan, for_each_probe as core_for_each_probe,
+    AdapterBinding, NicBinding, Probe, ReadyPlan, for_each_probe as core_for_each_probe,
 };
 use rmasscan_core::receive::PortStatus;
 use rmasscan_core::throttle::Clock;
@@ -90,6 +90,21 @@ pub struct Prepared {
 
 fn refusal(e: impl std::fmt::Display) -> String {
     format!("{REFUSAL_PREFIX}{e}")
+}
+
+/// План живого скана CLI (`ReadyPlan::new_cli`): `--retries`, `--shard`, `--blackrock-rounds`, `resume-index` и
+/// `resume-count` из конфигурации и `--resume` (`main.c:212-223, 269-273`). Один адаптер; `adapter-port` из 17
+/// портов, который пишет сам C (`main.c:1318`), принимается флагом `legacy_c_17_port_mask`.
+fn cli_plan(eff: &EffectiveConfig, binding: &AdapterBinding) -> Result<ReadyPlan, String> {
+    let nic = NicBinding {
+        source_ipv4_last: binding.source_ipv4,
+        legacy_c_17_port_mask: eff.legacy_c_17_port_mask(),
+        binding: binding.clone(),
+    };
+    let plan = ReadyPlan::new_cli(eff.clone(), vec![nic]).map_err(|e| e.to_string())?;
+    // Курсор строится здесь же: `resume-index` за пределом скана отказывает до ARP, а не после него.
+    plan.cursor_for_nic(0, None).map_err(|e| e.to_string())?;
+    Ok(plan)
 }
 
 /// `--offline` с явными ненулевыми `--adapter-ip` и `--adapter-mac` и с `--source-port` (решение 6): ОС не
@@ -155,6 +170,14 @@ pub fn prepare(
     };
     cfg.source_port = Some(source_ports.0);
     let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
+    // Массив адаптеров `nic[1..8)` запускается в Задаче 7; молча сканировать одним `nic[0]` нельзя: смещение
+    // потока (`nic_count`) и скорость зависят от числа адаптеров.
+    if eff.nics().len() > 1 {
+        return Err(format!(
+            "{} adapters are configured but only one adapter is supported by this build",
+            eff.nics().len()
+        ));
+    }
     let detected = if let (true, Some(ip), Some(mac)) = (
         hermetic_offline(&eff, source_ports.1),
         eff.adapter_ip(),
@@ -442,9 +465,9 @@ pub fn run_live_with(
     let mut best_effort = BestEffort::new(log);
     let log: &mut dyn Write = &mut best_effort;
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
-    // Ограничения runtime v1 (`--retries`, `--shard`, rounds, legacy resume) до ARP: отказ плана не стоит кадра.
-    // Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
-    ReadyPlan::new(p.eff.clone(), p.binding.clone()).map_err(|e| e.to_string())?;
+    // Ограничения плана (rounds, shard, `resume-index` за пределом, ширина портов) до ARP: отказ плана не стоит
+    // кадра. Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
+    cli_plan(&p.eff, &p.binding)?;
     print_detection(&p, log)?;
     // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
     sink.open()?;
@@ -500,7 +523,7 @@ pub fn run_live_with(
         binding.next_hop_mac = report.mac;
     }
     print_parameters(&p, log)?;
-    let plan = ReadyPlan::new(p.eff, binding.clone()).map_err(|e| e.to_string())?;
+    let plan = cli_plan(&p.eff, &binding)?;
     // Нажатие, пришедшее после ARP, но до открытия адаптера скана: ни адаптера, ни SYN.
     if backend.interrupts() > 0 {
         return early_stop(log, sink);
@@ -509,7 +532,13 @@ pub fn run_live_with(
     let options = EngineOptions::new(ids(backend), ids(backend));
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
     let started = clock.now_micros();
-    let handle = Engine::start_with_clock(plan, io, options, clock.clone())
+    // Конец передачи для строки статуса: `min(range, min_k effective_end(k))`. При усечённом `resume-count`
+    // позиция никогда не дойдёт до `range`, а движок всё равно завершает скан на своём `effective_end`.
+    let tx_end = (0..plan.nics().len() as u32)
+        .map(|k| plan.effective_end(k))
+        .min()
+        .unwrap_or(0);
+    let handle = Engine::start_cli_with_clock(plan, vec![io], options, clock.clone(), None)
         .map_err(|e| format!("cannot start the scan: {e}"))?;
     let (mut replies, mut open_count) = (0u64, 0u64);
     let mut sink_error = None;
@@ -533,7 +562,7 @@ pub fn run_live_with(
             Ok(Event::Progress(prog)) => {
                 let now = clock.now_micros();
                 // main.c:1427 и 1496: конец передачи это `index >= range`; ожидание отсчитывается от него.
-                if prog.next_index >= max_count {
+                if prog.next_index >= max_count.min(tx_end) {
                     tx_done_at.get_or_insert(now);
                 }
                 let exiting = tx_done_at

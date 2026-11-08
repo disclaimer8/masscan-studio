@@ -11,13 +11,18 @@
 //! `--noshow` и `--open` применяются в порядке командной строки. Отклонения от C: неизвестный `--output-format` -
 //! ошибка (Р6); redis, certs и ротация отклоняются с причиной (Р1).
 
+use std::collections::HashSet;
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::path::Path;
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
-use rmasscan_core::config::{ScanConfig, parse_mac, parse_rate, parse_shard, parse_source_port};
+use rmasscan_core::config::{
+    NicConfig, ScanConfig, parse_mac, parse_rate, parse_shard, parse_source_port,
+};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 
+use crate::conf::{FullConf, OutputConfPatch, apply_conf_key};
 use crate::output::{Format, OutputOptions};
 use crate::status::StatusMode;
 
@@ -122,6 +127,13 @@ pub struct Cli {
         help = "Stop after this many indexes"
     )]
     pub resume_count: Option<u64>,
+    // main-conf.c:2926-2928: `resume = <file>` читает файл в этой позиции argv.
+    #[arg(
+        long = "resume",
+        value_name = "FILE",
+        help = "Resume a scan from a paused.conf file (options to the right of it override the file; output is appended)"
+    )]
+    pub resume: Vec<String>,
     // main-conf.c:2486: `source-ip` - синоним `adapter-ip`.
     #[arg(
         long = "adapter-ip",
@@ -352,7 +364,29 @@ pub struct Cli {
     /// Был ли хоть один `--stylesheet` или `--webxml` (`SET_output_stylesheet` задаёт XML, если формата нет).
     #[arg(skip)]
     style_sets_xml: bool,
+    /// Ключи конфигурации, чьё последнее появление в argv стоит правее `--resume` (они переопределяют файл).
+    #[arg(skip)]
+    after_resume: HashSet<&'static str>,
 }
+
+/// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
+/// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
+const POSITIONAL_KEYS: [&str; 14] = [
+    "seed",
+    "rate",
+    "wait",
+    "retries",
+    "shard",
+    "blackrock_rounds",
+    "resume_index",
+    "resume_count",
+    "adapter_ip",
+    "adapter_mac",
+    "router_ip",
+    "router_mac",
+    "source_port",
+    "interface",
+];
 
 /// Один шаг `SET_output_show` (`on`), `SET_output_noshow` (`!on`) или `SET_output_show_open`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -614,6 +648,22 @@ impl Cli {
         let mut cli = Cli::from_arg_matches(&m).map_err(ParseError::Clap)?;
         cli.show_steps = show_steps(&m);
         (cli.style, cli.style_sets_xml) = fold_stylesheet(&m);
+        if cli.resume.len() > 1 {
+            return Err(ParseError::Masscan(
+                "--resume may be given only once".to_string(),
+            ));
+        }
+        if let Some(at) = m.indices_of("resume").and_then(Iterator::max) {
+            cli.after_resume = POSITIONAL_KEYS
+                .iter()
+                .copied()
+                .filter(|id| {
+                    m.indices_of(id)
+                        .and_then(Iterator::max)
+                        .is_some_and(|i| i > at)
+                })
+                .collect();
+        }
         cli.output_options().map_err(ParseError::Masscan)?;
         Ok(cli)
     }
@@ -697,77 +747,209 @@ impl Cli {
 
     // Строит `ScanConfig`. В отличие от C (main-conf.c:2736-2741, ошибка
     // `--range` не фатальна) любая ошибка цели, порта или значения фатальна.
+    // С `--resume <file>` читает файл в его позиции argv.
     pub fn to_config(&self) -> Result<ScanConfig, String> {
+        self.resolve().map(|full| full.scan)
+    }
+
+    /// Конфигурация с учётом `--resume <file>` (`resume = <file>`, main-conf.c:2926-2928): ключи левее файла
+    /// применяются первыми, затем файл (с его выводом, `pcap-filename` и `ndjson-status`), затем ключи правее
+    /// (они переопределяют файл). Без `--resume` это обычный `to_config` с пустым [`FullConf::output`].
+    pub fn resolve(&self) -> Result<FullConf, String> {
         let mut cfg = ScanConfig::default();
-        for t in self.targets.iter().chain(&self.range) {
-            add_target_string(cfg.targets.ipv4_mut(), t)
-                .map_err(|e| format!("bad target {t:?}: {e}"))?;
+        self.apply_scan_fields(&mut cfg, false)?;
+        let mut full = FullConf {
+            scan: cfg,
+            ..FullConf::default()
+        };
+        if let Some(file) = self.resume.first() {
+            let mut loader = |p: &Path| std::fs::read_to_string(p).map_err(|e| e.to_string());
+            apply_conf_key("resume", file, &mut full, &mut loader, 0)?;
+            self.apply_scan_fields(&mut full.scan, true)?;
         }
-        for p in &self.ports {
-            parse_ports(cfg.targets.ports_mut(), p).map_err(|e| format!("bad ports {p:?}: {e}"))?;
-        }
-        for x in &self.exclude {
-            add_target_string(cfg.excludes.ipv4_mut(), x)
-                .map_err(|e| format!("bad --exclude {x:?}: {e}"))?;
-        }
-        for f in &self.excludefile {
-            read_exclude_file(&mut cfg, f)?;
+        Ok(full)
+    }
+
+    /// Применяет поля командной строки к `cfg`. `after` = `false`: цели, исключения и ключи, стоящие левее
+    /// `--resume` (или все, если его нет); `true`: ключи правее `--resume`. Ключи адаптера идут и в
+    /// одиночные поля, и в `nics[0]`, если файл уже создал массив адаптеров (`apply_core_kv` держит их равными).
+    fn apply_scan_fields(&self, cfg: &mut ScanConfig, after: bool) -> Result<(), String> {
+        let take = |id: &'static str| self.after_resume.contains(id) == after;
+        if !after {
+            for t in self.targets.iter().chain(&self.range) {
+                add_target_string(cfg.targets.ipv4_mut(), t)
+                    .map_err(|e| format!("bad target {t:?}: {e}"))?;
+            }
+            for p in &self.ports {
+                parse_ports(cfg.targets.ports_mut(), p)
+                    .map_err(|e| format!("bad ports {p:?}: {e}"))?;
+            }
+            for x in &self.exclude {
+                add_target_string(cfg.excludes.ipv4_mut(), x)
+                    .map_err(|e| format!("bad --exclude {x:?}: {e}"))?;
+            }
+            for f in &self.excludefile {
+                read_exclude_file(cfg, f)?;
+            }
+            cfg.offline |= self.offline;
         }
         // seed == 0 в C значит "взять энтропию" (main.c:1640-1641). Явный 0
         // отклоняется; отсутствие --seed решает `run` по операции (см.
         // [`seed_policy`]), здесь это seed 0.
-        cfg.seed = match self.seed {
-            Some(0) => {
-                return Err(
-                    "--seed must be non-zero (omit it for a live scan to use entropy)".into(),
-                );
+        if take("seed") {
+            match self.seed {
+                Some(0) => {
+                    return Err(
+                        "--seed must be non-zero (omit it for a live scan to use entropy)".into(),
+                    );
+                }
+                Some(s) => cfg.seed = s,
+                None => {}
             }
-            Some(s) => s,
-            None => 0,
-        };
-        if let Some(r) = &self.rate {
+        }
+        if take("rate")
+            && let Some(r) = &self.rate
+        {
             cfg.max_rate = parse_rate(r).map_err(|e| e.to_string())?;
         }
-        if let Some(w) = self.wait {
+        if take("wait")
+            && let Some(w) = self.wait
+        {
             cfg.wait_secs = w;
         }
-        if let Some(r) = self.retries {
+        if take("retries")
+            && let Some(r) = self.retries
+        {
             cfg.retries = r;
         }
-        if let Some(s) = &self.shard {
+        if take("shard")
+            && let Some(s) = &self.shard
+        {
             cfg.shard = parse_shard(s).map_err(|e| e.to_string())?;
         }
-        if let Some(r) = self.blackrock_rounds {
+        if take("blackrock_rounds")
+            && let Some(r) = self.blackrock_rounds
+        {
             cfg.blackrock_rounds = r;
         }
-        if let Some(i) = self.resume_index {
+        if take("resume_index")
+            && let Some(i) = self.resume_index
+        {
             cfg.resume_index = i;
         }
-        cfg.resume_count = self.resume_count;
-        if let Some(ip) = &self.adapter_ip {
+        if take("resume_count")
+            && let Some(c) = self.resume_count
+        {
+            cfg.resume_count = Some(c);
+        }
+        if take("adapter_ip")
+            && let Some(ip) = &self.adapter_ip
+        {
             let ip: Ipv4Addr = ip
                 .parse()
                 .map_err(|_| format!("bad --adapter-ip {ip:?}: expected one IPv4 address"))?;
-            cfg.adapter_ip = Some(ip.into());
+            let ip = u32::from(ip);
+            cfg.adapter_ip = Some(ip);
+            set_nic0(cfg, |n| n.adapter_ip = Some((ip, ip)));
         }
-        if let Some(m) = &self.adapter_mac {
-            cfg.adapter_mac = Some(parse_mac(m).map_err(|e| e.to_string())?);
+        if take("adapter_mac")
+            && let Some(m) = &self.adapter_mac
+        {
+            let mac = parse_mac(m).map_err(|e| e.to_string())?;
+            cfg.adapter_mac = Some(mac);
+            set_nic0(cfg, |n| n.adapter_mac = Some(mac));
         }
-        if let Some(ip) = &self.router_ip {
+        if take("router_ip")
+            && let Some(ip) = &self.router_ip
+        {
             let ip: Ipv4Addr = ip
                 .parse()
                 .map_err(|_| format!("bad --router-ip {ip:?}: expected one IPv4 address"))?;
-            cfg.router_ip = Some(ip.into());
+            let ip = u32::from(ip);
+            cfg.router_ip = Some(ip);
+            set_nic0(cfg, |n| n.router_ip = Some(ip));
         }
-        if let Some(m) = &self.router_mac {
-            cfg.router_mac = Some(parse_mac(m).map_err(|e| e.to_string())?);
+        if take("router_mac")
+            && let Some(m) = &self.router_mac
+        {
+            let mac = parse_mac(m).map_err(|e| e.to_string())?;
+            cfg.router_mac = Some(mac);
+            set_nic0(cfg, |n| {
+                (n.router_mac_ipv4, n.router_mac_ipv6) = (Some(mac), Some(mac));
+            });
         }
-        if let Some(p) = &self.source_port {
-            cfg.source_port = Some(parse_source_port(p).map_err(|e| e.to_string())?);
+        if take("source_port")
+            && let Some(p) = &self.source_port
+        {
+            let ports = parse_source_port(p).map_err(|e| e.to_string())?;
+            cfg.source_port = Some(ports);
+            // Явный диапазон степени двойки снимает причуду C в 17 портов, пришедшую из файла.
+            cfg.legacy_c_17_port_mask = false;
+            set_nic0(cfg, |n| n.source_port = Some(ports));
         }
-        cfg.adapter_name = self.interface.clone();
-        cfg.offline = self.offline;
-        Ok(cfg)
+        if take("interface")
+            && let Some(name) = &self.interface
+        {
+            cfg.adapter_name = Some(name.clone());
+            set_nic0(cfg, |n| n.adapter_name = Some(name.clone()));
+        }
+        Ok(())
+    }
+
+    /// Опции вывода с учётом `--resume`: поля файла (`output-filename`, `output-format`, ...) служат базой, а
+    /// явно заданные в командной строке опции вывода их переопределяют; `output-append` после `--resume`
+    /// принудительно истина (main-conf.c:2926-2928). Без `--resume` совпадает с [`Cli::output_options`].
+    pub fn resolved_output_options(&self) -> Result<OutputOptions, String> {
+        let mut o = self.output_options()?;
+        if self.resume.is_empty() {
+            return Ok(o);
+        }
+        let file = self.resolve()?.output;
+        merge_file_output(&mut o, &file, self);
+        Ok(o)
+    }
+}
+
+/// `nics[0]`, если массив адаптеров уже создан (файлом): CLI-ключ адаптера обязан попасть и в него, иначе
+/// одиночное поле и `nics[0]` разойдутся и `echo`/`paused.conf` напишут значение файла.
+fn set_nic0(cfg: &mut ScanConfig, f: impl FnOnce(&mut NicConfig)) {
+    if let Some(n) = cfg.nics.first_mut() {
+        f(n);
+    }
+}
+
+/// База из файла `--resume` под явно заданные опции вывода командной строки.
+fn merge_file_output(o: &mut OutputOptions, file: &OutputConfPatch, cli: &Cli) {
+    let flag_format_given =
+        cli.output_format.is_some() || cli.output_filename.is_some() || cli.style_sets_xml;
+    if !flag_format_given && let Some(f) = file.format {
+        o.format = f;
+    }
+    if cli.output_filename.is_none() {
+        o.filename.clone_from(&file.filename);
+    }
+    // `resume` ставит `output-append = true` после чтения файла (main-conf.c:2926-2928).
+    o.append = cli.append_output.last().is_none_or(|v| parse_boolean(v));
+    if cli.output_flush.is_empty() {
+        o.flush = file.flush.unwrap_or(false);
+    }
+    if cli.style.is_none() {
+        o.stylesheet.clone_from(&file.stylesheet);
+    }
+    if cli.show_steps.is_empty() {
+        if let Some(v) = file.show_open {
+            o.show_open = v;
+        }
+        if let Some(v) = file.show_closed {
+            o.show_closed = v;
+        }
+        if let Some(v) = file.show_host {
+            o.show_host = v;
+        }
+    }
+    // SET_output_filename (main-conf.c:1643): имя файла без формата значит XML.
+    if o.format == Format::Default && o.filename.is_some() {
+        o.format = Format::Xml;
     }
 }
 
@@ -1331,6 +1513,129 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.adapter_ip, Some(0x0aff_0001));
         assert_eq!(cfg.adapter_mac, Some([0, 0x11, 0x22, 0x33, 0x44, 0x55]));
+    }
+
+    /// `paused.conf` для тестов `--resume`: адаптер, порт источника, скорость, повторы, вывод.
+    const RESUME_FILE: &str = "\n# resume information\nresume-index = 4\nseed = 9\nrate = 250.000000\n\
+retries = 2\nshard = 2/3\n\noutput-filename = a.json\noutput-format = json\n\n\
+adapter = eth0\nadapter-ip = 10.0.0.2\nadapter-mac = 02-00-00-00-00-01\n\
+router-mac-ipv4 = 02-00-00-00-00-02\nrouter-mac-ipv6 = 02-00-00-00-00-02\n\
+adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrange = 10.0.0.0/28\n";
+
+    /// Т2 M-2 (Р1): `--resume <file>` разбирается в своей позиции argv. Ключи правее файла (`--rate`,
+    /// `--adapter-ip`, `--source-port`, `--router-mac`, `--interface`) переопределяют его и попадают и в
+    /// одиночные поля, и в `nics[0]`; ключ левее файла файл переопределяет.
+    #[test]
+    fn resume_file_then_cli_flags_override_it_at_argv_level() {
+        let dir = crate::scratch::Scratch::new();
+        let file = dir.write("paused.conf", RESUME_FILE.as_bytes());
+        let f = file.to_str().unwrap();
+
+        let plain = parse(&["--resume", f]).unwrap().to_config().unwrap();
+        assert_eq!(plain.max_rate, 250.0);
+        assert_eq!(plain.seed, 9);
+        assert_eq!(plain.resume_index, 4);
+        assert_eq!(plain.retries, 2);
+        assert_eq!(plain.adapter_ip, Some(0x0a00_0002));
+        assert_eq!(plain.source_port, Some((41234, 41234)));
+
+        let over = parse(&[
+            "--resume",
+            f,
+            "--rate",
+            "500",
+            "--adapter-ip",
+            "10.0.0.9",
+            "--source-port",
+            "5000-5003",
+            "--router-mac",
+            "02-00-00-00-00-77",
+            "--interface",
+            "eth9",
+            "--resume-index",
+            "1",
+        ])
+        .unwrap()
+        .to_config()
+        .unwrap();
+        assert_eq!(over.max_rate, 500.0);
+        assert_eq!(over.resume_index, 1);
+        assert_eq!(over.seed, 9, "keys the CLI did not give stay from the file");
+        assert_eq!(over.adapter_ip, Some(0x0a00_0009));
+        assert_eq!(over.source_port, Some((5000, 5003)));
+        assert_eq!(over.router_mac, Some([2, 0, 0, 0, 0, 0x77]));
+        assert_eq!(over.adapter_name.as_deref(), Some("eth9"));
+        assert_eq!(over.adapter_mac, Some([2, 0, 0, 0, 0, 1]));
+        // Одиночные поля и `nics[0]` не расходятся (иначе `paused.conf` напишет значение файла).
+        let nic = &over.nics[0];
+        assert_eq!(nic.adapter_ip, Some((0x0a00_0009, 0x0a00_0009)));
+        assert_eq!(nic.source_port, Some((5000, 5003)));
+        assert_eq!(nic.router_mac_ipv4, Some([2, 0, 0, 0, 0, 0x77]));
+        assert_eq!(nic.router_mac_ipv6, Some([2, 0, 0, 0, 0, 0x77]));
+        assert_eq!(nic.adapter_name.as_deref(), Some("eth9"));
+        assert!(!over.legacy_c_17_port_mask);
+
+        // Ключ левее `--resume` файл переопределяет: файл говорит rate 250.
+        let left = parse(&["--rate", "500", "--resume", f])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(left.max_rate, 250.0);
+    }
+
+    /// `--resume` принудительно включает `output-append` (main-conf.c:2926-2928); явные опции вывода правее
+    /// файла его переопределяют; имя файла без формата значит XML (M-8).
+    #[test]
+    fn resume_forces_append_and_cli_output_flags_override_the_file() {
+        let dir = crate::scratch::Scratch::new();
+        let file = dir.write("paused.conf", RESUME_FILE.as_bytes());
+        let f = file.to_str().unwrap();
+
+        let o = parse(&["--resume", f])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert!(o.append);
+        assert_eq!(o.filename.as_deref(), Some("a.json"));
+        assert_eq!(o.format, Format::Json);
+
+        let o = parse(&["--resume", f, "-oX", "b.xml"])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert!(o.append);
+        assert_eq!(o.filename.as_deref(), Some("b.xml"));
+        assert_eq!(o.format, Format::Xml);
+
+        // Без формата в файле имя файла даёт XML, а не `Default` (SET_output_filename, main-conf.c:1643).
+        let bare = dir.write(
+            "bare.conf",
+            b"output-filename = c.out\nports = 80\nrange = 10.0.0.1\n",
+        );
+        let o = parse(&["--resume", bare.to_str().unwrap()])
+            .unwrap()
+            .resolved_output_options()
+            .unwrap();
+        assert_eq!(
+            (o.format, o.filename.as_deref()),
+            (Format::Xml, Some("c.out"))
+        );
+
+        // Без `--resume` ничего не меняется.
+        assert!(
+            !parse(&["-p80"])
+                .unwrap()
+                .resolved_output_options()
+                .unwrap()
+                .append
+        );
+        // Нечитаемый файл `--resume` это ошибка (отличие от C, Р1), а не молчаливое продолжение.
+        let e = parse(&["--resume", "/nonexistent/paused.conf"])
+            .unwrap()
+            .to_config()
+            .unwrap_err();
+        assert!(e.contains("paused.conf"), "{e}");
+        assert!(parse(&["--resume", "a", "--resume", "b"]).is_err());
     }
 
     #[test]

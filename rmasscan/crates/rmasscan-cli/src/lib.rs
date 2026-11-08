@@ -70,7 +70,7 @@ pub fn error_text(msg: &str) -> String {
 
 /// Опции вывода скана и `--readscan`: реальный формат требует файл (`-` это stdout).
 fn checked_output_options(cli: &Cli) -> Result<OutputOptions, String> {
-    let o = cli.output_options()?;
+    let o = cli.resolved_output_options()?;
     let needs_file = !matches!(
         o.format,
         Format::Default | Format::Interactive | Format::None

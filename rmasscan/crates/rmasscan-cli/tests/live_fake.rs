@@ -587,17 +587,18 @@ fn detection_failure_opens_nothing() {
     }
 }
 
-/// Ограничения runtime v1 (`ReadyPlan`: retries 0, shard 1/1, rounds 14, без legacy resume) проверяются до ARP:
-/// отказ плана не стоит ни одного кадра.
+/// Ограничения плана CLI (`ReadyPlan::new_cli`: rounds 1..64, `resume-index` не дальше `(retries + 1) * range`)
+/// проверяются до ARP: отказ плана не стоит ни одного кадра. `--retries`, `--shard`, `--resume-index` и
+/// `--blackrock-rounds` в допустимых пределах скан запускают (Задача 3).
 #[test]
 fn unsupported_plan_options_are_refused_before_any_frame() {
     let mut b = FakeBackend::new();
     b.panic_on_open = true;
     for (extra, word) in [
-        (&["--retries", "1"][..], "retries"),
-        (&["--shard", "2/3"][..], "shard"),
-        (&["--blackrock-rounds", "4"][..], "rounds"),
-        (&["--resume-index", "1"][..], "resume"),
+        (&["--blackrock-rounds", "0"][..], "rounds"),
+        (&["--blackrock-rounds", "64"][..], "rounds"),
+        (&["--resume-index", "5"][..], "beyond"),
+        (&["--shard", "4/3"][..], "shard"),
     ] {
         let args: Vec<&str> = LIVE.iter().chain(extra).copied().collect();
         let (r, out, log) = cli(&b, &args);
@@ -605,6 +606,67 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
         assert!(e.contains(word), "{extra:?}: {e}");
         assert!(out.is_empty() && log.is_empty(), "{extra:?}: {log}");
     }
+}
+
+/// Разрешённые пределы плана (Задача 3): шардирование делит поток, повторы удлиняют его, `--resume-index` и
+/// `--resume-count` режут его; скан завершается `Completed`.
+#[test]
+fn retries_shard_and_resume_window_run_on_the_live_path() {
+    let sent = |extra: &[&str]| {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, &with(&LIVE, extra));
+        r.unwrap();
+        assert!(log.contains("finished: Completed"), "{extra:?}: {log}");
+        let opened = b.opened();
+        opened.last().unwrap().adapter.sent_frames()
+    };
+    // range = 2 адреса x 2 порта = 4; поток одного адаптера 1/1.
+    let all = sent(&["--seed", "7"]);
+    assert_eq!(all.len(), 4);
+    // Две половины shard 1/2 + 2/2 вместе дают ровно тот же набор кадров.
+    let mut halves = sent(&["--seed", "7", "--shard", "1/2"]);
+    halves.extend(sent(&["--seed", "7", "--shard", "2/2"]));
+    assert_eq!(halves.len(), 4);
+    let (mut a, mut h) = (all.clone(), halves);
+    a.sort();
+    h.sort();
+    assert_eq!(a, h, "shard 1/2 + 2/2 == shard 1/1");
+    // `--resume-index 1 --resume-count 2` шлёт ровно два кадра и завершается.
+    assert_eq!(
+        sent(&["--seed", "7", "--resume-index", "1", "--resume-count", "2"]),
+        all[1..3].to_vec()
+    );
+}
+
+/// `--resume <file>` end-to-end: файл задаёт цели, seed, `resume-index`; ключ правее файла (`--rate`) его
+/// переопределяет. Отправлен ровно остаток потока `resume-index..range`.
+#[test]
+fn resume_file_continues_the_scan_from_its_index() {
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &with(&LIVE, &["--seed", "7"]));
+    r.unwrap();
+    let all = b.opened().last().unwrap().adapter.sent_frames();
+    assert_eq!(all.len(), 4);
+
+    let dir = Scratch::new();
+    let file = dir.write(
+        "paused.conf",
+        b"\n# resume information\nresume-index = 1\nseed = 7\nrate = 100\nwait = 1\n\
+nocapture = servername\nnocapture = servername\n\n\n\
+# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80,81\nrange = 198.51.100.1-198.51.100.2\n",
+    );
+    let f = file.to_str().unwrap();
+    let b = FakeBackend::new();
+    let (r, _, log) = cli(&b, &["--resume", f]);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    assert_eq!(b.opened().last().unwrap().adapter.sent_frames(), all[1..]);
+
+    // Ключ правее файла переопределяет его: `--resume-index 3` шлёт один последний кадр.
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &["--resume", f, "--resume-index", "3"]);
+    r.unwrap();
+    assert_eq!(b.opened().last().unwrap().adapter.sent_frames(), all[3..]);
 }
 
 #[test]

@@ -146,9 +146,11 @@ CLI и строка статуса `*` — в `rmasscan-cli`.
 - Produces:
   - `Engine::start_cli_with_clock(plan: ReadyPlan, ios: Vec<AdapterPair>, options: EngineOptions, clock: Arc<dyn Clock +
     Send + Sync>, pcap_sink: Option<Arc<dyn Fn(&[u8], u64) + Send + Sync>>) -> Result<EngineHandle, StartError>` —
-    запускает по паре потоков TX/RX на каждый `nic_index` (для `ios.len() == 1` эквивалентно `start_with_clock`), считает
-    `next_index = min_k my_index[k]` (`main.c:1408–1414`) и завершает скан, когда каждый `nic_index` достиг своего
-    `effective_end(nic_index)`. Существующие `Engine::start` / `Engine::resume` для `Studio` не меняют сигнатуру.
+    запускает по паре потоков TX/RX на каждый `nic_index` (для `ios.len() == 1` эквивалентно `start_with_clock`), пишет в
+    `paused.conf` `resume-index = min_k ProbeCursor::resume_base()` (= `min_k( my_index[k] − ReadyPlan::nic_offset(k) )`;
+    **не** сырой `min_k my_index[k]` из `main.c:1408–1414` — иначе `cursor_for_nic` на возобновлении задвоит смещение
+    шарда/NIC) и завершает скан, когда каждый `nic_index` достиг своего `effective_end(nic_index)` (`position() >=
+    effective_end`, не по нормализованной базе). Существующие `Engine::start` / `Engine::resume` для `Studio` не меняют сигнатуру.
   - Разбор `--resume <file>` в `args.rs` (`preprocess_args` / позиционное слияние в `FullConf`).
 
 - [ ] **Шаг 1 — красный тест:**

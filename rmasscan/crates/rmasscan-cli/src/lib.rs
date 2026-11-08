@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod conf;
 pub mod live;
 pub mod output;
 pub mod readscan;

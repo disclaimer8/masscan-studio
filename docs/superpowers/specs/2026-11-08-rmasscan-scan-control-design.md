@@ -70,8 +70,12 @@ TCP-опции) — чтобы реальные крупные сканы на �
   `--adapter-ip[i]`, `--adapter-mac[i]`, `--router-ip[i]`, `--router-mac[i]`, `--source-port[i]`, `0 <= i < 8`,
   `main-conf.c:882–890, 2437–2641`). Каждый поток `(shard, nic_index)` идёт по внешним индексам `i` с началом
   `start = resume_index + (shard.one - 1) * nic_count + nic_index` и шагом `increment = shard.of * nic_count`
-  (`main.c:223, 269`), скоростью `max_rate / nic_count` (`main.c:249`), общим `DedupCache`/`Sink`, а прогресс и
-  `resume-index` при паузе равны `min_k my_index[k]` (`main.c:1408–1414`). При `shard.of > 1` без явного `--seed`
+  (`main.c:223, 269`), скоростью `max_rate / nic_count` (`main.c:249`), общим `DedupCache`/`Sink`, а `resume-index` при паузе равен
+  `min_k ProbeCursor::resume_base()` = `min_k( my_index[k] − ReadyPlan::nic_offset(k) )` — нормализованная база без
+  смещения шарда/NIC, чтобы `cursor_for_nic` на возобновлении добавил смещение заново ровно один раз; **сырой**
+  `min_k my_index[k]` (как в `main.c:1408–1414`, где C затем снова прибавляет смещение на `:269`) задвоил бы смещение и
+  сдвинул поток в чужой residue-класс — отличие от C. Завершение скана определяется `position() >= effective_end(k)`,
+  а не нормализованной базой. При `shard.of > 1` без явного `--seed`
   печатаем в `stderr` предупреждение о необходимости общего `--seed` (`main-conf.c:3624–3627`). Курсор `ProbeCursor`
   хранит внешний индекс `i` из `transmit_index_stream`, а не счётчик отправленных пакетов — это исключает сдвиг
   `paused.conf` при `shard.of > 1`, `nic_count > 1` и `retries > 0` — отличие от C: индекс адаптера `i >= 8`

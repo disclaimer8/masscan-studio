@@ -7,9 +7,10 @@
 //! Два входа:
 //! - [`ReadyPlan`] + [`ProbeCursor`]: runtime. Курсор отдаёт один и тот же
 //!   probe, пока вызывающий не подтвердит отправку ([`ProbeCursor::advance_sent`]).
-//!   План принимает только то, что runtime v1 умеет (shard 1/1, NIC 1,
-//!   retries 0, rounds 14) и только новый запуск: продолжение идёт через
-//!   checkpoint, не через `resume_index`/`resume_count`.
+//!   [`ReadyPlan::new`] принимает только то, что runtime v1 умеет (shard 1/1,
+//!   NIC 1, retries 0, rounds 14) и только новый запуск: продолжение идёт через
+//!   checkpoint, не через `resume_index`/`resume_count`. [`ReadyPlan::new_cli`]
+//!   принимает любой валидный shard, retries до 999, `resume_*` и до 8 адаптеров.
 //! - [`for_each_probe`]: потоковый оракул для CLI (`--offline --packet-trace`),
 //!   сохраняет все алгоритмы этапа 1 (retries, shard), с остановкой через
 //!   [`ControlFlow`].
@@ -109,7 +110,8 @@ impl From<AdapterBinding> for NicBinding {
 /// Одна отправка SYN (main.c:371-402).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Probe {
-    /// Индекс цикла `i` (для runtime: порядковый номер probe).
+    /// Внешний индекс цикла `i` (main.c:431): при `retries > 0` или shard это
+    /// не порядковый номер кадра, а один `i` на всю пачку повторов.
     pub index: u64,
     pub ip_me: u32,
     pub port_me: u16,
@@ -379,6 +381,14 @@ impl ReadyPlan {
         self.inner.range
     }
 
+    /// Смещение потока адаптера в базе `resume.index`:
+    /// `(shard.one - 1) * nic_count + nic_index` (main.c:269, 32-битное произведение).
+    pub fn nic_offset(&self, nic_index: u32) -> u64 {
+        let one = self.inner.effective.shard().one;
+        let count = self.inner.nics.len() as u32;
+        u64::from(one.wrapping_sub(1).wrapping_mul(count)).wrapping_add(u64::from(nic_index))
+    }
+
     /// Конец цикла адаптера `nic_index`, `main.c:269-273`:
     /// `min(range, start + resume_count) + retries * range`, где
     /// `start = resume_index + (shard.one - 1) * nic_count + nic_index`.
@@ -420,10 +430,14 @@ impl ReadyPlan {
         let e = &self.inner.effective;
         let range = self.inner.range;
         let base = resume_override.unwrap_or_else(|| e.resume_index());
-        if base > range {
+        // C проверки не делает (main.c:269-280); возобновление на хвосте
+        // повторов (range < base < конец) законно. Предел: `(retries+1)*range`,
+        // при retries == 0 это `range` (путь v1 и engine.rs:760).
+        let limit = range.saturating_add(u64::from(e.retries()).saturating_mul(range));
+        if base > limit {
             return Err(PlanError::NextIndexBeyondRange {
                 next_index: base,
-                range,
+                range: limit,
             });
         }
         let (start, end) = self.bounds(nic_index, base);
@@ -481,9 +495,18 @@ impl std::fmt::Debug for ProbeCursor {
 
 impl ProbeCursor {
     /// Курсор, начинающийся с индекса `next_index` (0 для нового запуска).
-    /// `next_index == range` даёт пустой курсор; `> range` это ошибка.
+    /// При `retries == 0`: `next_index == range` даёт пустой курсор, `> range`
+    /// ошибка. При `retries > 0` пределом служит `(retries + 1) * range`.
     pub fn new(plan: &ReadyPlan, next_index: u64) -> Result<ProbeCursor, PlanError> {
         plan.cursor_for_nic(0, Some(next_index))
+    }
+
+    /// Нормализованная база возобновления: `position()` без смещения shard/NIC,
+    /// то есть значение для `cursor_for_nic(nic, Some(base))` (смещение
+    /// прибавляется внутри, повторно его учитывать не нужно).
+    pub fn resume_base(&self) -> u64 {
+        self.position
+            .saturating_sub(self.plan.nic_offset(self.nic_index as u32))
     }
 
     /// Ставит `position` по внешнему индексу: голова загруженных, иначе
@@ -661,6 +684,68 @@ mod tests {
         }
         assert_eq!(total, 37);
         assert_eq!(seen, want);
+    }
+
+    #[test]
+    fn shards_partition_multi_port_range_with_cartesian_excludes() {
+        let mut t = MassIp::new();
+        add_target_string(t.ipv4_mut(), "198.18.0.0/29").unwrap();
+        parse_ports(t.ports_mut(), "80-84").unwrap();
+        let mut ex = MassIp::new();
+        add_target_string(ex.ipv4_mut(), "198.18.0.5-198.18.0.7").unwrap();
+        t.apply_excludes(&mut ex);
+        let mut seen = BTreeSet::new();
+        let mut total = 0;
+        for one in 1..=3 {
+            let cfg = ScanConfig {
+                targets: t.clone(),
+                seed: 0x1234_5678,
+                shard: Shard { one, of: 3 },
+                ..ScanConfig::default()
+            };
+            let plan =
+                ReadyPlan::new_cli(validate(&cfg, Operation::Scan).unwrap(), nics(1)).unwrap();
+            assert_eq!(plan.range(), 25);
+            for p in drain(&mut plan.cursor_for_nic(0, None).unwrap()) {
+                total += 1;
+                assert!(seen.insert((p.ip_them, p.port_them)), "overlap {p:?}");
+            }
+        }
+        assert_eq!(total, 25);
+        assert_eq!(seen.len(), 25);
+        let ports: BTreeSet<_> = seen.iter().map(|&(_, port)| port).collect();
+        assert_eq!(ports.len(), 5);
+    }
+
+    #[test]
+    fn resume_on_retry_tail_is_accepted() {
+        let e = eff("198.18.0.0-198.18.0.9", "80", |c| c.retries = 2);
+        let plan = ReadyPlan::new_cli(e, nics(1)).unwrap();
+        // range = 10, конец = 30: база 15 лежит на хвосте повторов.
+        let mut cursor = plan.cursor_for_nic(0, Some(15)).unwrap();
+        assert_eq!(cursor.position(), 15);
+        assert_eq!(drain(&mut cursor).len(), (30 - 15) * 3);
+        assert_eq!(cursor.position(), 30);
+        assert!(matches!(
+            plan.cursor_for_nic(0, Some(31)),
+            Err(PlanError::NextIndexBeyondRange { .. })
+        ));
+        // retries == 0 (путь v1): `> range` по-прежнему ошибка.
+        let v1 = ReadyPlan::new_cli(eff("198.18.0.0-198.18.0.9", "80", |_| {}), nics(1)).unwrap();
+        assert!(ProbeCursor::new(&v1, 10).is_ok());
+        assert!(ProbeCursor::new(&v1, 11).is_err());
+    }
+
+    #[test]
+    fn resume_base_strips_shard_and_nic_offset() {
+        let e = eff(T37, "80", |c| c.shard = Shard { one: 2, of: 3 });
+        let plan = ReadyPlan::new_cli(e, nics(2)).unwrap();
+        assert_eq!(plan.nic_offset(1), 3);
+        let cursor = plan.cursor_for_nic(1, Some(6)).unwrap();
+        assert_eq!(cursor.position(), 9);
+        assert_eq!(cursor.resume_base(), 6);
+        let again = plan.cursor_for_nic(1, Some(cursor.resume_base())).unwrap();
+        assert_eq!(again.position(), 9);
     }
 
     #[test]

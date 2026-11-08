@@ -78,9 +78,11 @@ CLI и строка статуса `*` — в `rmasscan-cli`.
     шага — `effective_end`, как `parms->my_index = i` в `main.c:431`).
 
 - [ ] **Шаг 1 — красный тест:** добавить в `probe.rs` юнит-тесты:
-  - `shards_partition_full_range_without_gaps_or_overlaps`: `range = 37` (`198.18.0.0/29` × 5 портов `80..=84` минус 3
-    исключения), `seed = 0x1234_5678`, `shard = 1/3, 2/3, 3/3` через `ReadyPlan::new_cli` → попарно не пересекаются,
-    объединение даёт все 37 пар `(ip_them, port_them)` в точности как `for_each_probe`.
+  - `shards_partition_full_range_without_gaps_or_overlaps`: `range = 37` (простое число: 37 адресов `198.18.0.0-198.18.0.36` ×
+    1 порт `80`), `seed = 0x1234_5678`, `shard = 1/3, 2/3, 3/3` через `ReadyPlan::new_cli` → попарно не пересекаются,
+    объединение даёт все 37 пар `(ip_them, port_them)` в точности как `for_each_probe`. Парный тест
+    `shards_partition_multi_port_range_with_cartesian_excludes`: `198.18.0.0/29` × портов `80-84` минус исключение
+    `198.18.0.5-198.18.0.7` = 5 адресов × 5 портов = 25 (исключения декартовы: убирают адрес со всеми портами).
   - `multi_nic_and_shards_match_c_increment`: `shard = 2/3`, `nics.len() = 2` → поток `nic 0` стартует с `i = 2`, шаг `6`,
     поток `nic 1` стартует с `i = 3`, шаг `6`; объединение всех 6 потоков `(shard 1..=3 × nic 0..=1)` равно полному
     множеству `0..range`.

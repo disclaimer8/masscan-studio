@@ -53,10 +53,11 @@ TCP-опции) — чтобы реальные крупные сканы на �
   (`min_index < effective_end`) записываем `./paused.conf`, печатая в `stderr` затирку из 70 пробелов + `\r` и строку
   `saving resume file to: paused.conf\n` (`main-conf.c:395–416`, `main.c:1447–1452`). Порядок секций повторяет
   `masscan_echo(..., is_echo_all=0)` (`main-conf.c:3636–3780`): `\n# resume information\nresume-index = <u64>\n`,
-  `resume-count = <u64>\n` (если задан), `seed`, `rate`, `shard`, `retries`, `pcap-filename` (если задан),
+  `resume-count = <u64>\n` (если задан), `seed`, `rate`, `shard`, `retries`, `noreset` (после `retries`, по порядку
+  таблицы `config_parameters[]`, `main-conf.c:2380`), `pcap-filename` (если задан),
   `ndjson-status = true` (если включён), двойной `nocapture = servername\n` + `\n`, секция вывода (`output-filename`,
   `output-format`, `output-append`, `output-flush`, `stylesheet`) + `\n`, изменённые TCP/IP-параметры (`ttl`,
-  `badsum`, `noreset`, `tcp-mss`, `tcp-sackok`, `tcp-wscale`, `tcp-tsecho`), секция адаптеров (`masscan_echo_nic`,
+  `badsum`, `tcp-mss`, `tcp-sackok`, `tcp-wscale`, `tcp-tsecho`), секция адаптеров (`masscan_echo_nic`,
   `main-conf.c:294–389`: `adapter`, `adapter-ip`, `adapter-mac`, `router-ip`, `router-mac-ipv4`, `router-mac-ipv6`,
   с суффиксом `[i]` при `nic_count > 1`), `adapter-port` и `# TARGET SELECTION (IP, PORTS, EXCLUDES)\n` с `ports = ...`
   и уже вычтенными `range = ...`. Флаг `--resume <file>` разбирает файл в своей позиции `argv` (ключи правее в `argv`

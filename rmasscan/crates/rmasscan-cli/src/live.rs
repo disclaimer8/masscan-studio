@@ -10,9 +10,12 @@
 //! [`Backend`]; обнаружение, `--offline` и `--iflist` ничего не открывают. Единственный кадр до engine это ARP-запрос
 //! резолвера с отдельного короткоживущего адаптера, закрытого до открытия адаптера скана. Ctrl-C (Р18, порт
 //! `control_c_handler`, `main.c:1131–1155`): [`Backend::interrupts`] ставит обработчик до ARP, цикл событий видит
-//! первое нажатие, печатает строку C и останавливает engine, приёмник дописывает принятое и подвал, итог `Stopped`
-//! (exit 0); второе нажатие завершает процесс с кодом 1 из самого обработчика. Фазы ожидания поздних ответов после
-//! Ctrl-C нет, `paused.conf` не пишется.
+//! первое нажатие и печатает строку C. До старта engine скан просто останавливается (итог `Stopped`, exit 0). После
+//! старта нажатие ставит engine на паузу (Р4): передача встаёт, приём ещё `--wait` секунд берёт поздние ответы, а
+//! `paused.conf` с нормализованным `resume-index` пишется сразу, до отсчёта ожидания (`main.c:1447-1456`,
+//! `main-conf.c:395-416`); приёмник дописывает принятое и подвал, итог `Paused` (exit 0), либо `Completed`, если
+//! передача успела закончиться до нажатия. Второе нажатие завершает процесс с кодом 1 из самого обработчика, а
+//! `paused.conf` к этому времени уже на диске.
 
 #![forbid(unsafe_code)]
 
@@ -23,6 +26,7 @@ use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
+use crate::conf::{FullConf, format_paused_conf};
 use crate::status::{StatusLine, StatusMode};
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
@@ -73,6 +77,10 @@ pub trait Backend: Wall {
     /// Нажатия Ctrl-C (Р18). Первый вызов ставит обработчик; его делает только [`run_live_with`], один раз до ARP, и
     /// затем опрашивает счётчик в цикле событий. Остальные операции не зовут его, у них поведение ОС по умолчанию.
     fn interrupts(&self) -> u32;
+    /// Пишет `paused.conf` в рабочий каталог (`masscan_save_state`, `main-conf.c:395-416`: файл `paused.conf`, режим
+    /// `wt`). Ошибка ФС возвращается строкой; скан она не прерывает (C печатает `[-] FAIL: saving resume file` и
+    /// идёт дальше). Фейковые бэкенды тестов сохраняют строку в памяти и диска не касаются.
+    fn write_paused_conf(&self, content: &str) -> Result<(), String>;
 }
 
 /// Подготовленный скан: проверенная конфигурация, обнаружение и binding. `binding.next_hop_mac` для
@@ -401,7 +409,7 @@ fn print_finished(
     )
 }
 
-/// `[+] finished: …` и решение о коде выхода: `Completed`/`Stopped` → `Ok` (exit 0), иначе `Err` (exit 1).
+/// `[+] finished: …` и решение о коде выхода: `Completed`/`Stopped`/`Paused` → `Ok` (exit 0), иначе `Err` (exit 1).
 pub fn conclude(
     outcome: &Outcome,
     replies: u64,
@@ -410,9 +418,9 @@ pub fn conclude(
 ) -> Result<(), String> {
     print_finished(outcome, replies, open, log)?;
     match &outcome.reason {
-        Reason::Completed | Reason::Stopped => Ok(()),
+        // `Paused`: первое Ctrl-C после старта (Р4), после `--wait` скан заканчивается обычным выходом, как в C (`main.c:1447-1540`).
+        Reason::Completed | Reason::Stopped | Reason::Paused => Ok(()),
         Reason::Failed(f) => Err(format!("scan failed: {f:?}")),
-        Reason::Paused => Err("scan paused without a checkpoint consumer".into()),
     }
 }
 
@@ -462,6 +470,24 @@ pub fn run_live_with(
     log: &mut dyn Write,
     mode: StatusMode,
 ) -> Result<(Outcome, u64), String> {
+    let full = FullConf {
+        scan: cfg.clone(),
+        ndjson_status: mode == StatusMode::Ndjson,
+        ..FullConf::default()
+    };
+    run_live_conf(&full, backend, sink, log, mode)
+}
+
+/// [`run_live_with`] с полной конфигурацией: `full.output`, `pcap-filename` и `ndjson-status` попадают в `paused.conf`
+/// по первому Ctrl-C (`masscan_echo`, `main-conf.c:395-416`).
+pub fn run_live_conf(
+    full: &FullConf,
+    backend: &dyn Backend,
+    sink: &mut dyn Sink,
+    log: &mut dyn Write,
+    mode: StatusMode,
+) -> Result<(Outcome, u64), String> {
+    let cfg = &full.scan;
     let mut best_effort = BestEffort::new(log);
     let log: &mut dyn Write = &mut best_effort;
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
@@ -544,18 +570,56 @@ pub fn run_live_with(
     let mut sink_error = None;
     let wait_secs = i64::from(cfg.wait_secs);
     let mut status = StatusLine::new(mode, started);
-    let (mut max_count, mut tx_done_at) = (0u64, None::<u64>);
-    let mut interrupted = false;
+    // Момент, с которого идёт обратный отсчёт `--wait`: конец передачи (`main.c:1427, 1496`) либо остановка передачи
+    // паузой.
+    let (mut max_count, mut wait_started) = (0u64, None::<u64>);
+    let (mut interrupted, mut paused_saved) = (false, false);
+    // `paused.conf` с эффективными `seed` и портом источника: без них возобновление пошло бы по другой перестановке.
+    let mut saved_conf = full.clone();
+    saved_conf.scan.seed = p.seed.0;
+    saved_conf.scan.source_port = Some(p.source_ports.0);
+    for n in saved_conf.scan.nics.iter_mut().take(1) {
+        n.source_port = Some(p.source_ports.0);
+    }
+    // `masscan_save_state` (`main-conf.c:395-416`) по условию `min_index < count_ips * count_ports`
+    // (`main.c:1447-1456`); `--infinite` не имеет конца и сохранять нечего (Р5).
+    let save_paused = |base: u64, log: &mut dyn Write| {
+        if base >= tx_end || p.eff.infinite() {
+            return;
+        }
+        let _ = log.write_all(
+            concat!(
+                "                                   ",
+                "                                   \r",
+                "saving resume file to: paused.conf\n"
+            )
+            .as_bytes(),
+        );
+        if let Err(e) = backend.write_paused_conf(&format_paused_conf(&saved_conf, base)) {
+            let _ = writeln!(log, "[-] FAIL: saving resume file\n[-] paused.conf: {e}");
+        }
+        let _ = log.flush();
+    };
     // `log` best-effort (`BestEffort`): мёртвый stderr (EPIPE с первого байта или `2>&1 | tee` после Ctrl-C) не останавливает скан и не
     // меняет код выхода, как в C.
     'events: loop {
-        // Р18: счётчик проверяется на каждой итерации (не реже раза в 250 мс). После остановки цикл дочитывает
-        // события до `Finished`, поэтому приёмник получает каждый принятый ответ.
+        // Р18: счётчик проверяется на каждой итерации (не реже раза в 250 мс). После паузы цикл дочитывает события
+        // до `Finished`, поэтому приёмник получает каждый принятый ответ, в том числе позднюю фазу `--wait`.
         if !interrupted && backend.interrupts() > 0 {
             interrupted = true;
             let _ = log.write_all(INTERRUPT_LINE.as_bytes());
             let _ = log.flush();
-            handle.stop();
+            handle.pause();
+        }
+        // Р4: `paused.conf` пишется сразу, как только передача встала, до окончания `--wait` (второе Ctrl-C и
+        // `--nostatus` его не теряют). Событие `CheckpointReady` приходит только после `wait`.
+        if interrupted
+            && !paused_saved
+            && let Some(base) = handle.pause_resume_base()
+        {
+            paused_saved = true;
+            wait_started.get_or_insert(clock.now_micros());
+            save_paused(base, log);
         }
         match handle.recv_event_timeout(Duration::from_millis(250)) {
             Ok(Event::Started { range }) => max_count = range,
@@ -563,9 +627,9 @@ pub fn run_live_with(
                 let now = clock.now_micros();
                 // main.c:1427 и 1496: конец передачи это `index >= range`; ожидание отсчитывается от него.
                 if prog.next_index >= max_count.min(tx_end) {
-                    tx_done_at.get_or_insert(now);
+                    wait_started.get_or_insert(now);
                 }
-                let exiting = tx_done_at
+                let exiting = wait_started
                     .map(|t| wait_secs.saturating_sub((now.saturating_sub(t) / 1_000_000) as i64));
                 let _ = status.tick(
                     now,
@@ -590,8 +654,16 @@ pub fn run_live_with(
                     }
                 }
             }
+            // Страховка: событие пришло раньше, чем цикл увидел остановку передачи.
+            Ok(Event::CheckpointReady { next_index }) => {
+                if !paused_saved {
+                    paused_saved = true;
+                    wait_started.get_or_insert(clock.now_micros());
+                    save_paused(next_index, log);
+                }
+            }
             Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
-            Ok(_) | Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Empty) => {}
         }
     }
     // `join` и `sink.finish()` идут всегда, до любого `?`: ошибка engine не оставляет файл

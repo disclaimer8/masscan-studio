@@ -81,6 +81,21 @@ fn checked_output_options(cli: &Cli) -> Result<OutputOptions, String> {
     Ok(o)
 }
 
+/// Опции вывода скана в виде ключей `paused.conf` (`output-filename`, `output-format`, `output-append`, `output-flush`,
+/// `stylesheet`, `main-conf.c:2402-2422`).
+fn output_patch(o: &OutputOptions) -> conf::OutputConfPatch {
+    conf::OutputConfPatch {
+        format: Some(o.format),
+        filename: o.filename.clone(),
+        append: Some(o.append),
+        flush: Some(o.flush),
+        stylesheet: o.stylesheet.clone(),
+        show_open: Some(o.show_open),
+        show_closed: Some(o.show_closed),
+        show_host: Some(o.show_host),
+    }
+}
+
 /// Порты TCP целей за вычетом исключений, отсортированные и слитые: `masscan->targets.ports` после
 /// `massip_apply_excludes` и `massip_optimize` (main.c:1672–1684), строка `# Ports scanned` заголовка `-oG`.
 fn tcp_ports(cfg: &ScanConfig) -> Vec<(u16, u16)> {
@@ -221,8 +236,12 @@ pub fn run(
     let elapsed_to_stdout = !opts.format_to_stdout();
     let env = output_env(backend, &opts, &cfg, None);
     let mode = cli.status_mode();
-    let (_, scan_millis) = live::run_live_with(
-        &cfg,
+    // `paused.conf` (первое Ctrl-C) повторяет разобранную конфигурацию: вывод по позиции `--resume`, `-oX`, режим статуса.
+    let mut full = cli.resolve()?;
+    full.output = output_patch(&opts);
+    full.ndjson_status = mode == status::StatusMode::Ndjson;
+    let (_, scan_millis) = live::run_live_conf(
+        &full,
         backend,
         &mut Pipeline::new(opts, &mut *out, env),
         log,
@@ -340,6 +359,9 @@ mod tests {
         }
         fn interrupts(&self) -> u32 {
             panic!("library unit tests never trap Ctrl-C")
+        }
+        fn write_paused_conf(&self, _: &str) -> Result<(), String> {
+            panic!("library unit tests never write paused.conf")
         }
     }
 

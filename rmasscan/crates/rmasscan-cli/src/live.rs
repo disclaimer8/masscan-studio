@@ -78,8 +78,8 @@ pub trait Backend: Wall {
     /// затем опрашивает счётчик в цикле событий. Остальные операции не зовут его, у них поведение ОС по умолчанию.
     fn interrupts(&self) -> u32;
     /// Пишет `paused.conf` в рабочий каталог (`masscan_save_state`, `main-conf.c:395-416`: файл `paused.conf`, режим
-    /// `wt`). Ошибка ФС возвращается строкой; скан она не прерывает (C печатает `[-] FAIL: saving resume file` и
-    /// идёт дальше). Фейковые бэкенды тестов сохраняют строку в памяти и диска не касаются.
+    /// `wt`). Ошибка ФС возвращается строкой: CLI печатает `[-] FAIL: saving resume file`, всё равно доводит фазу
+    /// `--wait` и подвал вывода, но завершается кодом 1 (Р1: в C скан молча идёт дальше). Фейковые бэкенды тестов сохраняют строку в памяти и диска не касаются.
     fn write_paused_conf(&self, content: &str) -> Result<(), String>;
 }
 
@@ -583,9 +583,9 @@ pub fn run_live_conf(
     }
     // `masscan_save_state` (`main-conf.c:395-416`) по условию `min_index < count_ips * count_ports`
     // (`main.c:1447-1456`); `--infinite` не имеет конца и сохранять нечего (Р5).
-    let save_paused = |base: u64, log: &mut dyn Write| {
+    let save_paused = |base: u64, log: &mut dyn Write| -> Option<String> {
         if base >= tx_end || p.eff.infinite() {
-            return;
+            return None;
         }
         let _ = log.write_all(
             concat!(
@@ -595,11 +595,17 @@ pub fn run_live_conf(
             )
             .as_bytes(),
         );
-        if let Err(e) = backend.write_paused_conf(&format_paused_conf(&saved_conf, base)) {
+        let failed = backend
+            .write_paused_conf(&format_paused_conf(&saved_conf, base))
+            .err();
+        if let Some(e) = &failed {
             let _ = writeln!(log, "[-] FAIL: saving resume file\n[-] paused.conf: {e}");
         }
         let _ = log.flush();
+        failed
     };
+    // Отказ записи `paused.conf` не рвёт ожидание, но даёт код 1 (Р1).
+    let mut paused_error: Option<String> = None;
     // `log` best-effort (`BestEffort`): мёртвый stderr (EPIPE с первого байта или `2>&1 | tee` после Ctrl-C) не останавливает скан и не
     // меняет код выхода, как в C.
     'events: loop {
@@ -619,7 +625,7 @@ pub fn run_live_conf(
         {
             paused_saved = true;
             wait_started.get_or_insert(clock.now_micros());
-            save_paused(base, log);
+            paused_error = save_paused(base, log);
         }
         match handle.recv_event_timeout(Duration::from_millis(250)) {
             Ok(Event::Started { range }) => max_count = range,
@@ -659,7 +665,7 @@ pub fn run_live_conf(
                 if !paused_saved {
                     paused_saved = true;
                     wait_started.get_or_insert(clock.now_micros());
-                    save_paused(next_index, log);
+                    paused_error = save_paused(next_index, log);
                 }
             }
             Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
@@ -683,6 +689,9 @@ pub fn run_live_conf(
         return Err(e);
     }
     conclude(&outcome, replies, open_count, log)?;
+    if let Some(e) = paused_error {
+        return Err(format!("cannot save paused.conf: {e}"));
+    }
     Ok((outcome, elapsed_ms))
 }
 

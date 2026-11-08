@@ -163,6 +163,8 @@ struct FakeBackend {
     press_in_tx: Option<PressInTx>,
     /// Записи `paused.conf`: показание часов на момент записи и содержимое. Диска фейк не касается.
     paused_writes: Mutex<Vec<(u64, String)>>,
+    /// Ошибка записи `paused.conf`: запись не сохраняется.
+    paused_write_error: Option<String>,
 }
 
 /// Сценарий «Ctrl-C посреди передачи»: после `at`-го SYN адаптера скана поток TX поднимает счётчик нажатий и ждёт,
@@ -233,6 +235,7 @@ impl FakeBackend {
             silent_targets: false,
             press_in_tx: None,
             paused_writes: Mutex::new(Vec::new()),
+            paused_write_error: None,
         }
     }
 
@@ -356,13 +359,13 @@ impl Backend for FakeBackend {
                 let before = polls.load(Ordering::SeqCst);
                 hook_presses.fetch_max(1, Ordering::SeqCst);
                 // Цикл событий опрашивает `interrupts()` на каждой итерации; следующий опрос видит нажатие и ставит
-                // паузу. Запас в 100 мс покрывает вызов `pause()` сразу после опроса.
+                // паузу. Запас в 500 мс покрывает вызов `pause()` сразу после опроса.
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 while polls.load(Ordering::SeqCst) <= before && std::time::Instant::now() < deadline
                 {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(500));
                 if let Some(frame) = held.lock().unwrap().take() {
                     handle.push_rx(RxStep::Idle(40));
                     handle.push_frame(frame);
@@ -396,6 +399,9 @@ impl Backend for FakeBackend {
         self.presses()
     }
     fn write_paused_conf(&self, content: &str) -> Result<(), String> {
+        if let Some(e) = &self.paused_write_error {
+            return Err(e.clone());
+        }
         self.paused_writes
             .lock()
             .unwrap()
@@ -1300,7 +1306,7 @@ fn outcome(reason: Reason) -> Outcome {
 }
 
 #[test]
-fn stopped_outcome_exits_zero() {
+fn stopped_completed_and_paused_outcomes_exit_zero() {
     for (reason, line) in [
         (
             Reason::Stopped,
@@ -2660,6 +2666,11 @@ fn first_ctrl_c_pauses_saves_conf_waits_for_late_reply_and_closes_footer() {
     assert_eq!(log.matches(&waiting_line()).count(), 1, "{log:?}");
     assert_eq!(log.matches(&saving_line()).count(), 1, "{log:?}");
     assert!(log.find(&waiting_line()).unwrap() < log.find(&saving_line()).unwrap());
+    // Review Focus 3: файл записан до первого тика отсчёта `waiting N-secs`.
+    assert!(
+        log.find(&saving_line()).unwrap() < log.find("-secs").unwrap(),
+        "{log:?}"
+    );
     // Ровно один файл, нормализованный индекс и эффективный seed (иначе возобновление пойдёт по другой перестановке).
     let writes = b.paused_writes();
     assert_eq!(writes.len(), 1, "paused.conf is written once");
@@ -2793,4 +2804,46 @@ fn paused_conf_carries_output_options_and_ndjson_status() {
         "{conf}"
     );
     assert!(conf.contains("ndjson-status = true\n"), "{conf}");
+}
+
+/// Р1: отказ записи `paused.conf` печатает строки C, но не рвёт фазу `--wait`: поздний ответ принят, подвал `-oJ`
+/// закрыт, `[+] finished: Paused` напечатан; процесс при этом завершается кодом 1 (`Err`), а не молчаливым 0.
+#[test]
+fn paused_conf_write_failure_exits_one() {
+    let scratch = Scratch::new();
+    let path = scratch.path("paused-fail.json");
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 2,
+        late_first: true,
+    });
+    b.paused_write_error = Some("Permission denied".into());
+    let (r, log, file, reported) = pause_run(&b, &PAUSE_WAIT, &path);
+    let e = r.unwrap_err();
+    assert!(e.contains("Permission denied"), "{e}");
+    assert!(
+        log.contains("[-] FAIL: saving resume file\n[-] paused.conf: Permission denied\n"),
+        "{log:?}"
+    );
+    assert!(b.paused_writes().is_empty());
+    assert!(
+        plus_lines(&log)
+            .last()
+            .unwrap()
+            .starts_with("[+] finished: Paused"),
+        "{:?}",
+        plus_lines(&log)
+    );
+    let first_syn = syn_dst(&b.opened()[1].adapter.sent_frames()[0]);
+    assert!(
+        reported
+            .iter()
+            .any(|r| (Ipv4Addr::from(r.remote_ip), r.remote_port) == first_syn)
+    );
+    let open: Vec<Reply> = reported
+        .iter()
+        .copied()
+        .filter(|r| r.status == PortStatus::Open)
+        .collect();
+    assert_eq!(file, json_file(&open));
 }

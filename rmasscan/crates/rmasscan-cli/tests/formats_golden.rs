@@ -130,6 +130,9 @@ impl Backend for ReadscanOnly {
     fn interrupts(&self) -> u32 {
         panic!("--readscan never traps Ctrl-C")
     }
+    fn write_paused_conf(&self, _: &str) -> Result<(), String> {
+        panic!("--readscan never writes paused.conf")
+    }
 }
 
 /// Часть шаблона маски: `Lit` остаётся, остальное заменяется на `*`. Те же правила, что выражения `sed -E` в

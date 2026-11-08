@@ -73,4 +73,9 @@ impl Backend for OsBackend {
         let _ = rmasscan_net::interrupt::install();
         rmasscan_net::interrupt::presses()
     }
+
+    /// `masscan_save_state` (`main-conf.c:395-416`): `paused.conf` в рабочем каталоге, существующий файл усекается.
+    fn write_paused_conf(&self, content: &str) -> Result<(), String> {
+        std::fs::write("paused.conf", content).map_err(|e| e.to_string())
+    }
 }

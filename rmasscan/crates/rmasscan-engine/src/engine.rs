@@ -1165,6 +1165,16 @@ impl EngineHandle {
         self.shared.command(STOP);
     }
 
+    /// Нормализованная база возобновления (`min_k resume_base`) сразу после того, как пауза остановила все TX-потоки,
+    /// ещё до конца `wait`: `main.c:1447-1456` пишет `paused.conf` до ожидания, а `CheckpointReady` приходит только
+    /// вместе с итогом, то есть после `wait`. `None`, пока TX идёт, после Stop/отказа и если передача закончилась
+    /// сама (конец последовательности сильнее паузы). Значение то же, что в итоговом `CheckpointReady`: позиции
+    /// TX после выхода потоков не меняются.
+    pub fn pause_resume_base(&self) -> Option<u64> {
+        (self.shared.halted() == PAUSE && self.shared.tx_end() == END_HALTED)
+            .then(|| self.shared.resume_base())
+    }
+
     pub fn try_event(&self) -> Result<Event, TryRecvError> {
         self.shared.queue.try_pop()
     }

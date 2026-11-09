@@ -8,7 +8,8 @@
 //!
 //! # Правило приёма (main.c:823-825, :829, :935, :1048-1065)
 //! Ответ принимается, если одновременно:
-//! 1. IPv4, не фрагмент, TCP; адрес назначения равен `source_ipv4` плана;
+//! 1. IPv4, не фрагмент, TCP; адрес назначения лежит в диапазоне `source_ipv4..=source_ipv4_last` плана
+//!    (`--adapter-ip A-B`; один адрес это диапазон из одного);
 //! 2. порт назначения лежит в `source_ports` плана (`is_my_port`);
 //! 3. флаги: `(flags & 0x12) == 0x12` даёт Open, `flags & 0x04` даёт Closed
 //!    (RST перекрывает SYN-ACK, как в C: статус сначала Open, затем Closed);
@@ -275,9 +276,10 @@ fn parse_ipv4_tcp(
     let ackno = be32(seg, 8).ok_or(ParseError::Truncated("tcp header"))?;
     let flags = seg[13];
 
-    // main.c:829: is_my_ip.
+    // main.c:829: is_my_ip. `--adapter-ip A-B`: любой адрес диапазона `first..=last` адаптера `nic[0]` плана.
     let binding = plan.binding();
-    if ip_me != binding.source_ipv4 {
+    let ip_last = plan.nics()[0].source_ipv4_last;
+    if !(binding.source_ipv4..=ip_last).contains(&ip_me) {
         return Ok(None);
     }
     // main.c:935: is_my_port.

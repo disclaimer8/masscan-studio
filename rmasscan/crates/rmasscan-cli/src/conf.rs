@@ -369,7 +369,7 @@ adapter-port = 41234-41250\n\
         .unwrap();
 
         assert_eq!(base.scan.source_port, Some((41234, 41250)));
-        assert!(base.scan.legacy_c_17_port_mask);
+        assert!(base.scan.nics[0].legacy_c_17_port_mask);
         assert_eq!(base.scan.resume_index, 77);
         assert_eq!(base.output.filename.as_deref(), Some("a.json"));
         assert_eq!(base.output.append, Some(true));

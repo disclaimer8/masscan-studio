@@ -18,9 +18,10 @@ use std::path::Path;
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 use rmasscan_core::config::{
-    NicConfig, ScanConfig, parse_mac, parse_rate, parse_shard, parse_source_port,
+    NicConfig, ScanConfig, apply_core_kv, is_boolean, is_integer, parse_mac, parse_rate,
+    parse_shard, parse_source_port,
 };
-use rmasscan_core::targets::{add_target_string, parse_ports};
+use rmasscan_core::targets::{add_target_string, parse_ports, range_parse_ipv4};
 
 use crate::conf::{FullConf, OutputConfPatch, apply_conf_key};
 use crate::output::{Format, OutputOptions};
@@ -134,14 +135,80 @@ pub struct Cli {
         help = "Resume a scan from a paused.conf file (options to the right of it override the file; output is appended)"
     )]
     pub resume: Vec<String>,
-    // main-conf.c:2486: `source-ip` - синоним `adapter-ip`.
+    // main-conf.c:2486-2550: `source-ip` - синоним `adapter-ip`; диапазон `A-B` степени двойки (Р6).
     #[arg(
         long = "adapter-ip",
         alias = "source-ip",
         value_name = "IP",
-        help = "Source IPv4 address (single address; alias: --source-ip)"
+        help = "Source IPv4 address, or a range A-B / CIDR of 1, 2, 4, 8, ... addresses (alias: --source-ip)"
     )]
     pub adapter_ip: Option<String>,
+    // Р9: `--ttl` (main-conf.c:3003-3009), 1..=255; 0 и >= 256 отклоняются.
+    #[arg(
+        long,
+        value_name = "N",
+        help = "IP time-to-live of the probes, 1-255 (default 255)"
+    )]
+    pub ttl: Option<String>,
+    // Р9: `badsum` - singleton (main-conf.c:2758, :3074).
+    #[arg(
+        long,
+        help = "Send SYNs with a wrong TCP checksum (the IPv4 header checksum stays valid)"
+    )]
+    pub badsum: bool,
+    // Р9: `F_BOOL` (main-conf.c:2381): принимается и сериализуется, без собственного TCP-стека RST не шлётся.
+    #[arg(
+        long,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Accepted for masscan compatibility (rmasscan sends no RST anyway)"
+    )]
+    pub noreset: Vec<String>,
+    // Р9: `F_NUMABLE` (main-conf.c:2419-2422): `--tcp-mss [N|BOOL]`; значение берётся из следующего слова, если оно
+    // целое или логическое (см. [`preprocess_args`]).
+    #[arg(
+        long = "tcp-mss",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "N|BOOL",
+        help = "TCP MSS option: number (default 1460) or disable"
+    )]
+    pub tcp_mss: Vec<String>,
+    #[arg(
+        long = "tcp-sackok",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Add the TCP SACK-permitted option"
+    )]
+    pub tcp_sackok: Vec<String>,
+    #[arg(
+        long = "tcp-wscale",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "N|BOOL",
+        help = "Add the TCP window-scale option: number 0-255 (default 3)"
+    )]
+    pub tcp_wscale: Vec<String>,
+    #[arg(
+        long = "tcp-tsecho",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "N|BOOL",
+        help = "Add the TCP timestamp option with this 32-bit value (default 0x12345678)"
+    )]
+    pub tcp_tsecho: Vec<String>,
     // main-conf.c:2556: `source-mac` - синоним `adapter-mac`.
     #[arg(
         long = "adapter-mac",
@@ -385,7 +452,7 @@ pub struct Cli {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 14] = [
+const POSITIONAL_KEYS: [&str; 21] = [
     "seed",
     "rate",
     "wait",
@@ -400,6 +467,13 @@ const POSITIONAL_KEYS: [&str; 14] = [
     "router_mac",
     "source_port",
     "interface",
+    "ttl",
+    "badsum",
+    "noreset",
+    "tcp_mss",
+    "tcp_sackok",
+    "tcp_wscale",
+    "tcp_tsecho",
 ];
 
 /// Один шаг `SET_output_show` (`on`), `SET_output_noshow` (`!on`) или `SET_output_show_open`.
@@ -502,10 +576,23 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let mut it = args.into_iter().map(Into::into);
+    let mut it = args.into_iter().map(Into::into).peekable();
     let mut out: Vec<String> = it.next().into_iter().collect();
     while let Some(a) = it.next() {
-        if a == "-sL" {
+        if let Some((name, inline)) = numable_split(&a) {
+            // main-conf.c:3236-3260 (`F_NUMABLE`): `--name=v`, `--name:v` или следующее слово, если оно целое или
+            // логическое; иначе `--name` один значит «включить». Отличие: `--noreset` и `--tcp-sackok` в C берут
+            // следующее слово безусловно (`argv[++i]`), что съедает цель; здесь, как у `F_NUMABLE`, только
+            // целое или логическое.
+            let value = match inline {
+                Some(v) => v.to_string(),
+                None => match it.peek() {
+                    Some(n) if is_integer(n) || is_boolean(n) => it.next().unwrap_or_default(),
+                    _ => String::new(),
+                },
+            };
+            out.push(format!("--{name}={value}"));
+        } else if a == "-sL" {
             out.push("--list".into());
         } else if a.starts_with("-o") {
             let format = dash_o_format(&a)?;
@@ -520,6 +607,25 @@ where
         }
     }
     Ok(out)
+}
+
+/// Опции с необязательным числовым или логическим значением (`F_NUMABLE`/`F_BOOL` в main-conf.c:2381, :2419-2422).
+const NUMABLE: [&str; 5] = [
+    "noreset",
+    "tcp-sackok",
+    "tcp-mss",
+    "tcp-wscale",
+    "tcp-tsecho",
+];
+
+/// `--имя`, `--имя=v` или `--имя:v` для имён из [`NUMABLE`]: имя и встроенное значение.
+fn numable_split(a: &str) -> Option<(&'static str, Option<&str>)> {
+    let rest = a.strip_prefix("--")?;
+    let (name, inline) = match rest.find(['=', ':']) {
+        Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+        None => (rest, None),
+    };
+    NUMABLE.iter().find(|n| **n == name).map(|n| (*n, inline))
 }
 
 /// Порядок `--show`, `--noshow` и `--open` по индексам clap. Из нескольких `--open` значим только последний (он
@@ -891,12 +997,20 @@ impl Cli {
         if take("adapter_ip")
             && let Some(ip) = &self.adapter_ip
         {
-            let ip: Ipv4Addr = ip
-                .parse()
-                .map_err(|_| format!("bad --adapter-ip {ip:?}: expected one IPv4 address"))?;
-            let ip = u32::from(ip);
-            cfg.adapter_ip = Some(ip);
-            set_nic0(cfg, |n| n.adapter_ip = Some((ip, ip)));
+            let bad = || {
+                format!(
+                    "bad --adapter-ip {ip:?}: expected an IPv4 address or a range A-B of a power-of-two width"
+                )
+            };
+            let r = range_parse_ipv4(ip).map_err(|_| bad())?;
+            if r.begin == r.end {
+                cfg.adapter_ip = Some(r.begin);
+                set_nic0(cfg, |n| n.adapter_ip = Some((r.begin, r.begin)));
+            } else {
+                // Диапазон хранится только в `nics[0]` (одиночное поле держит первый адрес); ключ
+                // конфигурации проверяет степень двойки (main-conf.c:2483) и заводит `nic[0]`.
+                apply_core_kv(cfg, "adapter-ip", ip).map_err(|_| bad())?;
+            }
         }
         if take("adapter_mac")
             && let Some(m) = &self.adapter_mac
@@ -929,15 +1043,39 @@ impl Cli {
         {
             let ports = parse_source_port(p).map_err(|e| e.to_string())?;
             cfg.source_port = Some(ports);
-            // Явный диапазон степени двойки снимает причуду C в 17 портов, пришедшую из файла.
-            cfg.legacy_c_17_port_mask = false;
-            set_nic0(cfg, |n| n.source_port = Some(ports));
+            // Явный диапазон степени двойки снимает причуду C в 17 портов, пришедшую из файла (флаг у адаптера).
+            set_nic0(cfg, |n| {
+                n.source_port = Some(ports);
+                n.legacy_c_17_port_mask = false;
+            });
         }
         if take("interface")
             && let Some(name) = &self.interface
         {
             cfg.adapter_name = Some(name.clone());
             set_nic0(cfg, |n| n.adapter_name = Some(name.clone()));
+        }
+        // Р9: параметры зонда. Ключи ядра сами проверяют значения (`--ttl 0`, `--tcp-mss 70000` отклоняются).
+        if take("ttl")
+            && let Some(t) = &self.ttl
+        {
+            apply_core_kv(cfg, "ttl", t).map_err(|e| e.to_string())?;
+        }
+        if take("badsum") && self.badsum {
+            cfg.badsum = true;
+        }
+        for (id, key, values) in [
+            ("noreset", "noreset", &self.noreset),
+            ("tcp_mss", "tcp-mss", &self.tcp_mss),
+            ("tcp_sackok", "tcp-sackok", &self.tcp_sackok),
+            ("tcp_wscale", "tcp-wscale", &self.tcp_wscale),
+            ("tcp_tsecho", "tcp-tsecho", &self.tcp_tsecho),
+        ] {
+            if take(id) {
+                for v in values {
+                    apply_core_kv(cfg, key, v).map_err(|e| e.to_string())?;
+                }
+            }
         }
         Ok(())
     }
@@ -1627,7 +1765,7 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         assert_eq!(nic.router_mac_ipv4, Some([2, 0, 0, 0, 0, 0x77]));
         assert_eq!(nic.router_mac_ipv6, Some([2, 0, 0, 0, 0, 0x77]));
         assert_eq!(nic.adapter_name.as_deref(), Some("eth9"));
-        assert!(!over.legacy_c_17_port_mask);
+        assert!(!over.nics[0].legacy_c_17_port_mask);
 
         // Ключ левее `--resume` файл переопределяет: файл говорит rate 250.
         let left = parse(&["--rate", "500", "--resume", f])
@@ -1760,5 +1898,120 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         );
         let e = parse(&["--seed", "0"]).unwrap().to_config().unwrap_err();
         assert!(e.contains("--seed"), "{e}");
+    }
+
+    #[test]
+    fn adapter_ip_range_is_kept_in_nic0_and_must_be_a_power_of_two_wide() {
+        let cfg = parse(&["--adapter-ip", "198.18.0.16-198.18.0.19"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.adapter_ip, Some(0xc612_0010), "single field = first");
+        assert_eq!(cfg.nics[0].adapter_ip, Some((0xc612_0010, 0xc612_0013)));
+        let cidr = parse(&["--source-ip", "198.18.0.16/30"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cidr.nics[0].adapter_ip, Some((0xc612_0010, 0xc612_0013)));
+        let single = parse(&["--adapter-ip", "198.18.0.16"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert!(
+            single.nics.is_empty(),
+            "a single address keeps the old shape"
+        );
+        for bad in ["198.18.0.16-198.18.0.18", "198.18.0.19-198.18.0.16", "x"] {
+            let e = parse(&["--adapter-ip", bad])
+                .unwrap()
+                .to_config()
+                .unwrap_err();
+            assert!(e.contains("--adapter-ip"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn probe_parameter_flags_reach_the_config() {
+        let cfg = parse(&[
+            "10.0.0.1",
+            "--ttl",
+            "64",
+            "--badsum",
+            "--noreset",
+            "--tcp-mss",
+            "1400",
+            "--tcp-sackok",
+            "--tcp-wscale",
+            "7",
+            "--tcp-tsecho=3735928559",
+        ])
+        .unwrap()
+        .to_config()
+        .unwrap();
+        assert_eq!(cfg.ttl, Some(64));
+        assert!(cfg.badsum && cfg.noreset);
+        assert_eq!(
+            cfg.tcp_opts,
+            rmasscan_core::packet::TcpHeaderOptions {
+                mss: Some(1400),
+                sackok: true,
+                wscale: Some(7),
+                tsecho: Some(0xdead_beef),
+            }
+        );
+        // Без значения: включить с умолчанием; логическое значение выключает; цель после опции не съедается.
+        let cli = parse(&[
+            "--tcp-wscale",
+            "--tcp-tsecho",
+            "10.0.0.1",
+            "--tcp-mss",
+            "off",
+        ])
+        .unwrap();
+        assert_eq!(cli.targets, ["10.0.0.1"]);
+        let cfg = cli.to_config().unwrap();
+        assert_eq!(cfg.tcp_opts.wscale, Some(3));
+        assert_eq!(cfg.tcp_opts.tsecho, Some(0x1234_5678));
+        assert_eq!(cfg.tcp_opts.mss, None);
+        let d = parse(&["10.0.0.1"]).unwrap().to_config().unwrap();
+        assert_eq!((d.ttl, d.badsum, d.noreset), (None, false, false));
+        assert_eq!(
+            d.tcp_opts,
+            rmasscan_core::packet::TcpHeaderOptions::default()
+        );
+    }
+
+    #[test]
+    fn bad_probe_parameters_are_refused() {
+        for a in [
+            &["--ttl", "0"][..],
+            &["--ttl", "256"][..],
+            &["--ttl", "x"][..],
+            &["--tcp-mss", "70000"][..],
+            &["--tcp-wscale", "256"][..],
+            &["--tcp-tsecho=4294967296"][..],
+        ] {
+            assert!(parse(a).unwrap().to_config().is_err(), "{a:?}");
+        }
+    }
+
+    /// Ключи правее `--resume` переопределяют файл, левее файл (Р1): то же для параметров зонда.
+    #[test]
+    fn probe_parameters_follow_resume_positions() {
+        let dir = crate::scratch::Scratch::new();
+        let file = dir.write("paused.conf", format!("{RESUME_FILE}ttl = 40\n").as_bytes());
+        let f = file.to_str().unwrap();
+        let right = parse(&["--resume", f, "--ttl", "99"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(right.ttl, Some(99));
+        let left = parse(&["--ttl", "99", "--resume", f])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(left.ttl, Some(40));
+        let bare = parse(&["--resume", f]).unwrap().to_config().unwrap();
+        assert_eq!(bare.ttl, Some(40));
     }
 }

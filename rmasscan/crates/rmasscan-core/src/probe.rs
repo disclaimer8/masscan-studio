@@ -566,7 +566,9 @@ impl ProbeCursor {
     /// Следующий проход `--infinite` (`main.c:445-449` `seed++; repeats++; goto infinite`, метка на `:251`).
     /// Только когда `effective.infinite()` включён и текущий проход дошёл до `effective_end` (поток исчерпан и всё
     /// отправлено): тогда пересоздаёт `BlackRock::new(range, seed + repeats + 1, rounds)` (`:262`), увеличивает
-    /// `repeats` и сбрасывает поток на начало (`:269-273`, `resume.index` конфигурации, не позиция паузы).
+    /// `repeats` и сбрасывает поток на начало (`:269-273`) с базой 0: `resume-index` действует только на первом
+    /// проходе (спец Р5; сознательное отличие от C, где метка `:251` стоит до `start = resume.index + ...`), так что
+    /// следующие проходы покрывают весь диапазон. `end` пересчитывается для нового прохода.
     /// `entropy` построителя остаётся исходным `seed` (`:227` `entropy = masscan->seed` задан до метки), поэтому
     /// `seqno` и порт источника проверяются приёмом для обоих проходов. `true`, если проход начат заново.
     pub fn advance_pass(&mut self) -> bool {
@@ -588,18 +590,20 @@ impl ProbeCursor {
             e.shard(),
             inner.nics.len() as u32,
             self.nic_index as u32,
-            e.resume_index(),
+            0,
             e.resume_count(),
             e.retries(),
             e.max_rate(),
         );
+        let (_, end) = self.plan.bounds(self.nic_index as u32, 0);
         let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
         let mut stream = stream.peekable();
-        // Пустой проход (`resume-index` за концом) не перезапускается: движок крутился бы вхолостую.
+        // Пустой проход (`resume-count` отсёк всё) не перезапускается: движок крутился бы вхолостую.
         if stream.peek().is_none() {
             return false;
         }
         self.stream = stream;
+        self.end = end;
         self.blackrock = blackrock;
         self.repeats = next;
         self.ended = false;
@@ -935,5 +939,53 @@ mod tests {
         assert_eq!(drain(&mut cursor).len(), 4);
         assert!(!cursor.advance_pass());
         assert!(cursor.current().is_none());
+    }
+
+    /// Р5: `resume-index` действует только на первом проходе, дальше проходы покрывают весь диапазон.
+    #[test]
+    fn infinite_later_passes_ignore_resume_index() {
+        let e = eff("198.18.0.0-198.18.0.5", "80", |c| {
+            c.seed = 10;
+            c.infinite = true;
+            c.resume_index = 4;
+        });
+        let rounds = e.blackrock_rounds();
+        let plan = ReadyPlan::new_cli(e.clone(), nics(1)).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        let first: Vec<u64> = drain(&mut cursor).iter().map(|p| p.index).collect();
+        assert_eq!(first, [4, 5]);
+        assert!(cursor.advance_pass());
+        let second = drain(&mut cursor);
+        assert_eq!(
+            second.iter().map(|p| p.index).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 5]
+        );
+        let br = BlackRock::try_new(6, 11, rounds).unwrap();
+        for p in &second {
+            // main.c:328 `xXx = i + r * rate`, затем по модулю range.
+            let x = (p.index + e.max_rate() as u64) % 6;
+            let (ip, port) = e.massip().pick(br.shuffle(x));
+            assert_eq!((p.ip_them, u32::from(p.port_them)), (ip, port));
+        }
+        // Третий проход тоже полный.
+        assert!(cursor.advance_pass());
+        assert_eq!(drain(&mut cursor).len(), 6);
+    }
+
+    /// `end` нового прохода пересчитывается: после исчерпания `position()` равен его концу, а не концу прохода 0.
+    #[test]
+    fn infinite_restart_recomputes_the_pass_end() {
+        let e = eff("198.18.0.0-198.18.0.5", "80", |c| {
+            c.infinite = true;
+            c.resume_index = 1;
+            c.resume_count = Some(2);
+        });
+        let plan = ReadyPlan::new_cli(e, nics(1)).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        assert_eq!(drain(&mut cursor).len(), 2);
+        assert_eq!(cursor.position(), 3, "pass 0 ends at resume_index + count");
+        assert!(cursor.advance_pass());
+        assert_eq!(drain(&mut cursor).len(), 2);
+        assert_eq!(cursor.position(), 2, "pass 1 starts at 0: end = 0 + count");
     }
 }

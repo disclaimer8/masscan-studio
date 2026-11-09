@@ -645,6 +645,7 @@ pub fn run_live_conf(
                         syns: prog.sent,
                         synacks: open_count,
                         tcbs: 0,
+                        index: prog.next_index,
                     };
                     status.tick_infinite(now, totals, prog.rate, exiting.is_some(), log)
                 } else {

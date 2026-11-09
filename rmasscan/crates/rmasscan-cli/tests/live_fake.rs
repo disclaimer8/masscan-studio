@@ -2886,3 +2886,20 @@ fn infinite_scan_runs_multiple_passes_until_ctrl_c() {
         assert_eq!(set, first, "every pass is a permutation of the range");
     }
 }
+
+/// `-sL --infinite` (C зацикливает список, `main-listscan.c:68`) отвергается явно, а не молча даёт один проход.
+#[test]
+fn list_scan_with_infinite_is_refused() {
+    for list in ["-sL", "--list"] {
+        let r = Cli::try_parse_masscan([
+            "rmasscan",
+            list,
+            "--infinite",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+        ]);
+        assert!(r.is_err(), "{list} --infinite must be refused");
+    }
+}

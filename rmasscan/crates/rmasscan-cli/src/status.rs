@@ -50,6 +50,9 @@ pub struct InfiniteTotals {
     pub syns: u64,
     pub synacks: u64,
     pub tcbs: u64,
+    /// Индекс передачи текущего прохода (`count` = `min_index`, `main-status.c:28`; в C сбрасывается на каждом
+    /// проходе): идёт в поле `"syn"` NDJSON.
+    pub index: u64,
 }
 
 impl StatusLine {
@@ -115,7 +118,7 @@ impl StatusLine {
                 tcb_rate,
                 totals.tcbs,
                 pps,
-                totals.syns,
+                totals.index,
             ),
         };
         log.write_all(line.as_bytes())?;
@@ -259,7 +262,7 @@ pub fn infinite_line(kpps: f64, syn_ps: f64, ack_ps: f64, tcb_ps: f64, tcbs: u64
 }
 
 /// `--infinite`, NDJSON (`json_fmt_infinite`, `main-status.c:56-69`): `kpps`, `pps`, `synps`, `ackps`, `tcbps`,
-/// затем `tcb` (число TCB) и `syn` (всего отправлено SYN).
+/// затем `tcb` (число TCB) и `syn` (индекс передачи текущего прохода, как `count` в C).
 pub fn ndjson_infinite(
     kpps: f64,
     syn_ps: f64,
@@ -267,10 +270,10 @@ pub fn ndjson_infinite(
     tcb_ps: f64,
     tcbs: u64,
     pps: f64,
-    syns: u64,
+    index: u64,
 ) -> String {
     format!(
-        "{{\"state\":\"*\",\"rate\":{{\"kpps\":{kpps:.2},\"pps\":{pps:.2},\"synps\":{syn_ps:.0},\"ackps\":{ack_ps:.0},\"tcbps\":{tcb_ps:.0}}},\"tcb\":{tcbs},\"syn\":{syns}}}\n"
+        "{{\"state\":\"*\",\"rate\":{{\"kpps\":{kpps:.2},\"pps\":{pps:.2},\"synps\":{syn_ps:.0},\"ackps\":{ack_ps:.0},\"tcbps\":{tcb_ps:.0}}},\"tcb\":{tcbs},\"syn\":{index}}}\n"
     )
 }
 
@@ -401,6 +404,7 @@ mod tests {
                 syns,
                 synacks: acks,
                 tcbs: 0,
+                index: syns % 7,
             };
             l.tick_infinite(now, t, 100.0, waiting, &mut b).unwrap();
             String::from_utf8(b).unwrap()
@@ -417,6 +421,8 @@ mod tests {
         let mut l = StatusLine::new(StatusMode::Ndjson, 0);
         let s = tick(&mut l, 1_000_000, 100, 5, false);
         assert!(s.starts_with("{\"state\":\"*\""), "{s}");
+        // "syn" is the per-pass index (100 % 7 = 2), not the cumulative total.
+        assert!(s.ends_with("\"syn\":2}\n"), "{s}");
         let mut l = StatusLine::new(StatusMode::Off, 0);
         assert_eq!(tick(&mut l, 1_000_000, 100, 5, false), "");
     }

@@ -187,6 +187,7 @@ pub struct Cli {
     // `SET_infinite` (main-conf.c:2836): без конца, проходы заново с `seed + 1`, пока не придёт Ctrl-C.
     #[arg(
         long,
+        conflicts_with = "list",
         help = "Scan the range again and again (seed + 1 each pass) until Ctrl-C; no paused.conf is written"
     )]
     pub infinite: bool,

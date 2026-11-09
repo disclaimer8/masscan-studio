@@ -107,12 +107,16 @@ TCP-опции) — чтобы реальные крупные сканы на �
 - **Р5 (`--infinite`):** поддерживаем флаг `--infinite` (`infinite = true` в конфиге, `main-conf.c:2836–2837, 3081`).
   По окончании каждого полного прохода без паузы/отмены поток передачи выполняет `seed = seed.wrapping_add(1)` и
   `repeats = repeats.wrapping_add(1)`, переинициализируя `BlackRock::new(range, seed, rounds)` со стартом
-  `(shard.one - 1) * nic_count + nic_index` (`resume_index` действует только на первом проходе), но сохраняет
+  `(shard.one - 1) * nic_count + nic_index` (`resume_index` действует только на первом проходе — отличие от C,
+  где метка `main.c:251` стоит до расчёта старта `:269` и `resume_index` переприменяется каждый проход, так что
+  все проходы после первого пропускали бы первые `resume_index` целей), но сохраняет
   `entropy = initial_seed` неизменным, чтобы приёмник продолжал подтверждать SYN-cookie предыдущего прохода
   (`main.c:225–228, 445–449, 545`); выбор источника хэширует `(i.wrapping_add(repeats), x)` (`main.c:379–382`). Строка
   статуса печатает формат C `rate:%6.2f-kpps, syn/s=%.0f ack/s=%.0f tcb-rate=%.0f, 0-tcbs,         \r`
   (`main-status.c:214`) и NDJSON `{"state":"*","rate":{...},"tcb":0,"syn":...}\n` (`main-status.c:56–69`). Выход —
-  только по Ctrl-C; `paused.conf` в `--infinite` не создаётся (`main.c:1447`).
+  только по Ctrl-C; `paused.conf` в `--infinite` не создаётся — сознательное отличие от C: в `main.c:1447` нет
+  проверки `is_infinite`, C пишет `paused.conf`, если `min_index < count`, но бесконечный скан нечего возобновлять.
+  `-sL` вместе с `--infinite` — явный отказ (C зацикливает список, `main-listscan.c:68`).
 - **Р6 (диапазоны источника и эфемерный порт по умолчанию):** по умолчанию сохраняем **один** эфемерный порт источника
   `p = 40000 + time % 20000` (`(p, p)`), одновременно поддерживая явные диапазоны ширины `2^k` и для `--source-port A-B`
   (`--adapter-port`), и для `--adapter-ip A-B` (`--source-ip`, `ipv4_mask = B - A`, `main-conf.c:2486–2550`,

@@ -94,34 +94,9 @@ pub enum ConfigError {
 /// переполняет массив (main-conf.c:2438), здесь это `BadValue`.
 pub const MAX_NICS: usize = 8;
 
-/// Опции TCP SYN (templ-tcp-hdr.c:1066-1119, main-conf.c:2141-2345).
-/// `Default`: MSS 1460 включён, остальное выключено. Порядок опций в
-/// кадре: `mss -> sackok -> wscale -> tsecho`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TcpHeaderOptions {
-    pub mss: Option<u16>,
-    pub sackok: bool,
-    pub wscale: Option<u8>,
-    pub tsecho: Option<u32>,
-}
-
-impl Default for TcpHeaderOptions {
-    fn default() -> Self {
-        TcpHeaderOptions {
-            mss: Some(DEFAULT_TCP_MSS),
-            sackok: false,
-            wscale: None,
-            tsecho: None,
-        }
-    }
-}
-
-/// main-conf.c:2143 `default_mss`.
-pub const DEFAULT_TCP_MSS: u16 = 1460;
-/// main-conf.c:2201 `default_value`.
-pub const DEFAULT_TCP_WSCALE: u8 = 3;
-/// main-conf.c:2254 `default_value`.
-pub const DEFAULT_TCP_TSECHO: u32 = 0x1234_5678;
+pub use crate::packet::{
+    DEFAULT_TCP_MSS, DEFAULT_TCP_TSECHO, DEFAULT_TCP_WSCALE, PacketModifiers, TcpHeaderOptions,
+};
 
 /// Один адаптер `nic[i]` (masscan.h `struct Masscan::nic`, подмножество
 /// IPv4). `adapter_ip` это включительный диапазон `(first, last)`.
@@ -134,6 +109,9 @@ pub struct NicConfig {
     pub router_mac_ipv4: Option<[u8; 6]>,
     pub router_mac_ipv6: Option<[u8; 6]>,
     pub source_port: Option<(u16, u16)>,
+    /// `adapter-port = A-B` шириной 17, как пишет сам C из-за ошибки на единицу (main.c:1318, port_mask 0x10).
+    /// Спека Р6: поблажка только для `last - first == 16` и только у этого адаптера, порядок ключей не важен.
+    pub legacy_c_17_port_mask: bool,
 }
 
 /// Все параметры скана (masscan.h `struct Masscan`, подмножество v1).
@@ -179,10 +157,6 @@ pub struct ScanConfig {
     /// `--infinite` (main-conf.c:2836).
     pub infinite: bool,
     pub tcp_opts: TcpHeaderOptions,
-    /// `adapter-port = A-B` шириной 17, как пишет сам C из-за ошибки на
-    /// единицу (main.c:1318, port_mask 0x10): принят при чтении, источник
-    /// выбирает порт по маске `0x10`.
-    pub legacy_c_17_port_mask: bool,
 }
 
 impl Default for ScanConfig {
@@ -212,7 +186,6 @@ impl Default for ScanConfig {
             noreset: false,
             infinite: false,
             tcp_opts: TcpHeaderOptions::default(),
-            legacy_c_17_port_mask: false,
         }
     }
 }
@@ -250,7 +223,6 @@ pub struct EffectiveConfig {
     noreset: bool,
     infinite: bool,
     tcp_opts: TcpHeaderOptions,
-    legacy_c_17_port_mask: bool,
 }
 
 impl EffectiveConfig {
@@ -325,8 +297,14 @@ impl EffectiveConfig {
     pub fn tcp_opts(&self) -> TcpHeaderOptions {
         self.tcp_opts
     }
-    pub fn legacy_c_17_port_mask(&self) -> bool {
-        self.legacy_c_17_port_mask
+    /// `--ttl`, `--badsum` и опции TCP как параметры зонда (templ-pkt.c:1474-1488,
+    /// templ-tcp-hdr.c:1066-1119). Умолчание: TTL 255 (`DEFAULT_TCP_TEMPLATE`).
+    pub fn packet_modifiers(&self) -> PacketModifiers {
+        PacketModifiers {
+            ttl: self.ttl.unwrap_or(255),
+            badsum: self.badsum,
+            tcp: self.tcp_opts,
+        }
     }
     /// Итоговый набор (исключения применены, optimize).
     pub fn massip(&self) -> &MassIp {
@@ -589,7 +567,6 @@ fn effective(
         noreset: cfg.noreset,
         infinite: cfg.infinite,
         tcp_opts: cfg.tcp_opts,
-        legacy_c_17_port_mask: cfg.legacy_c_17_port_mask,
     }
 }
 
@@ -828,6 +805,7 @@ fn legacy_nic(cfg: &ScanConfig) -> NicConfig {
         router_mac_ipv4: cfg.router_mac,
         router_mac_ipv6: cfg.router_mac,
         source_port: cfg.source_port,
+        legacy_c_17_port_mask: false,
     }
 }
 
@@ -1138,7 +1116,7 @@ fn parse_source_port_c(value: &str) -> Result<((u16, u16), bool), ConfigError> {
 }
 
 /// main-conf.c:591 `isBoolean`: значение это начало слова из набора или 0/1.
-fn is_boolean(v: &str) -> bool {
+pub fn is_boolean(v: &str) -> bool {
     let Some(&c) = v.as_bytes().first() else {
         return false;
     };
@@ -1160,7 +1138,7 @@ fn is_boolean(v: &str) -> bool {
 }
 
 /// main-conf.c:1066 `isInteger`.
-fn is_integer(v: &str) -> bool {
+pub fn is_integer(v: &str) -> bool {
     !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())
 }
 
@@ -1202,7 +1180,7 @@ fn parse_tcp_opt(
 /// ключ адаптера создаёт `nic[i]`.
 ///
 /// `adapter-port = A-B` шириной 17 принимается (ставит
-/// `legacy_c_17_port_mask`), потому что именно такой диапазон пишет сам C.
+/// `NicConfig::legacy_c_17_port_mask` этого адаптера), потому что именно такой диапазон пишет сам C.
 /// `wait = forever` это `INT_MAX` (main-conf.c:3028-3032). `ttl` вне `1..=255`
 /// отклоняется (в C `0` молча игнорируется).
 pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool, ConfigError> {
@@ -1348,10 +1326,9 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         "adapterport" | "sourceport" | "srcport" => {
             let idx = nic_index(name, value)?;
             let (range, quirk) = parse_source_port_c(value)?;
-            nic_mut(cfg, idx).source_port = Some(range);
-            if idx == 0 || quirk {
-                cfg.legacy_c_17_port_mask = quirk;
-            }
+            let nic = nic_mut(cfg, idx);
+            nic.source_port = Some(range);
+            nic.legacy_c_17_port_mask = quirk;
             sync_legacy_nic(cfg);
         }
         "ports" | "port" => targets::parse_ports(cfg.targets.ports_mut(), value)?,
@@ -2183,7 +2160,7 @@ mod tests {
         ] {
             apply_core_kv(&mut cfg, k, v).unwrap();
         }
-        assert!(cfg.legacy_c_17_port_mask);
+        assert!(cfg.nics[0].legacy_c_17_port_mask);
         let mut s = String::new();
         echo(&cfg, false, &mut s);
         let pos = |needle: &str| s.find(needle).unwrap_or_else(|| panic!("{needle} in {s}"));
@@ -2205,7 +2182,7 @@ mod tests {
         }
         let back = read_paused_conf(&s).unwrap();
         assert_eq!(back.tcp_opts, cfg.tcp_opts);
-        assert!(back.legacy_c_17_port_mask);
+        assert!(back.nics[0].legacy_c_17_port_mask);
         let mut s2 = String::new();
         echo(&back, false, &mut s2);
         assert_eq!(s, s2);
@@ -2222,5 +2199,54 @@ mod tests {
             assert!(!s.contains(k), "{k}: {s}");
         }
         assert!(parse_source_port("41234-41250").is_err());
+    }
+    /// T1 M-2 + T2 M-4: поблажка 17 портов принадлежит адаптеру, а не конфигурации; порядок ключей не важен.
+    #[test]
+    fn legacy_17_port_flag_is_per_nic_and_independent_of_key_order() {
+        let order_a = [
+            ("adapter-port[0]", "41234-41250"),
+            ("adapter-port[1]", "5000-5003"),
+        ];
+        let order_b = [
+            ("adapter-port[1]", "5000-5003"),
+            ("adapter-port[0]", "41234-41250"),
+        ];
+        for order in [order_a, order_b] {
+            let mut cfg = cfg_with("10.0.0.0/30", "80");
+            for (k, v) in order {
+                apply_core_kv(&mut cfg, k, v).unwrap();
+            }
+            assert!(cfg.nics[0].legacy_c_17_port_mask, "{order:?}");
+            assert!(!cfg.nics[1].legacy_c_17_port_mask, "{order:?}");
+            let eff = validate(&cfg, Operation::Scan).unwrap();
+            assert!(eff.nics()[0].legacy_c_17_port_mask);
+            assert!(!eff.nics()[1].legacy_c_17_port_mask);
+        }
+        // Явный диапазон степени двойки у того же адаптера снимает флаг; соседний флаг не трогает.
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        apply_core_kv(&mut cfg, "adapter-port[0]", "41234-41250").unwrap();
+        apply_core_kv(&mut cfg, "adapter-port[1]", "6000-6016").unwrap();
+        apply_core_kv(&mut cfg, "adapter-port[0]", "5000-5003").unwrap();
+        assert!(!cfg.nics[0].legacy_c_17_port_mask);
+        assert!(cfg.nics[1].legacy_c_17_port_mask);
+        // Ширина, отличная от 17 и не степень двойки, не принимается ни с каким флагом.
+        for bad in ["5000-5014", "5000-5019", "5000-5002"] {
+            assert!(
+                apply_core_kv(&mut cfg, "adapter-port[2]", bad).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_config_exposes_packet_modifiers() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        let m = validate(&cfg, Operation::Scan).unwrap().packet_modifiers();
+        assert_eq!(m, crate::packet::PacketModifiers::default());
+        for (k, v) in [("ttl", "64"), ("badsum", ""), ("tcp-wscale", "7")] {
+            apply_core_kv(&mut cfg, k, v).unwrap();
+        }
+        let m = validate(&cfg, Operation::Scan).unwrap().packet_modifiers();
+        assert_eq!((m.ttl, m.badsum, m.tcp.wscale), (64, true, Some(7)));
     }
 }

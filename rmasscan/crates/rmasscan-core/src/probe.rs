@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
-use crate::packet::{LinkType, TcpSynTemplate};
+use crate::packet::{LinkType, PacketModifiers, TcpSynTemplate};
 use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
 
 /// Раунды BlackRock, которые принимает runtime v1 (masscan по умолчанию).
@@ -64,7 +64,9 @@ pub enum PlanError {
     BadNicCount(usize),
     #[error("adapter index {index} is out of range for {count} adapters")]
     NicIndexOutOfRange { index: u32, count: usize },
-    #[error("invalid source addresses {first:#010x}-{last:#010x}: need first <= last")]
+    #[error(
+        "invalid source addresses {first:#010x}-{last:#010x}: need first <= last and a power-of-two width"
+    )]
     InvalidSourceIpv4 { first: u32, last: u32 },
     #[error(transparent)]
     Scan(#[from] ScanError),
@@ -92,8 +94,9 @@ pub struct NicBinding {
     /// (main.c:183). Равен `binding.source_ipv4` для одного адреса.
     pub source_ipv4_last: u32,
     /// C сам пишет в `paused.conf` порты `p-(p+16)` (17 портов, не степень
-    /// двойки; main.c:1318, main-conf.c:3668). С флагом ширина принимается и
-    /// маска остаётся `last - first` (main.c:186).
+    /// двойки; main.c:1318, main-conf.c:3668). С флагом принимается ровно
+    /// `last - first == 16` (спека Р6), маска остаётся `last - first`
+    /// (main.c:186). Флаг у каждого адаптера свой.
     pub legacy_c_17_port_mask: bool,
 }
 
@@ -121,11 +124,13 @@ pub struct Probe {
     pub frame: Vec<u8>,
 }
 
-fn check_source_ports(first: u16, last: u16, legacy_width: bool) -> Result<(), PlanError> {
+fn check_source_ports(first: u16, last: u16, legacy_c_17: bool) -> Result<(), PlanError> {
     let width = u32::from(last)
         .wrapping_sub(u32::from(first))
         .wrapping_add(1);
-    if first == 0 || first > last || !(legacy_width || width.is_power_of_two()) {
+    // Поблажка C (main.c:1318) только для 17 портов, `last - first == 16`.
+    let lenient = legacy_c_17 && width == 17;
+    if first == 0 || first > last || !(lenient || width.is_power_of_two()) {
         return Err(PlanError::InvalidSourcePorts { first, last });
     }
     Ok(())
@@ -144,22 +149,28 @@ struct Builder {
 }
 
 impl Builder {
-    fn new(binding: &AdapterBinding, seed: u64) -> Result<Builder, PlanError> {
-        Builder::from_nic(&NicBinding::from(binding.clone()), seed)
-    }
-
-    fn from_nic(nic: &NicBinding, seed: u64) -> Result<Builder, PlanError> {
+    fn from_nic(nic: &NicBinding, seed: u64, mods: &PacketModifiers) -> Result<Builder, PlanError> {
         let binding = &nic.binding;
         let (first, last) = binding.source_ports;
         check_source_ports(first, last, nic.legacy_c_17_port_mask)?;
-        if nic.source_ipv4_last < binding.source_ipv4 {
+        // main-conf.c:2483: ширина диапазона адресов источника степень двойки; только тогда
+        // `ipv4_mask = last - first` (main.c:183, :384) работает как маска.
+        let ip_width = u64::from(nic.source_ipv4_last)
+            .wrapping_sub(u64::from(binding.source_ipv4))
+            .wrapping_add(1);
+        if nic.source_ipv4_last < binding.source_ipv4 || !ip_width.is_power_of_two() {
             return Err(PlanError::InvalidSourceIpv4 {
                 first: binding.source_ipv4,
                 last: nic.source_ipv4_last,
             });
         }
         Ok(Builder {
-            tmpl: TcpSynTemplate::new(binding.source_mac, binding.next_hop_mac, binding.link_type),
+            tmpl: TcpSynTemplate::new_with_options(
+                binding.source_mac,
+                binding.next_hop_mac,
+                binding.link_type,
+                mods,
+            ),
             ip_me0: binding.source_ipv4,
             ipv4_mask: nic.source_ipv4_last - binding.source_ipv4,
             first,
@@ -223,9 +234,19 @@ impl Builder {
 pub fn for_each_probe<B>(
     eff: &EffectiveConfig,
     binding: &AdapterBinding,
+    f: impl FnMut(&Probe) -> ControlFlow<B>,
+) -> Result<ControlFlow<B>, PlanError> {
+    for_each_probe_nic(eff, &NicBinding::from(binding.clone()), f)
+}
+
+/// [`for_each_probe`] для адаптера CLI: с диапазоном адресов источника и флагом 17 портов. Параметры зонда
+/// (`--ttl`, `--badsum`, опции TCP) берутся из `eff`.
+pub fn for_each_probe_nic<B>(
+    eff: &EffectiveConfig,
+    nic: &NicBinding,
     mut f: impl FnMut(&Probe) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, PlanError> {
-    let builder = Builder::new(binding, eff.seed())?;
+    let builder = Builder::from_nic(nic, eff.seed(), &eff.packet_modifiers())?;
     let mut probe = Probe::default();
     let flow = transmit_scan_flow(
         eff.massip(),
@@ -334,7 +355,7 @@ impl ReadyPlan {
         }
         let builders = nics
             .iter()
-            .map(|n| Builder::from_nic(n, effective.seed()))
+            .map(|n| Builder::from_nic(n, effective.seed(), &effective.packet_modifiers()))
             .collect::<Result<Vec<_>, _>>()?;
         if let Some(r) = effective
             .massip()
@@ -1001,5 +1022,138 @@ mod tests {
             6,
             "pass 1 is the full range: end = range"
         );
+    }
+
+    fn range_nic(first: u32, last: u32, ports: (u16, u16), legacy: bool) -> NicBinding {
+        let mut b = binding();
+        b.source_ipv4 = first;
+        b.source_ports = ports;
+        NicBinding {
+            binding: b,
+            source_ipv4_last: last,
+            legacy_c_17_port_mask: legacy,
+        }
+    }
+
+    /// main-conf.c:2486-2550 + main.c:378-385: ширина `--adapter-ip A-B` степень двойки, источник выбирается
+    /// как `first + ((ck >> 16) & (last - first))`.
+    #[test]
+    fn adapter_ip_power_of_two_range_rotates_source_ip() {
+        const FIRST: u32 = 0xc612_0010; // 198.18.0.16
+        let e = eff("198.18.1.0/26", "80", |_| {});
+        let plan = ReadyPlan::new_cli(e, vec![range_nic(FIRST, FIRST + 3, (40000, 40000), false)])
+            .unwrap();
+        let probes = drain(&mut plan.cursor_for_nic(0, None).unwrap());
+        assert_eq!(probes.len(), 64);
+        let mut seen = BTreeSet::new();
+        for p in &probes {
+            assert!((FIRST..=FIRST + 3).contains(&p.ip_me), "{:#x}", p.ip_me);
+            assert_eq!(&p.frame[26..30], &p.ip_me.to_be_bytes());
+            seen.insert(p.ip_me);
+        }
+        assert_eq!(seen.len(), 4, "all four addresses are used: {seen:?}");
+        // Независимо от `fill`: тот же индекс через for_each_probe с тем же ключом даёт тот же адрес.
+        let nic = range_nic(FIRST, FIRST + 3, (40000, 40000), false);
+        let mut via_oracle = Vec::new();
+        let flow = for_each_probe_nic(&eff("198.18.1.0/26", "80", |_| {}), &nic, |p| {
+            via_oracle.push(p.ip_me);
+            ControlFlow::<()>::Continue(())
+        })
+        .unwrap();
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(
+            via_oracle,
+            probes.iter().map(|p| p.ip_me).collect::<Vec<_>>()
+        );
+
+        // Ширина 3 не степень двойки: отказ (main-conf.c:2483), как и `last < first`.
+        for (first, last) in [(FIRST, FIRST + 2), (FIRST + 3, FIRST), (FIRST, FIRST + 5)] {
+            let err = ReadyPlan::new_cli(
+                eff("198.18.1.0/26", "80", |_| {}),
+                vec![range_nic(first, last, (40000, 40000), false)],
+            )
+            .unwrap_err();
+            assert_eq!(err, PlanError::InvalidSourceIpv4 { first, last });
+        }
+        // Одиночный адрес и ширина 2, 8, 256 допустимы.
+        for width in [1u32, 2, 8, 256] {
+            ReadyPlan::new_cli(
+                eff("198.18.1.0/26", "80", |_| {}),
+                vec![range_nic(FIRST, FIRST + width - 1, (40000, 40000), false)],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Спека Р6: поблажка C только для `last - first == 16` (17 портов, main.c:1318), и только у адаптера,
+    /// которому её выдали; порядок адаптеров не влияет.
+    #[test]
+    fn legacy_17_port_leniency_is_exactly_seventeen_ports_and_per_nic() {
+        let plan =
+            |nics: Vec<NicBinding>| ReadyPlan::new_cli(eff("198.18.1.0/30", "80", |_| {}), nics);
+        let port_err = |first: u16, last: u16| PlanError::InvalidSourcePorts { first, last };
+
+        // С флагом: ровно 17 портов проходят, ширины 15 и 20 нет.
+        plan(vec![range_nic(IP_ME, IP_ME, (40000, 40016), true)]).unwrap();
+        for last in [40014u16, 40019, 40017, 40004, 40030] {
+            assert_eq!(
+                plan(vec![range_nic(IP_ME, IP_ME, (40000, last), true)]).unwrap_err(),
+                port_err(40000, last),
+                "width {} under the flag",
+                last - 40000 + 1
+            );
+        }
+        // Без флага 17 портов отклоняются; ширина 16 (степень двойки) проходит всегда.
+        assert_eq!(
+            plan(vec![range_nic(IP_ME, IP_ME, (40000, 40016), false)]).unwrap_err(),
+            port_err(40000, 40016)
+        );
+        plan(vec![range_nic(IP_ME, IP_ME, (40000, 40015), false)]).unwrap();
+        plan(vec![range_nic(IP_ME, IP_ME, (40000, 40015), true)]).unwrap();
+
+        // Флаг принадлежит адаптеру: у соседа без флага те же 17 портов отклоняются при любом порядке.
+        let with = range_nic(IP_ME, IP_ME, (40000, 40016), true);
+        let without = range_nic(IP_ME, IP_ME, (40000, 40016), false);
+        for nics in [
+            vec![with.clone(), without.clone()],
+            vec![without.clone(), with.clone()],
+        ] {
+            assert_eq!(plan(nics).unwrap_err(), port_err(40000, 40016));
+        }
+        plan(vec![with.clone(), with]).unwrap();
+    }
+
+    /// `--ttl`, `--badsum` и опции TCP из конфигурации попадают в кадры плана и в оракул `for_each_probe`.
+    #[test]
+    fn plan_applies_ttl_badsum_and_tcp_options_from_the_config() {
+        use crate::packet::TcpHeaderOptions;
+        let e = eff("198.18.1.0/30", "80", |c| {
+            c.ttl = Some(64);
+            c.badsum = true;
+            c.tcp_opts = TcpHeaderOptions {
+                mss: Some(1400),
+                sackok: true,
+                wscale: Some(7),
+                tsecho: Some(0xdead_beef),
+            };
+        });
+        let plan = ReadyPlan::new_cli(e.clone(), nics(1)).unwrap();
+        let from_plan = drain(&mut plan.cursor_for_nic(0, None).unwrap());
+        let from_oracle = oracle(&e);
+        assert_eq!(from_plan.len(), 4);
+        for (a, b) in from_plan.iter().zip(&from_oracle) {
+            assert_eq!(a.frame, b.frame);
+            assert_eq!(a.frame[22], 64);
+            assert_eq!(a.frame[46] >> 4, 10, "doff");
+            assert_eq!(&a.frame[54..62], &[2, 4, 5, 0x78, 4, 2, 3, 3]);
+            assert_eq!(a.frame.len(), 74);
+            assert_eq!(
+                crate::checksum::ip_header_checksum(&a.frame, 14, 34),
+                0xffff
+            );
+        }
+        // Умолчание не меняет кадр.
+        let d = oracle(&eff("198.18.1.0/30", "80", |_| {}));
+        assert!(d.iter().all(|p| p.frame.len() == 58 && p.frame[22] == 255));
     }
 }

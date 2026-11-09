@@ -2903,3 +2903,31 @@ fn list_scan_with_infinite_is_refused() {
         assert!(r.is_err(), "{list} --infinite must be refused");
     }
 }
+
+/// Т6 (Р6): `--adapter-ip A-B` с шириной степени двойки ротирует адрес источника в `--packet-trace`
+/// (main.c:378-385); ширина 3 отклоняется до скана (main-conf.c:2483).
+#[test]
+fn adapter_ip_range_rotates_the_packet_trace_source_and_rejects_other_widths() {
+    let b = hermetic();
+    let mut args = TRACE.to_vec();
+    args[2] = "10.0.0.0/28";
+    args[7] = "10.255.0.4-10.255.0.7";
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let sources: std::collections::BTreeSet<&str> = out
+        .lines()
+        .filter(|l| l.starts_with("SENT"))
+        .map(|l| l.split(['[', ']']).nth(1).unwrap())
+        .collect();
+    assert_eq!(out.lines().count(), 32);
+    assert!(
+        sources.len() > 1
+            && sources
+                .iter()
+                .all(|s| ["10.255.0.4", "10.255.0.5", "10.255.0.6", "10.255.0.7"].contains(s)),
+        "{sources:?}"
+    );
+    args[7] = "10.255.0.4-10.255.0.6";
+    let (r, out, _) = cli(&b, &args);
+    assert!(r.unwrap_err().contains("--adapter-ip"), "{out}");
+}

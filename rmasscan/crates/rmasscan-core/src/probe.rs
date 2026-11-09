@@ -566,9 +566,10 @@ impl ProbeCursor {
     /// Следующий проход `--infinite` (`main.c:445-449` `seed++; repeats++; goto infinite`, метка на `:251`).
     /// Только когда `effective.infinite()` включён и текущий проход дошёл до `effective_end` (поток исчерпан и всё
     /// отправлено): тогда пересоздаёт `BlackRock::new(range, seed + repeats + 1, rounds)` (`:262`), увеличивает
-    /// `repeats` и сбрасывает поток на начало (`:269-273`) с базой 0: `resume-index` действует только на первом
-    /// проходе (спец Р5; сознательное отличие от C, где метка `:251` стоит до `start = resume.index + ...`), так что
-    /// следующие проходы покрывают весь диапазон. `end` пересчитывается для нового прохода.
+    /// `repeats` и сбрасывает поток на начало (`:269-273`) с базой 0 и без `resume-count`: оба параметра действуют
+    /// только на первом проходе (спец Р5). Это сознательное отличие от C: метка `:251` стоит до
+    /// `start = resume.index + ...`, и C повторяет окно на каждом проходе. Здесь следующие проходы покрывают весь
+    /// диапазон `[0, range)` и повторы. `end` пересчитывается для нового прохода.
     /// `entropy` построителя остаётся исходным `seed` (`:227` `entropy = masscan->seed` задан до метки), поэтому
     /// `seqno` и порт источника проверяются приёмом для обоих проходов. `true`, если проход начат заново.
     pub fn advance_pass(&mut self) -> bool {
@@ -591,14 +592,22 @@ impl ProbeCursor {
             inner.nics.len() as u32,
             self.nic_index as u32,
             0,
-            e.resume_count(),
+            None,
             e.retries(),
             e.max_rate(),
         );
-        let (_, end) = self.plan.bounds(self.nic_index as u32, 0);
+        let (_, end, _) = transmit_bounds(
+            inner.range,
+            e.shard(),
+            inner.nics.len() as u32,
+            self.nic_index as u32,
+            0,
+            None,
+            e.retries(),
+        );
         let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
         let mut stream = stream.peekable();
-        // Пустой проход (`resume-count` отсёк всё) не перезапускается: движок крутился бы вхолостую.
+        // Пустой проход не перезапускается: движок крутился бы вхолостую.
         if stream.peek().is_none() {
             return false;
         }
@@ -948,12 +957,13 @@ mod tests {
             c.seed = 10;
             c.infinite = true;
             c.resume_index = 4;
+            c.resume_count = Some(1);
         });
         let rounds = e.blackrock_rounds();
         let plan = ReadyPlan::new_cli(e.clone(), nics(1)).unwrap();
         let mut cursor = plan.cursor_for_nic(0, None).unwrap();
         let first: Vec<u64> = drain(&mut cursor).iter().map(|p| p.index).collect();
-        assert_eq!(first, [4, 5]);
+        assert_eq!(first, [4], "pass 0 honours resume_index and resume_count");
         assert!(cursor.advance_pass());
         let second = drain(&mut cursor);
         assert_eq!(
@@ -985,7 +995,11 @@ mod tests {
         assert_eq!(drain(&mut cursor).len(), 2);
         assert_eq!(cursor.position(), 3, "pass 0 ends at resume_index + count");
         assert!(cursor.advance_pass());
-        assert_eq!(drain(&mut cursor).len(), 2);
-        assert_eq!(cursor.position(), 2, "pass 1 starts at 0: end = 0 + count");
+        assert_eq!(drain(&mut cursor).len(), 6);
+        assert_eq!(
+            cursor.position(),
+            6,
+            "pass 1 is the full range: end = range"
+        );
     }
 }

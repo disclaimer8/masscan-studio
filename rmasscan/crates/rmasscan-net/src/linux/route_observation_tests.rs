@@ -312,7 +312,7 @@ fn network_plan_kernel_custom_broadcast_route_is_not_an_ordinary_destination() {
 
 #[test]
 fn network_plan_kernel_anycast_multicast_and_unknown_route_kinds_are_refused() {
-    for kind in (0..=u8::MAX).filter(|kind| !matches!(kind, 1 | 2 | 3)) {
+    for kind in (0..=u8::MAX).filter(|kind| !matches!(kind, 1..=3)) {
         let result = route_reply(&route_response(kind), |_| "eth0".into()).unwrap();
         assert_eq!(result, None, "unsupported route kind {kind}");
     }

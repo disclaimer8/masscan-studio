@@ -652,12 +652,12 @@ fn wire_lab_runs_the_output_suite_on_the_autodetect_stand() {
     assert!(text.contains(r#"output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;;"#));
     // The same fixed stand, the same refusal of an earlier lab's --out, the same lab id and teardown record.
     for needle in [
-        r#"if [ "$SUITE" = autodetect ] || [ "$SUITE" = output ]; then
+        r#"if [ "$STAND_SUITE" = 1 ]; then
   # Fixed stand"#,
-        r#"if [ "$SUITE" = autodetect ] || [ "$SUITE" = output ]; then
+        r#"if [ "$STAND_SUITE" = 1 ]; then
   # An earlier lab's directory"#,
-        r#"[ "$SUITE" != output ] || autodetect_teardown"#,
-        r#"elif [ "$SUITE" = output ] && [ -e "$WORK/work-kept.txt" ]; then"#,
+        r#"[ "$STAND_SUITE" = 0 ] || autodetect_teardown"#,
+        r#"elif [ "$STAND_SUITE" = 1 ] && [ -e "$WORK/work-kept.txt" ]; then"#,
     ] {
         assert!(text.contains(needle), "{needle}");
     }
@@ -682,7 +682,7 @@ fn wire_lab_runs_the_output_suite_on_the_autodetect_stand() {
         .next()
         .unwrap();
     let teardown = cleanup
-        .find(r#"[ "$SUITE" != output ] || autodetect_teardown"#)
+        .find(r#"[ "$STAND_SUITE" = 0 ] || autodetect_teardown"#)
         .unwrap();
     assert!(
         cleanup.find(r#"ip netns del "$NS_B""#).unwrap() < teardown

@@ -19,6 +19,8 @@ pub mod output_verify;
 pub mod pcap;
 pub mod peer;
 pub mod provenance;
+pub mod scan_control_suite;
+pub mod scan_control_verify;
 pub mod studio_verify;
 pub mod verify;
 pub mod vm_lab;

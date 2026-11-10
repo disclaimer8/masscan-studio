@@ -581,9 +581,9 @@ where
     while let Some(a) = it.next() {
         if let Some((name, inline)) = numable_split(&a) {
             // main-conf.c:3236-3260 (`F_NUMABLE`): `--name=v`, `--name:v` или следующее слово, если оно целое или
-            // логическое; иначе `--name` один значит «включить». Отличие: `--noreset` и `--tcp-sackok` в C берут
-            // следующее слово безусловно (`argv[++i]`), что съедает цель; здесь, как у `F_NUMABLE`, только
-            // целое или логическое.
+            // логическое; иначе `--name` один значит «включить». `--noreset` и `--tcp-sackok` сюда не входят: в C
+            // это одиночные `F_BOOL` (main-conf.c:2381, 2422, `is_singleton` :3083–3094), значение только через `=`,
+            // следующее слово не забирается.
             let value = match inline {
                 Some(v) => v.to_string(),
                 None => match it.peek() {

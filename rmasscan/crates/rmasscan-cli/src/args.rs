@@ -64,6 +64,14 @@ pub struct Cli {
         help = "Target range (same as a positional target)"
     )]
     pub range: Vec<String>,
+    // `pcap-filename` и синоним `pcap` (main-conf.c:2385): файл захвата входящих кадров (Р8).
+    #[arg(
+        long = "pcap",
+        alias = "pcap-filename",
+        value_name = "FILE",
+        help = "Save the inbound frames addressed to the scanner to a .pcap file (live scan only; alias: --pcap-filename)"
+    )]
+    pub pcap: Option<String>,
     // `-p80,443`, `-p0-65535`, `--ports 22,80`.
     #[arg(
         short = 'p',
@@ -452,7 +460,8 @@ pub struct Cli {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 21] = [
+const POSITIONAL_KEYS: [&str; 22] = [
+    "pcap",
     "seed",
     "rate",
     "wait",
@@ -909,10 +918,16 @@ impl Cli {
             scan: cfg,
             ..FullConf::default()
         };
+        if !self.after_resume.contains("pcap") {
+            full.pcap_filename.clone_from(&self.pcap);
+        }
         if let Some(file) = self.resume.first() {
             let mut loader = |p: &Path| std::fs::read_to_string(p).map_err(|e| e.to_string());
             apply_conf_key("resume", file, &mut full, &mut loader, 0)?;
             self.apply_scan_fields(&mut full.scan, true)?;
+            if self.after_resume.contains("pcap") {
+                full.pcap_filename.clone_from(&self.pcap);
+            }
         }
         Ok(full)
     }

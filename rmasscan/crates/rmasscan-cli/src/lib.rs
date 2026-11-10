@@ -17,6 +17,7 @@ pub mod args;
 pub mod conf;
 pub mod live;
 pub mod output;
+pub mod pcap_writer;
 pub mod readscan;
 pub mod status;
 
@@ -31,7 +32,7 @@ use args::{Cli, SeedPolicy, seed_policy};
 use output::{
     Format, OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, ServiceNames, io_fail,
 };
-use rmasscan_core::config::{Operation, ScanConfig, echo, validate};
+use rmasscan_core::config::{EchoExtras, Operation, ScanConfig, echo_with, validate};
 use rmasscan_core::scan::{format_list_line, list_scan};
 
 /// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
@@ -168,6 +169,16 @@ pub fn run(
         return Err(OUTPUT_OUTSIDE_SCAN.into());
     }
     let cfg = cli.to_config()?;
+    let full = cli.resolve()?;
+    // Р8: захват только для живого скана; `--echo` лишь печатает ключ `pcap-filename`.
+    if full.pcap_filename.as_deref().is_some_and(|f| !f.is_empty())
+        && (cli.list || cli.offline || cfg.offline || cli.iflist || !cli.readscan.is_empty())
+    {
+        return Err(
+            "--pcap applies only to a live scan (not to --offline, -sL, --iflist or --readscan)"
+                .into(),
+        );
+    }
     if !cli.readscan.is_empty() {
         return readscan(cli, &cfg, backend, out, log);
     }
@@ -187,7 +198,11 @@ pub fn run(
         // main.c:1799-1805: оба режима зовут masscan_echo(.., 0).
         validate(&cfg, Operation::Echo).map_err(|e| e.to_string())?;
         let mut s = String::new();
-        echo(&cfg, false, &mut s);
+        let extras = EchoExtras {
+            pcap_filename: full.pcap_filename.as_deref(),
+            ..EchoExtras::default()
+        };
+        echo_with(&cfg, false, &extras, &mut s);
         write_out(out, &s)?;
         return finish(out);
     }
@@ -237,7 +252,7 @@ pub fn run(
     let env = output_env(backend, &opts, &cfg, None);
     let mode = cli.status_mode();
     // `paused.conf` (первое Ctrl-C) повторяет разобранную конфигурацию: вывод по позиции `--resume`, `-oX`, режим статуса.
-    let mut full = cli.resolve()?;
+    let mut full = full;
     full.output = output_patch(&opts);
     full.ndjson_status = mode == status::StatusMode::Ndjson;
     let (_, scan_millis) = live::run_live_conf(

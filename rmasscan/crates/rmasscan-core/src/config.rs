@@ -80,6 +80,10 @@ pub enum ConfigError {
     BadRate(String),
     #[error("bad MAC address: {0:?}")]
     BadMac(String),
+    /// `infinite` с `-sL`: список напечатался бы один раз молча (main.c: `-sL` игнорирует `is_infinite`, а проходы
+    /// заново бессмысленны для списка).
+    #[error("--infinite cannot be combined with -sL (a list has no repeated passes)")]
+    InfiniteWithList,
     /// Значение ключа не разобрано.
     #[error("bad value for {key}: {value:?}")]
     BadValue { key: String, value: String },
@@ -464,6 +468,10 @@ pub fn parse_source_port(value: &str) -> Result<(u16, u16), ConfigError> {
 /// Пустая цель при `-sL` в C — бесконечный цикл в `blackrock_init`
 /// (crypto-blackrock.c:117-120, :151-152), здесь `EmptyTargets`.
 pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, ConfigError> {
+    // `infinite` приходит и из файла `-c`/`--resume` (`infinite = true`), поэтому clap `conflicts_with` его не ловит.
+    if op == Operation::List && cfg.infinite {
+        return Err(ConfigError::InfiniteWithList);
+    }
     check_shard(cfg.shard)?;
     if op != Operation::Echo && cfg.blackrock_rounds >= 64 {
         return Err(ConfigError::BadBlackrockRounds(cfg.blackrock_rounds));
@@ -1401,6 +1409,17 @@ mod tests {
 
     fn err(cfg: &ScanConfig, op: Operation) -> ConfigError {
         validate(cfg, op).unwrap_err()
+    }
+
+    /// T5 New-3: `infinite` (ключ файла `-c`/`--resume` тоже его ставит) несовместим с `-sL`: иначе список
+    /// напечатался бы один раз молча.
+    #[test]
+    fn infinite_with_list_is_refused_but_scan_and_echo_accept_it() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.infinite = true;
+        assert_eq!(err(&cfg, Operation::List), ConfigError::InfiniteWithList);
+        assert!(validate(&cfg, Operation::Scan).is_ok());
+        assert!(validate(&cfg, Operation::Echo).is_ok());
     }
 
     #[test]

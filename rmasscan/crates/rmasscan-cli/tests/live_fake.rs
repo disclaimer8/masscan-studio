@@ -166,6 +166,24 @@ struct FakeBackend {
     paused_writes: Mutex<Vec<(u64, String)>>,
     /// Ошибка записи `paused.conf`: запись не сохраняется.
     paused_write_error: Option<String>,
+    /// Файл `--pcap` в памяти: байты и имена, под которыми его открывали.
+    pcap: Arc<Mutex<Vec<u8>>>,
+    pcap_opened: Mutex<Vec<String>>,
+    /// На каждый SYN сверх обычного ответа приходят RST с плохим cookie на наш `ip:port` и кадр на чужой адрес.
+    inject_noise: bool,
+}
+
+/// Файл захвата в памяти.
+struct MemPcap(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for MemPcap {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Сценарий «Ctrl-C посреди передачи»: после `at`-го SYN адаптера скана поток TX поднимает счётчик нажатий и ждёт,
@@ -237,6 +255,9 @@ impl FakeBackend {
             press_in_tx: None,
             paused_writes: Mutex::new(Vec::new()),
             paused_write_error: None,
+            pcap: Arc::new(Mutex::new(Vec::new())),
+            pcap_opened: Mutex::new(Vec::new()),
+            inject_noise: false,
         }
     }
 
@@ -262,6 +283,10 @@ impl FakeBackend {
 
     fn presses(&self) -> u32 {
         self.presses.load(Ordering::SeqCst)
+    }
+
+    fn pcap_bytes(&self) -> Vec<u8> {
+        self.pcap.lock().unwrap().clone()
     }
 
     fn paused_writes(&self) -> Vec<(u64, String)> {
@@ -329,6 +354,7 @@ impl Backend for FakeBackend {
         let (neighbors, tx) = (self.neighbors.clone(), self.tx.clone());
         let (presses, press_during_arp) = (self.presses.clone(), self.press_during_arp);
         let silent_targets = self.silent_targets;
+        let inject_noise = self.inject_noise;
         // Сценарий действует на адаптер скана (не на ARP-адаптер, открытый первым).
         let scenario = self.press_in_tx.filter(|_| !opened.is_empty());
         let held: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
@@ -349,7 +375,11 @@ impl Backend for FakeBackend {
                 *held_r.lock().unwrap() = reply_to_syn(f, 0x12);
                 return vec![];
             }
-            respond(f, &neighbors)
+            let mut replies = respond(f, &neighbors);
+            if inject_noise && is_syn(f) {
+                replies.extend(noise_for(f));
+            }
+            replies
         });
         if let Some(PressInTx { at, .. }) = scenario {
             let (polls, handle) = (self.polls.clone(), adapter.clone());
@@ -399,6 +429,10 @@ impl Backend for FakeBackend {
         self.polls.fetch_add(1, Ordering::SeqCst);
         self.presses()
     }
+    fn create_pcap(&self, path: &str) -> Result<Box<dyn std::io::Write + Send>, String> {
+        self.pcap_opened.lock().unwrap().push(path.to_string());
+        Ok(Box::new(MemPcap(self.pcap.clone())))
+    }
     fn write_paused_conf(&self, content: &str) -> Result<(), String> {
         if let Some(e) = &self.paused_write_error {
             return Err(e.clone());
@@ -409,6 +443,15 @@ impl Backend for FakeBackend {
             .push((self.clock.now_micros(), content.to_string()));
         Ok(())
     }
+}
+
+/// Шум к SYN: RST на наш `ip:port` с испорченным ack (плохой SYN-cookie) и валидный ответ на чужой адрес.
+fn noise_for(syn: &[u8]) -> Vec<Vec<u8>> {
+    let mut bad_cookie = reply_to_syn(syn, 0x04).unwrap();
+    bad_cookie[42] ^= 0xff;
+    let mut foreign = reply_to_syn(syn, 0x12).unwrap();
+    foreign[30..34].copy_from_slice(&[192, 0, 2, 99]);
+    vec![bad_cookie, foreign]
 }
 
 fn parse(args: &[&str]) -> Cli {
@@ -2930,4 +2973,111 @@ fn adapter_ip_range_rotates_the_packet_trace_source_and_rejects_other_widths() {
     args[7] = "10.255.0.4-10.255.0.6";
     let (r, out, _) = cli(&b, &args);
     assert!(r.unwrap_err().contains("--adapter-ip"), "{out}");
+}
+
+/// Записи `.pcap` после 24-байтового заголовка: `(ts_sec, ts_usec, incl_len, orig_len, кадр)`.
+fn pcap_records(bytes: &[u8]) -> Vec<(u32, u32, u32, u32, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut at = 24;
+    while at < bytes.len() {
+        let w = |i: usize| u32::from_le_bytes(bytes[at + i..at + i + 4].try_into().unwrap());
+        let (sec, usec, incl, orig) = (w(0), w(4), w(8), w(12));
+        let frame = bytes[at + 16..at + 16 + incl as usize].to_vec();
+        out.push((sec, usec, incl, orig, frame));
+        at += 16 + incl as usize;
+    }
+    assert_eq!(at, bytes.len(), "trailing bytes in the capture");
+    out
+}
+
+/// Задача 7, Р8, `main.c:829, 935, 943-951`: захват пишет входящие кадры на наш `ip:port` до проверки cookie. Валидный
+/// SYN-ACK и RST с плохим cookie попадают в файл, ответ на чужой адрес нет; заголовок файла и записи верны.
+#[test]
+fn pcap_captures_inbound_frames_to_scanner_only() {
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p80",
+            "--wait",
+            "1",
+            "--seed",
+            "7",
+            "--pcap",
+            "cap.pcap",
+        ],
+    );
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["cap.pcap"]);
+    let bytes = b.pcap_bytes();
+    assert_eq!(
+        bytes[..24],
+        [
+            0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0x00, 0x04, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0,
+            0, 1, 0, 0, 0
+        ]
+    );
+    let recs = pcap_records(&bytes);
+    assert_eq!(recs.len(), 2, "SYN-ACK and the bad-cookie RST only: {log}");
+    // Тот же порядок, что у ответчика: SYN-ACK, затем RST.
+    assert_eq!(recs[0].4[47], 0x12, "first record is the SYN-ACK");
+    assert_eq!(recs[1].4[47], 0x04, "second record is the RST");
+    for (sec, _, incl, orig, frame) in &recs {
+        assert_eq!((*incl, *orig), (frame.len() as u32, frame.len() as u32));
+        assert_eq!(&frame[30..34], &MY_IP.octets(), "addressed to our ip");
+        assert!(*sec >= UNIX_TIME as u32, "wall-clock seconds");
+    }
+    // Чужой кадр не записан и не принят.
+    assert!(
+        !recs.iter().any(|r| r.4[30..34] == [192, 0, 2, 99]),
+        "foreign frame leaked into the capture"
+    );
+}
+
+/// `--pcap` только для живого скана (Р8): с `--offline` и `-sL` отказ до открытия файла.
+#[test]
+fn pcap_is_refused_with_offline_and_list() {
+    let b = FakeBackend::new();
+    for extra in [
+        &["--offline", "--seed", "1"][..],
+        &["-sL", "--seed", "1"][..],
+    ] {
+        let mut args = vec!["198.51.100.1", "-p80", "--pcap", "cap.pcap"];
+        args.extend_from_slice(extra);
+        let (r, out, _) = cli(&b, &args);
+        let e = r.unwrap_err();
+        assert!(e.contains("--pcap"), "{extra:?}: {e}");
+        assert!(out.is_empty(), "{extra:?}: {out}");
+    }
+    assert!(b.pcap_opened.lock().unwrap().is_empty());
+    assert!(b.attempts().is_empty());
+}
+
+/// `pcap-filename` из `--resume`-файла (раньше разбирался и не использовался) включает захват.
+#[test]
+fn pcap_filename_from_a_resume_file_is_honoured() {
+    let dir = Scratch::new();
+    let file = dir.write(
+        "paused.conf",
+        b"\n# resume information\nresume-index = 0\nseed = 7\nrate = 100\nwait = 1\n\
+pcap-filename = from-file.pcap\nnocapture = servername\nnocapture = servername\n\n\n\
+# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrange = 198.51.100.1\n",
+    );
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, _) = cli(&b, &["--resume", file.to_str().unwrap()]);
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-file.pcap"]);
+    assert_eq!(pcap_records(&b.pcap_bytes()).len(), 2);
+    // Ключ правее файла переопределяет его.
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, _) = cli(
+        &b,
+        &["--resume", file.to_str().unwrap(), "--pcap", "cli.pcap"],
+    );
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["cli.pcap"]);
 }

@@ -43,7 +43,7 @@ Subsequent evidence commits do not change those package identities.
 | macOS engine | 1903 passed, 0 failed, 23 ignored | Full workspace, all targets |
 | Linux Studio, minipc | 302 passed, 0 failed, 4 ignored; Clippy and fmt pass | Exact clean `49ab1583` |
 | Windows Studio, GitHub CI | 309 passed, 0 failed, 7 ignored; Clippy and fmt pass | PR head `2ed9953` and its GitHub merge checkout |
-| Linux network crate | 345 passed, 0 failed, 12 ignored; final focused set 17 passed | Native observation/route tests; read-only syscall evidence |
+| Linux network crate | Earlier full set: 345 passed, 0 failed, 12 ignored; final focused set: 17 passed | Earlier implementation snapshot before three route-kind tests; final focused log is `route-kinds-green.log` |
 | Windows network crate | 301 passed, 0 failed, 33 ignored; Clippy pass | Exact clean `49ab1583`; final observation set 12 passed |
 
 The native Windows tests include actual read-only prefix/route queries, not
@@ -51,6 +51,10 @@ packet delivery. Linux strace recorded NETLINK_ROUTE observations without
 AF_PACKET. Ignored tests are not counted as passes. An earlier incomplete Linux
 temporary source snapshot failed lab tests because parent fixtures were absent;
 it is not used as full-workspace acceptance evidence.
+The earlier Linux 345/12 result is retained in the agent execution transcript
+(session 5005, output chunk 0378fc, exit 0), not a standalone log. It is not
+presented as a full network-crate rerun of final `49ab1583`; the complete final
+engine CI is separate evidence below.
 
 Initial Linux engine CI stopped at `manual_range_patterns` under `-D warnings`,
 before tests. The exact warning was reproduced and fixed in `2ed9953`.

@@ -94,18 +94,12 @@ impl ServiceNames {
         self.udp.get(&port).map_or("unknown", String::as_str)
     }
 
-    /// `oproto_service_name` (`out-tcp-services.c:101–118`): имя из protocols хоста. Если в файле номера нет, ICMP
-    /// и SCTP получают свои имена (`icmp`, `sctp`), остальное `unknown`; так вывод не зависит от того, есть ли
-    /// у хоста файл protocols (Р5).
+    /// `oproto_service_name` (`out-tcp-services.c:101–118`): имя из protocols хоста (`getprotobynumber`);
+    /// нет файла или записи значит `unknown`, как в C.
     pub fn oproto(&self, ip_proto: u8) -> &str {
-        match self.protocols.get(&ip_proto) {
-            Some(n) => n,
-            None => match ip_proto {
-                1 => "icmp",
-                132 => "sctp",
-                _ => "unknown",
-            },
-        }
+        self.protocols
+            .get(&ip_proto)
+            .map_or("unknown", String::as_str)
     }
 }
 
@@ -161,10 +155,10 @@ mod tests {
         assert_eq!(s.udp(81), "unknown");
         assert_eq!(s.oproto(0), "ip");
         assert_eq!(s.oproto(1), "icmp");
-        // без записи в файле: имена ICMP и SCTP остаются, остальное `unknown`
-        assert_eq!(s.oproto(132), "sctp");
+        // нет записи в файле (или файла): `unknown`, как `getprotobynumber` == NULL в C
+        assert_eq!(s.oproto(132), "unknown");
         assert_eq!(s.oproto(47), "unknown");
-        assert_eq!(ServiceNames::empty().oproto(1), "icmp");
+        assert_eq!(ServiceNames::empty().oproto(1), "unknown");
         assert_eq!(ServiceNames::empty().oproto(0), "unknown");
     }
 }

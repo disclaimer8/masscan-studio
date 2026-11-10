@@ -78,7 +78,8 @@ impl PcapWriter {
         }
         let ip = &frame[14..];
         let ihl = usize::from(ip[0] & 0x0f) * 4;
-        let fragment = u16::from_be_bytes([ip[6], ip[7]]) & 0x1fff != 0;
+        // MF (0x2000) и смещение (0x1fff): первый фрагмент C тоже отбрасывает (proto-preprocess.c:100-102).
+        let fragment = u16::from_be_bytes([ip[6], ip[7]]) & 0x3fff != 0;
         if ip[0] >> 4 != 4 || ihl < 20 || fragment || ip[9] != 6 || ip.len() < ihl + 4 {
             return false;
         }
@@ -232,6 +233,9 @@ mod tests {
         frag[20] = 0x00;
         frag[21] = 0x08;
         w.record(&frag, 7);
+        let mut first_frag = frame(ME, 40000, 60);
+        first_frag[20] = 0x20; // MF, смещение 0
+        w.record(&first_frag, 7);
         w.record(&frame(ME, 40000, MAX_FRAME + 1), 8);
         w.record(&frame(ME, 40000, MAX_FRAME), 9);
         w.record(&[0u8; 10], 10);

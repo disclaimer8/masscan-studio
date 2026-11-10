@@ -488,8 +488,10 @@ pub struct Cli {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 22] = [
+const POSITIONAL_KEYS: [&str; 24] = [
     "pcap",
+    "infinite",
+    "offline",
     "seed",
     "rate",
     "wait",
@@ -1093,8 +1095,13 @@ impl Cli {
             for f in &self.includefile {
                 read_include_file(cfg, f)?;
             }
-            cfg.offline |= self.offline;
-            cfg.infinite |= self.infinite;
+        }
+        // `--offline`/`--infinite` по порядку `argv`: файл левее/правее включает или отключает их (M-2).
+        if take("offline") && self.offline {
+            cfg.offline = true;
+        }
+        if take("infinite") && self.infinite {
+            cfg.infinite = true;
         }
         // seed == 0 в C значит "взять энтропию" (main.c:1640-1641). Явный 0
         // отклоняется; отсутствие --seed решает `run` по операции (см.
@@ -2350,6 +2357,26 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
         // `-cFILE` слитно, как в C.
         assert_eq!(rate(&[&format!("-c{b}")]), 2.0);
 
+        // `--infinite` и `--offline` тоже по порядку argv: файл правее может их отключить, левее не может.
+        let off = dir
+            .write("off.conf", b"infinite = false\noffline = false\n")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let flags = |a: &[&str]| {
+            let c = parse(a).unwrap().to_config().unwrap();
+            (c.infinite, c.offline)
+        };
+        assert_eq!(
+            flags(&["-c", &off, "--infinite", "--offline"]),
+            (true, true)
+        );
+        assert_eq!(
+            flags(&["--infinite", "--offline", "-c", &off]),
+            (false, false)
+        );
+        assert_eq!(flags(&["--infinite", "-c", &n]), (true, false));
+
         // Цикл: `conf = self` вкладывается глубже 16 и отказывает; пропавший файл и неизвестный ключ тоже.
         let selfref = dir.path("self.conf");
         std::fs::write(&selfref, format!("conf = {}\n", selfref.display())).unwrap();
@@ -2385,7 +2412,7 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
             &["--adapter[8]", "eth0"][..],
             &["--adapter[-1]", "eth0"][..],
             &["--adapter[x]=eth0"][..],
-            &["--adapter-ip[9]", "10.0.0.1"][..],
+            &["--adapter-ip[9]", "198.18.0.1"][..],
             &["--router-mac[100]:00-11-22-33-44-55"][..],
         ] {
             let e = parse(bad).unwrap().to_config().unwrap_err();

@@ -1,5 +1,15 @@
 # Studio integration evidence
 
+## 2026-11-10 — current engine and native MacPhysical acceptance
+
+The current integration branch adds a separate ordinary macOS IPv4/TCP profile,
+`MacPhysical`, with IPC v4. The native package at `433f3d4` completed direct-network
+open/closed scans, Pause/reopen/Resume, Stop/new Start and JSON export, with an
+independent target-side packet capture. See the [dated integration report](../docs/experiments/2026-11-10-studio-integration.md)
+for exact build hashes, test counts, retained development authorization and limits.
+Earlier entries below describe their own builds and gates; they do not override
+the new profile's dated acceptance. Linux/Windows Studio raw profiles remain closed.
+
 Note (2026-10-26): entries dated before the Mac feth raw acceptance describe the raw gate as it stood then. The current
 gate is per profile: open for Mac feth on macOS, closed on Windows and Linux (see the dated Mac feth entries).
 

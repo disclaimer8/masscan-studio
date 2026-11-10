@@ -45,7 +45,7 @@
 use crate::{
     autodetect_verify::{self as av, ArgvRecord, EVIDENCE_EXTENSIONS, MANIFEST_JSON, Plan, Stand},
     macos_verify::{hashes_match_tree, tree},
-    output_verify::{canon, fields, text_lines},
+    output_verify::{BINARY_BLOCK, BINARY_REC, FLAG_NAMES, canon, fields, text_lines},
     pcap::Frames,
     scan_control_verify::{self as sv, Who},
     verify::{self, FAIL, INVALID, NOT_RUN, PASS, Run, array, read_json, s},
@@ -603,7 +603,6 @@ impl St {
             .find(|x| x.name() == s)
     }
 }
-const FLAG_NAMES: [&str; 8] = ["fin", "syn", "rst", "psh", "ack", "urg", "ece", "cwr"];
 /// `reason_string` (output.c:120-150): the TCP flags' names, `none` for 0.
 pub fn reason_string(flags: u8) -> String {
     if flags == 0 {
@@ -1176,8 +1175,6 @@ pub struct Document {
 
 const LIST_REC: &str = "@ @ @ @ @";
 const JSON_REC: &str = "{   \"ip\": \"@\",   \"timestamp\": \"@\", \"ports\": [ {\"port\": @, \"proto\": \"@\", \"status\": \"@\", \"reason\": \"@\", \"ttl\": @} ] }";
-const BLOCK: usize = 99;
-const BIN_REC: usize = 15;
 
 fn field_rec(
     st: &str,
@@ -1290,25 +1287,25 @@ pub fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
             })?;
         }
         Out::Binary => {
-            if b.len() < BLOCK || !b.starts_with(b"masscan/1.1\ns:") {
+            if b.len() < BINARY_BLOCK || !b.starts_with(b"masscan/1.1\ns:") {
                 return Err("not the 99-byte `masscan/1.1` header".into());
             }
-            let rest = &b[BLOCK..];
-            let mut foot = [0u8; BLOCK];
+            let rest = &b[BINARY_BLOCK..];
+            let mut foot = [0u8; BINARY_BLOCK];
             foot[..11].copy_from_slice(b"masscan/1.1");
-            let body = if rest.len() >= BLOCK
+            let body = if rest.len() >= BINARY_BLOCK
                 && rest.ends_with(&foot)
-                && (rest.len() - BLOCK).is_multiple_of(BIN_REC)
+                && (rest.len() - BINARY_BLOCK).is_multiple_of(BINARY_REC)
             {
                 d.complete = true;
-                &rest[..rest.len() - BLOCK]
-            } else if rest.len().is_multiple_of(BIN_REC) {
+                &rest[..rest.len() - BINARY_BLOCK]
+            } else if rest.len().is_multiple_of(BINARY_REC) {
                 rest
             } else {
                 return Err(format!("{} bytes are not 99 + 15n (+ 99)", b.len()));
             };
             d.records = body
-                .chunks(BIN_REC)
+                .chunks(BINARY_REC)
                 .map(binary_rec)
                 .collect::<Result<_, _>>()?;
         }

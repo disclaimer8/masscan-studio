@@ -503,11 +503,11 @@ const XML_FOOT: [&str; 5] = [
 ];
 const UNICORN_REC: &str = "TCP @\t@[@]\t\tfrom @  ttl @";
 /// `-oB`: header and footer are 99 bytes each, a status record 15 (`out-binary.c`).
-const BINARY_BLOCK: usize = 99;
-const BINARY_REC: usize = 15;
+pub(crate) const BINARY_BLOCK: usize = 99;
+pub(crate) const BINARY_REC: usize = 15;
 const BINARY_MAGIC: &[u8] = b"masscan/1.1";
 /// `reason_string` (`output.c:118-136`): these flag names in this order, joined by `-`, or `none`.
-const FLAG_NAMES: [&str; 8] = ["fin", "syn", "rst", "psh", "ack", "urg", "ece", "cwr"];
+pub(crate) const FLAG_NAMES: [&str; 8] = ["fin", "syn", "rst", "psh", "ack", "urg", "ece", "cwr"];
 
 /// The `@` fields of `template` in `s`, each the shortest text up to the literal after it; `None` unless every
 /// literal matches.

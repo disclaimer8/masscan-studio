@@ -538,7 +538,9 @@ pub(crate) fn binary(path: &str) -> Result<Value, String> {
 pub(crate) enum Ended {
     /// It exited with this code.
     Code(i32),
-    /// A signal ended it (Unix: no exit code; `ExitStatusExt::signal`).
+    /// A signal ended it (Unix: no exit code; `ExitStatusExt::signal`). Windows has no signals: nothing builds it
+    /// there (`ended_by_signal` reads -1 as a code), so `clippy -D warnings` on the guest would call it dead.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Signal(i32),
 }
 /// A process the Linux suite started.

@@ -152,7 +152,7 @@ pub const DEVIATIONS: [(&str, &str); 6] = [
     ),
     (
         "non-tcp-dedup",
-        "rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated non-TCP records are collapsed before the documents are compared",
+        "rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated UDP and SCTP records are collapsed before the documents are compared (never a TCP, Echo or ARP record)",
     ),
     (
         "sctp-tcp-fallthrough",
@@ -1352,13 +1352,18 @@ pub fn wire_records(v: &WireView, who: Who, out: Out, show_closed: bool) -> Vec<
     }
     recs
 }
-/// C's records with its repeated non-TCP records collapsed the way rmasscan reports them (`non-tcp-dedup`): what
-/// rmasscan's document must equal. The number collapsed.
-pub fn collapse(c: &[Rec]) -> (Vec<Rec>, usize) {
+/// C's records with its repeated UDP and SCTP records collapsed the way rmasscan reports them (`non-tcp-dedup`, when
+/// the case applies it): what rmasscan's document must equal. Those are the records C prints once per reply (a UDP
+/// reply, the ICMP 3/3 of a UDP probe, an INIT-ACK or ABORT); TCP, Echo and ARP records C deduplicates itself, so a
+/// repeat of one is never collapsed. The number collapsed.
+pub fn collapse(c: &[Rec], non_tcp_dedup: bool) -> (Vec<Rec>, usize) {
     let mut seen = BTreeSet::new();
     let kept: Vec<Rec> = c
         .iter()
-        .filter(|r| seen.insert((r.proto, r.ip, r.port, r.st)))
+        .filter(|r| {
+            !(non_tcp_dedup && matches!(r.proto, Proto::Udp | Proto::Sctp))
+                || seen.insert((r.proto, r.ip, r.port, r.st))
+        })
         .map(Rec::bare)
         .collect();
     let n = c.len() - kept.len();
@@ -1728,7 +1733,7 @@ fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side], r12: usize, collapsed: 
             }
             "non-tcp-dedup" => (
                 true,
-                format!("{collapsed} repeated non-TCP records of C collapsed"),
+                format!("{collapsed} repeated UDP and SCTP records of C collapsed"),
             ),
             "sctp-tcp-fallthrough" => {
                 let bad = replies()
@@ -1856,7 +1861,7 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
         }
         if let (Some(Some(x)), Some(Some(y))) = (docs.get(k), docs.get(k + 1)) {
             let got: Vec<Rec> = x.records.iter().map(Rec::bare).collect();
-            let (want, n) = collapse(&y.records);
+            let (want, n) = collapse(&y.records, c.deviations.contains(&"non-tcp-dedup"));
             collapsed += n;
             r.cap(
                 &format!(

@@ -799,8 +799,66 @@ fn c_prints_every_non_tcp_reply_and_rmasscan_collapses_repeats() {
     let or = wire_records(&v, Who::Oracle, Out::Json, true);
     assert_eq!(rm.len(), probes.len());
     assert_eq!(or.len(), probes.len() + 1);
-    let (collapsed, n) = collapse(&or);
+    let (collapsed, n) = collapse(&or, true);
     assert_eq!((collapsed, n), (rm, 1));
+}
+
+#[test]
+fn only_cs_repeated_udp_and_sctp_records_collapse_and_only_under_non_tcp_dedup() {
+    let rec = |proto: Proto, port: u16| Rec {
+        st: St::Open,
+        proto,
+        ip: Ipv4Addr::new(198, 18, 0, 2),
+        port,
+        reason: None,
+        ttl: None,
+        mac: None,
+        ts: Some(1),
+    };
+    let (tcp, udp, sctp, echo) = (
+        rec(Proto::Tcp, 80),
+        rec(Proto::Udp, 53),
+        rec(Proto::Sctp, 2905),
+        rec(Proto::Icmp, 0),
+    );
+    let twice: Vec<Rec> = [&tcp, &udp, &sctp, &echo]
+        .iter()
+        .flat_map(|r| [(*r).clone(), (*r).clone()])
+        .collect();
+    let (kept, n) = collapse(&twice, true);
+    assert_eq!(n, 2, "one UDP and one SCTP repeat");
+    assert_eq!(
+        kept,
+        [
+            tcp.bare(),
+            tcp.bare(),
+            udp.bare(),
+            sctp.bare(),
+            echo.bare(),
+            echo.bare()
+        ]
+    );
+    // A case without non-tcp-dedup (p01, p04) collapses nothing.
+    let (kept, n) = collapse(&twice, false);
+    assert_eq!((kept.len(), n), (twice.len(), 0));
+}
+
+#[test]
+fn a_repeated_tcp_record_of_c_is_never_collapsed() {
+    // C's document repeats a TCP record: rmasscan's one record must not equal it. C deduplicates TCP (main.c:899), so
+    // that document also departs from C's own wire: the oracle is broken, and the comparison is INVALID, not a PASS.
+    let mut sim = Sim::new("p05_mixed_protos");
+    let s = sim.step_mut("oracle-json");
+    let mut recs = s.recs.clone();
+    let at = recs.iter().position(|r| r.proto == Proto::Tcp).unwrap();
+    recs.insert(at + 1, recs[at].clone());
+    s.doc = Some(render(Out::Json, &recs, false));
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(
+        has(&b, INVALID, "json: the records equal the C oracle's"),
+        "{b:#?}"
+    );
 }
 
 // ------------------------------------------------------------------ whole directories

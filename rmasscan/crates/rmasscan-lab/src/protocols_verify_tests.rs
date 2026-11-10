@@ -621,12 +621,32 @@ fn sctp_reply_answers_init_with_init_ack_or_abort_like_linux() {
 
 #[test]
 fn r12_equates_only_a_udp_checksum_of_ffff_against_0000() {
-    let p = plan_stream(&case("p02_udp_payloads_and_closed").unwrap()).unwrap()[0].clone();
+    let p = plan_stream(&case("p02_udp_payloads_and_closed").unwrap())
+        .unwrap()
+        .into_iter()
+        .find(|f| f[23] == 17 && f.len() >= 44)
+        .unwrap();
     assert_eq!(same_probe(&p, &p), Some(false));
-    let (mut rm, mut c) = (p.clone(), p.clone());
+    // A datagram whose sum computes to zero: rmasscan sends 0xFFFF (RFC 768), C 0x0000. One payload word makes it so.
+    let mut rm = p.clone();
     rm[40..42].copy_from_slice(&[0xff, 0xff]);
+    let w = (0..=u16::MAX)
+        .find(|w| {
+            let mut x = rm.clone();
+            x[42..44].copy_from_slice(&w.to_be_bytes());
+            sums_ok(&x)
+        })
+        .unwrap();
+    rm[42..44].copy_from_slice(&w.to_be_bytes());
+    let mut c = rm.clone();
     c[40..42].copy_from_slice(&[0, 0]);
     assert_eq!(same_probe(&rm, &c), Some(true), "R12");
+    // 0xFFFF that is no valid sum of rmasscan's datagram is no R12: it is a wrong checksum.
+    let (mut forged, mut cf) = (p.clone(), p.clone());
+    forged[40..42].copy_from_slice(&[0xff, 0xff]);
+    cf[40..42].copy_from_slice(&[0, 0]);
+    assert!(!sums_ok(&forged));
+    assert_eq!(same_probe(&forged, &cf), None, "an invalid 0xFFFF");
     assert_eq!(same_probe(&c, &rm), None, "rmasscan never sends 0x0000");
     let mut other = c.clone();
     other[45] ^= 1;

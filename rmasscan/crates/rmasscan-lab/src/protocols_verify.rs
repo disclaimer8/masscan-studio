@@ -1079,7 +1079,8 @@ pub fn plan_stream(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
 }
 
 /// rmasscan's probe `rm` and C's probe `c` are the same probe: equal, or (R12) two UDP datagrams that differ only in a
-/// checksum that is 0xFFFF in rmasscan's and 0x0000 in C's. `Some(true)` when R12 made them equal.
+/// checksum that is 0xFFFF in rmasscan's, a valid sum there (one that computes to zero), and 0x0000 in C's.
+/// `Some(true)` when R12 made them equal.
 pub fn same_probe(rm: &[u8], c: &[u8]) -> Option<bool> {
     if rm == c {
         return Some(false);
@@ -1091,7 +1092,8 @@ pub fn same_probe(rm: &[u8], c: &[u8]) -> Option<bool> {
         && rm.get(at..at + 2) == Some(&[0xff, 0xff][..])
         && c.get(at..at + 2) == Some(&[0, 0][..])
         && rm[..at] == c[..at]
-        && rm[at + 2..] == c[at + 2..];
+        && rm[at + 2..] == c[at + 2..]
+        && sums_ok(rm);
     r12.then_some(true)
 }
 

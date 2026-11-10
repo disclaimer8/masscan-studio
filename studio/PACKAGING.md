@@ -58,7 +58,9 @@ variables can override these limits.
 
 The release gate verifies the complete package inventory, clean source
 provenance, direct ELF GLIBC requirements at or below 2.39, runtime library
-resolution, and the packaged UI's pause/resume and stop-race simulation smokes.
+resolution, and the packaged UI's pause/resume and stop-race simulation smokes
+under Xvfb/X11 with the software renderer. Accelerated rendering and Wayland
+are not exercised by this gate.
 It scans uncompressed package contents with the inventory-backed home-path
 checker and `rmasscan-lab privacy-scan`, checks evidence logs for home-path
 prefixes, creates an archive with numeric neutral ownership, then extracts

@@ -22,7 +22,8 @@ run_logged package cargo xtask package --release
 packages=(/src/studio/dist/build-*)
 test "${#packages[@]}" = 1 && test -d "${packages[0]}"
 package=${packages[0]}
-tool=/build/studio/debug/xtask
+run_logged verification-tool cargo build --locked --release -p xtask
+tool=/build/studio/release/xtask
 run_logged verify-package "$tool" verify-package "$package"
 "$tool" verify-package-privacy "$package" > /out/evidence/package-home-paths.json
 jq -e --arg sha "$STUDIO_SOURCE_COMMIT" \

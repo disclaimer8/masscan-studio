@@ -95,7 +95,7 @@ fn verify(directory: &Path) -> Result<Report> {
         .map_err(|_| "Package inventory verification failed")?;
     let mut report = Report {
         schema_version: 1,
-        scope: "complete home paths in uncompressed UTF-8/UTF-16LE/UTF-16BE; doubled Windows separators included; not arbitrary private tokens, archives or Unicode escape decoding",
+        scope: "complete home paths in uncompressed UTF-8/UTF-16LE/UTF-16BE; doubled Windows separators included; encoding counts may overlap; not arbitrary private tokens, archives or Unicode escape decoding",
         inventory_files_verified,
         files_scanned: 0,
         findings: Vec::new(),
@@ -172,16 +172,15 @@ fn count_encoding(bytes: &[u8], encoding: Encoding) -> usize {
     count
 }
 
+const MAX_ACCOUNT_BYTES: usize = 1024;
+
 fn has_account(bytes: &[u8], separator: &[u8], encoding: Encoding) -> bool {
     // Bound the component independently of the surrounding binary's length.
-    // Spaces and Unicode are accepted; controls and path/JSON delimiters stop it.
-    for end in (0..bytes.len().min(1024)).step_by(encoding.width()) {
-        if bytes[end..].starts_with(separator) {
-            return encoding.decode(&bytes[..end]).is_some_and(|account| {
-                !account.trim().is_empty()
-                    && !matches!(account.as_str(), "." | "..")
-                    && account.chars().all(valid_account_character)
-            });
+    // A separator means a descendant path. End, NUL and a closing double quote
+    // also establish the account's home root. Spaces/apostrophes remain name characters.
+    for end in (0..=bytes.len().min(MAX_ACCOUNT_BYTES)).step_by(encoding.width()) {
+        if end == bytes.len() || bytes[end..].starts_with(separator) {
+            return valid_account(&bytes[..end], encoding);
         }
         let unit = &bytes[end..bytes.len().min(end + encoding.width())];
         if unit.len() != encoding.width() {
@@ -193,11 +192,22 @@ fn has_account(bytes: &[u8], separator: &[u8], encoding: Encoding) -> bool {
             Encoding::Utf16Le => (unit[1] == 0 && unit[0] < 128).then_some(unit[0]),
             Encoding::Utf16Be => (unit[0] == 0 && unit[1] < 128).then_some(unit[1]),
         };
+        if matches!(ascii, Some(0 | b'"')) {
+            return valid_account(&bytes[..end], encoding);
+        }
         if ascii.is_some_and(|byte| !valid_account_character(char::from(byte))) {
             return false;
         }
     }
     false
+}
+
+fn valid_account(bytes: &[u8], encoding: Encoding) -> bool {
+    encoding.decode(bytes).is_some_and(|account| {
+        !account.trim().is_empty()
+            && !matches!(account.as_str(), "." | "..")
+            && account.chars().all(valid_account_character)
+    })
 }
 
 fn valid_account_character(character: char) -> bool {
@@ -301,7 +311,6 @@ mod tests {
             "/home//Users/",
             r"\Users\",
             r"\\Users\\",
-            "/Users/alice",
             "/Users/ /file",
             "/home/../file",
             "/Users/\0unrelated/file",
@@ -310,6 +319,77 @@ mod tests {
             r"\Users\unexpected/path",
         ] {
             assert_eq!(count_paths(text.as_bytes()).total(), 0, "fixture {text:?}");
+        }
+    }
+
+    #[test]
+    fn detects_home_roots_at_end_nul_and_double_quote_boundaries() {
+        for encoding in [Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be] {
+            for root in [
+                "/Users/alice",
+                "/home/build-user",
+                r"C:\Users\Alice Example",
+                r"C:\\Users\\Alice Example",
+                "/Users/Zoë 文 😀",
+            ] {
+                for suffix in ["", "\0unrelated", "\" trailing text"] {
+                    let mut bytes = vec![0xfe];
+                    bytes.extend(encoding.bytes(&format!("{root}{suffix}")));
+                    let counts = count_paths(&bytes);
+                    assert_eq!(
+                        match encoding {
+                            Encoding::Utf8 => counts.utf8,
+                            Encoding::Utf16Le => counts.utf16_le,
+                            Encoding::Utf16Be => counts.utf16_be,
+                        },
+                        1,
+                        "fixture {root:?}{suffix:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bare_prefixes_remain_clean_at_root_terminators() {
+        for encoding in [Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be] {
+            for prefix in [
+                "/Users/",
+                "/home/",
+                r"\Users\",
+                r"\\Users\\",
+                "/Users//home/",
+            ] {
+                for suffix in ["", "\0unrelated", "\" trailing text"] {
+                    assert_eq!(
+                        count_paths(&encoding.bytes(&format!("{prefix}{suffix}"))).total(),
+                        0
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn limits_account_component_before_accepting_a_terminator() {
+        for encoding in [Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be] {
+            let at_limit = "a".repeat(MAX_ACCOUNT_BYTES / encoding.width());
+            let too_long = format!("{at_limit}a");
+            for suffix in ["", "\0later", "\" quoted", "/source"] {
+                let counts = count_paths(&encoding.bytes(&format!("/Users/{at_limit}{suffix}")));
+                assert_eq!(
+                    match encoding {
+                        Encoding::Utf8 => counts.utf8,
+                        Encoding::Utf16Le => counts.utf16_le,
+                        Encoding::Utf16Be => counts.utf16_be,
+                    },
+                    1
+                );
+                assert_eq!(
+                    count_paths(&encoding.bytes(&format!("/Users/{too_long}{suffix}"))).total(),
+                    0
+                );
+            }
         }
     }
 

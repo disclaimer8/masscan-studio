@@ -18,6 +18,7 @@ pub mod output_suite;
 pub mod output_verify;
 pub mod pcap;
 pub mod peer;
+pub mod privacy_scan;
 pub mod provenance;
 pub mod scan_control_suite;
 pub mod scan_control_verify;

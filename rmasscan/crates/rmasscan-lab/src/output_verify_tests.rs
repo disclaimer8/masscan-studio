@@ -1180,3 +1180,113 @@ fn a_wrong_rmasscan_footer_is_fail() {
         );
     }
 }
+
+// ------------------------------------------------------------------ the pause flow of the first Ctrl-C
+
+/// `o14..o16`'s stderr in the pause flow: the save block right after the Ctrl-C line, the wait ticks, `Paused`.
+fn pause_flow(sim: &mut Sim) {
+    let ctrl_c = interrupt_line();
+    let e = &mut sim.rm.stderr;
+    *e = e
+        .replace(&ctrl_c, &format!("{ctrl_c}{}", saving_block()))
+        .replace("finished: Stopped", "finished: Paused");
+}
+
+#[test]
+fn the_pause_flow_of_the_first_ctrl_c_passes_every_interrupt_case_as_the_stopped_flow_does() {
+    for tag in [
+        "o14_interrupt_json",
+        "o15_interrupt_xml",
+        "o16_interrupt_binary",
+    ] {
+        assert_verdict(&judge(&Sim::new(tag)), PASS);
+        let mut sim = Sim::new(tag);
+        pause_flow(&mut sim);
+        let r = judge(&sim);
+        assert_verdict(&r, PASS);
+        assert_eq!(
+            check(&r, "the pause flow carries the save block")["result"],
+            PASS
+        );
+        assert_eq!(check(&r, "[+] finished: Paused")["result"], PASS);
+        // and the stopped flow has no such checks at all
+        assert!(
+            array(&judge(&Sim::new(tag))["checks"])
+                .iter()
+                .all(|c| !c["name"].as_str().unwrap().contains("pause flow"))
+        );
+    }
+}
+
+#[test]
+fn a_pause_flow_missing_a_line_or_out_of_order_or_mixed_with_the_stopped_flow_fails() {
+    let block = saving_block();
+    type Break = (&'static str, fn(&mut String, &str), &'static str);
+    let broken: [Break; 5] = [
+        (
+            "no save block",
+            |e, b| *e = e.replace(b, ""),
+            "exactly once",
+        ),
+        (
+            "two save blocks",
+            |e, b| *e = e.replacen(b, &format!("{b}{b}"), 1),
+            "exactly once",
+        ),
+        (
+            "the block after the first wait tick",
+            |e, b| {
+                *e = e.replace(b, "");
+                let at = e
+                    .find("rate:")
+                    .and_then(|_| e.find("done, waiting "))
+                    .unwrap();
+                let line_start = e[..at].rfind('\n').unwrap() + 1;
+                e.insert_str(line_start + e[line_start..].find('\r').unwrap() + 1, b);
+            },
+            "in order",
+        ),
+        (
+            "Stopped after a save block",
+            |e, _| *e = e.replace("finished: Paused", "finished: Stopped"),
+            "finished",
+        ),
+        (
+            "a bare path outside the work area",
+            |e, b| *e = e.replace(b, &b.replace("paused.conf", "/etc/paused.conf")),
+            "exactly once",
+        ),
+    ];
+    for (what, f, needle) in broken {
+        let mut sim = Sim::new("o14_interrupt_json");
+        pause_flow(&mut sim);
+        f(&mut sim.rm.stderr, &block);
+        let r = judge(&sim);
+        assert!(
+            r["verdict"] == FAIL || r["verdict"] == INVALID,
+            "{what}: {:#?}",
+            bad(&r)
+        );
+        assert!(
+            array(&r["checks"])
+                .iter()
+                .any(|c| c["result"] != PASS && c["name"].as_str().unwrap().contains(needle)),
+            "{what}: {:#?}",
+            bad(&r)
+        );
+    }
+    // the footer must be complete after the pause, as after the stop
+    let mut sim = Sim::new("o14_interrupt_json");
+    pause_flow(&mut sim);
+    let (_, b) = sim.rm.file.as_mut().unwrap();
+    b.truncate(b.len() - 2);
+    let r = judge(&sim);
+    assert_eq!(check(&r, "complete after the interrupt")["result"], FAIL);
+    // a pause flow outside the interrupt cases is a plain violation: no pause flow is accepted there
+    let mut sim = Sim::new("o01_list");
+    sim.rm.stderr = sim
+        .rm
+        .stderr
+        .replacen("finished: Completed", "finished: Paused", 1);
+    assert_verdict(&judge(&sim), FAIL);
+}

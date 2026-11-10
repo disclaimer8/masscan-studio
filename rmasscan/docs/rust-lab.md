@@ -690,6 +690,24 @@ RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --sui
 target/release/rmasscan-lab scan-control-verify --dir "$OUT" --out "$OUT/verdict.json"
 ```
 
+## Privacy scan before committing evidence
+
+`rmasscan-lab privacy-scan --dir DIR [--forbid TOKEN]...` is a **mandatory step before any evidence directory is copied into
+the repository**. It stands outside every verdict, so the verifiers' rules and the committed verdicts do not change. It
+parses every `.pcap` and `.pcapng` under DIR and reports any mDNS (UDP 5353), LLMNR (5355) or NBNS (137) frame: a guest
+OS announces its own host name on the lab NIC with them, and the pcap rules of `autodetect-verify` allow OS frames.
+The names are decoded from DNS wire form (length-prefixed labels, compression pointers, names inside PTR/CNAME/NS/SRV
+data, NetBIOS names) and printed masked (first three characters and an ellipsis) with the file and the frame number; a
+text search for `_tcp.local` cannot find them. Every other file is searched as text, and every capture as raw bytes,
+for the tokens given with `--forbid` (repeatable; the operator passes the real host names and accounts on the command
+line, so no real name lives in the repository). A hit prints the file, the line and the token's number, never the token.
+Exit 0 only without a hit, 1 on any hit. Run it on the pulled directory, fix the stand or re-run on a hit, and copy
+only after a clean exit:
+
+```sh
+target/release/rmasscan-lab privacy-scan --dir "$OUT" --forbid "$(hostname -s)" --forbid "$USER" --forbid "$LABHOST"
+```
+
 ## macOS (`feth` stand)
 
 Build as above on the Mac. `macos-lab`, `macos-suite` and the live peer-side tools exist on macOS only (on

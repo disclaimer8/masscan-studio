@@ -1098,7 +1098,8 @@ fn line_problems(rel: &str, text: &str) -> Vec<String> {
         "stderr.txt" => av::output_problems(
             rel,
             &keep(&|l| {
-                l == OPEN_FAILURE
+                l == format!("{}\r{SAVING_TEXT}", " ".repeat(70))
+                    || l == OPEN_FAILURE
                     || l == OPEN_FAILURE_APPEND
                     || l.starts_with(&format!("{UNOPENABLE}: "))
             })
@@ -1494,6 +1495,36 @@ fn stdout_checks(r: &mut Run, c: &OutputCase, s: &Side) {
     }
 }
 
+/// The save block of the pause flow (C `masscan_save_state`, main-conf.c:399-403): 70 spaces and `\r`, then the line.
+const SAVING_TEXT: &str = "saving resume file to: paused.conf";
+fn saving_block() -> String {
+    format!("{}\r{SAVING_TEXT}\n", " ".repeat(70))
+}
+/// The pause flow of the first Ctrl-C, every line in order (C `control_c_handler`, main.c:1136-1139, then
+/// `masscan_save_state`): the Ctrl-C line, the save block exactly once, only then the wait ticks (`waiting N-secs`), the
+/// erase and `[+] finished: Paused`. `paused.conf` is named by its bare relative name: it lands in the scanner's working
+/// directory inside the stand's work area (the suite copies only the output file, so it is not in the evidence), never
+/// at a path outside it. Returns the stderr without the block, for the grammar checks every flow shares.
+fn pause_flow_checks(r: &mut Run, text: &str) -> String {
+    let block = saving_block();
+    let once = text.matches(&block).count() == 1 && text.matches(SAVING_TEXT).count() == 1;
+    r.beh(
+        "stderr.txt: the pause flow carries the save block (70 spaces, \\r, `saving resume file to: paused.conf`) exactly once, as a bare relative name",
+        once,
+        text.matches(SAVING_TEXT).count(),
+    );
+    let at = text.find(&block);
+    let ctrl_c = text.find("waiting several seconds to exit...");
+    let wait = text.find("done, waiting ");
+    r.beh(
+        "stderr.txt: the pause flow is in order: Ctrl-C line, save block, then the wait ticks, then [+] finished: Paused",
+        matches!((ctrl_c, at), (Some(a), Some(b)) if a < b)
+            && at.zip(wait).is_none_or(|(b, w)| b < w)
+            && text.rfind("[+] finished: Paused").zip(at).is_some_and(|(f, b)| b < f),
+        format!("Ctrl-C {ctrl_c:?}, block {at:?}, first wait tick {wait:?}"),
+    );
+    text.replacen(&block, "", 1)
+}
 /// rmasscan's stderr of a live scan: the status line's grammar and place, the `[+]` lines, the Ctrl-C line, and
 /// `[+] finished` against the wire and the records.
 fn scan_stderr(
@@ -1505,6 +1536,18 @@ fn scan_stderr(
     int: Option<&InterruptRecord>,
 ) {
     let Some(text) = &s.stderr else { return };
+    // The first Ctrl-C has two complete flows: the old one ends `Stopped` (the committed evidence), the pause flow of
+    // scan-control ends `Paused` after the save block. The pause flow is judged on its own branch below; the
+    // Stopped path's checks, names and details are untouched.
+    let pause_flow = c.kind == OutputKind::Interrupt
+        && (text.contains(SAVING_TEXT) || text.contains("finished: Paused"));
+    let stripped;
+    let text: &String = if pause_flow {
+        stripped = pause_flow_checks(r, text);
+        &stripped
+    } else {
+        text
+    };
     let pieces = match av::screen(text) {
         Ok(p) => {
             r.beh(
@@ -1562,7 +1605,13 @@ fn scan_stderr(
         format!("{det:?}"),
     );
     let stopped = c.kind == OutputKind::Interrupt;
-    let reason = if stopped { "Stopped" } else { "Completed" };
+    let reason = if pause_flow {
+        "Paused"
+    } else if stopped {
+        "Stopped"
+    } else {
+        "Completed"
+    };
     r.beh(
         &format!("[+] finished: {reason}"),
         det.finished.as_ref().is_some_and(|f| f.reason == reason),

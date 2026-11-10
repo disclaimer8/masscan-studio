@@ -12,6 +12,21 @@ package. Every build gets a fresh `dist/build-<timestamp>` directory. The releas
 profile optimizes the binaries; it does not enable publisher signing or submit
 anything to an external service.
 
+On macOS, install Homebrew SQLite and supply its static library directory:
+
+```sh
+SQLITE3_LIB_DIR="$(brew --prefix sqlite)/lib" cargo xtask package --release
+```
+
+The package build forces `SQLITE3_STATIC=1` for its child Cargo invocation.
+Both the GUI and runner must pass the existing working-session library policy:
+only system dynamic dependencies are allowed. A bundled SQLite dylib can let
+the GUI launch but cannot accompany the executable into the protected helper
+directory. Static SQLite keeps the selected SQLite implementation inside the
+signed executable. Packaging and `verify-package` now check this admission
+policy as well as signatures. Building a separate xtask for `work-session
+start` likewise requires `SQLITE3_STATIC=1` when using Homebrew SQLite.
+
 The manifest records the commit, dirty-worktree flag, Cargo.lock hash, platform,
 architecture, application/IPC versions, enabled raw profiles, build profile,
 signing status and SHA-256 for every regular file
@@ -32,7 +47,7 @@ authenticity or native scan acceptance.
 
 | Platform | Contents | Distribution status |
 | --- | --- | --- |
-| macOS | `Masscan Studio.app` with launcher, UI, runner, inspector and SQLite if required | Ad-hoc signed for local acceptance; not notarized |
+| macOS | `Masscan Studio.app` with launcher, UI, runner and inspector; SQLite linked statically | Ad-hoc signed for local acceptance; not notarized |
 | Windows | UI, runner, inspector, external `sqlite3.dll`, standalone `studio-tools.exe` | Unsigned directory bundle; release builds compile the tools with the release profile |
 | Linux | UI, runner and inspector | Unsigned directory bundle; runtime system libraries remain prerequisites |
 

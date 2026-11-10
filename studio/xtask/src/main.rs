@@ -154,6 +154,10 @@ fn main() -> Result<()> {
                 "-p",
                 "studio-inspection",
             ]);
+            // The working-session host stages an exact GUI/helper pair. Both
+            // executables must be self-contained apart from system libraries.
+            #[cfg(target_os = "macos")]
+            cmd.env("SQLITE3_STATIC", "1");
             if release {
                 cmd.arg("--release");
                 // The standalone Windows tool must use the same profile as the
@@ -220,6 +224,8 @@ fn main() -> Result<()> {
                 run(Command::new("codesign")
                     .args(["--verify", "--deep", "--strict", "--verbose=2"])
                     .arg(&bundle))?;
+                #[cfg(target_os = "macos")]
+                runner_setup::validate_package(&macos)?;
                 println!("App: {}", bundle.display());
             } else {
                 for name in ["studio-ui", "studio-runner", "studio-inspect"] {
@@ -278,6 +284,7 @@ fn main() -> Result<()> {
                 run(Command::new("codesign")
                     .args(["--verify", "--deep", "--strict", "--verbose=2"])
                     .arg(dist.join("Masscan Studio.app")))?;
+                runner_setup::validate_package(&dist.join("Masscan Studio.app/Contents/MacOS"))?;
             }
             println!("Verified {count} package files: {}", dist.display());
         }

@@ -65,6 +65,14 @@ pub(super) fn prepare_source(root: &Path, source: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 #[cfg(target_os = "macos")]
+pub(super) fn validate_package(macos: &Path) -> Result<()> {
+    for name in ["studio-ui", "studio-runner"] {
+        validate(&macos.join(name))
+            .map_err(|e| format!("{name} cannot be staged in the work session: {e}"))?;
+    }
+    Ok(())
+}
+#[cfg(target_os = "macos")]
 pub(super) fn validate(copy: &Path) -> Result<()> {
     // Preserve already-signed package bytes: the UI pins their exact SHA-256.
     run(Command::new("/usr/bin/codesign")

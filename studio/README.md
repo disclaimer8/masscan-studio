@@ -67,6 +67,11 @@ Choose **Simulation · no network packets** to exercise this flow on any OS. Thi
 uses the real engine with its fake packet adapter, not a prerecorded UI animation.
 It does not prove raw packet I/O or network correctness.
 
+The results summary covers all runs of the selected scan, including those before
+Pause/Resume. The footer's **latest run** sent/received counters start over on
+each Start or Resume. Replies can update an existing saved result, so the received
+count is not the number of unique results in history.
+
 The **Mac feth** profile is open at a compile-time per-profile gate
 (`raw_profile_enabled`) on macOS only; Windows and Linux builds keep it closed,
 and Simulation never touches the network. Raw Start/Resume requires an

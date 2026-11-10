@@ -178,7 +178,14 @@ impl Rows {
             return;
         }
         let t = self.table.borrow();
-        ui.set_summary(format!("{} of {} saved results", t.view.len(), t.rows.len()).into());
+        ui.set_summary(
+            format!(
+                "{} of {} saved results · all runs",
+                t.view.len(),
+                t.rows.len()
+            )
+            .into(),
+        );
         ui.set_selection_count(t.selected.len() as i32);
         let visible = t
             .view
@@ -1065,7 +1072,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Update::Progress(sent, received) => ui.set_event_label(
                         format!(
-                            "{} · sent {sent} · received {received} · saved to history",
+                            "{} · latest run: sent {sent} · received {received}",
                             if m.simulation.get() {
                                 "Simulation"
                             } else {

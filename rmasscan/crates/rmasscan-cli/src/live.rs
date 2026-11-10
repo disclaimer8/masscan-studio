@@ -47,6 +47,7 @@ use rmasscan_net::{
 
 use crate::args::SeedPolicy;
 use crate::output::{ServiceNames, Sink, Wall, io_fail};
+use crate::pcap_writer::{PcapTarget, PcapWriter};
 
 /// Префикс отказов обнаружения и ARP в форме C (`[-] FAIL: …` и подсказки); [`crate::error_text`] не оборачивает их.
 pub const REFUSAL_PREFIX: &str = "[-] ";
@@ -81,6 +82,12 @@ pub trait Backend: Wall {
     /// `wt`). Ошибка ФС возвращается строкой: CLI печатает `[-] FAIL: saving resume file`, всё равно доводит фазу
     /// `--wait` и подвал вывода, но завершается кодом 1 (Р1: в C скан молча идёт дальше). Фейковые бэкенды тестов сохраняют строку в памяти и диска не касаются.
     fn write_paused_conf(&self, content: &str) -> Result<(), String>;
+    /// Создаёт файл `--pcap` (`pcapfile_openwrite`, `rawsock-pcapfile.c:669-712`: `fopen(.., "wb")`). Ошибка пути
+    /// отказывает до ARP и engine (Р8). Тесты подставляют память.
+    fn create_pcap(&self, path: &str) -> Result<Box<dyn Write + Send>, String> {
+        let f = std::fs::File::create(path).map_err(|e| format!("{path}: {e}"))?;
+        Ok(Box::new(io::BufWriter::new(f)))
+    }
 }
 
 /// Подготовленный скан: проверенная конфигурация, обнаружение и binding. `binding.next_hop_mac` для
@@ -122,6 +129,34 @@ fn nic_binding(eff: &EffectiveConfig, binding: &AdapterBinding) -> Result<NicBin
         legacy_c_17_port_mask: nic0.is_some_and(|n| n.legacy_c_17_port_mask),
         binding: binding.clone(),
     })
+}
+
+/// Файл `--pcap` (Р8): открывается до ARP и engine, один потокобезопасный писатель на все адаптеры. Фильтр "наш адрес
+/// и порт" строится из адаптеров плана (`main.c:829, 935`). `None`, если `--pcap` не задан.
+fn open_pcap(
+    path: Option<&str>,
+    backend: &dyn Backend,
+    clock: &(dyn Clock + Send + Sync),
+    eff: &EffectiveConfig,
+    binding: &AdapterBinding,
+) -> Result<Option<Arc<PcapWriter>>, String> {
+    let Some(path) = path.filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let nic = nic_binding(eff, binding)?;
+    let targets = vec![PcapTarget {
+        ip_first: nic.binding.source_ipv4,
+        ip_last: nic.source_ipv4_last,
+        port_first: nic.binding.source_ports.0,
+        port_last: nic.binding.source_ports.1,
+    }];
+    // Время записи: Unix-время открытия минус показание часов engine в тот же момент.
+    let wall = backend.unix_time().saturating_mul(1_000_000);
+    let offset = wall.saturating_sub(clock.now_micros());
+    let out = backend
+        .create_pcap(path)
+        .map_err(|e| format!("could not open capture file: {e}"))?;
+    PcapWriter::new(out, targets, offset).map(|w| Some(Arc::new(w)))
 }
 
 /// План живого скана CLI (`ReadyPlan::new_cli`): `--retries`, `--shard`, `--blackrock-rounds`, `resume-index` и
@@ -517,10 +552,17 @@ pub fn run_live_conf(
     print_detection(&p, log)?;
     // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
     sink.open()?;
+    let clock = backend.clock();
+    let pcap = open_pcap(
+        full.pcap_filename.as_deref(),
+        backend,
+        clock.as_ref(),
+        &p.eff,
+        &p.binding,
+    )?;
     // Р18: обработчик Ctrl-C ставится до ARP и держится весь скан (первый же опрос его устанавливает). Нажатие до
     // первого SYN останавливает скан без адаптера скана и без единого кадра (C `main.c:1131–1154`: первое нажатие
     // только останавливает передачу; в C до `rawsock_init_adapter`/`main.c:1275` кадров ещё нет).
-    let clock = backend.clock();
     let early_stop = |log: &mut dyn Write, sink: &mut dyn Sink| {
         let _ = log.write_all(INTERRUPT_LINE.as_bytes());
         let _ = log.flush();
@@ -584,8 +626,14 @@ pub fn run_live_conf(
         .map(|k| plan.effective_end(k))
         .min()
         .unwrap_or(0);
-    let handle = Engine::start_cli_with_clock(plan, vec![io], options, clock.clone(), None)
-        .map_err(|e| format!("cannot start the scan: {e}"))?;
+    let handle = Engine::start_cli_with_clock(
+        plan,
+        vec![io],
+        options,
+        clock.clone(),
+        pcap.as_ref().map(PcapWriter::sink),
+    )
+    .map_err(|e| format!("cannot start the scan: {e}"))?;
     let (mut replies, mut open_count) = (0u64, 0u64);
     let mut sink_error = None;
     let wait_secs = i64::from(cfg.wait_secs);
@@ -714,6 +762,8 @@ pub fn run_live_conf(
         Some(e) => Err(e),
         None => sink.finish(),
     };
+    // Ошибка записи захвата это отказ скана (exit 1), как ошибка файла вывода; RX-потоки к этому времени остановлены.
+    let captured = pcap.as_ref().map_or(Ok(()), |w| w.finish());
     let outcome = joined?;
     if let Err(e) = sunk {
         // Ошибка приёмника (EPIPE stdout уже завершил процесс в `write_failed`; EPIPE файла это обычная ошибка) не
@@ -722,6 +772,7 @@ pub fn run_live_conf(
         return Err(e);
     }
     conclude(&outcome, replies, open_count, log)?;
+    captured?;
     if let Some(e) = paused_error {
         return Err(format!("cannot save paused.conf: {e}"));
     }

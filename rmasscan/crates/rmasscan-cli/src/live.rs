@@ -103,24 +103,32 @@ fn refusal(e: impl std::fmt::Display) -> String {
 /// Адаптер плана CLI. `--adapter-ip A-B` живёт только в `nics[0]` (одиночное поле хранит первый адрес): диапазон
 /// берётся оттуда, если его первый адрес и есть источник привязки (обнаруженный адрес диапазона не имеет). Флаг
 /// 17 портов принадлежит этому же адаптеру (спека Р6).
-fn nic_binding(eff: &EffectiveConfig, binding: &AdapterBinding) -> NicBinding {
+fn nic_binding(eff: &EffectiveConfig, binding: &AdapterBinding) -> Result<NicBinding, String> {
     let nic0 = eff.nics().first();
-    let source_ipv4_last = nic0
-        .and_then(|n| n.adapter_ip)
-        .filter(|&(first, last)| first == binding.source_ipv4 && last >= first)
-        .map_or(binding.source_ipv4, |(_, last)| last);
-    NicBinding {
+    let source_ipv4_last = match nic0.and_then(|n| n.adapter_ip) {
+        None => binding.source_ipv4,
+        Some((first, last)) if first == binding.source_ipv4 && last >= first => last,
+        Some((first, last)) => {
+            return Err(refusal(format!(
+                "adapter-ip range {}-{} does not start at the source address {}",
+                Ipv4Addr::from(first),
+                Ipv4Addr::from(last),
+                Ipv4Addr::from(binding.source_ipv4)
+            )));
+        }
+    };
+    Ok(NicBinding {
         source_ipv4_last,
         legacy_c_17_port_mask: nic0.is_some_and(|n| n.legacy_c_17_port_mask),
         binding: binding.clone(),
-    }
+    })
 }
 
 /// План живого скана CLI (`ReadyPlan::new_cli`): `--retries`, `--shard`, `--blackrock-rounds`, `resume-index` и
 /// `resume-count` из конфигурации и `--resume` (`main.c:212-223, 269-273`). Один адаптер; `adapter-port` из 17
 /// портов, который пишет сам C (`main.c:1318`), принимается флагом `legacy_c_17_port_mask`.
 fn cli_plan(eff: &EffectiveConfig, binding: &AdapterBinding) -> Result<ReadyPlan, String> {
-    let nic = nic_binding(eff, binding);
+    let nic = nic_binding(eff, binding)?;
     let plan = ReadyPlan::new_cli(eff.clone(), vec![nic]).map_err(|e| e.to_string())?;
     // Курсор строится здесь же: `resume-index` за пределом скана отказывает до ARP, а не после него.
     plan.cursor_for_nic(0, None).map_err(|e| e.to_string())?;
@@ -727,7 +735,7 @@ pub(crate) fn for_each_probe(
     binding: &AdapterBinding,
     mut f: impl FnMut(&Probe) -> Result<(), String>,
 ) -> Result<(), String> {
-    match core_for_each_probe_nic(eff, &nic_binding(eff, binding), |p| match f(p) {
+    match core_for_each_probe_nic(eff, &nic_binding(eff, binding)?, |p| match f(p) {
         Ok(()) => ControlFlow::Continue(()),
         Err(e) => ControlFlow::Break(e),
     })

@@ -132,9 +132,15 @@ const PARITY: &[Entry] = &[
         c_test: "sctp_selftest",
         main_c_line: 1829,
         c_def: "proto-sctp.c:195",
-        status: NotPorted,
-        rust: &[],
-        reason: "SCTP вне v1 (только TCP); смещение порт-пространства сохранено константой.",
+        status: Ported,
+        rust: &[
+            ("src/checksum.rs", "sctp_crc32c_matches_c_selftest"),
+            (
+                "src/packet.rs",
+                "sctp_crc32c_matches_c_selftest_in_a_built_frame",
+            ),
+        ],
+        reason: "Вектор sctp_selftest байт в байт; кадры INIT сверены с C (proto-sctp.c:195-208, templ-pkt.c:76-102).",
     },
     Entry {
         c_test: "base64_selftest",

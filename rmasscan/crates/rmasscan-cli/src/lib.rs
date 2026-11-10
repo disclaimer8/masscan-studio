@@ -1052,18 +1052,10 @@ mod tests {
         assert!(e.contains("O:47"), "{e}");
         let e = run_args(&trace_args(&["-pI:1"])).unwrap_err();
         assert!(e.contains("I:1"), "{e}");
-        // SCTP и ARP пока без построителя зонда: временный отказ до обнаружения и до первой строки
-        // SENT (Задачи 5-6 снимают его по протоколу). Чистый TCP, UDP и ICMP Echo (I:0) проходят.
-        for (ports, label) in [("-pS:2905", "S:2905"), ("-p80,U:53,S:7", "S:7")] {
-            let (res, out, log) = run_capture(&trace_args(&[ports]));
-            let e = res.unwrap_err();
-            assert!(
-                e.contains(&format!("{label} cannot be scanned yet")),
-                "{ports}: {e}"
-            );
-            assert!(out.is_empty(), "{ports}: SENT lines before refusal: {out}");
-            assert!(log.is_empty(), "{ports}: output before refusal: {log}");
-        }
+        // ARP пока без построителя зонда (Задача 6): `-pI:2` с портами трассировки отказывает смесью. SCTP
+        // построен (Задача 5): `S:` проходит, UNK-строки проверяет `packet_trace_prints_the_c_unk_line_for_sctp`.
+        let out = run_args(&trace_args(&["-pS:2905"])).unwrap();
+        assert_eq!(out.lines().count(), 12, "{out}");
         // I:0 строит ICMP Echo: к 8 SYN (TRACE шлёт на 80 и 443) добавляется по строке ICMP на каждый из 4 адресов
         let out = run_args(&trace_args(&["-pI:0"])).unwrap();
         assert_eq!(out.lines().count(), 12, "{out}");
@@ -1098,6 +1090,38 @@ mod tests {
         run_args(&["rmasscan", "-sL", "10.0.0.1", "-pO:47,U:53", "--seed", "1"]).unwrap();
         // без трассировки --offline ничего не строит и не отказывает
         run_args(&["rmasscan", "--offline", "10.0.0.1", "-pO:47", "--seed", "1"]).unwrap();
+    }
+
+    /// C `main-ptrace.c` не знает `FOUND_SCTP` и печатает ветку `default`: `SENT (%5.4f) UNK  %-21s > %-21s [%u]\n` с
+    /// номером `FOUND_SCTP` = 7 (образец снят с C 8e6b3b0 `packet_trace()` на кадре SCTP INIT).
+    #[test]
+    fn packet_trace_prints_the_c_unk_line_for_sctp() {
+        let out = run_args(&trace_args(&["-pS:2905"])).unwrap();
+        let unk: Vec<&str> = out
+            .split_inclusive('\n')
+            .filter(|l| l.contains(") UNK  "))
+            .collect();
+        assert_eq!(unk.len(), 4, "{out}");
+        let p = prepared(&trace_args(&["-pS:2905"]));
+        let mut want = Vec::new();
+        live::for_each_probe(&p.eff, &p.binding, |pr| {
+            if pr.frame[23] == 132 {
+                want.push((
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_me), pr.port_me),
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_them), pr.port_them),
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(want.len(), 4);
+        for (line, (from, to)) in unk.iter().zip(&want) {
+            let tail = format!("UNK  {from:<21} > {to:<21} [7]\n");
+            assert!(line.starts_with("SENT ("), "{line:?}");
+            assert!(line.ends_with(&tail), "{line:?} vs {tail:?}");
+        }
+        // SCTP не печатает ни TCP, ни UDP
+        assert_eq!(out.lines().count(), 12, "8 SYN и 4 INIT: {out}");
     }
 
     /// `main-ptrace.c` `FOUND_UDP`/`FOUND_DNS`: `SENT (%5.4f) UDP  %-21s > %-21s \n` (после второго адреса остаётся пробел).

@@ -993,7 +993,7 @@ pub(crate) fn for_each_probe_with(
     }
 }
 
-/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s` (для ICMP :67-70 и UDP :57-59, см. ниже). Адреса и флаги разбираются из самого кадра, как
+/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s` (для ICMP :67-70, UDP :57-59 и SCTP :108-111, см. ниже). Адреса и флаги разбираются из самого кадра, как
 /// `preprocess_frame` в C.
 fn trace_line(secs: f64, frame: &[u8]) -> String {
     let (ip, tcp) = (14, 34);
@@ -1024,6 +1024,15 @@ fn trace_line(secs: f64, frame: &[u8]) -> String {
         // main-ptrace.c:57-59 (`FOUND_UDP`, `FOUND_DNS`): `%s (%5.4f) UDP  %-21s > %-21s \n`, без флагов и числа байт.
         return format!(
             "SENT ({secs:5.4}) UDP  {:<21} > {:<21} \n",
+            format!("[{src}]:{sport}"),
+            format!("[{dst}]:{dport}")
+        );
+    }
+    if frame[ip + 9] == 132 {
+        // main-ptrace.c:108-111: у C нет ветки `FOUND_SCTP`, и `packet_trace()` печатает `default`: `UNK  %-21s > %-21s
+        // [%u]\n` с номером `FOUND_SCTP` (7, proto-preprocess.h:15); трейлинг-пробела UDP/ICMP здесь нет.
+        return format!(
+            "SENT ({secs:5.4}) UNK  {:<21} > {:<21} [7]\n",
             format!("[{src}]:{sport}"),
             format!("[{dst}]:{dport}")
         );

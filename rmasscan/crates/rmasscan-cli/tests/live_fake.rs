@@ -31,7 +31,7 @@ use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::fake::{
     FakeAdapter, HealthStep, ManualClock, RxStep, port_unreachable_for, reply_to_echo,
-    reply_to_syn, reply_to_udp,
+    reply_to_sctp, reply_to_syn, reply_to_udp,
 };
 use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHealth};
 use rmasscan_net::arp_resolve::{ArpPolicy, arp_binding};
@@ -55,6 +55,8 @@ const T2: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 2);
 const OPEN: [(Ipv4Addr, u16); 2] = [(T1, 80), (T2, 81)];
 /// Хосты, чей UDP-порт 53 отвечает датаграммой; остальные UDP-порты закрыты (ICMP Port Unreachable).
 const OPEN_UDP: [Ipv4Addr; 1] = [T1];
+/// Хосты, у которых порт SCTP 2905 отвечает INIT-ACK; остальные порты отвечают ABORT.
+const OPEN_SCTP: [Ipv4Addr; 1] = [T2];
 /// `--wait 1` идёт по `ManualClock` (около 20 пустых `recv` по 50 мс, миллисекунды реального времени); при `--wait 0`
 /// RX engine выходит в той же итерации, где увидел конец TX, и ответы фиктивной сети, ещё лежащие в очереди, теряются.
 const LIVE: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "1"];
@@ -342,6 +344,17 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
                     .into_iter()
                     .collect()
             }
+        }
+        Some([0x08, 0x00]) if frame.get(23) == Some(&132) => {
+            // SCTP: порт 2905 хостов из `OPEN_SCTP` отвечает INIT-ACK, остальные порты ABORT.
+            let ip = Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]);
+            let port = u16::from_be_bytes([frame[36], frame[37]]);
+            let ty = if port == 2905 && OPEN_SCTP.contains(&ip) {
+                2
+            } else {
+                6
+            };
+            reply_to_sctp(frame, ty).into_iter().collect()
         }
         Some([0x08, 0x00]) => {
             let (ip, port) = syn_dst(frame);
@@ -785,7 +798,7 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
     }
 }
 
-/// Порт протокола без построителя зонда (SCTP, ARP) и порты `O:*`/`I:1+` отклоняются живым
+/// Порт протокола без построителя зонда (ARP) и порты `O:*`/`I:1+` отклоняются живым
 /// сканом до обнаружения, ARP и открытия адаптера: ни кадра, ни строки `[+]`, ошибка и код 1. Раньше скан с
 /// `-p80,U:53` слал SYN до первого UDP-индекса и заканчивался как завершённый.
 #[test]
@@ -793,8 +806,6 @@ fn live_scan_refuses_ports_without_a_probe_builder_before_any_frame() {
     let mut b = FakeBackend::new();
     b.panic_on_open = true;
     for (extra, text) in [
-        (&["-pS:2905"][..], "S:2905 cannot be scanned yet"),
-        (&["-p80,U:53,S:7"][..], "S:7 cannot be scanned yet"),
         (&["-pI:2"][..], "ARP scan cannot be mixed with other ports"),
         (&["-pO:47"][..], "raw IP protocol ports (O:47)"),
         (&["-pI:1"][..], "ICMP ports other than I:0"),
@@ -3451,6 +3462,75 @@ fn live_udp_scan_reports_open_and_closed_and_sends_payload_frames() {
             "{want}: {out}"
         );
     }
+}
+
+/// SCTP (`-pS:2905,S:9`, Задача 5) идёт тем же путём адаптера: 66-байтовые INIT, ответ INIT-ACK это `open`, ABORT
+/// это `closed` с протоколом `sctp`.
+#[test]
+fn live_sctp_scan_reports_open_and_closed_and_sends_init_frames() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1-198.51.100.2",
+            "-pS:2905,S:9",
+            "--wait",
+            "1",
+            "--show",
+            "closed",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    let sent = opened.last().unwrap().adapter.sent_frames();
+    assert_eq!(sent.len(), 4);
+    assert!(
+        sent.iter()
+            .all(|f| f.len() == 66 && f[23] == 132 && f[46..50] == [1, 0, 0, 0x14]),
+        "{sent:?}"
+    );
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    // T2:2905 отвечает INIT-ACK; T1:2905 и оба :9 закрыты по ABORT
+    assert_eq!(lines.len(), 4, "{out}");
+    let count = |want: &str| lines.iter().filter(|l| l.contains(want)).count();
+    assert_eq!(count("open port 2905/sctp on 198.51.100.2"), 1, "{out}");
+    assert_eq!(count("closed port 2905/sctp on 198.51.100.1"), 1, "{out}");
+    assert_eq!(count("closed port 9/sctp on 198.51.100.1"), 1, "{out}");
+    assert_eq!(count("closed port 9/sctp on 198.51.100.2"), 1, "{out}");
+}
+
+/// `--offline --packet-trace -pS:2905` печатает для SCTP строку C `main-ptrace.c:108-111` (ветка `default`): в C нет
+/// `FOUND_SCTP`, поэтому `packet_trace()` пишет `UNK`, `[src]:port`, `[dst]:port` и `[7]` (номер `FOUND_SCTP`); поле
+/// второго адреса дополняется до 21 символа и отделяется от `[7]` одним пробелом. Образец снят с C 8e6b3b0: `packet_trace()` на кадре `template_set_target_ipv4`
+/// (198.18.2.1 <- 198.18.2.99:40001, порт 2905) вывел `SENT (0.0000) UNK  [198.18.2.99]:40001   > [198.18.2.1]:2905
+/// [7]` и перевод строки.
+#[test]
+fn offline_packet_trace_prints_the_c_unk_line_for_sctp() {
+    let b = hermetic();
+    let args: Vec<&str> = TRACE
+        .iter()
+        .map(|a| match *a {
+            "-p80,443" => "-pS:2905,S:9",
+            "--source-port=40000-40003" => "--source-port=40000",
+            other => other,
+        })
+        .collect();
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
+    lines.sort_unstable();
+    let mut want = Vec::new();
+    for n in 0..4 {
+        for (port, pad) in [(2905, "      "), (9, "         ")] {
+            want.push(format!(
+                "SENT (0.0000) UNK  [10.255.0.1]:40000    > [10.0.0.{n}]:{port}{pad} [7]\n"
+            ));
+        }
+    }
+    want.sort_unstable();
+    assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
 /// `--offline --packet-trace -pU:53,U:59999` печатает для UDP строку C `main-ptrace.c:57-59`: `UDP`, `[src]:port`,

@@ -639,6 +639,49 @@ pub fn reply_to_udp_from_port(probe: &[u8], sport: Option<u16>, payload: &[u8]) 
     Some(f)
 }
 
+/// Строит ответ SCTP (Ethernet/IPv4/SCTP, верные суммы IPv4 и CRC-32C) на наш INIT: адреса, порты и MAC меняются
+/// местами, TTL 64, verification tag равен `initiate_tag` INIT (так отвечает настоящий узел). `chunk_type` 2 это
+/// INIT-ACK (чанк 20 байт), 6 это ABORT (чанк 4 байта). `None`, если вход не Ethernet/IPv4/SCTP с общим заголовком
+/// и INIT.
+pub fn reply_to_sctp(probe: &[u8], chunk_type: u8) -> Option<Vec<u8>> {
+    if probe.len() < 14 + 20 + 12 + 20 || probe[12..14] != [0x08, 0x00] {
+        return None;
+    }
+    let ip = &probe[14..];
+    let ihl = usize::from(ip[0] & 0x0f) * 4;
+    if ip[9] != 132 {
+        return None;
+    }
+    let sctp = ip.get(ihl..ihl + 32)?;
+    let mut s = Vec::new();
+    s.extend_from_slice(&sctp[2..4]);
+    s.extend_from_slice(&sctp[0..2]);
+    s.extend_from_slice(&sctp[16..20]); // verification tag = initiate_tag нашего INIT
+    s.extend_from_slice(&[0; 4]);
+    let body = if chunk_type == 2 { 16 } else { 0 };
+    s.extend_from_slice(&[chunk_type, 0]);
+    s.extend_from_slice(&((4 + body) as u16).to_be_bytes());
+    s.extend(std::iter::repeat_n(0u8, body));
+    let crc = rmasscan_core::checksum::sctp_crc32c(&s);
+    s[8..12].copy_from_slice(&crc.to_be_bytes());
+    let mut i = vec![0u8; 20];
+    i[0] = 0x45;
+    i[2..4].copy_from_slice(&((20 + s.len()) as u16).to_be_bytes());
+    i[8] = 64;
+    i[9] = 132;
+    i[12..16].copy_from_slice(&ip[16..20]); // от цели к нам
+    i[16..20].copy_from_slice(&ip[12..16]);
+    let c = rfc1071(&[&i]);
+    i[10..12].copy_from_slice(&c.to_be_bytes());
+    let mut f = Vec::with_capacity(14 + 20 + s.len());
+    f.extend_from_slice(&probe[6..12]);
+    f.extend_from_slice(&probe[0..6]);
+    f.extend_from_slice(&[0x08, 0x00]);
+    f.extend_from_slice(&i);
+    f.extend_from_slice(&s);
+    Some(f)
+}
+
 /// Строит ICMP Destination Unreachable, Port Unreachable (type 3, code 3, Ethernet/IPv4, верные суммы) от
 /// маршрутизатора `router` на наш зонд TCP, UDP или SCTP: цитата это IP-заголовок зонда и его первые 8 байт L4
 /// (RFC 792), TTL внешнего пакета 250. `None`, если вход не Ethernet/IPv4 с 8 байтами L4.

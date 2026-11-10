@@ -23,7 +23,9 @@ use std::sync::Arc;
 use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
-use crate::packet::{IcmpEchoTemplate, LinkType, PacketModifiers, TcpSynTemplate, UdpTemplate};
+use crate::packet::{
+    IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, TcpSynTemplate, UdpTemplate,
+};
 use crate::payloads::PayloadTable;
 use crate::ranges::RangeList;
 use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
@@ -171,6 +173,8 @@ struct Builder {
     icmp: IcmpEchoTemplate,
     /// Шаблон UDP (`U:`, templ-pkt.c:56): тот же путь адаптера и та же таблица нагрузок на все адаптеры.
     udp: UdpTemplate,
+    /// Шаблон SCTP INIT (`S:`, templ-pkt.c:76): тот же путь адаптера.
+    sctp: SctpTemplate,
     payloads: Arc<PayloadTable>,
     ip_me0: u32,
     first: u16,
@@ -215,6 +219,12 @@ impl Builder {
                 mods.ttl,
             ),
             udp: UdpTemplate::new(
+                binding.source_mac,
+                binding.next_hop_mac,
+                binding.link_type,
+                mods.ttl,
+            ),
+            sctp: SctpTemplate::new(
                 binding.source_mac,
                 binding.next_hop_mac,
                 binding.link_type,
@@ -289,6 +299,24 @@ impl Builder {
                 self.payloads.get(port16),
                 &mut p.frame,
             );
+            p.index = i;
+            p.ip_me = ip_me;
+            p.port_me = port_me16;
+            p.ip_them = ip_them;
+            p.port_them = port16;
+            p.port_index = port_them;
+            p.seqno = seqno;
+            return Ok(());
+        }
+        if (TEMPL_SCTP..=TEMPL_SCTP_LAST).contains(&port_them) {
+            // templ-pkt.c:907-910: порт в кадре 16-битный (`port_them &= 0xFFFF`), cookie (main.c:389) берётся по
+            // индексу `Templ_SCTP + порт`; он же идёт в initiate_tag INIT, а приёмник сверяет с ним verification tag.
+            let port16 = (port_them & 0xFFFF) as u16;
+            let port_me16 = u16::try_from(port_me)
+                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
+            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+            self.sctp
+                .build_init((ip_them, port16), (ip_me, port_me16), seqno, &mut p.frame);
             p.index = i;
             p.ip_me = ip_me;
             p.port_me = port_me16;
@@ -428,12 +456,9 @@ pub fn check_cli_ports(ports: &RangeList) -> Result<(), PlanError> {
 }
 
 /// Временная таблица индексов, для которых построителя зонда ещё нет: `(первый, последний, метка)`. Задачи 4-6
-/// удаляют по строке, когда протокол получает построитель (SCTP, ARP; ICMP Echo построен в Задаче 3, UDP в Задаче 4). Постоянный отказ `O:*`/`I:1+`
-/// живёт отдельно, в [`check_cli_ports`].
-const UNBUILT: [(u32, u32, &str); 2] = [
-    (TEMPL_SCTP, TEMPL_SCTP_LAST, "S"),
-    (TEMPL_ARP, TEMPL_ARP, "I"),
-];
+/// удаляют по строке, когда протокол получает построитель (осталось ARP; ICMP Echo построен в Задаче 3, UDP в Задаче 4,
+/// SCTP в Задаче 5). Постоянный отказ `O:*`/`I:1+` живёт отдельно, в [`check_cli_ports`].
+const UNBUILT: [(u32, u32, &str); 1] = [(TEMPL_ARP, TEMPL_ARP, "I")];
 
 /// Временная проверка плана CLI: порт протокола без построителя зонда отказывает сразу, до ARP, движка и первой
 /// строки `SENT`, а не обрывает скан на первом таком индексе. Метка называет наименьший такой порт.
@@ -568,8 +593,8 @@ impl ReadyPlan {
         if effective.blackrock_rounds() < 1 {
             return Err(PlanError::ZeroRounds(effective.blackrock_rounds()));
         }
-        // Р1: O:*, I:n и смесь с ARP отклоняются навсегда; UDP/SCTP/ICMP Echo/ARP пока без построителя зонда и
-        // отклоняются временно (иначе скан оборвался бы молча на первом таком индексе).
+        // Р1: O:*, I:n и смесь с ARP отклоняются навсегда; ARP пока без построителя зонда и
+        // отклоняется временно (иначе скан оборвался бы молча на первом таком индексе).
         if check_ports {
             check_scan_ports(effective.massip().ports())?;
         }
@@ -1545,35 +1570,34 @@ mod tests {
 
     #[test]
     fn interim_refusal_names_the_first_protocol_without_a_builder() {
-        // Пока нет построителей SCTP и ARP, план CLI отказывает сразу (иначе скан оборвался бы молча на первом таком
-        // индексе); чистый TCP, UDP и ICMP Echo проходят.
+        // Пока нет построителя ARP, план CLI отказывает сразу (иначе скан оборвался бы молча на первом таком индексе);
+        // чистый TCP, UDP, SCTP и ICMP Echo проходят.
         let label = |ports: &str| match cli_err(ports) {
             PlanError::ProtocolNotBuilt { label } => label,
             e => panic!("{ports}: {e:?}"),
         };
-        assert_eq!(label("S:2905"), "S:2905");
-        assert_eq!(label("T:80,U:53,S:7,161"), "S:7");
         assert_eq!(label("I:2"), "ARP (I:2)");
-        // UDP не мешает: называется первый порт без построителя
-        assert_eq!(label("U:1,S:9"), "S:9");
         assert!(
-            cli_err("S:2905")
+            cli_err("I:2")
                 .to_string()
-                .contains("S:2905 cannot be scanned yet")
+                .contains("ARP (I:2) cannot be scanned yet")
         );
         ReadyPlan::new_cli(eff("198.18.2.0/30", "80,443,1000-1002", |_| {}), nics(1)).unwrap();
         ReadyPlan::new_cli(eff("198.18.2.0/30", "80,U:53,U:59999,I:0", |_| {}), nics(1)).unwrap();
+        ReadyPlan::new_cli(
+            eff("198.18.2.0/30", "80,S:2905,S:1,S:65535", |_| {}),
+            nics(1),
+        )
+        .unwrap();
         // постоянный отказ сильнее временного
         assert_eq!(
             cli_err("S:2905,O:47"),
             PlanError::OprotoNotSupported(196_911)
         );
         // без проверки (тестовый вход) план строится, а курсор упирается в отказ
-        let plan = ReadyPlan::new_cli_without_port_checks(
-            eff("198.18.2.0/30", "80,S:2905", |_| {}),
-            nics(1),
-        )
-        .unwrap();
+        let plan =
+            ReadyPlan::new_cli_without_port_checks(eff("198.18.2.0/30", "80,I:2", |_| {}), nics(1))
+                .unwrap();
         let mut cur = plan.cursor_for_nic(0, None).unwrap();
         assert!(cur.build_error().is_none());
         let sent = drain(&mut cur).len();
@@ -1582,6 +1606,89 @@ mod tests {
         let e = cur.build_error().expect("failure must be recorded");
         assert!(matches!(e, PlanError::ProbeBuild(_)), "{e:?}");
         assert!(e.to_string().contains("does not fit TCP"), "{e}");
+    }
+
+    /// Независимая проверка кадра SCTP INIT: сумма IP, CRC-32C (побитово, без таблицы), длины, порты и поля INIT.
+    fn check_sctp_frame(p: &Probe) {
+        let f = &p.frame;
+        assert_eq!(f.len(), 66);
+        assert_eq!(f[23], 132, "proto SCTP");
+        assert_eq!(crate::checksum::ip_header_checksum(f, 14, 34), 0xffff);
+        assert_eq!(u16::from_be_bytes([f[16], f[17]]), 52);
+        assert_eq!(&f[34..36], &p.port_me.to_be_bytes());
+        assert_eq!(&f[36..38], &p.port_them.to_be_bytes());
+        assert_eq!(&f[38..42], &[0; 4], "vtag 0");
+        assert_eq!(&f[46..50], &[1, 0, 0, 0x14]);
+        assert_eq!(&f[50..54], &p.seqno.to_be_bytes(), "initiate_tag = seqno");
+        let mut z = f[34..].to_vec();
+        z[8..12].fill(0);
+        let mut crc = !0u32;
+        for &b in &z {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0x82F6_3B78
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        assert_eq!(&f[42..46], &(!crc).to_le_bytes());
+    }
+
+    #[test]
+    fn sctp_plan_builds_init_frames_and_splits_across_nics() {
+        // S:2905 и S:1 через путь CLI: 66-байтовый INIT, cookie по индексу Templ_SCTP + порт (main.c:389).
+        let e = || eff("198.18.2.0/30", "S:2905,S:1,S:65535", |_| {});
+        let one = ReadyPlan::new_cli(e(), nics(1)).unwrap();
+        let mut cur = one.cursor_for_nic(0, None).unwrap();
+        let all = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        assert_eq!(all.len(), 12);
+        for p in &all {
+            check_sctp_frame(p);
+            assert_eq!(p.port_index, TEMPL_SCTP + u32::from(p.port_them));
+            let cookie = syn_cookie_ipv4(
+                p.ip_them,
+                p.port_index,
+                p.ip_me,
+                u32::from(p.port_me),
+                0x1234_5678,
+            ) as u32;
+            assert_eq!(
+                p.seqno, cookie,
+                "seqno is the cookie over Templ_SCTP + port"
+            );
+            let ip_id = (p.ip_them ^ u32::from(p.port_them) ^ p.seqno) as u16;
+            assert_eq!(&p.frame[18..20], &ip_id.to_be_bytes());
+        }
+        for port in [2905u16, 1, 65535] {
+            assert_eq!(all.iter().filter(|p| p.port_them == port).count(), 4);
+        }
+        let two = ReadyPlan::new_cli(e(), nics(2)).unwrap();
+        let k0 = drain(&mut two.cursor_for_nic(0, None).unwrap());
+        let k1 = drain(&mut two.cursor_for_nic(1, None).unwrap());
+        assert_eq!(k0.len() + k1.len(), 12);
+        let mut merged: Vec<_> = k0.iter().chain(&k1).collect();
+        merged.sort_by_key(|p| p.index);
+        assert_eq!(
+            merged.iter().map(|p| &p.frame).collect::<Vec<_>>(),
+            all.iter().map(|p| &p.frame).collect::<Vec<_>>(),
+            "the split reproduces the single stream"
+        );
+        // Смешанный список: TCP, UDP, SCTP и ICMP в одном потоке без ошибок сборки.
+        let mixed = ReadyPlan::new_cli(eff("198.18.2.0/30", "80,U:53,S:2905,I:0", |_| {}), nics(1))
+            .unwrap();
+        let mut cur = mixed.cursor_for_nic(0, None).unwrap();
+        let frames = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        for (len, n) in [(58, 4), (73, 4), (66, 4), (90, 4)] {
+            assert_eq!(
+                frames.iter().filter(|p| p.frame.len() == len).count(),
+                n,
+                "{len}"
+            );
+        }
     }
 
     /// Независимая проверка кадра UDP: сумма IP, сумма UDP (RFC 768), длины и порты.

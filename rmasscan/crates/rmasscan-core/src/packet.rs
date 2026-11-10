@@ -3,7 +3,9 @@
 //! :877), masscan © Robert David Graham (github.com/robertdavidgraham/masscan,
 //! HEAD 8e6b3b0). Кадры должны совпадать побайтно с C.
 
-use crate::checksum::{fold, ip_header_checksum, tcp_ipv4_partial, udp_ipv4_checksum, word_sum};
+use crate::checksum::{
+    fold, ip_header_checksum, sctp_crc32c, tcp_ipv4_partial, udp_ipv4_checksum, word_sum,
+};
 use crate::cookie::icmp_echo_cookie;
 use crate::payloads::PayloadEntry;
 use crate::targets::TEMPL_ICMP_ECHO;
@@ -429,6 +431,93 @@ impl UdpTemplate {
         out[ou + 6..ou + 8].fill(0);
         let csum = udp_ipv4_checksum(ip_me, ip_them, &out[ou..]);
         out[ou + 6..ou + 8].copy_from_slice(&csum.to_be_bytes());
+    }
+}
+
+/// `default_sctp_template`, templ-pkt.c:76-102: Ethernet 14 + IP 20 (`ip_len = 52`, TTL 255, proto 132) + общий
+/// заголовок SCTP 12 (порты и vtag 0) + чанк INIT 20 (`01 00 00 14`, initiate_tag, a_rwnd `0x00008000`, исходящих
+/// потоков 10, входящих 2048, initial TSN `0x461adf3d`), всего 66 байт. Сумма и initiate_tag шаблона (`58e45d36`,
+/// `9e8d5225`) при сборке кадра перезаписываются.
+pub const DEFAULT_SCTP_INIT_TEMPLATE: &[u8] = &[
+    // Ethernet: dst, src, ethertype IPv4
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x08, 0x00,
+    // IP: 0x45, tos, total length 0x34, id, flags/frag, TTL 255, proto SCTP, checksum, src, dst
+    0x45, 0x00, 0x00, 0x34, 0x00, 0x00, 0x00, 0x00, 0xff, 0x84, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
+    // SCTP: порт источника, порт назначения, verification tag, CRC-32C
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x58, 0xe4, 0x5d, 0x36,
+    // чанк INIT: тип 1, флаги 0, длина 20, initiate tag, a_rwnd, outbound 10, inbound 2048, initial TSN
+    0x01, 0x00, 0x00, 0x14, 0x9e, 0x8d, 0x52, 0x25, 0x00, 0x00, 0x80, 0x00, 0x00, 0x0a, 0x08, 0x00,
+    0x46, 0x1a, 0xdf, 0x3d,
+];
+
+/// Шаблон SCTP INIT (`Proto_SCTP`). Частичных сумм нет: CRC-32C считается по готовому пакету (32 байта).
+#[derive(Clone, Debug)]
+pub struct SctpTemplate {
+    packet: Vec<u8>,
+    offset_ip: usize,
+    offset_sctp: usize,
+}
+
+impl SctpTemplate {
+    /// `_template_init` для SCTP, templ-pkt.c:1285-1313 и :1330-1335; `--ttl` как `template_set_ttl`
+    /// (:1474-1488). Опции TCP и `--badsum` к SCTP не относятся.
+    pub fn new(source_mac: [u8; 6], router_mac: [u8; 6], link: LinkType, ttl: u8) -> Self {
+        let mut px = DEFAULT_SCTP_INIT_TEMPLATE.to_vec();
+        let (offset_ip, offset_sctp) = (14usize, 34usize);
+        px[0..6].copy_from_slice(&router_mac);
+        px[6..12].copy_from_slice(&source_mac);
+        px[offset_ip + 8] = ttl;
+        // :1290-1292: ID, сумма и адреса обнуляются.
+        px[offset_ip + 4..offset_ip + 6].fill(0);
+        px[offset_ip + 10..offset_ip + 12].fill(0);
+        px[offset_ip + 12..offset_ip + 20].fill(0);
+        // DATALINK KLUDGE, templ-pkt.c:1342-1360 (как у TCP).
+        let (packet, offset_ip, offset_sctp) = match link {
+            LinkType::Ethernet => (px, offset_ip, offset_sctp),
+            LinkType::Null => {
+                let mut p = 2u32.to_ne_bytes().to_vec();
+                p.extend_from_slice(&px[offset_ip..]);
+                (p, 4, offset_sctp - (offset_ip - 4))
+            }
+            LinkType::Raw => (px[offset_ip..].to_vec(), 0, offset_sctp - offset_ip),
+        };
+        Self {
+            packet,
+            offset_ip,
+            offset_sctp,
+        }
+    }
+
+    /// `template_set_target_ipv4`, ветка `Proto_SCTP`, templ-pkt.c:907-910, :942-988 и :1048-1064. `port_them`
+    /// 16-битный (`port_them &= 0xFFFF`, :909), `ip_id = ip_them ^ port_them ^ seqno`, `seqno` (cookie с индексом
+    /// `Templ_SCTP + порт`) идёт в `initiate_tag`, verification tag остаётся 0. CRC-32C пишется так, как его пишет C
+    /// (значение `sctp_checksum` big-endian: на проводе стандартный CRC-32C little-endian). `out` очищается и
+    /// получает кадр целиком.
+    pub fn build_init(
+        &self,
+        (ip_them, port_them): (u32, u16),
+        (ip_me, port_me): (u32, u16),
+        seqno: u32,
+        out: &mut Vec<u8>,
+    ) {
+        out.clear();
+        out.extend_from_slice(&self.packet);
+        let (oi, os) = (self.offset_ip, self.offset_sctp);
+        let ip_id = ip_them ^ u32::from(port_them) ^ seqno; // :942
+        let total_length = (self.packet.len() - oi) as u16;
+        out[oi + 2..oi + 4].copy_from_slice(&total_length.to_be_bytes());
+        out[oi + 4..oi + 6].copy_from_slice(&(ip_id as u16).to_be_bytes());
+        out[oi + 12..oi + 16].copy_from_slice(&ip_me.to_be_bytes());
+        out[oi + 16..oi + 20].copy_from_slice(&ip_them.to_be_bytes());
+        out[oi + 10..oi + 12].fill(0);
+        let xsum2 = !ip_header_checksum(out, oi, out.len()); // :988
+        out[oi + 10..oi + 12].copy_from_slice(&xsum2.to_be_bytes());
+
+        out[os..os + 2].copy_from_slice(&port_me.to_be_bytes());
+        out[os + 2..os + 4].copy_from_slice(&port_them.to_be_bytes());
+        out[os + 16..os + 20].copy_from_slice(&seqno.to_be_bytes());
+        let xsum = sctp_crc32c(&out[os..]);
+        out[os + 8..os + 12].copy_from_slice(&xsum.to_be_bytes());
     }
 }
 
@@ -1032,5 +1121,131 @@ mod tests {
         assert_eq!(&raw[..], &eth[14..]);
         // Cookie DNS: txid = младшие 16 бит seqno.
         assert_eq!(&eth[42..44], &[0xbe, 0xef]);
+    }
+
+    // --- SCTP INIT (templ-pkt.c:76-102, :1048-1064, proto-sctp.c:9-131) ---
+
+    fn sctp_tmpl(link: LinkType, ttl: u8) -> SctpTemplate {
+        SctpTemplate::new(hex6("001122334455"), hex6("665544332211"), link, ttl)
+    }
+
+    /// Кадры из настоящего C (masscan 8e6b3b0): `template_packet_init` + `template_set_target_ipv4` (templ-pkt.c)
+    /// вместе с немодифицированным `sctp_checksum`, в обвязке без сети (ни один кадр не передавался); `packet_trace()`
+    /// на тех же байтах дал `UNK  ... [7]`. MAC: dst 66:55:44:33:22:11, src 00:11:22:33:44:55; seqno =
+    /// `syn_cookie(ip_them, 131072 + порт, ip_me, port_me, entropy)`.
+    /// `(ip_them, порт, ip_me, port_me, entropy, ttl, seqno, кадр)`.
+    #[allow(clippy::type_complexity)]
+    const C_SCTP_FRAMES: &[(u32, u16, u32, u16, u64, u8, u32, &str)] = &[
+        (
+            0xc612_0201,
+            2905,
+            0xc612_0263,
+            40001,
+            0x1122_3344_5566_7788,
+            255,
+            0x4bd6_3a66,
+            "665544332211001122334455080045000034333e0000ff84f77ec6120263c61202019c410b5900000000a5d4226e010000144bd63a6600008000000a0800461adf3d",
+        ),
+        (
+            0xc000_0201,
+            9,
+            0x0aff_0001,
+            40003,
+            0x0123_4567_89ab_cdef,
+            64,
+            0xf94d_bb14,
+            "665544332211001122334455080045000034b91c00004084f4280aff0001c00002019c4300090000000098c0077701000014f94dbb1400008000000a0800461adf3d",
+        ),
+        (
+            0xc613_fffe,
+            65535,
+            0x0aff_0001,
+            65000,
+            5,
+            255,
+            0x423e_3825,
+            "66554433221100112233445508004500003438240000ff84b20f0aff0001c613fffefde8ffff0000000018d35abd01000014423e382500008000000a0800461adf3d",
+        ),
+    ];
+
+    #[test]
+    fn sctp_init_template_is_66_bytes() {
+        assert_eq!(DEFAULT_SCTP_INIT_TEMPLATE.len(), 66);
+        // Ethernet 14 + IP 20 (ip_len 52, TTL 255, proto 132) + SCTP 32 (templ-pkt.c:76-102)
+        assert_eq!(&DEFAULT_SCTP_INIT_TEMPLATE[16..18], &[0x00, 0x34]);
+        assert_eq!(&DEFAULT_SCTP_INIT_TEMPLATE[22..24], &[0xff, 0x84]);
+        assert_eq!(
+            &DEFAULT_SCTP_INIT_TEMPLATE[46..50],
+            &[0x01, 0x00, 0x00, 0x14],
+            "INIT, флаги 0, длина 20"
+        );
+        assert_eq!(&DEFAULT_SCTP_INIT_TEMPLATE[54..58], &[0, 0, 0x80, 0x00]);
+        assert_eq!(&DEFAULT_SCTP_INIT_TEMPLATE[58..60], &[0x00, 0x0a]);
+        assert_eq!(&DEFAULT_SCTP_INIT_TEMPLATE[60..62], &[0x08, 0x00]);
+        assert_eq!(
+            &DEFAULT_SCTP_INIT_TEMPLATE[62..66],
+            &[0x46, 0x1a, 0xdf, 0x3d]
+        );
+    }
+
+    #[test]
+    fn sctp_crc32c_matches_c_selftest_in_a_built_frame() {
+        // Review Focus 5: неправильный порядок байт CRC-32C молча срывает все ответы. Сумма стоит в [42..46] байтами
+        // C-значения big-endian, то есть стандартного CRC-32C в little-endian (`to_le_bytes`).
+        let mut f = Vec::new();
+        for &(them, port, me, port_me, _e, ttl, seqno, hex) in C_SCTP_FRAMES {
+            sctp_tmpl(LinkType::Ethernet, ttl).build_init(
+                (them, port),
+                (me, port_me),
+                seqno,
+                &mut f,
+            );
+            assert_eq!(f, hexv(hex), "port {port}");
+            assert_eq!(f.len(), 66);
+            assert_eq!(&f[16..18], &[0x00, 0x34], "ip_len = 52");
+            assert_eq!(f[23], 132);
+            assert_eq!(
+                &f[18..20],
+                &((them ^ u32::from(port) ^ seqno) as u16).to_be_bytes(),
+                "ip_id = ip_them ^ port ^ seqno"
+            );
+            assert_eq!(&f[34..36], &port_me.to_be_bytes());
+            assert_eq!(&f[36..38], &port.to_be_bytes());
+            assert_eq!(&f[38..42], &[0, 0, 0, 0], "verification tag 0");
+            assert_eq!(&f[46..50], &[0x01, 0x00, 0x00, 0x14]);
+            assert_eq!(&f[50..54], &seqno.to_be_bytes(), "initiate_tag = seqno");
+            assert_eq!(&f[54..58], &[0x00, 0x00, 0x80, 0x00], "a_rwnd");
+            assert_eq!(&f[58..60], &[0x00, 0x0a], "outbound 10");
+            assert_eq!(&f[60..62], &[0x08, 0x00], "inbound 2048");
+            assert_eq!(&f[62..66], &[0x46, 0x1a, 0xdf, 0x3d], "initial_tsn");
+            assert_eq!(checksum::ip_header_checksum(&f, 14, 34), 0xffff);
+            // независимая проверка: CRC-32C пакета с обнулённым полем суммы, little-endian
+            let mut z = f[34..].to_vec();
+            z[8..12].fill(0);
+            let mut crc = !0u32;
+            for &b in &z {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 {
+                        (crc >> 1) ^ 0x82F6_3B78
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            assert_eq!(&f[42..46], &(!crc).to_le_bytes(), "port {port}");
+        }
+    }
+
+    #[test]
+    fn sctp_init_null_and_raw_are_trimmed_ethernet_frames() {
+        let (them, me, seqno) = (0xc612_0001u32, 0xc000_0201u32, 7u32);
+        let (mut eth, mut null, mut raw) = (Vec::new(), Vec::new(), Vec::new());
+        sctp_tmpl(LinkType::Ethernet, 255).build_init((them, 2905), (me, 4000), seqno, &mut eth);
+        sctp_tmpl(LinkType::Null, 255).build_init((them, 2905), (me, 4000), seqno, &mut null);
+        sctp_tmpl(LinkType::Raw, 255).build_init((them, 2905), (me, 4000), seqno, &mut raw);
+        assert_eq!(&null[..4], &2u32.to_ne_bytes());
+        assert_eq!(&null[4..], &eth[14..]);
+        assert_eq!(&raw[..], &eth[14..]);
     }
 }

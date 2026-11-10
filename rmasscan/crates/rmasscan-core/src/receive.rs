@@ -8,8 +8,8 @@
 //!
 //! # Правило приёма (main.c:823-825, :829, :935, :1048-1065)
 //! Ответ принимается, если одновременно:
-//! 1. IPv4, не фрагмент, TCP (или ICMP Echo Reply и Port Unreachable `3/3`: [`parse_icmp`], или UDP: [`parse_udp_reply`], у них
-//!    свои правила, описанные у функций); адрес назначения лежит в диапазоне `source_ipv4..=source_ipv4_last` плана
+//! 1. IPv4, не фрагмент, TCP (или ICMP Echo Reply и Port Unreachable `3/3`: [`parse_icmp`], UDP: [`parse_udp_reply`], SCTP INIT-ACK и
+//!    ABORT: [`parse_sctp_reply`], у них свои правила, описанные у функций); адрес назначения лежит в диапазоне `source_ipv4..=source_ipv4_last` плана
 //!    (`--adapter-ip A-B`; один адрес это диапазон из одного);
 //! 2. порт назначения лежит в `source_ports` плана (`is_my_port`);
 //! 3. флаги: `(flags & 0x12) == 0x12` даёт Open, `flags & 0x04` даёт Closed
@@ -36,7 +36,9 @@
 //!   старого скана с тем же seed попадал бы в результаты. Порт намеренно
 //!   ужесточает это (ревью 2A, P2).
 
-use crate::checksum::{checksum_ipv4, fold, ip_header_checksum, udp_ipv4_checksum_ok, word_sum};
+use crate::checksum::{
+    checksum_ipv4, fold, ip_header_checksum, sctp_crc32c, udp_ipv4_checksum_ok, word_sum,
+};
 use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4};
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
@@ -104,6 +106,8 @@ pub enum ParseError {
     BadUdpLength(u16),
     #[error("bad UDP checksum")]
     BadUdpChecksum,
+    #[error("bad SCTP checksum")]
+    BadSctpChecksum,
 }
 
 /// Открыт или закрыт порт (main.c:1052-1057).
@@ -272,8 +276,9 @@ fn parse_ipv4_tcp(
     match proto {
         1 => return parse_icmp(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
         17 => return parse_udp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
+        132 => return parse_sctp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
         6 => {}
-        // SCTP и прочее: не наш SYN-ответ.
+        // прочее: не наш SYN-ответ.
         _ => return Ok(None),
     }
 
@@ -430,6 +435,88 @@ fn parse_udp_reply(
         tcp_flags: 0,
         ttl,
         ip_proto: 17,
+        mac: None,
+    }))
+}
+
+/// Ответ SCTP на наш INIT (`handle_sctp`, proto-sctp.c:137-189): verification tag ответа равен cookie
+/// `syn_cookie(ip_them, port_them | (Proto_SCTP << 16), ip_me, port_me, entropy)` (main.c:822, это `initiate_tag`
+/// нашего INIT); первый чанк типа 2 (INIT-ACK) даёт `Open`, типа 6 (ABORT) даёт `Closed`, всё прочее молча
+/// отбрасывается. Номер протокола 132, `reason` 0, TTL внешнего пакета, порт цели это порт источника ответа. Мы
+/// ничего не отвечаем (C тоже: ABORT в ответ не шлётся).
+///
+/// Отличия от C (жёстче, как у остальных приёмников): адрес и порт источника обязаны входить в итоговый набор целей
+/// плана (`S:порт`), а порт назначения обязан лежать в `source_ports` (в C `handle_sctp` вызывается до `is_my_port` и
+/// отчёт уходит при любом порте); суммы IPv4 и CRC-32C SCTP проверяются при [`ChecksumPolicy::Verify`] (C их не
+/// проверяет, "TODO: verify checksum"); короче общего заголовка (12 байт) это ошибка разбора.
+fn parse_sctp_reply(
+    ip: &[u8],
+    header_len: usize,
+    (ip_them, ip_me, ttl): (u32, u32, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let seg = &ip[header_len..];
+    // proto-preprocess.c:198-207: общий заголовок SCTP 12 байт.
+    if seg.len() < 12 {
+        return Err(ParseError::Truncated("sctp header"));
+    }
+    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("sctp header"))?;
+    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("sctp header"))?;
+    let tag = be32(seg, 4).ok_or(ParseError::Truncated("sctp header"))?;
+    // main.c:829: is_my_ip; main.c:935: is_my_port (в C после отчёта, здесь до него).
+    if !is_my_ip(plan, ip_me) {
+        return Ok(None);
+    }
+    let (first, last) = plan.binding().source_ports;
+    if port_me < first || port_me > last {
+        return Ok(None);
+    }
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges(targets.ipv4(), ip_them)
+        || !in_sorted_ranges(targets.ports(), TEMPL_SCTP + u32::from(port_them))
+    {
+        return Ok(None);
+    }
+    // proto-sctp.c:150-153: verification tag это cookie; main.c:822: `port_them | (Proto_SCTP << 16)` = индекс порта.
+    let cookie = syn_cookie_ipv4(
+        ip_them,
+        TEMPL_SCTP + u32::from(port_them),
+        ip_me,
+        u32::from(port_me),
+        plan.effective().seed(),
+    ) as u32;
+    if cookie != tag {
+        return Ok(None);
+    }
+    // proto-sctp.c:155-156: `offset + 16 > length` (заголовок чанка 4 байта).
+    let Some(&chunk_type) = seg.get(12).filter(|_| seg.len() >= 16) else {
+        return Ok(None);
+    };
+    let status = match chunk_type {
+        2 => PortStatus::Open,   // INIT ACK
+        6 => PortStatus::Closed, // ABORT
+        _ => return Ok(None),
+    };
+    // Суммы проверяются после дешёвых фильтров и cookie.
+    if policy == ChecksumPolicy::Verify {
+        if ip_header_checksum(ip, 0, header_len) != 0xffff {
+            return Err(ParseError::BadIpChecksum);
+        }
+        // CRC-32C считается по всему пакету SCTP (по длине IP-пакета, без трейлера кадра), поле суммы как нули.
+        if be32(seg, 8) != Some(sctp_crc32c(seg)) {
+            return Err(ParseError::BadSctpChecksum);
+        }
+    }
+    Ok(Some(Reply {
+        remote_ip: ip_them,
+        remote_port: port_them,
+        local_ip: ip_me,
+        local_port: port_me,
+        status,
+        tcp_flags: 0,
+        ttl,
+        ip_proto: 132,
         mac: None,
     }))
 }

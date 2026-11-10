@@ -808,6 +808,48 @@ fn icmp_closed_never_suppresses_a_real_open_in_either_order() {
 }
 
 #[test]
+fn dedup_sctp_init_ack_and_abort_never_suppress_each_other_in_either_order() {
+    // SCTP: INIT-ACK (Open, корзина 0) и ABORT (Closed, корзина 1) на один кортеж это разные факты; повтор глушится.
+    let open = Reply {
+        ip_proto: 132,
+        tcp_flags: 0,
+        ..reply(9, 2905)
+    };
+    let abort = Reply {
+        status: PortStatus::Closed,
+        ..open
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&abort), "abort first");
+    assert!(d.insert(&open), "INIT-ACK after ABORT is not swallowed");
+    assert!(!d.insert(&abort) && !d.insert(&open));
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&open), "INIT-ACK first");
+    assert!(d.insert(&abort), "ABORT after INIT-ACK is not swallowed");
+    assert!(!d.insert(&open) && !d.insert(&abort));
+    // Правило R14: ABORT и ICMP 3/3 "closed" на тот же кортеж SCTP делят корзину closed (статус тот же, open не теряется).
+    let icmp_closed = Reply {
+        status: PortStatus::Closed,
+        tcp_flags: 0,
+        ..open
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&abort));
+    assert!(!d.insert(&icmp_closed), "same closed fact, reported once");
+    assert!(d.insert(&open), "no open is lost");
+    // SCTP не сливается с TCP и UDP на том же порте
+    let tcp = reply(9, 2905);
+    let udp = Reply {
+        ip_proto: 17,
+        tcp_flags: 0,
+        ..reply(9, 2905)
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&open) && d.insert(&tcp) && d.insert(&udp));
+    assert_eq!(d.len(), 3);
+}
+
+#[test]
 fn dedup_never_exceeds_100k_entries() {
     assert_eq!(DedupCache::new(10_000_000).capacity(), MAX_DEDUP_ENTRIES);
     assert_eq!(DedupCache::new(0).capacity(), 1);

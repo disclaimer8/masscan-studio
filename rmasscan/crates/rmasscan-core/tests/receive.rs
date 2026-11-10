@@ -1603,3 +1603,321 @@ mod udp_and_unreachable {
         assert_eq!((r.ip_proto, r.status), (1, PortStatus::Open));
     }
 }
+
+/// SCTP (Задача 5): приём `INIT-ACK` (Open) и `ABORT` (Closed) по verification tag (`handle_sctp`, proto-sctp.c:137-189).
+mod sctp_rx {
+    use super::*;
+    use rmasscan_core::probe::{NicBinding, Probe};
+    use rmasscan_core::receive::Reply;
+
+    const SRC_PORTS: (u16, u16) = (41000, 41003);
+    const PORT_ME_SCTP: u16 = 41002;
+    const SCTP_PORT: u16 = 2905;
+
+    fn plan(link: LinkType) -> ReadyPlan {
+        plan_with_ports(link, "S:2905,S:7,T:80")
+    }
+
+    fn plan_with_ports(link: LinkType, ports: &str) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: link,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: MAC_NH,
+                source_ports: SRC_PORTS,
+            })],
+        )
+        .unwrap()
+    }
+
+    /// Cookie приёмника C: `syn_cookie(ip_them, port_them | (Proto_SCTP << 16), ip_me, port_me, entropy)` (main.c:822).
+    fn vtag(ip_them: u32, port_them: u16, port_me: u16) -> u32 {
+        syn_cookie_ipv4(
+            ip_them,
+            u32::from(port_them) | (2 << 16),
+            IP_ME,
+            u32::from(port_me),
+            SEED,
+        ) as u32
+    }
+
+    /// Независимый CRC-32C (побитово): стандартное значение с обнулённым полем суммы, на проводе little-endian.
+    fn crc32c_le(pkt: &[u8]) -> [u8; 4] {
+        let mut z = pkt.to_vec();
+        z[8..12].fill(0);
+        let mut crc = !0u32;
+        for &b in &z {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0x82F6_3B78
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        (!crc).to_le_bytes()
+    }
+
+    fn with_sums(mut ip: Vec<u8>) -> Vec<u8> {
+        ip[10..12].fill(0);
+        let x = rfc1071(&[&ip[..20]]);
+        ip[10..12].copy_from_slice(&x.to_be_bytes());
+        ip
+    }
+
+    /// Пакет SCTP: общий заголовок, затем один чанк `chunk_type` длиной 4 (плюс `extra` байт тела); верные суммы.
+    fn sctp_packet(
+        ip_them: u32,
+        (sport, dport): (u16, u16),
+        tag: u32,
+        chunk_type: u8,
+        extra: usize,
+        ttl: u8,
+    ) -> Vec<u8> {
+        let mut s = Vec::new();
+        s.extend_from_slice(&sport.to_be_bytes());
+        s.extend_from_slice(&dport.to_be_bytes());
+        s.extend_from_slice(&tag.to_be_bytes());
+        s.extend_from_slice(&[0; 4]);
+        s.extend_from_slice(&[chunk_type, 0]);
+        s.extend_from_slice(&((4 + extra) as u16).to_be_bytes());
+        s.extend(std::iter::repeat_n(0xab, extra));
+        let c = crc32c_le(&s);
+        s[8..12].copy_from_slice(&c);
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + s.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 132;
+        ip[12..16].copy_from_slice(&ip_them.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&s);
+        with_sums(ip)
+    }
+
+    fn reply_to(link: LinkType, plan: &ReadyPlan, ip: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(&wrap(link, ip), link, plan)
+    }
+
+    fn probes(plan: &ReadyPlan) -> Vec<Probe> {
+        let mut cur = plan.cursor_for_nic(0, None).unwrap();
+        let mut v = Vec::new();
+        while let Some(p) = cur.current().cloned() {
+            v.push(p);
+            cur.advance_sent();
+        }
+        v.into_iter().filter(|p| p.ip_them == IP_THEM).collect()
+    }
+
+    #[test]
+    fn sctp_rx_classifies_init_ack_and_abort() {
+        for link in LINKS {
+            let plan = plan(link);
+            let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+            let want = |status, ttl| Reply {
+                remote_ip: IP_THEM,
+                remote_port: SCTP_PORT,
+                local_ip: IP_ME,
+                local_port: PORT_ME_SCTP,
+                status,
+                tcp_flags: 0,
+                ttl,
+                ip_proto: 132,
+                mac: None,
+            };
+            // INIT-ACK (тип 2) -> Open, ABORT (тип 6) -> Closed; ttl внешний, reason 0
+            let ack = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 16, 57);
+            assert_eq!(
+                reply_to(link, &plan, &ack),
+                Ok(Some(want(PortStatus::Open, 57))),
+                "{link:?}"
+            );
+            let abort = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 6, 0, 61);
+            assert_eq!(
+                reply_to(link, &plan, &abort),
+                Ok(Some(want(PortStatus::Closed, 61))),
+                "{link:?}"
+            );
+            // чужой verification tag отбрасывается (в том числе tag 0 и tag соседнего порта)
+            for bad in [
+                tag ^ 1,
+                0,
+                vtag(IP_THEM, 7, PORT_ME_SCTP),
+                vtag(IP_THEM, SCTP_PORT, 41001),
+            ] {
+                let p = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), bad, 2, 16, 64);
+                assert_eq!(reply_to(link, &plan, &p), Ok(None), "tag {bad:#x}");
+            }
+            // другие типы чанков (INIT 1, COOKIE-ACK 11, ERROR 9) не статус
+            for ty in [0u8, 1, 3, 9, 11, 255] {
+                let p = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, ty, 0, 64);
+                assert_eq!(reply_to(link, &plan, &p), Ok(None), "chunk {ty}");
+            }
+        }
+    }
+
+    /// Ответ на настоящий зонд плана: initiate_tag INIT это и есть cookie, которым приёмник сверяет verification tag.
+    #[test]
+    fn real_init_is_answered_by_init_ack_carrying_its_initiate_tag() {
+        for link in LINKS {
+            let plan = plan_with_ports(link, "S:2905");
+            let all = probes(&plan);
+            assert_eq!(all.len(), 1);
+            let p = &all[0];
+            assert_eq!(p.frame.len() - ip_off(link) - 20 - 12, 20, "INIT 20 байт");
+            let off = ip_off(link) + 20;
+            let tag = u32::from_be_bytes(p.frame[off + 16..off + 20].try_into().unwrap());
+            assert_eq!(tag, p.seqno);
+            assert_eq!(tag, vtag(p.ip_them, p.port_them, p.port_me));
+            let ack = sctp_packet(p.ip_them, (p.port_them, p.port_me), tag, 2, 16, 64);
+            let r = reply_to(link, &plan, &ack).unwrap().unwrap();
+            assert_eq!(
+                (r.status, r.ip_proto, r.remote_port),
+                (PortStatus::Open, 132, SCTP_PORT)
+            );
+            // сам наш INIT (от нас к цели) ответом не считается
+            let mut own = p.frame[ip_off(link)..].to_vec();
+            own[8] = 64;
+            assert_eq!(reply_to(link, &plan, &own), Ok(None));
+        }
+    }
+
+    #[test]
+    fn sctp_rx_filters() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+        let ok = |ip: &[u8]| reply_to(link, &plan, ip);
+        // порт источника ответа не из S-портов плана: 54 нет; 80 это порт TCP
+        for sport in [54u16, 80] {
+            let t = vtag(IP_THEM, sport, PORT_ME_SCTP);
+            assert_eq!(
+                ok(&sctp_packet(IP_THEM, (sport, PORT_ME_SCTP), t, 2, 0, 64)),
+                Ok(None),
+                "sport {sport}"
+            );
+        }
+        // порт назначения вне диапазона источника и чужой адрес назначения
+        for dport in [41004u16, 40999] {
+            let t = vtag(IP_THEM, SCTP_PORT, dport);
+            assert_eq!(
+                ok(&sctp_packet(IP_THEM, (SCTP_PORT, dport), t, 2, 0, 64)),
+                Ok(None),
+                "dport {dport}"
+            );
+        }
+        let mut other_dst = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 0, 64);
+        other_dst[16..20].copy_from_slice(&(IP_ME + 1).to_be_bytes());
+        assert_eq!(ok(&with_sums(other_dst)), Ok(None));
+        // цель вне набора плана (cookie верный для неё)
+        let out = 0x0b00_0005;
+        let t = vtag(out, SCTP_PORT, PORT_ME_SCTP);
+        assert_eq!(
+            ok(&sctp_packet(out, (SCTP_PORT, PORT_ME_SCTP), t, 2, 0, 64)),
+            Ok(None)
+        );
+        // TCP-план (Студия) SCTP не принимает
+        let tcp_plan = plan_for(link);
+        assert_eq!(
+            reply_to(
+                link,
+                &tcp_plan,
+                &sctp_packet(IP_THEM, (80, PORT_ME_SCTP), tag, 2, 0, 64)
+            ),
+            Ok(None)
+        );
+        // план без S-портов (только T:80) SCTP тоже не принимает
+        let t80 = plan_with_ports(link, "T:80");
+        let t = vtag(IP_THEM, 80, PORT_ME_SCTP);
+        assert_eq!(
+            reply_to(
+                link,
+                &t80,
+                &sctp_packet(IP_THEM, (80, PORT_ME_SCTP), t, 2, 0, 64)
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn sctp_checksums_are_verified_and_policy_is_explicit() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+        let good = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 16, 64);
+        assert!(reply_to(link, &plan, &good).unwrap().is_some());
+        // испорченный CRC-32C (любой байт поля, и байт чанка)
+        for at in [20 + 8, 20 + 11, 20 + 20] {
+            let mut bad = good.clone();
+            bad[at] ^= 0x01;
+            assert_eq!(
+                reply_to(link, &plan, &bad),
+                Err(ParseError::BadSctpChecksum),
+                "byte {at}"
+            );
+            assert!(
+                parse_reply_with(
+                    &wrap(link, &bad),
+                    link,
+                    &plan,
+                    ChecksumPolicy::TrustHardware
+                )
+                .unwrap()
+                .is_some(),
+                "TrustHardware принимает byte {at}"
+            );
+        }
+        // CRC-32C в big-endian вместо little-endian (ошибка порядка байт из Review Focus 5) не проходит
+        let mut be = good.clone();
+        be[28..32].reverse();
+        assert_eq!(reply_to(link, &plan, &be), Err(ParseError::BadSctpChecksum));
+        // испорченная сумма IP-заголовка
+        let mut bad_ip = good.clone();
+        bad_ip[10] ^= 0xff;
+        assert_eq!(
+            reply_to(link, &plan, &bad_ip),
+            Err(ParseError::BadIpChecksum)
+        );
+        // испорченная сумма на чужом (неверный tag) пакете не ошибка: фильтры идут до сумм
+        let mut foreign = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag ^ 1, 2, 16, 64);
+        foreign[28] ^= 0x01;
+        assert_eq!(reply_to(link, &plan, &foreign), Ok(None));
+    }
+
+    #[test]
+    fn sctp_truncation_never_panics() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+        let full = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 16, 64);
+        for n in 0..full.len() {
+            let _ = reply_to(link, &plan, &full[..n]);
+        }
+        // меньше общего заголовка (12 байт) это ошибка разбора
+        let mut short = full[..20 + 10].to_vec();
+        short[2..4].copy_from_slice(&30u16.to_be_bytes());
+        assert!(matches!(
+            reply_to(link, &plan, &short),
+            Err(ParseError::Truncated(_))
+        ));
+        // общий заголовок есть, а заголовка чанка нет (C: offset + 16 > length, молча): не статус и не ошибка
+        let mut nochunk = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 0, 64);
+        nochunk.truncate(20 + 14);
+        nochunk[2..4].copy_from_slice(&34u16.to_be_bytes());
+        assert_eq!(reply_to(link, &plan, &with_sums(nochunk)), Ok(None));
+    }
+}

@@ -443,10 +443,7 @@ impl Sim {
                 doc,
                 probes: probes.clone(),
                 recs: shown,
-                responder: ResponderRecord {
-                    exited_with: None,
-                    stderr: String::new(),
-                },
+                responder: ResponderRecord::default(),
             });
         }
         Sim {
@@ -968,27 +965,59 @@ fn a_document_that_differs_from_the_wire_or_from_c_fails() {
     );
 }
 
-/// The live shape of a burst (both scanners send several probes back to back at `--rate 100`): probe `k` and probe
-/// `k + 1` leave together and the stand answers `k + 1` first (the responder answers each UDP socket on its own
-/// thread, the peer kernel answers ICMP at once). Same probes, same order; only the replies change places.
-fn burst(fr: &Frames, k: usize, arp: bool) -> Frames {
+/// A capture time on whole microsecond `n` plus half a microsecond: the generator's pcap stores microseconds by
+/// truncation, so such a time is stored exactly, and gaps between two of them round to whole microseconds.
+fn at_us(n: u64) -> f64 {
+    (n as f64 + 0.5) / 1e6
+}
+/// The capture indices of the probes of `fr`, and the first frame after probe `k + 1`'s frames.
+fn probe_indices(fr: &Frames, arp: bool) -> Vec<usize> {
     let st = stand();
-    let at: Vec<usize> = fr
-        .iter()
+    fr.iter()
         .enumerate()
         .filter(|(_, (t, f))| probe_of(*t, f, &st, arp).is_some())
         .map(|(i, _)| i)
-        .collect();
+        .collect()
+}
+/// The live shape of a burst (both scanners send several probes back to back at `--rate 100`): probe `k` and probe
+/// `k + 1` leave together and the stand answers `k + 1` first (the responder answers each UDP socket on its own
+/// thread, the peer kernel answers ICMP at once). Same probes, same order; only the replies change places. The frames
+/// of the two probes follow each other 10 us apart, so the two replies are at most 30 us apart (an SCTP probe
+/// has three frames).
+fn burst(fr: &Frames, k: usize, arp: bool) -> Frames {
+    let at = probe_indices(fr, arp);
     let (a, b) = (at[k], at[k + 1]);
     let end = at.get(k + 2).copied().unwrap_or(fr.len() - 3);
-    let t0 = fr[a].0;
+    let base = (fr[a].0 * 1e6).floor() as u64;
     let mut out = fr[..a].to_vec();
-    out.push((t0, fr[a].1.clone()));
-    out.push((t0 + 0.0001, fr[b].1.clone()));
-    let mut t = t0 + 0.0002;
+    out.push((at_us(base), fr[a].1.clone()));
+    out.push((at_us(base + 10), fr[b].1.clone()));
+    let mut n = base + 20;
     for (_, f) in fr[b + 1..end].iter().chain(&fr[a + 1..b]) {
-        out.push((t, f.clone()));
-        t += 0.0001;
+        out.push((at_us(n), f.clone()));
+        n += 10;
+    }
+    out.extend(fr[end..].iter().cloned());
+    out
+}
+/// Probes `k` and `k + 1` of a scan that is no ARP scan leave 1 us apart and the stand answers `k + 1` first; the
+/// reply of `k` follows exactly `gap_us` microseconds after the reply of `k + 1` on the capture, the other frames of
+/// both probes after it. The documents, written in probe order, then hold one pair of records in the other order than
+/// their replies, `gap_us` apart.
+fn swapped_pair(fr: &Frames, k: usize, gap_us: u64) -> Frames {
+    let at = probe_indices(fr, false);
+    let (a, b) = (at[k], at[k + 1]);
+    let end = at.get(k + 2).copied().unwrap_or(fr.len() - 3);
+    // In the generator's capture a probe's reply is the frame right after it, its other frames follow.
+    let (ra, rb) = (&fr[a + 1..b], &fr[b + 1..end]);
+    let base = (fr[a].0 * 1e6).floor() as u64;
+    let mut out = fr[..a].to_vec();
+    out.push((at_us(base), fr[a].1.clone()));
+    out.push((at_us(base + 1), fr[b].1.clone()));
+    out.push((at_us(base + 2), rb[0].1.clone()));
+    out.push((at_us(base + 2 + gap_us), ra[0].1.clone()));
+    for (n, (_, f)) in (base + 3 + gap_us..).zip(rb[1..].iter().chain(&ra[1..])) {
+        out.push((at_us(n), f.clone()));
     }
     out.extend(fr[end..].iter().cloned());
     out
@@ -1048,51 +1077,125 @@ fn the_stands_reply_order_may_differ_between_the_two_runs_of_a_document() {
         ),
         "{b:#?}"
     );
-    // A record that C reports and rmasscan does not (or another field) is still a difference from C.
+    // The cross-check with C, exactly. A record rmasscan drops or writes twice, on wires that answered exactly as the
+    // stand owes (the same records on both runs): the document differs from its own wire and from C's, so exactly
+    // those two checks FAIL, and the other document of the case (`binary`) still equals C's.
+    for (what, edit) in [
+        (
+            "dropped",
+            (|r: &mut Vec<Rec>| drop(r.remove(2))) as fn(&mut Vec<Rec>),
+        ),
+        ("written twice", |r: &mut Vec<Rec>| {
+            let x = r[2].clone();
+            r.insert(3, x);
+        }),
+    ] {
+        let mut sim = Sim::new("p02_udp_payloads_and_closed");
+        let s = sim.step_mut("json");
+        let mut recs = s.recs.clone();
+        edit(&mut recs);
+        s.doc = Some(render(Out::Json, &recs, true));
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, FAIL, "{what}: {b:#?}");
+        assert_eq!(b.len(), 2, "{what}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                FAIL,
+                "json: the document holds the records of the replies on its wire"
+            ) && has(
+                &b,
+                FAIL,
+                "json: the records equal the C oracle's (oracle-json) field for field but the time, in any order"
+            ),
+            "{what}: {b:#?}"
+        );
+        assert!(!b.iter().any(|x| x.contains("binary:")), "{what}: {b:#?}");
+    }
+    // The cross-check alone: a wire where the stand answered rmasscan's run with another TTL on one SYN-ACK, which
+    // rmasscan's document records as it came. The document holds its own wire's records, the stand is still the
+    // stand, and the one check that sees the difference from C is the cross-check of that document.
     let mut sim = Sim::new("p05_mixed_protos");
-    let s = sim.step_mut("oracle-json");
-    s.recs[3].ttl = Some(63);
-    s.doc = Some(render(Out::Json, &s.recs, false));
+    let s = sim.step_mut("json");
+    let i = s
+        .frames
+        .iter()
+        .position(|(_, f)| {
+            f[6..12] == PEER_MAC && f.get(12..14) == Some(&[8, 0][..]) && f.get(23) == Some(&6)
+        })
+        .unwrap();
+    let f = &mut s.frames[i].1;
+    f[22] = 63;
+    f[24..26].fill(0);
+    let sum = sum16(&f[14..34], 0);
+    f[24..26].copy_from_slice(&sum.to_be_bytes());
+    let (ip, proto) = (Ipv4Addr::new(f[26], f[27], f[28], f[29]), f[23]);
+    let r = s
+        .recs
+        .iter_mut()
+        .find(|r| r.ip == ip && r.proto.number() == proto)
+        .unwrap();
+    r.ttl = Some(63);
+    s.doc = Some(render(Out::Json, &s.recs, true));
     let (v, b) = judge_one(&sim);
-    assert_ne!(v, PASS, "{b:#?}");
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
     assert!(
         has(
             &b,
             FAIL,
-            "json: the records equal the C oracle's (oracle-json)"
-        ) || has(
-            &b,
-            INVALID,
-            "json: the records equal the C oracle's (oracle-json)"
+            "json: the records equal the C oracle's (oracle-json) field for field but the time, in any order"
         ),
         "{b:#?}"
     );
 }
 
-#[test]
-fn replies_captured_within_a_millisecond_may_reach_the_scanner_in_either_order() {
-    // Live, 2026-11-10 (linux-protocols-r2 on 5661a6e): p05's oracle wrote the SYN-ACK of 198.18.0.3:80 before the
-    // INIT-ACK of 198.18.0.5:2905, which the peer link had sent 5 us earlier (the responder's SCTP thread and the peer
-    // kernel, two CPUs). Here both runs of p05 get a burst on the wire while their documents keep the order of the
-    // probes: the first two replies trade places within 0.4 ms.
-    let mut sim = Sim::new("p05_mixed_protos");
-    for s in &mut sim.steps {
-        s.frames = burst(&s.frames, 0, false);
-    }
-    let (v, b) = judge_one(&sim);
-    assert_eq!(v, PASS, "{b:#?}");
+/// The notes of case `p05` written alone.
+fn p05_notes(sim: &Sim) -> Value {
     let root = scratch();
     sim.write(&root);
     fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
     let res = verify_dir(&root);
-    let run = run_of(&res, "p05_mixed_protos");
-    assert_eq!(
-        run["notes"]["reply_order_swaps"],
-        json!({"json": 1, "oracle-json": 1}),
-        "{:#?}",
-        run["notes"]
-    );
+    let notes = run_of(&res, "p05_mixed_protos")["notes"].clone();
     fs::remove_dir_all(&root).unwrap();
+    notes
+}
+
+#[test]
+fn replies_captured_at_most_50_us_apart_may_reach_the_scanner_in_either_order() {
+    // Live, 2026-11-10 (linux-protocols-r2 on 5661a6e): p05's oracle wrote the SYN-ACK of 198.18.0.3:80 before the
+    // INIT-ACK of 198.18.0.5:2905, which the peer link had sent 5 us earlier (the responder's SCTP thread and the peer
+    // kernel, two CPUs); r3 on 0ed6e36 had the same on rmasscan's side, 7 us. Here both runs of p05 get a burst on
+    // the wire while their documents keep the order of the probes: the first two replies trade places 20 us apart.
+    let mut sim = Sim::new("p05_mixed_protos");
+    for s in &mut sim.steps {
+        s.frames = swapped_pair(&s.frames, 0, 20);
+    }
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, PASS, "{b:#?}");
+    let notes = p05_notes(&sim);
+    // per step: the pairs written in the other order and the largest gap among them
+    assert_eq!(
+        notes["reply_order_swaps"],
+        json!({
+            "json": {"pairs": 1, "largest_gap_us": 20},
+            "oracle-json": {"pairs": 1, "largest_gap_us": 20}
+        }),
+        "{notes:#?}"
+    );
+    assert!(
+        s(&notes["reply_order_window"]).starts_with("50 us:")
+            && s(&notes["reply_order_window"]).contains("exactly 50 us is inside"),
+        "{notes:#?}"
+    );
+    // without a swap: no pair, no gap
+    assert_eq!(
+        p05_notes(&Sim::new("p05_mixed_protos"))["reply_order_swaps"],
+        json!({
+            "json": {"pairs": 0, "largest_gap_us": null},
+            "oracle-json": {"pairs": 0, "largest_gap_us": null}
+        })
+    );
     // The window is the bound: the same two records swapped where their replies are 10 ms apart FAIL rmasscan's step
     // and make the oracle's INVALID.
     let mut sim = Sim::new("p05_mixed_protos");
@@ -1111,11 +1214,16 @@ fn replies_captured_within_a_millisecond_may_reach_the_scanner_in_either_order()
             &b,
             INVALID,
             "oracle-json: the document holds the records of the replies on its wire"
-        ) && b.iter().any(|x| x.contains("10.0 ms apart")),
+        ) && b
+            .iter()
+            .any(|x| x.contains("10000 us apart (more than 50 us)")),
         "{b:#?}"
     );
-    // The pure rule: an inversion inside the window is counted, outside it is the difference.
-    let r = |port: u16| Rec {
+}
+
+/// A UDP record of port `port` for the pure order rule.
+fn order_rec(port: u16) -> Rec {
+    Rec {
         st: St::Open,
         proto: Proto::Udp,
         ip: Ipv4Addr::new(198, 18, 0, 2),
@@ -1124,13 +1232,89 @@ fn replies_captured_within_a_millisecond_may_reach_the_scanner_in_either_order()
         ttl: None,
         mac: None,
         ts: None,
+    }
+}
+
+#[test]
+fn the_reply_order_window_is_50_us_and_a_pair_exactly_50_us_apart_is_inside() {
+    assert_eq!(REPLY_REORDER_WINDOW_US, 50);
+    let r = order_rec;
+    let swaps = |pairs, gap| Swaps {
+        pairs,
+        largest_gap_us: gap,
     };
-    let want = [(r(1), 0.0), (r(2), 0.0002), (r(3), 0.010)];
-    assert_eq!(in_reply_order(&[r(1), r(2), r(3)], &want), Ok(0));
-    assert_eq!(in_reply_order(&[r(2), r(1), r(3)], &want), Ok(1));
-    assert!(in_reply_order(&[r(1), r(3), r(2)], &want).is_err());
-    assert!(in_reply_order(&[r(1), r(2)], &want).is_err());
-    assert!(in_reply_order(&[r(1), r(2), r(4)], &want).is_err());
+    // The pure rule, at the edge: 49 and 50 us are inside (counted, with the gap), 51 us is the difference.
+    for (gap, inside) in [(49u64, true), (50, true), (51, false)] {
+        let want = [(r(1), 0.0), (r(2), gap as f64 / 1e6), (r(3), 0.010)];
+        let got = in_reply_order(&[r(2), r(1), r(3)], &want);
+        if inside {
+            assert_eq!(got, Ok(swaps(1, Some(gap))), "{gap} us");
+        } else {
+            let e = got.unwrap_err();
+            assert!(e.contains("51 us apart (more than 50 us)"), "{e}");
+        }
+    }
+    // The same at capture times of the live epoch (1.8e9 s carries a quarter microsecond of f64 error): rounded.
+    for (gap, inside) in [(50u64, true), (51, false)] {
+        let t = T0 + 0.5 / 1e6;
+        let want = [(r(1), t), (r(2), t + gap as f64 / 1e6)];
+        assert_eq!(
+            in_reply_order(&[r(2), r(1)], &want).is_ok(),
+            inside,
+            "{gap} us at the epoch"
+        );
+    }
+    // In order: no pair; the largest gap is the largest of several pairs; a missing or foreign record is the
+    // difference whatever the window.
+    let want = [
+        (r(1), 0.0),
+        (r(2), 0.000_010),
+        (r(3), 0.000_040),
+        (r(4), 0.010),
+    ];
+    assert_eq!(
+        in_reply_order(&[r(1), r(2), r(3), r(4)], &want),
+        Ok(swaps(0, None))
+    );
+    assert_eq!(
+        in_reply_order(&[r(3), r(2), r(1), r(4)], &want),
+        Ok(swaps(3, Some(40)))
+    );
+    assert!(in_reply_order(&[r(1), r(2), r(4), r(3)], &want).is_err());
+    assert!(in_reply_order(&[r(1), r(2), r(3)], &want).is_err());
+    assert!(in_reply_order(&[r(1), r(2), r(3), r(5)], &want).is_err());
+    assert_eq!(reply_gap_us(T0 + 0.000_007_4, T0), 7);
+
+    // End to end on p05: the first two replies trade places exactly 50 us apart (PASS, both steps count the pair
+    // with its gap), 51 us apart (rmasscan's step FAILs, the oracle's is INVALID, each with the gap in the detail).
+    let mut sim = Sim::new("p05_mixed_protos");
+    for s in &mut sim.steps {
+        s.frames = swapped_pair(&s.frames, 0, 50);
+    }
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, PASS, "50 us: {b:#?}");
+    assert_eq!(
+        p05_notes(&sim)["reply_order_swaps"],
+        json!({
+            "json": {"pairs": 1, "largest_gap_us": 50},
+            "oracle-json": {"pairs": 1, "largest_gap_us": 50}
+        })
+    );
+    let mut sim = Sim::new("p05_mixed_protos");
+    for s in &mut sim.steps {
+        s.frames = swapped_pair(&s.frames, 0, 51);
+    }
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "51 us: {b:#?}");
+    assert_eq!(b.len(), 2, "51 us: {b:#?}");
+    const CHECK: &str = "the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)";
+    assert!(
+        has(&b, FAIL, &format!("json: {CHECK}"))
+            && has(&b, INVALID, &format!("oracle-json: {CHECK}"))
+            && b.iter()
+                .all(|x| x.contains("51 us apart (more than 50 us)")),
+        "51 us: {b:#?}"
+    );
 }
 
 #[test]
@@ -1468,7 +1652,8 @@ fn with_frames(fr: &Frames, f: &[u8], n: usize) -> Frames {
 #[test]
 fn the_named_classes_count_no_more_frames_than_the_scanner_side_can_send() {
     // The bounds themselves: rmasscan's resolver sends at most 10 who-has (one a second for 10 s), C's 12
-    // (stack-arpv4.c:175-187); a reset per SYN-ACK frame, two on C's step; one ICMP error per UDP or SCTP reply frame.
+    // (stack-arpv4.c:175-187); a kernel reset per SYN-ACK frame, and on C's step one more per distinct SYN-ACK (C
+    // resets after its dedup, main.c:1067-1068 then :1095); one ICMP error per UDP or SCTP reply frame.
     assert_eq!(NEXT_HOP_WHO_HAS_MAX_RMASSCAN, 10);
     assert_eq!(NEXT_HOP_WHO_HAS_MAX_C, 12);
     let c = case("p05_mixed_protos").unwrap();
@@ -1499,6 +1684,9 @@ fn the_named_classes_count_no_more_frames_than_the_scanner_side_can_send() {
         scanner_bounds(&v, Who::Rmasscan)[1],
         ("rst_to_syn_ack", 4, 5)
     );
+    // ... and on C's step one more of the kernel's only: C's own reset follows its dedup, so the repeat gets none
+    // (5 SYN-ACK frames + 4 distinct SYN-ACKs, not 2 x 5).
+    assert_eq!(scanner_bounds(&v, Who::Oracle)[1], ("rst_to_syn_ack", 4, 9));
 
     // One rule broken at a time, each on rmasscan's step (FAIL) and on the oracle's (INVALID).
     const CHECK: &str = "the named scanner-side frames stay within their bounds";
@@ -1580,6 +1768,24 @@ fn the_named_classes_count_no_more_frames_than_the_scanner_side_can_send() {
             "{step} {detail}: {b:#?}"
         );
     }
+    // C resetting a repeated SYN-ACK a second time: with the stand's SYN-ACK repeated on the oracle's wire, kernel and
+    // C together may send 9 resets (5 + 4); a 10th, which the old bound of 2 x 5 let through, is INVALID.
+    let rst = scanner_rst(&syn_ack);
+    for (extra, want) in [(5, PASS), (6, INVALID)] {
+        let mut sim = Sim::new("p05_mixed_protos");
+        let s = sim.step_mut("oracle-json");
+        s.frames = with_frames(&with_frame(&s.frames, syn_ack.clone()), &rst, extra);
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{extra} more resets: {b:#?}");
+        if want == INVALID {
+            assert_eq!(b.len(), 1, "{b:#?}");
+            assert!(
+                has(&b, INVALID, &format!("oracle-json: {CHECK}"))
+                    && b[0].contains("rst_to_syn_ack 10 of at most 9"),
+                "{b:#?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1616,6 +1822,7 @@ fn a_responder_that_died_mid_step_is_named_in_the_verdict() {
     sim.step_mut("json").responder = ResponderRecord {
         exited_with: Some(2),
         stderr: ERR.into(),
+        ..ResponderRecord::default()
     };
     let (v, b) = judge_one(&sim);
     assert_eq!(v, INVALID, "{b:#?}");
@@ -1625,20 +1832,62 @@ fn a_responder_that_died_mid_step_is_named_in_the_verdict() {
             &b,
             INVALID,
             "json/responder.json: the peer responder ran until the scanner ended"
-        ) && b[0].contains(&format!("exited with 2 before the scanner ended: {ERR}")),
+        ) && b[0].contains(&format!(
+            "not seen running when the scanner ended (it exited with 2): {ERR}"
+        )),
         "{b:#?}"
     );
-    // gone without a word: still named, with its exit code
-    let mut sim = Sim::new("p02_udp_payloads_and_closed");
-    sim.step_mut("oracle-binary").responder = ResponderRecord {
-        exited_with: Some(-1),
-        stderr: String::new(),
-    };
-    let (v, b) = judge_one(&sim);
-    assert_eq!(v, INVALID, "{b:#?}");
-    assert!(
-        b.len() == 1 && b[0].contains("exited with -1 before the scanner ended: it wrote nothing"),
-        "{b:#?}"
+    // Each way of not running is named apart (until the final review of the stage all were one exit code -1): gone
+    // without a word with an exit code, killed by a signal, a state the suite could not read.
+    for (rec, says) in [
+        (
+            ResponderRecord {
+                exited_with: Some(0),
+                ..ResponderRecord::default()
+            },
+            "(it exited with 0): it wrote nothing to its stderr",
+        ),
+        (
+            ResponderRecord {
+                killed_by_signal: Some(9),
+                ..ResponderRecord::default()
+            },
+            "(it was killed by signal 9): it wrote nothing to its stderr",
+        ),
+        (
+            ResponderRecord {
+                state_unknown: Some("try_wait failed: Interrupted system call (os error 4)".into()),
+                ..ResponderRecord::default()
+            },
+            "(its state is unknown (try_wait failed: Interrupted system call (os error 4))): it wrote nothing",
+        ),
+        (
+            ResponderRecord {
+                state_unknown: Some("the suite held no handle of the responder".into()),
+                ..ResponderRecord::default()
+            },
+            "(its state is unknown (the suite held no handle of the responder))",
+        ),
+    ] {
+        let mut sim = Sim::new("p02_udp_payloads_and_closed");
+        sim.step_mut("oracle-binary").responder = rec.clone();
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, INVALID, "{rec:?}: {b:#?}");
+        assert!(
+            b.len() == 1
+                && has(
+                    &b,
+                    INVALID,
+                    "oracle-binary/responder.json: the peer responder ran until the scanner ended"
+                )
+                && b[0].contains(says),
+            "{rec:?}: {b:#?}"
+        );
+    }
+    // the record names every field, `null` while the responder runs
+    assert_eq!(
+        serde_json::to_value(ResponderRecord::default()).unwrap(),
+        json!({"exited_with": null, "killed_by_signal": null, "state_unknown": null, "stderr": ""})
     );
     // the record is part of every step's evidence
     let mut sim = Sim::new("p01_ping");

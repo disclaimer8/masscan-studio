@@ -27,9 +27,9 @@
 //! What is judged, per step: the probes on the wire (rmasscan's equal the product's own plan, `ReadyPlan` and its
 //! cursor, in order; the oracle's equal rmasscan's), the stand's answer to every probe (exactly the one reply the
 //! stand owes; a stand that answered otherwise is INVALID, never a FAIL), the document against the replies on the
-//! step's own wire (format by format, in reply order up to replies captured within [`REPLY_REORDER_WINDOW`] of each
-//! other), rmasscan's stderr and exit, and the two scanners' documents against each other (as multisets of records:
-//! [`RECORD_ORDER_VS_C`]). The differences from C that the code documents are applied by name, never by a looser
+//! step's own wire (format by format, in reply order up to replies captured at most [`REPLY_REORDER_WINDOW_US`]
+//! apart), rmasscan's stderr and exit, and the two scanners' documents against each other (as multisets of
+//! records: [`RECORD_ORDER_VS_C`]). The differences from C that the code documents are applied by name, never by a looser
 //! comparison ([`DEVIATIONS`]): each has a check that the wire is such that it cannot change the comparison, and the
 //! run's notes say which applied and how often.
 //!
@@ -164,13 +164,13 @@ pub const DEVIATIONS: [(&str, &str); 6] = [
     ),
     (
         "arp-mac-ethernet-source",
-        "the MAC of an ARP record is the Ethernet source (C proto-arp.c:36), not the sender hardware address of the design text; every ARP reply must carry the same MAC in both",
+        "the MAC of an ARP record is the Ethernet source (C proto-arp.c:39), not the sender hardware address of the design text; every ARP reply must carry the same MAC in both",
     ),
 ];
 
 /// Why rmasscan's document and the oracle's are compared as multisets of records, while each one's order is judged
 /// against its own wire (no deviation from C: both print in the order the replies arrive).
-pub const RECORD_ORDER_VS_C: &str = "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured within REPLY_REORDER_WINDOW of each other); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order";
+pub const RECORD_ORDER_VS_C: &str = "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order";
 
 /// One case: what it scans and which documents it writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -394,21 +394,44 @@ pub struct PeerStack {
 /// `<step>/responder.json`: the peer responder of the step as the suite found it the moment the step's scanner
 /// ended. The responder never writes to its stderr while it answers; an answerer that fails ends it at once with
 /// `NOT RUN: <error>` there and exit 2 (`capture responder`).
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+///
+/// The three fields of its state are `null` while it still ran; otherwise exactly one of them says what the suite
+/// found: an exit code, the signal that ended it, or why its state could not be read (no handle of it was held, or
+/// `try_wait` failed). Until the final review of the stage all three were one `exited_with: -1`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ResponderRecord {
-    /// Its exit code when it had already exited; `None` while it still ran.
+    /// Its exit code when it had already exited with one.
     pub exited_with: Option<i32>,
+    /// The signal that had ended it (Unix: the process exited without a code).
+    pub killed_by_signal: Option<i32>,
+    /// Why its state is not known: the suite held no handle of it, or `try_wait` failed (with its error).
+    pub state_unknown: Option<String>,
     /// What it had written to its stderr by then.
     pub stderr: String,
 }
-/// Why the peer did not answer the whole step: a responder that was gone before the scanner ended, named with its
-/// exit code and its own error text; `None` when it ran through the scan.
+impl ResponderRecord {
+    /// What the record says about the responder when it was not running, in words (`it exited with 2`, `it was killed
+    /// by signal 9`, `its state is unknown (...)`); `None` while it ran.
+    pub fn gone(&self) -> Option<String> {
+        if let Some(rc) = self.exited_with {
+            return Some(format!("it exited with {rc}"));
+        }
+        if let Some(sig) = self.killed_by_signal {
+            return Some(format!("it was killed by signal {sig}"));
+        }
+        self.state_unknown
+            .as_ref()
+            .map(|why| format!("its state is unknown ({why})"))
+    }
+}
+/// Why the peer did not answer the whole step: a responder that was gone, or whose state was unknown, when the
+/// scanner ended, named with what the suite found and its own error text; `None` when it ran through the scan.
 pub fn responder_problem(rec: &ResponderRecord) -> Option<String> {
-    rec.exited_with.map(|rc| {
+    rec.gone().map(|how| {
         let said = rec.stderr.trim();
         format!(
-            "the peer responder exited with {rc} before the scanner ended: {}",
+            "the peer responder was not seen running when the scanner ended ({how}): {}",
             if said.is_empty() {
                 "it wrote nothing to its stderr"
             } else {
@@ -886,7 +909,7 @@ pub const SCANNER_CLASSES: [(&str, &str); 4] = [
     ),
     (
         "rst_to_syn_ack",
-        "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each first SYN-ACK itself (main.c:1095)",
+        "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068 then main.c:1095)",
     ),
     (
         "port_unreachable_to_udp_reply",
@@ -907,11 +930,12 @@ pub const NEXT_HOP_WHO_HAS_MAX_RMASSCAN: usize = (rmasscan_net::arp_resolve::ARP
 /// send), 12 requests.
 pub const NEXT_HOP_WHO_HAS_MAX_C: usize = 12;
 /// How many frames of each [`SCANNER_CLASSES`] entry a step may hold, from what its scanner side can send for the
-/// stand's replies on the same wire: one kernel reset per SYN-ACK frame (rmasscan has no RST path; C adds its own
-/// `tcp_send_RST` for each first SYN-ACK, main.c:1095, so at most two per SYN-ACK frame on the oracle's step), the
-/// resolver's request count ([`NEXT_HOP_WHO_HAS_MAX_RMASSCAN`], [`NEXT_HOP_WHO_HAS_MAX_C`]), and one kernel ICMP
-/// error per UDP or SCTP reply frame (neither scanner sends one itself). `(class, count, at most)` in
-/// [`SCANNER_CLASSES`] order.
+/// stand's replies on the same wire: one kernel reset per SYN-ACK frame (the scanner namespace kernel resets every
+/// SYN-ACK frame; rmasscan has no RST path), plus on the oracle's step one `tcp_send_RST` of C per distinct SYN-ACK
+/// (C resets only a reply that passed its dedup, main.c:1067-1068 then :1095, so a repeated SYN-ACK gets the
+/// kernel's reset and no second one of C's), the resolver's request count ([`NEXT_HOP_WHO_HAS_MAX_RMASSCAN`],
+/// [`NEXT_HOP_WHO_HAS_MAX_C`]), and one kernel ICMP error per UDP or SCTP reply frame (neither scanner sends one
+/// itself). `(class, count, at most)` in [`SCANNER_CLASSES`] order.
 pub fn scanner_bounds(v: &WireView, who: Who) -> [(&'static str, usize, usize); 4] {
     let replies = |proto: Proto, st: Option<St>| {
         v.replies
@@ -919,13 +943,21 @@ pub fn scanner_bounds(v: &WireView, who: Who) -> [(&'static str, usize, usize); 
             .filter(|r| r.proto == proto && !r.via_icmp && st.is_none_or(|s| r.st == s))
             .count()
     };
-    let (rst_per_syn_ack, who_has) = match who {
-        Who::Rmasscan => (1, NEXT_HOP_WHO_HAS_MAX_RMASSCAN),
-        Who::Oracle => (2, NEXT_HOP_WHO_HAS_MAX_C),
+    // C's dedup key is (ip_them, port_them, ip_me, port_me) (main.c:1067); on the stand ip_me and port_me are fixed.
+    let distinct_syn_acks = v
+        .replies
+        .iter()
+        .filter(|r| r.proto == Proto::Tcp && !r.via_icmp && r.st == St::Open)
+        .map(|r| (r.ip, r.port))
+        .collect::<BTreeSet<_>>()
+        .len();
+    let (c_resets, who_has) = match who {
+        Who::Rmasscan => (0, NEXT_HOP_WHO_HAS_MAX_RMASSCAN),
+        Who::Oracle => (distinct_syn_acks, NEXT_HOP_WHO_HAS_MAX_C),
     };
     let max = [
         who_has,
-        rst_per_syn_ack * replies(Proto::Tcp, Some(St::Open)),
+        replies(Proto::Tcp, Some(St::Open)) + c_resets,
         replies(Proto::Udp, None),
         replies(Proto::Sctp, None),
     ];
@@ -1428,16 +1460,32 @@ pub fn wire_records_at(v: &WireView, who: Who, out: Out, show_closed: bool) -> V
     }
     recs
 }
-/// How far apart two replies on the peer capture may be and still reach the scanner in the other order. The witness
-/// records the peer link; the peer kernel (TCP, ICMP) and the responder's threads (one per UDP socket, one for the
-/// SCTP link) send from different CPUs, and two frames a few microseconds apart on the peer link can be delivered to
-/// the scanner's socket in the other order (live linux-protocols-r2: 5 us). Outside a burst the scan's send slots
-/// are 10 ms apart at `--rate 100`, so this never lets records of different slots trade places.
-pub const REPLY_REORDER_WINDOW: f64 = 0.001;
+/// How far apart, in microseconds, two replies on the peer capture may be and still reach the scanner in the other
+/// order; a pair exactly this far apart is inside. The witness records the peer link; the peer kernel (TCP, ICMP) and
+/// the responder's threads (one per UDP socket, one for the SCTP link) send from different CPUs, and two frames a few
+/// microseconds apart on the peer link can be delivered to the scanner's socket in the other order (live
+/// linux-protocols-r2 on 5661a6e: 5 us; r3 on 0ed6e36: 7 us). Until the final review of the stage the window was
+/// 1 ms, which inside a burst (neighbouring probes up to about 0.25 ms apart) let almost any order through; 50 us
+/// admits that cross-CPU race and not the reordering of a burst's replies by a scanner's writer. The gap is measured on
+/// the capture and rounded to the microsecond ([`reply_gap_us`]).
+pub const REPLY_REORDER_WINDOW_US: u64 = 50;
+/// The gap between two capture times in whole microseconds, rounded: the witness writes nanoseconds, the generator
+/// microseconds, and a capture time near 1.8e9 s carries about a quarter of a microsecond of `f64` error, so rounding
+/// makes the window's edge exact.
+pub fn reply_gap_us(a: f64, b: f64) -> u64 {
+    ((a - b).abs() * 1e6).round() as u64
+}
+/// The pairs of records a document wrote in the other order than their replies on the wire, all within
+/// [`REPLY_REORDER_WINDOW_US`]: how many, and the largest gap among them (`None` without such a pair).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Swaps {
+    pub pairs: usize,
+    pub largest_gap_us: Option<u64>,
+}
 /// `got` (a document's records, time aside) holds exactly the records `want` (the wire's, in reply order, each with
-/// its reply's capture time), in reply order up to records whose replies were captured within
-/// [`REPLY_REORDER_WINDOW`] of each other. `Ok`: how many such pairs are in the other order; `Err`: the difference.
-pub fn in_reply_order(got: &[Rec], want: &[(Rec, f64)]) -> Result<usize, String> {
+/// its reply's capture time), in reply order up to records whose replies were captured at most
+/// [`REPLY_REORDER_WINDOW_US`] apart. `Ok`: the pairs in the other order ([`Swaps`]); `Err`: the difference.
+pub fn in_reply_order(got: &[Rec], want: &[(Rec, f64)]) -> Result<Swaps, String> {
     let plain: Vec<Rec> = want.iter().map(|(r, _)| r.clone()).collect();
     if got.len() != want.len() {
         return Err(first_difference(got, &plain));
@@ -1454,24 +1502,23 @@ pub fn in_reply_order(got: &[Rec], want: &[(Rec, f64)]) -> Result<usize, String>
             None => return Err(first_difference(got, &plain)),
         }
     }
-    let mut swaps = 0;
+    let mut swaps = Swaps::default();
     for i in 0..at.len() {
         for k in i + 1..at.len() {
             if at[i] < at[k] {
                 continue;
             }
-            let gap = (want[at[i]].1 - want[at[k]].1).abs();
-            if gap > REPLY_REORDER_WINDOW {
+            let gap = reply_gap_us(want[at[i]].1, want[at[k]].1);
+            if gap > REPLY_REORDER_WINDOW_US {
                 return Err(format!(
-                    "record {i} ({}) is written before record {k} ({}), whose reply came first on the wire, {:.1} ms apart (more than {:.0} ms); in reply order: {}",
+                    "record {i} ({}) is written before record {k} ({}), whose reply came first on the wire, {gap} us apart (more than {REPLY_REORDER_WINDOW_US} us); in reply order: {}",
                     got[i].show(),
                     got[k].show(),
-                    gap * 1000.0,
-                    REPLY_REORDER_WINDOW * 1000.0,
                     shown(&plain)
                 ));
             }
-            swaps += 1;
+            swaps.pairs += 1;
+            swaps.largest_gap_us = Some(swaps.largest_gap_us.map_or(gap, |g| g.max(gap)));
         }
     }
     Ok(swaps)
@@ -1944,12 +1991,15 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
             let got: Vec<Rec> = d.records.iter().map(Rec::bare).collect();
             let order = in_reply_order(&got, &want);
             if let Ok(n) = order {
-                swaps.insert(s.spec.name.into(), json!(n));
+                swaps.insert(
+                    s.spec.name.into(),
+                    json!({"pairs": n.pairs, "largest_gap_us": n.largest_gap_us}),
+                );
             }
             cap(
                 r,
                 s,
-                "the document holds the records of the replies on its wire, field for field, in reply order (replies captured within 1 ms of each other on the peer link may come in either order: REPLY_REORDER_WINDOW)",
+                "the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
                 order.is_ok(),
                 order.map_or_else(|e| e, |_| shown(&got)),
             );
@@ -2039,8 +2089,7 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
     r.notes.insert(
         "reply_order_window".into(),
         json!(format!(
-            "{} s: two replies captured on the peer link within this time of each other may reach the scanner in the other order (two CPUs send them); reply_order_swaps counts, per step, the pairs of records written in the other order within it",
-            REPLY_REORDER_WINDOW
+            "{REPLY_REORDER_WINDOW_US} us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly {REPLY_REORDER_WINDOW_US} us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)"
         )),
     );
     case_checks(r, c, sides, &docs, &st);
@@ -2077,7 +2126,7 @@ fn scanner_frames(r: &mut Run, s: &Side, v: &WireView) {
     cap(
         r,
         s,
-        "the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, two on the oracle's step for C's own reset; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+        "the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
         bounds.iter().all(|(_, n, max)| n <= max),
         bounds
             .iter()

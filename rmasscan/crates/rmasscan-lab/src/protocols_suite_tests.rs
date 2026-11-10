@@ -604,7 +604,8 @@ fn a_responder_that_died_mid_step_is_recorded_and_named_in_the_verdict() {
         rec,
         pv::ResponderRecord {
             exited_with: Some(2),
-            stderr: DEAD.into()
+            stderr: DEAD.into(),
+            ..pv::ResponderRecord::default()
         }
     );
     // the other steps' responders ran through their scans
@@ -612,7 +613,7 @@ fn a_responder_that_died_mid_step_is_recorded_and_named_in_the_verdict() {
         let rec: pv::ResponderRecord =
             serde_json::from_slice(&fs::read(d.join(step).join(pv::RESPONDER_JSON)).unwrap())
                 .unwrap();
-        assert_eq!(rec.exited_with, None, "{step}");
+        assert_eq!(rec, pv::ResponderRecord::default(), "{step}");
     }
     let res = pv::verify_dir(&s.out);
     let run = array(&res["runs"])
@@ -627,10 +628,76 @@ fn a_responder_that_died_mid_step_is_recorded_and_named_in_the_verdict() {
     assert_eq!(b.len(), 1, "{b:#?}");
     assert!(
         b[0].contains("json/responder.json: the peer responder ran until the scanner ended")
-            && b[0].contains(&format!("exited with 2 before the scanner ended: {DEAD}")),
+            && b[0].contains(&format!(
+                "not seen running when the scanner ended (it exited with 2): {DEAD}"
+            )),
         "{b:#?}"
     );
     fs::remove_dir_all(s.root).unwrap();
+}
+
+/// A responder handle whose `try_end` answers what the test says.
+struct Fixed(Result<Option<ad::Ended>, String>);
+impl Running for Fixed {
+    fn try_wait(&mut self) -> Result<Option<i32>, String> {
+        unreachable!("responder_end reads try_end")
+    }
+    fn try_end(&mut self) -> Result<Option<ad::Ended>, String> {
+        self.0.clone()
+    }
+    fn signal(&mut self, _sig: &str) {}
+    fn kill(&mut self) {}
+}
+
+#[test]
+fn the_responders_state_names_an_exit_a_signal_a_missing_handle_and_an_unreadable_state_apart() {
+    // Until the final review of the stage all four ended as one `exited_with: -1`.
+    let end = |r: Result<Option<ad::Ended>, String>| {
+        let mut p: Box<dyn Running> = Box::new(Fixed(r));
+        responder_end(Some(&mut p))
+    };
+    let rec = |exited_with, killed_by_signal, state_unknown: Option<&str>| pv::ResponderRecord {
+        exited_with,
+        killed_by_signal,
+        state_unknown: state_unknown.map(str::to_owned),
+        stderr: String::new(),
+    };
+    assert_eq!(end(Ok(None)), rec(None, None, None), "running");
+    assert_eq!(end(Ok(Some(ad::Ended::Code(2)))), rec(Some(2), None, None));
+    assert_eq!(
+        end(Ok(Some(ad::Ended::Code(-1)))),
+        rec(Some(-1), None, None)
+    );
+    assert_eq!(
+        end(Ok(Some(ad::Ended::Signal(9)))),
+        rec(None, Some(9), None)
+    );
+    assert_eq!(
+        end(Err("Interrupted system call (os error 4)".into())),
+        rec(
+            None,
+            None,
+            Some("try_wait failed: Interrupted system call (os error 4)")
+        )
+    );
+    assert_eq!(
+        responder_end(None),
+        rec(
+            None,
+            None,
+            Some("the suite held no handle of the responder")
+        )
+    );
+    // every way of not running is a problem the verifier names; running is none
+    assert_eq!(pv::responder_problem(&end(Ok(None))), None);
+    for r in [
+        end(Ok(Some(ad::Ended::Code(2)))),
+        end(Ok(Some(ad::Ended::Signal(9)))),
+        end(Err("x".into())),
+        responder_end(None),
+    ] {
+        assert!(pv::responder_problem(&r).is_some(), "{r:?}");
+    }
 }
 
 // ------------------------------------------------------------------ refusals

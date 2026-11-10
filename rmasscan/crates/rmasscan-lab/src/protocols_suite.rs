@@ -23,8 +23,8 @@
 //! never loads a kernel module and never opens an SCTP socket.
 use crate::{
     autodetect_suite::{
-        self as ad, Linux, LinuxHost, LinuxTools, RESPONDER_POLLS, SH, addresses_outside_the_lab,
-        io, not_run, p2s, say, write_exit, write_record,
+        self as ad, Ended, Linux, LinuxHost, LinuxTools, RESPONDER_POLLS, Running, SH,
+        addresses_outside_the_lab, io, not_run, p2s, say, write_exit, write_record,
     },
     autodetect_verify::{ArgvRecord, CAPTURE_JSON},
     protocols_verify::{self as pv, CaseSpec, PeerStack, StepSpec},
@@ -255,10 +255,8 @@ fn responder(l: &Linux, base: &Path, t: &mut LinuxTools) -> Result<(), SuiteErro
         } else {
             &rec.stderr
         };
-        let state = match rec.exited_with {
-            Some(rc) => format!("it exited with {rc}: {said}"),
-            None => format!("it still runs: {said}"),
-        };
+        let how = rec.gone().unwrap_or_else(|| "it still runs".into());
+        let state = format!("{how}: {said}");
         return Err(not_run(format!(
             "the peer responder did not become ready ({state}); the scanner was not started"
         )));
@@ -268,20 +266,30 @@ fn responder(l: &Linux, base: &Path, t: &mut LinuxTools) -> Result<(), SuiteErro
 
 /// The responder's stderr in the step's work directory (`capture responder` prints its error there).
 const RESPONDER_ERR: &str = "responder.err.txt";
-/// The responder of the step in work directory `base` as it is now: its exit code once it is gone, and its stderr
-/// (trimmed, with `--out`, `--work` and the account scrubbed). A responder whose state cannot be read counts as gone.
+/// The responder of the step in work directory `base` as it is now ([`responder_end`]), and its stderr (trimmed, with
+/// `--out`, `--work` and the account scrubbed).
 fn responder_state(l: &Linux, base: &Path, t: &mut LinuxTools) -> pv::ResponderRecord {
-    let exited_with = match t.responder.as_mut() {
-        Some(p) => p.try_wait().unwrap_or(Some(-1)),
-        None => Some(-1),
-    };
     let stderr = fs::read(base.join(RESPONDER_ERR))
         .map(|b| String::from_utf8_lossy(&b).trim().to_owned())
         .unwrap_or_else(|e| format!("({RESPONDER_ERR} unreadable: {e})"));
     pv::ResponderRecord {
-        exited_with,
         stderr: l.scrub.str(&stderr),
+        ..responder_end(t.responder.as_mut())
     }
+}
+/// The state fields of [`pv::ResponderRecord`] for the responder handle `p`, each case apart: running (all `None`),
+/// an exit code, a signal, no handle held, or `try_wait` failing. A state that cannot be read is never taken for
+/// "still running"; the verifier names it like a responder that is gone.
+pub(crate) fn responder_end(p: Option<&mut Box<dyn Running>>) -> pv::ResponderRecord {
+    let mut rec = pv::ResponderRecord::default();
+    match p.map(|p| p.try_end()) {
+        None => rec.state_unknown = Some("the suite held no handle of the responder".into()),
+        Some(Err(e)) => rec.state_unknown = Some(format!("try_wait failed: {e}")),
+        Some(Ok(None)) => {}
+        Some(Ok(Some(Ended::Code(rc)))) => rec.exited_with = Some(rc),
+        Some(Ok(Some(Ended::Signal(sig)))) => rec.killed_by_signal = Some(sig),
+    }
+    rec
 }
 
 /// One step: its own responder and witness, the scanner in its own working directory, the document collected.

@@ -94,6 +94,7 @@ fn output_patch(o: &OutputOptions) -> conf::OutputConfPatch {
         show_open: Some(o.show_open),
         show_closed: Some(o.show_closed),
         show_host: Some(o.show_host),
+        ..conf::OutputConfPatch::default()
     }
 }
 
@@ -410,6 +411,41 @@ mod tests {
         drop(a);
         assert!(!kept.exists());
         assert!(b.dir().exists());
+    }
+
+    /// T5 New-3: `infinite = true` из файла `-c` обходит `conflicts_with` clap; `-sL` с ним отказывает, а не печатает
+    /// список один раз молча.
+    #[test]
+    fn conf_infinite_with_list_is_refused() {
+        let scratch = Scratch::new();
+        let conf = scratch.write("inf.conf", b"infinite = true\n");
+        let c = conf.to_str().unwrap();
+        let e = run_args(&[
+            "rmasscan",
+            "-c",
+            c,
+            "-sL",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+        ])
+        .unwrap_err();
+        assert!(e.contains("--infinite"), "{e}");
+        // Без `-sL` файл по-прежнему разрешён (`--echo` его печатает).
+        assert!(
+            run_args(&[
+                "rmasscan",
+                "-c",
+                c,
+                "--echo",
+                "10.0.0.0/30",
+                "-p80",
+                "--seed",
+                "1"
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

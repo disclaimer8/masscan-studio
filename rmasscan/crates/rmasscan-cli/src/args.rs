@@ -11,7 +11,7 @@
 //! `--noshow` и `--open` применяются в порядке командной строки. Отклонения от C: неизвестный `--output-format` -
 //! ошибка (Р6); redis, certs и ротация отклоняются с причиной (Р1).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 use std::net::Ipv4Addr;
 use std::path::Path;
@@ -143,6 +143,24 @@ pub struct Cli {
         help = "Resume a scan from a paused.conf file (options to the right of it override the file; output is appended)"
     )]
     pub resume: Vec<String>,
+    // main-conf.c:2472-2473, 3332-3338, 3868-3924: `-c FILE`, `--conf FILE`, `--config FILE` читают файл в своей позиции argv.
+    #[arg(
+        short = 'c',
+        long = "conf",
+        alias = "config",
+        value_name = "FILE",
+        action = clap::ArgAction::Append,
+        help = "Read a configuration file (key = value lines) at this position; options to the right override it, repeatable (aliases: --config, -cFILE)"
+    )]
+    pub conf: Vec<String>,
+    // main-conf.c:2825-2836, 3375-3377: `-iL FILE` / `--includefile FILE`, файл целей (`massip_parse_file`).
+    #[arg(
+        long = "includefile",
+        value_name = "FILE",
+        action = clap::ArgAction::Append,
+        help = "File of targets: addresses, CIDRs and ranges separated by whitespace or commas, # starts a comment (alias: -iL)"
+    )]
+    pub includefile: Vec<String>,
     // main-conf.c:2486-2550: `source-ip` - синоним `adapter-ip`; диапазон `A-B` степени двойки (Р6).
     #[arg(
         long = "adapter-ip",
@@ -446,13 +464,16 @@ pub struct Cli {
     /// Был ли хоть один `--stylesheet` или `--webxml` (`SET_output_stylesheet` задаёт XML, если формата нет).
     #[arg(skip)]
     style_sets_xml: bool,
-    /// Ключи конфигурации, чьё последнее появление в argv стоит правее `--resume` (они переопределяют файл).
+    /// Файлы конфигурации (`-c`, `--conf`, `--config`, `--resume`) в порядке `argv` и их позиции clap.
     #[arg(skip)]
-    after_resume: HashSet<&'static str>,
-    /// Группы опций вывода (`format`, `filename`, `append`, `flush`, `style`, `show`), чьё последнее появление в
-    /// argv стоит правее `--resume`.
+    markers: Vec<FileMarker>,
+    /// Позиция clap последнего появления каждого позиционного ключа конфигурации ([`POSITIONAL_KEYS`]).
     #[arg(skip)]
-    after_output: HashSet<&'static str>,
+    key_pos: HashMap<&'static str, usize>,
+    /// Позиция clap последнего появления каждой группы опций вывода (`format`, `filename`, `append`, `flush`,
+    /// `style`, `show`).
+    #[arg(skip)]
+    output_pos: HashMap<&'static str, usize>,
     /// Разобранная конфигурация с `--resume`: файл читается один раз на `Cli`.
     #[arg(skip)]
     resolved: std::sync::OnceLock<Result<FullConf, String>>,
@@ -483,6 +504,26 @@ const POSITIONAL_KEYS: [&str; 22] = [
     "tcp_sackok",
     "tcp_wscale",
     "tcp_tsecho",
+];
+
+/// Файл конфигурации в `argv`: `kind` это ключ C (`conf` или `resume`), `pos` индекс clap его значения.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileMarker {
+    pos: usize,
+    kind: &'static str,
+    path: String,
+}
+
+/// Идентификаторы clap опций вывода по группам (`merge_file_output`).
+const OUTPUT_GROUPS: [(&str, &[&str]); 6] = [
+    // Только `--output-format` ставит формат безусловно; имя файла и таблица стилей лишь подставляют XML
+    // при формате 0 (main-conf.c:1643, 2100), `--no-stylesheet` формат не трогает (:2983).
+    ("format", &["output_format"]),
+    ("filename", &["output_filename"]),
+    ("append", &["append_output"]),
+    ("flush", &["output_flush"]),
+    ("style", &["stylesheet", "webxml", "no_stylesheet"]),
+    ("show", &["show", "noshow", "open"]),
 ];
 
 /// Один шаг `SET_output_show` (`on`), `SET_output_noshow` (`!on`) или `SET_output_show_open`.
@@ -603,6 +644,9 @@ where
             out.push(format!("--{name}={value}"));
         } else if a == "-sL" {
             out.push("--list".into());
+        } else if a == "-iL" {
+            // main-conf.c:3375-3377: nmap-стиль `-iL FILE` это `includefile`; clap прочёл бы его как `-i L`.
+            out.push("--includefile".into());
         } else if a.starts_with("-o") {
             let format = dash_o_format(&a)?;
             let file = it
@@ -778,42 +822,35 @@ impl Cli {
                 "--resume may be given only once".to_string(),
             ));
         }
-        if let Some(at) = m.indices_of("resume").and_then(Iterator::max) {
-            cli.after_resume = POSITIONAL_KEYS
-                .iter()
-                .copied()
-                .filter(|id| {
-                    m.indices_of(id)
-                        .and_then(Iterator::max)
-                        .is_some_and(|i| i > at)
-                })
-                .collect();
-            // `Count` без вхождений хранит значение по умолчанию, поэтому сначала счётчик (см. `fold_stylesheet`).
-            let counted =
-                |id: &str| !matches!(id, "webxml" | "no_stylesheet") || m.get_count(id) > 0;
-            let right = |ids: &[&str]| {
-                ids.iter().any(|id| {
-                    counted(id)
-                        && m.indices_of(id)
-                            .and_then(Iterator::max)
-                            .is_some_and(|i| i > at)
-                })
-            };
-            for (group, ids) in [
-                // Только `--output-format` ставит формат безусловно; имя файла и таблица стилей лишь подставляют XML
-                // при формате 0 (main-conf.c:1643, 2100), `--no-stylesheet` формат не трогает (:2983).
-                ("format", &["output_format"][..]),
-                ("filename", &["output_filename"][..]),
-                ("append", &["append_output"][..]),
-                ("flush", &["output_flush"][..]),
-                ("style", &["stylesheet", "webxml", "no_stylesheet"][..]),
-                ("show", &["show", "noshow", "open"][..]),
-            ] {
-                if right(ids) {
-                    cli.after_output.insert(group);
-                }
+        // Файлы конфигурации: `-c`/`--conf`/`--config` и `--resume` применяются в своей позиции `argv`.
+        for (id, kind) in [("conf", "conf"), ("resume", "resume")] {
+            if let (Some(values), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
+                cli.markers
+                    .extend(indices.zip(values).map(|(pos, path)| FileMarker {
+                        pos,
+                        kind,
+                        path: path.clone(),
+                    }));
             }
         }
+        cli.markers.sort_by_key(|mk| mk.pos);
+        let last = |id: &str| m.indices_of(id).and_then(Iterator::max);
+        cli.key_pos = POSITIONAL_KEYS
+            .iter()
+            .filter_map(|id| last(id).map(|p| (*id, p)))
+            .collect();
+        // `Count` без вхождений хранит значение по умолчанию, поэтому сначала счётчик (см. `fold_stylesheet`).
+        let counted = |id: &str| !matches!(id, "webxml" | "no_stylesheet") || m.get_count(id) > 0;
+        cli.output_pos = OUTPUT_GROUPS
+            .iter()
+            .filter_map(|(group, ids)| {
+                ids.iter()
+                    .filter(|id| counted(id))
+                    .filter_map(|id| last(id))
+                    .max()
+                    .map(|p| (*group, p))
+            })
+            .collect();
         cli.output_options().map_err(ParseError::Masscan)?;
         Ok(cli)
     }
@@ -902,9 +939,10 @@ impl Cli {
         self.resolve().map(|full| full.scan)
     }
 
-    /// Конфигурация с учётом `--resume <file>` (`resume = <file>`, main-conf.c:2926-2928): ключи левее файла
-    /// применяются первыми, затем файл (с его выводом, `pcap-filename` и `ndjson-status`), затем ключи правее
-    /// (они переопределяют файл). Без `--resume` это обычный `to_config` с пустым [`FullConf::output`].
+    /// Конфигурация с учётом файлов `-c`/`--conf`/`--config` и `--resume <file>` (`conf = <file>`, `resume = <file>`,
+    /// main-conf.c:2472-2473, 2926-2928): ключи применяются в порядке `argv`, то есть ключ правее файла переопределяет
+    /// его, левее переопределяется им (`masscan_set_parameter` зовётся по ходу разбора). Файл приносит свой вывод,
+    /// `pcap-filename` и `ndjson-status`. Без файлов это обычный `to_config` с пустым [`FullConf::output`].
     pub fn resolve(&self) -> Result<FullConf, String> {
         self.resolved
             .get_or_init(|| self.resolve_uncached())
@@ -912,32 +950,44 @@ impl Cli {
     }
 
     fn resolve_uncached(&self) -> Result<FullConf, String> {
-        let mut cfg = ScanConfig::default();
-        self.apply_scan_fields(&mut cfg, false)?;
-        let mut full = FullConf {
-            scan: cfg,
-            ..FullConf::default()
-        };
-        if !self.after_resume.contains("pcap") {
-            full.pcap_filename.clone_from(&self.pcap);
-        }
-        if let Some(file) = self.resume.first() {
-            let mut loader = |p: &Path| std::fs::read_to_string(p).map_err(|e| e.to_string());
-            apply_conf_key("resume", file, &mut full, &mut loader, 0)?;
-            self.apply_scan_fields(&mut full.scan, true)?;
-            if self.after_resume.contains("pcap") {
+        let mut full = FullConf::default();
+        let mut loader = |p: &Path| std::fs::read_to_string(p).map_err(|e| e.to_string());
+        // Сегмент `s` это ключи между `s`-м и `s+1`-м файлом: ключ входит в сегмент, левее которого лежит ровно
+        // `s` файлов.
+        for seg in 0..=self.markers.len() {
+            self.apply_scan_fields(&mut full.scan, seg)?;
+            if self.in_segment("pcap", seg) {
                 full.pcap_filename.clone_from(&self.pcap);
+            }
+            if let Some(mk) = self.markers.get(seg) {
+                full.output.touched.clear();
+                apply_conf_key(mk.kind, &mk.path, &mut full, &mut loader, 0)?;
+                for group in std::mem::take(&mut full.output.touched) {
+                    full.output.file_pos.insert(group, mk.pos);
+                }
             }
         }
         Ok(full)
     }
 
-    /// Применяет поля командной строки к `cfg`. `after` = `false`: цели, исключения и ключи, стоящие левее
-    /// `--resume` (или все, если его нет); `true`: ключи правее `--resume`. Ключи адаптера идут и в
-    /// одиночные поля, и в `nics[0]`, если файл уже создал массив адаптеров (`apply_core_kv` держит их равными).
-    fn apply_scan_fields(&self, cfg: &mut ScanConfig, after: bool) -> Result<(), String> {
-        let take = |id: &'static str| self.after_resume.contains(id) == after;
-        if !after {
+    /// Сколько файлов конфигурации стоит левее позиции clap `pos`.
+    fn segment_of(&self, pos: usize) -> usize {
+        self.markers.iter().filter(|mk| mk.pos < pos).count()
+    }
+
+    /// Лежит ли последнее появление ключа `id` в сегменте `seg` (ключа нет: нет).
+    fn in_segment(&self, id: &str, seg: usize) -> bool {
+        self.key_pos
+            .get(id)
+            .is_some_and(|&pos| self.segment_of(pos) == seg)
+    }
+
+    /// Применяет поля командной строки сегмента `seg` к `cfg`. Сегмент 0 несёт и цели, исключения и файлы целей
+    /// (порядок их добавления значения не имеет). Ключи адаптера идут и в одиночные поля, и в `nics[0]`, если файл
+    /// уже создал массив адаптеров (`apply_core_kv` держит их равными).
+    fn apply_scan_fields(&self, cfg: &mut ScanConfig, seg: usize) -> Result<(), String> {
+        let take = |id: &'static str| self.in_segment(id, seg);
+        if seg == 0 {
             for t in self.targets.iter().chain(&self.range) {
                 add_target_string(cfg.targets.ipv4_mut(), t)
                     .map_err(|e| format!("bad target {t:?}: {e}"))?;
@@ -952,6 +1002,9 @@ impl Cli {
             }
             for f in &self.excludefile {
                 read_exclude_file(cfg, f)?;
+            }
+            for f in &self.includefile {
+                read_include_file(cfg, f)?;
             }
             cfg.offline |= self.offline;
             cfg.infinite |= self.infinite;
@@ -1091,12 +1144,13 @@ impl Cli {
         Ok(())
     }
 
-    /// Опции вывода с учётом `--resume`: поля файла (`output-filename`, `output-format`, ...) служат базой, а
-    /// опции вывода правее `--resume` их переопределяют, левее переопределяются файлом; `output-append` после `--resume`
-    /// принудительно истина (main-conf.c:2926-2928). Без `--resume` совпадает с [`Cli::output_options`].
+    /// Опции вывода с учётом файлов конфигурации: поля файла (`output-filename`, `output-format`, ...) служат базой, а
+    /// опции вывода правее файла, который их задал, его переопределяют, левее переопределяются файлом;
+    /// `output-append` после `--resume` принудительно истина (main-conf.c:2926-2928). Без файлов совпадает с
+    /// [`Cli::output_options`].
     pub fn resolved_output_options(&self) -> Result<OutputOptions, String> {
         let mut o = self.output_options()?;
-        if self.resume.is_empty() {
+        if self.markers.is_empty() {
             return Ok(o);
         }
         let file = self.resolve()?.output;
@@ -1113,11 +1167,15 @@ fn set_nic0(cfg: &mut ScanConfig, f: impl FnOnce(&mut NicConfig)) {
     }
 }
 
-/// Опции вывода по позиции относительно `--resume` (main-conf.c:3401-3457, 2926-2928: и `-o…`, и ключи файла
-/// применяются в порядке argv): опция правее файла побеждает файл, опция левее переопределяется файлом, если
-/// файл задаёт этот ключ; `output-append` после файла всегда истина, пока правее нет явного `--append-output`.
+/// Опции вывода по позиции относительно файлов конфигурации (main-conf.c:3401-3457, 2926-2928: и `-o…`, и ключи
+/// файла применяются в порядке argv): опция правее файла, который задал этот ключ, побеждает файл; опция левее
+/// переопределяется файлом. `output-append`, заданный `--resume`, истина, пока правее нет явного `--append-output`.
 fn merge_file_output(o: &mut OutputOptions, file: &OutputConfPatch, cli: &Cli) {
-    let right = |g: &str| cli.after_output.contains(g);
+    let right = |g: &str| {
+        cli.output_pos
+            .get(g)
+            .is_some_and(|&p| file.file_pos.get(g).is_none_or(|&fp| p > fp))
+    };
     if !right("format")
         && let Some(f) = file.format
     {
@@ -1126,11 +1184,11 @@ fn merge_file_output(o: &mut OutputOptions, file: &OutputConfPatch, cli: &Cli) {
     if !right("filename") && file.filename.is_some() {
         o.filename.clone_from(&file.filename);
     }
-    o.append = if right("append") {
-        cli.append_output.last().is_some_and(|v| parse_boolean(v))
-    } else {
-        true
-    };
+    if !right("append")
+        && let Some(v) = file.append
+    {
+        o.append = v;
+    }
     if !right("flush")
         && let Some(v) = file.flush
     {
@@ -1176,6 +1234,13 @@ pub fn seed_policy(cli: &Cli) -> SeedPolicy {
 // `--excludefile` (main-conf.c:2791, `massip_parse_file`): по одной записи
 // на строку, `#` начинает комментарий. Порт построчный, а не побайтовый
 // автомат C; ошибка в строке фатальна (в C тоже `exit(1)`).
+/// `-iL FILE` / `--includefile FILE` (`massip_parse_file`, main-conf.c:2825-2836): грамматика C в
+/// [`crate::conf::parse_include_text`].
+fn read_include_file(cfg: &mut ScanConfig, path: &str) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    crate::conf::parse_include_text(&bytes, path, cfg.targets.ipv4_mut())
+}
+
 fn read_exclude_file(cfg: &mut ScanConfig, path: &str) -> Result<(), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     for (n, line) in text.lines().enumerate() {
@@ -2051,5 +2116,136 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
             .to_config()
             .unwrap();
         assert_eq!(cfg.tcp_opts.mss, Some(1300));
+    }
+
+    /// Файл конфигурации с адаптером, выводом и целями; `includefile` и `conf` внутри указывают на другие файлы.
+    fn write_base(dir: &crate::scratch::Scratch) -> String {
+        dir.write(
+            "base.conf",
+            b"# comment\nrate = 100\nseed = 5\nports = 80\nrange = 198.18.0.0/30\n\
+adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
+        )
+        .to_str()
+        .unwrap()
+        .to_string()
+    }
+
+    /// Задача 7 (Р7, `main-conf.c:3332-3338, 3375-3377, 3868-3924`): `-c`/`--conf`/`--config` и `-iL`/`--includefile`
+    /// разбираются в порядке `argv`. Ключ правее файла его переопределяет, левее переопределяется им (T2 I-1), для
+    /// скана, адаптера и вывода; несколько `-c` идут по порядку; рекурсивный `conf = self` обрывается на глубине > 16.
+    #[test]
+    fn conf_and_includefile_respect_argv_order_and_detect_cycles() {
+        let dir = crate::scratch::Scratch::new();
+        let base = write_base(&dir);
+        let targets = dir
+            .write(
+                "targets.txt",
+                b"# extra targets\n203.0.113.0/30, 203.0.113.8\n",
+            )
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Правее файла: `--rate 900`, `--adapter-ip`, `-oL` побеждают; цели из `-iL` и файла складываются.
+        let c = parse(&[
+            "-c",
+            &base,
+            "--rate",
+            "900",
+            "-iL",
+            &targets,
+            "--adapter-ip",
+            "198.18.0.50",
+            "-oL",
+            "x.list",
+        ])
+        .unwrap();
+        let cfg = c.to_config().unwrap();
+        assert_eq!(cfg.max_rate, 900.0);
+        assert_eq!(cfg.seed, 5);
+        assert_eq!(cfg.adapter_ip, Some(0xc612_0032));
+        assert_eq!(
+            cfg.targets.ipv4().len(),
+            3,
+            "198.18.0.0/30, 203.0.113.0/30, 203.0.113.8"
+        );
+        assert_eq!(
+            c.resolved_output_options().unwrap().filename.as_deref(),
+            Some("x.list")
+        );
+
+        // Левее файла: файл побеждает.
+        let c = parse(&[
+            "--rate",
+            "900",
+            "--adapter-ip",
+            "198.18.0.50",
+            "-oL",
+            "x.list",
+            "--config",
+            &base,
+        ])
+        .unwrap();
+        let cfg = c.to_config().unwrap();
+        assert_eq!(cfg.max_rate, 100.0);
+        assert_eq!(cfg.adapter_ip, Some(0xc612_0009));
+        assert_eq!(cfg.nics[0].adapter_ip, Some((0xc612_0009, 0xc612_0009)));
+        let o = c.resolved_output_options().unwrap();
+        assert_eq!(o.filename.as_deref(), Some("base.xml"));
+        assert!(
+            !o.append,
+            "-c does not force output-append (only --resume does)"
+        );
+
+        // Несколько файлов и ключи между ними: файл правее побеждает, а между файлами остаётся ключ, если следующий
+        // файл его не задаёт.
+        let a = dir
+            .write("a.conf", b"rate = 1\nports = 22\n")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let b = dir
+            .write("b.conf", b"rate = 2\n")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let n = dir
+            .write("n.conf", b"retries = 1\n")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let rate = |a: &[&str]| parse(a).unwrap().to_config().unwrap().max_rate;
+        assert_eq!(rate(&["-c", &a, "-c", &b]), 2.0);
+        assert_eq!(rate(&["-c", &b, "-c", &a]), 1.0);
+        assert_eq!(rate(&["-c", &a, "--rate", "7", "-c", &b]), 2.0);
+        assert_eq!(rate(&["-c", &a, "--rate", "7", "-c", &n]), 7.0);
+        assert_eq!(rate(&["--rate", "7", "-c", &a, "-c", &n]), 1.0);
+        // `-cFILE` слитно, как в C.
+        assert_eq!(rate(&[&format!("-c{b}")]), 2.0);
+
+        // Цикл: `conf = self` вкладывается глубже 16 и отказывает; пропавший файл и неизвестный ключ тоже.
+        let selfref = dir.path("self.conf");
+        std::fs::write(&selfref, format!("conf = {}\n", selfref.display())).unwrap();
+        let e = parse(&["-c", selfref.to_str().unwrap()])
+            .unwrap()
+            .to_config()
+            .unwrap_err();
+        assert!(e.contains("nested deeper than 16"), "{e}");
+        let e = parse(&["-c", "/nonexistent/x.conf"])
+            .unwrap()
+            .to_config()
+            .unwrap_err();
+        assert!(e.contains("x.conf"), "{e}");
+        let bad = dir
+            .write("bad.conf", b"banners = true\n")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(parse(&["-c", &bad]).unwrap().to_config().is_err());
+        let e = parse(&["-iL", "/nonexistent/t.txt"])
+            .unwrap()
+            .to_config()
+            .unwrap_err();
+        assert!(e.contains("t.txt"), "{e}");
     }
 }

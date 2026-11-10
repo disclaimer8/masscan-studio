@@ -11,7 +11,7 @@ use std::path::Path;
 use rmasscan_core::config::{
     EchoExtras, ScanConfig, apply_core_kv, conf_line_kv, echo_with, normalize_key, parse_bool,
 };
-use rmasscan_core::targets::add_target_string;
+use rmasscan_core::ranges::RangeList;
 
 use crate::output::Format;
 
@@ -26,6 +26,19 @@ pub struct OutputConfPatch {
     pub show_open: Option<bool>,
     pub show_closed: Option<bool>,
     pub show_host: Option<bool>,
+    /// Группы вывода (`format`, `filename`, `append`, `flush`, `style`, `show`), которые задал последний применённый
+    /// файл; [`crate::args::Cli`] очищает список перед каждым файлом и переносит его в `file_pos`.
+    pub touched: Vec<&'static str>,
+    /// Позиция в `argv` последнего файла, задавшего группу: опция командной строки правее неё побеждает файл.
+    pub file_pos: std::collections::BTreeMap<&'static str, usize>,
+}
+
+impl OutputConfPatch {
+    fn touch(&mut self, group: &'static str) {
+        if !self.touched.contains(&group) {
+            self.touched.push(group);
+        }
+    }
 }
 
 /// Всё, что попадает в `paused.conf`.
@@ -171,17 +184,12 @@ pub fn apply_conf_key(
             let text = load(include_loader, value)?;
             parse_conf_str(&text, base, include_loader, depth + 1)?;
             base.output.append = Some(true);
+            base.output.touch("append");
         }
         "includefile" => {
-            // main-conf.c:2825-2836, `massip_parse_file`: по цели на строку, `#` комментарий.
+            // main-conf.c:2825-2836, `massip_parse_file`.
             let text = load(include_loader, value)?;
-            for line in text.lines() {
-                let line = line.split('#').next().unwrap_or("").trim();
-                if !line.is_empty() {
-                    add_target_string(base.scan.targets.ipv4_mut(), line)
-                        .map_err(|e| format!("{value}: bad target {line:?}: {e}"))?;
-                }
-            }
+            parse_include_text(text.as_bytes(), value, base.scan.targets.ipv4_mut())?;
         }
         "pcapfilename" | "pcap" => base.pcap_filename = Some(value.to_string()),
         "ndjsonstatus" | "statusndjson" => base.ndjson_status = parse_bool(value),
@@ -193,20 +201,38 @@ pub fn apply_conf_key(
                 o.format = Some(Format::Xml);
             }
             o.filename = Some(value.to_string());
+            o.touch("filename");
         }
-        "outputformat" => o.format = Some(parse_format(value)?),
-        "outputshow" | "outputstatus" | "show" => apply_show(o, value, true, "show")?,
-        "outputnoshow" | "noshow" => apply_show(o, value, false, "noshow")?,
+        "outputformat" => {
+            o.format = Some(parse_format(value)?);
+            o.touch("format");
+        }
+        "outputshow" | "outputstatus" | "show" => {
+            apply_show(o, value, true, "show")?;
+            o.touch("show");
+        }
+        "outputnoshow" | "noshow" => {
+            apply_show(o, value, false, "noshow")?;
+            o.touch("show");
+        }
         "outputshowopen" | "open" | "openonly" => {
             (o.show_open, o.show_closed, o.show_host) = (Some(true), Some(false), Some(false));
+            o.touch("show");
         }
-        "outputappend" | "appendoutput" => o.append = Some(parse_bool(value)),
-        "outputflush" => o.flush = Some(parse_bool(value)),
+        "outputappend" | "appendoutput" => {
+            o.append = Some(parse_bool(value));
+            o.touch("append");
+        }
+        "outputflush" => {
+            o.flush = Some(parse_bool(value));
+            o.touch("flush");
+        }
         "stylesheet" => {
             if o.format.is_none() {
                 o.format = Some(Format::Xml);
             }
             o.stylesheet = Some(value.to_string());
+            o.touch("style");
         }
         // Ротация вывода не поддерживается: ключи принимаются и не действуют.
         "rotate"
@@ -252,6 +278,172 @@ pub fn parse_conf_str(
         }
     }
     Ok(())
+}
+
+/// Сообщение об ошибке файла целей в форме C: `[-] file:line:col: invalid IP address on line #line`
+/// (`massip_parse_file`, `massip-parse.c:880-891`); номер столбца считает и сбойный байт (`char_number++`).
+fn include_error(file: &str, line: u64, col: u64) -> String {
+    format!("{file}:{line}:{col}: invalid IP address on line #{line}")
+}
+
+/// Файл целей `-iL` / `includefile = FILE` (`massip_parse_file`, `massip-parse.c:822-947`, конечный автомат
+/// `_parser_next` :171-770): записи разделяются пробелом, табуляцией, `\r`, `\n` и запятой; в начале записи
+/// `#`, `;`, `/` и `-` начинают комментарий до конца строки; запись это `a.b.c.d`, `a.b.c.d-e.f.g.h` (дефис, байт
+/// `0x96` или юникодные тире U+2010-2015) или `a.b.c.d/n`; октет не длиннее трёх цифр и не больше 255, префикс
+/// не больше 32. Последняя запись без `\n` принимается (C дописывает `\n` сам, :925-950).
+///
+/// Уже, чем C (Р1 стиля `--excludefile`, README): IPv6 отказывает (rmasscan сканирует только IPv4), пустой октет
+/// (`1..2.3`), завершающая точка (`1.2.3.`), пустой префикс (`1.2.3.4/`) и перевёрнутый диапазон отказывают, а C
+/// молча читает их как `1.0.2.3`, `1.2.3.0` и `/0`. Файл `-` (stdin) не поддерживается.
+pub fn parse_include_text(text: &[u8], file: &str, out: &mut RangeList) -> Result<(), String> {
+    let mut p = Include {
+        b: text,
+        i: 0,
+        line: 1,
+        col: 0,
+        file,
+    };
+    while let Some(c) = p.peek() {
+        match c {
+            b' ' | b'\t' | b'\r' => p.bump(),
+            b'\n' => p.newline(),
+            b'#' | b';' | b'/' | b'-' => {
+                while let Some(c) = p.peek() {
+                    if c == b'\n' {
+                        p.newline();
+                        break;
+                    }
+                    p.bump();
+                }
+            }
+            b'0'..=b'9' => {
+                let (begin, end) = p.record()?;
+                out.add_range(begin, end);
+            }
+            // Шестнадцатеричная буква, `:` и `[` начинают IPv6 в C.
+            _ => return Err(p.fail()),
+        }
+    }
+    Ok(())
+}
+
+struct Include<'a> {
+    b: &'a [u8],
+    i: usize,
+    line: u64,
+    col: u64,
+    file: &'a str,
+}
+
+impl Include<'_> {
+    fn peek(&self) -> Option<u8> {
+        self.b.get(self.i).copied()
+    }
+
+    fn bump(&mut self) {
+        self.i += 1;
+        self.col += 1;
+    }
+
+    fn newline(&mut self) {
+        self.i += 1;
+        self.line += 1;
+        self.col = 0;
+    }
+
+    /// Ошибка на следующем (ещё не прочитанном) байте; в конце файла это дописанный `\n`.
+    fn fail(&self) -> String {
+        include_error(self.file, self.line, self.col + 1)
+    }
+
+    /// Десятичный октет: 1..=3 цифры, значение не больше 255.
+    fn octet(&mut self) -> Result<u32, String> {
+        let (mut v, mut digits) = (0u32, 0);
+        while let Some(c @ b'0'..=b'9') = self.peek() {
+            v = v * 10 + u32::from(c - b'0');
+            digits += 1;
+            if digits > 3 || v > 255 {
+                self.bump();
+                return Err(include_error(self.file, self.line, self.col));
+            }
+            self.bump();
+        }
+        if digits == 0 {
+            return Err(self.fail());
+        }
+        Ok(v)
+    }
+
+    fn address(&mut self) -> Result<u32, String> {
+        let mut a = self.octet()?;
+        for _ in 0..3 {
+            if self.peek() != Some(b'.') {
+                return Err(self.fail());
+            }
+            self.bump();
+            a = (a << 8) | self.octet()?;
+        }
+        Ok(a)
+    }
+
+    /// Разделитель после записи (`','`, пробел, табуляция, `\r`, `\n`, `':'`); конец файла это дописанный `\n`.
+    fn terminator(&mut self) -> Result<(), String> {
+        match self.peek() {
+            Some(b',' | b' ' | b'\t' | b'\r' | b':') => self.bump(),
+            Some(b'\n') => self.newline(),
+            None => {}
+            Some(_) => return Err(self.fail()),
+        }
+        Ok(())
+    }
+
+    /// Дефис диапазона: `-`, байт `0x96` или U+2010..U+2015 (`E2 80 90..95`), :540-555 и :593-620.
+    fn dash(&mut self) -> bool {
+        match (self.peek(), self.b.get(self.i + 1), self.b.get(self.i + 2)) {
+            (Some(b'-' | 0x96), _, _) => self.bump(),
+            (Some(0xe2), Some(0x80), Some(0x90..=0x95)) => {
+                self.bump();
+                self.bump();
+                self.bump();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn record(&mut self) -> Result<(u32, u32), String> {
+        let begin = self.address()?;
+        if self.dash() {
+            let end = self.address()?;
+            if end < begin {
+                return Err(self.fail());
+            }
+            self.terminator()?;
+            return Ok((begin, end));
+        }
+        if self.peek() == Some(b'/') {
+            self.bump();
+            let (mut prefix, mut digits) = (0u32, 0);
+            while let Some(c @ b'0'..=b'9') = self.peek() {
+                prefix = prefix * 10 + u32::from(c - b'0');
+                digits += 1;
+                self.bump();
+                if digits > 3 || prefix > 32 {
+                    return Err(include_error(self.file, self.line, self.col));
+                }
+            }
+            if digits == 0 {
+                return Err(self.fail());
+            }
+            // `_ipv4_apply_cidr`: маска старших `prefix` бит, хвост заполняется единицами.
+            let mask = (0xffff_ffff_0000_0000u64 >> prefix) as u32;
+            let first = begin & mask;
+            self.terminator()?;
+            return Ok((first, first | !mask));
+        }
+        self.terminator()?;
+        Ok((begin, begin))
+    }
 }
 
 #[cfg(test)]
@@ -404,5 +596,86 @@ adapter-port = 41234-41250\n\
         assert_eq!(base.scan.targets.ipv4().len(), 1);
         let err = parse_conf_str("resume = gone.conf\n", &mut base, &mut loader, 0).unwrap_err();
         assert!(err.contains("gone.conf"), "{err}");
+    }
+
+    /// T2 M-6: `-iL` разбирает файл как `massip_parse_file` (`massip-parse.c:171-880`): токены через пробелы,
+    /// табуляции, `\r`, `\n` и запятую; комментарий (`#`, `;`, `/`, `-`) в начале токена до конца строки; адрес,
+    /// `a.b.c.d-e.f.g.h` (в том числе юникодные тире), `a.b.c.d/n`; октеты до 255 и трёх цифр, префикс до 32.
+    #[test]
+    fn includefile_grammar_follows_massip_parse_file() {
+        let parse = |text: &str| -> Result<Vec<(u32, u32)>, String> {
+            let mut base = FullConf::default();
+            parse_include_text(text.as_bytes(), "t.txt", base.scan.targets.ipv4_mut())?;
+            let mut v: Vec<(u32, u32)> = base
+                .scan
+                .targets
+                .ipv4()
+                .as_slice()
+                .iter()
+                .map(|r| (r.begin, r.end))
+                .collect();
+            v.sort_unstable();
+            Ok(v)
+        };
+        let ip = |a: u8, b: u8, c: u8, d: u8| u32::from_be_bytes([a, b, c, d]);
+        // Несколько записей в строке через запятую и пробелы, комментарии всех видов, без завершающей строки.
+        let got = parse(
+            "10.0.0.1,10.0.0.3  10.1.0.0/24\t# comment\n; semi\n// slash\n- dash\r\n\n10.2.0.5-10.2.0.9\n10.3.0.7",
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            [
+                (ip(10, 0, 0, 1), ip(10, 0, 0, 1)),
+                (ip(10, 0, 0, 3), ip(10, 0, 0, 3)),
+                (ip(10, 1, 0, 0), ip(10, 1, 0, 255)),
+                (ip(10, 2, 0, 5), ip(10, 2, 0, 9)),
+                (ip(10, 3, 0, 7), ip(10, 3, 0, 7)),
+            ]
+        );
+        // CIDR маскирует хвост адреса (`_ipv4_apply_cidr`), /0 и /32 допустимы.
+        assert_eq!(
+            parse("10.1.2.3/16").unwrap(),
+            [(ip(10, 1, 0, 0), ip(10, 1, 255, 255))]
+        );
+        assert_eq!(
+            parse("1.2.3.4/32").unwrap(),
+            [(ip(1, 2, 3, 4), ip(1, 2, 3, 4))]
+        );
+        // Юникодное тире U+2013 (E2 80 93) и байт 0x96 как дефис в диапазоне.
+        assert_eq!(
+            parse("10.0.0.1\u{2013}10.0.0.4\n").unwrap(),
+            [(ip(10, 0, 0, 1), ip(10, 0, 0, 4))]
+        );
+        // Ошибки с номером строки и столбца, как `[-] file:line:col: invalid IP address on line #line`.
+        for (text, line, col) in [
+            ("10.0.0.1\n10.0.0.256\n", 2, 10),
+            ("10.0.0.1\n\n1.2.3.4/33\n", 3, 10),
+            ("1.2.3\n", 1, 6),
+            ("1.2.3.4x\n", 1, 8),
+            ("1.2.3.4-5.6.7.8-9\n", 1, 16),
+            (",1.2.3.4\n", 1, 1),
+            ("1.2.3.4,,5.6.7.8\n", 1, 9),
+            ("1.2.3.4#c\n", 1, 8),
+        ] {
+            let e = parse(text).unwrap_err();
+            assert_eq!(
+                e,
+                format!("t.txt:{line}:{col}: invalid IP address on line #{line}"),
+                "{text:?}"
+            );
+        }
+        // Осознанно уже C: IPv6, пустой октет, завершающая точка, пустой префикс, перевёрнутый диапазон.
+        for text in [
+            "abc\n",
+            "::1\n",
+            "[2001:db8::1]\n",
+            "1..2.3\n",
+            "1.2.3.\n",
+            "1.2.3.4/\n",
+            "10.0.0.9-10.0.0.1\n",
+        ] {
+            assert!(parse(text).is_err(), "{text:?}");
+        }
     }
 }

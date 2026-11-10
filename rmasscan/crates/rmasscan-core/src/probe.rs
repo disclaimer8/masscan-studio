@@ -24,7 +24,9 @@ use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
 use crate::packet::{LinkType, PacketModifiers, TcpSynTemplate};
+use crate::ranges::RangeList;
 use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
+use crate::targets::{TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST};
 
 /// Раунды BlackRock, которые принимает runtime v1 (masscan по умолчанию).
 pub const RUNTIME_BLACKROCK_ROUNDS: u32 = 14;
@@ -56,6 +58,12 @@ pub enum PlanError {
     PortNotTcp(u32),
     #[error("port {port_them}/{port_me} does not fit TCP (v1 is TCP only)")]
     PortDoesNotFit { port_them: u32, port_me: u32 },
+    #[error("raw IP protocol ports (O:{}) are not supported for scanning; rmasscan sends no raw-protocol probes", .0 - TEMPL_OPROTO_FIRST)]
+    OprotoNotSupported(u32),
+    #[error("ICMP ports other than I:0 (echo) and the ARP index are not supported for scanning (I:{})", .0 - TEMPL_ICMP_ECHO)]
+    IcmpTypeNotSupported(u32),
+    #[error("ARP scan cannot be mixed with other ports")]
+    ArpMixedWithPorts,
     #[error("next index {next_index} is beyond the transmit limit {limit}")]
     NextIndexBeyondRange { next_index: u64, limit: u64 },
     #[error("invalid shard {one}/{of}: need 1 <= one <= of")]
@@ -290,6 +298,38 @@ struct PlanInner {
     builders: Vec<Builder>,
 }
 
+/// Проверка портов плана CLI (спека Р1, решение R1): живой скан и
+/// `--offline --packet-trace` не шлют сырые IP-протоколы (`O:*`, в C нет
+/// отправки: templ-pkt.c:932) и ICMP кроме Echo (в C нет приёма `I:1`:
+/// proto-icmp.c:222). `Templ_ARP` = 65536*3+2 (`I:2`, massip-port.h:18-20)
+/// допустим, но только единственным портом. Диапазон сообщается по
+/// наименьшему недопустимому индексу.
+pub fn check_cli_ports(ports: &RangeList) -> Result<(), PlanError> {
+    let allowed = |i: u32| i == TEMPL_ICMP_ECHO || i == TEMPL_ARP;
+    for r in ports.as_slice() {
+        if r.end < TEMPL_ICMP_ECHO {
+            continue;
+        }
+        let mut i = r.begin.max(TEMPL_ICMP_ECHO);
+        while i <= r.end && allowed(i) {
+            i += 1;
+        }
+        if i > r.end {
+            continue;
+        }
+        return Err(if (TEMPL_OPROTO_FIRST..=TEMPL_OPROTO_LAST).contains(&i) {
+            PlanError::OprotoNotSupported(i)
+        } else {
+            PlanError::IcmpTypeNotSupported(i)
+        });
+    }
+    let has_arp = ports.is_contains(TEMPL_ARP);
+    if has_arp && ports.count() != 1 {
+        return Err(PlanError::ArpMixedWithPorts);
+    }
+    Ok(())
+}
+
 /// Проверенный план нового запуска. Поля приватны; создать можно только через
 /// [`ReadyPlan::new`] или [`ReadyPlan::new_cli`].
 #[derive(Debug, Clone)]
@@ -328,7 +368,7 @@ impl ReadyPlan {
         if effective.packet_modifiers() != PacketModifiers::default() {
             return Err(PlanError::UnsupportedPacketModifiers);
         }
-        ReadyPlan::build(effective, vec![NicBinding::from(binding)])
+        ReadyPlan::build(effective, vec![NicBinding::from(binding)], true)
     }
 
     /// План CLI: любой валидный shard, retries до 999, `resume_index` и
@@ -354,10 +394,16 @@ impl ReadyPlan {
         if effective.blackrock_rounds() < 1 {
             return Err(PlanError::ZeroRounds(effective.blackrock_rounds()));
         }
-        ReadyPlan::build(effective, nics)
+        // Р1: O:*, I:n и смесь с ARP отклоняются; UDP/SCTP/ICMP Echo/ARP план принимает.
+        check_cli_ports(effective.massip().ports())?;
+        ReadyPlan::build(effective, nics, false)
     }
 
-    fn build(effective: EffectiveConfig, nics: Vec<NicBinding>) -> Result<ReadyPlan, PlanError> {
+    fn build(
+        effective: EffectiveConfig,
+        nics: Vec<NicBinding>,
+        tcp_only: bool,
+    ) -> Result<ReadyPlan, PlanError> {
         if nics.is_empty() || nics.len() > 8 {
             return Err(PlanError::BadNicCount(nics.len()));
         }
@@ -365,12 +411,14 @@ impl ReadyPlan {
             .iter()
             .map(|n| Builder::from_nic(n, effective.seed(), &effective.packet_modifiers()))
             .collect::<Result<Vec<_>, _>>()?;
-        if let Some(r) = effective
-            .massip()
-            .ports()
-            .as_slice()
-            .iter()
-            .find(|r| r.end > u32::from(u16::MAX))
+        // Студия (`new`) принимает только TCP; план CLI проверил порты в `check_cli_ports`.
+        if tcp_only
+            && let Some(r) = effective
+                .massip()
+                .ports()
+                .as_slice()
+                .iter()
+                .find(|r| r.end > u32::from(u16::MAX))
         {
             return Err(PlanError::PortNotTcp(r.end));
         }
@@ -1185,5 +1233,70 @@ mod tests {
         // Умолчание не меняет кадр.
         let d = oracle(&eff("198.18.1.0/30", "80", |_| {}));
         assert!(d.iter().all(|p| p.frame.len() == 58 && p.frame[22] == 255));
+    }
+
+    fn cli_err(ports: &str) -> PlanError {
+        ReadyPlan::new_cli(eff("198.18.2.0/30", ports, |_| {}), nics(1)).unwrap_err()
+    }
+
+    #[test]
+    fn sticky_port_prefixes_and_oproto_live_refusal() {
+        // Р1/R1/R3: O:* и I:n (кроме I:0 и ARP = I:2) отклоняются планом CLI.
+        for ports in ["O:47", "o:0", "O:255", "T:80,O:47", "U:53,O:1-3"] {
+            assert!(
+                matches!(cli_err(ports), PlanError::OprotoNotSupported(_)),
+                "{ports}"
+            );
+        }
+        for ports in [
+            "I:1", "I:3", "I:255", "I:0-1", "S:1,I:1", "I:0-300", "I:512",
+        ] {
+            assert!(
+                matches!(cli_err(ports), PlanError::IcmpTypeNotSupported(_)),
+                "{ports}"
+            );
+        }
+        // O:47 это I:303 (тот же индекс 196911): оба отказа текстом называют индекс
+        assert_eq!(cli_err("I:303"), PlanError::OprotoNotSupported(196_911));
+        assert_eq!(cli_err("I:1"), PlanError::IcmpTypeNotSupported(196_609));
+        assert!(cli_err("I:1").to_string().contains("I:1"));
+        assert!(cli_err("O:47").to_string().contains("O:47"));
+        // I:0 принимается; ARP (индекс 196610 = I:2) принимается один
+        ReadyPlan::new_cli(eff("198.18.2.0/30", "I:0", |_| {}), nics(1)).unwrap();
+        ReadyPlan::new_cli(eff("198.18.2.0/30", "I:2", |_| {}), nics(1)).unwrap();
+        // ... но не вместе с любым другим портом (R3)
+        for ports in ["I:2,T:80", "I:2,U:53", "I:0,I:2", "I:2-3"] {
+            let e = cli_err(ports);
+            assert!(
+                matches!(
+                    e,
+                    PlanError::ArpMixedWithPorts | PlanError::IcmpTypeNotSupported(_)
+                ),
+                "{ports}: {e:?}"
+            );
+        }
+        assert_eq!(cli_err("I:2,T:80"), PlanError::ArpMixedWithPorts);
+        assert_eq!(cli_err("I:0,I:2"), PlanError::ArpMixedWithPorts);
+        // UDP/SCTP/ICMP Echo план принимает (зонды появятся в следующих задачах)
+        ReadyPlan::new_cli(
+            eff("198.18.2.0/30", "U:53,S:2905,I:0,T:80", |_| {}),
+            nics(1),
+        )
+        .unwrap();
+        // Студия: `new` по-прежнему только TCP
+        for ports in ["U:53", "S:1", "I:0"] {
+            assert!(matches!(
+                ReadyPlan::new(eff("198.18.2.0/30", ports, |_| {}), binding()).unwrap_err(),
+                PlanError::PortNotTcp(_)
+            ));
+        }
+        // тот же отказ отдельной проверкой для --offline --packet-trace
+        let bad = eff("198.18.2.0/30", "80,O:47", |_| {});
+        assert_eq!(
+            check_cli_ports(bad.massip().ports()),
+            Err(PlanError::OprotoNotSupported(196_911))
+        );
+        let good = eff("198.18.2.0/30", "80,U:53", |_| {});
+        assert_eq!(check_cli_ports(good.massip().ports()), Ok(()));
     }
 }

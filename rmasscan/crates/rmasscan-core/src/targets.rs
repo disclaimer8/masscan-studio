@@ -14,8 +14,6 @@ pub enum ParseError {
     BadPort,
     #[error("IPv6 targets are not supported")]
     Ipv6NotSupported,
-    #[error("only TCP ports are supported (T: prefix or none)")]
-    UnsupportedProtoPrefix,
     #[error("range end comes before range start")]
     ReversedRange,
 }
@@ -407,19 +405,70 @@ fn strtoul0(s: &[u8], pos: &mut usize) -> u64 {
     v
 }
 
+/// Протокол, закодированный в индексе порта (`massip-port.h:11-25`), и его
+/// порт. Общий для приёма и передачи тип ядра; выходной слой CLI строит свой
+/// `Proto` поверх него.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortProto {
+    Tcp,
+    Udp,
+    Sctp,
+    /// `I:0` (`Templ_ICMP_echo`).
+    IcmpEcho,
+    /// `I:n`, `n` кроме 0 и ARP: `Templ_ICMP_timestamp` = 1 и далее. Живой
+    /// скан такие индексы отклоняет (Р1).
+    IcmpOther(u8),
+    /// `Templ_ARP` = 65536*3+2, то есть `I:2` (massip-port.h:18-20).
+    Arp,
+    /// `O:n`, сырой IP-протокол `n` (`Templ_Oproto_first + n`).
+    Oproto(u8),
+}
+
+impl PortProto {
+    /// Разбирает индекс порта на протокол и 16-битный порт. Порт осмыслен
+    /// для TCP/UDP/SCTP, для остальных он 0. Индексы выше `Templ_Oproto_last`
+    /// (`I:512..`, парсер принимает их, как C) не моделируются: они
+    /// сворачиваются в `IcmpOther(255)`, а живой слой их отклоняет.
+    pub fn from_raw(raw: u32) -> (PortProto, u16) {
+        let low = (raw & 0xFFFF) as u16;
+        match raw {
+            r if r < TEMPL_UDP => (PortProto::Tcp, low),
+            r if r < TEMPL_SCTP => (PortProto::Udp, low),
+            r if r < TEMPL_ICMP_ECHO => (PortProto::Sctp, low),
+            TEMPL_ICMP_ECHO => (PortProto::IcmpEcho, 0),
+            TEMPL_ARP => (PortProto::Arp, 0),
+            r if r < TEMPL_OPROTO_FIRST => (PortProto::IcmpOther((r - TEMPL_ICMP_ECHO) as u8), 0),
+            r if r <= TEMPL_OPROTO_LAST => (PortProto::Oproto((r - TEMPL_OPROTO_FIRST) as u8), 0),
+            _ => (PortProto::IcmpOther(u8::MAX), 0),
+        }
+    }
+}
+
 /// massip-rangesv4.c:993 `rangelist_parse_ports` (через `massip_add_port_string`,
 /// main-conf.c:2675). Формы: `80`, `1000-2000`, `-1024` (порты 1..=1024,
-/// как в C: `port = 1`), `80-` (до 65535), список через запятую, `T:`-префикс.
-/// `U:`/`S:`/`O:`/`I:` дают `UnsupportedProtoPrefix`.
+/// как в C: `port = 1`), `80-` (до 65535), список через запятую и липкие
+/// префиксы `T:`/`U:`/`S:`/`I:`/`O:` любого регистра (:1016-1040): сдвиги
+/// 0, 65536, 131072, 196608 и 196864 (`massip-port.h`). `default_offset` это
+/// сдвиг до первого явного префикса (`-sU -p53`, main-conf.c:2670-2674).
+///
+/// Границы типа (спека Р2): TCP/UDP/SCTP до 65535, `O:` до 255 (в C :1068
+/// ограничивает `O:` только по началу диапазона), для `I:` как в C до 65535:
+/// `I:303` это тот же индекс, что `O:47`, и `--echo` печатает его именно так.
 ///
 /// Отличия от C: там мусор на месте порта (`abc`, `80,,90`, `08`, `T:`)
 /// молча обрывает разбор без ошибки, здесь это `BadPort`; значения больше
 /// 0xFFFF отвергаются без `(unsigned)`-усечения. `#` по-прежнему начинает
 /// комментарий. При ошибке `ports` не меняется. Обратный диапазон
 /// (`end < begin`) — ошибка, как в C (:1067).
-pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
+pub fn parse_ports_with(
+    ports: &mut RangeList,
+    s: &str,
+    default_offset: u32,
+) -> Result<(), ParseError> {
     let b = s.as_bytes();
     let mut p = 0;
+    // :1005 `proto_offset` липкий: действует до следующего префикса.
+    let mut offset = default_offset;
     let mut found: Vec<(u32, u32)> = Vec::new();
 
     while p < b.len() {
@@ -430,17 +479,19 @@ pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
             break;
         }
 
-        // :1016 — префикс протокола. Для TCP смещение 0, оно же по умолчанию.
+        // :1016 — префикс протокола; неизвестная буква в C ошибка (:1034).
         if b[p].is_ascii_alphabetic() && b.get(p + 1) == Some(&b':') {
-            match b[p] {
-                b'T' | b't' => {}
-                b'U' | b'u' | b'S' | b's' | b'O' | b'o' | b'I' | b'i' => {
-                    return Err(ParseError::UnsupportedProtoPrefix);
-                }
+            offset = match b[p] {
+                b'T' | b't' => TEMPL_TCP,
+                b'U' | b'u' => TEMPL_UDP,
+                b'S' | b's' => TEMPL_SCTP,
+                b'O' | b'o' => TEMPL_OPROTO_FIRST,
+                b'I' | b'i' => TEMPL_ICMP_ECHO,
                 _ => return Err(ParseError::BadPort),
-            }
+            };
             p += 2;
         }
+        let is_oproto = offset == TEMPL_OPROTO_FIRST;
 
         // :1044 начало диапазона; `-N` значит с порта 1.
         let port: u64 = match b.get(p) {
@@ -452,11 +503,13 @@ pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
             _ => return Err(ParseError::BadPort),
         };
 
-        // :1056 конец диапазона; `N-` значит до 65535.
+        // :1056 конец диапазона; `N-` значит до 65535 (у `O:` до 255).
         let end: u64 = if b.get(p) == Some(&b'-') {
             p += 1;
             if b.get(p).is_some_and(u8::is_ascii_digit) {
                 strtoul0(b, &mut p)
+            } else if is_oproto {
+                0xFF
             } else {
                 0xFFFF
             }
@@ -464,14 +517,15 @@ pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
             port
         };
 
-        // :1067 проверка границ.
-        if port > 0xFFFF || end > 0xFFFF {
+        // :1067 проверка границ; у `O:` верхняя граница 255 (Р2).
+        let limit = if is_oproto { 0xFF } else { 0xFFFF };
+        if port > limit || end > limit {
             return Err(ParseError::BadPort);
         }
         if end < port {
             return Err(ParseError::ReversedRange);
         }
-        found.push((port as u32 + TEMPL_TCP, end as u32 + TEMPL_TCP));
+        found.push((port as u32 + offset, end as u32 + offset));
 
         while p < b.len() && is_c_space(b[p]) {
             p += 1;
@@ -496,6 +550,29 @@ pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
         ports.add_range(begin, end);
     }
     Ok(())
+}
+
+/// `parse_ports_with` без префикса по умолчанию: порты TCP.
+pub fn parse_ports(ports: &mut RangeList, s: &str) -> Result<(), ParseError> {
+    parse_ports_with(ports, s, TEMPL_TCP)
+}
+
+/// main-conf.c:896 `config_top_ports`: первые `max` портов встроенных
+/// таблиц ([`crate::top_ports`]) для включённых типов скана, затем сортировка.
+/// Размер таблицы ограничивает `max` сверху (:1045, :1053).
+pub fn add_top_ports(ports: &mut RangeList, max: u32, tcp: bool, udp: bool) {
+    let max = max as usize;
+    if tcp {
+        for &p in crate::top_ports::TOP_TCP_PORTS.iter().take(max) {
+            ports.add_range(TEMPL_TCP + u32::from(p), TEMPL_TCP + u32::from(p));
+        }
+    }
+    if udp {
+        for &p in crate::top_ports::TOP_UDP_PORTS.iter().take(max) {
+            ports.add_range(TEMPL_UDP + u32::from(p), TEMPL_UDP + u32::from(p));
+        }
+    }
+    ports.sort_and_merge();
 }
 
 #[cfg(test)]
@@ -674,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_ports_tcp_and_rejects_other_protos() {
+    fn parse_ports_tcp_plain_lists() {
         let mut p = RangeList::new();
         parse_ports(&mut p, "80,1000-2000,1234,4444").unwrap();
         p.sort_and_merge();
@@ -695,11 +772,8 @@ mod tests {
                 end: 4444
             }
         );
-        // Review Focus №5: не-TCP префиксы отклоняются
-        assert_eq!(
-            parse_ports(&mut RangeList::new(), "U:53"),
-            Err(ParseError::UnsupportedProtoPrefix)
-        );
+        // U: больше не отклоняется (Р2), см. sticky_port_prefixes_and_oproto_live_refusal
+        assert!(parse_ports(&mut RangeList::new(), "U:53").is_ok());
         assert!(parse_ports(&mut RangeList::new(), "70000").is_err());
     }
 
@@ -763,17 +837,15 @@ mod tests {
             "80x",
             "X:80",
             "T:",
-            "80,U:53",
-            "S:1",
-            "O:1",
-            "I:1",
             "8a",
+            "U:",
+            "I:-x",
         ] {
             assert!(one(bad).is_err(), "{bad}");
         }
-        // при ошибке список не меняется
+        // при ошибке список не меняется, даже если до неё были валидные префиксные порты
         let mut l = RangeList::new();
-        assert!(parse_ports(&mut l, "80,U:53").is_err());
+        assert!(parse_ports(&mut l, "80,U:53,O:256").is_err());
         assert!(l.is_empty());
     }
 
@@ -832,5 +904,135 @@ mod tests {
         assert_eq!(TEMPL_SCTP, 131072);
         assert_eq!(TEMPL_ICMP_ECHO, 196608);
         assert_eq!(TEMPL_OPROTO_FIRST, 196608 + 256);
+    }
+
+    fn raw(s: &str) -> Vec<(u32, u32)> {
+        let mut l = RangeList::new();
+        parse_ports(&mut l, s).unwrap();
+        l.as_slice().iter().map(|r| (r.begin, r.end)).collect()
+    }
+
+    #[test]
+    fn sticky_port_prefixes_and_oproto_live_refusal() {
+        // massip-rangesv4.c:1016-1040: префикс липкий до следующего префикса,
+        // регистр не важен; сдвиги из massip-port.h:11-25.
+        assert_eq!(
+            raw("U:53,161,T:80-81,s:2905,I:0,o:47"),
+            [
+                (65589, 65589),
+                (65697, 65697),
+                (80, 81),
+                (133_977, 133_977),
+                (196_608, 196_608),
+                (196_911, 196_911),
+            ]
+        );
+        // липкость не сбрасывается запятой и пробелами
+        assert_eq!(raw("U:1 , 2"), [(65537, 65538)]);
+        // `U:-` и `U:80-` берут верхнюю границу 65535 (:1056-1061), `O:5-` до 255
+        assert_eq!(raw("U:-"), [(65537, 65536 + 65535)]);
+        assert_eq!(raw("S:65535"), [(131_072 + 65535, 131_072 + 65535)]);
+        assert_eq!(raw("O:5-"), [(196_864 + 5, 196_864 + 255)]);
+        assert_eq!(raw("O:255"), [(196_864 + 255, 196_864 + 255)]);
+        // Р2: границы типа отклоняются (в C :1068 O:300 проходил)
+        for bad in [
+            "O:256",
+            "O:5-256",
+            "O:300",
+            "U:65536",
+            "T:65536",
+            "S:65536",
+            "U:1-65536",
+            "I:65536",
+            "k:80",
+        ] {
+            assert!(
+                parse_ports(&mut RangeList::new(), bad).is_err(),
+                "{bad} must be rejected"
+            );
+        }
+        // при ошибке список не меняется
+        let mut l = RangeList::new();
+        assert!(parse_ports(&mut l, "U:53,O:256").is_err());
+        assert!(l.is_empty());
+    }
+
+    #[test]
+    fn parse_ports_with_default_prefix() {
+        // main-conf.c:2670-2674: `-sU -p53` даёт U:53, явный `T:` сбрасывает
+        let mut l = RangeList::new();
+        parse_ports_with(&mut l, "53,T:80", TEMPL_UDP).unwrap();
+        assert_eq!(
+            l.as_slice().iter().map(|r| r.begin).collect::<Vec<_>>(),
+            [65589, 80]
+        );
+    }
+
+    #[test]
+    fn port_proto_from_raw_splits_index() {
+        use PortProto::*;
+        assert_eq!(PortProto::from_raw(80), (Tcp, 80));
+        assert_eq!(PortProto::from_raw(65535), (Tcp, 65535));
+        assert_eq!(PortProto::from_raw(TEMPL_UDP), (Udp, 0));
+        assert_eq!(PortProto::from_raw(TEMPL_UDP + 53), (Udp, 53));
+        assert_eq!(PortProto::from_raw(TEMPL_UDP_LAST), (Udp, 65535));
+        assert_eq!(PortProto::from_raw(TEMPL_SCTP + 2905), (Sctp, 2905));
+        assert_eq!(PortProto::from_raw(TEMPL_SCTP_LAST), (Sctp, 65535));
+        assert_eq!(PortProto::from_raw(TEMPL_ICMP_ECHO), (IcmpEcho, 0));
+        assert_eq!(PortProto::from_raw(TEMPL_ICMP_TIMESTAMP), (IcmpOther(1), 0));
+        assert_eq!(PortProto::from_raw(TEMPL_ARP), (Arp, 0));
+        assert_eq!(PortProto::from_raw(TEMPL_ICMP_ECHO + 3), (IcmpOther(3), 0));
+        assert_eq!(
+            PortProto::from_raw(TEMPL_ICMP_ECHO + 255),
+            (IcmpOther(255), 0)
+        );
+        assert_eq!(PortProto::from_raw(TEMPL_OPROTO_FIRST), (Oproto(0), 0));
+        assert_eq!(
+            PortProto::from_raw(TEMPL_OPROTO_FIRST + 47),
+            (Oproto(47), 0)
+        );
+        assert_eq!(PortProto::from_raw(TEMPL_OPROTO_LAST), (Oproto(255), 0));
+    }
+
+    #[test]
+    fn top_ports_follow_the_c_tables() {
+        use crate::top_ports::{TOP_TCP_PORTS, TOP_UDP_PORTS};
+        // main-conf.c:934-1037 и :899-932: размеры и первые значения
+        assert_eq!(TOP_TCP_PORTS.len(), 1008);
+        assert_eq!(TOP_UDP_PORTS.len(), 31);
+        assert_eq!(&TOP_TCP_PORTS[..5], [80, 443, 8080, 21, 990]);
+        assert_eq!(&TOP_UDP_PORTS[..5], [161, 135, 500, 137, 138]);
+        let list = |n, tcp, udp| {
+            let mut l = RangeList::new();
+            add_top_ports(&mut l, n, tcp, udp);
+            l.as_slice()
+                .iter()
+                .map(|r| (r.begin, r.end))
+                .collect::<Vec<_>>()
+        };
+        // main-conf.c:1043-1058: только TCP, только UDP, оба; список отсортирован
+        assert_eq!(
+            list(5, true, false),
+            [(21, 21), (80, 80), (443, 443), (990, 990), (8080, 8080)]
+        );
+        assert_eq!(
+            list(5, false, true),
+            [
+                (65536 + 135, 65536 + 135),
+                (65536 + 137, 65536 + 138),
+                (65536 + 161, 65536 + 161),
+                (65536 + 500, 65536 + 500),
+            ]
+        );
+        let both = list(5, true, true);
+        assert_eq!(both.len(), 5 + 4);
+        assert_eq!(both[0], (21, 21));
+        assert_eq!(both[8], (65536 + 500, 65536 + 500));
+        // N больше таблицы режется по длине таблицы (:1045, :1053)
+        let mut all = RangeList::new();
+        add_top_ports(&mut all, 100_000, false, true);
+        assert_eq!(all.count(), 31);
+        // N = 0 ничего не добавляет
+        assert!(list(0, true, true).is_empty());
     }
 }

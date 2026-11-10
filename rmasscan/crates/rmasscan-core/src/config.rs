@@ -4,7 +4,8 @@
 //! `src/main.c:1595-1733` из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Что здесь НЕ перенесено: IPv6, опции баннеров и `--top-ports`. Ключи
+//! Что здесь НЕ перенесено: IPv6 и опции баннеров (`--top-ports` разбирает CLI,
+//! таблицы лежат в [`crate::top_ports`]). Ключи
 //! вывода, `pcap-filename` и `ndjson-status` принадлежат слою CLI и
 //! подмешиваются через [`EchoExtras`]; остальные ключи `config_parameters[]`
 //! печатает `echo` из `ScanConfig` (адаптеры `nic[0..8)`, `noreset`, `ttl`,
@@ -1933,9 +1934,11 @@ mod tests {
             read_paused_conf("adapter-mac = nope\n").unwrap_err(),
             ConfigError::BadMac("nope".into())
         );
+        // Р2: U: принимается, границы типа нет
+        assert!(read_paused_conf("ports = U:53\n").is_ok());
         assert_eq!(
-            read_paused_conf("ports = U:53\n").unwrap_err(),
-            ConfigError::Parse(ParseError::UnsupportedProtoPrefix)
+            read_paused_conf("ports = U:65536\n").unwrap_err(),
+            ConfigError::Parse(ParseError::BadPort)
         );
         assert_eq!(
             read_paused_conf("range = ::1\n").unwrap_err(),
@@ -2268,5 +2271,22 @@ mod tests {
         }
         let m = validate(&cfg, Operation::Scan).unwrap().packet_modifiers();
         assert_eq!((m.ttl, m.badsum, m.tcp.wscale), (64, true, Some(7)));
+    }
+
+    #[test]
+    fn echo_prints_sticky_prefixed_ports_like_c() {
+        // Тот же вход, что в sticky_port_prefixes_and_oproto_live_refusal.
+        // C (masscan_echo, main-conf.c:3681-3732) печатает O:47 как `I:303`:
+        // ветка `>= Templ_ICMP_echo` стоит раньше ветки Oproto и перехватывает
+        // её. Сверено с masscan 8e6b3b0 (`--echo`); `I:303` разбирается обратно
+        // в тот же индекс 196911.
+        let mut cfg = cfg_with("10.0.0.1", "");
+        targets::parse_ports(cfg.targets.ports_mut(), "U:53,161,T:80-81,s:2905,I:0,o:47").unwrap();
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(
+            s.contains("ports = 80-81,U:53,U:161,S:2905,I:0,I:303\n"),
+            "{s}"
+        );
     }
 }

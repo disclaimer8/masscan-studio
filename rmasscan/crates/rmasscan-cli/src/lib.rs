@@ -935,7 +935,7 @@ mod tests {
                 "1",
             ][..],
             &["rmasscan", "-sL", "10.0.0.0/30", "-p80x", "--seed", "1"][..],
-            &["rmasscan", "-sL", "10.0.0.0/30", "-pU:53", "--seed", "1"][..],
+            &["rmasscan", "-sL", "10.0.0.0/30", "-pU:65536", "--seed", "1"][..],
             &[
                 "rmasscan",
                 "-sL",
@@ -1038,6 +1038,42 @@ mod tests {
                 "SENT (0.0000) TCP  ".len() + 21,
                 "{l}"
             );
+        }
+    }
+
+    #[test]
+    fn packet_trace_refuses_oproto_and_icmp_but_echo_and_list_accept_all_prefixes() {
+        // Р1: трассировка (как и живой скан) отказывает на O:* и I:1+, текст называет порт
+        let e = run_args(&trace_args(&["-pO:47"])).unwrap_err();
+        assert!(e.contains("O:47"), "{e}");
+        let e = run_args(&trace_args(&["-pI:1"])).unwrap_err();
+        assert!(e.contains("I:1"), "{e}");
+        // UDP, SCTP, I:0 и ARP-индекс проходят проверку (зонды появятся в следующих задачах)
+        assert!(check_prefixes_ok(&trace_args(&["-pU:53,S:2905,I:0"])));
+        // --echo и -sL принимают все пять префиксов и печатают их как C (O:47 как I:303)
+        let echo = run_args(&[
+            "rmasscan",
+            "--echo",
+            "10.0.0.1",
+            "-pU:53,T:80-81,s:2905,I:0,o:47",
+            "--seed",
+            "1",
+        ])
+        .unwrap();
+        assert!(
+            echo.contains("ports = 80-81,U:53,S:2905,I:0,I:303\n"),
+            "{echo}"
+        );
+        run_args(&["rmasscan", "-sL", "10.0.0.1", "-pO:47,U:53", "--seed", "1"]).unwrap();
+        // без трассировки --offline ничего не строит и не отказывает
+        run_args(&["rmasscan", "--offline", "10.0.0.1", "-pO:47", "--seed", "1"]).unwrap();
+    }
+
+    /// `true`, если отказ трассировки не про порты (другая ошибка или успех).
+    fn check_prefixes_ok(args: &[&str]) -> bool {
+        match run_args(args) {
+            Ok(_) => true,
+            Err(e) => !e.contains("not supported for scanning"),
         }
     }
 

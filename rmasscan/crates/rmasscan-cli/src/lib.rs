@@ -1330,6 +1330,61 @@ mod tests {
         }
     }
 
+    /// `--top-ports` C строит в конце разбора по итоговым типам скана, и TCP по умолчанию только если нет ни UDP, ни
+    /// SCTP, ни ping, ни ARP, ни oproto (main-conf.c:3609–3619); `scan_type.arp` ставит `SET_arpscan` (`--arp`,
+    /// `--arpscan`, ключ файла `arpscan =`, main-conf.c:1088–1102), а `-pI:2` его не ставит. Ожидания сняты с C 8e6b3b0
+    /// (`masscan 10.0.0.1 <argv> --echo`, файл `a` это `arpscan = true`); строка `ports = …` вывода C:
+    /// - `--arp --top-ports 5` и `--top-ports 5 --arp` → `ports = I:2`; `--arpscan --top-ports 3` → `ports = I:2`;
+    /// - `--arp --top-ports 5 -sS` → `ports = 21,80,443,990,8080,I:2`;
+    /// - `--arp --top-ports 5 -sU` → `ports = U:135,U:137-138,U:161,U:500,I:2`;
+    /// - `--arp --top-ports 5 --ping` → `ports = I:0,I:2`;
+    /// - `-pI:2 --top-ports 5` → `ports = 21,80,443,990,8080,I:2`;
+    /// - `-c a --top-ports 5` и `--top-ports 5 -c a` → `ports = I:2`.
+    ///
+    /// oproto: у rmasscan нет ни `-sO`, ни ключа `oprotos` (C main-conf.c:2649–2655, :3524), а `-pO:47` у C
+    /// `scan_type.oproto` не ставит, поэтому эту часть условия у rmasscan ничто не задаёт.
+    #[test]
+    fn arp_scan_drops_the_tcp_default_of_top_ports_as_in_c() {
+        let scratch = Scratch::new();
+        let a = scratch.write("a", b"arpscan = true\n");
+        let a = a.to_str().unwrap();
+        let ports = |argv: &[&str]| {
+            let mut v = vec!["rmasscan", "10.0.0.1"];
+            v.extend_from_slice(argv);
+            v.extend_from_slice(&["--seed", "1", "--echo"]);
+            let out = run_args(&v).unwrap();
+            out.lines()
+                .find(|l| l.starts_with("ports = "))
+                .unwrap_or_else(|| panic!("{argv:?}: no ports line in {out}"))
+                .to_string()
+        };
+        for (argv, c) in [
+            (&["--arp", "--top-ports", "5"][..], "ports = I:2"),
+            (&["--top-ports", "5", "--arp"][..], "ports = I:2"),
+            (&["--arpscan", "--top-ports", "3"][..], "ports = I:2"),
+            (
+                &["--arp", "--top-ports", "5", "-sS"][..],
+                "ports = 21,80,443,990,8080,I:2",
+            ),
+            (
+                &["--arp", "--top-ports", "5", "-sU"][..],
+                "ports = U:135,U:137-138,U:161,U:500,I:2",
+            ),
+            (
+                &["--arp", "--top-ports", "5", "--ping"][..],
+                "ports = I:0,I:2",
+            ),
+            (
+                &["-pI:2", "--top-ports", "5"][..],
+                "ports = 21,80,443,990,8080,I:2",
+            ),
+            (&["-c", a, "--top-ports", "5"][..], "ports = I:2"),
+            (&["--top-ports", "5", "-c", a][..], "ports = I:2"),
+        ] {
+            assert_eq!(ports(argv), c, "{argv:?}");
+        }
+    }
+
     /// Файлы нагрузок доходят до кадров: сначала pcap, потом nmap (main-conf.c:3163-3183), оба заменяют встроенные.
     #[test]
     fn payload_files_reach_the_probe_frames() {

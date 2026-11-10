@@ -1198,6 +1198,7 @@ impl Cli {
                 }
             }
         }
+        self.apply_top_ports(&mut full.scan)?;
         Ok(full)
     }
 
@@ -1228,14 +1229,14 @@ impl Cli {
         port_default(udp, sctp)
     }
 
-    /// Порты, `--udp-ports`, `--ping`, `--top-ports` и `-sS/-sU/-sZ` в порядке `argv`, как `masscan_set_parameter`
-    /// (main-conf.c:2642-2681, 2721-2729, 3524-3549): `-p` берёт префикс по умолчанию от `-sU`/`-sZ` левее него,
-    /// а таблицы `--top-ports` строятся в конце по итоговым типам скана (main-conf.c:3609-3619).
+    /// Порты, `--udp-ports`, `--ping` и `-sS/-sU/-sZ` в порядке `argv`, как `masscan_set_parameter`
+    /// (main-conf.c:2642-2681, 2721-2729, 3524-3549): `-p` берёт префикс по умолчанию от `-sU`/`-sZ` левее него.
+    /// Таблицы `--top-ports` строит [`Cli::apply_top_ports`] после всех файлов конфигурации.
     fn apply_port_options(&self, cfg: &mut ScanConfig) -> Result<(), String> {
-        let (mut tcp, mut udp, mut sctp) = (false, false, false);
+        let (mut udp, mut sctp) = (false, false);
         for (_, ev) in &self.port_events {
             match ev {
-                PortEvent::Scan('S') => tcp = true,
+                PortEvent::Scan('S') => {}
                 PortEvent::Scan('U') => udp = true,
                 PortEvent::Scan(_) => sctp = true,
                 PortEvent::Ports(p) => {
@@ -1258,8 +1259,25 @@ impl Cli {
                 .ports_mut()
                 .add_range(TEMPL_ICMP_ECHO, TEMPL_ICMP_ECHO);
         }
-        // main-conf.c:3609-3612: без другого типа скана по умолчанию TCP.
-        if !udp && !sctp && !self.ping {
+        Ok(())
+    }
+
+    /// Таблицы `--top-ports` в конце разбора по итоговым типам скана (main-conf.c:3609-3619), то есть после всех
+    /// файлов конфигурации: ARP-скан, заданный файлом (`arpscan =`), тоже снимает TCP по умолчанию.
+    fn apply_top_ports(&self, cfg: &mut ScanConfig) -> Result<(), String> {
+        let (mut tcp, mut udp, mut sctp) = (false, false, false);
+        for (_, ev) in &self.port_events {
+            match ev {
+                PortEvent::Scan('S') => tcp = true,
+                PortEvent::Scan('U') | PortEvent::UdpPorts(_) => udp = true,
+                PortEvent::Scan(_) => sctp = true,
+                PortEvent::Ports(_) => {}
+            }
+        }
+        // main-conf.c:3609-3612: без UDP, SCTP, ping, ARP и oproto по умолчанию TCP. `scan_type.arp` ставит только
+        // `SET_arpscan` (`--arp`, `--arpscan`, `arpscan =` в файле; `cfg.arpscan`), не `-pI:2`. oproto у rmasscan не
+        // задаётся ничем: нет ни `-sO`, ни ключа `oprotos` (main-conf.c:2649-2655, :3524), а `-pO:` его у C не ставит.
+        if !udp && !sctp && !self.ping && !cfg.arpscan {
             tcp = true;
         }
         if let Some(v) = self.top_ports.last() {

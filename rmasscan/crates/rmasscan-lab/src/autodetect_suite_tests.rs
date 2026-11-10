@@ -2040,7 +2040,7 @@ fn wire_lab_records_the_teardown_and_keeps_a_work_directory_the_suite_marked() {
     };
     // M1: the autodetect lab records the undo after both namespaces are deleted and before the files go back to
     // the user; the record is the verifier's file in the verifier's schema. The other suites write none.
-    let record = at(r#"[ "$SUITE" != autodetect ] || autodetect_teardown"#);
+    let record = at(r#"[ "$STAND_SUITE" = 0 ] || autodetect_teardown"#);
     assert!(at(r#"ip netns del "$NS_B""#) < record && record < at("chown -R"));
     let f = text
         .split("autodetect_teardown() {")

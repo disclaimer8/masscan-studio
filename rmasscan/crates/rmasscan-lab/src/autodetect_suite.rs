@@ -621,6 +621,8 @@ impl LinuxHost for RealLinux {
 pub(crate) struct LinuxTools {
     pub(crate) scanner: Option<Box<dyn Running>>,
     pub(crate) witness: Option<Box<dyn Running>>,
+    /// The witness of the second link (the scan-control stand's `veth-b2`), when that suite runs one.
+    pub(crate) witness2: Option<Box<dyn Running>>,
     pub(crate) responder: Option<Box<dyn Running>>,
     /// A frame may exist: the start marker is about to be sent.
     pub(crate) frames_possible: bool,
@@ -630,6 +632,7 @@ impl Drop for LinuxTools {
         for (p, sig) in [
             (self.scanner.take(), "INT"),
             (self.witness.take(), "TERM"),
+            (self.witness2.take(), "TERM"),
             (self.responder.take(), "TERM"),
         ] {
             if let Some(mut p) = p {
@@ -640,8 +643,15 @@ impl Drop for LinuxTools {
 }
 /// One capture's witness: the pcap it writes and the record it leaves.
 pub(crate) struct Witness {
-    pcap: PathBuf,
-    meta: PathBuf,
+    pub(crate) pcap: PathBuf,
+    pub(crate) meta: PathBuf,
+}
+/// Which link a witness watches: the peer end it records on, and the scanner end that sends its start marker.
+pub(crate) struct WitnessLink<'a> {
+    pub(crate) peer_if: &'a str,
+    pub(crate) scanner_if: &'a str,
+    pub(crate) scanner_mac: &'a str,
+    pub(crate) peer_mac: &'a str,
 }
 
 /// The driver of the Linux netns stand, shared by `autodetect-suite linux` and `output-suite linux`.
@@ -682,13 +692,17 @@ impl Linux<'_> {
 
     /// `capture isolation --mode autodetect` now, into `path` (scrubbed): the seal of the stand, proven again.
     pub(crate) fn isolation(&self, path: &Path) -> Result<(), String> {
+        self.isolation_mode(path, "autodetect")
+    }
+    /// [`Self::isolation`] for `mode` `autodetect` or `scan-control` (the autodetect stand plus the second veth pair).
+    pub(crate) fn isolation_mode(&self, path: &Path, mode: &str) -> Result<(), String> {
         let links = self.work.join("host-links-before.txt");
         let o = self.host.exec(
             &self.lab(&[
                 "capture",
                 "isolation",
                 "--mode",
-                "autodetect",
+                mode,
                 "--out",
                 &p2s(path),
                 "--ns-a",
@@ -708,9 +722,9 @@ impl Linux<'_> {
             ));
         }
         let mut v = read_json(path)?;
-        if v["mode"] != "autodetect" || !isolation_permits(&v, IsolationMode::Autodetect) {
+        if v["mode"] != mode || !isolation_permits(&v, IsolationMode::Autodetect) {
             return Err(format!(
-                "the record does not permit an autodetect run (default_route {})",
+                "the record does not permit a {mode} run (default_route {})",
                 v["default_route"]
             ));
         }
@@ -764,6 +778,25 @@ impl Linux<'_> {
         pcap_name: &str,
         t: &mut LinuxTools,
     ) -> Result<Witness, SuiteError> {
+        let link = WitnessLink {
+            peer_if: LINUX_PEER_IF,
+            scanner_if: av::stand(Plan::Linux).iface,
+            scanner_mac: &self.mac_a,
+            peer_mac: &self.mac_b,
+        };
+        self.witness_link(base, run, pcap_name, t, &link, false)
+    }
+
+    /// [`Self::witness`] on any link of the stand; `second` keeps the process in `t.witness2`.
+    pub(crate) fn witness_link(
+        &self,
+        base: &Path,
+        run: &Path,
+        pcap_name: &str,
+        t: &mut LinuxTools,
+        link: &WitnessLink,
+        second: bool,
+    ) -> Result<Witness, SuiteError> {
         let stem = pcap_name.trim_end_matches(".pcap");
         let pcap = run.join(pcap_name);
         let meta = base.join(format!("{stem}-witness.json"));
@@ -777,7 +810,7 @@ impl Linux<'_> {
                 "capture",
                 "dump",
                 "--iface",
-                LINUX_PEER_IF,
+                link.peer_if,
                 "--pcap",
                 &p2s(&pcap),
                 "--meta",
@@ -787,14 +820,19 @@ impl Linux<'_> {
                 "--ack",
                 &p2s(&ack),
                 "--end-dst",
-                &self.mac_a,
+                link.scanner_mac,
             ]),
         );
-        t.witness = Some(self.host.spawn(
+        let process = self.host.spawn(
             &argv,
             &base.join(format!("{stem}-witness.out.txt")),
             &base.join(format!("{stem}-witness.err.txt")),
-        )?);
+        )?;
+        if second {
+            t.witness2 = Some(process);
+        } else {
+            t.witness = Some(process);
+        }
         if !poll(&self.pause(), READY_POLLS, || ready.exists()) {
             return Err(not_run(
                 "the peer witness never became ready; the scanner was not started",
@@ -808,11 +846,11 @@ impl Linux<'_> {
                     "capture",
                     "marker",
                     "--iface",
-                    av::stand(Plan::Linux).iface,
+                    link.scanner_if,
                     "--src",
-                    &self.mac_a,
+                    link.scanner_mac,
                     "--dst",
-                    &self.mac_b,
+                    link.peer_mac,
                 ]),
             ),
             EXEC_TIMEOUT,
@@ -840,7 +878,30 @@ impl Linux<'_> {
         record: &str,
         err: &str,
     ) -> Result<(), SuiteError> {
-        let mut p = t.witness.take().ok_or("the witness is not running")?;
+        let p = t.witness.take();
+        self.finish_witness_process(p, w, run, record, err)
+    }
+    /// [`Self::finish_witness`] for the process of the second link.
+    pub(crate) fn finish_witness2(
+        &self,
+        w: &Witness,
+        t: &mut LinuxTools,
+        run: &Path,
+        record: &str,
+        err: &str,
+    ) -> Result<(), SuiteError> {
+        let p = t.witness2.take();
+        self.finish_witness_process(p, w, run, record, err)
+    }
+    fn finish_witness_process(
+        &self,
+        p: Option<Box<dyn Running>>,
+        w: &Witness,
+        run: &Path,
+        record: &str,
+        err: &str,
+    ) -> Result<(), SuiteError> {
+        let mut p = p.ok_or("the witness is not running")?;
         let rc = stop(p.as_mut(), "TERM", &self.pause(), WITNESS_POLLS);
         if rc != Some(0) {
             return Err(SuiteError::Abort(format!(
@@ -1046,6 +1107,9 @@ impl Linux<'_> {
             stop(p.as_mut(), "INT", &self.pause(), 100);
         }
         if let Some(mut p) = t.witness.take() {
+            stop(p.as_mut(), "TERM", &self.pause(), WITNESS_POLLS);
+        }
+        if let Some(mut p) = t.witness2.take() {
             stop(p.as_mut(), "TERM", &self.pause(), WITNESS_POLLS);
         }
         let frames = t.frames_possible;

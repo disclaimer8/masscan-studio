@@ -9,6 +9,9 @@
 
 /// `(порт, seqno, кадр)`, где seqno = (unsigned)syn_cookie(ip_them = 198.18.2.1, Templ_UDP + порт, ip_me, port_me,
 /// entropy).
+/// entropy харнеса (seed C) для [`C_FRAMES`].
+pub(crate) const C_ENTROPY: u64 = 0x1122_3344_5566_7788;
+
 pub(crate) const C_FRAMES: &[(u16, u32, &str)] = &[
     (
         7,

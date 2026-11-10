@@ -1494,7 +1494,7 @@ mod tests {
             assert_eq!(ok(ports), Err(PlanError::ArpMixedWithPorts), "{ports}");
         }
         assert_eq!(ok("I:2-3"), Err(PlanError::IcmpTypeNotSupported(196_611)));
-        // new_cli: смесь с ARP отказывает раньше временного отказа
+        // new_cli: смесь с ARP отказывает тем же `ArpMixedWithPorts`
         assert_eq!(cli_err("I:2,T:80"), PlanError::ArpMixedWithPorts);
         assert_eq!(cli_err("I:0,I:2"), PlanError::ArpMixedWithPorts);
         // Студия: `new` по-прежнему только TCP

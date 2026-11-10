@@ -1087,7 +1087,8 @@ mod tests {
     #[test]
     fn udp_frames_match_c_bytes_for_every_port() {
         use crate::payloads::PayloadTable;
-        use crate::udp_c_vectors::C_FRAMES;
+        use crate::targets::TEMPL_UDP;
+        use crate::udp_c_vectors::{C_ENTROPY, C_FRAMES};
         // Кадры настоящего C: IP, порты, ip_id, длины, сумма UDP и нагрузка с cookie (все 28 портов таблицы и 5 без записи).
         let table = PayloadTable::builtin();
         let t = udp_tmpl(LinkType::Ethernet, 255);
@@ -1101,6 +1102,19 @@ mod tests {
                 &((them ^ u32::from(port) ^ seqno) as u16).to_be_bytes()
             );
             assert!(udp_sum_folds_to_ones(&f), "port {port}");
+            // Якорь индекса cookie: seqno вектора C это `syn_cookie(ip_them, Templ_UDP + порт, ip_me, port_me, entropy)`
+            // (индекс диапазона портов, main.c:371–402), и cookie Rust с тем же индексом обязан дать то же число.
+            assert_eq!(
+                syn_cookie_ipv4(
+                    them,
+                    TEMPL_UDP + u32::from(port),
+                    me,
+                    u32::from(port_me),
+                    C_ENTROPY
+                ) as u32,
+                seqno,
+                "port {port}: cookie index"
+            );
             assert_eq!(checksum::ip_header_checksum(&f, 14, 34), 0xffff);
         }
         assert_eq!(C_FRAMES.len(), 33);
@@ -1261,7 +1275,21 @@ mod tests {
         // Review Focus 5: неправильный порядок байт CRC-32C молча срывает все ответы. Сумма стоит в [42..46] байтами
         // C-значения big-endian, то есть стандартного CRC-32C в little-endian (`to_le_bytes`).
         let mut f = Vec::new();
-        for &(them, port, me, port_me, _e, ttl, seqno, hex) in C_SCTP_FRAMES {
+        for &(them, port, me, port_me, e, ttl, seqno, hex) in C_SCTP_FRAMES {
+            // Якорь индекса cookie: seqno вектора C это `syn_cookie(ip_them, Templ_SCTP + порт, ip_me, port_me, entropy)`
+            // (индекс диапазона портов, main.c:371–402; на приёме тот же индекс `port_them | (Proto_SCTP<<16)`,
+            // main.c:821), и cookie Rust с тем же индексом обязан дать то же число.
+            assert_eq!(
+                syn_cookie_ipv4(
+                    them,
+                    crate::targets::TEMPL_SCTP + u32::from(port),
+                    me,
+                    u32::from(port_me),
+                    e
+                ) as u32,
+                seqno,
+                "port {port}: cookie index"
+            );
             sctp_tmpl(LinkType::Ethernet, ttl).build_init(
                 (them, port),
                 (me, port_me),

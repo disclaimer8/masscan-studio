@@ -235,6 +235,18 @@ pub fn options_for(attempt: u8) -> EngineOptions {
     EngineOptions::new([1; 16], [attempt; 16])
 }
 
+/// Опции отрезков [`first_leg`] и [`resume_leg`]. `FakeRx::idle` (fake.rs) двигает общий `ManualClock` на таймаут приёма
+/// примерно за 100 мкс реального времени (тот же clock отсчитывает `--wait`), поэтому поток TX, который планировщик
+/// снял с CPU посреди WouldBlock, видит, как прошли 10 с окна `tx_stall_timeout`, и отрезок кончается `TxStalled`, а не
+/// паузой (итоговое ревью этапа протоколов: 9 из 150 под нагрузкой, `pause_resume.rs:95`). Эти отрезки проверяют паузу
+/// и возобновление, а не окно простоя TX (его проверяют `tx_stall.rs` и `tx_batch.rs` со своими опциями), поэтому окно
+/// здесь практически бесконечно. Логика остановки продукта не меняется.
+pub fn leg_options(attempt: u8) -> EngineOptions {
+    let mut o = options_for(attempt);
+    o.tx_stall_timeout = Duration::from_secs(365 * 24 * 3600);
+    o
+}
+
 /// Результат одного отрезка запуска.
 pub struct Leg {
     pub frames: Vec<Vec<u8>>,
@@ -287,7 +299,7 @@ pub fn first_leg(plan: &ReadyPlan, at: usize, block_calls: usize, attempt: u8) -
     let (fake, clock) = leg_fake();
     let (pair, cell) = wrapped_pair(&fake, at, block_calls);
     let c: Arc<dyn Clock + Send + Sync> = clock.clone();
-    let h = Engine::start_with_clock(plan.clone(), pair, options_for(attempt), c).unwrap();
+    let h = Engine::start_with_clock(plan.clone(), pair, leg_options(attempt), c).unwrap();
     cell.set(h.cancel_handle()).ok();
     finish_leg(h, &fake)
 }
@@ -299,7 +311,7 @@ pub fn resume_leg(plan: &ReadyPlan, cp: &Checkpoint, at: usize, attempt: u8) -> 
     let (pair, cell) = wrapped_pair(&fake, at, 1);
     let c: Arc<dyn Clock + Send + Sync> = clock.clone();
     let h =
-        Engine::resume_with_clock(plan.clone(), cp.clone(), pair, options_for(attempt), c).unwrap();
+        Engine::resume_with_clock(plan.clone(), cp.clone(), pair, leg_options(attempt), c).unwrap();
     cell.set(h.cancel_handle()).ok();
     finish_leg(h, &fake)
 }

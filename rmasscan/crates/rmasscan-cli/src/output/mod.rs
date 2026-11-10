@@ -115,7 +115,8 @@ pub fn interactive_line(r: &Record) -> String {
     format!("{head:<79}\n")
 }
 
-/// Интерактивный вывод masscan: только open, flush на строку.
+/// Интерактивный вывод masscan: строки open и ARP (`up`) по [`interactive_line`], closed не печатается
+/// (`is_show_closed = 0`), flush на строку.
 pub struct Interactive<W: Write> {
     out: W,
 }

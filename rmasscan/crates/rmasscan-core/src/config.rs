@@ -1257,7 +1257,10 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         // main-conf.c:2758: `badsum` ставит флаг при любом значении.
         "badsum" => cfg.badsum = true,
         // main-conf.c:1088-1102 (`SET_arpscan`, :2373 с псевдонимом `arp`): значение не читается; порт `Templ_ARP`,
-        // `router-mac = ff-ff-ff-ff-ff-ff` (как ключ `router-mac`, порядок argv решает, кто победит) и флаг.
+        // `router-mac = ff-ff-ff-ff-ff-ff` (как ключ `router-mac` в этой точке) и флаг. Внутри файла и между файлом и
+        // командной строкой побеждает то, что правее, как в C. Флаг `--arp` командной строки CLI применяет раньше её
+        // ключей адаптера, поэтому явный `--router-mac` командной строки побеждает на любом месте (у C `--arp` правее
+        // `--router-mac` его затирает; на проводе разницы нет, README §8).
         "arpscan" | "arp" => {
             cfg.targets
                 .ports_mut()

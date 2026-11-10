@@ -700,9 +700,13 @@ The names are decoded from DNS wire form (length-prefixed labels, compression po
 data, NetBIOS names) and printed masked (first three characters and an ellipsis) with the file and the frame number; a
 text search for `_tcp.local` cannot find them. Every other file is searched as text, and every capture as raw bytes,
 for the tokens given with `--forbid` (repeatable; the operator passes the real host names and accounts on the command
-line, so no real name lives in the repository). A hit prints the file, the line and the token's number, never the token.
-Exit 0 only without a hit, 1 on any hit. Run it on the pulled directory, fix the stand or re-run on a hit, and copy
-only after a clean exit:
+line, so no real name lives in the repository). A `--forbid` token shorter than 4 bytes is refused with exit 2 and a
+message that does not print the token: a token that short matches unrelated bytes, such as pcap timestamps. In a
+capture the raw-bytes search covers frame data only: pcap record headers are skipped; for pcapng it covers the
+packet-block data plus every non-packet block (section and interface blocks, comments, interface names). A capture
+that does not parse is searched whole. A hit prints the file, the line (`bytes` in a capture) and the token's number,
+never the token. Exit codes: 0 without a hit, 1 on any hit, 2 on a refused argument. Run it on the pulled directory,
+fix the stand or re-run on a hit, and copy only after a clean exit:
 
 ```sh
 target/release/rmasscan-lab privacy-scan --dir "$OUT" --forbid "$(hostname -s)" --forbid "$USER" --forbid "$LABHOST"

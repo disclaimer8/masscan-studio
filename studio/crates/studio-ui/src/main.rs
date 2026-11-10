@@ -16,6 +16,7 @@ mod smoke_feth;
 mod smoke_history;
 mod smoke_network;
 mod smoke_session;
+mod smoke_single;
 mod table_controls;
 slint::include_modules!();
 
@@ -428,6 +429,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .transpose()?,
     ));
     let network_active = network_driver.borrow().is_some();
+    let single_driver = Rc::new(RefCell::new(
+        if smoke_single::requested(&std::env::args().collect::<Vec<_>>())? {
+            Some(smoke_single::Driver::prepare(&runner)?)
+        } else {
+            None
+        },
+    ));
+    let single_active = single_driver.borrow().is_some();
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
     ui.set_mac_feth_open(studio_protocol::raw_profile_enabled(Backend::MacFeth));
@@ -906,6 +915,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session_active = session_smoke.is_some();
     let mut session_driver = session_smoke.map(smoke_session::Driver::new);
     let native = network_driver.clone();
+    let single = single_driver.clone();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(50),
@@ -914,6 +924,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let updates = a.borrow_mut().poll();
             if let Some(driver) = &mut history_driver { driver.observe(&updates); }
             if let Some(driver) = native.borrow_mut().as_mut() { driver.observe(&updates); }
+            if let Some(driver) = single.borrow_mut().as_mut() { driver.observe(&updates); }
             if let Some(driver) = &mut session_driver { driver.observe(&updates); }
             // The `--smoke-feth` driver sees every update first, in order, and answers with the steps a user's
             // clicks would have produced; they run through `action` below, the same path as the buttons.
@@ -1126,6 +1137,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = slint::quit_event_loop();
                 }
             }
+            if let Some(driver) = single.borrow_mut().as_mut() {
+                match driver.tick(&ui, m.as_ref()) {
+                    Ok(false) => {},
+                    result => {
+                        *finished.borrow_mut() = Some(match result { Ok(_) => (true,String::new()), Err(e) => (false,e) });
+                        let _ = slint::quit_event_loop();
+                    }
+                }
+            }
             if let Some(driver) = native.borrow_mut().as_mut() {
                 match driver.tick(&ui, m.row_count()) {
                     Ok(false) => {},
@@ -1226,7 +1246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     ui.run()?;
     timer.stop();
-    if driver_active || session_active || network_active || history_active {
+    if driver_active || session_active || network_active || single_active || history_active {
         match outcome.borrow().as_ref() {
             Some((true, _)) => {}
             Some((false, reason)) => return Err(format!("UI acceptance failed: {reason}").into()),
@@ -1236,7 +1256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if (smoke || pause_smoke || stop_smoke) && !success.get() {
         return Err("UI smoke did not complete the expected lifecycle".into());
     }
-    if network_active {
+    if network_active || single_active {
         // Destroy all callbacks holding Controller clones before recording joined.
         drop(timer);
         drop(ui);
@@ -1244,11 +1264,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|_| "GUI callbacks still own the Controller")?
             .into_inner();
         drop(controller);
-        network_driver
-            .borrow_mut()
-            .take()
-            .ok_or("Missing native GUI driver")?
-            .finish()?;
+        if network_active {
+            network_driver
+                .borrow_mut()
+                .take()
+                .ok_or("Missing native GUI driver")?
+                .finish()?;
+        }
+        if single_active {
+            single_driver
+                .borrow_mut()
+                .take()
+                .ok_or("Missing single-target GUI driver")?
+                .finish()?;
+        }
     }
     Ok(())
 }

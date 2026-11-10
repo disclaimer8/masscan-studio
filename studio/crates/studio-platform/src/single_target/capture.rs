@@ -16,9 +16,91 @@ pub struct CaptureFinish {
     pub recorded: u64,
     pub statistics: Option<CaptureStatistics>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<CaptureTimeline>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureTimeline {
+    pub opened: studio_protocol::acceptance::Stamp,
+    pub ready: studio_protocol::acceptance::Stamp,
+    pub stopped: studio_protocol::acceptance::Stamp,
+    pub closed: studio_protocol::acceptance::Stamp,
+    pub samples: Vec<studio_protocol::acceptance::Stamp>,
+}
+impl CaptureTimeline {
+    pub(super) fn sampled(
+        opened: studio_protocol::acceptance::Stamp,
+        ready: studio_protocol::acceptance::Stamp,
+        stopped: studio_protocol::acceptance::Stamp,
+        closed: studio_protocol::acceptance::Stamp,
+        samples: Vec<studio_protocol::acceptance::Stamp>,
+    ) -> Result<Self> {
+        if !(2..=1000).contains(&samples.len())
+            || samples.first() != Some(&opened)
+            || samples.last() != Some(&closed)
+        {
+            return Err("Missing original capture samples".into());
+        }
+        // Validate every 50ms observation before retaining a 500ms series.
+        // A discarded sample can never hide a clock discontinuity.
+        studio_protocol::acceptance::clocks(&samples)?;
+        let mut retained: Vec<_> = samples.iter().step_by(10).cloned().collect();
+        if retained.last() != Some(&closed) {
+            retained.push(closed.clone());
+        }
+        let timeline = Self {
+            opened,
+            ready,
+            stopped,
+            closed,
+            samples: retained,
+        };
+        timeline.validate()?;
+        Ok(timeline)
+    }
+    pub fn validate(&self) -> Result<()> {
+        use studio_protocol::acceptance::clocks;
+        clocks(&[
+            self.opened.clone(),
+            self.ready.clone(),
+            self.stopped.clone(),
+            self.closed.clone(),
+        ])?;
+        clocks(&self.samples)?;
+        if !(2..=128).contains(&self.samples.len())
+            || self.samples.first() != Some(&self.opened)
+            || self.samples.last() != Some(&self.closed)
+            || self
+                .samples
+                .windows(2)
+                .any(|p| p[1].mono_ns - p[0].mono_ns > 1_000_000_000)
+            || self.closed.mono_ns >= CAPTURE_SECONDS * 1_000_000_000
+        {
+            return Err("Capture clock coverage is incomplete or expired".into());
+        }
+        Ok(())
+    }
 }
 impl CaptureFinish {
     fn validate(&self, witness: &CaptureWitness, finished: u64) -> Result<()> {
+        if let Some(timeline) = &self.timeline {
+            timeline.validate()?;
+            let ready = witness
+                .created
+                .checked_mul(1_000_000_000)
+                .ok_or("Capture clock overflow")?;
+            let end = finished
+                .checked_add(1)
+                .and_then(|s| s.checked_mul(1_000_000_000))
+                .ok_or("Capture clock overflow")?;
+            if timeline.ready.wall_ns < ready
+                || timeline.closed.wall_ns >= end
+                || timeline.closed.mono_ns / 1_000_000 > self.elapsed_millis
+            {
+                return Err("Capture clock differs from completion record".into());
+            }
+        }
         if self.recorded > 1024
             || self
                 .error
@@ -631,6 +713,38 @@ mod tests {
         }
     }
     #[test]
+    fn compact_clock_evidence_checks_even_the_discarded_samples() {
+        use studio_protocol::acceptance::Stamp;
+        let samples: Vec<_> = (0..=780)
+            .map(|index| Stamp {
+                wall_ns: 1_000_000_000_000 + index * 50_000_000,
+                mono_ns: index * 50_000_000,
+                uncertainty_ns: 0,
+            })
+            .collect();
+        let build = |samples: Vec<Stamp>| {
+            CaptureTimeline::sampled(
+                samples[0].clone(),
+                samples[1].clone(),
+                samples[779].clone(),
+                samples[780].clone(),
+                samples,
+            )
+        };
+        let timeline = build(samples.clone()).unwrap();
+        assert_eq!(timeline.samples.len(), 79);
+        assert!(serde_json::to_vec(&timeline).unwrap().len() < 14000);
+        let mut bad = samples.clone();
+        bad[3].wall_ns += 10_000_000;
+        assert!(build(bad).is_err());
+        let mut sparse = timeline.clone();
+        sparse.samples.drain(1..5);
+        assert!(sparse.validate().is_err());
+        let mut late = timeline;
+        late.closed.mono_ns = CAPTURE_SECONDS * 1_000_000_000;
+        assert!(late.validate().is_err());
+    }
+    #[test]
     fn child_observes_store_kernel_lease() {
         let Some(path) = std::env::var_os("STUDIO_CAPTURE_STORE_TEST_DIR") else {
             return;
@@ -726,6 +840,7 @@ mod tests {
         let mut w = witness(&p);
         w.permit_sha256 = digest(&serde_json::to_vec(&p).unwrap());
         let data = CaptureFinish {
+            timeline: None,
             elapsed_millis: 1000,
             recorded: 0,
             statistics: Some(CaptureStatistics {
@@ -777,6 +892,7 @@ mod tests {
         let p = permit();
         let w = witness(&p);
         let good = CaptureFinish {
+            timeline: None,
             elapsed_millis: 1000,
             recorded: 1,
             statistics: Some(CaptureStatistics {
@@ -802,6 +918,7 @@ mod tests {
         assert!(good.validate(&w, 1000).is_err());
         assert!(good.validate(&w, 1041).is_err());
         let failed = CaptureFinish {
+            timeline: None,
             elapsed_millis: 40_100,
             recorded: 1,
             statistics: None,

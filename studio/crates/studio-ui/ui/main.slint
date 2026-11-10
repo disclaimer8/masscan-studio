@@ -138,7 +138,8 @@ export component MainWindow inherits Window {
     private property <string> empty-description: root.filter-query != "" ? "Try another IP, hostname or service." : root.process-active ? "Results will appear here as they are saved." : root.has-network-coverage ? "Preparation coverage is saved above and can be exported even without result rows. Unresolved neighbours were not scanned." : root.history-index >= 0 ? "Choose another scan in History or start a new scan." : "Configure targets and ports to begin. Results are saved in History.";
     in property <string> selection-label: "No selection";
     in property <string> event-label: "Ready · no scan started";
-    in-out property <int> backend-index: 0;
+    // Startup may select an enabled macOS profile; the portable default is Simulation.
+    in-out property <int> backend-index: 1;
     // Set once from studio_protocol::raw_profile_enabled(Backend::MacFeth): the gate differs per OS.
     in property <bool> mac-feth-open: false;
     in property <bool> mac-network-open: false;
@@ -201,7 +202,10 @@ export component MainWindow inherits Window {
     in property <bool> process-preparing: false;
     out property <bool> can-pause: root.process-active && !root.process-preparing && root.process-status == "Scanning" && !root.process-stopping;
     out property <bool> can-stop: root.process-active && !root.process-stopping;
-    out property <bool> can-start: root.job-valid && !root.process-active && (root.backend-index != 2 || (root.mac-network-open && root.mac-network-supported));
+    out property <bool> can-start: root.job-valid && !root.process-active
+        && (root.backend-index == 1
+            || (root.backend-index == 0 && root.mac-feth-open)
+            || (root.backend-index == 2 && root.mac-network-open && root.mac-network-supported));
     in-out property <bool> process-stopping: false;
     in property <string> process-status: "Ready";
     callback settings-edited();

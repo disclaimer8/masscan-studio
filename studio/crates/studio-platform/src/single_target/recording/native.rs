@@ -3,8 +3,8 @@ use super::*;
 use crate::{
     pcap::Capture,
     single_target::{
-        CaptureCompletion, CaptureFinish, CaptureLease, CaptureStatistics, CaptureWitness, Lease,
-        Store,
+        CaptureCompletion, CaptureFinish, CaptureLease, CaptureStatistics, CaptureTimeline,
+        CaptureWitness, Lease, Store,
     },
     unix::Identity,
     work_session::{self, Config},
@@ -18,6 +18,7 @@ use std::{
     },
     time::Instant,
 };
+use studio_protocol::acceptance::{Sampler, Stamp};
 use studio_protocol::single_target::{Context, Permit};
 
 impl Source for Capture {
@@ -100,6 +101,8 @@ struct Control<'a> {
     witness: Option<CaptureWitness>,
     lease: Lease,
     capture_lease: Option<CaptureLease>,
+    ready_stamp: Option<Stamp>,
+    stopped_stamp: Option<Stamp>,
 }
 impl Control<'_> {
     fn check(&mut self) -> Result<()> {
@@ -138,9 +141,13 @@ impl Runtime for Control<'_> {
                     .ok_or("Capture kernel lease missing")?,
             )?,
         );
+        self.ready_stamp = Some(Stamp::now(self.started)?);
         Ok(())
     }
     fn end(&mut self) -> Result<()> {
+        if self.stopped_stamp.is_none() {
+            self.stopped_stamp = Some(Stamp::now(self.started)?);
+        }
         match &self.witness {
             Some(w) => self.store.end_capture(self.permit, w),
             None => Ok(()),
@@ -206,6 +213,8 @@ pub fn run(uid: u32, generation: &str) -> Result<CaptureCompletion> {
     let mut output = store.begin_capture(&permit, &context(&config)?)?;
     let capture_lease = store.capture_lease(&permit, &context(&config)?)?;
     let mut source = Capture::open(&permit.interface.name, Some(&filter(&permit)))?;
+    let opened = Stamp::now(started)?;
+    let sampler = Sampler::start(started, opened.clone());
     let mut runtime = Control {
         store: &store,
         permit: &permit,
@@ -217,6 +226,8 @@ pub fn run(uid: u32, generation: &str) -> Result<CaptureCompletion> {
         witness: None,
         lease: Lease::default(),
         capture_lease: Some(capture_lease),
+        ready_stamp: None,
+        stopped_stamp: None,
     };
     let mut result = record(&mut source, &mut output, &mut runtime);
     if let Err(e) = output.sync_all() {
@@ -224,6 +235,29 @@ pub fn run(uid: u32, generation: &str) -> Result<CaptureCompletion> {
     }
     drop(source);
     drop(output);
+    let timeline = (|| -> Result<CaptureTimeline> {
+        let (closed, samples) = sampler.finish()?;
+        CaptureTimeline::sampled(
+            opened,
+            runtime
+                .ready_stamp
+                .clone()
+                .ok_or("Missing capture ready clock")?,
+            runtime
+                .stopped_stamp
+                .clone()
+                .ok_or("Missing capture stop clock")?,
+            closed,
+            samples,
+        )
+    })();
+    let timeline = match timeline {
+        Ok(timeline) => Some(timeline),
+        Err(error) => {
+            result.fail(error);
+            None
+        }
+    };
     let witness = runtime.witness.as_ref().ok_or_else(|| {
         result
             .error
@@ -246,6 +280,7 @@ pub fn run(uid: u32, generation: &str) -> Result<CaptureCompletion> {
             e.truncate(e.floor_char_boundary(1024));
             e
         }),
+        timeline,
     };
     store.finish_capture(&permit, witness, &data)
 }

@@ -1,6 +1,7 @@
 //! Pure admission policy for a future one-shot physical acceptance path.
 //! Not wired to any execution gate. Root storage/claiming and witness admission
 //! are required separately; a parsed permit is not permission to open an adapter.
+pub mod acceptance;
 use crate::{Backend, Job, NetworkReport};
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_net::PhysicalRoutePlan;

@@ -18,7 +18,7 @@ mod capture_lock;
 mod transmission;
 pub use capture::{
     CAPTURE_HEADER, CAPTURE_SECONDS, CaptureCompletion, CaptureEvidence, CaptureFinish,
-    CaptureLease, CapturePin, CaptureStatistics, CaptureWitness,
+    CaptureLease, CapturePin, CaptureStatistics, CaptureTimeline, CaptureWitness,
 };
 pub use transmission::TransmissionLease;
 pub mod recording;

@@ -104,6 +104,53 @@ fn route_success_does_not_enable_closed_physical_start_or_authorize_a_session() 
 }
 
 #[test]
+fn fresh_settings_validate_normal_targets_without_raw_profile_support() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new().unwrap();
+    ui.set_job_targets("192.0.2.1".into());
+    ui.set_job_ports("80".into());
+    ui.set_job_seed("42".into());
+    let job = draft(&ui).unwrap();
+    network_ui::preview(&job).expect("fresh settings should select an available profile");
+    assert_eq!(job.backend, Backend::Simulation);
+    ui.set_job_valid(true);
+    assert!(ui.get_can_start());
+    assert!(!ui.get_authorized());
+}
+
+#[test]
+fn start_is_disabled_for_unavailable_or_unknown_scan_profiles() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new().unwrap();
+    ui.set_job_valid(true);
+    for (index, feth_open, network_open, network_supported, can_start) in [
+        (0, false, false, false, false),
+        (0, true, false, false, true),
+        (1, false, false, false, true),
+        (2, true, false, true, false),
+        (2, true, true, false, false),
+        (2, false, true, true, true),
+        (-1, true, true, true, false),
+        (3, true, true, true, false),
+    ] {
+        ui.set_backend_index(index);
+        ui.set_mac_feth_open(feth_open);
+        ui.set_mac_network_open(network_open);
+        ui.set_mac_network_supported(network_supported);
+        assert_eq!(ui.get_can_start(), can_start, "profile index {index}");
+    }
+    ui.set_backend_index(1);
+    ui.set_process_active(true);
+    assert!(
+        !ui.get_can_start(),
+        "an active scan still prevents a new start"
+    );
+    ui.set_process_active(false);
+    ui.set_job_valid(false);
+    assert!(!ui.get_can_start(), "settings must still pass validation");
+}
+
+#[test]
 fn preparing_keeps_stop_available_and_pause_disabled_until_tcp_scanning() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = MainWindow::new().unwrap();

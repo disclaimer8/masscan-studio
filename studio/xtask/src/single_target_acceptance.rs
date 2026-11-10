@@ -1,4 +1,6 @@
 //! Offline packet verification and the fixed root capture child entry point.
+#[cfg(target_os = "macos")]
+mod gui;
 use rmasscan_core::probe::ProbeCursor;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -363,6 +365,12 @@ fn read(path: &str, limit: usize) -> Result<Vec<u8>> {
 pub fn main_entry() -> super::Result<()> {
     let args: Vec<_> = std::env::args().skip(2).collect();
     #[cfg(target_os = "macos")]
+    if let [action, evidence, attempt, history] = args.as_slice()
+        && action == "verify-gui"
+    {
+        return gui::command(evidence, attempt, history);
+    }
+    #[cfg(target_os = "macos")]
     if let [action, evidence, report] = args.as_slice()
         && action == "verify-evidence"
     {
@@ -390,7 +398,7 @@ pub fn main_entry() -> super::Result<()> {
     }
     let [action, permit, report, pcap, stats] = args.as_slice() else {
         return Err(
-            "Usage: single-target-acceptance verify PERMIT.json REPORT.bin CAPTURE.pcap STATS.json | verify-evidence EXPORT.bin REPORT.bin | capture UID GENERATION (installed root child only)"
+            "Usage: single-target-acceptance verify PERMIT.json REPORT.bin CAPTURE.pcap STATS.json | verify-evidence EXPORT.bin REPORT.bin | verify-gui EXPORT.bin ATTEMPT.json HISTORY_DIR | capture UID GENERATION (installed root child only)"
                 .into(),
         );
     };
@@ -410,13 +418,14 @@ pub fn main_entry() -> super::Result<()> {
     Ok(())
 }
 #[cfg(target_os = "macos")]
-fn verify_evidence(bytes: &[u8], report: &NetworkReport) -> Result<Verified> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Metadata {
-        permit: Permit,
-        completion: studio_platform::single_target::CaptureCompletion,
-    }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Metadata {
+    permit: Permit,
+    completion: studio_platform::single_target::CaptureCompletion,
+}
+#[cfg(target_os = "macos")]
+fn export(bytes: &[u8]) -> Result<(Metadata, &[u8])> {
     let boundary = bytes
         .iter()
         .take(16385)
@@ -428,6 +437,11 @@ fn verify_evidence(bytes: &[u8], report: &NetworkReport) -> Result<Verified> {
     metadata
         .completion
         .validate_export(&metadata.permit, pcap)?;
+    Ok((metadata, pcap))
+}
+#[cfg(target_os = "macos")]
+fn verify_evidence(bytes: &[u8], report: &NetworkReport) -> Result<Verified> {
+    let (metadata, pcap) = export(bytes)?;
     // Completion has second resolution: include its final second, never the
     // following second. Buffered background packets may predate publication;
     // scanner SYNs must not predate the readiness second.
@@ -475,7 +489,7 @@ fn verify_evidence(bytes: &[u8], report: &NetworkReport) -> Result<Verified> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn setup() -> (Permit, NetworkReport, Vec<Vec<u8>>) {
+    pub(super) fn setup() -> (Permit, NetworkReport, Vec<Vec<u8>>) {
         let p = Permit {
             version: 1,
             generation: "1".repeat(32),
@@ -534,7 +548,7 @@ mod tests {
         });
         f
     }
-    fn pcap(frames: &[(u64, Vec<u8>)]) -> Vec<u8> {
+    pub(super) fn pcap(frames: &[(u64, Vec<u8>)]) -> Vec<u8> {
         let mut out = vec![
             0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0,
         ];
@@ -560,7 +574,7 @@ mod tests {
             interface_dropped: 0,
         }
     }
-    fn spaced(frames: &[Vec<u8>]) -> Vec<(u64, Vec<u8>)> {
+    pub(super) fn spaced(frames: &[Vec<u8>]) -> Vec<(u64, Vec<u8>)> {
         frames
             .iter()
             .enumerate()
@@ -592,7 +606,7 @@ mod tests {
         let checksum = sum(&pseudo);
         f[tcp + 16..tcp + 18].copy_from_slice(&checksum.to_be_bytes());
     }
-    fn reply(syn: &[u8], open: bool, options: bool) -> Vec<u8> {
+    pub(super) fn reply(syn: &[u8], open: bool, options: bool) -> Vec<u8> {
         let ihl = if options { 24 } else { 20 };
         let thl = if options { 32 } else { 20 };
         let end = 14 + ihl + thl;
@@ -669,6 +683,7 @@ mod tests {
             },
             finished: 1006,
             measurements: CaptureFinish {
+                timeline: None,
                 elapsed_millis: 6000,
                 recorded: count as u64,
                 statistics: Some(CaptureStatistics {

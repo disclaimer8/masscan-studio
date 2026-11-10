@@ -860,9 +860,11 @@ pub fn run_live_conf(
             Ok(Event::Started { range }) => max_count = range,
             Ok(Event::Progress(prog)) => {
                 let now = clock.now_micros();
-                // main.c:1427 и 1496: конец передачи это `index >= range`; ожидание отсчитывается от него.
+                // Конец передачи это `tx_end` (самый медленный адаптер, `effective_end` = `(retries + 1) * range`, с
+                // усечённым `resume-count` тоже): от него engine отсчитывает `--wait`. Процент ниже остаётся от
+                // `max_count` как у C (`main.c:1427-1437`), поэтому с `--retries` он переходит 100% до отсчёта.
                 // `--infinite` конца не имеет (`main.c:1425` `min_index >= range && !is_infinite`).
-                if !infinite && prog.next_index >= max_count.min(tx_end) {
+                if !infinite && prog.next_index >= tx_end {
                     wait_started.get_or_insert(now);
                 }
                 let exiting = wait_started

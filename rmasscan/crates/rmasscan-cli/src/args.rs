@@ -100,12 +100,13 @@ pub struct Cli {
     pub seed: Option<u64>,
     #[arg(long, value_name = "PPS", help = "Packets per second (default 100)")]
     pub rate: Option<String>,
+    // Р4, main-conf.c:3028-3032: число секунд или `forever` (`INT_MAX`); разбирает ключ ядра `wait`, как в файле.
     #[arg(
         long,
-        value_name = "SECONDS",
-        help = "Seconds to wait after the scan (default 10)"
+        value_name = "SECONDS|forever",
+        help = "Seconds to wait for replies after the scan, or forever (default 10)"
     )]
-    pub wait: Option<u32>,
+    pub wait: Option<String>,
     #[arg(
         long,
         value_name = "N",
@@ -488,8 +489,9 @@ pub struct Cli {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 24] = [
+const POSITIONAL_KEYS: [&str; 25] = [
     "pcap",
+    "ndjson_status",
     "infinite",
     "offline",
     "seed",
@@ -967,13 +969,23 @@ impl Cli {
             || self.rotate_size.is_some()
     }
 
+    /// Последнее `--ndjson-status[=<val>]` командной строки (без файлов конфигурации).
+    fn ndjson_status_flag(&self) -> bool {
+        self.ndjson_status.last().is_some_and(|v| parse_boolean(v))
+    }
+
     /// Режим строки статуса: `is_status_updates` (по умолчанию 1; `--status`/`--nostatus`) и `is_status_ndjson`
-    /// (по умолчанию 0; `--ndjson-status[=<val>]`) независимы, как в C (`main.c:1399, 1434-1437, 1499-1503`,
-    /// `main-conf.c:2842-2845`, `:1507-1517`): выключено, если нет обновлений, иначе NDJSON, если он включён.
+    /// (по умолчанию 0; `--ndjson-status[=<val>]` и ключ `ndjson-status` файлов `-c`/`--resume` в порядке argv,
+    /// [`FullConf::ndjson_status`]) независимы, как в C (`main.c:1399, 1434-1437, 1499-1503`, `main-conf.c:2842-2845`,
+    /// `:1507-1517`): выключено, если нет обновлений, иначе NDJSON, если он включён. Если файл не читается, остаётся
+    /// флаг командной строки (`run` к этому времени уже отказал с ошибкой файла).
     pub fn status_mode(&self) -> StatusMode {
+        let ndjson = self
+            .resolve()
+            .map_or_else(|_| self.ndjson_status_flag(), |full| full.ndjson_status);
         if self.nostatus {
             StatusMode::Off
-        } else if self.ndjson_status.last().is_some_and(|v| parse_boolean(v)) {
+        } else if ndjson {
             StatusMode::Ndjson
         } else {
             StatusMode::Text
@@ -1047,6 +1059,11 @@ impl Cli {
             self.apply_scan_fields(&mut full.scan, seg)?;
             if self.in_segment("pcap", seg) {
                 full.pcap_filename.clone_from(&self.pcap);
+            }
+            // T2 M-5: `--ndjson-status[=<val>]` тоже ключ по позиции: файл правее флага его переопределяет, флаг правее
+            // файла переопределяет файл (`SET_status_ndjson`, main-conf.c:1507-1517, зовётся по ходу разбора).
+            if self.in_segment("ndjson_status", seg) {
+                full.ndjson_status = self.ndjson_status_flag();
             }
             if let Some(mk) = self.markers.get(seg) {
                 full.output.touched.clear();
@@ -1122,10 +1139,11 @@ impl Cli {
         {
             cfg.max_rate = parse_rate(r).map_err(|e| e.to_string())?;
         }
+        // `masscan_set_parameter` общий у argv и файла: тот же разбор, что у ключа `wait = …` (`forever` включительно).
         if take("wait")
-            && let Some(w) = self.wait
+            && let Some(w) = &self.wait
         {
-            cfg.wait_secs = w;
+            apply_core_kv(cfg, "wait", w).map_err(|e| e.to_string())?;
         }
         if take("retries")
             && let Some(r) = self.retries
@@ -2097,6 +2115,63 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         ] {
             assert_eq!(seed_policy(&parse(args).unwrap()), want, "{args:?}");
         }
+    }
+
+    /// Р4, main-conf.c:3028-3032: `--wait` идёт через тот же разбор, что ключ `wait = …` файла (`masscan_set_parameter`
+    /// общий у argv и файла): `forever` это `INT_MAX` секунд, иначе число; плохое значение это ошибка ключа `wait`.
+    #[test]
+    fn wait_forever_on_the_command_line_is_the_conf_key_value() {
+        for args in [
+            &["--wait", "forever"][..],
+            &["--wait=forever"][..],
+            &["--wait", "FOREVER"][..],
+        ] {
+            let cfg = parse(args).unwrap().to_config().unwrap();
+            assert_eq!(cfg.wait_secs, i32::MAX as u32, "{args:?}");
+        }
+        let cfg = parse(&["--wait", "3"]).unwrap().to_config().unwrap();
+        assert_eq!(cfg.wait_secs, 3);
+        let e = parse(&["--wait", "soon"]).unwrap().to_config().unwrap_err();
+        assert!(e.contains("wait") && e.contains("soon"), "{e}");
+        let help = Cli::command().render_help().to_string();
+        assert!(help.contains("--wait <SECONDS|forever>"), "{help}");
+    }
+
+    /// T2 M-5: `ndjson-status` из файла `--resume`/`-c` применяется в позиции файла в argv, как любой ключ
+    /// (`masscan_set_parameter` по ходу разбора): флаг правее файла его переопределяет, флаг левее переопределяется им.
+    #[test]
+    fn ndjson_status_from_a_resume_or_conf_file_is_applied_at_its_argv_position() {
+        use crate::status::StatusMode::{Ndjson, Off, Text};
+        let dir = crate::scratch::Scratch::new();
+        let file = dir.write(
+            "paused.conf",
+            format!("{RESUME_FILE}ndjson-status = true\n").as_bytes(),
+        );
+        let f = file.to_str().unwrap();
+        let mode = |a: &[&str]| {
+            let cli = parse(a).unwrap();
+            (cli.status_mode(), cli.resolve().unwrap().ndjson_status)
+        };
+        assert_eq!(mode(&["--resume", f]), (Ndjson, true));
+        assert_eq!(mode(&["-c", f]), (Ndjson, true));
+        assert_eq!(
+            mode(&["--resume", f, "--ndjson-status=false"]),
+            (Text, false)
+        );
+        assert_eq!(
+            mode(&["--ndjson-status=false", "--resume", f]),
+            (Ndjson, true)
+        );
+        // `--nostatus` гасит только строку статуса; `is_status_ndjson` остаётся и попадает в `paused.conf` (C пишет его
+        // по `is_status_ndjson`, main-conf.c:1512-1513).
+        assert_eq!(mode(&["--resume", f, "--nostatus"]), (Off, true));
+        // Без файла всё как раньше.
+        assert_eq!(mode(&["--ndjson-status"]), (Ndjson, true));
+        assert_eq!(mode(&[]), (Text, false));
+        let plain = dir.write("plain.conf", RESUME_FILE.as_bytes());
+        let p = plain.to_str().unwrap();
+        assert_eq!(mode(&["--resume", p]), (Text, false));
+        assert_eq!(mode(&["--ndjson-status", "--resume", p]), (Ndjson, true));
     }
 
     #[test]

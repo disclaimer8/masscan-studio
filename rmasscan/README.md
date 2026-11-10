@@ -73,13 +73,13 @@ Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip
 Управление сканом (спека этапа `../docs/superpowers/specs/2026-11-08-rmasscan-scan-control-design.md`, Р1–Р9).
 Принимаются только перечисленные ниже опции, все они есть и в файле конфигурации (`ключ = значение`):
 - `--shard ONE/OF` (`1 <= ONE <= OF`; без явного `--seed` печатается предупреждение о необходимости общего seed),
-  `--retries N` (`0..=999`), `--wait N` (по умолчанию 10 с), `--rate`, `--blackrock-rounds`;
+  `--retries N` (`0..=999`), `--wait N|forever` (секунды, по умолчанию 10 с; `forever` это `INT_MAX`, как в C), `--rate`, `--blackrock-rounds`;
 - `--resume-index N`, `--resume-count N`, `--resume FILE` (разбирается в своей позиции argv, включает дописывание
   файла вывода, ключи правее файла его переопределяют);
 - `--infinite` (проходы заново с `seed + 1` до Ctrl-C);
 - `-c`/`--conf`/`--config FILE` и `-iL`/`--includefile FILE` в порядке argv;
-- `--adapter[i]`, `--adapter-ip[i]`, `--adapter-mac[i]`, `--router-ip[i]`, `--router-mac[i]`, `--source-port[i]`,
-  `--rate[i]`... с индексом `0..=7` (без индекса это адаптер 0);
+- `--adapter[i]`, `--adapter-ip[i]`, `--adapter-mac[i]`, `--router-ip[i]`, `--router-mac[i]`, `--source-port[i]`
+  с индексом `0..=7` (без индекса это адаптер 0);
 - `--pcap FILE` (синоним `--pcap-filename`);
 - `--ttl N` (`1..=255`), `--badsum`, `--noreset[=bool]`, `--tcp-mss [N]` (синоним `--tcpmss`), `--tcp-sackok[=bool]`,
   `--tcp-wscale [N]`, `--tcp-tsecho [N]`.

@@ -15,6 +15,9 @@
 use crate::pcap::{self, Frames};
 use std::{fs, path::Path};
 
+/// The shortest `--forbid` token `run` accepts, in bytes (the search compares bytes).
+const MIN_FORBID_BYTES: usize = 4;
+
 const PORTS: [(u16, &str); 3] = [(5353, "mDNS"), (5355, "LLMNR"), (137, "NBNS")];
 
 /// One finding.
@@ -193,6 +196,55 @@ fn pcapng_frames(b: &[u8]) -> Frames {
     out
 }
 
+/// The byte ranges of a capture the raw-bytes pass searches: the frame data of every packet record, and every block of a
+/// pcapng that is not a packet block (section header, interface description and name resolution blocks carry the
+/// comments and host names). The record headers (timestamps, lengths) are skipped: their bytes match a short token by
+/// chance. A capture that does not parse is searched whole.
+fn search_regions<'a>(ext: &str, b: &'a [u8]) -> Vec<&'a [u8]> {
+    if ext == "pcap" {
+        return match pcap::frame_ranges(b) {
+            Ok(r) => r.into_iter().map(|r| &b[r]).collect(),
+            Err(_) => vec![b],
+        };
+    }
+    if b.get(..4) != Some(&[0x0a, 0x0d, 0x0d, 0x0a]) {
+        return vec![b];
+    }
+    let le = b.get(8..12) == Some(&[0x4d, 0x3c, 0x2b, 0x1a]);
+    let u32_at = |o: usize| {
+        b.get(o..o + 4).map(|x| {
+            let a = [x[0], x[1], x[2], x[3]];
+            if le {
+                u32::from_le_bytes(a)
+            } else {
+                u32::from_be_bytes(a)
+            }
+        })
+    };
+    let (mut out, mut o) = (Vec::new(), 0);
+    while o < b.len() {
+        let (Some(ty), Some(len)) = (u32_at(o), u32_at(o + 4)) else {
+            out.push(&b[o..]);
+            break;
+        };
+        let len = len as usize;
+        if len < 12 || o + len > b.len() {
+            out.push(&b[o..]);
+            break;
+        }
+        match ty {
+            6 => match u32_at(o + 20).and_then(|cap| b.get(o + 28..o + 28 + cap as usize)) {
+                Some(d) => out.push(d),
+                None => out.push(&b[o..o + len]),
+            },
+            3 => out.push(b.get(o + 12..o + len - 4).unwrap_or(&b[o..o + len])),
+            _ => out.push(&b[o..o + len]),
+        }
+        o += (len + 3) & !3;
+    }
+    out
+}
+
 fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -246,10 +298,15 @@ pub fn scan(dir: &Path, forbid: &[String]) -> Result<Vec<Hit>, String> {
                     });
                 }
             }
-            // raw bytes: a host name sits in a capture whole
+            // raw bytes of the frames (not of the record headers): a host name sits in a capture whole
+            let regions = search_regions(ext, &bytes);
             for (i, t) in forbid.iter().enumerate() {
                 let t = t.as_bytes();
-                if !t.is_empty() && bytes.windows(t.len()).any(|w| w.eq_ignore_ascii_case(t)) {
+                if !t.is_empty()
+                    && regions
+                        .iter()
+                        .any(|r| r.windows(t.len()).any(|w| w.eq_ignore_ascii_case(t)))
+                {
                     hits.push(Hit {
                         file: rel.clone(),
                         place: "bytes".into(),
@@ -293,6 +350,14 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         }
     }
     let dir = dir.ok_or("--dir is required")?;
+    // A short token (the 2-character guest name of r3) matched record-header bytes by chance: refuse it. The token is
+    // never printed.
+    if let Some(i) = forbid.iter().position(|t| t.len() < MIN_FORBID_BYTES) {
+        return Err(format!(
+            "--forbid #{} is shorter than {MIN_FORBID_BYTES} bytes: a short token matches unrelated bytes; use a longer one",
+            i + 1
+        ));
+    }
     let hits = scan(Path::new(&dir), &forbid)?;
     for h in &hits {
         println!("HIT {}", h.line());

@@ -1921,3 +1921,144 @@ mod sctp_rx {
         assert_eq!(reply_to(link, &plan, &with_sums(nochunk)), Ok(None));
     }
 }
+
+/// ARP-скан (`--arp`, Задача 6): приём `arp_recv_response` (proto-arp.c:14-41) и ветка `FOUND_ARP`
+/// (main.c:874-906) приёмника C.
+mod arp_scan {
+    use super::*;
+    use rmasscan_core::probe::NicBinding;
+    use rmasscan_core::receive::Reply;
+
+    const NEIGHBOR_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+
+    fn arp_plan(ports: &str) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: LinkType::Ethernet,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: [0xff; 6],
+                source_ports: (FIRST, LAST),
+            })],
+        )
+        .unwrap()
+    }
+
+    fn reply_of(plan: &ReadyPlan, frame: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(frame, LinkType::Ethernet, plan)
+    }
+
+    #[test]
+    fn plan_knows_it_is_an_arp_scan() {
+        assert!(arp_plan("I:2").is_arp_scan());
+        assert!(!arp_plan("80").is_arp_scan());
+        assert!(!arp_plan("I:0").is_arp_scan());
+        assert!(!plan_for(LinkType::Ethernet).is_arp_scan());
+    }
+
+    #[test]
+    fn arp_reply_from_a_target_is_reported_with_the_ethernet_source_mac() {
+        let plan = arp_plan("I:2");
+        let frame = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME);
+        assert_eq!(
+            reply_of(&plan, &frame),
+            Ok(Some(Reply {
+                remote_ip: IP_THEM,
+                remote_port: 0,
+                local_ip: IP_ME,
+                local_port: 0,
+                status: PortStatus::Arp,
+                tcp_flags: 0,
+                ttl: 0,
+                ip_proto: 0,
+                mac: Some(NEIGHBOR_MAC),
+            }))
+        );
+        // proto-arp.c:36 берёт `parsed->mac_src`, то есть MAC источника Ethernet-кадра, а не `sha`
+        let mut f = frame;
+        f[6..12].copy_from_slice(&[0x02, 0x11, 0x11, 0x11, 0x11, 0x11]);
+        assert_eq!(
+            reply_of(&plan, &f).unwrap().unwrap().mac,
+            Some([0x02, 0x11, 0x11, 0x11, 0x11, 0x11])
+        );
+        // C не сверяет `tpa` с адресом источника (main.c:889-905): ответ другому узлу, увиденный на проводе, тоже
+        // доказывает, что `spa` жив
+        let other = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME + 5);
+        assert_eq!(
+            reply_of(&plan, &other).unwrap().unwrap().local_ip,
+            IP_ME + 5
+        );
+    }
+
+    #[test]
+    fn arp_replies_outside_the_rule_are_ignored() {
+        let plan = arp_plan("I:2");
+        // `spa` вне целей (main.c:896)
+        let outside = encode_reply(NEIGHBOR_MAC, 0x0a00_0008, MAC_ME, IP_ME);
+        assert_eq!(reply_of(&plan, &outside), Ok(None));
+        // opcode 1 (запрос) приёмник ARP-скана не использует (main.c:877-886 отвечает на него сам)
+        let request = encode_request(NEIGHBOR_MAC, IP_THEM, IP_ME);
+        assert_eq!(reply_of(&plan, &request), Ok(None));
+        // без `--arp` ARP-ответ не результат (main.c:893)
+        let frame = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME);
+        assert_eq!(reply_of(&plan_for(LinkType::Ethernet), &frame), Ok(None));
+        assert_eq!(reply_of(&arp_plan("I:0"), &frame), Ok(None));
+        // ARP бывает только в Ethernet: Null и Raw его не разбирают
+        for link in [LinkType::Null, LinkType::Raw] {
+            assert_eq!(parse_reply(&frame, link, &plan).unwrap_or(None), None);
+        }
+    }
+
+    #[test]
+    fn arp_truncation_and_junk_never_panic() {
+        let plan = arp_plan("I:2");
+        let frame = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME);
+        for n in 0..frame.len() {
+            let _ = reply_of(&plan, &frame[..n]);
+        }
+        // 42 байта без дополнения до 60 это полный ARP
+        assert!(reply_of(&plan, &frame[..42]).unwrap().is_some());
+        for n in 0..42 {
+            assert!(matches!(reply_of(&plan, &frame[..n]), Ok(None) | Err(_)));
+        }
+        // чужие длины адресов: строже C, не результат
+        let mut f = frame;
+        f[18] = 8;
+        assert_eq!(reply_of(&plan, &f), Ok(None));
+    }
+
+    #[test]
+    fn arp_probes_from_the_cursor_are_42_byte_who_has_frames() {
+        let plan = arp_plan("I:2");
+        let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+        let mut seen = Vec::new();
+        while let Some(p) = cur.current() {
+            assert_eq!(p.frame.len(), 42);
+            assert_eq!(&p.frame[0..6], &[0xff; 6]);
+            assert_eq!(&p.frame[6..12], &MAC_ME);
+            assert_eq!(&p.frame[12..14], &[0x08, 0x06]);
+            let a = decode(&p.frame).unwrap();
+            assert_eq!(a.op, ArpOp::Request);
+            assert_eq!((a.sender_ip, a.sender_mac), (IP_ME, MAC_ME));
+            assert_eq!(a.target_mac, [0; 6]);
+            assert_eq!((p.ip_them, p.port_them), (a.target_ip, 0));
+            seen.push(a.target_ip);
+            cur.advance_sent();
+        }
+        assert!(cur.build_error().is_none());
+        seen.sort_unstable();
+        assert_eq!(seen, (0x0a00_0000..0x0a00_0008).collect::<Vec<u32>>());
+    }
+}

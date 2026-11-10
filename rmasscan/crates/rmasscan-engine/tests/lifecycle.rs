@@ -772,6 +772,43 @@ fn dedup_cache_separates_protocols() {
 }
 
 #[test]
+fn dedup_cache_reports_each_arp_neighbor_once() {
+    // C `dedup_is_duplicate(dedup, ip_them, 0, ip_me, 0)` (main.c:899): ключ это пара `(spa, tpa)`, MAC в него не входит.
+    let arp = Reply {
+        ip_proto: 0,
+        remote_port: 0,
+        local_port: 0,
+        status: PortStatus::Arp,
+        tcp_flags: 0,
+        ttl: 0,
+        mac: Some([2, 0, 0, 0, 0, 1]),
+        ..reply(7, 80)
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&arp));
+    let again = Reply {
+        mac: Some([2, 0, 0, 0, 0, 9]),
+        ..arp
+    };
+    assert!(
+        !d.insert(&again),
+        "a second reply of the same host is a repeat"
+    );
+    let other_host = Reply {
+        remote_ip: arp.remote_ip + 1,
+        ..arp
+    };
+    assert!(d.insert(&other_host));
+    // ответ на ARP-скан не глушит TCP и ICMP Echo того же адреса
+    let open = Reply {
+        ip_proto: 6,
+        status: PortStatus::Open,
+        ..arp
+    };
+    assert!(d.insert(&open));
+}
+
+#[test]
 fn icmp_closed_never_suppresses_a_real_open_in_either_order() {
     // ICMP 3/3 "closed" has tcp_flags 0; an RST always carries 0x04, a SYN-ACK 0x12.
     for proto in [6u8, 17, 132] {

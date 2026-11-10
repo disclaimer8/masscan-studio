@@ -32,8 +32,8 @@ use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::payloads::PayloadTable;
 use rmasscan_core::probe::{
-    AdapterBinding, NicBinding, Probe, ReadyPlan, check_scan_ports,
-    for_each_probe_nic_with_payloads as core_for_each_probe_nic_with_payloads,
+    AdapterBinding, NicBinding, Probe, ReadyPlan, check_cli_ports,
+    for_each_probe_nic_with_payloads as core_for_each_probe_nic_with_payloads, is_arp_scan_ports,
 };
 use rmasscan_core::receive::PortStatus;
 use rmasscan_core::throttle::Clock;
@@ -412,7 +412,13 @@ fn detect_nic(
     backend: &dyn Backend,
     offline: bool,
 ) -> Result<Detected, String> {
-    let ov = overrides(eff, k);
+    let mut ov = overrides(eff, k);
+    // ARP-скан: адресат кадров это `ff-ff-ff-ff-ff-ff` на каждом адаптере, шлюз не ищется и не резолвится
+    // (`--arpscan` ставит `router-mac`, main-conf.c:1099; без него `main-initadapter.c:170-189` спросил бы шлюз ARP-ом).
+    // Так же `-p I:2` без флага: решение R1, ARP-скан определяет порт, а не флаг.
+    if is_arp_scan_ports(eff.massip().ports()) {
+        ov.router_mac = Some([0xff; 6]);
+    }
     let os = |e: NetError| refusal(DetectError::Os(e));
     let routes = backend.routes().map_err(os)?;
     let ifaces = backend.interfaces().map_err(os)?;
@@ -996,6 +1002,21 @@ pub(crate) fn for_each_probe_with(
 /// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s` (для ICMP :67-70, UDP :57-59 и SCTP :108-111, см. ниже). Адреса и флаги разбираются из самого кадра, как
 /// `preprocess_frame` в C.
 fn trace_line(secs: f64, frame: &[u8]) -> String {
+    if frame[12..14] == [0x08, 0x06] {
+        // main-ptrace.c:44-54 (`FOUND_ARP`): `%s (%5.4f) ARP  %-21s > %-21s %s\n`; из `[ip]:port` убран порт
+        // (`*strchr(.., ':') = '\0'`), последнее поле это opcode: `request`, `response` или `unknown(N)`.
+        let ip_at = |i: usize| Ipv4Addr::new(frame[i], frame[i + 1], frame[i + 2], frame[i + 3]);
+        let op = match u16::from_be_bytes([frame[20], frame[21]]) {
+            1 => "request".to_string(),
+            2 => "response".to_string(),
+            n => format!("unknown({n})"),
+        };
+        return format!(
+            "SENT ({secs:5.4}) ARP  {:<21} > {:<21} {op}\n",
+            format!("[{}]", ip_at(28)),
+            format!("[{}]", ip_at(38))
+        );
+    }
     let (ip, tcp) = (14, 34);
     let src = Ipv4Addr::new(
         frame[ip + 12],
@@ -1063,7 +1084,7 @@ pub fn run_offline(
     // Р1: `--packet-trace` как и живой скан не шлёт `O:*` и `I:n` (проверка плана CLI, `cli_plan`); без
     // трассировки `--offline` ничего не строит и отказа нет.
     if packet_trace {
-        check_scan_ports(p.eff.massip().ports()).map_err(|e| e.to_string())?;
+        check_cli_ports(p.eff.massip().ports()).map_err(|e| e.to_string())?;
     }
     print_detection(&p, log)?;
     print_parameters(&p, log)?;

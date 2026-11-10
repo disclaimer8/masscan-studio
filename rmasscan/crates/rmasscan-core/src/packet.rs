@@ -521,6 +521,47 @@ impl SctpTemplate {
     }
 }
 
+/// `default_arp_template`, templ-pkt.c:162-176: Ethernet 14 (адресат `ff..ff`, тип `0x0806`) + ARP 28 (hardware 1,
+/// protocol `0x0800`, длины 6 и 4, opcode 1 = request, `sha`/`spa`/`tha`/`tpa` нулевые), всего 42 байта.
+pub const DEFAULT_ARP_TEMPLATE: &[u8] = &[
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Ethernet: адресат
+    0, 0, 0, 0, 0, 0, // Ethernet: источник
+    0x08, 0x06, // тип Ethernet: ARP
+    0x00, 0x01, 0x08, 0x00, 0x06, 0x04, 0x00,
+    0x01, // hardware, protocol, длины, opcode = request
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // sha, spa
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // tha, tpa
+];
+
+/// Шаблон ARP who-has (`Proto_ARP`, `--arp`). Всегда Ethernet, широковещание: в C адресат шаблона это
+/// `router_mac_ipv4`, а `--arpscan` ставит его в `ff-ff-ff-ff-ff-ff` (main-conf.c:1099), и шлюз при этом не
+/// резолвится (main-initadapter.c:170). У ARP нет IP-заголовка, поэтому нет ни TTL, ни сумм, ни вариантов
+/// `DLT_NULL`/`DLT_RAW`.
+#[derive(Clone, Debug)]
+pub struct ArpTemplate {
+    packet: [u8; 42],
+}
+
+impl ArpTemplate {
+    /// `_template_init` для ARP, templ-pkt.c:1272-1281: MAC источника попадает и в Ethernet, и в `sha`.
+    pub fn new(source_mac: [u8; 6]) -> Self {
+        let mut packet = [0u8; 42];
+        packet.copy_from_slice(DEFAULT_ARP_TEMPLATE);
+        packet[6..12].copy_from_slice(&source_mac);
+        packet[22..28].copy_from_slice(&source_mac);
+        Self { packet }
+    }
+
+    /// `template_set_target_ipv4`, ветка `Templ_ARP`, templ-pkt.c:914-928: `spa = ip_me`, `tpa = ip_them`.
+    /// `out` очищается и получает кадр целиком.
+    pub fn build_arp(&self, ip_them: u32, ip_me: u32, out: &mut Vec<u8>) {
+        out.clear();
+        out.extend_from_slice(&self.packet);
+        out[28..32].copy_from_slice(&ip_me.to_be_bytes());
+        out[38..42].copy_from_slice(&ip_them.to_be_bytes());
+    }
+}
+
 /// Независимая проверка TCP-суммы Ethernet-кадра (RFC 1071): псевдозаголовок +
 /// весь сегмент, включая поле checksum, должны свернуться в 0xFFFF.
 #[cfg(test)]
@@ -988,6 +1029,33 @@ mod tests {
         assert_eq!(seqno, 0x0ead_c5ca);
         icmp_tmpl(LinkType::Ethernet, 64).build_echo(them, me, seqno, seed, &mut f);
         assert_eq!(f, hexv(C_ICMP_FRAME_B_TTL64));
+    }
+
+    /// Кадр ARP who-has побайтно из `default_arp_template` (templ-pkt.c:162-176) и подстановки адресов
+    /// (:914-928, `px[14..18] = ip_me`, `px[24..28] = ip_them`, смещение `offset_ip = 14`), `sha` из
+    /// `_template_init` (:1277-1280, `parsed._ip_src - 6 = source_mac`), адресат `router_mac_ipv4 = ff..ff`
+    /// (`--arpscan`, main-conf.c:1099).
+    #[test]
+    fn arp_probe_frame_matches_c_42_bytes() {
+        let mut f = vec![0xaa; 7];
+        ArpTemplate::new(hex6("020000000001")).build_arp(0xc612_0002, 0xc612_0001, &mut f);
+        assert_eq!(
+            f,
+            hexv(concat!(
+                "ffffffffffff", // Ethernet: адресат, широковещание
+                "020000000001", // Ethernet: источник
+                "0806",         // тип ARP
+                "0001",
+                "0800", // hardware = Ethernet, protocol = IPv4
+                "0604",
+                "0001",         // длины 6 и 4, opcode = request
+                "020000000001", // sha = source_mac
+                "c6120001",     // spa = ip_me = 198.18.0.1
+                "000000000000", // tha = 0
+                "c6120002",     // tpa = ip_them = 198.18.0.2
+            ))
+        );
+        assert_eq!(f.len(), 42);
     }
 
     #[test]

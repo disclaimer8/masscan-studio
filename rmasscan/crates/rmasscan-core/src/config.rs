@@ -161,6 +161,9 @@ pub struct ScanConfig {
     pub noreset: bool,
     /// `--infinite` (main-conf.c:2836).
     pub infinite: bool,
+    /// `--arp`/`--arpscan` (main-conf.c:1088-1102): порт `I:2` и `router-mac = ff-ff-ff-ff-ff-ff` уже добавлены
+    /// ключом [`apply_core_kv`]; флаг нужен только `--echo` (`arpscan = true`). Приём и отправка смотрят на сам порт.
+    pub arpscan: bool,
     pub tcp_opts: TcpHeaderOptions,
     /// `--nmap-payloads FILE` (main-conf.c:1568): файл нагрузок UDP в синтаксисе Nmap. Читает слой CLI.
     pub nmap_payloads: Option<String>,
@@ -194,6 +197,7 @@ impl Default for ScanConfig {
             badsum: false,
             noreset: false,
             infinite: false,
+            arpscan: false,
             tcp_opts: TcpHeaderOptions::default(),
             nmap_payloads: None,
             pcap_payloads: None,
@@ -751,6 +755,10 @@ pub fn echo_with(cfg: &ScanConfig, echo_all: bool, extras: &EchoExtras<'_>, out:
         let _ = writeln!(out, "resume-count = {count}");
     }
     let _ = writeln!(out, "seed = {}", cfg.seed); // :2038, всегда
+    // :1092-1094: только при `scan_type.arp`; `echo_all` в этом пути C ключ не печатает (проверено на 8e6b3b0).
+    if cfg.arpscan {
+        out.push_str("arpscan = true\n");
+    }
     out.push_str(&format_rate(cfg.max_rate));
     if cfg.shard.of > 0 || echo_all {
         let _ = writeln!(out, "shard = {}/{}", cfg.shard.one, cfg.shard.of); // :2067
@@ -1248,6 +1256,15 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         "pcappayloads" | "pcappayload" => cfg.pcap_payloads = Some(value.to_string()),
         // main-conf.c:2758: `badsum` ставит флаг при любом значении.
         "badsum" => cfg.badsum = true,
+        // main-conf.c:1088-1102 (`SET_arpscan`, :2373 с псевдонимом `arp`): значение не читается; порт `Templ_ARP`,
+        // `router-mac = ff-ff-ff-ff-ff-ff` (как ключ `router-mac`, порядок argv решает, кто победит) и флаг.
+        "arpscan" | "arp" => {
+            cfg.targets
+                .ports_mut()
+                .add_range(crate::targets::TEMPL_ARP, crate::targets::TEMPL_ARP);
+            cfg.arpscan = true;
+            apply_core_kv(cfg, "router-mac", "ff-ff-ff-ff-ff-ff")?;
+        }
         // Значение читается как логическое (`infinite = false` в файле отменяет `--infinite` левее него); C ставит 1 всегда.
         "infinite" => cfg.infinite = parse_bool(value),
         "ttl" => {

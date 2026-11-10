@@ -56,13 +56,28 @@ fn finish(out: &mut dyn Write) -> Result<(), String> {
     out.flush().map_err(io_fail)
 }
 
+/// Отказ `main_scan` C (`main.c:1224-1229`): порт скана вместе с `--arp`. Текст как есть, без `[-]` и обёртки.
+const ARP_PORTSCAN_REFUSAL: &str = "FAIL: cannot arpscan and portscan at the same time";
+
+/// Проверка `main.c:1224-1229` (после проверок пустых целей и портов): ARP только единственным портом.
+fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
+    let ports = cfg.targets.ports();
+    if rmasscan_core::probe::is_arp_scan_ports(ports) && ports.count() != 1 {
+        return Err(ARP_PORTSCAN_REFUSAL.into());
+    }
+    Ok(())
+}
+
 /// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) и отказ открытия файла
 /// вывода (`out: could not open file for …`) как есть, [`LOGGED`] пусто (уже в `log`), прочие ошибки с обёрткой
 /// `rmasscan: error:`. Любая ошибка даёт exit 1.
 pub fn error_text(msg: &str) -> String {
     if msg == LOGGED {
         String::new()
-    } else if msg.starts_with(live::REFUSAL_PREFIX) || msg.starts_with(OPEN_FAILURE_PREFIX) {
+    } else if msg.starts_with(live::REFUSAL_PREFIX)
+        || msg.starts_with(OPEN_FAILURE_PREFIX)
+        || msg == ARP_PORTSCAN_REFUSAL
+    {
         msg.to_string()
     } else {
         format!("rmasscan: error: {msg}")
@@ -243,6 +258,12 @@ pub fn run(
         return finish(out);
     }
     if cli.offline {
+        // `--offline` это тот же `main_scan`: отказ ARP и портов виден и без трассировки.
+        let mut probe = cfg.clone();
+        probe.seed = probe.seed.max(1);
+        if validate(&probe, Operation::Scan).is_ok() {
+            refuse_arp_with_ports(&cfg)?;
+        }
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
@@ -255,6 +276,8 @@ pub fn run(
         }
         validate(&probe, Operation::Scan).map_err(|e| e.to_string())?;
     }
+    // main.c:1224-1229: сразу после проверок пустых целей и портов, до вывода и адаптера.
+    refuse_arp_with_ports(&cfg)?;
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени
@@ -1052,8 +1075,7 @@ mod tests {
         assert!(e.contains("O:47"), "{e}");
         let e = run_args(&trace_args(&["-pI:1"])).unwrap_err();
         assert!(e.contains("I:1"), "{e}");
-        // ARP пока без построителя зонда (Задача 6): `-pI:2` с портами трассировки отказывает смесью. SCTP
-        // построен (Задача 5): `S:` проходит, UNK-строки проверяет `packet_trace_prints_the_c_unk_line_for_sctp`.
+        // SCTP построен (Задача 5): `S:` проходит, UNK-строки проверяет `packet_trace_prints_the_c_unk_line_for_sctp`.
         let out = run_args(&trace_args(&["-pS:2905"])).unwrap();
         assert_eq!(out.lines().count(), 12, "{out}");
         // I:0 строит ICMP Echo: к 8 SYN (TRACE шлёт на 80 и 443) добавляется по строке ICMP на каждый из 4 адресов
@@ -1064,9 +1086,12 @@ mod tests {
             .filter(|l| l.contains(") ICMP [10.255.0.1]:8 "))
             .count();
         assert_eq!(icmp, 4, "{out}");
-        // ARP-индекс вместе с TCP-портами трассировки: постоянный отказ смеси (R3)
+        // ARP-индекс вместе с TCP-портами трассировки: отказ смеси текстом C (main.c:1224-1229)
         let (res, out, log) = run_capture(&trace_args(&["-pI:2"]));
-        assert!(res.unwrap_err().contains("ARP scan cannot be mixed"));
+        assert_eq!(
+            res.unwrap_err(),
+            "FAIL: cannot arpscan and portscan at the same time"
+        );
         assert!(out.is_empty() && log.is_empty());
         assert_eq!(
             run_args(&trace_args(&[])).unwrap().lines().count(),

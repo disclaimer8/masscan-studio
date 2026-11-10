@@ -24,7 +24,8 @@ use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
 use crate::packet::{
-    IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, TcpSynTemplate, UdpTemplate,
+    ArpTemplate, IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, TcpSynTemplate,
+    UdpTemplate,
 };
 use crate::payloads::PayloadTable;
 use crate::ranges::RangeList;
@@ -70,11 +71,6 @@ pub enum PlanError {
     IcmpTypeNotSupported(u32),
     #[error("ARP scan cannot be mixed with other ports")]
     ArpMixedWithPorts,
-    /// Временный отказ (Задачи 4-6 снимают его по протоколу): порт разобран, но построителя зонда ещё нет.
-    #[error(
-        "{label} cannot be scanned yet: rmasscan has no probe builder for this protocol (-sL and --echo accept it)"
-    )]
-    ProtocolNotBuilt { label: String },
     /// Построитель зонда отказал посреди прохода: это отказ скана, а не его конец.
     #[error("probe could not be built: {0}")]
     ProbeBuild(Box<PlanError>),
@@ -175,6 +171,8 @@ struct Builder {
     udp: UdpTemplate,
     /// Шаблон SCTP INIT (`S:`, templ-pkt.c:76): тот же путь адаптера.
     sctp: SctpTemplate,
+    /// Шаблон ARP who-has (`--arp`, `I:2`, templ-pkt.c:162): тот же путь адаптера, всегда широковещательный.
+    arp: ArpTemplate,
     payloads: Arc<PayloadTable>,
     ip_me0: u32,
     first: u16,
@@ -230,6 +228,7 @@ impl Builder {
                 binding.link_type,
                 mods.ttl,
             ),
+            arp: ArpTemplate::new(binding.source_mac),
             payloads: payloads.clone(),
             ip_me0: binding.source_ipv4,
             ipv4_mask: nic.source_ipv4_last - binding.source_ipv4,
@@ -267,6 +266,23 @@ impl Builder {
         } else {
             (self.ip_me0, u32::from(self.first))
         };
+        if port_them == TEMPL_ARP {
+            // templ-pkt.c:914-928: у ARP нет ни порта, ни cookie в кадре, только `spa = ip_me` и `tpa = ip_them`.
+            // Cookie и порт источника считаются как у остальных (main.c:389), чтобы поток источников адаптера
+            // не зависел от типа скана; в кадр они не попадают.
+            let port_me16 = u16::try_from(port_me)
+                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
+            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+            self.arp.build_arp(ip_them, ip_me, &mut p.frame);
+            p.index = i;
+            p.ip_me = ip_me;
+            p.port_me = port_me16;
+            p.ip_them = ip_them;
+            p.port_them = 0;
+            p.port_index = port_them;
+            p.seqno = seqno;
+            return Ok(());
+        }
         if port_them == TEMPL_ICMP_ECHO {
             // main.c:389 даёт seqno с реальным port_me: он идёт только в ip_id (templ-pkt.c:942); [id|seq] кадра
             // это cookie с port_me = 0 (templ-pkt.c:1067), его считает `build_echo`.
@@ -448,51 +464,18 @@ pub fn check_cli_ports(ports: &RangeList) -> Result<(), PlanError> {
             PlanError::IcmpTypeNotSupported(i)
         });
     }
-    let has_arp = ports.is_contains(TEMPL_ARP);
+    let has_arp = is_arp_scan_ports(ports);
     if has_arp && ports.count() != 1 {
         return Err(PlanError::ArpMixedWithPorts);
     }
     Ok(())
 }
 
-/// Временная таблица индексов, для которых построителя зонда ещё нет: `(первый, последний, метка)`. Задачи 4-6
-/// удаляют по строке, когда протокол получает построитель (осталось ARP; ICMP Echo построен в Задаче 3, UDP в Задаче 4,
-/// SCTP в Задаче 5). Постоянный отказ `O:*`/`I:1+` живёт отдельно, в [`check_cli_ports`].
-const UNBUILT: [(u32, u32, &str); 1] = [(TEMPL_ARP, TEMPL_ARP, "I")];
-
-/// Временная проверка плана CLI: порт протокола без построителя зонда отказывает сразу, до ARP, движка и первой
-/// строки `SENT`, а не обрывает скан на первом таком индексе. Метка называет наименьший такой порт.
-pub fn check_buildable_ports(ports: &RangeList) -> Result<(), PlanError> {
-    let mut first: Option<(u32, &str)> = None;
-    for r in ports.as_slice() {
-        for &(lo, hi, name) in &UNBUILT {
-            let i = r.begin.max(lo);
-            if i <= r.end.min(hi) && first.is_none_or(|(f, _)| i < f) {
-                first = Some((i, name));
-            }
-        }
-    }
-    let Some((i, name)) = first else {
-        return Ok(());
-    };
-    let base = if i == TEMPL_ARP {
-        TEMPL_ICMP_ECHO
-    } else {
-        i - (i % 65536)
-    };
-    let label = if i == TEMPL_ARP {
-        format!("ARP ({name}:{})", i - base)
-    } else {
-        format!("{name}:{}", i - base)
-    };
-    Err(PlanError::ProtocolNotBuilt { label })
-}
-
-/// Все проверки портов плана CLI: постоянный отказ ([`check_cli_ports`]) и временный ([`check_buildable_ports`]).
-/// Зовут `ReadyPlan::new_cli` (живой скан) и `--offline --packet-trace`.
-pub fn check_scan_ports(ports: &RangeList) -> Result<(), PlanError> {
-    check_cli_ports(ports)?;
-    check_buildable_ports(ports)
+/// Список портов задаёт ARP-скан: в нём есть `Templ_ARP`. Смесь с другими портами отклоняет [`check_cli_ports`]
+/// (`FAIL: cannot arpscan and portscan at the same time`, main.c:1224-1229). Как в C, `-p I:2` без `--arp` это тоже
+/// ARP-скан (решение R1).
+pub fn is_arp_scan_ports(ports: &RangeList) -> bool {
+    ports.is_contains(TEMPL_ARP)
 }
 
 /// Проверенный план нового запуска. Поля приватны; создать можно только через
@@ -593,10 +576,9 @@ impl ReadyPlan {
         if effective.blackrock_rounds() < 1 {
             return Err(PlanError::ZeroRounds(effective.blackrock_rounds()));
         }
-        // Р1: O:*, I:n и смесь с ARP отклоняются навсегда; ARP пока без построителя зонда и
-        // отклоняется временно (иначе скан оборвался бы молча на первом таком индексе).
+        // Р1: O:*, I:n и смесь ARP с другими портами отклоняются навсегда.
         if check_ports {
-            check_scan_ports(effective.massip().ports())?;
+            check_cli_ports(effective.massip().ports())?;
         }
         ReadyPlan::build(effective, nics, false, payloads)
     }
@@ -652,6 +634,12 @@ impl ReadyPlan {
 
     pub fn effective(&self) -> &EffectiveConfig {
         &self.inner.effective
+    }
+
+    /// ARP-скан (`--arp`, `I:2`): единственный порт плана это `Templ_ARP`. Приёмник принимает ARP-ответы только в
+    /// нём (`scan_type.arp`, main.c:893), а CLI не резолвит шлюз (main-initadapter.c:170).
+    pub fn is_arp_scan(&self) -> bool {
+        is_arp_scan_ports(self.inner.effective.massip().ports())
     }
 
     /// Таблица нагрузок UDP плана.
@@ -1569,19 +1557,10 @@ mod tests {
     }
 
     #[test]
-    fn interim_refusal_names_the_first_protocol_without_a_builder() {
-        // Пока нет построителя ARP, план CLI отказывает сразу (иначе скан оборвался бы молча на первом таком индексе);
-        // чистый TCP, UDP, SCTP и ICMP Echo проходят.
-        let label = |ports: &str| match cli_err(ports) {
-            PlanError::ProtocolNotBuilt { label } => label,
-            e => panic!("{ports}: {e:?}"),
-        };
-        assert_eq!(label("I:2"), "ARP (I:2)");
-        assert!(
-            cli_err("I:2")
-                .to_string()
-                .contains("ARP (I:2) cannot be scanned yet")
-        );
+    fn arp_plan_builds_and_unbuildable_ports_still_fail_the_run() {
+        // Временной таблицы отказов больше нет: чистый ARP, TCP, UDP, SCTP и ICMP Echo проходят план CLI.
+        let arp = ReadyPlan::new_cli(eff("198.18.2.0/30", "I:2", |_| {}), nics(1)).unwrap();
+        assert!(arp.is_arp_scan());
         ReadyPlan::new_cli(eff("198.18.2.0/30", "80,443,1000-1002", |_| {}), nics(1)).unwrap();
         ReadyPlan::new_cli(eff("198.18.2.0/30", "80,U:53,U:59999,I:0", |_| {}), nics(1)).unwrap();
         ReadyPlan::new_cli(
@@ -1589,14 +1568,25 @@ mod tests {
             nics(1),
         )
         .unwrap();
-        // постоянный отказ сильнее временного
+        // постоянный отказ сильнее остальных
         assert_eq!(
             cli_err("S:2905,O:47"),
             PlanError::OprotoNotSupported(196_911)
         );
-        // без проверки (тестовый вход) план строится, а курсор упирается в отказ
+        // 4 кадра ARP: 42 байта, адресат ff..ff, tpa пробегает цели
+        let mut cur = arp.cursor_for_nic(0, None).unwrap();
+        let frames = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        assert_eq!(frames.len(), 4);
+        assert!(
+            frames
+                .iter()
+                .all(|p| p.frame.len() == 42 && p.port_them == 0)
+        );
+        // без проверки портов (тестовый вход) порт без построителя (I:1) бьёт посреди прохода, а не заканчивает
+        // скан естественно
         let plan =
-            ReadyPlan::new_cli_without_port_checks(eff("198.18.2.0/30", "80,I:2", |_| {}), nics(1))
+            ReadyPlan::new_cli_without_port_checks(eff("198.18.2.0/30", "80,I:1", |_| {}), nics(1))
                 .unwrap();
         let mut cur = plan.cursor_for_nic(0, None).unwrap();
         assert!(cur.build_error().is_none());

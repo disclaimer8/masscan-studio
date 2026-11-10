@@ -36,6 +36,7 @@
 //!   старого скана с тем же seed попадал бы в результаты. Порт намеренно
 //!   ужесточает это (ревью 2A, P2).
 
+use crate::arp::{ArpOp, decode};
 use crate::checksum::{
     checksum_ipv4, fold, ip_header_checksum, sctp_crc32c, udp_ipv4_checksum_ok, word_sum,
 };
@@ -178,6 +179,10 @@ pub fn parse_reply_with(
 ) -> Result<Option<Reply>, ParseError> {
     if frame.len() > MAX_FRAME_LEN {
         return Err(ParseError::FrameTooLong(frame.len()));
+    }
+    // ARP-скан: ответ ARP это не IPv4, он разбирается до `locate_ipv4` (main.c:874-906, `FOUND_ARP`).
+    if link == LinkType::Ethernet && be16(frame, 12) == Some(0x0806) {
+        return Ok(parse_arp_reply(frame, plan));
     }
     let Some(ip) = locate_ipv4(frame, link)? else {
         return Ok(None);
@@ -365,6 +370,38 @@ fn parse_ipv4_tcp(
         ip_proto: 6,
         mac: None,
     }))
+}
+
+/// Ответ ARP на наш ARP-скан (ветка `FOUND_ARP`, main.c:874-906, и `arp_recv_response`, proto-arp.c:14-41).
+///
+/// Принимается, если план это ARP-скан (`scan_type.arp`, :893), opcode равен 2 (:889) и `spa` входит в итоговый набор
+/// целей (:896). Как в C, `tpa` не сверяется с нашим адресом: ответ чужому узлу, увиденный на проводе, тоже доказывает,
+/// что `spa` жив (в `local_ip` кладётся `tpa`, как `ip_me` у `dedup_is_duplicate`, :899). MAC результата это MAC
+/// источника Ethernet-кадра (`parsed->mac_src`, proto-arp.c:36), а не `sha`; в обычном ответе они равны. Дубликаты
+/// отсекает `DedupCache` по `(spa, tpa)`, как в C.
+///
+/// Строже C: кодек [`decode`] принимает только Ethernet/IPv4 с длинами 6 и 4 (C берёт любые длины из заголовка), а
+/// кадр с VLAN-тегом и всё нечитаемое это `None` (в C `continue`). Это не ошибка разбора: чужой ARP на проводе
+/// обычное дело.
+fn parse_arp_reply(frame: &[u8], plan: &ReadyPlan) -> Option<Reply> {
+    if !plan.is_arp_scan() {
+        return None;
+    }
+    let a = decode(frame).ok()?;
+    if a.op != ArpOp::Reply || !in_sorted_ranges(plan.effective().massip().ipv4(), a.sender_ip) {
+        return None;
+    }
+    Some(Reply {
+        remote_ip: a.sender_ip,
+        remote_port: 0,
+        local_ip: a.target_ip,
+        local_port: 0,
+        status: PortStatus::Arp,
+        tcp_flags: 0,
+        ttl: 0,
+        ip_proto: 0,
+        mac: Some(a.eth_src),
+    })
 }
 
 /// Наш ли адрес назначения (`is_my_ip`, main.c:829): диапазон адресов источника адаптера `nic[0]` плана.

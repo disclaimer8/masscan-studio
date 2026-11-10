@@ -117,6 +117,13 @@ pub struct Cli {
         help = "Add an ICMP echo probe (same as -pI:0, alias: --ping-sweep)"
     )]
     pub ping: bool,
+    // `--arp`, `--arpscan` (main-conf.c:1088-1102, :2373): порт `I:2`, `router-mac = ff-ff-ff-ff-ff-ff`, `arpscan = true`.
+    #[arg(
+        long,
+        alias = "arpscan",
+        help = "ARP scan of the local segment (same as -pI:2; the gateway is not resolved; cannot be combined with other ports; alias: --arpscan)"
+    )]
+    pub arp: bool,
     // `F_NUMABLE` (main-conf.c:2423): `--top-ports [N]`; значение берётся из следующего слова, если оно целое или
     // логическое (см. [`preprocess_args`]); `--top-port` синоним.
     #[arg(
@@ -1222,6 +1229,10 @@ impl Cli {
                         .map_err(|e| format!("bad --udp-ports {p:?}: {e}"))?;
                 }
             }
+        }
+        // `SET_arpscan` кладёт порт, `router-mac` и флаг через тот же ключ, что `arpscan = ...` в файле (`apply_core_kv`).
+        if self.arp {
+            apply_core_kv(cfg, "arpscan", "").map_err(|e| e.to_string())?;
         }
         if self.ping {
             cfg.targets

@@ -155,7 +155,7 @@ the last two items.
    (commit, manifest hash, remote binary hash, script hashes, the measured clock offset and its
    uncertainty). A rerun into the same directory adds one more preflight file.
 
-6. **sudoers: nothing to configure.** On 2026-10-24 the user `a1` on home-pc had `NOPASSWD: ALL`,
+6. **sudoers: nothing to configure.** On 2026-10-24 the user `<LAB_ACCOUNT>` on home-pc had `NOPASSWD: ALL`,
    so `sudo -n <rmasscan-lab> vm-lab ...`, `sudo -n ip netns exec wvp-n2 <rmasscan-lab> peer ...`,
    `sudo -n tcpdump`, `sudo -n kill` and the dead-man `sudo -n sh -c 'exec timeout ...'` the suite
    issues all work without a rule. If the grant is ever narrowed, those command shapes are the
@@ -569,7 +569,7 @@ rmasscan/target/release/rmasscan-lab autodetect-verify --dir "$DST" --out "$DST/
 ```
 
 Любой `STOP` — копия не делается или удаляется. Совпадение privacy-скана смотрят глазами: настоящее имя — копии нет;
-случайное совпадение короткого имени (`a1`) в байтах pcap записывается в `README.md` каталога. Дальше `MANIFEST.sha256`, `README.md` каталога и `verification/`,
+случайное совпадение короткого имени (`<LAB_ACCOUNT>`) в байтах pcap записывается в `README.md` каталога. Дальше `MANIFEST.sha256`, `README.md` каталога и `verification/`,
 как в плане. `.work` в репозиторий не попадает никогда (он не в `.gitignore`).
 
 **Коды.** `autodetect-verify --dir DIR [--out FILE]` (и `windows-verify` для такого каталога): 0 PASS, 1 FAIL,

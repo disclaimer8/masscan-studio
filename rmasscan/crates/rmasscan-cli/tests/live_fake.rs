@@ -3111,3 +3111,202 @@ fn conf_file_and_includefile_drive_a_live_scan() {
     r.unwrap();
     assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-conf.pcap"]);
 }
+
+const ETH1_IP: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 6);
+const ETH1_MAC: [u8; 6] = [0x02, 0xaa, 0, 0, 0, 3];
+
+fn eth1() -> Iface {
+    Iface {
+        name: "eth1".to_string(),
+        index: 3,
+        device_id: "eth1".to_string(),
+        description: None,
+        mac: Some(ETH1_MAC),
+        mac_masked: false,
+        ethernet: true,
+        up: true,
+        ipv4: vec![ETH1_IP],
+    }
+}
+
+/// Два адаптера, шлюз задан `--router-mac[i]` (ARP не нужен).
+fn two_nic_backend() -> FakeBackend {
+    let mut b = FakeBackend::new();
+    b.ifaces.push(eth1());
+    b
+}
+
+const TWO_NICS: [&str; 13] = [
+    "198.51.100.1-198.51.100.2",
+    "-p80,81",
+    "--wait",
+    "1",
+    "--seed",
+    "7",
+    "--adapter[0]",
+    "eth0",
+    "--adapter[1]",
+    "eth1",
+    "--router-mac[0]",
+    "02-aa-00-00-00-02",
+    "--router-mac[1]=02-aa-00-00-00-02",
+];
+
+/// Review Focus 4 и T3 M-8. Индекс адаптера вне `0..=7` отказывает (exit 1) до любого кадра. `--adapter[0]` и
+/// `--adapter[1]` на двух `FakeAdapter` делят зонды по чётности внешнего индекса (`main.c:269`: `start = nic_index`,
+/// `increment = nic_count`) и пишут ответы в единый `Sink`.
+#[test]
+fn adapter_index_out_of_bounds_fails() {
+    let mut b = FakeBackend::new();
+    b.panic_on_open = true;
+    for bad in [
+        &["--adapter[8]", "eth0"][..],
+        &["--adapter[-1]", "eth0"][..],
+        &["--adapter-ip[8]=192.0.2.9"][..],
+    ] {
+        let (r, out, log) = cli(&b, &with(&LIVE, bad));
+        let e = r.unwrap_err();
+        assert!(e.contains("adapter"), "{bad:?}: {e}");
+        assert!(out.is_empty() && log.is_empty(), "{bad:?}: {log}");
+    }
+
+    // Поток одного адаптера: внешние индексы 0..4 по порядку.
+    let b1 = FakeBackend::new();
+    let (r, _, _) = cli(&b1, &with(&LIVE, &["--seed", "7"]));
+    r.unwrap();
+    let all = b1.opened().last().unwrap().adapter.sent_frames();
+    assert_eq!(all.len(), 4);
+
+    let b = two_nic_backend();
+    let (r, out, log) = cli(&b, &TWO_NICS);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    assert_eq!(opened.len(), 2, "no ARP adapter: both routers are given");
+    let dsts = |k: usize| -> Vec<(Ipv4Addr, u16)> {
+        opened[k]
+            .adapter
+            .sent_frames()
+            .iter()
+            .map(|f| syn_dst(f))
+            .collect()
+    };
+    let stream: Vec<_> = all.iter().map(|f| syn_dst(f)).collect();
+    assert_eq!(
+        dsts(0),
+        [stream[0], stream[2]],
+        "even outer indices go to nic 0"
+    );
+    assert_eq!(
+        dsts(1),
+        [stream[1], stream[3]],
+        "odd outer indices go to nic 1"
+    );
+    // Каждый адаптер шлёт со своего адреса.
+    for (k, ip) in [MY_IP, ETH1_IP].into_iter().enumerate() {
+        assert!(
+            opened[k]
+                .adapter
+                .sent_frames()
+                .iter()
+                .all(|f| f[26..30] == ip.octets()),
+            "nic {k}"
+        );
+        assert_eq!(opened[k].binding.source_ipv4, u32::from(ip));
+    }
+    // Один `Sink`: обе открытые цели (T1:80, T2:81) напечатаны, хотя их принимают разные адаптеры.
+    let mut got: Vec<&str> = out.lines().collect();
+    got.sort_unstable();
+    assert_eq!(got.len(), 2, "{out}");
+    assert!(
+        got[0].contains("198.51.100.1") && got[1].contains("198.51.100.2"),
+        "{out}"
+    );
+    // Строки `[+]` второго адаптера несут суффикс `[1]`.
+    for key in [
+        "interface[1] = eth1 (given)",
+        "source-ip[1] = 192.0.2.6 (detected)",
+    ] {
+        assert!(log.contains(key), "{key}: {log}");
+    }
+}
+
+/// `--pcap` с двумя адаптерами: один писатель, кадры обоих адаптеров, ни один чужой.
+#[test]
+fn pcap_with_two_adapters_shares_one_writer() {
+    let mut b = two_nic_backend();
+    b.inject_noise = true;
+    let (r, _, _) = cli(&b, &with(&TWO_NICS, &["--pcap", "cap.pcap"]));
+    r.unwrap();
+    let recs = pcap_records(&b.pcap_bytes());
+    // 4 зонда: 4 ответа обычных (SYN-ACK или RST) + по одному RST с плохим cookie на каждый SYN; чужие не пишутся.
+    assert_eq!(recs.len(), 8, "{} records", recs.len());
+    let to = |ip: Ipv4Addr| recs.iter().filter(|r| r.4[30..34] == ip.octets()).count();
+    assert_eq!((to(MY_IP), to(ETH1_IP)), (4, 4));
+    assert!(!recs.iter().any(|r| r.4[30..34] == [192, 0, 2, 99]));
+}
+
+/// T3/T4: `paused.conf` с несколькими адаптерами пишется и читается обратно (раньше возобновление отказывало
+/// «until T7»). Ctrl-C посреди передачи второго адаптера; возобновление из записанного файла досылает остаток, и
+/// вместе оба прогона покрывают весь набор зондов.
+#[test]
+fn multi_adapter_paused_conf_round_trips_and_resumes() {
+    let whole = {
+        let b = two_nic_backend();
+        let (r, _, _) = cli(&b, &TWO_NICS);
+        r.unwrap();
+        let o = b.opened();
+        let mut v: Vec<(Ipv4Addr, u16)> = o
+            .iter()
+            .flat_map(|x| x.adapter.sent_frames())
+            .map(|f| syn_dst(&f))
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    assert_eq!(whole.len(), 4);
+
+    let mut b = two_nic_backend();
+    b.press_in_tx = Some(PressInTx {
+        at: 1,
+        late_first: false,
+    });
+    let (r, _, log) = cli(&b, &TWO_NICS);
+    r.unwrap();
+    assert!(log.contains("saving resume file to: paused.conf"), "{log}");
+    let writes = b.paused_writes();
+    assert_eq!(writes.len(), 1);
+    let conf = &writes[0].1;
+    for key in [
+        "adapter[0] = eth0",
+        "adapter[1] = eth1",
+        "router-mac-ipv4[1] = 02-aa-00-00-00-02",
+    ] {
+        assert!(conf.contains(key), "{key}: {conf}");
+    }
+    let first: Vec<(Ipv4Addr, u16)> = b
+        .opened()
+        .iter()
+        .flat_map(|x| x.adapter.sent_frames())
+        .map(|f| syn_dst(&f))
+        .collect();
+
+    // Возобновление: файл читается, второй адаптер не отвергается, остаток отправляется.
+    let dir = Scratch::new();
+    let file = dir.write("paused.conf", conf.as_bytes());
+    let b2 = two_nic_backend();
+    let (r, _, log2) = cli(&b2, &["--resume", file.to_str().unwrap(), "--nostatus"]);
+    r.unwrap();
+    assert!(log2.contains("finished: Completed"), "{log2}");
+    assert_eq!(b2.opened().len(), 2);
+    let second: Vec<(Ipv4Addr, u16)> = b2
+        .opened()
+        .iter()
+        .flat_map(|x| x.adapter.sent_frames())
+        .map(|f| syn_dst(&f))
+        .collect();
+    let mut union: Vec<_> = first.iter().chain(&second).copied().collect();
+    union.sort_unstable();
+    union.dedup();
+    assert_eq!(union, whole, "first leg {first:?}, resumed leg {second:?}");
+}

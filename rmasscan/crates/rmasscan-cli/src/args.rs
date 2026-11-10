@@ -18,8 +18,8 @@ use std::path::Path;
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 use rmasscan_core::config::{
-    NicConfig, ScanConfig, apply_core_kv, is_boolean, is_integer, parse_mac, parse_rate,
-    parse_shard, parse_source_port,
+    NicConfig, ScanConfig, apply_core_kv, is_boolean, is_integer, normalize_key, parse_mac,
+    parse_rate, parse_shard, parse_source_port,
 };
 use rmasscan_core::targets::{add_target_string, parse_ports, range_parse_ipv4};
 
@@ -153,6 +153,10 @@ pub struct Cli {
         help = "Read a configuration file (key = value lines) at this position; options to the right override it, repeatable (aliases: --config, -cFILE)"
     )]
     pub conf: Vec<String>,
+    // Ключи массива адаптеров `--adapter[i]`, `--adapter-ip[i]`, ... (main-conf.c:882-890, 2437-2641): [`preprocess_args`]
+    // переписывает их в `--rmasscan-nic=имя[i]=значение`, чтобы clap дал позицию в `argv`.
+    #[arg(long = "rmasscan-nic", hide = true, action = clap::ArgAction::Append)]
+    nic_kv: Vec<String>,
     // main-conf.c:2825-2836, 3375-3377: `-iL FILE` / `--includefile FILE`, файл целей (`massip_parse_file`).
     #[arg(
         long = "includefile",
@@ -470,6 +474,9 @@ pub struct Cli {
     /// Позиция clap последнего появления каждого позиционного ключа конфигурации ([`POSITIONAL_KEYS`]).
     #[arg(skip)]
     key_pos: HashMap<&'static str, usize>,
+    /// Ключи `имя[i]=значение` массива адаптеров и позиции clap.
+    #[arg(skip)]
+    nic_pos: Vec<(usize, String)>,
     /// Позиция clap последнего появления каждой группы опций вывода (`format`, `filename`, `append`, `flush`,
     /// `style`, `show`).
     #[arg(skip)]
@@ -505,6 +512,22 @@ const POSITIONAL_KEYS: [&str; 22] = [
     "tcp_wscale",
     "tcp_tsecho",
 ];
+
+/// Одиночные опции адаптера, которые идут по порядку `argv` вместе с `--adapter[i]` и т.п.
+const NIC_PLAIN: [&str; 6] = [
+    "adapter_ip",
+    "adapter_mac",
+    "router_ip",
+    "router_mac",
+    "source_port",
+    "interface",
+];
+
+/// Шаг ключа адаптера внутри сегмента.
+enum NicStep<'a> {
+    Plain(&'static str),
+    Indexed(&'a str),
+}
 
 /// Файл конфигурации в `argv`: `kind` это ключ C (`conf` или `resume`), `pos` индекс clap его значения.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -642,6 +665,16 @@ where
                 },
             };
             out.push(format!("--{name}={value}"));
+        } else if let Some(nic) = indexed_nic_key(&a) {
+            // main-conf.c:3294-3326, 882-890: `--имя[i]` берёт значение из `=`, `:` или следующего слова.
+            let (name, inline) = nic?;
+            let value = match inline {
+                Some(v) => v.to_string(),
+                None => it
+                    .next()
+                    .ok_or_else(|| format!("{name}: empty parameter"))?,
+            };
+            out.push(format!("--rmasscan-nic={name}={value}"));
         } else if a == "-sL" {
             out.push("--list".into());
         } else if a == "-iL" {
@@ -660,6 +693,55 @@ where
         }
     }
     Ok(out)
+}
+
+/// Ключи, которые C хранит в `nic[i]` (`masscan_set_parameter`, main-conf.c:2470-2641), в нормализованном виде.
+const NIC_KEYS: [&str; 27] = [
+    "adapter",
+    "if",
+    "interface",
+    "adapterip",
+    "sourceip",
+    "sourceaddress",
+    "spoofip",
+    "spoofaddress",
+    "srcip",
+    "adapterport",
+    "sourceport",
+    "srcport",
+    "adaptermac",
+    "spoofmac",
+    "sourcemac",
+    "srcmac",
+    "routermac",
+    "router",
+    "destmac",
+    "destinationmac",
+    "dstmac",
+    "targetmac",
+    "routermacipv4",
+    "routeripv4",
+    "routermacipv6",
+    "routeripv6",
+    "routerip",
+];
+
+/// `--имя[i]`, `--имя[i]=v` или `--имя[i]:v` для ключа массива адаптеров: имя с индексом и встроенное значение.
+/// Другие ключи с `[` остаются clap (он их отклонит); `None`, если аргумент не такой.
+fn indexed_nic_key(a: &str) -> Option<Result<(&str, Option<&str>), String>> {
+    let rest = a.strip_prefix("--")?;
+    let open = rest.find('[')?;
+    if !NIC_KEYS.contains(&normalize_key(&rest[..open]).as_str()) {
+        return None;
+    }
+    // Как в C: сначала `=`, затем `:` (после скобки, чтобы индекс не мешал).
+    let close = rest[open..].find(']').map_or(open, |i| open + i);
+    let tail = &rest[close..];
+    let cut = tail.find('=').or_else(|| tail.find(':')).map(|i| close + i);
+    Some(Ok(match cut {
+        Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+        None => (rest, None),
+    }))
 }
 
 /// Опции с необязательным числовым или логическим значением (`F_NUMABLE`, main-conf.c:2419-2421).
@@ -834,6 +916,11 @@ impl Cli {
             }
         }
         cli.markers.sort_by_key(|mk| mk.pos);
+        if let (Some(values), Some(indices)) =
+            (m.get_many::<String>("nic_kv"), m.indices_of("nic_kv"))
+        {
+            cli.nic_pos = indices.zip(values.cloned()).collect();
+        }
         let last = |id: &str| m.indices_of(id).and_then(Iterator::max);
         cli.key_pos = POSITIONAL_KEYS
             .iter()
@@ -1058,66 +1145,30 @@ impl Cli {
         {
             cfg.resume_count = Some(c);
         }
-        if take("adapter_ip")
-            && let Some(ip) = &self.adapter_ip
-        {
-            let bad = || {
-                format!(
-                    "bad --adapter-ip {ip:?}: expected an IPv4 address or a range A-B of a power-of-two width"
-                )
-            };
-            let r = range_parse_ipv4(ip).map_err(|_| bad())?;
-            if r.begin == r.end {
-                cfg.adapter_ip = Some(r.begin);
-                set_nic0(cfg, |n| n.adapter_ip = Some((r.begin, r.begin)));
-            } else {
-                // Диапазон хранится только в `nics[0]` (одиночное поле держит первый адрес); ключ
-                // конфигурации проверяет степень двойки (main-conf.c:2483) и заводит `nic[0]`.
-                apply_core_kv(cfg, "adapter-ip", ip).map_err(|_| bad())?;
+        // Ключи адаптера: одиночные опции и `--adapter[i]` и т.п. идут по порядку `argv` внутри сегмента (C зовёт
+        // `masscan_set_parameter` по ходу разбора). Все они держат одиночные поля и `nics[0]` равными.
+        let mut nic_steps: Vec<(usize, NicStep<'_>)> = NIC_PLAIN
+            .iter()
+            .filter(|id| take(id))
+            .filter_map(|id| self.key_pos.get(id).map(|&p| (p, NicStep::Plain(id))))
+            .collect();
+        nic_steps.extend(
+            self.nic_pos
+                .iter()
+                .filter(|(pos, _)| self.segment_of(*pos) == seg)
+                .map(|(pos, kv)| (*pos, NicStep::Indexed(kv))),
+        );
+        nic_steps.sort_by_key(|(pos, _)| *pos);
+        for (_, step) in nic_steps {
+            match step {
+                NicStep::Plain(id) => self.apply_nic_plain(cfg, id)?,
+                NicStep::Indexed(kv) => {
+                    let (name, value) = kv.split_once('=').unwrap_or((kv, ""));
+                    if !apply_core_kv(cfg, name, value).map_err(|e| format!("{name}: {e}"))? {
+                        return Err(format!("unknown adapter option {name:?}"));
+                    }
+                }
             }
-        }
-        if take("adapter_mac")
-            && let Some(m) = &self.adapter_mac
-        {
-            let mac = parse_mac(m).map_err(|e| e.to_string())?;
-            cfg.adapter_mac = Some(mac);
-            set_nic0(cfg, |n| n.adapter_mac = Some(mac));
-        }
-        if take("router_ip")
-            && let Some(ip) = &self.router_ip
-        {
-            let ip: Ipv4Addr = ip
-                .parse()
-                .map_err(|_| format!("bad --router-ip {ip:?}: expected one IPv4 address"))?;
-            let ip = u32::from(ip);
-            cfg.router_ip = Some(ip);
-            set_nic0(cfg, |n| n.router_ip = Some(ip));
-        }
-        if take("router_mac")
-            && let Some(m) = &self.router_mac
-        {
-            let mac = parse_mac(m).map_err(|e| e.to_string())?;
-            cfg.router_mac = Some(mac);
-            set_nic0(cfg, |n| {
-                (n.router_mac_ipv4, n.router_mac_ipv6) = (Some(mac), Some(mac));
-            });
-        }
-        if take("source_port")
-            && let Some(p) = &self.source_port
-        {
-            let ports = parse_source_port(p).map_err(|e| e.to_string())?;
-            cfg.source_port = Some(ports);
-            // Явный диапазон степени двойки снимает причуду C в 17 портов, пришедшую из файла (флаг у адаптера).
-            set_nic0(cfg, |n| {
-                n.source_port = Some(ports);
-                n.legacy_c_17_port_mask = false;
-            });
-        }
-        if take("interface")
-            && let Some(name) = &self.interface
-        {
-            cfg.adapter_name = Some(name.clone());
-            set_nic0(cfg, |n| n.adapter_name = Some(name.clone()));
         }
         // Р9: параметры зонда. Ключи ядра сами проверяют значения (`--ttl 0`, `--tcp-mss 70000` отклоняются).
         if take("ttl")
@@ -1140,6 +1191,82 @@ impl Cli {
                     apply_core_kv(cfg, key, v).map_err(|e| e.to_string())?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Одиночная опция адаптера `id` в `nic[0]` и одиночные поля (`--adapter-ip`, `--adapter-mac`, `--router-ip`,
+    /// `--router-mac`, `--source-port`, `--interface`).
+    fn apply_nic_plain(&self, cfg: &mut ScanConfig, id: &str) -> Result<(), String> {
+        match id {
+            "adapter_ip" => {
+                let Some(ip) = &self.adapter_ip else {
+                    return Ok(());
+                };
+                let bad = || {
+                    format!(
+                        "bad --adapter-ip {ip:?}: expected an IPv4 address or a range A-B of a power-of-two width"
+                    )
+                };
+                let r = range_parse_ipv4(ip).map_err(|_| bad())?;
+                if r.begin == r.end {
+                    cfg.adapter_ip = Some(r.begin);
+                    set_nic0(cfg, |n| n.adapter_ip = Some((r.begin, r.begin)));
+                } else {
+                    // Диапазон хранится только в `nics[0]` (одиночное поле держит первый адрес); ключ
+                    // конфигурации проверяет степень двойки (main-conf.c:2483) и заводит `nic[0]`.
+                    apply_core_kv(cfg, "adapter-ip", ip).map_err(|_| bad())?;
+                }
+            }
+            "adapter_mac" => {
+                let Some(m) = &self.adapter_mac else {
+                    return Ok(());
+                };
+                let mac = parse_mac(m).map_err(|e| e.to_string())?;
+                cfg.adapter_mac = Some(mac);
+                set_nic0(cfg, |n| n.adapter_mac = Some(mac));
+            }
+            "router_ip" => {
+                let Some(ip) = &self.router_ip else {
+                    return Ok(());
+                };
+                let ip: Ipv4Addr = ip
+                    .parse()
+                    .map_err(|_| format!("bad --router-ip {ip:?}: expected one IPv4 address"))?;
+                let ip = u32::from(ip);
+                cfg.router_ip = Some(ip);
+                set_nic0(cfg, |n| n.router_ip = Some(ip));
+            }
+            "router_mac" => {
+                let Some(m) = &self.router_mac else {
+                    return Ok(());
+                };
+                let mac = parse_mac(m).map_err(|e| e.to_string())?;
+                cfg.router_mac = Some(mac);
+                set_nic0(cfg, |n| {
+                    (n.router_mac_ipv4, n.router_mac_ipv6) = (Some(mac), Some(mac));
+                });
+            }
+            "source_port" => {
+                let Some(p) = &self.source_port else {
+                    return Ok(());
+                };
+                let ports = parse_source_port(p).map_err(|e| e.to_string())?;
+                cfg.source_port = Some(ports);
+                // Явный диапазон степени двойки снимает причуду C в 17 портов, пришедшую из файла (флаг у адаптера).
+                set_nic0(cfg, |n| {
+                    n.source_port = Some(ports);
+                    n.legacy_c_17_port_mask = false;
+                });
+            }
+            "interface" => {
+                let Some(name) = &self.interface else {
+                    return Ok(());
+                };
+                cfg.adapter_name = Some(name.clone());
+                set_nic0(cfg, |n| n.adapter_name = Some(name.clone()));
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -2247,5 +2374,91 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
             .to_config()
             .unwrap_err();
         assert!(e.contains("t.txt"), "{e}");
+    }
+
+    /// Задача 7, Review Focus 4 (`main-conf.c:2437-2641`, `nic[8]` переполняет массив): индекс адаптера вне `0..=7`
+    /// отказывает (exit 1), а не пишет за массив; `--adapter[i]` и родственные ключи идут по порядку `argv` вместе с
+    /// одиночными опциями и держат одиночные поля и `nics[0]` равными (T2 I-1).
+    #[test]
+    fn adapter_index_out_of_bounds_fails() {
+        for bad in [
+            &["--adapter[8]", "eth0"][..],
+            &["--adapter[-1]", "eth0"][..],
+            &["--adapter[x]=eth0"][..],
+            &["--adapter-ip[9]", "10.0.0.1"][..],
+            &["--router-mac[100]:00-11-22-33-44-55"][..],
+        ] {
+            let e = parse(bad).unwrap().to_config().unwrap_err();
+            assert!(
+                e.contains("adapter") || e.contains("router"),
+                "{bad:?}: {e}"
+            );
+        }
+        // Файл `adapter[-1] = eth0` тоже отказывает.
+        let dir = crate::scratch::Scratch::new();
+        let f = dir.write("neg.conf", b"adapter[-1] = eth0\n");
+        assert!(
+            parse(&["-c", f.to_str().unwrap()])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+
+        // Допустимые индексы: три формы значения, порядок `argv` с одиночной опцией.
+        let cfg = parse(&[
+            "--adapter[0]",
+            "veth0",
+            "--adapter[1]=veth1",
+            "--adapter-ip[1]:198.18.0.2",
+            "--adapter-mac[1]",
+            "02-00-00-00-00-02",
+            "--source-port[1]",
+            "50000",
+        ])
+        .unwrap()
+        .to_config()
+        .unwrap();
+        assert_eq!(cfg.nics.len(), 2);
+        assert_eq!(cfg.nics[0].adapter_name.as_deref(), Some("veth0"));
+        assert_eq!(cfg.adapter_name.as_deref(), Some("veth0"));
+        assert_eq!(cfg.nics[1].adapter_name.as_deref(), Some("veth1"));
+        assert_eq!(cfg.nics[1].adapter_ip, Some((0xc612_0002, 0xc612_0002)));
+        assert_eq!(cfg.nics[1].adapter_mac, Some([2, 0, 0, 0, 0, 2]));
+        assert_eq!(cfg.nics[1].source_port, Some((50000, 50000)));
+        // Правее побеждает: одиночная опция после `--adapter[0]` и наоборот.
+        let name = |a: &[&str]| {
+            parse(a).unwrap().to_config().unwrap().nics[0]
+                .adapter_name
+                .clone()
+        };
+        assert_eq!(
+            name(&["--adapter[0]", "a", "--interface", "b"]).as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            name(&["--interface", "b", "--adapter[0]", "a"]).as_deref(),
+            Some("a")
+        );
+        // Индексированный ключ левее файла переопределяется файлом, правее переопределяет его.
+        let conf = dir.write(
+            "n.conf",
+            b"adapter[1] = from-file\nadapter-ip[1] = 198.18.0.7\n",
+        );
+        let f = conf.to_str().unwrap();
+        let one = |a: &[&str]| {
+            parse(a).unwrap().to_config().unwrap().nics[1]
+                .adapter_name
+                .clone()
+        };
+        assert_eq!(
+            one(&["--adapter[1]", "cli", "-c", f]).as_deref(),
+            Some("from-file")
+        );
+        assert_eq!(
+            one(&["-c", f, "--adapter[1]", "cli"]).as_deref(),
+            Some("cli")
+        );
+        // Не ключ адаптера со скобкой это ошибка clap, а не молчаливое игнорирование.
+        assert!(parse(&["--rate[1]", "5"]).is_err());
     }
 }

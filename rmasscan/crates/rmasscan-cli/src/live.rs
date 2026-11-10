@@ -101,18 +101,60 @@ pub struct Prepared {
     pub seed: (u64, Source),
     /// `Source::Detected` значит «по времени».
     pub source_ports: ((u16, u16), Source),
+    /// Адаптеры `nic[1..n)` (`--adapter[i]`, Задача 7, `main.c:1257-1390`); `detected`/`binding`/`source_ports`
+    /// выше это `nic[0]`.
+    pub extra: Vec<NicPrepared>,
+}
+
+/// Обнаружение и binding одного адаптера `nic[k]`, `k >= 1`.
+#[derive(Debug, Clone)]
+pub struct NicPrepared {
+    pub detected: Detected,
+    pub binding: AdapterBinding,
+    pub source_ports: ((u16, u16), Source),
+}
+
+impl Prepared {
+    /// Привязки всех адаптеров по порядку `nic[0..n)` (`next_hop_mac` ещё нулевой там, где нужен ARP).
+    fn bindings(&self) -> Vec<AdapterBinding> {
+        std::iter::once(self.binding.clone())
+            .chain(self.extra.iter().map(|e| e.binding.clone()))
+            .collect()
+    }
+
+    /// Обнаружение адаптера `k`.
+    fn detected(&self, k: usize) -> &Detected {
+        if k == 0 {
+            &self.detected
+        } else {
+            &self.extra[k - 1].detected
+        }
+    }
+
+    /// Источник порта адаптера `k`.
+    fn source_ports(&self, k: usize) -> ((u16, u16), Source) {
+        if k == 0 {
+            self.source_ports
+        } else {
+            self.extra[k - 1].source_ports
+        }
+    }
 }
 
 fn refusal(e: impl std::fmt::Display) -> String {
     format!("{REFUSAL_PREFIX}{e}")
 }
 
-/// Адаптер плана CLI. `--adapter-ip A-B` живёт только в `nics[0]` (одиночное поле хранит первый адрес): диапазон
-/// берётся оттуда, если его первый адрес и есть источник привязки (обнаруженный адрес диапазона не имеет). Флаг
-/// 17 портов принадлежит этому же адаптеру (спека Р6).
-fn nic_binding(eff: &EffectiveConfig, binding: &AdapterBinding) -> Result<NicBinding, String> {
-    let nic0 = eff.nics().first();
-    let source_ipv4_last = match nic0.and_then(|n| n.adapter_ip) {
+/// Адаптер `k` плана CLI. `--adapter-ip A-B` живёт только в `nics[k]` (одиночное поле хранит первый адрес `nic[0]`):
+/// диапазон берётся оттуда, если его первый адрес и есть источник привязки (обнаруженный адрес диапазона не имеет).
+/// Флаг 17 портов принадлежит этому же адаптеру (спека Р6).
+fn nic_binding(
+    eff: &EffectiveConfig,
+    k: usize,
+    binding: &AdapterBinding,
+) -> Result<NicBinding, String> {
+    let nic = eff.nics().get(k);
+    let source_ipv4_last = match nic.and_then(|n| n.adapter_ip) {
         None => binding.source_ipv4,
         Some((first, last)) if first == binding.source_ipv4 && last >= first => last,
         Some((first, last)) => {
@@ -126,9 +168,21 @@ fn nic_binding(eff: &EffectiveConfig, binding: &AdapterBinding) -> Result<NicBin
     };
     Ok(NicBinding {
         source_ipv4_last,
-        legacy_c_17_port_mask: nic0.is_some_and(|n| n.legacy_c_17_port_mask),
+        legacy_c_17_port_mask: nic.is_some_and(|n| n.legacy_c_17_port_mask),
         binding: binding.clone(),
     })
+}
+
+/// Адаптеры плана по привязкам `nic[0..n)`.
+fn nic_bindings(
+    eff: &EffectiveConfig,
+    bindings: &[AdapterBinding],
+) -> Result<Vec<NicBinding>, String> {
+    bindings
+        .iter()
+        .enumerate()
+        .map(|(k, b)| nic_binding(eff, k, b))
+        .collect()
 }
 
 /// Файл `--pcap` (Р8): открывается до ARP и engine, один потокобезопасный писатель на все адаптеры. Фильтр "наш адрес
@@ -137,19 +191,20 @@ fn open_pcap(
     path: Option<&str>,
     backend: &dyn Backend,
     clock: &(dyn Clock + Send + Sync),
-    eff: &EffectiveConfig,
-    binding: &AdapterBinding,
+    nics: &[NicBinding],
 ) -> Result<Option<Arc<PcapWriter>>, String> {
     let Some(path) = path.filter(|p| !p.is_empty()) else {
         return Ok(None);
     };
-    let nic = nic_binding(eff, binding)?;
-    let targets = vec![PcapTarget {
-        ip_first: nic.binding.source_ipv4,
-        ip_last: nic.source_ipv4_last,
-        port_first: nic.binding.source_ports.0,
-        port_last: nic.binding.source_ports.1,
-    }];
+    let targets = nics
+        .iter()
+        .map(|n| PcapTarget {
+            ip_first: n.binding.source_ipv4,
+            ip_last: n.source_ipv4_last,
+            port_first: n.binding.source_ports.0,
+            port_last: n.binding.source_ports.1,
+        })
+        .collect();
     // Время записи: Unix-время открытия минус показание часов engine в тот же момент.
     let wall = backend.unix_time().saturating_mul(1_000_000);
     let offset = wall.saturating_sub(clock.now_micros());
@@ -160,13 +215,17 @@ fn open_pcap(
 }
 
 /// План живого скана CLI (`ReadyPlan::new_cli`): `--retries`, `--shard`, `--blackrock-rounds`, `resume-index` и
-/// `resume-count` из конфигурации и `--resume` (`main.c:212-223, 269-273`). Один адаптер; `adapter-port` из 17
-/// портов, который пишет сам C (`main.c:1318`), принимается флагом `legacy_c_17_port_mask`.
-fn cli_plan(eff: &EffectiveConfig, binding: &AdapterBinding) -> Result<ReadyPlan, String> {
-    let nic = nic_binding(eff, binding)?;
-    let plan = ReadyPlan::new_cli(eff.clone(), vec![nic]).map_err(|e| e.to_string())?;
-    // Курсор строится здесь же: `resume-index` за пределом скана отказывает до ARP, а не после него.
-    plan.cursor_for_nic(0, None).map_err(|e| e.to_string())?;
+/// `resume-count` из конфигурации и `--resume` (`main.c:212-223, 269-273`), 1..=8 адаптеров с общим потоком индексов
+/// (`nic_offset`, `main.c:269`). `adapter-port` из 17 портов, который пишет сам C (`main.c:1318`), принимается флагом
+/// `legacy_c_17_port_mask`. Порядок адаптеров в плане это порядок RX-потоков: `rx_plan` ставит адаптер `k` первым,
+/// поэтому приёмник каждого адаптера проверяет диапазон адресов и портов именно своего (T6, замечание 4).
+fn cli_plan(eff: &EffectiveConfig, bindings: &[AdapterBinding]) -> Result<ReadyPlan, String> {
+    let plan =
+        ReadyPlan::new_cli(eff.clone(), nic_bindings(eff, bindings)?).map_err(|e| e.to_string())?;
+    // Курсоры строятся здесь же: `resume-index` за пределом скана отказывает до ARP, а не после него.
+    for k in 0..plan.nics().len() as u32 {
+        plan.cursor_for_nic(k, None).map_err(|e| e.to_string())?;
+    }
     Ok(plan)
 }
 
@@ -233,11 +292,11 @@ pub fn prepare(
     };
     cfg.source_port = Some(source_ports.0);
     let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
-    // Массив адаптеров `nic[1..8)` запускается в Задаче 7; молча сканировать одним `nic[0]` нельзя: смещение
-    // потока (`nic_count`) и скорость зависят от числа адаптеров.
-    if eff.nics().len() > 1 {
+    // `--offline --packet-trace` печатает поток одного адаптера; поток `nic[k]` зависит от числа адаптеров
+    // (`nic_count`, смещение и скорость), поэтому с несколькими адаптерами офлайн-режим отказывает.
+    if offline && eff.nics().len() > 1 {
         return Err(format!(
-            "{} adapters are configured but only one adapter is supported by this build",
+            "{} adapters are configured, but --offline supports one adapter",
             eff.nics().len()
         ));
     }
@@ -250,24 +309,41 @@ pub fn prepare(
     } else {
         let targets =
             probe_targets(eff.massip()).ok_or_else(|| refusal(DetectError::NoUnicastTargets))?;
-        let ov = Overrides {
-            adapter: eff.adapter_name().map(str::to_string),
-            adapter_ip: eff.adapter_ip().map(Ipv4Addr::from),
-            adapter_mac: eff.adapter_mac(),
-            router_ip: eff.router_ip().map(Ipv4Addr::from),
-            router_mac: eff.router_mac(),
-        };
-        let os = |e: NetError| refusal(DetectError::Os(e));
-        let routes = backend.routes().map_err(os)?;
-        let ifaces = backend.interfaces().map_err(os)?;
-        let found = if offline {
-            detect_offline(&targets, &ov, routes.as_ref(), ifaces.as_ref())
-        } else {
-            detect(&targets, &ov, routes.as_ref(), ifaces.as_ref())
-        };
-        found.map_err(refusal)?
+        detect_nic(&eff, 0, &targets, backend, offline)?
     };
-    let binding = AdapterBinding {
+    let binding = binding_of(&detected, source_ports.0);
+    // Адаптеры `nic[1..n)` (`main.c:1257-1390`): у каждого своё обнаружение по его ключам; порт источника по
+    // умолчанию общий, шлюз ищется ARP-ом на самом адаптере.
+    let mut extra = Vec::new();
+    if eff.nics().len() > 1 {
+        let targets =
+            probe_targets(eff.massip()).ok_or_else(|| refusal(DetectError::NoUnicastTargets))?;
+        for k in 1..eff.nics().len() {
+            let detected = detect_nic(&eff, k, &targets, backend, false)?;
+            let ports = match eff.nics()[k].source_port {
+                Some(p) => (p, Source::Given),
+                None => (source_ports.0, Source::Detected),
+            };
+            extra.push(NicPrepared {
+                binding: binding_of(&detected, ports.0),
+                detected,
+                source_ports: ports,
+            });
+        }
+    }
+    Ok(Prepared {
+        eff,
+        detected,
+        binding,
+        seed,
+        source_ports,
+        extra,
+    })
+}
+
+/// Привязки адаптера по результату обнаружения.
+fn binding_of(detected: &Detected, source_ports: (u16, u16)) -> AdapterBinding {
+    AdapterBinding {
         interface_id: detected.iface.device_id.clone(),
         link_type: LinkType::Ethernet,
         source_ipv4: u32::from(detected.source_ipv4.0),
@@ -276,15 +352,57 @@ pub fn prepare(
             NextHop::Mac(m, _) => m,
             NextHop::Resolve { .. } => [0; 6],
         },
-        source_ports: source_ports.0,
-    };
-    Ok(Prepared {
-        eff,
-        detected,
-        binding,
-        seed,
         source_ports,
-    })
+    }
+}
+
+/// Ключи обнаружения адаптера `k`: для `nic[0]` одиночные поля (в них нули уже отброшены `effective()`), для
+/// остальных `nics[k]` с теми же правилами нуля (`main-initadapter.c:122-126, 170`).
+fn overrides(eff: &EffectiveConfig, k: usize) -> Overrides {
+    if k == 0 {
+        return Overrides {
+            adapter: eff.adapter_name().map(str::to_string),
+            adapter_ip: eff.adapter_ip().map(Ipv4Addr::from),
+            adapter_mac: eff.adapter_mac(),
+            router_ip: eff.router_ip().map(Ipv4Addr::from),
+            router_mac: eff.router_mac(),
+        };
+    }
+    let n = &eff.nics()[k];
+    Overrides {
+        adapter: n.adapter_name.clone(),
+        adapter_ip: n
+            .adapter_ip
+            .map(|(first, _)| first)
+            .filter(|&ip| ip != 0)
+            .map(Ipv4Addr::from),
+        adapter_mac: n.adapter_mac.filter(|m| *m != [0u8; 6]),
+        router_ip: n.router_ip.map(Ipv4Addr::from),
+        router_mac: n
+            .router_mac_ipv4
+            .or(n.router_mac_ipv6)
+            .filter(|m| *m != [0u8; 6]),
+    }
+}
+
+/// Обнаружение адаптера `k` только чтением таблиц ОС (`detect` или `detect_offline`).
+fn detect_nic(
+    eff: &EffectiveConfig,
+    k: usize,
+    targets: &rmasscan_net::discover::Targets,
+    backend: &dyn Backend,
+    offline: bool,
+) -> Result<Detected, String> {
+    let ov = overrides(eff, k);
+    let os = |e: NetError| refusal(DetectError::Os(e));
+    let routes = backend.routes().map_err(os)?;
+    let ifaces = backend.interfaces().map_err(os)?;
+    let found = if offline {
+        detect_offline(targets, &ov, routes.as_ref(), ifaces.as_ref())
+    } else {
+        detect(targets, &ov, routes.as_ref(), ifaces.as_ref())
+    };
+    found.map_err(refusal)
 }
 
 fn fmt_mac(m: [u8; 6]) -> String {
@@ -338,25 +456,41 @@ fn line(log: &mut dyn Write, s: &str) -> Result<(), String> {
 /// и `router-mac`, если он известен без ARP. Строку ARP (`router-mac … (arp: …)`) печатает [`run_live`] после
 /// резолвера, затем идут `seed` и `source-port`, поэтому порядок stderr одинаков на обоих путях.
 pub fn print_detection(p: &Prepared, log: &mut dyn Write) -> Result<(), String> {
-    let d = &p.detected;
-    let offline = p.eff.offline();
-    let iface = if hermetic_offline(&p.eff, p.source_ports.1) && p.eff.adapter_name().is_none() {
-        "none (offline)".to_string()
+    (0..=p.extra.len()).try_for_each(|k| print_nic_detection(p, k, log))
+}
+
+/// Строки `[+]` адаптера `k`; ключи адаптеров с `k >= 1` несут суффикс `[k]`, как в `paused.conf`.
+fn print_nic_detection(p: &Prepared, k: usize, log: &mut dyn Write) -> Result<(), String> {
+    let d = p.detected(k);
+    let sfx = if k == 0 {
+        String::new()
     } else {
-        match d.iface_source {
-            Source::Given => format!("{} (given)", d.iface.name),
-            Source::Detected => {
-                let first = probe_targets(p.eff.massip()).map(|t| t.first);
-                let first = first.map_or_else(String::new, |ip| format!(" to {ip}"));
-                format!("{} (detected: route{first})", d.iface.name)
-            }
-        }
+        format!("[{k}]")
     };
-    line(log, &format!("interface = {iface}"))?;
+    let given_router_ip = if k == 0 {
+        p.eff.router_ip()
+    } else {
+        p.eff.nics()[k].router_ip
+    };
+    let offline = p.eff.offline();
+    let iface =
+        if k == 0 && hermetic_offline(&p.eff, p.source_ports.1) && p.eff.adapter_name().is_none() {
+            "none (offline)".to_string()
+        } else {
+            match d.iface_source {
+                Source::Given => format!("{} (given)", d.iface.name),
+                Source::Detected => {
+                    let first = probe_targets(p.eff.massip()).map(|t| t.first);
+                    let first = first.map_or_else(String::new, |ip| format!(" to {ip}"));
+                    format!("{} (detected: route{first})", d.iface.name)
+                }
+            }
+        };
+    line(log, &format!("interface{sfx} = {iface}"))?;
     line(
         log,
         &format!(
-            "source-mac = {} ({})",
+            "source-mac{sfx} = {} ({})",
             fmt_mac(d.source_mac.0),
             given_or(d.source_mac.1, "detected")
         ),
@@ -364,16 +498,19 @@ pub fn print_detection(p: &Prepared, log: &mut dyn Write) -> Result<(), String> 
     line(
         log,
         &format!(
-            "source-ip = {} ({})",
+            "source-ip{sfx} = {} ({})",
             d.source_ipv4.0,
             given_or(d.source_ipv4.1, "detected")
         ),
     )?;
     if offline {
-        line(log, "router-ip = none (offline)")?;
+        line(log, &format!("router-ip{sfx} = none (offline)"))?;
         return line(
             log,
-            &format!("router-mac = {} (offline)", fmt_mac(OFFLINE_ROUTER_MAC)),
+            &format!(
+                "router-mac{sfx} = {} (offline)",
+                fmt_mac(OFFLINE_ROUTER_MAC)
+            ),
         );
     }
     match d.next_hop {
@@ -384,14 +521,17 @@ pub fn print_detection(p: &Prepared, log: &mut dyn Write) -> Result<(), String> 
                 NextHopWhy::OnLinkTarget => "on-link target",
                 NextHopWhy::InterfaceDefaultGateway => "interface default gateway",
             };
-            line(log, &format!("router-ip = {ip} ({why})"))
+            line(log, &format!("router-ip{sfx} = {ip} ({why})"))
         }
         NextHop::Mac(m, _) => {
             // `--router-mac`: ARP не нужен, `--router-ip` только печатается (C его тогда не ищет).
-            if let Some(ip) = p.eff.router_ip() {
-                line(log, &format!("router-ip = {} (given)", Ipv4Addr::from(ip)))?;
+            if let Some(ip) = given_router_ip {
+                line(
+                    log,
+                    &format!("router-ip{sfx} = {} (given)", Ipv4Addr::from(ip)),
+                )?;
             }
-            line(log, &format!("router-mac = {} (given)", fmt_mac(m)))
+            line(log, &format!("router-mac{sfx} = {} (given)", fmt_mac(m)))
         }
     }
 }
@@ -402,16 +542,24 @@ fn print_parameters(p: &Prepared, log: &mut dyn Write) -> Result<(), String> {
         log,
         &format!("seed = {} ({})", p.seed.0, given_or(p.seed.1, "entropy")),
     )?;
-    let ((first, last), src) = p.source_ports;
-    let ports = if first == last {
-        first.to_string()
-    } else {
-        format!("{first}-{last}")
-    };
-    line(
-        log,
-        &format!("source-port = {ports} ({})", given_or(src, "time")),
-    )
+    for k in 0..=p.extra.len() {
+        let ((first, last), src) = p.source_ports(k);
+        let ports = if first == last {
+            first.to_string()
+        } else {
+            format!("{first}-{last}")
+        };
+        let sfx = if k == 0 {
+            String::new()
+        } else {
+            format!("[{k}]")
+        };
+        line(
+            log,
+            &format!("source-port{sfx} = {ports} ({})", given_or(src, "time")),
+        )?;
+    }
+    Ok(())
 }
 
 /// Подсказка для `PermissionDenied` при открытии адаптера: что нужно на этой ОС.
@@ -548,7 +696,7 @@ pub fn run_live_conf(
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
     // Ограничения плана (rounds, shard, `resume-index` за пределом, ширина портов) до ARP: отказ плана не стоит
     // кадра. Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
-    cli_plan(&p.eff, &p.binding)?;
+    cli_plan(&p.eff, &p.bindings())?;
     print_detection(&p, log)?;
     // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
     sink.open()?;
@@ -557,8 +705,7 @@ pub fn run_live_conf(
         full.pcap_filename.as_deref(),
         backend,
         clock.as_ref(),
-        &p.eff,
-        &p.binding,
+        &nic_bindings(&p.eff, &p.bindings())?,
     )?;
     // Р18: обработчик Ctrl-C ставится до ARP и держится весь скан (первый же опрос его устанавливает). Нажатие до
     // первого SYN останавливает скан без адаптера скана и без единого кадра (C `main.c:1131–1154`: первое нажатие
@@ -571,52 +718,64 @@ pub fn run_live_conf(
     if backend.interrupts() > 0 {
         return early_stop(log, sink);
     }
-    let mut binding = p.binding.clone();
-    let name = p.detected.iface.name.as_str();
-    if let NextHop::Resolve { ip, why } = p.detected.next_hop {
-        let (my_ip, my_mac) = (p.detected.source_ipv4.0, p.detected.source_mac.0);
-        let kind = match why {
-            NextHopWhy::OnLinkTarget => NextHopKind::Target,
-            NextHopWhy::Given | NextHopWhy::RouteGateway | NextHopWhy::InterfaceDefaultGateway => {
-                NextHopKind::Router
-            }
+    // ARP по очереди для каждого адаптера: адаптер фазы ARP закрывается до открытия следующего и до адаптеров скана.
+    let mut bindings = p.bindings();
+    for (k, binding) in bindings.iter_mut().enumerate() {
+        let d = p.detected(k);
+        let sfx = if k == 0 {
+            String::new()
+        } else {
+            format!("[{k}]")
         };
-        let arp = arp_binding(&binding.interface_id, my_ip, my_mac, binding.source_ports);
-        let mut pair = open(backend, name, &arp)?;
-        let r = resolve_next_hop_until(
-            &mut pair,
-            name,
-            my_mac,
-            my_ip,
-            ip,
-            kind,
-            &backend.arp_policy(),
-            clock.as_ref(),
-            &mut || backend.interrupts() > 0,
-        );
-        // Адаптер фазы ARP закрывается до открытия адаптера скана.
-        drop(pair);
-        let Some(report) = r.map_err(refusal)? else {
-            return early_stop(log, sink);
-        };
-        line(
-            log,
-            &format!(
-                "router-mac = {} (arp: {} requests, {} ms)",
-                fmt_mac(report.mac),
-                report.requests_sent,
-                report.elapsed.as_millis()
-            ),
-        )?;
-        binding.next_hop_mac = report.mac;
+        let name = d.iface.name.as_str();
+        if let NextHop::Resolve { ip, why } = d.next_hop {
+            let (my_ip, my_mac) = (d.source_ipv4.0, d.source_mac.0);
+            let kind = match why {
+                NextHopWhy::OnLinkTarget => NextHopKind::Target,
+                NextHopWhy::Given
+                | NextHopWhy::RouteGateway
+                | NextHopWhy::InterfaceDefaultGateway => NextHopKind::Router,
+            };
+            let arp = arp_binding(&binding.interface_id, my_ip, my_mac, binding.source_ports);
+            let mut pair = open(backend, name, &arp)?;
+            let r = resolve_next_hop_until(
+                &mut pair,
+                name,
+                my_mac,
+                my_ip,
+                ip,
+                kind,
+                &backend.arp_policy(),
+                clock.as_ref(),
+                &mut || backend.interrupts() > 0,
+            );
+            // Адаптер фазы ARP закрывается до открытия адаптера скана.
+            drop(pair);
+            let Some(report) = r.map_err(refusal)? else {
+                return early_stop(log, sink);
+            };
+            line(
+                log,
+                &format!(
+                    "router-mac{sfx} = {} (arp: {} requests, {} ms)",
+                    fmt_mac(report.mac),
+                    report.requests_sent,
+                    report.elapsed.as_millis()
+                ),
+            )?;
+            binding.next_hop_mac = report.mac;
+        }
     }
     print_parameters(&p, log)?;
-    let plan = cli_plan(&p.eff, &binding)?;
+    let plan = cli_plan(&p.eff, &bindings)?;
     // Нажатие, пришедшее после ARP, но до открытия адаптера скана: ни адаптера, ни SYN.
     if backend.interrupts() > 0 {
         return early_stop(log, sink);
     }
-    let io = open(backend, name, &binding)?;
+    let mut ios = Vec::with_capacity(bindings.len());
+    for (k, binding) in bindings.iter().enumerate() {
+        ios.push(open(backend, p.detected(k).iface.name.as_str(), binding)?);
+    }
     let options = EngineOptions::new(ids(backend), ids(backend));
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
     let started = clock.now_micros();
@@ -628,7 +787,7 @@ pub fn run_live_conf(
         .unwrap_or(0);
     let handle = Engine::start_cli_with_clock(
         plan,
-        vec![io],
+        ios,
         options,
         clock.clone(),
         pcap.as_ref().map(PcapWriter::sink),
@@ -647,8 +806,8 @@ pub fn run_live_conf(
     let mut saved_conf = full.clone();
     saved_conf.scan.seed = p.seed.0;
     saved_conf.scan.source_port = Some(p.source_ports.0);
-    for n in saved_conf.scan.nics.iter_mut().take(1) {
-        n.source_port = Some(p.source_ports.0);
+    for (k, n) in saved_conf.scan.nics.iter_mut().enumerate() {
+        n.source_port = Some(p.source_ports(k).0);
     }
     // `masscan_save_state` (`main-conf.c:395-416`) по условию `min_index < count_ips * count_ports`
     // (`main.c:1447-1456`); `--infinite` не имеет конца и сохранять нечего (Р5).
@@ -786,7 +945,7 @@ pub(crate) fn for_each_probe(
     binding: &AdapterBinding,
     mut f: impl FnMut(&Probe) -> Result<(), String>,
 ) -> Result<(), String> {
-    match core_for_each_probe_nic(eff, &nic_binding(eff, binding)?, |p| match f(p) {
+    match core_for_each_probe_nic(eff, &nic_binding(eff, 0, binding)?, |p| match f(p) {
         Ok(()) => ControlFlow::Continue(()),
         Err(e) => ControlFlow::Break(e),
     })

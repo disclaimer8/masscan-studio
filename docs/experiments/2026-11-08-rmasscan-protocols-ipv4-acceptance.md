@@ -97,7 +97,7 @@ Windows `windows-verify` передаёт каталог целиком в `auto
 | minipc (Linux 7.0.0-38-generic, tcpdump 4.99.6) | `RMASSCAN_EXPECT_DEFAULT_ROUTE=1 cargo test --locked --workspace --no-fail-fast`: **1830 passed, 0 failed**, 14 ignored, 51 строка `test result`; `cargo clippy --locked --workspace --all-targets -- -D warnings`: 0. Оба под `nice -n 19`: шли одновременно с окном Windows, ssh которого идёт через minipc |
 | гость (Windows 10.0.26300, elevated, Npcap 1.90 Admin-only) | тот же тест: **1726 passed, 0 failed**, 34 ignored; clippy 0; `rmasscan.exe` со статическим CRT и `/DEPENDENTLOADFLAG:0x800` (`0800 Dependent Load Flag` OK) |
 | home-pc (Linux 7.3.0-10-generic, QEMU 10.2.1) | `rmasscan-lab`, `deploy-manifest` для C |
-| Mac (macOS 27.2) | `cargo test --locked --workspace --no-fail-fast`: **1958 passed, 0 failed**, 23 ignored (на C и на итоговом HEAD `63c88b9`, одинаково); clippy 0; `cargo fmt --check` 0; `cargo check --locked` в `studio/` 0. `sudo` не использовался; живых кадров с Mac нет |
+| Mac (macOS 27.2) | `cargo test --locked --workspace --no-fail-fast`: **1958 passed, 0 failed**, 23 ignored (прогон ворот 7b на Mac на C и на итоговом HEAD `63c88b9`, лог не закоммичен); clippy 0; `cargo fmt --check` 0; `cargo check --locked` в `studio/` 0. `sudo` не использовался; живых кадров с Mac нет |
 
 sha256 бинарников: `verification/binaries.sha256.txt` (lab minipc `e760a85e…`, `rmasscan` minipc `73409675…`, lab home-pc
 `1e9a6a32…`, `rmasscan.exe` гостя `e79bc90a…`, lab Mac `e759714f…`, оракул `8afc8ec8…`).
@@ -110,11 +110,11 @@ sha256 бинарников: `verification/binaries.sha256.txt` (lab minipc `e76
 - Порядок зондов побайтно тот же, что у C, и идёт в том же порядке (перестановка BlackRock).
 - Документ каждого сканера судится по порядку ответов своего провода; пары ответов, снятые на линке пира ближе 1 мс
   друг к другу (`REPLY_REORDER_WINDOW`), документ может записать в любом порядке. Окно в 1 мс на практике допускает
-  любую перестановку внутри одной пачки отправки.
+  почти любую перестановку внутри одной пачки отправки, поскольку пачка шириной до около 1 мс.
 - Записи rmasscan равны записям C как мультимножество, поле в поле без времени (`notes.record_order_vs_c`): в r3 `p02`
   (`json`, `binary`) и `p05` (`json`) это те же записи в другом порядке, остальные пять документов — в том же порядке.
-- Порядок между пачками отправки (на захватах r3 зонды идут либо пачкой в пределах около 0,25 мс, либо не ближе 8,4 мс друг
-  от друга) вердикт требует. Порядок внутри пачки вердикт не требует, он показан счётчиком `notes.reply_order_swaps`:
+- Порядок между пачками отправки (на захватах r3 соседние зонды пачки идут не дальше около 0,25 мс друг от друга, вся пачка до около 1 мс, пачки
+  не ближе 8,4 мс друг от друга) вердикт требует. Порядок внутри пачки вердикт не требует, он показан счётчиком `notes.reply_order_swaps`:
   в r3 одна переставленная пара (7 мкс, шаг `json` кейса `p05`, INIT-ACK пира раньше SYN-ACK, а rmasscan записал SYN-ACK
   первым), в остальных 15 шагах 0. Такие данные прошли бы и при любом окне не меньше 7 мкс.
 - Порядок записей в писателях rmasscan закреплён офлайн-тестами. Сужение окна (десятки микросекунд, максимальный разрыв

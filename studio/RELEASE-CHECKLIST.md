@@ -22,16 +22,21 @@ rebuilding after the history rewrite does not transfer that acceptance.
 - [x] Diagnose the macOS modifier/Command-character failure and verify native
   automated Cmd+A/C/F/V, Shift selection and Tab/Shift+Tab in Studio fields and
   the results table, including return from a cancelled export dialog.
-- [ ] Complete keyboard/layout acceptance for the system Save panel, physical
-  keyboards and other input layouts, and native minimum window width. Automated
-  Cmd+A/text entry in the AppKit Save field remains unreliable; the Studio event
-  adapter does not handle AppKit-owned text fields.
+- [x] Supply native Save editing actions, verify Save/Cancel and post-dialog
+  input, and obtain a physical-keyboard Cmd+A confirmation on the menu candidate.
+  Automated Cmd+A in the system Save field remains unreliable; the report keeps
+  that observation separate from the successful physical test.
+- [x] Check Studio shortcuts with ABC, Russian and Ukrainian input sources.
+- [x] Fix narrow-header clipping; verify geometry across 820–1160 logical pixels
+  and run the final package's native stop-race smoke at 820x540. Mouse-edge
+  resizing itself was not successfully automated.
 - [ ] Repeat physical-network lifecycle and export acceptance on the exact
   eventual distribution candidate, including same-window Stop/Start and
   Pause/Resume. Historical fixture and direct-network checks remain historical.
 
 Latest UI evidence: [draft queue and native export](../docs/experiments/2026-11-10-studio-native-ui.md).
 Keyboard follow-up: [macOS event diagnosis and verification](../docs/experiments/2026-11-10-studio-keyboard.md).
+Latest UI completion: [native Save, input layouts and minimum width](../docs/experiments/2026-11-10-studio-ui-finish.md).
 
 ## 2. Physical-network acceptance
 

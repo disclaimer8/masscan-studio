@@ -77,6 +77,10 @@ ad-hoc-signed package, not a notarized release.
 
 ## Remaining limits
 
+Subsequent Save, input-layout and minimum-width work is recorded in the
+[UI completion report](2026-11-10-studio-ui-finish.md). The following limits
+describe the earlier `57ac3f32` verification, not the later package.
+
 Automated Cmd+A/text entry remains unreliable in the AppKit-owned Save name
 field, both before and after this adapter. Cancel works and Studio input recovers
 after returning. The adapter handles Slint windows, not AppKit text fields; the

@@ -30,13 +30,14 @@ rebuilding after the history rewrite does not transfer that acceptance.
 - [x] Fix narrow-header clipping; verify geometry across 820–1160 logical pixels
   and run the final package's native stop-race smoke at 820x540. Mouse-edge
   resizing itself was not successfully automated.
-- [ ] Repeat physical-network lifecycle and export acceptance on the exact
-  eventual distribution candidate, including same-window Stop/Start and
-  Pause/Resume. Historical fixture and direct-network checks remain historical.
+- [x] Exercise the clean macOS `de7ee4ad` release on two direct owned peers,
+  including JSON/SQLite/packet comparison, Pause/reopen/Resume and same-window
+  Stop/Start. Repeat matching acceptance after any later runtime integration.
 
 Latest UI evidence: [draft queue and native export](../docs/experiments/2026-11-10-studio-native-ui.md).
 Keyboard follow-up: [macOS event diagnosis and verification](../docs/experiments/2026-11-10-studio-keyboard.md).
 Latest UI completion: [native Save, input layouts and minimum width](../docs/experiments/2026-11-10-studio-ui-finish.md).
+Latest native release: [static SQLite and physical lifecycle](../docs/experiments/2026-11-10-studio-native-release.md).
 
 ## 2. Physical-network acceptance
 
@@ -44,8 +45,10 @@ Latest UI completion: [native Save, input layouts and minimum width](../docs/exp
   preparation, persisted coverage and destination MACs, and frozen Resume identity.
 - [x] Preserve separate fixture admission; unsupported profiles never fall back
   to an ordinary network profile.
-- [ ] Verify the final package's source/interface selection, direct/routed delivery,
-  partial neighbour coverage, Stop, Pause/Resume and restart on owned devices.
+- [x] Verify source/interface selection and direct delivery, Stop,
+  Pause/reopen/Resume and restart on the clean macOS `de7ee4ad` release, with
+  29 independently correlated probe/reply pairs.
+- [ ] Verify routed delivery and partial neighbour coverage on the final candidate.
 - [ ] Exercise network loss, route/interface changes, sleep/wake and stale
   observations; compare Interrupted status and partial history with packet capture.
 
@@ -57,6 +60,8 @@ accepted; do not generalize an isolated fixture or direct peer to routed network
 
 - [x] Inventory complete packages and verify hashes; check macOS deep/strict
   ad-hoc signatures after all executable and SQLite load-path changes.
+- [x] Link macOS package SQLite statically; reject GUI/helper pairs that cannot
+  pass the retained-session dependency policy, even when signatures are valid.
 - [x] Build in neutral paths and scan uncompressed packages for complete home
   paths plus known private tokens before creating distribution archives.
 - [x] Automate Ubuntu 24.04 baseline packaging, direct GLIBC checks, X11/software

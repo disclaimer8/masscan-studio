@@ -26,7 +26,10 @@ use crate::cookie::syn_cookie_ipv4;
 use crate::packet::{LinkType, PacketModifiers, TcpSynTemplate};
 use crate::ranges::RangeList;
 use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
-use crate::targets::{TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST};
+use crate::targets::{
+    TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST,
+    TEMPL_UDP, TEMPL_UDP_LAST,
+};
 
 /// Раунды BlackRock, которые принимает runtime v1 (masscan по умолчанию).
 pub const RUNTIME_BLACKROCK_ROUNDS: u32 = 14;
@@ -64,6 +67,14 @@ pub enum PlanError {
     IcmpTypeNotSupported(u32),
     #[error("ARP scan cannot be mixed with other ports")]
     ArpMixedWithPorts,
+    /// Временный отказ (Задачи 3-6 снимают его по протоколу): порт разобран, но построителя зонда ещё нет.
+    #[error(
+        "{label} cannot be scanned yet: rmasscan has no probe builder for this protocol (-sL and --echo accept it)"
+    )]
+    ProtocolNotBuilt { label: String },
+    /// Построитель зонда отказал посреди прохода: это отказ скана, а не его конец.
+    #[error("probe could not be built: {0}")]
+    ProbeBuild(Box<PlanError>),
     #[error("next index {next_index} is beyond the transmit limit {limit}")]
     NextIndexBeyondRange { next_index: u64, limit: u64 },
     #[error("invalid shard {one}/{of}: need 1 <= one <= of")]
@@ -330,6 +341,51 @@ pub fn check_cli_ports(ports: &RangeList) -> Result<(), PlanError> {
     Ok(())
 }
 
+/// Временная таблица индексов, для которых построителя зонда ещё нет: `(первый, последний, метка)`. Задачи 3-6
+/// удаляют по строке, когда протокол получает построитель (UDP, SCTP, ICMP Echo, ARP). Постоянный отказ `O:*`/`I:1+`
+/// живёт отдельно, в [`check_cli_ports`].
+const UNBUILT: [(u32, u32, &str); 4] = [
+    (TEMPL_UDP, TEMPL_UDP_LAST, "U"),
+    (TEMPL_SCTP, TEMPL_SCTP_LAST, "S"),
+    (TEMPL_ICMP_ECHO, TEMPL_ICMP_ECHO, "I"),
+    (TEMPL_ARP, TEMPL_ARP, "I"),
+];
+
+/// Временная проверка плана CLI: порт протокола без построителя зонда отказывает сразу, до ARP, движка и первой
+/// строки `SENT`, а не обрывает скан на первом таком индексе. Метка называет наименьший такой порт.
+pub fn check_buildable_ports(ports: &RangeList) -> Result<(), PlanError> {
+    let mut first: Option<(u32, &str)> = None;
+    for r in ports.as_slice() {
+        for &(lo, hi, name) in &UNBUILT {
+            let i = r.begin.max(lo);
+            if i <= r.end.min(hi) && first.is_none_or(|(f, _)| i < f) {
+                first = Some((i, name));
+            }
+        }
+    }
+    let Some((i, name)) = first else {
+        return Ok(());
+    };
+    let base = if i == TEMPL_ARP {
+        TEMPL_ICMP_ECHO
+    } else {
+        i - (i % 65536)
+    };
+    let label = if i == TEMPL_ARP {
+        format!("ARP ({name}:{})", i - base)
+    } else {
+        format!("{name}:{}", i - base)
+    };
+    Err(PlanError::ProtocolNotBuilt { label })
+}
+
+/// Все проверки портов плана CLI: постоянный отказ ([`check_cli_ports`]) и временный ([`check_buildable_ports`]).
+/// Зовут `ReadyPlan::new_cli` (живой скан) и `--offline --packet-trace`.
+pub fn check_scan_ports(ports: &RangeList) -> Result<(), PlanError> {
+    check_cli_ports(ports)?;
+    check_buildable_ports(ports)
+}
+
 /// Проверенный план нового запуска. Поля приватны; создать можно только через
 /// [`ReadyPlan::new`] или [`ReadyPlan::new_cli`].
 #[derive(Debug, Clone)]
@@ -378,6 +434,24 @@ impl ReadyPlan {
         effective: EffectiveConfig,
         nics: Vec<NicBinding>,
     ) -> Result<ReadyPlan, PlanError> {
+        ReadyPlan::new_cli_checked(effective, nics, true)
+    }
+
+    /// Только для тестов отказа движка: как [`ReadyPlan::new_cli`], но без проверки портов, поэтому план с
+    /// портом без построителя зонда строится и курсор упирается в отказ посреди прохода. Не для рабочего кода.
+    #[doc(hidden)]
+    pub fn new_cli_without_port_checks(
+        effective: EffectiveConfig,
+        nics: Vec<NicBinding>,
+    ) -> Result<ReadyPlan, PlanError> {
+        ReadyPlan::new_cli_checked(effective, nics, false)
+    }
+
+    fn new_cli_checked(
+        effective: EffectiveConfig,
+        nics: Vec<NicBinding>,
+        check_ports: bool,
+    ) -> Result<ReadyPlan, PlanError> {
         if effective.operation() != Operation::Scan {
             return Err(PlanError::NotScanOperation(effective.operation()));
         }
@@ -394,8 +468,11 @@ impl ReadyPlan {
         if effective.blackrock_rounds() < 1 {
             return Err(PlanError::ZeroRounds(effective.blackrock_rounds()));
         }
-        // Р1: O:*, I:n и смесь с ARP отклоняются; UDP/SCTP/ICMP Echo/ARP план принимает.
-        check_cli_ports(effective.massip().ports())?;
+        // Р1: O:*, I:n и смесь с ARP отклоняются навсегда; UDP/SCTP/ICMP Echo/ARP пока без построителя зонда и
+        // отклоняются временно (иначе скан оборвался бы молча на первом таком индексе).
+        if check_ports {
+            check_scan_ports(effective.massip().ports())?;
+        }
         ReadyPlan::build(effective, nics, false)
     }
 
@@ -535,7 +612,7 @@ impl ReadyPlan {
             stream: stream.peekable(),
             loaded: VecDeque::new(),
             ended: false,
-            failed: false,
+            failed: None,
             blackrock: self.inner.blackrock,
             repeats: 0,
             position: start,
@@ -558,8 +635,9 @@ pub struct ProbeCursor {
     /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
     /// пропущенный индекс не сдвинул последовательность.
     ended: bool,
-    /// Probe не построился (порт не влез в TCP): конец не естественный, и `--infinite` не перезапускает проход.
-    failed: bool,
+    /// Probe не построился: конец не естественный, `--infinite` не перезапускает проход, а движок обязан
+    /// объявить отказ ([`ProbeCursor::build_error`]).
+    failed: Option<PlanError>,
     /// Перестановка текущего прохода: у прохода `n` это `BlackRock(seed + n)` (`main.c:225-228, 445-449`), у
     /// прохода 0 перестановка плана.
     blackrock: BlackRock,
@@ -623,16 +701,27 @@ impl ProbeCursor {
         let xxx = self.blackrock.shuffle(x);
         let (ip, port) = inner.effective.massip().pick(xxx);
         let mut p = Probe::default();
-        // План уже проверил, что порты помещаются в TCP; при ошибке probe не
-        // выдаётся (курсор заканчивается), а не паникует.
-        if builder.fill(&mut p, i, self.repeats, xxx, ip, port).is_ok() {
-            self.loaded.push_back(p);
-            true
-        } else {
-            self.ended = true;
-            self.failed = true;
-            false
+        // `ReadyPlan::new` и `new_cli` отклоняют порты без построителя заранее, поэтому отказ здесь это
+        // нарушение инварианта. Он не паникует и не выдаётся за конец скана: курсор останавливается и хранит
+        // причину, а движок завершает запуск отказом.
+        match builder.fill(&mut p, i, self.repeats, xxx, ip, port) {
+            Ok(()) => {
+                self.loaded.push_back(p);
+                true
+            }
+            Err(e) => {
+                self.ended = true;
+                self.failed = Some(e);
+                false
+            }
         }
+    }
+
+    /// Причина, по которой probe не построился. `Some` означает, что конец курсора не естественный.
+    pub fn build_error(&self) -> Option<PlanError> {
+        self.failed
+            .clone()
+            .map(|e| PlanError::ProbeBuild(Box::new(e)))
     }
 
     /// Номер прохода `--infinite` (0 для первого).
@@ -651,7 +740,11 @@ impl ProbeCursor {
     /// `seqno` и порт источника проверяются приёмом для обоих проходов. `true`, если проход начат заново.
     pub fn advance_pass(&mut self) -> bool {
         let e = self.plan.effective();
-        if !e.infinite() || self.failed || !self.loaded.is_empty() || self.stream.peek().is_some() {
+        if !e.infinite()
+            || self.failed.is_some()
+            || !self.loaded.is_empty()
+            || self.stream.peek().is_some()
+        {
             return false;
         }
         let inner = &*self.plan.inner;
@@ -1261,28 +1354,22 @@ mod tests {
         assert_eq!(cli_err("I:1"), PlanError::IcmpTypeNotSupported(196_609));
         assert!(cli_err("I:1").to_string().contains("I:1"));
         assert!(cli_err("O:47").to_string().contains("O:47"));
-        // I:0 принимается; ARP (индекс 196610 = I:2) принимается один
-        ReadyPlan::new_cli(eff("198.18.2.0/30", "I:0", |_| {}), nics(1)).unwrap();
-        ReadyPlan::new_cli(eff("198.18.2.0/30", "I:2", |_| {}), nics(1)).unwrap();
-        // ... но не вместе с любым другим портом (R3)
-        for ports in ["I:2,T:80", "I:2,U:53", "I:0,I:2", "I:2-3"] {
-            let e = cli_err(ports);
-            assert!(
-                matches!(
-                    e,
-                    PlanError::ArpMixedWithPorts | PlanError::IcmpTypeNotSupported(_)
-                ),
-                "{ports}: {e:?}"
-            );
+        // Постоянная проверка принимает I:0 и ARP (I:2) как допустимые порты; ARP только единственным
+        let ok = |ports: &str| {
+            let e = eff("198.18.2.0/30", ports, |_| {});
+            check_cli_ports(e.massip().ports())
+        };
+        assert_eq!(ok("I:0"), Ok(()));
+        assert_eq!(ok("I:2"), Ok(()));
+        assert_eq!(ok("U:53,S:2905,I:0,T:80"), Ok(()));
+        assert_eq!(ok("80,O:47"), Err(PlanError::OprotoNotSupported(196_911)));
+        for ports in ["I:2,T:80", "I:2,U:53", "I:0,I:2"] {
+            assert_eq!(ok(ports), Err(PlanError::ArpMixedWithPorts), "{ports}");
         }
+        assert_eq!(ok("I:2-3"), Err(PlanError::IcmpTypeNotSupported(196_611)));
+        // new_cli: смесь с ARP отказывает раньше временного отказа
         assert_eq!(cli_err("I:2,T:80"), PlanError::ArpMixedWithPorts);
         assert_eq!(cli_err("I:0,I:2"), PlanError::ArpMixedWithPorts);
-        // UDP/SCTP/ICMP Echo план принимает (зонды появятся в следующих задачах)
-        ReadyPlan::new_cli(
-            eff("198.18.2.0/30", "U:53,S:2905,I:0,T:80", |_| {}),
-            nics(1),
-        )
-        .unwrap();
         // Студия: `new` по-прежнему только TCP
         for ports in ["U:53", "S:1", "I:0"] {
             assert!(matches!(
@@ -1290,13 +1377,44 @@ mod tests {
                 PlanError::PortNotTcp(_)
             ));
         }
-        // тот же отказ отдельной проверкой для --offline --packet-trace
-        let bad = eff("198.18.2.0/30", "80,O:47", |_| {});
-        assert_eq!(
-            check_cli_ports(bad.massip().ports()),
-            Err(PlanError::OprotoNotSupported(196_911))
+    }
+
+    #[test]
+    fn interim_refusal_names_the_first_protocol_without_a_builder() {
+        // Пока нет построителей UDP, SCTP, ICMP Echo и ARP, план CLI отказывает сразу (иначе скан оборвался бы
+        // молча на первом таком индексе); чистый TCP проходит.
+        let label = |ports: &str| match cli_err(ports) {
+            PlanError::ProtocolNotBuilt { label } => label,
+            e => panic!("{ports}: {e:?}"),
+        };
+        assert_eq!(label("U:53"), "U:53");
+        assert_eq!(label("T:80,U:53,161"), "U:53");
+        assert_eq!(label("S:2905"), "S:2905");
+        assert_eq!(label("I:0"), "I:0");
+        assert_eq!(label("I:2"), "ARP (I:2)");
+        // наименьший индекс побеждает: UDP раньше SCTP
+        assert_eq!(label("S:1,U:9"), "U:9");
+        assert!(
+            cli_err("U:53")
+                .to_string()
+                .contains("U:53 cannot be scanned yet")
         );
-        let good = eff("198.18.2.0/30", "80,U:53", |_| {});
-        assert_eq!(check_cli_ports(good.massip().ports()), Ok(()));
+        ReadyPlan::new_cli(eff("198.18.2.0/30", "80,443,1000-1002", |_| {}), nics(1)).unwrap();
+        // постоянный отказ сильнее временного
+        assert_eq!(cli_err("U:53,O:47"), PlanError::OprotoNotSupported(196_911));
+        // без проверки (тестовый вход) план строится, а курсор упирается в отказ
+        let plan = ReadyPlan::new_cli_without_port_checks(
+            eff("198.18.2.0/30", "80,U:53", |_| {}),
+            nics(1),
+        )
+        .unwrap();
+        let mut cur = plan.cursor_for_nic(0, None).unwrap();
+        assert!(cur.build_error().is_none());
+        let sent = drain(&mut cur).len();
+        assert!(sent < 8, "sent {sent}");
+        // конец не естественный: причина хранится и называет порт
+        let e = cur.build_error().expect("failure must be recorded");
+        assert!(matches!(e, PlanError::ProbeBuild(_)), "{e:?}");
+        assert!(e.to_string().contains("does not fit TCP"), "{e}");
     }
 }

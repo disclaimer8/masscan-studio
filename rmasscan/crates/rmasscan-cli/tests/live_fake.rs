@@ -755,6 +755,28 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
     }
 }
 
+/// Порт протокола без построителя зонда (UDP, SCTP, ICMP Echo, ARP) и порты `O:*`/`I:1+` отклоняются живым
+/// сканом до обнаружения, ARP и открытия адаптера: ни кадра, ни строки `[+]`, ошибка и код 1. Раньше скан с
+/// `-p80,U:53` слал SYN до первого UDP-индекса и заканчивался как завершённый.
+#[test]
+fn live_scan_refuses_ports_without_a_probe_builder_before_any_frame() {
+    let mut b = FakeBackend::new();
+    b.panic_on_open = true;
+    for (extra, text) in [
+        (&["-pU:53"][..], "U:53 cannot be scanned yet"),
+        (&["-pS:2905"][..], "S:2905 cannot be scanned yet"),
+        (&["-pI:0"][..], "I:0 cannot be scanned yet"),
+        (&["-pI:2"][..], "ARP scan cannot be mixed with other ports"),
+        (&["-pO:47"][..], "raw IP protocol ports (O:47)"),
+        (&["-pI:1"][..], "ICMP ports other than I:0"),
+    ] {
+        let (r, out, log) = cli(&b, &with(&LIVE, extra));
+        let e = r.unwrap_err();
+        assert!(e.contains(text), "{extra:?}: {e}");
+        assert!(out.is_empty() && log.is_empty(), "{extra:?}: {log}");
+    }
+}
+
 /// Разрешённые пределы плана (Задача 3): шардирование делит поток, повторы удлиняют его, `--resume-index` и
 /// `--resume-count` режут его; скан завершается `Completed`.
 #[test]

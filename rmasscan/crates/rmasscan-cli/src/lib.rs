@@ -1048,8 +1048,32 @@ mod tests {
         assert!(e.contains("O:47"), "{e}");
         let e = run_args(&trace_args(&["-pI:1"])).unwrap_err();
         assert!(e.contains("I:1"), "{e}");
-        // UDP, SCTP, I:0 и ARP-индекс проходят проверку (зонды появятся в следующих задачах)
-        assert!(check_prefixes_ok(&trace_args(&["-pU:53,S:2905,I:0"])));
+        // UDP, SCTP, I:0 и ARP пока без построителя зонда: временный отказ до обнаружения и до первой строки
+        // SENT (Задачи 3-6 снимают его по протоколу). Чистый TCP проходит.
+        for (ports, label) in [
+            ("-pU:53", "U:53"),
+            ("-p80,U:53", "U:53"),
+            ("-pS:2905", "S:2905"),
+            ("-pI:0", "I:0"),
+        ] {
+            let (res, out, log) = run_capture(&trace_args(&[ports]));
+            let e = res.unwrap_err();
+            assert!(
+                e.contains(&format!("{label} cannot be scanned yet")),
+                "{ports}: {e}"
+            );
+            assert!(out.is_empty(), "{ports}: SENT lines before refusal: {out}");
+            assert!(log.is_empty(), "{ports}: output before refusal: {log}");
+        }
+        // ARP-индекс вместе с TCP-портами трассировки: постоянный отказ смеси (R3)
+        let (res, out, log) = run_capture(&trace_args(&["-pI:2"]));
+        assert!(res.unwrap_err().contains("ARP scan cannot be mixed"));
+        assert!(out.is_empty() && log.is_empty());
+        assert_eq!(
+            run_args(&trace_args(&[])).unwrap().lines().count(),
+            8,
+            "pure TCP trace still runs"
+        );
         // --echo и -sL принимают все пять префиксов и печатают их как C (O:47 как I:303)
         let echo = run_args(&[
             "rmasscan",
@@ -1069,12 +1093,16 @@ mod tests {
         run_args(&["rmasscan", "--offline", "10.0.0.1", "-pO:47", "--seed", "1"]).unwrap();
     }
 
-    /// `true`, если отказ трассировки не про порты (другая ошибка или успех).
-    fn check_prefixes_ok(args: &[&str]) -> bool {
-        match run_args(args) {
-            Ok(_) => true,
-            Err(e) => !e.contains("not supported for scanning"),
-        }
+    /// Итог запуска вместе со stdout и stderr (то, что напечатано до отказа).
+    fn run_capture(args: &[&str]) -> (Result<(), String>, String, String) {
+        let cli = Cli::try_parse_masscan(args.iter().copied()).unwrap();
+        let (mut out, mut log) = (Vec::new(), Vec::new());
+        let res = run(&cli, &FakeBackend::default(), &mut out, &mut log);
+        (
+            res,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(log).unwrap(),
+        )
     }
 
     fn prepared(args: &[&str]) -> live::Prepared {

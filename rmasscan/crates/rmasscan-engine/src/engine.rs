@@ -602,6 +602,11 @@ fn run_tx(
         // завершение, а не checkpoint с пустым остатком.
         // `--infinite` (`main.c:445-449`): конец прохода запускает следующий, пока не придёт команда остановки.
         if cursor.current().is_none() && !cursor.advance_pass() {
+            // Probe, который не построился, это отказ, а не естественный конец скана.
+            if let Some(e) = cursor.build_error() {
+                shared.fail(FailReason::ProbeBuild(e.to_string()));
+                break END_HALTED;
+            }
             break END_NATURAL;
         }
         if halted() {
@@ -633,6 +638,10 @@ fn run_tx(
                 // `--infinite`: проход кончился посреди окна throttle, продолжаем со следующего прохода.
                 if cursor.advance_pass() {
                     continue;
+                }
+                if let Some(e) = cursor.build_error() {
+                    shared.fail(FailReason::ProbeBuild(e.to_string()));
+                    break 'run END_HALTED;
                 }
                 break 'run END_NATURAL;
             }

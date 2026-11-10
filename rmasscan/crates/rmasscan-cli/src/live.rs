@@ -31,7 +31,7 @@ use crate::status::{InfiniteTotals, StatusLine, StatusMode};
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{
-    AdapterBinding, NicBinding, Probe, ReadyPlan, check_cli_ports,
+    AdapterBinding, NicBinding, Probe, ReadyPlan, check_scan_ports,
     for_each_probe_nic as core_for_each_probe_nic,
 };
 use rmasscan_core::receive::PortStatus;
@@ -1004,7 +1004,7 @@ pub fn run_offline(
     // Р1: `--packet-trace` как и живой скан не шлёт `O:*` и `I:n` (проверка плана CLI, `cli_plan`); без
     // трассировки `--offline` ничего не строит и отказа нет.
     if packet_trace {
-        check_cli_ports(p.eff.massip().ports()).map_err(|e| e.to_string())?;
+        check_scan_ports(p.eff.massip().ports()).map_err(|e| e.to_string())?;
     }
     print_detection(&p, log)?;
     print_parameters(&p, log)?;

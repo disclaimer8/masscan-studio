@@ -766,7 +766,7 @@ fn run_rx(
                 let frame = &buf[..n.min(buf.len())];
                 // `--pcap` (main.c:943-951): кадр уходит в файл захвата до
                 // проверки cookie и дедупликации. Фильтр "наш адрес и порт"
-                // принадлежит писателю захвата (Задача 7).
+                // принадлежит писателю захвата (`rmasscan-cli::pcap_writer`).
                 if let Some(sink) = &pcap_sink
                     && frame.len() <= PCAP_MAX_FRAME
                 {
@@ -1505,5 +1505,111 @@ mod tests {
         }
         assert_eq!(leg.frames, reference);
         assert_eq!(leg.outcome.progress.next_index, plan.effective_end(0));
+    }
+
+    /// Два адаптера: A `198.18.0.99` с портами `40000..=40015`, B `198.18.0.100` с портами `41000..=41003`.
+    fn plan_two_nics() -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.1.0/30").unwrap();
+        parse_ports(m.ports_mut(), "80").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 1, // при 0 RX выходит в той же итерации, где увидел конец TX, и ответы теряются
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = |ip: u32, mac: u8, ports: (u16, u16)| {
+            NicBinding::from(AdapterBinding {
+                interface_id: format!("fake{mac}"),
+                link_type: LinkType::Ethernet,
+                source_ipv4: ip,
+                source_mac: [0, 0x11, 0x22, 0x33, 0x44, mac],
+                next_hop_mac: [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
+                source_ports: ports,
+            })
+        };
+        ReadyPlan::new_cli(
+            eff,
+            vec![
+                nic(0xc612_0063, 0x55, (40000, 40015)),
+                nic(0xc612_0064, 0x56, (41000, 41003)),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// T3 M-8 (первый тест с n > 1) и T6, замечание 4: два адаптера делят поток внешних индексов по чётности
+    /// (`start = nic_index`, `increment = nic_count`, `main.c:269`) и пишут ответы в одну очередь; RX-поток адаптера
+    /// `k` проверяет диапазон адресов и портов именно своего адаптера (`rx_plan`), так что ответ, валидный для
+    /// адаптера B, адаптером A не принимается, и наоборот.
+    #[test]
+    fn two_adapters_split_even_odd_and_each_accepts_only_its_own_range() {
+        let plan = plan_two_nics();
+        let clock = ManualClock::new();
+        let fakes = [
+            FakeAdapter::new().with_clock(clock.clone()),
+            FakeAdapter::new().with_clock(clock.clone()),
+        ];
+        for f in &fakes {
+            f.set_responder(|syn| crate::fake::reply_to_syn(syn, 0x12).into_iter().collect());
+        }
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            fakes.iter().map(FakeAdapter::pair).collect(),
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        let (_, events) = h.join_drain().unwrap();
+        let replies: Vec<Reply> = events
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::Results { replies } => Some(replies),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        // range = 4: адаптер A шлёт внешние индексы 0 и 2, адаптер B 1 и 3.
+        let sent = |k: usize| fakes[k].sent_frames();
+        assert_eq!((sent(0).len(), sent(1).len()), (2, 2));
+        let mut want = [Vec::new(), Vec::new()];
+        for (k, w) in want.iter_mut().enumerate() {
+            let mut cursor = plan.cursor_for_nic(k as u32, None).unwrap();
+            while let Some(p) = cursor.current() {
+                w.push(p.frame.clone());
+                cursor.advance_sent();
+            }
+        }
+        assert_eq!(sent(0), want[0]);
+        assert_eq!(sent(1), want[1]);
+        // Источники кадров разные: каждый адаптер шлёт со своего адреса и порта.
+        for (k, ip) in [[198, 18, 0, 99], [198, 18, 0, 100]]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(sent(k).iter().all(|f| f[26..30] == ip), "adapter {k}");
+        }
+        // Все четыре ответа дошли до общей очереди, по два на адаптер.
+        assert_eq!(replies.len(), 4);
+        for ip in [0xc612_0063u32, 0xc612_0064] {
+            assert_eq!(replies.iter().filter(|r| r.local_ip == ip).count(), 2);
+        }
+
+        // Ответ на SYN адаптера B валиден только для RX адаптера B.
+        let link = LinkType::Ethernet;
+        let (rx_a, rx_b) = (rx_plan(&plan, 0).unwrap(), rx_plan(&plan, 1).unwrap());
+        for k in 0..2 {
+            for syn in sent(k) {
+                let reply = crate::fake::reply_to_syn(&syn, 0x12).unwrap();
+                let accepted = |p: &ReadyPlan| matches!(parse_reply(&reply, link, p), Ok(Some(_)));
+                assert_eq!(accepted(&rx_a), k == 0, "RX A, reply to adapter {k}");
+                assert_eq!(accepted(&rx_b), k == 1, "RX B, reply to adapter {k}");
+            }
+        }
     }
 }

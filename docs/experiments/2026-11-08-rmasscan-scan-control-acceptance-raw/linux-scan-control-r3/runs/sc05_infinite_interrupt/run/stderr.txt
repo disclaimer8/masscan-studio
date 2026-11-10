@@ -1,9 +1,0 @@
-[+] interface = veth-a (detected: route to 198.18.0.2)
-[+] source-mac = 02-aa-00-00-00-01 (detected)
-[+] source-ip = 198.18.0.1 (detected)
-[+] router-ip = 198.18.0.2 (interface default gateway)
-[+] router-mac = 02-aa-00-00-00-02 (arp: 1 requests, 0 ms)
-[+] seed = 1 (given)
-[+] source-port = 58324 (time)
-rate:  0.10-kpps, syn/s=104 ack/s=32 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=100 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=102 ack/s=0 tcb-rate=0, 0-tcbs,         waiting several seconds to exit...                                            
-rate:  0.10-kpps, syn/s=49 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,         rate:  0.10-kpps, syn/s=0 ack/s=0 tcb-rate=0, 0-tcbs,                                                                                      [+] finished: Paused, sent 210, replies 12, open 8

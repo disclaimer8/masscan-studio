@@ -299,11 +299,11 @@ fake-бэкендом. Тесты Studio этого этапа идут в CI PR
 
 ## Статус
 
-Управление сканом (код `e52793b`, evidence `7773eb3`, 2026-11-10, ветка `feat/rmasscan-scan-control`): `--shard`,
+Управление сканом (код `11a2235`, evidence `28c956e`, 2026-11-10, ветка `feat/rmasscan-scan-control`): `--shard`,
 `--retries`, `--wait`, пауза первым Ctrl-C с `paused.conf`, `--resume`/`--resume-index`/`--resume-count`, `--infinite`,
 `-c`/`-iL`, `--adapter[0..7]`, `--pcap`, `--ttl`, `--badsum`, `--tcp-*`. Живая приёмка: Linux `scan-control` PASS 7/7,
-регрессия вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты minipc 1695/0 и
-гость 1591/0; CI `rmasscan` и `language-guard` на `e52793b` зелёные. macOS живой и физические NIC: NOT RUN.
+регрессия вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты minipc 1702/0 и
+гость 1598/0; CI `rmasscan` и `language-guard` на `11a2235` зелёные. macOS живой и физические NIC: NOT RUN.
 Отчёт: `../docs/experiments/2026-11-08-rmasscan-scan-control-acceptance.md`.
 
 Форматы вывода masscan, `--readscan`, строка статуса и Ctrl-C (код `2b0e92c`, evidence `86f384f`, 2026-11-06, ветка

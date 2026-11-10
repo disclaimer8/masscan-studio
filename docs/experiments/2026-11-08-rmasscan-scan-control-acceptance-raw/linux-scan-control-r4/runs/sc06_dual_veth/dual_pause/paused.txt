@@ -1,0 +1,24 @@
+
+# resume information
+resume-index = 32
+seed = 1
+rate = 10        
+shard = 1/1
+nocapture = servername
+nocapture = servername
+
+output-filename = output.json
+output-format = json
+
+adapter[0] = veth-a
+router-mac-ipv4[0] = 02-aa-00-00-00-02
+router-mac-ipv6[0] = 02-aa-00-00-00-02
+adapter[1] = veth-a2
+adapter-ip[1] = 198.18.0.6
+adapter-mac[1] = 02-aa-00-00-00-03
+router-mac-ipv4[1] = 02-aa-00-00-00-04
+router-mac-ipv6[1] = 02-aa-00-00-00-04
+adapter-port = 48410
+# TARGET SELECTION (IP, PORTS, EXCLUDES)
+ports = 76-95
+range = 198.18.0.2-198.18.0.5

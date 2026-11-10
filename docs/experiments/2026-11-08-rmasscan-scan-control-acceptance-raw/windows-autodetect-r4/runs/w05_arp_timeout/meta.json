@@ -1,0 +1,19 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794309225.870767,
+  "capture_stopped_utc": 1794309284.619522,
+  "end_marker_seen": true,
+  "exe_sha256": "ef5121a319f3034fe3cc3d8aa5496fc6f2d7e9a680a66e7f887df8d22241c450",
+  "guest_exit": 1,
+  "guest_finished_utc": 1794309250.448377,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794309231.428181,
+  "guest_times": {
+    "finished_utc": 1794309249.571,
+    "started_utc": 1794309239.502
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "ra6ecab627cca6d570f8b2509a8fbcb21-c6d563ea28cdccdc",
+  "kind": "arp-timeout",
+  "tag": "w05_arp_timeout"
+}

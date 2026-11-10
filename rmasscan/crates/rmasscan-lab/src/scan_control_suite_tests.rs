@@ -104,6 +104,8 @@ struct FakeSc {
     /// The files in each scanner's working directory when it started.
     cwd_files: RefCell<Vec<(String, String, Vec<String>)>>,
     stop_after_int: Cell<bool>,
+    /// A stop request arrives once the netem delay is set.
+    stop_on_netem: Cell<bool>,
 }
 impl FakeSc {
     fn new(tags: &[&'static str], rmasscan: &Path, oracle: &Path) -> Self {
@@ -121,6 +123,7 @@ impl FakeSc {
             clock: Cell::new((0.0, 0)),
             cwd_files: RefCell::default(),
             stop_after_int: Cell::new(false),
+            stop_on_netem: Cell::new(false),
         }
     }
     fn note(&self, argv: &[String], paths: &[&Path]) {
@@ -309,6 +312,8 @@ impl LinuxHost for FakeSc {
     }
     fn stopped(&self) -> bool {
         self.stop_after_int.get() && self.log.borrow().iter().any(|x| x == "signal scanner:INT")
+            || (self.stop_on_netem.get()
+                && self.log.borrow().iter().any(|x| x.contains("qdisc add")))
     }
     fn now(&self) -> f64 {
         let (base, n) = self.clock.get();
@@ -1113,4 +1118,27 @@ fn wire_lab_raises_the_second_pair_inside_the_same_two_namespaces_and_tears_both
             "{banned}"
         );
     }
+}
+
+#[test]
+fn the_netem_delay_is_taken_off_on_an_early_exit_too() {
+    let s = setup(&["sc02_pause_wait_resume"]);
+    s.fake.stop_on_netem.set(true);
+    let r = run_suite(&s);
+    assert!(matches!(r, Err(SuiteError::Interrupted(_))), "{r:?}");
+    let tcs: Vec<String> = s
+        .fake
+        .log
+        .borrow()
+        .iter()
+        .filter(|l| l.contains("qdisc"))
+        .cloned()
+        .collect();
+    assert_eq!(tcs.len(), 2, "{tcs:?}");
+    assert!(tcs[0].contains("qdisc add") && tcs[1].contains("qdisc del"));
+    assert!(
+        s.fake.scans(&s.fake.rmasscan).is_empty(),
+        "the scanner never started"
+    );
+    fs::remove_dir_all(s.root).unwrap();
 }

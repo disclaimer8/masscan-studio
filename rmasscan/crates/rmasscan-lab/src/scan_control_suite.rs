@@ -246,6 +246,19 @@ fn netem(l: &Linux, add: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Takes the netem delay off on every exit path of a step that set it; netns deletion remains the last safety net.
+struct NetemGuard<'a> {
+    l: &'a Linux<'a>,
+    armed: bool,
+}
+impl Drop for NetemGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = netem(self.l, false);
+        }
+    }
+}
+
 /// One step: its own responder and witnesses, the scanner in its group's working directory, the collected files.
 fn step(
     l: &Linux,
@@ -266,6 +279,7 @@ fn step(
         )));
     }
     l.responder(&sb, t)?;
+    let mut guard = NetemGuard { l, armed: false };
     if s.netem {
         netem(l, true).map_err(|e| {
             not_run(format!(
@@ -274,6 +288,7 @@ fn step(
             ))
         })?;
     }
+    guard.armed = s.netem;
     let w0 = l.witness(&sb, &sd, PEER_FILES[0][0], t)?;
     let w1 = if s.links == 2 {
         Some(l.witness_link(&sb, &sd, PEER_FILES[1][0], t, &SECOND_LINK, true)?)
@@ -311,6 +326,7 @@ fn step(
     if s.netem {
         // After the witnesses: replies still held back are not cut off before the capture is complete.
         let removed = netem(l, false);
+        guard.armed = false;
         write_record(
             &sd.join(NETEM_JSON),
             &NetemRecord {

@@ -664,3 +664,72 @@ fn usage_and_unknown_stands_are_refused_without_running_anything() {
     assert!(s.fake.spawned.borrow().is_empty());
     fs::remove_dir_all(s.root).unwrap();
 }
+
+// ------------------------------------------------------------------ wire-lab.sh
+
+#[test]
+fn wire_lab_raises_the_protocols_stand_with_every_icmp_error_answered_in_the_peer_namespace_only() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/wire-lab.sh"))
+            .unwrap();
+    // `--suite protocols` needs --rmasscan and runs on the fixed autodetect stand, lab id and teardown.
+    assert!(text.contains(r#"protocols) [ -n "$RMASSCAN_BIN" ] || { echo "--suite protocols needs --rmasscan" >&2; exit 64; } ;;"#));
+    assert!(text.contains(
+        r#"case "$SUITE" in autodetect|output|scan-control|protocols) STAND_SUITE=1 ;; esac"#
+    ));
+    // The one stand change of the suite: no ICMP error rate limit, in the peer namespace only (dies with it).
+    let changes: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("icmp_ratemask") && !l.trim_start().starts_with('#'))
+        .collect();
+    assert!(
+        changes.iter().any(|l| l
+            .contains(r#"[ "$SUITE" != protocols ] || nsb sysctl -qw net.ipv4.icmp_ratemask=0"#)),
+        "{changes:?}"
+    );
+    for l in &changes {
+        assert!(
+            l.contains("nsb ") || l.contains("note_cmd") || l.contains("$NS_B"),
+            "an ICMP setting outside the peer namespace: {l}"
+        );
+    }
+    // the isolation record is the autodetect stand's
+    assert!(text.contains(
+        r#"ISOLATION_MODE=autodetect; [ "$SUITE" != scan-control ] || ISOLATION_MODE=scan-control"#
+    ));
+    // The suite is started with the lab id and the same flags as the other stand suites.
+    let suite = text
+        .split("start_suite_group \"$OUT/suite.log\" \"$LAB_BIN\" protocols-suite linux")
+        .nth(1)
+        .and_then(|t| t.split("SUITE_PID=").next())
+        .expect("the protocols suite's start");
+    for flag in [
+        r#"--lab-id "$LAB_ID""#,
+        r#"--rmasscan "$RMASSCAN_BIN""#,
+        r#"--oracle "$ORACLE""#,
+        r#"--conf-masked "$CONF_MASKED""#,
+        r#"--work "$WORK""#,
+        r#"--ns-a "$NS_A""#,
+        r#"--ns-b "$NS_B""#,
+    ] {
+        assert!(suite.contains(flag), "{flag}: {suite}");
+    }
+    // Nothing of the new branch loads a module or touches the host's firewall, routes, bridges or sudo.
+    for banned in [
+        "modprobe",
+        "insmod",
+        "iptables",
+        "nft ",
+        "brctl",
+        "ip route add default",
+        "sudo ",
+    ] {
+        assert!(
+            !text
+                .lines()
+                .filter(|l| l.contains("protocols"))
+                .any(|l| l.contains(banned) && !l.trim_start().starts_with('#')),
+            "{banned}"
+        );
+    }
+}

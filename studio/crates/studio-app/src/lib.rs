@@ -1,5 +1,6 @@
 //! Application controller.
 #![forbid(unsafe_code)]
+mod commands;
 mod hosts;
 mod network;
 mod persistence;
@@ -96,7 +97,7 @@ pub enum Update {
     Notice(String),
 }
 pub struct Controller {
-    commands: mpsc::SyncSender<(Action, u64)>,
+    commands: commands::Sender,
     updates: mpsc::Receiver<Update>,
     stop: Arc<AtomicBool>,
     cancel_auth: Arc<AtomicBool>,
@@ -109,7 +110,7 @@ pub struct Controller {
 impl Controller {
     pub fn open(dir: PathBuf, runner: PathBuf) -> Result<Self, String> {
         let store = Store::open(&dir).map_err(|e| e.to_string())?;
-        let (commands, rx) = mpsc::sync_channel(8);
+        let (commands, rx) = commands::channel(8);
         let (out, updates) = mpsc::sync_channel(32);
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -531,7 +532,7 @@ fn emit(out: &mpsc::SyncSender<Update>, u: Update) -> Result<(), String> {
 fn work(
     mut db: Store,
     path: PathBuf,
-    actions: mpsc::Receiver<(Action, u64)>,
+    actions: commands::Receiver,
     out: mpsc::SyncSender<Update>,
     cancellation: (Arc<AtomicBool>, Arc<AtomicU64>),
     cancel_auth: Arc<AtomicBool>,

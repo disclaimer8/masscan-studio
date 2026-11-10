@@ -946,11 +946,55 @@ fn malformed_physical_settings_are_reported_without_starting_or_authorizing() {
 }
 
 #[test]
+fn editing_burst_preserves_latest_draft_and_start_stop_order() {
+    let (commands, rx) = commands::channel(8);
+    let (_out, updates) = mpsc::sync_channel(32);
+    let c = Controller {
+        commands,
+        updates,
+        stop: Arc::new(AtomicBool::new(false)),
+        cancel_auth: Arc::new(AtomicBool::new(false)),
+        cancel_epoch: Arc::new(AtomicU64::new(0)),
+        setup_pending: Arc::new(AtomicBool::new(false)),
+        cancel_setup: Arc::new(AtomicBool::new(false)),
+        error: Arc::new(Mutex::new(None)),
+        worker: None,
+    };
+    let mut job = Job::example(Backend::Simulation);
+    for seed in 0..1000 {
+        job.seed = seed.to_string();
+        c.send(Action::SetDraft(job.clone()))
+            .expect("typing must not fill the command queue");
+    }
+    c.send(Action::Start(job.clone())).unwrap();
+    c.send(Action::Stop).unwrap();
+    assert!(c.cancel_auth.load(Ordering::Acquire));
+    assert_eq!(c.cancel_epoch.load(Ordering::Acquire), 1);
+    for seed in 1000..2000 {
+        job.seed = seed.to_string();
+        c.send(Action::SetDraft(job.clone())).unwrap();
+    }
+    let (a, epoch) = rx.try_recv().unwrap();
+    assert!(matches!(a, Action::SetDraft(j) if j.seed == "999"));
+    assert_eq!(epoch, 0);
+    let (a, epoch) = rx.try_recv().unwrap();
+    assert!(matches!(a, Action::Start(j) if j.seed == "999"));
+    assert_eq!(epoch, 0, "Stop must invalidate this queued Start");
+    let (a, epoch) = rx.try_recv().unwrap();
+    assert!(matches!(a, Action::Stop));
+    assert_eq!(epoch, 1);
+    let (a, epoch) = rx.try_recv().unwrap();
+    assert!(matches!(a, Action::SetDraft(j) if j.seed == "1999"));
+    assert_eq!(epoch, 1);
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
 fn queued_start_before_stop_is_cancelled_even_before_worker_reads_actions() {
     let _process_reopen_guard = PROCESS_REOPEN_TEST_LOCK.lock().unwrap();
     let dir = Temp::new();
     let db = Store::open(&dir.0).unwrap();
-    let (commands, rx) = mpsc::sync_channel(8);
+    let (commands, rx) = commands::channel(8);
     let (out, updates) = mpsc::sync_channel(32);
     let stop = Arc::new(AtomicBool::new(false));
     let epoch = Arc::new(AtomicU64::new(0));

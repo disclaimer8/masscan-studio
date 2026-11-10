@@ -105,7 +105,7 @@ mod tests {
     }
     #[test]
     fn setup_command_gate_prevents_late_authorization_and_allows_cancel() {
-        let (tx, rx) = mpsc::sync_channel(8);
+        let (tx, rx) = commands::channel(8);
         let (_out, updates) = mpsc::sync_channel(8);
         let c = Controller {
             commands: tx,

@@ -27,8 +27,9 @@
 //! What is judged, per step: the probes on the wire (rmasscan's equal the product's own plan, `ReadyPlan` and its
 //! cursor, in order; the oracle's equal rmasscan's), the stand's answer to every probe (exactly the one reply the
 //! stand owes; a stand that answered otherwise is INVALID, never a FAIL), the document against the replies on the
-//! step's own wire (format by format, in reply order), rmasscan's stderr and exit, and the two scanners' documents
-//! against each other. The differences from C that the code documents are applied by name, never by a looser
+//! step's own wire (format by format, in reply order up to replies captured within [`REPLY_REORDER_WINDOW`] of each
+//! other), rmasscan's stderr and exit, and the two scanners' documents against each other (as multisets of records:
+//! [`RECORD_ORDER_VS_C`]). The differences from C that the code documents are applied by name, never by a looser
 //! comparison ([`DEVIATIONS`]): each has a check that the wire is such that it cannot change the comparison, and the
 //! run's notes say which applied and how often.
 //!
@@ -169,7 +170,7 @@ pub const DEVIATIONS: [(&str, &str); 6] = [
 
 /// Why rmasscan's document and the oracle's are compared as multisets of records, while each one's order is judged
 /// against its own wire (no deviation from C: both print in the order the replies arrive).
-pub const RECORD_ORDER_VS_C: &str = "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order";
+pub const RECORD_ORDER_VS_C: &str = "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured within REPLY_REORDER_WINDOW of each other); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order";
 
 /// One case: what it scans and which documents it writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1398,6 +1399,13 @@ pub fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
 /// port, status); C once per (protocol, address, port) for TCP, Echo and ARP (its dedup tables, main.c:899,
 /// proto-icmp.c:126) and once per reply otherwise (`non-tcp-dedup`). `show_closed`: closed records are written.
 pub fn wire_records(v: &WireView, who: Who, out: Out, show_closed: bool) -> Vec<Rec> {
+    wire_records_at(v, who, out, show_closed)
+        .into_iter()
+        .map(|(r, _)| r)
+        .collect()
+}
+/// [`wire_records`] with the capture time of the reply each record comes from.
+pub fn wire_records_at(v: &WireView, who: Who, out: Out, show_closed: bool) -> Vec<(Rec, f64)> {
     let mut seen = BTreeSet::new();
     let mut recs = Vec::new();
     for r in &v.replies {
@@ -1416,9 +1424,57 @@ pub fn wire_records(v: &WireView, who: Who, out: Out, show_closed: bool) -> Vec<
         if r.st == St::Closed && !show_closed {
             continue;
         }
-        recs.push(Rec::of(r, out));
+        recs.push((Rec::of(r, out), r.t));
     }
     recs
+}
+/// How far apart two replies on the peer capture may be and still reach the scanner in the other order. The witness
+/// records the peer link; the peer kernel (TCP, ICMP) and the responder's threads (one per UDP socket, one for the
+/// SCTP link) send from different CPUs, and two frames a few microseconds apart on the peer link can be delivered to
+/// the scanner's socket in the other order (live linux-protocols-r2: 5 us). Outside a burst the scan's send slots
+/// are 10 ms apart at `--rate 100`, so this never lets records of different slots trade places.
+pub const REPLY_REORDER_WINDOW: f64 = 0.001;
+/// `got` (a document's records, time aside) holds exactly the records `want` (the wire's, in reply order, each with
+/// its reply's capture time), in reply order up to records whose replies were captured within
+/// [`REPLY_REORDER_WINDOW`] of each other. `Ok`: how many such pairs are in the other order; `Err`: the difference.
+pub fn in_reply_order(got: &[Rec], want: &[(Rec, f64)]) -> Result<usize, String> {
+    let plain: Vec<Rec> = want.iter().map(|(r, _)| r.clone()).collect();
+    if got.len() != want.len() {
+        return Err(first_difference(got, &plain));
+    }
+    // Each record onto the earliest reply of its fields not taken yet (identical records are interchangeable).
+    let mut taken = vec![false; want.len()];
+    let mut at = Vec::with_capacity(got.len());
+    for g in got {
+        match (0..want.len()).find(|&j| !taken[j] && want[j].0 == *g) {
+            Some(j) => {
+                taken[j] = true;
+                at.push(j);
+            }
+            None => return Err(first_difference(got, &plain)),
+        }
+    }
+    let mut swaps = 0;
+    for i in 0..at.len() {
+        for k in i + 1..at.len() {
+            if at[i] < at[k] {
+                continue;
+            }
+            let gap = (want[at[i]].1 - want[at[k]].1).abs();
+            if gap > REPLY_REORDER_WINDOW {
+                return Err(format!(
+                    "record {i} ({}) is written before record {k} ({}), whose reply came first on the wire, {:.1} ms apart (more than {:.0} ms); in reply order: {}",
+                    got[i].show(),
+                    got[k].show(),
+                    gap * 1000.0,
+                    REPLY_REORDER_WINDOW * 1000.0,
+                    shown(&plain)
+                ));
+            }
+            swaps += 1;
+        }
+    }
+    Ok(swaps)
 }
 /// C's records with its repeated UDP and SCTP records collapsed the way rmasscan reports them (`non-tcp-dedup`, when
 /// the case applies it): what rmasscan's document must equal. Those are the records C prints once per reply (a UDP
@@ -1847,6 +1903,8 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
     let st = stand();
     let mut docs: Vec<Option<Document>> = Vec::new();
     let mut scanner_notes = serde_json::Map::new();
+    // Per step: pairs of records in the other order than their replies on the peer capture, within the window.
+    let mut swaps = serde_json::Map::new();
     for s in sides {
         if let Some(v) = &s.view {
             stand_answers(r, s, v);
@@ -1882,18 +1940,18 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
             }
         }
         if let (Some(v), Some(d)) = (&s.view, &d) {
-            let want = wire_records(v, s.spec.who, s.spec.out, c.show_closed);
+            let want = wire_records_at(v, s.spec.who, s.spec.out, c.show_closed);
             let got: Vec<Rec> = d.records.iter().map(Rec::bare).collect();
+            let order = in_reply_order(&got, &want);
+            if let Ok(n) = order {
+                swaps.insert(s.spec.name.into(), json!(n));
+            }
             cap(
                 r,
                 s,
-                "the document holds the records of the replies on its wire, in reply order, field for field",
-                got == want,
-                if got == want {
-                    shown(&got)
-                } else {
-                    first_difference(&got, &want)
-                },
+                "the document holds the records of the replies on its wire, field for field, in reply order (replies captured within 1 ms of each other on the peer link may come in either order: REPLY_REORDER_WINDOW)",
+                order.is_ok(),
+                order.map_or_else(|e| e, |_| shown(&got)),
             );
         }
         if let (Some(v), Some(p), Who::Rmasscan) = (&s.view, &plan, s.spec.who) {
@@ -1952,8 +2010,7 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
                 rm.spec.name.into(),
                 json!(match (same, got == want) {
                     (true, true) => "the same records in the same order",
-                    (true, false) =>
-                        "the same records, in another order (the two wires' reply orders differ)",
+                    (true, false) => "the same records, in another order",
                     (false, _) => "other records",
                 }),
             );
@@ -1976,6 +2033,15 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
     r.notes.insert(
         "record_order_vs_c".into(),
         json!({"rule": RECORD_ORDER_VS_C, "documents": order}),
+    );
+    r.notes
+        .insert("reply_order_swaps".into(), Value::Object(swaps));
+    r.notes.insert(
+        "reply_order_window".into(),
+        json!(format!(
+            "{} s: two replies captured on the peer link within this time of each other may reach the scanner in the other order (two CPUs send them); reply_order_swaps counts, per step, the pairs of records written in the other order within it",
+            REPLY_REORDER_WINDOW
+        )),
     );
     case_checks(r, c, sides, &docs, &st);
     deviations(r, c, sides, r12, collapsed);

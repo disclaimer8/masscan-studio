@@ -962,7 +962,7 @@ fn a_document_that_differs_from_the_wire_or_from_c_fails() {
         has(
             &b,
             FAIL,
-            "list: the document holds the records of the replies on its wire, in reply order"
+            "list: the document holds the records of the replies on its wire, field for field, in reply order"
         ),
         "{b:#?}"
     );
@@ -1024,7 +1024,7 @@ fn the_stands_reply_order_may_differ_between_the_two_runs_of_a_document() {
                 .name;
             assert_eq!(
                 run["notes"]["record_order_vs_c"]["documents"][doc],
-                "the same records, in another order (the two wires' reply orders differ)",
+                "the same records, in another order",
                 "{tag} {doc}"
             );
         }
@@ -1044,7 +1044,7 @@ fn the_stands_reply_order_may_differ_between_the_two_runs_of_a_document() {
         has(
             &b,
             FAIL,
-            "json: the document holds the records of the replies on its wire, in reply order"
+            "json: the document holds the records of the replies on its wire, field for field, in reply order"
         ),
         "{b:#?}"
     );
@@ -1067,6 +1067,70 @@ fn the_stands_reply_order_may_differ_between_the_two_runs_of_a_document() {
         ),
         "{b:#?}"
     );
+}
+
+#[test]
+fn replies_captured_within_a_millisecond_may_reach_the_scanner_in_either_order() {
+    // Live, 2026-11-10 (linux-protocols-r2 on 5661a6e): p05's oracle wrote the SYN-ACK of 198.18.0.3:80 before the
+    // INIT-ACK of 198.18.0.5:2905, which the peer link had sent 5 us earlier (the responder's SCTP thread and the peer
+    // kernel, two CPUs). Here both runs of p05 get a burst on the wire while their documents keep the order of the
+    // probes: the first two replies trade places within 0.4 ms.
+    let mut sim = Sim::new("p05_mixed_protos");
+    for s in &mut sim.steps {
+        s.frames = burst(&s.frames, 0, false);
+    }
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, PASS, "{b:#?}");
+    let root = scratch();
+    sim.write(&root);
+    fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
+    let res = verify_dir(&root);
+    let run = run_of(&res, "p05_mixed_protos");
+    assert_eq!(
+        run["notes"]["reply_order_swaps"],
+        json!({"json": 1, "oracle-json": 1}),
+        "{:#?}",
+        run["notes"]
+    );
+    fs::remove_dir_all(&root).unwrap();
+    // The window is the bound: the same two records swapped where their replies are 10 ms apart FAIL rmasscan's step
+    // and make the oracle's INVALID.
+    let mut sim = Sim::new("p05_mixed_protos");
+    for s in &mut sim.steps {
+        s.recs.swap(0, 1);
+        s.doc = Some(render(Out::Json, &s.recs, s.spec.who == Who::Rmasscan));
+    }
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "json: the document holds the records of the replies on its wire"
+        ) && has(
+            &b,
+            INVALID,
+            "oracle-json: the document holds the records of the replies on its wire"
+        ) && b.iter().any(|x| x.contains("10.0 ms apart")),
+        "{b:#?}"
+    );
+    // The pure rule: an inversion inside the window is counted, outside it is the difference.
+    let r = |port: u16| Rec {
+        st: St::Open,
+        proto: Proto::Udp,
+        ip: Ipv4Addr::new(198, 18, 0, 2),
+        port,
+        reason: None,
+        ttl: None,
+        mac: None,
+        ts: None,
+    };
+    let want = [(r(1), 0.0), (r(2), 0.0002), (r(3), 0.010)];
+    assert_eq!(in_reply_order(&[r(1), r(2), r(3)], &want), Ok(0));
+    assert_eq!(in_reply_order(&[r(2), r(1), r(3)], &want), Ok(1));
+    assert!(in_reply_order(&[r(1), r(3), r(2)], &want).is_err());
+    assert!(in_reply_order(&[r(1), r(2)], &want).is_err());
+    assert!(in_reply_order(&[r(1), r(2), r(4)], &want).is_err());
 }
 
 #[test]

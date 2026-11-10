@@ -9,6 +9,10 @@ use std::{
 use studio_app::{Action, Controller, Update};
 use studio_protocol::{Backend, Job, Status};
 use studio_table::{Change, Table};
+#[cfg(all(test, debug_assertions))]
+mod layout_tests;
+#[cfg(target_os = "macos")]
+mod macos_dialog_menu;
 #[cfg(target_os = "macos")]
 mod macos_keyboard;
 #[cfg(test)]
@@ -864,6 +868,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             let json = format == "json";
+            #[cfg(target_os = "macos")]
+            if let Err(error) = macos_dialog_menu::install() {
+                ui.set_action_notice(format!("Cannot open export dialog: {error}").into());
+                return;
+            }
             ui.set_exporting(true);
             let dialog = rfd::AsyncFileDialog::new()
                 .set_file_name(if json {
@@ -900,6 +909,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok("Export cancelled".into())
                 };
                 let _ = w.upgrade_in_event_loop(move |ui| {
+                    #[cfg(target_os = "macos")]
+                    macos_dialog_menu::remove();
                     ui.set_exporting(false);
                     ui.set_action_notice(
                         result
@@ -1261,6 +1272,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if smoke || pause_smoke || stop_smoke {
         ui.set_backend_index(1);
+        if stop_smoke {
+            // Exercise the native minimum-size layout in one packaged smoke.
+            ui.window().set_size(slint::LogicalSize::new(820., 540.));
+        }
         let mut job = Job::example(Backend::Simulation);
         if pause_smoke {
             job.rate = 4;

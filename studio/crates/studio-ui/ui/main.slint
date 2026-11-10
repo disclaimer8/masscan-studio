@@ -254,11 +254,12 @@ export component MainWindow inherits Window {
       visible: !root.settings-open && !root.history-open && !root.setup-open;
       VerticalLayout {
         padding: 0px; spacing: 0px;
-        // Compact application header. Demo status is distinct from scan status.
+        // Keep every action visible at the minimum width. The narrow header has
+        // a separate action row; the mode and scan status stay on its first row.
         Rectangle {
-            height: 56px;
+            height: root.width < 1100px ? 96px : 56px;
             HorizontalLayout {
-                padding-left: 20px; padding-right: 20px; padding-top: 16px; padding-bottom: 16px; spacing: 10px;
+                x: 20px; y: 16px; height: 24px; width: self.preferred-width; spacing: 10px;
                 Rectangle {
                     width: 24px; height: 24px; border-radius: 6px; background: Theme.selected;
                     Text { text: "M"; font-size: 14px; font-weight: 700; color: Theme.accent; horizontal-alignment: center; vertical-alignment: center; }
@@ -268,12 +269,20 @@ export component MainWindow inherits Window {
                     width: 154px; height: 22px; border-radius: 4px; background: Theme.surface;
                     Text { text: root.scan-backend-label; color: Theme.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
                 }
-                Rectangle { horizontal-stretch: 1; }
+            }
+            header-actions := HorizontalLayout {
+                x: root.width < 1100px ? 20px : parent.width - self.width - header-status.width - 40px;
+                y: root.width < 1100px ? 52px : 16px;
+                height: 30px; width: self.preferred-width; spacing: 10px;
                 ActionButton { text: "History…"; enabled: !root.process-active && root.history-labels.length > 0; clicked => { root.manage-history(); } }
                 ActionButton { text: "New scan"; enabled: !root.process-active; clicked => { root.settings-open = true; } }
                 ActionButton { text: "Scanner setup"; enabled: !root.process-active && !root.authorized && !root.setup-busy; clicked => { root.setup-open = true; root.check-setup(); } }
                 ActionButton { text: root.authorizing ? "Cancel authorization" : root.process-active || root.authorized || !root.authorization-available ? "Lock" : "Authorize"; clicked => { root.lock-session(); } }
                 theme-button := ActionButton { text: Theme.preference == 0 ? "Theme: System" : Theme.dark ? "Theme: Dark" : "Theme: Light"; clicked => { themes.show(); } }
+            }
+            header-status := HorizontalLayout {
+                x: parent.width - self.width - 20px; y: 16px;
+                height: 24px; width: self.preferred-width; spacing: 10px;
                 Rectangle { width: 6px; height: 6px; border-radius: 3px; background: root.stream-state == 1 ? Theme.accent : Theme.muted; }
                 Text { text: root.process-view ? (root.process-stopping ? "Stopping…" : root.process-status) : root.stream-state == 1 ? "Streaming" : root.stream-state == 2 ? "Stream complete" : "Ready"; color: Theme.muted; font-size: 12px; }
             }

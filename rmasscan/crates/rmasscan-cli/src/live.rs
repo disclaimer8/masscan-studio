@@ -780,7 +780,7 @@ pub fn run_live_conf(
     let options = EngineOptions::new(ids(backend), ids(backend));
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
     let started = clock.now_micros();
-    // Конец передачи для строки статуса: `min(range, min_k effective_end(k))`. При усечённом `resume-count`
+    // Конец передачи для строки статуса: `min_k effective_end(k)`, то есть эффективный конец самого медленного адаптера. При усечённом `resume-count`
     // позиция никогда не дойдёт до `range`, а движок всё равно завершает скан на своём `effective_end`.
     let tx_end = (0..plan.nics().len() as u32)
         .map(|k| plan.effective_end(k))

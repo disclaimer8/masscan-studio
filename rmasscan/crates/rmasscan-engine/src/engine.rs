@@ -132,8 +132,8 @@ type DedupKey = (u32, u16, u32, u16, u8, u8);
 
 /// Ограниченный dedup по кортежу (remote ip/port, local ip/port, протокол, корзина статуса). Протокол в ключе нужен,
 /// чтобы `80/tcp` и `80/udp` одного хоста не глушили друг друга. Корзина статуса разделяет для не-TCP ответ-датаграмму
-/// (`Open`) и ICMP Port Unreachable (`Closed`) на тот же порт; у TCP она всегда 0, поэтому RST вслед за SYN-ACK на тот
-/// же кортеж остаётся повтором, как и было (C `dedup_is_duplicate`, main.c:1052, не различает статус).
+/// (`Open`) и ICMP Port Unreachable (`Closed`) на тот же порт; у TCP она 0 для SYN-ACK и RST (RST вслед за SYN-ACK на тот
+/// же кортеж остаётся повтором) и 1 для Closed от ICMP 3/3 (флагов нет), как и было (C `dedup_is_duplicate`, main.c:1052, не различает статус).
 ///
 /// Политика вытеснения: FIFO по порядку первой вставки. При заполнении
 /// вытесняется самая старая запись; повторное попадание уже известного ключа
@@ -172,6 +172,9 @@ impl DedupCache {
     /// `true`, если кортеж новый (и теперь запомнен); `false` для повтора.
     pub fn insert(&mut self, r: &Reply) -> bool {
         let bucket = match (r.ip_proto, r.status) {
+            // Closed без флагов TCP приходит только из ICMP 3/3 (RST всегда несёт 0x04): у него своя корзина, иначе он
+            // глушил бы настоящий SYN-ACK (C не пропускает ICMP через dedup, main.c:917-919).
+            (6, PortStatus::Closed) if r.tcp_flags == 0 => 1,
             (6, _) | (_, PortStatus::Open) => 0,
             (_, PortStatus::Closed) => 1,
             (_, PortStatus::Arp) => 2,

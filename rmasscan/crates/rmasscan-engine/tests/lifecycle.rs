@@ -772,6 +772,42 @@ fn dedup_cache_separates_protocols() {
 }
 
 #[test]
+fn icmp_closed_never_suppresses_a_real_open_in_either_order() {
+    // ICMP 3/3 "closed" has tcp_flags 0; an RST always carries 0x04, a SYN-ACK 0x12.
+    for proto in [6u8, 17, 132] {
+        let open = Reply {
+            ip_proto: proto,
+            tcp_flags: if proto == 6 { 0x12 } else { 0 },
+            ..reply(9, 80)
+        };
+        let icmp_closed = Reply {
+            status: PortStatus::Closed,
+            tcp_flags: 0,
+            ..open
+        };
+        let mut d = DedupCache::new(16);
+        assert!(d.insert(&icmp_closed), "proto {proto}: closed first");
+        assert!(d.insert(&open), "proto {proto}: open after ICMP closed");
+        assert!(!d.insert(&icmp_closed) && !d.insert(&open));
+        let mut d = DedupCache::new(16);
+        assert!(d.insert(&open), "proto {proto}: open first");
+        assert!(
+            d.insert(&icmp_closed),
+            "proto {proto}: ICMP closed after open"
+        );
+    }
+    // TCP RST (0x04) after SYN-ACK stays a repeat.
+    let mut d = DedupCache::new(4);
+    assert!(d.insert(&reply(9, 80)));
+    let rst = Reply {
+        status: PortStatus::Closed,
+        tcp_flags: 0x04,
+        ..reply(9, 80)
+    };
+    assert!(!d.insert(&rst));
+}
+
+#[test]
 fn dedup_never_exceeds_100k_entries() {
     assert_eq!(DedupCache::new(10_000_000).capacity(), MAX_DEDUP_ENTRIES);
     assert_eq!(DedupCache::new(0).capacity(), 1);

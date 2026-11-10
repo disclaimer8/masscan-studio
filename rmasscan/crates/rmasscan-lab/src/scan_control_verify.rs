@@ -748,20 +748,20 @@ enum Ev {
     Finished,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Fin {
-    reason: String,
-    sent: u64,
-    replies: u64,
-    open: u64,
+pub(crate) struct Fin {
+    pub(crate) reason: String,
+    pub(crate) sent: u64,
+    pub(crate) replies: u64,
+    pub(crate) open: u64,
 }
 #[derive(Debug, Default)]
-struct Stderr {
+pub(crate) struct Stderr {
     events: Vec<Ev>,
     /// `[+] key = value`, the key with its `[k]` suffix, in order.
-    plus: Vec<(String, String)>,
-    fin: Option<Fin>,
+    pub(crate) plus: Vec<(String, String)>,
+    pub(crate) fin: Option<Fin>,
     /// What is neither a `[+]` line nor a status form: nothing rmasscan prints.
-    stray: Vec<String>,
+    pub(crate) stray: Vec<String>,
     /// The seconds of the `waiting N-secs` ticks.
     wait_secs: Vec<i64>,
 }
@@ -772,7 +772,7 @@ impl Stderr {
     fn at(&self, e: Ev) -> Option<usize> {
         self.events.iter().position(|x| *x == e)
     }
-    fn value(&self, key: &str) -> Option<&str> {
+    pub(crate) fn value(&self, key: &str) -> Option<&str> {
         self.plus
             .iter()
             .find(|(k, _)| k == key)
@@ -825,7 +825,7 @@ fn parse_fin(rest: &str) -> Option<Fin> {
     })
 }
 const SAVING_LINE: &str = "saving resume file to: paused.conf";
-fn parse_stderr(text: &str) -> Stderr {
+pub(crate) fn parse_stderr(text: &str) -> Stderr {
     let mut e = Stderr::default();
     let status = |f: &str| -> Option<Ev> {
         if infinite_form(f) {
@@ -932,7 +932,7 @@ impl Side {
     }
 }
 
-fn forced_exit(stderr: &str) -> bool {
+pub(crate) fn forced_exit(stderr: &str) -> bool {
     stderr
         .split(['\n', '\r'])
         .any(|s| s.trim_end() == FORCED_EXIT)

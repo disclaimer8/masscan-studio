@@ -102,24 +102,113 @@ fn marker(a: &BTreeMap<String, String>) -> Result<i32, String> {
     }
     Ok(0)
 }
-fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
-    lab_io::install_signal_handlers().map_err(err)?;
-    let ports = get(a, "ports")?;
-    let mut listeners = Vec::new();
+fn port_list(ports: &str) -> Result<Vec<u16>, String> {
+    let mut out = Vec::new();
     for p in ports.split(',').filter(|s| !s.is_empty()) {
         let p = p.parse::<u16>().map_err(err)?;
         if p == 0 {
             return Err("port zero".into());
         }
+        out.push(p);
+    }
+    Ok(out)
+}
+/// The peer's listeners: the TCP ports (`--ports`; the kernel answers SYN-ACK there and resets every other port) and,
+/// for the protocols stand, UDP and SCTP:
+/// - `--udp-ports P,.. --udp-ips A,..`: one UDP socket per address and port (a reply leaves from the address the
+///   datagram went to), each datagram answered once with `protocols_verify::UDP_REPLY`; the kernel sends ICMP 3/3
+///   for every other port;
+/// - `--sctp-iface IF --sctp-open P,..`: every SCTP INIT on the link `IF` answered on the link with
+///   `protocols_verify::sctp_reply` (INIT-ACK on the open ports, ABORT elsewhere). The host kernel must have no SCTP
+///   (the suite checks it): no SCTP socket is ever opened here, so no module is loaded either.
+///
+/// Each UDP socket and the SCTP link has its own thread, so a reply leaves within the probe's own interval.
+fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
+    lab_io::install_signal_handlers().map_err(err)?;
+    let ports = get(a, "ports")?;
+    let mut listeners = Vec::new();
+    for p in port_list(ports)? {
         listeners
             .push(std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, p)).map_err(err)?);
     }
-    fs::write(get(a, "ready")?, format!("listening {ports}\n")).map_err(err)?;
-    while !lab_io::stop_requested() {
+    let mut workers: Vec<std::thread::JoinHandle<Result<(), String>>> = Vec::new();
+    let mut said = format!("listening {ports}");
+    if let Some(udp) = a.get("udp-ports") {
+        for ip in get(a, "udp-ips")?.split(',') {
+            let ip: std::net::Ipv4Addr = ip.parse().map_err(err)?;
+            for p in port_list(udp)? {
+                let s = std::net::UdpSocket::bind((ip, p)).map_err(err)?;
+                s.set_read_timeout(Some(Duration::from_millis(100)))
+                    .map_err(err)?;
+                workers.push(std::thread::spawn(move || udp_answers(&s)));
+            }
+        }
+        said.push_str(&format!(" udp {udp}"));
+    }
+    if let Some(iface) = a.get("sctp-iface") {
+        let open = port_list(get(a, "sctp-open")?)?;
+        let mac = link::iface_mac(iface)?;
+        let l = link::open(iface)?;
+        workers.push(std::thread::spawn(move || sctp_answers(l, mac, &open)));
+        said.push_str(&format!(" sctp {iface} open {}", get(a, "sctp-open")?));
+    }
+    fs::write(get(a, "ready")?, format!("{said}\n")).map_err(err)?;
+    while !lab_io::stop_requested() && !workers.iter().any(|w| w.is_finished()) {
         std::thread::sleep(Duration::from_millis(100));
     }
+    let mut failure = None;
+    for w in workers {
+        // A worker that stopped before the stop request has failed: its error is the responder's exit.
+        if let Err(e) = w
+            .join()
+            .unwrap_or_else(|_| Err("a responder thread panicked".into()))
+        {
+            failure.get_or_insert(e);
+        }
+    }
     drop(listeners);
-    Ok(0)
+    failure.map_or(Ok(0), Err)
+}
+/// Answer every datagram on `s` once with the stand's reply, until the stop request.
+fn udp_answers(s: &std::net::UdpSocket) -> Result<(), String> {
+    let mut buf = [0u8; 2048];
+    while !lab_io::stop_requested() {
+        match s.recv_from(&mut buf) {
+            Ok((_, from)) => {
+                s.send_to(crate::protocols_verify::UDP_REPLY, from)
+                    .map_err(err)?;
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            // The scanner host's kernel answers a reply with ICMP 3/3; Linux may hand that to the socket as an error.
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
+            Err(e) => return Err(format!("udp responder: {e}")),
+        }
+    }
+    Ok(())
+}
+/// Answer every SCTP INIT on the link with `protocols_verify::sctp_reply`, until the stop request.
+fn sctp_answers(mut l: link::Link, mac: [u8; 6], open: &[u16]) -> Result<(), String> {
+    let mut buf = vec![0u8; 65536];
+    while !lab_io::stop_requested() {
+        let n =
+            l.rx.recv(&mut buf, Duration::from_millis(100))
+                .map_err(|e| format!("sctp responder: {e:?}"))?;
+        if let Some(reply) =
+            n.and_then(|n| crate::protocols_verify::sctp_reply(&buf[..n], mac, open))
+        {
+            link::send_blocking(
+                &mut *l.tx,
+                &reply,
+                link::SEND_PATIENCE,
+                &lab_io::stop_requested,
+            )?;
+        }
+    }
+    Ok(())
 }
 /// Hashes of the harness that is actually executing (L M4): the running binary, and the exact
 /// scripts the caller names (wire-lab.sh passes its own path and the helper it sourced, never a

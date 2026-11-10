@@ -511,7 +511,7 @@ const FLAG_NAMES: [&str; 8] = ["fin", "syn", "rst", "psh", "ack", "urg", "ece", 
 
 /// The `@` fields of `template` in `s`, each the shortest text up to the literal after it; `None` unless every
 /// literal matches.
-fn fields<'a>(template: &str, s: &'a str) -> Option<Vec<&'a str>> {
+pub(crate) fn fields<'a>(template: &str, s: &'a str) -> Option<Vec<&'a str>> {
     let mut parts = template.split('@');
     let mut rest = s.strip_prefix(parts.next()?)?;
     let lits: Vec<&str> = parts.collect();
@@ -539,7 +539,7 @@ fn fill(template: &str, vals: &[&str]) -> String {
     out
 }
 /// A value printed the way C prints it: parsed and printed again, it is the same text (no sign, pad or zero).
-fn canon<T: std::str::FromStr + ToString>(s: &str) -> Option<T> {
+pub(crate) fn canon<T: std::str::FromStr + ToString>(s: &str) -> Option<T> {
     s.parse::<T>().ok().filter(|v| v.to_string() == s)
 }
 fn reason_form(s: &str) -> bool {
@@ -636,7 +636,7 @@ fn unicorn_rec(line: &str) -> Result<Rec, String> {
 }
 
 /// The lines of a text document, each ended by `end` (`\n`, XML `\r\n`); no other line break inside.
-fn text_lines<'a>(b: &'a [u8], end: &str) -> Result<Vec<&'a str>, String> {
+pub(crate) fn text_lines<'a>(b: &'a [u8], end: &str) -> Result<Vec<&'a str>, String> {
     let t = std::str::from_utf8(b).map_err(|e| format!("not UTF-8: {e}"))?;
     let body = t
         .strip_suffix(end)

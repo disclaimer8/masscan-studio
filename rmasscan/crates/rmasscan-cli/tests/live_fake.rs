@@ -162,6 +162,8 @@ struct FakeBackend {
     silent_targets: bool,
     /// Ctrl-C посреди передачи (Р4, Задача 4).
     press_in_tx: Option<PressInTx>,
+    /// С `press_in_tx`: адаптер сценария перед нажатием ждёт, пока первый открытый адаптер отправит столько кадров.
+    hold_for_peer: Option<usize>,
     /// Записи `paused.conf`: показание часов на момент записи и содержимое. Диска фейк не касается.
     paused_writes: Mutex<Vec<(u64, String)>>,
     /// Ошибка записи `paused.conf`: запись не сохраняется.
@@ -253,6 +255,7 @@ impl FakeBackend {
             press_during_arp: false,
             silent_targets: false,
             press_in_tx: None,
+            hold_for_peer: None,
             paused_writes: Mutex::new(Vec::new()),
             paused_write_error: None,
             pcap: Arc::new(Mutex::new(Vec::new())),
@@ -381,11 +384,22 @@ impl Backend for FakeBackend {
             }
             replies
         });
+        let peer = self
+            .hold_for_peer
+            .and_then(|n| opened.first().map(|o| (o.adapter.clone(), n)))
+            .filter(|_| scenario.is_some());
         if let Some(PressInTx { at, .. }) = scenario {
             let (polls, handle) = (self.polls.clone(), adapter.clone());
             adapter.set_send_hook(move |count| {
                 if count != at {
                     return;
+                }
+                // Детерминизм: нажатие только после того, как соседний адаптер отправил ровно ожидаемое число кадров.
+                if let Some((peer, n)) = &peer {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while peer.sent_count() < *n && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
                 }
                 let before = polls.load(Ordering::SeqCst);
                 hook_presses.fetch_max(1, Ordering::SeqCst);
@@ -3271,6 +3285,8 @@ fn multi_adapter_paused_conf_round_trips_and_resumes() {
         at: 1,
         late_first: false,
     });
+    // nic 1 встаёт после первого кадра и не нажимает Ctrl-C, пока nic 0 не отправил оба своих.
+    b.hold_for_peer = Some(2);
     let (r, _, log) = cli(&b, &TWO_NICS);
     r.unwrap();
     assert!(log.contains("saving resume file to: paused.conf"), "{log}");

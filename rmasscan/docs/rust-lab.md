@@ -147,7 +147,7 @@ the last two items.
      --suite functional-r2 --plan functional --commit $COMMIT --repo . \
      --guest-exe 'C:\Users\lab\t4\wire_scan.exe' \
      --fixtures docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional/fixtures \
-     --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+     --remote-lab /home/<LAB_ACCOUNT>/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
    ```
 
    Evidence of the preflights is written into the output directory: `deploy/deploy-manifest.json`
@@ -203,7 +203,7 @@ the last two items.
      --suite perf-r1 --plan perf --commit $COMMIT --repo . \
      --guest-exe 'C:\Users\lab\t4\wire_scan.exe' \
      --fixtures docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional/fixtures \
-     --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+     --remote-lab /home/<LAB_ACCOUNT>/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
    ```
 
    Expected wall time: about 75 to 90 minutes. functional-r2 took 87 minutes for 24 runs, about
@@ -270,7 +270,7 @@ rmasscan/target/release/rmasscan-lab windows-suite \
   --suite perf-r2 --plan perf --tx-mode sendqueue --commit $COMMIT --repo . \
   --guest-exe 'C:\Users\lab\t4\wire_scan.exe' \
   --fixtures docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional/fixtures \
-  --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+  --remote-lab /home/<LAB_ACCOUNT>/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
 ```
 
 New `windows-verify` checks, all FAIL (behaviour) and applied only when the manifest has
@@ -464,7 +464,7 @@ rmasscan/target/release/rmasscan-lab windows-suite \
   --out "$OUT" \
   --suite windows-r1 --plan autodetect --commit $COMMIT --repo . \
   --guest-exe 'C:\Users\lab\t4\rmasscan.exe' \
-  --remote-lab /home/a1/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+  --remote-lab /home/<LAB_ACCOUNT>/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
 rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT" --out "$OUT/verdict.json"
 ```
 
@@ -541,7 +541,7 @@ rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT" --out "$OUT/ver
 и `$SCRATCH` Mac — не пути minipc), и `.work` проверяется там, до копии:
 
 ```sh
-LINUX_OUT=/home/a1/<scratch>/autodetect-out/linux-r1   # --out на minipc, буквально
+LINUX_OUT=/home/<LAB_ACCOUNT>/<scratch>/autodetect-out/linux-r1   # --out на minipc, буквально
 ssh minipc "test ! -e '$LINUX_OUT/.work'" || echo "STOP: minipc kept $LINUX_OUT/.work (an unfinished copy)"
 rsync -a minipc:"$LINUX_OUT"/ "$SCRATCH/autodetect-out/linux-r1"/
 ```
@@ -740,9 +740,9 @@ ABORT рядом с ответчиком: suite отказывает до зап
 линке пира ближе 1 мс друг к другу, документ может записать в любом порядке, число таких пар идёт в
 `notes.reply_order_swaps` шага), а записи rmasscan равны записям C как мультимножество, поле в поле без времени
 (`notes.record_order_vs_c`: «те же записи в том же порядке», «в другом порядке» или «другие записи»). Это не «порядок как у
-C» и не проверка порядка прихода внутри пачки: окно в 1 мс на практике допускает любую перестановку внутри одной пачки
-отправки. Порядок между пачками (на захватах r3 зонды идут либо пачкой в пределах около 0,25 мс, либо не ближе 8,4 мс друг от
-друга) верификатор требует; порядок внутри пачки показывает
+C» и не проверка порядка прихода внутри пачки: окно в 1 мс на практике допускает почти любую перестановку внутри одной пачки
+отправки, поскольку пачка шириной до около 1 мс. Порядок между пачками (на захватах r3 соседние зонды пачки идут не дальше около 0,25 мс друг от друга, вся пачка до около 1 мс, пачки не
+ближе 8,4 мс друг от друга) верификатор требует; порядок внутри пачки показывает
 только счётчик `reply_order_swaps`: в r3 одна такая пара (7 мкс, шаг `json` кейса `p05`), в остальных 15 шагах 0. Порядок
 записей в писателях rmasscan закреплён офлайн-тестами. Сужение окна (десятки микросекунд, максимум разрыва переставленной
 пары в заметках, граничный тест и точная сверка rmasscan с C) оставлено этапу, который снова запустит suite (IPv6).
@@ -763,7 +763,7 @@ C» и не проверка порядка прихода внутри пачк
 равных только по этому правилу, при верной сумме `0xFFFF`), `icmp-echo-code-0` и `rx-checksum-verify` (П5: у всех Echo
 Reply код 0 и у всех ответов верные суммы), `non-tcp-dedup` (повторы UDP и SCTP у C схлопываются перед сравнением,
 никогда не TCP, Echo и ARP), `sctp-tcp-fallthrough` (флаги чанка SCTP ни SYN-ACK, ни RST, `main.c:920–922`),
-`arp-mac-ethernet-source` (MAC записи ARP это Ethernet-источник, `proto-arp.c:36`). В r3 все шесть условий выполнены и ни
+`arp-mac-ethernet-source` (MAC записи ARP это Ethernet-источник, `proto-arp.c:39`). В r3 все шесть условий выполнены и ни
 одно отклонение не сработало: живое окно показывает, что эти пути не изменили сравнение, но не упражняет дедупликацию
 повторов, отбрасывание Echo с кодом не 0 и неверных сумм у rmasscan (это покрыто офлайн-тестами).
 

@@ -24,6 +24,8 @@ Extending (how the `protocols` input was added): run the script on all inputs as
 earlier case reproduces (`masked_sha256`, `stdout`, `stderr`), and copy only the new cases: their outputs,
 their manifest entries and input, `services.txt` and `protocols.txt`; the earlier entries and outputs stay as
 committed, and `extended` in `manifest.json` records the later capture (time, host, its cases).
+The `extended` block and the new case entries were merged into the committed `manifest.json` by hand with `jq`:
+`build-format-goldens.sh` alone regenerates the case entries of a whole new manifest, but never writes `extended`.
 
 ## Layout
 

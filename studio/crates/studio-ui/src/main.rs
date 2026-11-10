@@ -271,6 +271,7 @@ fn history_label(s: &studio_store::SavedScan) -> String {
         Backend::Simulation => "Simulation",
         Backend::MacFeth => "feth",
         Backend::MacNetwork => "Mac network",
+        Backend::MacPhysical => "Mac network",
         Backend::Archived => "Archived history",
     };
     format!(
@@ -447,7 +448,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         network_ui::profile_hint(cfg!(target_os = "macos"), network_open).into(),
     );
     if network_open {
-        ui.set_backend_index(2);
+        ui.set_backend_index(3);
         ui.set_job_targets("".into());
         ui.set_job_rate("100".into());
     }
@@ -1016,7 +1017,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "Simulation · no packets"
                             } else if backend == Backend::Archived {
                                 "Archived history"
-                            } else if backend == Backend::MacNetwork {
+                            } else if backend.is_network() {
                                 "Mac network · raw packets"
                             } else {
                                 "feth lab · raw packets"

@@ -439,7 +439,7 @@ impl Client {
         }
         self.halted = false;
         self.preparing = match &command {
-            Command::Start(job) | Command::Resume { job, .. } => job.backend == Backend::MacNetwork,
+            Command::Start(job) | Command::Resume { job, .. } => job.backend.is_network(),
             _ => false,
         };
         self.scan = scan;

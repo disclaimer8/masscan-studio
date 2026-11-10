@@ -118,3 +118,39 @@ fn check_network_without_root_refuses_and_names_masking_or_manifest() {
     .unwrap();
     let _ = r.child.wait();
 }
+
+#[test]
+fn ordinary_network_start_without_authorization_never_prepares_or_starts_packets() {
+    let mut r = spawn();
+    let (scan, attempt) = ([2; 16], [3; 16]);
+    let mut job = Job::example(Backend::MacPhysical);
+    job.targets = "192.0.2.1".into();
+    job.ports = "22".into();
+    write_frame(
+        &mut r.input,
+        &Envelope::new([1; 16], scan, attempt, 1, Command::Start(job)),
+    )
+    .unwrap();
+    loop {
+        let event = read_frame::<Event>(&mut r.output).unwrap();
+        if event.attempt != attempt {
+            continue;
+        }
+        match event.payload {
+            Event::PreparingNetwork => {}
+            Event::Finished { status, detail } => {
+                assert_eq!(status, Status::Failed);
+                assert!(detail.contains("authorized macOS runner"), "{detail}");
+                break;
+            }
+            other => panic!("unauthorized attempt reached {other:?}"),
+        }
+    }
+    write_frame(
+        &mut r.input,
+        &Envelope::new([1; 16], scan, attempt, 2, Command::CloseSession),
+    )
+    .unwrap();
+    drop(r.input);
+    assert!(r.child.wait().unwrap().success());
+}

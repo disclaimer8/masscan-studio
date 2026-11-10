@@ -8,6 +8,7 @@ pub(super) fn backend_index(backend: Backend) -> i32 {
     match backend {
         Backend::Simulation => 1,
         Backend::MacNetwork => 2,
+        Backend::MacPhysical => 3,
         _ => 0,
     }
 }
@@ -16,6 +17,7 @@ pub(super) fn backend(index: i32) -> Result<Backend, String> {
         0 => Ok(Backend::MacFeth),
         1 => Ok(Backend::Simulation),
         2 => Ok(Backend::MacNetwork),
+        3 => Ok(Backend::MacPhysical),
         _ => Err("Choose a scan profile".into()),
     }
 }
@@ -41,7 +43,7 @@ pub(super) fn profile_hint(macos: bool, enabled: bool) -> &'static str {
 }
 pub(super) fn preview(job: &Job) -> Result<String, String> {
     job.validate()?;
-    if job.backend != Backend::MacNetwork {
+    if !job.backend.is_network() {
         let plan = job.prepare()?;
         return Ok(format!(
             "{} endpoints · wait 3 s · exact seed {}",
@@ -90,7 +92,7 @@ pub(super) fn export_coverage(value: &NetworkCoverage) -> ExportCoverage {
     ExportCoverage {
         scan_id: studio_protocol::id_text(value.scan),
         original_job: ExportJob {
-            backend: "MacNetwork".into(),
+            backend: format!("{:?}", value.job.backend),
             targets: value.job.targets.clone(),
             ports: value.job.ports.clone(),
             exclusions: value.job.exclusions.clone(),

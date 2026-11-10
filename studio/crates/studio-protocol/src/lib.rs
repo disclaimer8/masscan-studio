@@ -15,7 +15,7 @@ use rmasscan_core::{
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const ENGINE_VERSION: u32 = rmasscan_engine::ENGINE_ALGORITHM_VERSION;
 pub const MAX_FRAME: usize = 131_072;
 pub const MAX_QUEUE: usize = 4 * 1024 * 1024;
@@ -42,18 +42,28 @@ pub enum Backend {
     Simulation,
     MacFeth,
     MacNetwork,
+    /// Ordinary macOS Ethernet/Wi-Fi targets, with authenticated runner access.
+    MacPhysical,
     // Read compatibility for schema-v3 archives only; prepare() rejects execution.
     #[serde(rename = "SwiftImport")]
     Archived,
 }
-/// UNMERGED SEALED-FIXTURE CANDIDATE ONLY. MacNetwork is constrained by mandatory
-/// helper and persisted-report predicates; this branch must never be distributed.
-pub const fn raw_profile_enabled(backend: Backend) -> bool {
-    matches!(backend, Backend::MacFeth | Backend::MacNetwork) && cfg!(target_os = "macos")
+impl Backend {
+    pub const fn is_network(self) -> bool {
+        matches!(self, Self::MacNetwork | Self::MacPhysical)
+    }
 }
-/// Candidate profiles: MacNetwork is fixture-only, never general physical access.
+/// Raw profiles require macOS and authenticated helper access. MacNetwork retains
+/// its separate sealed-fixture/single-target policy; it never falls back to MacPhysical.
+pub const fn raw_profile_enabled(backend: Backend) -> bool {
+    matches!(
+        backend,
+        Backend::MacFeth | Backend::MacNetwork | Backend::MacPhysical
+    ) && cfg!(target_os = "macos")
+}
+/// MacNetwork remains the constrained acceptance profile.
 pub const RAW_PROFILES: &[&str] = if cfg!(target_os = "macos") {
-    &["MacFeth", "MacNetwork"]
+    &["MacFeth", "MacNetwork", "MacPhysical"]
 } else {
     &[]
 };
@@ -79,7 +89,7 @@ impl Job {
         }
     }
     pub fn prepare(&self) -> Result<ReadyPlan, String> {
-        if self.backend == Backend::MacNetwork {
+        if self.backend.is_network() {
             return Err(
                 "Physical network requires an independently verified network report".into(),
             );
@@ -333,7 +343,7 @@ pub fn validate_checkpoint(
     bytes: &[u8],
     index: &str,
 ) -> Result<(), String> {
-    let (cp, plan) = if job.backend == Backend::MacNetwork {
+    let (cp, plan) = if job.backend.is_network() {
         let envelope = NetworkCheckpoint::decode(bytes)?;
         let plan = job.prepare_network(&envelope.report)?;
         (
@@ -373,7 +383,7 @@ pub fn checkpoint_origin(bytes: &[u8]) -> Result<Id, String> {
 mod gate_tests {
     use super::*;
     #[test]
-    fn candidate_gate_is_mac_only_and_declares_both_constrained_profiles() {
+    fn raw_profiles_are_mac_only_and_include_the_distinct_physical_profile() {
         assert_eq!(
             raw_profile_enabled(Backend::MacFeth),
             cfg!(target_os = "macos")
@@ -388,6 +398,7 @@ mod gate_tests {
             Backend::Simulation,
             Backend::MacFeth,
             Backend::MacNetwork,
+            Backend::MacPhysical,
             Backend::Archived,
         ]
         .into_iter()
@@ -395,7 +406,7 @@ mod gate_tests {
         .count();
         assert_eq!(RAW_PROFILES.len(), open);
         if raw_profile_enabled(Backend::MacFeth) {
-            assert_eq!(RAW_PROFILES, ["MacFeth", "MacNetwork"]);
+            assert_eq!(RAW_PROFILES, ["MacFeth", "MacNetwork", "MacPhysical"]);
         } else {
             assert!(RAW_PROFILES.is_empty());
         }

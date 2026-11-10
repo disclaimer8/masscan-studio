@@ -119,6 +119,30 @@ fn fresh_settings_validate_normal_targets_without_raw_profile_support() {
 }
 
 #[test]
+fn ordinary_network_settings_roundtrip_preserves_profile_and_requires_platform_support() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new().unwrap();
+    let mut job = Job::example(Backend::MacPhysical);
+    job.targets = "192.0.2.1".into();
+    job.ports = "22".into();
+    fill_settings(&ui, &job);
+    assert_eq!(draft(&ui).unwrap(), job);
+    assert!(
+        network_ui::preview(&job)
+            .unwrap()
+            .contains("1 addresses / 1 probes")
+    );
+    ui.set_job_valid(true);
+    ui.set_mac_network_open(true);
+    ui.set_mac_network_supported(false);
+    assert!(!ui.get_can_start());
+    ui.set_mac_network_supported(true);
+    assert!(ui.get_can_start());
+    ui.set_mac_network_open(false);
+    assert!(!ui.get_can_start());
+}
+
+#[test]
 fn start_is_disabled_for_unavailable_or_unknown_scan_profiles() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = MainWindow::new().unwrap();
@@ -131,7 +155,8 @@ fn start_is_disabled_for_unavailable_or_unknown_scan_profiles() {
         (2, true, true, false, false),
         (2, false, true, true, true),
         (-1, true, true, true, false),
-        (3, true, true, true, false),
+        (3, true, true, true, true),
+        (4, true, true, true, false),
     ] {
         ui.set_backend_index(index);
         ui.set_mac_feth_open(feth_open);

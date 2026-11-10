@@ -1,10 +1,11 @@
 # Masscan Studio (Rust + Slint)
 
-**Acceptance branch notice:** this checkout enables MacNetwork only for a mandatory
-sealed local fixture. It is not a general-network release and must not be
-distributed. Use the [release checklist](RELEASE-CHECKLIST.md) and
-[current GUI/session evidence](../docs/experiments/2026-11-02-studio-gui-work-session.md)
-for this candidate's actual status.
+**Development branch:** ordinary macOS network scanning uses the distinct
+`MacPhysical` profile. The older `MacNetwork` profile retains its sealed fixture
+and single-target acceptance restrictions. This is not a notarized release.
+Use the [release checklist](RELEASE-CHECKLIST.md) and
+[current integration evidence](../docs/experiments/2026-11-10-studio-integration.md)
+for the exact scope of verification.
 
 This workspace connects the selected Slint interface to the current `rmasscan`
 engine through a separate Rust runner. Engine/core/net remain in `../rmasscan`;
@@ -73,17 +74,39 @@ Studio (one Mac, one macOS version, debug build) is recorded in
 `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`; its status
 words there govern.
 
+## Mac network · Wi-Fi / Ethernet
+
+Fresh macOS settings select this profile with empty targets and rate 100.
+Enter the IPv4 addresses and TCP ports you are authorized to test, check settings
+and routes, then authorize the matching runner and start. There is no laboratory
+manifest or single-use permit in this user flow. Route checks are read-only;
+ARP begins only after an authorized Start.
+
+The runner uses the shared engine/net libraries to select one Ethernet-compatible
+interface and source, resolve next-hop MACs and retain complete preparation
+coverage. Start waits for the report to be committed to history. Pause/Resume
+pins the job, interface, routes and destination MAC map; a changed snapshot
+requires a new scan. Stop, disconnect and network/clock guards stop the attempt.
+Limits are 2,048 candidates, 1,024 effective addresses, 1,048,576 TCP probes and
+1–1,000 packets/s. IPv6, UDP, hostnames, tunnels and multi-interface jobs are not
+supported in this Studio profile. Windows/Linux retain Simulation only.
+
+IPC version 4 requires the matching helper packaged with this build. Existing
+history, profiles and supported engine checkpoints remain readable. CLI retries,
+sharding and multiple adapters are not exposed by Studio merely because the
+integrated engine supports them.
+
 ## Mac network · local test only
 
 On macOS this acceptance branch enables the **Mac network · local test only**
 profile exclusively for a sealed synthetic multi-peer/routed fixture on this Mac.
 The helper enforces its exact topology before opening a packet adapter. Arbitrary
-Wi-Fi/Ethernet devices, including hotel clients and the gateway, are not enabled.
+Wi-Fi/Ethernet devices are not enabled through this fixture profile; use the
+separate ordinary-network profile above for authorized devices.
 Windows/Linux show **Mac network · scanning disabled**; read-only physical route
 checks are macOS-only. This is not a general-network release.
 
-Fresh macOS settings select this profile with empty targets and rate 100. No
-targets are inferred from the current network. Existing feth and Simulation
+No targets are inferred from the current network. Existing feth and Simulation
 profile meanings and saved settings are unchanged. Follow the
 [release checklist](RELEASE-CHECKLIST.md) for the separate owned-target policy and
 physical-interface acceptance still required before enabling broader use.

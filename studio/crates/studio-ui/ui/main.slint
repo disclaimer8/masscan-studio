@@ -205,7 +205,7 @@ export component MainWindow inherits Window {
     out property <bool> can-start: root.job-valid && !root.process-active
         && (root.backend-index == 1
             || (root.backend-index == 0 && root.mac-feth-open)
-            || (root.backend-index == 2 && root.mac-network-open && root.mac-network-supported));
+            || ((root.backend-index == 2 || root.backend-index == 3) && root.mac-network-open && root.mac-network-supported));
     in-out property <bool> process-stopping: false;
     in property <string> process-status: "Ready";
     callback settings-edited();
@@ -584,7 +584,7 @@ export component MainWindow inherits Window {
                     ActionButton { text: "Cancel"; enabled: !root.profile-busy; clicked => { root.confirm-profile-delete = false; } }
                     ActionButton { text: "Delete profile"; enabled: !root.profile-busy; clicked => { root.delete-profile(); } }
                 }
-                ComboBox { model: [root.mac-feth-open ? "Mac feth · isolated stand (macOS)" : "Mac feth · not enabled on this OS", "Simulation · no network packets", root.mac-network-open ? "Mac network · local test only" : "Mac network · scanning disabled"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
+                ComboBox { model: [root.mac-feth-open ? "Mac feth · isolated stand (macOS)" : "Mac feth · not enabled on this OS", "Simulation · no network packets", root.mac-network-open ? "Mac network · local test only" : "Mac network · scanning disabled", root.mac-network-open ? "Mac network · Wi-Fi / Ethernet" : "Mac network · unavailable on this OS"]; current-index <=> root.backend-index; selected(value) => { root.settings-edited(); } }
                 JobField { label: "Targets"; hint: "IPv4 addresses, CIDRs or ranges"; value <=> root.job-targets; edited => { root.settings-edited(); } }
                 HorizontalLayout {
                     spacing: 12px;
@@ -592,11 +592,11 @@ export component MainWindow inherits Window {
                     JobField { label: "Rate · packets/s"; value <=> root.job-rate; edited => { root.settings-edited(); } }
                 }
                 JobField { label: "Exclude · optional"; hint: "IPv4 addresses or ranges"; value <=> root.job-exclusions; edited => { root.settings-edited(); } }
-                Text { text: root.backend-index == 2 ? root.network-profile-hint : root.backend-index == 0 ? (root.mac-feth-open ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Raw scanning is not enabled for this profile on this OS.") : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
+                Text { text: root.backend-index == 3 ? "IPv4 / TCP on your network. The runner checks routes and resolves neighbours before scanning. Authorize the session to start." : root.backend-index == 2 ? root.network-profile-hint : root.backend-index == 0 ? (root.mac-feth-open ? "Raw scanning awaits complete isolation preflight and runner authorization." : "Raw scanning is not enabled for this profile on this OS.") : "Engine simulation · no adapter opened"; color: Theme.muted; wrap: word-wrap; }
                 if root.backend-index != 1 : HorizontalLayout {
                     spacing: 12px;
-                    ActionButton { text: root.network-checking ? "Checking routes…" : root.backend-index == 2 ? "Check network" : "Check isolated stand"; enabled: !root.network-checking && !root.process-active && (root.backend-index != 2 || root.mac-network-supported); clicked => { root.check-network(); } }
-                    ActionButton { text: root.authorizing ? "Cancel authorization" : root.authorized ? "Lock session" : "Authorize session…"; enabled: root.authorizing || root.authorized || (root.authorization-available && (root.backend-index != 2 || root.mac-network-supported)); clicked => { root.lock-session(); } }
+                    ActionButton { text: root.network-checking ? "Checking routes…" : root.backend-index >= 2 ? "Check network" : "Check isolated stand"; enabled: !root.network-checking && !root.process-active && (root.backend-index < 2 || root.mac-network-supported); clicked => { root.check-network(); } }
+                    ActionButton { text: root.authorizing ? "Cancel authorization" : root.authorized ? "Lock session" : "Authorize session…"; enabled: root.authorizing || root.authorized || (root.authorization-available && (root.backend-index < 2 || root.mac-network-supported)); clicked => { root.lock-session(); } }
                     Text { text: root.authorized ? "Helper session authorized" : "Helper session is not authorized"; color: Theme.muted; wrap: word-wrap; }
                 }
                 if root.backend-index != 1 : Text { text: root.network-detail; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
@@ -625,7 +625,7 @@ export component MainWindow inherits Window {
                 }
                 HorizontalLayout {
                     spacing: 12px; height: 30px;
-                    Text { text: root.backend-index == 1 ? "Simulation sends no network packets." : root.backend-index == 2 ? (root.mac-network-open ? "Only the isolated local test network is enabled in this build." : "Route checks send no scan packets. Physical Start is disabled in this build.") : "Only scan networks you are authorized to test. This profile uses the isolated feth stand."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                    Text { text: root.backend-index == 1 ? "Simulation sends no network packets." : root.backend-index == 3 ? "Only scan devices and networks you are authorized to test." : root.backend-index == 2 ? (root.mac-network-open ? "Only the isolated local test network is enabled in this build." : "Route checks send no scan packets. Physical Start is disabled in this build.") : "Only scan networks you are authorized to test. This profile uses the isolated feth stand."; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                     ActionButton { width: 130px; text: root.job-checking ? "Preparing…" : "Check settings"; enabled: !root.job-checking; primary: true; clicked => { root.check-settings(); } }
                     ActionButton { width: 140px; text: "Start scan"; enabled: root.can-start; clicked => { root.run-process-test(); } }
                 }

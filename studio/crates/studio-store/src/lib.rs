@@ -173,7 +173,7 @@ impl Store {
                 old.checkpoint.as_deref().ok_or("No checkpoint")?,
                 old.next_index.as_deref().ok_or("No checkpoint index")?,
             )?;
-            if job.backend == Backend::MacNetwork {
+            if job.backend.is_network() {
                 let envelope =
                     NetworkCheckpoint::decode(old.checkpoint.as_deref().ok_or("No checkpoint")?)?;
                 if old.network_report.as_deref() != Some(envelope.report.encode()?.as_slice()) {
@@ -222,7 +222,7 @@ impl Store {
                 network_report,
             )| {
                 let job: Job = serde_json::from_str(&job)?;
-                if job.backend == Backend::MacNetwork {
+                if job.backend.is_network() {
                     if let Some(bytes) = &network_report {
                         NetworkReport::decode(bytes)?.validate_for(&job)?;
                     }
@@ -376,7 +376,7 @@ impl Store {
         let mut observed = Vec::new();
         match &event.payload {
             Event::PreparingNetwork => {
-                if saved.job.backend != Backend::MacNetwork
+                if !saved.job.backend.is_network()
                     || !matches!(saved.status, Status::Starting | Status::Preparing)
                 {
                     return Err("Unexpected network preparation".into());
@@ -387,7 +387,7 @@ impl Store {
                 )?;
             }
             Event::NetworkPrepared { bytes } => {
-                if saved.job.backend != Backend::MacNetwork
+                if !saved.job.backend.is_network()
                     || !matches!(saved.status, Status::Starting | Status::Preparing)
                 {
                     return Err("Unexpected network report".into());
@@ -425,7 +425,7 @@ impl Store {
             }
             Event::Checkpoint { bytes, next_index } => {
                 validate_checkpoint(&saved.job, event.scan, event.attempt, bytes, next_index)?;
-                if saved.job.backend == Backend::MacNetwork {
+                if saved.job.backend.is_network() {
                     let envelope = NetworkCheckpoint::decode(bytes)?;
                     if saved.network_report.as_deref() != Some(envelope.report.encode()?.as_slice())
                     {
@@ -440,7 +440,7 @@ impl Store {
                 )?;
             }
             Event::Started { total } => {
-                if saved.job.backend == Backend::MacNetwork {
+                if saved.job.backend.is_network() {
                     let report = NetworkReport::decode(
                         saved
                             .network_report

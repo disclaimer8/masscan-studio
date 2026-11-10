@@ -53,7 +53,7 @@ type PreparedAdapter = (rmasscan_engine::AdapterPair, Option<guard::Inspector>);
 fn raw_adapter(job: &Job) -> Result<PreparedAdapter, String> {
     let plan = job.prepare()?;
     match job.backend {
-        Backend::MacNetwork => {
+        Backend::MacNetwork | Backend::MacPhysical => {
             Err("Physical network profile is disabled pending integration and acceptance".into())
         }
         Backend::Archived => Err("Archived history cannot start a scanner".into()),
@@ -236,7 +236,7 @@ fn serve_with_adapter(
         output_stream,
         live,
         adapter,
-        std::sync::Arc::new(network::Native::default()),
+        network::environment(None),
     )
 }
 fn serve_with_network(
@@ -403,7 +403,7 @@ fn serve_with_network(
                             flushed: Instant::now(),
                         };
                         a.order.accept(&e)?;
-                        if job.backend == Backend::MacNetwork {
+                        if job.backend.is_network() {
                             let checkpoint = match &e.payload {
                                 Command::Resume { checkpoint, .. } => Some(checkpoint.clone()),
                                 _ => None,
@@ -712,7 +712,7 @@ fn launch() -> Result<(), String> {
             Box::new(writer),
             live,
             raw_adapter,
-            std::sync::Arc::new(network::Candidate::new(owner_uid)),
+            network::environment(Some(owner_uid)),
         );
         #[cfg(target_os = "linux")]
         return serve(Box::new(stream), Box::new(writer), live);

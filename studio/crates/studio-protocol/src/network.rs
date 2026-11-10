@@ -74,7 +74,7 @@ impl Job {
     /// Settings validation is intentionally independent of release gate and OS.
     /// Effective limits require admit_network after the read-only route planner.
     pub fn validate(&self) -> Result<(), String> {
-        if self.backend != Backend::MacNetwork {
+        if !self.backend.is_network() {
             return self.prepare().map(|_| ());
         }
         if decimal(&self.seed)? == 0 || !(1..=1000).contains(&self.rate) {
@@ -101,7 +101,7 @@ impl Job {
         Ok(())
     }
     pub fn network_targets(&self) -> Result<PhysicalTargets, String> {
-        if self.backend != Backend::MacNetwork {
+        if !self.backend.is_network() {
             return Err("Not a physical network job".into());
         }
         if self.targets.len() >= 65536

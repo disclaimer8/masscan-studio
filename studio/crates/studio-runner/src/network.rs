@@ -348,6 +348,8 @@ impl Check {
 
 mod native;
 pub use native::Native;
+mod physical;
+pub use physical::environment;
 #[cfg(target_os = "macos")]
 mod single_target;
 #[cfg(target_os = "macos")]

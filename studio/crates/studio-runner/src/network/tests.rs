@@ -14,7 +14,7 @@ struct Fake {
 }
 impl Fake {
     fn new() -> (Job, Self) {
-        let mut job = Job::example(studio_protocol::Backend::MacNetwork);
+        let mut job = Job::example(studio_protocol::Backend::MacPhysical);
         job.targets = "10.0.0.1-10.0.0.3".into();
         job.ports = "80".into();
         (

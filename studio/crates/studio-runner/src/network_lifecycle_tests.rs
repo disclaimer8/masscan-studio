@@ -152,7 +152,7 @@ impl Environment for Fake {
     }
 }
 fn job() -> Job {
-    let mut j = Job::example(Backend::MacNetwork);
+    let mut j = Job::example(Backend::MacPhysical);
     j.targets = "10.0.0.1-10.0.0.3".into();
     j.ports = "80".into();
     j

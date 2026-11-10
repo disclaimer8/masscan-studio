@@ -667,6 +667,28 @@ impl LinkCap {
     }
     /// The replies on the wire to this capture's SYNs inside its window, with their times: a SYN-ACK is open, an RST
     /// closed (the answer's ack is the SYN's sequence plus one, from the SYN's port, to the scanner).
+    fn asked(&self) -> BTreeSet<(String, u16, u16, u32)> {
+        self.wire
+            .syns
+            .iter()
+            .filter_map(|(_, f)| tcp(f))
+            .map(|i| (i.dst, i.dp, i.sp, i.seq.wrapping_add(1)))
+            .collect()
+    }
+    /// Frames from the peer to the scanner inside the window that answer none of this capture's SYNs: a reply that
+    /// belongs to the other link, or to no probe.
+    fn unsolicited(&self) -> usize {
+        let asked = self.asked();
+        let (start, end) = av::window(&self.wire);
+        let sm = av::dash(self.stand.scanner_mac).replace('-', ":");
+        self.frames
+            .iter()
+            .filter(|(t, _)| (start..=end).contains(t))
+            .filter_map(|(_, f)| tcp(f))
+            .filter(|i| i.sm != sm)
+            .filter(|i| !asked.contains(&(i.src.clone(), i.sp, i.dp, i.ack)))
+            .count()
+    }
     fn replies(&self) -> Vec<(f64, Key)> {
         let asked: BTreeSet<(String, u16, u16, u32)> = self
             .wire
@@ -687,6 +709,13 @@ impl LinkCap {
             .filter(|(_, i)| {
                 i.dm == sm && i.dst == src && asked.contains(&(i.src.clone(), i.sp, i.dp, i.ack))
             })
+            // The peer retransmits a SYN-ACK nobody resets (an address on no interface): a retransmission has the
+            // same (src, dst, sport, dport, seq, flags) as the reply it repeats and is the same reply.
+            .scan(BTreeSet::new(), |seen, (t, i)| {
+                let id = (i.src.clone(), i.dst.clone(), i.sp, i.dp, i.seq, i.flags);
+                Some(seen.insert(id).then_some((t, i)))
+            })
+            .flatten()
             .filter_map(|(t, i)| {
                 let status = if i.flags & 0x12 == 0x12 {
                     Status::Open
@@ -2334,9 +2363,32 @@ fn sc06(r: &mut Run, d: &Path, sides: &[Side]) {
         cap(
             r,
             dual,
-            "the replies to the second adapter's SYNs came back on the second link",
+            "the replies to the second adapter's SYNs came back on the second link (one distinct reply per SYN; the peer's SYN-ACK retransmissions to an address on no interface are the same reply)",
             !l1.replies().is_empty() && l1.replies().len() == p1.len(),
-            format!("{} replies for {} SYNs", l1.replies().len(), p1.len()),
+            format!(
+                "{} distinct replies for {} SYNs",
+                l1.replies().len(),
+                p1.len()
+            ),
+        );
+        cap(
+            r,
+            dual,
+            "the first adapter's replies came back on the first link, one distinct reply per SYN",
+            l0.replies().len() == p0.len(),
+            format!(
+                "{} distinct replies for {} SYNs",
+                l0.replies().len(),
+                p0.len()
+            ),
+        );
+        let stray = (l0.unsolicited(), l1.unsolicited());
+        cap(
+            r,
+            dual,
+            "no peer frame on either link answers a SYN of the other link or of no probe",
+            stray == (0, 0),
+            format!("unsolicited on link 0 and 1: {stray:?}"),
         );
     }
     if let Some(dc) = single_doc(r, dual) {

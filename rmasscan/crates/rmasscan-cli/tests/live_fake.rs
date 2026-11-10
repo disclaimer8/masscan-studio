@@ -3328,6 +3328,16 @@ fn multi_adapter_paused_conf_round_trips_and_resumes() {
     let (r, _, log2) = cli(&b2, &["--resume", file.to_str().unwrap()]);
     r.unwrap();
     assert!(log2.contains("finished: Completed"), "{log2}");
+    // the port comes from paused.conf for both adapters (adapter 1 inherits adapter 0's): both say so
+    let port_lines: Vec<&str> = log2
+        .lines()
+        .filter(|l| l.starts_with("[+] source-port"))
+        .collect();
+    assert_eq!(port_lines.len(), 2, "{log2}");
+    assert!(
+        port_lines.iter().all(|l| l.ends_with("(given)")),
+        "{port_lines:?}"
+    );
     assert_eq!(b2.opened().len(), 2);
     // Адаптер 0 был впереди минимума: он заново шлёт индекс 2; адаптер 1 шлёт 3.
     assert_eq!(

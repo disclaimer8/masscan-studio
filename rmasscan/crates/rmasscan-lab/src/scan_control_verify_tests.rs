@@ -2177,3 +2177,115 @@ fn sc06_a_resent_probe_must_come_from_its_own_adapter_at_its_own_index() {
         "a resent probe comes from the adapter's own stream",
     );
 }
+
+// ---- the real shape of sc06 `dual` (live window 1): the peer retransmits SYN-ACKs to 198.18.0.6, which is on no
+// interface, so nothing resets them. Captures copied from that window (stand addresses only).
+
+fn real_link(k: usize) -> LinkCap {
+    let name = ["sc06-dual-peer.pcap", "sc06-dual-peer2.pcap"][k];
+    let b = fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/golden/scan-control")
+            .join(name),
+    )
+    .unwrap();
+    let (_, frames) = pcap::read_pcap_records(&b).unwrap();
+    let stand = link_stand(k);
+    LinkCap {
+        wire: av::classify(&frames, stand.scanner_mac),
+        frames,
+        stand,
+    }
+}
+
+#[test]
+fn the_real_retransmitting_capture_has_one_distinct_reply_per_syn_on_its_own_link() {
+    let (l0, l1) = (real_link(0), real_link(1));
+    assert_eq!((l0.wire.syns.len(), l1.wire.syns.len()), (6, 6));
+    // the raw peer frames to 198.18.0.6 outnumber its SYNs; the distinct replies do not
+    let raw = l1
+        .frames
+        .iter()
+        .filter(|(_, f)| tcp(f).is_some_and(|i| i.sm == "02:aa:00:00:00:04"))
+        .count();
+    assert!(raw > 6, "{raw}");
+    assert_eq!((l0.replies().len(), l1.replies().len()), (6, 6));
+    assert_eq!((l0.unsolicited(), l1.unsolicited()), (0, 0));
+    // a reply that belongs to the other link is unsolicited there and missing here
+    let mut moved = real_link(1);
+    let peer = |f: &[u8]| tcp(f).filter(|i| i.sm == "02:aa:00:00:00:04");
+    let first = moved.frames.iter().find_map(|(_, f)| peer(f)).unwrap();
+    let key = (first.src.clone(), first.sp);
+    let mut taken = Vec::new();
+    moved.frames.retain(|(t, f)| {
+        let hit = peer(f).is_some_and(|i| (i.src.clone(), i.sp) == key);
+        if hit {
+            taken.push((*t, f.clone()));
+        }
+        !hit
+    });
+    let mut l0b = real_link(0);
+    let at = av::window(&l0b.wire).0 + 0.7;
+    l0b.frames.push((at, taken[0].1.clone()));
+    assert_eq!(l0b.unsolicited(), 1);
+    assert_eq!(moved.replies().len(), 5);
+}
+
+#[test]
+fn sc06_passes_with_retransmitted_syn_acks_and_fails_on_a_distinct_extra_or_misplaced_reply() {
+    // retransmissions of the replies the second link already saw: same reply, PASS
+    let retransmit = |s: &mut Sim| {
+        let st = s.step("dual");
+        let dup: Vec<(f64, Vec<u8>)> = st.links[1]
+            .iter()
+            .filter(|(_, f)| {
+                tcp(f).is_some_and(|i| i.flags & 0x12 == 0x12 && i.sm == "02:aa:00:00:00:04")
+            })
+            .map(|(t, f)| (t + 0.01, f.clone()))
+            .collect();
+        for (n, d) in dup.into_iter().enumerate() {
+            let at = st.links[1].len() - 3;
+            st.links[1].insert(at, (d.0 + n as f64 * 1e-6, d.1));
+        }
+    };
+    let mut sim = Sim::new("sc06_dual_veth");
+    retransmit(&mut sim);
+    assert_verdict(&judge(&sim), PASS);
+    // a distinct extra reply (another sequence number) is not a retransmission
+    breaks(
+        "sc06_dual_veth",
+        |s| {
+            retransmit(s);
+            let st = s.step("dual");
+            let i = st.links[1]
+                .iter()
+                .position(|(_, f)| {
+                    tcp(f).is_some_and(|i| i.flags & 0x12 == 0x12 && i.sm == "02:aa:00:00:00:04")
+                })
+                .unwrap();
+            let mut f = st.links[1][i].1.clone();
+            f[38] ^= 0x7f;
+            let n = st.links[1].len() - 3;
+            let t = st.links[1][i].0 + 0.02;
+            st.links[1].insert(n, (t, f));
+        },
+        FAIL,
+        "came back on the second link",
+    );
+    // a reply of link 1 shows up on link 0
+    breaks(
+        "sc06_dual_veth",
+        |s| {
+            let st = s.step("dual");
+            let i = st.links[1]
+                .iter()
+                .position(|(_, f)| tcp(f).is_some_and(|i| i.sm == "02:aa:00:00:00:04"))
+                .unwrap();
+            let (_, f) = st.links[1].remove(i);
+            let first = st.links[0].iter().map(|(t, _)| *t).fold(f64::MAX, f64::min);
+            st.links[0].insert(2, (first + 0.7, f));
+        },
+        FAIL,
+        "no peer frame on either link answers a SYN of the other link",
+    );
+}

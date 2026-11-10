@@ -248,7 +248,7 @@ pub(super) fn probe_source(source: &Path) -> Result<()> {
     }
     println!("Root runner exited; socket endpoint removed.");
     println!(
-        "Authorization probe complete. No packets sent. Raw profiles open in this build: {:?} (empty means every raw profile is closed on this OS; an open one still needs Authorize and the stand preflight).",
+        "Authorization probe complete. No packets sent. Raw profiles open in this build: {:?} (empty means every raw profile is closed on this OS; each open profile still requires authorization and its own network preparation).",
         studio_protocol::RAW_PROFILES
     );
     Ok(())

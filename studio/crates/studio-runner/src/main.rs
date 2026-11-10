@@ -53,7 +53,10 @@ type PreparedAdapter = (rmasscan_engine::AdapterPair, Option<guard::Inspector>);
 fn raw_adapter(job: &Job) -> Result<PreparedAdapter, String> {
     let plan = job.prepare()?;
     match job.backend {
-        Backend::MacNetwork | Backend::MacPhysical => {
+        Backend::MacNetwork
+        | Backend::MacPhysical
+        | Backend::LinuxPhysical
+        | Backend::WindowsPhysical => {
             Err("Physical network profile is disabled pending integration and acceptance".into())
         }
         Backend::Archived => Err("Archived history cannot start a scanner".into()),

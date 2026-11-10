@@ -175,9 +175,9 @@ pub fn verify_uac(root: &Path) -> Result<()> {
     };
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
         || studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacFeth)
-        || !studio_protocol::RAW_PROFILES.is_empty()
+        || studio_protocol::RAW_PROFILES != ["WindowsPhysical"]
     {
-        return Err("Requires disposable Windows CI with raw scanning disabled".into());
+        return Err("Requires disposable Windows CI with only its native physical profile".into());
     }
     if std::env::var_os("CARGO_TARGET_DIR").is_some() {
         return Err("CI probe requires default target directory".into());
@@ -320,7 +320,7 @@ pub fn uac_fixture() -> Result<()> {
         }
         _ => return Err("Unknown fixture mode".into()),
     }
-    println!("PASS: UAC session {mode}, raw scanning stayed disabled");
+    println!("PASS: UAC session {mode}, no raw scan was requested");
     Ok(())
 }
 

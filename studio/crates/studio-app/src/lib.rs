@@ -1221,7 +1221,7 @@ fn commit_scan_events(
                             saved.network_report.as_deref(),
                         )?;
                     }
-                } else if saved.job.backend != Backend::MacPhysical {
+                } else if !saved.job.backend.is_physical() {
                     return Err("Network preparation requires a network profile".into());
                 }
                 // Every profile still validates the persisted report against its

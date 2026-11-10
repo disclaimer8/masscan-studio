@@ -9,6 +9,8 @@ pub(super) fn backend_index(backend: Backend) -> i32 {
         Backend::Simulation => 1,
         Backend::MacNetwork => 2,
         Backend::MacPhysical => 3,
+        Backend::LinuxPhysical => 4,
+        Backend::WindowsPhysical => 5,
         _ => 0,
     }
 }
@@ -18,6 +20,8 @@ pub(super) fn backend(index: i32) -> Result<Backend, String> {
         1 => Ok(Backend::Simulation),
         2 => Ok(Backend::MacNetwork),
         3 => Ok(Backend::MacPhysical),
+        4 => Ok(Backend::LinuxPhysical),
+        5 => Ok(Backend::WindowsPhysical),
         _ => Err("Choose a scan profile".into()),
     }
 }

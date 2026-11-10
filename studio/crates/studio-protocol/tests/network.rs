@@ -28,36 +28,38 @@ fn fixture(n: u32) -> (Job, NetworkReport) {
 }
 #[test]
 fn physical_profile_uses_verified_routes_and_cannot_reuse_fixture_provenance() {
-    let (fixture_job, mut report) = fixture(2);
-    let mut wire = serde_json::to_value(&fixture_job).unwrap();
-    wire["backend"] = "MacPhysical".into();
-    let job: Job = serde_json::from_value(wire).expect("ordinary macOS network profile");
-    job.validate().unwrap();
-    assert!(
-        job.prepare().is_err(),
-        "no static fixture binding for real targets"
-    );
-    assert!(
-        job.prepare_network(&report).is_err(),
-        "fixture report is a different job"
-    );
-    report.job_digest = job.original_digest().unwrap();
-    let plan = job.prepare_network(&report).unwrap();
-    assert_eq!(plan.range(), 2048);
-    assert_eq!(plan.binding().interface_id, "en0");
-    assert_eq!(plan.destinations().unwrap().len(), 2);
-    let engine = rmasscan_engine::Checkpoint {
-        format_version: rmasscan_engine::CHECKPOINT_FORMAT_VERSION,
-        engine_version: ENGINE_VERSION,
-        scan_id: [1; 16],
-        attempt_id: [2; 16],
-        job_digest: rmasscan_engine::job_digest(&plan),
-        next_index: 1,
+    for profile in ["MacPhysical", "LinuxPhysical", "WindowsPhysical"] {
+        let (fixture_job, mut report) = fixture(2);
+        let mut wire = serde_json::to_value(&fixture_job).unwrap();
+        wire["backend"] = profile.into();
+        let job: Job = serde_json::from_value(wire).expect("ordinary network profile");
+        job.validate().unwrap();
+        assert!(
+            job.prepare().is_err(),
+            "no static fixture binding for real targets"
+        );
+        assert!(
+            job.prepare_network(&report).is_err(),
+            "fixture report is a different job"
+        );
+        report.job_digest = job.original_digest().unwrap();
+        let plan = job.prepare_network(&report).unwrap();
+        assert_eq!(plan.range(), 2048);
+        assert_eq!(plan.binding().interface_id, "en0");
+        assert_eq!(plan.destinations().unwrap().len(), 2);
+        let engine = rmasscan_engine::Checkpoint {
+            format_version: rmasscan_engine::CHECKPOINT_FORMAT_VERSION,
+            engine_version: ENGINE_VERSION,
+            scan_id: [1; 16],
+            attempt_id: [2; 16],
+            job_digest: rmasscan_engine::job_digest(&plan),
+            next_index: 1,
+        }
+        .to_bytes();
+        let bytes = NetworkCheckpoint { report, engine }.encode().unwrap();
+        validate_checkpoint(&job, [1; 16], [2; 16], &bytes, "1").unwrap();
+        assert!(validate_checkpoint(&fixture_job, [1; 16], [2; 16], &bytes, "1").is_err());
     }
-    .to_bytes();
-    let bytes = NetworkCheckpoint { report, engine }.encode().unwrap();
-    validate_checkpoint(&job, [1; 16], [2; 16], &bytes, "1").unwrap();
-    assert!(validate_checkpoint(&fixture_job, [1; 16], [2; 16], &bytes, "1").is_err());
 }
 #[test]
 fn network_bounds_and_settings_without_binding() {

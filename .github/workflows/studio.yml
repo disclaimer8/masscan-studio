@@ -12,8 +12,9 @@ concurrency:
   cancel-in-progress: true
 # Live feth raw windows are not run here: the live feth window is user-run (stand, BPF grant and
 # the Authorize dialog are user actions); see docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md.
-# CI builds and runs the offline tests only; the per-profile raw gate is compile-time (open for Mac feth on
-# macOS, closed on Windows and Linux).
+# CI builds and runs offline tests plus authorization-only fixtures. Ordinary raw
+# profiles are native-OS-specific; enabling one does not make these tests send packets.
+# Mac fixture profiles remain macOS-only. Native physical scan acceptance is separate.
 jobs:
   application:
     strategy:

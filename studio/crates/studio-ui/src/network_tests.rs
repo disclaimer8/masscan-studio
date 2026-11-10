@@ -119,6 +119,40 @@ fn fresh_settings_validate_normal_targets_without_raw_profile_support() {
 }
 
 #[test]
+fn linux_windows_saved_settings_roundtrip_without_changing_network_profile() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new().unwrap();
+    for backend in [Backend::LinuxPhysical, Backend::WindowsPhysical] {
+        let mut job = Job::example(backend);
+        job.targets = "192.0.2.1".into();
+        job.ports = "22".into();
+        fill_settings(&ui, &job);
+        assert_eq!(draft(&ui).unwrap(), job);
+        assert!(
+            network_ui::preview(&job)
+                .unwrap()
+                .contains("1 addresses / 1 probes")
+        );
+        ui.set_job_valid(true);
+        assert!(
+            !ui.get_can_start(),
+            "unsupported profiles must remain disabled by default"
+        );
+        ui.set_linux_network_open(backend == Backend::LinuxPhysical);
+        ui.set_windows_network_open(backend == Backend::WindowsPhysical);
+        assert!(ui.get_can_start());
+        ui.set_linux_network_open(backend != Backend::LinuxPhysical);
+        ui.set_windows_network_open(backend != Backend::WindowsPhysical);
+        assert!(
+            !ui.get_can_start(),
+            "another OS's availability must not enable this profile"
+        );
+        ui.set_linux_network_open(false);
+        ui.set_windows_network_open(false);
+    }
+}
+
+#[test]
 fn ordinary_network_settings_roundtrip_preserves_profile_and_requires_platform_support() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = MainWindow::new().unwrap();

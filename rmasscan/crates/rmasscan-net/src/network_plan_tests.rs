@@ -85,6 +85,26 @@ fn plan(t: &PhysicalTargets, o: &Os) -> Result<PhysicalRoutePlan, NetError> {
     plan_physical(t, o, o, Instant::now() + OBSERVATION_BUDGET, &|| false)
 }
 #[test]
+fn physical_plan_freezes_packet_device_identity_instead_of_friendly_name() {
+    let mut os = Os::new();
+    let device = r"\Device\NPF_{12345678-1234-1234-1234-123456789ABC}";
+    os.interfaces[0].iface.name = "Ethernet 2".into();
+    os.interfaces[0].iface.device_id = device.into();
+    let destination = ip("192.168.1.20");
+    os.overrides.insert(
+        destination,
+        Route {
+            ifname: "Ethernet 2".into(),
+            ifindex: 2,
+            gateway: None,
+            local: false,
+        },
+    );
+    let p = plan(&targets("192.168.1.20", "192.168.1.20", &[], &[]), &os).unwrap();
+    assert_eq!(p.interface_name, device);
+    p.validate_executable().unwrap();
+}
+#[test]
 fn home_subnet_discloses_endpoints_and_self() {
     let p = plan(
         &targets("192.168.1.0", "192.168.1.255", &[], &[]),

@@ -1,8 +1,10 @@
 # Masscan Studio (Rust + Slint)
 
-**Development branch:** ordinary macOS network scanning uses the distinct
-`MacPhysical` profile. The older `MacNetwork` profile retains its sealed fixture
-and single-target acceptance restrictions. This is not a notarized release.
+**Development branch:** ordinary IPv4/TCP scanning has separate native profiles:
+`MacPhysical`, `LinuxPhysical` and `WindowsPhysical`. A saved profile from another
+OS remains readable but cannot start on the wrong OS. The older `MacNetwork`
+profile retains its sealed fixture and single-target acceptance restrictions.
+IPC v5 requires the matching helper. This is not a notarized release.
 Use the [release checklist](RELEASE-CHECKLIST.md) and
 [current integration evidence](../docs/experiments/2026-11-10-studio-integration.md)
 for the exact scope of verification.
@@ -34,7 +36,10 @@ development signature, not Developer ID/notarization. Windows packages contain
 `studio-ui.exe`, `studio-runner.exe`, `studio-inspect.exe`, `studio-tools.exe`
 and `sqlite3.dll`; keep them together.
 `manifest.json` records the source revision, dirty state, Cargo lock hash and
-binary hashes. No Npcap or Nmap is bundled.
+the complete package file inventory, protocol version and enabled profiles.
+`cargo xtask verify-package dist/build-…` checks package integrity; see
+[PACKAGING.md](PACKAGING.md) for optimized builds and signing limits.
+No Npcap or Nmap is bundled.
 
 History lives in `~/Library/Application Support/Masscan Studio
 Rust` on macOS, `%LOCALAPPDATA%/Masscan Studio` on Windows, and
@@ -74,9 +79,9 @@ Studio (one Mac, one macOS version, debug build) is recorded in
 `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`; its status
 words there govern.
 
-## Mac network · Wi-Fi / Ethernet
+## Ordinary network scanning
 
-Fresh macOS settings select this profile with empty targets and rate 100.
+Fresh settings select the native OS profile with empty targets and rate 100.
 Enter the IPv4 addresses and TCP ports you are authorized to test, check settings
 and routes, then authorize the matching runner and start. There is no laboratory
 manifest or single-use permit in this user flow. Route checks are read-only;
@@ -89,9 +94,12 @@ pins the job, interface, routes and destination MAC map; a changed snapshot
 requires a new scan. Stop, disconnect and network/clock guards stop the attempt.
 Limits are 2,048 candidates, 1,024 effective addresses, 1,048,576 TCP probes and
 1–1,000 packets/s. IPv6, UDP, hostnames, tunnels and multi-interface jobs are not
-supported in this Studio profile. Windows/Linux retain Simulation only.
+supported in these Studio profiles. Linux uses an authorized root runner and
+AF_PACKET; Windows uses same-account UAC and an existing Npcap installation.
+Studio does not install Npcap or change its driver permissions. Windows freezes
+the Npcap device GUID, rather than a potentially ambiguous friendly adapter name.
 
-IPC version 4 requires the matching helper packaged with this build. Existing
+IPC version 5 requires the matching helper packaged with this build. Existing
 history, profiles and supported engine checkpoints remain readable. CLI retries,
 sharding and multiple adapters are not exposed by Studio merely because the
 integrated engine supports them.
@@ -174,7 +182,7 @@ again** to discover its result. Waiting is bounded to 180 seconds.
 Linux requires `pkexec`, `polkitd`, `binutils` and a desktop authentication agent.
 Windows requires a system-wide PowerShell 7 installation in Program Files; user
 or PATH-only installations are refused. No driver, Npcap, service or automatic
-update is installed by this action. Raw network gates remain unchanged.
+update is installed by this action. Installation never authorizes or starts a scan.
 
 Native setup installation is recorded for [macOS](../docs/experiments/2026-10-27-studio-runner-setup.md),
 [Windows](../docs/experiments/2026-10-28-studio-windows-setup.md) and

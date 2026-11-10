@@ -1,4 +1,4 @@
-//! Ordinary macOS network access, separate from the sealed acceptance environments.
+//! Ordinary native network access, separate from the sealed acceptance environments.
 use super::*;
 use std::sync::Mutex;
 use studio_protocol::Backend;
@@ -27,7 +27,7 @@ impl Environment for Physical {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<PhysicalRoutePlan, String> {
         bounded(deadline, cancelled)?;
-        if job.backend != Backend::MacPhysical {
+        if !job.backend.is_physical() {
             return Err("Not an ordinary network job".into());
         }
         job.validate()?;
@@ -85,13 +85,21 @@ fn bounded(deadline: Instant, cancelled: &dyn Fn() -> bool) -> Result<(), String
 struct System;
 impl Host for System {
     fn authorize(&self) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        if studio_protocol::raw_profile_enabled(Backend::MacPhysical)
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if Backend::native_physical().is_some_and(studio_protocol::raw_profile_enabled)
             && studio_platform::unix::Identity::current()?.uid == 0
         {
             return Ok(());
         }
-        Err("Mac network scanning requires the authorized macOS runner".into())
+        #[cfg(windows)]
+        if studio_protocol::raw_profile_enabled(Backend::WindowsPhysical)
+            && studio_platform::windows::Process::open(std::process::id())?
+                .elevation()?
+                .elevated
+        {
+            return Ok(());
+        }
+        Err("Network scanning requires the authorized native runner".into())
     }
     fn observe(
         &self,
@@ -99,8 +107,8 @@ impl Host for System {
         deadline: Instant,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<PhysicalRoutePlan, String> {
-        if !cfg!(target_os = "macos") {
-            return Err("Mac network is available on macOS only".into());
+        if Some(job.backend) != Backend::native_physical() {
+            return Err("This network profile is unavailable on the current OS".into());
         }
         rmasscan_net::plan_physical(
             &job.network_targets()?,
@@ -131,7 +139,9 @@ struct Dispatch {
 impl Dispatch {
     fn for_backend(&self, backend: Backend) -> Result<&dyn Environment, String> {
         match backend {
-            Backend::MacPhysical => Ok(self.physical.as_ref()),
+            Backend::MacPhysical | Backend::LinuxPhysical | Backend::WindowsPhysical => {
+                Ok(self.physical.as_ref())
+            }
             Backend::MacNetwork => Ok(self.fixture.as_ref()),
             _ => Err("Not a network profile".into()),
         }

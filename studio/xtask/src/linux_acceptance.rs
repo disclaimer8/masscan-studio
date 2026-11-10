@@ -20,9 +20,11 @@ pub fn verify(root: &Path) -> Result<()> {
         );
     }
     if studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacFeth)
-        || !studio_protocol::RAW_PROFILES.is_empty()
+        || studio_protocol::RAW_PROFILES != ["LinuxPhysical"]
     {
-        return Err("Raw scanning must remain disabled".into());
+        return Err(
+            "CI requires only the native physical profile and no Mac fixture access".into(),
+        );
     }
     run(Command::new("cargo").args(["build", "--locked", "-p", "studio-runner"]))?;
     // CI uses the repository's default target directory. Explicitly refuse an
@@ -94,7 +96,7 @@ pub fn verify(root: &Path) -> Result<()> {
         return Err("CI authorization policy cleanup failed".into());
     }
     println!(
-        "PASS: actual pkexec, UID/PID authentication, handshake, closed raw gate, session exit, endpoint and policy cleanup"
+        "PASS: actual pkexec, UID/PID authentication, handshake without scan commands, session exit, endpoint and policy cleanup"
     );
     Ok(())
 }

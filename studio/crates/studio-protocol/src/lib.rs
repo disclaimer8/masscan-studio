@@ -15,7 +15,7 @@ use rmasscan_core::{
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 pub const ENGINE_VERSION: u32 = rmasscan_engine::ENGINE_ALGORITHM_VERSION;
 pub const MAX_FRAME: usize = 131_072;
 pub const MAX_QUEUE: usize = 4 * 1024 * 1024;
@@ -44,26 +44,51 @@ pub enum Backend {
     MacNetwork,
     /// Ordinary macOS Ethernet/Wi-Fi targets, with authenticated runner access.
     MacPhysical,
+    LinuxPhysical,
+    WindowsPhysical,
     // Read compatibility for schema-v3 archives only; prepare() rejects execution.
     #[serde(rename = "SwiftImport")]
     Archived,
 }
 impl Backend {
     pub const fn is_network(self) -> bool {
-        matches!(self, Self::MacNetwork | Self::MacPhysical)
+        self.is_physical() || matches!(self, Self::MacNetwork)
+    }
+    pub const fn is_physical(self) -> bool {
+        matches!(
+            self,
+            Self::MacPhysical | Self::LinuxPhysical | Self::WindowsPhysical
+        )
+    }
+    pub const fn native_physical() -> Option<Self> {
+        if cfg!(target_os = "macos") {
+            Some(Self::MacPhysical)
+        } else if cfg!(target_os = "linux") {
+            Some(Self::LinuxPhysical)
+        } else if cfg!(windows) {
+            Some(Self::WindowsPhysical)
+        } else {
+            None
+        }
     }
 }
-/// Raw profiles require macOS and authenticated helper access. MacNetwork retains
+/// Raw profiles require their native OS and authenticated helper access. MacNetwork retains
 /// its separate sealed-fixture/single-target policy; it never falls back to MacPhysical.
 pub const fn raw_profile_enabled(backend: Backend) -> bool {
-    matches!(
-        backend,
-        Backend::MacFeth | Backend::MacNetwork | Backend::MacPhysical
-    ) && cfg!(target_os = "macos")
+    match backend {
+        Backend::MacFeth | Backend::MacNetwork | Backend::MacPhysical => cfg!(target_os = "macos"),
+        Backend::LinuxPhysical => cfg!(target_os = "linux"),
+        Backend::WindowsPhysical => cfg!(windows),
+        _ => false,
+    }
 }
 /// MacNetwork remains the constrained acceptance profile.
 pub const RAW_PROFILES: &[&str] = if cfg!(target_os = "macos") {
     &["MacFeth", "MacNetwork", "MacPhysical"]
+} else if cfg!(target_os = "linux") {
+    &["LinuxPhysical"]
+} else if cfg!(windows) {
+    &["WindowsPhysical"]
 } else {
     &[]
 };
@@ -383,7 +408,21 @@ pub fn checkpoint_origin(bytes: &[u8]) -> Result<Id, String> {
 mod gate_tests {
     use super::*;
     #[test]
-    fn raw_profiles_are_mac_only_and_include_the_distinct_physical_profile() {
+    fn ordinary_linux_and_windows_jobs_require_network_preparation() {
+        for profile in ["LinuxPhysical", "WindowsPhysical"] {
+            let backend: Backend = serde_json::from_str(&format!("\"{profile}\"")).unwrap();
+            let job = Job::example(backend);
+            job.validate().unwrap();
+            assert!(job.backend.is_network());
+            assert!(
+                job.prepare()
+                    .unwrap_err()
+                    .contains("verified network report")
+            );
+        }
+    }
+    #[test]
+    fn raw_profiles_match_native_platform_and_keep_fixture_profiles_mac_only() {
         assert_eq!(
             raw_profile_enabled(Backend::MacFeth),
             cfg!(target_os = "macos")
@@ -399,6 +438,8 @@ mod gate_tests {
             Backend::MacFeth,
             Backend::MacNetwork,
             Backend::MacPhysical,
+            Backend::LinuxPhysical,
+            Backend::WindowsPhysical,
             Backend::Archived,
         ]
         .into_iter()
@@ -407,6 +448,10 @@ mod gate_tests {
         assert_eq!(RAW_PROFILES.len(), open);
         if raw_profile_enabled(Backend::MacFeth) {
             assert_eq!(RAW_PROFILES, ["MacFeth", "MacNetwork", "MacPhysical"]);
+        } else if cfg!(target_os = "linux") {
+            assert_eq!(RAW_PROFILES, ["LinuxPhysical"]);
+        } else if cfg!(windows) {
+            assert_eq!(RAW_PROFILES, ["WindowsPhysical"]);
         } else {
             assert!(RAW_PROFILES.is_empty());
         }

@@ -29,6 +29,7 @@ pub enum ExcludedReason {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalRoutePlan {
+    /// Frozen packet-device identity (Unix name or Windows Npcap device GUID).
     pub interface_name: String,
     pub interface_index: u32,
     pub source_ipv4: Ipv4Addr,
@@ -293,7 +294,15 @@ pub fn plan_physical(
         }
         let o = matches[0];
         let i = &o.iface;
-        if !i.up || !i.ethernet || i.index == 0 || i.name.is_empty() || i.name.len() > 63 {
+        if !i.up
+            || !i.ethernet
+            || i.index == 0
+            || i.device_id.is_empty()
+            || i.device_id.len() > 63
+            || i.device_id
+                .bytes()
+                .any(|b| b == 0 || b.is_ascii_whitespace() || b == b'/')
+        {
             return Err(invalid(format!("unsupported interface {} for {a}", i.name)));
         }
         if i.ipv4.len() != 1
@@ -326,7 +335,7 @@ pub fn plan_physical(
         .ok_or_else(|| invalid("no usable physical route"))?
         .iface;
     Ok(PhysicalRoutePlan {
-        interface_name: i.name.clone(),
+        interface_name: i.device_id.clone(),
         interface_index: i.index,
         source_ipv4: i.ipv4[0],
         source_mac: if i.mac_masked {

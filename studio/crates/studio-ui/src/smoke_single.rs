@@ -47,7 +47,7 @@ fn projection(model: &impl Model<Data = ResultRow>) -> Result<Vec<studio_protoco
                 "Closed" => false,
                 _ => return Err("Unexpected visible port state".into()),
             };
-            if row.protocol != "TCP" || row.device != "BPF observation" {
+            if row.protocol != "TCP" || row.device != "TCP response" {
                 return Err("Visible result is not an observed TCP state".into());
             }
             Ok(studio_protocol::Row {
@@ -353,7 +353,7 @@ mod tests {
             port: "443".into(),
             protocol: "TCP".into(),
             service: "Closed".into(),
-            device: "BPF observation".into(),
+            device: "TCP response".into(),
             ..Default::default()
         }]);
         assert_eq!(

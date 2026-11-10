@@ -272,6 +272,8 @@ fn history_label(s: &studio_store::SavedScan) -> String {
         Backend::MacFeth => "feth",
         Backend::MacNetwork => "Mac network",
         Backend::MacPhysical => "Mac network",
+        Backend::LinuxPhysical => "Linux network",
+        Backend::WindowsPhysical => "Windows network",
         Backend::Archived => "Archived history",
     };
     format!(
@@ -444,11 +446,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let network_open = studio_protocol::raw_profile_enabled(Backend::MacNetwork);
     ui.set_mac_network_open(network_open);
     ui.set_mac_network_supported(cfg!(target_os = "macos"));
+    ui.set_linux_network_open(studio_protocol::raw_profile_enabled(Backend::LinuxPhysical));
+    ui.set_windows_network_open(studio_protocol::raw_profile_enabled(
+        Backend::WindowsPhysical,
+    ));
     ui.set_network_profile_hint(
         network_ui::profile_hint(cfg!(target_os = "macos"), network_open).into(),
     );
-    if network_open {
-        ui.set_backend_index(3);
+    if let Some(backend) =
+        Backend::native_physical().filter(|b| studio_protocol::raw_profile_enabled(*b))
+    {
+        ui.set_backend_index(network_ui::backend_index(backend));
         ui.set_job_targets("".into());
         ui.set_job_rate("100".into());
     }
@@ -1018,7 +1026,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else if backend == Backend::Archived {
                                 "Archived history"
                             } else if backend.is_network() {
-                                "Mac network · raw packets"
+                                match backend {
+                                    Backend::LinuxPhysical => "Linux network · raw packets",
+                                    Backend::WindowsPhysical => "Windows network · raw packets",
+                                    _ => "Mac network · raw packets",
+                                }
                             } else {
                                 "feth lab · raw packets"
                             }

@@ -1175,51 +1175,57 @@ fn cancellation_during_persistence_prevents_start_and_resume_dispatch() {
 
 #[test]
 fn physical_network_report_is_acknowledged_only_after_saved_job_validation() {
-    for substitute in [false, true] {
-        let dir = Temp::new();
-        let mut db = Store::open(&dir.0).unwrap();
-        let (mut job, mut report) = fixture();
-        job.backend = Backend::MacPhysical;
-        report.job_digest = job.original_digest().unwrap();
-        if substitute {
-            let mut changed = report.clone();
-            changed.job_digest = [9; 32];
-            let hex: String = changed
-                .encode()
-                .unwrap()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            let sql = rusqlite::Connection::open(dir.0.join("history.sqlite3")).unwrap();
-            sql.execute_batch(&format!("CREATE TRIGGER substitute_physical_report AFTER UPDATE OF network_report ON scans BEGIN UPDATE scans SET network_report=X'{hex}' WHERE id=NEW.id; END;")).unwrap();
+    for backend in [
+        Backend::MacPhysical,
+        Backend::LinuxPhysical,
+        Backend::WindowsPhysical,
+    ] {
+        for substitute in [false, true] {
+            let dir = Temp::new();
+            let mut db = Store::open(&dir.0).unwrap();
+            let (mut job, mut report) = fixture();
+            job.backend = backend;
+            report.job_digest = job.original_digest().unwrap();
+            if substitute {
+                let mut changed = report.clone();
+                changed.job_digest = [9; 32];
+                let hex: String = changed
+                    .encode()
+                    .unwrap()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let sql = rusqlite::Connection::open(dir.0.join("history.sqlite3")).unwrap();
+                sql.execute_batch(&format!("CREATE TRIGGER substitute_physical_report AFTER UPDATE OF network_report ON scans BEGIN UPDATE scans SET network_report=X'{hex}' WHERE id=NEW.id; END;")).unwrap();
+            }
+            let (mut c, _, wire) = fake_client();
+            db.begin([1; 16], [2; 16], &job, false).unwrap();
+            c.start([1; 16], [2; 16], Command::Start(job)).unwrap();
+            let event = Envelope::new(
+                c.session,
+                c.scan,
+                c.attempt,
+                1,
+                Event::NetworkPrepared {
+                    bytes: report.encode().unwrap(),
+                },
+            );
+            let (out, rx) = mpsc::sync_channel(32);
+            let result =
+                commit_scan_events(&mut db, &mut c, vec![event], &out, Some([1; 16]), &|| false);
+            assert_eq!(result.is_ok(), !substitute, "{result:?}");
+            assert_eq!(
+                wire.commands()
+                    .iter()
+                    .any(|e| matches!(e.payload, Command::AckNetworkReport { through: 1 })),
+                !substitute
+            );
+            assert_eq!(
+                rx.try_iter()
+                    .any(|u| matches!(u, Update::NetworkCoverage(Some(_)))),
+                !substitute
+            );
         }
-        let (mut c, _, wire) = fake_client();
-        db.begin([1; 16], [2; 16], &job, false).unwrap();
-        c.start([1; 16], [2; 16], Command::Start(job)).unwrap();
-        let event = Envelope::new(
-            c.session,
-            c.scan,
-            c.attempt,
-            1,
-            Event::NetworkPrepared {
-                bytes: report.encode().unwrap(),
-            },
-        );
-        let (out, rx) = mpsc::sync_channel(32);
-        let result =
-            commit_scan_events(&mut db, &mut c, vec![event], &out, Some([1; 16]), &|| false);
-        assert_eq!(result.is_ok(), !substitute, "{result:?}");
-        assert_eq!(
-            wire.commands()
-                .iter()
-                .any(|e| matches!(e.payload, Command::AckNetworkReport { through: 1 })),
-            !substitute
-        );
-        assert_eq!(
-            rx.try_iter()
-                .any(|u| matches!(u, Update::NetworkCoverage(Some(_)))),
-            !substitute
-        );
     }
 }
 

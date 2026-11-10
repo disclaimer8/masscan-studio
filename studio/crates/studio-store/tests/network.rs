@@ -29,7 +29,12 @@ fn job() -> Job {
 }
 #[test]
 fn report_commit_precedes_ack_and_survives_history() {
-    for backend in [Backend::MacNetwork, Backend::MacPhysical] {
+    for backend in [
+        Backend::MacNetwork,
+        Backend::MacPhysical,
+        Backend::LinuxPhysical,
+        Backend::WindowsPhysical,
+    ] {
         let dir =
             std::env::temp_dir().join(format!("studio-network-{}", id_text(new_id().unwrap())));
         let mut db = Store::open(&dir).unwrap();
@@ -120,7 +125,12 @@ fn version_four_migration_backs_up_before_altering() {
 }
 #[test]
 fn physical_started_requires_durable_nonempty_report() {
-    for backend in [Backend::MacNetwork, Backend::MacPhysical] {
+    for backend in [
+        Backend::MacNetwork,
+        Backend::MacPhysical,
+        Backend::LinuxPhysical,
+        Backend::WindowsPhysical,
+    ] {
         let dir = std::env::temp_dir().join(format!(
             "studio-network-start-{}",
             id_text(new_id().unwrap())
@@ -151,7 +161,12 @@ fn physical_started_requires_durable_nonempty_report() {
 }
 #[test]
 fn substituted_route_checkpoint_rejected_against_committed_report_on_apply_and_load() {
-    for backend in [Backend::MacNetwork, Backend::MacPhysical] {
+    for backend in [
+        Backend::MacNetwork,
+        Backend::MacPhysical,
+        Backend::LinuxPhysical,
+        Backend::WindowsPhysical,
+    ] {
         let dir = std::env::temp_dir().join(format!(
             "studio-network-substitution-{}",
             id_text(new_id().unwrap())
@@ -223,7 +238,12 @@ fn substituted_route_checkpoint_rejected_against_committed_report_on_apply_and_l
 }
 #[test]
 fn network_profiles_and_preparing_recovery_require_no_binding() {
-    for backend in [Backend::MacNetwork, Backend::MacPhysical] {
+    for backend in [
+        Backend::MacNetwork,
+        Backend::MacPhysical,
+        Backend::LinuxPhysical,
+        Backend::WindowsPhysical,
+    ] {
         let dir = std::env::temp_dir().join(format!(
             "studio-network-preparing-{}",
             id_text(new_id().unwrap())

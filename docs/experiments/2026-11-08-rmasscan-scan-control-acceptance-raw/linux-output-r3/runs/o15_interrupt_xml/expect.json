@@ -1,0 +1,10 @@
+{
+  "tag": "o15_interrupt_xml",
+  "kind": "interrupt",
+  "format": "xml",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": false
+}

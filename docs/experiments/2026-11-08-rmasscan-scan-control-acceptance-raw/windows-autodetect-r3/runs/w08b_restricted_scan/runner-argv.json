@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "198.18.0.2",
+    "-p80,443,8000-8007,8099",
+    "--seed",
+    "1",
+    "--rate",
+    "100",
+    "--wait",
+    "3"
+  ],
+  "exe": "C:\\Users\\lab\\t4\\rmasscan.exe",
+  "invocation_nonce": "r23b5592e7ba3839aecb6bc7837b4f5bf-c5067886902175de"
+}

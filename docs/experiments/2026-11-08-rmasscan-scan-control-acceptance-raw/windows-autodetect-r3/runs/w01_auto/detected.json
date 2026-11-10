@@ -1,0 +1,40 @@
+{
+  "interface": {
+    "value": "Ethernet 2",
+    "source": "detected: route to 198.18.0.2"
+  },
+  "source_mac": {
+    "value": "52-54-00-04-80-a9",
+    "source": "detected"
+  },
+  "source_ip": {
+    "value": "198.18.0.1",
+    "source": "detected"
+  },
+  "router_ip": {
+    "value": "198.18.0.2",
+    "source": "on-link target"
+  },
+  "router_mac": {
+    "value": "02-57-4c-3d-2e-9b",
+    "source": "arp",
+    "arp": {
+      "requests": 1,
+      "ms": 0
+    }
+  },
+  "seed": {
+    "value": "1",
+    "source": "given"
+  },
+  "source_port": {
+    "value": "58718",
+    "source": "time"
+  },
+  "finished": {
+    "reason": "Completed",
+    "sent": 11,
+    "replies": 10,
+    "open": 10
+  }
+}

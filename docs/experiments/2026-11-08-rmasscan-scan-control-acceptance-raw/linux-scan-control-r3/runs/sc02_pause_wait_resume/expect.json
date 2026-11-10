@@ -1,0 +1,19 @@
+{
+  "tag": "sc02_pause_wait_resume",
+  "steps": [
+    {
+      "name": "pause",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": true,
+      "netem": true
+    },
+    {
+      "name": "resume",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+[+] interface = veth-a (detected: route to 198.18.0.2)
+[+] source-mac = 02-aa-00-00-00-01 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-mac = 02-aa-00-00-00-02 (given)
+[+] seed = 1 (given)
+[+] source-port = 58723 (time)
+rate:  0.02-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 1-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 1-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 1-secs, found=2       rate:  0.02-kpps, 100.00% done, waiting 1-secs, found=2                                                                                    [+] finished: Completed, sent 3, replies 3, open 2

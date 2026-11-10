@@ -1,0 +1,44 @@
+# rmasscan-lab privacy-scan (e52793b, Mac build 3586a11f), run on the staged copies before the repo copy
+# tokens (masked, by number): #1 Mac account, #2 Mac host name, #3 minipc host name, #4 home-pc host name,
+#   #5 the 2-character guest host name (its full name), #6 the first-name part of the Mac account
+# tokens are named by role only; no token characters are printed in this file
+
+## linux-scan-control-r3: privacy-scan --dir $STAGE/linux-scan-control-r3 --forbid #1 ... --forbid #6
+HIT runs/sc05_infinite_interrupt/run/peer.pcap: bytes: forbidden token #5
+privacy-scan: 1 hits in $STAGE/linux-scan-control-r3
+rc=1
+
+## linux-output-r3: privacy-scan --dir $STAGE/linux-output-r3 --forbid #1 ... --forbid #6
+privacy-scan: 0 hits in $STAGE/linux-output-r3
+rc=0
+
+## linux-autodetect-r3: privacy-scan --dir $STAGE/linux-autodetect-r3 --forbid #1 ... --forbid #6
+privacy-scan: 0 hits in $STAGE/linux-autodetect-r3
+rc=0
+
+## windows-autodetect-r3: privacy-scan --dir $STAGE/windows-autodetect-r3 --forbid #1 ... --forbid #6
+privacy-scan: 0 hits in $STAGE/windows-autodetect-r3
+rc=0
+
+## verification: privacy-scan --dir $STAGE/verification --forbid #1 ... --forbid #6
+HIT minipc-clippy.log: line 29: forbidden token #5
+HIT minipc-test-ws.log: line 42: forbidden token #5
+privacy-scan: 2 hits in $STAGE/verification
+rc=1
+
+## linux-scan-control-r3 without #5: privacy-scan --dir $STAGE/linux-scan-control-r3 --forbid #1 #2 #3 #4 #6
+privacy-scan: 0 hits in $STAGE/linux-scan-control-r3
+rc=0
+
+## review of the hits (2026-11-10)
+- The guest's FULL host name is 2 characters. Six guest sources agree: COMPUTERNAME, Dns.GetHostName,
+  Win32_ComputerSystem Name and DNSHostName, Tcpip Hostname / NV Hostname, ActiveComputerName. The length-2 name label
+  in the mDNS frame of the uncommitted r2 attempt confirms it. Such a name identifies nobody.
+- The identifying tokens #1-#4 and #6 give 0 hits in every directory. No capture holds an mDNS, LLMNR or NBNS frame.
+- The 3 hits of #5 are reviewed coincidences, not the name:
+  - linux-scan-control-r3: bytes 77 2d inside the nanosecond timestamp field of the pcap record headers of frames
+    381-383 of runs/sc05_infinite_interrupt/run/peer.pcap (the guest is not on the Linux stand);
+  - verification: the two characters inside the crate name linux-raw-sys (minipc-clippy.log line 29,
+    minipc-test-ws.log line 42).
+- rc 1 of those two directories is due to these three coincidences only. The case-sensitive word-bounded grep -ralwE
+  of rust-lab.md over every name gives 0 files.

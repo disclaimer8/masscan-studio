@@ -258,10 +258,13 @@ fn unicast_v4(
         // ведёт в тот же буфер или NULL; в узле только целые, объединения целых и указатели.
         let u = unsafe { &*p };
         let sa = u.Address.lpSockaddr;
-        if !sa.is_null() && u.Address.iSockaddrLength as usize >= std::mem::size_of::<SOCKADDR_IN>()
+        // `iSockaddrLength` это i32: отрицательная длина не годится (`as usize` дал бы огромное значение).
+        if !sa.is_null()
+            && usize::try_from(u.Address.iSockaddrLength)
+                .is_ok_and(|len| len >= std::mem::size_of::<SOCKADDR_IN>())
         {
             // SAFETY: sa не null и указывает на iSockaddrLength >= sizeof(SOCKADDR_IN)
-            // байт внутри буфера; read_unaligned не предполагает выравнивания.
+            // байт (длина неотрицательна) внутри буфера; read_unaligned не предполагает выравнивания.
             let sin = unsafe { sa.cast::<SOCKADDR_IN>().read_unaligned() };
             if sin.sin_family == AF_INET {
                 // SAFETY: IN_ADDR это объединение целых представлений одного u32.
@@ -323,8 +326,8 @@ pub(crate) fn adapters() -> Result<Vec<WinAdapter>, NetError> {
         .collect())
 }
 
-/// Строка `MIB_IPFORWARD_ROW2` → [`Fwd`]; `loopback` здесь только флаг строки (IfType 24 добавляет
-/// `route_parse::mark_loopback`).
+/// Строка `MIB_IPFORWARD_ROW2` → [`Fwd`]; `mib_loopback` это флаг `Loopback` строки, `loopback_if` здесь всегда
+/// `false` (IfType 24 отмечает `route_parse::mark_loopback`).
 ///
 /// # Safety
 /// `p` указывает на строку, заполненную IP Helper и живую на время вызова.
@@ -349,7 +352,8 @@ unsafe fn fwd_from_row(
             prefix_len: (*p).DestinationPrefix.PrefixLength,
             next_hop: gateway,
             metric: (*p).Metric,
-            loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
+            mib_loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
+            loopback_if: false,
         }
     }
 }
@@ -527,6 +531,34 @@ mod tests {
         let e = NpcapApi::load_with(&OsLoader, "C:\\rmasscan-no-such-dir\\Npcap\\wpcap.dll")
             .unwrap_err();
         assert!(matches!(e, NetError::DriverUnavailable(_)), "{e:?}");
+    }
+
+    /// Узел unicast с отрицательной или короткой `iSockaddrLength` пропускается, адрес не читается.
+    #[test]
+    fn unicast_with_negative_or_short_sockaddr_length_is_skipped() {
+        use windows_sys::Win32::NetworkManagement::IpHelper::IP_ADAPTER_UNICAST_ADDRESS_LH;
+        use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR, SOCKADDR_IN};
+
+        let mut sin = SOCKADDR_IN {
+            sin_family: AF_INET,
+            ..Default::default()
+        };
+        sin.sin_addr.S_un.S_addr = u32::from_ne_bytes([198, 18, 0, 1]);
+        let full = i32::try_from(std::mem::size_of::<SOCKADDR_IN>()).unwrap();
+        let mut node = IP_ADAPTER_UNICAST_ADDRESS_LH::default();
+        node.Address.lpSockaddr = (&raw mut sin).cast::<SOCKADDR>();
+        node.Address.iSockaddrLength = full;
+        assert_eq!(
+            unicast_v4(&raw mut node),
+            vec![Ipv4Addr::new(198, 18, 0, 1)]
+        );
+        for len in [-1, i32::MIN, 0, full - 1] {
+            node.Address.iSockaddrLength = len;
+            assert!(
+                unicast_v4(&raw mut node).is_empty(),
+                "iSockaddrLength {len}"
+            );
+        }
     }
 
     #[test]

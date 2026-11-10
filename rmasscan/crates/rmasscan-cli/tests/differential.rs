@@ -7,9 +7,11 @@
 #[path = "../../rmasscan-core/tests/common/mod.rs"]
 mod common;
 
-use std::process::Command;
+#[path = "common/spawn.rs"]
+mod spawn;
 
 use common::{GOLDEN_DIR, Sha256, load_manifest};
+use spawn::{readonly_command, spawn_readonly};
 
 const LIST_CHECKED: [&str; 21] = [
     "listscan/exclude_list_seed3.txt",
@@ -58,10 +60,8 @@ const ECHO_CHECKED: [&str; 16] = [
 ];
 
 fn run_bin(args: &[String]) -> Vec<u8> {
-    let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
-        .args(args)
-        .output()
-        .expect("spawn rmasscan");
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = spawn_readonly(&argv);
     // C exit code was 0 for all of these cases.
     assert_eq!(
         out.status.code(),
@@ -145,12 +145,16 @@ fn echo_matches_oracle_as_set() {
 fn errors_exit_nonzero_with_message_on_stderr() {
     for args in [
         &["-sL", "bogus", "-p80", "--seed", "1"][..],
-        &["--banners", "10.0.0.0/24", "-p80"][..],
+        &[
+            "--nonsense",
+            "--offline",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+        ][..],
     ] {
-        let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
-            .args(args)
-            .output()
-            .unwrap();
+        let out = spawn_readonly(args);
         assert_ne!(out.status.code(), Some(0), "{args:?}");
         assert!(out.stdout.is_empty(), "{args:?}");
         assert!(!out.stderr.is_empty(), "{args:?}");
@@ -162,8 +166,7 @@ fn broken_pipe_stops_work_quickly() {
     use std::io::{BufRead, BufReader};
     use std::time::{Duration, Instant};
     // 2^32 targets: finishing the listing would take minutes.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
-        .args(["-sL", "0.0.0.0/0", "-p80", "--seed", "1"])
+    let mut child = readonly_command(&["-sL", "0.0.0.0/0", "-p80", "--seed", "1"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
@@ -187,14 +190,33 @@ fn broken_pipe_stops_work_quickly() {
     }
 }
 
+/// A dead stderr (the reader of `2>&1 | tee` is gone, EPIPE) ends the error path with exit 1, not a panic (101):
+/// both the `run` error text and the masscan parse error text are written without `eprintln!`. The read end of
+/// the pipe is closed before the spawn, so the very first stderr write fails.
+#[test]
+fn dead_stderr_error_exits_one_not_panic() {
+    for args in [
+        &["-sL", "bogus", "-p80", "--seed", "1"][..],
+        &["--offline", "10.0.0.1", "-p80", "--seed", "1", "-oA", "x"][..],
+    ] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let st = readonly_command(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(writer)
+            .status()
+            .unwrap();
+        assert_eq!(st.code(), Some(1), "{args:?}");
+    }
+}
+
 /// Launches the CLI once (`--help`) and waits for it, outside any timed region,
 /// so the OS loader / antivirus cost of a freshly linked EXE is paid up front.
 /// Bounded: a hanging `--help` is killed and fails the test after 60 s instead of
 /// blocking forever (generous, since a cold scan can take ~15 s).
 fn warm_up_exe() {
     use std::time::{Duration, Instant};
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
-        .arg("--help")
+    let mut child = readonly_command(&["--help"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -225,18 +247,15 @@ fn list_scan_retries_that_cannot_terminate_fails_fast() {
     // run is a separate process with the same 5 s limit.
     warm_up_exe();
     let start = Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
-        .args([
-            "-sL",
-            "10.0.0.0/30",
-            "-p80",
-            "--seed",
-            "1",
-            "--retries",
-            "1",
-        ])
-        .output()
-        .unwrap();
+    let out = spawn_readonly(&[
+        "-sL",
+        "10.0.0.0/30",
+        "-p80",
+        "--seed",
+        "1",
+        "--retries",
+        "1",
+    ]);
     assert!(start.elapsed() < Duration::from_secs(5));
     assert_ne!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty());
@@ -245,20 +264,14 @@ fn list_scan_retries_that_cannot_terminate_fails_fast() {
 
 #[test]
 fn seed_zero_is_rejected() {
-    let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
-        .args(["-sL", "10.0.0.0/30", "-p80", "--seed", "0"])
-        .output()
-        .unwrap();
+    let out = spawn_readonly(&["-sL", "10.0.0.0/30", "-p80", "--seed", "0"]);
     assert_ne!(out.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&out.stderr).contains("--seed"));
 }
 
 #[test]
 fn help_is_plain_english() {
-    let out = Command::new(env!("CARGO_BIN_EXE_rmasscan"))
-        .arg("--help")
-        .output()
-        .unwrap();
+    let out = spawn_readonly(&["--help"]);
     let t = String::from_utf8(out.stdout).unwrap();
     assert!(t.is_ascii(), "{t}");
     assert!(t.contains("--list") && t.contains("-sL") && t.contains("--seed"));

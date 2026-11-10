@@ -758,3 +758,18 @@ Handle::pause(), Handle::stop(), Handle::join()
   `blackrock_rounds >= 64` отвергается (в C это UB-сдвиг).
 - **(f) Запись pcap-файла.** §3 относит pcap-writer к этапу 1. Он не планировался и не
   делался в этапе 1; переносится в этап 2.
+- **(g) Форматы вывода CLI портируются побайтно.** Строка «Форматы вывода» в §3 (стр. ~145)
+  относит к переносу для CLI только list, NDJSON и interactive-строку, а XML/JSON/binary/
+  grepable/unicornscan/hostonly не переносить. Это следствие варианта B (CLI как оракул для
+  Studio) и больше не верно: цель пользователя — сам masscan на Rust. Этап вывода переносит
+  `-oL`, `-oJ`, `-oD`, `-oG`, `-oX`, `-oB`, `-oH`, `-oU` побайтно с C, а также `--readscan`
+  для файлов `-oB`; redis, certs и ротацию он отказывает явно (код 1). Решения и границы:
+  [спека этапа](2026-11-06-rmasscan-output-formats-design.md) (Р1–Р19, отличия от C в §8);
+  приёмка: [отчёт](../../experiments/2026-11-06-rmasscan-output-acceptance.md).
+- **(h) Управление сканом CLI портируется.** §3 и этап 2 оставляли `--shard`, `--retries`, `paused.conf`, `--infinite`,
+  несколько адаптеров, `--pcap` и поля пакета (`--ttl`, `--badsum`, `--tcp-*`) на потом, а CLI останавливал скан первым
+  Ctrl-C без файла возобновления. Этап управления сканом переносит их с осознанными отличиями от C (нормализованная
+  база `resume-index`, `--badsum` портит L4-сумму, `--infinite` без `paused.conf`, индекс адаптера `0..=7`; полный
+  перечень в `rmasscan/README.md`, «Отличия от masscan»). Решения и границы:
+  [спека этапа](2026-11-08-rmasscan-scan-control-design.md) (Р1–Р9, отличия от C в §8); приёмка:
+  [отчёт](../../experiments/2026-11-08-rmasscan-scan-control-acceptance.md).

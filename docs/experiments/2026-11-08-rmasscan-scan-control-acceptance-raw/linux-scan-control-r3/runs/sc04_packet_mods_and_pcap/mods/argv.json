@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "198.18.0.2-198.18.0.5",
+    "-p80,443,8080",
+    "-oL",
+    "output.txt",
+    "--show",
+    "open,closed",
+    "--seed",
+    "1",
+    "--rate",
+    "100",
+    "--wait",
+    "3",
+    "--ttl",
+    "42",
+    "--tcp-sackok",
+    "--tcp-wscale",
+    "7",
+    "--pcap",
+    "scanner.pcap"
+  ]
+}

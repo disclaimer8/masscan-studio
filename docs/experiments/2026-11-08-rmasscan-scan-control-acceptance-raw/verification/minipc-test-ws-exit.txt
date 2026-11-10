@@ -1,0 +1,6 @@
+SigIgn:	0000000000000000
+ 08:02:07 up 25 days, 12:54,  2 users,  load average: 2.06, 1.18, 0.73
+TEST_WS_EXIT=0
+ 08:09:13 up 25 days, 13:01,  2 users,  load average: 2.31, 2.92, 1.84
+CLIPPY_EXIT=0
+ 08:09:47 up 25 days, 13:01,  2 users,  load average: 2.65, 2.96, 1.90

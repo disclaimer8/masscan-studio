@@ -27,6 +27,92 @@ pub const DEFAULT_TCP_TEMPLATE: &[u8] = &[
     0x02, 0x04, 0x05, 0xb4,
 ];
 
+/// main-conf.c:2143 `default_mss`.
+pub const DEFAULT_TCP_MSS: u16 = 1460;
+/// main-conf.c:2201 `default_value`.
+pub const DEFAULT_TCP_WSCALE: u8 = 3;
+/// main-conf.c:2254 `default_value`.
+pub const DEFAULT_TCP_TSECHO: u32 = 0x1234_5678;
+
+/// Опции TCP SYN (templ-tcp-hdr.c:1066-1119, main-conf.c:2141-2345).
+/// `Default`: MSS 1460 включён, остальное выключено. Порядок опций в
+/// кадре: `mss -> sackok -> wscale -> tsecho`. Один тип на `config` и `packet`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TcpHeaderOptions {
+    pub mss: Option<u16>,
+    pub sackok: bool,
+    pub wscale: Option<u8>,
+    pub tsecho: Option<u32>,
+}
+
+impl Default for TcpHeaderOptions {
+    fn default() -> Self {
+        TcpHeaderOptions {
+            mss: Some(DEFAULT_TCP_MSS),
+            sackok: false,
+            wscale: None,
+            tsecho: None,
+        }
+    }
+}
+
+/// Параметры зонда поверх шаблона: `--ttl`, `--badsum` и опции TCP.
+/// `Default` даёт байты `DEFAULT_TCP_TEMPLATE` (TTL 255, MSS 1460).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PacketModifiers {
+    pub ttl: u8,
+    pub badsum: bool,
+    pub tcp: TcpHeaderOptions,
+}
+
+impl Default for PacketModifiers {
+    fn default() -> Self {
+        PacketModifiers {
+            ttl: 255,
+            badsum: false,
+            tcp: TcpHeaderOptions::default(),
+        }
+    }
+}
+
+/// Байты опций TCP, дополненные нулями (EOL) до границы 4 байт
+/// (templ-tcp-hdr.c:1066-1119 `templ_tcp_apply_options`, :843 `tcp_add_opt`).
+/// Не длиннее 20 байт, поэтому `doff <= 10`.
+fn tcp_option_bytes(o: &TcpHeaderOptions) -> Vec<u8> {
+    let mut b = Vec::new();
+    if let Some(mss) = o.mss {
+        // kind 2, len 4.
+        b.extend_from_slice(&[2, 4]);
+        b.extend_from_slice(&mss.to_be_bytes());
+    }
+    if o.sackok {
+        // kind 4, len 2.
+        b.extend_from_slice(&[4, 2]);
+    }
+    if let Some(ws) = o.wscale {
+        // kind 3, len 3.
+        b.extend_from_slice(&[3, 3, ws]);
+    }
+    if let Some(ts) = o.tsecho {
+        // kind 8, len 10: TSval и нулевой TSecr. Все 4 байта значения (Р9:
+        // C затирает `field[2]` на :1111-1112 и теряет `ts >> 8`).
+        b.extend_from_slice(&[8, 10]);
+        b.extend_from_slice(&ts.to_be_bytes());
+        b.extend_from_slice(&[0; 4]);
+    }
+    while b.len() % 4 != 0 {
+        b.push(0);
+    }
+    b
+}
+
+/// Заведомо неверная TCP-сумма для `--badsum` (Р9): `csum - 1`. Для 0 нужна
+/// единица: `0xFFFF` это тот же ноль в арифметике дополнения до единицы и
+/// сумма осталась бы верной.
+fn corrupt_tcp_checksum(csum: u16) -> u16 {
+    if csum == 0 { 1 } else { csum - 1 }
+}
+
 /// Готовый шаблон с частичными суммами (`struct TemplatePacket.ipv4`).
 #[derive(Clone, Debug)]
 pub struct TcpSynTemplate {
@@ -35,6 +121,7 @@ pub struct TcpSynTemplate {
     offset_tcp: usize,
     checksum_ip: u16,
     checksum_tcp: u16,
+    badsum: bool,
 }
 
 impl TcpSynTemplate {
@@ -47,8 +134,29 @@ impl TcpSynTemplate {
     /// `AF_INET` на Linux и macOS оба равны 2; расхождение есть только у `AF_INET6`
     /// (:1100 `#define AF_INET6 23`, :1161), к IPv4 это не относится.
     pub fn new(source_mac: [u8; 6], router_mac: [u8; 6], link: LinkType) -> Self {
-        let mut px = DEFAULT_TCP_TEMPLATE.to_vec();
+        Self::new_with_options(source_mac, router_mac, link, &PacketModifiers::default())
+    }
+
+    /// [`TcpSynTemplate::new`] с `--ttl`, `--badsum` и опциями TCP
+    /// (templ-pkt.c:1474-1488 `template_set_ttl`, templ-tcp-hdr.c:1066-1119).
+    /// При `PacketModifiers::default()` байты равны `DEFAULT_TCP_TEMPLATE`.
+    pub fn new_with_options(
+        source_mac: [u8; 6],
+        router_mac: [u8; 6],
+        link: LinkType,
+        mods: &PacketModifiers,
+    ) -> Self {
+        // Базовые 54 байта и опции TCP отдельно.
+        let mut px = DEFAULT_TCP_TEMPLATE[..54].to_vec();
+        px.extend_from_slice(&tcp_option_bytes(&mods.tcp));
         let (offset_ip, offset_tcp, offset_app) = (14usize, 34usize, px.len());
+        // Длина IP и смещение данных TCP под новые опции.
+        let tcp_len = offset_app - offset_tcp;
+        px[offset_ip + 2..offset_ip + 4]
+            .copy_from_slice(&((offset_app - offset_ip) as u16).to_be_bytes());
+        px[offset_tcp + 12] = ((tcp_len / 4) as u8) << 4;
+        // templ-pkt.c:1483 `px[offset+8] = ttl`; сумма IP пересчитывается ниже.
+        px[offset_ip + 8] = mods.ttl;
 
         // MAC-адреса, templ-pkt.c:1272-1273.
         px[0..6].copy_from_slice(&router_mac);
@@ -83,6 +191,7 @@ impl TcpSynTemplate {
             offset_tcp,
             checksum_ip,
             checksum_tcp,
+            badsum: mods.badsum,
         }
     }
 
@@ -132,7 +241,12 @@ impl TcpSynTemplate {
             + u64::from(port_me)
             + u64::from(port_them)
             + u64::from(seqno);
-        out[ot + 16..ot + 18].copy_from_slice(&(!fold(xsum)).to_be_bytes());
+        let mut csum = !fold(xsum);
+        if self.badsum {
+            // Р9: IPv4-сумма остаётся верной, портится только L4.
+            csum = corrupt_tcp_checksum(csum);
+        }
+        out[ot + 16..ot + 18].copy_from_slice(&csum.to_be_bytes());
     }
 }
 
@@ -352,6 +466,197 @@ mod tests {
             }
             tmpl(link).build_syn(them, pt, me, pm, seq, &mut f);
             assert_eq!(f, hexv(hex), "{link:?} {them:#x}:{pt}");
+        }
+    }
+
+    fn mods(tcp: TcpHeaderOptions) -> PacketModifiers {
+        PacketModifiers {
+            tcp,
+            ..PacketModifiers::default()
+        }
+    }
+
+    fn syn_with(m: &PacketModifiers) -> Vec<u8> {
+        let t = TcpSynTemplate::new_with_options(
+            hex6("001122334455"),
+            hex6("665544332211"),
+            LinkType::Ethernet,
+            m,
+        );
+        let mut f = Vec::new();
+        t.build_syn(0x0808_0808, 443, 0x0a00_0002, 12345, 0xdead_beef, &mut f);
+        f
+    }
+
+    /// Только заголовки опций кадра: байты `54..`, `ip.total_len` и `tcp.doff`.
+    fn shape(f: &[u8]) -> (&[u8], u16, u8) {
+        (&f[54..], u16::from_be_bytes([f[16], f[17]]), f[46])
+    }
+
+    #[test]
+    fn default_template_bytes_unchanged() {
+        // Студия строит кадры из умолчания: `canonical_job_bytes` зависит от них.
+        for link in [LinkType::Ethernet, LinkType::Null, LinkType::Raw] {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            let old = tmpl(link);
+            let new = TcpSynTemplate::new_with_options(
+                hex6("001122334455"),
+                hex6("665544332211"),
+                link,
+                &PacketModifiers::default(),
+            );
+            old.build_syn(0x0a00_0001, 80, 0xc0a8_0101, 40000, 0x1234_5678, &mut a);
+            new.build_syn(0x0a00_0001, 80, 0xc0a8_0101, 40000, 0x1234_5678, &mut b);
+            assert_eq!(a, b, "{link:?}");
+            assert_eq!(old.checksum_ip(), new.checksum_ip());
+        }
+        // Пустая заготовка совпадает с константой побайтно (58 байт).
+        let mut px = DEFAULT_TCP_TEMPLATE[..54].to_vec();
+        px.extend_from_slice(&tcp_option_bytes(&TcpHeaderOptions::default()));
+        px[14 + 8] = PacketModifiers::default().ttl;
+        assert_eq!(px, DEFAULT_TCP_TEMPLATE);
+        assert_eq!(syn_with(&PacketModifiers::default()).len(), 58);
+    }
+
+    #[test]
+    fn tcp_options_layout_and_padding_match_c() {
+        let none = TcpHeaderOptions {
+            mss: None,
+            ..TcpHeaderOptions::default()
+        };
+        let f = syn_with(&mods(none));
+        assert_eq!(f.len(), 54);
+        assert_eq!(shape(&f), (&[][..], 40, 0x50));
+        assert!(tcp_checksum_is_valid(&f));
+
+        let f = syn_with(&mods(TcpHeaderOptions {
+            mss: Some(1400),
+            sackok: true,
+            ..none
+        }));
+        assert_eq!(
+            shape(&f),
+            (
+                &[0x02, 0x04, 0x05, 0x78, 0x04, 0x02, 0x00, 0x00][..],
+                48,
+                0x70
+            )
+        );
+        assert!(tcp_checksum_is_valid(&f));
+
+        let f = syn_with(&mods(TcpHeaderOptions {
+            wscale: Some(7),
+            ..TcpHeaderOptions::default()
+        }));
+        assert_eq!(
+            shape(&f),
+            (
+                &[0x02, 0x04, 0x05, 0xb4, 0x03, 0x03, 0x07, 0x00][..],
+                48,
+                0x70
+            )
+        );
+        assert!(tcp_checksum_is_valid(&f));
+
+        let f = syn_with(&mods(TcpHeaderOptions {
+            tsecho: Some(0xdead_beef),
+            ..TcpHeaderOptions::default()
+        }));
+        assert_eq!(
+            shape(&f),
+            (
+                &[
+                    0x02, 0x04, 0x05, 0xb4, 0x08, 0x0a, 0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0
+                ][..],
+                56,
+                0x90
+            )
+        );
+        assert!(tcp_checksum_is_valid(&f));
+        assert_eq!(checksum::ip_header_checksum(&f, 14, 34), 0xffff);
+    }
+
+    fn all_options() -> TcpHeaderOptions {
+        TcpHeaderOptions {
+            mss: Some(1460),
+            sackok: true,
+            wscale: Some(7),
+            tsecho: Some(0xdead_beef),
+        }
+    }
+
+    #[test]
+    fn all_tcp_options_and_badsum_keep_valid_ipv4_header() {
+        // Review Focus 5: 4 + 2 + 3 + 10 = 19 байт, EOL до 20, `doff = 10`.
+        let m = PacketModifiers {
+            ttl: 64,
+            badsum: true,
+            tcp: all_options(),
+        };
+        let f = syn_with(&m);
+        assert_eq!(f[22], 64);
+        let (opts, total, doff) = shape(&f);
+        assert_eq!(opts.len(), 20);
+        assert_eq!(opts[19], 0, "EOL pad");
+        assert_eq!((total, doff), (60, 0xa0));
+        assert!(doff >> 4 <= 15);
+        assert_eq!(checksum::ip_header_checksum(&f, 14, 34), 0xffff);
+        assert!(!tcp_checksum_is_valid(&f));
+        // Без badsum тот же кадр верен, а расходятся ровно два байта суммы.
+        let good = syn_with(&PacketModifiers { badsum: false, ..m });
+        assert!(tcp_checksum_is_valid(&good));
+        let diff: Vec<_> = (0..f.len()).filter(|&i| f[i] != good[i]).collect();
+        assert!(diff.iter().all(|&i| (50..52).contains(&i)), "{diff:?}");
+        assert_eq!(
+            u16::from_be_bytes([f[50], f[51]]),
+            u16::from_be_bytes([good[50], good[51]]).wrapping_sub(1)
+        );
+    }
+
+    #[test]
+    fn badsum_is_never_valid_even_for_a_zero_checksum() {
+        // 0xFFFF это тот же ноль в арифметике дополнения: `wrapping_sub(1)` от
+        // нуля оставил бы сумму верной.
+        assert_eq!(corrupt_tcp_checksum(0), 1);
+        assert_eq!(corrupt_tcp_checksum(1), 0);
+        assert_eq!(corrupt_tcp_checksum(0xffff), 0xfffe);
+        for seq in 0..2000u32 {
+            let t = TcpSynTemplate::new_with_options(
+                hex6("001122334455"),
+                hex6("665544332211"),
+                LinkType::Ethernet,
+                &PacketModifiers {
+                    badsum: true,
+                    ..PacketModifiers::default()
+                },
+            );
+            let mut f = Vec::new();
+            t.build_syn(0x0a00_0001, 80, 0x0a00_0002, 1000, seq, &mut f);
+            assert!(!tcp_checksum_is_valid(&f), "seq {seq}");
+        }
+    }
+
+    #[test]
+    fn ttl_lands_in_every_link_type_with_a_valid_header_sum() {
+        for link in [LinkType::Ethernet, LinkType::Null, LinkType::Raw] {
+            let t = TcpSynTemplate::new_with_options(
+                hex6("001122334455"),
+                hex6("665544332211"),
+                link,
+                &PacketModifiers {
+                    ttl: 1,
+                    ..PacketModifiers::default()
+                },
+            );
+            let mut f = Vec::new();
+            t.build_syn(0x0a00_0001, 80, 0x0a00_0002, 1000, 7, &mut f);
+            let oi = match link {
+                LinkType::Ethernet => 14,
+                LinkType::Null => 4,
+                LinkType::Raw => 0,
+            };
+            assert_eq!(f[oi + 8], 1, "{link:?}");
+            assert_eq!(checksum::ip_header_checksum(&f, oi, oi + 20), 0xffff);
         }
     }
 }

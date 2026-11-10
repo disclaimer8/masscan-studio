@@ -139,6 +139,38 @@ pub fn resolve_next_hop(
     policy: &ArpPolicy,
     clock: &dyn Clock,
 ) -> Result<ArpReport, ArpResolveError> {
+    match resolve_next_hop_until(
+        io,
+        ifname,
+        my_mac,
+        my_ip,
+        target,
+        kind,
+        policy,
+        clock,
+        &mut || false,
+    )? {
+        Some(report) => Ok(report),
+        // Недостижимо: `interrupted` всегда `false`. Отказ, а не паника, если это когда-нибудь изменится.
+        None => Err(ArpResolveError::Uncertain),
+    }
+}
+
+/// [`resolve_next_hop`] с прерыванием (Р18; C `main.c:1131–1154`: Ctrl-C останавливает скан, а не ждёт отказа ARP).
+/// `interrupted` опрашивается перед каждой отправкой и перед каждым ожиданием ответа (срез не длиннее
+/// `MAX_IO_TIMEOUT`); `true` даёт `Ok(None)` без новых кадров и без ожидания остатка `policy.timeout`.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_next_hop_until(
+    io: &mut AdapterPair,
+    ifname: &str,
+    my_mac: [u8; 6],
+    my_ip: Ipv4Addr,
+    target: Ipv4Addr,
+    kind: NextHopKind,
+    policy: &ArpPolicy,
+    clock: &dyn Clock,
+    interrupted: &mut dyn FnMut() -> bool,
+) -> Result<Option<ArpReport>, ArpResolveError> {
     let interval_us =
         micros(policy.interval)
             .filter(|&us| us != 0)
@@ -156,12 +188,14 @@ pub fn resolve_next_hop(
         ))?;
     let mut pending = PendingResolve::new(my_mac, u32::from(my_ip), u32::from(target));
     let frame = pending.request_frame();
-    // MAX_IO_TIMEOUT is a fixed 50 ms, representable in the clock's microseconds.
     let max_io_us = MAX_IO_TIMEOUT.as_micros() as u64;
     let mut next_send = t0;
     let mut requests_sent = 0u32;
     let mut buf = [0u8; 2048];
     loop {
+        if interrupted() {
+            return Ok(None);
+        }
         let now = clock.now_micros();
         let elapsed = now.saturating_sub(t0);
         if elapsed >= timeout_us {
@@ -201,11 +235,11 @@ pub fn resolve_next_hop(
         if let Some(n) = got
             && let Some(mac) = pending.offer(&buf[..n])
         {
-            return Ok(ArpReport {
+            return Ok(Some(ArpReport {
                 mac,
                 requests_sent,
                 elapsed: Duration::from_micros(clock.now_micros().saturating_sub(t0)),
-            });
+            }));
         }
     }
 }

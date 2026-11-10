@@ -2,7 +2,9 @@
 //! one absolute <=1s deadline covers writes, readiness, EINTR and foreign replies.
 use super::ifinfo;
 use crate::network_plan::{InterfaceObservation, check_observation};
-use crate::route_parse::{RtReply, parse_rt_reply, route_from_rt, rt_get_request};
+use crate::route_parse::{
+    RtReply, defaults_from_rt, lookup_from_rt, parse_rt_reply, rt_get_request,
+};
 use crate::{
     NetError,
     discover::{Iface, Interfaces, Route, RouteTable},
@@ -153,21 +155,23 @@ impl RouteTable for OsRoutes {
         deadline: Instant,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Option<Route>, NetError> {
-        Ok(rt_get(dst, deadline, cancelled)?
-            .as_ref()
-            .and_then(route_from_rt))
+        let ifaces = ifinfo::observe(deadline, cancelled)?
+            .into_iter()
+            .map(|observation| observation.iface)
+            .collect::<Vec<_>>();
+        let reply = rt_get(dst, deadline, cancelled)?;
+        check_observation(deadline, cancelled)?;
+        Ok(lookup_from_rt(reply.as_ref(), dst, &ifaces))
     }
     fn default_routes(&self) -> Result<Vec<Route>, NetError> {
-        Ok(rt_get(
-            Ipv4Addr::UNSPECIFIED,
-            Instant::now() + Duration::from_secs(1),
-            &|| false,
-        )?
-        .as_ref()
-        .and_then(route_from_rt)
-        .filter(|r| !r.local)
-        .into_iter()
-        .collect())
+        Ok(defaults_from_rt(
+            rt_get(
+                Ipv4Addr::UNSPECIFIED,
+                Instant::now() + Duration::from_secs(1),
+                &|| false,
+            )?
+            .as_ref(),
+        ))
     }
 }
 pub(crate) struct OsIfaces;

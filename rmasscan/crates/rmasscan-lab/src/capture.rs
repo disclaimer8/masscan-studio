@@ -259,7 +259,8 @@ pub fn scrub(v: &mut Value) {
         _ => {}
     }
 }
-fn scrub_str(s: &str) -> String {
+/// [`scrub`] of one string (a log line, an error message).
+pub(crate) fn scrub_str(s: &str) -> String {
     let home = scrub_home(s);
     scrub_namespaces(&home)
 }
@@ -326,6 +327,143 @@ fn scrub_namespaces_tail(mut head: String, tail: &str) -> String {
     head.push_str(&scrub_namespaces(tail));
     head
 }
+/// What an autodetect suite rewrites in everything it writes to evidence, on top of [`scrub`]: its own `--out` (to
+/// `$OUT`) and private work directory (to `$WORK`), by their paths as given, made absolute and resolved, and the
+/// account that started it (to `$USER`, see [`account`]): a bare name, and the dash-joined forms `-Users-NAME`,
+/// `-home-NAME` a tool makes of a path. One helper for the Linux, macOS and Windows suites.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Scrubber {
+    /// (path, placeholder), the longest path first.
+    prefixes: Vec<(String, &'static str)>,
+    account: Option<String>,
+}
+/// A character of a path component or a name: a path or a name ends at any other.
+fn name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')
+}
+impl Scrubber {
+    pub(crate) fn new(out: &Path, work: Option<&Path>, account: Option<&str>) -> Self {
+        let mut prefixes: Vec<(String, &'static str)> = Vec::new();
+        for (p, placeholder) in std::iter::once((out, "$OUT")).chain(work.map(|w| (w, "$WORK"))) {
+            let raw = p.to_string_lossy().into_owned();
+            // A relative form only with a separator in it: a bare `out` would also be a word of a message.
+            let forms = [
+                raw.contains(['/', '\\']).then_some(raw),
+                std::path::absolute(p)
+                    .ok()
+                    .map(|a| a.to_string_lossy().into_owned()),
+                fs::canonicalize(p)
+                    .ok()
+                    .map(|a| a.to_string_lossy().into_owned()),
+            ];
+            for f in forms.into_iter().flatten() {
+                let f = f.trim_end_matches(['/', '\\']).to_owned();
+                if f.len() > 1 && !prefixes.iter().any(|(q, _)| *q == f) {
+                    prefixes.push((f, placeholder));
+                }
+            }
+        }
+        prefixes.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
+        Scrubber {
+            prefixes,
+            account: account.map(str::to_owned),
+        }
+    }
+    /// One string (a record's value or key, a log line).
+    pub(crate) fn str(&self, s: &str) -> String {
+        let mut t = s.to_owned();
+        for (p, placeholder) in &self.prefixes {
+            // A path, not the start of a longer name (`--out` `/x/out` is not `/x/out.bak` or `/x/outer`).
+            t = replace_bounded(&t, p, placeholder, |head, after| {
+                !head.chars().next_back().is_some_and(name_char) && !after.is_some_and(name_char)
+            });
+        }
+        if let Some(a) = &self.account {
+            // The name as a word (`alice`, `\Users\alice`, `alice.local`, `alice@host`; not `malice`, `alice_x`,
+            // `alice-mbp`, `--alice`), or as the tail of a dash-joined path (`-Users-alice/`, `-Users-alice-repo`). A `:`
+            // joins a word too: a short name that is hex (`a1`) never rewrites a byte of a MAC or IPv6 address.
+            let word = |c: Option<char>| {
+                c.is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':'))
+            };
+            t = replace_bounded(&t, a, "$USER", |head, after| {
+                let dashed = head.ends_with("-Users-") || head.ends_with("-home-");
+                (!word(head.chars().next_back()) && !word(after))
+                    || (dashed && !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'))
+            });
+        }
+        scrub_str(&t)
+    }
+    /// Every string of a record, keys included.
+    pub(crate) fn value(&self, v: &mut Value) {
+        match v {
+            Value::String(s) => *s = self.str(s),
+            Value::Array(a) => a.iter_mut().for_each(|x| self.value(x)),
+            Value::Object(m) => {
+                let old = std::mem::take(m);
+                for (k, mut val) in old {
+                    self.value(&mut val);
+                    m.insert(self.str(&k), val);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// A text record another tool wrote into the run (`macos-lab status`), rewritten in place when it changes. A
+    /// file that is not UTF-8 is left as it is (the verifier still scans it).
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn file(&self, path: &Path) -> Result<(), String> {
+        let b = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let Ok(text) = String::from_utf8(b) else {
+            return Ok(());
+        };
+        let s = self.str(&text);
+        if s != text {
+            fs::write(path, s).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    }
+}
+/// `s` with every occurrence of `needle` that `bounded(text before it, char after it)` accepts replaced by `with`.
+fn replace_bounded(
+    s: &str,
+    needle: &str,
+    with: &str,
+    bounded: impl Fn(&str, Option<char>) -> bool,
+) -> String {
+    if needle.is_empty() {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    for (i, _) in s.match_indices(needle) {
+        let end = i + needle.len();
+        if bounded(&s[..i], s[end..].chars().next()) {
+            out.push_str(&s[last..i]);
+            out.push_str(with);
+            last = end;
+        }
+    }
+    out.push_str(&s[last..]);
+    out
+}
+/// The account a suite was started by, which its evidence never names: `$SUDO_USER` when it is set and not root,
+/// else `$USER`. Root names no one (it is the lab's own account, and a word of the stand's texts: "root verified"),
+/// so it is never rewritten.
+pub(crate) fn account(sudo_user: Option<&str>, user: Option<&str>) -> Option<String> {
+    let named = |u: Option<&str>| {
+        u.map(str::trim)
+            .filter(|u| !u.is_empty() && *u != "root")
+            .map(str::to_owned)
+    };
+    named(sudo_user).or_else(|| named(user))
+}
+/// [`account`] of this process's environment.
+pub(crate) fn account_from_env() -> Option<String> {
+    account(
+        std::env::var("SUDO_USER").ok().as_deref(),
+        std::env::var("USER").ok().as_deref(),
+    )
+}
 fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     fn checked(args: &[&str]) -> Result<String, String> {
         let o = Command::new(args[0])
@@ -340,6 +478,13 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         }
         Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
+    let (autodetect, scan_control) = match a.get("mode").map(String::as_str) {
+        None | Some("default") => (false, false),
+        Some("autodetect") => (true, false),
+        // The scan-control stand: the autodetect stand plus one more veth pair (`SECOND_*`), in the same namespaces.
+        Some("scan-control") => (true, true),
+        Some(other) => return Err(format!("unknown isolation mode {other}")),
+    };
     let before = fs::read_to_string(get(a, "host-links-before")?).map_err(err)?;
     let now_links = checked(&["ip", "-o", "link"])?;
     let mut names = now_links
@@ -352,8 +497,19 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     }
     let mut v = json!({"uplink":false,"bridge":false,"nat":false,"default_route":false,"ip_forward":0,"ipv6":"disabled","veth_created_inside_scanner_ns_peer_moved_to_peer_ns":true,"host_link_list_unchanged":true,"verified_by":"Rust capture isolation: live namespace links, routes, forwarding, IPv6 and host link baseline; plus wire-lab lifecycle assertions"});
     let mut endpoints = Vec::new();
+    let mut second_links: Vec<Value> = Vec::new();
     for (k, opt) in [("scanner", "ns-a"), ("peer", "ns-b")] {
         let ns = get(a, opt)?;
+        let mode = if autodetect {
+            IsolationMode::Autodetect
+        } else {
+            IsolationMode::Default
+        };
+        let side = if k == "scanner" {
+            Side::Scanner
+        } else {
+            Side::Peer
+        };
         let links: Value =
             serde_json::from_str(&checked(&["ip", "-n", ns, "-d", "-j", "link"])?).map_err(err)?;
         let routes: Value =
@@ -367,11 +523,32 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             "cat",
             "/proc/sys/net/ipv4/ip_forward",
         ])?;
-        check_isolation_snapshot(&links, &routes, &forwarding)?;
+        let (links, routes, second) = if scan_control {
+            let (l, r, sec) = split_second_link(&links, &routes, side)?;
+            (l, r, Some(sec))
+        } else {
+            (links, routes, None)
+        };
+        check_isolation_snapshot(&links, &routes, &forwarding, mode, side)?;
         let endpoint = links
             .as_array()
             .and_then(|ls| ls.iter().find(|x| x["ifname"] != "lo"))
             .ok_or("veth missing")?;
+        if let Some(sec) = second {
+            let sec_if = sec["ifname"].as_str().ok_or("second link name missing")?;
+            if checked(&[
+                "ip",
+                "netns",
+                "exec",
+                ns,
+                "cat",
+                &format!("/proc/sys/net/ipv6/conf/{sec_if}/disable_ipv6"),
+            ])? != "1"
+            {
+                return Err("IPv6 not disabled on the second lab veth".into());
+            }
+            second_links.push(sec);
+        }
         let iface = endpoint["ifname"]
             .as_str()
             .ok_or("interface name missing")?;
@@ -392,15 +569,29 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         if !checked(&["ip", "-n", ns, "-6", "route", "show", "default"])?.is_empty() {
             return Err("IPv6 default route in lab".into());
         }
-        let unreachable = Command::new("ip")
+        let route_get = Command::new("ip")
             .args(["netns", "exec", ns, "ip", "route", "get", "8.8.8.8"])
             .output()
             .map_err(err)?;
-        if unreachable.status.success() {
-            return Err("lab has route to external IP".into());
+        if mode == IsolationMode::Autodetect && side == Side::Scanner {
+            if !route_get.status.success() {
+                return Err("scanner namespace has no route to 8.8.8.8 via the peer".into());
+            }
+            let out = String::from_utf8_lossy(&route_get.stdout);
+            check_route_get(&out, iface)?;
+            check_isolation_neighbours(
+                &serde_json::from_str(&checked(&["ip", "-n", ns, "-j", "neigh", "show"])?)
+                    .map_err(err)?,
+                iface,
+            )?;
+            v[format!("{k}_route_get_8_8_8_8")] = json!(out.lines().next().unwrap_or_default());
+        } else {
+            if route_get.status.success() {
+                return Err("lab has route to external IP".into());
+            }
+            v[format!("{k}_route_get_8_8_8_8")] =
+                json!(String::from_utf8_lossy(&route_get.stderr).trim());
         }
-        v[format!("{k}_route_get_8_8_8_8")] =
-            json!(String::from_utf8_lossy(&unreachable.stderr).trim());
         v[format!("{k}_routes")] = json!(
             checked(&["ip", "-n", ns, "route", "show"])?
                 .lines()
@@ -420,14 +611,147 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             return Err("namespace veth endpoints are not paired".into());
         }
     }
+    if scan_control {
+        for (left, right) in [(0, 1), (1, 0)] {
+            let (e, p) = (&second_links[left], &second_links[right]);
+            if e["link_index"].as_u64().is_none() || e["link_index"] != p["ifindex"] {
+                return Err("second namespace veth endpoints are not paired".into());
+            }
+        }
+        v["second_link"] = json!({"scanner": SECOND_SCANNER_IF, "peer": SECOND_PEER_IF, "adapter_ip": SECOND_ADAPTER_IP});
+    }
+    if autodetect {
+        v["mode"] = json!(if scan_control {
+            "scan-control"
+        } else {
+            "autodetect"
+        });
+        v["default_route"] = isolation_default_route(
+            IsolationMode::Autodetect,
+            endpoints[0]["ifname"].as_str().ok_or("veth missing")?,
+        );
+    }
     write_json(get(a, "out")?, &v)?;
     Ok(0)
+}
+
+/// Which namespace of the lab pair a snapshot describes (autodetect mode only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Scanner,
+    Peer,
+}
+
+/// Sealed-lab mode of `capture isolation`. `Default` is the original sealed lab (no default route
+/// anywhere). `Autodetect` is the stand for the scanner's auto-detection: the scanner namespace has
+/// exactly the connected route and a default route via the peer, plus permanent neighbours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IsolationMode {
+    Default,
+    Autodetect,
+}
+
+const AUTODETECT_NET: &str = "198.18.0.0/24";
+const AUTODETECT_GATEWAY: &str = "198.18.0.2";
+const AUTODETECT_NEIGHBOURS: [&str; 4] = ["198.18.0.2", "198.18.0.3", "198.18.0.4", "198.18.0.5"];
+
+fn autodetect_via(iface: &str) -> String {
+    format!("via {AUTODETECT_GATEWAY} dev {iface}")
+}
+
+/// The `default_route` field of isolation.json, recorded as it is.
+pub fn isolation_default_route(mode: IsolationMode, scanner_iface: &str) -> Value {
+    match mode {
+        IsolationMode::Default => json!(false),
+        IsolationMode::Autodetect => {
+            json!({"scanner_ns": autodetect_via(scanner_iface), "peer_ns": false})
+        }
+    }
+}
+
+/// Whether a recorded isolation.json document permits a run in `mode`.
+pub fn isolation_permits(v: &Value, mode: IsolationMode) -> bool {
+    let default_ok = match mode {
+        IsolationMode::Default => v["default_route"] == false,
+        IsolationMode::Autodetect => {
+            v["default_route"]["scanner_ns"] == autodetect_via("veth-a")
+                && v["default_route"]["peer_ns"] == false
+                && v["default_route"].as_object().map(|o| o.len()) == Some(2)
+        }
+    };
+    ["uplink", "bridge", "nat"].iter().all(|k| v[*k] == false)
+        && default_ok
+        && v["ip_forward"].as_u64() == Some(0)
+        && v["ipv6"] == "disabled"
+        && v["veth_created_inside_scanner_ns_peer_moved_to_peer_ns"] == true
+        && v["host_link_list_unchanged"] == true
+}
+
+/// The second veth pair of the scan-control stand (`wire-lab.sh --suite scan-control`), for `--adapter[1]`: no
+/// address on either end, a /32 route to [`SECOND_ADAPTER_IP`] on the peer end only; the scanner binds the address
+/// itself (`--adapter-ip[1]`, it is assigned to no interface).
+pub const SECOND_SCANNER_IF: &str = "veth-a2";
+pub const SECOND_PEER_IF: &str = "veth-b2";
+pub const SECOND_ADAPTER_IP: &str = "198.18.0.6";
+
+/// Splits a scan-control namespace snapshot into the primary stand (what [`check_isolation_snapshot`] judges,
+/// unchanged), its routes, and the second link's record, after checking that the namespace holds exactly `lo` and two
+/// veths, that the second link is a veth without a master, that the scanner end of it has no route at all and that
+/// the peer end has exactly the /32 route to [`SECOND_ADAPTER_IP`] (no gateway, no default).
+pub fn split_second_link(
+    links: &Value,
+    routes: &Value,
+    side: Side,
+) -> Result<(Value, Value, Value), String> {
+    let second_name = match side {
+        Side::Scanner => SECOND_SCANNER_IF,
+        Side::Peer => SECOND_PEER_IF,
+    };
+    let all = links.as_array().ok_or("invalid interface inventory")?;
+    if all.len() != 3 || all.iter().filter(|l| l["ifname"] == "lo").count() != 1 {
+        return Err("a scan-control namespace must contain only lo and two veths".into());
+    }
+    let second = all
+        .iter()
+        .find(|l| l["ifname"] == second_name)
+        .ok_or_else(|| format!("the second link {second_name} is missing"))?;
+    if second["linkinfo"]["info_kind"] != "veth" || !second["master"].is_null() {
+        return Err("foreign link or bridge master on the second link".into());
+    }
+    let primary: Vec<Value> = all
+        .iter()
+        .filter(|l| l["ifname"] != second_name)
+        .cloned()
+        .collect();
+    let routes = routes.as_array().ok_or("invalid route inventory")?;
+    let on_second: Vec<&Value> = routes.iter().filter(|r| r["dev"] == second_name).collect();
+    match side {
+        Side::Scanner if !on_second.is_empty() => {
+            return Err("the scanner end of the second link has a route".into());
+        }
+        Side::Peer
+            if on_second.len() != 1
+                || on_second[0]["dst"] != SECOND_ADAPTER_IP
+                || !on_second[0]["gateway"].is_null() =>
+        {
+            return Err("the peer end of the second link must have exactly the /32 route to the second adapter address".into());
+        }
+        _ => {}
+    }
+    let rest: Vec<Value> = routes
+        .iter()
+        .filter(|r| r["dev"] != second_name)
+        .cloned()
+        .collect();
+    Ok((json!(primary), json!(rest), second.clone()))
 }
 
 pub fn check_isolation_snapshot(
     links: &Value,
     routes: &Value,
     forwarding: &str,
+    mode: IsolationMode,
+    side: Side,
 ) -> Result<(), String> {
     let links = links.as_array().ok_or("invalid interface inventory")?;
     if links.len() != 2 || links.iter().filter(|l| l["ifname"] == "lo").count() != 1 {
@@ -441,17 +765,70 @@ pub fn check_isolation_snapshot(
         return Err("foreign link or bridge master in namespace".into());
     }
     let routes = routes.as_array().ok_or("invalid route inventory")?;
-    if routes.len() > 1
-        || routes
-            .iter()
-            .any(|r| r["dst"] == "default" || !r["gateway"].is_null())
-    {
-        return Err("unexpected route or gateway in lab".into());
+    match (mode, side) {
+        (IsolationMode::Autodetect, Side::Scanner) => {
+            let dev = veth["ifname"].as_str().ok_or("veth name missing")?;
+            let connected = routes.iter().filter(|r| {
+                r["dst"] == AUTODETECT_NET && r["gateway"].is_null() && r["dev"] == dev
+            });
+            let default = routes.iter().filter(|r| {
+                r["dst"] == "default" && r["gateway"] == AUTODETECT_GATEWAY && r["dev"] == dev
+            });
+            if routes.len() != 2 || connected.count() != 1 || default.count() != 1 {
+                return Err("scanner namespace routes are not exactly the connected route and the default route via the peer".into());
+            }
+        }
+        (IsolationMode::Default, _) | (IsolationMode::Autodetect, Side::Peer) => {
+            if routes.len() > 1
+                || routes
+                    .iter()
+                    .any(|r| r["dst"] == "default" || !r["gateway"].is_null())
+            {
+                return Err("unexpected route or gateway in lab".into());
+            }
+        }
     }
     if forwarding.trim() != "0" {
         return Err("namespace forwarding enabled or unknown".into());
     }
     Ok(())
+}
+
+/// Scanner namespace neighbours: 198.18.0.2-5 permanent on the lab veth, nothing from outside the /24.
+pub fn check_isolation_neighbours(neigh: &Value, iface: &str) -> Result<(), String> {
+    let list = neigh.as_array().ok_or("invalid neighbour inventory")?;
+    for want in AUTODETECT_NEIGHBOURS {
+        let ok = list.iter().any(|n| {
+            n["dst"] == want
+                && n["dev"] == iface
+                && n["state"]
+                    .as_array()
+                    .is_some_and(|s| s.iter().any(|x| x == "PERMANENT"))
+        });
+        if !ok {
+            return Err(format!("neighbour {want} is not permanent on {iface}"));
+        }
+    }
+    if list.iter().any(|n| {
+        !n["dst"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("198.18.0."))
+    }) {
+        return Err("neighbour outside the lab network".into());
+    }
+    Ok(())
+}
+
+/// `ip route get 8.8.8.8` in the scanner namespace must go via the peer on the lab veth.
+pub fn check_route_get(out: &str, iface: &str) -> Result<(), String> {
+    let first = out.lines().next().unwrap_or_default();
+    if first.starts_with(&format!("8.8.8.8 {} ", autodetect_via(iface)))
+        || first == format!("8.8.8.8 {}", autodetect_via(iface))
+    {
+        Ok(())
+    } else {
+        Err(format!("route get 8.8.8.8 is not via the peer: {first}"))
+    }
 }
 
 /// macOS: `capture marker` and `capture responder` are Linux-lab tools (CAP_NET_RAW inside a
@@ -493,6 +870,78 @@ pub fn run(args: &[String]) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn veth(name: &str, index: u64, peer_index: u64) -> Value {
+        json!({"ifname":name,"ifindex":index,"link_index":peer_index,"linkinfo":{"info_kind":"veth"},"master":null})
+    }
+    fn scan_control_links(side: Side) -> Value {
+        let (p, s) = match side {
+            Side::Scanner => ("veth-a", SECOND_SCANNER_IF),
+            Side::Peer => ("veth-b", SECOND_PEER_IF),
+        };
+        json!([{"ifname":"lo"}, veth(p, 2, 3), veth(s, 4, 5)])
+    }
+    #[test]
+    fn the_second_link_is_split_off_and_the_primary_stand_is_judged_as_before() {
+        let routes = json!([{"dst":"198.18.0.0/24","dev":"veth-a"},{"dst":"default","gateway":"198.18.0.2","dev":"veth-a"}]);
+        let (l, r, sec) =
+            split_second_link(&scan_control_links(Side::Scanner), &routes, Side::Scanner).unwrap();
+        assert_eq!(sec["ifname"], SECOND_SCANNER_IF);
+        assert!(
+            check_isolation_snapshot(&l, &r, "0", IsolationMode::Autodetect, Side::Scanner).is_ok()
+        );
+        let routes = json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":SECOND_ADAPTER_IP,"dev":"veth-b2"}]);
+        let (l, r, sec) =
+            split_second_link(&scan_control_links(Side::Peer), &routes, Side::Peer).unwrap();
+        assert_eq!(sec["ifname"], SECOND_PEER_IF);
+        assert!(
+            check_isolation_snapshot(&l, &r, "0", IsolationMode::Autodetect, Side::Peer).is_ok()
+        );
+    }
+    #[test]
+    fn a_third_link_a_master_or_a_stray_route_on_the_second_link_breaks_the_seal() {
+        let peer_routes = json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":SECOND_ADAPTER_IP,"dev":"veth-b2"}]);
+        let scan_routes = json!([{"dst":"198.18.0.0/24","dev":"veth-a"},{"dst":"default","gateway":"198.18.0.2","dev":"veth-a"}]);
+        let go = |links: Value, routes: &Value, side| split_second_link(&links, routes, side);
+        // an extra link, or only the primary one
+        let mut four = scan_control_links(Side::Scanner);
+        four.as_array_mut().unwrap().push(veth("veth-x", 6, 7));
+        assert!(go(four, &scan_routes, Side::Scanner).is_err());
+        assert!(
+            go(
+                json!([{"ifname":"lo"},veth("veth-a", 2, 3)]),
+                &scan_routes,
+                Side::Scanner
+            )
+            .is_err()
+        );
+        // the second link under a bridge, or not a veth
+        let mut mastered = scan_control_links(Side::Scanner);
+        mastered[2]["master"] = json!("br0");
+        assert!(go(mastered, &scan_routes, Side::Scanner).is_err());
+        let mut bridge = scan_control_links(Side::Scanner);
+        bridge[2]["linkinfo"]["info_kind"] = json!("bridge");
+        assert!(go(bridge, &scan_routes, Side::Scanner).is_err());
+        // a route on the scanner end of the second link
+        let mut stray = scan_routes.clone();
+        stray
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"dst":"198.18.0.0/24","dev":"veth-a2"}));
+        assert!(go(scan_control_links(Side::Scanner), &stray, Side::Scanner).is_err());
+        // the peer end: no route, a gateway, a default route, the wrong destination
+        for bad in [
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"}]),
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":SECOND_ADAPTER_IP,"gateway":"198.18.0.2","dev":"veth-b2"}]),
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":"default","dev":"veth-b2"}]),
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":"198.18.0.7","dev":"veth-b2"}]),
+        ] {
+            assert!(
+                go(scan_control_links(Side::Peer), &bad, Side::Peer).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(go(scan_control_links(Side::Peer), &peer_routes, Side::Peer).is_ok());
+    }
     #[test]
     fn macos_refuses_marker_and_responder_with_an_explanation_and_leaves_the_rest() {
         for cmd in ["marker", "responder"] {
@@ -653,6 +1102,106 @@ mod tests {
             v["h"], "00ff/home/",
             "an empty user name is not a home path"
         );
+    }
+
+    #[test]
+    fn a_suites_scrubber_writes_its_out_work_and_account_as_placeholders() {
+        // The first macOS window at 6c87e94: `--out` under a scratch directory whose path names the account.
+        let out = Path::new(
+            "/private/tmp/claude-501/-Users-alice/0946/scratchpad/autodetect-out/macos-r1",
+        );
+        let o = out.display();
+        // Strings, not joins: the hermetic tests also run on Windows.
+        let work = format!("{o}/.work");
+        let sc = Scrubber::new(out, Some(Path::new(&work)), Some("alice"));
+        for (input, want) in [
+            (
+                format!("{o}/.work/m01_user_masked.r1/peer.unfiltered"),
+                "$WORK/m01_user_masked.r1/peer.unfiltered",
+            ),
+            (format!("--dir {o}"), "--dir $OUT"),
+            (
+                format!("'{o}/runs/m01_user_masked'"),
+                "'$OUT/runs/m01_user_masked'",
+            ),
+            (format!("{o}"), "$OUT"),
+            // A sibling of --out is not --out; its account name still goes.
+            (
+                format!("{o}.bak/x"),
+                "/private/tmp/claude-501/-Users-$USER/0946/scratchpad/autodetect-out/macos-r1.bak/x",
+            ),
+            (
+                "-Users-alice-masscan-studio".into(),
+                "-Users-$USER-masscan-studio",
+            ),
+            ("/x/-home-alice/masscan".into(), "/x/-home-$USER/masscan"),
+            ("/Users/alice/x".into(), "$HOME/x"),
+            ("/home/alice".into(), "$HOME"),
+            ("C:\\Users\\alice\\t4".into(), "C:\\Users\\$USER\\t4"),
+            ("run by alice.".into(), "run by $USER."),
+            ("alice@host".into(), "$USER@host"),
+            // Words that only contain the name, and the namespace rule of `scrub`.
+            (
+                "malice alice_x alice-mbp --alice".into(),
+                "malice alice_x alice-mbp --alice",
+            ),
+            ("ns wl-scan-12-34".into(), "ns wl-scan-RUNID"),
+        ] {
+            assert_eq!(sc.str(&input), want, "{input}");
+        }
+        // Values and keys of a record, and nothing else of it.
+        let mut v = json!({format!("{o}/k"): [format!("{o}/.work/a"), "alice", 5, true]});
+        sc.value(&mut v);
+        assert_eq!(v, json!({"$OUT/k": ["$WORK/a", "$USER", 5, true]}));
+        // A short hex account name never rewrites a byte of a MAC, an IPv6 address or a hash; as a word it goes.
+        let sc = Scrubber::new(out, None, Some("a1"));
+        assert_eq!(
+            sc.str("link/ether 02:a1:00:00:00:01 fe80::a1 a1b2 /home/a1/x run by a1"),
+            "link/ether 02:a1:00:00:00:01 fe80::a1 a1b2 $HOME/x run by $USER"
+        );
+        // Without a work directory or an account, only --out goes.
+        let sc = Scrubber::new(out, None, None);
+        assert_eq!(sc.str(&format!("{o}/.work/a alice")), "$OUT/.work/a alice");
+        // A trailing separator on --out changes nothing.
+        let sc = Scrubber::new(Path::new("/srv/out/"), None, None);
+        assert_eq!(sc.str("/srv/out/.work/a /srv/out"), "$OUT/.work/a $OUT");
+        assert_eq!(sc.str("/srv/outer/a"), "/srv/outer/a");
+    }
+
+    #[test]
+    fn a_tools_text_record_is_rewritten_in_place_and_other_bytes_are_left_alone() {
+        let d =
+            std::env::temp_dir().join(format!("rml-scrub-file-{}", crate::windows_suite::nonce()));
+        fs::create_dir_all(&d).unwrap();
+        let out = format!("{}/out", d.display());
+        let sc = Scrubber::new(Path::new(&out), None, Some("alice"));
+        let status = d.join("status-pre.json");
+        fs::write(&status, format!("{{\"note\":\"alice in {out}/.work\"}}\n")).unwrap();
+        sc.file(&status).unwrap();
+        assert_eq!(
+            fs::read_to_string(&status).unwrap(),
+            "{\"note\":\"$USER in $OUT/.work\"}\n"
+        );
+        // Not UTF-8: untouched (the verifier still scans it); a missing file is an error.
+        let raw = d.join("x.txt");
+        let bytes = [b'a', 0xff, b'l', b'i', b'c', b'e'];
+        fs::write(&raw, bytes).unwrap();
+        sc.file(&raw).unwrap();
+        assert_eq!(fs::read(&raw).unwrap(), bytes);
+        assert!(sc.file(&d.join("missing.json")).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_account_is_sudo_user_unless_root_then_user_and_root_is_none() {
+        assert_eq!(
+            account(Some("alice"), Some("root")).as_deref(),
+            Some("alice")
+        );
+        assert_eq!(account(Some("root"), Some("bob")).as_deref(), Some("bob"));
+        assert_eq!(account(None, Some("bob")).as_deref(), Some("bob"));
+        assert_eq!(account(Some(""), Some("root")), None);
+        assert_eq!(account(None, None), None);
     }
 
     #[test]

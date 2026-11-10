@@ -20,10 +20,10 @@ fn stop_requested() -> bool {
     }
     rmasscan_net::lab_io::stop_requested()
 }
-/// Signal a process directly. `command()` kills its own child as soon as the stop flag is up, so a
-/// cleanup kill sent through it would die before it ran (final review M-2).
-fn signal_process(sig: &str, pid: u32) {
-    let _ = Command::new("kill")
+/// Signal a process directly (`/bin/kill` by absolute path). `command()` kills its own child as soon as the stop
+/// flag is up, so a cleanup kill sent through it would die before it ran (final review M-2).
+pub(crate) fn signal_process(sig: &str, pid: u32) {
+    let _ = Command::new("/bin/kill")
         .arg(format!("-{sig}"))
         .arg(pid.to_string())
         .stdout(Stdio::null())
@@ -124,7 +124,7 @@ fn sorted_replies(s: &Value) -> Vec<String> {
     r.sort();
     r
 }
-fn spawn(a: &[String], out: &Path, err: &Path) -> Result<Child, String> {
+pub(crate) fn spawn(a: &[String], out: &Path, err: &Path) -> Result<Child, String> {
     Command::new(&a[0])
         .args(&a[1..])
         .stdout(Stdio::from(
@@ -2085,7 +2085,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         preflight_gnu_time(&c.work)?;
     }
     let isolation = read_json(c.out.join("isolation.json"))?;
-    if !isolation_permits(&isolation) {
+    if !crate::capture::isolation_permits(&isolation, crate::capture::IsolationMode::Default) {
         return Err(format!(
             "lab isolation attestation does not permit raw suite: {isolation}"
         ));
@@ -2119,16 +2119,6 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     result?;
     Ok(i32::from(d.checks.iter().any(|c| c["result"] == "FAIL")))
 }
-fn isolation_permits(v: &Value) -> bool {
-    ["uplink", "bridge", "nat", "default_route"]
-        .iter()
-        .all(|k| v[*k] == false)
-        && v["ip_forward"].as_u64() == Some(0)
-        && v["ipv6"] == "disabled"
-        && v["veth_created_inside_scanner_ns_peer_moved_to_peer_ns"] == true
-        && v["host_link_list_unchanged"] == true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2163,7 +2153,10 @@ mod tests {
     fn archived_isolation_all_fields_are_required() {
         let raw = read_json(golden().join("manifest.json")).unwrap();
         let good = &raw["isolation"];
-        assert!(isolation_permits(good));
+        assert!(crate::capture::isolation_permits(
+            good,
+            crate::capture::IsolationMode::Default
+        ));
         for k in [
             "uplink",
             "bridge",
@@ -2176,7 +2169,10 @@ mod tests {
         ] {
             let mut bad = good.clone();
             bad[k] = Value::Null;
-            assert!(!isolation_permits(&bad), "{k}");
+            assert!(
+                !crate::capture::isolation_permits(&bad, crate::capture::IsolationMode::Default),
+                "{k}"
+            );
         }
     }
     #[test]

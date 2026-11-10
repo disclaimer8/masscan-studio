@@ -1,0 +1,10 @@
+{
+  "tag": "o07_hostonly",
+  "kind": "scan",
+  "format": "hostonly",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": true
+}

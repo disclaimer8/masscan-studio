@@ -1,0 +1,6 @@
+{
+  "rc": 0,
+  "lines": 4,
+  "sha256": "586a90978e78968f623b9a043b1ea42901828f09b1aaf3bf3f5b9711d0b8de04",
+  "stand_line": "Ethernet 2 index=14 mac=52-54-00-04-80-a9 ipv4=198.18.0.1 up ethernet id=\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40} desc=Ethernet 2"
+}

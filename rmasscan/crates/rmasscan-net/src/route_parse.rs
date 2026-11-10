@@ -327,8 +327,10 @@ mod rtsock {
 
     use super::AF_INET;
     use super::bytes::{i32_at, ipv4_at, u16_at};
-    use crate::discover::Route;
+    use crate::discover::{Iface, Route};
 
+    /// Loopback Darwin: через него ядро доставляет пакеты на собственные адреса хоста.
+    pub(crate) const LO0: &str = "lo0";
     /// `sizeof(struct rt_msghdr)` Darwin: 9 полей по 2/4 байта и `rt_metrics` (14 × u32).
     pub(crate) const RT_MSGHDR_LEN: usize = 92;
     pub(crate) const RTM_VERSION: u8 = 5;
@@ -484,7 +486,8 @@ mod rtsock {
     }
 
     /// Ответ → [`Route`]: `RTF_LOCAL` или `lo0` это адрес хоста; шлюз только `sockaddr_in` при `RTF_GATEWAY`
-    /// (`sockaddr_dl` это on-link); `RTF_REJECT`/`RTF_BLACKHOLE` без `RTF_LLINFO` это «нет маршрута».
+    /// (`sockaddr_dl` это on-link); `RTF_REJECT`/`RTF_BLACKHOLE` без `RTF_LLINFO` это «нет маршрута». Адреса
+    /// интерфейсов, о которых ответ может не знать, добавляет [`lookup_from_rt`].
     pub(crate) fn route_from_rt(r: &RtReply) -> Option<Route> {
         // llinfo-маршрут хоста с RTF_REJECT это сосед, чей ARP только что не удался (XNU `arpt_down`): он остаётся
         // on-link, иначе следующий скан той же цели получил бы «нет маршрута».
@@ -492,7 +495,7 @@ mod rtsock {
             return None;
         }
         let ifname = r.ifp.clone().unwrap_or_default();
-        let local = r.flags & RTF_LOCAL != 0 || ifname == "lo0";
+        let local = r.flags & RTF_LOCAL != 0 || ifname == LO0;
         let via_gateway = r.flags & RTF_GATEWAY != 0 && !r.gateway_is_link;
         Some(Route {
             ifindex: r.ifindex,
@@ -504,6 +507,41 @@ mod rtsock {
             },
             local,
         })
+    }
+
+    /// `RouteTable::lookup` Darwin: ответ `RTM_GET` к `dst` (`None`: маршрута нет) и интерфейсы `getifaddrs` →
+    /// [`Route`]. Через неё идут `macos::route::OsRoutes` и герметичная таблица стенда m1 в тестах.
+    ///
+    /// `dst`, равный IPv4-адресу любого интерфейса, это адрес хоста через `lo0`, что бы ни ответил `RTM_GET` (так Darwin
+    /// доставляет на свои адреса). Маршрут хоста `dst … lo0` с `RTF_LOCAL` Darwin клонирует из маршрута подсети только
+    /// после того, как хост сам отправит на этот адрес; до того `RTM_GET` отвечает маршрутом подсети через интерфейс
+    /// адреса (`<UP,DONE,CLONING>`), и без этой проверки ответ зависел бы от истории кеша маршрутов. Индекс такого
+    /// маршрута это индекс `lo0` в списке (0, если `lo0` там нет). Иначе [`route_from_rt`]: `RTF_LOCAL` или `lo0`
+    /// ответа тоже адрес хоста.
+    pub(crate) fn lookup_from_rt(
+        reply: Option<&RtReply>,
+        dst: Ipv4Addr,
+        ifaces: &[Iface],
+    ) -> Option<Route> {
+        if ifaces.iter().any(|i| i.ipv4.contains(&dst)) {
+            return Some(Route {
+                ifindex: ifaces.iter().find(|i| i.name == LO0).map_or(0, |i| i.index),
+                ifname: LO0.into(),
+                gateway: None,
+                local: true,
+            });
+        }
+        reply.and_then(route_from_rt)
+    }
+
+    /// `RouteTable::default_routes` Darwin: ответ `RTM_GET 0.0.0.0` (C `rawsock-getif.c`) → один маршрут или пусто
+    /// (маршрута нет или он локальный).
+    pub(crate) fn defaults_from_rt(reply: Option<&RtReply>) -> Vec<Route> {
+        reply
+            .and_then(route_from_rt)
+            .filter(|r| !r.local)
+            .into_iter()
+            .collect()
     }
 }
 
@@ -526,8 +564,12 @@ mod iphlp {
         /// `0.0.0.0` это on-link.
         pub next_hop: Ipv4Addr,
         pub metric: u32,
-        /// Флаг `Loopback` строки или IfType 24 её интерфейса ([`mark_loopback`]).
-        pub loopback: bool,
+        /// Флаг `Loopback` строки `MIB_IPFORWARD_ROW2` как есть. Windows ставит его и строкам, которые не адрес хоста
+        /// (/32 широковещательного адреса подсети), поэтому он только исключает строку из маршрутов по умолчанию
+        /// ([`defaults_from_table`]), но не делает назначение локальным ([`route_from_best`]).
+        pub mib_loopback: bool,
+        /// Интерфейс строки это software loopback, IfType 24 ([`mark_loopback`]).
+        pub loopback_if: bool,
     }
 
     /// Адаптер `GetAdaptersAddresses(AF_INET)`.
@@ -576,21 +618,42 @@ mod iphlp {
             .map_or_else(|| format!("ifindex {ifindex}"), |i| i.name.clone())
     }
 
-    /// Строки через интерфейс IfType 24 (software loopback) получают `loopback`.
+    /// Строки через интерфейс IfType 24 (software loopback) получают `loopback_if`.
     pub(crate) fn mark_loopback(rows: &mut [Fwd], adapters: &[WinAdapter]) {
         for row in rows {
             if adapters
                 .iter()
                 .any(|a| a.if_index == row.ifindex && a.if_type == IF_TYPE_SOFTWARE_LOOPBACK)
             {
-                row.loopback = true;
+                row.loopback_if = true;
             }
         }
     }
 
-    /// `GetBestRoute2` → [`Route`] (правило `Route::local`: флаг loopback строки или `dst` равен unicast-адресу адаптера).
+    /// `RouteTable::lookup` Windows: строка `GetBestRoute2` к `dst` и адаптеры `GetAdaptersAddresses` → [`Route`]
+    /// ([`mark_loopback`], затем [`route_from_best`]). Через неё идут `windows::os::OsRoutes` и герметичная таблица
+    /// гостя в тестах.
+    pub(crate) fn lookup_from_best(row: Fwd, dst: Ipv4Addr, adapters: &[WinAdapter]) -> Route {
+        let mut rows = [row];
+        mark_loopback(&mut rows, adapters);
+        let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
+        route_from_best(&rows[0], dst, &ifaces)
+    }
+
+    /// `RouteTable::default_routes` Windows: строки `GetIpForwardTable2` и адаптеры → маршруты по умолчанию
+    /// ([`mark_loopback`], затем [`defaults_from_table`]).
+    pub(crate) fn defaults_from_rows(mut rows: Vec<Fwd>, adapters: &[WinAdapter]) -> Vec<Route> {
+        mark_loopback(&mut rows, adapters);
+        let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
+        defaults_from_table(&rows, &ifaces)
+    }
+
+    /// `GetBestRoute2` → [`Route`]. Правило `Route::local`: `dst` равен unicast-адресу адаптера или лучший маршрут идёт
+    /// через software loopback (IfType 24). Флаг MIB `Loopback` строки сам по себе назначение локальным не делает:
+    /// Windows ставит его и строке /32 широковещательного адреса подсети, а такая строка это on-link маршрут своего
+    /// интерфейса (шлюз это `next_hop`, если он задан), как `RTN_BROADCAST` на Linux и маршрут без `RTF_LOCAL` на macOS.
     pub(crate) fn route_from_best(row: &Fwd, dst: Ipv4Addr, ifaces: &[Iface]) -> Route {
-        let local = row.loopback || ifaces.iter().any(|i| i.ipv4.contains(&dst));
+        let local = row.loopback_if || ifaces.iter().any(|i| i.ipv4.contains(&dst));
         Route {
             ifindex: row.ifindex,
             ifname: name_of(row.ifindex, ifaces),
@@ -599,11 +662,12 @@ mod iphlp {
         }
     }
 
-    /// Маршруты по умолчанию: префикс 0, не loopback, по `metric` (порядок равных сохраняется).
+    /// Маршруты по умолчанию: префикс 0, без флага MIB `Loopback` и не через IfType 24, по `metric` (порядок равных
+    /// сохраняется).
     pub(crate) fn defaults_from_table(rows: &[Fwd], ifaces: &[Iface]) -> Vec<Route> {
         let mut d: Vec<&Fwd> = rows
             .iter()
-            .filter(|r| r.prefix_len == 0 && !r.loopback)
+            .filter(|r| r.prefix_len == 0 && !r.mib_loopback && !r.loopback_if)
             .collect();
         d.sort_by_key(|r| r.metric);
         d.into_iter()

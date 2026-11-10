@@ -1,0 +1,10 @@
+utc 2026-11-10T08:12:50.6077143Z
+reg HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters EnableMDNS = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization DODownloadMode = 99
+reg NetBT Tcpip_{lab GUID} NetbiosOptions = 2   (0 default/DHCP, 1 on, 2 off)
+nic lab 'Ethernet 2' mac 52-54-00-04-80-A9 status Up: ms_tcpip6 enabled=False, ms_tcpip enabled=True, TcpipNetbiosOptions=2
+nic lab addresses: IPv4 198.18.0.1/30
+nic management 'Ethernet' mac 52-54-00-12-34-56 status Up: ms_tcpip6 enabled=True, ms_tcpip enabled=True, TcpipNetbiosOptions=0
+service Dnscache status Running start Automatic
+service DoSvc status Running start Automatic

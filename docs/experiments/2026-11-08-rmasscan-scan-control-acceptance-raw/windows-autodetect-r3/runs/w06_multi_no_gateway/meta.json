@@ -1,0 +1,19 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794299628.499472,
+  "capture_stopped_utc": 1794299677.326861,
+  "end_marker_seen": true,
+  "exe_sha256": "f46e897a34f08f41b6f7228f0b12440a0cc994f3a75cc42521a84d7c354cb28a",
+  "guest_exit": 1,
+  "guest_finished_utc": 1794299643.039253,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794299634.186402,
+  "guest_times": {
+    "finished_utc": 1794299642.188,
+    "started_utc": 1794299642.117
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r23b5592e7ba3839aecb6bc7837b4f5bf-0c4ef0061c589996",
+  "kind": "refusal",
+  "tag": "w06_multi_no_gateway"
+}

@@ -1,0 +1,24 @@
+OUT=/tmp/rmasscan-out.HX1LhE/autodetect-out/linux-autodetect-r2
+2026-11-06T21:22:48Z
+[wire-lab] suite autodetect finished rc=0 (see /tmp/rmasscan-out.HX1LhE/autodetect-out/linux-autodetect-r2/suite.log)
+[wire-lab] done: /tmp/rmasscan-out.HX1LhE/autodetect-out/linux-autodetect-r2
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+2026-11-06T21:24:23Z
+PASS     manifest 
+PASS     l01_auto 
+PASS     l02_auto_multi 
+PASS     l03_adapter 
+PASS     l04_adapter_ip 
+PASS     l05_adapter_mac 
+PASS     l06_router_ip 
+PASS     l07_router_mac 
+PASS     l08_source_port 
+PASS     l09_arp_timeout 
+PASS     l10_no_such_adapter 
+PASS     l11_parity 
+PASS     l12_iflist 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":13}
+VERIFY_RC=0
+2026-11-06T21:24:23Z
+FINISHED

@@ -35,7 +35,8 @@ pub(crate) use adapter::open;
 pub(crate) use os::{OsIfaces, OsRoutes};
 
 /// Обнаружение над IP Helper: безопасная обёртка над `sys::{adapters, best_route, forward_table}`; правила
-/// (IfType 6/71 это Ethernet, 24 это loopback, `Route::local`, порядок по Metric) в переносимом `route_parse`.
+/// (IfType 6/71 это Ethernet, 24 это loopback, `Route::local`, порядок по Metric) и сама склейка строк с адаптерами
+/// (`lookup_from_best`, `defaults_from_rows`) в переносимом `route_parse`, где их проверяют тесты любой ОС.
 #[cfg(windows)]
 mod os {
     use std::net::Ipv4Addr;
@@ -43,9 +44,7 @@ mod os {
     use super::sys;
     use crate::NetError;
     use crate::discover::{Iface, Interfaces, Route, RouteTable};
-    use crate::route_parse::{
-        defaults_from_table, iface_from_adapter, mark_loopback, route_from_best,
-    };
+    use crate::route_parse::{defaults_from_rows, iface_from_adapter, lookup_from_best};
 
     /// Таблица маршрутов IP Helper (`GetBestRoute2`, `GetIpForwardTable2`).
     pub(crate) struct OsRoutes;
@@ -55,19 +54,12 @@ mod os {
             let Some(row) = sys::best_route(dst)? else {
                 return Ok(None);
             };
-            let adapters = sys::adapters()?;
-            let mut rows = [row];
-            mark_loopback(&mut rows, &adapters);
-            let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
-            Ok(Some(route_from_best(&rows[0], dst, &ifaces)))
+            Ok(Some(lookup_from_best(row, dst, &sys::adapters()?)))
         }
 
         fn default_routes(&self) -> Result<Vec<Route>, NetError> {
-            let mut rows = sys::forward_table()?;
-            let adapters = sys::adapters()?;
-            mark_loopback(&mut rows, &adapters);
-            let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
-            Ok(defaults_from_table(&rows, &ifaces))
+            let rows = sys::forward_table()?;
+            Ok(defaults_from_rows(rows, &sys::adapters()?))
         }
     }
 

@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "198.18.0.2",
+    "-p80,443,8000-8007,8099",
+    "--router-mac",
+    "02-57-4c-3d-2e-9b",
+    "--seed",
+    "1",
+    "--rate",
+    "100",
+    "--wait",
+    "3"
+  ],
+  "exe": "C:\\Users\\lab\\t4\\rmasscan.exe",
+  "invocation_nonce": "r6af22fc1789d879dc37555a612186dce-95bf7fd2e8c63f49"
+}

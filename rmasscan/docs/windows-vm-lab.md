@@ -14,7 +14,8 @@ Windows 2nd e1000e -> TAP wvt-ID -> bridge wvb-ID -> veth wvh-ID == lab0 in netn
 
 - The bridge is L2-only so the host IP stack never sees lab frames: `vlan_filtering 1` with the bridge's own (self) vid 1 removed (`bridge vlan del dev BR vid 1 self`; port VLANs stay, so TAP and veth still switch), NOARP on bridge/TAP/host veth, `arp_ignore=8`, `rp_filter=1`, `forwarding=0`, IPv6 off. Without this a lab-side ARP for the host's own address was answered with the bridge MAC and a SYN to the host's sshd could leak out via eno1.
 - udev (`99-systemd.rules` running `systemd-sysctl`, `50-default.conf` `rp_filter=2`) rewrites per-device sysctls asynchronously after a device appears, so `up` and `status` run `udevadm settle` before applying/reading them and `status` re-reads every value. The kernel uses max(`conf.all`, `conf.<dev>`) for rp_filter, so the per-device value is the configured one, not the effective one; it is irrelevant here because no frame reaches the host IP stack. If NetworkManager is running, `up` also does a best-effort `nmcli device set <own dev> managed no` (runtime, own devices only); a missing or stopped NetworkManager is fine.
-- Violations (any makes `status` not ok and raw-run forbidden): physical or foreign port on the bridge; any IP on bridge/TAP/veth; ARP on; wrong sysctls; self vlan present or vlan_filtering off; global `ip_forward != 0`; nftables/iptables rules mentioning the lab interfaces. `plan` also refuses on name/MAC/address/route collisions, `ip_forward=1`, and firewall rules naming the lab interfaces.
+- Violations (any makes `status` not ok and raw-run forbidden): physical or foreign port on the bridge; any IP on bridge/TAP/veth; ARP on; wrong sysctls; self vlan present or vlan_filtering off; nftables/iptables rules mentioning the lab interfaces. `plan` also refuses on name/MAC/address/route collisions and firewall rules naming the lab interfaces.
+- Global `net.ipv4.ip_forward=1` (for example a VPN exit on the same host) is allowed and is not a violation; `status` reports it as `global_ip_forward`. Linux decides IPv4 forwarding by the ingress interface's `net.ipv4.conf.<if>.forwarding`, and every lab link must have `forwarding=0` (set by `up`, checked by `status`). Lab frames also never reach the host IP stack (L2-only bridge, no IP, NOARP, `arp_ignore=8`, `rp_filter=1`, IPv6 off), and would not be routed if they did. A change of the global value (for example toggling it 1→0→1) is copied to every host interface's `forwarding` and to `conf.default`; the per-link check catches it: such a link makes `status` not ok and raw runs forbidden until `forwarding` is set back to 0 by hand. A new network namespace copies the host's global `ip_forward`, so `up` forces `ip_forward=0` in the peer namespace and `status` checks it (`<netns>: ip_forward must be 0`).
 - No `ip_forward`, NAT, iptables/nftables, route or DNS change anywhere; `eno1`/`eno2`/`wlp*` are never touched.
 
 ## Ownership and lifecycle
@@ -59,6 +60,19 @@ adapter that holds the management address or a default route, and writes `<Manif
 ## Deployment for a live Windows rerun
 
 See [rust-lab.md](rust-lab.md), section "Deployment for the live Windows rerun". The suite, not the operator, copies `windows-vm-lab.ps1` to `C:\Users\lab\` from the tree of `--commit` and records its sha256; an older guest copy would make every gate fail.
+
+## Autodetect plan
+
+`rmasscan.exe` (CLI с автоопределением) собирается на госте так же, как `wire_scan.exe`: из `git archive` того же
+коммита, release, статический CRT, `RUSTFLAGS` с `/DEPENDENTLOADFLAG:0x800`, проверка `dumpbin /loadconfig`. Отличие
+одно: `cargo build --locked --release -p rmasscan-cli` вместо `-p rmasscan-net --example wire_scan`. Копия кладётся в
+`C:\Users\lab\t4\rmasscan.exe`. `windows-suite --plan autodetect` гоняет кейсы `w01`–`w08b` на этом же стенде
+`n2` без изменений: тот же гейт, слушатели, захваты `lab0`/`eno1` и гостевой runner (`w08a`/`w08b` под ограниченным
+токеном). Команды и каталог прогона — в [rust-lab.md](rust-lab.md), раздел «Autodetect suite». У лабораторного NIC нет
+шлюза, поэтому одна цель на линке (`198.18.0.2`) резолвится ARP-ом к самой цели, а несколько целей (`w06`)
+получают отказ. ARP-ответы ядра гостя ожидаемы: ядро пира спрашивает `who-has 198.18.0.1`, гость отвечает
+42-байтовыми кадрами со своего MAC. Верификатор считает их в `os_arp`, никогда не кадрами сканера. ARP-запрос
+сканера — это ровно 60 байт с нулевым дополнением.
 
 ## Why run.sh was changed instead of QMP hotplug
 

@@ -37,6 +37,16 @@ struct Knobs {
     subdir_present: bool,
     /// Raise `stopped` when the guest Verify (the gate) is invoked.
     stop_at_verify: bool,
+    /// Canned orchestrator provenance: the suite then reads no `git` (the autodetect tests start no process at all).
+    provenance: Option<Value>,
+    /// The sha256 the guest runner reports for the executable it ran (default: `EXE`, what the guest hash reports).
+    runner_exe_sha: Option<String>,
+    /// What `windows_wire_hash.ps1` reports for the scanner executable (default: `EXE`).
+    exe_hash: Option<String>,
+    /// The executable the guest runner reports it ran (`runner.json` `exe`; default: the plan's own scanner).
+    runner_exe: Option<String>,
+    /// The account that started the orchestrator (`Exec::account`; default: none).
+    account: Option<String>,
 }
 struct Stand {
     src: PathBuf,
@@ -53,6 +63,8 @@ struct Stand {
     marker: RefCell<Option<String>>,
     deleted: Cell<bool>,
     created: Cell<bool>,
+    /// The local destination of every copy of a guest `stdout.txt` (autodetect stand).
+    stdout_fetches: RefCell<Vec<PathBuf>>,
 }
 /// The "installed" Linux binary of the fake stand; the default deploy manifest vouches for it.
 const LAB_BINARY: &[u8] = b"rmasscan-lab test binary";
@@ -86,6 +98,7 @@ impl Stand {
             marker: RefCell::default(),
             deleted: Cell::new(false),
             created: Cell::new(false),
+            stdout_fetches: RefCell::default(),
         }
     }
     fn script_bytes(&self, name: &str) -> Option<Vec<u8>> {
@@ -266,7 +279,8 @@ impl Stand {
                     &format!("{}\n{}\n", crate::deploy::sha256_hex(&bytes), bytes.len()),
                 );
             }
-            return out(0, &format!("{EXE}\n42\n"));
+            let exe = k.exe_hash.clone().unwrap_or_else(|| EXE.into());
+            return out(0, &format!("{exe}\n42\n"));
         }
         if cmd.contains("windows-vm-lab.ps1") {
             if k.stop_at_verify {
@@ -314,9 +328,32 @@ impl Stand {
                 fs::write(local.join(format!("{who}.pcap")), self.pcap(who))
                     .map_err(|e| e.to_string())?;
             }
+            // `scp -r DIR/.` copies dot files too: the keep marker comes home with the scratch while it is set.
+            if self.marker.borrow().is_some() {
+                fs::write(local.join(ABORT_MARKER), "").map_err(|e| e.to_string())?;
+            }
             return out(0, "");
         }
-        let body: Option<Vec<u8>> = if name.ends_with(".verify.json") {
+        let guest = dir.join("guest");
+        let body: Option<Vec<u8>> = if guest.is_dir()
+            && matches!(name, "stdout.txt" | "stderr.txt" | "exit.txt")
+        {
+            // An autodetect stand: what the guest runner wrote for this run (or for its `--offline` preflight).
+            if name == "stdout.txt" {
+                self.stdout_fetches.borrow_mut().push(local.to_path_buf());
+            }
+            let file = if remote.contains(".preflight/") {
+                format!("preflight-{name}")
+            } else {
+                name.to_owned()
+            };
+            fs::read(guest.join(file)).ok()
+        } else if guest.join("restricted").exists() && name.ends_with(".runner.rc") {
+            // Only windows_wire_restricted.cmd writes these: `echo %errorlevel% > OUT.runner.rc`, the runner's log.
+            Some(b"0 \r\n".to_vec())
+        } else if guest.join("restricted").exists() && name.ends_with(".runner.log") {
+            Some(Vec::new())
+        } else if name.ends_with(".verify.json") {
             Some(
                 json!({
                     "ok":true,"errors":[],
@@ -345,7 +382,7 @@ impl Stand {
                 "stderr.txt" => Some(Vec::new()),
                 "exit.txt" => Some(b"0\n".to_vec()),
                 "runner.json" => Some(
-                    json!({"exe":"C:\\x\\wire_scan.exe","exe_sha256":EXE,"argc":1,"times":{"started_utc":1.0,"finished_utc":2.0}})
+                    json!({"exe":k.runner_exe.clone().unwrap_or_else(|| if guest.is_dir() { RMASSCAN_EXE } else { "C:\\x\\wire_scan.exe" }.into()),"exe_sha256":k.runner_exe_sha.clone().unwrap_or_else(|| EXE.into()),"argc":1,"times":{"started_utc":1.0,"finished_utc":2.0}})
                         .to_string()
                         .into_bytes(),
                 ),
@@ -432,12 +469,19 @@ impl Exec for Stand {
     fn stopped(&self) -> bool {
         self.knobs.borrow().stopped
     }
+    fn account(&self) -> Option<String> {
+        self.knobs.borrow().account.clone()
+    }
     fn lock_suite(&self) -> Result<LockGuard, String> {
         if self.knobs.borrow().lock_held {
             return Err(LOCK_BUSY.into());
         }
         self.locks.set(self.locks.get() + 1);
         Ok(LockGuard::none())
+    }
+    fn provenance(&self, repo: &Path) -> Value {
+        let canned = self.knobs.borrow().provenance.clone();
+        canned.unwrap_or_else(|| crate::provenance::collect(repo))
     }
 }
 struct World {
@@ -533,6 +577,7 @@ fn suite<'a>(stand: &'a Stand, root: &Path) -> Suite<'a> {
         cleanup: Cell::new(false),
         runner_invoked: Cell::new(false),
         lock: None,
+        scrub: Default::default(),
     }
 }
 const TAG: &str = "perm_elevated_control";
@@ -1585,6 +1630,7 @@ mod local_sweep {
             cleanup: Cell::new(false),
             runner_invoked: Cell::new(false),
             lock: None,
+            scrub: Default::default(),
         };
         // The real wrapper of `Suite::bg`, around a TERM-ignoring shell.
         let tool = format!(
@@ -1655,6 +1701,7 @@ mod local_sweep {
             cleanup: Cell::new(true),
             runner_invoked: Cell::new(false),
             lock: Some(&lock),
+            scrub: Default::default(),
         };
         // Two TERM-ignoring tools in the real `Suite::bg` wrapper: ours, and one of another orchestrator's run.
         let start = |dir: &Path| -> i32 {
@@ -2899,4 +2946,1211 @@ fn tx_mode_option_is_validated_and_recorded_in_the_manifest() {
         "{e:?}"
     );
     assert!(stand.calls().is_empty(), "refused only after remote calls");
+}
+
+// ---- Task 6d: --plan autodetect, the rmasscan CLI cases w01-w08b of the verifier's case table ----
+//
+// The stand serves, per tag, what the guest runner and the two captures produce for a correct run of the case: the
+// verifier's synthetic generator (`autodetect_verify::tests::Sim`). The suite writes the run directories itself and
+// `autodetect-verify` judges them. Nothing here starts a process: the provenance is canned and `--repo` is a plain
+// directory.
+use crate::autodetect_verify::{
+    self as av, ArgvRecord, CaseKind, ExpectRecord, IflistRecord, Plan, tests::Sim,
+};
+
+const RMASSCAN_EXE: &str = "C:\\Users\\lab\\t4\\rmasscan.exe";
+/// The guest's `--iflist` around the stand line: the management NIC, loopback and a miniport, which no evidence file
+/// may ever hold (an inventory of the guest).
+fn guest_listing(stand_line: &str) -> String {
+    format!(
+        "Ethernet index=4 mac=52-54-00-12-34-56 ipv4=10.0.2.15 up ethernet id=\\Device\\NPF_{{0B9A3C1D-1111-2222-3333-444455556666}} desc=Intel(R) 82574L Gigabit Network Connection\n{stand_line}\nLoopback Pseudo-Interface 1 index=1 mac=none ipv4=127.0.0.1 up loopback\nWAN Miniport (IP) index=9 mac=none ipv4=- down other\n"
+    )
+}
+const LISTING_ONLY: [&str; 5] = [
+    "52-54-00-12-34-56",
+    "10.0.2.15",
+    "Loopback Pseudo",
+    "WAN Miniport",
+    "0B9A3C1D",
+];
+fn canned_provenance() -> Value {
+    json!({"git_commit": COMMIT, "git_dirty": false, "build_commit": "unknown",
+        "binary_sha256": "c".repeat(64), "binary_name": "rmasscan-lab", "errors": []})
+}
+fn sim_file(sim: &Sim, name: &str) -> Vec<u8> {
+    sim.files()
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, b)| b)
+        .unwrap_or_else(|| panic!("the generator has no {name}"))
+}
+/// The stand's source of one case: both captures, the peer listener's record, and under `guest/` what the guest
+/// runner writes (`stdout.txt`, `stderr.txt`, `exit.txt`; `preflight-stderr.txt`, `preflight-exit.txt` for the
+/// `--offline` preflight). An `--iflist` case's stdout is the guest's full listing.
+fn write_case(src: &Path, sim: &Sim) {
+    let d = src.join("runs").join(sim.case.tag);
+    let g = d.join("guest");
+    fs::create_dir_all(&g).unwrap();
+    fs::write(d.join("peer.pcap"), sim_file(sim, "peer.pcap")).unwrap();
+    fs::write(d.join("eno1.pcap"), sim_file(sim, "eno1.pcap")).unwrap();
+    write_json(
+        d.join("listeners.json"),
+        &json!({"bind":"198.18.0.2","open":[80,443,8000,8001,8002,8003,8004,8005,8006,8007],"pid":4242,"ready":true,"silent":[8099],"silent_proven":true}),
+    )
+    .unwrap();
+    let stdout = match &sim.stdout {
+        Some(s) => s.clone(),
+        None => {
+            let rec: IflistRecord = serde_json::from_slice(&sim_file(sim, "iflist.json")).unwrap();
+            guest_listing(&rec.stand_line.unwrap())
+        }
+    };
+    fs::write(g.join("stdout.txt"), stdout).unwrap();
+    fs::write(g.join("stderr.txt"), sim.stderr_text()).unwrap();
+    fs::write(g.join("exit.txt"), format!("{}\n", sim.exit)).unwrap();
+    if spec_of(sim.case.tag).restricted {
+        // The restricted-token runner (windows_wire_restricted.cmd) also leaves `OUT.runner.rc` and `OUT.runner.log`.
+        fs::write(g.join("restricted"), "").unwrap();
+    }
+    if let Some(p) = &sim.preflight {
+        let (rc, stderr) = p.split_once('\n').unwrap();
+        let rc = rc.strip_prefix("rc ").unwrap();
+        fs::write(g.join("preflight-exit.txt"), format!("{rc}\n")).unwrap();
+        fs::write(g.join("preflight-stderr.txt"), stderr).unwrap();
+    }
+}
+impl World {
+    /// The `n2` stand running the autodetect cases: `--out` starts empty, `--repo` is a plain directory, the deploy
+    /// manifest vouches for the stand's binary. `tweak` changes a case's simulated outputs before they are served.
+    fn autodetect(name: &str, tweak: impl Fn(&mut Sim)) -> Self {
+        let base = std::env::temp_dir().join(format!(
+            "rmasscan-suite-ad-{name}-{}-{}",
+            std::process::id(),
+            nonce()
+        ));
+        let (root, src, repo) = (base.join("out"), base.join("src"), base.join("repo"));
+        for d in [&root, &src, &repo] {
+            fs::create_dir_all(d).unwrap();
+        }
+        for tag in av::planned_tags(Plan::Windows) {
+            let mut sim = Sim::new(Plan::Windows, tag);
+            tweak(&mut sim);
+            write_case(&src, &sim);
+        }
+        let deploy = base.join("deploy.json");
+        write_json(
+            &deploy,
+            &crate::deploy::build_manifest(COMMIT, REMOTE_LAB, LAB_BINARY, "rustc test", 1.0),
+        )
+        .unwrap();
+        Self {
+            root,
+            src,
+            deploy,
+            repo,
+        }
+    }
+}
+fn autodetect_stand(w: &World) -> Stand {
+    let stand = Stand::new(&w.src);
+    {
+        let mut k = stand.knobs.borrow_mut();
+        k.provenance = Some(canned_provenance());
+    }
+    stand
+}
+fn autodetect_args(w: &World, extra: &[&str]) -> Vec<String> {
+    let mut a = strings(&[
+        "--out",
+        w.root.to_str().unwrap(),
+        "--commit",
+        COMMIT,
+        "--guest-exe",
+        RMASSCAN_EXE,
+        "--remote-lab",
+        REMOTE_LAB,
+        "--deploy-manifest",
+        w.deploy.to_str().unwrap(),
+        "--plan",
+        "autodetect",
+        "--suite",
+        "windows-r1",
+        "--repo",
+        w.repo.to_str().unwrap(),
+    ]);
+    a.extend(strings(extra));
+    a
+}
+fn spec_of(tag: &str) -> av::CaseSpec {
+    av::case_spec(Plan::Windows, tag).unwrap()
+}
+fn argv_of(v: &Value) -> Vec<String> {
+    v["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_owned())
+        .collect()
+}
+/// The non-PASS checks of a verdict, for assertion messages.
+fn ad_bad(res: &Value) -> Vec<String> {
+    res["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| {
+            r["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|c| c["result"] != "PASS")
+                .map(move |c| {
+                    format!(
+                        "{} {}: {} ({})",
+                        r["tag"], c["result"], c["name"], c["detail"]
+                    )
+                })
+        })
+        .collect()
+}
+fn ad_verdict(res: &Value, tag: &str) -> String {
+    res["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tag"] == tag)
+        .map(|r| r["verdict"].as_str().unwrap().to_owned())
+        .unwrap_or_else(|| panic!("no run {tag}"))
+}
+/// Every file under `dir` (relative), for the evidence-wide assertions.
+fn every_file(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                todo.push(p);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn plan_autodetect_lists_w01_to_w08b() {
+    let tags = av::planned_tags(Plan::Windows);
+    assert_eq!(
+        tags,
+        [
+            "w01_auto",
+            "w02_adapter_npf",
+            "w03_adapter_friendly",
+            "w04_router_mac",
+            "w05_arp_timeout",
+            "w06_multi_no_gateway",
+            "w07_iflist",
+            "w08a_restricted_iflist",
+            "w08b_restricted_scan"
+        ]
+    );
+    // --list names the nine cases, w08a and w08b under the restricted token, and starts nothing.
+    let items = autodetect_items();
+    assert_eq!(
+        items
+            .iter()
+            .map(|i| i["tag"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        tags
+    );
+    let restricted: Vec<&str> = items
+        .iter()
+        .filter(|i| i["restricted"] == true)
+        .map(|i| i["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        restricted,
+        ["w08a_restricted_iflist", "w08b_restricted_scan"]
+    );
+    for i in &items {
+        let spec = spec_of(i["tag"].as_str().unwrap());
+        assert_eq!(i["kind"], json!(spec.kind), "{i}");
+        assert_eq!(i["restricted"], spec.restricted, "{i}");
+    }
+    let stand = Stand::new(Path::new("/nonexistent"));
+    assert_eq!(
+        run_with(&strings(&["--plan", "autodetect", "--list"]), &stand).unwrap(),
+        0
+    );
+    assert!(stand.calls().is_empty());
+    // A full run: w08a (`--iflist`) and w08b (the scan) are two runner invocations under the restricted token, the
+    // seven others and the two preflights go through the plain runner.
+    let w = World::autodetect("list", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &[]), &stand).unwrap(),
+        0,
+        "{:?}",
+        stand.calls()
+    );
+    let calls = stand.calls();
+    let runas: Vec<&String> = calls
+        .iter()
+        .filter(|c| c.starts_with("guest ") && c.contains("windows_wire_runas.cmd \""))
+        .collect();
+    assert_eq!(runas.len(), 2, "{runas:?}");
+    assert!(
+        runas[0].contains(".w08a_restricted_iflist.runner-argv.json"),
+        "{}",
+        runas[0]
+    );
+    assert!(
+        runas[1].contains(".w08b_restricted_scan.runner-argv.json"),
+        "{}",
+        runas[1]
+    );
+    let plain = calls
+        .iter()
+        .filter(|c| c.starts_with("guest ") && c.contains("windows_wire_run.ps1 -ArgvFile"))
+        .count();
+    assert_eq!(plain, 7 + 2, "seven scans and the w01/w06 preflights");
+    let runner =
+        |tag: &str| read_json(w.root.join("runs").join(tag).join("runner-argv.json")).unwrap();
+    assert_eq!(argv_of(&runner("w08a_restricted_iflist")), ["--iflist"]);
+    assert_eq!(
+        argv_of(&runner("w08b_restricted_scan")),
+        spec_of("w01_auto").argv(),
+        "w08b scans what w01 scans"
+    );
+    for tag in &tags {
+        let d = w.root.join("runs").join(tag);
+        let meta = read_json(d.join("meta.json")).unwrap();
+        let restricted = spec_of(tag).restricted;
+        assert_eq!(
+            meta.get("restricted_via").is_some(),
+            restricted,
+            "{tag}: {meta}"
+        );
+        // The restricted runner's own exit code is kept under an evidence extension, never as `.rc`.
+        assert_eq!(d.join("guest-runner-rc.txt").is_file(), restricted, "{tag}");
+        assert_eq!(d.join("guest-runner.log").is_file(), restricted, "{tag}");
+        assert!(!d.join("guest-runner.rc").exists(), "{tag}");
+    }
+}
+
+#[test]
+fn autodetect_runs_carry_expect_json() {
+    let w = World::autodetect("expect", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(run_with(&autodetect_args(&w, &[]), &stand).unwrap(), 0);
+    for spec in av::cases(Plan::Windows) {
+        let d = w.root.join("runs").join(spec.tag);
+        // One schema, one case table: the run's records are the table's, in the verifier's own types.
+        let expect: ExpectRecord =
+            serde_json::from_slice(&fs::read(d.join(av::EXPECT_JSON)).unwrap()).unwrap();
+        assert_eq!(expect, spec.expect(), "{}", spec.tag);
+        let argv: ArgvRecord =
+            serde_json::from_slice(&fs::read(d.join(av::ARGV_JSON)).unwrap()).unwrap();
+        assert_eq!(argv.argv, spec.argv(), "{}", spec.tag);
+        assert!(d.join(av::HASHES).is_file(), "{}", spec.tag);
+        // The preflight cases carry what their --offline preflight printed.
+        assert_eq!(
+            d.join(av::PREFLIGHT_TXT).is_file(),
+            spec.preflight.is_some(),
+            "{}",
+            spec.tag
+        );
+        if spec.kind != CaseKind::Iflist {
+            let det: av::DetectedRecord =
+                serde_json::from_slice(&fs::read(d.join(av::DETECTED_JSON)).unwrap()).unwrap();
+            let stderr = fs::read_to_string(d.join("guest-stderr.txt")).unwrap();
+            assert_eq!(det, av::parse_stderr(&stderr).unwrap(), "{}", spec.tag);
+        }
+    }
+}
+
+#[test]
+fn options_list_accepts_plan_autodetect() {
+    // The documented command parses with the option allow-list, and `--plan autodetect` is a known plan.
+    let w = World::autodetect("options", |_| {});
+    let documented = autodetect_args(&w, &[]);
+    assert!(options_for("windows-suite", &documented, WINDOWS_SUITE_OPTIONS).is_ok());
+    let stand = Stand::new(&w.src);
+    for plan in ["autodetect", "functional", "failure", "perf"] {
+        assert_eq!(
+            run_with(&strings(&["--plan", plan, "--list"]), &stand).unwrap(),
+            0,
+            "{plan}"
+        );
+    }
+    for bad in ["Autodetect", "auto", "autodetect,functional", "windows"] {
+        let r = run_with(&strings(&["--plan", bad, "--list"]), &stand);
+        assert!(matches!(r, Err(SuiteError::NotRun(_))), "{bad:?}: {r:?}");
+    }
+    assert!(stand.calls().is_empty());
+    // What the plan refuses before any remote command: no --suite (the default would be the functional suite id),
+    // --rerun (a case runs once into one --out), --tx-mode (wire_scan's TX path), a scanner other than rmasscan.exe.
+    let without_suite: Vec<String> = {
+        let mut a = documented.clone();
+        let at = a.iter().position(|x| x == "--suite").unwrap();
+        a.drain(at..at + 2);
+        a
+    };
+    for (args, named) in [
+        (without_suite, "--suite"),
+        (
+            autodetect_args(&w, &["--rerun", "--only", "w01_auto"]),
+            "--rerun",
+        ),
+        (autodetect_args(&w, &["--tx-mode", "single"]), "--tx-mode"),
+        (
+            {
+                let mut a = documented.clone();
+                let at = a.iter().position(|x| x == "--guest-exe").unwrap();
+                a[at + 1] = "C:\\Users\\lab\\t4\\wire_scan.exe".into();
+                a
+            },
+            "rmasscan.exe",
+        ),
+        (
+            autodetect_args(&w, &["--only", "c01_one_addr_port_synack.run1"]),
+            "c01_one_addr_port_synack.run1",
+        ),
+    ] {
+        let stand = autodetect_stand(&w);
+        let e = run_with(&args, &stand).unwrap_err();
+        assert!(
+            matches!(&e, SuiteError::NotRun(m) if m.contains(named)),
+            "{named}: {e:?}"
+        );
+        assert!(
+            stand.calls().is_empty() && stand.locks.get() == 0,
+            "{named}: {:?}",
+            stand.calls()
+        );
+        assert!(!w.root.join("manifest.json").exists(), "{named}");
+    }
+}
+
+#[test]
+fn fixtures_are_optional_only_for_plan_autodetect() {
+    let w = World::autodetect("fixtures", |_| {});
+    // Every wire_scan plan still needs the oracle fixtures, and refuses before any remote command.
+    for plan in ["functional", "failure", "perf"] {
+        let stand = autodetect_stand(&w);
+        let mut a = autodetect_args(&w, &[]);
+        let at = a.iter().position(|x| x == "--plan").unwrap();
+        a[at + 1] = plan.into();
+        let at = a.iter().position(|x| x == "--guest-exe").unwrap();
+        a[at + 1] = "C:\\Users\\lab\\t4\\wire_scan.exe".into();
+        let e = run_with(&a, &stand).unwrap_err();
+        assert!(
+            matches!(&e, SuiteError::NotRun(m) if m.contains("--fixtures")),
+            "{plan}: {e:?}"
+        );
+        assert!(stand.calls().is_empty(), "{plan}");
+    }
+    // The autodetect plan runs without them...
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap(),
+        0,
+        "{:?}",
+        stand.calls()
+    );
+    // ...and given anyway they are neither read nor copied (the plan has no oracle).
+    let stand = autodetect_stand(&w);
+    let missing = w.root.parent().unwrap().join("no-such-fixtures");
+    assert_eq!(
+        run_with(
+            &autodetect_args(
+                &w,
+                &[
+                    "--fixtures",
+                    missing.to_str().unwrap(),
+                    "--only",
+                    "w03_adapter_friendly"
+                ]
+            ),
+            &stand
+        )
+        .unwrap(),
+        0
+    );
+    assert!(!w.root.join("fixtures").exists());
+    let man = read_json(w.root.join("manifest.json")).unwrap();
+    assert!(man.get("oracle").is_none(), "{man}");
+}
+
+#[test]
+fn manifest_build_and_binding_follow_the_plan() {
+    let w = World::autodetect("manifest", |_| {});
+    // A wire_scan plan: the explicit binding of every run, the wire_scan build.
+    let fixtures = w.root.parent().unwrap().join("fixtures");
+    fs::create_dir_all(&fixtures).unwrap();
+    write_json(
+        fixtures.join("manifest.json"),
+        &json!({"all_valid": true, "oracle": {"git_commit": "8e6b3b0"}}),
+    )
+    .unwrap();
+    let legacy_out = w.root.parent().unwrap().join("legacy-out");
+    // The failed gate's copy home reads the run's (empty) captures from the stand.
+    let tag_src = w.src.join("runs").join(TAG);
+    fs::create_dir_all(&tag_src).unwrap();
+    for who in ["peer", "eno1"] {
+        fs::write(
+            tag_src.join(format!("{who}.pcap")),
+            crate::pcap::encode(&Vec::new()),
+        )
+        .unwrap();
+    }
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().verify_rc = 1; // the manifest is written before the first gate
+    let mut a = autodetect_args(
+        &w,
+        &["--fixtures", fixtures.to_str().unwrap(), "--only", TAG],
+    );
+    for (k, v) in [
+        ("--plan", "failure"),
+        ("--suite", "failure"),
+        ("--guest-exe", "C:\\x\\wire_scan.exe"),
+        ("--out", legacy_out.to_str().unwrap()),
+    ] {
+        let at = a.iter().position(|x| x == k).unwrap();
+        a[at + 1] = v.into();
+    }
+    let _ = run_with(&a, &stand);
+    let man = read_json(legacy_out.join("manifest.json")).unwrap();
+    assert_eq!(
+        man["exe"]["build"],
+        "Rust static CRT wire_scan from code_commit"
+    );
+    assert_eq!(
+        man["binding"],
+        json!({"iface":IFACE,"src_ip":"198.18.0.1","src_mac":MAC,"router_mac":PM,"peer_ip":"198.18.0.2","seed":1,"rate":100,"wait":3})
+    );
+    assert!(man.get("autodetect").is_none());
+    assert_eq!(man["perm_restricted_refusal"], "PermissionDenied");
+    // The autodetect plan: the rmasscan CLI build, the binding of each case from its expect.json, the plan key the
+    // verifier reads, and no wire_scan-only field.
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w01_auto"]), &stand).unwrap(),
+        0
+    );
+    let man = read_json(w.root.join("manifest.json")).unwrap();
+    assert_eq!(
+        man["exe"]["build"],
+        "Rust static CRT rmasscan CLI from code_commit"
+    );
+    assert_eq!(man["exe"]["guest_path"], RMASSCAN_EXE);
+    assert_eq!(man["autodetect"], "windows");
+    assert_eq!(man["plan"], "autodetect");
+    let binding = man["binding"].as_object().unwrap();
+    assert_eq!(binding.len(), 9);
+    for spec in av::cases(Plan::Windows) {
+        assert_eq!(
+            binding[spec.tag],
+            json!(spec.expect().detection),
+            "{}",
+            spec.tag
+        );
+    }
+    for k in [
+        "oracle",
+        "pause",
+        "tx_mode_expected",
+        "perm_restricted_refusal",
+    ] {
+        assert!(man.get(k).is_none(), "{k}: {man}");
+    }
+    // Personal paths are scrubbed: the stand manifest lives under the home directory on home-pc.
+    assert_eq!(man["stand"]["manifest"], "$HOME/winvm/lab/n2.json");
+    let parsed: av::Manifest = serde_json::from_value(man).unwrap();
+    assert_eq!(parsed.autodetect, Plan::Windows);
+}
+
+#[test]
+fn autodetect_plan_skips_the_run_json_line_and_keeps_guest_names() {
+    // rmasscan prints no JSON line; a line that merely starts with `{` must not be parsed into run.json (the
+    // wire_scan plans would refuse it), and the guest's files keep their guest-* names.
+    let w = World::autodetect("guest-names", |sim| {
+        if sim.case.tag == "w02_adapter_npf" {
+            let out = sim.stdout.take().unwrap();
+            sim.stdout = Some(format!("{out}{{not json\n"));
+        }
+    });
+    let stand = autodetect_stand(&w);
+    let only = [
+        "--only",
+        "w02_adapter_npf",
+        "w03_adapter_friendly",
+        "w07_iflist",
+    ];
+    assert_eq!(
+        run_with(&autodetect_args(&w, &only), &stand).unwrap(),
+        0,
+        "{:?}",
+        stand.calls()
+    );
+    for tag in ["w02_adapter_npf", "w03_adapter_friendly", "w07_iflist"] {
+        let d = w.root.join("runs").join(tag);
+        assert!(!d.join("run.json").exists(), "{tag}");
+        for n in ["stdout.txt", "stderr.txt", "exit.txt", "guest-runner.rc"] {
+            assert!(!d.join(n).exists(), "{tag}: {n}");
+        }
+        for n in ["guest-stderr.txt", "guest-exit.txt", "guest-runner.json"] {
+            assert!(d.join(n).is_file(), "{tag}: {n}");
+        }
+        assert_eq!(
+            d.join("guest-stdout.txt").is_file(),
+            tag != "w07_iflist",
+            "{tag}"
+        );
+        let proof = read_json(d.join("run-artifacts.json")).unwrap();
+        assert!(proof["files"].get("run.json").is_none(), "{tag}: {proof}");
+    }
+    // The guest's stdout is copied as it is, and the verifier sees the stray line.
+    let w02 = fs::read_to_string(w.root.join("runs/w02_adapter_npf/guest-stdout.txt")).unwrap();
+    assert!(w02.ends_with("{not json\n"), "{w02:?}");
+    let res = av::verify_dir(&w.root);
+    assert_eq!(
+        ad_verdict(&res, "w03_adapter_friendly"),
+        "PASS",
+        "{:#?}",
+        ad_bad(&res)
+    );
+    assert_eq!(
+        ad_verdict(&res, "w07_iflist"),
+        "PASS",
+        "{:#?}",
+        ad_bad(&res)
+    );
+    assert_eq!(ad_verdict(&res, "w02_adapter_npf"), "INVALID");
+}
+
+#[test]
+fn iflist_runs_reduce_guest_stdout_in_the_work_dir_before_the_run_dir_is_written() {
+    let w = World::autodetect("iflist", |_| {});
+    let stand = autodetect_stand(&w);
+    let tags = ["w07_iflist", "w08a_restricted_iflist"];
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", tags[0], tags[1]]), &stand).unwrap(),
+        0,
+        "{:?}",
+        stand.calls()
+    );
+    // The guest's stdout went to the work directory next to the run (`.work/<tag>.<run id>/`), never into the run
+    // directory (`.work/<tag>.<run id>/run`), which is what reaches `runs/<tag>`; and it is deleted at once.
+    let fetches = stand.stdout_fetches.borrow().clone();
+    assert_eq!(fetches.len(), 2, "{fetches:?}");
+    for (local, tag) in fetches.iter().zip(tags) {
+        let rel = local
+            .strip_prefix(w.root.join(".work"))
+            .unwrap_or_else(|_| panic!("{} is not in the work directory", local.display()));
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts[0].starts_with(&format!("{tag}.")), "{parts:?}");
+        assert!(!parts.iter().any(|p| p == "run"), "{parts:?}");
+        assert!(
+            !local.exists(),
+            "the copy is deleted at once: {}",
+            local.display()
+        );
+    }
+    for tag in tags {
+        let d = w.root.join("runs").join(tag);
+        assert!(!d.join("guest-stdout.txt").exists(), "{tag}");
+        let rec: IflistRecord =
+            serde_json::from_slice(&fs::read(d.join(av::IFLIST_JSON)).unwrap()).unwrap();
+        let listing =
+            fs::read_to_string(w.src.join("runs").join(tag).join("guest/stdout.txt")).unwrap();
+        assert_eq!(rec.rc, 0);
+        assert_eq!(rec.lines, 4);
+        assert_eq!(rec.sha256, crate::verify::sha(listing.as_bytes()));
+        let stand_line = rec.stand_line.unwrap();
+        assert!(stand_line.starts_with("Ethernet 2 index="), "{stand_line}");
+        assert!(listing.lines().any(|l| l == stand_line));
+    }
+    // No file of the evidence directory holds anything of the listing but the stand line; the work directory is gone.
+    for f in every_file(&w.root) {
+        let t = String::from_utf8_lossy(&fs::read(&f).unwrap()).into_owned();
+        for host in LISTING_ONLY {
+            assert!(!t.contains(host), "{}: {host}", f.display());
+        }
+    }
+    assert!(!w.root.join(".work").exists());
+    let res = av::verify_dir(&w.root);
+    for tag in tags {
+        assert_eq!(ad_verdict(&res, tag), "PASS", "{:#?}", ad_bad(&res));
+    }
+}
+
+#[test]
+fn windows_plan_uses_rmasscan_exe_argv_not_wire_scan() {
+    let w = World::autodetect("argv", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(run_with(&autodetect_args(&w, &[]), &stand).unwrap(), 0);
+    let calls = stand.calls();
+    for spec in av::cases(Plan::Windows) {
+        let d = w.root.join("runs").join(spec.tag);
+        // What the guest runner was given: rmasscan.exe and the case's own argv, none of wire_scan's options.
+        let input = read_json(d.join("runner-argv.json")).unwrap();
+        assert_eq!(input["exe"], RMASSCAN_EXE, "{}", spec.tag);
+        let argv = argv_of(&input);
+        assert_eq!(argv, spec.argv(), "{}", spec.tag);
+        for k in [
+            "--iface",
+            "--src-ip",
+            "--src-mac",
+            "--targets",
+            "--ports",
+            "--checkpoint-out",
+            "--resume-checkpoint",
+        ] {
+            assert!(!argv.iter().any(|a| a == k), "{}: {k}", spec.tag);
+        }
+        assert!(
+            calls.iter().any(|c| c.starts_with("guest ")
+                && c.contains(&format!(".{}.runner-argv.json", spec.tag))),
+            "{}",
+            spec.tag
+        );
+        // The preflight ran the same executable with the same argv plus --offline, read only.
+        if spec.preflight.is_some() {
+            let pre = read_json(d.join("runner-preflight-argv.json")).unwrap();
+            assert_eq!(pre["exe"], RMASSCAN_EXE);
+            let mut want = spec.argv();
+            want.push("--offline".into());
+            assert_eq!(argv_of(&pre), want, "{}", spec.tag);
+        }
+        let runner = read_json(d.join("guest-runner.json")).unwrap();
+        assert_eq!(runner["exe_sha256"], EXE, "{}", spec.tag);
+    }
+    // Nothing of the wire_scan plans: no fixtures, no checkpoints, no injector, flood or link loss.
+    for needle in [
+        "checkpoint",
+        "inject --iface",
+        "flood --guest-mac",
+        "linkloss --guest-mac",
+    ] {
+        assert_eq!(stand.count(needle), 0, "{needle}");
+    }
+}
+
+#[test]
+fn a_windows_autodetect_directory_written_by_the_suite_passes_autodetect_verify() {
+    // The cross-check: the suite writes every run from the guest's and the captures' synthetic outputs, and both
+    // autodetect-verify and windows-verify (which hands the directory over) find it PASS.
+    let w = World::autodetect("cross", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &[]), &stand).unwrap(),
+        0,
+        "{:?}",
+        stand.calls()
+    );
+    let res = av::verify_dir(&w.root);
+    assert_eq!(res["overall"], "PASS", "{:#?}", ad_bad(&res));
+    for tag in av::planned_tags(Plan::Windows) {
+        assert_eq!(ad_verdict(&res, tag), "PASS", "{tag}");
+    }
+    assert_eq!(ad_verdict(&res, "manifest"), "PASS");
+    assert_eq!(crate::verify::verify_dir(&w.root), res);
+    assert_eq!(
+        crate::verify::run(&strings(&["--dir", w.root.to_str().unwrap()])).unwrap(),
+        0
+    );
+    // The guest kernel's ARP answers are on the wire and counted as the OS's, never as the scanner's.
+    let w01 = res["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tag"] == "w01_auto")
+        .unwrap();
+    assert_eq!(w01["notes"]["os_arp"]["replies"], 1);
+    // The guest scripts were sent from the work directory (`.ps1`/`.cmd` are no evidence), never from `deploy/`.
+    let sent: Vec<String> = stand
+        .calls()
+        .into_iter()
+        .filter(|c| {
+            c.starts_with("scp ")
+                && c.rsplit(' ').next().is_some_and(|to| {
+                    to.starts_with("lab@127.0.0.1:")
+                        && (to.ends_with(".ps1") || to.ends_with(".cmd"))
+                })
+        })
+        .collect();
+    assert_eq!(sent.len(), crate::deploy::GUEST_SCRIPTS.len(), "{sent:?}");
+    let staged = w.root.join(".work").join("guest-scripts");
+    for c in &sent {
+        assert!(c.contains(&*staged.to_string_lossy()), "{c}");
+    }
+    // Nothing of the suite's own work is left in the evidence directory, no staged script, no full listing.
+    assert!(!w.root.join(".work").exists());
+    for f in every_file(&w.root) {
+        let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+        assert!(av::EVIDENCE_EXTENSIONS.contains(&ext), "{}", f.display());
+    }
+}
+
+#[test]
+fn a_preflight_other_than_the_expected_detection_is_not_run_and_starts_nothing() {
+    let w = World::autodetect("preflight", |sim| {
+        if sim.case.tag == "w01_auto" {
+            sim.preflight =
+                Some("rc 0\n[+] interface = Ethernet (detected: route to 198.18.0.2)\n".into());
+        }
+    });
+    let stand = autodetect_stand(&w);
+    let e = run_with(&autodetect_args(&w, &["--only", "w01_auto"]), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains(PREFLIGHT_MARK)),
+        "{e:?}"
+    );
+    assert_eq!(e.code(), 2);
+    // Only the read-only preflight ran: no listener, capture, marker or scanner.
+    for raw in [
+        "listen --open",
+        "tcpdump",
+        "marker --iface",
+        "windows_wire_runas.cmd \"",
+    ] {
+        assert_eq!(stand.count(raw), 0, "{raw}");
+    }
+    assert_eq!(stand.count("windows_wire_run.ps1 -ArgvFile"), 1);
+    assert_eq!(stand.count("eno1_size="), 0);
+    assert!(!w.root.join("runs/w01_auto").exists());
+    // Nothing ran and nothing was captured: no failure copy of the remote scratch (it would bring the keep marker
+    // home), the scratch and its marker are removed on home-pc, and only the orchestrator's records are kept.
+    let copies = stand
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("scp home-pc:") && c.contains("/. "))
+        .count();
+    assert_eq!(copies, 0, "{:?}", stand.calls());
+    assert!(
+        stand.marker.borrow().is_none(),
+        "the keep marker is cleared"
+    );
+    assert!(
+        stand
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("home if test -e")
+                && c.contains("rm -rf --")
+                && c.contains("/w01_auto'")),
+        "{:?}",
+        stand.calls()
+    );
+    let files = every_file(&w.root);
+    assert!(
+        !files
+            .iter()
+            .any(|p| p.ends_with(ABORT_MARKER) || p.ends_with("eno1.pcap")),
+        "{files:?}"
+    );
+    // What it printed is kept with the gate's records; the directory is NOT RUN, exactly, never INVALID or PASS.
+    let kept: Vec<&PathBuf> = files
+        .iter()
+        .filter(|p| p.ends_with(av::PREFLIGHT_TXT))
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(
+        kept[0].starts_with(w.root.join("runs_aborted")),
+        "{}",
+        kept[0].display()
+    );
+    assert!(
+        fs::read_to_string(kept[0])
+            .unwrap()
+            .contains("interface = Ethernet (")
+    );
+    let res = av::verify_dir(&w.root);
+    assert_eq!(ad_verdict(&res, "w01_auto"), "NOT RUN");
+    assert_eq!(ad_verdict(&res, "manifest"), "PASS", "{:#?}", ad_bad(&res));
+    assert_eq!(res["overall"], "NOT RUN", "{:#?}", ad_bad(&res));
+    assert!(!w.root.join(".work").exists());
+}
+
+#[test]
+fn an_autodetect_run_that_fails_after_the_send_is_kept_under_runs_aborted_and_never_in_runs() {
+    let w = World::autodetect("abort", |_| {});
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().fail_runner = true;
+    let e = run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap_err();
+    assert_eq!(e.code(), 10, "{e:?}");
+    assert!(!w.root.join("runs/w02_adapter_npf").exists());
+    let aborted: Vec<PathBuf> = fs::read_dir(w.root.join("runs_aborted"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(aborted.len(), 1, "{aborted:?}");
+    // The remote scratch (captures) and the orchestrator's own part of the run are both kept.
+    assert!(aborted[0].join("eno1.pcap").is_file());
+    assert!(aborted[0].join("work").join(av::ARGV_JSON).is_file());
+    assert!(!w.root.join(".work").exists());
+    let res = av::verify_dir(&w.root);
+    assert_eq!(ad_verdict(&res, "w02_adapter_npf"), "NOT RUN");
+    assert_eq!(res["safety_trips"], json!([]));
+    // A scanner whose hash differs from the manifest's is refused: per run, and when a directory is extended.
+    let w = World::autodetect("exe-hash", |_| {});
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().runner_exe_sha = Some("d".repeat(64));
+    let e = run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap_err();
+    assert!(e.message().contains("manifest"), "{e:?}");
+    assert!(!w.root.join("runs/w02_adapter_npf").exists());
+    let w = World::autodetect("exe-extend", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap(),
+        0
+    );
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().exe_hash = Some("e".repeat(64));
+    let e = run_with(
+        &autodetect_args(&w, &["--only", "w03_adapter_friendly"]),
+        &stand,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("sha256")),
+        "{e:?}"
+    );
+    assert_eq!(stand.count("-Action Verify"), 0);
+}
+
+#[test]
+fn an_autodetect_directory_never_runs_a_case_twice_or_over_a_work_directory() {
+    let w = World::autodetect("twice", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap(),
+        0
+    );
+    // A case that has a run is not run again into the same --out.
+    let stand = autodetect_stand(&w);
+    let e = run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("w02_adapter_npf")),
+        "{e:?}"
+    );
+    assert!(stand.calls().is_empty() && stand.locks.get() == 0);
+    // Something left in the work directory (a crash) stops every start until it is looked at.
+    fs::create_dir_all(w.root.join(".work/x")).unwrap();
+    fs::write(w.root.join(".work/x/guest-iflist.raw"), "x").unwrap();
+    let stand = autodetect_stand(&w);
+    let e = run_with(
+        &autodetect_args(&w, &["--only", "w03_adapter_friendly"]),
+        &stand,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains(".work")),
+        "{e:?}"
+    );
+    assert!(stand.calls().is_empty());
+}
+
+#[test]
+fn an_autodetect_case_with_an_aborted_attempt_is_not_run_and_nothing_is_started() {
+    // A preflight NOT RUN of an earlier start kept the orchestrator's records under runs_aborted/<tag>.<run id>/work/.
+    // A later `--only <tag>` into the same --out is refused before any remote change, as a case with a run is.
+    let w = World::autodetect("aborted-again", |_| {});
+    let attempt = w.root.join("runs_aborted/w06_multi_no_gateway.r1/work");
+    fs::create_dir_all(&attempt).unwrap();
+    fs::write(attempt.join(av::PREFLIGHT_TXT), "rc 0\n").unwrap();
+    let stand = autodetect_stand(&w);
+    let e = run_with(
+        &autodetect_args(&w, &["--only", "w06_multi_no_gateway"]),
+        &stand,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("runs_aborted/w06_multi_no_gateway.r1")),
+        "{e:?}"
+    );
+    assert_eq!(e.code(), 2);
+    assert!(stand.calls().is_empty() && stand.locks.get() == 0);
+    // Another case of the directory still runs; the attempt stays visible and its case NOT RUN.
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w01_auto"]), &stand).unwrap(),
+        0
+    );
+    let res = av::verify_dir(&w.root);
+    assert_eq!(ad_verdict(&res, "w01_auto"), "PASS", "{:#?}", ad_bad(&res));
+    assert_eq!(ad_verdict(&res, "w06_multi_no_gateway"), "NOT RUN");
+    assert_eq!(res["aborted"][0]["tag"], "w06_multi_no_gateway.r1");
+}
+
+#[test]
+fn the_windows_autodetect_records_carry_out_and_account_as_placeholders() {
+    // The orchestrator's records (the deploy manifest copy among them) go through the suites' one scrubber: its
+    // --out and the account that started it are `$OUT` and `$USER` in the evidence.
+    let w = World::autodetect("scrub", |_| {});
+    let mut deploy =
+        crate::deploy::build_manifest(COMMIT, REMOTE_LAB, LAB_BINARY, "rustc test", 1.0);
+    deploy["toolchain"] = json!(format!(
+        "rustc test, built by alice for {}",
+        w.root.display()
+    ));
+    write_json(&w.deploy, &deploy).unwrap();
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().account = Some("alice".into());
+    assert_eq!(run_with(&autodetect_args(&w, &[]), &stand).unwrap(), 0);
+    let copy = read_json(w.root.join("deploy/deploy-manifest.json")).unwrap();
+    assert_eq!(copy["toolchain"], "rustc test, built by $USER for $OUT");
+    let root = w.root.to_string_lossy().into_owned();
+    for f in every_file(&w.root) {
+        let b = fs::read(&f).unwrap();
+        for needle in [root.as_str(), "alice"] {
+            assert!(
+                !b.windows(needle.len()).any(|x| x == needle.as_bytes()),
+                "{} holds {needle:?}",
+                f.display()
+            );
+        }
+    }
+    let res = av::verify_dir(&w.root);
+    assert_eq!(res["overall"], "PASS", "{:#?}", ad_bad(&res));
+}
+
+#[test]
+fn the_peer_witness_of_a_windows_run_is_judged_by_the_capture_dump_rule() {
+    // A complete capture: start marker, the run, three end markers; tcpdump counted and stored every frame, no drop,
+    // the lab0 counters moved by exactly the frames, the wait went quiet, tcpdump exited.
+    let sim = Sim::new(Plan::Windows, "w01_auto");
+    let pcap = sim_file(&sim, "peer.pcap");
+    let n = sim.peer.len() as u64;
+    let cap = json!({"quiet":{"reached":true,"quiet_s":1.5},"peer":{
+        "exited": true, "interface_drop_delta": 0,
+        "tcpdump": {"captured": n, "received": n, "dropped_kernel": 0, "dropped_if": 0},
+        "counters": {"rx_before": 10, "tx_before": 20, "rx_ready": 10, "tx_ready": 20, "rx_end": 10 + n, "tx_end": 20}}});
+    let w = peer_witness(&cap, &pcap);
+    assert_eq!(w["valid"], true, "{w}");
+    assert_eq!(w["invalid_reasons"], json!([]));
+    assert_eq!(w["pcap_sha256"], crate::verify::sha(&pcap));
+    assert_eq!(w["pcap_frames"], n);
+    let rec: av::PeerWitness = serde_json::from_value(w).unwrap();
+    assert!(rec.valid);
+    // Each broken fact alone makes the witness invalid, with its reason.
+    let broken = |path: &str, v: Value| {
+        let mut c = cap.clone();
+        *c.pointer_mut(path).unwrap() = v;
+        peer_witness(&c, &pcap)
+    };
+    for (path, v, why) in [
+        (
+            "/peer/tcpdump/dropped_kernel",
+            json!(1),
+            "tcpdump completeness",
+        ),
+        (
+            "/peer/tcpdump/captured",
+            json!(n - 1),
+            "tcpdump completeness",
+        ),
+        ("/peer/interface_drop_delta", json!(2), "rx_dropped"),
+        ("/peer/interface_drop_delta", Value::Null, "rx_dropped"),
+        ("/peer/exited", json!(false), "did not exit"),
+        ("/quiet/reached", json!(false), "never went quiet"),
+        (
+            "/peer/counters/rx_end",
+            json!(10 + n - 1),
+            "tcpdump completeness",
+        ),
+        (
+            "/peer/counters/rx_end",
+            json!(5),
+            "decreased or were unreadable",
+        ),
+    ] {
+        let w = broken(path, v.clone());
+        assert_eq!(w["valid"], false, "{path} = {v}");
+        assert!(
+            w["invalid_reasons"].to_string().contains(why),
+            "{path} = {v}: {}",
+            w["invalid_reasons"]
+        );
+    }
+    // Without its end markers the tail of the capture is not proven; a pcap that does not parse is no capture.
+    let cut: Vec<_> = sim
+        .peer
+        .iter()
+        .filter(|(_, f)| {
+            !(f.get(12..14) == Some(&[0x88, 0xb5][..]) && f[14..].starts_with(b"WIRELAB-END"))
+        })
+        .cloned()
+        .collect();
+    let w = peer_witness(&cap, &crate::pcap::encode(&cut));
+    assert_eq!(w["valid"], false);
+    assert!(
+        w["invalid_reasons"].to_string().contains("end markers"),
+        "{w}"
+    );
+    let w = peer_witness(&cap, b"not a pcap");
+    assert_eq!(w["valid"], false);
+    assert!(
+        w["invalid_reasons"].to_string().contains("pcap unreadable"),
+        "{w}"
+    );
+}
+
+// ---- Task 6d fix round 1 ----
+#[test]
+fn the_guest_runner_must_have_run_the_executable_it_was_given() {
+    // runner.json names what the guest runner really started; the autodetect plan accepts only `--guest-exe`.
+    let w = World::autodetect("runner-exe", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap(),
+        0
+    );
+    let runner = read_json(w.root.join("runs/w02_adapter_npf/guest-runner.json")).unwrap();
+    assert_eq!(runner["exe"], RMASSCAN_EXE);
+    // The same sha256 under another executable (a wire_scan.exe that the runner was pointed at) is refused.
+    let w = World::autodetect("runner-exe-other", |_| {});
+    let stand = autodetect_stand(&w);
+    stand.knobs.borrow_mut().runner_exe = Some("C:\\Users\\lab\\t4\\wire_scan.exe".into());
+    let e = run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::Abort(m) if m.contains("wire_scan.exe") && m.contains("rmasscan.exe")),
+        "{e:?}"
+    );
+    assert!(!w.root.join("runs/w02_adapter_npf").exists());
+}
+
+#[test]
+fn the_deploy_record_hashes_the_trust_anchor_and_the_scrubbed_copy_it_keeps() {
+    let w = World::autodetect("deploy-hash", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&autodetect_args(&w, &["--only", "w02_adapter_npf"]), &stand).unwrap(),
+        0
+    );
+    let copy = w.root.join("deploy/deploy-manifest.json");
+    let text = fs::read_to_string(&copy).unwrap();
+    assert!(
+        !text.contains("/home/a1") && text.contains("$HOME"),
+        "{text}"
+    );
+    let pre = fs::read_dir(w.root.join("deploy"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("preflight-"))
+        .unwrap()
+        .path();
+    let rec = read_json(pre).unwrap();
+    // The anchor on the orchestrating machine (what vouched for the binary) and the copy in the directory.
+    assert_eq!(rec["deploy_manifest_sha256"], hash(&w.deploy).unwrap());
+    assert_eq!(
+        rec["deploy_manifest_copy"]["path"],
+        "deploy/deploy-manifest.json"
+    );
+    assert_eq!(rec["deploy_manifest_copy"]["sha256"], hash(&copy).unwrap());
+    assert_eq!(rec["deploy_manifest_copy"]["scrubbed"], true);
+    assert_ne!(hash(&copy).unwrap(), hash(&w.deploy).unwrap());
+}
+
+#[test]
+fn an_iflist_stand_line_in_the_windows_cli_format_passes_with_the_e1000e_nic() {
+    // The n2 guest's NICs are e1000e ("Intel(R) 82574L Gigabit Network Connection", "… #2"). rmasscan --iflist prints
+    // `desc=` from the adapter's FriendlyName (route_parse::iface_from_adapter), so the stand line reads
+    // `… desc=Ethernet 2`; a line carrying the hardware description must pass as well.
+    use rmasscan_net::{Iface, Route, iflist_text};
+    use std::net::Ipv4Addr;
+    let mac = |b: [u8; 6]| Some(b);
+    let iface = |name: &str, index, id: &str, desc: &str, m, ip: Vec<Ipv4Addr>| Iface {
+        name: name.into(),
+        index,
+        device_id: id.into(),
+        description: Some(desc.into()),
+        mac: m,
+        mac_masked: false,
+        ethernet: true,
+        up: true,
+        ipv4: ip,
+    };
+    let lab_id = IFACE;
+    for lab_desc in [
+        "Ethernet 2",
+        "Intel(R) 82574L Gigabit Network Connection #2",
+    ] {
+        let listing = iflist_text(
+            &[
+                iface(
+                    "Ethernet",
+                    4,
+                    "\\Device\\NPF_{0B9A3C1D-1111-2222-3333-444455556666}",
+                    "Intel(R) 82574L Gigabit Network Connection",
+                    mac([0x52, 0x54, 0, 0x12, 0x34, 0x56]),
+                    vec![Ipv4Addr::new(10, 0, 2, 15)],
+                ),
+                iface(
+                    "Ethernet 2",
+                    14,
+                    lab_id,
+                    lab_desc,
+                    mac([0x52, 0x54, 0, 0x04, 0x80, 0xa9]),
+                    vec![Ipv4Addr::new(198, 18, 0, 1)],
+                ),
+            ],
+            &[Route {
+                ifindex: 4,
+                ifname: "Ethernet".into(),
+                gateway: Some(Ipv4Addr::new(10, 0, 2, 2)),
+                local: false,
+            }],
+        );
+        let w = World::autodetect("e1000e", |_| {});
+        for tag in ["w07_iflist", "w08a_restricted_iflist"] {
+            fs::write(
+                w.src.join("runs").join(tag).join("guest/stdout.txt"),
+                &listing,
+            )
+            .unwrap();
+        }
+        let stand = autodetect_stand(&w);
+        assert_eq!(
+            run_with(
+                &autodetect_args(&w, &["--only", "w07_iflist", "w08a_restricted_iflist"]),
+                &stand
+            )
+            .unwrap(),
+            0
+        );
+        let res = av::verify_dir(&w.root);
+        for tag in ["w07_iflist", "w08a_restricted_iflist"] {
+            assert_eq!(
+                ad_verdict(&res, tag),
+                "PASS",
+                "{lab_desc}: {:#?}",
+                ad_bad(&res)
+            );
+            let rec: IflistRecord = serde_json::from_slice(
+                &fs::read(w.root.join("runs").join(tag).join(av::IFLIST_JSON)).unwrap(),
+            )
+            .unwrap();
+            let line = rec.stand_line.unwrap();
+            assert_eq!(
+                line,
+                format!(
+                    "Ethernet 2 index=14 mac=52-54-00-04-80-a9 ipv4=198.18.0.1 up ethernet id={lab_id} desc={lab_desc}"
+                )
+            );
+            assert_eq!(rec.lines, 3);
+        }
+        for f in every_file(&w.root) {
+            let t = String::from_utf8_lossy(&fs::read(&f).unwrap()).into_owned();
+            for host in ["10.0.2.15", "52-54-00-12-34-56", "10.0.2.2", "0B9A3C1D"] {
+                assert!(!t.contains(host), "{}: {host}", f.display());
+            }
+        }
+    }
 }

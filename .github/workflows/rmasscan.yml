@@ -8,6 +8,10 @@
 # Windows TX через Npcap sendqueue (пачка TX_BATCH_FRAMES, частичный transmit, порядок кадров) проверяется fake-тестами
 # (rmasscan-net windows::tests, engine tx_batch); живые тесты sendqueue (live_sendqueue_*, windows_live) помечены
 # #[ignore] и в CI не идут: они выполнены вручную на запечатанной Windows VM (отчёт 2026-10-25-rmasscan-windows-sendqueue-acceptance.md).
+# Живой скан CLI с автоопределением: autodetect live suites are user/operator-run on the sealed stands; CI runs
+# read-only detection tests only; no test opens an adapter. Тесты CLI идут через fake-бэкенд (OsBackend есть только в
+# бинарнике вне cfg(test)), бинарник в тестах запускается только через spawn_readonly (--iflist, --offline, -sL, --echo,
+# --help); результаты окон: отчёт 2026-10-27-rmasscan-autodetect-acceptance.md.
 name: rmasscan
 
 on:

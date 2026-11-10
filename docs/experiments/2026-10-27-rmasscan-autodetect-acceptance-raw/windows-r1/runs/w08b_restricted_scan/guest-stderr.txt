@@ -1,0 +1,6 @@
+[+] interface = Ethernet 2 (detected: route to 198.18.0.2)
+[+] source-mac = 52-54-00-04-80-a9 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = 198.18.0.2 (on-link target)
+rmasscan: error: cannot open adapter "Ethernet 2": permission denied (raw packet access needs elevated privileges): no Npcap device named "\\Device\\NPF_{C4617223-A264-44F4-BDC8-0EA27F02CC40}": only loopback is visible: Npcap may be installed in Administrators-only mode and this process lacks rights (1 devices enumerated)
+    [hint] run as Administrator; Npcap must be installed (Admin-only mode needs an elevated prompt)

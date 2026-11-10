@@ -1,0 +1,81 @@
+//! Настоящая реализация шва `Backend` (AGPL-3.0). Включается только в бинарник вне `cfg(test)` и является
+//! единственным местом, где CLI открывает адаптер (`rmasscan_net::open_explicit`). Таблицы маршрутов и интерфейсов
+//! читаются в процессе и без привилегий; энтропия из `getrandom`; часы `SystemClock`; смещение местного времени
+//! `rmasscan_net::localtime`; имена сервисов из файла services хоста; счётчик Ctrl-C `rmasscan_net::interrupt`.
+
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rmasscan_cli::live::Backend;
+use rmasscan_cli::output::{ServiceNames, Wall};
+use rmasscan_core::probe::AdapterBinding;
+use rmasscan_core::throttle::{Clock, SystemClock};
+use rmasscan_engine::AdapterPair;
+use rmasscan_net::arp_resolve::ArpPolicy;
+use rmasscan_net::{Interfaces, NetError, RouteTable};
+
+pub struct OsBackend;
+
+impl Wall for OsBackend {
+    fn unix_time(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    }
+
+    /// Ошибка ОС (или время вне `time_t`) даёт 0: подвал `-oX` тогда печатает UTC, запись не теряется.
+    fn utc_offset_secs(&self, unix: u64) -> i32 {
+        i64::try_from(unix)
+            .ok()
+            .and_then(|t| rmasscan_net::localtime::utc_offset_secs(t).ok())
+            .unwrap_or(0)
+    }
+}
+
+impl Backend for OsBackend {
+    fn routes(&self) -> Result<Box<dyn RouteTable>, NetError> {
+        rmasscan_net::os_route_table()
+    }
+
+    fn interfaces(&self) -> Result<Box<dyn Interfaces>, NetError> {
+        rmasscan_net::os_interfaces()
+    }
+
+    fn open(&self, binding: &AdapterBinding) -> Result<AdapterPair, NetError> {
+        rmasscan_net::open_explicit(binding).map(|a| a.io)
+    }
+
+    fn entropy64(&self) -> u64 {
+        // Контракт шва: не 0 (seed 0 в C значит «взять энтропию»).
+        loop {
+            let v = getrandom::u64().expect("operating system entropy is unavailable");
+            if v != 0 {
+                return v;
+            }
+        }
+    }
+
+    fn arp_policy(&self) -> ArpPolicy {
+        ArpPolicy::default()
+    }
+
+    fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
+        Arc::new(SystemClock::new())
+    }
+
+    fn services(&self) -> ServiceNames {
+        ServiceNames::host()
+    }
+
+    /// Первый вызов ставит обработчик (`install` идемпотентен). Сбой установки оставляет поведение ОС по умолчанию:
+    /// Ctrl-C завершает процесс, счётчик остаётся 0; C тоже не проверяет итог `signal(SIGINT, …)` (`main.c:1338`).
+    fn interrupts(&self) -> u32 {
+        let _ = rmasscan_net::interrupt::install();
+        rmasscan_net::interrupt::presses()
+    }
+
+    /// `masscan_save_state` (`main-conf.c:395-416`): `paused.conf` в рабочем каталоге, существующий файл усекается.
+    fn write_paused_conf(&self, content: &str) -> Result<(), String> {
+        std::fs::write("paused.conf", content).map_err(|e| e.to_string())
+    }
+}

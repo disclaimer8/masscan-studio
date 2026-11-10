@@ -1,0 +1,4 @@
+2026-11-06T21:22:30Z
+all planned runs executed; verify offline with rmasscan-lab windows-verify --dir $MACOUT/autodetect-out/windows-autodetect-r2 (it hands an autodetect directory to autodetect-verify)
+SUITE_RC=0
+2026-11-06T21:53:23Z

@@ -377,6 +377,52 @@ fn real_probe_from_cursor_is_answered_by_matching_synack() {
     assert_eq!(seen, plan.range());
 }
 
+/// `--adapter-ip A-B` (main.c:829 `is_my_ip` по диапазону): ответ принимается на любой адрес диапазона источника
+/// плана, и только на него.
+#[test]
+fn replies_to_any_address_of_the_source_range_are_accepted() {
+    use rmasscan_core::probe::NicBinding;
+    const FIRST_IP: u32 = 0xc612_0010; // 198.18.0.16
+    let mut m = MassIp::new();
+    add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+    parse_ports(m.ports_mut(), "80").unwrap();
+    let cfg = ScanConfig {
+        targets: m,
+        seed: SEED,
+        ..ScanConfig::default()
+    };
+    let eff = validate(&cfg, Operation::Scan).unwrap();
+    let plan = ReadyPlan::new_cli(
+        eff,
+        vec![NicBinding {
+            binding: AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: LinkType::Ethernet,
+                source_ipv4: FIRST_IP,
+                source_mac: MAC_ME,
+                next_hop_mac: MAC_NH,
+                source_ports: (FIRST, LAST),
+            },
+            source_ipv4_last: FIRST_IP + 3,
+            legacy_c_17_port_mask: false,
+        }],
+    )
+    .unwrap();
+    let reply_to = |ip_me: u32| {
+        let s = Spec {
+            ip_me,
+            ack: cookie(IP_THEM, PORT_THEM, ip_me, PORT_ME).wrapping_add(1),
+            ..Spec::synack()
+        };
+        parse_reply(&s.frame(LinkType::Ethernet), LinkType::Ethernet, &plan).unwrap()
+    };
+    for ip in FIRST_IP..=FIRST_IP + 3 {
+        assert_eq!(reply_to(ip).map(|r| r.local_ip), Some(ip), "{ip:#x}");
+    }
+    assert_eq!(reply_to(FIRST_IP - 1), None);
+    assert_eq!(reply_to(FIRST_IP + 4), None);
+}
+
 // ---------- RED: враждебные длины ----------
 
 #[test]

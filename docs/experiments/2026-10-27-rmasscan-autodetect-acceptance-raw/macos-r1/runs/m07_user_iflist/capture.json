@@ -1,0 +1,39 @@
+{
+  "end_marker_frames": 3,
+  "iface_rxtx_delta_hi": 6,
+  "iface_rxtx_delta_lo": 3,
+  "interface_drop_delta": 0,
+  "interface_drops": null,
+  "invalid_reasons": [],
+  "kernel_drops": 0,
+  "pcap_frames": 6,
+  "pcap_sha256": "3c48947f7f08e33dc9159cfe511b89b37a87be2f2e9a04d5b31c7c934bd51a7a",
+  "pcap_size_bytes": 480,
+  "privacy_filter": {
+    "frames_dropped": 0,
+    "frames_kept": 6,
+    "published": "not (ether src 02:ac:00:00:00:02 and udp port 5353)"
+  },
+  "quiesced_before_stop": true,
+  "received_by_filter": 6,
+  "start_marker_frames": 3,
+  "tcpdump_argv": [
+    "tcpdump",
+    "-i",
+    "feth4202",
+    "-n",
+    "-U",
+    "--immediate-mode",
+    "-s",
+    "0",
+    "-w",
+    "/private/tmp/rmasscan-ad.6qCSaM/autodetect-out/macos-r1/.work/m07_user_iflist.rfd624dd621b59e10e0cebf95598b5532/peer.unfiltered"
+  ],
+  "tcpdump_captured": 6,
+  "unfiltered": {
+    "kept": "private work directory only, deleted after publishing",
+    "pcap_frames": 6,
+    "pcap_sha256": "3c48947f7f08e33dc9159cfe511b89b37a87be2f2e9a04d5b31c7c934bd51a7a"
+  },
+  "valid": true
+}

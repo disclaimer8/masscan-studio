@@ -167,6 +167,37 @@ impl Iterator for TransmitIndices {
     }
 }
 
+/// Границы цикла transmit для одного потока: `(start, end, increment)`
+/// (main.c:223, :269-273). `increment == 0` означает `shard.of * nic_count == 0`
+/// (в C бесконечный цикл).
+pub fn transmit_bounds(
+    range: u64,
+    shard: Shard,
+    nic_count: u32,
+    nic_index: u32,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+) -> (u64, u64, u64) {
+    // :223 `unsigned increment = shard.of * nic_count`
+    let increment = shard.of.wrapping_mul(nic_count);
+    // :269 `resume.index + (shard.one-1) * nic_count + nic_index`;
+    // произведение — unsigned (32 бита), сумма с u64 — в u64.
+    let start = resume_index
+        .wrapping_add(u64::from(shard.one.wrapping_sub(1).wrapping_mul(nic_count)))
+        .wrapping_add(u64::from(nic_index));
+    let mut end = range; // :270
+    if let Some(count) = resume_count.filter(|&c| c != 0) {
+        let limit = start.wrapping_add(count);
+        if end > limit {
+            end = limit; // :271-272
+        }
+    }
+    // :273 `end += retries * range` (в отличие от -sL, где max_rate)
+    end = end.wrapping_add(u64::from(retries).wrapping_mul(range));
+    (start, end, u64::from(increment))
+}
+
 /// Пред-shuffle поток transmit (main.c:203-448): пары `(i, xXx)`, где `i` —
 /// текущий индекс цикла (нужен для SYN-cookie источника, main.c:379), а `xXx` —
 /// `(i + r*rate) mod range` до `blackrock_shuffle`.
@@ -185,23 +216,16 @@ pub fn transmit_index_stream(
     retries: u32,
     max_rate: f64,
 ) -> impl Iterator<Item = (u64, u64)> {
-    // :223 `unsigned increment = shard.of * nic_count`
-    let increment = shard.of.wrapping_mul(nic_count);
+    let (start, end, increment) = transmit_bounds(
+        range,
+        shard,
+        nic_count,
+        nic_index,
+        resume_index,
+        resume_count,
+        retries,
+    );
     assert!(increment != 0, "shard.of * nic_count must be non-zero");
-    // :269 `resume.index + (shard.one-1) * nic_count + nic_index`;
-    // произведение — unsigned (32 бита), сумма с u64 — в u64.
-    let start = resume_index
-        .wrapping_add(u64::from(shard.one.wrapping_sub(1).wrapping_mul(nic_count)))
-        .wrapping_add(u64::from(nic_index));
-    let mut end = range; // :270
-    if let Some(count) = resume_count.filter(|&c| c != 0) {
-        let limit = start.wrapping_add(count);
-        if end > limit {
-            end = limit; // :271-272
-        }
-    }
-    // :273 `end += retries * range` (в отличие от -sL, где max_rate)
-    end = end.wrapping_add(u64::from(retries).wrapping_mul(range));
     TransmitIndices {
         i: start,
         end,
@@ -209,7 +233,7 @@ pub fn transmit_index_stream(
         rate: max_rate as u64, // :212 `(uint64_t)masscan->max_rate`
         retries,
         r: retries.wrapping_add(1), // :213 `(unsigned)retries + 1`
-        increment: u64::from(increment),
+        increment,
     }
 }
 
@@ -360,6 +384,17 @@ pub fn transmit_scan_flow<B, F: FnMut(u64, u64, u64, u32, u32) -> ControlFlow<B>
 mod tests {
     use super::*;
     use crate::targets::{add_target_string, parse_ports};
+
+    /// main.c:269-273: `start`, `end`, шаг на пару (shard 2/3, 2 NIC).
+    #[test]
+    fn transmit_bounds_follow_c_start_end_increment() {
+        let shard = Shard { one: 2, of: 3 };
+        assert_eq!(transmit_bounds(10, shard, 2, 0, 0, None, 0), (2, 10, 6));
+        assert_eq!(transmit_bounds(10, shard, 2, 1, 0, None, 0), (3, 10, 6));
+        // resume.count усекает end, затем + retries * range.
+        assert_eq!(transmit_bounds(10, shard, 2, 1, 4, Some(3), 2), (7, 30, 6));
+        assert_eq!(transmit_bounds(10, shard, 2, 1, 4, Some(0), 2), (7, 30, 6));
+    }
 
     const ONE: Shard = Shard { one: 1, of: 1 };
 

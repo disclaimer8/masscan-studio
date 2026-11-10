@@ -1,0 +1,34 @@
+OUT=/tmp/rmasscan-out.vz2gHt/output-out/linux-output-r4
+SigIgn:	0000000000000000
+c73587a479ba52d55307147713279c90acade41e7cdb68fb6e0d91d61de5f5ea  target/release/rmasscan-lab
+3a169c27b6296e7b603f8cfba458a50e729f18ad4dfcdb024915263f411372f8  target/release/rmasscan
+2026-11-10T11:00:35Z
+[wire-lab] suite output finished rc=0 (see /tmp/rmasscan-out.vz2gHt/output-out/linux-output-r4/suite.log)
+[wire-lab] done: /tmp/rmasscan-out.vz2gHt/output-out/linux-output-r4
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+2026-11-10T11:05:53Z
+PASS     manifest 
+PASS     o01_list 
+PASS     o02_json 
+PASS     o03_ndjson 
+PASS     o04_grepable 
+PASS     o05_xml 
+PASS     o06_binary 
+PASS     o07_hostonly 
+PASS     o08_unicornscan 
+PASS     o09_json_default_show 
+PASS     o10_list_stdout 
+PASS     o11_interactive 
+PASS     o12_nostatus 
+PASS     o13_open_fail 
+PASS     o14_interrupt_json 
+PASS     o15_interrupt_xml 
+PASS     o16_interrupt_binary 
+PASS     o17_readscan 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":18}
+VERIFY_RC=0
+2026-11-10T11:05:53Z
+5272b145798f93a10c3c8ad6a0f00c4a5a68d5a9c1b748e23290396599d7774f  /tmp/rmasscan-out.vz2gHt/output-out/linux-output-r4/verdict.json
+0
+FINISHED

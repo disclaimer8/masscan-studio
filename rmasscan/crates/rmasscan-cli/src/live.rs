@@ -322,7 +322,8 @@ pub fn prepare(
             let detected = detect_nic(&eff, k, &targets, backend, false)?;
             let ports = match eff.nics()[k].source_port {
                 Some(p) => (p, Source::Given),
-                None => (source_ports.0, Source::Detected),
+                // inherited from nic 0 (paused.conf keeps only the unindexed `adapter-port`, as C): so is its provenance
+                None => (source_ports.0, source_ports.1),
             };
             extra.push(NicPrepared {
                 binding: binding_of(&detected, ports.0),

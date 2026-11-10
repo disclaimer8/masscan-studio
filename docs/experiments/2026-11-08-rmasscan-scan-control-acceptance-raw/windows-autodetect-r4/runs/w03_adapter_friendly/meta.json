@@ -1,0 +1,19 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794308862.207583,
+  "capture_stopped_utc": 1794308914.765964,
+  "end_marker_seen": true,
+  "exe_sha256": "ef5121a319f3034fe3cc3d8aa5496fc6f2d7e9a680a66e7f887df8d22241c450",
+  "guest_exit": 0,
+  "guest_finished_utc": 1794308880.599221,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794308868.008783,
+  "guest_times": {
+    "finished_utc": 1794308879.748,
+    "started_utc": 1794308876.464
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "ra6ecab627cca6d570f8b2509a8fbcb21-599eefc83a8a8474",
+  "kind": "scan",
+  "tag": "w03_adapter_friendly"
+}

@@ -209,6 +209,21 @@ fn preparing_keeps_stop_available_and_pause_disabled_until_tcp_scanning() {
 }
 
 #[test]
+fn paused_history_authorization_does_not_require_an_unrelated_draft() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new().unwrap();
+    ui.set_authorization_available(true);
+    ui.set_can_resume(true);
+    ui.set_job_rate("invalid draft".into());
+    assert!(matches!(
+        network_ui::session_action(&ui).unwrap(),
+        Action::Authorize
+    ));
+    ui.set_settings_open(true);
+    assert!(network_ui::session_action(&ui).is_err());
+}
+
+#[test]
 fn saved_partial_and_all_missing_coverage_survive_reopen_and_programmatic_fill() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = MainWindow::new().unwrap();

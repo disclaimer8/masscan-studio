@@ -1202,17 +1202,23 @@ fn commit_scan_events(
                     .ok_or("Saved scan disappeared")?;
                 // Candidate-only veto uses the bytes read back after Store commit.
                 // Coverage delivery and ACK cannot authorize a substituted report.
-                if studio_protocol::single_target::Intent::from_job(&saved.job).is_ok() {
-                    studio_protocol::single_target::validate_persisted(
-                        &saved.job,
-                        saved.network_report.as_deref(),
-                    )?;
-                } else {
-                    studio_protocol::sealed_fixture::validate_persisted(
-                        &saved.job,
-                        saved.network_report.as_deref(),
-                    )?;
+                if saved.job.backend == Backend::MacNetwork {
+                    if studio_protocol::single_target::Intent::from_job(&saved.job).is_ok() {
+                        studio_protocol::single_target::validate_persisted(
+                            &saved.job,
+                            saved.network_report.as_deref(),
+                        )?;
+                    } else {
+                        studio_protocol::sealed_fixture::validate_persisted(
+                            &saved.job,
+                            saved.network_report.as_deref(),
+                        )?;
+                    }
+                } else if saved.job.backend != Backend::MacPhysical {
+                    return Err("Network preparation requires a network profile".into());
                 }
+                // Every profile still validates the persisted report against its
+                // original job before coverage delivery and acknowledgement.
                 emit(out, network::coverage(saved)?)?;
                 if !c.halted && !cancelled() {
                     c.send(Command::AckNetworkReport {

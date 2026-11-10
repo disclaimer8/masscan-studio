@@ -27,7 +27,13 @@ pub(super) fn session_action(ui: &MainWindow) -> Result<Action, String> {
         && !ui.get_authorized()
         && !ui.get_authorizing()
     {
-        draft(ui).map(Action::AuthorizeFor)
+        if ui.get_can_resume() && !ui.get_settings_open() {
+            // Reopening paused history must not depend on a fresh or invalid
+            // settings draft. Resume validates the saved job and network itself.
+            Ok(Action::Authorize)
+        } else {
+            draft(ui).map(Action::AuthorizeFor)
+        }
     } else {
         Ok(Action::Lock)
     }

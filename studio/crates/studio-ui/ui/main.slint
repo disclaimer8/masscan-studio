@@ -600,6 +600,11 @@ export component MainWindow inherits Window {
                     Text { text: root.authorized ? "Helper session authorized" : "Helper session is not authorized"; color: Theme.muted; wrap: word-wrap; }
                 }
                 if root.backend-index != 1 : Text { text: root.network-detail; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                if root.action-notice != "" : HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: root.action-notice; color: Theme.text; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
+                    ActionButton { text: "Dismiss"; clicked => { root.action-notice = ""; } }
+                }
                 HorizontalLayout {
                     spacing: 12px;
                     JobField { label: "Seed · exact job sequence"; value <=> root.job-seed; edited => { root.settings-edited(); } }

@@ -3,6 +3,7 @@ mod work_session;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "macos")]
 mod feth_acceptance;
+mod linux_abi;
 #[cfg(target_os = "linux")]
 mod linux_acceptance;
 #[cfg(any(target_os = "macos", test))]
@@ -58,6 +59,11 @@ fn main() -> Result<()> {
         ) || std::env::args().nth(2).is_none())
     {
         return Err("Usage: studio-tools.exe prepare-runner PATH | verify-installed-runner HASH | probe-windows-authorization HASH".into());
+    }
+    // Resolve the supplied package path from the caller's directory and keep
+    // source checkout paths out of this standalone ABI evidence command.
+    if task == "verify-linux-abi" {
+        return linux_abi::main_entry();
     }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -271,7 +277,7 @@ fn main() -> Result<()> {
             }
             println!("Verified {count} package files: {}", dist.display());
         }
-        _ => return Err("Usage: cargo xtask build [--release] | package [--release] | verify-package DIR | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | feth-acceptance --out DIR --app APP --lab LAB [--manual] [--dry-run] (macOS) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
+        _ => return Err("Usage: cargo xtask build [--release] | package [--release] | verify-package DIR | verify-linux-abi PACKAGE_DIR --max-glibc MAJOR.MINOR[.PATCH] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | feth-acceptance --out DIR --app APP --lab LAB [--manual] [--dry-run] (macOS) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
     }
     Ok(())
 }

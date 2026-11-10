@@ -41,6 +41,55 @@ SQLite DLL/import library. See `scripts/windows-sqlite.ps1`. Building on one hos
 does not validate native installation, authorization or packet delivery on the
 other platforms.
 
+## Linux baseline release
+
+From a clean repository root, with Docker available:
+
+```sh
+bash studio/scripts/package-linux-baseline.sh /tmp/studio-linux-release
+```
+
+The output directory must be new. The script clones the exact source commit and
+builds with pinned Rust 1.99.1 and Ubuntu 24.04 images in neutral directories.
+Compilation and simulation acceptance run as an ordinary container user. The
+default limits are four CPUs, four Cargo jobs and 6 GiB of memory; the
+`STUDIO_BUILD_CPUS`, `STUDIO_BUILD_JOBS` and `STUDIO_BUILD_MEMORY` environment
+variables can override these limits.
+
+The release gate verifies the complete package inventory, clean source
+provenance, direct ELF GLIBC requirements at or below 2.39, runtime library
+resolution, and the packaged UI's pause/resume and stop-race simulation smokes.
+It scans uncompressed package contents and evidence with `rmasscan-lab
+privacy-scan`, creates an archive with numeric neutral ownership, then extracts
+and verifies that archive again. Artifacts are exported only after every gate
+passes. The `Studio Linux release` workflow runs this same command.
+
+To inspect an existing Linux package using GNU binutils:
+
+```sh
+cd studio
+cargo xtask verify-linux-abi dist/build-<timestamp> --max-glibc 2.39
+```
+
+The JSON report covers direct executable GLIBC requirements. It does not
+establish compatibility with every distribution or cover all transitive system
+libraries. Ubuntu 24.04 simulation acceptance does not establish desktop polkit
+interaction or native packet delivery.
+
+## Source and privacy provenance
+
+Release builds must use neutral physical paths for the checkout, Cargo cache,
+Rust toolchain and build output. Rust debug and panic data, build scripts and
+embedded environment strings can preserve source paths inside binaries.
+Manifest verification alone does not detect these leaks. Scan the actual
+uncompressed deliverable and publishable logs before archiving; inspect archive
+metadata separately. `privacy-scan` does not decompress archives or decode
+UTF-16 strings, so Windows packages also need a UTF-16 path check.
+
+After a source-history rewrite, rebuild from the new commit. Historical
+packages retain their original provenance; editing their manifest or renaming
+them cannot establish that they were built from the rewritten commit.
+
 ## Public macOS distribution
 
 Apple requires Developer ID signing, hardened runtime and secure timestamps for

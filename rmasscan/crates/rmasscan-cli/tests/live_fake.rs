@@ -3284,29 +3284,76 @@ fn multi_adapter_paused_conf_round_trips_and_resumes() {
     ] {
         assert!(conf.contains(key), "{key}: {conf}");
     }
-    let first: Vec<(Ipv4Addr, u16)> = b
-        .opened()
-        .iter()
-        .flat_map(|x| x.adapter.sent_frames())
-        .map(|f| syn_dst(&f))
-        .collect();
+    // Сценарий известен: адаптер 0 закончил оба своих зонда (внешние индексы 0 и 2), адаптер 1 встал после первого
+    // (индекс 1). Исчерпанный адаптер в минимум не входит (T7 I-2), база возобновления это база адаптера 1:
+    // позиция 3 минус смещение 1.
+    let dsts = |b: &FakeBackend, k: usize| -> Vec<(Ipv4Addr, u16)> {
+        b.opened()[k]
+            .adapter
+            .sent_frames()
+            .iter()
+            .map(|f| syn_dst(f))
+            .collect()
+    };
+    let stream: Vec<(Ipv4Addr, u16)> = {
+        let b1 = FakeBackend::new();
+        let (r, _, _) = cli(&b1, &with(&LIVE, &["--seed", "7"]));
+        r.unwrap();
+        let o = b1.opened();
+        o.last()
+            .unwrap()
+            .adapter
+            .sent_frames()
+            .iter()
+            .map(|f| syn_dst(f))
+            .collect()
+    };
+    assert_eq!(
+        dsts(&b, 0),
+        [stream[0], stream[2]],
+        "nic 0 finished its stream"
+    );
+    assert_eq!(
+        dsts(&b, 1),
+        [stream[1]],
+        "nic 1 paused after its first probe"
+    );
+    assert!(conf.contains("resume-index = 2\n"), "{conf}");
+    let first: Vec<(Ipv4Addr, u16)> = (0..2).flat_map(|k| dsts(&b, k)).collect();
 
     // Возобновление: файл читается, второй адаптер не отвергается, остаток отправляется.
     let dir = Scratch::new();
     let file = dir.write("paused.conf", conf.as_bytes());
     let b2 = two_nic_backend();
-    let (r, _, log2) = cli(&b2, &["--resume", file.to_str().unwrap(), "--nostatus"]);
+    let (r, _, log2) = cli(&b2, &["--resume", file.to_str().unwrap()]);
     r.unwrap();
     assert!(log2.contains("finished: Completed"), "{log2}");
     assert_eq!(b2.opened().len(), 2);
-    let second: Vec<(Ipv4Addr, u16)> = b2
-        .opened()
-        .iter()
-        .flat_map(|x| x.adapter.sent_frames())
-        .map(|f| syn_dst(&f))
-        .collect();
+    // Адаптер 0 был впереди минимума: он заново шлёт индекс 2; адаптер 1 шлёт 3.
+    assert_eq!(
+        dsts(&b2, 0),
+        [stream[2]],
+        "resumed nic 0 re-sends its probe past the min"
+    );
+    assert_eq!(dsts(&b2, 1), [stream[3]]);
+    let second: Vec<(Ipv4Addr, u16)> = (0..2).flat_map(|k| dsts(&b2, k)).collect();
+
+    // Без потерь: объединение равно всему потоку; ни один зонд не отправлен больше двух раз; единственный
+    // дубликат (индекс 2) принадлежит адаптеру, бывшему впереди минимума.
     let mut union: Vec<_> = first.iter().chain(&second).copied().collect();
     union.sort_unstable();
-    union.dedup();
-    assert_eq!(union, whole, "first leg {first:?}, resumed leg {second:?}");
+    let mut whole = stream.clone();
+    whole.sort_unstable();
+    let mut deduped = union.clone();
+    deduped.dedup();
+    assert_eq!(deduped, whole, "no probe is lost");
+    for probe in &whole {
+        let n = union.iter().filter(|p| *p == probe).count();
+        assert!(n <= 2, "{probe:?} sent {n} times");
+        assert_eq!(
+            n == 2,
+            *probe == stream[2],
+            "only nic 0's probe past the min repeats"
+        );
+    }
 }

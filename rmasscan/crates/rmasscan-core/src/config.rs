@@ -1220,7 +1220,8 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         "noreset" => cfg.noreset = parse_bool(value),
         // main-conf.c:2758: `badsum` ставит флаг при любом значении.
         "badsum" => cfg.badsum = true,
-        "infinite" => cfg.infinite = true,
+        // Значение читается как логическое (`infinite = false` в файле отменяет `--infinite` левее него); C ставит 1 всегда.
+        "infinite" => cfg.infinite = parse_bool(value),
         "ttl" => {
             let n = strtoul0(value).ok_or_else(bad)?;
             cfg.ttl = Some(u8::try_from(n).ok().filter(|&t| t != 0).ok_or_else(bad)?);
@@ -1415,7 +1416,7 @@ mod tests {
     /// напечатался бы один раз молча.
     #[test]
     fn infinite_with_list_is_refused_but_scan_and_echo_accept_it() {
-        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        let mut cfg = cfg_with("198.18.0.0/30", "80");
         cfg.infinite = true;
         assert_eq!(err(&cfg, Operation::List), ConfigError::InfiniteWithList);
         assert!(validate(&cfg, Operation::Scan).is_ok());

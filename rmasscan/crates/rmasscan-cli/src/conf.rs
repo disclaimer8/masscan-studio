@@ -16,7 +16,7 @@ use rmasscan_core::ranges::RangeList;
 use crate::output::Format;
 
 /// Ключи вывода, которые `paused.conf` хранит между двумя `SPACE`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct OutputConfPatch {
     pub format: Option<Format>,
     pub filename: Option<String>,
@@ -28,10 +28,37 @@ pub struct OutputConfPatch {
     pub show_host: Option<bool>,
     /// Группы вывода (`format`, `filename`, `append`, `flush`, `style`, `show`), которые задал последний применённый
     /// файл; [`crate::args::Cli`] очищает список перед каждым файлом и переносит его в `file_pos`.
-    pub touched: Vec<&'static str>,
+    pub(crate) touched: Vec<&'static str>,
     /// Позиция в `argv` последнего файла, задавшего группу: опция командной строки правее неё побеждает файл.
-    pub file_pos: std::collections::BTreeMap<&'static str, usize>,
+    pub(crate) file_pos: std::collections::BTreeMap<&'static str, usize>,
 }
+
+/// Сравниваются только данные `paused.conf`; учёт позиций файлов (`touched`, `file_pos`) в сравнении не участвует.
+impl PartialEq for OutputConfPatch {
+    fn eq(&self, o: &Self) -> bool {
+        (
+            self.format,
+            &self.filename,
+            self.append,
+            self.flush,
+            &self.stylesheet,
+            self.show_open,
+            self.show_closed,
+            self.show_host,
+        ) == (
+            o.format,
+            &o.filename,
+            o.append,
+            o.flush,
+            &o.stylesheet,
+            o.show_open,
+            o.show_closed,
+            o.show_host,
+        )
+    }
+}
+
+impl Eq for OutputConfPatch {}
 
 impl OutputConfPatch {
     fn touch(&mut self, group: &'static str) {
@@ -620,23 +647,23 @@ adapter-port = 41234-41250\n\
         let ip = |a: u8, b: u8, c: u8, d: u8| u32::from_be_bytes([a, b, c, d]);
         // Несколько записей в строке через запятую и пробелы, комментарии всех видов, без завершающей строки.
         let got = parse(
-            "10.0.0.1,10.0.0.3  10.1.0.0/24\t# comment\n; semi\n// slash\n- dash\r\n\n10.2.0.5-10.2.0.9\n10.3.0.7",
+            "198.18.0.1,198.18.0.3  198.18.1.0/24\t# comment\n; semi\n// slash\n- dash\r\n\n198.18.2.5-198.18.2.9\n198.18.3.7",
         )
         .unwrap();
         assert_eq!(
             got,
             [
-                (ip(10, 0, 0, 1), ip(10, 0, 0, 1)),
-                (ip(10, 0, 0, 3), ip(10, 0, 0, 3)),
-                (ip(10, 1, 0, 0), ip(10, 1, 0, 255)),
-                (ip(10, 2, 0, 5), ip(10, 2, 0, 9)),
-                (ip(10, 3, 0, 7), ip(10, 3, 0, 7)),
+                (ip(198, 18, 0, 1), ip(198, 18, 0, 1)),
+                (ip(198, 18, 0, 3), ip(198, 18, 0, 3)),
+                (ip(198, 18, 1, 0), ip(198, 18, 1, 255)),
+                (ip(198, 18, 2, 5), ip(198, 18, 2, 9)),
+                (ip(198, 18, 3, 7), ip(198, 18, 3, 7)),
             ]
         );
         // CIDR маскирует хвост адреса (`_ipv4_apply_cidr`), /0 и /32 допустимы.
         assert_eq!(
-            parse("10.1.2.3/16").unwrap(),
-            [(ip(10, 1, 0, 0), ip(10, 1, 255, 255))]
+            parse("198.18.2.3/16").unwrap(),
+            [(ip(198, 18, 0, 0), ip(198, 18, 255, 255))]
         );
         assert_eq!(
             parse("1.2.3.4/32").unwrap(),
@@ -644,13 +671,13 @@ adapter-port = 41234-41250\n\
         );
         // Юникодное тире U+2013 (E2 80 93) и байт 0x96 как дефис в диапазоне.
         assert_eq!(
-            parse("10.0.0.1\u{2013}10.0.0.4\n").unwrap(),
-            [(ip(10, 0, 0, 1), ip(10, 0, 0, 4))]
+            parse("198.18.0.1\u{2013}198.18.0.4\n").unwrap(),
+            [(ip(198, 18, 0, 1), ip(198, 18, 0, 4))]
         );
         // Ошибки с номером строки и столбца, как `[-] file:line:col: invalid IP address on line #line`.
         for (text, line, col) in [
-            ("10.0.0.1\n10.0.0.256\n", 2, 10),
-            ("10.0.0.1\n\n1.2.3.4/33\n", 3, 10),
+            ("198.18.0.1\n198.18.0.256\n", 2, 12),
+            ("198.18.0.1\n\n1.2.3.4/33\n", 3, 10),
             ("1.2.3\n", 1, 6),
             ("1.2.3.4x\n", 1, 8),
             ("1.2.3.4-5.6.7.8-9\n", 1, 16),
@@ -673,7 +700,7 @@ adapter-port = 41234-41250\n\
             "1..2.3\n",
             "1.2.3.\n",
             "1.2.3.4/\n",
-            "10.0.0.9-10.0.0.1\n",
+            "198.18.0.9-198.18.0.1\n",
         ] {
             assert!(parse(text).is_err(), "{text:?}");
         }

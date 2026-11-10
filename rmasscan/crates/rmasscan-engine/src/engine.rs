@@ -323,6 +323,8 @@ struct Shared {
     positions: Vec<AtomicU64>,
     /// `ReadyPlan::nic_offset(k)`: смещение shard/NIC в базе `resume.index`.
     offsets: Vec<u64>,
+    /// `effective_end(k)` каждого адаптера: позиция исчерпанного курсора равна `end`.
+    ends: Vec<u64>,
     received: AtomicU64,
     discarded: AtomicU64,
     duplicates: AtomicU64,
@@ -439,13 +441,22 @@ impl Shared {
     /// Нормализованная база возобновления `min_k(my_index[k] - nic_offset(k))`
     /// (то же, что `ProbeCursor::resume_base`): `cursor_for_nic` прибавит
     /// смещение shard/NIC заново ровно один раз.
+    ///
+    /// Исчерпанный адаптер (`position >= effective_end`) в минимум не входит: его позиция равна `end`, а
+    /// `end - nic_offset` лежит вне класса вычетов потока и при `nic_count >= 3` увёл бы `resume-index` в
+    /// индексы чужого шарда. Если исчерпаны все, результат не меньше `effective_end` (T4: `paused.conf` не нужен).
     fn resume_base(&self) -> u64 {
-        self.positions
+        let live = self
+            .positions
             .iter()
             .zip(&self.offsets)
-            .map(|(p, off)| p.load(Ordering::Acquire).saturating_sub(*off))
-            .min()
-            .unwrap_or(0)
+            .zip(&self.ends)
+            .filter_map(|((p, off), end)| {
+                let pos = p.load(Ordering::Acquire);
+                (pos < *end).then(|| pos.saturating_sub(*off))
+            })
+            .min();
+        live.unwrap_or_else(|| self.ends.iter().copied().max().unwrap_or(0))
     }
 
     fn snapshot(&self) -> Progress {
@@ -991,6 +1002,7 @@ impl Engine {
                 .map(|c| AtomicU64::new(c.position()))
                 .collect(),
             offsets: (0..count as u32).map(|k| plan.nic_offset(k)).collect(),
+            ends: (0..count as u32).map(|k| plan.effective_end(k)).collect(),
             received: AtomicU64::new(0),
             discarded: AtomicU64::new(0),
             duplicates: AtomicU64::new(0),
@@ -1611,5 +1623,119 @@ mod tests {
                 assert_eq!(accepted(&rx_b), k == 1, "RX B, reply to adapter {k}");
             }
         }
+    }
+
+    /// T7 I-2: исчерпанный адаптер не тянет `resume-index` вниз. `--shard 1/2`, 3 адаптера, range 13: поток шарда 1
+    /// это индексы {0,1,2,6,7,8,12}; адаптеры 1 ({1,7}) и 2 ({2,8}) заканчивают, адаптер 0 ({0,6,12}) встаёт после
+    /// отправки 0 и 6. Сырой минимум дал бы `resume-index = 11` (индекс шарда 2), правильная база 12.
+    #[test]
+    fn exhausted_adapter_does_not_drag_the_resume_base_into_another_shard() {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.1.0-198.18.1.12").unwrap();
+        parse_ports(m.ports_mut(), "80").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 0,
+            shard: Shard { one: 1, of: 2 },
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = |ip: u32, mac: u8| {
+            NicBinding::from(AdapterBinding {
+                interface_id: format!("fake{mac}"),
+                link_type: LinkType::Ethernet,
+                source_ipv4: ip,
+                source_mac: [0, 0x11, 0x22, 0x33, 0x44, mac],
+                next_hop_mac: [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
+                source_ports: (40000, 40015),
+            })
+        };
+        let plan = ReadyPlan::new_cli(
+            eff,
+            vec![
+                nic(0xc612_0063, 1),
+                nic(0xc612_0064, 2),
+                nic(0xc612_0065, 3),
+            ],
+        )
+        .unwrap();
+        assert_eq!(plan.range(), 13);
+
+        let clock = ManualClock::new();
+        let fakes: Vec<FakeAdapter> = (0..3)
+            .map(|_| FakeAdapter::new().with_clock(clock.clone()))
+            .collect();
+        // Адаптер 0 встаёт на внешнем индексе 12 (две отправки: 0 и 6), пока 1 и 2 ещё не закончили, затем ждёт.
+        let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+        {
+            let (c2, d2) = (cell.clone(), done.clone());
+            fakes[0].set_send_hook(move |sent| {
+                if sent == 2 {
+                    // Ждём, пока адаптеры 1 и 2 отправят свои потоки целиком.
+                    let t = Instant::now();
+                    while d2.load(Ordering::SeqCst) < 4 && t.elapsed() < Duration::from_secs(10) {
+                        std::thread::yield_now();
+                    }
+                    let c = loop {
+                        if let Some(c) = c2.get() {
+                            break c;
+                        }
+                        std::thread::yield_now();
+                    };
+                    c.pause();
+                }
+            });
+        }
+        for f in &fakes[1..] {
+            let d3 = done.clone();
+            f.set_send_hook(move |_| {
+                d3.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            fakes.iter().map(FakeAdapter::pair).collect(),
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        cell.set(h.cancel_handle()).ok();
+        let (outcome, events) = h.join_drain().unwrap();
+        assert_eq!(outcome.reason, Reason::Paused);
+        let next = events.iter().find_map(|e| match e {
+            Event::CheckpointReady { next_index } => Some(*next_index),
+            _ => None,
+        });
+        assert_eq!(next, Some(12), "exhausted adapters must not lower the base");
+        let sent0 = fakes[0].sent_count();
+        assert_eq!(sent0, 2, "adapter 0 paused after indices 0 and 6");
+
+        // Возобновление с базы 12: во всех адаптерах отправляется ровно индекс 12.
+        let mut resumed_cfg = cfg.clone();
+        resumed_cfg.resume_index = 12;
+        let eff = validate(&resumed_cfg, Operation::Scan).unwrap();
+        let plan2 = ReadyPlan::new_cli(eff, plan.nics().to_vec()).unwrap();
+        let mut all = Vec::new();
+        for k in 0..3 {
+            let mut cursor = plan2.cursor_for_nic(k, None).unwrap();
+            while let Some(p) = cursor.current() {
+                all.push(p.frame.clone());
+                cursor.advance_sent();
+            }
+        }
+        assert_eq!(all.len(), 1, "exactly one probe left (index 12)");
+        let mut c0 = plan.cursor_for_nic(0, None).unwrap();
+        let mut stream0 = Vec::new();
+        while let Some(p) = c0.current() {
+            stream0.push(p.frame.clone());
+            c0.advance_sent();
+        }
+        assert_eq!(stream0.len(), 3);
+        assert_eq!(all[0], stream0[2], "the leftover probe is nic 0's index 12");
     }
 }

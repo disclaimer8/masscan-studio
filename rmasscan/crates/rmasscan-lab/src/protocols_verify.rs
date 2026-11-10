@@ -823,9 +823,12 @@ pub struct WireView {
     pub proto_unreachable: usize,
     /// The peer's ARP replies to the next-hop resolution of a scan that is no ARP scan.
     pub next_hop_replies: usize,
-    /// Frames of the scanner MAC that are no probe, by what they are: the host kernel's resets and ICMP errors
-    /// (its answer to replies nobody listens for), next-hop ARP requests, anything else.
-    pub scanner_other: BTreeMap<String, usize>,
+    /// Frames of the scanner MAC that are no probe and belong to one of [`SCANNER_CLASSES`], by its key.
+    pub scanner_named: BTreeMap<&'static str, usize>,
+    /// Every other frame of the scanner MAC that is no probe: the scanner's own extra frames, described.
+    pub scanner_unexplained: Vec<String>,
+    /// ARP requests of the scanner MAC that are no probe (the next-hop who-has among them).
+    pub arp_requests_not_probes: usize,
     /// Frames of the peer MAC that answer nothing the scan sent.
     pub peer_unexpected: Vec<String>,
     /// Probes or replies outside the witness window (last start marker .. first end marker).
@@ -836,15 +839,137 @@ impl WireView {
         self.probes.iter().map(|p| p.frame.clone()).collect()
     }
     fn arp_requests(&self) -> usize {
-        self.probes.iter().filter(|p| p.proto == Proto::Arp).count()
-            + self.scanner_other.get(NEXT_HOP_ARP).copied().unwrap_or(0)
+        self.probes.iter().filter(|p| p.proto == Proto::Arp).count() + self.arp_requests_not_probes
     }
 }
-const NEXT_HOP_ARP: &str = "ARP request that is no probe (next-hop resolution)";
+
+/// The frames of the scanner MAC that are no probe of the scan and that the stand makes the scanner side send: the
+/// key they are counted under in the notes, and what they are. Any other frame of the scanner MAC is the scanner's own
+/// extra frame: a FAIL on rmasscan's step, INVALID on the oracle's.
+pub const SCANNER_CLASSES: [(&str, &str); 4] = [
+    (
+        "next_hop_who_has",
+        "the scanner's next-hop resolution: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan), in a scan that is no ARP scan",
+    ),
+    (
+        "rst_to_syn_ack",
+        "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each first SYN-ACK itself (main.c:1095)",
+    ),
+    (
+        "port_unreachable_to_udp_reply",
+        "an ICMP 3/3 from 198.18.0.1 quoting a UDP reply of the stand: the scanner namespace kernel, no socket on the source port",
+    ),
+    (
+        "protocol_unreachable_to_sctp_reply",
+        "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
+    ),
+];
+/// The scanner's next-hop who-has for the default gateway, in its resolver form.
+fn next_hop_who_has(f: &[u8], st: &Stand) -> bool {
+    av::resolver_request(f) && f[28..32] == st.scanner_ip.octets() && f[38..42] == GATEWAY.octets()
+}
+/// What a frame of the scanner MAC that is no probe is: the key of its [`SCANNER_CLASSES`] entry, when it answers a
+/// reply of the stand (`replies`) the way the scanner side does, or what it is otherwise.
+fn scanner_frame(
+    f: &[u8],
+    st: &Stand,
+    arp: bool,
+    replies: &[Reply],
+) -> Result<&'static str, String> {
+    if f.get(12..14) == Some(&[8, 6][..]) {
+        return match (next_hop_who_has(f, st), arp) {
+            (true, false) => Ok(SCANNER_CLASSES[0].0),
+            (true, true) => Err(
+                "the next-hop who-has 198.18.0.2 in an ARP scan (its router MAC is given)".into(),
+            ),
+            _ => Err(describe(f)),
+        };
+    }
+    if ipv4(f).is_none() || src(f) != st.scanner_ip {
+        return Err(describe(f));
+    }
+    if av::is_reset(f) {
+        let answers = verify::tcp(f).is_some_and(|t| {
+            t.flags == 0x04
+                && replies.iter().any(|r| {
+                    r.proto == Proto::Tcp
+                        && r.st == St::Open
+                        && !r.via_icmp
+                        && src(&r.frame) == dst(f)
+                        && verify::tcp(&r.frame)
+                            .is_some_and(|y| (y.sp, y.dp, y.ack) == (t.dp, t.sp, t.seq))
+                })
+        });
+        return if answers {
+            Ok(SCANNER_CLASSES[1].0)
+        } else {
+            Err(format!(
+                "{}, which resets no SYN-ACK of the stand",
+                describe(f)
+            ))
+        };
+    }
+    if f[23] == 1 && f.get(34) == Some(&3) {
+        // The quoted IPv4 header and ports: the reply's own, as the stand sent it.
+        let quotes = |proto: Proto| {
+            f.get(42..66).is_some_and(|q| {
+                q[0] == 0x45
+                    && replies.iter().any(|r| {
+                        r.proto == proto
+                            && !r.via_icmp
+                            && r.frame.get(23) == Some(&q[9])
+                            && r.frame.get(26..34) == Some(&q[12..20])
+                            && r.frame.get(34..38) == Some(&q[20..24])
+                    })
+            })
+        };
+        match f[35] {
+            3 if quotes(Proto::Udp) => return Ok(SCANNER_CLASSES[2].0),
+            2 if quotes(Proto::Sctp) => return Ok(SCANNER_CLASSES[3].0),
+            _ => {}
+        }
+        return Err(format!(
+            "{}, which quotes no UDP (3/3) or SCTP (3/2) reply of the stand",
+            describe(f)
+        ));
+    }
+    Err(describe(f))
+}
+/// A frame in a few words, for the detail of a check.
+fn describe(f: &[u8]) -> String {
+    let b = |i: usize| f.get(i).copied().unwrap_or(0);
+    let port = u16::from_be_bytes([b(36), b(37)]);
+    if f.get(12..14) == Some(&[8, 6][..]) {
+        return format!(
+            "an ARP frame of {} bytes, operation {}, for {}",
+            f.len(),
+            u16::from_be_bytes([b(20), b(21)]),
+            Ipv4Addr::new(b(38), b(39), b(40), b(41))
+        );
+    }
+    if ipv4(f).is_none() {
+        return format!(
+            "a {}-byte frame of ethertype {:02x}{:02x}",
+            f.len(),
+            b(12),
+            b(13)
+        );
+    }
+    let to = format!("{} > {}", src(f), dst(f));
+    match f[23] {
+        6 => format!("TCP flags {:#04x} {to}:{port}", b(47)),
+        17 => format!("UDP {to}:{port}"),
+        1 => format!("ICMP {}/{} {to}", b(34), b(35)),
+        132 => format!("SCTP chunk type {} {to}:{port}", b(46)),
+        p => format!("IPv4 protocol {p} {to}"),
+    }
+}
 pub fn view(fr: &Frames, st: &Stand, arp: bool) -> WireView {
     let w = av::classify(fr, st.scanner_mac);
     let (start, end) = av::window(&w);
     let mut v = WireView::default();
+    // The scanner MAC's frames that are no probe, judged once every reply of the capture is known.
+    let mut mine: Vec<&Vec<u8>> = Vec::new();
     let marker = |f: &[u8]| f.get(12..14) == Some(&crate::link::MARKER_ETHERTYPE[..]);
     for (t, f) in fr {
         if marker(f) {
@@ -856,15 +981,7 @@ pub fn view(fr: &Frames, st: &Stand, arp: bool) -> WireView {
             continue;
         }
         if f.get(6..12) == Some(&st.scanner_mac[..]) {
-            let what = match (f.get(12..14), ipv4(f).map(|_| f[23])) {
-                (Some([8, 6]), _) if f.get(20..22) == Some(&[0, 1][..]) => NEXT_HOP_ARP,
-                (_, Some(6)) if f.get(47).is_some_and(|x| x & 0x04 != 0) => {
-                    "TCP reset of the scanner host's kernel"
-                }
-                (_, Some(1)) if f.get(34) == Some(&3) => "ICMP error of the scanner host's kernel",
-                _ => "other",
-            };
-            *v.scanner_other.entry(what.into()).or_insert(0) += 1;
+            mine.push(f);
             continue;
         }
         if f.get(6..12) == Some(&st.peer_mac[..]) {
@@ -877,6 +994,15 @@ pub fn view(fr: &Frames, st: &Stand, arp: bool) -> WireView {
                 Peer::NextHop => v.next_hop_replies += 1,
                 Peer::Unexpected(why) => v.peer_unexpected.push(why),
             }
+        }
+    }
+    for f in mine {
+        if f.get(12..14) == Some(&[8, 6][..]) && f.get(20..22) == Some(&[0, 1][..]) {
+            v.arp_requests_not_probes += 1;
+        }
+        match scanner_frame(f, st, arp, &v.replies) {
+            Ok(key) => *v.scanner_named.entry(key).or_insert(0) += 1,
+            Err(what) => v.scanner_unexplained.push(what),
         }
     }
     v
@@ -1645,9 +1771,22 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
     };
     let st = stand();
     let mut docs: Vec<Option<Document>> = Vec::new();
+    let mut scanner_notes = serde_json::Map::new();
     for s in sides {
         if let Some(v) = &s.view {
             stand_answers(r, s, v);
+            scanner_frames(r, s, v);
+            let mut counts: serde_json::Map<String, Value> = SCANNER_CLASSES
+                .iter()
+                .map(|(k, _)| {
+                    (
+                        (*k).into(),
+                        json!(v.scanner_named.get(k).copied().unwrap_or(0)),
+                    )
+                })
+                .collect();
+            counts.insert("unexplained".into(), json!(v.scanner_unexplained.len()));
+            scanner_notes.insert(s.spec.name.into(), Value::Object(counts));
         }
         let d = doc_of(r, s);
         match s.spec.who {
@@ -1729,6 +1868,33 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
     }
     case_checks(r, c, sides, &docs, &st);
     deviations(r, c, sides, r12, collapsed);
+    r.notes.insert(
+        "scanner_frame_classes".into(),
+        json!(SCANNER_CLASSES.iter().copied().collect::<BTreeMap<_, _>>()),
+    );
+    r.notes
+        .insert("scanner_frames".into(), Value::Object(scanner_notes));
+}
+
+/// Every frame of the scanner MAC is a probe of the scan or one of [`SCANNER_CLASSES`]; any other is the scanner's
+/// own extra frame: a FAIL on rmasscan's step (once the evidence is proven), INVALID on the oracle's.
+fn scanner_frames(r: &mut Run, s: &Side, v: &WireView) {
+    cap(
+        r,
+        s,
+        "every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+        v.scanner_unexplained.is_empty(),
+        format!(
+            "{} other frames: {}",
+            v.scanner_unexplained.len(),
+            v.scanner_unexplained
+                .iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+    );
 }
 
 /// What a case proves beyond the common checks.
@@ -1787,9 +1953,9 @@ fn case_checks(r: &mut Run, c: &CaseSpec, sides: &[Side], docs: &[Option<Documen
                     "no ARP request to the default gateway: the scanner's ARP requests are the four who-has probes, 198.18.0.2 asked once",
                     v.arp_requests() == st.peer_ips.len() && gw == 1,
                     format!(
-                        "{} ARP requests, {gw} for 198.18.0.2, {:?}",
+                        "{} ARP requests, {gw} for 198.18.0.2, {} who-has that are no probe",
                         v.arp_requests(),
-                        v.scanner_other
+                        v.arp_requests_not_probes
                     ),
                 );
                 if s.spec.out == Out::Stdout {

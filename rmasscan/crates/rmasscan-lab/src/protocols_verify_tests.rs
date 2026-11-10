@@ -1019,6 +1019,193 @@ fn every_named_deviation_has_its_wire_condition() {
     );
 }
 
+/// `f` inserted into a step's capture just before its end markers (inside the witness window).
+fn with_frame(fr: &Frames, f: Vec<u8>) -> Frames {
+    let mut fr = fr.clone();
+    let at = fr.len() - 3;
+    let t = fr[at - 1].0 + 0.001;
+    fr.insert(at, (t, f));
+    fr
+}
+fn tcp_from_scanner(to: Ipv4Addr, dport: u16, flags: u8) -> Vec<u8> {
+    let mut t = vec![0u8; 20];
+    t[0..2].copy_from_slice(&40000_u16.to_be_bytes());
+    t[2..4].copy_from_slice(&dport.to_be_bytes());
+    t[12] = 0x50;
+    t[13] = flags;
+    ip_frame(PEER_MAC, SCANNER_MAC, SCANNER_IP, to, 6, t)
+}
+fn class_counts(v: &WireView) -> Vec<usize> {
+    SCANNER_CLASSES
+        .iter()
+        .map(|(k, _)| v.scanner_named.get(k).copied().unwrap_or(0))
+        .collect()
+}
+
+#[test]
+fn the_scanner_sides_frames_of_the_stand_are_named_and_counted_in_the_notes() {
+    // p05 on four peers: T:80 open (a reset per SYN-ACK), U:53 open (an ICMP 3/3 per UDP reply), S:2905 open (an
+    // ICMP 3/2 per INIT-ACK), the next-hop who-has once; nothing else from the scanner MAC.
+    let c = case("p05_mixed_protos").unwrap();
+    let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
+    let v = view(&fr, &stand(), false);
+    assert_eq!(class_counts(&v), [1, 4, 4, 4]);
+    assert!(
+        v.scanner_unexplained.is_empty(),
+        "{:?}",
+        v.scanner_unexplained
+    );
+    // an ARP scan: no class at all
+    let c = case("p04_arp_scan").unwrap();
+    let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
+    let v = view(&fr, &stand(), true);
+    assert_eq!(class_counts(&v), [0, 0, 0, 0]);
+    assert!(v.scanner_unexplained.is_empty());
+    // the notes carry each step's counts and what each class is
+    let root = scratch();
+    Sim::new("p05_mixed_protos").write(&root);
+    fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
+    let res = verify_dir(&root);
+    let run = run_of(&res, "p05_mixed_protos");
+    assert_eq!(run["verdict"], PASS, "{:#?}", bad(run));
+    for step in ["json", "oracle-json"] {
+        assert_eq!(
+            run["notes"]["scanner_frames"][step],
+            json!({"next_hop_who_has": 1, "rst_to_syn_ack": 4, "port_unreachable_to_udp_reply": 4,
+                   "protocol_unreachable_to_sctp_reply": 4, "unexplained": 0}),
+            "{step}"
+        );
+    }
+    let classes = run["notes"]["scanner_frame_classes"].as_object().unwrap();
+    assert_eq!(classes.len(), SCANNER_CLASSES.len());
+    assert!(s(&classes["rst_to_syn_ack"]).contains("main.c:1095"));
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_scanner_frame_of_no_named_class_is_left_unexplained() {
+    let c = case("p05_mixed_protos").unwrap();
+    let probes = plan_stream(&c).unwrap();
+    let (fr, _) = wire(&c, T0, &probes);
+    let st = stand();
+    let base = class_counts(&view(&fr, &st, false));
+    let peer = Ipv4Addr::new(198, 18, 0, 2);
+    let from_peer = |proto: u8, flags: Option<u8>| {
+        fr.iter()
+            .map(|(_, f)| f.clone())
+            .find(|f| {
+                f[6..12] == PEER_MAC
+                    && f.get(23) == Some(&proto)
+                    && flags.is_none_or(|x| f.get(47) == Some(&x))
+            })
+            .unwrap()
+    };
+    let (syn_ack, udp, sctp) = (
+        from_peer(6, Some(0x12)),
+        from_peer(17, None),
+        from_peer(132, None),
+    );
+    let udp_probe = probes.iter().find(|p| p[23] == 17).unwrap();
+    let mut wrong_seq = scanner_rst(&syn_ack);
+    wrong_seq[38] ^= 1;
+    let mut rst_ack = scanner_rst(&syn_ack);
+    rst_ack[47] = 0x14;
+    let mut cookie_echo = vec![0x9c, 0x40, 0x0b, 0x59, 0, 0, 0, 1, 0, 0, 0, 0];
+    cookie_echo.extend([10, 0, 0, 4]);
+    let mut arp_reply = Vec::new();
+    arp_reply.extend(PEER_MAC);
+    arp_reply.extend(SCANNER_MAC);
+    arp_reply.extend([8, 6, 0, 1, 8, 0, 6, 4, 0, 2]);
+    arp_reply.extend(SCANNER_MAC);
+    arp_reply.extend(SCANNER_IP.octets());
+    arp_reply.extend(PEER_MAC);
+    arp_reply.extend(peer.octets());
+    let extra: Vec<(&str, Vec<u8>)> = vec![
+        ("a TCP ACK", tcp_from_scanner(peer, 80, 0x10)),
+        ("a TCP SYN-ACK", tcp_from_scanner(peer, 80, 0x12)),
+        ("a reset of no SYN-ACK", wrong_seq),
+        ("RST-ACK", rst_ack),
+        (
+            "an SCTP COOKIE ECHO",
+            ip_frame(PEER_MAC, SCANNER_MAC, SCANNER_IP, peer, 132, cookie_echo),
+        ),
+        ("an ARP reply", arp_reply),
+        (
+            "an ICMP 3/3 quoting a probe",
+            ip_frame(
+                PEER_MAC,
+                SCANNER_MAC,
+                SCANNER_IP,
+                peer,
+                1,
+                icmp(3, 3, &[0; 4], &udp_probe[14..42]),
+            ),
+        ),
+        ("an ICMP 3/2 quoting a UDP reply", icmp_error(&udp, 2, true)),
+        (
+            "an ICMP 3/3 quoting an SCTP reply",
+            icmp_error(&sctp, 3, true),
+        ),
+        (
+            "an Echo Reply",
+            ip_frame(
+                PEER_MAC,
+                SCANNER_MAC,
+                SCANNER_IP,
+                peer,
+                1,
+                icmp(0, 0, &[0, 1, 0, 1], &[]),
+            ),
+        ),
+        ("a 42-byte who-has for the gateway", {
+            let mut f = next_hop_request();
+            f.truncate(42);
+            f
+        }),
+    ];
+    for (what, f) in extra {
+        let v = view(&with_frame(&fr, f), &st, false);
+        assert_eq!(
+            v.scanner_unexplained.len(),
+            1,
+            "{what}: {:?}",
+            v.scanner_unexplained
+        );
+        assert_eq!(class_counts(&v), base, "{what}");
+    }
+    // In an ARP scan the router MAC is given: the next-hop who-has is no class there.
+    let c = case("p04_arp_scan").unwrap();
+    let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
+    let v = view(&with_frame(&fr, next_hop_request()), &st, true);
+    assert_eq!(
+        v.scanner_unexplained.len(),
+        1,
+        "{:?}",
+        v.scanner_unexplained
+    );
+}
+
+#[test]
+fn an_extra_frame_of_the_scanner_fails_rmasscan_and_invalidates_the_oracle() {
+    const CHECK: &str = "every frame of the scanner MAC is a probe of the scan or of a named class";
+    let extra = tcp_from_scanner(Ipv4Addr::new(198, 18, 0, 2), 80, 0x10);
+    let mut sim = Sim::new("p05_mixed_protos");
+    let s = sim.step_mut("json");
+    s.frames = with_frame(&s.frames, extra.clone());
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(has(&b, FAIL, &format!("json: {CHECK}")), "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
+    // the same frame on the oracle's step: the oracle (or the stand) misbehaved, not rmasscan
+    let mut sim = Sim::new("p05_mixed_protos");
+    let s = sim.step_mut("oracle-json");
+    s.frames = with_frame(&s.frames, extra);
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(has(&b, INVALID, &format!("oracle-json: {CHECK}")), "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
+}
+
 #[test]
 fn an_arp_scan_that_asks_the_gateway_fails() {
     let mut sim = Sim::new("p04_arp_scan");

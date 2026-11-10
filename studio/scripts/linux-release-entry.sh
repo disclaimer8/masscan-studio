@@ -24,6 +24,7 @@ test "${#packages[@]}" = 1 && test -d "${packages[0]}"
 package=${packages[0]}
 tool=/build/studio/debug/xtask
 run_logged verify-package "$tool" verify-package "$package"
+"$tool" verify-package-privacy "$package" > /out/evidence/package-home-paths.json
 jq -e --arg sha "$STUDIO_SOURCE_COMMIT" \
     '.source_commit == $sha and .dirty == false and .profile == "release" and .platform == "linux" and .arch == "x86_64"' \
     "$package/manifest.json" > /out/evidence/provenance.log
@@ -55,12 +56,17 @@ scanner=/build/engine/release/rmasscan-lab
 cp -R "$package" /out/package
 printf '%s\n' "$STUDIO_SOURCE_COMMIT" > /out/source-commit.txt
 # Scan uncompressed bytes and logs; an archive scan cannot establish their privacy.
-"$scanner" privacy-scan --dir /out --forbid /Users/ --forbid /home/ --forbid '\Users\' --forbid '\\Users\\' > /out/evidence/privacy.log
+# The UI contains bare home-prefix literals for its own redaction function.
+# The inventory-backed path audit above detects complete paths in UTF-8/UTF-16;
+# the lab scan additionally checks capture/discovery content. Logs are checked
+# with the stricter prefix rule below, after every evidence file has been written.
+"$scanner" privacy-scan --dir /out > /out/evidence/privacy.log
 tar --sort=name --owner=0 --group=0 --numeric-owner -czf /out/studio-linux-x86_64.tar.gz -C /out/package .
 mkdir /tmp/studio-roundtrip
 tar -xzf /out/studio-linux-x86_64.tar.gz --no-same-owner -C /tmp/studio-roundtrip
 run_logged archive-verification "$tool" verify-package /tmp/studio-roundtrip
-"$scanner" privacy-scan --dir /tmp/studio-roundtrip --forbid /Users/ --forbid /home/ --forbid '\Users\' --forbid '\\Users\\' > /out/evidence/archive-privacy.log
+"$scanner" privacy-scan --dir /tmp/studio-roundtrip > /out/evidence/archive-privacy.log
+"$tool" verify-package-privacy /tmp/studio-roundtrip > /out/evidence/archive-home-paths.json
 tar --numeric-owner -tvzf /out/studio-linux-x86_64.tar.gz > /out/evidence/archive-members.log
 cd /out
 sha256sum studio-linux-x86_64.tar.gz > studio-linux-x86_64.tar.gz.sha256

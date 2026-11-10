@@ -2,6 +2,13 @@
 
 Date: 2026-11-10. Branch: `integration/studio-current-engine`.
 Review: [draft PR #54](https://github.com/disclaimer8/masscan-studio/pull/54).
+Historical evidence: the package identities and SHAs below predate the
+2026-11-10 history rewrite. They are preserved as recorded, not relabeled as
+new-history builds. A later privacy review found personal build paths in the
+old macOS binaries, so those packages are not current distribution candidates.
+Fresh releases must follow the neutral-path and archive checks in
+[packaging requirements](../../studio/PACKAGING.md).
+
 The scanner scan-control work is integrated through main `755e7bd`; the separate
 scanner worktree and existing VM lab were not changed.
 

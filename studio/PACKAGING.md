@@ -59,8 +59,9 @@ variables can override these limits.
 The release gate verifies the complete package inventory, clean source
 provenance, direct ELF GLIBC requirements at or below 2.39, runtime library
 resolution, and the packaged UI's pause/resume and stop-race simulation smokes.
-It scans uncompressed package contents and evidence with `rmasscan-lab
-privacy-scan`, creates an archive with numeric neutral ownership, then extracts
+It scans uncompressed package contents with the inventory-backed home-path
+checker and `rmasscan-lab privacy-scan`, checks evidence logs for home-path
+prefixes, creates an archive with numeric neutral ownership, then extracts
 and verifies that archive again. Artifacts are exported only after every gate
 passes. The `Studio Linux release` workflow runs this same command.
 
@@ -84,7 +85,22 @@ embedded environment strings can preserve source paths inside binaries.
 Manifest verification alone does not detect these leaks. Scan the actual
 uncompressed deliverable and publishable logs before archiving; inspect archive
 metadata separately. `privacy-scan` does not decompress archives or decode
-UTF-16 strings, so Windows packages also need a UTF-16 path check.
+UTF-16 strings. Run the additional package check on every platform:
+
+```sh
+cargo xtask verify-package-privacy dist/build-<timestamp>
+```
+
+This checks complete home paths in UTF-8 and UTF-16LE/BE, while allowing bare
+prefix constants used by the application's redaction code. It does not detect
+every kind of private data; supply known private account/host tokens directly
+to `rmasscan-lab privacy-scan` for a separate check before publishing evidence.
+Do not put those token values in recorded command lines or tracked scripts.
+
+A vendor binary can contain its publisher's build path. Keep the strict finding
+visible, verify the binary against the pinned upstream artifact, and record any
+reviewed exception by exact file hash. Do not edit a vendor DLL to remove a debug
+path or describe a package with an exception as having zero home-path matches.
 
 After a source-history rewrite, rebuild from the new commit. Historical
 packages retain their original provenance; editing their manifest or renaming

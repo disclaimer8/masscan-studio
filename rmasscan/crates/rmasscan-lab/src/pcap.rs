@@ -12,6 +12,10 @@ pub fn read_pcap_records(data: &[u8]) -> Result<(u32, Frames), String> {
             .collect(),
     ))
 }
+/// The byte ranges of the frame data of every record (the record headers excluded), checked like [`read_pcap_records`].
+pub fn frame_ranges(data: &[u8]) -> Result<Vec<std::ops::Range<usize>>, String> {
+    Ok(records(data)?.1.into_iter().map(|(_, _, f)| f).collect())
+}
 /// `data` with only the records whose frame `keep` accepts, each kept record byte for byte as it was (header,
 /// timestamp, frame), and the number of records left out. The capture is checked like [`read_pcap_records`].
 pub fn keep_records(

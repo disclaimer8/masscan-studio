@@ -173,7 +173,13 @@ struct FakeBackend {
     pcap_opened: Mutex<Vec<String>>,
     /// На каждый SYN сверх обычного ответа приходят RST с плохим cookie на наш `ip:port` и кадр на чужой адрес.
     inject_noise: bool,
+    /// Передача встаёт после этого кадра адаптера скана, пока цикл событий CLI не опросит `interrupts()` ещё
+    /// [`STALL_POLLS`] раз: строка статуса видит позицию посреди передачи (приём и часы идут дальше).
+    stall_tx_at: Option<usize>,
 }
+
+/// Сколько итераций цикла событий CLI переждать в сценарии `stall_tx_at`.
+const STALL_POLLS: usize = 40;
 
 /// Файл захвата в памяти.
 struct MemPcap(Arc<Mutex<Vec<u8>>>);
@@ -261,6 +267,7 @@ impl FakeBackend {
             pcap: Arc::new(Mutex::new(Vec::new())),
             pcap_opened: Mutex::new(Vec::new()),
             inject_noise: false,
+            stall_tx_at: None,
         }
     }
 
@@ -414,6 +421,21 @@ impl Backend for FakeBackend {
                 if let Some(frame) = held.lock().unwrap().take() {
                     handle.push_rx(RxStep::Idle(40));
                     handle.push_frame(frame);
+                }
+            });
+        }
+        if let Some(at) = self.stall_tx_at.filter(|_| !opened.is_empty()) {
+            let polls = self.polls.clone();
+            adapter.set_send_hook(move |count| {
+                if count != at {
+                    return;
+                }
+                let before = polls.load(Ordering::SeqCst);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while polls.load(Ordering::SeqCst) < before + STALL_POLLS
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             });
         }
@@ -904,6 +926,47 @@ fn seed_defaults_to_entropy_and_is_printed() {
     );
     r.unwrap();
     assert!(plus_lines(&log).contains(&"[+] seed = 9 (given)"), "{log}");
+}
+
+/// Р2, `main-conf.c:3624-3626`: `--shard` с `OF > 1` без seed (ни в argv, ни в файле конфигурации) печатает
+/// предупреждение C первым на stderr, до строк `[+]`: каждый процесс шарда взял бы свою энтропию, и шарды пошли бы по
+/// разным перестановкам. C печатает его в конце разбора командной строки для любой операции; `--echo` и `-sL` без
+/// seed здесь отказывают (seed обязателен) после того же предупреждения.
+#[test]
+fn shard_without_seed_prints_the_c_warning_before_the_plus_lines() {
+    const WARNING: &str = "[-] WARNING: --seed <num> is not specified\n    HINT: all shards must share the same seed\n";
+    let b = FakeBackend::new();
+    let (r, _, log) = cli(&b, &with(&LIVE, &["--shard", "1/2"]));
+    r.unwrap();
+    assert!(log.starts_with(WARNING), "{log:?}");
+    assert_eq!(log.matches("WARNING").count(), 1, "{log:?}");
+    assert!(
+        plus_lines(&log).contains(&format!("[+] seed = {ENTROPY} (entropy)").as_str()),
+        "{log}"
+    );
+    // Seed задан (в argv или в файле) или шард один: предупреждения нет.
+    let dir = Scratch::new();
+    let conf = dir.write("seed.conf", b"seed = 7\n");
+    let conf = conf.to_str().unwrap();
+    for extra in [
+        &["--shard", "1/2", "--seed", "7"][..],
+        &["--shard", "2/2", "-c", conf][..],
+        &["--shard", "1/1"][..],
+        &[][..],
+    ] {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, &with(&LIVE, extra));
+        r.unwrap();
+        assert!(!log.contains("WARNING"), "{extra:?}: {log:?}");
+    }
+    for op in ["--echo", "-sL"] {
+        let mut b = FakeBackend::new();
+        b.panic_on_open = true;
+        let (r, out, log) = cli(&b, &with(&LIVE, &[op, "--shard", "1/2"]));
+        assert!(r.unwrap_err().contains("--seed"), "{op}");
+        assert_eq!(log, WARNING, "{op}");
+        assert!(out.is_empty(), "{op}: {out:?}");
+    }
 }
 
 #[test]
@@ -2203,6 +2266,45 @@ fn ndjson_status_lines() {
     assert!(!log.contains("rate:"), "{log:?}");
 }
 
+/// Процент тика статуса `rate: …, P% done, …`.
+fn status_percent(f: &str) -> f64 {
+    f.split("-kpps, ")
+        .nth(1)
+        .and_then(|r| r.split("% done").next())
+        .and_then(|p| p.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no percent in {f:?}"))
+}
+
+/// Minor 1 финального ревью: с `--retries` позиция переходит `range` уже на 1/(retries+1) передачи, а SYN ещё уходят.
+/// Обратный отсчёт `--wait` начинается с конца передачи (позиция дошла до `effective_end` = `(retries + 1) * range`,
+/// тот же момент, от которого engine отсчитывает ожидание), а процент по-прежнему считается от `range`, как у C
+/// (`main.c:1427-1437`: `status_print(min_index, range, …)`, отсюда 141.67% у оракула).
+#[test]
+fn wait_countdown_starts_at_the_end_of_transmission_with_retries() {
+    let mut b = FakeBackend::new();
+    // range 4, `--retries 1`: позиции 0..8, на позицию два SYN (16 SYN); после 12-го SYN позиция 5 или 6 из 8, и
+    // передача стоит, пока цикл событий не сделает `STALL_POLLS` итераций.
+    b.stall_tx_at = Some(12);
+    let (r, _, log) = cli(&b, &with(&LIVE5, &["--retries", "1"]));
+    r.unwrap();
+    assert_eq!(b.opened().last().unwrap().adapter.sent_count(), 16);
+    let frags = status_fragments(&log);
+    let (waiting, running): (Vec<&str>, Vec<&str>) =
+        frags.iter().partition(|f| f.contains(" waiting "));
+    // Остановка видна: тик передачи за `range` (100%) и до конца передачи (200%).
+    assert!(
+        running
+            .iter()
+            .any(|f| status_percent(f) > 100.0 && status_percent(f) < 200.0),
+        "{frags:?}"
+    );
+    // Ни одного тика ожидания до конца передачи.
+    assert!(
+        waiting.iter().all(|f| status_percent(f) >= 200.0),
+        "{waiting:?}"
+    );
+}
+
 // ---------- Ctrl-C (Р18) ----------
 
 /// Ожидание `--wait 3600` идёт по `ManualClock` (72 000 пустых `recv`): скан не успевает закончиться сам раньше, чем
@@ -2862,6 +2964,49 @@ fn paused_conf_carries_output_options_and_ndjson_status() {
         "{conf}"
     );
     assert!(conf.contains("ndjson-status = true\n"), "{conf}");
+}
+
+/// T2 M-5: `ndjson-status = true` из файла `--resume` применяется (строка статуса NDJSON) и снова попадает в
+/// `paused.conf` следующей паузы; `--ndjson-status=false` правее файла его переопределяет (ключ правее файла сильнее).
+#[test]
+fn ndjson_status_from_a_resume_file_is_applied_and_saved_again() {
+    let dir = Scratch::new();
+    let file = dir.write(
+        "paused.conf",
+        b"\n# resume information\nresume-index = 0\nseed = 7\nrate = 100\nwait = 20\nndjson-status = true\n\n\
+# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80,81\nrange = 198.51.100.1-198.51.100.2\n",
+    );
+    let f = file.to_str().unwrap();
+    for (args, ndjson) in [
+        (&["--resume", f][..], true),
+        (&["--resume", f, "--ndjson-status=false"][..], false),
+    ] {
+        let mut b = FakeBackend::new();
+        b.press_in_tx = Some(PressInTx {
+            at: 2,
+            late_first: false,
+        });
+        let (r, _, log) = cli(&b, args);
+        r.unwrap();
+        let frags = status_fragments(&log);
+        let json = frags.iter().filter(|f| f.starts_with("{\"state\"")).count();
+        assert!(!frags.is_empty(), "{args:?}: {log:?}");
+        assert_eq!(json == frags.len(), ndjson, "{args:?}: {frags:?}");
+        assert_eq!(json == 0, !ndjson, "{args:?}: {frags:?}");
+        let writes = b.paused_writes();
+        assert_eq!(writes.len(), 1, "{args:?}: {log:?}");
+        assert!(
+            writes[0].1.contains("resume-index = 2\n"),
+            "{}",
+            writes[0].1
+        );
+        assert_eq!(
+            writes[0].1.contains("ndjson-status = true\n"),
+            ndjson,
+            "{args:?}: {}",
+            writes[0].1
+        );
+    }
 }
 
 /// Р1: отказ записи `paused.conf` печатает строки C, но не рвёт фазу `--wait`: поздний ответ принят, подвал `-oJ`

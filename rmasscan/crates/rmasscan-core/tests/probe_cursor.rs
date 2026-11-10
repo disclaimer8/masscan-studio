@@ -196,7 +196,7 @@ fn index_boundaries() {
     // range + 1: error
     assert!(matches!(
         ProbeCursor::new(&plan, range + 1),
-        Err(PlanError::NextIndexBeyondRange { next_index, range: r }) if next_index == range + 1 && r == range
+        Err(PlanError::NextIndexBeyondRange { next_index, limit: r }) if next_index == range + 1 && r == range
     ));
     assert!(matches!(
         ProbeCursor::new(&plan, u64::MAX),

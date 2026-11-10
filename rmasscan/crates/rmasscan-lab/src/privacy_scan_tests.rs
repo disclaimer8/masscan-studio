@@ -206,7 +206,7 @@ fn a_forbidden_token_in_a_text_file_or_a_capture_exits_one_without_printing_the_
             "--forbid",
             "acme-host",
             "--forbid",
-            "zzz",
+            "zzzz",
             "--dir",
             d.to_str().unwrap()
         ])),
@@ -216,7 +216,7 @@ fn a_forbidden_token_in_a_text_file_or_a_capture_exits_one_without_printing_the_
     let mut f = tcp_frame();
     f.extend(b"ACME-HOST");
     write_pcap(&d, "runs/x/peer.pcap", &[f]);
-    let hits = scan(&d, &strings(&["zzz", "acme-host"])).unwrap();
+    let hits = scan(&d, &strings(&["zzzz", "acme-host"])).unwrap();
     assert!(
         hits.iter()
             .any(|h| h.file == "runs/x/peer.pcap" && h.what == "forbidden token #2"),
@@ -236,4 +236,103 @@ fn bad_arguments_and_pointer_loops_are_handled() {
     m[5] = 1;
     m.extend([0xc0, 12, 0, 1, 0, 1]);
     assert_eq!(dns_names(&m), Vec::<String>::new());
+}
+
+#[test]
+fn forbidden_tokens_shorter_than_four_bytes_are_refused_without_printing_them() {
+    let d = scratch();
+    let dir = d.to_str().unwrap();
+    // "é" is 2 bytes, "qzé" 4 bytes: the limit counts bytes, as the search does
+    for short in ["", "qz", "qzx", "é"] {
+        let e = run(&strings(&[
+            "--dir",
+            dir,
+            "--forbid",
+            "long-token",
+            "--forbid",
+            short,
+        ]))
+        .unwrap_err();
+        assert!(e.contains("--forbid #2") && e.contains("4 bytes"), "{e}");
+        assert!(short.is_empty() || !e.contains(short), "{e}");
+    }
+    assert_eq!(
+        run(&strings(&[
+            "--dir", dir, "--forbid", "qzx1", "--forbid", "qzé"
+        ])),
+        Ok(0)
+    );
+    fs::remove_dir_all(d).unwrap();
+}
+
+/// A pcapng section header block with one `opt_comment` and an Enhanced Packet Block whose timestamp is `ts`.
+fn pcapng_with(comment: &[u8], ts: [u8; 8], f: &[u8]) -> Vec<u8> {
+    let pad = |n: usize| (n + 3) & !3;
+    let mut opts = Vec::new();
+    opts.extend(1u16.to_le_bytes());
+    opts.extend((comment.len() as u16).to_le_bytes());
+    opts.extend(comment);
+    opts.extend(vec![0; pad(comment.len()) - comment.len()]);
+    opts.extend([0; 4]);
+    let shb_len = (28 + opts.len()) as u32;
+    let mut b = vec![0x0a, 0x0d, 0x0d, 0x0a];
+    b.extend(shb_len.to_le_bytes());
+    b.extend([0x4d, 0x3c, 0x2b, 0x1a, 1, 0, 0, 0]);
+    b.extend([0xff; 8]);
+    b.extend(&opts);
+    b.extend(shb_len.to_le_bytes());
+    let epb_len = (32 + pad(f.len())) as u32;
+    b.extend(6u32.to_le_bytes());
+    b.extend(epb_len.to_le_bytes());
+    b.extend([0; 4]);
+    b.extend(ts);
+    b.extend((f.len() as u32).to_le_bytes());
+    b.extend((f.len() as u32).to_le_bytes());
+    b.extend(f);
+    b.extend(vec![0; pad(f.len()) - f.len()]);
+    b.extend(epb_len.to_le_bytes());
+    b
+}
+
+/// T8b: the raw-bytes pass over a capture skips the record headers (timestamps, lengths), whose bytes matched a short
+/// token by chance in r3, and still searches the frames, the pcapng text blocks and a capture that does not parse.
+#[test]
+fn a_token_in_capture_record_headers_is_not_a_hit_but_in_frames_and_pcapng_text_it_is() {
+    let d = scratch();
+    let t = strings(&["wxyz"]);
+    // classic pcap: the first record's seconds field (bytes 24..28, after the 24-byte global header) is `WXYZ`
+    let mut hdr = pcap::encode(&vec![(0.0, tcp_frame())]);
+    hdr[24..28].copy_from_slice(b"WXYZ");
+    fs::write(d.join("hdr.pcap"), &hdr).unwrap();
+    // pcapng: the packet block's timestamp is `WXYZWXYZ`, the comment is clean
+    fs::write(
+        d.join("hdr.pcapng"),
+        pcapng_with(b"clean", *b"WXYZWXYZ", &tcp_frame()),
+    )
+    .unwrap();
+    assert_eq!(scan(&d, &t).unwrap(), []);
+    // the token in a frame, in a pcapng comment, or anywhere in a capture that does not parse is a hit
+    let mut f = tcp_frame();
+    f.extend(b"wxyz");
+    write_pcap(&d, "frame.pcap", &[f]);
+    fs::write(
+        d.join("note.pcapng"),
+        pcapng_with(b"host wxyz-1", [0; 8], &tcp_frame()),
+    )
+    .unwrap();
+    fs::write(d.join("broken.pcap"), b"not a capture WXYZ").unwrap();
+    let files: Vec<String> = scan(&d, &t)
+        .unwrap()
+        .into_iter()
+        .map(|h| format!("{} {} {}", h.file, h.place, h.what))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            "broken.pcap bytes forbidden token #1",
+            "frame.pcap bytes forbidden token #1",
+            "note.pcapng bytes forbidden token #1"
+        ]
+    );
+    fs::remove_dir_all(d).unwrap();
 }

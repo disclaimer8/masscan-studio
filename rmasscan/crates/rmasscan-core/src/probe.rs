@@ -56,8 +56,8 @@ pub enum PlanError {
     PortNotTcp(u32),
     #[error("port {port_them}/{port_me} does not fit TCP (v1 is TCP only)")]
     PortDoesNotFit { port_them: u32, port_me: u32 },
-    #[error("next index {next_index} is beyond the scan range {range}")]
-    NextIndexBeyondRange { next_index: u64, range: u64 },
+    #[error("next index {next_index} is beyond the transmit limit {limit}")]
+    NextIndexBeyondRange { next_index: u64, limit: u64 },
     #[error("invalid shard {one}/{of}: need 1 <= one <= of")]
     InvalidShard { one: u32, of: u32 },
     #[error("retries must be at most 999, got {0}")]
@@ -466,7 +466,7 @@ impl ReadyPlan {
         if base > limit {
             return Err(PlanError::NextIndexBeyondRange {
                 next_index: base,
-                range: limit,
+                limit,
             });
         }
         let (start, end) = self.bounds(nic_index, base);
@@ -832,6 +832,11 @@ mod tests {
             plan.cursor_for_nic(0, Some(31)),
             Err(PlanError::NextIndexBeyondRange { .. })
         ));
+        // T1 N-1: the limit is the transmit limit `(retries + 1) * range` = 30, not the scan range 10.
+        assert_eq!(
+            plan.cursor_for_nic(0, Some(31)).unwrap_err().to_string(),
+            "next index 31 is beyond the transmit limit 30"
+        );
         // retries == 0 (путь v1): `> range` по-прежнему ошибка.
         let v1 = ReadyPlan::new_cli(eff("198.18.0.0-198.18.0.9", "80", |_| {}), nics(1)).unwrap();
         assert!(ProbeCursor::new(&v1, 10).is_ok());
@@ -923,12 +928,18 @@ mod tests {
     /// остаётся на исходном `entropy`, поэтому приём подтверждает SYN-ACK обоих проходов.
     #[test]
     fn infinite_restarts_with_incremented_seed_and_constant_entropy() {
+        // rate 102: `(i + rate) % range` (main.c:325-330) is `(i + 2) % 4`, so the oracle sees the rate term (at the
+        // default rate 100 it vanishes, 100 = 0 mod 4).
         let e = eff("198.18.0.0-198.18.0.3", "80", |c| {
             c.seed = 10;
             c.infinite = true;
+            c.max_rate = 102.0;
         });
         let rounds = e.blackrock_rounds();
-        let first_oracle = oracle(&eff("198.18.0.0-198.18.0.3", "80", |c| c.seed = 10));
+        let first_oracle = oracle(&eff("198.18.0.0-198.18.0.3", "80", |c| {
+            c.seed = 10;
+            c.max_rate = 102.0;
+        }));
         let plan = ReadyPlan::new_cli(e.clone(), nics(1)).unwrap();
         let mut cursor = plan.cursor_for_nic(0, None).unwrap();
         // Проход не закончился: перезапуска нет.
@@ -951,7 +962,8 @@ mod tests {
         // а `i + repeats` (main.c:379) даёт `n = i + 1`.
         let br = BlackRock::try_new(4, 11, rounds).unwrap();
         for (i, p) in second.iter().enumerate() {
-            let xxx = br.shuffle(i as u64);
+            // main.c:328: C's index is `(i + max_rate) % range` (rate 102, range 4).
+            let xxx = br.shuffle((i as u64 + 102) % 4);
             let (ip, port) = e.massip().pick(xxx);
             assert_eq!((p.ip_them, u32::from(p.port_them)), (ip, port), "i={i}");
             let n = i as u64 + 1;

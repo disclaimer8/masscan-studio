@@ -9,6 +9,8 @@ use std::{
 use studio_app::{Action, Controller, Update};
 use studio_protocol::{Backend, Job, Status};
 use studio_table::{Change, Table};
+#[cfg(target_os = "macos")]
+mod macos_keyboard;
 #[cfg(test)]
 mod network_tests;
 mod network_ui;
@@ -449,6 +451,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let single_active = single_driver.borrow().is_some();
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
+    #[cfg(target_os = "macos")]
+    macos_keyboard::connect(ui.window());
     ui.set_mac_feth_open(studio_protocol::raw_profile_enabled(Backend::MacFeth));
     let network_open = studio_protocol::raw_profile_enabled(Backend::MacNetwork);
     ui.set_mac_network_open(network_open);

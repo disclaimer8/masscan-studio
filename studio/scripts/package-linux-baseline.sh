@@ -28,6 +28,7 @@ FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce
 RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential pkg-config git ca-certificates libsqlite3-dev libfontconfig1-dev \
     libxkbcommon-dev libxkbcommon-x11-0 libxcb-xkb1 libwayland-dev libx11-xcb-dev \
+    libxcursor1 libxi6 \
     libegl1-mesa-dev xvfb xauth binutils jq && rm -rf /var/lib/apt/lists/*
 COPY --from=toolchain /usr/local/cargo /cargo
 COPY --from=toolchain /usr/local/rustup /rustup
@@ -48,7 +49,10 @@ docker run --name "$container" --platform linux/amd64 --hostname studio-build \
     --env "STUDIO_SOURCE_COMMIT=$source_commit" \
     --env "CARGO_BUILD_JOBS=${STUDIO_BUILD_JOBS:-4}" \
     "$image" bash /checkout/studio/scripts/linux-release-entry.sh > "$scratch/release-build.log" 2>&1 || {
+    # Keep failed diagnostics outside the publishable output for investigation.
+    docker cp "$container:/out/evidence" "$scratch/failed-evidence" >/dev/null 2>&1 || true
     cat "$scratch/release-build.log" >&2
+    printf 'Failed build diagnostics: %s\n' "$scratch" >&2
     exit 1
 }
 mkdir -p "$output"

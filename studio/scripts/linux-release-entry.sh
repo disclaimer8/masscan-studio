@@ -42,6 +42,7 @@ done
     printf 'acceptance_uid=%s\n' "$(id -u)"
     rustc --version
     cargo --version
+    dpkg-query -W libx11-6 libxcursor1 libxi6 libxkbcommon0 libsqlite3-0 libfontconfig1
 } > /out/evidence/runtime.log
 for smoke in pause stop-race; do
     run_logged "smoke-$smoke" env STUDIO_DATA_DIR="/tmp/studio-smoke-$smoke" \

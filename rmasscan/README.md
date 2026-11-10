@@ -392,35 +392,35 @@ Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM 
 GO (stands) условно: зелёный CI на точном HEAD и итоговое ревью ветки фиксирует контролёр при слиянии. macOS живой и
 физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-11-08-rmasscan-protocols-ipv4-acceptance.md`.
 
-Управление сканом (код `11a2235`, evidence `28c956e`, 2026-11-10, ветка `feat/rmasscan-scan-control`): `--shard`,
+Управление сканом (код `8059eac`, evidence `6509a8c`, 2026-11-10, ветка `feat/rmasscan-scan-control`): `--shard`,
 `--retries`, `--wait`, пауза первым Ctrl-C с `paused.conf`, `--resume`/`--resume-index`/`--resume-count`, `--infinite`,
 `-c`/`-iL`, `--adapter[0..7]`, `--pcap`, `--ttl`, `--badsum`, `--tcp-*`. Живая приёмка: Linux `scan-control` PASS 7/7,
 регрессия вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты minipc 1702/0 и
-гость 1598/0; CI `rmasscan` и `language-guard` на `11a2235` зелёные. macOS живой и физические NIC: NOT RUN.
+гость 1598/0; CI `rmasscan` и `language-guard` на `8059eac` зелёные. macOS живой и физические NIC: NOT RUN.
 Отчёт: `../docs/experiments/2026-11-08-rmasscan-scan-control-acceptance.md`.
 
-Форматы вывода masscan, `--readscan`, строка статуса и Ctrl-C (код `2b0e92c`, evidence `86f384f`, 2026-11-06, ветка
+Форматы вывода masscan, `--readscan`, строка статуса и Ctrl-C (код `cd0ad38`, evidence `f63d23f`, 2026-11-06, ветка
 `feat/rmasscan-output-formats`): офлайн-паритет с C `8e6b3b0` на 74 эталонах `--readscan` (байты равны после маски только
 полей «часы в момент записи»); живая приёмка на Linux netns PASS 18/18 (записи и заголовок равны C-оракулу в `o01`–`o11`,
 подвал оракула в живом скане отсутствует, потому что C не заканчивает скан на этом стенде; подвал rmasscan равен подвалу
 своего формата из его записей; `--nostatus`, прерывание и открытие файла проверены без оракула), регрессия
 автоопределения Linux PASS 13/13 и Windows VM PASS 10/10. macOS живой, живой Ctrl-C на Windows и физические NIC:
-NOT RUN. GO (stands): итоговое ревью ветки APPROVED, CI зелёный на последнем коммите с кодом `9907de0` (PR #50). Отчёт:
+NOT RUN. GO (stands): итоговое ревью ветки APPROVED, CI зелёный на последнем коммите с кодом `15f3e00` (PR #50). Отчёт:
 `../docs/experiments/2026-11-06-rmasscan-output-acceptance.md`.
 
-Живой скан CLI с автоопределением интерфейса, адреса и MAC источника и следующего хопа (код `6c87e94`, evidence
-`00110f9`, 2026-11-04, ветка `feat/rmasscan-autodetect`) принят на трёх запечатанных стендах: Linux netns PASS 13/13
+Живой скан CLI с автоопределением интерфейса, адреса и MAC источника и следующего хопа (код `5682194`, evidence
+`f85ec33`, 2026-11-04, ветка `feat/rmasscan-autodetect`) принят на трёх запечатанных стендах: Linux netns PASS 13/13
 (паритет с C-оракулом по байтам ARP-запроса, порядку SYN и строкам `Discovered`), Windows VM PASS 10/10, Mac `feth`
 PASS 8/8 и под root 3/3; `[+] finished … sent N` равен числу SYN на проводе, до скана уходит только 60-байтовый
 ARP-запрос к напечатанному `router-ip`. GO (stands): итоговое ревью ветки APPROVED, CI зелёный на точном HEAD.
 Физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`.
 
-Состояние остальных слоёв на commit `27e3042` (код; evidence `8479ff2`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
+Состояние остальных слоёв на commit `b346d4d` (код; evidence `7aa5b12`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
 полная таблица (capability / слой / реализовано / проверка / ограничение / следующий этап)
 находится в §0.2 спеки Studio. Кратко: raw I/O: Linux AF_PACKET
 (замкнутый стенд); Windows (Npcap) реализован и принят на виртуальной машине (физический NIC открыт); macOS (BPF) реализован, живая приёмка выполнена на паре `feth` (части A и C PASS, часть B с одним INVALID `linkloss`), физический NIC открыт, см. `../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance.md`. Дедупликация живёт в engine
 (ограниченный FIFO), не в core. VLAN не поддержан (`Unsupported`). ARP: кодек в core,
-резолвер следующего хопа (`arp_resolve`) и обнаружение шлюза (`discover`) в `rmasscan-net` (с `6c87e94`). Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
+резолвер следующего хопа (`arp_resolve`) и обнаружение шлюза (`discover`) в `rmasscan-net` (с `5682194`). Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
 контроль достоверности приёма (`Rx::health`, `RxLoss`/`RxStatsUnavailable`/`RxError`,
 `Outcome.rx_health`) и watchdog TX (`EngineOptions::tx_stall_timeout`, 10 с,
 `TxStalled`); `Completed` означает завершение с доступной статистикой без kernel drops,

@@ -1,62 +1,77 @@
 # Path to a usable release
 
-This branch is an unmerged, fixture-only macOS acceptance candidate. Passing its
-tests does not make it a general network scanner or a distributable release.
-The next work is ordered by user-visible outcome, not by test count.
+Updated 2026-11-10. This development branch has ordinary IPv4/TCP profiles for
+macOS, Linux and Windows, with IPC v5 and matching packaged helpers. It is not
+fixture-only. The separate macOS fixture profiles keep their admission checks.
+Protocol work in Claude's other branch is not integrated here.
 
-## 1. Finish the real GUI path on an isolated local network
+Builds, CI, Simulation and physical-network acceptance are separate evidence.
+Historical native results belong to the package identified in their dated report;
+rebuilding after the history rewrite does not transfer that acceptance.
 
-- [x] Launch the ordinary `.app` through macOS and preserve argument forwarding.
-- [x] Reuse the existing development work session without another password.
-- [x] Exercise GUI authorization, simulation completion, Stop and another Start;
-  compare displayed results with durable history.
-- [x] Run the optimized packaged GUI against the sealed multi-peer/routed fixture
-  for Complete, Stop and another Complete in separate launches; independent root
-  packet evidence passed (96, 5, 96 saved results on November 3).
-- [x] Verify native Pause and Resume after restarting the packaged GUI: 5 then 91
-  independently captured probes, 96 cumulative rows and consumed checkpoint.
-- [ ] Verify same-window native Stop/Start and Pause/Resume on this package.
-- [x] Check saved History, exact repeat settings, filtered/sorted projections and
-  JSON/CSV writers using private copies of those real results (24 files verified).
-- [ ] Exercise the native save-file dialog and asynchronous Export action.
+## 1. GUI, history and export
 
-## 2. Admit a concrete owned physical target
+- [x] Label cumulative saved results separately from latest-run sent/received.
+- [x] Prevent rapid draft edits from filling the command queue; retain explicit
+  action order, cancellation epochs, bounded capacity and receiver-death errors.
+- [x] Exercise native macOS JSON/CSV save dialogs, filtering and Cancel in
+  Simulation; compare exports with SQLite. Reopen history and repeat exact
+  settings without starting automatically.
+- [x] Exercise ordinary and zoomed native window layouts; preserve visible
+  counters, controls and result rows.
+- [ ] Complete native keyboard/layout acceptance, including non-Latin shortcuts,
+  focus, Shift selection and the minimum window width. The observed Cmd+A input
+  anomaly remains unclassified; a successful headless test does not resolve it.
+- [ ] Repeat physical-network lifecycle and export acceptance on the exact
+  eventual distribution candidate, including same-window Stop/Start and
+  Pause/Resume. Historical fixture and direct-network checks remain historical.
 
-- [ ] Make a separately reviewed change replacing the fixed-fixture policy with
-  a bounded owned-target acceptance policy. Keep the distributed gate closed.
-- [ ] Verify source/interface selection, direct/routed TCP delivery, neighbour
-  preparation, partial coverage, Stop, Pause/Resume and restart on an actual
-  physical interface to a specifically authorized target.
-- [ ] Exercise network loss, route/interface change, sleep/wake and stale guard
-  observations; preserve truthful Interrupted status and partial results.
+Latest UI evidence: [draft queue and native export](../docs/experiments/2026-11-10-studio-native-ui.md).
 
-The current hotel network is not an authorized target inventory. The chosen safe
-test is the isolated pair on this Mac; it does not establish physical Wi-Fi
-delivery to another owned device. Do not select hotel clients or the gateway as
-scan targets merely because they appear in routes or neighbour tables.
+## 2. Physical-network acceptance
 
-## 3. Make the accepted build installable and understandable
+- [x] Implement bounded native profiles, read-only route checks, authorized
+  preparation, persisted coverage and destination MACs, and frozen Resume identity.
+- [x] Preserve separate fixture admission; unsupported profiles never fall back
+  to an ordinary network profile.
+- [ ] Verify the final package's source/interface selection, direct/routed delivery,
+  partial neighbour coverage, Stop, Pause/Resume and restart on owned devices.
+- [ ] Exercise network loss, route/interface changes, sleep/wake and stale
+  observations; compare Interrupted status and partial history with packet capture.
 
-- [x] Verify the optimized release build with its exact packaged helper on the
-  isolated local fixture. Physical-interface acceptance remains separate above.
-- [x] Reopen saved native results through the packaged GUI without changing history.
-- [ ] Check first install, denied authorization, retry and update in the native GUI. Keep development host maintenance separate from the
-  ordinary application's helper session.
-- [ ] Perform manual keyboard/mouse, focus, resizing, scrolling and error-message
-  acceptance. Callback automation and rendered snapshots cover only part of this.
-- [x] Align the current profile labels and README with fixture-only execution.
-- [ ] Reconcile documentation again if the supported target policy changes.
-- [ ] Obtain release signing/notarization and an explicit publish/merge decision
-  for a distributable build. Ad-hoc local signing is not that result.
+Use explicitly authorized owned targets. Routes and neighbour tables are not a
+source of authorization. Record which exact interface, targets and build were
+accepted; do not generalize an isolated fixture or direct peer to routed networks.
 
-## 4. Keep other platforms explicit
+## 3. Installation and distribution
 
-Windows and Linux have CI packages and earlier native helper-installation evidence.
-That is not acceptance of their full network-scanning GUI. If included in the
-release scope, each needs its own bounded owned-target lifecycle and installation
-acceptance. Otherwise the first release must state its macOS-only scan support.
+- [x] Inventory complete packages and verify hashes; check macOS deep/strict
+  ad-hoc signatures after all executable and SQLite load-path changes.
+- [x] Build in neutral paths and scan uncompressed packages for complete home
+  paths plus known private tokens before creating distribution archives.
+- [x] Automate Ubuntu 24.04 baseline packaging, direct GLIBC checks, X11/software
+  Simulation and archive round-trip verification.
+- [x] Reconcile current profile documentation with the implemented native gates.
+- [ ] Accept first install, denied authorization, retry and update on the final
+  native package. Retained development authorization is not a clean-install test.
+- [ ] Obtain Developer ID/notarization and Windows publisher signing where
+  required; ad-hoc/unsigned packages are local development artifacts.
+- [ ] Verify CI and review for the eventual merge head, then obtain the user's
+  release/merge decision. Integration with Claude remains deferred.
 
-Latest work and exact artifacts:
-[history and Resume report](../docs/experiments/2026-11-03-studio-history-and-resume.md),
-[GUI/session report](../docs/experiments/2026-11-02-studio-gui-work-session.md),
-[prior fixture capture evidence](../docs/experiments/2026-10-31-studio-macos-network-capture.md).
+See [packaging requirements](PACKAGING.md) for privacy and provenance gates.
+The unchanged official Windows SQLite DLL has one reviewed upstream PDB path;
+report it explicitly instead of claiming the whole Windows package has none.
+
+## 4. Platform scope
+
+Linux and Windows native profiles are implemented, but CI and Simulation do not
+establish desktop polkit/UAC or physical packet acceptance. Linux needs ordinary
+user/desktop authorization and independent packet evidence. Windows manual
+GUI/UAC/raw acceptance is excluded from the current work by user instruction;
+it remains open for distribution readiness, not implicitly passed.
+
+Historical evidence:
+[platform release follow-up](../docs/experiments/2026-11-10-studio-release-followup.md),
+[MacPhysical integration](../docs/experiments/2026-11-10-studio-integration.md),
+[fixture history and Resume](../docs/experiments/2026-11-03-studio-history-and-resume.md).

@@ -16,15 +16,16 @@
 //! - Ничто в рабочих потоках не блокируется на потребителе: очередь
 //!   результатов ограничена и при переполнении даёт `Failed(ConsumerTooSlow)`.
 
+use std::cell::Cell;
 use std::collections::{HashSet, VecDeque};
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use rmasscan_core::packet::LinkType;
-use rmasscan_core::probe::{PlanError, ProbeCursor, ReadyPlan};
+use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
 use rmasscan_core::receive::{Reply, parse_reply};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
@@ -46,6 +47,12 @@ pub const MAX_TX_BATCH: usize = 4096;
 const RX_HEALTH_INTERVAL_MICROS: u64 = 250_000;
 /// 1514 + запас: кадр длиннее отбрасывается RX-слоем сети (MSG_TRUNC), в парсер сверхдлинным не попадает.
 const RX_BUFFER_LEN: usize = 2048;
+/// `main.c:943`: в захват идут кадры не длиннее 1514 байт.
+const PCAP_MAX_FRAME: usize = 1514;
+
+/// Приёмник входящих кадров для `--pcap`: кадр и время приёма в микросекундах
+/// часов engine. Вызывается из RX-потоков, поэтому обязан быть потокобезопасным.
+pub type PcapSink = Arc<dyn Fn(&[u8], u64) + Send + Sync>;
 
 const RUN: u8 = 0;
 const PAUSE: u8 = 1;
@@ -307,23 +314,61 @@ impl Queue {
 struct Shared {
     halt: AtomicU8,
     fail: Mutex<Option<FailReason>>,
-    /// Последнее успешно измеренное состояние приёма (пишет только RX-поток).
-    rx_health: Mutex<RxHealth>,
+    /// Последнее успешно измеренное состояние приёма по одному на RX-поток
+    /// (пишет только свой RX-поток).
+    rx_health: Mutex<Vec<RxHealth>>,
     sent: AtomicU64,
-    position: AtomicU64,
+    /// Внешний индекс следующего неподтверждённого probe, по одному на адаптер
+    /// (`main.c:431` `parms->my_index`).
+    positions: Vec<AtomicU64>,
+    /// `ReadyPlan::nic_offset(k)`: смещение shard/NIC в базе `resume.index`.
+    offsets: Vec<u64>,
+    /// `effective_end(k)` каждого адаптера: позиция исчерпанного курсора равна `end`.
+    ends: Vec<u64>,
     received: AtomicU64,
     discarded: AtomicU64,
     duplicates: AtomicU64,
-    /// `f64::to_bits()` текущей скорости throttle.
-    rate_bits: AtomicU64,
-    tx_end: AtomicU8,
-    rx_end: AtomicU8,
-    exited: AtomicU8,
+    /// `f64::to_bits()` текущей скорости throttle каждого TX-потока.
+    rate_bits: Vec<AtomicU64>,
+    /// Итог каждого TX- и RX-потока; сводка в [`Shared::tx_end`] / [`Shared::rx_end`].
+    tx_ends: Vec<AtomicU8>,
+    rx_ends: Vec<AtomicU8>,
+    exited: AtomicUsize,
+    /// Число рабочих потоков (TX + RX).
+    threads: usize,
     queue: Queue,
     clock: Arc<dyn Clock + Send + Sync>,
     io_timeout: Duration,
     wait_micros: u64,
     progress_micros: u64,
+}
+
+/// Сводка итогов потоков: "идёт", если хоть один идёт; "естественный конец",
+/// только если все закончились естественно; иначе "остановлен".
+fn fold_ends(ends: &[AtomicU8]) -> u8 {
+    let mut all_natural = true;
+    for e in ends {
+        match e.load(Ordering::Acquire) {
+            END_RUNNING => return END_RUNNING,
+            END_NATURAL => {}
+            _ => all_natural = false,
+        }
+    }
+    if all_natural { END_NATURAL } else { END_HALTED }
+}
+
+/// Сумма потерь по RX-потокам; одно неизвестное делает неизвестной сумму.
+fn fold_health(v: &[RxHealth]) -> RxHealth {
+    let mut sum = 0u64;
+    for h in v {
+        match h.kernel_drops {
+            Some(n) => sum = sum.saturating_add(n),
+            None => return RxHealth { kernel_drops: None },
+        }
+    }
+    RxHealth {
+        kernel_drops: Some(sum),
+    }
 }
 
 impl Shared {
@@ -350,10 +395,10 @@ impl Shared {
     /// перезаписывает); в `rx_health` попадает только УСПЕШНОЕ измерение,
     /// иначе неизвестное значение (`None`): ранее увиденный ноль не подменяет
     /// ошибку. Возвращает `false`, если исход уже нельзя считать чистым.
-    fn check_rx_health(&self, rx: &mut dyn Rx) -> bool {
+    fn check_rx_health(&self, idx: usize, rx: &mut dyn Rx) -> bool {
         match rx.health(self.io_timeout) {
             Ok(h) => {
-                *lock(&self.rx_health) = h;
+                lock(&self.rx_health)[idx] = h;
                 match h.kernel_drops {
                     Some(0) => true,
                     Some(n) => {
@@ -367,18 +412,62 @@ impl Shared {
                 }
             }
             Err(e) => {
-                *lock(&self.rx_health) = RxHealth { kernel_drops: None };
+                lock(&self.rx_health)[idx] = RxHealth { kernel_drops: None };
                 self.fail(FailReason::RxError(e.message));
                 false
             }
         }
     }
 
+    /// Сводка итогов TX-потоков.
+    fn tx_end(&self) -> u8 {
+        fold_ends(&self.tx_ends)
+    }
+
+    /// Сводка итогов RX-потоков.
+    fn rx_end(&self) -> u8 {
+        fold_ends(&self.rx_ends)
+    }
+
+    /// Сырой `min_k my_index[k]` (`main.c:1408-1414`): для строки статуса.
+    fn min_position(&self) -> u64 {
+        self.positions
+            .iter()
+            .map(|p| p.load(Ordering::Acquire))
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Нормализованная база возобновления `min_k(my_index[k] - nic_offset(k))`
+    /// (то же, что `ProbeCursor::resume_base`): `cursor_for_nic` прибавит
+    /// смещение shard/NIC заново ровно один раз.
+    ///
+    /// Исчерпанный адаптер (`position >= effective_end`) в минимум не входит: его позиция равна `end`, а
+    /// `end - nic_offset` лежит вне класса вычетов потока и при `nic_count >= 3` увёл бы `resume-index` в
+    /// индексы чужого шарда. Если исчерпаны все, результат не меньше `effective_end` (T4: `paused.conf` не нужен).
+    fn resume_base(&self) -> u64 {
+        let live = self
+            .positions
+            .iter()
+            .zip(&self.offsets)
+            .zip(&self.ends)
+            .filter_map(|((p, off), end)| {
+                let pos = p.load(Ordering::Acquire);
+                (pos < *end).then(|| pos.saturating_sub(*off))
+            })
+            .min();
+        live.unwrap_or_else(|| self.ends.iter().copied().max().unwrap_or(0))
+    }
+
     fn snapshot(&self) -> Progress {
-        let rate = f64::from_bits(self.rate_bits.load(Ordering::Relaxed));
+        let rate: f64 = self
+            .rate_bits
+            .iter()
+            .map(|b| f64::from_bits(b.load(Ordering::Relaxed)))
+            .sum();
         Progress {
             sent: self.sent.load(Ordering::Acquire),
-            next_index: self.position.load(Ordering::Acquire),
+            next_index: self.min_position(),
             received: self.received.load(Ordering::Relaxed),
             discarded: self.discarded.load(Ordering::Relaxed),
             duplicates: self.duplicates.load(Ordering::Relaxed),
@@ -386,13 +475,13 @@ impl Shared {
         }
     }
 
-    /// Вызывается ровно один раз: потоком, вышедшим вторым.
+    /// Вызывается ровно один раз: потоком, вышедшим последним.
     fn finalize(&self) {
         let fail = lock(&self.fail).clone();
-        let tx_end = self.tx_end.load(Ordering::Acquire);
-        let rx_end = self.rx_end.load(Ordering::Acquire);
+        let tx_end = self.tx_end();
+        let rx_end = self.rx_end();
         let halt = self.halted();
-        let health = *lock(&self.rx_health);
+        let health = fold_health(&lock(&self.rx_health));
         let reason = if let Some(f) = fail {
             Reason::Failed(f)
         } else if health.kernel_drops != Some(0) {
@@ -412,7 +501,7 @@ impl Shared {
             Reason::Failed(FailReason::Internal)
         };
         let progress = self.snapshot();
-        let checkpoint = (reason == Reason::Paused).then_some(progress.next_index);
+        let checkpoint = (reason == Reason::Paused).then(|| self.resume_base());
         let rx_health = health;
         self.queue.finish(
             Outcome {
@@ -425,22 +514,33 @@ impl Shared {
     }
 }
 
+/// Роль рабочего потока.
+#[derive(Clone, Copy)]
+enum Role {
+    Tx,
+    Rx,
+}
+
 /// Объявляет выход потока. Объявляется РАНЬШЕ handle адаптера, поэтому
 /// уничтожается позже него: к моменту `Finished` handle уже освобождён.
 struct ExitGuard {
     shared: Arc<Shared>,
-    end: fn(&Shared) -> &AtomicU8,
+    role: Role,
+    idx: usize,
 }
 
 impl Drop for ExitGuard {
     fn drop(&mut self) {
-        let end = (self.end)(&self.shared);
+        let end = match self.role {
+            Role::Tx => &self.shared.tx_ends[self.idx],
+            Role::Rx => &self.shared.rx_ends[self.idx],
+        };
         if std::thread::panicking() {
             self.shared.fail(FailReason::WorkerPanicked);
         }
         // Если поток не выставил конец сам (отказ, паника): остановлен.
         let _ = end.compare_exchange(END_RUNNING, END_HALTED, Ordering::AcqRel, Ordering::Acquire);
-        if self.shared.exited.fetch_add(1, Ordering::AcqRel) == 1 {
+        if self.shared.exited.fetch_add(1, Ordering::AcqRel) + 1 == self.shared.threads {
             self.shared.finalize();
         }
     }
@@ -452,12 +552,16 @@ impl Drop for ExitGuard {
 ///
 /// 1 мс это НОВОЕ РЕШЕНИЕ плана 2B-Linux, а не результат измерения
 /// производительности: оно лишь убирает busy-spin и укладывается в контракт
-/// "Stop/Pause <= 1 с" (один сон короче любого лимита отмены). Значение можно
-/// пересмотреть после замеров на реальном адаптере.
+/// "Stop/Pause <= 1 с" (один сон короче любого лимита отмены). Пауза в середине
+/// пачки повторов шлёт остаток пачки сразу, мимо throttle, поэтому остаётся
+/// такой же быстрой; исключение одно: адаптер, застрявший на `WouldBlockUnsent`
+/// во время этой досылки, даёт `TxStalled` по окну `tx_stall_timeout` (решение
+/// be022ac). Значение можно пересмотреть после замеров на реальном адаптере.
 const WOULD_BLOCK_BACKOFF_MICROS: u64 = 1_000;
 
 fn run_tx(
     shared: Arc<Shared>,
+    idx: usize,
     tx: Box<dyn Tx>,
     mut cursor: ProbeCursor,
     rate: f64,
@@ -465,11 +569,26 @@ fn run_tx(
 ) {
     let _guard = ExitGuard {
         shared: shared.clone(),
-        end: |s| &s.tx_end,
+        role: Role::Tx,
+        idx,
     };
     let mut tx = tx;
     let clock = &*shared.clock;
-    let halted = || shared.halted() != RUN;
+    // Подтверждено ли уже начало пачки повторов текущего внешнего индекса `i`
+    // (`main.c:421-431`: `retries + 1` кадров на один `i`). Пауза не рвёт пачку:
+    // `resume-index` хранит только внешний `i`, и возобновление с середины
+    // пачки послало бы уже отправленные копии второй раз. Стоп и отказ рвут
+    // пачку сразу. Остаток пачки при паузе уходит одним неограниченным по скорости проходом (ниже), поэтому
+    // задержка Pause ограничена числом повторов, а не throttle. Для `retries == 0` пачка из одного кадра,
+    // поведение прежнее.
+    let mid_burst = Cell::new(false);
+    let halted = || {
+        let h = shared.halted();
+        h >= STOP || (h == PAUSE && !mid_burst.get())
+    };
+    // Счёт отправленного для throttle этого потока (общий `shared.sent`
+    // суммирует все адаптеры, а скорость делится между ними, `main.c:249`).
+    let mut my_sent = 0u64;
     // Один Throttler на TX-поток, плановая скорость, те же часы для start и
     // next_batch.
     let mut throttler = Throttler::start(rate, clock);
@@ -481,23 +600,26 @@ fn run_tx(
     let end = 'run: loop {
         // Конец последовательности сильнее паузы: next_index == range это
         // завершение, а не checkpoint с пустым остатком.
-        if cursor.current().is_none() {
+        // `--infinite` (`main.c:445-449`): конец прохода запускает следующий, пока не придёт команда остановки.
+        if cursor.current().is_none() && !cursor.advance_pass() {
             break END_NATURAL;
         }
         if halted() {
             break END_HALTED;
         }
-        let batch = match throttler.next_batch_interruptible(
-            shared.sent.load(Ordering::Acquire),
-            clock,
-            halted,
-        ) {
-            Ok(b) => b,
-            Err(_) => break END_HALTED,
+        // Пауза посреди пачки: остаток пачки уходит сразу, мимо throttle (не более `retries` кадров), иначе при
+        // малой скорости Pause ждал бы до `retries / rate` секунд. Любая команда прерывает сон throttle.
+        let pausing = || shared.halted() == PAUSE && mid_burst.get();
+        let batch = if pausing() {
+            u64::MAX
+        } else {
+            match throttler.next_batch_interruptible(my_sent, clock, || shared.halted() != RUN) {
+                Ok(b) => b,
+                Err(_) if pausing() => u64::MAX,
+                Err(_) => break END_HALTED,
+            }
         };
-        shared
-            .rate_bits
-            .store(throttler.current_rate().to_bits(), Ordering::Relaxed);
+        shared.rate_bits[idx].store(throttler.current_rate().to_bits(), Ordering::Relaxed);
         // batch == 0 означает "вызвать снова".
         let mut left = batch;
         while left > 0 {
@@ -508,9 +630,20 @@ fn run_tx(
                 .min(MAX_TX_BATCH as u64) as usize;
             let probes = cursor.preload(want);
             if probes.is_empty() {
+                // `--infinite`: проход кончился посреди окна throttle, продолжаем со следующего прохода.
+                if cursor.advance_pass() {
+                    continue;
+                }
                 break 'run END_NATURAL;
             }
-            let n = probes.len();
+            // Пауза в середине пачки: досылаем только остаток этой пачки.
+            let n = if shared.halted() == PAUSE && mid_burst.get() {
+                let first = probes[0].index;
+                probes.iter().take_while(|p| p.index == first).count()
+            } else {
+                probes.len()
+            };
+            let probes = &probes[..n];
             // Отмена перед КАЖДОЙ пачкой (при `max_batch() == 1` это перед
             // каждой отправкой, как раньше).
             if halted() {
@@ -542,9 +675,13 @@ fn run_tx(
                         // Sent из уже начатого вызова засчитывается даже после
                         // границы окна; курсор идёт ровно на принятый префикс.
                         stall_since = None;
+                        let last = probes[r.sent - 1].index;
                         cursor.advance_sent_n(r.sent);
+                        // Следующий кадр с тем же `i` означает середину пачки.
+                        mid_burst.set(cursor.position() == last);
+                        my_sent += r.sent as u64;
                         shared.sent.fetch_add(r.sent as u64, Ordering::AcqRel);
-                        shared.position.store(cursor.position(), Ordering::Release);
+                        shared.positions[idx].store(cursor.position(), Ordering::Release);
                         left -= r.sent as u64;
                     }
                     match r.rest {
@@ -584,7 +721,7 @@ fn run_tx(
             }
         }
     };
-    shared.tx_end.store(end, Ordering::Release);
+    shared.tx_ends[idx].store(end, Ordering::Release);
 }
 
 fn stall_fail(shared: &Shared, idle_micros: u64) {
@@ -603,15 +740,22 @@ fn stall_fail(shared: &Shared, idle_micros: u64) {
 /// чужой или битый: выбросить и продолжать приём" (C `main.c:773 continue`).
 /// Это враждебный/посторонний ввод, а не отказ скана: он никогда не ведёт к
 /// `Failed`. Падением считается только ошибка самого адаптера (`Rx::recv`).
-fn run_rx(shared: Arc<Shared>, rx: Box<dyn Rx>, plan: ReadyPlan, dedup_capacity: usize) {
+fn run_rx(
+    shared: Arc<Shared>,
+    idx: usize,
+    rx: Box<dyn Rx>,
+    plan: ReadyPlan,
+    dedup: Arc<Mutex<DedupCache>>,
+    pcap_sink: Option<PcapSink>,
+) {
     let _guard = ExitGuard {
         shared: shared.clone(),
-        end: |s| &s.rx_end,
+        role: Role::Rx,
+        idx,
     };
     let mut rx = rx;
     let clock = &*shared.clock;
     let link: LinkType = plan.binding().link_type;
-    let mut dedup = DedupCache::new(dedup_capacity);
     let mut buf = vec![0u8; RX_BUFFER_LEN];
     let mut deadline: Option<u64> = None;
     let mut last_progress = clock.now_micros();
@@ -631,9 +775,18 @@ fn run_rx(shared: Arc<Shared>, rx: Box<dyn Rx>, plan: ReadyPlan, dedup_capacity:
                 // n > buf.len() это нарушение контракта адаптера; безвредно
                 // обрезаем, парсер отбросит такой кадр.
                 let frame = &buf[..n.min(buf.len())];
+                // `--pcap` (main.c:943-951): кадр уходит в файл захвата до
+                // проверки cookie и дедупликации. Фильтр "наш адрес и порт"
+                // принадлежит писателю захвата (`rmasscan-cli::pcap_writer`).
+                if let Some(sink) = &pcap_sink
+                    && frame.len() <= PCAP_MAX_FRAME
+                {
+                    sink(frame, clock.now_micros());
+                }
                 match parse_reply(frame, link, &plan) {
                     Ok(Some(reply)) => {
-                        if !dedup.insert(&reply) {
+                        let fresh = lock(&dedup).insert(&reply);
+                        if !fresh {
                             shared.duplicates.fetch_add(1, Ordering::Relaxed);
                         } else if shared.queue.push_result(reply) {
                             shared.received.fetch_add(1, Ordering::Relaxed);
@@ -660,11 +813,11 @@ fn run_rx(shared: Arc<Shared>, rx: Box<dyn Rx>, plan: ReadyPlan, dedup_capacity:
         // Проверка достоверности по часам engine, а не по числу кадров.
         if now.wrapping_sub(last_health) >= RX_HEALTH_INTERVAL_MICROS {
             last_health = now;
-            if !shared.check_rx_health(&mut *rx) {
+            if !shared.check_rx_health(idx, &mut *rx) {
                 break END_HALTED;
             }
         }
-        if shared.tx_end.load(Ordering::Acquire) != END_RUNNING {
+        if shared.tx_end() != END_RUNNING {
             let d = *deadline.get_or_insert(now.saturating_add(shared.wait_micros));
             if now >= d {
                 break END_NATURAL;
@@ -674,13 +827,13 @@ fn run_rx(shared: Arc<Shared>, rx: Box<dyn Rx>, plan: ReadyPlan, dedup_capacity:
     // Обязательная финальная проверка: её снимок закрывает окно наблюдения и
     // делается ДО публикации rx_end (а значит, до терминального исхода). Handle
     // закрывается позже, в ExitGuard, то есть до Finished.
-    let clean = shared.check_rx_health(&mut *rx);
+    let clean = shared.check_rx_health(idx, &mut *rx);
     let end = if clean || end == END_HALTED {
         end
     } else {
         END_HALTED
     };
-    shared.rx_end.store(end, Ordering::Release);
+    shared.rx_ends[idx].store(end, Ordering::Release);
 }
 
 // --------------------------------------------------------------- engine ---
@@ -763,13 +916,57 @@ impl Engine {
         Ok(h)
     }
 
-    /// Общий запуск; `start_index` приходит только из проверенного checkpoint.
+    /// Запуск CLI: по паре потоков TX/RX на каждый адаптер плана
+    /// (`main.c:1257-1390`, `transmit_thread` на `nic[k]`, `main.c:269-273`).
+    /// Начало потока каждого адаптера берётся из `resume_index` плана
+    /// (`ReadyPlan::cursor_for_nic(k, None)`), общий dedup и общая очередь
+    /// результатов. Скорость делится на число адаптеров (`main.c:249`).
+    ///
+    /// Чистая пауза пишет `resume-index = min_k ProbeCursor::resume_base()`
+    /// (нормализованная база), а не сырой `min_k my_index[k]` из
+    /// `main.c:1408-1414`: `cursor_for_nic` на возобновлении заново прибавит
+    /// смещение shard/NIC, и сырое значение задвоило бы его. Скан завершён,
+    /// когда каждый адаптер дошёл до своего `effective_end` (его курсор пуст),
+    /// а не когда нормализованная база достигла `range` (`main.c:1425` ждёт
+    /// именно этого и зависает при усечённом `resume-count`).
+    ///
+    /// `ios.len()` обязан равняться `plan.nics().len()`. `pcap_sink` получает
+    /// входящие кадры до разбора. Для одного адаптера ведёт себя как
+    /// [`Self::start_with_clock`] (кроме плана `new_cli`, который тот не
+    /// отвергает).
+    pub fn start_cli_with_clock(
+        plan: ReadyPlan,
+        ios: Vec<AdapterPair>,
+        options: EngineOptions,
+        clock: Arc<dyn Clock + Send + Sync>,
+        pcap_sink: Option<PcapSink>,
+    ) -> Result<EngineHandle, StartError> {
+        let cursors = (0..plan.nics().len() as u32)
+            .map(|k| plan.cursor_for_nic(k, None))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::launch_n(plan, ios, cursors, options, clock, pcap_sink)
+    }
+
+    /// Общий запуск одного адаптера; `start_index` приходит только из
+    /// проверенного checkpoint.
     pub(crate) fn launch(
         plan: ReadyPlan,
         io: AdapterPair,
         options: EngineOptions,
         clock: Arc<dyn Clock + Send + Sync>,
         start_index: u64,
+    ) -> Result<EngineHandle, StartError> {
+        let cursor = ProbeCursor::new(&plan, start_index)?;
+        Self::launch_n(plan, vec![io], vec![cursor], options, clock, None)
+    }
+
+    fn launch_n(
+        plan: ReadyPlan,
+        ios: Vec<AdapterPair>,
+        cursors: Vec<ProbeCursor>,
+        options: EngineOptions,
+        clock: Arc<dyn Clock + Send + Sync>,
+        pcap_sink: Option<PcapSink>,
     ) -> Result<EngineHandle, StartError> {
         if options.result_capacity == 0 {
             return Err(StartError::InvalidOptions("result_capacity must be > 0"));
@@ -783,9 +980,14 @@ impl Engine {
         if options.tx_stall_timeout.is_zero() {
             return Err(StartError::InvalidOptions("tx_stall_timeout must be > 0"));
         }
+        let count = plan.nics().len();
+        if ios.len() != count || cursors.len() != count {
+            return Err(StartError::InvalidOptions(
+                "the number of adapter pairs must equal the number of plan adapters",
+            ));
+        }
         let stall_micros = u64::try_from(options.tx_stall_timeout.as_micros()).unwrap_or(u64::MAX);
-        let cursor = ProbeCursor::new(&plan, start_index)?;
-        let rate = plan.effective().max_rate();
+        let rate = plan.effective().max_rate() / count as f64;
         let io_timeout = options.io_timeout.min(MAX_IO_TIMEOUT);
 
         let queue = Queue::new(options.result_capacity, options.event_batch_limit);
@@ -793,16 +995,22 @@ impl Engine {
         let shared = Arc::new(Shared {
             halt: AtomicU8::new(RUN),
             fail: Mutex::new(None),
-            rx_health: Mutex::new(RxHealth { kernel_drops: None }),
+            rx_health: Mutex::new(vec![RxHealth { kernel_drops: None }; count]),
             sent: AtomicU64::new(0),
-            position: AtomicU64::new(cursor.position()),
+            positions: cursors
+                .iter()
+                .map(|c| AtomicU64::new(c.position()))
+                .collect(),
+            offsets: (0..count as u32).map(|k| plan.nic_offset(k)).collect(),
+            ends: (0..count as u32).map(|k| plan.effective_end(k)).collect(),
             received: AtomicU64::new(0),
             discarded: AtomicU64::new(0),
             duplicates: AtomicU64::new(0),
-            rate_bits: AtomicU64::new(0f64.to_bits()),
-            tx_end: AtomicU8::new(END_RUNNING),
-            rx_end: AtomicU8::new(END_RUNNING),
-            exited: AtomicU8::new(0),
+            rate_bits: (0..count).map(|_| AtomicU64::new(0f64.to_bits())).collect(),
+            tx_ends: (0..count).map(|_| AtomicU8::new(END_RUNNING)).collect(),
+            rx_ends: (0..count).map(|_| AtomicU8::new(END_RUNNING)).collect(),
+            exited: AtomicUsize::new(0),
+            threads: 2 * count,
             queue,
             clock,
             io_timeout,
@@ -811,41 +1019,86 @@ impl Engine {
                 .unwrap_or(u64::MAX),
         });
 
-        let AdapterPair { tx, rx } = io;
-        // RX первым: к моменту первой отправки приёмник уже слушает.
-        let rx_thread = {
-            let s = shared.clone();
-            let plan = plan.clone();
-            let cap = options.dedup_capacity;
-            std::thread::Builder::new()
-                .name("rmasscan-rx".into())
-                .spawn(move || run_rx(s, rx, plan, cap))
-                .map_err(|e| StartError::Spawn(e.to_string()))?
-        };
-        let tx_thread = {
-            let s = shared.clone();
-            std::thread::Builder::new()
-                .name("rmasscan-tx".into())
-                .spawn(move || run_tx(s, tx, cursor, rate, stall_micros))
-        };
-        let tx_thread = match tx_thread {
-            Ok(t) => t,
-            Err(e) => {
-                shared.command(STOP);
-                let _ = rx_thread.join();
-                return Err(StartError::Spawn(e.to_string()));
+        let dedup = Arc::new(Mutex::new(DedupCache::new(options.dedup_capacity)));
+        let mut txs = Vec::with_capacity(count);
+        let mut rxs = Vec::with_capacity(count);
+        for io in ios {
+            let AdapterPair { tx, rx } = io;
+            txs.push(tx);
+            rxs.push(rx);
+        }
+        // Остановить уже запущенные потоки и вернуть отказ запуска.
+        let abort = |shared: &Shared, threads: Vec<JoinHandle<()>>, e: std::io::Error| {
+            shared.command(STOP);
+            for t in threads {
+                let _ = t.join();
             }
+            StartError::Spawn(e.to_string())
         };
+        // Планы RX строятся до первого потока: отказ не оставляет живых потоков.
+        let rx_plans = (0..count)
+            .map(|k| rx_plan(&plan, k))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut rx_threads = Vec::with_capacity(count);
+        // RX первым: к моменту первой отправки приёмник уже слушает.
+        for (k, (rx, plan)) in rxs.into_iter().zip(rx_plans).enumerate() {
+            let s = shared.clone();
+            let dedup = dedup.clone();
+            let sink = pcap_sink.clone();
+            let name = if k == 0 {
+                "rmasscan-rx".to_string()
+            } else {
+                format!("rmasscan-rx{k}")
+            };
+            match std::thread::Builder::new()
+                .name(name)
+                .spawn(move || run_rx(s, k, rx, plan, dedup, sink))
+            {
+                Ok(t) => rx_threads.push(t),
+                Err(e) => return Err(abort(&shared, rx_threads, e)),
+            }
+        }
+        let mut tx_threads = Vec::with_capacity(count);
+        for (k, (tx, cursor)) in txs.into_iter().zip(cursors).enumerate() {
+            let s = shared.clone();
+            let name = if k == 0 {
+                "rmasscan-tx".to_string()
+            } else {
+                format!("rmasscan-tx{k}")
+            };
+            match std::thread::Builder::new()
+                .name(name)
+                .spawn(move || run_tx(s, k, tx, cursor, rate, stall_micros))
+            {
+                Ok(t) => tx_threads.push(t),
+                Err(e) => {
+                    let all = rx_threads.into_iter().chain(tx_threads).collect();
+                    return Err(abort(&shared, all, e));
+                }
+            }
+        }
         let digest = job_digest(&plan);
         Ok(EngineHandle {
             shared,
             options,
             digest,
             resumed_from: None,
-            tx_thread: Some(tx_thread),
-            rx_thread: Some(rx_thread),
+            tx_threads,
+            rx_threads,
         })
     }
+}
+
+/// План для RX-потока адаптера `k`: `parse_reply` сверяет адрес и порты
+/// источника с `plan.binding()` (то есть с `nic[0]`), поэтому для `k > 0`
+/// адаптер `k` ставится первым.
+fn rx_plan(plan: &ReadyPlan, k: usize) -> Result<ReadyPlan, PlanError> {
+    if k == 0 {
+        return Ok(plan.clone());
+    }
+    let mut nics: Vec<NicBinding> = plan.nics().to_vec();
+    nics.swap(0, k);
+    ReadyPlan::new_cli(plan.effective().clone(), nics)
 }
 
 /// Владелец запуска. `Drop` останавливает и дожидается оба потока.
@@ -854,8 +1107,8 @@ pub struct EngineHandle {
     options: EngineOptions,
     digest: [u8; 32],
     resumed_from: Option<[u8; 16]>,
-    tx_thread: Option<JoinHandle<()>>,
-    rx_thread: Option<JoinHandle<()>>,
+    tx_threads: Vec<JoinHandle<()>>,
+    rx_threads: Vec<JoinHandle<()>>,
 }
 
 /// Клон права на Pause/Stop для другого потока (например, кнопка UI или
@@ -901,13 +1154,20 @@ impl EngineHandle {
     /// сохранённая пауза: durable Paused подтверждает Studio.
     pub fn checkpoint(&self) -> Option<Checkpoint> {
         let o = self.outcome()?;
-        (o.reason == Reason::Paused).then_some(Checkpoint {
+        if o.reason != Reason::Paused {
+            return None;
+        }
+        // Нормализованная база возобновления (`min_k resume_base`), а не
+        // сырой индекс прогресса: для плана Studio (shard 1/1, один адаптер)
+        // это одно и то же число.
+        let next_index = lock(&self.shared.queue.st).checkpoint?;
+        Some(Checkpoint {
             format_version: CHECKPOINT_FORMAT_VERSION,
             engine_version: ENGINE_ALGORITHM_VERSION,
             scan_id: self.options.scan_id,
             attempt_id: self.options.attempt_id,
             job_digest: self.digest,
-            next_index: o.progress.next_index,
+            next_index,
         })
     }
 
@@ -920,6 +1180,16 @@ impl EngineHandle {
     /// Остановить оба потока без ожидания `wait`.
     pub fn stop(&self) {
         self.shared.command(STOP);
+    }
+
+    /// Нормализованная база возобновления (`min_k resume_base`) сразу после того, как пауза остановила все TX-потоки,
+    /// ещё до конца `wait`: `main.c:1447-1456` пишет `paused.conf` до ожидания, а `CheckpointReady` приходит только
+    /// вместе с итогом, то есть после `wait`. `None`, пока TX идёт, после Stop/отказа и если передача закончилась
+    /// сама (конец последовательности сильнее паузы). Значение то же, что в итоговом `CheckpointReady`: позиции
+    /// TX после выхода потоков не меняются.
+    pub fn pause_resume_base(&self) -> Option<u64> {
+        (self.shared.halted() == PAUSE && self.shared.tx_end() == END_HALTED)
+            .then(|| self.shared.resume_base())
     }
 
     pub fn try_event(&self) -> Result<Event, TryRecvError> {
@@ -978,10 +1248,10 @@ impl EngineHandle {
     }
 
     fn join_threads(&mut self) {
-        for t in [self.tx_thread.take(), self.rx_thread.take()]
+        let threads = std::mem::take(&mut self.tx_threads)
             .into_iter()
-            .flatten()
-        {
+            .chain(std::mem::take(&mut self.rx_threads));
+        for t in threads {
             // Паника потока уже учтена в итоге через `ExitGuard`; здесь важен
             // сам join (handles освобождены).
             let _ = t.join();
@@ -991,12 +1261,481 @@ impl EngineHandle {
 
 impl Drop for EngineHandle {
     fn drop(&mut self) {
-        if self.tx_thread.is_none() && self.rx_thread.is_none() {
+        if self.tx_threads.is_empty() && self.rx_threads.is_empty() {
             return;
         }
         // Потребитель потерян: остановить, закрыть очередь, дождаться потоков.
         self.shared.command(STOP);
         self.shared.queue.close();
         self.join_threads();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Возобновление `--resume` через `start_cli_with_clock` (Задача 3):
+    //! пауза посреди пачки повторов и усечённый `resume-count` с повторами.
+    //! Только `FakeAdapter` и `ManualClock`.
+
+    use super::*;
+    use crate::fake::{FakeAdapter, ManualClock};
+    use rmasscan_core::config::{Operation, ScanConfig, validate};
+    use rmasscan_core::massip::MassIp;
+    use rmasscan_core::probe::{AdapterBinding, NicBinding};
+    use rmasscan_core::scan::Shard;
+    use rmasscan_core::targets::{add_target_string, parse_ports};
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    const SEED: u64 = 0x1234_5678_9abc;
+
+    struct Spec {
+        targets: &'static str,
+        ports: &'static str,
+        retries: u32,
+        shard: Shard,
+        resume_index: u64,
+        resume_count: Option<u64>,
+        rate: f64,
+    }
+
+    fn cli_plan(spec: &Spec) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), spec.targets).unwrap();
+        parse_ports(m.ports_mut(), spec.ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: spec.rate,
+            wait_secs: 0,
+            retries: spec.retries,
+            shard: spec.shard,
+            resume_index: spec.resume_index,
+            resume_count: spec.resume_count,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = NicBinding::from(AdapterBinding {
+            interface_id: "fake0".into(),
+            link_type: LinkType::Ethernet,
+            source_ipv4: 0xc612_0063,
+            source_mac: [0, 0x11, 0x22, 0x33, 0x44, 0x55],
+            next_hop_mac: [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
+            source_ports: (40000, 40015),
+        });
+        ReadyPlan::new_cli(eff, vec![nic]).unwrap()
+    }
+
+    /// range = 4 адреса x 3 порта = 12.
+    fn plan12(retries: u32, shard: Shard, resume_index: u64) -> ReadyPlan {
+        cli_plan(&Spec {
+            targets: "198.18.0.0/30",
+            ports: "80,443,8080",
+            retries,
+            shard,
+            resume_index,
+            resume_count: None,
+            rate: 1_000_000.0,
+        })
+    }
+
+    struct Leg {
+        frames: Vec<Vec<u8>>,
+        outcome: Outcome,
+        events: Vec<Event>,
+        /// Время часов `ManualClock` от старта до `Finished`.
+        elapsed_micros: u64,
+    }
+
+    /// Один прогон; `pause_after = Some(n)` подаёт Pause изнутри n-й отправки.
+    fn run_leg(plan: &ReadyPlan, pause_after: Option<usize>) -> Leg {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+        if let Some(n) = pause_after {
+            let c2 = cell.clone();
+            fake.set_send_hook(move |sent| {
+                if sent == n {
+                    let c = loop {
+                        if let Some(c) = c2.get() {
+                            break c;
+                        }
+                        std::thread::yield_now();
+                    };
+                    c.pause();
+                }
+            });
+        }
+        let t0 = clock.now_micros();
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            vec![fake.pair()],
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        cell.set(h.cancel_handle()).ok();
+        let mut events = Vec::new();
+        let t = Instant::now();
+        loop {
+            match h.recv_event_timeout(Duration::from_millis(50)) {
+                Ok(e) => {
+                    let fin = matches!(e, Event::Finished { .. });
+                    events.push(e);
+                    if fin {
+                        break;
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    assert!(
+                        t.elapsed() < Duration::from_secs(10),
+                        "no Finished: {events:?}"
+                    );
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        let outcome = h.join().unwrap();
+        Leg {
+            frames: fake.sent_frames(),
+            outcome,
+            events,
+            elapsed_micros: clock.now_micros() - t0,
+        }
+    }
+
+    fn sorted(mut v: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        v.sort();
+        v
+    }
+
+    /// Review Focus 1 (`main.c:421-431`, `:1408-1414`): пауза посреди пачки
+    /// из `retries + 1` кадров одного внешнего `i` при `shard.of > 1`. Два
+    /// отрезка вместе равны непрерывному прогону как мультимножество кадров:
+    /// без пропуска и без лишней копии. Для shard 2/2 смещение потока равно 1,
+    /// поэтому дополнительно проверяется нормализованная база возобновления.
+    #[test]
+    fn resume_mid_retry_burst_completes_exact_multiset() {
+        for one in [1, 2] {
+            let shard = Shard { one, of: 2 };
+            let whole = run_leg(&plan12(1, shard, 0), None);
+            assert_eq!(whole.outcome.reason, Reason::Completed, "shard {one}/2");
+            // retries 1: пачка из 2 кадров на каждый из 12 внешних `i` потока.
+            assert_eq!(whole.frames.len(), 24, "shard {one}/2");
+
+            let first = run_leg(&plan12(1, shard, 0), Some(5));
+            assert_eq!(first.outcome.reason, Reason::Paused, "shard {one}/2");
+            let next_index = first
+                .events
+                .iter()
+                .find_map(|e| match e {
+                    Event::CheckpointReady { next_index } => Some(*next_index),
+                    _ => None,
+                })
+                .expect("CheckpointReady after a clean pause");
+            assert!(
+                (5..whole.frames.len()).contains(&first.frames.len()),
+                "pause landed outside the run: {}",
+                first.frames.len()
+            );
+            // Пауза не рвёт пачку: отправлено целое число пачек по 2 кадра.
+            assert_eq!(first.frames.len() % 2, 0, "paused mid burst");
+            // Сырой индекс прогресса = база + смещение shard (nic_offset).
+            let offset = u64::from(one - 1);
+            assert_eq!(first.outcome.progress.next_index, next_index + offset);
+
+            let second = run_leg(&plan12(1, shard, next_index), None);
+            assert_eq!(second.outcome.reason, Reason::Completed, "shard {one}/2");
+
+            let mut joined = first.frames.clone();
+            joined.extend(second.frames.clone());
+            assert_eq!(
+                sorted(joined),
+                sorted(whole.frames.clone()),
+                "shard {one}/2: pause + resume != uninterrupted"
+            );
+        }
+    }
+
+    /// Пауза посреди пачки при малой скорости: остаток пачки уходит мимо throttle, `CheckpointReady` приходит
+    /// без долгого ожидания (по часам engine), пачка при этом доведена до конца.
+    #[test]
+    fn pause_mid_burst_at_a_low_rate_finishes_the_burst_unthrottled() {
+        let plan = cli_plan(&Spec {
+            targets: "198.18.0.0/30",
+            ports: "80,443,8080",
+            retries: 99,
+            shard: Shard::default(),
+            resume_index: 0,
+            resume_count: None,
+            rate: 1.0,
+        });
+        let leg = run_leg(&plan, Some(1));
+        assert_eq!(leg.outcome.reason, Reason::Paused);
+        // Пачка из `retries + 1` кадров одного `i` доведена до конца, дальше пауза.
+        assert_eq!(leg.frames.len(), 100);
+        assert!(
+            leg.events
+                .iter()
+                .any(|e| matches!(e, Event::CheckpointReady { next_index: 1 }))
+        );
+        // 99 кадров по 1 кадру/с заняли бы ~99 с; без throttle часы почти не движутся.
+        assert!(
+            leg.elapsed_micros < 5_000_000,
+            "burst was throttled: {} us",
+            leg.elapsed_micros
+        );
+    }
+
+    /// Review Focus 4 (`main.c:269-273`, `:1425`): при `resume-count < range`
+    /// и `retries > 0` C ждёт `min_index >= range` и зависает. Здесь каждый
+    /// адаптер завершается по своему `effective_end`.
+    #[test]
+    fn resume_count_with_retries_terminates_cleanly() {
+        let plan = cli_plan(&Spec {
+            targets: "198.18.0.0-198.18.0.49",
+            ports: "80,443",
+            retries: 1,
+            shard: Shard::default(),
+            resume_index: 10,
+            resume_count: Some(8),
+            rate: 1_000_000.0,
+        });
+        assert_eq!(plan.range(), 100);
+        let leg = run_leg(&plan, None);
+        assert_eq!(leg.outcome.reason, Reason::Completed);
+
+        // (min(100, 10 + 8) + 1 * 100 - 10) внешних `i` x (retries + 1) = 108 x 2 (main.c:269-273, 421-431).
+        assert_eq!(leg.frames.len(), 216);
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        let mut reference = Vec::new();
+        while let Some(p) = cursor.current() {
+            reference.push(p.frame.clone());
+            cursor.advance_sent();
+        }
+        assert_eq!(leg.frames, reference);
+        assert_eq!(leg.outcome.progress.next_index, plan.effective_end(0));
+    }
+
+    /// Два адаптера: A `198.18.0.99` с портами `40000..=40015`, B `198.18.0.100` с портами `41000..=41003`.
+    fn plan_two_nics() -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.1.0/30").unwrap();
+        parse_ports(m.ports_mut(), "80").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 1, // при 0 RX выходит в той же итерации, где увидел конец TX, и ответы теряются
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = |ip: u32, mac: u8, ports: (u16, u16)| {
+            NicBinding::from(AdapterBinding {
+                interface_id: format!("fake{mac}"),
+                link_type: LinkType::Ethernet,
+                source_ipv4: ip,
+                source_mac: [0, 0x11, 0x22, 0x33, 0x44, mac],
+                next_hop_mac: [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
+                source_ports: ports,
+            })
+        };
+        ReadyPlan::new_cli(
+            eff,
+            vec![
+                nic(0xc612_0063, 0x55, (40000, 40015)),
+                nic(0xc612_0064, 0x56, (41000, 41003)),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// T3 M-8 (первый тест с n > 1) и T6, замечание 4: два адаптера делят поток внешних индексов по чётности
+    /// (`start = nic_index`, `increment = nic_count`, `main.c:269`) и пишут ответы в одну очередь; RX-поток адаптера
+    /// `k` проверяет диапазон адресов и портов именно своего адаптера (`rx_plan`), так что ответ, валидный для
+    /// адаптера B, адаптером A не принимается, и наоборот.
+    #[test]
+    fn two_adapters_split_even_odd_and_each_accepts_only_its_own_range() {
+        let plan = plan_two_nics();
+        let clock = ManualClock::new();
+        let fakes = [
+            FakeAdapter::new().with_clock(clock.clone()),
+            FakeAdapter::new().with_clock(clock.clone()),
+        ];
+        for f in &fakes {
+            f.set_responder(|syn| crate::fake::reply_to_syn(syn, 0x12).into_iter().collect());
+        }
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            fakes.iter().map(FakeAdapter::pair).collect(),
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        let (_, events) = h.join_drain().unwrap();
+        let replies: Vec<Reply> = events
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::Results { replies } => Some(replies),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        // range = 4: адаптер A шлёт внешние индексы 0 и 2, адаптер B 1 и 3.
+        let sent = |k: usize| fakes[k].sent_frames();
+        assert_eq!((sent(0).len(), sent(1).len()), (2, 2));
+        let mut want = [Vec::new(), Vec::new()];
+        for (k, w) in want.iter_mut().enumerate() {
+            let mut cursor = plan.cursor_for_nic(k as u32, None).unwrap();
+            while let Some(p) = cursor.current() {
+                w.push(p.frame.clone());
+                cursor.advance_sent();
+            }
+        }
+        assert_eq!(sent(0), want[0]);
+        assert_eq!(sent(1), want[1]);
+        // Источники кадров разные: каждый адаптер шлёт со своего адреса и порта.
+        for (k, ip) in [[198, 18, 0, 99], [198, 18, 0, 100]]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(sent(k).iter().all(|f| f[26..30] == ip), "adapter {k}");
+        }
+        // Все четыре ответа дошли до общей очереди, по два на адаптер.
+        assert_eq!(replies.len(), 4);
+        for ip in [0xc612_0063u32, 0xc612_0064] {
+            assert_eq!(replies.iter().filter(|r| r.local_ip == ip).count(), 2);
+        }
+
+        // Ответ на SYN адаптера B валиден только для RX адаптера B.
+        let link = LinkType::Ethernet;
+        let (rx_a, rx_b) = (rx_plan(&plan, 0).unwrap(), rx_plan(&plan, 1).unwrap());
+        for k in 0..2 {
+            for syn in sent(k) {
+                let reply = crate::fake::reply_to_syn(&syn, 0x12).unwrap();
+                let accepted = |p: &ReadyPlan| matches!(parse_reply(&reply, link, p), Ok(Some(_)));
+                assert_eq!(accepted(&rx_a), k == 0, "RX A, reply to adapter {k}");
+                assert_eq!(accepted(&rx_b), k == 1, "RX B, reply to adapter {k}");
+            }
+        }
+    }
+
+    /// T7 I-2: исчерпанный адаптер не тянет `resume-index` вниз. `--shard 1/2`, 3 адаптера, range 13: поток шарда 1
+    /// это индексы {0,1,2,6,7,8,12}; адаптеры 1 ({1,7}) и 2 ({2,8}) заканчивают, адаптер 0 ({0,6,12}) встаёт после
+    /// отправки 0 и 6. Сырой минимум дал бы `resume-index = 11` (индекс шарда 2), правильная база 12.
+    #[test]
+    fn exhausted_adapter_does_not_drag_the_resume_base_into_another_shard() {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.1.0-198.18.1.12").unwrap();
+        parse_ports(m.ports_mut(), "80").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 0,
+            shard: Shard { one: 1, of: 2 },
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = |ip: u32, mac: u8| {
+            NicBinding::from(AdapterBinding {
+                interface_id: format!("fake{mac}"),
+                link_type: LinkType::Ethernet,
+                source_ipv4: ip,
+                source_mac: [0, 0x11, 0x22, 0x33, 0x44, mac],
+                next_hop_mac: [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
+                source_ports: (40000, 40015),
+            })
+        };
+        let plan = ReadyPlan::new_cli(
+            eff,
+            vec![
+                nic(0xc612_0063, 1),
+                nic(0xc612_0064, 2),
+                nic(0xc612_0065, 3),
+            ],
+        )
+        .unwrap();
+        assert_eq!(plan.range(), 13);
+
+        let clock = ManualClock::new();
+        let fakes: Vec<FakeAdapter> = (0..3)
+            .map(|_| FakeAdapter::new().with_clock(clock.clone()))
+            .collect();
+        // Адаптер 0 встаёт на внешнем индексе 12 (две отправки: 0 и 6), пока 1 и 2 ещё не закончили, затем ждёт.
+        let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+        {
+            let (c2, d2) = (cell.clone(), done.clone());
+            fakes[0].set_send_hook(move |sent| {
+                if sent == 2 {
+                    // Ждём, пока адаптеры 1 и 2 отправят свои потоки целиком.
+                    let t = Instant::now();
+                    while d2.load(Ordering::SeqCst) < 4 && t.elapsed() < Duration::from_secs(10) {
+                        std::thread::yield_now();
+                    }
+                    let c = loop {
+                        if let Some(c) = c2.get() {
+                            break c;
+                        }
+                        std::thread::yield_now();
+                    };
+                    c.pause();
+                }
+            });
+        }
+        for f in &fakes[1..] {
+            let d3 = done.clone();
+            f.set_send_hook(move |_| {
+                d3.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            fakes.iter().map(FakeAdapter::pair).collect(),
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        cell.set(h.cancel_handle()).ok();
+        let (outcome, events) = h.join_drain().unwrap();
+        assert_eq!(outcome.reason, Reason::Paused);
+        let next = events.iter().find_map(|e| match e {
+            Event::CheckpointReady { next_index } => Some(*next_index),
+            _ => None,
+        });
+        assert_eq!(next, Some(12), "exhausted adapters must not lower the base");
+        let sent0 = fakes[0].sent_count();
+        assert_eq!(sent0, 2, "adapter 0 paused after indices 0 and 6");
+
+        // Возобновление с базы 12: во всех адаптерах отправляется ровно индекс 12.
+        let mut resumed_cfg = cfg.clone();
+        resumed_cfg.resume_index = 12;
+        let eff = validate(&resumed_cfg, Operation::Scan).unwrap();
+        let plan2 = ReadyPlan::new_cli(eff, plan.nics().to_vec()).unwrap();
+        let mut all = Vec::new();
+        for k in 0..3 {
+            let mut cursor = plan2.cursor_for_nic(k, None).unwrap();
+            while let Some(p) = cursor.current() {
+                all.push(p.frame.clone());
+                cursor.advance_sent();
+            }
+        }
+        assert_eq!(all.len(), 1, "exactly one probe left (index 12)");
+        let mut c0 = plan.cursor_for_nic(0, None).unwrap();
+        let mut stream0 = Vec::new();
+        while let Some(p) = c0.current() {
+            stream0.push(p.frame.clone());
+            c0.advance_sent();
+        }
+        assert_eq!(stream0.len(), 3);
+        assert_eq!(all[0], stream0[2], "the leftover probe is nic 0's index 12");
     }
 }

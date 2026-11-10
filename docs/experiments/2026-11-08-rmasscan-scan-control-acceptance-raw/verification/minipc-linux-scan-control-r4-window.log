@@ -1,0 +1,23 @@
+OUT=/tmp/rmasscan-out.vz2gHt/scan-control-out/linux-scan-control-r4
+SigIgn:	0000000000000000
+c73587a479ba52d55307147713279c90acade41e7cdb68fb6e0d91d61de5f5ea  target/release/rmasscan-lab
+3a169c27b6296e7b603f8cfba458a50e729f18ad4dfcdb024915263f411372f8  target/release/rmasscan
+2026-11-10T10:58:21Z
+[wire-lab] suite scan-control finished rc=0 (see /tmp/rmasscan-out.vz2gHt/scan-control-out/linux-scan-control-r4/suite.log)
+[wire-lab] done: /tmp/rmasscan-out.vz2gHt/scan-control-out/linux-scan-control-r4
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+2026-11-10T11:00:34Z
+PASS     manifest 
+PASS     sc01_shards_union 
+PASS     sc02_pause_wait_resume 
+PASS     sc03_retries 
+PASS     sc04_packet_mods_and_pcap 
+PASS     sc05_infinite_interrupt 
+PASS     sc06_dual_veth 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":7}
+VERIFY_RC=0
+2026-11-10T11:00:34Z
+6993ae1f0cf73286f04a39f229e4122f6f06d723a3ca9962ce14472a781cb66d  /tmp/rmasscan-out.vz2gHt/scan-control-out/linux-scan-control-r4/verdict.json
+0
+FINISHED

@@ -4,10 +4,11 @@
 //! `src/main.c:1595-1733` из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Что здесь НЕ перенесено: IPv6, несколько адаптеров (`nic_count == 1`),
-//! `router-ip`, `adapter-ip` как диапазон, все опции вывода/баннеров/
-//! `--top-ports` (вне v1). Поэтому `echo` печатает только те ключи
-//! `config_parameters[]`, которыми владеет `ScanConfig`.
+//! Что здесь НЕ перенесено: IPv6, опции баннеров и `--top-ports`. Ключи
+//! вывода, `pcap-filename` и `ndjson-status` принадлежат слою CLI и
+//! подмешиваются через [`EchoExtras`]; остальные ключи `config_parameters[]`
+//! печатает `echo` из `ScanConfig` (адаптеры `nic[0..8)`, `noreset`, `ttl`,
+//! `badsum`, опции TCP).
 //!
 //! `echo(.., echo_all = true)` печатает все принадлежащие нам ключи
 //! безусловно (как `masscan->echo_all` в C), но это не весь `--echo-all` C:
@@ -79,6 +80,10 @@ pub enum ConfigError {
     BadRate(String),
     #[error("bad MAC address: {0:?}")]
     BadMac(String),
+    /// `infinite` с `-sL`: список напечатался бы один раз молча (main.c: `-sL` игнорирует `is_infinite`, а проходы
+    /// заново бессмысленны для списка).
+    #[error("--infinite cannot be combined with -sL (a list has no repeated passes)")]
+    InfiniteWithList,
     /// Значение ключа не разобрано.
     #[error("bad value for {key}: {value:?}")]
     BadValue { key: String, value: String },
@@ -87,6 +92,30 @@ pub enum ConfigError {
     UnknownKey(String),
     #[error("{0}")]
     Parse(#[from] ParseError),
+}
+
+/// Максимум адаптеров `nic[0..8)` (masscan.h `nic[8]`). Индекс `>= 8` в C
+/// переполняет массив (main-conf.c:2438), здесь это `BadValue`.
+pub const MAX_NICS: usize = 8;
+
+pub use crate::packet::{
+    DEFAULT_TCP_MSS, DEFAULT_TCP_TSECHO, DEFAULT_TCP_WSCALE, PacketModifiers, TcpHeaderOptions,
+};
+
+/// Один адаптер `nic[i]` (masscan.h `struct Masscan::nic`, подмножество
+/// IPv4). `adapter_ip` это включительный диапазон `(first, last)`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NicConfig {
+    pub adapter_name: Option<String>,
+    pub adapter_ip: Option<(u32, u32)>,
+    pub adapter_mac: Option<[u8; 6]>,
+    pub router_ip: Option<u32>,
+    pub router_mac_ipv4: Option<[u8; 6]>,
+    pub router_mac_ipv6: Option<[u8; 6]>,
+    pub source_port: Option<(u16, u16)>,
+    /// `adapter-port = A-B` шириной 17, как пишет сам C из-за ошибки на единицу (main.c:1318, port_mask 0x10).
+    /// Спека Р6: поблажка только для `last - first == 16` и только у этого адаптера, порядок ключей не важен.
+    pub legacy_c_17_port_mask: bool,
 }
 
 /// Все параметры скана (masscan.h `struct Masscan`, подмножество v1).
@@ -118,6 +147,20 @@ pub struct ScanConfig {
     pub source_port: Option<(u16, u16)>,
     pub adapter_name: Option<String>,
     pub offline: bool,
+    /// Массив адаптеров `nic[0..nic_count)`. Пусто значит «один адаптер,
+    /// описанный одиночными полями выше». Когда не пусто, единственный
+    /// писатель это [`apply_core_kv`], и он держит одиночные поля равными
+    /// `nics[0]` (обратная совместимость со `Studio` и прежними тестами).
+    pub nics: Vec<NicConfig>,
+    /// `--ttl` (main-conf.c:3003): `None` значит умолчание 255.
+    pub ttl: Option<u8>,
+    /// `--badsum` (main-conf.c:2758).
+    pub badsum: bool,
+    /// `--noreset` (main-conf.c:1556).
+    pub noreset: bool,
+    /// `--infinite` (main-conf.c:2836).
+    pub infinite: bool,
+    pub tcp_opts: TcpHeaderOptions,
 }
 
 impl Default for ScanConfig {
@@ -141,6 +184,12 @@ impl Default for ScanConfig {
             source_port: None,
             adapter_name: None,
             offline: false,
+            nics: Vec::new(),
+            ttl: None,
+            badsum: false,
+            noreset: false,
+            infinite: false,
+            tcp_opts: TcpHeaderOptions::default(),
         }
     }
 }
@@ -172,6 +221,12 @@ pub struct EffectiveConfig {
     source_port: Option<(u16, u16)>,
     adapter_name: Option<String>,
     offline: bool,
+    nics: Vec<NicConfig>,
+    ttl: Option<u8>,
+    badsum: bool,
+    noreset: bool,
+    infinite: bool,
+    tcp_opts: TcpHeaderOptions,
 }
 
 impl EffectiveConfig {
@@ -226,6 +281,34 @@ impl EffectiveConfig {
     }
     pub fn adapter_name(&self) -> Option<&str> {
         self.adapter_name.as_deref()
+    }
+    /// Массив адаптеров; пусто значит один адаптер из одиночных полей.
+    pub fn nics(&self) -> &[NicConfig] {
+        &self.nics
+    }
+    pub fn ttl(&self) -> Option<u8> {
+        self.ttl
+    }
+    pub fn badsum(&self) -> bool {
+        self.badsum
+    }
+    pub fn noreset(&self) -> bool {
+        self.noreset
+    }
+    pub fn infinite(&self) -> bool {
+        self.infinite
+    }
+    pub fn tcp_opts(&self) -> TcpHeaderOptions {
+        self.tcp_opts
+    }
+    /// `--ttl`, `--badsum` и опции TCP как параметры зонда (templ-pkt.c:1474-1488,
+    /// templ-tcp-hdr.c:1066-1119). Умолчание: TTL 255 (`DEFAULT_TCP_TEMPLATE`).
+    pub fn packet_modifiers(&self) -> PacketModifiers {
+        PacketModifiers {
+            ttl: self.ttl.unwrap_or(255),
+            badsum: self.badsum,
+            tcp: self.tcp_opts,
+        }
     }
     /// Итоговый набор (исключения применены, optimize).
     pub fn massip(&self) -> &MassIp {
@@ -385,6 +468,10 @@ pub fn parse_source_port(value: &str) -> Result<(u16, u16), ConfigError> {
 /// Пустая цель при `-sL` в C — бесконечный цикл в `blackrock_init`
 /// (crypto-blackrock.c:117-120, :151-152), здесь `EmptyTargets`.
 pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, ConfigError> {
+    // `infinite` приходит и из файла `-c`/`--resume` (`infinite = true`), поэтому clap `conflicts_with` его не ловит.
+    if op == Operation::List && cfg.infinite {
+        return Err(ConfigError::InfiniteWithList);
+    }
     check_shard(cfg.shard)?;
     if op != Operation::Echo && cfg.blackrock_rounds >= 64 {
         return Err(ConfigError::BadBlackrockRounds(cfg.blackrock_rounds));
@@ -482,6 +569,12 @@ fn effective(
         source_port: cfg.source_port,
         adapter_name: cfg.adapter_name.clone(),
         offline: cfg.offline,
+        nics: cfg.nics.clone(),
+        ttl: cfg.ttl,
+        badsum: cfg.badsum,
+        noreset: cfg.noreset,
+        infinite: cfg.infinite,
+        tcp_opts: cfg.tcp_opts,
     }
 }
 
@@ -601,6 +694,31 @@ fn echo_range(out: &mut String, r: crate::ranges::Range) {
 /// их между двумя пустыми строками, поэтому `paused.conf` от студии не
 /// совпадает с нашим `echo` байт в байт (читается он нормально).
 pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
+    echo_with(cfg, echo_all, &EchoExtras::default(), out);
+}
+
+/// Дополнения к [`echo`], которыми владеет не `ScanConfig`, а слой CLI
+/// (`rmasscan-cli::conf`): ключи `pcap-filename` и `ndjson-status` и секция
+/// вывода между двумя записями `SPACE` (main-conf.c:2402-2422).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EchoExtras<'a> {
+    pub pcap_filename: Option<&'a str>,
+    pub ndjson_status: bool,
+    /// Готовые строки `output-filename`, `output-format`, ... с `\n` на
+    /// конце каждой.
+    pub output_section: &'a str,
+}
+
+/// [`echo`] с дополнениями. С `EchoExtras::default()` и конфигурацией без
+/// новых полей вывод побайтно прежний.
+///
+/// Порядок как у `config_parameters[]` (main-conf.c:2369-2422): resume,
+/// seed, rate, shard, retries, `noreset`, offline, `pcap-filename`,
+/// `ndjson-status`, двойной capture, `SPACE`, секция вывода, `SPACE`,
+/// затем `ttl`, `badsum` (их C не печатает, это расширение rmasscan, читаемое
+/// и C: `masscan_set_parameter` знает оба ключа) и `tcp-mss`, `tcp-wscale`,
+/// `tcp-tsecho`, `tcp-sackok` (:2141-2345), после этого адаптеры.
+pub fn echo_with(cfg: &ScanConfig, echo_all: bool, extras: &EchoExtras<'_>, out: &mut String) {
     // resume-index / resume-count (main-conf.c:1913-1934).
     if cfg.resume_index != 0 || echo_all {
         let _ = write!(
@@ -621,8 +739,19 @@ pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
     if cfg.retries != 0 || echo_all {
         let _ = writeln!(out, "retries = {}", cfg.retries); // :1936
     }
+    // :1556-1565. Только когда включён: `echo_all` здесь не печатает умолчание,
+    // чтобы вывод `--echo-all` старых конфигураций остался прежним.
+    if cfg.noreset {
+        out.push_str("noreset = true\n");
+    }
     if cfg.offline || echo_all {
         let _ = writeln!(out, "offline = {}", cfg.offline); // :1603
+    }
+    if let Some(name) = extras.pcap_filename.filter(|n| !n.is_empty()) {
+        let _ = writeln!(out, "pcap-filename = {name}"); // :1814-1822
+    }
+    if extras.ndjson_status {
+        out.push_str("ndjson-status = true\n"); // :1507-1514
     }
     // SET_capture (main-conf.c:1132) стоит в таблице дважды ("capture" и
     // "nocapture"), поэтому блок печатается дважды. Умолчания C:
@@ -636,28 +765,25 @@ pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
             out.push_str("nocapture = html\nnocapture = heartbleed\nnocapture = ticketbleed\n");
         }
     }
-    out.push_str("\n\n"); // две записи SPACE (:2048)
+    out.push('\n'); // первая запись SPACE (:2048)
+    out.push_str(extras.output_section);
+    out.push('\n'); // вторая запись SPACE
 
-    // masscan_echo_nic (main-conf.c:294-388), nic_count == 1.
-    if let Some(name) = cfg.adapter_name.as_deref().filter(|n| !n.is_empty()) {
-        let _ = writeln!(out, "adapter = {name}");
+    echo_tcp_ip_params(cfg, out);
+
+    // masscan_echo_nic (main-conf.c:294-388).
+    let legacy;
+    let nics: &[NicConfig] = if cfg.nics.is_empty() {
+        legacy = [legacy_nic(cfg)];
+        &legacy
+    } else {
+        &cfg.nics
+    };
+    for (i, nic) in nics.iter().enumerate() {
+        echo_nic(out, nic, (nics.len() > 1).then_some(i));
     }
-    if let Some(ip) = cfg.adapter_ip.filter(|&ip| ip != 0) {
-        let _ = writeln!(out, "adapter-ip = {}", Ipv4Addr::from(ip));
-    }
-    if let Some(mac) = cfg.adapter_mac.filter(|m| *m != [0u8; 6]) {
-        let _ = writeln!(out, "adapter-mac = {}", fmt_mac(mac));
-    }
-    // main-conf.c:376-378: после adapter-mac, перед router-mac.
-    if let Some(ip) = cfg.router_ip.filter(|&ip| ip != 0) {
-        let _ = writeln!(out, "router-ip = {}", Ipv4Addr::from(ip));
-    }
-    if let Some(mac) = cfg.router_mac.filter(|m| *m != [0u8; 6]) {
-        let _ = writeln!(out, "router-mac-ipv4 = {}", fmt_mac(mac));
-        let _ = writeln!(out, "router-mac-ipv6 = {}", fmt_mac(mac));
-    }
-    // adapter-port (main-conf.c:3666-3676).
-    if let Some((first, last)) = cfg.source_port.filter(|&(f, _)| f != 0) {
+    // adapter-port (main-conf.c:3666-3676): только nic[0].
+    if let Some((first, last)) = nics[0].source_port.filter(|&(f, _)| f != 0) {
         let _ = write!(out, "adapter-port = {first}");
         if first != last {
             let _ = write!(out, "-{last}");
@@ -677,6 +803,89 @@ pub fn echo(cfg: &ScanConfig, echo_all: bool, out: &mut String) {
     }
 }
 
+/// Одиночные поля как `nic[0]` (когда `nics` пуст).
+fn legacy_nic(cfg: &ScanConfig) -> NicConfig {
+    NicConfig {
+        adapter_name: cfg.adapter_name.clone(),
+        adapter_ip: cfg.adapter_ip.map(|ip| (ip, ip)),
+        adapter_mac: cfg.adapter_mac,
+        router_ip: cfg.router_ip,
+        router_mac_ipv4: cfg.router_mac,
+        router_mac_ipv6: cfg.router_mac,
+        source_port: cfg.source_port,
+        legacy_c_17_port_mask: false,
+    }
+}
+
+/// `ttl`, `badsum` и опции TCP (изменённые против умолчания).
+fn echo_tcp_ip_params(cfg: &ScanConfig, out: &mut String) {
+    if let Some(ttl) = cfg.ttl {
+        let _ = writeln!(out, "ttl = {ttl}");
+    }
+    if cfg.badsum {
+        out.push_str("badsum = true\n");
+    }
+    let o = cfg.tcp_opts;
+    match o.mss {
+        Some(DEFAULT_TCP_MSS) => {}
+        Some(v) => {
+            let _ = writeln!(out, "tcp-mss = {v}");
+        }
+        None => out.push_str("tcp-mss = disable\n"),
+    }
+    match o.wscale {
+        Some(DEFAULT_TCP_WSCALE) => out.push_str("tcp-wscale = enable\n"),
+        Some(v) => {
+            let _ = writeln!(out, "tcp-wscale = {v}");
+        }
+        None => {}
+    }
+    match o.tsecho {
+        Some(DEFAULT_TCP_TSECHO) => out.push_str("tcp-tsecho = enable\n"),
+        Some(v) => {
+            let _ = writeln!(out, "tcp-tsecho = {v}");
+        }
+        None => {}
+    }
+    if o.sackok {
+        out.push_str("tcp-sackok = enable\n");
+    }
+}
+
+/// main-conf.c:294-389 `masscan_echo_nic`; `idx` это `[i]` при `nic_count > 1`.
+fn echo_nic(out: &mut String, nic: &NicConfig, idx: Option<usize>) {
+    let sfx = idx.map(|i| format!("[{i}]")).unwrap_or_default();
+    if let Some(name) = nic.adapter_name.as_deref().filter(|n| !n.is_empty()) {
+        let _ = writeln!(out, "adapter{sfx} = {name}");
+    }
+    if let Some((first, last)) = nic.adapter_ip.filter(|&(f, l)| f != 0 || l != 0) {
+        // :312-358: одиночный адрес, либо диапазон `first-last` (включая два).
+        if first == last {
+            let _ = writeln!(out, "adapter-ip{sfx} = {}", Ipv4Addr::from(first));
+        } else if first < last {
+            let _ = writeln!(
+                out,
+                "adapter-ip{sfx} = {}-{}",
+                Ipv4Addr::from(first),
+                Ipv4Addr::from(last)
+            );
+        }
+    }
+    if let Some(mac) = nic.adapter_mac.filter(|m| *m != [0u8; 6]) {
+        let _ = writeln!(out, "adapter-mac{sfx} = {}", fmt_mac(mac));
+    }
+    // main-conf.c:376-378: после adapter-mac, перед router-mac.
+    if let Some(ip) = nic.router_ip.filter(|&ip| ip != 0) {
+        let _ = writeln!(out, "router-ip{sfx} = {}", Ipv4Addr::from(ip));
+    }
+    if let Some(mac) = nic.router_mac_ipv4.filter(|m| *m != [0u8; 6]) {
+        let _ = writeln!(out, "router-mac-ipv4{sfx} = {}", fmt_mac(mac));
+    }
+    if let Some(mac) = nic.router_mac_ipv6.filter(|m| *m != [0u8; 6]) {
+        let _ = writeln!(out, "router-mac-ipv6{sfx} = {}", fmt_mac(mac));
+    }
+}
+
 // ---------------------------------------------------------------------
 // paused.conf
 // ---------------------------------------------------------------------
@@ -688,7 +897,7 @@ fn is_c_space(c: char) -> bool {
 
 /// main-conf.c:833 `EQUALS`: регистр и символы `-`, `.`, `_` не важны, суффикс
 /// `[N]` (массив адаптеров) отбрасывается.
-fn normalize_key(name: &str) -> String {
+pub fn normalize_key(name: &str) -> String {
     name.split('[')
         .next()
         .unwrap_or("")
@@ -750,8 +959,8 @@ fn parse_u32(key: &str, value: &str) -> Result<u32, ConfigError> {
     })
 }
 
-/// main-conf.c:176 `parseBoolean` (по первому символу).
-fn parse_bool(value: &str) -> bool {
+/// main-conf.c:657 `parseBoolean` (по первому символу).
+pub fn parse_bool(value: &str) -> bool {
     match value.bytes().next() {
         None => true,
         Some(c) if c.is_ascii_digit() => value
@@ -782,50 +991,14 @@ fn parse_bool(value: &str) -> bool {
 /// `BadValue`.
 pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
     let mut cfg = ScanConfig::default();
-    let (mut mac4, mut mac6) = (None, None);
     for raw in text.lines() {
-        let line = raw.trim_matches(is_c_space);
-        if line.is_empty() || line.as_bytes()[0].is_ascii_punctuation() {
+        let Some((name, value)) = conf_line_kv(raw) else {
+            continue;
+        };
+        if apply_core_kv(&mut cfg, name, value)? {
             continue;
         }
-        let Some((name, value)) = line.split_once('=') else {
-            continue;
-        };
-        let name = name.trim_matches(is_c_space);
-        let value = value.trim_matches(is_c_space);
-        let bad = || ConfigError::BadValue {
-            key: name.into(),
-            value: value.into(),
-        };
         match normalize_key(name).as_str() {
-            "resumeindex" => cfg.resume_index = parse_int(name, value)?,
-            "resumecount" => {
-                cfg.resume_count = Some(parse_int(name, value)?).filter(|&c| c != 0);
-            }
-            "seed" => cfg.seed = parse_int(name, value)?,
-            "rate" | "maxrate" => cfg.max_rate = parse_rate(value)?,
-            "shard" | "shards" => cfg.shard = parse_shard(value)?,
-            "retries" | "retry" | "maxretries" | "maxretry" => {
-                // main-conf.c:1943: strtoul(value, 0, 0), затем x >= 1000.
-                let n = strtoul0(value).ok_or_else(bad)?;
-                if n >= 1000 {
-                    return Err(ConfigError::TooManyRetries(
-                        u32::try_from(n).unwrap_or(u32::MAX),
-                    ));
-                }
-                cfg.retries = n as u32;
-            }
-            "offline" | "notransmit" | "nosend" | "dryrun" => cfg.offline = parse_bool(value),
-            "blackrockrounds" => cfg.blackrock_rounds = parse_u32(name, value)?,
-            "wait" => cfg.wait_secs = parse_u32(name, value)?,
-            "capture" | "nocapture" => {
-                if !["cert", "servername", "html", "heartbleed", "ticketbleed"]
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(value))
-                {
-                    return Err(bad());
-                }
-            }
             // Ключи вывода (pure-output), которые C пишет в paused.conf, если
             // заданы: на порядок и содержимое скана не влияют, значения
             // не проверяются (студия всегда пишет `output-format = interactive`).
@@ -859,43 +1032,320 @@ pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
             | "ndjsonstatus"
             | "statusndjson"
             | "jsonstatus"
-            | "statusjson" => {}
-            "adapter" | "if" | "interface" => cfg.adapter_name = Some(value.to_string()),
-            "adapterip" | "sourceip" => {
-                let ip: Ipv4Addr = value.parse().map_err(|_| bad())?;
-                cfg.adapter_ip = Some(ip.into());
-            }
-            "adaptermac" | "sourcemac" => {
-                // main-conf.c:2552: нулевой MAC C не сохраняет.
-                cfg.adapter_mac = Some(parse_mac(value)?).filter(|m| *m != [0u8; 6]);
-            }
-            "routerip" => {
-                let ip: Ipv4Addr = value.parse().map_err(|_| bad())?;
-                cfg.router_ip = Some(ip.into());
-            }
-            "routermac" => {
-                let m = parse_mac(value)?;
-                (mac4, mac6) = (Some(m), Some(m));
-            }
-            "routermacipv4" => mac4 = Some(parse_mac(value)?),
-            "routermacipv6" => mac6 = Some(parse_mac(value)?),
-            "adapterport" | "sourceport" => cfg.source_port = Some(parse_source_port(value)?),
-            "ports" | "port" => targets::parse_ports(cfg.targets.ports_mut(), value)?,
-            "range" => targets::add_target_string(cfg.targets.ipv4_mut(), value)?,
-            "exclude" => targets::add_target_string(cfg.excludes.ipv4_mut(), value)?,
+            | "statusjson"
+            | "pcapfilename"
+            | "pcap" => {}
             _ => return Err(ConfigError::UnknownKey(name.to_string())),
         }
     }
-    if let (Some(a), Some(b)) = (mac4, mac6)
-        && a != b
-    {
-        return Err(ConfigError::BadValue {
-            key: "router-mac-ipv6".into(),
-            value: fmt_mac(b),
-        });
-    }
-    cfg.router_mac = mac4.or(mac6);
     Ok(cfg)
+}
+
+/// Одна строка файла конфигурации (main-conf.c:3900-3920): обрезка по
+/// пробелам, пустые строки, строки с пунктуацией первым знаком и строки без
+/// `=` дают `None`; иначе `(имя, значение)`, оба обрезаны.
+pub fn conf_line_kv(raw: &str) -> Option<(&str, &str)> {
+    let line = raw.trim_matches(is_c_space);
+    if line.is_empty() || line.as_bytes()[0].is_ascii_punctuation() {
+        return None;
+    }
+    let (name, value) = line.split_once('=')?;
+    Some((
+        name.trim_matches(is_c_space),
+        value.trim_matches(is_c_space),
+    ))
+}
+
+/// Индекс `[N]` в имени ключа (C `ARRAY`, main-conf.c:2438); без скобок 0.
+/// В отличие от C индекс `>= 8` и нечисловой — ошибка, а не переполнение
+/// `nic[8]`.
+fn nic_index(name: &str, value: &str) -> Result<usize, ConfigError> {
+    let bad = || ConfigError::BadValue {
+        key: name.into(),
+        value: value.into(),
+    };
+    let Some((_, rest)) = name.split_once('[') else {
+        return Ok(0);
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || digits > 4 {
+        return Err(bad());
+    }
+    let idx: usize = rest[..digits].parse().map_err(|_| bad())?;
+    if idx >= MAX_NICS {
+        return Err(bad());
+    }
+    Ok(idx)
+}
+
+/// Берёт `nic[idx]`, создавая его (и недостающие до него) при необходимости.
+/// Первое создание переносит одиночные поля в `nics[0]`.
+fn nic_mut(cfg: &mut ScanConfig, idx: usize) -> &mut NicConfig {
+    if cfg.nics.is_empty() {
+        let first = legacy_nic(cfg);
+        cfg.nics.push(first);
+    }
+    while cfg.nics.len() <= idx {
+        cfg.nics.push(NicConfig::default());
+    }
+    &mut cfg.nics[idx]
+}
+
+/// Одиночные поля := `nics[0]`.
+fn sync_legacy_nic(cfg: &mut ScanConfig) {
+    let n = cfg.nics[0].clone();
+    cfg.adapter_name = n.adapter_name;
+    cfg.adapter_ip = n.adapter_ip.map(|(first, _)| first);
+    cfg.adapter_mac = n.adapter_mac;
+    cfg.router_ip = n.router_ip;
+    cfg.router_mac = n.router_mac_ipv4.or(n.router_mac_ipv6);
+    cfg.source_port = n.source_port;
+}
+
+/// `adapter-port` (main-conf.c:2523-2554) и его ошибка на единицу: `true`,
+/// если принят диапазон из 17 портов, какой C пишет сам (main.c:1318).
+fn parse_source_port_c(value: &str) -> Result<((u16, u16), bool), ConfigError> {
+    match parse_source_port(value) {
+        Ok(r) => Ok((r, false)),
+        Err(e) => {
+            let mut list = RangeList::new();
+            if targets::parse_ports(&mut list, value).is_ok() && list.len() == 1 {
+                let r = list.get(0);
+                if r.end >= r.begin
+                    && r.end - r.begin == 16
+                    && let (Ok(first), Ok(last)) = (u16::try_from(r.begin), u16::try_from(r.end))
+                {
+                    return Ok(((first, last), true));
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+/// main-conf.c:591 `isBoolean`: значение это начало слова из набора или 0/1.
+pub fn is_boolean(v: &str) -> bool {
+    let Some(&c) = v.as_bytes().first() else {
+        return false;
+    };
+    if c.is_ascii_digit() {
+        return matches!(strtoul0(v), None | Some(0 | 1));
+    }
+    let lower = v.to_ascii_lowercase();
+    let words: &[&str] = match c.to_ascii_lowercase() {
+        b'e' => &["enable", "enabled"],
+        b'd' => &["disable", "disabled"],
+        b't' => &["true"],
+        b'f' => &["false"],
+        b'o' => &["on", "off"],
+        b'y' => &["yes"],
+        b'n' => &["no"],
+        _ => return false,
+    };
+    words.iter().any(|w| w.starts_with(&lower))
+}
+
+/// main-conf.c:1066 `isInteger`.
+pub fn is_integer(v: &str) -> bool {
+    !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Общий разбор `--tcp-mss`/`-wscale`/`-tsecho` (main-conf.c:2141-2345):
+/// `Some(None)` выключить, `Some(Some(n))` задать, `Err` плохое значение.
+fn parse_tcp_opt(
+    key: &str,
+    value: &str,
+    default: u64,
+    limit: u64,
+) -> Result<Option<u64>, ConfigError> {
+    let bad = || ConfigError::BadValue {
+        key: key.into(),
+        value: value.into(),
+    };
+    if value.is_empty() {
+        Ok(Some(default))
+    } else if is_boolean(value) {
+        Ok(parse_bool(value).then_some(default))
+    } else if is_integer(value) {
+        let n = parse_int(key, value)?;
+        if n >= limit {
+            return Err(bad());
+        }
+        Ok(Some(n))
+    } else {
+        Err(bad())
+    }
+}
+
+/// Применяет один ключ `name = value` к `ScanConfig` (main-conf.c
+/// `masscan_set_parameter` :2429, ключи, которыми владеет `ScanConfig`).
+/// `Ok(true)` ключ принят, `Ok(false)` ключ чужой (вывод, `pcap`, `conf`,
+/// `resume`, ... - их разбирает слой CLI), `Err` значение плохое.
+///
+/// Ключи адаптера понимают индекс `name[i]`, `0 <= i < 8` (иначе
+/// `BadValue`), и пишут в `nics[i]`, поддерживая одиночные поля равными
+/// `nics[0]`. В отличие от C (где только `adapter` растит `nic_count`) любой
+/// ключ адаптера создаёт `nic[i]`.
+///
+/// `adapter-port = A-B` шириной 17 принимается (ставит
+/// `NicConfig::legacy_c_17_port_mask` этого адаптера), потому что именно такой диапазон пишет сам C.
+/// `wait = forever` это `INT_MAX` (main-conf.c:3028-3032). `ttl` вне `1..=255`
+/// отклоняется (в C `0` молча игнорируется).
+pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool, ConfigError> {
+    let name = key;
+    let value = val;
+    let bad = || ConfigError::BadValue {
+        key: name.into(),
+        value: value.into(),
+    };
+    match normalize_key(name).as_str() {
+        "resumeindex" => cfg.resume_index = parse_int(name, value)?,
+        "resumecount" => {
+            cfg.resume_count = Some(parse_int(name, value)?).filter(|&c| c != 0);
+        }
+        "seed" => cfg.seed = parse_int(name, value)?,
+        "rate" | "maxrate" => cfg.max_rate = parse_rate(value)?,
+        "shard" | "shards" => cfg.shard = parse_shard(value)?,
+        "retries" | "retry" | "maxretries" | "maxretry" => {
+            // main-conf.c:1943: strtoul(value, 0, 0), затем x >= 1000.
+            let n = strtoul0(value).ok_or_else(bad)?;
+            if n >= 1000 {
+                return Err(ConfigError::TooManyRetries(
+                    u32::try_from(n).unwrap_or(u32::MAX),
+                ));
+            }
+            cfg.retries = n as u32;
+        }
+        "offline" | "notransmit" | "nosend" | "dryrun" => cfg.offline = parse_bool(value),
+        "noreset" => cfg.noreset = parse_bool(value),
+        // main-conf.c:2758: `badsum` ставит флаг при любом значении.
+        "badsum" => cfg.badsum = true,
+        // Значение читается как логическое (`infinite = false` в файле отменяет `--infinite` левее него); C ставит 1 всегда.
+        "infinite" => cfg.infinite = parse_bool(value),
+        "ttl" => {
+            let n = strtoul0(value).ok_or_else(bad)?;
+            cfg.ttl = Some(u8::try_from(n).ok().filter(|&t| t != 0).ok_or_else(bad)?);
+        }
+        "tcpmss" => {
+            cfg.tcp_opts.mss =
+                parse_tcp_opt(name, value, u64::from(DEFAULT_TCP_MSS), 0x1_0000)?.map(|n| n as u16);
+        }
+        "tcpwscale" => {
+            cfg.tcp_opts.wscale =
+                parse_tcp_opt(name, value, u64::from(DEFAULT_TCP_WSCALE), 255)?.map(|n| n as u8);
+        }
+        "tcptsecho" => {
+            // C ограничивает 255 (main-conf.c:2285); Р9 сохраняет все 32 бита.
+            cfg.tcp_opts.tsecho = parse_tcp_opt(
+                name,
+                value,
+                u64::from(DEFAULT_TCP_TSECHO),
+                u64::from(u32::MAX) + 1,
+            )?
+            .map(|n| n as u32);
+        }
+        "tcpsackok" => {
+            // :2305-2340: цифра (не 0/1) тоже включает; пустое значение включает.
+            cfg.tcp_opts.sackok = if value.is_empty() {
+                true
+            } else if is_boolean(value) {
+                parse_bool(value)
+            } else if is_integer(value) {
+                parse_int(name, value)? != 0
+            } else {
+                return Err(bad());
+            };
+        }
+        "blackrockrounds" => cfg.blackrock_rounds = parse_u32(name, value)?,
+        "wait" => {
+            cfg.wait_secs = if value.eq_ignore_ascii_case("forever") {
+                i32::MAX as u32
+            } else {
+                parse_u32(name, value)?
+            };
+        }
+        "capture" | "nocapture" => {
+            if !["cert", "servername", "html", "heartbleed", "ticketbleed"]
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(value))
+            {
+                return Err(bad());
+            }
+        }
+        "adapter" | "if" | "interface" => {
+            let idx = nic_index(name, value)?;
+            nic_mut(cfg, idx).adapter_name = Some(value.to_string());
+            sync_legacy_nic(cfg);
+        }
+        "adapterip" | "sourceip" | "sourceaddress" | "spoofip" | "spoofaddress" | "srcip" => {
+            let idx = nic_index(name, value)?;
+            let r = targets::range_parse_ipv4(value).map_err(|_| bad())?;
+            // main-conf.c:2483: ширина диапазона степень двойки.
+            if !(u64::from(r.end) - u64::from(r.begin) + 1).is_power_of_two() {
+                return Err(bad());
+            }
+            nic_mut(cfg, idx).adapter_ip = Some((r.begin, r.end));
+            sync_legacy_nic(cfg);
+        }
+        "adaptermac" | "sourcemac" | "spoofmac" | "srcmac" => {
+            let idx = nic_index(name, value)?;
+            // main-conf.c:2552: нулевой MAC C не хранит.
+            nic_mut(cfg, idx).adapter_mac = Some(parse_mac(value)?).filter(|m| *m != [0u8; 6]);
+            sync_legacy_nic(cfg);
+        }
+        "routerip" => {
+            let idx = nic_index(name, value)?;
+            let r = targets::range_parse_ipv4(value).map_err(|_| bad())?;
+            if r.begin != r.end {
+                return Err(bad());
+            }
+            nic_mut(cfg, idx).router_ip = Some(r.begin);
+            sync_legacy_nic(cfg);
+        }
+        "routermac" | "router" | "destmac" | "destinationmac" | "dstmac" | "targetmac" => {
+            let idx = nic_index(name, value)?;
+            let m = parse_mac(value)?;
+            let nic = nic_mut(cfg, idx);
+            (nic.router_mac_ipv4, nic.router_mac_ipv6) = (Some(m), Some(m));
+            sync_legacy_nic(cfg);
+        }
+        "routermacipv4" | "routeripv4" | "routermacipv6" | "routeripv6" => {
+            let v6 = normalize_key(name).ends_with("v6");
+            let idx = nic_index(name, value)?;
+            let m = parse_mac(value)?;
+            let nic = nic_mut(cfg, idx);
+            if v6 {
+                nic.router_mac_ipv6 = Some(m);
+            } else {
+                nic.router_mac_ipv4 = Some(m);
+            }
+            // Один `router_mac` не хранит разные ipv4 и ipv6.
+            let conflict = match (nic.router_mac_ipv4, nic.router_mac_ipv6) {
+                (Some(a), Some(b)) if a != b => Some(b),
+                _ => None,
+            };
+            if let Some(b) = conflict {
+                return Err(ConfigError::BadValue {
+                    key: "router-mac-ipv6".into(),
+                    value: fmt_mac(b),
+                });
+            }
+            sync_legacy_nic(cfg);
+        }
+        "adapterport" | "sourceport" | "srcport" => {
+            let idx = nic_index(name, value)?;
+            let (range, quirk) = parse_source_port_c(value)?;
+            let nic = nic_mut(cfg, idx);
+            nic.source_port = Some(range);
+            nic.legacy_c_17_port_mask = quirk;
+            sync_legacy_nic(cfg);
+        }
+        "ports" | "port" => targets::parse_ports(cfg.targets.ports_mut(), value)?,
+        "range" => targets::add_target_string(cfg.targets.ipv4_mut(), value)?,
+        "exclude" => targets::add_target_string(cfg.excludes.ipv4_mut(), value)?,
+        _ => return Ok(false),
+    }
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -960,6 +1410,17 @@ mod tests {
 
     fn err(cfg: &ScanConfig, op: Operation) -> ConfigError {
         validate(cfg, op).unwrap_err()
+    }
+
+    /// T5 New-3: `infinite` (ключ файла `-c`/`--resume` тоже его ставит) несовместим с `-sL`: иначе список
+    /// напечатался бы один раз молча.
+    #[test]
+    fn infinite_with_list_is_refused_but_scan_and_echo_accept_it() {
+        let mut cfg = cfg_with("198.18.0.0/30", "80");
+        cfg.infinite = true;
+        assert_eq!(err(&cfg, Operation::List), ConfigError::InfiniteWithList);
+        assert!(validate(&cfg, Operation::Scan).is_ok());
+        assert!(validate(&cfg, Operation::Echo).is_ok());
     }
 
     #[test]
@@ -1638,5 +2099,174 @@ mod tests {
         assert_eq!(format_rate(134217728.0), "rate = 134217728 \n");
         // beyond i64: indefinite integer, low 32 bits zero -> integer branch
         assert_eq!(format_rate(1e300), format!("rate = {:<10.0}\n", 1e300));
+    }
+
+    // ---- Задача 2: расширение echo и apply_core_kv ----
+
+    #[test]
+    fn apply_core_kv_nic_index_bounds_and_sync() {
+        let mut cfg = ScanConfig::default();
+        assert!(apply_core_kv(&mut cfg, "adapter[1]", "veth1").unwrap());
+        assert!(apply_core_kv(&mut cfg, "adapter-ip[0]", "10.0.0.1").unwrap());
+        assert_eq!(cfg.nics.len(), 2);
+        assert_eq!(cfg.adapter_ip, Some(0x0a00_0001)); // одиночное поле = nics[0]
+        assert_eq!(cfg.nics[1].adapter_name.as_deref(), Some("veth1"));
+        for bad in ["adapter[8]", "adapter[-1]", "adapter-ip[x]", "adapter[]"] {
+            assert!(
+                matches!(
+                    apply_core_kv(&mut cfg, bad, "1.2.3.4"),
+                    Err(ConfigError::BadValue { .. })
+                ),
+                "{bad}"
+            );
+        }
+        assert_eq!(cfg.nics.len(), 2);
+        // не-степень двойки для adapter-ip (main-conf.c:2483)
+        assert!(apply_core_kv(&mut cfg, "adapter-ip", "10.0.0.16-10.0.0.18").is_err());
+        assert!(apply_core_kv(&mut cfg, "adapter-ip", "10.0.0.16-10.0.0.19").unwrap());
+        assert_eq!(cfg.nics[0].adapter_ip, Some((0x0a00_0010, 0x0a00_0013)));
+        assert_eq!(cfg.adapter_ip, Some(0x0a00_0010));
+    }
+
+    #[test]
+    fn apply_core_kv_probe_params_wait_and_unknown() {
+        let mut cfg = ScanConfig::default();
+        for (k, v) in [
+            ("ttl", "64"),
+            ("badsum", ""),
+            ("noreset", "true"),
+            ("infinite", ""),
+            ("tcp-mss", "1400"),
+            ("tcp-sackok", "enable"),
+            ("tcp-wscale", ""),
+            ("tcp-tsecho", "3735928559"),
+            ("wait", "forever"),
+        ] {
+            assert!(apply_core_kv(&mut cfg, k, v).unwrap(), "{k}");
+        }
+        assert_eq!(cfg.ttl, Some(64));
+        assert!(cfg.badsum && cfg.noreset && cfg.infinite);
+        assert_eq!(
+            cfg.tcp_opts,
+            TcpHeaderOptions {
+                mss: Some(1400),
+                sackok: true,
+                wscale: Some(3),
+                tsecho: Some(0xdead_beef),
+            }
+        );
+        assert_eq!(cfg.wait_secs, i32::MAX as u32);
+        assert!(apply_core_kv(&mut cfg, "tcp-mss", "disable").unwrap());
+        assert_eq!(cfg.tcp_opts.mss, None);
+        assert!(apply_core_kv(&mut cfg, "ttl", "0").is_err());
+        assert!(apply_core_kv(&mut cfg, "ttl", "256").is_err());
+        assert!(apply_core_kv(&mut cfg, "tcp-mss", "65536").is_err());
+        assert_eq!(apply_core_kv(&mut cfg, "output-filename", "x"), Ok(false));
+    }
+
+    #[test]
+    fn echo_extension_prints_new_keys_in_c_table_order_and_roundtrips() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.retries = 1;
+        for (k, v) in [
+            ("noreset", "true"),
+            ("ttl", "64"),
+            ("badsum", ""),
+            ("tcp-mss", "1400"),
+            ("tcp-wscale", "7"),
+            ("tcp-tsecho", "enable"),
+            ("tcp-sackok", ""),
+            ("adapter-port", "41234-41250"),
+        ] {
+            apply_core_kv(&mut cfg, k, v).unwrap();
+        }
+        assert!(cfg.nics[0].legacy_c_17_port_mask);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        let pos = |needle: &str| s.find(needle).unwrap_or_else(|| panic!("{needle} in {s}"));
+        let order = [
+            "retries = 1\n",
+            "noreset = true\n",
+            "nocapture = servername\n",
+            "ttl = 64\n",
+            "badsum = true\n",
+            "tcp-mss = 1400\n",
+            "tcp-wscale = 7\n",
+            "tcp-tsecho = enable\n",
+            "tcp-sackok = enable\n",
+            "adapter-port = 41234-41250\n",
+            "# TARGET SELECTION",
+        ];
+        for w in order.windows(2) {
+            assert!(pos(w[0]) < pos(w[1]), "{} before {}: {s}", w[0], w[1]);
+        }
+        let back = read_paused_conf(&s).unwrap();
+        assert_eq!(back.tcp_opts, cfg.tcp_opts);
+        assert!(back.nics[0].legacy_c_17_port_mask);
+        let mut s2 = String::new();
+        echo(&back, false, &mut s2);
+        assert_eq!(s, s2);
+    }
+
+    #[test]
+    fn echo_default_probe_params_print_nothing_and_17_wide_cli_port_stays_rejected() {
+        let cfg = cfg_with("10.0.0.0/30", "80");
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        for k in [
+            "ttl", "badsum", "noreset", "tcp-", "pcap", "ndjson", "output-",
+        ] {
+            assert!(!s.contains(k), "{k}: {s}");
+        }
+        assert!(parse_source_port("41234-41250").is_err());
+    }
+    /// T1 M-2 + T2 M-4: поблажка 17 портов принадлежит адаптеру, а не конфигурации; порядок ключей не важен.
+    #[test]
+    fn legacy_17_port_flag_is_per_nic_and_independent_of_key_order() {
+        let order_a = [
+            ("adapter-port[0]", "41234-41250"),
+            ("adapter-port[1]", "5000-5003"),
+        ];
+        let order_b = [
+            ("adapter-port[1]", "5000-5003"),
+            ("adapter-port[0]", "41234-41250"),
+        ];
+        for order in [order_a, order_b] {
+            let mut cfg = cfg_with("10.0.0.0/30", "80");
+            for (k, v) in order {
+                apply_core_kv(&mut cfg, k, v).unwrap();
+            }
+            assert!(cfg.nics[0].legacy_c_17_port_mask, "{order:?}");
+            assert!(!cfg.nics[1].legacy_c_17_port_mask, "{order:?}");
+            let eff = validate(&cfg, Operation::Scan).unwrap();
+            assert!(eff.nics()[0].legacy_c_17_port_mask);
+            assert!(!eff.nics()[1].legacy_c_17_port_mask);
+        }
+        // Явный диапазон степени двойки у того же адаптера снимает флаг; соседний флаг не трогает.
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        apply_core_kv(&mut cfg, "adapter-port[0]", "41234-41250").unwrap();
+        apply_core_kv(&mut cfg, "adapter-port[1]", "6000-6016").unwrap();
+        apply_core_kv(&mut cfg, "adapter-port[0]", "5000-5003").unwrap();
+        assert!(!cfg.nics[0].legacy_c_17_port_mask);
+        assert!(cfg.nics[1].legacy_c_17_port_mask);
+        // Ширина, отличная от 17 и не степень двойки, не принимается ни с каким флагом.
+        for bad in ["5000-5014", "5000-5019", "5000-5002"] {
+            assert!(
+                apply_core_kv(&mut cfg, "adapter-port[2]", bad).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_config_exposes_packet_modifiers() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        let m = validate(&cfg, Operation::Scan).unwrap().packet_modifiers();
+        assert_eq!(m, crate::packet::PacketModifiers::default());
+        for (k, v) in [("ttl", "64"), ("badsum", ""), ("tcp-wscale", "7")] {
+            apply_core_kv(&mut cfg, k, v).unwrap();
+        }
+        let m = validate(&cfg, Operation::Scan).unwrap().packet_modifiers();
+        assert_eq!((m.ttl, m.badsum, m.tcp.wscale), (64, true, Some(7)));
     }
 }

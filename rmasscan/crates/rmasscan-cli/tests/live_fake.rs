@@ -10,6 +10,7 @@
 #[path = "common/scratch.rs"]
 mod scratch;
 
+use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,7 +29,7 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::throttle::Clock;
-use rmasscan_engine::fake::{FakeAdapter, HealthStep, ManualClock, reply_to_syn};
+use rmasscan_engine::fake::{FakeAdapter, HealthStep, ManualClock, RxStep, reply_to_syn};
 use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHealth};
 use rmasscan_net::arp_resolve::{ArpPolicy, arp_binding};
 use rmasscan_net::discover::{NextHopWhy, Source};
@@ -154,11 +155,53 @@ struct FakeBackend {
     /// Нажатия Ctrl-C, которые видит `interrupts()`; поднимают их тест или ответчик ARP (`press_during_arp`).
     presses: Arc<AtomicU32>,
     /// Вызовы `interrupts()`.
-    polls: AtomicUsize,
+    polls: Arc<AtomicUsize>,
     /// Ctrl-C во время ARP: уход ARP-запроса считается одним нажатием.
     press_during_arp: bool,
     /// Цели молчат: SYN остаётся без ответа (ARP отвечает как обычно).
     silent_targets: bool,
+    /// Ctrl-C посреди передачи (Р4, Задача 4).
+    press_in_tx: Option<PressInTx>,
+    /// С `press_in_tx`: адаптер сценария перед нажатием ждёт, пока первый открытый адаптер отправит столько кадров.
+    hold_for_peer: Option<usize>,
+    /// Записи `paused.conf`: показание часов на момент записи и содержимое. Диска фейк не касается.
+    paused_writes: Mutex<Vec<(u64, String)>>,
+    /// Ошибка записи `paused.conf`: запись не сохраняется.
+    paused_write_error: Option<String>,
+    /// Файл `--pcap` в памяти: байты и имена, под которыми его открывали.
+    pcap: Arc<Mutex<Vec<u8>>>,
+    pcap_opened: Mutex<Vec<String>>,
+    /// На каждый SYN сверх обычного ответа приходят RST с плохим cookie на наш `ip:port` и кадр на чужой адрес.
+    inject_noise: bool,
+    /// Передача встаёт после этого кадра адаптера скана, пока цикл событий CLI не опросит `interrupts()` ещё
+    /// [`STALL_POLLS`] раз: строка статуса видит позицию посреди передачи (приём и часы идут дальше).
+    stall_tx_at: Option<usize>,
+}
+
+/// Сколько итераций цикла событий CLI переждать в сценарии `stall_tx_at`.
+const STALL_POLLS: usize = 40;
+
+/// Файл захвата в памяти.
+struct MemPcap(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for MemPcap {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Сценарий «Ctrl-C посреди передачи»: после `at`-го SYN адаптера скана поток TX поднимает счётчик нажатий и ждёт,
+/// пока цикл событий CLI его увидит и поставит паузу (следующий опрос `interrupts()` плюс запас на сам `pause()`).
+/// С `late_first` ответ на первый SYN (всегда SYN-ACK) придерживается и выдаётся приёмнику после 40 пустых
+/// `recv` (2 с часов), то есть уже в окне `--wait`.
+#[derive(Clone, Copy)]
+struct PressInTx {
+    at: usize,
+    late_first: bool,
 }
 
 impl FakeBackend {
@@ -214,9 +257,17 @@ impl FakeBackend {
             attempts: Mutex::new(Vec::new()),
             tx: Arc::new(Mutex::new(Vec::new())),
             presses: Arc::new(AtomicU32::new(0)),
-            polls: AtomicUsize::new(0),
+            polls: Arc::new(AtomicUsize::new(0)),
             press_during_arp: false,
             silent_targets: false,
+            press_in_tx: None,
+            hold_for_peer: None,
+            paused_writes: Mutex::new(Vec::new()),
+            paused_write_error: None,
+            pcap: Arc::new(Mutex::new(Vec::new())),
+            pcap_opened: Mutex::new(Vec::new()),
+            inject_noise: false,
+            stall_tx_at: None,
         }
     }
 
@@ -242,6 +293,14 @@ impl FakeBackend {
 
     fn presses(&self) -> u32 {
         self.presses.load(Ordering::SeqCst)
+    }
+
+    fn pcap_bytes(&self) -> Vec<u8> {
+        self.pcap.lock().unwrap().clone()
+    }
+
+    fn paused_writes(&self) -> Vec<(u64, String)> {
+        self.paused_writes.lock().unwrap().clone()
     }
 }
 
@@ -305,6 +364,12 @@ impl Backend for FakeBackend {
         let (neighbors, tx) = (self.neighbors.clone(), self.tx.clone());
         let (presses, press_during_arp) = (self.presses.clone(), self.press_during_arp);
         let silent_targets = self.silent_targets;
+        let inject_noise = self.inject_noise;
+        // Сценарий действует на адаптер скана (не на ARP-адаптер, открытый первым).
+        let scenario = self.press_in_tx.filter(|_| !opened.is_empty());
+        let held: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+        let (held_r, first_syn) = (held.clone(), Arc::new(AtomicU32::new(0)));
+        let hook_presses = presses.clone();
         adapter.set_responder(move |f| {
             tx.lock().unwrap().push(f.to_vec());
             if press_during_arp && is_arp(f) {
@@ -313,8 +378,67 @@ impl Backend for FakeBackend {
             if silent_targets && !is_arp(f) {
                 return vec![];
             }
-            respond(f, &neighbors)
+            if scenario.is_some_and(|s| s.late_first)
+                && is_syn(f)
+                && first_syn.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                *held_r.lock().unwrap() = reply_to_syn(f, 0x12);
+                return vec![];
+            }
+            let mut replies = respond(f, &neighbors);
+            if inject_noise && is_syn(f) {
+                replies.extend(noise_for(f));
+            }
+            replies
         });
+        let peer = self
+            .hold_for_peer
+            .and_then(|n| opened.first().map(|o| (o.adapter.clone(), n)))
+            .filter(|_| scenario.is_some());
+        if let Some(PressInTx { at, .. }) = scenario {
+            let (polls, handle) = (self.polls.clone(), adapter.clone());
+            adapter.set_send_hook(move |count| {
+                if count != at {
+                    return;
+                }
+                // Детерминизм: нажатие только после того, как соседний адаптер отправил ровно ожидаемое число кадров.
+                if let Some((peer, n)) = &peer {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while peer.sent_count() < *n && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+                let before = polls.load(Ordering::SeqCst);
+                hook_presses.fetch_max(1, Ordering::SeqCst);
+                // Цикл событий опрашивает `interrupts()` на каждой итерации; следующий опрос видит нажатие и ставит
+                // паузу. Запас в 500 мс покрывает вызов `pause()` сразу после опроса.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while polls.load(Ordering::SeqCst) <= before && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                if let Some(frame) = held.lock().unwrap().take() {
+                    handle.push_rx(RxStep::Idle(40));
+                    handle.push_frame(frame);
+                }
+            });
+        }
+        if let Some(at) = self.stall_tx_at.filter(|_| !opened.is_empty()) {
+            let polls = self.polls.clone();
+            adapter.set_send_hook(move |count| {
+                if count != at {
+                    return;
+                }
+                let before = polls.load(Ordering::SeqCst);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while polls.load(Ordering::SeqCst) < before + STALL_POLLS
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            });
+        }
         let pair = adapter.pair();
         opened.push(Opened {
             binding: binding.clone(),
@@ -341,6 +465,29 @@ impl Backend for FakeBackend {
         self.polls.fetch_add(1, Ordering::SeqCst);
         self.presses()
     }
+    fn create_pcap(&self, path: &str) -> Result<Box<dyn std::io::Write + Send>, String> {
+        self.pcap_opened.lock().unwrap().push(path.to_string());
+        Ok(Box::new(MemPcap(self.pcap.clone())))
+    }
+    fn write_paused_conf(&self, content: &str) -> Result<(), String> {
+        if let Some(e) = &self.paused_write_error {
+            return Err(e.clone());
+        }
+        self.paused_writes
+            .lock()
+            .unwrap()
+            .push((self.clock.now_micros(), content.to_string()));
+        Ok(())
+    }
+}
+
+/// Шум к SYN: RST на наш `ip:port` с испорченным ack (плохой SYN-cookie) и валидный ответ на чужой адрес.
+fn noise_for(syn: &[u8]) -> Vec<Vec<u8>> {
+    let mut bad_cookie = reply_to_syn(syn, 0x04).unwrap();
+    bad_cookie[42] ^= 0xff;
+    let mut foreign = reply_to_syn(syn, 0x12).unwrap();
+    foreign[30..34].copy_from_slice(&[192, 0, 2, 99]);
+    vec![bad_cookie, foreign]
 }
 
 fn parse(args: &[&str]) -> Cli {
@@ -587,17 +734,18 @@ fn detection_failure_opens_nothing() {
     }
 }
 
-/// Ограничения runtime v1 (`ReadyPlan`: retries 0, shard 1/1, rounds 14, без legacy resume) проверяются до ARP:
-/// отказ плана не стоит ни одного кадра.
+/// Ограничения плана и конфигурации (rounds 0 и shard 4/3 отвергает `validate`/разбор, `resume-index` за
+/// `(retries + 1) * range` отвергает курсор плана `new_cli`) проверяются до ARP: отказ не стоит ни одного кадра. `--retries`, `--shard`, `--resume-index` и
+/// `--blackrock-rounds` в допустимых пределах скан запускают (Задача 3).
 #[test]
 fn unsupported_plan_options_are_refused_before_any_frame() {
     let mut b = FakeBackend::new();
     b.panic_on_open = true;
     for (extra, word) in [
-        (&["--retries", "1"][..], "retries"),
-        (&["--shard", "2/3"][..], "shard"),
-        (&["--blackrock-rounds", "4"][..], "rounds"),
-        (&["--resume-index", "1"][..], "resume"),
+        (&["--blackrock-rounds", "0"][..], "rounds"),
+        (&["--blackrock-rounds", "64"][..], "rounds"),
+        (&["--resume-index", "5"][..], "beyond"),
+        (&["--shard", "4/3"][..], "shard"),
     ] {
         let args: Vec<&str> = LIVE.iter().chain(extra).copied().collect();
         let (r, out, log) = cli(&b, &args);
@@ -605,6 +753,76 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
         assert!(e.contains(word), "{extra:?}: {e}");
         assert!(out.is_empty() && log.is_empty(), "{extra:?}: {log}");
     }
+}
+
+/// Разрешённые пределы плана (Задача 3): шардирование делит поток, повторы удлиняют его, `--resume-index` и
+/// `--resume-count` режут его; скан завершается `Completed`.
+#[test]
+fn retries_shard_and_resume_window_run_on_the_live_path() {
+    let sent = |extra: &[&str]| {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, &with(&LIVE, extra));
+        r.unwrap();
+        assert!(log.contains("finished: Completed"), "{extra:?}: {log}");
+        let opened = b.opened();
+        opened.last().unwrap().adapter.sent_frames()
+    };
+    // range = 2 адреса x 2 порта = 4; поток одного адаптера 1/1.
+    let all = sent(&["--seed", "7"]);
+    assert_eq!(all.len(), 4);
+    // Две половины shard 1/2 + 2/2 вместе дают ровно тот же набор кадров.
+    let mut halves = sent(&["--seed", "7", "--shard", "1/2"]);
+    halves.extend(sent(&["--seed", "7", "--shard", "2/2"]));
+    assert_eq!(halves.len(), 4);
+    let (mut a, mut h) = (all.clone(), halves);
+    a.sort();
+    h.sort();
+    assert_eq!(a, h, "shard 1/2 + 2/2 == shard 1/1");
+    // `--retries 1`: (1 + 1) * (4 + 4) = 16 кадров, каждая пара (ip, порт) по 4 раза.
+    let retried = sent(&["--seed", "7", "--retries", "1"]);
+    assert_eq!(retried.len(), 16);
+    for f in &all {
+        assert_eq!(
+            retried.iter().filter(|r| syn_dst(r) == syn_dst(f)).count(),
+            4
+        );
+    }
+    // `--resume-index 1 --resume-count 2` шлёт ровно два кадра и завершается.
+    assert_eq!(
+        sent(&["--seed", "7", "--resume-index", "1", "--resume-count", "2"]),
+        all[1..3].to_vec()
+    );
+}
+
+/// `--resume <file>` end-to-end: файл задаёт цели, seed, `resume-index`; ключ правее файла (`--rate`) его
+/// переопределяет. Отправлен ровно остаток потока `resume-index..range`.
+#[test]
+fn resume_file_continues_the_scan_from_its_index() {
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &with(&LIVE, &["--seed", "7"]));
+    r.unwrap();
+    let all = b.opened().last().unwrap().adapter.sent_frames();
+    assert_eq!(all.len(), 4);
+
+    let dir = Scratch::new();
+    let file = dir.write(
+        "paused.conf",
+        b"\n# resume information\nresume-index = 1\nseed = 7\nrate = 100\nwait = 1\n\
+nocapture = servername\nnocapture = servername\n\n\n\
+# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80,81\nrange = 198.51.100.1-198.51.100.2\n",
+    );
+    let f = file.to_str().unwrap();
+    let b = FakeBackend::new();
+    let (r, _, log) = cli(&b, &["--resume", f]);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    assert_eq!(b.opened().last().unwrap().adapter.sent_frames(), all[1..]);
+
+    // Ключ правее файла переопределяет его: `--resume-index 3` шлёт один последний кадр.
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &["--resume", f, "--resume-index", "3"]);
+    r.unwrap();
+    assert_eq!(b.opened().last().unwrap().adapter.sent_frames(), all[3..]);
 }
 
 #[test]
@@ -708,6 +926,47 @@ fn seed_defaults_to_entropy_and_is_printed() {
     );
     r.unwrap();
     assert!(plus_lines(&log).contains(&"[+] seed = 9 (given)"), "{log}");
+}
+
+/// Р2, `main-conf.c:3624-3626`: `--shard` с `OF > 1` без seed (ни в argv, ни в файле конфигурации) печатает
+/// предупреждение C первым на stderr, до строк `[+]`: каждый процесс шарда взял бы свою энтропию, и шарды пошли бы по
+/// разным перестановкам. C печатает его в конце разбора командной строки для любой операции; `--echo` и `-sL` без
+/// seed здесь отказывают (seed обязателен) после того же предупреждения.
+#[test]
+fn shard_without_seed_prints_the_c_warning_before_the_plus_lines() {
+    const WARNING: &str = "[-] WARNING: --seed <num> is not specified\n    HINT: all shards must share the same seed\n";
+    let b = FakeBackend::new();
+    let (r, _, log) = cli(&b, &with(&LIVE, &["--shard", "1/2"]));
+    r.unwrap();
+    assert!(log.starts_with(WARNING), "{log:?}");
+    assert_eq!(log.matches("WARNING").count(), 1, "{log:?}");
+    assert!(
+        plus_lines(&log).contains(&format!("[+] seed = {ENTROPY} (entropy)").as_str()),
+        "{log}"
+    );
+    // Seed задан (в argv или в файле) или шард один: предупреждения нет.
+    let dir = Scratch::new();
+    let conf = dir.write("seed.conf", b"seed = 7\n");
+    let conf = conf.to_str().unwrap();
+    for extra in [
+        &["--shard", "1/2", "--seed", "7"][..],
+        &["--shard", "2/2", "-c", conf][..],
+        &["--shard", "1/1"][..],
+        &[][..],
+    ] {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, &with(&LIVE, extra));
+        r.unwrap();
+        assert!(!log.contains("WARNING"), "{extra:?}: {log:?}");
+    }
+    for op in ["--echo", "-sL"] {
+        let mut b = FakeBackend::new();
+        b.panic_on_open = true;
+        let (r, out, log) = cli(&b, &with(&LIVE, &[op, "--shard", "1/2"]));
+        assert!(r.unwrap_err().contains("--seed"), "{op}");
+        assert_eq!(log, WARNING, "{op}");
+        assert!(out.is_empty(), "{op}: {out:?}");
+    }
 }
 
 #[test]
@@ -1168,7 +1427,7 @@ fn outcome(reason: Reason) -> Outcome {
 }
 
 #[test]
-fn stopped_outcome_exits_zero() {
+fn stopped_completed_and_paused_outcomes_exit_zero() {
     for (reason, line) in [
         (
             Reason::Stopped,
@@ -1178,13 +1437,16 @@ fn stopped_outcome_exits_zero() {
             Reason::Completed,
             "[+] finished: Completed, sent 3, replies 1, open 1\n",
         ),
+        // Р4: первое Ctrl-C после старта это пауза, и C выходит с кодом 0.
+        (
+            Reason::Paused,
+            "[+] finished: Paused, sent 3, replies 1, open 1\n",
+        ),
     ] {
         let mut log = Vec::new();
         live::conclude(&outcome(reason), 1, 1, &mut log).unwrap();
         assert_eq!(String::from_utf8(log).unwrap(), line);
     }
-    let mut log = Vec::new();
-    assert!(live::conclude(&outcome(Reason::Paused), 1, 1, &mut log).is_err());
 }
 
 #[test]
@@ -2004,11 +2266,54 @@ fn ndjson_status_lines() {
     assert!(!log.contains("rate:"), "{log:?}");
 }
 
+/// Процент тика статуса `rate: …, P% done, …`.
+fn status_percent(f: &str) -> f64 {
+    f.split("-kpps, ")
+        .nth(1)
+        .and_then(|r| r.split("% done").next())
+        .and_then(|p| p.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no percent in {f:?}"))
+}
+
+/// Minor 1 финального ревью: с `--retries` позиция переходит `range` уже на 1/(retries+1) передачи, а SYN ещё уходят.
+/// Обратный отсчёт `--wait` начинается с конца передачи (позиция дошла до `effective_end` = `(retries + 1) * range`,
+/// тот же момент, от которого engine отсчитывает ожидание), а процент по-прежнему считается от `range`, как у C
+/// (`main.c:1427-1437`: `status_print(min_index, range, …)`, отсюда 141.67% у оракула).
+#[test]
+fn wait_countdown_starts_at_the_end_of_transmission_with_retries() {
+    let mut b = FakeBackend::new();
+    // range 4, `--retries 1`: позиции 0..8, на позицию два SYN (16 SYN); после 12-го SYN позиция 5 или 6 из 8, и
+    // передача стоит, пока цикл событий не сделает `STALL_POLLS` итераций.
+    b.stall_tx_at = Some(12);
+    let (r, _, log) = cli(&b, &with(&LIVE5, &["--retries", "1"]));
+    r.unwrap();
+    assert_eq!(b.opened().last().unwrap().adapter.sent_count(), 16);
+    let frags = status_fragments(&log);
+    let (waiting, running): (Vec<&str>, Vec<&str>) =
+        frags.iter().partition(|f| f.contains(" waiting "));
+    // Остановка видна: тик передачи за `range` (100%) и до конца передачи (200%).
+    assert!(
+        running
+            .iter()
+            .any(|f| status_percent(f) > 100.0 && status_percent(f) < 200.0),
+        "{frags:?}"
+    );
+    // Ни одного тика ожидания до конца передачи.
+    assert!(
+        waiting.iter().all(|f| status_percent(f) >= 200.0),
+        "{waiting:?}"
+    );
+}
+
 // ---------- Ctrl-C (Р18) ----------
 
 /// Ожидание `--wait 3600` идёт по `ManualClock` (72 000 пустых `recv`): скан не успевает закончиться сам раньше, чем
 /// цикл событий увидит нажатие, поэтому итог `Stopped` детерминирован.
 const LONG_WAIT: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "3600"];
+
+/// Короткое окно `--wait` (20 с часов = 400 пустых `recv`) для тестов паузы: нажатие приходит из потока TX, пока передача
+/// ещё идёт (`PressInTx`), и скан после паузы быстро заканчивается.
+const SHORT_WAIT: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "20"];
 
 /// Строка C первого Ctrl-C (`main.c:1136–1139`): текст, 44 пробела, `\n`.
 fn waiting_line() -> String {
@@ -2097,16 +2402,20 @@ fn xml_file(open: &[Reply]) -> String {
     s
 }
 
-/// Р18: первое Ctrl-C посреди скана печатает строку C, останавливает engine; приёмник дописывает записи и подвал
-/// (`-oJ` закрыт `]\n`, `-oX` закрыт `</nmaprun>\r\n`), `[+] finished: Stopped`, `Ok` (exit 0). Ни один принятый
+/// Р18, Р4: первое Ctrl-C посреди передачи печатает строку C и ставит engine на паузу; приёмник дописывает записи и
+/// подвал (`-oJ` закрыт `]\n`, `-oX` закрыт `</nmaprun>\r\n`), `[+] finished: Paused`, `Ok` (exit 0). Ни один принятый
 /// ответ не теряется: в файле ровно открытые ответы, переданные приёмнику, включая пачки после остановки.
 #[test]
-fn first_interrupt_stops_and_finishes_outputs() {
+fn first_interrupt_pauses_and_finishes_outputs() {
     for format in ["-oJ", "-oX"] {
         let scratch = Scratch::new();
         let path = scratch.path(&format!("interrupt{format}"));
-        let b = FakeBackend::new();
-        let parsed = parse(&with(&LONG_WAIT, &[format, path.to_str().unwrap()]));
+        let mut b = FakeBackend::new();
+        b.press_in_tx = Some(PressInTx {
+            at: 2,
+            late_first: false,
+        });
+        let parsed = parse(&with(&SHORT_WAIT, &[format, path.to_str().unwrap()]));
         let (mut stdout, mut log) = (Vec::new(), Vec::new());
         let (r, reported) = {
             let env = OutputEnv {
@@ -2117,7 +2426,7 @@ fn first_interrupt_stops_and_finishes_outputs() {
             };
             let mut sink = PressOnFirstOpen {
                 pipeline: Pipeline::new(parsed.output_options().unwrap(), &mut stdout, env),
-                presses: b.presses.clone(),
+                presses: Arc::new(AtomicU32::new(0)),
                 reported: Vec::new(),
             };
             let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
@@ -2126,7 +2435,7 @@ fn first_interrupt_stops_and_finishes_outputs() {
         let log = String::from_utf8(log).unwrap();
         assert_eq!(
             r.unwrap().reason,
-            Reason::Stopped,
+            Reason::Paused,
             "{format}: {:?}",
             plus_lines(&log)
         );
@@ -2142,10 +2451,13 @@ fn first_interrupt_stops_and_finishes_outputs() {
             .copied()
             .filter(|r| r.status == PortStatus::Open)
             .collect();
-        assert!(!open.is_empty(), "the press came after an open reply");
+        assert!(
+            !open.is_empty(),
+            "the first two probes include an open reply"
+        );
         let sent = b.opened()[1].adapter.sent_count();
         let finished = format!(
-            "[+] finished: Stopped, sent {sent}, replies {}, open {}",
+            "[+] finished: Paused, sent {sent}, replies {}, open {}",
             reported.len(),
             open.len()
         );
@@ -2322,8 +2634,12 @@ impl std::io::Write for BrokenStderr {
 fn broken_stderr_after_the_first_press_still_finishes_the_file() {
     let scratch = Scratch::new();
     let path = scratch.path("interrupt-broken-stderr.json");
-    let b = FakeBackend::new();
-    let parsed = parse(&with(&LONG_WAIT, &["-oJ", path.to_str().unwrap()]));
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 2,
+        late_first: false,
+    });
+    let parsed = parse(&with(&SHORT_WAIT, &["-oJ", path.to_str().unwrap()]));
     let mut stdout = Vec::new();
     let mut log = BrokenStderr::new(Breaks::AfterWaitingLine);
     let (r, reported) = {
@@ -2335,7 +2651,7 @@ fn broken_stderr_after_the_first_press_still_finishes_the_file() {
         };
         let mut sink = PressOnFirstOpen {
             pipeline: Pipeline::new(parsed.output_options().unwrap(), &mut stdout, env),
-            presses: b.presses.clone(),
+            presses: Arc::new(AtomicU32::new(0)),
             reported: Vec::new(),
         };
         let r = live::run_live(&parsed.to_config().unwrap(), &b, &mut sink, &mut log);
@@ -2436,4 +2752,779 @@ fn closed_stderr_readscan_still_reports() {
     let out = String::from_utf8(out).unwrap();
     assert!(out.starts_with("#masscan\n"), "{out}");
     assert_eq!(out.matches("open tcp").count(), 2, "{out}");
+}
+
+// ---------- Пауза по Ctrl-C и фаза `--wait` (Р4, Задача 4) ----------
+
+/// `--wait 300` (6000 пустых `recv`, не меньше 0,6 с реального времени): запись `paused.conf` обязана попасть в начало
+/// окна ожидания, а не в его конец.
+const PAUSE_WAIT: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "300"];
+
+/// Строка C `masscan_save_state` (`main-conf.c:398-399`): 70 пробелов, `\r`, текст.
+fn saving_line() -> String {
+    format!("{}\rsaving resume file to: paused.conf\n", " ".repeat(70))
+}
+
+/// Числа N всех фрагментов `waiting N-secs` в `stderr`.
+fn waiting_secs(log: &str) -> Vec<i64> {
+    log.match_indices("waiting ")
+        .filter_map(|(i, _)| {
+            let rest = &log[i + "waiting ".len()..];
+            let (n, tail) = rest.split_once("-secs")?;
+            let _ = tail;
+            n.parse().ok()
+        })
+        .collect()
+}
+
+/// Запускает скан с `-oJ`, сценарием `PressInTx` и записью всех ответов приёмника; возвращает итог, `stderr`, файл
+/// `-oJ` и ответы, переданные приёмнику.
+fn pause_run(
+    b: &FakeBackend,
+    args: &[&str],
+    path: &std::path::Path,
+) -> (Result<Outcome, String>, String, String, Vec<Reply>) {
+    let parsed = parse(&with(args, &["-oJ", path.to_str().unwrap()]));
+    let (mut stdout, mut log) = (Vec::new(), Vec::new());
+    let (r, reported) = {
+        let env = OutputEnv {
+            wall: b,
+            services: ServiceNames::empty(),
+            tcp_ports: Vec::new(),
+            scan_started: None,
+        };
+        let mut sink = PressOnFirstOpen {
+            pipeline: Pipeline::new(parsed.output_options().unwrap(), &mut stdout, env),
+            presses: Arc::new(AtomicU32::new(0)),
+            reported: Vec::new(),
+        };
+        let mode = parsed.status_mode();
+        let r = live::run_live_with(&parsed.to_config().unwrap(), b, &mut sink, &mut log, mode)
+            .map(|(o, _)| o);
+        (r, sink.reported)
+    };
+    let file = std::fs::read_to_string(path).unwrap_or_default();
+    (r, String::from_utf8(log).unwrap(), file, reported)
+}
+
+/// Р4 (`main.c:1447-1540`, `main-conf.c:395-416`): Ctrl-C после 2 из 4 SYN. Передача встаёт, `paused.conf` пишется с
+/// нормализованным `resume-index = 2` и эффективным `seed`, приёмник ещё `--wait` секунд берёт поздний SYN-ACK на
+/// первый SYN, строка статуса отсчитывает `waiting N-secs`, подвал `-oJ` закрыт, итог `Paused`, `Ok`.
+#[test]
+fn first_ctrl_c_pauses_saves_conf_waits_for_late_reply_and_closes_footer() {
+    let scratch = Scratch::new();
+    let path = scratch.path("paused.json");
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 2,
+        late_first: true,
+    });
+    let (r, log, file, reported) = pause_run(&b, &PAUSE_WAIT, &path);
+    let outcome = r.unwrap();
+    assert_eq!(outcome.reason, Reason::Paused, "{:?}", plus_lines(&log));
+    assert_eq!(b.presses(), 1, "one press");
+    assert_eq!(log.matches(&waiting_line()).count(), 1, "{log:?}");
+    assert_eq!(log.matches(&saving_line()).count(), 1, "{log:?}");
+    assert!(log.find(&waiting_line()).unwrap() < log.find(&saving_line()).unwrap());
+    // Review Focus 3: файл записан до первого тика отсчёта `waiting N-secs`.
+    assert!(
+        log.find(&saving_line()).unwrap() < log.find("-secs").unwrap(),
+        "{log:?}"
+    );
+    // Ровно один файл, нормализованный индекс и эффективный seed (иначе возобновление пойдёт по другой перестановке).
+    let writes = b.paused_writes();
+    assert_eq!(writes.len(), 1, "paused.conf is written once");
+    let conf = &writes[0].1;
+    assert!(conf.contains("resume-index = 2\n"), "{conf}");
+    assert!(conf.contains(&format!("seed = {ENTROPY}\n")), "{conf}");
+    // C не пишет `wait` в `paused.conf` (`masscan_echo` его не знает), поэтому его нет и здесь.
+    assert!(!conf.contains("wait ="), "{conf}");
+    assert_eq!(outcome.progress.next_index, 2);
+    // Поздний ответ на первый SYN дошёл до приёмника внутри окна ожидания и попал в файл.
+    let first_syn = syn_dst(&b.opened()[1].adapter.sent_frames()[0]);
+    assert!(
+        reported.iter().any(|r| r.status == PortStatus::Open
+            && (Ipv4Addr::from(r.remote_ip), r.remote_port) == first_syn),
+        "late reply to {first_syn:?} missing: {reported:?}"
+    );
+    let open: Vec<Reply> = reported
+        .iter()
+        .copied()
+        .filter(|r| r.status == PortStatus::Open)
+        .collect();
+    assert_eq!(file, json_file(&open));
+    assert!(file.ends_with("]\n"), "{file:?}");
+    // Отсчёт ожидания стартует с `--wait` и убывает.
+    let secs = waiting_secs(&log);
+    assert!(
+        secs.iter().any(|n| *n < 300) && secs.iter().all(|n| (0..=300).contains(n)),
+        "{secs:?}"
+    );
+    let sent = b.opened()[1].adapter.sent_count();
+    assert_eq!(sent, 2);
+    let finished = format!(
+        "[+] finished: Paused, sent {sent}, replies {}, open {}",
+        reported.len(),
+        open.len()
+    );
+    assert_eq!(plus_lines(&log).last().copied(), Some(finished.as_str()));
+}
+
+/// Review Focus 3 (`main.c:1399, 1530`): при `--nostatus` обратный отсчёт `--wait` не привязан к печати статуса и не
+/// зависает, а `paused.conf` записан до первого тика ожидания: показание часов на момент записи отстоит от конца скана
+/// не меньше чем на половину окна. Так второе нажатие (немедленный `exit(1)` из обработчика) не теряет файл.
+#[test]
+fn first_ctrl_c_waits_with_nostatus_and_writes_paused_conf_before_wait() {
+    let scratch = Scratch::new();
+    let path = scratch.path("paused-nostatus.json");
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 2,
+        late_first: true,
+    });
+    let args = with(&PAUSE_WAIT, &["--nostatus"]);
+    let (r, log, file, reported) = pause_run(&b, &args, &path);
+    assert_eq!(r.unwrap().reason, Reason::Paused, "{:?}", plus_lines(&log));
+    let end = b.clock.now_micros();
+    let writes = b.paused_writes();
+    assert_eq!(writes.len(), 1);
+    assert!(
+        writes[0].1.contains("resume-index = 2\n"),
+        "{}",
+        writes[0].1
+    );
+    assert!(
+        end - writes[0].0 >= 150_000_000,
+        "paused.conf was written {} us before the end of a 300 s wait",
+        end - writes[0].0
+    );
+    assert!(waiting_secs(&log).is_empty(), "{log:?}");
+    assert_eq!(log.matches(&saving_line()).count(), 1, "{log:?}");
+    let open: Vec<Reply> = reported
+        .iter()
+        .copied()
+        .filter(|r| r.status == PortStatus::Open)
+        .collect();
+    assert_eq!(file, json_file(&open));
+}
+
+/// `main.c:1447`: если передача к моменту Ctrl-C уже закончилась (`min_index >= range`), `paused.conf` не пишется,
+/// скан дожидается `--wait` и заканчивается `Completed`.
+#[test]
+fn ctrl_c_after_tx_done_skips_paused_conf() {
+    let scratch = Scratch::new();
+    let path = scratch.path("completed.json");
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 4,
+        late_first: false,
+    });
+    let (r, log, file, reported) = pause_run(&b, &SHORT_WAIT, &path);
+    assert_eq!(
+        r.unwrap().reason,
+        Reason::Completed,
+        "{:?}",
+        plus_lines(&log)
+    );
+    assert!(b.paused_writes().is_empty(), "no paused.conf after tx done");
+    assert!(!log.contains("saving resume file"), "{log:?}");
+    assert_eq!(log.matches(&waiting_line()).count(), 1, "{log:?}");
+    let open: Vec<Reply> = reported
+        .iter()
+        .copied()
+        .filter(|r| r.status == PortStatus::Open)
+        .collect();
+    assert_eq!(file, json_file(&open));
+}
+
+/// Через весь CLI (`rmasscan_cli::run`) `paused.conf` несёт опции вывода и режим статуса из командной строки, чтобы
+/// `--resume paused.conf` писал туда же, куда писал прерванный скан.
+#[test]
+fn paused_conf_carries_output_options_and_ndjson_status() {
+    let scratch = Scratch::new();
+    let path = scratch.path("paused-cli.json");
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 2,
+        late_first: false,
+    });
+    let args = with(
+        &SHORT_WAIT,
+        &["-oJ", path.to_str().unwrap(), "--ndjson-status"],
+    );
+    let (r, _, log) = cli(&b, &args);
+    r.unwrap();
+    let writes = b.paused_writes();
+    assert_eq!(writes.len(), 1, "{log:?}");
+    let conf = &writes[0].1;
+    assert!(conf.contains("resume-index = 2\n"), "{conf}");
+    assert!(conf.contains("output-format = json\n"), "{conf}");
+    assert!(
+        conf.contains(&format!("output-filename = {}\n", path.to_str().unwrap())),
+        "{conf}"
+    );
+    assert!(conf.contains("ndjson-status = true\n"), "{conf}");
+}
+
+/// T2 M-5: `ndjson-status = true` из файла `--resume` применяется (строка статуса NDJSON) и снова попадает в
+/// `paused.conf` следующей паузы; `--ndjson-status=false` правее файла его переопределяет (ключ правее файла сильнее).
+#[test]
+fn ndjson_status_from_a_resume_file_is_applied_and_saved_again() {
+    let dir = Scratch::new();
+    let file = dir.write(
+        "paused.conf",
+        b"\n# resume information\nresume-index = 0\nseed = 7\nrate = 100\nwait = 20\nndjson-status = true\n\n\
+# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80,81\nrange = 198.51.100.1-198.51.100.2\n",
+    );
+    let f = file.to_str().unwrap();
+    for (args, ndjson) in [
+        (&["--resume", f][..], true),
+        (&["--resume", f, "--ndjson-status=false"][..], false),
+    ] {
+        let mut b = FakeBackend::new();
+        b.press_in_tx = Some(PressInTx {
+            at: 2,
+            late_first: false,
+        });
+        let (r, _, log) = cli(&b, args);
+        r.unwrap();
+        let frags = status_fragments(&log);
+        let json = frags.iter().filter(|f| f.starts_with("{\"state\"")).count();
+        assert!(!frags.is_empty(), "{args:?}: {log:?}");
+        assert_eq!(json == frags.len(), ndjson, "{args:?}: {frags:?}");
+        assert_eq!(json == 0, !ndjson, "{args:?}: {frags:?}");
+        let writes = b.paused_writes();
+        assert_eq!(writes.len(), 1, "{args:?}: {log:?}");
+        assert!(
+            writes[0].1.contains("resume-index = 2\n"),
+            "{}",
+            writes[0].1
+        );
+        assert_eq!(
+            writes[0].1.contains("ndjson-status = true\n"),
+            ndjson,
+            "{args:?}: {}",
+            writes[0].1
+        );
+    }
+}
+
+/// Р1: отказ записи `paused.conf` печатает строки C, но не рвёт фазу `--wait`: поздний ответ принят, подвал `-oJ`
+/// закрыт, `[+] finished: Paused` напечатан; процесс при этом завершается кодом 1 (`Err`), а не молчаливым 0.
+#[test]
+fn paused_conf_write_failure_exits_one() {
+    let scratch = Scratch::new();
+    let path = scratch.path("paused-fail.json");
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 2,
+        late_first: true,
+    });
+    b.paused_write_error = Some("Permission denied".into());
+    let (r, log, file, reported) = pause_run(&b, &PAUSE_WAIT, &path);
+    let e = r.unwrap_err();
+    assert!(e.contains("Permission denied"), "{e}");
+    assert!(
+        log.contains("[-] FAIL: saving resume file\n[-] paused.conf: Permission denied\n"),
+        "{log:?}"
+    );
+    assert!(b.paused_writes().is_empty());
+    assert!(
+        plus_lines(&log)
+            .last()
+            .unwrap()
+            .starts_with("[+] finished: Paused"),
+        "{:?}",
+        plus_lines(&log)
+    );
+    let first_syn = syn_dst(&b.opened()[1].adapter.sent_frames()[0]);
+    assert!(
+        reported
+            .iter()
+            .any(|r| (Ipv4Addr::from(r.remote_ip), r.remote_port) == first_syn)
+    );
+    let open: Vec<Reply> = reported
+        .iter()
+        .copied()
+        .filter(|r| r.status == PortStatus::Open)
+        .collect();
+    assert_eq!(file, json_file(&open));
+}
+
+/// `--infinite` (Р5, `main.c:225-228, 445-449, 1447`): диапазон из 3 целей проходится заново с `seed + 1`, пока не
+/// придёт Ctrl-C; прерывание штатно завершает скан (exit 0) и не пишет `paused.conf`.
+#[test]
+fn infinite_scan_runs_multiple_passes_until_ctrl_c() {
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 10,
+        late_first: false,
+    });
+    let args = [
+        "198.51.100.1-198.51.100.3",
+        "-p80",
+        "--wait",
+        "1",
+        "--seed",
+        "7",
+        "--infinite",
+    ];
+    let (r, _, log) = cli(&b, &args);
+    r.unwrap();
+    assert_eq!(b.presses(), 1);
+    assert!(log.contains("finished: Paused"), "{:?}", plus_lines(&log));
+    assert!(!log.contains("saving resume file"), "{log}");
+    assert!(
+        b.paused_writes().is_empty(),
+        "no paused.conf for --infinite"
+    );
+    let frames = b.opened()[1].adapter.sent_frames();
+    assert!(frames.len() >= 9, "sent {}", frames.len());
+    let first: BTreeSet<_> = frames[..3].iter().map(|f| syn_dst(f)).collect();
+    assert_eq!(first.len(), 3, "pass 1 covers each target once");
+    let (passes, _) = frames.as_chunks::<3>();
+    for pass in passes {
+        let set: BTreeSet<_> = pass.iter().map(|f| syn_dst(f)).collect();
+        assert_eq!(set, first, "every pass is a permutation of the range");
+    }
+}
+
+/// `-sL --infinite` (C зацикливает список, `main-listscan.c:68`) отвергается явно, а не молча даёт один проход.
+#[test]
+fn list_scan_with_infinite_is_refused() {
+    for list in ["-sL", "--list"] {
+        let r = Cli::try_parse_masscan([
+            "rmasscan",
+            list,
+            "--infinite",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+        ]);
+        assert!(r.is_err(), "{list} --infinite must be refused");
+    }
+}
+
+/// Т6 (Р6): `--adapter-ip A-B` с шириной степени двойки ротирует адрес источника в `--packet-trace`
+/// (main.c:378-385); ширина 3 отклоняется до скана (main-conf.c:2483).
+#[test]
+fn adapter_ip_range_rotates_the_packet_trace_source_and_rejects_other_widths() {
+    let b = hermetic();
+    let mut args = TRACE.to_vec();
+    args[2] = "10.0.0.0/28";
+    args[7] = "10.255.0.4-10.255.0.7";
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let sources: std::collections::BTreeSet<&str> = out
+        .lines()
+        .filter(|l| l.starts_with("SENT"))
+        .map(|l| l.split(['[', ']']).nth(1).unwrap())
+        .collect();
+    assert_eq!(out.lines().count(), 32);
+    assert!(
+        sources.len() > 1
+            && sources
+                .iter()
+                .all(|s| ["10.255.0.4", "10.255.0.5", "10.255.0.6", "10.255.0.7"].contains(s)),
+        "{sources:?}"
+    );
+    args[7] = "10.255.0.4-10.255.0.6";
+    let (r, out, _) = cli(&b, &args);
+    assert!(r.unwrap_err().contains("--adapter-ip"), "{out}");
+}
+
+/// Записи `.pcap` после 24-байтового заголовка: `(ts_sec, ts_usec, incl_len, orig_len, кадр)`.
+fn pcap_records(bytes: &[u8]) -> Vec<(u32, u32, u32, u32, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut at = 24;
+    while at < bytes.len() {
+        let w = |i: usize| u32::from_le_bytes(bytes[at + i..at + i + 4].try_into().unwrap());
+        let (sec, usec, incl, orig) = (w(0), w(4), w(8), w(12));
+        let frame = bytes[at + 16..at + 16 + incl as usize].to_vec();
+        out.push((sec, usec, incl, orig, frame));
+        at += 16 + incl as usize;
+    }
+    assert_eq!(at, bytes.len(), "trailing bytes in the capture");
+    out
+}
+
+/// Задача 7, Р8, `main.c:829, 935, 943-951`: захват пишет входящие кадры на наш `ip:port` до проверки cookie. Валидный
+/// SYN-ACK и RST с плохим cookie попадают в файл, ответ на чужой адрес нет; заголовок файла и записи верны.
+#[test]
+fn pcap_captures_inbound_frames_to_scanner_only() {
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p80",
+            "--wait",
+            "1",
+            "--seed",
+            "7",
+            "--pcap",
+            "cap.pcap",
+        ],
+    );
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["cap.pcap"]);
+    let bytes = b.pcap_bytes();
+    assert_eq!(
+        bytes[..24],
+        [
+            0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0x00, 0x04, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0,
+            0, 1, 0, 0, 0
+        ]
+    );
+    let recs = pcap_records(&bytes);
+    assert_eq!(recs.len(), 2, "SYN-ACK and the bad-cookie RST only: {log}");
+    // Тот же порядок, что у ответчика: SYN-ACK, затем RST.
+    assert_eq!(recs[0].4[47], 0x12, "first record is the SYN-ACK");
+    assert_eq!(recs[1].4[47], 0x04, "second record is the RST");
+    for (sec, _, incl, orig, frame) in &recs {
+        assert_eq!((*incl, *orig), (frame.len() as u32, frame.len() as u32));
+        assert_eq!(&frame[30..34], &MY_IP.octets(), "addressed to our ip");
+        assert!(*sec >= UNIX_TIME as u32, "wall-clock seconds");
+    }
+    // Чужой кадр не записан и не принят.
+    assert!(
+        !recs.iter().any(|r| r.4[30..34] == [192, 0, 2, 99]),
+        "foreign frame leaked into the capture"
+    );
+}
+
+/// `--pcap` только для живого скана (Р8): с `--offline` и `-sL` отказ до открытия файла.
+#[test]
+fn pcap_is_refused_with_offline_and_list() {
+    let b = FakeBackend::new();
+    for extra in [
+        &["--offline", "--seed", "1"][..],
+        &["-sL", "--seed", "1"][..],
+    ] {
+        let mut args = vec!["198.51.100.1", "-p80", "--pcap", "cap.pcap"];
+        args.extend_from_slice(extra);
+        let (r, out, _) = cli(&b, &args);
+        let e = r.unwrap_err();
+        assert!(e.contains("--pcap"), "{extra:?}: {e}");
+        assert!(out.is_empty(), "{extra:?}: {out}");
+    }
+    assert!(b.pcap_opened.lock().unwrap().is_empty());
+    assert!(b.attempts().is_empty());
+}
+
+/// `pcap-filename` из `--resume`-файла (раньше разбирался и не использовался) включает захват.
+#[test]
+fn pcap_filename_from_a_resume_file_is_honoured() {
+    let dir = Scratch::new();
+    let file = dir.write(
+        "paused.conf",
+        b"\n# resume information\nresume-index = 0\nseed = 7\nrate = 100\nwait = 1\n\
+pcap-filename = from-file.pcap\nnocapture = servername\nnocapture = servername\n\n\n\
+# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrange = 198.51.100.1\n",
+    );
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, _) = cli(&b, &["--resume", file.to_str().unwrap()]);
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-file.pcap"]);
+    assert_eq!(pcap_records(&b.pcap_bytes()).len(), 2);
+    // Ключ правее файла переопределяет его.
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, _) = cli(
+        &b,
+        &["--resume", file.to_str().unwrap(), "--pcap", "cli.pcap"],
+    );
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["cli.pcap"]);
+}
+
+/// `-c FILE` и `-iL FILE` end-to-end (Р7): цели, порты и `pcap-filename` из файла, дополнительные цели из `-iL`;
+/// ключ правее файла (`--pcap`) переопределяет его.
+#[test]
+fn conf_file_and_includefile_drive_a_live_scan() {
+    let dir = Scratch::new();
+    let conf = dir.write(
+        "scan.conf",
+        b"# live scan from a file\nseed = 7\nports = 80\nrange = 198.51.100.1\nwait = 1\npcap-filename = from-conf.pcap\n",
+    );
+    let inc = dir.write("more.txt", b"198.51.100.2 # second target\n");
+    let (c, i) = (conf.to_str().unwrap(), inc.to_str().unwrap());
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, log) = cli(&b, &["-c", c, "-iL", i]);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    assert_eq!(b.opened().last().unwrap().adapter.sent_count(), 2);
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-conf.pcap"]);
+
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &["-c", c, "--pcap", "cli.pcap"]);
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["cli.pcap"]);
+    // Левее файла файл побеждает.
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &["--pcap", "cli.pcap", "-c", c]);
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-conf.pcap"]);
+}
+
+const ETH1_IP: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 6);
+const ETH1_MAC: [u8; 6] = [0x02, 0xaa, 0, 0, 0, 3];
+
+fn eth1() -> Iface {
+    Iface {
+        name: "eth1".to_string(),
+        index: 3,
+        device_id: "eth1".to_string(),
+        description: None,
+        mac: Some(ETH1_MAC),
+        mac_masked: false,
+        ethernet: true,
+        up: true,
+        ipv4: vec![ETH1_IP],
+    }
+}
+
+/// Два адаптера, шлюз задан `--router-mac[i]` (ARP не нужен).
+fn two_nic_backend() -> FakeBackend {
+    let mut b = FakeBackend::new();
+    b.ifaces.push(eth1());
+    b
+}
+
+const TWO_NICS: [&str; 13] = [
+    "198.51.100.1-198.51.100.2",
+    "-p80,81",
+    "--wait",
+    "1",
+    "--seed",
+    "7",
+    "--adapter[0]",
+    "eth0",
+    "--adapter[1]",
+    "eth1",
+    "--router-mac[0]",
+    "02-aa-00-00-00-02",
+    "--router-mac[1]=02-aa-00-00-00-02",
+];
+
+/// Review Focus 4 и T3 M-8. Индекс адаптера вне `0..=7` отказывает (exit 1) до любого кадра. `--adapter[0]` и
+/// `--adapter[1]` на двух `FakeAdapter` делят зонды по чётности внешнего индекса (`main.c:269`: `start = nic_index`,
+/// `increment = nic_count`) и пишут ответы в единый `Sink`.
+#[test]
+fn adapter_index_out_of_bounds_fails() {
+    let mut b = FakeBackend::new();
+    b.panic_on_open = true;
+    for bad in [
+        &["--adapter[8]", "eth0"][..],
+        &["--adapter[-1]", "eth0"][..],
+        &["--adapter-ip[8]=192.0.2.9"][..],
+    ] {
+        let (r, out, log) = cli(&b, &with(&LIVE, bad));
+        let e = r.unwrap_err();
+        assert!(e.contains("adapter"), "{bad:?}: {e}");
+        assert!(out.is_empty() && log.is_empty(), "{bad:?}: {log}");
+    }
+
+    // Поток одного адаптера: внешние индексы 0..4 по порядку.
+    let b1 = FakeBackend::new();
+    let (r, _, _) = cli(&b1, &with(&LIVE, &["--seed", "7"]));
+    r.unwrap();
+    let all = b1.opened().last().unwrap().adapter.sent_frames();
+    assert_eq!(all.len(), 4);
+
+    let b = two_nic_backend();
+    let (r, out, log) = cli(&b, &TWO_NICS);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    assert_eq!(opened.len(), 2, "no ARP adapter: both routers are given");
+    let dsts = |k: usize| -> Vec<(Ipv4Addr, u16)> {
+        opened[k]
+            .adapter
+            .sent_frames()
+            .iter()
+            .map(|f| syn_dst(f))
+            .collect()
+    };
+    let stream: Vec<_> = all.iter().map(|f| syn_dst(f)).collect();
+    assert_eq!(
+        dsts(0),
+        [stream[0], stream[2]],
+        "even outer indices go to nic 0"
+    );
+    assert_eq!(
+        dsts(1),
+        [stream[1], stream[3]],
+        "odd outer indices go to nic 1"
+    );
+    // Каждый адаптер шлёт со своего адреса.
+    for (k, ip) in [MY_IP, ETH1_IP].into_iter().enumerate() {
+        assert!(
+            opened[k]
+                .adapter
+                .sent_frames()
+                .iter()
+                .all(|f| f[26..30] == ip.octets()),
+            "nic {k}"
+        );
+        assert_eq!(opened[k].binding.source_ipv4, u32::from(ip));
+    }
+    // Один `Sink`: обе открытые цели (T1:80, T2:81) напечатаны, хотя их принимают разные адаптеры.
+    let mut got: Vec<&str> = out.lines().collect();
+    got.sort_unstable();
+    assert_eq!(got.len(), 2, "{out}");
+    assert!(
+        got[0].contains("198.51.100.1") && got[1].contains("198.51.100.2"),
+        "{out}"
+    );
+    // Строки `[+]` второго адаптера несут суффикс `[1]`.
+    for key in [
+        "interface[1] = eth1 (given)",
+        "source-ip[1] = 192.0.2.6 (detected)",
+    ] {
+        assert!(log.contains(key), "{key}: {log}");
+    }
+}
+
+/// `--pcap` с двумя адаптерами: один писатель, кадры обоих адаптеров, ни один чужой.
+#[test]
+fn pcap_with_two_adapters_shares_one_writer() {
+    let mut b = two_nic_backend();
+    b.inject_noise = true;
+    let (r, _, _) = cli(&b, &with(&TWO_NICS, &["--pcap", "cap.pcap"]));
+    r.unwrap();
+    let recs = pcap_records(&b.pcap_bytes());
+    // 4 зонда: 4 ответа обычных (SYN-ACK или RST) + по одному RST с плохим cookie на каждый SYN; чужие не пишутся.
+    assert_eq!(recs.len(), 8, "{} records", recs.len());
+    let to = |ip: Ipv4Addr| recs.iter().filter(|r| r.4[30..34] == ip.octets()).count();
+    assert_eq!((to(MY_IP), to(ETH1_IP)), (4, 4));
+    assert!(!recs.iter().any(|r| r.4[30..34] == [192, 0, 2, 99]));
+}
+
+/// T3/T4: `paused.conf` с несколькими адаптерами пишется и читается обратно (раньше возобновление отказывало
+/// «until T7»). Ctrl-C посреди передачи второго адаптера; возобновление из записанного файла досылает остаток, и
+/// вместе оба прогона покрывают весь набор зондов.
+#[test]
+fn multi_adapter_paused_conf_round_trips_and_resumes() {
+    let whole = {
+        let b = two_nic_backend();
+        let (r, _, _) = cli(&b, &TWO_NICS);
+        r.unwrap();
+        let o = b.opened();
+        let mut v: Vec<(Ipv4Addr, u16)> = o
+            .iter()
+            .flat_map(|x| x.adapter.sent_frames())
+            .map(|f| syn_dst(&f))
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    assert_eq!(whole.len(), 4);
+
+    let mut b = two_nic_backend();
+    b.press_in_tx = Some(PressInTx {
+        at: 1,
+        late_first: false,
+    });
+    // nic 1 встаёт после первого кадра и не нажимает Ctrl-C, пока nic 0 не отправил оба своих.
+    b.hold_for_peer = Some(2);
+    let (r, _, log) = cli(&b, &TWO_NICS);
+    r.unwrap();
+    assert!(log.contains("saving resume file to: paused.conf"), "{log}");
+    let writes = b.paused_writes();
+    assert_eq!(writes.len(), 1);
+    let conf = &writes[0].1;
+    for key in [
+        "adapter[0] = eth0",
+        "adapter[1] = eth1",
+        "router-mac-ipv4[1] = 02-aa-00-00-00-02",
+    ] {
+        assert!(conf.contains(key), "{key}: {conf}");
+    }
+    // Сценарий известен: адаптер 0 закончил оба своих зонда (внешние индексы 0 и 2), адаптер 1 встал после первого
+    // (индекс 1). Исчерпанный адаптер в минимум не входит (T7 I-2), база возобновления это база адаптера 1:
+    // позиция 3 минус смещение 1.
+    let dsts = |b: &FakeBackend, k: usize| -> Vec<(Ipv4Addr, u16)> {
+        b.opened()[k]
+            .adapter
+            .sent_frames()
+            .iter()
+            .map(|f| syn_dst(f))
+            .collect()
+    };
+    let stream: Vec<(Ipv4Addr, u16)> = {
+        let b1 = FakeBackend::new();
+        let (r, _, _) = cli(&b1, &with(&LIVE, &["--seed", "7"]));
+        r.unwrap();
+        let o = b1.opened();
+        o.last()
+            .unwrap()
+            .adapter
+            .sent_frames()
+            .iter()
+            .map(|f| syn_dst(f))
+            .collect()
+    };
+    assert_eq!(
+        dsts(&b, 0),
+        [stream[0], stream[2]],
+        "nic 0 finished its stream"
+    );
+    assert_eq!(
+        dsts(&b, 1),
+        [stream[1]],
+        "nic 1 paused after its first probe"
+    );
+    assert!(conf.contains("resume-index = 2\n"), "{conf}");
+    let first: Vec<(Ipv4Addr, u16)> = (0..2).flat_map(|k| dsts(&b, k)).collect();
+
+    // Возобновление: файл читается, второй адаптер не отвергается, остаток отправляется.
+    let dir = Scratch::new();
+    let file = dir.write("paused.conf", conf.as_bytes());
+    let b2 = two_nic_backend();
+    let (r, _, log2) = cli(&b2, &["--resume", file.to_str().unwrap()]);
+    r.unwrap();
+    assert!(log2.contains("finished: Completed"), "{log2}");
+    // the port comes from paused.conf for both adapters (adapter 1 inherits adapter 0's): both say so
+    let port_lines: Vec<&str> = log2
+        .lines()
+        .filter(|l| l.starts_with("[+] source-port"))
+        .collect();
+    assert_eq!(port_lines.len(), 2, "{log2}");
+    assert!(
+        port_lines.iter().all(|l| l.ends_with("(given)")),
+        "{port_lines:?}"
+    );
+    assert_eq!(b2.opened().len(), 2);
+    // Адаптер 0 был впереди минимума: он заново шлёт индекс 2; адаптер 1 шлёт 3.
+    assert_eq!(
+        dsts(&b2, 0),
+        [stream[2]],
+        "resumed nic 0 re-sends its probe past the min"
+    );
+    assert_eq!(dsts(&b2, 1), [stream[3]]);
+    let second: Vec<(Ipv4Addr, u16)> = (0..2).flat_map(|k| dsts(&b2, k)).collect();
+
+    // Без потерь: объединение равно всему потоку; ни один зонд не отправлен больше двух раз; единственный
+    // дубликат (индекс 2) принадлежит адаптеру, бывшему впереди минимума.
+    let mut union: Vec<_> = first.iter().chain(&second).copied().collect();
+    union.sort_unstable();
+    let mut whole = stream.clone();
+    whole.sort_unstable();
+    let mut deduped = union.clone();
+    deduped.dedup();
+    assert_eq!(deduped, whole, "no probe is lost");
+    for probe in &whole {
+        let n = union.iter().filter(|p| *p == probe).count();
+        assert!(n <= 2, "{probe:?} sent {n} times");
+        assert_eq!(
+            n == 2,
+            *probe == stream[2],
+            "only nic 0's probe past the min repeats"
+        );
+    }
 }

@@ -478,9 +478,11 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         }
         Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
-    let autodetect = match a.get("mode").map(String::as_str) {
-        None | Some("default") => false,
-        Some("autodetect") => true,
+    let (autodetect, scan_control) = match a.get("mode").map(String::as_str) {
+        None | Some("default") => (false, false),
+        Some("autodetect") => (true, false),
+        // The scan-control stand: the autodetect stand plus one more veth pair (`SECOND_*`), in the same namespaces.
+        Some("scan-control") => (true, true),
         Some(other) => return Err(format!("unknown isolation mode {other}")),
     };
     let before = fs::read_to_string(get(a, "host-links-before")?).map_err(err)?;
@@ -495,6 +497,7 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
     }
     let mut v = json!({"uplink":false,"bridge":false,"nat":false,"default_route":false,"ip_forward":0,"ipv6":"disabled","veth_created_inside_scanner_ns_peer_moved_to_peer_ns":true,"host_link_list_unchanged":true,"verified_by":"Rust capture isolation: live namespace links, routes, forwarding, IPv6 and host link baseline; plus wire-lab lifecycle assertions"});
     let mut endpoints = Vec::new();
+    let mut second_links: Vec<Value> = Vec::new();
     for (k, opt) in [("scanner", "ns-a"), ("peer", "ns-b")] {
         let ns = get(a, opt)?;
         let mode = if autodetect {
@@ -520,11 +523,32 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             "cat",
             "/proc/sys/net/ipv4/ip_forward",
         ])?;
+        let (links, routes, second) = if scan_control {
+            let (l, r, sec) = split_second_link(&links, &routes, side)?;
+            (l, r, Some(sec))
+        } else {
+            (links, routes, None)
+        };
         check_isolation_snapshot(&links, &routes, &forwarding, mode, side)?;
         let endpoint = links
             .as_array()
             .and_then(|ls| ls.iter().find(|x| x["ifname"] != "lo"))
             .ok_or("veth missing")?;
+        if let Some(sec) = second {
+            let sec_if = sec["ifname"].as_str().ok_or("second link name missing")?;
+            if checked(&[
+                "ip",
+                "netns",
+                "exec",
+                ns,
+                "cat",
+                &format!("/proc/sys/net/ipv6/conf/{sec_if}/disable_ipv6"),
+            ])? != "1"
+            {
+                return Err("IPv6 not disabled on the second lab veth".into());
+            }
+            second_links.push(sec);
+        }
         let iface = endpoint["ifname"]
             .as_str()
             .ok_or("interface name missing")?;
@@ -587,8 +611,21 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             return Err("namespace veth endpoints are not paired".into());
         }
     }
+    if scan_control {
+        for (left, right) in [(0, 1), (1, 0)] {
+            let (e, p) = (&second_links[left], &second_links[right]);
+            if e["link_index"].as_u64().is_none() || e["link_index"] != p["ifindex"] {
+                return Err("second namespace veth endpoints are not paired".into());
+            }
+        }
+        v["second_link"] = json!({"scanner": SECOND_SCANNER_IF, "peer": SECOND_PEER_IF, "adapter_ip": SECOND_ADAPTER_IP});
+    }
     if autodetect {
-        v["mode"] = json!("autodetect");
+        v["mode"] = json!(if scan_control {
+            "scan-control"
+        } else {
+            "autodetect"
+        });
         v["default_route"] = isolation_default_route(
             IsolationMode::Autodetect,
             endpoints[0]["ifname"].as_str().ok_or("veth missing")?,
@@ -648,6 +685,65 @@ pub fn isolation_permits(v: &Value, mode: IsolationMode) -> bool {
         && v["ipv6"] == "disabled"
         && v["veth_created_inside_scanner_ns_peer_moved_to_peer_ns"] == true
         && v["host_link_list_unchanged"] == true
+}
+
+/// The second veth pair of the scan-control stand (`wire-lab.sh --suite scan-control`), for `--adapter[1]`: no
+/// address on either end, a /32 route to [`SECOND_ADAPTER_IP`] on the peer end only; the scanner binds the address
+/// itself (`--adapter-ip[1]`, it is assigned to no interface).
+pub const SECOND_SCANNER_IF: &str = "veth-a2";
+pub const SECOND_PEER_IF: &str = "veth-b2";
+pub const SECOND_ADAPTER_IP: &str = "198.18.0.6";
+
+/// Splits a scan-control namespace snapshot into the primary stand (what [`check_isolation_snapshot`] judges,
+/// unchanged), its routes, and the second link's record, after checking that the namespace holds exactly `lo` and two
+/// veths, that the second link is a veth without a master, that the scanner end of it has no route at all and that
+/// the peer end has exactly the /32 route to [`SECOND_ADAPTER_IP`] (no gateway, no default).
+pub fn split_second_link(
+    links: &Value,
+    routes: &Value,
+    side: Side,
+) -> Result<(Value, Value, Value), String> {
+    let second_name = match side {
+        Side::Scanner => SECOND_SCANNER_IF,
+        Side::Peer => SECOND_PEER_IF,
+    };
+    let all = links.as_array().ok_or("invalid interface inventory")?;
+    if all.len() != 3 || all.iter().filter(|l| l["ifname"] == "lo").count() != 1 {
+        return Err("a scan-control namespace must contain only lo and two veths".into());
+    }
+    let second = all
+        .iter()
+        .find(|l| l["ifname"] == second_name)
+        .ok_or_else(|| format!("the second link {second_name} is missing"))?;
+    if second["linkinfo"]["info_kind"] != "veth" || !second["master"].is_null() {
+        return Err("foreign link or bridge master on the second link".into());
+    }
+    let primary: Vec<Value> = all
+        .iter()
+        .filter(|l| l["ifname"] != second_name)
+        .cloned()
+        .collect();
+    let routes = routes.as_array().ok_or("invalid route inventory")?;
+    let on_second: Vec<&Value> = routes.iter().filter(|r| r["dev"] == second_name).collect();
+    match side {
+        Side::Scanner if !on_second.is_empty() => {
+            return Err("the scanner end of the second link has a route".into());
+        }
+        Side::Peer
+            if on_second.len() != 1
+                || on_second[0]["dst"] != SECOND_ADAPTER_IP
+                || !on_second[0]["gateway"].is_null() =>
+        {
+            return Err("the peer end of the second link must have exactly the /32 route to the second adapter address".into());
+        }
+        _ => {}
+    }
+    let rest: Vec<Value> = routes
+        .iter()
+        .filter(|r| r["dev"] != second_name)
+        .cloned()
+        .collect();
+    Ok((json!(primary), json!(rest), second.clone()))
 }
 
 pub fn check_isolation_snapshot(
@@ -774,6 +870,78 @@ pub fn run(args: &[String]) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn veth(name: &str, index: u64, peer_index: u64) -> Value {
+        json!({"ifname":name,"ifindex":index,"link_index":peer_index,"linkinfo":{"info_kind":"veth"},"master":null})
+    }
+    fn scan_control_links(side: Side) -> Value {
+        let (p, s) = match side {
+            Side::Scanner => ("veth-a", SECOND_SCANNER_IF),
+            Side::Peer => ("veth-b", SECOND_PEER_IF),
+        };
+        json!([{"ifname":"lo"}, veth(p, 2, 3), veth(s, 4, 5)])
+    }
+    #[test]
+    fn the_second_link_is_split_off_and_the_primary_stand_is_judged_as_before() {
+        let routes = json!([{"dst":"198.18.0.0/24","dev":"veth-a"},{"dst":"default","gateway":"198.18.0.2","dev":"veth-a"}]);
+        let (l, r, sec) =
+            split_second_link(&scan_control_links(Side::Scanner), &routes, Side::Scanner).unwrap();
+        assert_eq!(sec["ifname"], SECOND_SCANNER_IF);
+        assert!(
+            check_isolation_snapshot(&l, &r, "0", IsolationMode::Autodetect, Side::Scanner).is_ok()
+        );
+        let routes = json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":SECOND_ADAPTER_IP,"dev":"veth-b2"}]);
+        let (l, r, sec) =
+            split_second_link(&scan_control_links(Side::Peer), &routes, Side::Peer).unwrap();
+        assert_eq!(sec["ifname"], SECOND_PEER_IF);
+        assert!(
+            check_isolation_snapshot(&l, &r, "0", IsolationMode::Autodetect, Side::Peer).is_ok()
+        );
+    }
+    #[test]
+    fn a_third_link_a_master_or_a_stray_route_on_the_second_link_breaks_the_seal() {
+        let peer_routes = json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":SECOND_ADAPTER_IP,"dev":"veth-b2"}]);
+        let scan_routes = json!([{"dst":"198.18.0.0/24","dev":"veth-a"},{"dst":"default","gateway":"198.18.0.2","dev":"veth-a"}]);
+        let go = |links: Value, routes: &Value, side| split_second_link(&links, routes, side);
+        // an extra link, or only the primary one
+        let mut four = scan_control_links(Side::Scanner);
+        four.as_array_mut().unwrap().push(veth("veth-x", 6, 7));
+        assert!(go(four, &scan_routes, Side::Scanner).is_err());
+        assert!(
+            go(
+                json!([{"ifname":"lo"},veth("veth-a", 2, 3)]),
+                &scan_routes,
+                Side::Scanner
+            )
+            .is_err()
+        );
+        // the second link under a bridge, or not a veth
+        let mut mastered = scan_control_links(Side::Scanner);
+        mastered[2]["master"] = json!("br0");
+        assert!(go(mastered, &scan_routes, Side::Scanner).is_err());
+        let mut bridge = scan_control_links(Side::Scanner);
+        bridge[2]["linkinfo"]["info_kind"] = json!("bridge");
+        assert!(go(bridge, &scan_routes, Side::Scanner).is_err());
+        // a route on the scanner end of the second link
+        let mut stray = scan_routes.clone();
+        stray
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"dst":"198.18.0.0/24","dev":"veth-a2"}));
+        assert!(go(scan_control_links(Side::Scanner), &stray, Side::Scanner).is_err());
+        // the peer end: no route, a gateway, a default route, the wrong destination
+        for bad in [
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"}]),
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":SECOND_ADAPTER_IP,"gateway":"198.18.0.2","dev":"veth-b2"}]),
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":"default","dev":"veth-b2"}]),
+            json!([{"dst":"198.18.0.0/24","dev":"veth-b"},{"dst":"198.18.0.7","dev":"veth-b2"}]),
+        ] {
+            assert!(
+                go(scan_control_links(Side::Peer), &bad, Side::Peer).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(go(scan_control_links(Side::Peer), &peer_routes, Side::Peer).is_ok());
+    }
     #[test]
     fn macos_refuses_marker_and_responder_with_an_explanation_and_leaves_the_rest() {
         for cmd in ["marker", "responder"] {

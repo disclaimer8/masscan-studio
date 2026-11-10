@@ -1,0 +1,43 @@
+# rmasscan-lab privacy-scan (C = 11a2235, Mac build 074457e3), run on the staged copies before the repo copy
+# tokens (masked, by number; every token is 4+ bytes, so none is refused):
+#   #1 Mac account, #2 Mac host name (LocalHostName = hostname -s), #3 Mac computer name,
+#   #4 minipc host name, #5 home-pc host name, #6 the first-name part of the Mac account,
+#   #7 the surname part of the Mac account, #8 the former Windows profile name on home-pc
+# tokens are named by role only; no token characters are printed in this file
+# not a token: the guest host name is 2 characters (checked in r3 from six guest sources); privacy-scan refuses a token
+#   shorter than 4 bytes (rc 2). It is covered by the DNS-wire pass, which reports every name in an mDNS, LLMNR or NBNS
+#   frame regardless of tokens. The minipc/home-pc account is 2 characters as well; tokens #4 and #5 contain it.
+# positive control before the run: a scratch file holding token #4 gave "HIT ... forbidden token #4", rc 1; a 2-byte
+#   token gave rc 2 (refused), as documented in rust-lab.md
+
+## linux-scan-control-r4: privacy-scan --dir $STAGE/linux-scan-control-r4 --forbid #1 ... --forbid #8
+privacy-scan: 0 hits in $STAGE/linux-scan-control-r4
+rc=0
+
+## linux-output-r4: privacy-scan --dir $STAGE/linux-output-r4 --forbid #1 ... --forbid #8
+privacy-scan: 0 hits in $STAGE/linux-output-r4
+rc=0
+
+## linux-autodetect-r4: privacy-scan --dir $STAGE/linux-autodetect-r4 --forbid #1 ... --forbid #8
+privacy-scan: 0 hits in $STAGE/linux-autodetect-r4
+rc=0
+
+## windows-autodetect-r4: privacy-scan --dir $STAGE/windows-autodetect-r4 --forbid #1 ... --forbid #8
+privacy-scan: 0 hits in $STAGE/windows-autodetect-r4
+rc=0
+
+## verification: privacy-scan --dir $STAGE/verification --forbid #1 ... --forbid #8
+privacy-scan: 0 hits in $STAGE/verification
+rc=0
+
+## 2026-11-08-rmasscan-scan-control-acceptance-raw: privacy-scan --dir $STAGE/2026-11-08-rmasscan-scan-control-acceptance-raw --forbid #1 ... --forbid #8
+privacy-scan: 0 hits in $STAGE/2026-11-08-rmasscan-scan-control-acceptance-raw
+rc=0
+
+## result
+- 0 hits of tokens #1-#8 in every directory, in verification/ and in the whole tree (README.md included); rc 0 everywhere.
+- 0 mDNS, LLMNR or NBNS frames in every capture of the four directories.
+- grep over the whole tree: 0 Mac home-directory paths (/Users plus a slash); Windows paths with Users name only the
+  guest account lab (C:\Users\lab\...).
+- the case-sensitive word-bounded grep -ralwE of rust-lab.md over every host and account name of the Mac, minipc,
+  home-pc and the guest (the short ones included) plus the mDNS service suffixes: 0 files.

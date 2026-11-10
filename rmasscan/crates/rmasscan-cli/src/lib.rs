@@ -14,8 +14,10 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod conf;
 pub mod live;
 pub mod output;
+pub mod pcap_writer;
 pub mod readscan;
 pub mod status;
 
@@ -30,7 +32,7 @@ use args::{Cli, SeedPolicy, seed_policy};
 use output::{
     Format, OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, ServiceNames, io_fail,
 };
-use rmasscan_core::config::{Operation, ScanConfig, echo, validate};
+use rmasscan_core::config::{EchoExtras, Operation, ScanConfig, echo_with, validate};
 use rmasscan_core::scan::{format_list_line, list_scan};
 
 /// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
@@ -69,7 +71,7 @@ pub fn error_text(msg: &str) -> String {
 
 /// Опции вывода скана и `--readscan`: реальный формат требует файл (`-` это stdout).
 fn checked_output_options(cli: &Cli) -> Result<OutputOptions, String> {
-    let o = cli.output_options()?;
+    let o = cli.resolved_output_options()?;
     let needs_file = !matches!(
         o.format,
         Format::Default | Format::Interactive | Format::None
@@ -78,6 +80,22 @@ fn checked_output_options(cli: &Cli) -> Result<OutputOptions, String> {
         return Err(NO_OUTPUT_FILE.into());
     }
     Ok(o)
+}
+
+/// Опции вывода скана в виде ключей `paused.conf` (`output-filename`, `output-format`, `output-append`, `output-flush`,
+/// `stylesheet`, `main-conf.c:2402-2422`).
+fn output_patch(o: &OutputOptions) -> conf::OutputConfPatch {
+    conf::OutputConfPatch {
+        format: Some(o.format),
+        filename: o.filename.clone(),
+        append: Some(o.append),
+        flush: Some(o.flush),
+        stylesheet: o.stylesheet.clone(),
+        show_open: Some(o.show_open),
+        show_closed: Some(o.show_closed),
+        show_host: Some(o.show_host),
+        ..conf::OutputConfPatch::default()
+    }
 }
 
 /// Порты TCP целей за вычетом исключений, отсортированные и слитые: `masscan->targets.ports` после
@@ -138,6 +156,10 @@ fn readscan(
     finish(out)
 }
 
+/// Строка C (`main-conf.c:3625-3627`), байт в байт.
+const SHARD_SEED_WARNING: &str =
+    "[-] WARNING: --seed <num> is not specified\n    HINT: all shards must share the same seed\n";
+
 /// Выполняет разобранную командную строку. `backend` - единственный шов к ОС; `out` получает stdout (строки
 /// `Discovered`, вывод `-o… -`, трассу, `-sL`, `--echo`, `--iflist`), `log` строки `[+]` и `[-]`. `Ok` значит
 /// exit 0.
@@ -152,6 +174,22 @@ pub fn run(
         return Err(OUTPUT_OUTSIDE_SCAN.into());
     }
     let cfg = cli.to_config()?;
+    let full = cli.resolve()?;
+    // Р2, main-conf.c:3625-3627: в конце разбора командной строки, для любой операции, `--shard` с `OF > 1` и seed 0
+    // (не задан ни в argv, ни в файле) печатает предупреждение: каждый процесс шарда взял бы свою энтропию.
+    if cfg.shard.of > 1 && cfg.seed == 0 {
+        let _ = log.write_all(SHARD_SEED_WARNING.as_bytes());
+        let _ = log.flush();
+    }
+    // Р8: захват только для живого скана; `--echo` лишь печатает ключ `pcap-filename`.
+    if full.pcap_filename.as_deref().is_some_and(|f| !f.is_empty())
+        && (cli.list || cli.offline || cfg.offline || cli.iflist || !cli.readscan.is_empty())
+    {
+        return Err(
+            "--pcap applies only to a live scan (not to --offline, -sL, --iflist or --readscan)"
+                .into(),
+        );
+    }
     if !cli.readscan.is_empty() {
         return readscan(cli, &cfg, backend, out, log);
     }
@@ -171,7 +209,11 @@ pub fn run(
         // main.c:1799-1805: оба режима зовут masscan_echo(.., 0).
         validate(&cfg, Operation::Echo).map_err(|e| e.to_string())?;
         let mut s = String::new();
-        echo(&cfg, false, &mut s);
+        let extras = EchoExtras {
+            pcap_filename: full.pcap_filename.as_deref(),
+            ..EchoExtras::default()
+        };
+        echo_with(&cfg, false, &extras, &mut s);
         write_out(out, &s)?;
         return finish(out);
     }
@@ -219,9 +261,15 @@ pub fn run(
     // скана (`main.c:1551`): в stdout C остаётся только формат.
     let elapsed_to_stdout = !opts.format_to_stdout();
     let env = output_env(backend, &opts, &cfg, None);
+    // Режим статуса учитывает и `ndjson-status` файлов `-c`/`--resume` (T2 M-5).
     let mode = cli.status_mode();
-    let (_, scan_millis) = live::run_live_with(
-        &cfg,
+    // `paused.conf` (первое Ctrl-C) повторяет разобранную конфигурацию: вывод по позиции `--resume`, `-oX`, а
+    // `ndjson-status` уже в `full` по позиции argv (C пишет его по `is_status_ndjson` и при `--nostatus`,
+    // main-conf.c:1512-1513).
+    let mut full = full;
+    full.output = output_patch(&opts);
+    let (_, scan_millis) = live::run_live_conf(
+        &full,
         backend,
         &mut Pipeline::new(opts, &mut *out, env),
         log,
@@ -340,6 +388,9 @@ mod tests {
         fn interrupts(&self) -> u32 {
             panic!("library unit tests never trap Ctrl-C")
         }
+        fn write_paused_conf(&self, _: &str) -> Result<(), String> {
+            panic!("library unit tests never write paused.conf")
+        }
     }
 
     fn run_with(b: &FakeBackend, args: &[&str]) -> Result<String, String> {
@@ -372,6 +423,41 @@ mod tests {
         drop(a);
         assert!(!kept.exists());
         assert!(b.dir().exists());
+    }
+
+    /// T5 New-3: `infinite = true` из файла `-c` обходит `conflicts_with` clap; `-sL` с ним отказывает, а не печатает
+    /// список один раз молча.
+    #[test]
+    fn conf_infinite_with_list_is_refused() {
+        let scratch = Scratch::new();
+        let conf = scratch.write("inf.conf", b"infinite = true\n");
+        let c = conf.to_str().unwrap();
+        let e = run_args(&[
+            "rmasscan",
+            "-c",
+            c,
+            "-sL",
+            "198.18.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+        ])
+        .unwrap_err();
+        assert!(e.contains("--infinite"), "{e}");
+        // Без `-sL` файл по-прежнему разрешён (`--echo` его печатает).
+        assert!(
+            run_args(&[
+                "rmasscan",
+                "-c",
+                c,
+                "--echo",
+                "198.18.0.0/30",
+                "-p80",
+                "--seed",
+                "1"
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

@@ -1,0 +1,5 @@
+   Compiling rmasscan-core v0.1.0 ($REPO/rmasscan/crates/rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 ($REPO/rmasscan/crates/rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
+   Compiling rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
+    Finished `release` profile [optimized] target(s) in 9.61s

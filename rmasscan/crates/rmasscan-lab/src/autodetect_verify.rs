@@ -299,6 +299,9 @@ pub struct PeerWitness {
 pub const SCANNER_IP: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
 const LINUX_SCANNER_MAC: [u8; 6] = [0x02, 0xaa, 0, 0, 0, 1];
 const LINUX_PEER_MAC: [u8; 6] = [0x02, 0xaa, 0, 0, 0, 2];
+/// The scan-control stand's second link (`wire-lab.sh --suite scan-control`): `veth-a2` and `veth-b2`.
+pub const SECOND_SCANNER_MAC: [u8; 6] = [0x02, 0xaa, 0, 0, 0, 3];
+pub const SECOND_PEER_MAC: [u8; 6] = [0x02, 0xaa, 0, 0, 0, 4];
 const MACOS_SCANNER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 1];
 const MACOS_PEER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 2];
 /// `windows_suite::MAC` (a test keeps the two equal).
@@ -1526,6 +1529,9 @@ fn allowed_mac(m: [u8; 6]) -> bool {
     [
         LINUX_SCANNER_MAC,
         LINUX_PEER_MAC,
+        // The second veth pair of the scan-control stand.
+        SECOND_SCANNER_MAC,
+        SECOND_PEER_MAC,
         MACOS_SCANNER_MAC,
         MACOS_PEER_MAC,
         WINDOWS_SCANNER_MAC,
@@ -1944,7 +1950,7 @@ pub(crate) fn window(w: &Wire) -> (f64, f64) {
     )
 }
 /// SYNs that are not the scanner's (stand MAC and IP) to a peer address of the stand.
-fn foreign_syns(fr: &Frames, st: &Stand) -> usize {
+pub(crate) fn foreign_syns(fr: &Frames, st: &Stand) -> usize {
     let (sm, src) = (colon(st.scanner_mac), st.scanner_ip.to_string());
     let peers: Vec<String> = st.peer_ips.iter().map(Ipv4Addr::to_string).collect();
     fr.iter()
@@ -1981,7 +1987,7 @@ fn foreign_frames(fr: &Frames, st: &Stand) -> Vec<String> {
         .collect()
 }
 /// The safety check of [`foreign_frames`] on one capture.
-fn no_foreign_frame(r: &mut Run, who: &str, fr: &Frames, st: &Stand) {
+pub(crate) fn no_foreign_frame(r: &mut Run, who: &str, fr: &Frames, st: &Stand) {
     let foreign = foreign_frames(fr, st);
     r.safety(
         &format!(

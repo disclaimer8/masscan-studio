@@ -555,6 +555,17 @@ enum PortEvent {
     UdpPorts(String),
 }
 
+/// Префикс по умолчанию для портов без префикса (main-conf.c:2670–2674): UDP важнее SCTP, иначе TCP (`0`).
+fn port_default(udp: bool, sctp: bool) -> u32 {
+    if udp {
+        TEMPL_UDP
+    } else if sctp {
+        TEMPL_SCTP
+    } else {
+        0
+    }
+}
+
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
 const POSITIONAL_KEYS: [&str; 27] = [
@@ -1180,6 +1191,7 @@ impl Cli {
             }
             if let Some(mk) = self.markers.get(seg) {
                 full.output.touched.clear();
+                full.port_default = self.port_default_at(mk.pos);
                 apply_conf_key(mk.kind, &mk.path, &mut full, &mut loader, 0)?;
                 for group in std::mem::take(&mut full.output.touched) {
                     full.output.file_pos.insert(group, mk.pos);
@@ -1201,6 +1213,21 @@ impl Cli {
             .is_some_and(|&pos| self.segment_of(pos) == seg)
     }
 
+    /// Префикс по умолчанию портов файла конфигурации в позиции clap `pos`: C разбирает файл на его месте в `argv`,
+    /// поэтому строка `ports = …` файла берёт тип скана от `-sU`/`-sZ`/`--udp-ports` левее файла (main-conf.c:2663–2674,
+    /// `--udp-ports` ставит `scan_type.udp`, :2642–2648).
+    fn port_default_at(&self, pos: usize) -> u32 {
+        let (mut udp, mut sctp) = (false, false);
+        for (_, ev) in self.port_events.iter().take_while(|(p, _)| *p < pos) {
+            match ev {
+                PortEvent::Scan('U') | PortEvent::UdpPorts(_) => udp = true,
+                PortEvent::Scan('S') | PortEvent::Ports(_) => {}
+                PortEvent::Scan(_) => sctp = true,
+            }
+        }
+        port_default(udp, sctp)
+    }
+
     /// Порты, `--udp-ports`, `--ping`, `--top-ports` и `-sS/-sU/-sZ` в порядке `argv`, как `masscan_set_parameter`
     /// (main-conf.c:2642-2681, 2721-2729, 3524-3549): `-p` берёт префикс по умолчанию от `-sU`/`-sZ` левее него,
     /// а таблицы `--top-ports` строятся в конце по итоговым типам скана (main-conf.c:3609-3619).
@@ -1212,15 +1239,7 @@ impl Cli {
                 PortEvent::Scan('U') => udp = true,
                 PortEvent::Scan(_) => sctp = true,
                 PortEvent::Ports(p) => {
-                    // main-conf.c:2670-2674: UDP важнее SCTP.
-                    let default = if udp {
-                        TEMPL_UDP
-                    } else if sctp {
-                        TEMPL_SCTP
-                    } else {
-                        0
-                    };
-                    parse_ports_with(cfg.targets.ports_mut(), p, default)
+                    parse_ports_with(cfg.targets.ports_mut(), p, port_default(udp, sctp))
                         .map_err(|e| format!("bad ports {p:?}: {e}"))?;
                 }
                 PortEvent::UdpPorts(p) => {

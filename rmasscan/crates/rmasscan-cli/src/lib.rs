@@ -1280,6 +1280,56 @@ mod tests {
         assert!(!plain.contains("payloads"), "{plain}");
     }
 
+    /// Файл `-c`/`--resume` C разбирает на его месте в `argv` (`masscan_set_parameter` по ходу разбора), поэтому
+    /// префикс по умолчанию его строки `ports =` задают `-sU`/`-sZ`/`--udp-ports` левее файла, а правее нет
+    /// (main-conf.c:2663–2674: UDP важнее SCTP; `--udp-ports` ставит `scan_type.udp`, :2642–2648). Ожидания сняты с
+    /// C 8e6b3b0 (`masscan 10.0.0.1 <argv> --echo`, файл `f` это `ports = 53`, `g` это `ports = 53,U:161`, `nest`
+    /// это `conf = f`); строка `ports = …` вывода C:
+    /// - `-sU -c f` → `ports = U:53`; `-c f -sU` → `ports = 53`;
+    /// - `-sZ -c f` → `ports = S:53`; `-c f -sZ` → `ports = 53`; `-c f` → `ports = 53`;
+    /// - `-sU -sZ -c f` и `-sZ -sU -c f` → `ports = U:53`; `-sS -sU -c f` → `ports = U:53`;
+    /// - `--udp-ports 7 -c f` → `ports = U:7,U:53`; `-sU -c g` → `ports = U:53,U:161`;
+    /// - `-sU -c nest` → `ports = U:53`; `-sU --resume f` → `ports = U:53`; `-c f -sU -p 80` → `ports = 53,U:80`.
+    #[test]
+    fn scan_type_left_of_a_conf_file_prefixes_its_ports_as_in_c() {
+        let scratch = Scratch::new();
+        let f = scratch.write("f", b"ports = 53\n");
+        let g = scratch.write("g", b"ports = 53,U:161\n");
+        let nest = scratch.write("nest", format!("conf = {}\n", f.display()).as_bytes());
+        let (f, g, nest) = (
+            f.to_str().unwrap(),
+            g.to_str().unwrap(),
+            nest.to_str().unwrap(),
+        );
+        let ports = |argv: &[&str]| {
+            let mut a = vec!["rmasscan", "10.0.0.1"];
+            a.extend_from_slice(argv);
+            a.extend_from_slice(&["--seed", "1", "--echo"]);
+            let out = run_args(&a).unwrap();
+            out.lines()
+                .find(|l| l.starts_with("ports = "))
+                .unwrap_or_else(|| panic!("{argv:?}: no ports line in {out}"))
+                .to_string()
+        };
+        for (argv, c) in [
+            (&["-sU", "-c", f][..], "ports = U:53"),
+            (&["-c", f, "-sU"][..], "ports = 53"),
+            (&["-sZ", "-c", f][..], "ports = S:53"),
+            (&["-c", f, "-sZ"][..], "ports = 53"),
+            (&["-c", f][..], "ports = 53"),
+            (&["-sU", "-sZ", "-c", f][..], "ports = U:53"),
+            (&["-sZ", "-sU", "-c", f][..], "ports = U:53"),
+            (&["-sS", "-sU", "-c", f][..], "ports = U:53"),
+            (&["--udp-ports", "7", "-c", f][..], "ports = U:7,U:53"),
+            (&["-sU", "-c", g][..], "ports = U:53,U:161"),
+            (&["-sU", "-c", nest][..], "ports = U:53"),
+            (&["-sU", "--resume", f][..], "ports = U:53"),
+            (&["-c", f, "-sU", "-p", "80"][..], "ports = 53,U:80"),
+        ] {
+            assert_eq!(ports(argv), c, "{argv:?}");
+        }
+    }
+
     /// Файлы нагрузок доходят до кадров: сначала pcap, потом nmap (main-conf.c:3163-3183), оба заменяют встроенные.
     #[test]
     fn payload_files_reach_the_probe_frames() {

@@ -9,9 +9,11 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use rmasscan_core::config::{
-    EchoExtras, ScanConfig, apply_core_kv, conf_line_kv, echo_with, normalize_key, parse_bool,
+    ConfigError, EchoExtras, ScanConfig, apply_core_kv, conf_line_kv, echo_with, normalize_key,
+    parse_bool,
 };
 use rmasscan_core::ranges::RangeList;
+use rmasscan_core::targets::parse_ports_with;
 
 use crate::output::Format;
 
@@ -75,6 +77,10 @@ pub struct FullConf {
     pub output: OutputConfPatch,
     pub pcap_filename: Option<String>,
     pub ndjson_status: bool,
+    /// Префикс по умолчанию для строки `ports = …` файла (`0` это TCP, иначе `TEMPL_UDP` или `TEMPL_SCTP`): тип скана,
+    /// заданный в `argv` левее файла (main-conf.c:2663–2674, C разбирает файл на его месте в `argv`). Ставит
+    /// [`crate::args::Cli`] перед каждым файлом; в `paused.conf` не пишется.
+    pub port_default: u32,
 }
 
 /// Глубина вложенности `conf =` / `resume =` / `includefile =` (Р7): больше
@@ -217,6 +223,12 @@ pub fn apply_conf_key(
             // main-conf.c:2825-2836, `massip_parse_file`.
             let text = load(include_loader, value)?;
             parse_include_text(text.as_bytes(), value, base.scan.targets.ipv4_mut())?;
+        }
+        // main-conf.c:2663–2674: порты без префикса получают префикс типа скана, заданного левее файла
+        // (`FullConf::port_default`), а не всегда TCP.
+        "ports" | "port" => {
+            parse_ports_with(base.scan.targets.ports_mut(), value, base.port_default)
+                .map_err(|e| ConfigError::from(e).to_string())?
         }
         "pcapfilename" | "pcap" => base.pcap_filename = Some(value.to_string()),
         "ndjsonstatus" | "statusndjson" => base.ndjson_status = parse_bool(value),
@@ -524,6 +536,7 @@ mod tests {
             },
             pcap_filename: Some("cap.pcap".into()),
             ndjson_status: true,
+            port_default: 0,
         }
     }
 

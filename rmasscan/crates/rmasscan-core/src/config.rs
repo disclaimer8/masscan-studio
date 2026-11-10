@@ -1385,6 +1385,8 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
             nic.legacy_c_17_port_mask = quirk;
             sync_legacy_nic(cfg);
         }
+        // Здесь всегда TCP по умолчанию. Строку `ports =` файла конфигурации CLI разбирает сам, с префиксом типа скана,
+        // заданного в `argv` левее файла (rmasscan-cli `conf.rs`, main-conf.c:2663–2674).
         "ports" | "port" => targets::parse_ports(cfg.targets.ports_mut(), value)?,
         "range" => targets::add_target_string(cfg.targets.ipv4_mut(), value)?,
         "exclude" => targets::add_target_string(cfg.excludes.ipv4_mut(), value)?,

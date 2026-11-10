@@ -1,4 +1,4 @@
-e575f9409fbc5bb9d37d8672a2ce4af1ccc1207f0f4846db3178b10d57d12e38  ./README.md
+bd87dc28d6953080daf06fe43f8d11eb20ece2b639d6752330d883b2c922b5a5  ./README.md
 c147ff6572993a88de351ec9f3517e63c3c4bcc0a6e83d9e3d517704b6ba0fd1  ./linux-autodetect-r3/commands.txt
 ce4a0614b9c9965fdce6c36644dcce68877ea769f4279cd6db6ea0f373485b39  ./linux-autodetect-r3/env.json
 ffd65854273bc93b96d4a2025c3dce4da8b42b712e76415e7c230ffe122151f3  ./linux-autodetect-r3/isolation.json
@@ -811,7 +811,7 @@ eecfb838e382cd3e2acd10687512be2943e809c69fd82c325167eec7b5c23b7e  ./verification
 588feae4d33b45b5c1d1344eb67e7adc8880bf1458d3fa92f154a3f2f9eceb58  ./verification/minipc-versions.txt
 97d51675f1d99f4ed047b981fbfe4e68877228033d8024cdcedef46f1689d7fe  ./verification/privacy-scan.txt
 49008d8983403b726c48628f3fb36d64d5dc303fdbfcc8abf205cc884063e106  ./verification/rederive-on-committed-copy.txt
-23f802ff21ff6b9bd97dac73c5600fce21d4f22a4b45fb2a4e2e89feb4a79759  ./verification/superseded-attempts.txt
+45330741c2ed442bd0c0eb533fd0ce0dcb219f642c67498cbcc2a67b59cf0aa4  ./verification/superseded-attempts.txt
 3df0df328114bf055f628f1aed85723c181d419c44f36386938209a2f7d7dd91  ./verification/windows-autodetect-r3-suite.log
 1cc31649ada27c06f5de448bb2b7827ea9591872f7595c730e8445f9be9a7cb0  ./verification/windows-autodetect-r3-verify.log
 b39a4a48d82db96ee5fc92101de5d30cf5bb816d5f4307f62d1ab103a904644e  ./windows-autodetect-r3/deploy/deploy-manifest.json

@@ -41,6 +41,6 @@ linux-protocols-r2: minipc, window 2026-11-10T19:52:36Z..19:55:58Z, minipc rmass
   Fixed in 0ed6e36 (lab only): replies captured within 1 ms of each other on the peer link (REPLY_REORDER_WINDOW) may
   be written in either order; pairs written in the other order are counted per step in the notes
   (reply_order_swaps); records of different send slots may still not trade places (on the r3 captures
-  the probes of every step left either within 0.1 ms of each other, a burst, or at least 8.4 ms apart).
+  the probes of every step left either within about 0.25 ms of each other, a burst, or at least 8.4 ms apart).
   Re-judged with the verifier of C: PASS 6/6 (p05 oracle-json reply_order_swaps 1), verdict sha256
   dd4caae948b075d10c87ba4d38d6d8aa013839d08f02909bddeaf6f76839923f

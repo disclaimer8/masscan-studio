@@ -9,6 +9,7 @@ pub mod config;
 pub mod cookie;
 pub mod massip;
 pub mod packet;
+pub mod payloads;
 pub mod probe;
 pub mod ranges;
 pub mod receive;
@@ -16,6 +17,8 @@ pub mod scan;
 pub mod targets;
 pub mod throttle;
 pub mod top_ports;
+#[cfg(test)]
+mod udp_c_vectors;
 
 /// Версия masscan, с которой сверяется порт.
 pub const ORACLE_MASSCAN_VERSION: &str = "1.3.9-integration";

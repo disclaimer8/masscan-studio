@@ -35,7 +35,7 @@
 //!   старого скана с тем же seed попадал бы в результаты. Порт намеренно
 //!   ужесточает это (ревью 2A, P2).
 
-use crate::checksum::{checksum_ipv4, fold, ip_header_checksum};
+use crate::checksum::{checksum_ipv4, fold, ip_header_checksum, word_sum};
 use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4};
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
@@ -398,11 +398,7 @@ fn parse_icmp_echo_reply(
             return Err(ParseError::BadIpChecksum);
         }
         // RFC 792: сумма всего сообщения вместе с полем суммы сворачивается в 0xFFFF (без псевдозаголовка).
-        let sum: u64 = msg
-            .chunks(2)
-            .map(|w| u64::from(w[0]) << 8 | u64::from(*w.get(1).unwrap_or(&0)))
-            .sum();
-        if fold(sum) != 0xffff {
+        if fold(word_sum(msg)) != 0xffff {
             return Err(ParseError::BadIcmpChecksum);
         }
     }

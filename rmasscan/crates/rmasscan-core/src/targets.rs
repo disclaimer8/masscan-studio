@@ -32,7 +32,7 @@ pub const TEMPL_OPROTO_LAST: u32 = 65536 * 3 + 256 + 255;
 pub const TEMPL_VULN_CHECK: u32 = 65536 * 4;
 
 /// C `isspace` в локали "C" (включая \v и \f).
-fn is_c_space(c: u8) -> bool {
+pub(crate) fn is_c_space(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
 }
 
@@ -383,7 +383,7 @@ pub fn add_target_string(targets: &mut RangeList, s: &str) -> Result<(), ParseEr
 /// C `strtoul(p, &p, 0)` для строки, начинающейся с цифры: `0x` — hex,
 /// ведущий `0` — восьмеричное, иначе десятичное. Переполнение даёт
 /// `u64::MAX` (в C затем `(unsigned)`-усечение, которое мы не повторяем).
-fn strtoul0(s: &[u8], pos: &mut usize) -> u64 {
+pub(crate) fn strtoul0(s: &[u8], pos: &mut usize) -> u64 {
     let (radix, mut i) = if s[*pos] == b'0'
         && s.get(*pos + 1).is_some_and(|c| *c == b'x' || *c == b'X')
         && s.get(*pos + 2).is_some_and(u8::is_ascii_hexdigit)

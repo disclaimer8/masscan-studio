@@ -3,7 +3,7 @@
 //! :877), masscan © Robert David Graham (github.com/robertdavidgraham/masscan,
 //! HEAD 8e6b3b0). Кадры должны совпадать побайтно с C.
 
-use crate::checksum::{fold, ip_header_checksum, tcp_ipv4_partial};
+use crate::checksum::{fold, ip_header_checksum, tcp_ipv4_partial, word_sum};
 use crate::cookie::icmp_echo_cookie;
 use crate::targets::TEMPL_ICMP_ECHO;
 
@@ -290,11 +290,7 @@ impl IcmpEchoTemplate {
         px[offset_ip + 10..offset_ip + 12].fill(0);
         px[offset_ip + 12..offset_ip + 20].fill(0);
         // icmp_checksum2: сумма слов всего сообщения (поле суммы и [id|seq] нулевые), три свёртки.
-        let mut sum = 0u64;
-        for w in px[offset_icmp..].chunks(2) {
-            sum += u64::from(w[0]) << 8 | u64::from(*w.get(1).unwrap_or(&0));
-        }
-        let checksum_icmp = fold(sum);
+        let checksum_icmp = fold(word_sum(&px[offset_icmp..]));
         // DATALINK KLUDGE, templ-pkt.c:1342-1360 (как у TCP).
         let (packet, offset_ip, offset_icmp) = match link {
             LinkType::Ethernet => (px, offset_ip, offset_icmp),

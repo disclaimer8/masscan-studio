@@ -79,6 +79,50 @@ pub fn tcp_ipv4_partial(px: &[u8], offset_ip: usize, offset_tcp: usize, offset_a
     fold(u64::from(xsum))
 }
 
+/// Сумма 16-битных слов big-endian без свёртки и инверсии (RFC 1071): нечётный хвост дополняется нулевым байтом справа.
+/// Общая основа проверок и расчётов ICMP и UDP; `u64` не переполняется на любом кадре.
+pub fn word_sum(buf: &[u8]) -> u64 {
+    let (pairs, rest) = buf.as_chunks::<2>();
+    let mut sum: u64 = pairs
+        .iter()
+        .map(|c| u64::from(u16::from_be_bytes(*c)))
+        .sum();
+    if let [last] = rest {
+        sum += u64::from(*last) << 8;
+    }
+    sum
+}
+
+/// Сумма псевдозаголовка IPv4 для UDP (RFC 768): адреса, протокол 17 и длина датаграммы.
+fn udp_pseudo_sum(ip_src: u32, ip_dst: u32, udp_len: usize) -> u64 {
+    u64::from(ip_src >> 16)
+        + u64::from(ip_src & 0xFFFF)
+        + u64::from(ip_dst >> 16)
+        + u64::from(ip_dst & 0xFFFF)
+        + 17
+        + udp_len as u64
+}
+
+/// Контрольная сумма UDP для передачи (RFC 768, как `udp_checksum2`, templ-pkt.c:278, но с правилом RFC: результат 0
+/// заменяется на `0xFFFF`, потому что 0 в поле значит "суммы нет"; C пишет 0). `datagram` это заголовок UDP и нагрузка
+/// с полем суммы, равным нулю.
+pub fn udp_ipv4_checksum(ip_src: u32, ip_dst: u32, datagram: &[u8]) -> u16 {
+    let sum = udp_pseudo_sum(ip_src, ip_dst, datagram.len()) + word_sum(datagram);
+    match !fold(sum) {
+        0 => 0xFFFF,
+        c => c,
+    }
+}
+
+/// Проверка суммы принятой датаграммы UDP (RFC 768): поле 0 значит "отправитель сумму не считал" и допустимо;
+/// иначе сумма всей датаграммы вместе с полем и псевдозаголовком сворачивается в `0xFFFF`.
+pub fn udp_ipv4_checksum_ok(ip_src: u32, ip_dst: u32, datagram: &[u8]) -> bool {
+    if datagram.get(6..8) == Some(&[0, 0]) {
+        return true;
+    }
+    fold(udp_pseudo_sum(ip_src, ip_dst, datagram.len()) + word_sum(datagram)) == 0xFFFF
+}
+
 /// Складывает и инвертирует, util-checksum.c:62.
 pub fn fold_and_invert(sum: u32) -> u16 {
     let sum = (sum >> 16) + (sum & 0xFFFF);

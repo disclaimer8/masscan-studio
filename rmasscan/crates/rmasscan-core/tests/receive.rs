@@ -1986,20 +1986,42 @@ mod arp_scan {
                 mac: Some(NEIGHBOR_MAC),
             }))
         );
-        // proto-arp.c:36 берёт `parsed->mac_src`, то есть MAC источника Ethernet-кадра, а не `sha`
+        // proto-arp.c:39 берёт `parsed->mac_src`, то есть MAC источника Ethernet-кадра, а не `sha`
         let mut f = frame;
         f[6..12].copy_from_slice(&[0x02, 0x11, 0x11, 0x11, 0x11, 0x11]);
         assert_eq!(
             reply_of(&plan, &f).unwrap().unwrap().mac,
             Some([0x02, 0x11, 0x11, 0x11, 0x11, 0x11])
         );
-        // C не сверяет `tpa` с адресом источника (main.c:889-905): ответ другому узлу, увиденный на проводе, тоже
-        // доказывает, что `spa` жив
+    }
+
+    /// C отбрасывает каждый кадр, адрес назначения которого не наш, ещё до ветки ARP (main.c:829–837:
+    /// `if (!is_my_ip(stack->src, ip_me)) … continue;`), а у ARP адрес назначения это `tpa`
+    /// (proto-preprocess.c:619–621, `info->dst_ip`). Ответ другому узлу, увиденный на проводе, и gratuitous ARP
+    /// (`tpa == spa`) результатом не становятся.
+    #[test]
+    fn arp_reply_whose_tpa_is_not_ours_is_dropped_as_in_c() {
+        let plan = arp_plan("I:2");
+        // ответ другому узлу: `spa` в целях, `tpa` не наш
         let other = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME + 5);
+        assert_eq!(reply_of(&plan, &other), Ok(None));
+        // gratuitous ARP соседа: `tpa == spa`
+        let gratuitous = encode_reply(NEIGHBOR_MAC, IP_THEM, [0xff; 6], IP_THEM);
+        assert_eq!(reply_of(&plan, &gratuitous), Ok(None));
+        // `is_my_ip` это диапазон `--adapter-ip A-B` (stack-src.c:8–13): `tpa` внутри принят, за краем нет
+        let mut nic = NicBinding::from(plan.nics()[0].binding.clone());
+        nic.source_ipv4_last = IP_ME + 3;
+        let ranged =
+            ReadyPlan::new_cli(plan.effective().clone(), vec![nic]).expect("ranged ARP plan");
+        let inside = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME + 3);
         assert_eq!(
-            reply_of(&plan, &other).unwrap().unwrap().local_ip,
-            IP_ME + 5
+            reply_of(&ranged, &inside).unwrap().unwrap().local_ip,
+            IP_ME + 3
         );
+        let beyond = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME + 4);
+        assert_eq!(reply_of(&ranged, &beyond), Ok(None));
+        let below = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME - 1);
+        assert_eq!(reply_of(&ranged, &below), Ok(None));
     }
 
     #[test]

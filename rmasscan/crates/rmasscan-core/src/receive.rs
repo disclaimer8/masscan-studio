@@ -374,11 +374,13 @@ fn parse_ipv4_tcp(
 
 /// Ответ ARP на наш ARP-скан (ветка `FOUND_ARP`, main.c:874-906, и `arp_recv_response`, proto-arp.c:14-41).
 ///
-/// Принимается, если план это ARP-скан (`scan_type.arp`, :893), opcode равен 2 (:889) и `spa` входит в итоговый набор
-/// целей (:896). Как в C, `tpa` не сверяется с нашим адресом: ответ чужому узлу, увиденный на проводе, тоже доказывает,
-/// что `spa` жив (в `local_ip` кладётся `tpa`, как `ip_me` у `dedup_is_duplicate`, :899). MAC результата это MAC
-/// источника Ethernet-кадра (`parsed->mac_src`, proto-arp.c:36), а не `sha`; в обычном ответе они равны. Дубликаты
-/// отсекает `DedupCache` по `(spa, tpa)`, как в C.
+/// Принимается, если план это ARP-скан (`scan_type.arp`, :893), opcode равен 2 (:889), `tpa` наш адрес и `spa`
+/// входит в итоговый набор целей (:896). `tpa` сверяется, как в C: приёмник отбрасывает каждый кадр, адрес назначения
+/// которого не наш, ещё до ветки ARP (main.c:829–837, `is_my_ip(stack->src, ip_me)` и `continue`), а у ARP адрес
+/// назначения это `tpa` (proto-preprocess.c:619–621). Поэтому ответ другому узлу, увиденный на проводе, и gratuitous
+/// ARP (`tpa == spa`) результатом не становятся. В `local_ip` кладётся `tpa`, как `ip_me` у `dedup_is_duplicate`
+/// (:899). MAC результата это MAC источника Ethernet-кадра (`parsed->mac_src`, proto-arp.c:39), а не `sha`; в обычном
+/// ответе они равны. Дубликаты отсекает `DedupCache` по `(spa, tpa)`, как в C.
 ///
 /// Строже C: кодек [`decode`] принимает только Ethernet/IPv4 с длинами 6 и 4 (C берёт любые длины из заголовка), а
 /// кадр с VLAN-тегом и всё нечитаемое это `None` (в C `continue`). Это не ошибка разбора: чужой ARP на проводе
@@ -388,6 +390,10 @@ fn parse_arp_reply(frame: &[u8], plan: &ReadyPlan) -> Option<Reply> {
         return None;
     }
     let a = decode(frame).ok()?;
+    // main.c:829–837: адрес назначения (`tpa`) не наш, кадр отбрасывается до ветки ARP.
+    if !is_my_ip(plan, a.target_ip) {
+        return None;
+    }
     if a.op != ArpOp::Reply || !in_sorted_ranges(plan.effective().massip().ipv4(), a.sender_ip) {
         return None;
     }

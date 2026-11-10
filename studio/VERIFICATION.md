@@ -1,20 +1,32 @@
 # Studio integration evidence
 
+## 2026-11-10 — native platform profiles and release packages
+
+IPC v5 adds native LinuxPhysical and WindowsPhysical profiles alongside
+MacPhysical. See the [release follow-up](../docs/experiments/2026-11-10-studio-release-followup.md)
+for exact clean package identities, platform tests and the macOS release's
+two-peer native scan with correlated captures. Platform availability does not
+establish desktop authorization or packet acceptance on Linux/Windows.
+
 ## 2026-11-10 — current engine and native MacPhysical acceptance
 
-The current integration branch adds a separate ordinary macOS IPv4/TCP profile,
-`MacPhysical`, with IPC v4. The native package at `433f3d4` completed direct-network
+The earlier integration build `433f3d4` added a separate ordinary macOS IPv4/TCP
+profile, `MacPhysical`, with IPC v4. That native package completed direct-network
 open/closed scans, Pause/reopen/Resume, Stop/new Start and JSON export, with an
 independent target-side packet capture. See the [dated integration report](../docs/experiments/2026-11-10-studio-integration.md)
 for exact build hashes, test counts, retained development authorization and limits.
 Earlier entries below describe their own builds and gates; they do not override
-the new profile's dated acceptance. Linux/Windows Studio raw profiles remain closed.
+the new profile's dated acceptance. Linux/Windows Studio raw profiles were closed
+at that earlier build; the release follow-up above records their later state.
 
-Note (2026-10-26): entries dated before the Mac feth raw acceptance describe the raw gate as it stood then. The current
-gate is per profile: open for Mac feth on macOS, closed on Windows and Linux (see the dated Mac feth entries).
+Note (2026-10-26): entries dated before the Mac feth raw acceptance describe the
+gate as it stood then: open for Mac feth on macOS, closed on Windows and Linux.
+The dated release follow-up above records the later native-profile availability.
 
-Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
-Studio is a separate workspace/branch; scanner source unchanged.
+Historical baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
+At that baseline Studio was a separate workspace/branch with scanner source
+unchanged. The November integration includes the bounded observation adapters
+described in its dated report.
 
 ## 2026-10-28 — gated Mac network UI, History and coverage exports
 

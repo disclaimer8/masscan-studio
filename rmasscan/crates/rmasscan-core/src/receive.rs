@@ -8,7 +8,7 @@
 //!
 //! # Правило приёма (main.c:823-825, :829, :935, :1048-1065)
 //! Ответ принимается, если одновременно:
-//! 1. IPv4, не фрагмент, TCP; адрес назначения лежит в диапазоне `source_ipv4..=source_ipv4_last` плана
+//! 1. IPv4, не фрагмент, TCP (или ICMP Echo Reply: [`parse_icmp_echo_reply`]); адрес назначения лежит в диапазоне `source_ipv4..=source_ipv4_last` плана
 //!    (`--adapter-ip A-B`; один адрес это диапазон из одного);
 //! 2. порт назначения лежит в `source_ports` плана (`is_my_port`);
 //! 3. флаги: `(flags & 0x12) == 0x12` даёт Open, `flags & 0x04` даёт Closed
@@ -35,11 +35,12 @@
 //!   старого скана с тем же seed попадал бы в результаты. Порт намеренно
 //!   ужесточает это (ревью 2A, P2).
 
-use crate::checksum::{checksum_ipv4, ip_header_checksum};
-use crate::cookie::syn_cookie_ipv4;
+use crate::checksum::{checksum_ipv4, fold, ip_header_checksum};
+use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4};
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
 use crate::ranges::RangeList;
+use crate::targets::TEMPL_ICMP_ECHO;
 
 /// main.c:773 `if (length > 1514) continue;`.
 pub const MAX_FRAME_LEN: usize = 1514;
@@ -96,6 +97,8 @@ pub enum ParseError {
     BadIpChecksum,
     #[error("bad TCP checksum")]
     BadTcpChecksum,
+    #[error("bad ICMP checksum")]
+    BadIcmpChecksum,
 }
 
 /// Открыт или закрыт порт (main.c:1052-1057).
@@ -261,8 +264,11 @@ fn parse_ipv4_tcp(
     let proto = ip[9];
     let ip_them = be32(ip, 12).ok_or(ParseError::Truncated("ipv4 header"))?;
     let ip_me = be32(ip, 16).ok_or(ParseError::Truncated("ipv4 header"))?;
+    if proto == 1 {
+        return parse_icmp_echo_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy);
+    }
     if proto != 6 {
-        // UDP, ICMP, SCTP и прочее: не наш SYN-ответ.
+        // UDP, SCTP и прочее: не наш SYN-ответ.
         return Ok(None);
     }
 
@@ -347,6 +353,68 @@ fn parse_ipv4_tcp(
         tcp_flags: flags,
         ttl,
         ip_proto: 6,
+        mac: None,
+    }))
+}
+
+/// ICMP Echo Reply на наш Echo Request (proto-icmp.c:200-226, `handle_icmp`).
+///
+/// Принимается только `type 0, code 0`, у которого `[id|seq]` (байты 4..8 ICMP, `seqno_me`) равны
+/// `icmp_echo_cookie(ip_them, ip_me, seed)`: `syn_cookie(ip_them, Templ_ICMP_echo, ip_me, 0, entropy)` с
+/// `port_me = 0` (:203). Отличие от C (жёстче): C берёт любой `code` при `type 0` и не проверяет суммы; здесь
+/// `code != 0` отбрасывается, суммы проверяются при [`ChecksumPolicy::Verify`], а адрес и порт `I:0` должны
+/// входить в итоговый набор целей задания (как у TCP). Порта у ICMP нет: `remote_port = local_port = 0`.
+fn parse_icmp_echo_reply(
+    ip: &[u8],
+    header_len: usize,
+    (ip_them, ip_me, ttl): (u32, u32, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let msg = &ip[header_len..];
+    if msg.len() < 8 {
+        return Err(ParseError::Truncated("icmp header"));
+    }
+    // main.c:829: is_my_ip, как у TCP.
+    let ip_last = plan.nics()[0].source_ipv4_last;
+    if !(plan.binding().source_ipv4..=ip_last).contains(&ip_me) {
+        return Ok(None);
+    }
+    if msg[0] != 0 || msg[1] != 0 {
+        return Ok(None);
+    }
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges(targets.ipv4(), ip_them)
+        || !in_sorted_ranges(targets.ports(), TEMPL_ICMP_ECHO)
+    {
+        return Ok(None);
+    }
+    let seqno_me = be32(msg, 4).ok_or(ParseError::Truncated("icmp header"))?;
+    if icmp_echo_cookie(ip_them, ip_me, plan.effective().seed()) != seqno_me {
+        return Ok(None);
+    }
+    if policy == ChecksumPolicy::Verify {
+        if ip_header_checksum(ip, 0, header_len) != 0xffff {
+            return Err(ParseError::BadIpChecksum);
+        }
+        // RFC 792: сумма всего сообщения вместе с полем суммы сворачивается в 0xFFFF (без псевдозаголовка).
+        let sum: u64 = msg
+            .chunks(2)
+            .map(|w| u64::from(w[0]) << 8 | u64::from(*w.get(1).unwrap_or(&0)))
+            .sum();
+        if fold(sum) != 0xffff {
+            return Err(ParseError::BadIcmpChecksum);
+        }
+    }
+    Ok(Some(Reply {
+        remote_ip: ip_them,
+        remote_port: 0,
+        local_ip: ip_me,
+        local_port: 0,
+        status: PortStatus::Open,
+        tcp_flags: 0,
+        ttl,
+        ip_proto: 1,
         mac: None,
     }))
 }

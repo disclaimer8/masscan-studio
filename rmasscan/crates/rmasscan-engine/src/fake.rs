@@ -546,3 +546,40 @@ pub fn reply_to_syn(syn: &[u8], flags: u8) -> Option<Vec<u8>> {
     f.extend_from_slice(&t);
     Some(f)
 }
+
+/// Строит Echo Reply (type 0, Ethernet/IPv4/ICMP, верные суммы) на наш Echo Request: адреса и MAC меняются
+/// местами, `[id|seq]` и паттерн копируются (как делает настоящий хост). `id_seq_xor` портит cookie
+/// (0 оставляет верный). `None`, если вход не Ethernet/IPv4/ICMP Echo Request.
+pub fn reply_to_echo(req: &[u8], id_seq_xor: u32) -> Option<Vec<u8>> {
+    if req.len() < 14 + 20 + 8 || req[12..14] != [0x08, 0x00] {
+        return None;
+    }
+    let ip = &req[14..];
+    let ihl = usize::from(ip[0] & 0x0f) * 4;
+    if ip[9] != 1 || ip.get(ihl).copied() != Some(8) {
+        return None;
+    }
+    let mut icmp = ip.get(ihl..)?.to_vec();
+    icmp[0] = 0;
+    icmp[2..4].fill(0);
+    let idseq = u32::from_be_bytes(icmp[4..8].try_into().ok()?) ^ id_seq_xor;
+    icmp[4..8].copy_from_slice(&idseq.to_be_bytes());
+    let c = rfc1071(&[&icmp]);
+    icmp[2..4].copy_from_slice(&c.to_be_bytes());
+    let mut i = vec![0u8; 20];
+    i[0] = 0x45;
+    i[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+    i[8] = 64;
+    i[9] = 1;
+    i[12..16].copy_from_slice(&ip[16..20]); // от цели к нам
+    i[16..20].copy_from_slice(&ip[12..16]);
+    let c = rfc1071(&[&i]);
+    i[10..12].copy_from_slice(&c.to_be_bytes());
+    let mut f = Vec::with_capacity(14 + 20 + icmp.len());
+    f.extend_from_slice(&req[6..12]);
+    f.extend_from_slice(&req[0..6]);
+    f.extend_from_slice(&[0x08, 0x00]);
+    f.extend_from_slice(&i);
+    f.extend_from_slice(&icmp);
+    Some(f)
+}

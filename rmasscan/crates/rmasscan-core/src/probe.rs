@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
-use crate::packet::{LinkType, PacketModifiers, TcpSynTemplate};
+use crate::packet::{IcmpEchoTemplate, LinkType, PacketModifiers, TcpSynTemplate};
 use crate::ranges::RangeList;
 use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
 use crate::targets::{
@@ -67,7 +67,7 @@ pub enum PlanError {
     IcmpTypeNotSupported(u32),
     #[error("ARP scan cannot be mixed with other ports")]
     ArpMixedWithPorts,
-    /// Временный отказ (Задачи 3-6 снимают его по протоколу): порт разобран, но построителя зонда ещё нет.
+    /// Временный отказ (Задачи 4-6 снимают его по протоколу): порт разобран, но построителя зонда ещё нет.
     #[error(
         "{label} cannot be scanned yet: rmasscan has no probe builder for this protocol (-sL and --echo accept it)"
     )]
@@ -163,6 +163,8 @@ fn check_source_ports(first: u16, last: u16, legacy_c_17: bool) -> Result<(), Pl
 #[derive(Debug, Clone)]
 struct Builder {
     tmpl: TcpSynTemplate,
+    /// Шаблон ICMP Echo (`I:0`, templ-pkt.c:105): тот же путь адаптера, что у TCP.
+    icmp: IcmpEchoTemplate,
     ip_me0: u32,
     first: u16,
     port_mask: u32,
@@ -193,6 +195,12 @@ impl Builder {
                 binding.next_hop_mac,
                 binding.link_type,
                 mods,
+            ),
+            icmp: IcmpEchoTemplate::new(
+                binding.source_mac,
+                binding.next_hop_mac,
+                binding.link_type,
+                mods.ttl,
             ),
             ip_me0: binding.source_ipv4,
             ipv4_mask: nic.source_ipv4_last - binding.source_ipv4,
@@ -230,6 +238,23 @@ impl Builder {
         } else {
             (self.ip_me0, u32::from(self.first))
         };
+        if port_them == TEMPL_ICMP_ECHO {
+            // main.c:389 даёт seqno с реальным port_me: он идёт только в ip_id (templ-pkt.c:942); [id|seq] кадра
+            // это cookie с port_me = 0 (templ-pkt.c:1067), его считает `build_echo`.
+            let port_me16 = u16::try_from(port_me)
+                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
+            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+            self.icmp
+                .build_echo(ip_them, ip_me, seqno, self.entropy, &mut p.frame);
+            p.index = i;
+            p.ip_me = ip_me;
+            p.port_me = port_me16;
+            p.ip_them = ip_them;
+            // у ICMP порта получателя нет: индекс 196608 в u16 не помещается, как в кадре его нет вовсе
+            p.port_them = 0;
+            p.seqno = seqno;
+            return Ok(());
+        }
         let (Ok(port_them16), Ok(port_me16)) = (u16::try_from(port_them), u16::try_from(port_me))
         else {
             return Err(PlanError::PortDoesNotFit { port_them, port_me });
@@ -341,13 +366,12 @@ pub fn check_cli_ports(ports: &RangeList) -> Result<(), PlanError> {
     Ok(())
 }
 
-/// Временная таблица индексов, для которых построителя зонда ещё нет: `(первый, последний, метка)`. Задачи 3-6
-/// удаляют по строке, когда протокол получает построитель (UDP, SCTP, ICMP Echo, ARP). Постоянный отказ `O:*`/`I:1+`
+/// Временная таблица индексов, для которых построителя зонда ещё нет: `(первый, последний, метка)`. Задачи 4-6
+/// удаляют по строке, когда протокол получает построитель (UDP, SCTP, ARP; ICMP Echo построен в Задаче 3). Постоянный отказ `O:*`/`I:1+`
 /// живёт отдельно, в [`check_cli_ports`].
-const UNBUILT: [(u32, u32, &str); 4] = [
+const UNBUILT: [(u32, u32, &str); 3] = [
     (TEMPL_UDP, TEMPL_UDP_LAST, "U"),
     (TEMPL_SCTP, TEMPL_SCTP_LAST, "S"),
-    (TEMPL_ICMP_ECHO, TEMPL_ICMP_ECHO, "I"),
     (TEMPL_ARP, TEMPL_ARP, "I"),
 ];
 
@@ -1380,8 +1404,58 @@ mod tests {
     }
 
     #[test]
+    fn icmp_echo_plan_builds_through_the_cli_path_and_splits_across_nics() {
+        // I:0 больше не отказывает: 90-байтные кадры, ip_id и [id|seq] как у C; адаптеры делят поток по чётности
+        let e = || eff("198.18.2.0/30", "I:0", |_| {});
+        let one = ReadyPlan::new_cli(e(), nics(1)).unwrap();
+        let all = drain(&mut one.cursor_for_nic(0, None).unwrap());
+        assert_eq!(all.len(), 4);
+        for p in &all {
+            assert_eq!(p.frame.len(), 90);
+            assert_eq!(p.frame[23], 1, "proto ICMP");
+            assert_eq!(p.port_them, 0);
+            let id_seq = u32::from_be_bytes(p.frame[38..42].try_into().unwrap());
+            assert_eq!(
+                id_seq,
+                crate::cookie::icmp_echo_cookie(p.ip_them, p.ip_me, 0x1234_5678)
+            );
+        }
+        let two = ReadyPlan::new_cli(e(), nics(2)).unwrap();
+        let k0 = drain(&mut two.cursor_for_nic(0, None).unwrap());
+        let k1 = drain(&mut two.cursor_for_nic(1, None).unwrap());
+        assert_eq!(
+            k0.iter().map(|p| p.index).collect::<Vec<_>>(),
+            [0, 2],
+            "even outer indices"
+        );
+        assert_eq!(k1.iter().map(|p| p.index).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(
+            [
+                k0[0].frame.clone(),
+                k1[0].frame.clone(),
+                k0[1].frame.clone(),
+                k1[1].frame.clone()
+            ],
+            [
+                all[0].frame.clone(),
+                all[1].frame.clone(),
+                all[2].frame.clone(),
+                all[3].frame.clone()
+            ],
+            "same source address on both test NICs: the split reproduces the single stream"
+        );
+        // Смешанный список: ICMP и TCP в одном потоке без ошибок сборки
+        let mixed = ReadyPlan::new_cli(eff("198.18.2.0/30", "80,I:0", |_| {}), nics(1)).unwrap();
+        let mut cur = mixed.cursor_for_nic(0, None).unwrap();
+        let frames = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        assert_eq!(frames.iter().filter(|p| p.frame.len() == 90).count(), 4);
+        assert_eq!(frames.iter().filter(|p| p.frame.len() == 58).count(), 4);
+    }
+
+    #[test]
     fn interim_refusal_names_the_first_protocol_without_a_builder() {
-        // Пока нет построителей UDP, SCTP, ICMP Echo и ARP, план CLI отказывает сразу (иначе скан оборвался бы
+        // Пока нет построителей UDP, SCTP и ARP, план CLI отказывает сразу (иначе скан оборвался бы
         // молча на первом таком индексе); чистый TCP проходит.
         let label = |ports: &str| match cli_err(ports) {
             PlanError::ProtocolNotBuilt { label } => label,
@@ -1390,7 +1464,6 @@ mod tests {
         assert_eq!(label("U:53"), "U:53");
         assert_eq!(label("T:80,U:53,161"), "U:53");
         assert_eq!(label("S:2905"), "S:2905");
-        assert_eq!(label("I:0"), "I:0");
         assert_eq!(label("I:2"), "ARP (I:2)");
         // наименьший индекс побеждает: UDP раньше SCTP
         assert_eq!(label("S:1,U:9"), "U:9");

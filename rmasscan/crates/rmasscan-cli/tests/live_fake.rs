@@ -29,7 +29,9 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::throttle::Clock;
-use rmasscan_engine::fake::{FakeAdapter, HealthStep, ManualClock, RxStep, reply_to_syn};
+use rmasscan_engine::fake::{
+    FakeAdapter, HealthStep, ManualClock, RxStep, reply_to_echo, reply_to_syn,
+};
 use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHealth};
 use rmasscan_net::arp_resolve::{ArpPolicy, arp_binding};
 use rmasscan_net::discover::{NextHopWhy, Source};
@@ -317,6 +319,15 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
                 })
                 .unwrap_or_default()
         }
+        Some([0x08, 0x00]) if is_echo_request(frame) => {
+            // ICMP Echo Request: отвечают те же хосты, что открыты в `OPEN` (по адресу, порта у ICMP нет).
+            let ip = Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]);
+            if OPEN.iter().any(|(o, _)| *o == ip) {
+                reply_to_echo(frame, 0).into_iter().collect()
+            } else {
+                vec![]
+            }
+        }
         Some([0x08, 0x00]) => {
             let (ip, port) = syn_dst(frame);
             let flags = if OPEN.contains(&(ip, port)) {
@@ -529,6 +540,10 @@ fn live_run(b: &FakeBackend, args: &[&str]) -> (Result<Outcome, String>, String,
 
 fn is_arp(f: &[u8]) -> bool {
     f.get(12..14) == Some(&[0x08, 0x06][..])
+}
+
+fn is_echo_request(f: &[u8]) -> bool {
+    f.len() == 90 && f.get(23) == Some(&1) && f.get(34) == Some(&8)
 }
 
 fn is_syn(f: &[u8]) -> bool {
@@ -755,7 +770,7 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
     }
 }
 
-/// Порт протокола без построителя зонда (UDP, SCTP, ICMP Echo, ARP) и порты `O:*`/`I:1+` отклоняются живым
+/// Порт протокола без построителя зонда (UDP, SCTP, ARP) и порты `O:*`/`I:1+` отклоняются живым
 /// сканом до обнаружения, ARP и открытия адаптера: ни кадра, ни строки `[+]`, ошибка и код 1. Раньше скан с
 /// `-p80,U:53` слал SYN до первого UDP-индекса и заканчивался как завершённый.
 #[test]
@@ -765,7 +780,6 @@ fn live_scan_refuses_ports_without_a_probe_builder_before_any_frame() {
     for (extra, text) in [
         (&["-pU:53"][..], "U:53 cannot be scanned yet"),
         (&["-pS:2905"][..], "S:2905 cannot be scanned yet"),
-        (&["-pI:0"][..], "I:0 cannot be scanned yet"),
         (&["-pI:2"][..], "ARP scan cannot be mixed with other ports"),
         (&["-pO:47"][..], "raw IP protocol ports (O:47)"),
         (&["-pI:1"][..], "ICMP ports other than I:0"),
@@ -3317,6 +3331,73 @@ fn two_nic_backend() -> FakeBackend {
     let mut b = FakeBackend::new();
     b.ifaces.push(eth1());
     b
+}
+
+/// ICMP Echo (`--ping`, Задача 3) идёт тем же путём адаптера, что TCP: живой скан находит хосты фиктивной сети,
+/// кадры это 90-байтные Echo Request, а результаты печатаются как `icmp` с портом 0.
+#[test]
+fn live_ping_scan_finds_hosts_with_90_byte_echo_requests() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &["198.51.100.1-198.51.100.2", "--ping", "--wait", "1"]);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    let sent = opened.last().unwrap().adapter.sent_frames();
+    assert_eq!(sent.len(), 2);
+    assert!(sent.iter().all(|f| is_echo_request(f)), "{sent:?}");
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(lines.len(), 2, "{out}");
+    for (l, ip) in lines.iter().zip([T1, T2]) {
+        assert!(l.contains(&format!("0/icmp on {ip}")), "{l}");
+    }
+}
+
+/// Multi-NIC: ICMP Echo делится между `--adapter[0]` и `--adapter[1]` по чётности внешнего индекса, как TCP,
+/// и каждый адаптер шлёт со своего адреса.
+#[test]
+fn live_ping_scan_splits_probes_across_two_adapters() {
+    let b = two_nic_backend();
+    let mut args = TWO_NICS.to_vec();
+    args[1] = "--ping";
+    let (r, out, log) = cli(&b, &args);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    assert_eq!(opened.len(), 2);
+    for (k, ip) in [MY_IP, ETH1_IP].into_iter().enumerate() {
+        let sent = opened[k].adapter.sent_frames();
+        assert_eq!(sent.len(), 1, "nic {k}");
+        assert!(is_echo_request(&sent[0]), "nic {k}");
+        assert_eq!(sent[0][26..30], ip.octets(), "nic {k}");
+    }
+    assert_eq!(out.lines().count(), 2, "{out}");
+}
+
+/// `--offline --packet-trace` печатает для ICMP Echo строку C `main-ptrace.c:67-70`: `ICMP`, `[src]:type`
+/// (8), `[dst]:code` (0), после второго адреса пробел. Образец снят с C 8e6b3b0: `packet_trace()` на кадре
+/// `template_set_target_ipv4` (10.0.0.1 <- 10.255.0.1) вывел
+/// `SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.1]:0          ` и перевод строки.
+#[test]
+fn offline_packet_trace_prints_the_c_icmp_sent_line() {
+    let b = hermetic();
+    let args: Vec<&str> = TRACE
+        .iter()
+        .map(|a| if *a == "-p80,443" { "-pI:0" } else { *a })
+        .collect();
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines,
+        [
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.0]:0          \n",
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.1]:0          \n",
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.2]:0          \n",
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.3]:0          \n",
+        ]
+    );
 }
 
 const TWO_NICS: [&str; 13] = [

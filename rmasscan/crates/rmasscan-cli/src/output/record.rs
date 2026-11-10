@@ -72,6 +72,11 @@ pub struct Record {
 
 impl Record {
     pub fn from_reply(r: &Reply, timestamp: u64) -> Record {
+        debug_assert!(
+            Proto::from_ip_proto(r.ip_proto).is_some(),
+            "unknown ip_proto {}",
+            r.ip_proto
+        );
         Record {
             timestamp,
             ip: Ipv4Addr::from(r.remote_ip),

@@ -1052,13 +1052,12 @@ mod tests {
         assert!(e.contains("O:47"), "{e}");
         let e = run_args(&trace_args(&["-pI:1"])).unwrap_err();
         assert!(e.contains("I:1"), "{e}");
-        // UDP, SCTP, I:0 и ARP пока без построителя зонда: временный отказ до обнаружения и до первой строки
-        // SENT (Задачи 3-6 снимают его по протоколу). Чистый TCP проходит.
+        // UDP, SCTP и ARP пока без построителя зонда: временный отказ до обнаружения и до первой строки
+        // SENT (Задачи 4-6 снимают его по протоколу). Чистый TCP и ICMP Echo (I:0) проходят.
         for (ports, label) in [
             ("-pU:53", "U:53"),
             ("-p80,U:53", "U:53"),
             ("-pS:2905", "S:2905"),
-            ("-pI:0", "I:0"),
         ] {
             let (res, out, log) = run_capture(&trace_args(&[ports]));
             let e = res.unwrap_err();
@@ -1069,6 +1068,14 @@ mod tests {
             assert!(out.is_empty(), "{ports}: SENT lines before refusal: {out}");
             assert!(log.is_empty(), "{ports}: output before refusal: {log}");
         }
+        // I:0 строит ICMP Echo: к 8 SYN (TRACE шлёт на 80 и 443) добавляется по строке ICMP на каждый из 4 адресов
+        let out = run_args(&trace_args(&["-pI:0"])).unwrap();
+        assert_eq!(out.lines().count(), 12, "{out}");
+        let icmp = out
+            .lines()
+            .filter(|l| l.contains(") ICMP [10.255.0.1]:8 "))
+            .count();
+        assert_eq!(icmp, 4, "{out}");
         // ARP-индекс вместе с TCP-портами трассировки: постоянный отказ смеси (R3)
         let (res, out, log) = run_capture(&trace_args(&["-pI:2"]));
         assert!(res.unwrap_err().contains("ARP scan cannot be mixed"));

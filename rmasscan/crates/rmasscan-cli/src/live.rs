@@ -960,7 +960,7 @@ pub(crate) fn for_each_probe(
     }
 }
 
-/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s`. Адреса и флаги разбираются из самого кадра, как
+/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s` (для ICMP :67-70, см. ниже). Адреса и флаги разбираются из самого кадра, как
 /// `preprocess_frame` в C.
 fn trace_line(secs: f64, frame: &[u8]) -> String {
     let (ip, tcp) = (14, 34);
@@ -976,6 +976,15 @@ fn trace_line(secs: f64, frame: &[u8]) -> String {
         frame[ip + 18],
         frame[ip + 19],
     );
+    if frame[ip + 9] == 1 {
+        // main-ptrace.c:67-70: ICMP печатает `type` в поле порта источника и `code` в поле порта получателя
+        // (proto-preprocess.c:184-187), после второго адреса остаётся пробел (формат `%-21s \n`).
+        return format!(
+            "SENT ({secs:5.4}) ICMP {:<21} > {:<21} \n",
+            format!("[{src}]:{}", frame[tcp]),
+            format!("[{dst}]:{}", frame[tcp + 1])
+        );
+    }
     let sport = u16::from_be_bytes([frame[tcp], frame[tcp + 1]]);
     let dport = u16::from_be_bytes([frame[tcp + 2], frame[tcp + 3]]);
     let flags = match frame[tcp + 13] {

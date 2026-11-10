@@ -1069,3 +1069,164 @@ fn full_address_space_target_accepts_both_extremes() {
     );
     assert_eq!(reply_from(&plan, 0x0a00_0001, 80, 0x12), Ok(None));
 }
+
+// ---------- ICMP Echo (I:0): cookie с port_me = 0 и приём Echo Reply ----------
+
+mod icmp_echo {
+    use super::*;
+    use rmasscan_core::cookie::icmp_echo_cookie;
+    use rmasscan_core::probe::NicBinding;
+    use rmasscan_core::receive::Reply;
+
+    const ICMP_SRC_PORT: u16 = 41000;
+
+    fn icmp_plan(link: LinkType, ports: &str) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: link,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: MAC_NH,
+                // --source-port 41000: один порт источника
+                source_ports: (ICMP_SRC_PORT, ICMP_SRC_PORT),
+            })],
+        )
+        .unwrap()
+    }
+
+    /// IP-пакет ICMP с верными суммами; `[id|seq]`, type и code задаёт вызывающий.
+    fn icmp_packet(ip_them: u32, typ: u8, code: u8, idseq: u32, ttl: u8) -> Vec<u8> {
+        let mut icmp = vec![typ, code, 0, 0];
+        icmp.extend_from_slice(&idseq.to_be_bytes());
+        icmp.extend_from_slice(&(8u8..=0x37).collect::<Vec<u8>>());
+        let x = rfc1071(&[&icmp]);
+        icmp[2..4].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&ip_them.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        let x = rfc1071(&[&ip]);
+        ip[10..12].copy_from_slice(&x.to_be_bytes());
+        ip.extend_from_slice(&icmp);
+        ip
+    }
+
+    fn reply_to(link: LinkType, plan: &ReadyPlan, ip: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(&wrap(link, ip), link, plan)
+    }
+
+    #[test]
+    fn icmp_echo_cookie_uses_zero_source_port() {
+        for link in LINKS {
+            let plan = icmp_plan(link, "I:0");
+            let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+            let mut n = 0;
+            while let Some(p) = cur.current().cloned() {
+                n += 1;
+                cur.advance_sent();
+                let oi = ip_off(link);
+                let ot = oi + 20;
+                // кадр: 28 байт IP+ICMP-заголовков и 48 байт паттерна, [id|seq] = cookie с port_me = 0
+                assert_eq!(p.frame.len(), oi + 20 + 56);
+                assert_eq!(p.port_me, ICMP_SRC_PORT);
+                let id_seq = u32::from_be_bytes(p.frame[ot + 4..ot + 8].try_into().unwrap());
+                assert_eq!(id_seq, icmp_echo_cookie(p.ip_them, p.ip_me, SEED));
+                let zero = syn_cookie_ipv4(p.ip_them, 196_608, p.ip_me, 0, SEED) as u32;
+                let with_port =
+                    syn_cookie_ipv4(p.ip_them, 196_608, p.ip_me, u32::from(p.port_me), SEED) as u32;
+                assert_eq!(id_seq, zero);
+                assert_ne!(
+                    id_seq, with_port,
+                    "порт источника не должен попасть в cookie"
+                );
+                // seqno потока (с реальным port_me) идёт только в ip_id
+                assert_eq!(p.seqno, with_port);
+                assert_eq!(
+                    u16::from_be_bytes([p.frame[oi + 4], p.frame[oi + 5]]),
+                    (p.ip_them ^ 196_608 ^ with_port) as u16
+                );
+                // приём: Echo Reply с тем же [id|seq]
+                let ok = icmp_packet(p.ip_them, 0, 0, id_seq, 57);
+                let r = reply_to(link, &plan, &ok).unwrap().unwrap();
+                assert_eq!(
+                    r,
+                    Reply {
+                        remote_ip: p.ip_them,
+                        remote_port: 0,
+                        local_ip: IP_ME,
+                        local_port: 0,
+                        status: PortStatus::Open,
+                        tcp_flags: 0,
+                        ttl: 57,
+                        ip_proto: 1,
+                        mac: None,
+                    }
+                );
+                // неверный cookie (с портом источника) отбрасывается
+                let bad = icmp_packet(p.ip_them, 0, 0, with_port, 57);
+                assert_eq!(reply_to(link, &plan, &bad), Ok(None), "{link:?}");
+            }
+            assert_eq!(n, 8, "{link:?}");
+        }
+    }
+
+    #[test]
+    fn icmp_echo_reply_filters() {
+        let link = LinkType::Ethernet;
+        let plan = icmp_plan(link, "I:0");
+        let good = icmp_echo_cookie(IP_THEM, IP_ME, SEED);
+        let ok = |ip: &[u8]| reply_to(link, &plan, ip);
+        assert!(ok(&icmp_packet(IP_THEM, 0, 0, good, 64)).unwrap().is_some());
+        // Echo Request (type 8) и ненулевой code не принимаются
+        assert_eq!(ok(&icmp_packet(IP_THEM, 8, 0, good, 64)), Ok(None));
+        assert_eq!(ok(&icmp_packet(IP_THEM, 0, 1, good, 64)), Ok(None));
+        // cookie другого хоста и чужой seed
+        assert_eq!(ok(&icmp_packet(IP_THEM + 1, 0, 0, good, 64)), Ok(None));
+        let other_seed = icmp_echo_cookie(IP_THEM, IP_ME, SEED + 1);
+        assert_eq!(ok(&icmp_packet(IP_THEM, 0, 0, other_seed, 64)), Ok(None));
+        // адрес вне целей плана (cookie для него верный)
+        let outside = 0x0b00_0005;
+        let c = icmp_echo_cookie(outside, IP_ME, SEED);
+        assert_eq!(ok(&icmp_packet(outside, 0, 0, c, 64)), Ok(None));
+        // I:0 не входит в порты плана: TCP-план ответ не принимает
+        let tcp_plan = icmp_plan(link, "80");
+        assert_eq!(
+            reply_to(link, &tcp_plan, &icmp_packet(IP_THEM, 0, 0, good, 64)),
+            Ok(None)
+        );
+        // обрезанный ICMP и испорченная сумма: ошибка, не Open
+        let mut short = icmp_packet(IP_THEM, 0, 0, good, 64);
+        short.truncate(20 + 6);
+        short[2..4].copy_from_slice(&26u16.to_be_bytes());
+        assert!(matches!(ok(&short), Err(ParseError::Truncated(_))));
+        let mut bad = icmp_packet(IP_THEM, 0, 0, good, 64);
+        bad[20 + 10] ^= 0xff;
+        assert_eq!(ok(&bad), Err(ParseError::BadIcmpChecksum));
+        assert_eq!(
+            parse_reply_with(
+                &wrap(link, &bad),
+                link,
+                &plan,
+                ChecksumPolicy::TrustHardware
+            )
+            .unwrap()
+            .map(|r| r.ip_proto),
+            Some(1)
+        );
+    }
+}

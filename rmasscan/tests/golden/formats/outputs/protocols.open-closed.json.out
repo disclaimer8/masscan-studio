@@ -1,0 +1,25 @@
+[
+{   "ip": "192.0.2.10",   "timestamp": "1700007200", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "192.0.2.10",   "timestamp": "1700007200", "ports": [ {"port": 53, "proto": "udp", "status": "open", "reason": "none", "ttl": 64} ] }
+,
+{   "ip": "192.0.2.11",   "timestamp": "1700007201", "ports": [ {"port": 59999, "proto": "udp", "status": "open", "reason": "none", "ttl": 63} ] }
+,
+{   "ip": "192.0.2.11",   "timestamp": "1700007201", "ports": [ {"port": 161, "proto": "udp", "status": "closed", "reason": "none", "ttl": 63} ] }
+,
+{   "ip": "192.0.2.12",   "timestamp": "1700007202", "ports": [ {"port": 500, "proto": "udp", "status": "closed", "reason": "none", "ttl": 62} ] }
+,
+{   "ip": "192.0.2.12",   "timestamp": "1700007202", "ports": [ {"port": 443, "proto": "tcp", "status": "closed", "reason": "rst-ack", "ttl": 62} ] }
+,
+{   "ip": "192.0.2.12",   "timestamp": "1700007203", "ports": [ {"port": 8080, "proto": "tcp", "status": "closed", "reason": "none", "ttl": 62} ] }
+,
+{   "ip": "198.51.100.5",   "timestamp": "1700007203", "ports": [ {"port": 2905, "proto": "sctp", "status": "open", "reason": "none", "ttl": 64} ] }
+,
+{   "ip": "198.51.100.5",   "timestamp": "1700007204", "ports": [ {"port": 2906, "proto": "sctp", "status": "closed", "reason": "none", "ttl": 64} ] }
+,
+{   "ip": "198.51.100.6",   "timestamp": "1700007204", "ports": [ {"port": 0, "proto": "icmp", "status": "open", "reason": "none", "ttl": 128} ] }
+,
+{   "ip": "203.0.113.9",   "timestamp": "1700007205", "ports": [ {"port": 0, "proto": "icmp", "status": "open", "reason": "none", "ttl": 255} ] }
+,
+{   "ip": "203.0.113.9",   "timestamp": "1700007205", "ports": [ {"port": 123, "proto": "udp", "status": "open", "reason": "none", "ttl": 255} ] }
+]

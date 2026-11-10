@@ -7,7 +7,7 @@
   "captured_at": "2026-11-06T16:35:12Z",
   "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
   "isolation": "sudo unshare -n",
-  "services_source": "getent services <port>/tcp on the oracle host",
+  "services_source": "getent services <port>/tcp (TCP records) and <port>/udp (UDP records) on the oracle host",
   "store_max_bytes": 65536,
   "inputs": [
     {
@@ -37,6 +37,13 @@
       "size_bytes": 1050198,
       "records": 70000,
       "stored": false
+    },
+    {
+      "name": "protocols.scan.bin",
+      "sha256": "197e8bd5ebef32204559afd81418514cbc74b77656de4e78c61bb5e7a1662833",
+      "size_bytes": 378,
+      "records": 12,
+      "stored": true
     }
   ],
   "cases": [
@@ -1453,6 +1460,368 @@
       "stderr": "[+] --readscan @INPUT@\n[+] @INPUT@:    65536\r"
     },
     {
+      "name": "protocols.open.list",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.list.out",
+      "sha256": "c6df6b8b9f831140645d039983c36cea042660e75add8769085523bd1c417491",
+      "masked_sha256": "c6df6b8b9f831140645d039983c36cea042660e75add8769085523bd1c417491",
+      "size_bytes": 266,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.json",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.json.out",
+      "sha256": "2a29f999e34cdc7607be44e988a69afff7272f20f4038a800b1f29c3e742a3f5",
+      "masked_sha256": "2a29f999e34cdc7607be44e988a69afff7272f20f4038a800b1f29c3e742a3f5",
+      "size_bytes": 1043,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.ndjson",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.ndjson.out",
+      "sha256": "998fa6b9ab1bc1b18d101b1022c5e3d68aa59a61fcc36c95bcad8b7a87a94b1f",
+      "masked_sha256": "998fa6b9ab1bc1b18d101b1022c5e3d68aa59a61fcc36c95bcad8b7a87a94b1f",
+      "size_bytes": 992,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.grepable",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.grepable.out",
+      "sha256": "dbd7cd34552e2c9afc3e89a2c9c9cfcbfd03771963a110ce8d8369b54c2b7f08",
+      "masked_sha256": "ca869049026b9dfe3f9346199afd433e3d000ee23eded3431757605c9b781d1d",
+      "size_bytes": 667,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.xml",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.xml.out",
+      "sha256": "3da1d1448de114d2e36b3e1373d35e2e40ef2435d00b93e4c0672345f8b619ad",
+      "masked_sha256": "733649b0f062575e4616d636e535cad96af9d7c1a5b82eeb772f7b3c456890d5",
+      "size_bytes": 1652,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.binary",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.binary.out",
+      "sha256": "bb89afa0842c92ec40d74d02f3adae5446dcb2c90a8670df42a3bb69eb019659",
+      "masked_sha256": "bb89afa0842c92ec40d74d02f3adae5446dcb2c90a8670df42a3bb69eb019659",
+      "size_bytes": 303,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.hostonly",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.hostonly.out",
+      "sha256": "46dad478c1458067c62f9728254bc6f3841e94e2a9547e1cf413c71a3ca5fde1",
+      "masked_sha256": "46dad478c1458067c62f9728254bc6f3841e94e2a9547e1cf413c71a3ca5fde1",
+      "size_bytes": 83,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.unicornscan",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/protocols.open.unicornscan.out",
+      "sha256": "473c525c2cec7f49c5bdd1a05198aeadc7e4ec5025ab27ebee758aa589211684",
+      "masked_sha256": "473c525c2cec7f49c5bdd1a05198aeadc7e4ec5025ab27ebee758aa589211684",
+      "size_bytes": 345,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open.xml-webxml",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": "outputs/protocols.open.xml-webxml.out",
+      "sha256": "9594dcb5d414005483ee75d570ab31f12afa99deb41fb4fe5fcc738878f1a6b5",
+      "masked_sha256": "3ebc0ed224b39d13c9ce77e2f59b3d5f0ded1f97d63c7309b6ffe96a8f49d1f7",
+      "size_bytes": 1729,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.list",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.list.out",
+      "sha256": "1ca7ef6559faf1fbce61490599e2f8afd88eb6f6ec0751e9c8354516ef6da1a6",
+      "masked_sha256": "1ca7ef6559faf1fbce61490599e2f8afd88eb6f6ec0751e9c8354516ef6da1a6",
+      "size_bytes": 456,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.json",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.json.out",
+      "sha256": "0c62d4a07740e058d5f16375650fb0a07e03513dacaf4c371a02eedff15a34f1",
+      "masked_sha256": "0c62d4a07740e058d5f16375650fb0a07e03513dacaf4c371a02eedff15a34f1",
+      "size_bytes": 1796,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.ndjson",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.ndjson.out",
+      "sha256": "4a3c018934d60aca232c3a5c097be3fd215e44fd165c40284fcaed8e5fcf4710",
+      "masked_sha256": "4a3c018934d60aca232c3a5c097be3fd215e44fd165c40284fcaed8e5fcf4710",
+      "size_bytes": 1710,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.grepable",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.grepable.out",
+      "sha256": "f5e31a153c1dcd24c3365f1127fbbfad4851cba1edb57d0ad03ec4f88f31efea",
+      "masked_sha256": "ba6863e3a0fb5d5c104ee69189c8561a3d2cc139a97fb3f6bb7f5d59143985ac",
+      "size_bytes": 1039,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.xml",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.xml.out",
+      "sha256": "c4169b3a05f77b90f7ff4958eabb94ff4439b205605b1e3cfbe7ef5fe0abc26c",
+      "masked_sha256": "2f1dd78a3a9719e691b0e363206c706b75c27b4bd39c8654a231dfc90effc19b",
+      "size_bytes": 2605,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.binary",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.binary.out",
+      "sha256": "197e8bd5ebef32204559afd81418514cbc74b77656de4e78c61bb5e7a1662833",
+      "masked_sha256": "197e8bd5ebef32204559afd81418514cbc74b77656de4e78c61bb5e7a1662833",
+      "size_bytes": 378,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.hostonly",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.hostonly.out",
+      "sha256": "634bca410597dcca37df08422d9475c86659837b205ae7a40aca3f35afb6f0bd",
+      "masked_sha256": "634bca410597dcca37df08422d9475c86659837b205ae7a40aca3f35afb6f0bd",
+      "size_bytes": 140,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.unicornscan",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.unicornscan.out",
+      "sha256": "6e97c4bb6e79d126e6d26f57071d6c5a648a15db343cf02d860a73dafd403f52",
+      "masked_sha256": "6e97c4bb6e79d126e6d26f57071d6c5a648a15db343cf02d860a73dafd403f52",
+      "size_bytes": 609,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "protocols.open-closed.xml-webxml",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/protocols.open-closed.xml-webxml.out",
+      "sha256": "bfdfd74b177120df86491dbfad6f689756c51d35cdbb2f0ffae043282ed169db",
+      "masked_sha256": "a82a4a32233e347620d6ddfc8878d1b5b9c19fad239e08c6754b1836cea96f39",
+      "size_bytes": 2682,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
       "name": "filter.open.list",
       "input": "basic.scan.bin",
       "args": [
@@ -1495,6 +1864,81 @@
       ],
       "stdout": "",
       "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.protocols.list",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--range",
+        "192.0.2.0/28",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.protocols.list.out",
+      "sha256": "43557ebeed694b48bd8cd7e3815373481c266d2b4995fae543be22cae0379137",
+      "masked_sha256": "43557ebeed694b48bd8cd7e3815373481c266d2b4995fae543be22cae0379137",
+      "size_bytes": 120,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.protocols.grepable",
+      "input": "protocols.scan.bin",
+      "args": [
+        "--range",
+        "192.0.2.0/28",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.protocols.grepable.out",
+      "sha256": "b7d0689d4e60fddd1c20c12923c89cfff4824f25aeea1a6a602298f038e0332b",
+      "masked_sha256": "dd0c0dd98f90ad9ae04fc7391b76b39429bd2ee3ee574fce7a0b380f70512e2b",
+      "size_bytes": 382,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    }
+  ],
+  "protocols_source": "getent protocols <ip_proto> on the oracle host for the records that are neither TCP nor UDP",
+  "extended": [
+    {
+      "captured_at": "2026-11-10T17:52:03Z",
+      "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
+      "inputs": [
+        "protocols.scan.bin"
+      ],
+      "cases": [
+        "protocols.open.list",
+        "protocols.open.json",
+        "protocols.open.ndjson",
+        "protocols.open.grepable",
+        "protocols.open.xml",
+        "protocols.open.binary",
+        "protocols.open.hostonly",
+        "protocols.open.unicornscan",
+        "protocols.open.xml-webxml",
+        "protocols.open-closed.list",
+        "protocols.open-closed.json",
+        "protocols.open-closed.ndjson",
+        "protocols.open-closed.grepable",
+        "protocols.open-closed.xml",
+        "protocols.open-closed.binary",
+        "protocols.open-closed.hostonly",
+        "protocols.open-closed.unicornscan",
+        "protocols.open-closed.xml-webxml",
+        "filter.protocols.list",
+        "filter.protocols.grepable"
+      ],
+      "note": "the protocols cases were captured later with the same oracle and script; every earlier case reproduced (masked_sha256, stdout, stderr) and was kept as committed"
     }
   ]
 }

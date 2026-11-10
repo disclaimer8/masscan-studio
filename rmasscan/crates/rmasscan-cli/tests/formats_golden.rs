@@ -1,11 +1,12 @@
 //! Офлайн-паритет форматов вывода с C (AGPL-3.0), проект §6.1. Каждый кейс `tests/golden/formats/manifest.json` это
 //! прогон `--readscan` C-оракула masscan © Robert David Graham (HEAD 8e6b3b0, `scripts/build-format-goldens.sh`);
 //! здесь тот же argv идёт через [`rmasscan_cli::run`] в процессе с fake-бэкендом: имена сервисов из закоммиченного
-//! `services.txt` (`getent services` хоста оракула), смещение UTC 0, часы стенки постоянны. Байты файла вывода равны
-//! эталону после масок манифеста (поля, которые C берёт из часов при записи: XML `start`, `finished`
-//! `time`/`timestr`/`elapsed`, `# Masscan done at …` grepable); stdout и stderr равны дословно (путь входа заменён на
-//! `@INPUT@`). Кейсы `many` (входы и выходы больше `store_max_bytes`) сверяются по sha256 после масок: вход строится
-//! тем же генератором `examples/format_inputs.rs`.
+//! `services.txt` (`getent services` хоста оракула, `/tcp` и `/udp`) и `protocols.txt` (`getent protocols`: имя сервиса
+//! ICMP и SCTP в `-oG`), смещение UTC 0, часы стенки постоянны. Байты файла вывода равны эталону после масок
+//! манифеста (поля, которые C берёт из часов при записи: XML `start`, `finished` `time`/`timestr`/`elapsed`,
+//! `# Masscan done at …` grepable); stdout и stderr равны дословно (путь входа заменён на `@INPUT@`). Кейсы `many`
+//! (входы и выходы больше `store_max_bytes`) сверяются по sha256 после масок: вход строится тем же генератором
+//! `examples/format_inputs.rs`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -327,8 +328,9 @@ fn check_input(m: &Manifest, input: &Input, tally: &mut Tally) {
         p
     };
     let services = fs::read_to_string(format!("{DIR}/services.txt")).expect("services.txt");
+    let protocols = fs::read_to_string(format!("{DIR}/protocols.txt")).expect("protocols.txt");
     let backend = ReadscanOnly {
-        services: ServiceNames::parse(&services),
+        services: ServiceNames::parse(&services).with_protocols(&protocols),
     };
     for c in m.cases.iter().filter(|c| c.input == input.name) {
         if let Some((_, why)) = SKIPS.iter().find(|(n, _)| *n == c.name) {
@@ -386,16 +388,17 @@ fn inputs_are_the_generator_output() {
     }
 }
 
-/// Манифест снят с закреплённого оракула и содержит всю матрицу скрипта: 4 входа × 2 режима `--show` ×
-/// (8 форматов + `-oX --webxml`) и 2 кейса фильтра; имена уникальны, пропуски называют существующие кейсы, у
-/// хранимых входов есть файл эталона, у остальных его нет.
+/// Манифест снят с закреплённого оракула и содержит всю матрицу скрипта: 5 входов × 2 режима `--show` ×
+/// (8 форматов + `-oX --webxml`), 2 кейса фильтра на `basic` (`--range` и `-p80`) и 2 на `protocols` (только
+/// `--range`: фильтр `-p` по не-TCP записям это отличие Р5, его эталонов C нет); имена уникальны, пропуски
+/// называют существующие кейсы, у хранимых входов есть файл эталона, у остальных его нет.
 #[test]
 fn manifest_covers_the_capture_matrix() {
     let m = manifest();
     assert_eq!(m.oracle.git_head, ORACLE_GIT_HEAD);
     assert_eq!(m.oracle.binary_sha256, ORACLE_SHA256);
-    assert_eq!(m.inputs.len(), 4);
-    assert_eq!(m.cases.len(), 4 * 2 * 9 + 2);
+    assert_eq!(m.inputs.len(), 5);
+    assert_eq!(m.cases.len(), 5 * 2 * 9 + 2 + 2);
     let mut names: Vec<&str> = m.cases.iter().map(|c| c.name.as_str()).collect();
     names.sort_unstable();
     names.dedup();

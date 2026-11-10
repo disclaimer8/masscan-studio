@@ -2,8 +2,8 @@
 //! (порт `out-binary.c` masscan © Robert David Graham) напрямую через форматтер: так пишутся и заголовок с подвалом
 //! без записей (`empty`), чего конвейер с ленивым заголовком не делает (`output.c:867–870`).
 //!
-//! `cargo run -p rmasscan-cli --example format_inputs -- OUTDIR` пишет четыре файла; `tests/golden/formats/inputs/`
-//! хранит три маленьких, `many` (1 МиБ) не коммитится. Тот же модуль подключает `tests/formats_golden.rs`: тест
+//! `cargo run -p rmasscan-cli --example format_inputs -- OUTDIR` пишет пять файлов; `tests/golden/formats/inputs/`
+//! хранит четыре маленьких, `many` (1 МиБ) не коммитится. Тот же модуль подключает `tests/formats_golden.rs`: тест
 //! сверяет закоммиченные входы и sha256 из манифеста с [`inputs`] и строит `many` на лету.
 //!
 //! Имена `*.scan.bin`, а не `*.scan` C: расширение `.scan` не входит в список данных языкового сторожа репозитория
@@ -70,6 +70,49 @@ fn edge() -> Vec<Record> {
     ]
 }
 
+/// Время записей `protocols`: `BASE + 7_200`, через два часа после `basic`.
+pub const PROTOCOLS_BASE: u64 = BASE + 7_200;
+
+/// Запись протокола `proto` (UDP, SCTP, ICMP или TCP): типы `6`/`7` `-oB` с `ip_proto` 1/6/17/132, которые C
+/// умеет и писать, и читать (`out-binary.c:154–211`, `in-binary.c:100–150`). ARP (тип `8`) C не читает, его
+/// покрывают юнит-тесты `readscan`.
+fn proto_rec(
+    proto: Proto,
+    ip: [u8; 4],
+    port: u16,
+    status: Status,
+    reason: u8,
+    ttl: u8,
+    at: u64,
+) -> Record {
+    Record {
+        proto,
+        ..rec(ip, port, status, reason, ttl, PROTOCOLS_BASE + at)
+    }
+}
+
+/// Не-TCP записи, как их пишет живой скан, вперемешку с TCP: UDP open (порт из services и порт без записи), UDP
+/// closed из ICMP 3/3 (reason 0, TTL внешнего заголовка), SCTP open (INIT-ACK) и closed (ABORT), ICMP Echo open
+/// (порт 0), TCP open/closed по флагам и TCP closed из ICMP 3/3 (reason 0). Адреса из TEST-NET-1/2/3 (RFC 5737).
+fn protocols() -> Vec<Record> {
+    use Proto::{Icmp, Sctp, Tcp, Udp};
+    use Status::{Closed, Open};
+    vec![
+        proto_rec(Tcp, [192, 0, 2, 10], 80, Open, 0x12, 64, 0),
+        proto_rec(Udp, [192, 0, 2, 10], 53, Open, 0x00, 64, 0),
+        proto_rec(Udp, [192, 0, 2, 11], 59999, Open, 0x00, 63, 1),
+        proto_rec(Udp, [192, 0, 2, 11], 161, Closed, 0x00, 63, 1),
+        proto_rec(Udp, [192, 0, 2, 12], 500, Closed, 0x00, 62, 2),
+        proto_rec(Tcp, [192, 0, 2, 12], 443, Closed, 0x14, 62, 2),
+        proto_rec(Tcp, [192, 0, 2, 12], 8080, Closed, 0x00, 62, 3),
+        proto_rec(Sctp, [198, 51, 100, 5], 2905, Open, 0x00, 64, 3),
+        proto_rec(Sctp, [198, 51, 100, 5], 2906, Closed, 0x00, 64, 4),
+        proto_rec(Icmp, [198, 51, 100, 6], 0, Open, 0x00, 128, 4),
+        proto_rec(Icmp, [203, 0, 113, 9], 0, Open, 0x00, 255, 5),
+        proto_rec(Udp, [203, 0, 113, 9], 123, Open, 0x00, 255, 5),
+    ]
+}
+
 /// [`MANY_RECORDS`] записей с адресов подряд от `10.1.0.0`, порты по кругу 22/80/443/8080, каждая третья closed,
 /// по тысяче записей на секунду.
 fn many() -> Vec<Record> {
@@ -123,6 +166,7 @@ pub fn inputs() -> Vec<(&'static str, Vec<u8>)> {
         ("edge.scan.bin", scan_file(&edge())),
         ("many.scan.bin", scan_file(&many())),
         ("empty.scan.bin", scan_file(&[])),
+        ("protocols.scan.bin", scan_file(&protocols())),
     ]
 }
 

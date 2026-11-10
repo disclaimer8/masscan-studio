@@ -690,6 +690,102 @@ RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --sui
 target/release/rmasscan-lab scan-control-verify --dir "$OUT" --out "$OUT/verdict.json"
 ```
 
+## Protocols suite
+
+Живой паритет протоколов IPv4 (спека `2026-11-08-rmasscan-protocols-ipv4-design.md` §6.2) идёт на стенде autodetect:
+`wire-lab.sh --suite protocols` поднимает его так же, как `--suite scan-control` (печать, `lab_id`, `teardown.json`, отказ от
+`--out` прежней лаборатории, ловушка очистки на EXIT/INT/TERM) и запускает внутри `protocols-suite linux`. Нужен
+`--rmasscan`. Пять кейсов `p01`–`p05` и их шаги это одна таблица верификатора (`protocols_verify.rs`, `CASES` и `steps`):
+на каждый выходной документ кейса один шаг rmasscan и один шаг C-оракула с тем же argv, у каждого свой захват пира
+(`peer.pcap`) и свой перезапущенный ответчик. Argv всех кейсов: `198.18.0.2-198.18.0.5 <флаги> [<-oX> <файл>] [--show open,closed]
+--seed 1 --rate 100 --wait 3 --source-port 40000`; фиксированный порт источника делает зонды двух сканеров побайтно
+сравнимыми (cookie нагрузки UDP, initiate tag SCTP, id ICMP и `ip_id` зависят от него). Вердикт выносит офлайн
+`protocols-verify --dir DIR [--out FILE]` (0 PASS, 1 FAIL, 2 INVALID или NOT RUN).
+
+| Кейс | Флаги | Документы | Что доказывает |
+|---|---|---|---|
+| `p01_ping` | `--ping` | `-oL` | Echo Request обоих сканеров побайтно равны плану и друг другу, найдены все четыре пира, у каждого Echo Reply код 0 |
+| `p02_udp_payloads_and_closed` | `-sU -p53,161,500,59999` | `-oJ`, `-oB` | встроенные нагрузки DNS (53), SNMP (161), ISAKMP (500) и 0 байт на 59999 равны плану и зондам оракула; UDP 53 и 161 `open`, 500 и 59999 `closed` по ICMP 3/3 |
+| `p03_sctp_init_ack_abort` | `-sZ -p2905,2906` | `-oB`, `-oL` | INIT побайтно равны плану и оракулу (CRC-32C); INIT-ACK на 2905 `open`, ABORT на 2906 `closed` |
+| `p04_arp_scan` | `--arp` | интерактивный stdout, `-oB` (тип 8) | четыре 42-байтовых who-has и ни одного ARP к шлюзу, `[+] router-mac = ff-ff-ff-ff-ff-ff (given)`, все соседи с MAC пира |
+| `p05_mixed_protos` | `-pT:80,U:53,S:2905,I:0` | `-oJ` | одна выборка с записями tcp, udp, sctp и icmp |
+
+**Как отвечают пиры.** TCP 80 и 8080 открыты (слушатели ответчика), остальные порты закрыты; Echo и ARP отвечает ядро
+пира. UDP 53 и 161 отвечает ответчик лаборатории (`capture responder --udp-ports P,.. --udp-ips A,..`): по сокету на адрес
+пира и порт (сокет на `0.0.0.0` отвечал бы с первичного адреса), один ответ `UDP_REPLY` на датаграмму. Закрытый порт
+UDP получает ICMP 3/3 ядра пира; Linux ограничивает такие ответы (по умолчанию `icmp_ratemask` 6168), поэтому
+`wire-lab.sh --suite protocols` ставит `net.ipv4.icmp_ratemask=0` только в netns пира (запись в `commands.txt`, значение
+умирает вместе с netns, хост не меняется). SCTP: в ядре minipc модуль SCTP не загружен, SCTP-инструментов нет, поэтому
+INIT на линке пира отвечает ответчик лаборатории (`--sctp-iface IF --sctp-open P,..`, один поток, `protocols_verify::sctp_reply`):
+INIT-ACK на 2905 и ABORT на остальных портах в форме Linux (RFC 9260 §8.4: бит T 0, initiate tag INIT как verification
+tag, CRC-32C), только для целого INIT на свой MAC. Это не стек ядра. Ядро пира без SCTP шлёт ещё ICMP 3/2 на каждый INIT,
+оба сканера его игнорируют. Модуль не загружается и не выгружается нигде. Если в ядре хоста SCTP есть, ядро ответило бы
+ABORT рядом с ответчиком: suite отказывает до запуска чего-либо (NOT RUN), p03 и p05 не выполняются; остальные кейсы
+выбирает `--only` у `protocols-suite`. `peer-stack.json` кейса хранит `icmp_ratemask`, `icmp_echo_ignore_all`,
+`sctp_in_kernel` и аргументы ответчика; значения не стенда делают кейс INVALID.
+
+**Что судит верификатор.** Зонды rmasscan равны плану продукта (`ReadyPlan` и курсор, по порядку, по разу); зонды
+оракула равны зондам rmasscan того же документа побайтно и по порядку (перестановка BlackRock). Стенд на каждый зонд
+отвечает ровно тем одним ответом, которого требует его форма; иначе INVALID для обоих сканеров, не FAIL. Документ
+разбирается в байтовых формах C (`-oL`, `-oJ`, `-oB` типов 6, 7 и 8, интерактивные строки) и сравнивается с записями
+своего провода. stderr rmasscan: код 0, молчащий stdout при файле, только строки `[+]` и формы строки статуса,
+`[+] finished: Completed, sent N, replies R, open O` равно числу зондов и различных ответов на проводе. Файл оракула
+может быть без подвала только при строке `[-] Passed the wait window but still running, forcing exit...` в его stderr (так
+было в каждом шаге r3), файл rmasscan обязан быть целым.
+
+**Порядок записей (поправка П9 спеки).** Зонд за зондом порядок побайтно тот же, что у C. Стенд не может дать двум
+прогонам один порядок ответов: оба сканера шлют на `--rate 100` по несколько зондов подряд, и внутри такой пачки ответчик
+(поток на каждый сокет UDP и на линк SCTP) и ядро пира отвечают в порядке, который меняется от прогона к прогону. Поэтому
+документ каждого сканера судится по порядку ответов своего провода (`REPLY_REORDER_WINDOW`, 1 мс: пары ответов, снятые на
+линке пира ближе 1 мс друг к другу, документ может записать в любом порядке, число таких пар идёт в
+`notes.reply_order_swaps` шага), а записи rmasscan равны записям C как мультимножество, поле в поле без времени
+(`notes.record_order_vs_c`: «те же записи в том же порядке», «в другом порядке» или «другие записи»). Это не «порядок как у
+C» и не проверка порядка прихода внутри пачки: окно в 1 мс на практике допускает любую перестановку внутри одной пачки
+отправки. Порядок между пачками (на захватах r3 зонды идут либо пачкой в пределах около 0,25 мс, либо не ближе 8,4 мс друг от
+друга) верификатор требует; порядок внутри пачки показывает
+только счётчик `reply_order_swaps`: в r3 одна такая пара (7 мкс, шаг `json` кейса `p05`), в остальных 15 шагах 0. Порядок
+записей в писателях rmasscan закреплён офлайн-тестами. Сужение окна (десятки микросекунд, максимум разрыва переставленной
+пары в заметках, граничный тест и точная сверка rmasscan с C) оставлено этапу, который снова запустит suite (IPv6).
+
+**Кадры стороны сканера.** Каждый кадр с MAC сканера, не являющийся зондом, обязан быть из четырёх названных классов
+(`SCANNER_CLASSES`) и не превышать границу числа кадров на шаг; иначе проверка проваливает шаг rmasscan и делает INVALID
+шаг оракула (в деталях `<класс> N of at most M`, границы в `notes.scanner_frames.<шаг>.at_most`):
+- `next_hop_who_has`: 60-байтовый ARP who-has `198.18.0.2` от резолвера, только в сканах не ARP; не больше 10 у rmasscan
+  (`ARP_TIMEOUT / ARP_INTERVAL`) и 12 у C (`stack-arpv4.c:175-187`);
+- `rst_to_syn_ack`: RST без других флагов на SYN-ACK пира; не больше одного на SYN-ACK стенда у rmasscan (RST шлёт только
+  ядро netns сканера, своего пути RST у rmasscan нет) и не больше двух у C (ядро и собственный `tcp_send_RST`, `main.c:1095`);
+- `port_unreachable_to_udp_reply`: ICMP 3/3 ядра сканера на ответ UDP пира, не больше одного на ответ;
+- `protocol_unreachable_to_sctp_reply`: ICMP 3/2 ядра сканера на INIT-ACK или ABORT пира, не больше одного на ответ.
+Любой другой кадр (`unexplained`) тоже проваливает шаг.
+
+**Названные отклонения.** Отличия rmasscan от C применяются по имени, а не мягким сравнением; у каждого своя проверка
+провода («стенд не мог задействовать»), число случаев идёт в `notes.deviations`: `udp-checksum-ffff` (П6, пары зондов,
+равных только по этому правилу, при верной сумме `0xFFFF`), `icmp-echo-code-0` и `rx-checksum-verify` (П5: у всех Echo
+Reply код 0 и у всех ответов верные суммы), `non-tcp-dedup` (повторы UDP и SCTP у C схлопываются перед сравнением,
+никогда не TCP, Echo и ARP), `sctp-tcp-fallthrough` (флаги чанка SCTP ни SYN-ACK, ни RST, `main.c:920–922`),
+`arp-mac-ethernet-source` (MAC записи ARP это Ethernet-источник, `proto-arp.c:36`). В r3 все шесть условий выполнены и ни
+одно отклонение не сработало: живое окно показывает, что эти пути не изменили сравнение, но не упражняет дедупликацию
+повторов, отбрасывание Echo с кодом не 0 и неверных сумм у rmasscan (это покрыто офлайн-тестами).
+
+**`responder.json`.** Каждый шаг пишет его в момент окончания сканера: `{"exited_with": null, "stderr": ""}`, если ответчик
+работал. Ответчик, умерший посреди шага, называется в вердикте (INVALID, «the peer responder exited with N before the
+scanner ended: <stderr>»); ответчик, не ставший готовым, называется в причине NOT RUN. Отдельно: упавший ответчик
+завершает всех своих рабочих сразу, ошибка уходит в `responder.err.txt` шага.
+
+**Охранные правила** как у scan-control: только root внутри `wire-lab.sh`, стенд фиксирован, любая цель вне `198.18.0.0/24`
+это отказ до запуска, печать до и после каждого кейса, кейс идёт один раз в один `--out`; проверяются `foreign_syns`,
+`no_foreign_frame` и `foreign_probes` (любой кадр TCP, UDP, ICMP, SCTP или ARP who-has сканера вне стенда, в том числе в
+захватах прерванных попыток). Privacy: как у autodetect, имена тегов кейсов маскируются перед разбором (`p02_udp_…`
+иначе читается как метка DNS-SD `_udp`), адреса записей `-oB` обязаны быть адресами стенда.
+
+```sh
+cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
+OUT=$(mktemp -d /tmp/rmasscan-out.XXXXXX)/protocols-out/linux-protocols-r1
+RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite protocols \
+  --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"
+target/release/rmasscan-lab protocols-verify --dir "$OUT" --out "$OUT/verdict.json"
+```
+
 ## Privacy scan before committing evidence
 
 `rmasscan-lab privacy-scan --dir DIR [--forbid TOKEN]...` is a **mandatory step before any evidence directory is copied into

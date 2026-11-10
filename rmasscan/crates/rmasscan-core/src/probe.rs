@@ -48,6 +48,10 @@ pub enum PlanError {
         "invalid source ports {first}-{last}: need 1 <= first <= last and a power-of-two width"
     )]
     InvalidSourcePorts { first: u16, last: u16 },
+    #[error(
+        "runtime v1 sends only default probe parameters (ttl 255, no badsum, default TCP options); use the CLI plan"
+    )]
+    UnsupportedPacketModifiers,
     #[error("target port {0} does not fit TCP (v1 is TCP only)")]
     PortNotTcp(u32),
     #[error("port {port_them}/{port_me} does not fit TCP (v1 is TCP only)")]
@@ -319,6 +323,10 @@ impl ReadyPlan {
         }
         if effective.blackrock_rounds() != RUNTIME_BLACKROCK_ROUNDS {
             return Err(PlanError::UnsupportedRounds(effective.blackrock_rounds()));
+        }
+        // `canonical_job_bytes` не кодирует параметры зонда: один дайджест обязан давать один поток кадров.
+        if effective.packet_modifiers() != PacketModifiers::default() {
+            return Err(PlanError::UnsupportedPacketModifiers);
         }
         ReadyPlan::build(effective, vec![NicBinding::from(binding)])
     }
@@ -1152,6 +1160,16 @@ mod tests {
                 0xffff
             );
         }
+        // Студия (`new`) принимает только умолчание; CLI (`new_cli`) применяет параметры.
+        let non_default = eff("198.18.1.0/30", "80", |c| c.ttl = Some(64));
+        assert_eq!(
+            ReadyPlan::new(non_default.clone(), binding()).unwrap_err(),
+            PlanError::UnsupportedPacketModifiers
+        );
+        ReadyPlan::new(eff("198.18.1.0/30", "80", |_| {}), binding()).unwrap();
+        let cli = ReadyPlan::new_cli(non_default, nics(1)).unwrap();
+        let p = drain(&mut cli.cursor_for_nic(0, None).unwrap());
+        assert!(p.iter().all(|p| p.frame[22] == 64));
         // Умолчание не меняет кадр.
         let d = oracle(&eff("198.18.1.0/30", "80", |_| {}));
         assert!(d.iter().all(|p| p.frame.len() == 58 && p.frame[22] == 255));

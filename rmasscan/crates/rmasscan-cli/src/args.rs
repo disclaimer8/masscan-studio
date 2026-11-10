@@ -156,7 +156,7 @@ pub struct Cli {
         help = "Send SYNs with a wrong TCP checksum (the IPv4 header checksum stays valid)"
     )]
     pub badsum: bool,
-    // Р9: `F_BOOL` (main-conf.c:2381): принимается и сериализуется, без собственного TCP-стека RST не шлётся.
+    // Р9: `F_BOOL` (main-conf.c:2381), singleton (:3083): значение только `--noreset=<bool>`, следующее слово не берётся.
     #[arg(
         long,
         num_args = 0..=1,
@@ -167,8 +167,8 @@ pub struct Cli {
         help = "Accepted for masscan compatibility (rmasscan sends no RST anyway)"
     )]
     pub noreset: Vec<String>,
-    // Р9: `F_NUMABLE` (main-conf.c:2419-2422): `--tcp-mss [N|BOOL]`; значение берётся из следующего слова, если оно
-    // целое или логическое (см. [`preprocess_args`]).
+    // Р9: `F_NUMABLE` (main-conf.c:2419): `--tcp-mss [N|BOOL]`; значение берётся из следующего слова, если оно
+    // целое или логическое (см. [`preprocess_args`]); `--tcpmss` синоним.
     #[arg(
         long = "tcp-mss",
         num_args = 0..=1,
@@ -186,7 +186,7 @@ pub struct Cli {
         default_missing_value = "",
         action = clap::ArgAction::Append,
         value_name = "BOOL",
-        help = "Add the TCP SACK-permitted option"
+        help = "Add the TCP SACK-permitted option (=false disables; never takes the next word)"
     )]
     pub tcp_sackok: Vec<String>,
     #[arg(
@@ -196,7 +196,7 @@ pub struct Cli {
         default_missing_value = "",
         action = clap::ArgAction::Append,
         value_name = "N|BOOL",
-        help = "Add the TCP window-scale option: number 0-255 (default 3)"
+        help = "Add the TCP window-scale option: number 0-254 (default 3)"
     )]
     pub tcp_wscale: Vec<String>,
     #[arg(
@@ -609,14 +609,8 @@ where
     Ok(out)
 }
 
-/// Опции с необязательным числовым или логическим значением (`F_NUMABLE`/`F_BOOL` в main-conf.c:2381, :2419-2422).
-const NUMABLE: [&str; 5] = [
-    "noreset",
-    "tcp-sackok",
-    "tcp-mss",
-    "tcp-wscale",
-    "tcp-tsecho",
-];
+/// Опции с необязательным числовым или логическим значением (`F_NUMABLE`, main-conf.c:2419-2421).
+const NUMABLE: [&str; 3] = ["tcp-mss", "tcp-wscale", "tcp-tsecho"];
 
 /// `--имя`, `--имя=v` или `--имя:v` для имён из [`NUMABLE`]: имя и встроенное значение.
 fn numable_split(a: &str) -> Option<(&'static str, Option<&str>)> {
@@ -625,6 +619,8 @@ fn numable_split(a: &str) -> Option<(&'static str, Option<&str>)> {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
     };
+    // main-conf.c:2419: `tcpmss` синоним `tcp-mss`.
+    let name = if name == "tcpmss" { "tcp-mss" } else { name };
     NUMABLE.iter().find(|n| **n == name).map(|n| (*n, inline))
 }
 
@@ -2013,5 +2009,32 @@ adapter-port = 41234\n# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80\nrang
         assert_eq!(left.ttl, Some(40));
         let bare = parse(&["--resume", f]).unwrap().to_config().unwrap();
         assert_eq!(bare.ttl, Some(40));
+    }
+
+    #[test]
+    fn noreset_and_sackok_never_swallow_the_next_word() {
+        // main-conf.c:2381, :2422 F_BOOL -> is_singleton (:3083): значение только через `=`.
+        let cli = parse(&["--noreset", "198.18.0.5", "-p80"]).unwrap();
+        assert_eq!(cli.targets, ["198.18.0.5"]);
+        assert!(cli.to_config().unwrap().noreset);
+        let cfg = parse(&["10.0.0.1", "--tcp-sackok=false"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert!(!cfg.tcp_opts.sackok);
+        let cli = parse(&["--tcp-sackok", "10.0.0.1"]).unwrap();
+        assert_eq!(cli.targets, ["10.0.0.1"]);
+        assert!(cli.to_config().unwrap().tcp_opts.sackok);
+        let cfg = parse(&["10.0.0.1", "--noreset=false"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert!(!cfg.noreset);
+        // Синоним C `--tcpmss`.
+        let cfg = parse(&["10.0.0.1", "--tcpmss", "1300"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.tcp_opts.mss, Some(1300));
     }
 }

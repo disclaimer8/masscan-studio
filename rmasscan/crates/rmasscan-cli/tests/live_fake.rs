@@ -3081,3 +3081,33 @@ pcap-filename = from-file.pcap\nnocapture = servername\nnocapture = servername\n
     r.unwrap();
     assert_eq!(*b.pcap_opened.lock().unwrap(), ["cli.pcap"]);
 }
+
+/// `-c FILE` и `-iL FILE` end-to-end (Р7): цели, порты и `pcap-filename` из файла, дополнительные цели из `-iL`;
+/// ключ правее файла (`--pcap`) переопределяет его.
+#[test]
+fn conf_file_and_includefile_drive_a_live_scan() {
+    let dir = Scratch::new();
+    let conf = dir.write(
+        "scan.conf",
+        b"# live scan from a file\nseed = 7\nports = 80\nrange = 198.51.100.1\nwait = 1\npcap-filename = from-conf.pcap\n",
+    );
+    let inc = dir.write("more.txt", b"198.51.100.2 # second target\n");
+    let (c, i) = (conf.to_str().unwrap(), inc.to_str().unwrap());
+    let mut b = FakeBackend::new();
+    b.inject_noise = true;
+    let (r, _, log) = cli(&b, &["-c", c, "-iL", i]);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    assert_eq!(b.opened().last().unwrap().adapter.sent_count(), 2);
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-conf.pcap"]);
+
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &["-c", c, "--pcap", "cli.pcap"]);
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["cli.pcap"]);
+    // Левее файла файл побеждает.
+    let b = FakeBackend::new();
+    let (r, _, _) = cli(&b, &["--pcap", "cli.pcap", "-c", c]);
+    r.unwrap();
+    assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-conf.pcap"]);
+}

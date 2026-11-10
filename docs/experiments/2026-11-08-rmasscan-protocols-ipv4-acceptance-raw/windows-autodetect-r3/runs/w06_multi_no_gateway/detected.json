@@ -1,0 +1,8 @@
+{
+  "fail": "no default gateway on interface \"Ethernet 2\" for several on-link targets",
+  "hints": [
+    "    [hint] try \"--router-ip 192.0.2.1\" to specify different router",
+    "    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass ARP",
+    "    [hint] try \"--interface eth0\" to change interface"
+  ]
+}

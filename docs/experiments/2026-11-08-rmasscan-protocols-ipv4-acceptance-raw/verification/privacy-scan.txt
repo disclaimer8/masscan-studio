@@ -1,0 +1,64 @@
+# rmasscan-lab privacy-scan (C = 0ed6e36, Mac build e759714f), run on the final staged copy of the
+# raw directory before the repository copy, and again on the repository copy before the commit
+# tokens (masked, by number; every token is 4+ bytes, so none is refused; matching is case-insensitive):
+#   #1 Mac host name (hostname), #2 Mac LocalHostName, #3 Mac computer name (ComputerName), #4 Mac account,
+#   #5 minipc host name, #6 home-pc host name, #7 the former Windows profile name on home-pc,
+#   #8 the first-name part of the Mac account, #9 the surname part of the Mac account
+# tokens are named by role only; no token characters are printed in this file
+# not tokens (privacy-scan refuses a token shorter than 4 bytes, rc 2, checked below): the minipc and home-pc account
+#   (2 characters; tokens #5 and #6 contain it) and the guest host name (2 characters). The guest's names are covered
+#   by the DNS-wire pass, which reports every name in an mDNS, LLMNR or NBNS frame regardless of tokens.
+
+## refusal of the short names (expected rc 2)
+  NOT RUN: --forbid #1 is shorter than 4 bytes: a short token matches unrelated bytes; use a longer one
+  short name 1: rc=2
+  NOT RUN: --forbid #1 is shorter than 4 bytes: a short token matches unrelated bytes; use a longer one
+  short name 2: rc=2
+
+## positive control: a scratch directory with a file holding token #5
+  HIT control.txt: line 1: forbidden token #5
+  privacy-scan: 1 hits in $CONTROL
+  rc=1
+
+## linux-autodetect-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-autodetect-r3 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-autodetect-r3
+rc=0
+
+## linux-output-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-output-r3 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-output-r3
+rc=0
+
+## linux-protocols-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-protocols-r3 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-protocols-r3
+rc=0
+
+## linux-scan-control-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-scan-control-r3 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-scan-control-r3
+rc=0
+
+## verification: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/verification --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/verification
+rc=0
+
+## windows-autodetect-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/windows-autodetect-r3 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/windows-autodetect-r3
+rc=0
+
+## 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw (the whole directory, README.md included): privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw
+rc=0
+
+rc=0
+
+## result
+- 0 hits of tokens #1-#9 in each of the five window directories, in verification/ and in the whole directory
+  (README.md included); rc 0 everywhere. The positive control hit (rc 1) and both short names were refused (rc 2).
+- 0 mDNS, LLMNR or NBNS frames in every capture of the five directories (the DNS-wire pass reports any).
+- grep -ral over the whole directory for the Mac and Linux home-directory roots (/Users and /home, each followed by
+  a slash), the home LAN prefix (192.168 followed by a dot) and the agent scratch root: 0 files. Windows paths with
+  Users name only the guest account lab (C:\Users\lab\...).
+- the case-sensitive word-bounded grep -ralwE of rust-lab.md over every host and account name of the Mac, minipc,
+  home-pc and the guest (the short ones included) plus the mDNS service suffixes: one file,
+  linux-output-r3/runs/o12_nostatus/peer.pcap, a match of the 2-character minipc/home-pc account at byte 2711
+  (0xa97): the microseconds field of a pcap record header (bytes 23 61 31 03), not frame data and not a name;
+  inspected by eye as rust-lab.md requires.

@@ -1,0 +1,122 @@
+{
+  "capture_schema": 3,
+  "end_marker_frames": 3,
+  "eno1": {
+    "cmd": [
+      "tcpdump",
+      "-i",
+      "eno1",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-B",
+      "4096",
+      "-s",
+      "0",
+      "-Z",
+      "root",
+      "-w",
+      "'$HOME/winvm/t4-ev/windows-autodetect-r3/r228a3a3581a41852ba285b6db5377e0b/w04_router_mac/eno1.pcap'",
+      "'net",
+      "198.18.0.0/30",
+      "or",
+      "(arp",
+      "and",
+      "(host",
+      "198.18.0.1",
+      "or",
+      "host",
+      "198.18.0.2))",
+      "or",
+      "ether",
+      "host",
+      "52:54:00:04:80:a9",
+      "or",
+      "ether",
+      "host",
+      "02:57:4c:3d:2e:9b",
+      "or",
+      "ether",
+      "proto",
+      "0x88b5",
+      "or",
+      "ether",
+      "proto",
+      "0x88b6'"
+    ],
+    "exited": true,
+    "filter": "net 198.18.0.0/30 or (arp and (host 198.18.0.1 or host 198.18.0.2)) or ether host 52:54:00:04:80:a9 or ether host 02:57:4c:3d:2e:9b or ether proto 0x88b5 or ether proto 0x88b6",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 0,
+      "sha256": "704e5e5b3234433c01fcfd1b20a306e77e985038120492dc53965c3edd38a4ea",
+      "size": 24
+    },
+    "tcpdump": {
+      "captured": 0,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 0
+    }
+  },
+  "iface_rxtx_delta_hi": 49,
+  "iface_rxtx_delta_lo": 49,
+  "invalid_reasons": [],
+  "pcap_frames": 49,
+  "pcap_sha256": "c7c9d67dccb7b38f5ac7ff8b9fced24cb3defb9b6604b031270d632d0cd7d4dc",
+  "pcap_size_bytes": 3630,
+  "peer": {
+    "cmd": [
+      "ip",
+      "netns",
+      "exec",
+      "wvp-n2",
+      "tcpdump",
+      "-i",
+      "lab0",
+      "-n",
+      "-U",
+      "--immediate-mode",
+      "-B",
+      "16384",
+      "-s",
+      "0",
+      "-Z",
+      "root",
+      "-w",
+      "'$HOME/winvm/t4-ev/windows-autodetect-r3/r228a3a3581a41852ba285b6db5377e0b/w04_router_mac/peer.pcap'"
+    ],
+    "counters": {
+      "rx_before": 46,
+      "rx_end": 58,
+      "rx_ready": 46,
+      "tx_before": 124,
+      "tx_end": 161,
+      "tx_ready": 124
+    },
+    "exited": true,
+    "filter": "(none: every frame on lab0)",
+    "interface_drop_delta": 0,
+    "listening": true,
+    "pcap": {
+      "frames": 49,
+      "sha256": "c7c9d67dccb7b38f5ac7ff8b9fced24cb3defb9b6604b031270d632d0cd7d4dc",
+      "size": 3630
+    },
+    "tcpdump": {
+      "captured": 49,
+      "dropped_if": null,
+      "dropped_kernel": 0,
+      "received": 49
+    }
+  },
+  "quiesced_before_stop": true,
+  "quiet": {
+    "quiet_s": 1.5,
+    "reached": true
+  },
+  "start_marker_frames": 3,
+  "status_post_raw_run_allowed": true,
+  "valid": true
+}

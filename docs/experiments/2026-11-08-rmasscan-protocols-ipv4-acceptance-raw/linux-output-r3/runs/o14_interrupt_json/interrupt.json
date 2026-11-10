@@ -1,0 +1,7 @@
+{
+  "signal": "INT",
+  "after_s": 2.0,
+  "signal_unix": 1794341750.1829612,
+  "exit_within_s": 30.0,
+  "killed": false
+}

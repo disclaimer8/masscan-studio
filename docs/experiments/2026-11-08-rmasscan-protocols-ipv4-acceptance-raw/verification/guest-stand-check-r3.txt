@@ -1,0 +1,53 @@
+# Guest stand check for r3 (dedicated lab VM n2), C = 0ed6e36a8a52c624b1422e008977b7b26b25797d
+# The stand fix (mDNS, LLMNR, DO off; lab-NIC IPv6 and NetBIOS off) was applied in the previous stage's r3
+# (2026-11-10 08:12:50Z; its snapshot is docs/experiments/2026-11-08-rmasscan-scan-control-acceptance-raw/verification/
+# guest-stand-applied.txt) and stayed applied. For this window it was only READ (a read-only pwsh 7 script file) and
+# compared with that snapshot; nothing was re-applied and nothing was reverted. The revert recipe stays on the guest
+# (C:\Users\lab\guest-stand-before.txt).
+
+## Reading 1: before n2 up (VM up since 10:57:12Z, no lab NIC backend)
+utc 2026-11-10T19:56:17.6902387Z
+reg HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters EnableMDNS = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization DODownloadMode = 99
+reg NetBT Tcpip_{lab GUID} NetbiosOptions = 2   (0 default/DHCP, 1 on, 2 off)
+nic lab 'Ethernet 2' mac 52-54-00-04-80-A9 status Up: ms_tcpip6 enabled=False, ms_tcpip enabled=True, TcpipNetbiosOptions=2
+nic lab addresses: IPv4 198.18.0.1/30
+nic management 'Ethernet' mac 52-54-00-12-34-56 status Up: ms_tcpip6 enabled=True, ms_tcpip enabled=True, TcpipNetbiosOptions=0
+service Dnscache status Running start Automatic
+service DoSvc status Stopped start Manual
+
+## Reading 2: after the VM restart for the Windows window
+# vm-lab up 20:16:56Z, guest shutdown /s /t 0 at 20:17:07Z (qemu gone 11 s later), run.sh with lab.env at 20:17:18Z
+# (qemu command line carries -netdev tap,id=lab0,ifname=wvt-n2 and e1000e,netdev=lab0,mac=52:54:00:04:80:a9);
+# LastBootUpTime 20:17:21.5Z, Dnscache started 20:17:28.6Z; then w32time started (it was Stopped, start Manual),
+# w32tm /resync /force (exit 0), windows-vm-lab.ps1 -Action Configure (exit 0, lab NIC 'Ethernet 2' 198.18.0.1/30,
+# default routes before and after: only the management NIC), vm-lab record-guest --guest-json (20:18:01Z, rc 0)
+utc 2026-11-10T20:18:07.8903974Z
+reg HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters EnableMDNS = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization DODownloadMode = 99
+reg NetBT Tcpip_{lab GUID} NetbiosOptions = 2   (0 default/DHCP, 1 on, 2 off)
+nic lab 'Ethernet 2' mac 52-54-00-04-80-A9 status Up: ms_tcpip6 enabled=False, ms_tcpip enabled=True, TcpipNetbiosOptions=2
+nic lab addresses: IPv4 198.18.0.1/30
+nic management 'Ethernet' mac 52-54-00-12-34-56 status Up: ms_tcpip6 enabled=True, ms_tcpip enabled=True, TcpipNetbiosOptions=0
+service Dnscache status Running start Automatic
+service DoSvc status Stopped start Manual
+
+## Comparison with guest-stand-applied.txt (previous stage, verification/)
+setting                                                        applied   reading 1  reading 2  match
+Dnscache\Parameters EnableMDNS                                 0         0          0          yes
+Policies DNSClient EnableMulticast (LLMNR)                     0         0          0          yes
+Policies DeliveryOptimization DODownloadMode                   99        99         99         yes
+lab NIC 'Ethernet 2' NetBT NetbiosOptions                      2         2          2          yes
+lab NIC 'Ethernet 2' ms_tcpip6 binding                         False     False      False      yes
+lab NIC 'Ethernet 2' TcpipNetbiosOptions                       2         2          2          yes
+lab NIC addresses                                              IPv4 198.18.0.1/30 only (all three)   yes
+management NIC 'Ethernet' ms_tcpip6 / TcpipNetbiosOptions      True / 0 (all three, untouched)       yes
+Every 'reg' and 'nic' line of both readings is byte-identical to guest-stand-applied.txt (diff: no difference).
+
+Not a stand-fix setting (informational): service DoSvc reads 'Stopped, start Manual' in both readings, as in the
+previous stage's r4 check. The operator did not change it. w32time was started by the operator for the clock resync
+(it is not a stand-fix setting either).
+
+Result: all settings match; proceed without re-applying.

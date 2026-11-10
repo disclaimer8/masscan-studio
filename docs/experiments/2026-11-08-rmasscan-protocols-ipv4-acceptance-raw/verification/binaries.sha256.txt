@@ -1,0 +1,8 @@
+# commit 0ed6e36a8a52c624b1422e008977b7b26b25797d; release, CARGO_INCREMENTAL=0, RMASSCAN_LAB_BUILD_COMMIT set to the commit,
+# rustc 1.99.1 (58cf8f9c3 2026-10-13). minipc, guest, home-pc: git archive of the commit; Mac: the clean worktree at the commit
+e760a85eedeba1220542545d3929ce084e7b8f1db6d0b257101a31a36311f711  minipc rmasscan-lab (linux-protocols-r3, linux-scan-control-r3, linux-output-r3, linux-autodetect-r3)
+73409675ea27251de3a09de9a02060bbde7c850183a06c745241712bcd5c60e6  minipc rmasscan (linux-protocols-r3, linux-scan-control-r3, linux-output-r3, linux-autodetect-r3)
+1e9a6a32121171c51404fbbd2bb48447a125e2b65d4c90f0f22504c7ab15d5e3  home-pc rmasscan-lab (~/winvm/lab/bin, deploy-manifest)
+e79bc90adb894fa9912352fb57770db7ee02a57db37cea6ffa097cf0a549c61f  guest rmasscan.exe (static CRT, /DEPENDENTLOADFLAG:0x800)
+e759714fd9b0abc6db45a0c0f952b97d0ddb0b702d1d22d4c9f464ae11cfd13f  Mac rmasscan-lab (windows-suite orchestrator, verifiers, privacy-scan)
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  minipc C oracle masscan 8e6b3b0 (~/rmasscan-oracle, unchanged)

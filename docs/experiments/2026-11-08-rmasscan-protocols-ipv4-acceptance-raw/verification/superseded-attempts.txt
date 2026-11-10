@@ -1,0 +1,46 @@
+# Attempts superseded by the r3 set (C = 0ed6e36a8a52c624b1422e008977b7b26b25797d)
+# Neither attempt is committed. Their directories were kept in a neutral directory of the operator on the Mac during
+# the task, re-judged there with the Mac rmasscan-lab built at C (binaries.sha256.txt), and removed at the cleanup.
+# The product binary was the same in all three attempts: minipc rmasscan sha256
+# 73409675ea27251de3a09de9a02060bbde7c850183a06c745241712bcd5c60e6 (no product code changed in this task).
+# Stop rule: an attempt that did not PASS stopped the set; no other window ran on its commit.
+
+## r1 on 68ffcf3a268f4ff37a75e93624fea3f2aebce389 (bac7a38 plus the pre-window lab tightening of the brief)
+linux-protocols-r1: minipc, window 2026-11-10T19:39:35Z..19:42:56Z, minipc rmasscan-lab e316623690dde30b...
+  verdict.json sha256 75545d3fa932392f743d205b327afe059fa62f6ed1d8fcfd4f5af06677a6d5b9
+  overall FAIL {"FAIL":2,"INVALID":0,"NOT RUN":0,"PASS":4}; p01, p03, p04 PASS
+  p02 FAIL json: the records equal the C oracle's (oracle-json) in order and field for field, but the time
+       (non-tcp-dedup applied): 16 records, 16 wanted; first difference at 4:
+       open 198.18.0.2 161/udp reason none ttl 64 vs open 198.18.0.3 53/udp reason none ttl 64
+  p02 FAIL binary: the same check against oracle-binary: first difference at 5:
+       open 198.18.0.5 161/udp reason none ttl 64 vs closed 198.18.0.4 59999/udp reason none ttl 64
+  p05 FAIL json: the same check against oracle-json: first difference at 3:
+       open 198.18.0.5 2905/sctp reason none ttl 64 vs open 198.18.0.3 80/tcp reason syn-ack ttl 64
+  Every other check of the directory PASSed, among them, for all twelve steps, "the document holds the records of
+  the replies on its wire, in reply order, field for field" and "the probes equal the C oracle's, byte for byte and
+  in order".
+  Cause: both scanners send several probes back to back at --rate 100 (in the json step of p02 ten of the sixteen
+  probes left within 0.8 ms); within such a burst the lab responder (one thread per UDP socket, one for the SCTP link) and the peer
+  kernel (ICMP at once) answered in another order in rmasscan's run than in the oracle's. The in-order comparison
+  of the two documents compared the stand's timing, not the scanners.
+  Fixed in 5661a6e (lab only): the documents are compared with C as a multiset of records, each document's order
+  stays judged against its own wire.
+  Re-judged with the verifier of C: PASS 6/6, verdict sha256 7fd12b919226b03fc21eb250400e498abb99bb20c758332226c67557eac1124c
+
+## r2 on 5661a6e96757bb0dc1f8938e454fbeec29249e1a
+linux-protocols-r2: minipc, window 2026-11-10T19:52:36Z..19:55:58Z, minipc rmasscan-lab bd74f9756f500865...
+  verdict.json sha256 01bc9772fe3d7a90af3af58328ea5477300efb8ed8d5c2fccb13035db703d42d
+  overall INVALID {"FAIL":0,"INVALID":1,"NOT RUN":0,"PASS":5}; p01-p04 PASS
+  p05 INVALID oracle-json: the document holds the records of the replies on its wire, in reply order, field for
+       field: 16 records, 16 wanted; first difference at 3:
+       open 198.18.0.3 80/tcp reason syn-ack ttl 64 vs open 198.18.0.5 2905/sctp reason none ttl 64
+  The peer capture of oracle-json: SCTP INIT-ACK 198.18.0.5:2905 at .358969, TCP SYN-ACK 198.18.0.3:80 at .358974
+  (5 us later); the oracle's document has the SYN-ACK first. The INIT-ACK comes from the responder's SCTP thread,
+  the SYN-ACK from the peer kernel, on different CPUs; the witness records the peer link, not the scanner's socket.
+  Every other step of the five cases held its wire's records exactly in reply order.
+  Fixed in 0ed6e36 (lab only): replies captured within 1 ms of each other on the peer link (REPLY_REORDER_WINDOW) may
+  be written in either order; pairs written in the other order are counted per step in the notes
+  (reply_order_swaps); records of different send slots may still not trade places (on the r3 captures
+  the probes of every step left either within 0.1 ms of each other, a burst, or at least 8.4 ms apart).
+  Re-judged with the verifier of C: PASS 6/6 (p05 oracle-json reply_order_swaps 1), verdict sha256
+  dd4caae948b075d10c87ba4d38d6d8aa013839d08f02909bddeaf6f76839923f

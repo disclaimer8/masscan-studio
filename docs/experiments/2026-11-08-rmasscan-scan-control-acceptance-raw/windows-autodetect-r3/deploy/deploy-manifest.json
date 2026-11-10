@@ -1,0 +1,14 @@
+{
+  "binaries": [
+    {
+      "path": "$HOME/winvm/lab/bin/rmasscan-lab",
+      "sha256": "f20a6b4a13b0ac29b200e657666afda0f4ddb7c67744ca328cd9cc2bb4b9e249",
+      "size": 5709960
+    }
+  ],
+  "built_utc": 1794297748.9596925,
+  "commit": "e52793b71ddec6ae5a11de0dc99f8c9ebf4605af",
+  "kind": "rmasscan-lab-deploy",
+  "schema": 1,
+  "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+}

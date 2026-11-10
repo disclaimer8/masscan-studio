@@ -1,0 +1,29 @@
+OUT=/tmp/rmasscan-out.fIWKI7/autodetect-out/linux-autodetect-r3
+SigIgn:	0000000000000000
+3f2caf5a77661cb6c3bbb8022606c66cc5cf0b6707e6ca63372c97dfdd395188  target/release/rmasscan-lab
+bd9ea8412e5f5dfe686a1ff42731a63a2bc0614a46dcb3b0a6081f1c5001d5c9  target/release/rmasscan
+2026-11-10T08:18:05Z
+[wire-lab] suite autodetect finished rc=0 (see /tmp/rmasscan-out.fIWKI7/autodetect-out/linux-autodetect-r3/suite.log)
+[wire-lab] done: /tmp/rmasscan-out.fIWKI7/autodetect-out/linux-autodetect-r3
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+2026-11-10T08:19:40Z
+PASS     manifest 
+PASS     l01_auto 
+PASS     l02_auto_multi 
+PASS     l03_adapter 
+PASS     l04_adapter_ip 
+PASS     l05_adapter_mac 
+PASS     l06_router_ip 
+PASS     l07_router_mac 
+PASS     l08_source_port 
+PASS     l09_arp_timeout 
+PASS     l10_no_such_adapter 
+PASS     l11_parity 
+PASS     l12_iflist 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":13}
+VERIFY_RC=0
+2026-11-10T08:19:40Z
+cc1b9fef49cfb69e4aab59ba9db2d68b2532783e5f62dc12da67a60ba39ef6be  /tmp/rmasscan-out.fIWKI7/autodetect-out/linux-autodetect-r3/verdict.json
+0
+FINISHED

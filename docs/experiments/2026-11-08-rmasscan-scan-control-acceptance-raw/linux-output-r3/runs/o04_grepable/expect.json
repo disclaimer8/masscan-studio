@@ -1,0 +1,10 @@
+{
+  "tag": "o04_grepable",
+  "kind": "scan",
+  "format": "grepable",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": true
+}

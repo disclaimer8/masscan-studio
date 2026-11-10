@@ -1,0 +1,10 @@
+{
+  "tag": "o12_nostatus",
+  "kind": "scan",
+  "format": "json",
+  "target": "file",
+  "show_closed": false,
+  "stdout": "elapsed",
+  "status": "off",
+  "oracle": false
+}

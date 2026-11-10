@@ -708,6 +708,8 @@ fn reply(ip: u32, port: u16) -> Reply {
         status: PortStatus::Open,
         tcp_flags: 0x12,
         ttl: 64,
+        ip_proto: 6,
+        mac: None,
     }
 }
 

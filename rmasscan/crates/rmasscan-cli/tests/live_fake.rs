@@ -2379,6 +2379,8 @@ fn open_replies(b: &FakeBackend) -> Vec<Reply> {
             status: PortStatus::Open,
             tcp_flags: 0x12,
             ttl: 64,
+            ip_proto: 6,
+            mac: None,
         })
         .collect()
 }
@@ -2443,7 +2445,7 @@ fn first_interrupt_pauses_and_finishes_outputs() {
             let env = OutputEnv {
                 wall: &b,
                 services: ServiceNames::empty(),
-                tcp_ports: Vec::new(),
+                ports: Vec::new(),
                 scan_started: None,
             };
             let mut sink = PressOnFirstOpen {
@@ -2668,7 +2670,7 @@ fn broken_stderr_after_the_first_press_still_finishes_the_file() {
         let env = OutputEnv {
             wall: &b,
             services: ServiceNames::empty(),
-            tcp_ports: Vec::new(),
+            ports: Vec::new(),
             scan_started: None,
         };
         let mut sink = PressOnFirstOpen {
@@ -2812,7 +2814,7 @@ fn pause_run(
         let env = OutputEnv {
             wall: b,
             services: ServiceNames::empty(),
-            tcp_ports: Vec::new(),
+            ports: Vec::new(),
             scan_started: None,
         };
         let mut sink = PressOnFirstOpen {

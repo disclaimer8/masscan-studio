@@ -10,9 +10,9 @@ use std::io::{self, BufWriter, Write};
 use rmasscan_core::receive::Reply;
 
 use super::formats::{Counts, FileCtx, Format, Formatter, formatter};
-use super::record::{Record, Status, status_str};
+use super::record::{Proto, Record, Status};
 use super::services::ServiceNames;
-use super::{Sink, WriteTarget, io_fail, write_failed};
+use super::{Sink, WriteTarget, interactive_line, io_fail, write_failed};
 
 /// Начало отказа открытия файла (`output.c:180–239`, `open_rotate`); `crate::error_text` печатает его как есть.
 pub const OPEN_FAILURE_PREFIX: &str = "out: could not open file for ";
@@ -66,7 +66,8 @@ impl OutputOptions {
 pub struct OutputEnv<'a> {
     pub wall: &'a dyn Wall,
     pub services: ServiceNames,
-    pub tcp_ports: Vec<(u16, u16)>,
+    /// Диапазоны портов цели со сдвигами протоколов (`masscan->targets.ports`), для заголовка `-oG`.
+    pub ports: Vec<(u32, u32)>,
     /// Начало скана; `None` значит «момент `open()`», `Some(0)` значит «из первой записи» (`--readscan`).
     pub scan_started: Option<u64>,
 }
@@ -123,21 +124,17 @@ impl<'a> Pipeline<'a> {
 
     /// `output.c:746–880` (справка §2) для одной записи.
     pub fn report_record(&mut self, r: &Record) -> Result<(), String> {
+        // `output.c:766–771`: фильтр только у open и closed, `up` (ARP) проходит всегда.
         let show = match r.status {
             Status::Open => self.opts.show_open,
             Status::Closed => self.opts.show_closed,
+            Status::Arp => true,
         };
         if !show {
             return Ok(());
         }
         if self.interactive_line() {
-            let head = format!(
-                "Discovered {} port {}/tcp on {}",
-                status_str(r.status),
-                r.port,
-                r.ip
-            );
-            let line = format!("{head:<79}\n");
+            let line = interactive_line(r);
             self.stdout.write_all(line.as_bytes()).map_err(io_fail)?;
             self.stdout.flush().map_err(io_fail)?;
         }
@@ -149,9 +146,14 @@ impl<'a> Pipeline<'a> {
             // он отклоняет такие опции до скана и до чтения `--readscan`.
             return Ok(());
         }
-        match r.status {
-            Status::Open => self.counts.open += 1,
-            Status::Closed => self.counts.closed += 1,
+        // `output.c:818–858`: счётчик TCP идёт в `<hosts up=…>` `-oX`; UDP, SCTP, ICMP и ARP считаются отдельно
+        // и в XML не попадают (`out-xml.c:55–58`).
+        if r.proto == Proto::Tcp {
+            match r.status {
+                Status::Open => self.counts.open += 1,
+                Status::Closed => self.counts.closed += 1,
+                Status::Arp => {}
+            }
         }
         let now = self.env.wall.unix_time();
         let cx = FileCtx {
@@ -161,7 +163,7 @@ impl<'a> Pipeline<'a> {
             file_opened: self.file_opened,
             counts: self.counts,
             stylesheet: self.opts.stylesheet.as_deref(),
-            tcp_ports: &self.env.tcp_ports,
+            ports: &self.env.ports,
             services: &self.env.services,
         };
         let (w, to): (&mut dyn Write, WriteTarget) = match &mut self.target {
@@ -236,7 +238,7 @@ impl Sink for Pipeline<'_> {
             file_opened: self.file_opened,
             counts: self.counts,
             stylesheet: self.opts.stylesheet.as_deref(),
-            tcp_ports: &self.env.tcp_ports,
+            ports: &self.env.ports,
             services: &self.env.services,
         };
         let virgin = std::mem::replace(&mut self.virgin, true);
@@ -286,7 +288,7 @@ mod tests {
         OutputEnv {
             wall,
             services: services::empty(),
-            tcp_ports: Vec::new(),
+            ports: Vec::new(),
             scan_started: None,
         }
     }
@@ -296,9 +298,11 @@ mod tests {
             timestamp: 1_700_000_000,
             ip: Ipv4Addr::new(1, 2, 3, 4),
             port: 80,
+            proto: Proto::Tcp,
             status: Status::Open,
             reason: 0x12,
             ttl: 57,
+            mac: None,
         }
     }
 
@@ -307,9 +311,11 @@ mod tests {
             timestamp: 1_700_000_000,
             ip: Ipv4Addr::new(10, 0, 0, 255),
             port: 443,
+            proto: Proto::Tcp,
             status: Status::Closed,
             reason: 0x14,
             ttl: 64,
+            mac: None,
         }
     }
 
@@ -343,6 +349,96 @@ mod tests {
             String::from_utf8(out).unwrap(),
             discovered_line(Ipv4Addr::new(1, 2, 3, 4), 80)
         );
+    }
+
+    fn non_tcp(proto: Proto, status: Status, port: u16, ip: u8) -> Record {
+        Record {
+            timestamp: 1_700_000_000,
+            ip: Ipv4Addr::new(192, 0, 2, ip),
+            port,
+            proto,
+            status,
+            reason: 0,
+            ttl: 0,
+            mac: None,
+        }
+    }
+
+    /// Интерактивные строки: UDP, SCTP, ICMP как у C `--readscan` (снято с `masscan 8e6b3b0`); ARP по
+    /// `output.c:770–778`: адрес, MAC строчными через двоеточие, пробел, производитель, дополнение до 79.
+    #[test]
+    fn interactive_lines_cover_every_protocol_like_c() {
+        let pad = |head: &str| format!("{head:<79}\n");
+        let recs = [
+            non_tcp(Proto::Udp, Status::Open, 53, 1),
+            non_tcp(Proto::Sctp, Status::Open, 2905, 3),
+            non_tcp(Proto::Icmp, Status::Open, 0, 4),
+            Record {
+                mac: Some([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
+                ..non_tcp(Proto::Arp, Status::Arp, 0, 9)
+            },
+            Record {
+                mac: Some([0xb8, 0x27, 0xeb, 0x01, 0x02, 0x03]),
+                ..non_tcp(Proto::Arp, Status::Arp, 0, 10)
+            },
+            non_tcp(Proto::Arp, Status::Arp, 0, 11),
+        ];
+        let out = String::from_utf8(run(OutputOptions::default(), &recs)).unwrap();
+        let expect = [
+            pad("Discovered open port 53/udp on 192.0.2.1"),
+            pad("Discovered open port 2905/sctp on 192.0.2.3"),
+            pad("Discovered open port 0/icmp on 192.0.2.4"),
+            // OUI 00:11:22 в таблице C нет: после MAC остаётся пробел.
+            pad("Discovered up port 0/arp on 192.0.2.9 (00:11:22:33:44:55) "),
+            pad("Discovered up port 0/arp on 192.0.2.10 (b8:27:eb:01:02:03) RPi 12-03"),
+            pad("Discovered up port 0/arp on 192.0.2.11 (00:00:00:00:00:00) "),
+        ]
+        .concat();
+        assert_eq!(out, expect);
+        assert!(out.lines().all(|l| l.len() == 79));
+        // Закрытый UDP скрыт без `--show closed` и виден с ним; ARP (`up`) фильтром show не режется.
+        let closed = non_tcp(Proto::Udp, Status::Closed, 5353, 2);
+        assert!(run(OutputOptions::default(), &[closed]).is_empty());
+        let o = OutputOptions {
+            show_open: false,
+            show_closed: true,
+            ..OutputOptions::default()
+        };
+        let out =
+            String::from_utf8(run(o, &[closed, non_tcp(Proto::Arp, Status::Arp, 0, 9)])).unwrap();
+        assert_eq!(
+            out,
+            [
+                pad("Discovered closed port 5353/udp on 192.0.2.2"),
+                pad("Discovered up port 0/arp on 192.0.2.9 (00:00:00:00:00:00) ")
+            ]
+            .concat()
+        );
+    }
+
+    /// `<hosts up=…>` `-oX` считает только TCP (`out-xml.c:55–58`, `output.c:818–858`); снято с C: файл из
+    /// четырёх не-TCP и одной TCP open записей даёт `up="1" down="0" total="1"`.
+    #[test]
+    fn xml_hosts_count_only_tcp() {
+        let o = OutputOptions {
+            show_closed: true,
+            ..opts(Format::Xml, Some("-"))
+        };
+        let recs = [
+            non_tcp(Proto::Udp, Status::Open, 53, 1),
+            non_tcp(Proto::Udp, Status::Closed, 5353, 2),
+            non_tcp(Proto::Sctp, Status::Open, 2905, 3),
+            non_tcp(Proto::Icmp, Status::Open, 0, 4),
+            non_tcp(Proto::Arp, Status::Arp, 0, 9),
+            open_rec(),
+            closed_rec(),
+        ];
+        let out = String::from_utf8(run(o, &recs)).unwrap();
+        assert!(
+            out.contains("<hosts up=\"1\" down=\"1\" total=\"2\" />\r\n"),
+            "{out}"
+        );
+        assert_eq!(out.matches("<host endtime=").count(), 7);
     }
 
     #[test]
@@ -601,6 +697,8 @@ mod tests {
                 status: rmasscan_core::receive::PortStatus::Open,
                 tcp_flags: 0x12,
                 ttl: 57,
+                ip_proto: 6,
+                mac: None,
             })
             .unwrap();
             p.finish().unwrap();

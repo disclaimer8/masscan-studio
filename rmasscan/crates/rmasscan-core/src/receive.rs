@@ -103,6 +103,8 @@ pub enum ParseError {
 pub enum PortStatus {
     Open,
     Closed,
+    /// ARP-сосед отозвался (`PortStatus_Arp`, `output.c:109–116`, печатается как `up`).
+    Arp,
 }
 
 /// Принятый ответ. Время ставит engine, не парсер.
@@ -116,6 +118,11 @@ pub struct Reply {
     /// Байт флагов TCP (`px[transport_offset + 13]`).
     pub tcp_flags: u8,
     pub ttl: u8,
+    /// Номер IP-протокола ответа (`output_report_status(.., ip_proto, ..)`, `output.c:75–86`): 6 TCP, 17 UDP,
+    /// 132 SCTP, 1 ICMP, 0 ARP. Разбор TCP этого файла всегда ставит 6.
+    pub ip_proto: u8,
+    /// MAC соседа (`sha` ответа ARP); `None` у всех остальных ответов.
+    pub mac: Option<[u8; 6]>,
 }
 
 /// Преобразование pcap DLT в [`LinkType`]; остальное это явная ошибка.
@@ -339,5 +346,7 @@ fn parse_ipv4_tcp(
         status,
         tcp_flags: flags,
         ttl,
+        ip_proto: 6,
+        mac: None,
     }))
 }

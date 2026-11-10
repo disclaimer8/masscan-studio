@@ -98,9 +98,10 @@ fn output_patch(o: &OutputOptions) -> conf::OutputConfPatch {
     }
 }
 
-/// Порты TCP целей за вычетом исключений, отсортированные и слитые: `masscan->targets.ports` после
-/// `massip_apply_excludes` и `massip_optimize` (main.c:1672–1684), строка `# Ports scanned` заголовка `-oG`.
-fn tcp_ports(cfg: &ScanConfig) -> Vec<(u16, u16)> {
+/// Все порты целей за вычетом исключений со сдвигами протоколов, отсортированные и слитые:
+/// `masscan->targets.ports` после `massip_apply_excludes` и `massip_optimize` (main.c:1672–1684), строка
+/// `# Ports scanned` заголовка `-oG`.
+fn target_ports(cfg: &ScanConfig) -> Vec<(u32, u32)> {
     let mut targets = cfg.targets.clone();
     targets.apply_excludes(&mut cfg.excludes.clone());
     targets.optimize();
@@ -108,8 +109,7 @@ fn tcp_ports(cfg: &ScanConfig) -> Vec<(u16, u16)> {
         .ports()
         .as_slice()
         .iter()
-        .filter(|r| r.begin <= 0xFFFF)
-        .map(|r| (r.begin as u16, r.end.min(0xFFFF) as u16))
+        .map(|r| (r.begin, r.end))
         .collect()
 }
 
@@ -128,7 +128,7 @@ fn output_env<'a>(
     OutputEnv {
         wall: backend,
         services,
-        tcp_ports: tcp_ports(cfg),
+        ports: target_ports(cfg),
         scan_started,
     }
 }
@@ -520,9 +520,11 @@ mod tests {
             timestamp: 1_700_000_000,
             ip: Ipv4Addr::new(1, 2, 3, 4),
             port: 80,
+            proto: output::Proto::Tcp,
             status: output::Status::Open,
             reason: 0x12,
             ttl: 57,
+            mac: None,
         }
     }
 
@@ -531,9 +533,11 @@ mod tests {
             timestamp: 1_700_000_000,
             ip: Ipv4Addr::new(10, 0, 0, 255),
             port: 443,
+            proto: output::Proto::Tcp,
             status: output::Status::Closed,
             reason: 0x14,
             ttl: 64,
+            mac: None,
         }
     }
 
@@ -553,7 +557,7 @@ mod tests {
         let env = OutputEnv {
             wall: &W,
             services: output::ServiceNames::empty(),
-            tcp_ports: Vec::new(),
+            ports: Vec::new(),
             scan_started: None,
         };
         let o = OutputOptions {

@@ -8,6 +8,7 @@
 
 pub mod formats;
 pub mod grepable;
+pub mod oui;
 pub mod pipeline;
 pub mod record;
 pub mod services;
@@ -19,7 +20,7 @@ use rmasscan_core::receive::{PortStatus, Reply};
 
 pub use formats::{Counts, FileCtx, Format, Formatter, formatter};
 pub use pipeline::{OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, Wall};
-pub use record::{MASSCAN_VERSION, Record, Status, reason_string, status_str};
+pub use record::{MASSCAN_VERSION, Proto, Record, Status, proto_str, reason_string, status_str};
 pub use services::ServiceNames;
 
 /// Куда идут результаты. Приёмник этапа 2 реализует тот же трейт.
@@ -81,6 +82,39 @@ pub fn discovered_line(ip: Ipv4Addr, port: u16) -> String {
     )
 }
 
+/// Интерактивная строка записи (`output.c:766–790`). У ARP после адреса идут MAC строчными шестнадцатеричными
+/// через двоеточие, пробел и строка производителя ([`oui::oui_from_mac`]; пробел остаётся и при пустой строке).
+/// Строка короче 80 байт дополняется пробелами до 79 символов, длиннее не трогается; затем `\n`.
+pub fn interactive_line(r: &Record) -> String {
+    let head = match r.proto {
+        Proto::Arp => {
+            let m = r.mac.unwrap_or([0; 6]);
+            format!(
+                "Discovered {} port {}/{} on {} ({:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}) {}",
+                status_str(r.status),
+                r.port,
+                proto_str(r.proto),
+                r.ip,
+                m[0],
+                m[1],
+                m[2],
+                m[3],
+                m[4],
+                m[5],
+                oui::oui_from_mac(&m)
+            )
+        }
+        _ => format!(
+            "Discovered {} port {}/{} on {}",
+            status_str(r.status),
+            r.port,
+            proto_str(r.proto),
+            r.ip
+        ),
+    };
+    format!("{head:<79}\n")
+}
+
 /// Интерактивный вывод masscan: только open, flush на строку.
 pub struct Interactive<W: Write> {
     out: W,
@@ -98,10 +132,11 @@ impl<W: Write> Sink for Interactive<W> {
     }
 
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
-        if reply.status != PortStatus::Open {
+        // Closed не печатается (`is_show_closed = 0`); open и ARP печатаются своей строкой.
+        if reply.status == PortStatus::Closed {
             return Ok(());
         }
-        let line = discovered_line(Ipv4Addr::from(reply.remote_ip), reply.remote_port);
+        let line = interactive_line(&Record::from_reply(reply, 0));
         self.out.write_all(line.as_bytes()).map_err(io_fail)?;
         self.out.flush().map_err(io_fail)
     }
@@ -127,6 +162,8 @@ mod tests {
             status,
             tcp_flags: 0x12,
             ttl: 64,
+            ip_proto: 6,
+            mac: None,
         }
     }
 

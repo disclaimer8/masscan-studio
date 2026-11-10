@@ -15,7 +15,9 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use rmasscan_cli::output::{Counts, FileCtx, Format, Record, ServiceNames, Status, formatter};
+use rmasscan_cli::output::{
+    Counts, FileCtx, Format, Proto, Record, ServiceNames, Status, formatter,
+};
 
 /// Время записей `basic`, `many` и `s:` пустого файла.
 pub const BASE: u64 = 1_700_000_000;
@@ -30,9 +32,11 @@ fn rec(ip: [u8; 4], port: u16, status: Status, reason: u8, ttl: u8, timestamp: u
         timestamp,
         ip: Ipv4Addr::from(ip),
         port,
+        proto: Proto::Tcp,
         status,
         reason,
         ttl,
+        mac: None,
     }
 }
 
@@ -77,9 +81,11 @@ fn many() -> Vec<Record> {
                 timestamp: BASE + u64::from(i / 1000),
                 ip: Ipv4Addr::from(0x0A01_0000 + i),
                 port: PORTS[i as usize % PORTS.len()],
+                proto: Proto::Tcp,
                 status: if closed { Status::Closed } else { Status::Open },
                 reason: if closed { 0x14 } else { 0x12 },
                 ttl: 32 + (i % 200) as u8,
+                mac: None,
             }
         })
         .collect()
@@ -97,7 +103,7 @@ fn scan_file(records: &[Record]) -> Vec<u8> {
         file_opened: started,
         counts: Counts::default(),
         stylesheet: None,
-        tcp_ports: &[],
+        ports: &[],
         services: &services,
     };
     let mut fm = formatter(Format::Binary).expect("-oB has a formatter");

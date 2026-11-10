@@ -54,7 +54,7 @@ while [ $# -gt 0 ]; do
     --rmasscan) RMASSCAN_BIN=$2; shift 2 ;;
     --reps) REPS=$2; shift 2 ;;
     --rates) RATES=$2; shift 2 ;;
-    -h|--help) sed -n 2,28p "$0"; exit 0 ;;
+    -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done

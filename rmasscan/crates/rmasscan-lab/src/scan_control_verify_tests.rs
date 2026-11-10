@@ -2107,3 +2107,73 @@ fn the_split_of_the_conf_and_ports_helpers() {
     assert_eq!(link_stand(1).scanner_ip.to_string(), "198.18.0.6");
     assert_eq!(link_stand(0).scanner_ip.to_string(), "198.18.0.1");
 }
+
+#[test]
+fn sc06_a_second_adapter_that_keeps_sending_after_sigint_fails() {
+    // adapter 1 sends one more SYN 2.5 s after SIGINT (3.6 s after the start of the step)
+    let r = breaks(
+        "sc06_dual_veth",
+        |s| {
+            let st = s.step("dual_pause");
+            let at = syn_idx(st, 1)[0];
+            let syn = st.links[1][at].1.clone();
+            let sig = st.interrupt.as_ref().unwrap().signal_unix.unwrap();
+            st.links[1].insert(at + 1, (sig + 2.5, syn));
+        },
+        FAIL,
+        "link 1: no SYN later than 1 s after SIGINT",
+    );
+    assert_eq!(
+        check(&r, "no SYN later than 1 s after SIGINT")["result"],
+        PASS
+    );
+    // the signal outside the second capture's window is unproven evidence
+    breaks(
+        "sc06_dual_veth",
+        |s| {
+            let st = s.step("dual_pause");
+            st.interrupt.as_mut().unwrap().signal_unix = Some(T0 + 100.0 + 50.0);
+        },
+        INVALID,
+        "link 1: SIGINT is inside the capture window",
+    );
+}
+
+#[test]
+fn a_frame_padded_past_its_ip_total_length_is_read_by_the_ip_length() {
+    let mut p = PlanSpec::single(PORTS, RATE, PORT0);
+    p.mods = Mods {
+        ttl: Some(42),
+        sackok: true,
+        wscale: Some(7),
+        ..Mods::default()
+    };
+    let mut f = plan(&p)[0][0].clone();
+    f.extend([0u8; 6]);
+    let i = syn_info(&f).unwrap();
+    assert!(i.tcp_checksum_ok && i.ip_header_ok && i.length_ok, "{i:?}");
+    // padding that is not zero, or a total length past the frame, is a finding
+    let mut g = f.clone();
+    *g.last_mut().unwrap() = 1;
+    assert!(!syn_info(&g).unwrap().length_ok);
+    f.truncate(f.len() - 6);
+    f[17] = f[17].wrapping_add(4);
+    assert!(!syn_info(&f).unwrap().length_ok);
+}
+
+#[test]
+fn sc06_a_resent_probe_must_come_from_its_own_adapter_at_its_own_index() {
+    // adapter 1's first probe of the resume is one that adapter 0 sent in the pause run: it is on the wrong link
+    breaks(
+        "sc06_dual_veth",
+        |s| {
+            let a = syn_idx(s.step("dual_pause"), 0)[0];
+            let foreign = s.step("dual_pause").links[0][a].1.clone();
+            let st = s.step("dual_resume");
+            let b = syn_idx(st, 1)[0];
+            st.links[1][b].1 = foreign;
+        },
+        FAIL,
+        "a resent probe comes from the adapter's own stream",
+    );
+}

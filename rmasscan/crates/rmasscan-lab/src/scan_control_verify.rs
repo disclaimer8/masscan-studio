@@ -591,9 +591,6 @@ pub fn tcp_options(bytes: &[u8]) -> Result<Vec<TcpOpt>, String> {
                 let body = bytes
                     .get(i + 2..i + len)
                     .ok_or("an option past the header")?;
-                if len < 2 {
-                    return Err("an option shorter than its kind and length".into());
-                }
                 out.push(match (kind, body) {
                     (2, [a, b]) => TcpOpt::Mss(u16::from_be_bytes([*a, *b])),
                     (4, []) => TcpOpt::SackOk,
@@ -631,7 +628,9 @@ pub fn syn_info(f: &[u8]) -> Option<SynInfo> {
         return None;
     }
     let total = usize::from(u16::from_be_bytes([f[16], f[17]]));
-    let seg = &f[t..];
+    // The TCP segment is what the IPv4 total length says; Ethernet padding past it is no part of it.
+    let consistent = total >= ihl + doff && 14 + total <= f.len();
+    let seg = &f[t..if consistent { 14 + total } else { f.len() }];
     let mut pseudo = ones(&f[26..34], 0);
     pseudo = ones(&[0, 6], pseudo);
     pseudo = ones(&(seg.len() as u16).to_be_bytes(), pseudo);
@@ -639,7 +638,7 @@ pub fn syn_info(f: &[u8]) -> Option<SynInfo> {
         ttl: f[22],
         ip_header_ok: ones(&f[14..t], 0) == 0xffff,
         tcp_checksum_ok: ones(seg, pseudo) == 0xffff,
-        length_ok: total == f.len() - 14,
+        length_ok: consistent && f[14 + total..].iter().all(|b| *b == 0),
         options: tcp_options(&f[t + 20..t + doff]),
         src: Ipv4Addr::new(f[26], f[27], f[28], f[29]),
         dst: Ipv4Addr::new(f[30], f[31], f[32], f[33]),
@@ -1603,6 +1602,32 @@ fn interrupt_checks(r: &mut Run, s: &Side, after_s: f64, window_of: Option<&Link
         cap(r, s, "no SYN later than 1 s after SIGINT", late == 0, late);
     }
 }
+/// The interrupt checks of every adapter beyond the first: the signal is inside its capture window and it sent
+/// nothing more than 1 s after SIGINT.
+fn extra_link_interrupt_checks(r: &mut Run, s: &Side, k: usize) {
+    let (Some(i), Some(l)) = (&s.interrupt, s.link(k)) else {
+        return;
+    };
+    let (a, b) = av::window(&l.wire);
+    r.inv(
+        &format!(
+            "{}: link {k}: SIGINT is inside the capture window",
+            s.spec.name
+        ),
+        i.signal_unix.is_none_or(|t| (a..=b).contains(&t)),
+        format!("{:?}, window {a} .. {b}", i.signal_unix),
+    );
+    if let Some(t) = i.signal_unix {
+        let late = l.wire.syns.iter().filter(|(x, _)| *x > t + 1.0).count();
+        cap(
+            r,
+            s,
+            &format!("link {k}: no SYN later than 1 s after SIGINT"),
+            late == 0,
+            late,
+        );
+    }
+}
 fn sc02(r: &mut Run, d: &Path, sides: &[Side]) {
     let [pause, resume] = sides else { return };
     let all = port_list(PAUSE_PORTS);
@@ -1740,7 +1765,7 @@ fn sc02(r: &mut Run, d: &Path, sides: &[Side]) {
     else {
         return;
     };
-    let mut p = PlanSpec::single(PAUSE_PORTS, PAUSE_RATE, port);
+    let p = PlanSpec::single(PAUSE_PORTS, PAUSE_RATE, port);
     if let Some(plan) = plan_of(r, pause, &p) {
         let full = &plan[0];
         let k = k as usize;
@@ -1775,7 +1800,6 @@ fn sc02(r: &mut Run, d: &Path, sides: &[Side]) {
             format!("{} of {}", a.len(), b.len()),
         );
     }
-    p.resume_index = k;
     // The output: the pause's file kept, the resume appended one more document.
     if let (Some(raw1), Some(raw2)) = (&pause.raw, &resume.raw) {
         beh(
@@ -2333,6 +2357,7 @@ fn sc06(r: &mut Run, d: &Path, sides: &[Side]) {
     }
     paused_step(r, pause, 2);
     interrupt_checks(r, pause, PAUSE_AFTER_S, pause.link(0));
+    extra_link_interrupt_checks(r, pause, 1);
     let doc1 = single_doc(r, pause);
     if let Some(dc) = &doc1 {
         beh(
@@ -2439,6 +2464,28 @@ fn sc06(r: &mut Run, d: &Path, sides: &[Side]) {
             total.keys().filter(|p| want.contains(p)).count(),
             want.len()
         ),
+    );
+    // Independent of the planner: a resent probe is on the link of its first send, at the same outer index
+    // (adapter k's j-th probe has outer index k + 2j, the resume starts at m, so j = m/2 + j').
+    let mut foreign = Vec::new();
+    for k in 0..2 {
+        let (Some(lp), Some(lr)) = (pause.link(k), resume.link(k)) else {
+            continue;
+        };
+        let first: Vec<(Ipv4Addr, u16)> = lp.pairs();
+        let other: Vec<(Ipv4Addr, u16)> = pause.link(1 - k).map(LinkCap::pairs).unwrap_or_default();
+        for (j2, p) in lr.pairs().into_iter().enumerate() {
+            let on_own = first.iter().position(|q| *q == p);
+            let off = other.contains(&p);
+            if off || on_own.is_some_and(|j| j as u64 != m / 2 + j2 as u64) {
+                foreign.push((k, p));
+            }
+        }
+    }
+    r.cap(
+        "a resent probe comes from the adapter's own stream: on the link of its first send, at the same outer index",
+        foreign.is_empty(),
+        format!("{foreign:?}"),
     );
     r.cap(
         "bounded duplicates: no probe was sent more than twice (the adapter ahead of the minimum resends its own probes once)",

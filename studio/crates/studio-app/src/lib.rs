@@ -758,7 +758,14 @@ fn work(
                         action @ (Action::Authorize | Action::AuthorizeFor(_)) if !active => {
                             let job = match action {
                                 Action::AuthorizeFor(job) => Some(job),
-                                _ => None,
+                                _ => db
+                                    .scans()
+                                    .map_err(|e| e.to_string())?
+                                    .into_iter()
+                                    .find(|s| {
+                                        Some(s.scan) == selected && s.status == Status::Paused
+                                    })
+                                    .map(|s| s.job),
                             };
                             draft.invalidate(&out)?;
                             if let Some(job) = &job {
@@ -917,9 +924,9 @@ fn work(
                                 && (!raw_profile_enabled(s.job.backend)
                                     || !client.as_ref().is_some_and(Client::is_authorized))
                             {
-                                return Err(
-                                    "Raw resume is gated; saved checkpoint is unchanged".into()
-                                );
+                                emit(&out, Update::State(Status::Paused,
+                                    "Raw resume is gated; authorize the runner first. Saved checkpoint is unchanged".into()))?;
+                                return Ok(());
                             }
                             if s.job.backend == Backend::Simulation
                                 && client.as_ref().is_some_and(Client::is_authorized)

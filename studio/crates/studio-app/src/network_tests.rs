@@ -885,6 +885,26 @@ fn network_checkpoint_uses_frozen_report_and_resume_restores_coverage() {
     assert!(updates.iter().any(
         |v| matches!(v,Update::NetworkCoverage(Some(coverage)) if coverage.unresolved_targets==1)
     ));
+    assert!(
+        updates
+            .iter()
+            .any(|v| matches!(v, Update::State(Status::Paused, _)))
+    );
+    controller.send(Action::Authorize).unwrap();
+    let updates = wait_updates(&mut controller, |u| {
+        u.iter().any(|v| {
+            matches!(
+                v,
+                Update::Authorization {
+                    busy: false,
+                    authorized: false,
+                    ..
+                }
+            )
+        })
+    });
+    assert!(updates.iter().any(|v| matches!(v, Update::NetworkReadiness(Some(state))
+        if state.job_digest == Some(job.original_digest().unwrap()) && state.backend == job.backend)));
     drop(controller);
     let db = Store::open(&dir.0).unwrap();
     let saved = db.scans().unwrap().remove(0);

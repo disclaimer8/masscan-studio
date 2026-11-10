@@ -948,7 +948,8 @@ fn a_document_that_differs_from_the_wire_or_from_c_fails() {
     let (v, b) = judge_one(&sim);
     assert_eq!(v, FAIL, "{b:#?}");
     assert!(has(&b, FAIL, "binary: the document holds the records"));
-    // rmasscan's -oL holds the right records in another order than C's.
+    // rmasscan's -oL holds the right records in another order than its wire answered (and than C's): the order is
+    // judged against the step's own wire; against C the records are the same multiset.
     let mut sim = Sim::new("p03_sctp_init_ack_abort");
     let s = sim.step_mut("list");
     let mut recs = s.recs.clone();
@@ -956,11 +957,113 @@ fn a_document_that_differs_from_the_wire_or_from_c_fails() {
     s.doc = Some(render(Out::List, &recs, true));
     let (v, b) = judge_one(&sim);
     assert_eq!(v, FAIL, "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
     assert!(
         has(
             &b,
             FAIL,
-            "list: the records equal the C oracle's (oracle-list) in order"
+            "list: the document holds the records of the replies on its wire, in reply order"
+        ),
+        "{b:#?}"
+    );
+}
+
+/// The live shape of a burst (both scanners send several probes back to back at `--rate 100`): probe `k` and probe
+/// `k + 1` leave together and the stand answers `k + 1` first (the responder answers each UDP socket on its own
+/// thread, the peer kernel answers ICMP at once). Same probes, same order; only the replies change places.
+fn burst(fr: &Frames, k: usize, arp: bool) -> Frames {
+    let st = stand();
+    let at: Vec<usize> = fr
+        .iter()
+        .enumerate()
+        .filter(|(_, (t, f))| probe_of(*t, f, &st, arp).is_some())
+        .map(|(i, _)| i)
+        .collect();
+    let (a, b) = (at[k], at[k + 1]);
+    let end = at.get(k + 2).copied().unwrap_or(fr.len() - 3);
+    let t0 = fr[a].0;
+    let mut out = fr[..a].to_vec();
+    out.push((t0, fr[a].1.clone()));
+    out.push((t0 + 0.0001, fr[b].1.clone()));
+    let mut t = t0 + 0.0002;
+    for (_, f) in fr[b + 1..end].iter().chain(&fr[a + 1..b]) {
+        out.push((t, f.clone()));
+        t += 0.0001;
+    }
+    out.extend(fr[end..].iter().cloned());
+    out
+}
+
+#[test]
+fn the_stands_reply_order_may_differ_between_the_two_runs_of_a_document() {
+    // Live, 2026-11-10 (linux-protocols-r1 on 68ffcf3): p02 and p05 FAILed only because rmasscan's wire and the
+    // oracle's wire had the replies of one burst in another order; each document held its own wire's replies in
+    // reply order. Here the oracle's run of each document gets such a burst (its document follows its own wire).
+    for tag in ["p02_udp_payloads_and_closed", "p05_mixed_protos"] {
+        let mut sim = Sim::new(tag);
+        let c = case(tag).unwrap();
+        for s in sim.steps.iter_mut().filter(|s| s.spec.who == Who::Oracle) {
+            s.frames = burst(&s.frames, 0, c.arp);
+            s.recs.swap(0, 1);
+            s.doc = Some(render(s.spec.out, &s.recs, false));
+        }
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, PASS, "{tag}: {b:#?}");
+        // and the notes say the order differed from C's
+        let root = scratch();
+        sim.write(&root);
+        fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
+        let res = verify_dir(&root);
+        let run = run_of(&res, tag);
+        for out in c.outs {
+            let doc = steps(tag)
+                .unwrap()
+                .into_iter()
+                .find(|s| s.who == Who::Rmasscan && s.out == *out)
+                .unwrap()
+                .name;
+            assert_eq!(
+                run["notes"]["record_order_vs_c"]["documents"][doc],
+                "the same records, in another order (the two wires' reply orders differ)",
+                "{tag} {doc}"
+            );
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+    // The order of a document is still judged against its own wire: rmasscan's records in an order its wire did not
+    // answer in FAIL, whatever the oracle did.
+    let mut sim = Sim::new("p02_udp_payloads_and_closed");
+    let s = sim.step_mut("json");
+    let mut recs = s.recs.clone();
+    recs.swap(0, 1);
+    s.doc = Some(render(Out::Json, &recs, true));
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "json: the document holds the records of the replies on its wire, in reply order"
+        ),
+        "{b:#?}"
+    );
+    // A record that C reports and rmasscan does not (or another field) is still a difference from C.
+    let mut sim = Sim::new("p05_mixed_protos");
+    let s = sim.step_mut("oracle-json");
+    s.recs[3].ttl = Some(63);
+    s.doc = Some(render(Out::Json, &s.recs, false));
+    let (v, b) = judge_one(&sim);
+    assert_ne!(v, PASS, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "json: the records equal the C oracle's (oracle-json)"
+        ) || has(
+            &b,
+            INVALID,
+            "json: the records equal the C oracle's (oracle-json)"
         ),
         "{b:#?}"
     );
@@ -1431,12 +1534,12 @@ fn the_comparison_with_c_names_non_tcp_dedup_only_where_it_applies() {
         let applies = c.deviations.contains(&"non-tcp-dedup");
         for n in &names {
             assert_eq!(
-                n.ends_with("but the time (non-tcp-dedup applied)"),
+                n.ends_with("may differ) (non-tcp-dedup applied)"),
                 applies,
                 "{}: {n}",
                 c.tag
             );
-            assert!(n.ends_with("but the time") || applies, "{}: {n}", c.tag);
+            assert!(n.ends_with("may differ)") || applies, "{}: {n}", c.tag);
         }
     }
     fs::remove_dir_all(&root).unwrap();

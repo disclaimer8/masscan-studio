@@ -167,6 +167,10 @@ pub const DEVIATIONS: [(&str, &str); 6] = [
     ),
 ];
 
+/// Why rmasscan's document and the oracle's are compared as multisets of records, while each one's order is judged
+/// against its own wire (no deviation from C: both print in the order the replies arrive).
+pub const RECORD_ORDER_VS_C: &str = "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order";
+
 /// One case: what it scans and which documents it writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaseSpec {
@@ -1911,6 +1915,7 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
     }
     // Each document: rmasscan's step against the oracle's step of the same document.
     let (mut r12, mut collapsed) = (0, 0);
+    let mut order = serde_json::Map::new();
     for (i, pair) in sides.chunks(2).enumerate() {
         let [rm, or] = pair else { continue };
         let k = 2 * i;
@@ -1937,18 +1942,41 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
             let dedup = c.deviations.contains(&"non-tcp-dedup");
             let (want, n) = collapse(&y.records, dedup);
             collapsed += n;
+            // The order of each document is its own wire's reply order (judged above, for both scanners); the two
+            // wires need not answer in the same order (RECORD_ORDER_VS_C), so the records are compared as a multiset.
+            let (mut got_set, mut want_set) = (got.clone(), want.clone());
+            got_set.sort();
+            want_set.sort();
+            let same = got_set == want_set;
+            order.insert(
+                rm.spec.name.into(),
+                json!(match (same, got == want) {
+                    (true, true) => "the same records in the same order",
+                    (true, false) =>
+                        "the same records, in another order (the two wires' reply orders differ)",
+                    (false, _) => "other records",
+                }),
+            );
             r.cap(
                 &format!(
-                    "{}: the records equal the C oracle's ({}) in order and field for field, but the time{}",
+                    "{}: the records equal the C oracle's ({}) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ){}",
                     rm.spec.name,
                     or.spec.name,
                     if dedup { " (non-tcp-dedup applied)" } else { "" }
                 ),
-                got == want,
-                if got == want { shown(&got) } else { first_difference(&got, &want) },
+                same,
+                if same {
+                    shown(&got)
+                } else {
+                    first_difference(&got_set, &want_set)
+                },
             );
         }
     }
+    r.notes.insert(
+        "record_order_vs_c".into(),
+        json!({"rule": RECORD_ORDER_VS_C, "documents": order}),
+    );
     case_checks(r, c, sides, &docs, &st);
     deviations(r, c, sides, r12, collapsed);
     r.notes.insert(

@@ -19,14 +19,19 @@ rebuilding after the history rewrite does not transfer that acceptance.
   settings without starting automatically.
 - [x] Exercise ordinary and zoomed native window layouts; preserve visible
   counters, controls and result rows.
-- [ ] Complete native keyboard/layout acceptance, including non-Latin shortcuts,
-  focus, Shift selection and the minimum window width. The observed Cmd+A input
-  anomaly remains unclassified; a successful headless test does not resolve it.
+- [x] Diagnose the macOS modifier/Command-character failure and verify native
+  automated Cmd+A/C/F/V, Shift selection and Tab/Shift+Tab in Studio fields and
+  the results table, including return from a cancelled export dialog.
+- [ ] Complete keyboard/layout acceptance for the system Save panel, physical
+  keyboards and other input layouts, and native minimum window width. Automated
+  Cmd+A/text entry in the AppKit Save field remains unreliable; the Studio event
+  adapter does not handle AppKit-owned text fields.
 - [ ] Repeat physical-network lifecycle and export acceptance on the exact
   eventual distribution candidate, including same-window Stop/Start and
   Pause/Resume. Historical fixture and direct-network checks remain historical.
 
 Latest UI evidence: [draft queue and native export](../docs/experiments/2026-11-10-studio-native-ui.md).
+Keyboard follow-up: [macOS event diagnosis and verification](../docs/experiments/2026-11-10-studio-keyboard.md).
 
 ## 2. Physical-network acceptance
 

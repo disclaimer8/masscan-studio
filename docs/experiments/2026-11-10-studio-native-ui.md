@@ -60,14 +60,16 @@ seed 73, giving 128 results. No adapter authorization or network packets were us
 
 ## Limits and remaining UI checks
 
-Full keyboard acceptance remains open. During native automation with the current
-input layout, Cmd+A in a settings field inserted a Cyrillic character instead of
-selecting all; the native Save panel's shortcut worked. This is an observation,
-not a confirmed attribution to Studio, Slint or the input tool. AX value-setting
-was used to complete the form checks. Home/End moved the table viewport, but
-complete modifier/focus behavior was not accepted. Native minimum-width resizing
-was not established by the attempted edge drags; ordinary and zoomed layouts were
-visually inspected. Do not label this as complete keyboard/mouse acceptance.
+During this initial check, Cmd+A in a settings field inserted a Cyrillic
+character instead of selecting all. The working Save-panel shortcut was
+Cmd+Shift+G (Go to Folder), not a verified Cmd+A. AX value-setting was used to
+complete the form checks. The subsequent
+[keyboard follow-up](2026-11-10-studio-keyboard.md) diagnoses the Studio event
+failure and records its fix on a newer exact build; it does not retroactively
+accept the packages in this report. Home/End moved the table viewport. Native
+minimum-width resizing was not established by the attempted edge drags; ordinary
+and zoomed layouts were visually inspected. Complete keyboard/mouse acceptance
+remains open, including the system Save field.
 
 No new helper installation, Windows GUI/UAC, Linux desktop/polkit, physical
 network, publisher signing or distribution acceptance is claimed. Claude's

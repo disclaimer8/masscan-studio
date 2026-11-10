@@ -3,8 +3,9 @@
 //! :877), masscan © Robert David Graham (github.com/robertdavidgraham/masscan,
 //! HEAD 8e6b3b0). Кадры должны совпадать побайтно с C.
 
-use crate::checksum::{fold, ip_header_checksum, tcp_ipv4_partial, word_sum};
+use crate::checksum::{fold, ip_header_checksum, tcp_ipv4_partial, udp_ipv4_checksum, word_sum};
 use crate::cookie::icmp_echo_cookie;
+use crate::payloads::PayloadEntry;
 use crate::targets::TEMPL_ICMP_ECHO;
 
 /// Тип канального уровня (спека §4.8): `PCAP_DLT_ETHERNET` 1, `PCAP_DLT_NULL` 0,
@@ -339,6 +340,95 @@ impl IcmpEchoTemplate {
         out[oc + 4..oc + 8].copy_from_slice(&cookie.to_be_bytes());
         let csum = !fold(u64::from(self.checksum_icmp) + u64::from(cookie));
         out[oc + 2..oc + 4].copy_from_slice(&csum.to_be_bytes());
+    }
+}
+
+/// `default_udp_template`, templ-pkt.c:56-74: Ethernet 14 + IP 20 (`ip_len = 28`, TTL 255, proto 17) + UDP 8
+/// (порт источника `0xfedc`, длина 8, сумма 0), всего 42 байта без нагрузки.
+pub const DEFAULT_UDP_TEMPLATE: &[u8] = &[
+    // Ethernet: dst, src, ethertype IPv4
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x08, 0x00,
+    // IP: 0x45, tos, total length 28, id, flags/frag, TTL 255, proto UDP, checksum, src, dst
+    0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0xff, 0x11, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0,
+    // UDP: порт источника, порт назначения, длина 8, сумма
+    0xfe, 0xdc, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00,
+];
+
+/// Шаблон UDP (`Proto_UDP`). Нагрузка подставляется при сборке кадра (`udp_payload_fixup`, templ-pkt.c:618), поэтому
+/// в шаблоне частичных сумм нет: сумма UDP считается по готовой датаграмме.
+#[derive(Clone, Debug)]
+pub struct UdpTemplate {
+    packet: Vec<u8>,
+    offset_ip: usize,
+    offset_udp: usize,
+}
+
+impl UdpTemplate {
+    /// `_template_init` для UDP, templ-pkt.c:1285-1313; `--ttl` как `template_set_ttl` (:1474-1488). Опции TCP и
+    /// `--badsum` к UDP не относятся (в C `badsum` ни на что не влияет: main-conf.c:2758).
+    pub fn new(source_mac: [u8; 6], router_mac: [u8; 6], link: LinkType, ttl: u8) -> Self {
+        let mut px = DEFAULT_UDP_TEMPLATE.to_vec();
+        let (offset_ip, offset_udp) = (14usize, 34usize);
+        px[0..6].copy_from_slice(&router_mac);
+        px[6..12].copy_from_slice(&source_mac);
+        px[offset_ip + 8] = ttl;
+        // :1290-1292: ID, сумма и адреса обнуляются; :1311-1313 сумма UDP тоже.
+        px[offset_ip + 4..offset_ip + 6].fill(0);
+        px[offset_ip + 10..offset_ip + 12].fill(0);
+        px[offset_ip + 12..offset_ip + 20].fill(0);
+        px[offset_udp + 6..offset_udp + 8].fill(0);
+        // DATALINK KLUDGE, templ-pkt.c:1342-1360 (как у TCP).
+        let (packet, offset_ip, offset_udp) = match link {
+            LinkType::Ethernet => (px, offset_ip, offset_udp),
+            LinkType::Null => {
+                let mut p = 2u32.to_ne_bytes().to_vec();
+                p.extend_from_slice(&px[offset_ip..]);
+                (p, 4, offset_udp - (offset_ip - 4))
+            }
+            LinkType::Raw => (px[offset_ip..].to_vec(), 0, offset_udp - offset_ip),
+        };
+        Self {
+            packet,
+            offset_ip,
+            offset_udp,
+        }
+    }
+
+    /// `template_set_target_ipv4`, ветка `Proto_UDP`, templ-pkt.c:903-906, :942-988 и :1023-1047. `port_them`
+    /// 16-битный (`port_them &= 0xFFFF`, :905), `ip_id = ip_them ^ port_them ^ seqno`. Нагрузка `payload` (если есть)
+    /// берётся с мутацией cookie по `seqno`; без записи уходит 0 байт (:630). Длины IP и UDP считаются по итоговому кадру.
+    /// Сумма UDP это RFC 768; результат 0 уходит как `0xFFFF` (C пишет 0). `out` очищается и получает кадр целиком.
+    pub fn build_udp(
+        &self,
+        (ip_them, port_them): (u32, u16),
+        (ip_me, port_me): (u32, u16),
+        seqno: u32,
+        payload: Option<&PayloadEntry>,
+        out: &mut Vec<u8>,
+    ) {
+        out.clear();
+        out.extend_from_slice(&self.packet);
+        if let Some(e) = payload {
+            out.extend_from_slice(&e.with_cookie(seqno));
+        }
+        let (oi, ou) = (self.offset_ip, self.offset_udp);
+        let ip_id = ip_them ^ u32::from(port_them) ^ seqno; // :942
+        let total_length = (out.len() - oi) as u16;
+        out[oi + 2..oi + 4].copy_from_slice(&total_length.to_be_bytes());
+        out[oi + 4..oi + 6].copy_from_slice(&(ip_id as u16).to_be_bytes());
+        out[oi + 12..oi + 16].copy_from_slice(&ip_me.to_be_bytes());
+        out[oi + 16..oi + 20].copy_from_slice(&ip_them.to_be_bytes());
+        out[oi + 10..oi + 12].fill(0);
+        let xsum2 = !ip_header_checksum(out, oi, out.len()); // :988
+        out[oi + 10..oi + 12].copy_from_slice(&xsum2.to_be_bytes());
+
+        let udp_length = (out.len() - ou) as u16; // :1030 `length - offset_app + 8`
+        out[ou..ou + 2].copy_from_slice(&port_me.to_be_bytes());
+        out[ou + 2..ou + 4].copy_from_slice(&port_them.to_be_bytes());
+        out[ou + 4..ou + 6].copy_from_slice(&udp_length.to_be_bytes());
+        out[ou + 6..ou + 8].fill(0);
+        let csum = udp_ipv4_checksum(ip_me, ip_them, &out[ou..]);
+        out[ou + 6..ou + 8].copy_from_slice(&csum.to_be_bytes());
     }
 }
 
@@ -821,5 +911,126 @@ mod tests {
         assert_eq!(&null[..4], &2u32.to_ne_bytes());
         assert_eq!(&null[4..], &eth[14..]);
         assert_eq!(&raw[..], &eth[14..]);
+    }
+
+    // --- UDP (templ-pkt.c:56-74, :903-906, :1023-1047) ---
+
+    fn udp_tmpl(link: LinkType, ttl: u8) -> UdpTemplate {
+        UdpTemplate::new(hex6("001122334455"), hex6("665544332211"), link, ttl)
+    }
+
+    /// Независимая проверка суммы UDP: псевдозаголовок и вся датаграмма сворачиваются в 0xFFFF.
+    fn udp_sum_folds_to_ones(f: &[u8]) -> bool {
+        let dg = &f[34..];
+        let mut sum = 17 + dg.len() as u64 + checksum::word_sum(&f[26..34]);
+        sum += checksum::word_sum(dg);
+        fold(sum) == 0xffff
+    }
+
+    #[test]
+    fn udp_frames_match_c_bytes_for_every_port() {
+        use crate::payloads::PayloadTable;
+        use crate::udp_c_vectors::C_FRAMES;
+        // Кадры настоящего C: IP, порты, ip_id, длины, сумма UDP и нагрузка с cookie (все 28 портов таблицы и 5 без записи).
+        let table = PayloadTable::builtin();
+        let t = udp_tmpl(LinkType::Ethernet, 255);
+        let (them, me, port_me) = (0xc612_0201u32, 0xc612_0263u32, 40001u16);
+        let mut f = Vec::new();
+        for &(port, seqno, hex) in C_FRAMES {
+            t.build_udp((them, port), (me, port_me), seqno, table.get(port), &mut f);
+            assert_eq!(f, hexv(hex), "port {port}");
+            assert_eq!(
+                &f[18..20],
+                &((them ^ u32::from(port) ^ seqno) as u16).to_be_bytes()
+            );
+            assert!(udp_sum_folds_to_ones(&f), "port {port}");
+            assert_eq!(checksum::ip_header_checksum(&f, 14, 34), 0xffff);
+        }
+        assert_eq!(C_FRAMES.len(), 33);
+    }
+
+    #[test]
+    fn udp_unknown_port_sends_empty_payload() {
+        use crate::payloads::PayloadTable;
+        let table = PayloadTable::builtin();
+        assert!(table.get(59999).is_none());
+        let t = udp_tmpl(LinkType::Ethernet, 255);
+        let mut f = Vec::new();
+        t.build_udp(
+            (0xc612_0201, 59999),
+            (0xc612_0263, 40001),
+            0x1234_5678,
+            None,
+            &mut f,
+        );
+        // 42 байта: Ethernet 14 + IP 20 + UDP 8, ip_len 28, udp_len 8.
+        assert_eq!(f.len(), 42);
+        assert_eq!(&f[16..18], &[0x00, 0x1c]);
+        assert_eq!(&f[38..40], &[0x00, 0x08]);
+        assert_eq!(f[22], 255, "ttl");
+        assert_eq!(f[23], 17, "proto UDP");
+        assert_eq!(
+            &f[34..38],
+            &[0x9c, 0x41, 0xea, 0x5f],
+            "ports 40001 -> 59999"
+        );
+        assert!(udp_sum_folds_to_ones(&f));
+        assert_ne!(&f[40..42], &[0, 0]);
+        assert_eq!(checksum::ip_header_checksum(&f, 14, 34), 0xffff);
+
+        // RFC 768: сумма, получившаяся 0, уходит как 0xFFFF (0 значит "суммы нет"). Подбор порта источника с нулевым итогом.
+        let mut hits = 0;
+        for port_me in 0..=u16::MAX {
+            t.build_udp(
+                (0xc612_0201, 59999),
+                (0xc612_0263, port_me),
+                0,
+                None,
+                &mut f,
+            );
+            let wire = u16::from_be_bytes([f[40], f[41]]);
+            assert_ne!(wire, 0, "port_me {port_me}");
+            if wire == 0xffff {
+                hits += 1;
+                assert!(udp_sum_folds_to_ones(&f), "port_me {port_me}");
+            }
+        }
+        assert!(hits >= 1, "no source port gave a zero checksum");
+    }
+
+    #[test]
+    fn udp_ttl_and_link_types_follow_the_other_templates() {
+        use crate::payloads::PayloadTable;
+        let table = PayloadTable::builtin();
+        let (them, me, seq) = (0xc612_0201u32, 0xc612_0263u32, 0xdead_beefu32);
+        let (mut eth, mut null, mut raw) = (Vec::new(), Vec::new(), Vec::new());
+        udp_tmpl(LinkType::Ethernet, 64).build_udp(
+            (them, 53),
+            (me, 40001),
+            seq,
+            table.get(53),
+            &mut eth,
+        );
+        udp_tmpl(LinkType::Null, 64).build_udp(
+            (them, 53),
+            (me, 40001),
+            seq,
+            table.get(53),
+            &mut null,
+        );
+        udp_tmpl(LinkType::Raw, 64).build_udp(
+            (them, 53),
+            (me, 40001),
+            seq,
+            table.get(53),
+            &mut raw,
+        );
+        assert_eq!(eth[22], 64);
+        assert_eq!(checksum::ip_header_checksum(&eth, 14, 34), 0xffff);
+        assert_eq!(&null[..4], &2u32.to_ne_bytes());
+        assert_eq!(&null[4..], &eth[14..]);
+        assert_eq!(&raw[..], &eth[14..]);
+        // Cookie DNS: txid = младшие 16 бит seqno.
+        assert_eq!(&eth[42..44], &[0xbe, 0xef]);
     }
 }

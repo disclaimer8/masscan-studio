@@ -30,7 +30,8 @@ use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::fake::{
-    FakeAdapter, HealthStep, ManualClock, RxStep, reply_to_echo, reply_to_syn,
+    FakeAdapter, HealthStep, ManualClock, RxStep, port_unreachable_for, reply_to_echo,
+    reply_to_syn, reply_to_udp,
 };
 use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHealth};
 use rmasscan_net::arp_resolve::{ArpPolicy, arp_binding};
@@ -52,6 +53,8 @@ const T1: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 1);
 const T2: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 2);
 /// Открытые порты фиктивной сети; остальное отвечает RST.
 const OPEN: [(Ipv4Addr, u16); 2] = [(T1, 80), (T2, 81)];
+/// Хосты, чей UDP-порт 53 отвечает датаграммой; остальные UDP-порты закрыты (ICMP Port Unreachable).
+const OPEN_UDP: [Ipv4Addr; 1] = [T1];
 /// `--wait 1` идёт по `ManualClock` (около 20 пустых `recv` по 50 мс, миллисекунды реального времени); при `--wait 0`
 /// RX engine выходит в той же итерации, где увидел конец TX, и ответы фиктивной сети, ещё лежащие в очереди, теряются.
 const LIVE: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "1"];
@@ -326,6 +329,18 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
                 reply_to_echo(frame, 0).into_iter().collect()
             } else {
                 vec![]
+            }
+        }
+        Some([0x08, 0x00]) if frame.get(23) == Some(&17) => {
+            // UDP: порт 53 хостов из `OPEN_UDP` отвечает датаграммой, остальные порты ICMP Port Unreachable от шлюза.
+            let ip = Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]);
+            let port = u16::from_be_bytes([frame[36], frame[37]]);
+            if port == 53 && OPEN_UDP.contains(&ip) {
+                reply_to_udp(frame, b"answer").into_iter().collect()
+            } else {
+                port_unreachable_for(frame, u32::from(GW))
+                    .into_iter()
+                    .collect()
             }
         }
         Some([0x08, 0x00]) => {
@@ -770,7 +785,7 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
     }
 }
 
-/// Порт протокола без построителя зонда (UDP, SCTP, ARP) и порты `O:*`/`I:1+` отклоняются живым
+/// Порт протокола без построителя зонда (SCTP, ARP) и порты `O:*`/`I:1+` отклоняются живым
 /// сканом до обнаружения, ARP и открытия адаптера: ни кадра, ни строки `[+]`, ошибка и код 1. Раньше скан с
 /// `-p80,U:53` слал SYN до первого UDP-индекса и заканчивался как завершённый.
 #[test]
@@ -778,8 +793,8 @@ fn live_scan_refuses_ports_without_a_probe_builder_before_any_frame() {
     let mut b = FakeBackend::new();
     b.panic_on_open = true;
     for (extra, text) in [
-        (&["-pU:53"][..], "U:53 cannot be scanned yet"),
         (&["-pS:2905"][..], "S:2905 cannot be scanned yet"),
+        (&["-p80,U:53,S:7"][..], "S:7 cannot be scanned yet"),
         (&["-pI:2"][..], "ARP scan cannot be mixed with other ports"),
         (&["-pO:47"][..], "raw IP protocol ports (O:47)"),
         (&["-pI:1"][..], "ICMP ports other than I:0"),
@@ -3372,6 +3387,102 @@ fn live_ping_scan_splits_probes_across_two_adapters() {
         assert_eq!(sent[0][26..30], ip.octets(), "nic {k}");
     }
     assert_eq!(out.lines().count(), 2, "{out}");
+}
+
+/// UDP (`-pU:53,U:59999`, Задача 4) идёт тем же путём адаптера: кадры с нагрузкой DNS (73 байта) и пустые (42 байта),
+/// ответная датаграмма это `open`, ICMP Port Unreachable от шлюза это `closed` с протоколом `udp`.
+#[test]
+fn live_udp_scan_reports_open_and_closed_and_sends_payload_frames() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1-198.51.100.2",
+            "-pU:53,U:59999",
+            "--wait",
+            "1",
+            "--show",
+            "closed",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    let sent = opened.last().unwrap().adapter.sent_frames();
+    assert_eq!(sent.len(), 4);
+    let dst_port = |f: &[u8]| u16::from_be_bytes([f[36], f[37]]);
+    assert_eq!(
+        sent.iter()
+            .filter(|f| f[23] == 17 && dst_port(f) == 53 && f.len() == 73)
+            .count(),
+        2
+    );
+    assert_eq!(
+        sent.iter()
+            .filter(|f| f[23] == 17 && dst_port(f) == 59999 && f.len() == 42)
+            .count(),
+        2
+    );
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    // T1:53 отвечает датаграммой; T2:53 и оба 59999 закрыты по ICMP 3/3
+    assert_eq!(lines.len(), 4, "{out}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("open port 53/udp on 198.51.100.1"))
+            .count(),
+        1,
+        "{out}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("closed port 53/udp on 198.51.100.2"))
+            .count(),
+        1,
+        "{out}"
+    );
+    for ip in [T1, T2] {
+        let want = format!("closed port 59999/udp on {ip}");
+        assert_eq!(
+            lines.iter().filter(|l| l.contains(&want)).count(),
+            1,
+            "{want}: {out}"
+        );
+    }
+}
+
+/// `--offline --packet-trace -pU:53,U:59999` печатает для UDP строку C `main-ptrace.c:57-59`: `UDP`, `[src]:port`,
+/// `[dst]:port`, после второго адреса пробел. Образец снят с C 8e6b3b0: `packet_trace()` на кадре
+/// `template_set_target_ipv4` (10.0.0.1 <- 10.255.0.1:40000) вывел
+/// `SENT (T) UDP  [10.255.0.1]:40000    > [10.0.0.1]:53         ` и `...:59999      ` с переводом строки; время `T`
+/// в образце секунды от `pt_start`, здесь 0.0000, как у остальных golden-строк.
+#[test]
+fn offline_packet_trace_prints_the_c_udp_sent_line() {
+    let b = hermetic();
+    let args: Vec<&str> = TRACE
+        .iter()
+        .map(|a| match *a {
+            "-p80,443" => "-pU:53,U:59999",
+            "--source-port=40000-40003" => "--source-port=40000",
+            other => other,
+        })
+        .collect();
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
+    lines.sort_unstable();
+    let mut want = Vec::new();
+    for n in 0..4 {
+        for (port, pad) in [(53, "         "), (59999, "      ")] {
+            want.push(format!(
+                "SENT (0.0000) UDP  [10.255.0.1]:40000    > [10.0.0.{n}]:{port}{pad}\n"
+            ));
+        }
+    }
+    want.sort_unstable();
+    assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
 /// `--offline --packet-trace` печатает для ICMP Echo строку C `main-ptrace.c:67-70`: `ICMP`, `[src]:type`

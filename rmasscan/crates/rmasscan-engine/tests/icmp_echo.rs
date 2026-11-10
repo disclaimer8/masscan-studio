@@ -110,8 +110,7 @@ fn icmp_and_tcp_replies_do_not_collide_in_the_current_dedup_key() {
     assert_eq!(dups, 0);
     assert_eq!(replies.iter().filter(|r| r.ip_proto == 1).count(), 8);
     assert_eq!(replies.iter().filter(|r| r.ip_proto == 6).count(), 8);
-    // Ключ DedupCache сегодня (remote ip, remote port, local ip, local port): локальный порт TCP всегда из
-    // `source_ports` (>= 1), у ICMP он 0, поэтому ICMP и TCP-запись с `remote_port = 0` не сливаются.
+    // Ключ DedupCache содержит протокол: ICMP (1) и TCP (6) с `remote_port = 0` не сливаются и при равных адресах.
     let mut d = DedupCache::new(8);
     let icmp = replies.iter().find(|r| r.ip_proto == 1).unwrap();
     let tcp = Reply {

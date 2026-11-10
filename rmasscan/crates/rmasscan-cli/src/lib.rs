@@ -1052,13 +1052,9 @@ mod tests {
         assert!(e.contains("O:47"), "{e}");
         let e = run_args(&trace_args(&["-pI:1"])).unwrap_err();
         assert!(e.contains("I:1"), "{e}");
-        // UDP, SCTP и ARP пока без построителя зонда: временный отказ до обнаружения и до первой строки
-        // SENT (Задачи 4-6 снимают его по протоколу). Чистый TCP и ICMP Echo (I:0) проходят.
-        for (ports, label) in [
-            ("-pU:53", "U:53"),
-            ("-p80,U:53", "U:53"),
-            ("-pS:2905", "S:2905"),
-        ] {
+        // SCTP и ARP пока без построителя зонда: временный отказ до обнаружения и до первой строки
+        // SENT (Задачи 5-6 снимают его по протоколу). Чистый TCP, UDP и ICMP Echo (I:0) проходят.
+        for (ports, label) in [("-pS:2905", "S:2905"), ("-p80,U:53,S:7", "S:7")] {
             let (res, out, log) = run_capture(&trace_args(&[ports]));
             let e = res.unwrap_err();
             assert!(
@@ -1102,6 +1098,266 @@ mod tests {
         run_args(&["rmasscan", "-sL", "10.0.0.1", "-pO:47,U:53", "--seed", "1"]).unwrap();
         // без трассировки --offline ничего не строит и не отказывает
         run_args(&["rmasscan", "--offline", "10.0.0.1", "-pO:47", "--seed", "1"]).unwrap();
+    }
+
+    /// `main-ptrace.c` `FOUND_UDP`/`FOUND_DNS`: `SENT (%5.4f) UDP  %-21s > %-21s \n` (после второго адреса остаётся пробел).
+    #[test]
+    fn packet_trace_prints_the_c_udp_sent_line() {
+        let out = run_args(&trace_args(&["-pU:53,U:59999"])).unwrap();
+        // 8 SYN на 80 и 443, по 4 строки UDP на 53 и на 59999
+        assert_eq!(out.lines().count(), 16, "{out}");
+        let udp: Vec<&str> = out
+            .split_inclusive('\n')
+            .filter(|l| l.contains(") UDP  "))
+            .collect();
+        assert_eq!(udp.len(), 8, "{out}");
+        let p = prepared(&trace_args(&["-pU:53,U:59999"]));
+        let mut want = Vec::new();
+        live::for_each_probe(&p.eff, &p.binding, |pr| {
+            if pr.frame[23] == 17 {
+                want.push((
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_me), pr.port_me),
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_them), pr.port_them),
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(want.len(), 8);
+        for (line, (from, to)) in udp.iter().zip(&want) {
+            // SENT (0.0000) UDP  [10.255.0.1]:4000N         > [10.0.0.N]:53        <пробел>\n
+            let tail = format!("UDP  {from:<21} > {to:<21} \n");
+            assert!(line.starts_with("SENT ("), "{line:?}");
+            assert!(line.ends_with(&tail), "{line:?} vs {tail:?}");
+            let secs = line["SENT (".len()..].split_once(')').unwrap().0;
+            assert_eq!(secs.len(), "0.0000".len(), "{line:?}");
+        }
+        assert!(udp[0].contains(") UDP  [10.255.0.1]:4000"), "{}", udp[0]);
+        assert!(udp.iter().any(|l| l.contains("> [10.0.0.0]:59999 ")));
+        // у UDP нет флагов TCP и числа байт нагрузки (в C `%u-bytes` только у TCP с `app_length`)
+        assert!(
+            udp.iter()
+                .all(|l| !l.contains("SYN") && !l.contains("-bytes"))
+        );
+    }
+
+    /// `--nmap-payloads` и `--pcap-payloads`: порядок в `--echo` снят с C (`masscan --echo 10.0.0.0/30 -p80 --seed 1
+    /// --nmap-payloads /tmp/x.txt --pcap-payloads /tmp/y.pcap --noreset --offline --pcap /tmp/z.pcap --ndjson-status
+    /// --retries 2`, config_parameters[], main-conf.c:2380-2399; `--ndjson-status` с `--echo` здесь отказывает); синонимы в единственном числе и файл `-c`.
+    #[test]
+    fn payload_options_are_positional_and_echoed_in_c_order() {
+        let head = |extra: &[&str]| {
+            let mut args = vec![
+                "rmasscan",
+                "--echo",
+                "10.0.0.0/30",
+                "-p80",
+                "--seed",
+                "1",
+                "--nmap-payloads",
+                "/tmp/x.txt",
+                "--pcap-payloads",
+                "/tmp/y.pcap",
+                "--noreset",
+                "--retries",
+                "2",
+            ];
+            args.extend_from_slice(extra);
+            run_args(&args)
+                .unwrap()
+                .lines()
+                .take_while(|l| !l.starts_with("nocapture"))
+                .map(|l| format!("{l}\n"))
+                .collect::<String>()
+        };
+        let top = "seed = 1\nrate = 100       \nshard = 1/1\nretries = 2\nnoreset = true\nnmap-payloads = /tmp/x.txt\n";
+        // `--offline` стоит между двумя ключами; `--pcap` (только живой скан) между `offline` и `pcap-payloads`
+        assert_eq!(
+            head(&["--offline"]),
+            format!("{top}offline = true\npcap-payloads = /tmp/y.pcap\n")
+        );
+        assert_eq!(
+            head(&["--pcap", "/tmp/z.pcap"]),
+            format!("{top}pcap-filename = /tmp/z.pcap\npcap-payloads = /tmp/y.pcap\n")
+        );
+        // единственное число, как синонимы C (`nmap-payload`, `pcap-payload`)
+        let cfg = Cli::try_parse_masscan([
+            "rmasscan",
+            "10.0.0.1",
+            "--nmap-payload",
+            "a.txt",
+            "--pcap-payload",
+            "b.pcap",
+        ])
+        .unwrap()
+        .to_config()
+        .unwrap();
+        assert_eq!(cfg.nmap_payloads.as_deref(), Some("a.txt"));
+        assert_eq!(cfg.pcap_payloads.as_deref(), Some("b.pcap"));
+        // ключ файла и позиция в argv: правее файла побеждает аргумент, левее победит файл
+        let scratch = Scratch::new();
+        let conf = scratch.write(
+            "p.conf",
+            b"nmap-payloads = from-file.txt\npcap-payloads = from-file.pcap\n",
+        );
+        let c = conf.to_str().unwrap();
+        let cfg = |args: &[&str]| {
+            Cli::try_parse_masscan(args.iter().copied())
+                .unwrap()
+                .to_config()
+                .unwrap()
+        };
+        let right = cfg(&[
+            "rmasscan",
+            "10.0.0.1",
+            "-c",
+            c,
+            "--nmap-payloads",
+            "arg.txt",
+        ]);
+        assert_eq!(right.nmap_payloads.as_deref(), Some("arg.txt"));
+        assert_eq!(right.pcap_payloads.as_deref(), Some("from-file.pcap"));
+        let left = cfg(&[
+            "rmasscan",
+            "10.0.0.1",
+            "--nmap-payloads",
+            "arg.txt",
+            "-c",
+            c,
+        ]);
+        assert_eq!(left.nmap_payloads.as_deref(), Some("from-file.txt"));
+        // без опций ключей в `--echo` нет
+        let plain = run_args(&["rmasscan", "--echo", "10.0.0.1", "-p80", "--seed", "1"]).unwrap();
+        assert!(!plain.contains("payloads"), "{plain}");
+    }
+
+    /// Файлы нагрузок доходят до кадров: сначала pcap, потом nmap (main-conf.c:3163-3183), оба заменяют встроенные.
+    #[test]
+    fn payload_files_reach_the_probe_frames() {
+        let scratch = Scratch::new();
+        let nmap = scratch.write(
+            "payloads.txt",
+            b"udp 59999\n\"from-nmap\"\nudp 161\n\"x\"\n",
+        );
+        // pcap с одним пакетом UDP на порт 161 (Ethernet/IPv4, документационные адреса) и одним на 59999
+        let udp = |dport: u16, payload: &[u8]| {
+            let mut f = vec![
+                0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0, 0x11, 0x22, 0x33, 0x44, 0x55, 8, 0,
+            ];
+            f.extend_from_slice(&[0x45, 0]);
+            f.extend_from_slice(&((28 + payload.len()) as u16).to_be_bytes());
+            f.extend_from_slice(&[
+                0, 0, 0, 0, 64, 17, 0, 0, 198, 18, 0, 1, 198, 18, 0, 2, 0x30, 0x39,
+            ]);
+            f.extend_from_slice(&dport.to_be_bytes());
+            f.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+            f.extend_from_slice(&[0, 0]);
+            f.extend_from_slice(payload);
+            f
+        };
+        let mut pcap = vec![
+            0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1, 0, 0,
+            0,
+        ];
+        for (port, body) in [(161u16, &b"from-pcap"[..]), (59999, b"pcap-loses")] {
+            let f = udp(port, body);
+            for v in [1u32, 2, f.len() as u32, f.len() as u32] {
+                pcap.extend_from_slice(&v.to_le_bytes());
+            }
+            pcap.extend_from_slice(&f);
+        }
+        let pcap = scratch.write("payloads.pcap", &pcap);
+        let frames = |extra: &[&str]| {
+            let p = prepared(&trace_args(
+                &[&["-pU:161,U:59999,U:53"][..], extra].concat(),
+            ));
+            let mut v = Vec::new();
+            live::for_each_probe_with(&p.eff, &p.binding, &p.payloads, |pr| {
+                if pr.frame[23] == 17 {
+                    v.push((pr.port_them, pr.frame[42..].to_vec()));
+                }
+                Ok(())
+            })
+            .unwrap();
+            v
+        };
+        let find =
+            |v: &[(u16, Vec<u8>)], port: u16| v.iter().find(|f| f.0 == port).unwrap().1.clone();
+        let builtin = frames(&[]);
+        assert_eq!(builtin.len(), 12);
+        assert_eq!(find(&builtin, 161).len(), 59, "built-in SNMP probe");
+        assert_eq!(find(&builtin, 59999), b"", "no entry: empty payload");
+        assert_eq!(find(&builtin, 53).len(), 31);
+        let with_pcap = frames(&["--pcap-payloads", pcap.to_str().unwrap()]);
+        assert_eq!(find(&with_pcap, 161), b"from-pcap");
+        assert_eq!(find(&with_pcap, 59999), b"pcap-loses");
+        assert_eq!(find(&with_pcap, 53).len(), 31, "other built-ins stay");
+        let both = frames(&[
+            "--pcap-payloads",
+            pcap.to_str().unwrap(),
+            "--nmap-payloads",
+            nmap.to_str().unwrap(),
+        ]);
+        assert_eq!(find(&both, 161), b"x", "nmap file wins over pcap");
+        assert_eq!(find(&both, 59999), b"from-nmap");
+        // порядок опций в argv на победителя не влияет (C грузит pcap, затем nmap)
+        let swapped = frames(&[
+            "--nmap-payloads",
+            nmap.to_str().unwrap(),
+            "--pcap-payloads",
+            pcap.to_str().unwrap(),
+        ]);
+        assert_eq!(swapped, both);
+    }
+
+    #[test]
+    fn payload_file_errors_refuse_before_any_output() {
+        let scratch = Scratch::new();
+        let bad = scratch.write("bad.txt", b"# header\ntcp 80\n\"x\"\n");
+        let notpcap = scratch.write("not.pcap", &[0u8; 40]);
+        let missing = scratch.dir().join("missing");
+        for (opt, file, want) in [
+            (
+                "--nmap-payloads",
+                missing.to_str().unwrap(),
+                "--nmap-payloads",
+            ),
+            (
+                "--pcap-payloads",
+                missing.to_str().unwrap(),
+                "--pcap-payloads",
+            ),
+            (
+                "--nmap-payloads",
+                bad.to_str().unwrap(),
+                "line 2: expected \"udp\"",
+            ),
+            (
+                "--pcap-payloads",
+                notpcap.to_str().unwrap(),
+                "unknown byte order",
+            ),
+        ] {
+            let (res, out, log) = run_capture(&trace_args(&["-pU:53", opt, file]));
+            let e = res.unwrap_err();
+            assert!(e.contains(want), "{opt}: {e}");
+            assert!(
+                out.is_empty() && log.is_empty(),
+                "{opt}: output before the refusal: {out}{log}"
+            );
+        }
+        // `--echo` и `-sL` файлов не читают (в них нет кадров)
+        run_args(&[
+            "rmasscan",
+            "--echo",
+            "10.0.0.1",
+            "-p80",
+            "--seed",
+            "1",
+            "--nmap-payloads",
+            "/nonexistent",
+        ])
+        .unwrap();
     }
 
     /// Итог запуска вместе со stdout и stderr (то, что напечатано до отказа).

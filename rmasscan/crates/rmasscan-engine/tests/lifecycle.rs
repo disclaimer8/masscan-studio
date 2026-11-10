@@ -728,6 +728,50 @@ fn dedup_is_fifo_bounded_and_allows_repeat_after_eviction() {
 }
 
 #[test]
+fn dedup_cache_separates_protocols() {
+    // 80/tcp и 80/udp на одном хосте (и тот же локальный порт) не глушат друг друга; повтор внутри протокола глушится.
+    let tcp = reply(7, 80);
+    let udp = Reply {
+        ip_proto: 17,
+        tcp_flags: 0,
+        ..reply(7, 80)
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&tcp));
+    assert!(d.insert(&udp), "80/udp is not a repeat of 80/tcp");
+    assert!(!d.insert(&tcp) && !d.insert(&udp));
+    assert_eq!(d.len(), 2);
+    // UDP: ответ-датаграмма (Open) и ICMP 3/3 (Closed) на тот же порт это разные факты; каждый один раз.
+    let closed = Reply {
+        status: PortStatus::Closed,
+        ..udp
+    };
+    assert!(
+        d.insert(&closed),
+        "ICMP 3/3 is not swallowed by the open UDP record"
+    );
+    assert!(!d.insert(&closed));
+    // ICMP Echo (порт 0, протокол 1) и ARP (протокол 0) не сливаются с TCP и UDP.
+    for proto in [1u8, 0] {
+        let r = Reply {
+            ip_proto: proto,
+            remote_port: 0,
+            local_port: 0,
+            ..tcp
+        };
+        assert!(d.insert(&r), "proto {proto}");
+        assert!(!d.insert(&r), "proto {proto} repeat");
+    }
+    // TCP как раньше: RST вслед за SYN-ACK на тот же кортеж считается повтором (ни счёт, ни порядок не меняются).
+    let rst = Reply {
+        status: PortStatus::Closed,
+        tcp_flags: 0x04,
+        ..tcp
+    };
+    assert!(!d.insert(&rst), "TCP key ignores the status, as before");
+}
+
+#[test]
 fn dedup_never_exceeds_100k_entries() {
     assert_eq!(DedupCache::new(10_000_000).capacity(), MAX_DEDUP_ENTRIES);
     assert_eq!(DedupCache::new(0).capacity(), 1);

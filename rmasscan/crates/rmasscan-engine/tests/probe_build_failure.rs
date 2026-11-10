@@ -16,7 +16,7 @@ use rmasscan_engine::{FailReason, Reason};
 fn unbuildable_port_fails_the_run_instead_of_ending_it_naturally() {
     let mut m = MassIp::new();
     add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
-    parse_ports(m.ports_mut(), "80,U:53").unwrap();
+    parse_ports(m.ports_mut(), "80,S:2905").unwrap();
     let cfg = ScanConfig {
         targets: m,
         seed: SEED,

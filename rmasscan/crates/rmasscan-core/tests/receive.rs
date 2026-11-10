@@ -1230,3 +1230,376 @@ mod icmp_echo {
         );
     }
 }
+
+// ---------- UDP (U:) и ICMP Type 3 Code 3 (Port Unreachable) ----------
+
+mod udp_and_unreachable {
+    use super::*;
+    use rmasscan_core::probe::{NicBinding, Probe};
+    use rmasscan_core::receive::Reply;
+
+    const SRC_PORTS: (u16, u16) = (41000, 41003);
+
+    fn plan_with_ports(link: LinkType, ports: &str) -> ReadyPlan {
+        build_plan(link, ports, ReadyPlan::new_cli)
+    }
+
+    fn build_plan(
+        link: LinkType,
+        ports: &str,
+        make: fn(
+            rmasscan_core::config::EffectiveConfig,
+            Vec<NicBinding>,
+        ) -> Result<ReadyPlan, rmasscan_core::probe::PlanError>,
+    ) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        make(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: link,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: MAC_NH,
+                source_ports: SRC_PORTS,
+            })],
+        )
+        .unwrap()
+    }
+
+    fn plan(link: LinkType) -> ReadyPlan {
+        plan_with_ports(link, "T:80,U:53,U:161")
+    }
+
+    /// Настоящие зонды плана (их кадры цитирует ICMP): по одному на порт для хоста `IP_THEM`.
+    fn probes(plan: &ReadyPlan) -> Vec<Probe> {
+        let mut cur = plan.cursor_for_nic(0, None).unwrap();
+        let mut v = Vec::new();
+        while let Some(p) = cur.current().cloned() {
+            v.push(p);
+            cur.advance_sent();
+        }
+        v.into_iter().filter(|p| p.ip_them == IP_THEM).collect()
+    }
+
+    fn with_sums(mut ip: Vec<u8>) -> Vec<u8> {
+        ip[10..12].fill(0);
+        let x = rfc1071(&[&ip[..20]]);
+        ip[10..12].copy_from_slice(&x.to_be_bytes());
+        ip
+    }
+
+    /// IP-пакет UDP от цели к нам с верными суммами; `mutate` портит готовые байты.
+    fn udp_packet(ip_them: u32, sport: u16, dport: u16, payload: &[u8], ttl: u8) -> Vec<u8> {
+        let mut udp = Vec::new();
+        udp.extend_from_slice(&sport.to_be_bytes());
+        udp.extend_from_slice(&dport.to_be_bytes());
+        udp.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+        udp.extend_from_slice(&[0, 0]);
+        udp.extend_from_slice(payload);
+        let mut pseudo = Vec::new();
+        pseudo.extend_from_slice(&ip_them.to_be_bytes());
+        pseudo.extend_from_slice(&IP_ME.to_be_bytes());
+        pseudo.extend_from_slice(&[0, 17]);
+        pseudo.extend_from_slice(&(udp.len() as u16).to_be_bytes());
+        let x = match rfc1071(&[&pseudo, &udp]) {
+            0 => 0xffff,
+            x => x,
+        };
+        udp[6..8].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + udp.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 17;
+        ip[12..16].copy_from_slice(&ip_them.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&udp);
+        with_sums(ip)
+    }
+
+    fn reply_to(link: LinkType, plan: &ReadyPlan, ip: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(&wrap(link, ip), link, plan)
+    }
+
+    #[test]
+    fn udp_datagram_from_a_scanned_port_marks_open() {
+        for link in LINKS {
+            let plan = plan(link);
+            let r = reply_to(
+                link,
+                &plan,
+                &udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 57),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                r,
+                Reply {
+                    remote_ip: IP_THEM,
+                    remote_port: 53,
+                    local_ip: IP_ME,
+                    local_port: PORT_ME_UDP,
+                    status: PortStatus::Open,
+                    tcp_flags: 0,
+                    ttl: 57,
+                    ip_proto: 17,
+                    mac: None,
+                },
+                "{link:?}"
+            );
+            // пустая датаграмма тоже ответ (C не смотрит на содержимое)
+            assert!(
+                reply_to(link, &plan, &udp_packet(IP_THEM, 161, PORT_ME_UDP, b"", 64))
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
+
+    const PORT_ME_UDP: u16 = 41002;
+
+    #[test]
+    fn udp_reply_filters() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let ok = |ip: &[u8]| reply_to(link, &plan, ip);
+        // порт цели не из U-портов плана: 54 нет в списке, 80 это порт TCP
+        assert_eq!(
+            ok(&udp_packet(IP_THEM, 54, PORT_ME_UDP, b"x", 64)),
+            Ok(None)
+        );
+        assert_eq!(
+            ok(&udp_packet(IP_THEM, 80, PORT_ME_UDP, b"x", 64)),
+            Ok(None)
+        );
+        // порт назначения вне диапазона источника и чужой адрес назначения
+        assert_eq!(ok(&udp_packet(IP_THEM, 53, 41004, b"x", 64)), Ok(None));
+        assert_eq!(ok(&udp_packet(IP_THEM, 53, 40999, b"x", 64)), Ok(None));
+        let mut other_dst = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"x", 64);
+        other_dst[16..20].copy_from_slice(&(IP_ME + 1).to_be_bytes());
+        assert_eq!(ok(&with_sums(other_dst)), Ok(None));
+        // цель вне набора плана
+        assert_eq!(
+            ok(&udp_packet(0x0b00_0005, 53, PORT_ME_UDP, b"x", 64)),
+            Ok(None)
+        );
+        // TCP-план (Студия) UDP не принимает
+        let tcp_plan = plan_for(link);
+        assert_eq!(
+            reply_to(
+                link,
+                &tcp_plan,
+                &udp_packet(IP_THEM, 80, PORT_ME_UDP, b"x", 64)
+            ),
+            Ok(None)
+        );
+        // испорченная сумма UDP: ошибка; ноль в поле значит "суммы нет" и допустим
+        let mut bad = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        bad[20 + 8] ^= 0x01;
+        assert_eq!(ok(&bad), Err(ParseError::BadUdpChecksum));
+        assert!(
+            parse_reply_with(
+                &wrap(link, &bad),
+                link,
+                &plan,
+                ChecksumPolicy::TrustHardware
+            )
+            .unwrap()
+            .is_some()
+        );
+        let mut nosum = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        nosum[26..28].fill(0);
+        assert!(ok(&nosum).unwrap().is_some());
+        // испорченная сумма IP-заголовка
+        let mut bad_ip = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        bad_ip[10] ^= 0xff;
+        assert_eq!(ok(&bad_ip), Err(ParseError::BadIpChecksum));
+        // длина UDP: меньше заголовка и больше IP-пакета
+        for len in [0u16, 7, 100] {
+            let mut p = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+            p[24..26].copy_from_slice(&len.to_be_bytes());
+            assert_eq!(ok(&p), Err(ParseError::BadUdpLength(len)), "len {len}");
+        }
+        // каждый обрезанный префикс это ошибка или не наш пакет, но не паника
+        let full = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        for n in 0..full.len() {
+            let _ = ok(&full[..n]);
+        }
+        // датаграмма короче заголовка UDP
+        let mut short = full[..20 + 6].to_vec();
+        short[2..4].copy_from_slice(&26u16.to_be_bytes());
+        assert!(matches!(ok(&short), Err(ParseError::Truncated(_))));
+    }
+
+    /// ICMP Type 3 с цитатой `quote` (IP-заголовок и 8 байт L4 зонда) от маршрутизатора `router`.
+    fn unreachable(router: u32, code: u8, quote: &[u8], ttl: u8) -> Vec<u8> {
+        let mut icmp = vec![3, code, 0, 0, 0, 0, 0, 0];
+        icmp.extend_from_slice(quote);
+        let x = rfc1071(&[&icmp]);
+        icmp[2..4].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&router.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&icmp);
+        with_sums(ip)
+    }
+
+    /// Цитата настоящего зонда: IPv4-заголовок и первые 8 байт L4 (RFC 792).
+    fn quote(p: &Probe) -> Vec<u8> {
+        p.frame[14..14 + 20 + 8].to_vec()
+    }
+
+    #[test]
+    fn icmp_port_unreachable_marks_closed_across_protocols() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let all = probes(&plan);
+        assert_eq!(all.len(), 3, "T:80, U:53 and U:161 for the one host");
+        let router = 0x0a00_00fe;
+        for p in &all {
+            let (proto, port) = (if p.frame[23] == 17 { 17 } else { 6 }, p.port_them);
+            let r = reply_to(link, &plan, &unreachable(router, 3, &quote(p), 249))
+                .unwrap()
+                .unwrap_or_else(|| panic!("proto {proto} port {port}"));
+            // Reply { ip_proto: <внутренний протокол>, status: Closed, reason: 0, ttl: внешний }
+            assert_eq!(
+                r,
+                Reply {
+                    remote_ip: IP_THEM,
+                    remote_port: port,
+                    local_ip: IP_ME,
+                    local_port: p.port_me,
+                    status: PortStatus::Closed,
+                    tcp_flags: 0,
+                    ttl: 249,
+                    ip_proto: proto,
+                    mac: None,
+                }
+            );
+        }
+        assert_eq!(
+            all.iter().filter(|p| p.frame[23] == 17).count(),
+            2,
+            "two UDP probes and one TCP probe"
+        );
+        // SCTP (132): цитата с портами `S:2905`, как её слал бы будущий построитель (приёму он не нужен)
+        let sctp_plan = build_plan(link, "S:2905", ReadyPlan::new_cli_without_port_checks);
+        let mut q = quote(&all[0]);
+        q[9] = 132;
+        q[20..22].copy_from_slice(&PORT_ME_UDP.to_be_bytes());
+        q[22..24].copy_from_slice(&2905u16.to_be_bytes());
+        let r = reply_to(
+            link,
+            &sctp_plan,
+            &unreachable(router, 3, &with_sums(q), 200),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (r.ip_proto, r.remote_port, r.status),
+            (132, 2905, PortStatus::Closed)
+        );
+    }
+
+    #[test]
+    fn icmp_port_unreachable_filters() {
+        let link = LinkType::Ethernet;
+        let plan = plan_with_ports(link, "T:80,U:53,U:161");
+        let all = probes(&plan);
+        let udp = all.iter().find(|p| p.frame[23] == 17).unwrap();
+        let router = 0x0a00_00fe;
+        let ok = |code: u8, q: &[u8]| reply_to(link, &plan, &unreachable(router, code, q, 250));
+        let good = quote(udp);
+        assert!(ok(3, &good).unwrap().is_some());
+        // другие коды Type 3 (сеть, хост, протокол недоступны, фрагментация) не отмечают порт закрытым
+        for code in [0u8, 1, 2, 4, 5, 13] {
+            assert_eq!(ok(code, &good), Ok(None), "code {code}");
+        }
+        // другой Type: Time Exceeded (11) с той же цитатой
+        let mut te = unreachable(router, 3, &good, 250);
+        te[20] = 11;
+        let sum = rfc1071(&[&[11, 3, 0, 0], &te[24..]]);
+        te[22..24].copy_from_slice(&sum.to_be_bytes());
+        assert_eq!(reply_to(link, &plan, &te), Ok(None));
+        // источник цитаты не мы / порт источника вне диапазона (proto-icmp.c:200 `matches_me`)
+        let mut q = good.clone();
+        q[12..16].copy_from_slice(&(IP_ME + 1).to_be_bytes());
+        assert_eq!(ok(3, &with_sums(q)), Ok(None));
+        let mut q = good.clone();
+        q[20..22].copy_from_slice(&41004u16.to_be_bytes());
+        assert_eq!(ok(3, &q), Ok(None));
+        // цель цитаты вне набора плана или порт вне плана
+        let mut q = good.clone();
+        q[16..20].copy_from_slice(&0x0b00_0005u32.to_be_bytes());
+        assert_eq!(ok(3, &with_sums(q)), Ok(None));
+        let mut q = good.clone();
+        q[22..24].copy_from_slice(&54u16.to_be_bytes());
+        assert_eq!(ok(3, &q), Ok(None));
+        // внутренний протокол не из {6, 17, 132}
+        for proto in [1u8, 2, 47] {
+            let mut q = good.clone();
+            q[9] = proto;
+            assert_eq!(ok(3, &with_sums(q)), Ok(None), "proto {proto}");
+        }
+        // цитата короче 24 байт (proto-icmp.c:36 `length < 24`) и с IHL больше цитаты
+        assert_eq!(ok(3, &good[..23]), Ok(None));
+        let mut q = good.clone();
+        q[0] = 0x4f;
+        assert_eq!(ok(3, &q), Ok(None));
+        let mut q = good.clone();
+        q[0] = 0x44;
+        assert_eq!(ok(3, &q), Ok(None));
+        // цитата с опциями IP зонда (IHL 6): порты берутся после опций
+        let mut q = good[..20].to_vec();
+        q[0] = 0x46;
+        q.extend_from_slice(&[0, 0, 0, 0]);
+        q.extend_from_slice(&good[20..28]);
+        assert!(ok(3, &with_sums(q)).unwrap().is_some());
+        // испорченные суммы
+        let mut bad = unreachable(router, 3, &good, 250);
+        bad[20 + 10] ^= 0x55;
+        assert_eq!(
+            reply_to(link, &plan, &bad),
+            Err(ParseError::BadIcmpChecksum)
+        );
+        let mut bad = unreachable(router, 3, &good, 250);
+        bad[10] ^= 0xff;
+        assert_eq!(reply_to(link, &plan, &bad), Err(ParseError::BadIpChecksum));
+        // каждый обрезанный префикс: ошибка или не наш пакет, не паника
+        let full = unreachable(router, 3, &good, 250);
+        for n in 0..full.len() {
+            let _ = reply_to(link, &plan, &full[..n]);
+        }
+        // Echo Reply продолжает работать рядом (диспетчеризация по type/code)
+        let echo_plan = plan_with_ports(link, "I:0");
+        let c = rmasscan_core::cookie::icmp_echo_cookie(IP_THEM, IP_ME, SEED);
+        let mut icmp = vec![0u8, 0, 0, 0];
+        icmp.extend_from_slice(&c.to_be_bytes());
+        let x = rfc1071(&[&icmp]);
+        icmp[2..4].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+        ip[8] = 64;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&IP_THEM.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&icmp);
+        let r = reply_to(link, &echo_plan, &with_sums(ip)).unwrap().unwrap();
+        assert_eq!((r.ip_proto, r.status), (1, PortStatus::Open));
+    }
+}

@@ -162,6 +162,10 @@ pub struct ScanConfig {
     /// `--infinite` (main-conf.c:2836).
     pub infinite: bool,
     pub tcp_opts: TcpHeaderOptions,
+    /// `--nmap-payloads FILE` (main-conf.c:1568): файл нагрузок UDP в синтаксисе Nmap. Читает слой CLI.
+    pub nmap_payloads: Option<String>,
+    /// `--pcap-payloads FILE` (main-conf.c:1832): нагрузки UDP из захвата pcap. Читает слой CLI.
+    pub pcap_payloads: Option<String>,
 }
 
 impl Default for ScanConfig {
@@ -191,6 +195,8 @@ impl Default for ScanConfig {
             noreset: false,
             infinite: false,
             tcp_opts: TcpHeaderOptions::default(),
+            nmap_payloads: None,
+            pcap_payloads: None,
         }
     }
 }
@@ -228,6 +234,8 @@ pub struct EffectiveConfig {
     noreset: bool,
     infinite: bool,
     tcp_opts: TcpHeaderOptions,
+    nmap_payloads: Option<String>,
+    pcap_payloads: Option<String>,
 }
 
 impl EffectiveConfig {
@@ -301,6 +309,14 @@ impl EffectiveConfig {
     }
     pub fn tcp_opts(&self) -> TcpHeaderOptions {
         self.tcp_opts
+    }
+    /// `--nmap-payloads`: пустое значение значит "не задан".
+    pub fn nmap_payloads(&self) -> Option<&str> {
+        self.nmap_payloads.as_deref().filter(|f| !f.is_empty())
+    }
+    /// `--pcap-payloads`: пустое значение значит "не задан".
+    pub fn pcap_payloads(&self) -> Option<&str> {
+        self.pcap_payloads.as_deref().filter(|f| !f.is_empty())
     }
     /// `--ttl`, `--badsum` и опции TCP как параметры зонда (templ-pkt.c:1474-1488,
     /// templ-tcp-hdr.c:1066-1119). Умолчание: TTL 255 (`DEFAULT_TCP_TEMPLATE`).
@@ -576,6 +592,8 @@ fn effective(
         noreset: cfg.noreset,
         infinite: cfg.infinite,
         tcp_opts: cfg.tcp_opts,
+        nmap_payloads: cfg.nmap_payloads.clone(),
+        pcap_payloads: cfg.pcap_payloads.clone(),
     }
 }
 
@@ -745,11 +763,17 @@ pub fn echo_with(cfg: &ScanConfig, echo_all: bool, extras: &EchoExtras<'_>, out:
     if cfg.noreset {
         out.push_str("noreset = true\n");
     }
+    if let Some(name) = cfg.nmap_payloads.as_deref().filter(|n| !n.is_empty()) {
+        let _ = writeln!(out, "nmap-payloads = {name}"); // :1568-1576
+    }
     if cfg.offline || echo_all {
         let _ = writeln!(out, "offline = {}", cfg.offline); // :1603
     }
     if let Some(name) = extras.pcap_filename.filter(|n| !n.is_empty()) {
         let _ = writeln!(out, "pcap-filename = {name}"); // :1814-1822
+    }
+    if let Some(name) = cfg.pcap_payloads.as_deref().filter(|n| !n.is_empty()) {
+        let _ = writeln!(out, "pcap-payloads = {name}"); // :1832-1840
     }
     if extras.ndjson_status {
         out.push_str("ndjson-status = true\n"); // :1507-1514
@@ -1219,6 +1243,9 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         }
         "offline" | "notransmit" | "nosend" | "dryrun" => cfg.offline = parse_bool(value),
         "noreset" => cfg.noreset = parse_bool(value),
+        // main-conf.c:2382, 2386: файлы читает слой CLI (`masscan_load_database_files`, :3156).
+        "nmappayloads" | "nmappayload" => cfg.nmap_payloads = Some(value.to_string()),
+        "pcappayloads" | "pcappayload" => cfg.pcap_payloads = Some(value.to_string()),
         // main-conf.c:2758: `badsum` ставит флаг при любом значении.
         "badsum" => cfg.badsum = true,
         // Значение читается как логическое (`infinite = false` в файле отменяет `--infinite` левее него); C ставит 1 всегда.
@@ -2209,6 +2236,68 @@ mod tests {
         let mut s2 = String::new();
         echo(&back, false, &mut s2);
         assert_eq!(s, s2);
+    }
+
+    /// Порядок ключей `nmap-payloads` и `pcap-payloads` в `--echo` снят с C (`masscan --echo ... --retries 2 --noreset
+    /// --nmap-payloads X --pcap-payloads Y --offline --pcap Z --ndjson-status`): `config_parameters[]`, main-conf.c:2380-2399.
+    #[test]
+    fn echo_prints_payload_file_keys_in_c_order() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.retries = 2;
+        cfg.noreset = true;
+        cfg.offline = true;
+        for (k, v) in [
+            ("nmap-payloads", "/tmp/x.txt"),
+            ("pcap-payloads", "/tmp/y.pcap"),
+        ] {
+            assert_eq!(apply_core_kv(&mut cfg, k, v), Ok(true), "{k}");
+        }
+        // синонимы C: `nmap-payload` и `pcap-payload` (main-conf.c:2382, 2386)
+        assert_eq!(
+            apply_core_kv(&mut cfg, "nmap-payload", "/tmp/x.txt"),
+            Ok(true)
+        );
+        assert_eq!(
+            apply_core_kv(&mut cfg, "pcap-payload", "/tmp/y.pcap"),
+            Ok(true)
+        );
+        assert_eq!(
+            validate(&cfg, Operation::Scan).unwrap().nmap_payloads(),
+            Some("/tmp/x.txt")
+        );
+        assert_eq!(
+            validate(&cfg, Operation::Scan).unwrap().pcap_payloads(),
+            Some("/tmp/y.pcap")
+        );
+        let mut s = String::new();
+        echo_with(
+            &cfg,
+            false,
+            &EchoExtras {
+                pcap_filename: Some("/tmp/z.pcap"),
+                ndjson_status: true,
+                output_section: "",
+            },
+            &mut s,
+        );
+        let head: String = s
+            .lines()
+            .take_while(|l| !l.starts_with("nocapture"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_eq!(
+            head,
+            "seed = 1\nrate = 100       \nshard = 1/1\nretries = 2\nnoreset = true\nnmap-payloads = /tmp/x.txt\n\
+             offline = true\npcap-filename = /tmp/z.pcap\npcap-payloads = /tmp/y.pcap\nndjson-status = true\n"
+        );
+        // paused.conf возвращает те же ключи
+        let back = read_paused_conf(&s).unwrap();
+        assert_eq!(back.nmap_payloads.as_deref(), Some("/tmp/x.txt"));
+        assert_eq!(back.pcap_payloads.as_deref(), Some("/tmp/y.pcap"));
+        // без ключей ничего не печатается
+        let mut plain = String::new();
+        echo(&cfg_with("10.0.0.0/30", "80"), false, &mut plain);
+        assert!(!plain.contains("payloads"), "{plain}");
     }
 
     #[test]

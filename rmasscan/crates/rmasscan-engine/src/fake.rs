@@ -583,3 +583,90 @@ pub fn reply_to_echo(req: &[u8], id_seq_xor: u32) -> Option<Vec<u8>> {
     f.extend_from_slice(&icmp);
     Some(f)
 }
+
+/// Строит ответ UDP (Ethernet/IPv4/UDP, верные суммы) на наш UDP-зонд: адреса, порты и MAC меняются местами,
+/// TTL 64. `None`, если вход не Ethernet/IPv4/UDP.
+pub fn reply_to_udp(probe: &[u8], payload: &[u8]) -> Option<Vec<u8>> {
+    reply_to_udp_from_port(probe, None, payload)
+}
+
+/// [`reply_to_udp`] с подменой порта источника ответа (`None` оставляет порт зонда): ответ с порта, которого в скане
+/// нет, и с верными суммами.
+pub fn reply_to_udp_from_port(probe: &[u8], sport: Option<u16>, payload: &[u8]) -> Option<Vec<u8>> {
+    if probe.len() < 14 + 20 + 8 || probe[12..14] != [0x08, 0x00] {
+        return None;
+    }
+    let ip = &probe[14..];
+    let ihl = usize::from(ip[0] & 0x0f) * 4;
+    if ip[9] != 17 {
+        return None;
+    }
+    let udp = ip.get(ihl..ihl + 8)?;
+    let mut u = Vec::new();
+    match sport {
+        Some(p) => u.extend_from_slice(&p.to_be_bytes()),
+        None => u.extend_from_slice(&udp[2..4]),
+    }
+    u.extend_from_slice(&udp[0..2]);
+    u.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+    u.extend_from_slice(&[0, 0]);
+    u.extend_from_slice(payload);
+    let mut i = vec![0u8; 20];
+    i[0] = 0x45;
+    i[2..4].copy_from_slice(&((20 + u.len()) as u16).to_be_bytes());
+    i[8] = 64;
+    i[9] = 17;
+    i[12..16].copy_from_slice(&ip[16..20]); // от цели к нам
+    i[16..20].copy_from_slice(&ip[12..16]);
+    let c = rfc1071(&[&i]);
+    i[10..12].copy_from_slice(&c.to_be_bytes());
+    let mut pseudo = Vec::new();
+    pseudo.extend_from_slice(&i[12..16]);
+    pseudo.extend_from_slice(&i[16..20]);
+    pseudo.extend_from_slice(&[0, 17]);
+    pseudo.extend_from_slice(&(u.len() as u16).to_be_bytes());
+    let c = match rfc1071(&[&pseudo, &u]) {
+        0 => 0xffff,
+        c => c,
+    };
+    u[6..8].copy_from_slice(&c.to_be_bytes());
+    let mut f = Vec::with_capacity(14 + 20 + u.len());
+    f.extend_from_slice(&probe[6..12]);
+    f.extend_from_slice(&probe[0..6]);
+    f.extend_from_slice(&[0x08, 0x00]);
+    f.extend_from_slice(&i);
+    f.extend_from_slice(&u);
+    Some(f)
+}
+
+/// Строит ICMP Destination Unreachable, Port Unreachable (type 3, code 3, Ethernet/IPv4, верные суммы) от
+/// маршрутизатора `router` на наш зонд TCP, UDP или SCTP: цитата это IP-заголовок зонда и его первые 8 байт L4
+/// (RFC 792), TTL внешнего пакета 250. `None`, если вход не Ethernet/IPv4 с 8 байтами L4.
+pub fn port_unreachable_for(probe: &[u8], router: u32) -> Option<Vec<u8>> {
+    if probe.len() < 14 + 20 + 8 || probe[12..14] != [0x08, 0x00] {
+        return None;
+    }
+    let ip = &probe[14..];
+    let ihl = usize::from(ip[0] & 0x0f) * 4;
+    let quote = ip.get(..ihl + 8)?;
+    let mut icmp = vec![3, 3, 0, 0, 0, 0, 0, 0];
+    icmp.extend_from_slice(quote);
+    let c = rfc1071(&[&icmp]);
+    icmp[2..4].copy_from_slice(&c.to_be_bytes());
+    let mut i = vec![0u8; 20];
+    i[0] = 0x45;
+    i[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+    i[8] = 250;
+    i[9] = 1;
+    i[12..16].copy_from_slice(&router.to_be_bytes());
+    i[16..20].copy_from_slice(&ip[12..16]); // к нам: адрес источника зонда
+    let c = rfc1071(&[&i]);
+    i[10..12].copy_from_slice(&c.to_be_bytes());
+    let mut f = Vec::with_capacity(14 + 20 + icmp.len());
+    f.extend_from_slice(&probe[6..12]);
+    f.extend_from_slice(&probe[0..6]);
+    f.extend_from_slice(&[0x08, 0x00]);
+    f.extend_from_slice(&i);
+    f.extend_from_slice(&icmp);
+    Some(f)
+}

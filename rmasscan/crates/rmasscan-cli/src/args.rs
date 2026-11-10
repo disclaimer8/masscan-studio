@@ -75,6 +75,22 @@ pub struct Cli {
         help = "Save the inbound frames addressed to the scanner to a .pcap file (live scan only; alias: --pcap-filename)"
     )]
     pub pcap: Option<String>,
+    // `nmap-payloads` и синоним `nmap-payload` (main-conf.c:2382): нагрузки UDP в синтаксисе `nmap-payloads`.
+    #[arg(
+        long = "nmap-payloads",
+        alias = "nmap-payload",
+        value_name = "FILE",
+        help = "Read UDP probe payloads from FILE in the nmap-payloads syntax (replaces the built-in payload of a port)"
+    )]
+    pub nmap_payloads: Option<String>,
+    // `pcap-payloads` и синоним `pcap-payload` (main-conf.c:2386): нагрузки UDP из захвата pcap.
+    #[arg(
+        long = "pcap-payloads",
+        alias = "pcap-payload",
+        value_name = "FILE",
+        help = "Read UDP probe payloads from the packets of a .pcap capture (read before --nmap-payloads)"
+    )]
+    pub pcap_payloads: Option<String>,
     // `-p80,443`, `-p0-65535`, `--ports 22,80`.
     #[arg(
         short = 'p',
@@ -534,8 +550,10 @@ enum PortEvent {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 25] = [
+const POSITIONAL_KEYS: [&str; 27] = [
     "pcap",
+    "nmap_payloads",
+    "pcap_payloads",
     "ndjson_status",
     "infinite",
     "offline",
@@ -1255,6 +1273,17 @@ impl Cli {
         // seed == 0 в C значит "взять энтропию" (main.c:1640-1641). Явный 0
         // отклоняется; отсутствие --seed решает `run` по операции (см.
         // [`seed_policy`]), здесь это seed 0.
+        // Файлы нагрузок читает `prepare` (слой живого скана); здесь только имена, правее файла побеждает аргумент.
+        if take("nmap_payloads")
+            && let Some(f) = &self.nmap_payloads
+        {
+            cfg.nmap_payloads = Some(f.clone());
+        }
+        if take("pcap_payloads")
+            && let Some(f) = &self.pcap_payloads
+        {
+            cfg.pcap_payloads = Some(f.clone());
+        }
         if take("seed") {
             match self.seed {
                 Some(0) => {

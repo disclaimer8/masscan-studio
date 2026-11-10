@@ -333,6 +333,8 @@ pub(crate) struct StepSim {
     /// The probes it sent and the records it reported, in order (for the tests that break one).
     pub(crate) probes: Vec<Vec<u8>>,
     pub(crate) recs: Vec<Rec>,
+    /// The peer responder at the scanner's end (`responder.json`).
+    pub(crate) responder: ResponderRecord,
 }
 pub(crate) struct Sim {
     pub(crate) tag: &'static str,
@@ -441,6 +443,10 @@ impl Sim {
                 doc,
                 probes: probes.clone(),
                 recs: shown,
+                responder: ResponderRecord {
+                    exited_with: None,
+                    stderr: String::new(),
+                },
             });
         }
         Sim {
@@ -483,6 +489,7 @@ impl Sim {
                 format!("{n}/peer.err"),
                 format!("{} packets captured\n", s.frames.len()).into_bytes(),
             ));
+            f.push((format!("{n}/{RESPONDER_JSON}"), json(&s.responder)));
             if let (Some(name), Some(d)) = (s.spec.out.file(), &s.doc) {
                 f.push((format!("{n}/{name}"), d.clone()));
             }
@@ -1146,11 +1153,13 @@ fn the_scanner_sides_frames_of_the_stand_are_named_and_counted_in_the_notes() {
     let res = verify_dir(&root);
     let run = run_of(&res, "p05_mixed_protos");
     assert_eq!(run["verdict"], PASS, "{:#?}", bad(run));
-    for step in ["json", "oracle-json"] {
+    for (step, rst, who_has) in [("json", 4, 10), ("oracle-json", 8, 12)] {
         assert_eq!(
             run["notes"]["scanner_frames"][step],
             json!({"next_hop_who_has": 1, "rst_to_syn_ack": 4, "port_unreachable_to_udp_reply": 4,
-                   "protocol_unreachable_to_sctp_reply": 4, "unexplained": 0}),
+                   "protocol_unreachable_to_sctp_reply": 4, "unexplained": 0,
+                   "at_most": {"next_hop_who_has": who_has, "rst_to_syn_ack": rst,
+                               "port_unreachable_to_udp_reply": 4, "protocol_unreachable_to_sctp_reply": 4}}),
             "{step}"
         );
     }
@@ -1282,6 +1291,194 @@ fn an_extra_frame_of_the_scanner_fails_rmasscan_and_invalidates_the_oracle() {
     assert_eq!(v, INVALID, "{b:#?}");
     assert!(has(&b, INVALID, &format!("oracle-json: {CHECK}")), "{b:#?}");
     assert_eq!(b.len(), 1, "{b:#?}");
+}
+
+/// `n` copies of `f` in a step's capture, inside the witness window.
+fn with_frames(fr: &Frames, f: &[u8], n: usize) -> Frames {
+    (0..n).fold(fr.clone(), |fr, _| with_frame(&fr, f.to_vec()))
+}
+
+#[test]
+fn the_named_classes_count_no_more_frames_than_the_scanner_side_can_send() {
+    // The bounds themselves: rmasscan's resolver sends at most 10 who-has (one a second for 10 s), C's 12
+    // (stack-arpv4.c:175-187); a reset per SYN-ACK frame, two on C's step; one ICMP error per UDP or SCTP reply frame.
+    assert_eq!(NEXT_HOP_WHO_HAS_MAX_RMASSCAN, 10);
+    assert_eq!(NEXT_HOP_WHO_HAS_MAX_C, 12);
+    let c = case("p05_mixed_protos").unwrap();
+    let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
+    let v = view(&fr, &stand(), false);
+    assert_eq!(
+        scanner_bounds(&v, Who::Rmasscan),
+        [
+            ("next_hop_who_has", 1, 10),
+            ("rst_to_syn_ack", 4, 4),
+            ("port_unreachable_to_udp_reply", 4, 4),
+            ("protocol_unreachable_to_sctp_reply", 4, 4)
+        ]
+    );
+    assert_eq!(
+        scanner_bounds(&v, Who::Oracle)[0],
+        ("next_hop_who_has", 1, 12)
+    );
+    assert_eq!(scanner_bounds(&v, Who::Oracle)[1], ("rst_to_syn_ack", 4, 8));
+    // A repeated SYN-ACK of the stand allows one more reset: the bound follows the SYN-ACK frames, not the probes.
+    let syn_ack = fr
+        .iter()
+        .map(|(_, f)| f.clone())
+        .find(|f| f[6..12] == PEER_MAC && f.get(23) == Some(&6))
+        .unwrap();
+    let v = view(&with_frame(&fr, syn_ack.clone()), &stand(), false);
+    assert_eq!(
+        scanner_bounds(&v, Who::Rmasscan)[1],
+        ("rst_to_syn_ack", 4, 5)
+    );
+
+    // One rule broken at a time, each on rmasscan's step (FAIL) and on the oracle's (INVALID).
+    const CHECK: &str = "the named scanner-side frames stay within their bounds";
+    let rst = scanner_rst(&syn_ack);
+    let udp_reply = fr
+        .iter()
+        .map(|(_, f)| f.clone())
+        .find(|f| f[6..12] == PEER_MAC && f.get(23) == Some(&17))
+        .unwrap();
+    let port_unreachable = icmp_error(&udp_reply, 3, true);
+    let sctp_reply = fr
+        .iter()
+        .map(|(_, f)| f.clone())
+        .find(|f| f[6..12] == PEER_MAC && f.get(23) == Some(&132))
+        .unwrap();
+    let proto_unreachable = icmp_error(&sctp_reply, 2, true);
+    // (step, frame, copies within the bound, copies over it, the detail over it)
+    let cases: Vec<(&str, Vec<u8>, usize, usize, &str)> = vec![
+        ("json", rst.clone(), 0, 1, "rst_to_syn_ack 5 of at most 4"),
+        ("oracle-json", rst, 4, 5, "rst_to_syn_ack 9 of at most 8"),
+        (
+            "json",
+            next_hop_request(),
+            9,
+            10,
+            "next_hop_who_has 11 of at most 10",
+        ),
+        (
+            "oracle-json",
+            next_hop_request(),
+            11,
+            12,
+            "next_hop_who_has 13 of at most 12",
+        ),
+        (
+            "json",
+            port_unreachable.clone(),
+            0,
+            1,
+            "port_unreachable_to_udp_reply 5 of at most 4",
+        ),
+        (
+            "oracle-json",
+            port_unreachable,
+            0,
+            1,
+            "port_unreachable_to_udp_reply 5 of at most 4",
+        ),
+        (
+            "json",
+            proto_unreachable.clone(),
+            0,
+            1,
+            "protocol_unreachable_to_sctp_reply 5 of at most 4",
+        ),
+        (
+            "oracle-json",
+            proto_unreachable,
+            0,
+            1,
+            "protocol_unreachable_to_sctp_reply 5 of at most 4",
+        ),
+    ];
+    for (step, f, within, over, detail) in cases {
+        let mut sim = Sim::new("p05_mixed_protos");
+        let s = sim.step_mut(step);
+        s.frames = with_frames(&s.frames, &f, within);
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, PASS, "{step} {detail}, {within} more: {b:#?}");
+        let mut sim = Sim::new("p05_mixed_protos");
+        let s = sim.step_mut(step);
+        s.frames = with_frames(&s.frames, &f, over);
+        let (v, b) = judge_one(&sim);
+        let want = if step == "json" { FAIL } else { INVALID };
+        assert_eq!(v, want, "{step} {detail}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step} {detail}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {CHECK}")) && b[0].contains(detail),
+            "{step} {detail}: {b:#?}"
+        );
+    }
+}
+
+#[test]
+fn the_comparison_with_c_names_non_tcp_dedup_only_where_it_applies() {
+    let root = scratch();
+    all_cases(&root);
+    let res = verify_dir(&root);
+    assert_eq!(res["overall"], PASS);
+    for c in CASES {
+        let names: Vec<String> = array(&run_of(&res, c.tag)["checks"])
+            .iter()
+            .map(|x| s(&x["name"]).to_owned())
+            .filter(|n| n.contains("the records equal the C oracle's"))
+            .collect();
+        assert_eq!(names.len(), c.outs.len(), "{}: {names:?}", c.tag);
+        let applies = c.deviations.contains(&"non-tcp-dedup");
+        for n in &names {
+            assert_eq!(
+                n.ends_with("but the time (non-tcp-dedup applied)"),
+                applies,
+                "{}: {n}",
+                c.tag
+            );
+            assert!(n.ends_with("but the time") || applies, "{}: {n}", c.tag);
+        }
+    }
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_responder_that_died_mid_step_is_named_in_the_verdict() {
+    const ERR: &str = "NOT RUN: udp responder: Address already in use (os error 98)";
+    let mut sim = Sim::new("p02_udp_payloads_and_closed");
+    sim.step_mut("json").responder = ResponderRecord {
+        exited_with: Some(2),
+        stderr: ERR.into(),
+    };
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            INVALID,
+            "json/responder.json: the peer responder ran until the scanner ended"
+        ) && b[0].contains(&format!("exited with 2 before the scanner ended: {ERR}")),
+        "{b:#?}"
+    );
+    // gone without a word: still named, with its exit code
+    let mut sim = Sim::new("p02_udp_payloads_and_closed");
+    sim.step_mut("oracle-binary").responder = ResponderRecord {
+        exited_with: Some(-1),
+        stderr: String::new(),
+    };
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(
+        b.len() == 1 && b[0].contains("exited with -1 before the scanner ended: it wrote nothing"),
+        "{b:#?}"
+    );
+    // the record is part of every step's evidence
+    let mut sim = Sim::new("p01_ping");
+    sim.omit.push(format!("oracle-list/{RESPONDER_JSON}"));
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, NOT_RUN, "{b:#?}");
+    assert!(has(&b, NOT_RUN, "responder.json present"), "{b:#?}");
 }
 
 #[test]

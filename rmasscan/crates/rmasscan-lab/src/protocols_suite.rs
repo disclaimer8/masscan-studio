@@ -4,7 +4,9 @@
 //! one `runs/<tag>/` directory that `protocols-verify` judges offline: `expect.json`, `peer-stack.json`,
 //! `isolation.json`, `isolation-post.json`, `hashes-before-copy.txt`, and per step `argv.json`, the scanner's
 //! `stdout.txt stderr.txt exit.txt`, its document under the table's neutral name (`output.txt`, `output.json`,
-//! `output.bin`) and the peer witness `peer.pcap capture.json peer.err`.
+//! `output.bin`), the peer witness `peer.pcap capture.json peer.err`, and `responder.json`: whether the step's
+//! responder still ran when the scanner ended, with its stderr (a responder that died mid-step is named in the
+//! verdict; one that never became ready is named in the NOT RUN reason).
 //!
 //! The driver is the other Linux suites' ([`Linux`]): the namespaces, the seal before and after each case, the
 //! witness, the oracle under a masked `/etc/masscan`, the evidence copy with its hashes, the aborted runs under
@@ -244,14 +246,42 @@ fn responder(l: &Linux, base: &Path, t: &mut LinuxTools) -> Result<(), SuiteErro
     t.responder = Some(l.host.spawn(
         &argv,
         &base.join("responder.out.txt"),
-        &base.join("responder.err.txt"),
+        &base.join(RESPONDER_ERR),
     )?);
     if !ad::poll(&l.pause(), RESPONDER_POLLS, || ready.exists()) {
-        return Err(not_run(
-            "the peer responder did not become ready; the scanner was not started",
-        ));
+        let rec = responder_state(l, base, t);
+        let said = if rec.stderr.is_empty() {
+            "nothing on its stderr"
+        } else {
+            &rec.stderr
+        };
+        let state = match rec.exited_with {
+            Some(rc) => format!("it exited with {rc}: {said}"),
+            None => format!("it still runs: {said}"),
+        };
+        return Err(not_run(format!(
+            "the peer responder did not become ready ({state}); the scanner was not started"
+        )));
     }
     Ok(())
+}
+
+/// The responder's stderr in the step's work directory (`capture responder` prints its error there).
+const RESPONDER_ERR: &str = "responder.err.txt";
+/// The responder of the step in work directory `base` as it is now: its exit code once it is gone, and its stderr
+/// (trimmed, with `--out`, `--work` and the account scrubbed). A responder whose state cannot be read counts as gone.
+fn responder_state(l: &Linux, base: &Path, t: &mut LinuxTools) -> pv::ResponderRecord {
+    let exited_with = match t.responder.as_mut() {
+        Some(p) => p.try_wait().unwrap_or(Some(-1)),
+        None => Some(-1),
+    };
+    let stderr = fs::read(base.join(RESPONDER_ERR))
+        .map(|b| String::from_utf8_lossy(&b).trim().to_owned())
+        .unwrap_or_else(|e| format!("({RESPONDER_ERR} unreadable: {e})"));
+    pv::ResponderRecord {
+        exited_with,
+        stderr: l.scrub.str(&stderr),
+    }
 }
 
 /// One step: its own responder and witness, the scanner in its own working directory, the document collected.
@@ -290,6 +320,8 @@ fn step(
     )?);
     let rc = l.wait(t, &format!("{tag}/{}", s.name))?;
     write_exit(&sd, rc)?;
+    // Did the peer answer the whole scan? A responder gone before the scanner ended is named in the verdict.
+    write_record(&sd.join(pv::RESPONDER_JSON), &responder_state(l, &sb, t))?;
     l.finish_witness(&w, t, &sd, CAPTURE_JSON, pv::PEER_FILES[2])?;
     // What the scanner left, under the table's neutral name; nothing else in its directory is evidence.
     if let Some(name) = s.out.file() {

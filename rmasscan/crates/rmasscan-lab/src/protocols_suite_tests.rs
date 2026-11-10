@@ -102,7 +102,11 @@ struct FakeProto {
     sctp: Cell<bool>,
     /// The files in each scanner's working directory when it started.
     cwd_files: RefCell<Vec<(String, Vec<String>)>>,
+    /// The `n`-th responder (from 0) dies with exit 2 and [`DEAD`] on its stderr; `true`: after it said ready.
+    dead_responder: Cell<Option<(usize, bool)>>,
 }
+/// What `capture responder` prints when an answerer fails (main: `NOT RUN: <error>`, exit 2).
+const DEAD: &str = "NOT RUN: udp responder: Address already in use (os error 98)";
 impl FakeProto {
     fn new(tags: &[&'static str], rmasscan: &Path, oracle: &Path) -> Self {
         FakeProto {
@@ -117,6 +121,7 @@ impl FakeProto {
             ratemask: RefCell::new("0".into()),
             sctp: Cell::new(false),
             cwd_files: RefCell::default(),
+            dead_responder: Cell::new(None),
         }
     }
     fn note(&self, argv: &[String], paths: &[&Path]) {
@@ -201,6 +206,16 @@ impl LinuxHost for FakeProto {
         fs::write(stdout, "").unwrap();
         fs::write(stderr, "").unwrap();
         if argv.iter().any(|a| a == "responder") {
+            match self.dead_responder.get() {
+                Some((n, ready)) if n + 1 == self.responders().len() => {
+                    fs::write(stderr, format!("{DEAD}\n")).unwrap();
+                    if ready {
+                        fs::write(after(argv, "--ready"), "listening 80,8080\n").unwrap();
+                    }
+                    return Ok(self.proc("responder", Some(2), None));
+                }
+                _ => {}
+            }
             fs::write(
                 after(argv, "--ready"),
                 "listening 80,8080 udp 53,161 sctp veth-b open 2905\n",
@@ -400,6 +415,7 @@ fn the_suite_writes_what_the_verifier_reads_for_every_case() {
                 "peer.pcap",
                 "capture.json",
                 "peer.err",
+                "responder.json",
             ] {
                 assert!(
                     d.join(step.name).join(f).is_file(),
@@ -549,6 +565,71 @@ fn the_responder_answers_the_stands_way_from_the_peer_namespace_and_restarts_for
         );
         assert!([RATEMASK, ECHO_IGNORE, PROTOCOLS].contains(&a[5].as_str()));
     }
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+// ------------------------------------------------------------------ a responder that dies
+
+#[test]
+fn a_responder_that_never_became_ready_is_named_in_the_not_run_reason() {
+    let s = setup(&["p02_udp_payloads_and_closed"]);
+    s.fake.dead_responder.set(Some((0, false)));
+    let m = not_run_text(run_suite(&s));
+    assert!(
+        m.contains(&format!(
+            "the peer responder did not become ready (it exited with 2: {DEAD}); the scanner was not started"
+        )),
+        "{m}"
+    );
+    assert!(
+        s.fake.scans(&s.fake.rmasscan).is_empty() && s.fake.scans(&s.fake.oracle).is_empty(),
+        "no scanner was started"
+    );
+    assert!(!s.out.join("runs").exists() && !s.out.join("runs_aborted").exists());
+    fs::remove_dir_all(s.root).unwrap();
+}
+
+#[test]
+fn a_responder_that_died_mid_step_is_recorded_and_named_in_the_verdict() {
+    // p02's first step is `json`: its responder said ready, then died before the scanner ended.
+    let s = setup(&["p02_udp_payloads_and_closed"]);
+    s.fake.dead_responder.set(Some((0, true)));
+    assert_eq!(run_suite(&s).unwrap(), 0);
+    teardown(&s);
+    let d = s.out.join("runs/p02_udp_payloads_and_closed");
+    let rec: pv::ResponderRecord =
+        serde_json::from_slice(&fs::read(d.join("json").join(pv::RESPONDER_JSON)).unwrap())
+            .unwrap();
+    assert_eq!(
+        rec,
+        pv::ResponderRecord {
+            exited_with: Some(2),
+            stderr: DEAD.into()
+        }
+    );
+    // the other steps' responders ran through their scans
+    for step in ["oracle-json", "binary", "oracle-binary"] {
+        let rec: pv::ResponderRecord =
+            serde_json::from_slice(&fs::read(d.join(step).join(pv::RESPONDER_JSON)).unwrap())
+                .unwrap();
+        assert_eq!(rec.exited_with, None, "{step}");
+    }
+    let res = pv::verify_dir(&s.out);
+    let run = array(&res["runs"])
+        .iter()
+        .find(|r| r["tag"] == "p02_udp_payloads_and_closed")
+        .unwrap();
+    let b: Vec<String> = bad(&res)
+        .into_iter()
+        .filter(|x| x.contains("p02_udp_payloads_and_closed"))
+        .collect();
+    assert_eq!(run["verdict"], "INVALID", "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
+    assert!(
+        b[0].contains("json/responder.json: the peer responder ran until the scanner ended")
+            && b[0].contains(&format!("exited with 2 before the scanner ended: {DEAD}")),
+        "{b:#?}"
+    );
     fs::remove_dir_all(s.root).unwrap();
 }
 

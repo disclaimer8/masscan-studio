@@ -41,7 +41,8 @@
 //! case. A case directory holds `expect.json` ([`ProtoExpect`]), `isolation.json` and `isolation-post.json`
 //! (`capture isolation --mode autodetect`), `peer-stack.json`, `hashes-before-copy.txt`, and one directory per step:
 //! `argv.json`, `stdout.txt stderr.txt exit.txt`, the document under its neutral name (`output.txt`, `output.json`,
-//! `output.bin`; the interactive form is `stdout.txt` itself) and the peer witness `peer.pcap capture.json peer.err`.
+//! `output.bin`; the interactive form is `stdout.txt` itself), the peer witness `peer.pcap capture.json peer.err`
+//! and `responder.json` ([`ResponderRecord`]: the peer responder at the scanner's end, with its stderr).
 use crate::{
     autodetect_verify::{self as av, ArgvRecord, EVIDENCE_EXTENSIONS, MANIFEST_JSON, Plan, Stand},
     macos_verify::{hashes_match_tree, tree},
@@ -91,6 +92,8 @@ pub const EXPECT_JSON: &str = "expect.json";
 pub const ISOLATION_JSON: &str = "isolation.json";
 pub const ISOLATION_POST_JSON: &str = "isolation-post.json";
 pub const PEER_STACK_JSON: &str = "peer-stack.json";
+/// The peer responder of a step at the scanner's end ([`ResponderRecord`]).
+pub const RESPONDER_JSON: &str = "responder.json";
 /// The peer witness of a step.
 pub const PEER_FILES: [&str; 3] = ["peer.pcap", "capture.json", "peer.err"];
 
@@ -382,6 +385,32 @@ pub struct PeerStack {
     pub sctp_in_kernel: bool,
     /// The responder's options ([`responder_args`]).
     pub responder: Vec<String>,
+}
+/// `<step>/responder.json`: the peer responder of the step as the suite found it the moment the step's scanner
+/// ended. The responder never writes to its stderr while it answers; an answerer that fails ends it at once with
+/// `NOT RUN: <error>` there and exit 2 (`capture responder`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResponderRecord {
+    /// Its exit code when it had already exited; `None` while it still ran.
+    pub exited_with: Option<i32>,
+    /// What it had written to its stderr by then.
+    pub stderr: String,
+}
+/// Why the peer did not answer the whole step: a responder that was gone before the scanner ended, named with its
+/// exit code and its own error text; `None` when it ran through the scan.
+pub fn responder_problem(rec: &ResponderRecord) -> Option<String> {
+    rec.exited_with.map(|rc| {
+        let said = rec.stderr.trim();
+        format!(
+            "the peer responder exited with {rc} before the scanner ended: {}",
+            if said.is_empty() {
+                "it wrote nothing to its stderr"
+            } else {
+                said
+            }
+        )
+    })
 }
 /// Why a peer stack cannot answer case `c` the stand's way, or `None`.
 pub fn peer_stack_problem(p: &PeerStack, c: &CaseSpec) -> Option<String> {
@@ -863,6 +892,44 @@ pub const SCANNER_CLASSES: [(&str, &str); 4] = [
         "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
     ),
 ];
+/// The most next-hop who-has rmasscan's resolver sends before it gives up: one per `ARP_INTERVAL` while less than
+/// `ARP_TIMEOUT` has passed (rmasscan-net `arp_resolve.rs`, `resolve_next_hop_until`: t = 0..9 s, 10 requests).
+pub const NEXT_HOP_WHO_HAS_MAX_RMASSCAN: usize = (rmasscan_net::arp_resolve::ARP_TIMEOUT.as_secs()
+    / rmasscan_net::arp_resolve::ARP_INTERVAL.as_secs())
+    as usize;
+/// The most next-hop who-has C's resolver sends: one at the start, one more each time the second changes, and it
+/// stops after the eleventh of those (`stack_arp_resolve`, stack-arpv4.c:175-187: `if (i++ >= 10) break` after the
+/// send), 12 requests.
+pub const NEXT_HOP_WHO_HAS_MAX_C: usize = 12;
+/// How many frames of each [`SCANNER_CLASSES`] entry a step may hold, from what its scanner side can send for the
+/// stand's replies on the same wire: one kernel reset per SYN-ACK frame (rmasscan has no RST path; C adds its own
+/// `tcp_send_RST` for each first SYN-ACK, main.c:1095, so at most two per SYN-ACK frame on the oracle's step), the
+/// resolver's request count ([`NEXT_HOP_WHO_HAS_MAX_RMASSCAN`], [`NEXT_HOP_WHO_HAS_MAX_C`]), and one kernel ICMP
+/// error per UDP or SCTP reply frame (neither scanner sends one itself). `(class, count, at most)` in
+/// [`SCANNER_CLASSES`] order.
+pub fn scanner_bounds(v: &WireView, who: Who) -> [(&'static str, usize, usize); 4] {
+    let replies = |proto: Proto, st: Option<St>| {
+        v.replies
+            .iter()
+            .filter(|r| r.proto == proto && !r.via_icmp && st.is_none_or(|s| r.st == s))
+            .count()
+    };
+    let (rst_per_syn_ack, who_has) = match who {
+        Who::Rmasscan => (1, NEXT_HOP_WHO_HAS_MAX_RMASSCAN),
+        Who::Oracle => (2, NEXT_HOP_WHO_HAS_MAX_C),
+    };
+    let max = [
+        who_has,
+        rst_per_syn_ack * replies(Proto::Tcp, Some(St::Open)),
+        replies(Proto::Udp, None),
+        replies(Proto::Sctp, None),
+    ];
+    let mut out = [("", 0, 0); 4];
+    for (i, (k, _)) in SCANNER_CLASSES.iter().enumerate() {
+        out[i] = (*k, v.scanner_named.get(k).copied().unwrap_or(0), max[i]);
+    }
+    out
+}
 /// The scanner's next-hop who-has for the default gateway, in its resolver form.
 fn next_hop_who_has(f: &[u8], st: &Stand) -> bool {
     av::resolver_request(f) && f[28..32] == st.scanner_ip.octets() && f[38..42] == GATEWAY.octets()
@@ -1790,6 +1857,15 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
                 })
                 .collect();
             counts.insert("unexplained".into(), json!(v.scanner_unexplained.len()));
+            counts.insert(
+                "at_most".into(),
+                json!(
+                    scanner_bounds(v, s.spec.who)
+                        .iter()
+                        .map(|(k, _, max)| (*k, *max))
+                        .collect::<BTreeMap<_, _>>()
+                ),
+            );
             scanner_notes.insert(s.spec.name.into(), Value::Object(counts));
         }
         let d = doc_of(r, s);
@@ -1858,12 +1934,15 @@ fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
         }
         if let (Some(Some(x)), Some(Some(y))) = (docs.get(k), docs.get(k + 1)) {
             let got: Vec<Rec> = x.records.iter().map(Rec::bare).collect();
-            let (want, n) = collapse(&y.records, c.deviations.contains(&"non-tcp-dedup"));
+            let dedup = c.deviations.contains(&"non-tcp-dedup");
+            let (want, n) = collapse(&y.records, dedup);
             collapsed += n;
             r.cap(
                 &format!(
-                    "{}: the records equal the C oracle's ({}) in order and field for field, but the time (non-tcp-dedup applied)",
-                    rm.spec.name, or.spec.name
+                    "{}: the records equal the C oracle's ({}) in order and field for field, but the time{}",
+                    rm.spec.name,
+                    or.spec.name,
+                    if dedup { " (non-tcp-dedup applied)" } else { "" }
                 ),
                 got == want,
                 if got == want { shown(&got) } else { first_difference(&got, &want) },
@@ -1898,6 +1977,19 @@ fn scanner_frames(r: &mut Run, s: &Side, v: &WireView) {
                 .collect::<Vec<_>>()
                 .join("; ")
         ),
+    );
+    // A named class is judged per frame above; here its count: no more than the scanner side can send.
+    let bounds = scanner_bounds(v, s.spec.who);
+    cap(
+        r,
+        s,
+        "the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, two on the oracle's step for C's own reset; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+        bounds.iter().all(|(_, n, max)| n <= max),
+        bounds
+            .iter()
+            .map(|(k, n, max)| format!("{k} {n} of at most {max}"))
+            .collect::<Vec<_>>()
+            .join(", "),
     );
 }
 
@@ -2197,6 +2289,21 @@ fn verify_run(root: &Path, c: &CaseSpec, root_links: &[String]) -> Run {
         }
     }
     r.argv_ok = argv_ok;
+    // A responder that died mid-step is a stand that stopped answering: named here, with its own error.
+    for spec in &specs {
+        if let Some(rec) = av::typed::<ResponderRecord>(&mut r, &d.join(spec.name), RESPONDER_JSON)
+        {
+            let problem = responder_problem(&rec);
+            r.inv(
+                &format!(
+                    "{}/{RESPONDER_JSON}: the peer responder ran until the scanner ended",
+                    spec.name
+                ),
+                problem.is_none(),
+                problem.unwrap_or_else(|| "it still ran".into()),
+            );
+        }
+    }
     if let Some(p) = av::typed::<PeerStack>(&mut r, &d, PEER_STACK_JSON) {
         let problem = peer_stack_problem(&p, c);
         r.inv(

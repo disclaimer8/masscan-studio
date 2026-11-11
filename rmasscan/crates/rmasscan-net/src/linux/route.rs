@@ -7,22 +7,25 @@
 //!   (`ENETUNREACH`; `EHOSTUNREACH`, `EINVAL`, `EACCES` это типы unreachable, blackhole, prohibit в `fib_props`
 //!   ядра) это `None`;
 //! * маршруты по умолчанию: dump (`NLM_F_DUMP`) до `NLMSG_DONE`, таблица main, `dst_len` 0, по `priority`; не-dump
-//!   lookup `0.0.0.0` отвечает `local … lo` и не используется.
+//!   lookup `0.0.0.0` отвечает `local … lo` и не используется;
+//! * IPv6 (только обнаружение IPv6): те же lookup и dump с `AF_INET6` (ответ lookup несёт `RTA_PREFSRC`, источник,
+//!   который выбрало ядро) и dump адресов `RTM_GETADDR` `AF_INET6` с флагами DAD. Путь IPv4 их не вызывает.
 //!
 //! Каждый fd живёт в `OwnedFd`; буферы это срезы Rust с явной длиной; ответы принимаются только от ядра (`nl_pid` 0).
 
 use std::ffi::CStr;
 use std::mem;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::socket::ifreq_for;
 use crate::NetError;
-use crate::discover::{Iface, Interfaces, Route, RouteTable};
+use crate::discover::{Iface, Interfaces, Route, RouteTable, RouteV6};
 use crate::route_parse::{
-    NlError, NlRoute, netlink_defaults, netlink_done, netlink_route_request, parse_netlink_routes,
-    route_from_nl,
+    NlError, NlRoute, NlRoute6, netlink_addr_request6, netlink_defaults, netlink_defaults6,
+    netlink_done, netlink_route_request, netlink_route_request6, parse_netlink_addrs6,
+    parse_netlink_routes, parse_netlink_routes6, route_from_nl, route6_from_nl, usable_addrs6,
 };
 
 /// Буфер приёма: больше любой датаграммы dump ядра (`NLMSG_GOODSIZE` ≤ 8 КиБ, на новых ядрах до 32 КиБ).
@@ -167,25 +170,48 @@ impl Netlink {
     }
 }
 
-/// Запрос `RTM_GETROUTE` и все датаграммы ответа (dump до `NLMSG_DONE`).
-fn exchange(dst: Option<Ipv4Addr>) -> Result<Vec<NlRoute>, Failure> {
+/// Запрос `req` и все датаграммы ответа: одна у lookup (`dump == false`), до `NLMSG_DONE` у dump; каждая разбирается
+/// `parse`.
+fn exchange_with<T>(
+    req: &[u8],
+    dump: bool,
+    parse: impl Fn(&[u8]) -> Result<Vec<T>, NlError>,
+) -> Result<Vec<T>, Failure> {
     let nl = Netlink::open().map_err(Failure::Io)?;
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    nl.send(&netlink_route_request(seq, dst))
-        .map_err(Failure::Io)?;
+    nl.send(req).map_err(Failure::Io)?;
     let mut buf = vec![0u8; RECV_BUF];
-    let mut routes = Vec::new();
+    let mut out = Vec::new();
     for _ in 0..MAX_DATAGRAMS {
         let n = nl.recv(&mut buf).map_err(Failure::Io)?;
         let dgram = &buf[..n];
-        routes.extend(parse_netlink_routes(dgram).map_err(Failure::Netlink)?);
-        if dst.is_some() || netlink_done(dgram) {
-            return Ok(routes);
+        out.extend(parse(dgram).map_err(Failure::Netlink)?);
+        if !dump || netlink_done(dgram) {
+            return Ok(out);
         }
     }
     Err(Failure::Io(NetError::System(format!(
         "netlink: dump did not end within {MAX_DATAGRAMS} datagrams"
     ))))
+}
+
+/// Запрос `RTM_GETROUTE` и все датаграммы ответа (dump до `NLMSG_DONE`).
+fn exchange(dst: Option<Ipv4Addr>) -> Result<Vec<NlRoute>, Failure> {
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    exchange_with(
+        &netlink_route_request(seq, dst),
+        dst.is_none(),
+        parse_netlink_routes,
+    )
+}
+
+/// `RTM_GETROUTE` `AF_INET6`: lookup `dst` или dump всех маршрутов IPv6.
+fn exchange6(dst: Option<Ipv6Addr>) -> Result<Vec<NlRoute6>, Failure> {
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    exchange_with(
+        &netlink_route_request6(seq, dst),
+        dst.is_none(),
+        parse_netlink_routes6,
+    )
 }
 
 /// `NLMSG_ERROR` lookup, означающий «нет маршрута» (`fib_props` ядра и отсутствие совпадения).
@@ -232,6 +258,27 @@ impl RouteTable for OsRoutes {
         Ok(netlink_defaults(routes)
             .iter()
             .filter_map(|r| route_from_nl(r, ifname_of))
+            .collect())
+    }
+
+    /// Lookup IPv6 (`RTA_PREFSRC` ответа это источник, который выбрало ядро); «нет маршрута» по тем же errno.
+    fn lookup_v6(&self, dst: Ipv6Addr) -> Result<Option<RouteV6>, NetError> {
+        let routes = match exchange6(Some(dst)) {
+            Ok(r) => r,
+            Err(Failure::Netlink(NlError::Kernel(e))) if is_no_route(e) => return Ok(None),
+            Err(f) => return Err(f.into()),
+        };
+        let r = routes.first().ok_or_else(|| {
+            NetError::System("netlink: RTM_GETROUTE (AF_INET6) reply carries no route".into())
+        })?;
+        Ok(route6_from_nl(r, ifname_of))
+    }
+
+    fn default_routes_v6(&self) -> Result<Vec<RouteV6>, NetError> {
+        let routes = exchange6(None)?;
+        Ok(netlink_defaults6(routes)
+            .iter()
+            .filter_map(|r| route6_from_nl(r, ifname_of))
             .collect())
     }
 }
@@ -358,5 +405,12 @@ impl Interfaces for OsIfaces {
             }
         }
         Ok(out)
+    }
+
+    /// Dump `RTM_GETADDR` `AF_INET6`: адреса интерфейса без tentative и dadfailed, deprecated в конце.
+    fn ipv6_addrs(&self, iface: &Iface) -> Result<Vec<Ipv6Addr>, NetError> {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let addrs = exchange_with(&netlink_addr_request6(seq), true, parse_netlink_addrs6)?;
+        Ok(usable_addrs6(&addrs, iface.index))
     }
 }

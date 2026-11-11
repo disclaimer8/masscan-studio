@@ -110,8 +110,14 @@ pub use crate::packet::{
 pub struct NicConfig {
     pub adapter_name: Option<String>,
     pub adapter_ip: Option<(u32, u32)>,
+    /// `adapter-ip` IPv6 (`src.ipv6.first/last`, main-conf.c:2508-2512): C шлёт только с `first` ("TODO: add support
+    /// for more than one source"); `::` значит «не задан». Есть только в `nics` (одиночного поля нет).
+    pub adapter_ipv6: Option<(u128, u128)>,
     pub adapter_mac: Option<[u8; 6]>,
     pub router_ip: Option<u32>,
+    /// `router-ip` IPv6: адрес следующего хопа для NDP (у C `router-ip` только IPv4, main-conf.c:2626-2641; здесь
+    /// это адрес Neighbor Solicitation, R11). Есть только в `nics`.
+    pub router_ipv6: Option<u128>,
     pub router_mac_ipv4: Option<[u8; 6]>,
     pub router_mac_ipv6: Option<[u8; 6]>,
     pub source_port: Option<(u16, u16)>,
@@ -143,7 +149,8 @@ pub struct ScanConfig {
     pub adapter_mac: Option<[u8; 6]>,
     /// `--router-ip` (main-conf.c:2626-2641): ровно один адрес IPv4.
     pub router_ip: Option<u32>,
-    /// Один MAC на ipv4 и ipv6 (`--router-mac` ставит оба).
+    /// MAC шлюза. Пока `nics` пуст (Студия, одиночные поля), это один MAC на ipv4 и ipv6, как `--router-mac`; когда
+    /// `nics` заведён, это `nics[0].router_mac_ipv4` (MAC IPv6 живёт в `nics[0].router_mac_ipv6`, main-conf.c:2602-2624).
     pub router_mac: Option<[u8; 6]>,
     /// `(first, last)` включительно.
     pub source_port: Option<(u16, u16)>,
@@ -284,8 +291,32 @@ impl EffectiveConfig {
     pub fn router_ip(&self) -> Option<u32> {
         self.router_ip.filter(|&ip| ip != 0)
     }
+    /// MAC шлюза IPv4 адаптера `nic[0]` (C `router_mac_ipv4`).
     pub fn router_mac(&self) -> Option<[u8; 6]> {
         self.router_mac
+    }
+    /// MAC шлюза IPv6 адаптера `nic[0]` (C `router_mac_ipv6`): `nics[0].router_mac_ipv6`, а без массива адаптеров
+    /// одиночное поле (`--router-mac` ставит оба, main-conf.c:2599-2600). Нулевой MAC значит «не задан».
+    pub fn router_mac_ipv6(&self) -> Option<[u8; 6]> {
+        match self.nics.first() {
+            Some(n) => n.router_mac_ipv6.filter(|m| *m != [0u8; 6]),
+            None => self.router_mac,
+        }
+    }
+    /// `adapter-ip` IPv6 адаптера `nic[0]` (первый адрес); `::` значит «не задан» (main-initadapter.c:214).
+    pub fn adapter_ipv6(&self) -> Option<u128> {
+        self.nics
+            .first()
+            .and_then(|n| n.adapter_ipv6)
+            .map(|(first, _)| first)
+            .filter(|&ip| ip != 0)
+    }
+    /// `router-ip` IPv6 адаптера `nic[0]`; `::` значит «не задан».
+    pub fn router_ipv6(&self) -> Option<u128> {
+        self.nics
+            .first()
+            .and_then(|n| n.router_ipv6)
+            .filter(|&ip| ip != 0)
     }
     pub fn source_port(&self) -> Option<(u16, u16)> {
         self.source_port
@@ -886,8 +917,10 @@ fn legacy_nic(cfg: &ScanConfig) -> NicConfig {
     NicConfig {
         adapter_name: cfg.adapter_name.clone(),
         adapter_ip: cfg.adapter_ip.map(|ip| (ip, ip)),
+        adapter_ipv6: None,
         adapter_mac: cfg.adapter_mac,
         router_ip: cfg.router_ip,
+        router_ipv6: None,
         router_mac_ipv4: cfg.router_mac,
         router_mac_ipv6: cfg.router_mac,
         source_port: cfg.source_port,
@@ -949,12 +982,29 @@ fn echo_nic(out: &mut String, nic: &NicConfig, idx: Option<usize>) {
             );
         }
     }
+    // main-conf.c:361-369: `adapter-ip` IPv6 после IPv4, `first-last` при `first < last`.
+    if let Some((first, last)) = nic.adapter_ipv6 {
+        if first < last {
+            let _ = writeln!(
+                out,
+                "adapter-ip{sfx} = {}-{}",
+                format_ipv6_c(first),
+                format_ipv6_c(last)
+            );
+        } else {
+            let _ = writeln!(out, "adapter-ip{sfx} = {}", format_ipv6_c(first));
+        }
+    }
     if let Some(mac) = nic.adapter_mac.filter(|m| *m != [0u8; 6]) {
         let _ = writeln!(out, "adapter-mac{sfx} = {}", fmt_mac(mac));
     }
     // main-conf.c:376-378: после adapter-mac, перед router-mac.
     if let Some(ip) = nic.router_ip.filter(|&ip| ip != 0) {
         let _ = writeln!(out, "router-ip{sfx} = {}", Ipv4Addr::from(ip));
+    }
+    // `router-ip` IPv6 (у C ключа нет): сразу после IPv4, только когда задан.
+    if let Some(ip) = nic.router_ipv6 {
+        let _ = writeln!(out, "router-ip{sfx} = {}", format_ipv6_c(ip));
     }
     if let Some(mac) = nic.router_mac_ipv4.filter(|m| *m != [0u8; 6]) {
         let _ = writeln!(out, "router-mac-ipv4{sfx} = {}", fmt_mac(mac));
@@ -1064,9 +1114,8 @@ pub fn parse_bool(value: &str) -> bool {
 ///
 /// Отличия от C: неизвестный ключ — `UnknownKey` (C вызывает exit(1)),
 /// нечисловое значение — `BadValue` (C берёт 0). Строки `capture`/`nocapture`
-/// проверяются и пропускаются (на скан не влияют), `router-mac-ipv4` и
-/// `-ipv6` с разными значениями не представимы одним `router_mac` и дают
-/// `BadValue`.
+/// проверяются и пропускаются (на скан не влияют). `router-mac-ipv4` и
+/// `router-mac-ipv6` хранятся раздельно в `nics` (как в C).
 pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
     let mut cfg = ScanConfig::default();
     for raw in text.lines() {
@@ -1176,7 +1225,8 @@ fn sync_legacy_nic(cfg: &mut ScanConfig) {
     cfg.adapter_ip = n.adapter_ip.map(|(first, _)| first);
     cfg.adapter_mac = n.adapter_mac;
     cfg.router_ip = n.router_ip;
-    cfg.router_mac = n.router_mac_ipv4.or(n.router_mac_ipv6);
+    // MAC шлюза IPv4 и только он: `--router-mac-ipv6` не становится MAC кадров IPv4 (main-conf.c:2614-2624).
+    cfg.router_mac = n.router_mac_ipv4;
     cfg.source_port = n.source_port;
 }
 
@@ -1370,6 +1420,15 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
             nic_mut(cfg, idx).adapter_name = Some(value.to_string());
             sync_legacy_nic(cfg);
         }
+        "adapterip" | "sourceip" | "sourceaddress" | "spoofip" | "spoofaddress" | "srcip"
+            if value.contains(':') =>
+        {
+            // main-conf.c:2508-2512: адрес или диапазон IPv6, `src.ipv6.first/last`.
+            let idx = nic_index(name, value)?;
+            let r = crate::ranges6::parse_ipv6_target(value).map_err(|_| bad())?;
+            nic_mut(cfg, idx).adapter_ipv6 = Some((r.begin, r.end));
+            sync_legacy_nic(cfg);
+        }
         "adapterip" | "sourceip" | "sourceaddress" | "spoofip" | "spoofaddress" | "srcip" => {
             let idx = nic_index(name, value)?;
             let r = targets::range_parse_ipv4(value).map_err(|_| bad())?;
@@ -1384,6 +1443,16 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
             let idx = nic_index(name, value)?;
             // main-conf.c:2552: нулевой MAC C не хранит.
             nic_mut(cfg, idx).adapter_mac = Some(parse_mac(value)?).filter(|m| *m != [0u8; 6]);
+            sync_legacy_nic(cfg);
+        }
+        "routerip" if value.contains(':') => {
+            // Один адрес IPv6 следующего хопа для NDP (у C ключ только IPv4).
+            let idx = nic_index(name, value)?;
+            let r = crate::ranges6::parse_ipv6_target(value).map_err(|_| bad())?;
+            if r.begin != r.end {
+                return Err(bad());
+            }
+            nic_mut(cfg, idx).router_ipv6 = Some(r.begin);
             sync_legacy_nic(cfg);
         }
         "routerip" => {
@@ -1411,17 +1480,6 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
                 nic.router_mac_ipv6 = Some(m);
             } else {
                 nic.router_mac_ipv4 = Some(m);
-            }
-            // Один `router_mac` не хранит разные ipv4 и ipv6.
-            let conflict = match (nic.router_mac_ipv4, nic.router_mac_ipv6) {
-                (Some(a), Some(b)) if a != b => Some(b),
-                _ => None,
-            };
-            if let Some(b) = conflict {
-                return Err(ConfigError::BadValue {
-                    key: "router-mac-ipv6".into(),
-                    value: fmt_mac(b),
-                });
             }
             sync_legacy_nic(cfg);
         }
@@ -2043,16 +2101,130 @@ mod tests {
             read_paused_conf("range = 2001:db8::zz\n").unwrap_err(),
             ConfigError::Parse(_)
         ));
+        // T5: MAC шлюза IPv4 и IPv6 хранятся раздельно, как в C (`router_mac_ipv4`/`router_mac_ipv6`,
+        // main-conf.c:2602-2624): разные значения больше не отказ.
+        let cfg = read_paused_conf(
+            "router-mac-ipv4 = 00-00-00-00-00-01\nrouter-mac-ipv6 = 00-00-00-00-00-02\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.nics[0].router_mac_ipv4, Some([0, 0, 0, 0, 0, 1]));
+        assert_eq!(cfg.nics[0].router_mac_ipv6, Some([0, 0, 0, 0, 0, 2]));
+        assert_eq!(cfg.router_mac, Some([0, 0, 0, 0, 0, 1]));
+    }
+
+    fn scan_cfg(text: &str) -> EffectiveConfig {
+        let mut cfg = read_paused_conf(text).unwrap();
+        cfg.seed = 1;
+        if cfg.targets.ipv4().is_empty() && !cfg.targets.has_ipv6_targets() {
+            cfg.targets.add_target_string("198.18.0.2").unwrap();
+        }
+        if cfg.targets.ports().is_empty() {
+            crate::targets::parse_ports(cfg.targets.ports_mut(), "80").unwrap();
+        }
+        validate(&cfg, Operation::Scan).unwrap()
+    }
+
+    /// Forward note T4: только `--router-mac-ipv6` не должен становиться MAC шлюза IPv4 (C: `--router-mac` ставит оба,
+    /// `--router-mac-ipv6`/`--router-ipv6` только IPv6, main-conf.c:2587-2624). Раньше одиночное поле брало
+    /// `ipv4.or(ipv6)`, и кадры IPv4 ушли бы на MAC шлюза IPv6.
+    #[test]
+    fn router_mac_ipv6_alone_never_becomes_the_ipv4_router_mac() {
+        for key in ["router-mac-ipv6", "router-ipv6"] {
+            let eff = scan_cfg(&format!("{key} = 02-00-00-00-00-06\n"));
+            assert_eq!(eff.router_mac(), None, "{key}");
+            assert_eq!(eff.router_mac_ipv6(), Some([2, 0, 0, 0, 0, 6]), "{key}");
+        }
+        let eff = scan_cfg("router-mac = 02-00-00-00-00-04\n");
+        assert_eq!(eff.router_mac(), Some([2, 0, 0, 0, 0, 4]));
+        assert_eq!(eff.router_mac_ipv6(), Some([2, 0, 0, 0, 0, 4]));
+        let eff = scan_cfg("router-mac-ipv4 = 02-00-00-00-00-04\n");
+        assert_eq!(eff.router_mac(), Some([2, 0, 0, 0, 0, 4]));
+        assert_eq!(eff.router_mac_ipv6(), None);
+        // Одиночное поле Студии (`nics` пуст) это оба MAC, как `--router-mac`.
+        let mut cfg = ScanConfig {
+            seed: 1,
+            router_mac: Some([2, 0, 0, 0, 0, 9]),
+            ..ScanConfig::default()
+        };
+        cfg.targets.add_target_string("198.18.0.2").unwrap();
+        crate::targets::parse_ports(cfg.targets.ports_mut(), "80").unwrap();
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        assert_eq!(eff.router_mac(), Some([2, 0, 0, 0, 0, 9]));
+        assert_eq!(eff.router_mac_ipv6(), Some([2, 0, 0, 0, 0, 9]));
+    }
+
+    /// `adapter-ip` принимает IPv6 (C `massip_parse_range` → `src.ipv6.first/last`, main-conf.c:2486-2512), а
+    /// `router-ip` IPv6 это адрес для NDP (у C только IPv4, main-conf.c:2626-2641). `echo`/`paused.conf` пишут их
+    /// только когда они заданы, в порядке C (`adapter-ip` IPv6 после IPv4, main-conf.c:361-369), и читаются назад
+    /// без потерь; чистый IPv4 не меняется ни на байт.
+    #[test]
+    fn ipv6_adapter_ip_and_router_ip_round_trip_through_echo() {
+        let text = "adapter-ip = 198.18.0.1\nadapter-ip = fd00:198:18::1\nrouter-ip = 198.18.0.254\n\
+                    router-ip = fe80::1\nrouter-mac-ipv6 = 02-00-00-00-00-06\nrange = fd00:198:18::2\n\
+                    ports = 80\nseed = 1\n";
+        let cfg = read_paused_conf(text).unwrap();
+        let n = &cfg.nics[0];
+        assert_eq!(n.adapter_ip, Some((0xc612_0001, 0xc612_0001)));
         assert_eq!(
-            read_paused_conf(
-                "router-mac-ipv4 = 00-00-00-00-00-01\nrouter-mac-ipv6 = 00-00-00-00-00-02\n"
-            )
-            .unwrap_err(),
-            ConfigError::BadValue {
-                key: "router-mac-ipv6".into(),
-                value: "00-00-00-00-00-02".into()
-            }
+            n.adapter_ipv6,
+            Some((
+                0xfd00_0198_0018_0000_0000_0000_0000_0001,
+                0xfd00_0198_0018_0000_0000_0000_0000_0001
+            ))
         );
+        assert_eq!(n.router_ip, Some(0xc612_00fe));
+        assert_eq!(
+            n.router_ipv6,
+            Some(0xfe80_0000_0000_0000_0000_0000_0000_0001)
+        );
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        assert_eq!(eff.adapter_ip(), Some(0xc612_0001));
+        assert_eq!(
+            eff.adapter_ipv6(),
+            Some(0xfd00_0198_0018_0000_0000_0000_0000_0001)
+        );
+        assert_eq!(
+            eff.router_ipv6(),
+            Some(0xfe80_0000_0000_0000_0000_0000_0000_0001)
+        );
+        let mut out = String::new();
+        echo(&cfg, false, &mut out);
+        let nic_lines: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with("adapter-ip") || l.starts_with("router-"))
+            .collect();
+        assert_eq!(
+            nic_lines,
+            [
+                "adapter-ip = 198.18.0.1",
+                "adapter-ip = fd00:198:18::1",
+                "router-ip = 198.18.0.254",
+                "router-ip = fe80::1",
+                "router-mac-ipv6 = 02-00-00-00-00-06",
+            ]
+        );
+        let back = read_paused_conf(&out).unwrap();
+        assert_eq!(back.nics, cfg.nics);
+        // `adapter-ip` диапазон IPv6: C хранит first/last и шлёт с first (main-conf.c:2510-2512, main.c:188).
+        let cfg = read_paused_conf("adapter-ip = [fd00::1]-[fd00::4]\n").unwrap();
+        assert_eq!(
+            cfg.nics[0].adapter_ipv6,
+            Some((0xfd00 << 112 | 1, 0xfd00 << 112 | 4))
+        );
+        let mut out = String::new();
+        echo(&cfg, false, &mut out);
+        assert!(out.contains("adapter-ip = fd00::1-fd00::4\n"), "{out}");
+        // `router-ip` IPv6 это один адрес; мусор отказ.
+        for bad in [
+            "router-ip = fe80::1-fe80::2\n",
+            "adapter-ip = fd00::zz\n",
+            "router-ip = fe80::/64\n",
+        ] {
+            assert!(read_paused_conf(bad).is_err(), "{bad}");
+        }
+        // `::` значит «не задан» (C `ipv6address_is_zero`, main-initadapter.c:214): адрес ищет обнаружение.
+        let eff = scan_cfg("adapter-ip = ::\nrouter-ip = ::\n");
+        assert_eq!((eff.adapter_ipv6(), eff.router_ipv6()), (None, None));
     }
 
     #[test]

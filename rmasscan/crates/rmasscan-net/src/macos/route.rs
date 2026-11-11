@@ -7,15 +7,16 @@
 //! `rawsock-getroute.c:183–196`); чтение ограничено таймаутом сокета и числом чужих сообщений.
 
 use std::mem;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use super::ifinfo;
 use crate::NetError;
-use crate::discover::{Iface, Interfaces, Route, RouteTable};
+use crate::discover::{Iface, Interfaces, Route, RouteTable, RouteV6};
 use crate::route_parse::{
-    RtReply, defaults_from_rt, lookup_from_rt, parse_rt_reply, rt_get_request,
+    LO0, RtReply, defaults_from_rt, defaults6_from_rt, lookup_from_rt, lookup6_from_rt,
+    parse_rt_reply, rt_get_request, rt_get_request6,
 };
 
 /// Таймаут чтения и записи сокета (как C: `SO_RCVTIMEO`/`SO_SNDTIMEO` 1 с).
@@ -37,9 +38,10 @@ fn sys(op: &str, e: i32) -> NetError {
     NetError::System(format!("{op}: {}", std::io::Error::from_raw_os_error(e)))
 }
 
-fn route_socket() -> Result<OwnedFd, NetError> {
+/// Сокет `PF_ROUTE` с фильтром семейства `family` (`AF_INET` или `AF_INET6`).
+fn route_socket(family: libc::c_int) -> Result<OwnedFd, NetError> {
     // SAFETY: socket() принимает только целые аргументы; результат проверяется ниже.
-    let raw = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, libc::AF_INET) };
+    let raw = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, family) };
     if raw < 0 {
         return Err(sys("socket(PF_ROUTE)", last_errno()));
     }
@@ -69,10 +71,26 @@ fn route_socket() -> Result<OwnedFd, NetError> {
 
 /// `RTM_GET` для `dst`; `None`, если маршрута нет (`ESRCH`/`ENETUNREACH` из `write`).
 fn rt_get(dst: Ipv4Addr) -> Result<Option<RtReply>, NetError> {
-    let fd = route_socket()?;
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id() as i32;
-    let req = rt_get_request(seq, pid, dst);
+    exchange(libc::AF_INET, &rt_get_request(seq, pid, dst), seq, pid)
+}
+
+/// `RTM_GET` для IPv6 `dst` (`sockaddr_in6`); `None`, если маршрута нет.
+fn rt_get6(dst: Ipv6Addr) -> Result<Option<RtReply>, NetError> {
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id() as i32;
+    exchange(libc::AF_INET6, &rt_get_request6(seq, pid, dst), seq, pid)
+}
+
+/// Запрос `req` в новый `PF_ROUTE`-сокет семейства `family` и ответ с этими `seq`/`pid`.
+fn exchange(
+    family: libc::c_int,
+    req: &[u8],
+    seq: i32,
+    pid: i32,
+) -> Result<Option<RtReply>, NetError> {
+    let fd = route_socket(family)?;
     loop {
         // SAFETY: указатель и длина берутся из одного живого среза; fd валиден.
         let n = unsafe {
@@ -143,6 +161,23 @@ impl RouteTable for OsRoutes {
     fn default_routes(&self) -> Result<Vec<Route>, NetError> {
         Ok(defaults_from_rt(rt_get(Ipv4Addr::UNSPECIFIED)?.as_ref()))
     }
+
+    /// `RTM_GET` к IPv6 `dst` (шлюз link-local без KAME-зоны); адрес любого интерфейса это адрес хоста через `lo0`.
+    fn lookup_v6(&self, dst: Ipv6Addr) -> Result<Option<RouteV6>, NetError> {
+        let reply = rt_get6(dst)?;
+        let own = ifinfo::all_ipv6_addrs().map_err(|e| sys("getifaddrs", e))?;
+        let lo0 = OsIfaces
+            .list()?
+            .iter()
+            .find(|i| i.name == LO0)
+            .map_or(0, |i| i.index);
+        Ok(lookup6_from_rt(reply.as_ref(), dst, &own, lo0))
+    }
+
+    /// Один маршрут IPv6 по умолчанию: `RTM_GET ::`.
+    fn default_routes_v6(&self) -> Result<Vec<RouteV6>, NetError> {
+        Ok(defaults6_from_rt(rt_get6(Ipv6Addr::UNSPECIFIED)?.as_ref()))
+    }
 }
 
 /// Интерфейсы `getifaddrs`; скрытый ОС MAC это `mac_masked` (`ifinfo::MASKED_MAC`).
@@ -151,5 +186,9 @@ pub(crate) struct OsIfaces;
 impl Interfaces for OsIfaces {
     fn list(&self) -> Result<Vec<Iface>, NetError> {
         ifinfo::iface_list().map_err(|e| sys("getifaddrs", e))
+    }
+
+    fn ipv6_addrs(&self, iface: &Iface) -> Result<Vec<Ipv6Addr>, NetError> {
+        ifinfo::ipv6_addrs(&iface.name).map_err(|e| sys("getifaddrs", e))
     }
 }

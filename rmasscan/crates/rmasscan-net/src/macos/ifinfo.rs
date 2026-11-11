@@ -1,8 +1,8 @@
 //! Сведения об интерфейсе через `if_nametoindex` и `getifaddrs` (AF_LINK /
-//! AF_INET). Без привилегий и без открытия BPF.
+//! AF_INET / AF_INET6). Без привилегий и без открытия BPF.
 
 use std::ffi::{CStr, CString};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
@@ -54,6 +54,9 @@ pub(crate) struct RawAddr {
 pub(crate) enum AddrKind {
     Link(LinkInfo),
     V4(Ipv4Addr),
+    /// Адрес IPv6 без встроенной KAME-зоны (`route_parse::in6_from_sockaddr`). Сводка интерфейсов IPv4 ([`merge`])
+    /// его не читает; его берёт только обнаружение IPv6 ([`ipv6_addrs`]).
+    V6(Ipv6Addr),
     Other,
 }
 
@@ -132,6 +135,7 @@ pub(crate) fn raw_addrs() -> Result<Vec<RawAddr>, Errno> {
                 )
             };
             const SIN_MIN: usize = std::mem::offset_of!(libc::sockaddr_in, sin_addr) + 4;
+            const SIN6_MIN: usize = std::mem::offset_of!(libc::sockaddr_in6, sin6_addr) + 16;
             match family {
                 libc::AF_LINK => {
                     // SAFETY: запись занимает ровно `sa_len` байт по указателю
@@ -149,6 +153,14 @@ pub(crate) fn raw_addrs() -> Result<Vec<RawAddr>, Errno> {
                     let s_addr =
                         unsafe { (*e.ifa_addr.cast::<libc::sockaddr_in>()).sin_addr.s_addr };
                     AddrKind::V4(Ipv4Addr::from(u32::from_be(s_addr)))
+                }
+                libc::AF_INET6 if sa_len >= SIN6_MIN => {
+                    // SAFETY: запись занимает ровно `sa_len` байт по указателю `ifa_addr` внутри списка, живущего до
+                    // конца `list`; `sa_len >= offsetof(sin6_addr) + 16` проверено, срез только читается и сразу
+                    // разбирается в owned `Ipv6Addr` (безопасный `in6_from_sockaddr` сам проверяет длину и семейство).
+                    let rec =
+                        unsafe { std::slice::from_raw_parts(e.ifa_addr.cast::<u8>(), sa_len) };
+                    crate::route_parse::in6_from_sockaddr(rec).map_or(AddrKind::Other, AddrKind::V6)
                 }
                 _ => AddrKind::Other,
             }
@@ -185,6 +197,29 @@ impl IfaceInfo for OsIface {
             _ => None,
         }))
     }
+}
+
+/// Адреса IPv6 интерфейса `name` в порядке `getifaddrs` (без KAME-зоны). Флагов DAD `getifaddrs` не даёт: правило
+/// выбора источника в `discover` берёт первый пригодный не link-local адрес, как C (`rawsock-getip6.c:230-251`).
+pub(crate) fn ipv6_addrs(name: &str) -> Result<Vec<Ipv6Addr>, Errno> {
+    Ok(raw_addrs()?
+        .into_iter()
+        .filter_map(|a| match a.kind {
+            AddrKind::V6(ip) if a.name == name => Some(ip),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Все адреса IPv6 хоста (любой интерфейс): назначение среди них это адрес самого хоста.
+pub(crate) fn all_ipv6_addrs() -> Result<Vec<Ipv6Addr>, Errno> {
+    Ok(raw_addrs()?
+        .into_iter()
+        .filter_map(|a| match a.kind {
+            AddrKind::V6(ip) => Some(ip),
+            _ => None,
+        })
+        .collect())
 }
 
 /// Сводка по интерфейсам для инвентаря (порядок первого появления имени).
@@ -242,7 +277,7 @@ pub(crate) fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> 
                 r.mac_masked = l.masked();
             }
             AddrKind::V4(ip) => r.ipv4.push(ip),
-            AddrKind::Other => {}
+            AddrKind::V6(_) | AddrKind::Other => {}
         }
     }
     out

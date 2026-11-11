@@ -1742,6 +1742,99 @@ mod tests {
         }
     }
 
+    /// T5: R7 снят на всех входах, в том числе в плане RX адаптера `k > 0` (`rx_plan` перестраивает план через
+    /// `new_cli_with_payloads`). Два адаптера сканируют цели IPv6: каждый шлёт свои зонды IPv6 со своего источника,
+    /// и ответ на SYN адаптера B принимает только RX адаптера B.
+    #[test]
+    fn ipv6_targets_scan_on_every_adapter_including_rx_plans_for_k_above_zero() {
+        const ME: [u128; 2] = [
+            0xfd00_0000_0000_0000_0000_0000_0000_0063,
+            0xfd00_0000_0000_0000_0000_0000_0000_0064,
+        ];
+        let mut m = MassIp::new();
+        m.add_target_string("2001:db8::1-2001:db8::2").unwrap();
+        parse_ports(m.ports_mut(), "80,443").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 1,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = |k: usize| {
+            let mut n = NicBinding::from(AdapterBinding {
+                interface_id: format!("fake{k}"),
+                link_type: LinkType::Ethernet,
+                source_ipv4: 0,
+                source_mac: [0x02, 0, 0, 0, 0, 0x10 + k as u8],
+                next_hop_mac: [0; 6],
+                source_ports: (40000 + k as u16, 40000 + k as u16),
+            });
+            n.source_ipv6 = Some(ME[k]);
+            n.next_hop_mac_ipv6 = Some([0x02, 0, 0, 0, 0, 0x20]);
+            n
+        };
+        let plan = ReadyPlan::new_cli(eff, vec![nic(0), nic(1)]).unwrap();
+        let (rx_a, rx_b) = (rx_plan(&plan, 0).unwrap(), rx_plan(&plan, 1).unwrap());
+        let clock = ManualClock::new();
+        let fakes: Vec<FakeAdapter> = (0..2)
+            .map(|_| {
+                let f = FakeAdapter::new().with_clock(clock.clone());
+                f.set_responder(|syn| crate::fake::reply_to_syn6(syn, 0x12).into_iter().collect());
+                f
+            })
+            .collect();
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            fakes.iter().map(FakeAdapter::pair).collect(),
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        let mut replies = Vec::new();
+        let t = Instant::now();
+        loop {
+            match h.recv_event_timeout(Duration::from_millis(50)) {
+                Ok(Event::Results { replies: r }) => replies.extend(r),
+                Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(10)),
+            }
+        }
+        h.join().unwrap();
+        let sent = |k: usize| fakes[k].sent_frames();
+        assert_eq!((sent(0).len(), sent(1).len()), (2, 2));
+        for (k, me) in ME.iter().enumerate() {
+            for f in sent(k) {
+                assert_eq!(&f[12..14], &[0x86, 0xdd], "adapter {k} sends IPv6");
+                assert_eq!(u128::from_be_bytes(f[22..38].try_into().unwrap()), *me);
+            }
+        }
+        assert_eq!(replies.len(), 4);
+        for (k, me) in ME.iter().enumerate() {
+            assert_eq!(
+                replies
+                    .iter()
+                    .filter(|r| r.ip6.map(|i| i.local) == Some(*me))
+                    .count(),
+                2,
+                "adapter {k}"
+            );
+        }
+        let link = LinkType::Ethernet;
+        for k in 0..2 {
+            for syn in sent(k) {
+                let reply = crate::fake::reply_to_syn6(&syn, 0x12).unwrap();
+                let accepted = |p: &ReadyPlan| matches!(parse_reply(&reply, link, p), Ok(Some(_)));
+                assert_eq!(accepted(&rx_a), k == 0, "RX A, reply to adapter {k}");
+                assert_eq!(accepted(&rx_b), k == 1, "RX B, reply to adapter {k}");
+            }
+        }
+    }
+
     /// T7 I-2: исчерпанный адаптер не тянет `resume-index` вниз. `--shard 1/2`, 3 адаптера, range 13: поток шарда 1
     /// это индексы {0,1,2,6,7,8,12}; адаптеры 1 ({1,7}) и 2 ({2,8}) заканчивают, адаптер 0 ({0,6,12}) встаёт после
     /// отправки 0 и 6. Сырой минимум дал бы `resume-index = 11` (индекс шарда 2), правильная база 12.
@@ -1863,8 +1956,8 @@ mod tests {
     const NDP_ROUTER_MAC: [u8; 6] = [0x0a, 0xbb, 0xcc, 0xdd, 0xee, 0x01];
     const NDP_ROUTER_IP: u128 = 0xfe80_0000_0000_0000_0000_0000_0000_abcd;
 
-    /// Скан IPv4 (порядок кадров замороженный) с `source_ipv6` адаптера: путь IPv6-цели закрыт R7, а приёмник и
-    /// ответчик NS от целей не зависят.
+    /// Скан IPv4 (порядок кадров замороженный) с `source_ipv6` адаптера: приёмник и ответчик NS от целей не
+    /// зависят (CLI ставит `source_ipv6` только при целях IPv6; здесь он задан нарочно).
     fn ndp_plan(source_ipv6: Option<u128>) -> ReadyPlan {
         let plan = plan12(0, Shard { one: 1, of: 1 }, 0);
         let mut nic = plan.nics()[0].clone();

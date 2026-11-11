@@ -76,8 +76,9 @@ pub mod localtime;
 pub mod interrupt;
 
 pub use discover::{
-    DetectError, Detected, Iface, Interfaces, NextHop, Overrides, Route, RouteTable, Targets,
-    detect, detect_offline, iflist_text, probe_targets,
+    DetectError, Detected, DetectedV6, Iface, Interfaces, NextHop, NextHop6, Overrides, Route,
+    RouteTable, RouteV6, Targets, Targets6, detect, detect_mixed, detect_offline, detect_v6,
+    detect_v6_offline, iflist_text, probe_targets, probe_targets_v6,
 };
 
 /// Таблица маршрутов ОС, читаемая в процессе и без привилегий (процессы не запускаются): Linux rtnetlink

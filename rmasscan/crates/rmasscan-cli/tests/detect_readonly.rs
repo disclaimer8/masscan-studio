@@ -11,9 +11,12 @@
 #[path = "common/spawn.rs"]
 mod spawn;
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
-use rmasscan_net::{DetectError, Overrides, Targets, detect, os_interfaces, os_route_table};
+use rmasscan_net::{
+    DetectError, NextHop6, Overrides, Targets, Targets6, detect, detect_v6, os_interfaces,
+    os_route_table,
+};
 use spawn::spawn_readonly;
 
 fn strict() -> bool {
@@ -229,6 +232,127 @@ fn kind(e: &DetectError) -> &'static str {
         DetectError::NoMac(_) => "NoMac",
         DetectError::NoGateway { .. } => "NoGateway",
         DetectError::RouteNotViaAdapter { .. } => "RouteNotViaAdapter",
+        DetectError::NoUnicastTargets6 => "NoUnicastTargets6",
+        DetectError::NoRoute6(_) => "NoRoute6",
+        DetectError::LocalTarget6 { .. } => "LocalTarget6",
+        DetectError::SplitRoutes6 { .. } => "SplitRoutes6",
+        DetectError::NoIpv6(_) => "NoIpv6",
+        DetectError::NoGateway6 { .. } => "NoGateway6",
+        DetectError::RouteNotViaAdapter6 { .. } => "RouteNotViaAdapter6",
+        DetectError::FamiliesSplit { .. } => "FamiliesSplit",
         DetectError::Os(_) => "Os",
+    }
+}
+
+/// IPv6 (T5): маршрут к `::1` локальный; маршрут к документационному адресу (`2001:db8::1`, его ищет только таблица
+/// маршрутов, кадров нет) либо отсутствует (хост без IPv6), либо даёт интерфейс, который `detect_v6` выбирает сам, с
+/// пригодным адресом источника (не `::`, не `::1`, не multicast, без KAME-зоны в link-local) и шлюзом без зоны.
+/// Терпим к хосту без IPv6 (CI), отказы называются только видом.
+#[test]
+fn ipv6_lookup_and_detection_read_only() {
+    let routes = os_route_table().expect("os_route_table");
+    let ifaces = os_interfaces().expect("os_interfaces");
+    if let Some(r) = routes
+        .lookup_v6(Ipv6Addr::LOCALHOST)
+        .expect("lookup_v6(::1)")
+    {
+        assert!(r.local, "the route to ::1 is local");
+        assert!(r.gateway.is_none(), "a local route has no gateway");
+    }
+    let remote: Ipv6Addr = "2001:db8::1".parse().unwrap();
+    let Some(route) = routes.lookup_v6(remote).expect("lookup_v6 must not fail") else {
+        return;
+    };
+    assert!(
+        !route.local,
+        "a documentation address is not an address of this host"
+    );
+    let no_zone = |a: &Ipv6Addr| {
+        let s = a.segments();
+        s[0] & 0xffc0 != 0xfe80 || s[1] == 0
+    };
+    assert!(
+        route.gateway.iter().all(no_zone),
+        "gateway without an embedded zone"
+    );
+    let t = Targets6 {
+        first: remote,
+        last: remote,
+        single: true,
+    };
+    match detect_v6(&t, &Overrides::default(), routes.as_ref(), ifaces.as_ref()) {
+        Ok(d) => {
+            assert!(
+                d.iface.index == route.ifindex,
+                "detect_v6 picks the route's interface"
+            );
+            let src = d.source_ipv6.0;
+            assert!(
+                !src.is_unspecified() && !src.is_loopback() && !src.is_multicast() && no_zone(&src),
+                "a usable source address"
+            );
+            let addrs = ifaces.ipv6_addrs(&d.iface).expect("ipv6_addrs");
+            assert!(
+                addrs.contains(&src),
+                "the source is an address of the interface"
+            );
+            if let NextHop6::Resolve { ip, .. } = d.next_hop {
+                assert!(no_zone(&ip), "next hop without an embedded zone");
+            }
+        }
+        // VPN-туннель, интерфейс без глобального адреса IPv6, MAC скрыт ОС.
+        Err(DetectError::NotUsable { .. } | DetectError::NoIpv6(_) | DetectError::MacMasked(_)) => {
+        }
+        Err(e) => panic!("detect_v6 refused unexpectedly: {}", kind(&e)),
+    }
+}
+
+/// `--offline` с целью IPv6 обнаруживает только чтением: строки `[+]` IPv6 с фиктивным MAC шлюза IPv6 либо отказ в
+/// форме C (хост без IPv6, VPN, MAC скрыт ОС).
+#[test]
+fn binary_offline_ipv6_detects_or_refuses_read_only() {
+    let out = spawn_readonly(&["--offline", "2001:db8::1", "-p80", "--seed", "1"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.stdout.is_empty(), "no stdout without --packet-trace");
+    assert!(
+        !err.contains("rmasscan: error:"),
+        "detection refusals use the C form"
+    );
+    match out.status.code() {
+        Some(0) => {
+            for prefix in [
+                "[+] interface = ",
+                "[+] source-mac = ",
+                "[+] source-ip = [",
+                "[+] router-mac-ipv6 = 66-55-44-33-22-11 (offline)",
+                "[+] seed = 1 (given)",
+            ] {
+                assert!(
+                    err.lines().any(|l| l.starts_with(prefix)),
+                    "missing stderr line {prefix:?}"
+                );
+            }
+            assert!(
+                !err.lines().any(|l| l.starts_with("[+] router-mac = ")),
+                "no IPv4 lines without IPv4 targets"
+            );
+        }
+        Some(1) => {
+            assert!(
+                err.starts_with("[-] FAIL: "),
+                "a refusal starts with [-] FAIL:"
+            );
+            let kinds = [
+                "could not determine default interface",
+                "failed to detect IPv6 address of interface",
+                "is os-masked",
+                "is not usable",
+            ];
+            assert!(
+                kinds.iter().any(|k| err.contains(k)),
+                "the refusal is one of {kinds:?}"
+            );
+        }
+        other => panic!("unexpected exit code {other:?}"),
     }
 }

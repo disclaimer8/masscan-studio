@@ -3,7 +3,8 @@
 //! Модуль безопасный и переносимый: ни системных вызовов, ни `unsafe`, ни типов `libc`/`windows-sys`. FFI-модули
 //! (`linux::route`, `macos::route`, `windows::sys`) только отправляют собранные здесь байты запросов и отдают сюда
 //! байты ответов или поля, уже скопированные в безопасные типы; тесты идут на любой ОС. Поля заголовков в родном
-//! порядке байт (как их пишет ядро), адреса IPv4 в сетевом.
+//! порядке байт (как их пишет ядро), адреса IPv4 и IPv6 в сетевом. Разбор IPv6 (`*6`) живёт рядом с IPv4 в тех же
+//! подмодулях и не меняет ни одной функции IPv4.
 
 #![forbid(unsafe_code)]
 
@@ -44,16 +45,22 @@ mod bytes {
         let o: [u8; 4] = b.get(at..at.checked_add(4)?)?.try_into().ok()?;
         Some(Ipv4Addr::from(o))
     }
+
+    /// Адрес IPv6 в сетевом порядке байт.
+    pub(super) fn ipv6_at(b: &[u8], at: usize) -> Option<std::net::Ipv6Addr> {
+        let o: [u8; 16] = b.get(at..at.checked_add(16)?)?.try_into().ok()?;
+        Some(std::net::Ipv6Addr::from(o))
+    }
 }
 
 /// Linux rtnetlink: `nlmsghdr` + `rtmsg` + `rtattr` (linux/netlink.h, linux/rtnetlink.h).
 #[cfg(any(target_os = "linux", test))]
 mod netlink {
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     use super::AF_INET;
-    use super::bytes::{i32_at, ipv4_at, u16_at, u32_at};
-    use crate::discover::Route;
+    use super::bytes::{i32_at, ipv4_at, ipv6_at, u16_at, u32_at};
+    use crate::discover::{Route, RouteV6};
 
     /// `sizeof(struct nlmsghdr)`.
     pub(crate) const NLMSG_HDRLEN: usize = 16;
@@ -317,17 +324,256 @@ mod netlink {
             local,
         })
     }
+
+    // ------------------------------------------------------------------------------------------------ IPv6
+
+    /// `AF_INET6` Linux.
+    pub(crate) const AF_INET6_LINUX: u8 = 10;
+    pub(crate) const RTA_PREFSRC: u16 = 7;
+    pub(crate) const RTM_NEWADDR: u16 = 20;
+    pub(crate) const RTM_GETADDR: u16 = 22;
+    pub(crate) const IFA_ADDRESS: u16 = 1;
+    pub(crate) const IFA_LOCAL: u16 = 2;
+    pub(crate) const IFA_FLAGS: u16 = 8;
+    pub(crate) const IFA_F_DADFAILED: u32 = 0x08;
+    pub(crate) const IFA_F_DEPRECATED: u32 = 0x20;
+    pub(crate) const IFA_F_TENTATIVE: u32 = 0x40;
+    /// `sizeof(struct ifaddrmsg)`.
+    const IFADDRMSG_LEN: usize = 8;
+
+    /// Маршрут из `RTM_NEWROUTE` (только `AF_INET6`).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct NlRoute6 {
+        /// `rtm_type` (`RTN_*`).
+        pub kind: u8,
+        pub dst_len: u8,
+        /// `RTA_TABLE`, иначе `rtm_table`.
+        pub table: u32,
+        pub oif: Option<u32>,
+        pub gateway: Option<Ipv6Addr>,
+        /// `RTA_PREFSRC`: в ответе на lookup это источник, который выбрало ядро (`rt6_fill_node`,
+        /// `ip6_route_get_saddr`).
+        pub prefsrc: Option<Ipv6Addr>,
+        /// `RTA_PRIORITY` (метрика), 0 без атрибута.
+        pub priority: u32,
+    }
+
+    /// Запрос `RTM_GETROUTE` `AF_INET6`: с `dst` lookup одного адреса (`dst_len` 128, `RTA_DST` 16 байт), без него dump
+    /// всех маршрутов IPv6.
+    pub(crate) fn netlink_route_request6(seq: u32, dst: Option<Ipv6Addr>) -> Vec<u8> {
+        let attr_len = if dst.is_some() { RTA_HDRLEN + 16 } else { 0 };
+        let len = NLMSG_HDRLEN + RTMSG_LEN + attr_len;
+        let flags = match dst {
+            Some(_) => NLM_F_REQUEST,
+            None => NLM_F_REQUEST | NLM_F_DUMP,
+        };
+        let mut b = Vec::with_capacity(len);
+        b.extend((len as u32).to_ne_bytes());
+        b.extend(RTM_GETROUTE.to_ne_bytes());
+        b.extend(flags.to_ne_bytes());
+        b.extend(seq.to_ne_bytes());
+        b.extend(0u32.to_ne_bytes());
+        let rt = RtMsg {
+            family: AF_INET6_LINUX,
+            dst_len: if dst.is_some() { 128 } else { 0 },
+            ..RtMsg::default()
+        };
+        b.extend(rt.to_bytes());
+        if let Some(d) = dst {
+            b.extend(((RTA_HDRLEN + 16) as u16).to_ne_bytes());
+            b.extend(RTA_DST.to_ne_bytes());
+            b.extend(d.octets());
+        }
+        b
+    }
+
+    /// Атрибуты `rtattr` тела после заголовка длиной `hdr`: `(тип без флагов NLA, полезная нагрузка)`; длины проверены.
+    fn attrs(body: &[u8], hdr: usize) -> Result<Vec<(u16, &[u8])>, NlError> {
+        let mut out = Vec::new();
+        let mut off = hdr;
+        while off < body.len() {
+            let rest = &body[off..];
+            let (Some(len), Some(ty)) = (u16_at(rest, 0), u16_at(rest, 2)) else {
+                return Err(malformed("truncated rtattr"));
+            };
+            let len = usize::from(len);
+            if len < RTA_HDRLEN || len > rest.len() {
+                return Err(malformed("rta_len out of bounds"));
+            }
+            out.push((ty & NLA_TYPE_MASK, &rest[RTA_HDRLEN..len]));
+            off += align4(len).min(rest.len());
+        }
+        Ok(out)
+    }
+
+    /// Тело `RTM_NEWROUTE` `AF_INET6`; `None` для другого семейства.
+    fn parse_route6(body: &[u8]) -> Result<Option<NlRoute6>, NlError> {
+        let rt = RtMsg::from_bytes(body).ok_or_else(|| malformed("short rtmsg"))?;
+        if rt.family != AF_INET6_LINUX {
+            return Ok(None);
+        }
+        let mut r = NlRoute6 {
+            kind: rt.kind,
+            dst_len: rt.dst_len,
+            table: u32::from(rt.table),
+            oif: None,
+            gateway: None,
+            prefsrc: None,
+            priority: 0,
+        };
+        let short = || malformed("short route attribute");
+        for (ty, p) in attrs(body, RTMSG_LEN)? {
+            match ty {
+                RTA_OIF => r.oif = Some(u32_at(p, 0).ok_or_else(short)?),
+                RTA_GATEWAY => r.gateway = Some(ipv6_at(p, 0).ok_or_else(short)?),
+                RTA_PREFSRC => r.prefsrc = Some(ipv6_at(p, 0).ok_or_else(short)?),
+                RTA_PRIORITY => r.priority = u32_at(p, 0).ok_or_else(short)?,
+                RTA_TABLE => r.table = u32_at(p, 0).ok_or_else(short)?,
+                _ => {}
+            }
+        }
+        Ok(Some(r))
+    }
+
+    /// Все `RTM_NEWROUTE` `AF_INET6` датаграммы (правила [`parse_netlink_routes`]).
+    pub(crate) fn parse_netlink_routes6(buf: &[u8]) -> Result<Vec<NlRoute6>, NlError> {
+        let mut out = Vec::new();
+        for (ty, body) in split_messages(buf)? {
+            match ty {
+                NLMSG_DONE => break,
+                NLMSG_ERROR => {
+                    let code = i32_at(body, 0).ok_or_else(|| malformed("short nlmsgerr"))?;
+                    if code != 0 {
+                        return Err(NlError::Kernel(code.saturating_neg()));
+                    }
+                }
+                RTM_NEWROUTE => out.extend(parse_route6(body)?),
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
+    /// Маршруты IPv6 по умолчанию из dump: `RTN_UNICAST`, `dst_len` 0, таблица main, с `RTA_OIF` (маршрут с
+    /// `RTA_MULTIPATH` без `RTA_OIF` не берётся); по `priority`.
+    pub(crate) fn netlink_defaults6(routes: Vec<NlRoute6>) -> Vec<NlRoute6> {
+        let mut d: Vec<NlRoute6> = routes
+            .into_iter()
+            .filter(|r| {
+                r.kind == RTN_UNICAST
+                    && r.dst_len == 0
+                    && r.table == RT_TABLE_MAIN
+                    && r.oif.is_some()
+            })
+            .collect();
+        d.sort_by_key(|r| r.priority);
+        d
+    }
+
+    /// Ответ lookup IPv6 → [`RouteV6`] (правила [`route_from_nl`]); `RTA_PREFSRC` становится `source`.
+    pub(crate) fn route6_from_nl(
+        r: &NlRoute6,
+        ifname: impl FnOnce(u32) -> String,
+    ) -> Option<RouteV6> {
+        if matches!(r.kind, RTN_UNREACHABLE | RTN_BLACKHOLE | RTN_PROHIBIT) {
+            return None;
+        }
+        let oif = r.oif?;
+        let local = r.kind == RTN_LOCAL;
+        Some(RouteV6 {
+            ifindex: oif,
+            ifname: ifname(oif),
+            gateway: if local { None } else { r.gateway },
+            source: r.prefsrc,
+            local,
+        })
+    }
+
+    /// Адрес IPv6 интерфейса из `RTM_NEWADDR`.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct NlAddr6 {
+        pub index: u32,
+        pub addr: Ipv6Addr,
+        /// `IFA_FLAGS`, иначе 8-битный `ifa_flags`.
+        pub flags: u32,
+    }
+
+    /// Dump `RTM_GETADDR` всех адресов `AF_INET6`.
+    pub(crate) fn netlink_addr_request6(seq: u32) -> Vec<u8> {
+        let len = NLMSG_HDRLEN + IFADDRMSG_LEN;
+        let mut b = Vec::with_capacity(len);
+        b.extend((len as u32).to_ne_bytes());
+        b.extend(RTM_GETADDR.to_ne_bytes());
+        b.extend((NLM_F_REQUEST | NLM_F_DUMP).to_ne_bytes());
+        b.extend(seq.to_ne_bytes());
+        b.extend(0u32.to_ne_bytes());
+        b.extend([AF_INET6_LINUX, 0, 0, 0]);
+        b.extend(0u32.to_ne_bytes());
+        b
+    }
+
+    /// Все `RTM_NEWADDR` `AF_INET6` датаграммы: `IFA_LOCAL`, иначе `IFA_ADDRESS` (у IPv6 обычно только он).
+    pub(crate) fn parse_netlink_addrs6(buf: &[u8]) -> Result<Vec<NlAddr6>, NlError> {
+        let mut out = Vec::new();
+        for (ty, body) in split_messages(buf)? {
+            match ty {
+                NLMSG_DONE => break,
+                NLMSG_ERROR => {
+                    let code = i32_at(body, 0).ok_or_else(|| malformed("short nlmsgerr"))?;
+                    if code != 0 {
+                        return Err(NlError::Kernel(code.saturating_neg()));
+                    }
+                }
+                RTM_NEWADDR => {
+                    let hdr = body
+                        .get(..IFADDRMSG_LEN)
+                        .ok_or_else(|| malformed("short ifaddrmsg"))?;
+                    if hdr[0] != AF_INET6_LINUX {
+                        continue;
+                    }
+                    let index = u32_at(hdr, 4).ok_or_else(|| malformed("short ifaddrmsg"))?;
+                    let mut flags = u32::from(hdr[2]);
+                    let (mut address, mut local) = (None, None);
+                    let short = || malformed("short address attribute");
+                    for (ty, p) in attrs(body, IFADDRMSG_LEN)? {
+                        match ty {
+                            IFA_ADDRESS => address = Some(ipv6_at(p, 0).ok_or_else(short)?),
+                            IFA_LOCAL => local = Some(ipv6_at(p, 0).ok_or_else(short)?),
+                            IFA_FLAGS => flags = u32_at(p, 0).ok_or_else(short)?,
+                            _ => {}
+                        }
+                    }
+                    if let Some(addr) = local.or(address) {
+                        out.push(NlAddr6 { index, addr, flags });
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
+    /// Пригодные адреса интерфейса `index` в порядке ядра: без tentative (DAD ещё идёт) и dadfailed; deprecated после
+    /// остальных.
+    pub(crate) fn usable_addrs6(addrs: &[NlAddr6], index: u32) -> Vec<Ipv6Addr> {
+        let mut v: Vec<&NlAddr6> = addrs
+            .iter()
+            .filter(|a| a.index == index && a.flags & (IFA_F_TENTATIVE | IFA_F_DADFAILED) == 0)
+            .collect();
+        v.sort_by_key(|a| a.flags & IFA_F_DEPRECATED != 0);
+        v.into_iter().map(|a| a.addr).collect()
+    }
 }
 
 /// Darwin route socket: `rt_msghdr` + массив `sockaddr`, каждый выровнен `ROUNDUP(sa_len)` до 4 байт
 /// (C `rawsock-getroute.c:21–22`, XNU `ROUNDUP32`).
 #[cfg(any(target_os = "macos", test))]
 mod rtsock {
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     use super::AF_INET;
-    use super::bytes::{i32_at, ipv4_at, u16_at};
-    use crate::discover::{Iface, Route};
+    use super::bytes::{i32_at, ipv4_at, ipv6_at, u16_at};
+    use crate::discover::{Iface, Route, RouteV6};
 
     /// Loopback Darwin: через него ядро доставляет пакеты на собственные адреса хоста.
     pub(crate) const LO0: &str = "lo0";
@@ -373,6 +619,8 @@ mod rtsock {
         pub ifindex: u32,
         /// `RTAX_GATEWAY` как `sockaddr_in`.
         pub gateway_in: Option<Ipv4Addr>,
+        /// `RTAX_GATEWAY` как `sockaddr_in6` (зона KAME очищена, [`in6_from_sockaddr`]).
+        pub gateway_in6: Option<Ipv6Addr>,
         /// `RTAX_GATEWAY` как `sockaddr_dl`: on-link.
         pub gateway_is_link: bool,
     }
@@ -450,6 +698,7 @@ mod rtsock {
             ifp: None,
             ifindex: u32::from(u16_at(buf, OFF_INDEX).ok_or("short rt_msghdr")?),
             gateway_in: None,
+            gateway_in6: None,
             gateway_is_link: false,
         };
         let mut off = RT_MSGHDR_LEN;
@@ -466,6 +715,7 @@ mod rtsock {
             let family = sa.get(1).copied();
             match (i, family) {
                 (RTAX_GATEWAY, Some(AF_INET)) => reply.gateway_in = ipv4_at(sa, 4),
+                (RTAX_GATEWAY, Some(AF_INET6_DARWIN)) => reply.gateway_in6 = in6_from_sockaddr(sa),
                 (RTAX_GATEWAY, Some(AF_LINK)) => reply.gateway_is_link = true,
                 (RTAX_IFP, Some(AF_LINK)) if sa.len() >= SDL_DATA => {
                     let index = u16_at(sa, 2).unwrap_or(0);
@@ -543,14 +793,110 @@ mod rtsock {
             .into_iter()
             .collect()
     }
+
+    // ------------------------------------------------------------------------------------------------ IPv6
+
+    /// `AF_INET6` Darwin.
+    pub(crate) const AF_INET6_DARWIN: u8 = 30;
+    /// `sizeof(struct sockaddr_in6)`.
+    const SIN6_LEN: usize = 28;
+    /// `offsetof(struct sockaddr_in6, sin6_addr)`.
+    const SIN6_ADDR: usize = 8;
+
+    /// Адрес `sockaddr_in6` Darwin (`sin6_len`, `sin6_family` 30, порт, flowinfo, адрес, scope id). Ядро KAME хранит
+    /// индекс зоны адресов link-local (`fe80::/10`) и multicast с зоной интерфейса или канала (`ff01::/16`,
+    /// `ff02::/16`) прямо в `s6_addr[2..4]` и так отдаёт их в route socket (измерено на macOS 27: шлюз по умолчанию
+    /// `fe80:e::…`); здесь эти два байта обнуляются, иначе зона ушла бы в NDP-кадр и в `[+]`. `None`: не
+    /// `sockaddr_in6` или запись короче адреса.
+    pub(crate) fn in6_from_sockaddr(sa: &[u8]) -> Option<Ipv6Addr> {
+        if sa.get(1) != Some(&AF_INET6_DARWIN) {
+            return None;
+        }
+        let mut b = ipv6_at(sa, SIN6_ADDR)?.octets();
+        let link_local = b[0] == 0xfe && b[1] & 0xc0 == 0x80;
+        let scoped_multicast = b[0] == 0xff && matches!(b[1] & 0x0f, 1 | 2);
+        if link_local || scoped_multicast {
+            b[2] = 0;
+            b[3] = 0;
+        }
+        Some(Ipv6Addr::from(b))
+    }
+
+    /// `RTM_GET` для IPv6 `dst` с `RTA_DST | RTA_IFP`: 92 + 28 байт (`sockaddr_in6`, scope id 0).
+    pub(crate) fn rt_get_request6(seq: i32, pid: i32, dst: Ipv6Addr) -> Vec<u8> {
+        let mut b = vec![0u8; RT_MSGHDR_LEN + SIN6_LEN];
+        let len = b.len() as u16;
+        b[OFF_MSGLEN..OFF_MSGLEN + 2].copy_from_slice(&len.to_ne_bytes());
+        b[OFF_VERSION] = RTM_VERSION;
+        b[OFF_TYPE] = RTM_GET;
+        b[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&RTF_UP.to_ne_bytes());
+        b[OFF_ADDRS..OFF_ADDRS + 4].copy_from_slice(&(RTA_DST_BIT | RTA_IFP_BIT).to_ne_bytes());
+        b[OFF_PID..OFF_PID + 4].copy_from_slice(&pid.to_ne_bytes());
+        b[OFF_SEQ..OFF_SEQ + 4].copy_from_slice(&seq.to_ne_bytes());
+        let sin6 = &mut b[RT_MSGHDR_LEN..];
+        sin6[0] = SIN6_LEN as u8;
+        sin6[1] = AF_INET6_DARWIN;
+        sin6[SIN6_ADDR..SIN6_ADDR + 16].copy_from_slice(&dst.octets());
+        b
+    }
+
+    /// Ответ IPv6 → [`RouteV6`] (правила [`route_from_rt`]); шлюз только `sockaddr_in6` при `RTF_GATEWAY`.
+    pub(crate) fn route6_from_rt(r: &RtReply) -> Option<RouteV6> {
+        if r.flags & (RTF_REJECT | RTF_BLACKHOLE) != 0 && r.flags & RTF_LLINFO == 0 {
+            return None;
+        }
+        let ifname = r.ifp.clone().unwrap_or_default();
+        let local = r.flags & RTF_LOCAL != 0 || ifname == LO0;
+        let via_gateway = r.flags & RTF_GATEWAY != 0 && !r.gateway_is_link;
+        Some(RouteV6 {
+            ifindex: r.ifindex,
+            ifname,
+            gateway: if local || !via_gateway {
+                None
+            } else {
+                r.gateway_in6
+            },
+            source: None,
+            local,
+        })
+    }
+
+    /// `RouteTable::lookup_v6` Darwin: `dst`, равный IPv6-адресу любого интерфейса (`own`), это адрес хоста через
+    /// `lo0` (индекс `lo0_index`), как у [`lookup_from_rt`]; иначе [`route6_from_rt`].
+    pub(crate) fn lookup6_from_rt(
+        reply: Option<&RtReply>,
+        dst: Ipv6Addr,
+        own: &[Ipv6Addr],
+        lo0_index: u32,
+    ) -> Option<RouteV6> {
+        if own.contains(&dst) {
+            return Some(RouteV6 {
+                ifindex: lo0_index,
+                ifname: LO0.into(),
+                gateway: None,
+                source: None,
+                local: true,
+            });
+        }
+        reply.and_then(route6_from_rt)
+    }
+
+    /// `RouteTable::default_routes_v6` Darwin: ответ `RTM_GET ::` → один маршрут или пусто.
+    pub(crate) fn defaults6_from_rt(reply: Option<&RtReply>) -> Vec<RouteV6> {
+        reply
+            .and_then(route6_from_rt)
+            .filter(|r| !r.local)
+            .into_iter()
+            .collect()
+    }
 }
 
 /// Windows IP Helper: строки `MIB_IPFORWARD_ROW2` и адаптеры `IP_ADAPTER_ADDRESSES_LH`, уже скопированные `windows::sys`.
 #[cfg(any(windows, test))]
 mod iphlp {
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
-    use crate::discover::{Iface, Route};
+    use crate::discover::{Iface, Route, RouteV6};
 
     pub(crate) const IF_TYPE_ETHERNET_CSMACD: u32 = 6;
     pub(crate) const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
@@ -679,8 +1025,120 @@ mod iphlp {
             })
             .collect()
     }
+
+    // ------------------------------------------------------------------------------------------------ IPv6
+
+    /// `NL_DAD_STATE` (`nldef.h`): адрес ещё проверяется (tentative), дубликат, устаревший, предпочтительный.
+    pub(crate) const WIN_DAD_TENTATIVE: i32 = 1;
+    pub(crate) const WIN_DAD_DUPLICATE: i32 = 2;
+    pub(crate) const WIN_DAD_DEPRECATED: i32 = 3;
+    pub(crate) const WIN_DAD_PREFERRED: i32 = 4;
+
+    /// Строка таблицы маршрутов IPv6 (поля как у [`Fwd`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct Fwd6 {
+        pub ifindex: u32,
+        pub prefix_len: u8,
+        /// `::` это on-link.
+        pub next_hop: Ipv6Addr,
+        pub metric: u32,
+        pub mib_loopback: bool,
+        pub loopback_if: bool,
+    }
+
+    /// Строки IPv6 через интерфейс IfType 24 (software loopback) получают `loopback_if`.
+    pub(crate) fn mark_loopback6(rows: &mut [Fwd6], adapters: &[WinAdapter]) {
+        for row in rows {
+            if adapters
+                .iter()
+                .any(|a| a.if_index == row.ifindex && a.if_type == IF_TYPE_SOFTWARE_LOOPBACK)
+            {
+                row.loopback_if = true;
+            }
+        }
+    }
+
+    /// `GetBestRoute2` `AF_INET6` → [`RouteV6`]: `local`, если `dst` это адрес хоста (`own`) или маршрут через
+    /// software loopback; шлюз `next_hop`, если он не `::`; `source` это `BestSourceAddress`.
+    pub(crate) fn route6_from_best(
+        row: &Fwd6,
+        source: Option<Ipv6Addr>,
+        dst: Ipv6Addr,
+        own: &[Ipv6Addr],
+        ifaces: &[Iface],
+    ) -> RouteV6 {
+        let local = row.loopback_if || own.contains(&dst);
+        RouteV6 {
+            ifindex: row.ifindex,
+            ifname: name_of(row.ifindex, ifaces),
+            gateway: (!local && !row.next_hop.is_unspecified()).then_some(row.next_hop),
+            source,
+            local,
+        }
+    }
+
+    /// `RouteTable::lookup_v6` Windows: [`mark_loopback6`], затем [`route6_from_best`].
+    pub(crate) fn lookup6_from_best(
+        row: Fwd6,
+        source: Option<Ipv6Addr>,
+        dst: Ipv6Addr,
+        own: &[Ipv6Addr],
+        adapters: &[WinAdapter],
+    ) -> RouteV6 {
+        let mut rows = [row];
+        mark_loopback6(&mut rows, adapters);
+        let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
+        route6_from_best(&rows[0], source, dst, own, &ifaces)
+    }
+
+    /// Маршруты IPv6 по умолчанию: префикс 0, не loopback, по `metric`.
+    pub(crate) fn defaults6_from_table(rows: &[Fwd6], ifaces: &[Iface]) -> Vec<RouteV6> {
+        let mut d: Vec<&Fwd6> = rows
+            .iter()
+            .filter(|r| r.prefix_len == 0 && !r.mib_loopback && !r.loopback_if)
+            .collect();
+        d.sort_by_key(|r| r.metric);
+        d.into_iter()
+            .map(|r| RouteV6 {
+                ifindex: r.ifindex,
+                ifname: name_of(r.ifindex, ifaces),
+                gateway: (!r.next_hop.is_unspecified()).then_some(r.next_hop),
+                source: None,
+                local: false,
+            })
+            .collect()
+    }
+
+    /// `RouteTable::default_routes_v6` Windows: [`mark_loopback6`], затем [`defaults6_from_table`].
+    pub(crate) fn defaults6_from_rows(
+        mut rows: Vec<Fwd6>,
+        adapters: &[WinAdapter],
+    ) -> Vec<RouteV6> {
+        mark_loopback6(&mut rows, adapters);
+        let ifaces: Vec<Iface> = adapters.iter().map(iface_from_adapter).collect();
+        defaults6_from_table(&rows, &ifaces)
+    }
+
+    /// Адреса `GetAdaptersAddresses(AF_INET6)` одного адаптера `(адрес, DadState)` → пригодные в порядке ОС:
+    /// preferred, затем deprecated; tentative, duplicate и invalid отбрасываются.
+    pub(crate) fn usable_win_addrs6(entries: &[(Ipv6Addr, i32)]) -> Vec<Ipv6Addr> {
+        let usable = |state: i32| match state {
+            WIN_DAD_PREFERRED | WIN_DAD_DEPRECATED => true,
+            // DAD ещё идёт или адрес занят другим узлом: источником быть не может.
+            WIN_DAD_TENTATIVE | WIN_DAD_DUPLICATE => false,
+            // `IpDadStateInvalid` (0) и неизвестные значения.
+            _ => false,
+        };
+        let mut v: Vec<&(Ipv6Addr, i32)> = entries.iter().filter(|(_, s)| usable(*s)).collect();
+        v.sort_by_key(|(_, s)| *s == WIN_DAD_DEPRECATED);
+        v.into_iter().map(|(a, _)| *a).collect()
+    }
 }
 
 #[cfg(test)]
 #[path = "route_parse_tests.rs"]
 mod route_parse_tests;
+
+#[cfg(test)]
+#[path = "route_parse6_tests.rs"]
+mod route_parse6_tests;

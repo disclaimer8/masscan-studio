@@ -68,17 +68,16 @@ fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// R7/R3: цели IPv6 принимают только `-sL`, `--echo`/`--echo-all`, `--iflist` (адреса он не читает) и
-/// `--offline` без `--packet-trace` (ничего не строит и не шлёт), а `--readscan` читает файл записей с фильтром
-/// IPv6 (задача 6). Живой скан и `--packet-trace` отказывают до обнаружения адаптера и до кадра: принять цель и не просканировать её это
-/// молчаливая потеря (временно, пока IPv6 не дойдёт до живого пути). Порт не TCP (`U:`, `S:`, `I:`, `O:`, `--arp`)
-/// при цели IPv6 получает своё сообщение: C шлёт их по IPv6, здесь это отложено.
-fn refuse_ipv6_outside_listing(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
+/// R3: поверх IPv6 только TCP SYN. Живой скан и `--offline --packet-trace` с целью IPv6 и портом не TCP (`U:`, `S:`,
+/// `I:`, `O:`, `--arp`) отказывают до обнаружения адаптера и до кадра (C шлёт их и по IPv6; здесь отложено). `-sL`,
+/// `--echo`/`--echo-all`, `--iflist`, `--readscan` и `--offline` без трассировки ничего не строят и принимают любые
+/// порты. TCP поверх IPv6 идёт живым путём и трассировкой (R7 снят в T5); план CLI повторяет эту проверку
+/// (`PlanError::Ipv6PortNotTcp`).
+fn refuse_ipv6_non_tcp(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
     if !cfg.targets.has_ipv6_targets() {
         return Ok(());
     }
     let listing = cli.list || cli.echo || cli.echo_all || cli.iflist;
-    // `--readscan` только читает файл и ничего не шлёт: IPv6-фильтр записей работает (`in-binary.c:254`).
     if listing || (cli.offline && !cli.packet_trace) || !cli.readscan.is_empty() {
         return Ok(());
     }
@@ -91,16 +90,12 @@ fn refuse_ipv6_outside_listing(cli: &Cli, cfg: &ScanConfig) -> Result<(), String
     if non_tcp {
         return Err(
             "IPv6 targets support only TCP ports: U:, S:, I:, O: and --arp ports cannot be \
-             scanned over IPv6 yet (IPv6 targets are accepted only for -sL, --echo and --offline \
-             without --packet-trace)"
+             scanned over IPv6 yet (they are accepted with IPv6 targets only for -sL, --echo and \
+             --offline without --packet-trace)"
                 .into(),
         );
     }
-    Err(
-        "IPv6 targets cannot be scanned yet: they are accepted only for -sL, --echo and --offline \
-         (without --packet-trace)"
-            .into(),
-    )
+    Ok(())
 }
 
 /// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) и отказ открытия файла
@@ -228,7 +223,7 @@ pub fn run(
     }
     let cfg = cli.to_config()?;
     let full = cli.resolve()?;
-    refuse_ipv6_outside_listing(cli, &cfg)?;
+    refuse_ipv6_non_tcp(cli, &cfg)?;
     // Р2, main-conf.c:3625-3627: в конце разбора командной строки, для любой операции, `--shard` с `OF > 1` и seed 0
     // (не задан ни в argv, ни в файле) печатает предупреждение: каждый процесс шарда взял бы свою энтропию.
     if cfg.shard.of > 1 && cfg.seed == 0 {
@@ -1876,47 +1871,115 @@ mod tests {
         run_args(args).expect_err(&format!("{args:?} must be refused"))
     }
 
-    /// R7: a live scan with any IPv6 target is refused up front (before the adapter is opened: the
-    /// fake backend panics on `open`), also when IPv4 targets come along.
+    /// T5 (R7 lifted): a live scan with IPv6 targets goes to IPv6 detection. The library fake has no IPv6 route,
+    /// so it ends in the C-form refusal of a missing interface (exit 1), never in the old R7 text, and before any
+    /// adapter is opened (the fake backend panics on `open`). A mixed scan detects IPv4 first, then IPv6.
     #[test]
-    fn live_scan_refuses_any_ipv6_target() {
+    fn live_scan_with_ipv6_targets_reaches_ipv6_detection() {
         for targets in [&["2001:db8::10"][..], &["10.0.0.0/30", "2001:db8::10"][..]] {
             let mut a = vec!["rmasscan"];
             a.extend_from_slice(targets);
             a.extend_from_slice(&["-p80", "--seed", "1"]);
             let e = ipv6_refusal(&a);
-            assert!(e.contains("IPv6 targets cannot be scanned yet"), "{e}");
             assert!(
-                e.contains("-sL") && e.contains("--echo") && e.contains("--offline"),
-                "{e}"
+                e.starts_with("[-] FAIL: could not determine default interface"),
+                "{targets:?}: {e}"
             );
+            assert!(!e.contains("cannot be scanned yet"), "{e}");
         }
-        // the entropy-seed path takes the same exit
         let e = ipv6_refusal(&["rmasscan", "2001:db8::10", "-p80"]);
-        assert!(e.contains("IPv6 targets cannot be scanned yet"), "{e}");
+        assert!(
+            e.starts_with("[-] FAIL: could not determine default interface"),
+            "{e}"
+        );
     }
 
-    /// R7: `--offline --packet-trace` refuses IPv6 targets too, even when IPv4 targets are
-    /// there and the adapter options are complete: no frame for the IPv4 half.
+    /// The trace of an IPv6 SYN: `main-ptrace.c:37-41, 97` formats `[ipv6address_fmt]:port` (C's first-zero-run
+    /// compression) in the same 21-wide field.
+    const TRACE6: [&str; 13] = [
+        "rmasscan",
+        "--offline",
+        "--packet-trace",
+        "2001:db8::/126",
+        "-p80,443",
+        "--seed",
+        "5",
+        "--adapter-ip",
+        "fd00:0:0:5::1",
+        "--adapter-mac",
+        "00-11-22-33-44-55",
+        "--source-port=40000-40003",
+        "--rate=1000000",
+    ];
+
+    /// T5: `--offline --packet-trace` traces IPv6 targets (R7 lifted): hermetic with `--adapter-ip <IPv6>`,
+    /// `--adapter-mac` and `--source-port`, one SYN per target and port, from the first source port only (main.c:346),
+    /// in transmit order; a mixed scan traces both families (IPv6 on the low indices of `range`).
     #[test]
-    fn packet_trace_refuses_any_ipv6_target() {
-        for v6 in ["2001:db8::10", "2001:db8::/126"] {
-            let mut a = trace_args(&[v6]);
-            let e = ipv6_refusal(&a);
-            assert!(
-                e.contains("IPv6 targets cannot be scanned yet"),
-                "{v6}: {e}"
-            );
-            // IPv6 alone
-            a[3] = v6;
-            let e = ipv6_refusal(&a);
-            assert!(
-                e.contains("IPv6 targets cannot be scanned yet"),
-                "{v6}: {e}"
-            );
+    fn packet_trace_traces_ipv6_targets() {
+        let out = run_args(&TRACE6).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 8, "{out}");
+        let mut dsts = Vec::new();
+        for l in &lines {
+            assert!(l.starts_with("SENT ("), "{l}");
+            let (_, rest) = l
+                .split_once(") TCP  [fd00::5:0:0:0:1]:40000 ")
+                .unwrap_or_else(|| panic!("{l}"));
+            assert!(rest.starts_with("> [2001:db8::"), "{l}");
+            assert!(l.ends_with(" SYN"), "{l}");
+            dsts.push(rest.split(' ').nth(1).unwrap().to_string());
         }
-        // without an IPv6 target the same command still traces
-        assert_eq!(run_args(&trace_args(&[])).unwrap().lines().count(), 8);
+        dsts.sort();
+        assert_eq!(
+            dsts,
+            [
+                "[2001:db8::1]:443",
+                "[2001:db8::1]:80",
+                "[2001:db8::2]:443",
+                "[2001:db8::2]:80",
+                "[2001:db8::3]:443",
+                "[2001:db8::3]:80",
+                "[2001:db8::]:443",
+                "[2001:db8::]:80",
+            ]
+        );
+        // Mixed: `--adapter-ip` for IPv4 and `--adapter-ip[0]` for IPv6 (or a config file), both families traced.
+        let mut a = trace_args(&["--adapter-ip[0]=fd00:0:0:5::1"]);
+        a.insert(3, "2001:db8::/127");
+        let out = run_args(&a).unwrap();
+        let v6 = out
+            .lines()
+            .filter(|l| l.contains("TCP  [fd00::5:0:0:0:1]"))
+            .count();
+        let v4 = out
+            .lines()
+            .filter(|l| l.contains("TCP  [10.255.0.1]"))
+            .count();
+        assert_eq!((v6, v4, out.lines().count()), (4, 8, 12), "{out}");
+    }
+
+    /// Task 2 minor: an IPv6-only `--offline` with autodetection takes the IPv6 path (no IPv4 "no unicast target"
+    /// error); the library fake knows no IPv6 route.
+    #[test]
+    fn offline_ipv6_only_detects_through_the_ipv6_path() {
+        let e = ipv6_refusal(&[
+            "rmasscan",
+            "--offline",
+            "2001:db8::10",
+            "-p80",
+            "--seed",
+            "1",
+        ]);
+        assert!(
+            e.starts_with("[-] FAIL: could not determine default interface"),
+            "{e}"
+        );
+        let e = ipv6_refusal(&["rmasscan", "--offline", "ff02::1", "-p80", "--seed", "1"]);
+        assert!(
+            e.starts_with("[-] FAIL: no unicast IPv6 target addresses to route to"),
+            "{e}"
+        );
     }
 
     /// R3: a non-TCP port with an IPv6 target gets its own message on live and `--packet-trace`.
@@ -1955,19 +2018,21 @@ mod tests {
         );
     }
 
-    /// R7: `--offline` without `--packet-trace` builds nothing, so IPv6 targets are accepted there.
+    /// `--offline` without `--packet-trace` builds nothing, so IPv6 targets are accepted there.
     #[test]
     fn offline_without_packet_trace_accepts_ipv6_targets() {
+        // Hermetic for IPv6 needs the IPv6 source too (`--adapter-ip[0]`), as the IPv4 half needs `--adapter-ip`.
         let mut a = trace_without(&[]);
         a.retain(|x| *x != "--packet-trace");
         let t = a.iter().position(|x| *x == "10.0.0.0/30").unwrap();
         a[t] = "2001:db8::10";
+        a.push("--adapter-ip[0]=fd00::1");
         assert_eq!(run_args(&a).unwrap(), "");
     }
 
-    /// Task 6: `--readscan` reads types 10/11 and takes IPv6 target filters (`in-binary.c:228-276`); only live and
-    /// `--packet-trace` stay refused (R7). `--range` with IPv6 ranges and an IPv4 range keeps the IPv6 records of
-    /// the IPv6 ranges (C: the address test runs when `count_ipv4s` is non-zero, `in-binary.c:254`).
+    /// Task 6: `--readscan` reads types 10/11 and takes IPv6 target filters (`in-binary.c:228-276`). `--range` with
+    /// IPv6 ranges and an IPv4 range keeps the IPv6 records of the IPv6 ranges (C: the address test runs when
+    /// `count_ipv4s` is non-zero, `in-binary.c:254`).
     #[test]
     fn readscan_accepts_an_ipv6_filter() {
         let scratch = Scratch::new();
@@ -2022,9 +2087,9 @@ mod tests {
             "{e}"
         );
         assert_eq!(log, "");
-        // A live scan of the same targets is still refused.
+        // A live scan of the same targets now goes to IPv6 detection (R7 lifted); the 63-bit limit refuses it first.
         let e = ipv6_refusal(&["rmasscan", "2001:db8::/32", "-p80", "--seed", "1"]);
-        assert!(e.contains("IPv6 targets cannot be scanned yet"), "{e}");
+        assert!(e.contains("scan range too large"), "{e}");
     }
 
     /// `-iL` still takes IPv4 only (its own grammar, main-conf.c:2825-2836): an IPv6 entry is

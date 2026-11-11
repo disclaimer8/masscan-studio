@@ -50,13 +50,13 @@ const CERTS_REFUSAL: &str =
     version,
     about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, masscan output formats, --readscan, --offline, -sL, --echo and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout). With a file format stdout is silent\nunless --interactive is given.\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. Detection, --offline and --iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
+    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout). With a file format stdout is silent\nunless --interactive is given.\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
     #[arg(
         value_name = "TARGET",
-        help = "Targets: IPv4 address, CIDR, a.b.c.d-e.f.g.h, or comma-separated list"
+        help = "Targets: IPv4 or IPv6 address, CIDR, a.b.c.d-e.f.g.h, or comma-separated list"
     )]
     pub targets: Vec<String>,
     // `--range` (main-conf.c:2729): то же, что позиционная цель.
@@ -221,12 +221,14 @@ pub struct Cli {
         help = "File of targets: addresses, CIDRs and ranges separated by whitespace or commas, # starts a comment (alias: -iL)"
     )]
     pub includefile: Vec<String>,
-    // main-conf.c:2486-2550: `source-ip` - синоним `adapter-ip`; диапазон `A-B` степени двойки (Р6).
+    // main-conf.c:2486-2550: `source-ip` - синоним `adapter-ip`; диапазон `A-B` степени двойки (Р6); адрес IPv6
+    // (main-conf.c:2508-2512) идёт в `nics[0].adapter_ipv6`. Одно значение на командную строку: второе семейство
+    // задаёт `--adapter-ip[0]` или файл `-c`.
     #[arg(
         long = "adapter-ip",
         alias = "source-ip",
         value_name = "IP",
-        help = "Source IPv4 address, or a range A-B / CIDR of 1, 2, 4, 8, ... addresses (alias: --source-ip)"
+        help = "Source IPv4 address, or a range A-B / CIDR of 1, 2, 4, 8, ... addresses, or the source IPv6 address (alias: --source-ip; the other family: --adapter-ip[0])"
     )]
     pub adapter_ip: Option<String>,
     // Р9: `--ttl` (main-conf.c:3003-3009), 1..=255; 0 и >= 256 отклоняются.
@@ -303,19 +305,28 @@ pub struct Cli {
         help = "Source MAC address (alias: --source-mac)"
     )]
     pub adapter_mac: Option<String>,
-    // main-conf.c:2626-2641: ровно один IPv4.
+    // main-conf.c:2626-2641: ровно один IPv4. Адрес IPv6 (у C ключа нет) это следующий хоп IPv6 для NDP (R11).
     #[arg(
         long = "router-ip",
         value_name = "IP",
-        help = "Router (next hop) IPv4 address to resolve with ARP (single address; default: route gateway)"
+        help = "Router (next hop) IPv4 address to resolve with ARP, or IPv6 address to resolve with NDP (single address; default: route gateway)"
     )]
     pub router_ip: Option<String>,
+    // main-conf.c:2587-2600: `--router-mac` ставит MAC шлюза и IPv4, и IPv6.
     #[arg(
         long = "router-mac",
         value_name = "MAC",
-        help = "Router (next hop) MAC address: skips ARP (ignored by --offline, which uses 66-55-44-33-22-11)"
+        help = "Router (next hop) MAC address for IPv4 and IPv6: skips ARP and NDP (ignored by --offline, which uses 66-55-44-33-22-11)"
     )]
     pub router_mac: Option<String>,
+    // main-conf.c:2614-2624: `router-mac-ipv6` / `router-ipv6` (синоним C, тоже MAC): только MAC шлюза IPv6.
+    #[arg(
+        long = "router-mac-ipv6",
+        alias = "router-ipv6",
+        value_name = "MAC",
+        help = "Router (next hop) MAC address for IPv6 only: skips NDP (alias: --router-ipv6)"
+    )]
+    pub router_mac_ipv6: Option<String>,
     // Одиночный порт или диапазон степени двойки (main-conf.c:2523).
     #[arg(
         long = "source-port",
@@ -567,7 +578,7 @@ fn port_default(udp: bool, sctp: bool) -> u32 {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 27] = [
+const POSITIONAL_KEYS: [&str; 28] = [
     "pcap",
     "nmap_payloads",
     "pcap_payloads",
@@ -586,6 +597,7 @@ const POSITIONAL_KEYS: [&str; 27] = [
     "adapter_mac",
     "router_ip",
     "router_mac",
+    "router_mac_ipv6",
     "source_port",
     "interface",
     "ttl",
@@ -598,11 +610,12 @@ const POSITIONAL_KEYS: [&str; 27] = [
 ];
 
 /// Одиночные опции адаптера, которые идут по порядку `argv` вместе с `--adapter[i]` и т.п.
-const NIC_PLAIN: [&str; 6] = [
+const NIC_PLAIN: [&str; 7] = [
     "adapter_ip",
     "adapter_mac",
     "router_ip",
     "router_mac",
+    "router_mac_ipv6",
     "source_port",
     "interface",
 ];
@@ -1444,9 +1457,14 @@ impl Cli {
                 };
                 let bad = || {
                     format!(
-                        "bad --adapter-ip {ip:?}: expected an IPv4 address or a range A-B of a power-of-two width"
+                        "bad --adapter-ip {ip:?}: expected an IPv4 address or a range A-B of a power-of-two width, or an IPv6 address"
                     )
                 };
+                if ip.contains(':') {
+                    // main-conf.c:2508-2512: адрес IPv6 источника живёт только в `nics[0]` (ключ его заводит).
+                    apply_core_kv(cfg, "adapter-ip", ip).map_err(|_| bad())?;
+                    return Ok(());
+                }
                 let r = range_parse_ipv4(ip).map_err(|_| bad())?;
                 if r.begin == r.end {
                     cfg.adapter_ip = Some(r.begin);
@@ -1469,9 +1487,16 @@ impl Cli {
                 let Some(ip) = &self.router_ip else {
                     return Ok(());
                 };
-                let ip: Ipv4Addr = ip
-                    .parse()
-                    .map_err(|_| format!("bad --router-ip {ip:?}: expected one IPv4 address"))?;
+                if ip.contains(':') {
+                    // Следующий хоп IPv6 для NDP (R11) живёт только в `nics[0]`.
+                    apply_core_kv(cfg, "router-ip", ip).map_err(|_| {
+                        format!("bad --router-ip {ip:?}: expected one IPv4 or IPv6 address")
+                    })?;
+                    return Ok(());
+                }
+                let ip: Ipv4Addr = ip.parse().map_err(|_| {
+                    format!("bad --router-ip {ip:?}: expected one IPv4 or IPv6 address")
+                })?;
                 let ip = u32::from(ip);
                 cfg.router_ip = Some(ip);
                 set_nic0(cfg, |n| n.router_ip = Some(ip));
@@ -1485,6 +1510,14 @@ impl Cli {
                 set_nic0(cfg, |n| {
                     (n.router_mac_ipv4, n.router_mac_ipv6) = (Some(mac), Some(mac));
                 });
+            }
+            "router_mac_ipv6" => {
+                let Some(m) = &self.router_mac_ipv6 else {
+                    return Ok(());
+                };
+                // Ключ C `router-mac-ipv6` (main-conf.c:2614-2624): MAC шлюза IPv6 в `nics[0]`, IPv4 не трогается.
+                parse_mac(m).map_err(|e| e.to_string())?;
+                apply_core_kv(cfg, "router-mac-ipv6", m).map_err(|e| e.to_string())?;
             }
             "source_port" => {
                 let Some(p) = &self.source_port else {
@@ -2122,12 +2155,76 @@ mod tests {
             .to_config()
             .unwrap();
         assert_eq!(cfg.router_ip, Some(0xc612_0002));
-        for bad in ["198.18.0.0/24", "198.18.0.2-198.18.0.3", "x", "", "::1"] {
+        for bad in [
+            "198.18.0.0/24",
+            "198.18.0.2-198.18.0.3",
+            "x",
+            "",
+            "fe80::/64",
+            "fe80::1-fe80::2",
+        ] {
             let cli = parse(&["--router-ip", bad]).unwrap();
             let e = cli.to_config().unwrap_err();
             assert!(e.contains("--router-ip"), "{bad}: {e}");
         }
         assert_eq!(parse(&[]).unwrap().to_config().unwrap().router_ip, None);
+        // T5: one IPv6 address is the IPv6 next hop for NDP, kept in `nics[0]`; the IPv4 field stays unset.
+        let cfg = parse(&["--router-ip", "fe80::1"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.router_ip, None);
+        assert_eq!(cfg.nics[0].router_ipv6, Some(0xfe80 << 112 | 1));
+    }
+
+    /// T5: `--router-mac-ipv6` (alias `--router-ipv6`, both MACs as in C main-conf.c:2614-2624) sets only the IPv6
+    /// router MAC; `--router-mac` sets both (main-conf.c:2599-2600); `--adapter-ip <IPv6>` is the IPv6 source.
+    #[test]
+    fn router_mac_ipv6_and_ipv6_adapter_ip_options() {
+        for opt in ["--router-mac-ipv6", "--router-ipv6"] {
+            let cfg = parse(&[opt, "02-00-00-00-00-06"])
+                .unwrap()
+                .to_config()
+                .unwrap();
+            assert_eq!(cfg.router_mac, None, "{opt}");
+            assert_eq!(
+                cfg.nics[0].router_mac_ipv6,
+                Some([2, 0, 0, 0, 0, 6]),
+                "{opt}"
+            );
+            assert_eq!(cfg.nics[0].router_mac_ipv4, None, "{opt}");
+        }
+        let cfg = parse(&[
+            "--router-mac",
+            "02-00-00-00-00-04",
+            "--router-mac-ipv6",
+            "02-00-00-00-00-06",
+        ])
+        .unwrap()
+        .to_config()
+        .unwrap();
+        assert_eq!(cfg.router_mac, Some([2, 0, 0, 0, 0, 4]));
+        assert_eq!(cfg.nics[0].router_mac_ipv6, Some([2, 0, 0, 0, 0, 6]));
+        assert!(
+            parse(&["--router-mac-ipv6", "nope"])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+        let cfg = parse(&["--adapter-ip", "fd00::1"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.adapter_ip, None);
+        assert_eq!(
+            cfg.nics[0].adapter_ipv6,
+            Some((0xfd00 << 112 | 1, 0xfd00 << 112 | 1))
+        );
+        let e = parse(&["--adapter-ip", "fd00::zz"])
+            .unwrap()
+            .to_config()
+            .unwrap_err();
+        assert!(e.contains("--adapter-ip"), "{e}");
     }
 
     #[test]

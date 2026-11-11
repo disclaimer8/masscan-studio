@@ -15,7 +15,9 @@ use std::fmt;
 use std::net::Ipv6Addr;
 use std::time::Duration;
 
-use rmasscan_core::ndp::PendingNdp;
+use rmasscan_core::ndp::{PendingNdp, solicited_node_mac};
+use rmasscan_core::packet::LinkType;
+use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::ranges6::format_ipv6_c;
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::engine::MAX_IO_TIMEOUT;
@@ -90,6 +92,25 @@ impl fmt::Display for NdpResolveError {
 }
 
 impl std::error::Error for NdpResolveError {}
+
+/// Binding короткоживущего адаптера фазы NDP (как [`crate::arp_resolve::arp_binding`]): только имя интерфейса и MAC
+/// источника важны для открытия; `next_hop_mac` это group-MAC solicited-node следующего хопа (куда уходит NS),
+/// поэтому он всегда отличается от source MAC (проверка адаптеров macOS и Windows). Источника IPv4 у фазы нет (0).
+pub fn ndp_binding(
+    device_id: &str,
+    source_mac: [u8; 6],
+    target: Ipv6Addr,
+    source_ports: (u16, u16),
+) -> AdapterBinding {
+    AdapterBinding {
+        interface_id: device_id.to_string(),
+        link_type: LinkType::Ethernet,
+        source_ipv4: 0,
+        source_mac,
+        next_hop_mac: solicited_node_mac(u128::from(target)),
+        source_ports,
+    }
+}
 
 fn micros(d: Duration) -> u64 {
     u64::try_from(d.as_micros()).unwrap_or(u64::MAX)

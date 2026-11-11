@@ -973,7 +973,7 @@ mod tests_ipv6 {
             ..ScanConfig::default()
         };
         let eff = validate(&cfg, Operation::Scan).unwrap();
-        ReadyPlan::new_cli_without_ipv6_guard(
+        ReadyPlan::new_cli(
             eff,
             vec![NicBinding {
                 binding: AdapterBinding {

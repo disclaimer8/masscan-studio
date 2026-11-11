@@ -30,7 +30,9 @@ use crate::packet::{
 };
 use crate::payloads::PayloadTable;
 use crate::ranges::RangeList;
-use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
+use crate::scan::{
+    ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow_v46,
+};
 use crate::targets::{
     TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST,
     TEMPL_UDP, TEMPL_UDP_LAST,
@@ -83,13 +85,18 @@ pub enum PlanError {
     TooManyRetries(u32),
     #[error("blackrock rounds must be at least 1, got {0}")]
     ZeroRounds(u32),
-    /// Цели IPv6: скан пока не умеет ни живого, ни `--packet-trace` пути (R7). C
-    /// шлёт их; здесь отказ до первого кадра, а не молчаливый пропуск.
+    /// Цели IPv6 в плане Студии (`ReadyPlan::new`, контракт TCP/IPv4) или в поточном оракуле над `AdapterBinding`:
+    /// отказ до первого кадра, а не молчаливый пропуск. План CLI (`new_cli`) их принимает (R7 снят в T5).
     #[error(
-        "IPv6 targets cannot be scanned yet: IPv6 is accepted only for -sL, --echo and --offline \
-         (without --packet-trace)"
+        "IPv6 targets are not supported by this plan (the Studio plan is TCP over IPv4); use the CLI plan"
     )]
     Ipv6TargetsNotSupported,
+    /// R3: цель IPv6 вместе с портом не TCP (`U:`, `S:`, `I:`, ARP). C шлёт их и по IPv6; здесь отложено, поэтому
+    /// отказ до первого кадра. Индекс это наименьший такой порт.
+    #[error(
+        "IPv6 targets support only TCP ports: port index {0} (U:, S:, I: or --arp) cannot be scanned over IPv6"
+    )]
+    Ipv6PortNotTcp(u32),
     /// IPv6-зонд без адреса источника IPv6 у адаптера (`NicBinding::source_ipv6`): C берёт `src.ipv6`
     /// (main.c:345), нулевой адрес ушёл бы в провод молча.
     #[error("the adapter has no IPv6 source address (source_ipv6), so no IPv6 probe can be built")]
@@ -172,8 +179,8 @@ pub struct Probe {
     pub port_me: u16,
     pub ip_them: u32,
     /// Цель как `TargetIp` (R2): рядом с IPv4-полями `ip_them` и `port_them`, которые остаются
-    /// прежними и дают те же байты кадра. Сейчас всегда `V4(ip_them)`: IPv6-цели план отклоняет
-    /// ([`PlanError::Ipv6TargetsNotSupported`]), а `V6` понадобится живому пути IPv6.
+    /// прежними и дают те же байты кадра. У зонда IPv6 (`V6`) поля `ip_me`/`ip_them` нулевые, адреса в `target` и в
+    /// кадре.
     pub target: TargetIp,
     pub port_them: u16,
     /// Порт цели с протокольным смещением, как `port_them` в `transmit_thread` (main.c:389): порт TCP как есть,
@@ -457,6 +464,10 @@ pub fn for_each_probe<B>(
     binding: &AdapterBinding,
     f: impl FnMut(&Probe) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, PlanError> {
+    // `AdapterBinding` (Студия) не несёт источника IPv6: цели IPv6 отказ до первого кадра, как `ReadyPlan::new`.
+    if eff.massip().has_ipv6_targets() {
+        return Err(ScanError::Ipv6Targets.into());
+    }
     for_each_probe_nic(eff, &NicBinding::from(binding.clone()), f)
 }
 
@@ -484,7 +495,9 @@ pub fn for_each_probe_nic_with_payloads<B>(
         &Arc::new(payloads.clone()),
     )?;
     let mut probe = Probe::default();
-    let flow = transmit_scan_flow(
+    // main.c:336-373: цели IPv6 на нижних индексах (`Builder::fill_v6`), IPv4 после них; без целей IPv6
+    // `range_ipv6 == 0` и поток побайтно прежний.
+    let flow = transmit_scan_flow_v46(
         eff.massip(),
         eff.seed(),
         eff.blackrock_rounds(),
@@ -495,8 +508,14 @@ pub fn for_each_probe_nic_with_payloads<B>(
         eff.resume_count(),
         eff.retries(),
         eff.max_rate(),
-        |i, repeats, xxx, ip_them, port_them| {
-            if let Err(e) = builder.fill(&mut probe, i, repeats, xxx, ip_them, port_them) {
+        |i, repeats, xxx, target, port_them| {
+            let built = match target {
+                TargetIp::V4(ip_them) => {
+                    builder.fill(&mut probe, i, repeats, xxx, ip_them, port_them)
+                }
+                TargetIp::V6(ip_them) => builder.fill_v6(&mut probe, i, ip_them, port_them),
+            };
+            if let Err(e) = built {
                 return ControlFlow::Break(Err(e));
             }
             match f(&probe) {
@@ -627,7 +646,7 @@ impl ReadyPlan {
         nics: Vec<NicBinding>,
         payloads: PayloadTable,
     ) -> Result<ReadyPlan, PlanError> {
-        ReadyPlan::new_cli_checked(effective, nics, true, false, Arc::new(payloads))
+        ReadyPlan::new_cli_checked(effective, nics, true, Arc::new(payloads))
     }
 
     /// Только для тестов отказа движка: как [`ReadyPlan::new_cli`], но без проверки портов, поэтому план с
@@ -637,38 +656,13 @@ impl ReadyPlan {
         effective: EffectiveConfig,
         nics: Vec<NicBinding>,
     ) -> Result<ReadyPlan, PlanError> {
-        ReadyPlan::new_cli_checked(
-            effective,
-            nics,
-            false,
-            false,
-            Arc::new(PayloadTable::builtin()),
-        )
-    }
-
-    /// Как [`ReadyPlan::new_cli`], но без отказа R7 для целей IPv6: план с IPv6-целями строится, чтобы приёмник
-    /// IPv6 и [`ReadyPlan::probe_v6`] можно было проверить до живого пути. `for_each_probe` и курсор всё равно
-    /// отказывают IPv6 (передающий цикл IPv6 открывает T5). Не для рабочего кода: CLI и Студия строят планы только
-    /// через [`ReadyPlan::new_cli`] и [`ReadyPlan::new`].
-    #[doc(hidden)]
-    pub fn new_cli_without_ipv6_guard(
-        effective: EffectiveConfig,
-        nics: Vec<NicBinding>,
-    ) -> Result<ReadyPlan, PlanError> {
-        ReadyPlan::new_cli_checked(
-            effective,
-            nics,
-            true,
-            true,
-            Arc::new(PayloadTable::builtin()),
-        )
+        ReadyPlan::new_cli_checked(effective, nics, false, Arc::new(PayloadTable::builtin()))
     }
 
     fn new_cli_checked(
         effective: EffectiveConfig,
         nics: Vec<NicBinding>,
         check_ports: bool,
-        allow_ipv6: bool,
         payloads: Arc<PayloadTable>,
     ) -> Result<ReadyPlan, PlanError> {
         if effective.operation() != Operation::Scan {
@@ -690,8 +684,22 @@ impl ReadyPlan {
         // Р1: O:*, I:n и смесь ARP с другими портами отклоняются навсегда.
         if check_ports {
             check_cli_ports(effective.massip().ports())?;
+            // R3: поверх IPv6 только TCP (порт с протокольным смещением это не кадр IPv6, а отказ до первого кадра).
+            if effective.massip().has_ipv6_targets()
+                && let Some(r) = effective
+                    .massip()
+                    .ports()
+                    .as_slice()
+                    .iter()
+                    .find(|r| r.end > u32::from(u16::MAX))
+            {
+                return Err(PlanError::Ipv6PortNotTcp(
+                    r.begin.max(u32::from(u16::MAX) + 1),
+                ));
+            }
         }
-        ReadyPlan::build(effective, nics, false, allow_ipv6, payloads)
+        // План CLI принимает цели IPv6 (R7 снят в T5): передающий цикл строит их зонды (`Builder::fill_v6`).
+        ReadyPlan::build(effective, nics, false, true, payloads)
     }
 
     fn build(
@@ -704,7 +712,7 @@ impl ReadyPlan {
         if nics.is_empty() || nics.len() > 8 {
             return Err(PlanError::BadNicCount(nics.len()));
         }
-        // R7: пока нет живого пути IPv6, цель IPv6 не принимается ни молча, ни пропуском.
+        // План Студии (`new`) это TCP поверх IPv4: цель IPv6 не принимается ни молча, ни пропуском.
         if !allow_ipv6 && effective.massip().has_ipv6_targets() {
             return Err(PlanError::Ipv6TargetsNotSupported);
         }
@@ -775,7 +783,7 @@ impl ReadyPlan {
 
     /// Зонд SYN для одной цели IPv6 адаптера `nic_index` (ветка main.c:336-353, `seqno` из `syn_cookie_ipv6`).
     /// Порт цели это индекс порта: вне 16 бит (`U:`, `S:`, `I:`) отказ [`PlanError::PortNotTcp`] (R3), без
-    /// `source_ipv6` у адаптера отказ [`PlanError::NoSourceIpv6`]. Цикл передачи пока не вызывает это (R7, T5).
+    /// `source_ipv6` у адаптера отказ [`PlanError::NoSourceIpv6`]. Тот же построитель зовёт передающий цикл.
     pub fn probe_v6(
         &self,
         nic_index: usize,
@@ -965,18 +973,17 @@ impl ProbeCursor {
         let inner = &*self.plan.inner;
         let builder = &inner.builders[self.nic_index];
         let xxx = self.blackrock.shuffle(x);
-        // main.c:336-373; цели IPv6 план не пропускает (`Ipv6TargetsNotSupported`), `V6` тут нарушение.
+        // main.c:336-373: индексы `< range_ipv6` это цели IPv6 (`Builder::fill_v6`), остальные IPv4.
         let (target, port, xxx) = inner.effective.massip().pick_transmit(xxx);
-        let TargetIp::V4(ip) = target else {
-            self.ended = true;
-            self.failed = Some(PlanError::Ipv6TargetsNotSupported);
-            return false;
-        };
         let mut p = Probe::default();
         // `ReadyPlan::new` и `new_cli` отклоняют порты без построителя заранее, поэтому отказ здесь это
-        // нарушение инварианта. Он не паникует и не выдаётся за конец скана: курсор останавливается и хранит
-        // причину, а движок завершает запуск отказом.
-        match builder.fill(&mut p, i, self.repeats, xxx, ip, port) {
+        // нарушение инварианта или адаптер без `source_ipv6`/`next_hop_mac_ipv6` у цели IPv6. Он не паникует и не
+        // выдаётся за конец скана: курсор останавливается и хранит причину, а движок завершает запуск отказом.
+        let built = match target {
+            TargetIp::V4(ip) => builder.fill(&mut p, i, self.repeats, xxx, ip, port),
+            TargetIp::V6(ip) => builder.fill_v6(&mut p, i, ip, port),
+        };
+        match built {
             Ok(()) => {
                 self.loaded.push_back(p);
                 true
@@ -2182,20 +2189,15 @@ mod tests {
         validate(&cfg, Operation::Scan).unwrap()
     }
 
-    /// R7: a plan with an IPv6 target is refused before any frame, on every way in
-    /// (Studio `new`, CLI `new_cli`, the streaming oracle). IPv4 targets in the same
-    /// plan do not rescue it: that would silently drop the IPv6 half.
+    /// R7 (снят в T5): CLI-план принимает цели IPv6, а Студия (`ReadyPlan::new`, контракт TCP/IPv4) и поточный
+    /// оракул `for_each_probe` над `AdapterBinding` по-прежнему отказывают до первого кадра: IPv4-цели того же плана
+    /// не спасают его, иначе половина IPv6 пропала бы молча.
     #[test]
-    fn plans_and_oracle_refuse_ipv6_targets_never_skip_them() {
+    fn studio_plan_and_oracle_refuse_ipv6_targets_the_cli_plan_takes_them() {
         for t in ["2001:db8::10", "2001:db8::10,198.18.0.1"] {
             let e = eff_v46(t, "80");
             assert_eq!(
                 ReadyPlan::new(e.clone(), binding()).unwrap_err(),
-                PlanError::Ipv6TargetsNotSupported,
-                "{t}"
-            );
-            assert_eq!(
-                ReadyPlan::new_cli(e.clone(), nics(1)).unwrap_err(),
                 PlanError::Ipv6TargetsNotSupported,
                 "{t}"
             );
@@ -2206,13 +2208,109 @@ mod tests {
             });
             assert_eq!(r.unwrap_err(), PlanError::Scan(ScanError::Ipv6Targets));
             assert_eq!(sent, 0);
+            assert!(ReadyPlan::new_cli(e, nics(1)).is_ok(), "{t}");
         }
+    }
+
+    /// R3: цели IPv6 только с портами TCP. `U:`, `S:`, `I:` (и ARP `I:2`) вместе с целью IPv6 это отказ плана CLI до
+    /// первого кадра (C шлёт их и по IPv6; здесь отложено).
+    #[test]
+    fn cli_plan_refuses_non_tcp_ports_with_ipv6_targets() {
+        for (ports, idx) in [
+            ("80,U:53", TEMPL_UDP + 53),
+            ("S:2905", TEMPL_SCTP + 2905),
+            ("I:0", TEMPL_ICMP_ECHO),
+            ("I:2", TEMPL_ARP),
+        ] {
+            let e = eff_v46("2001:db8::1,198.18.0.1", ports);
+            assert_eq!(
+                ReadyPlan::new_cli(e, nics(1)).unwrap_err(),
+                PlanError::Ipv6PortNotTcp(idx),
+                "{ports}"
+            );
+        }
+        // Без целей IPv6 те же порты допустимы, как раньше.
+        assert!(ReadyPlan::new_cli(eff_v46("198.18.0.1", "80,U:53"), nics(1)).is_ok());
+    }
+
+    fn v6_nic() -> NicBinding {
+        let mut b = binding();
+        b.link_type = LinkType::Ethernet;
+        b.source_mac = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+        b.next_hop_mac = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02];
+        b.source_ports = (40000, 40000);
+        let mut nic = NicBinding::from(b);
+        nic.source_ipv6 = Some(0xfd00_0000_0000_0000_0000_0000_0000_0002);
+        nic.next_hop_mac_ipv6 = Some([0x02, 0x00, 0x5e, 0x10, 0x00, 0x09]);
+        nic
+    }
+
+    /// T5: передающий цикл плана CLI шлёт цели IPv6 (main.c:336-353): индексы `< range_ipv6` дают зонд
+    /// [`ReadyPlan::probe_v6`] с тем же `i`, остальные IPv4 как раньше; курсор движка и поток `--packet-trace`
+    /// (`for_each_probe_nic`) дают одни и те же кадры в одном порядке.
+    #[test]
+    fn cli_plan_streams_ipv6_probes_in_transmit_order() {
+        let e = eff_v46("2001:db8::1-2001:db8::2,198.18.0.2", "80,443");
+        let nic = v6_nic();
+        let plan = ReadyPlan::new_cli(e.clone(), vec![nic.clone()]).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        let mut from_cursor = Vec::new();
+        while let Some(p) = cursor.current() {
+            from_cursor.push(p.clone());
+            cursor.advance_sent();
+        }
+        assert_eq!(cursor.build_error(), None);
+        assert_eq!(from_cursor.len(), 6);
+        let (mut v6s, mut v4s) = (0, 0);
+        for p in &from_cursor {
+            match p.target {
+                TargetIp::V6(ip) => {
+                    v6s += 1;
+                    assert_eq!(&p.frame[12..14], &[0x86, 0xdd]);
+                    assert_eq!(&p.frame[0..6], &[0x02, 0x00, 0x5e, 0x10, 0x00, 0x09]);
+                    let want = plan.probe_v6(0, p.index, ip, p.port_index).unwrap();
+                    assert_eq!(p, &want);
+                }
+                TargetIp::V4(ip) => {
+                    v4s += 1;
+                    assert_eq!(ip, 0xc612_0002);
+                    assert_eq!(&p.frame[12..14], &[0x08, 0x00]);
+                    assert_eq!(&p.frame[0..6], &[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02]);
+                }
+            }
+        }
+        assert_eq!((v6s, v4s), (4, 2));
+        let mut from_flow = Vec::new();
+        let flow = for_each_probe_nic(&e, &nic, |p| {
+            from_flow.push(p.clone());
+            ControlFlow::<()>::Continue(())
+        });
+        assert_eq!(flow, Ok(ControlFlow::Continue(())));
+        assert_eq!(from_flow, from_cursor);
+    }
+
+    /// Адаптер без `source_ipv6` в плане с целями IPv6: первый же зонд IPv6 это отказ скана (`ProbeBuild`), а не
+    /// пропуск цели или кадр с нулевым источником.
+    #[test]
+    fn ipv6_probe_without_a_source_fails_the_scan_never_skips() {
+        let e = eff_v46("2001:db8::1", "80");
+        let mut nic = v6_nic();
+        nic.source_ipv6 = None;
+        let plan = ReadyPlan::new_cli(e.clone(), vec![nic.clone()]).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        assert!(cursor.current().is_none());
+        assert_eq!(
+            cursor.build_error(),
+            Some(PlanError::ProbeBuild(Box::new(PlanError::NoSourceIpv6)))
+        );
+        let r = for_each_probe_nic(&e, &nic, |_| ControlFlow::<()>::Continue(()));
+        assert_eq!(r.unwrap_err(), PlanError::NoSourceIpv6);
     }
 
     /// IPv6 stage, Task 3 (main.c:336-353): цель IPv6 берёт `ip_me = src.ipv6` и `port_me = src.port` (первый
     /// порт, без ротации), `cookie = syn_cookie_ipv6`, `seqno = (unsigned)cookie`. Кадр и cookie напечатаны
     /// настоящим C (`syn_cookie_ipv6` + `template_set_target_ipv6`, seqno 0x824e4617 это младшие 32 бита
-    /// 0x8edac6d1824e4617). `for_each_probe` по-прежнему отказывает IPv6 (R7); этот путь открывает T5.
+    /// 0x8edac6d1824e4617). Передающий цикл зовёт тот же построитель (T5, `cli_plan_streams_ipv6_probes_in_transmit_order`).
     #[test]
     fn probe_v6_frame_and_seqno_match_c() {
         const THEM: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
@@ -2235,7 +2333,7 @@ mod tests {
             ..nic
         };
         let e = eff_v46_seed("2001:db8::1", "80", 0x0123_4567_89ab_cdef);
-        let plan = ReadyPlan::new_cli_without_ipv6_guard(e, vec![nic.clone()]).unwrap();
+        let plan = ReadyPlan::new_cli(e, vec![nic.clone()]).unwrap();
         let p = plan.probe_v6(0, 7, THEM, 80).unwrap();
         assert_eq!(p.seqno, 0x824e_4617);
         assert_eq!((p.port_me, p.port_them, p.port_index), (40000, 80, 80));
@@ -2260,9 +2358,7 @@ mod tests {
         // Нет source_ipv6: отказ, а не кадр с нулевым источником.
         let mut none = nic;
         none.source_ipv6 = None;
-        let plan_none =
-            ReadyPlan::new_cli_without_ipv6_guard(eff_v46("2001:db8::1", "80"), vec![none])
-                .unwrap();
+        let plan_none = ReadyPlan::new_cli(eff_v46("2001:db8::1", "80"), vec![none]).unwrap();
         assert_eq!(
             plan_none.probe_v6(0, 0, THEM, 80).unwrap_err(),
             PlanError::NoSourceIpv6
@@ -2291,13 +2387,13 @@ mod tests {
         let mut nic = NicBinding::from(b);
         nic.source_ipv6 = Some(ME);
         let e = eff_v46("2001:db8::1", "80");
-        let plain = ReadyPlan::new_cli_without_ipv6_guard(e.clone(), vec![nic.clone()]).unwrap();
+        let plain = ReadyPlan::new_cli(e.clone(), vec![nic.clone()]).unwrap();
         assert_eq!(
             plain.probe_v6(0, 0, THEM, 80).unwrap_err(),
             PlanError::NoNextHopMacIpv6
         );
         nic.next_hop_mac_ipv6 = Some(V6_HOP);
-        let plan = ReadyPlan::new_cli_without_ipv6_guard(e, vec![nic]).unwrap();
+        let plan = ReadyPlan::new_cli(e, vec![nic]).unwrap();
         let f = plan.probe_v6(0, 0, THEM, 80).unwrap().frame;
         assert_eq!(&f[0..6], &V6_HOP);
     }

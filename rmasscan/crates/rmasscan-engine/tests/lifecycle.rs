@@ -287,7 +287,9 @@ fn would_block_unsent_retries_same_frame_without_advancing() {
         TxStep::WouldBlockUnsent,
         TxStep::Sent,
     ]);
-    let h = start_manual(&p, &fake, &clock, opts());
+    // Окно простоя TX здесь не предмет: приём фейка двигает общие часы, и поток TX, снятый с CPU между двумя
+    // WouldBlock, увидел бы 10 с окна по умолчанию (`no_stall_opts`).
+    let h = start_manual(&p, &fake, &clock, no_stall_opts());
     let o = join_within(h, Duration::from_secs(5));
     assert_eq!(o.reason, Reason::Completed);
     assert_eq!(o.progress.sent, PROBES);
@@ -327,7 +329,11 @@ fn would_block_unsent_backs_off_1ms_on_the_injected_clock() {
     let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(manual);
     fake.script_tx(std::iter::repeat_n(TxStep::WouldBlockUnsent, 30));
     let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
-    let h = rmasscan_engine::Engine::start_with_clock(p.clone(), fake.pair(), opts(), c).unwrap();
+    // Окно простоя TX здесь не предмет: приём фейка двигает общие часы на таймаут приёма каждые ~100 мкс, и поток TX,
+    // снятый с CPU посреди 30 WouldBlock, видел 10 с окна по умолчанию (CI PR #55, macos-15: `TxStalled { idle_millis:
+    // 10128 }` здесь). Бэкофф 1 мс на инжектированных часах и кадры проверяются как прежде.
+    let h = rmasscan_engine::Engine::start_with_clock(p.clone(), fake.pair(), no_stall_opts(), c)
+        .unwrap();
     let o = join_within(h, Duration::from_secs(5));
     assert_eq!(o.reason, Reason::Completed);
     assert_eq!(fake.would_block_count(), 30);

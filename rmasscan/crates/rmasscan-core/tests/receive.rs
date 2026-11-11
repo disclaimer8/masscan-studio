@@ -405,6 +405,7 @@ fn replies_to_any_address_of_the_source_range_are_accepted() {
             },
             source_ipv4_last: FIRST_IP + 3,
             legacy_c_17_port_mask: false,
+            source_ipv6: None,
         }],
     )
     .unwrap();
@@ -1175,6 +1176,7 @@ mod icmp_echo {
                         ttl: 57,
                         ip_proto: 1,
                         mac: None,
+                        ip6: None,
                     }
                 );
                 // неверный cookie (с портом источника) отбрасывается
@@ -1354,6 +1356,7 @@ mod udp_and_unreachable {
                     ttl: 57,
                     ip_proto: 17,
                     mac: None,
+                    ip6: None,
                 },
                 "{link:?}"
             );
@@ -1475,7 +1478,7 @@ mod udp_and_unreachable {
             let r = reply_to(link, &plan, &unreachable(router, 3, &quote(p), 249))
                 .unwrap()
                 .unwrap_or_else(|| panic!("proto {proto} port {port}"));
-            // Reply { ip_proto: <внутренний протокол>, status: Closed, reason: 0, ttl: внешний }
+            // Reply { ip_proto: <внутренний протокол>, status: Closed, reason: 0, ttl: внешний, ip6: None, }
             assert_eq!(
                 r,
                 Reply {
@@ -1488,6 +1491,7 @@ mod udp_and_unreachable {
                     ttl: 249,
                     ip_proto: proto,
                     mac: None,
+                    ip6: None,
                 }
             );
         }
@@ -1738,6 +1742,7 @@ mod sctp_rx {
                 ttl,
                 ip_proto: 132,
                 mac: None,
+                ip6: None,
             };
             // INIT-ACK (тип 2) -> Open, ABORT (тип 6) -> Closed; ttl внешний, reason 0
             let ack = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 16, 57);
@@ -1984,6 +1989,7 @@ mod arp_scan {
                 ttl: 0,
                 ip_proto: 0,
                 mac: Some(NEIGHBOR_MAC),
+                ip6: None,
             }))
         );
         // proto-arp.c:39 берёт `parsed->mac_src`, то есть MAC источника Ethernet-кадра, а не `sha`

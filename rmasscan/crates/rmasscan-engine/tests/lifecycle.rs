@@ -716,6 +716,7 @@ fn reply(ip: u32, port: u16) -> Reply {
         ttl: 64,
         ip_proto: 6,
         mac: None,
+        ip6: None,
     }
 }
 
@@ -731,6 +732,36 @@ fn dedup_is_fifo_bounded_and_allows_repeat_after_eviction() {
     assert!(d.insert(&a), "repeat after eviction is allowed");
     assert!(!d.insert(&c) || d.len() == 3);
     assert_eq!(d.len(), 3);
+}
+
+/// IPv6 stage, Task 3 (R2): у IPv6-ответа `remote_ip`/`local_ip` равны 0, а адреса лежат в `ip6`. Ключ дедупа
+/// обязан включать их: два разных IPv6-хоста не сливаются в один кортеж `(0, порт, 0, порт)`, повтор того же
+/// кортежа глушится, а IPv4-ответ с теми же нулями и портами не путается с IPv6 (`dedup_is_duplicate` в C
+/// принимает `ipaddress`, main.c:1067, и различает версии и все 128 бит).
+#[test]
+fn dedup_cache_keys_ipv6_tuples_by_all_128_bits() {
+    use rmasscan_core::receive::ReplyIpv6;
+    let v6 = |remote: u128, local: u128| Reply {
+        remote_ip: 0,
+        local_ip: 0,
+        ip6: Some(ReplyIpv6 { remote, local }),
+        ..reply(0, 80)
+    };
+    let (a, b) = (0x2001_0db8u128 << 96 | 1, 0x2001_0db8u128 << 96 | 2);
+    let me = 0xfd00u128 << 112 | 2;
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&v6(a, me)));
+    assert!(!d.insert(&v6(a, me)), "same IPv6 tuple is a repeat");
+    assert!(d.insert(&v6(b, me)), "another remote host is new");
+    // Различие только в старших и только в младших 64 битах.
+    assert!(d.insert(&v6(a ^ (1u128 << 100), me)));
+    assert!(d.insert(&v6(a, me ^ 1)));
+    // IPv4-ответ с `remote_ip = 0` и теми же портами не глушится IPv6-записью и не глушит её.
+    let v4 = reply(0, 80);
+    assert!(d.insert(&v4));
+    assert!(!d.insert(&v4));
+    assert!(!d.insert(&v6(a, me)));
+    assert_eq!(d.len(), 5);
 }
 
 #[test]

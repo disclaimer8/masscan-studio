@@ -4,7 +4,8 @@
 //! HEAD 8e6b3b0). Кадры должны совпадать побайтно с C.
 
 use crate::checksum::{
-    fold, ip_header_checksum, sctp_crc32c, tcp_ipv4_partial, udp_ipv4_checksum, word_sum,
+    checksum_ipv6, fold, ip_header_checksum, sctp_crc32c, tcp_ipv4_partial, udp_ipv4_checksum,
+    word_sum,
 };
 use crate::cookie::icmp_echo_cookie;
 use crate::payloads::PayloadEntry;
@@ -249,6 +250,148 @@ impl TcpSynTemplate {
         let mut csum = !fold(xsum);
         if self.badsum {
             // Р9: IPv4-сумма остаётся верной, портится только L4.
+            csum = corrupt_tcp_checksum(csum);
+        }
+        out[ot + 16..ot + 18].copy_from_slice(&csum.to_be_bytes());
+    }
+}
+
+/// `AF_INET6` хоста, как его пишет C в первые 4 байта кадра DLT_NULL (`*(int*)buf = AF_INET6`, templ-pkt.c:1160-1162,
+/// в порядке байт хоста). :1100 задаёт 23 только для Windows, на остальных платформах подставляется значение из
+/// `<sys/socket.h>`: macOS 30, FreeBSD и DragonFly 28, OpenBSD и NetBSD 24, Linux и Android 10. У IPv4 в той же ветке
+/// стоит литерал 2 (:1343), поэтому там платформа не важна.
+#[cfg(windows)]
+const AF_INET6: u32 = 23;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos"
+))]
+const AF_INET6: u32 = 30;
+#[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
+const AF_INET6: u32 = 28;
+#[cfg(any(target_os = "openbsd", target_os = "netbsd"))]
+const AF_INET6: u32 = 24;
+#[cfg(not(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd"
+)))]
+const AF_INET6: u32 = 10;
+
+/// Шаблон TCP SYN поверх IPv6 (`struct TemplatePacket.ipv6`): 78 байт (Ethernet 14 + IPv6 40 + TCP 20 + MSS 4)
+/// по умолчанию, 64 у Raw, 68 у Null.
+///
+/// C строит его из уже готового IPv4-шаблона (`_template_init_ipv6`, templ-pkt.c:1110-1202): копирует TCP-сегмент
+/// (с опциями; порты, seqno и сумма обнулены `_template_init`, :1317-1318) за 40-байтный заголовок IPv6 (`memmove`
+/// :1149, `memset` :1155), пишет `0x60` (:1178), `payload_length = ipv4.length - offset_tcp` (:1135, :1184-1185),
+/// Next Header из IPv4-протокола, 6 (:1189) и hop limit `0xFF` (:1199). Ethernet: dst это `router_mac_ipv6`, ethertype
+/// `86 dd` (:1163-1172), src MAC остаётся `source_mac` (:1273).
+///
+/// Hop limit всегда `0xFF`: `--ttl` не доходит до IPv6, потому что `template_set_ttl` (templ-pkt.c:1473-1488) правит
+/// только `ipv4.packet`; харнесс C с `template_set_ttl(64)` выдал кадр с `ff`. Порт повторяет C, `mods.ttl` тут не
+/// читается. `--badsum` и опции TCP действуют как у IPv4-шаблона ([`TcpSynTemplate`]).
+#[derive(Clone, Debug)]
+pub struct Tcp6SynTemplate {
+    packet: Vec<u8>,
+    offset_ip: usize,
+    offset_tcp: usize,
+    badsum: bool,
+}
+
+impl Tcp6SynTemplate {
+    /// Шаблон с параметрами по умолчанию (MSS 1460, без `--badsum`).
+    pub fn new(source_mac: [u8; 6], router_mac_ipv6: [u8; 6], link: LinkType) -> Self {
+        Self::new_with_options(
+            source_mac,
+            router_mac_ipv6,
+            link,
+            &PacketModifiers::default(),
+        )
+    }
+
+    /// [`Tcp6SynTemplate::new`] с `--badsum` и опциями TCP; `mods.ttl` игнорируется (см. тип).
+    pub fn new_with_options(
+        source_mac: [u8; 6],
+        router_mac_ipv6: [u8; 6],
+        link: LinkType,
+        mods: &PacketModifiers,
+    ) -> Self {
+        // TCP-сегмент IPv4-шаблона: базовые 20 байт и опции; порты, seqno и сумма нулевые (:1317-1318).
+        let mut tcp = DEFAULT_TCP_TEMPLATE[34..54].to_vec();
+        tcp.extend_from_slice(&tcp_option_bytes(&mods.tcp));
+        tcp[12] = ((tcp.len() / 4) as u8) << 4;
+        tcp[0..8].fill(0);
+        tcp[16..18].fill(0);
+
+        let mut head = Vec::new();
+        let offset_ip = match link {
+            LinkType::Ethernet => {
+                head.extend_from_slice(&router_mac_ipv6);
+                head.extend_from_slice(&source_mac);
+                head.extend_from_slice(&[0x86, 0xdd]);
+                14
+            }
+            LinkType::Null => {
+                head.extend_from_slice(&AF_INET6.to_ne_bytes());
+                4
+            }
+            LinkType::Raw => 0,
+        };
+        let mut packet = head;
+        // IPv6: версия 6, класс трафика и метка потока 0, payload_length, next header 6, hop limit 255, адреса 0.
+        packet.extend_from_slice(&[0x60, 0, 0, 0]);
+        packet.extend_from_slice(&(tcp.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&[6, 0xff]);
+        packet.extend_from_slice(&[0u8; 32]);
+        let offset_tcp = packet.len();
+        packet.extend_from_slice(&tcp);
+        Self {
+            packet,
+            offset_ip,
+            offset_tcp,
+            badsum: mods.badsum,
+        }
+    }
+
+    /// `tmpl->proto == Proto_TCP`: Next Header шаблона это 6.
+    pub fn proto_is_tcp(&self) -> bool {
+        self.packet.get(self.offset_ip + 6) == Some(&6)
+    }
+
+    /// `template_set_target_ipv6`, ветка `Proto_TCP`, templ-pkt.c:662-804 (payload_length :747, адреса :748-786, порты
+    /// и seqno :789-796, сумма :800 `checksum_ipv6(px + offset_ip + 8, px + offset_ip + 24, 6, length - offset_tcp, ..)`).
+    /// Источник идёт первым (`offset_ip + 8` это `ip_me`, `+ 24` это `ip_them`). `out` очищается и получает кадр.
+    pub fn build_syn(
+        &self,
+        ip_them: u128,
+        port_them: u16,
+        ip_me: u128,
+        port_me: u16,
+        seqno: u32,
+        out: &mut Vec<u8>,
+    ) {
+        out.clear();
+        out.extend_from_slice(&self.packet);
+        let (oi, ot) = (self.offset_ip, self.offset_tcp);
+        let payload_length = (self.packet.len() - ot) as u16;
+        out[oi + 4..oi + 6].copy_from_slice(&payload_length.to_be_bytes());
+        out[oi + 8..oi + 24].copy_from_slice(&ip_me.to_be_bytes());
+        out[oi + 24..oi + 40].copy_from_slice(&ip_them.to_be_bytes());
+        out[ot..ot + 2].copy_from_slice(&port_me.to_be_bytes());
+        out[ot + 2..ot + 4].copy_from_slice(&port_them.to_be_bytes());
+        out[ot + 4..ot + 8].copy_from_slice(&seqno.to_be_bytes());
+        // Поле суммы в шаблоне нулевое; `checksum_ipv6` вычитает его всё равно (util-checksum.c:136-143).
+        let mut csum = checksum_ipv6(ip_me, ip_them, 6, &out[ot..]);
+        if self.badsum {
+            // Р9, как у IPv4: портится только сумма L4.
             csum = corrupt_tcp_checksum(csum);
         }
         out[ot + 16..ot + 18].copy_from_slice(&csum.to_be_bytes());
@@ -591,6 +734,7 @@ mod tests {
         o
     }
     fn hexv(s: &str) -> Vec<u8> {
+        let s: String = s.split_whitespace().collect();
         (0..s.len() / 2)
             .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
             .collect()
@@ -1343,5 +1487,210 @@ mod tests {
         assert_eq!(&null[..4], &2u32.to_ne_bytes());
         assert_eq!(&null[4..], &eth[14..]);
         assert_eq!(&raw[..], &eth[14..]);
+    }
+
+    // ---- IPv6 stage, Task 3: 78-byte TCP SYN over IPv6 ---------------------------------------------
+    //
+    // Ожидаемые кадры напечатаны настоящим C: весь `src/*.c` masscan 8e6b3b0 (без main.c) собран вместе с
+    // харнессом, который вызывает `template_packet_init` (templ-pkt.c:1396), `template_set_ttl` (:1473) и
+    // `template_set_target_ipv6` (:660). Адреса и порты: them 2001:db8::1:80, me fd00::2:40000, seqno 0xdeadbeef,
+    // source MAC 02:11:22:33:44:55, router-mac-ipv6 aa:bb:cc:dd:ee:02, router-mac-ipv4 aa:bb:cc:dd:ee:01.
+
+    const THEM6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+    const ME6: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+    const MAC_SRC: &str = "021122334455";
+    const MAC_R6: &str = "aabbccddee02";
+    // 40-байтный IPv6-заголовок после ethertype, с payload_len = 0x18 (templ-pkt.c:1167-1168).
+    const C_SYN6_ETH: &str = "aabbccddee02 021122334455 86dd \
+        60000000 0018 06 ff fd00000000000000 0000000000000002 20010db800000000 0000000000000001 \
+        9c40 0050 deadbeef 00000000 6002 0401 2f3b 0000 020405b4";
+
+    /// Адреса IPv6-пакета этого же кадра плюс TCP-сегмент.
+    fn ip6_tcp_parts(frame: &[u8], oi: usize) -> (u128, u128, u8, &[u8]) {
+        let src = u128::from_be_bytes(frame[oi + 8..oi + 24].try_into().unwrap());
+        let dst = u128::from_be_bytes(frame[oi + 24..oi + 40].try_into().unwrap());
+        (src, dst, frame[oi + 6], &frame[oi + 40..])
+    }
+
+    /// Независимый верификатор RFC 8200 §8.1 (псевдозаголовок: 16+16 байт адресов, 32-битная длина верхнего уровня,
+    /// 24 нулевых бита и 8 бит Next Header, затем сегмент). Сумма слов обязана свернуться в 0xFFFF. Не использует
+    /// ни `checksum_ipv6`, ни `fold` реализации.
+    fn rfc8200_sum(src: u128, dst: u128, next: u8, seg: &[u8]) -> u32 {
+        let mut words: Vec<u8> = Vec::new();
+        words.extend_from_slice(&src.to_be_bytes());
+        words.extend_from_slice(&dst.to_be_bytes());
+        words.extend_from_slice(&(seg.len() as u32).to_be_bytes());
+        words.extend_from_slice(&[0, 0, 0, next]);
+        words.extend_from_slice(seg);
+        assert_eq!(words.len() % 2, 0);
+        let mut sum: u64 = words
+            .chunks(2)
+            .map(|c| u64::from(c[0]) << 8 | u64::from(c[1]))
+            .sum();
+        while sum > 0xFFFF {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        sum as u32
+    }
+
+    /// `AF_INET6` хоста, как его берёт C (`*(int*)buf = AF_INET6`, templ-pkt.c:1161): :1100 задаёт 23 для Windows,
+    /// иначе подставляется `<sys/socket.h>`. Значения платформ записаны здесь как числа, не из `libc`.
+    fn host_af_inet6() -> u32 {
+        if cfg!(windows) {
+            23
+        } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+            30
+        } else if cfg!(any(target_os = "freebsd", target_os = "dragonfly")) {
+            28
+        } else if cfg!(any(target_os = "openbsd", target_os = "netbsd")) {
+            24
+        } else {
+            10
+        }
+    }
+
+    #[test]
+    fn tcp6_syn_template_78_bytes_and_rfc8200_checksum() {
+        let t = Tcp6SynTemplate::new(hex6(MAC_SRC), hex6(MAC_R6), LinkType::Ethernet);
+        let mut out = Vec::new();
+        t.build_syn(THEM6, 80, ME6, 40000, 0xdead_beef, &mut out);
+        assert_eq!(out.len(), 78);
+        assert_eq!(out, hexv(C_SYN6_ETH));
+        // Независимая проверка: сумма с псевдозаголовком RFC 8200 даёт 0xFFFF.
+        let (src, dst, next, seg) = ip6_tcp_parts(&out, 14);
+        assert_eq!((src, dst, next), (ME6, THEM6, 6));
+        assert_eq!(seg.len(), 24);
+        assert_eq!(rfc8200_sum(src, dst, next, seg), 0xFFFF);
+        // Поля, которые выбирает шаблон, прочитаны по смещениям из RFC 8200 §3 и RFC 9293 §3.1.
+        assert_eq!(&out[12..14], &[0x86, 0xdd]);
+        assert_eq!(out[14], 0x60);
+        assert_eq!(&out[18..20], &[0x00, 0x18]); // payload length = 24
+        assert_eq!(out[21], 0xff); // hop limit
+        assert_eq!(&out[54 + 12..54 + 14], &[0x60, 0x02]); // data offset 6, SYN
+        assert_eq!(&out[54 + 14..54 + 16], &[0x04, 0x01]); // window
+        assert_eq!(&out[54 + 20..], &[0x02, 0x04, 0x05, 0xb4]); // MSS 1460
+        assert!(t.proto_is_tcp());
+    }
+
+    /// DLT_NULL и DLT_RAW (templ-pkt.c:1149-1166): те же 64 байта IPv6+TCP, у Null впереди `AF_INET6` хоста
+    /// (в порядке байт хоста, как `*(int*)buf`), у Raw ничего.
+    #[test]
+    fn tcp6_syn_template_null_and_raw_links_match_c() {
+        let c_null = "1e000000 60000000 0018 06 ff fd00000000000000 0000000000000002 20010db800000000 0000000000000001 \
+             9c40 0050 deadbeef 00000000 6002 0401 2f3b 0000 020405b4";
+        let c_raw = "60000000 0018 06 ff fd00000000000000 0000000000000002 20010db800000000 0000000000000001 \
+             9c40 0050 deadbeef 00000000 6002 0401 2f3b 0000 020405b4";
+        let mut out = Vec::new();
+        Tcp6SynTemplate::new(hex6(MAC_SRC), hex6(MAC_R6), LinkType::Raw).build_syn(
+            THEM6,
+            80,
+            ME6,
+            40000,
+            0xdead_beef,
+            &mut out,
+        );
+        assert_eq!(out, hexv(c_raw));
+        assert_eq!(out.len(), 64);
+        Tcp6SynTemplate::new(hex6(MAC_SRC), hex6(MAC_R6), LinkType::Null).build_syn(
+            THEM6,
+            80,
+            ME6,
+            40000,
+            0xdead_beef,
+            &mut out,
+        );
+        assert_eq!(out.len(), 68);
+        // Часть после 4 байт семейства совпадает с C побайтно; само семейство это AF_INET6 платформы.
+        assert_eq!(out[4..], hexv(c_null)[4..]);
+        assert_eq!(out[..4], host_af_inet6().to_ne_bytes());
+        let (src, dst, next, seg) = ip6_tcp_parts(&out, 4);
+        assert_eq!(rfc8200_sum(src, dst, next, seg), 0xFFFF);
+    }
+
+    /// Опции TCP (MSS 1200, SACK-OK, WS 3): IPv6-шаблон строится из IPv4-шаблона уже с опциями
+    /// (templ-pkt.c:1409-1416 перед `_template_init`), `payload_len` и смещение данных растут. Кадр из C.
+    /// `--ttl 64` в C не доходит до IPv6: `template_set_ttl` правит только `ipv4.packet` (templ-pkt.c:1478-1486),
+    /// hop limit остаётся 0xFF (харнесс вызывал `template_set_ttl(64)` и получил `ff`).
+    #[test]
+    fn tcp6_syn_template_options_match_c_and_ttl_does_not_reach_ipv6() {
+        let c = "aabbccddee02 021122334455 86dd 60000000 0020 06 ff fd00000000000000 0000000000000002 \
+            20010db800000000 0000000000000001 9c40 0050 deadbeef 00000000 8002 0401 0632 0000 \
+            020404b0 0402 030303 00 00 00";
+        let mods = PacketModifiers {
+            ttl: 64,
+            badsum: false,
+            tcp: TcpHeaderOptions {
+                mss: Some(1200),
+                sackok: true,
+                wscale: Some(3),
+                tsecho: None,
+            },
+        };
+        let t = Tcp6SynTemplate::new_with_options(
+            hex6(MAC_SRC),
+            hex6(MAC_R6),
+            LinkType::Ethernet,
+            &mods,
+        );
+        let mut out = Vec::new();
+        t.build_syn(THEM6, 80, ME6, 40000, 0xdead_beef, &mut out);
+        assert_eq!(out.len(), 86);
+        assert_eq!(out, hexv(c));
+        assert_eq!(out[21], 0xff, "hop limit stays 255 whatever --ttl says");
+        let (src, dst, next, seg) = ip6_tcp_parts(&out, 14);
+        assert_eq!(rfc8200_sum(src, dst, next, seg), 0xFFFF);
+    }
+
+    /// `--badsum` (Р9, как у IPv4): портится только сумма TCP, остальное байт в байт то же. Верификатор RFC 8200
+    /// отвергает такой кадр.
+    #[test]
+    fn tcp6_syn_template_badsum_breaks_only_the_checksum() {
+        let mods = PacketModifiers {
+            badsum: true,
+            ..PacketModifiers::default()
+        };
+        let good = {
+            let mut o = Vec::new();
+            Tcp6SynTemplate::new(hex6(MAC_SRC), hex6(MAC_R6), LinkType::Ethernet).build_syn(
+                THEM6,
+                80,
+                ME6,
+                40000,
+                0xdead_beef,
+                &mut o,
+            );
+            o
+        };
+        let mut bad = Vec::new();
+        Tcp6SynTemplate::new_with_options(hex6(MAC_SRC), hex6(MAC_R6), LinkType::Ethernet, &mods)
+            .build_syn(THEM6, 80, ME6, 40000, 0xdead_beef, &mut bad);
+        assert_eq!(good.len(), bad.len());
+        let diff: Vec<usize> = (0..good.len()).filter(|&i| good[i] != bad[i]).collect();
+        assert!(
+            diff.iter().all(|i| (54 + 16..54 + 18).contains(i)),
+            "{diff:?}"
+        );
+        assert_eq!(u16::from_be_bytes([bad[70], bad[71]]), 0x2f3a);
+        let (src, dst, next, seg) = ip6_tcp_parts(&bad, 14);
+        assert_ne!(rfc8200_sum(src, dst, next, seg), 0xFFFF);
+    }
+
+    /// Каждый вызов перезаписывает адреса, порты, seqno и сумму, как `template_set_target_ipv6` поверх копии
+    /// шаблона: другая цель даёт кадр, чья сумма снова верна, а буфер `out` с мусором очищается.
+    #[test]
+    fn tcp6_syn_template_refill_is_independent_of_previous_target() {
+        let t = Tcp6SynTemplate::new(hex6(MAC_SRC), hex6(MAC_R6), LinkType::Ethernet);
+        let mut out = vec![0xAA; 200];
+        t.build_syn(THEM6, 80, ME6, 40000, 0xdead_beef, &mut out);
+        let mut other = Vec::new();
+        let them2: u128 = 0x2606_4700_4700_0000_0000_0000_0000_1111;
+        t.build_syn(them2, 443, ME6, 40001, 7, &mut other);
+        assert_eq!(other.len(), 78);
+        let (src, dst, next, seg) = ip6_tcp_parts(&other, 14);
+        assert_eq!((src, dst), (ME6, them2));
+        assert_eq!(rfc8200_sum(src, dst, next, seg), 0xFFFF);
+        assert_eq!(&other[54..58], &[0x9c, 0x41, 0x01, 0xbb]);
+        t.build_syn(THEM6, 80, ME6, 40000, 0xdead_beef, &mut other);
+        assert_eq!(other, out);
     }
 }

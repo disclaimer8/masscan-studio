@@ -205,6 +205,27 @@ pub fn checksum_ipv4(ip_src: u32, ip_dst: u32, ip_proto: u8, payload: &[u8]) -> 
     fold_and_invert(sum)
 }
 
+/// util-checksum.c:118-153 `checksum_ipv6` (RFC 8200 §8.1). Псевдозаголовок: 16 байт источника, 16 байт
+/// назначения, длина верхнего уровня и номер протокола как 32-битные слагаемые (в C `sum += payload_length;
+/// sum += ip_proto`); затем сегмент, из суммы вычитается текущее поле checksum по `ip_proto` (ICMPv6 58 и ICMP 1:
+/// байты 2-3, TCP: 16-17, UDP: 6-7). Протокол 0 даёт 0 (:131-133), неизвестный `0xFFFFFFFF` (:146-148), здесь
+/// усечённый до `0xFFFF`, как в [`checksum_ipv4`]. `u128` это адреса в порядке "старший байт первый".
+pub fn checksum_ipv6(ip_src: u128, ip_dst: u128, ip_proto: u8, payload: &[u8]) -> u16 {
+    let mut sum = checksum_calculate(&ip_src.to_be_bytes());
+    sum = sum.wrapping_add(checksum_calculate(&ip_dst.to_be_bytes()));
+    sum = sum.wrapping_add(payload.len() as u32);
+    sum = sum.wrapping_add(u32::from(ip_proto));
+    sum = sum.wrapping_add(checksum_calculate(payload));
+    match ip_proto {
+        0 => return 0,
+        1 | 58 => sum = sum.wrapping_sub(be16(payload, 2)),
+        6 => sum = sum.wrapping_sub(be16(payload, 16)),
+        17 => sum = sum.wrapping_sub(be16(payload, 6)),
+        _ => return 0xFFFF,
+    }
+    fold_and_invert(sum)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +390,43 @@ mod tests {
         padded[..3].copy_from_slice(&[1, 2, 3]);
         assert_eq!(sctp_crc32c(&[1, 2, 3]), sctp_crc32c(&padded));
         assert_eq!(sctp_crc32c(&[]), sctp_crc32c(&[0u8; 12]));
+    }
+
+    fn ip6(b: [u8; 16]) -> u128 {
+        u128::from_be_bytes(b)
+    }
+
+    /// util-checksum.c:196-236 (`ipv6packets[]`): три вектора C для UDP, ICMPv6 и TCP (байты скопированы из
+    /// литералов C скриптом, не набраны руками).
+    #[test]
+    fn checksum_ipv6_reference_vectors() {
+        let udp = hex(
+            "02220223003209e30b1518540006000a001700180038001f000e0001000e00020000ab11fdb3aebbe657005c000800020000",
+        );
+        assert_eq!(udp.len(), 50);
+        let src = ip6(hex("fe800000000000000207 32fffe425e35").try_into().unwrap());
+        let dst = ip6(hex("ff020000000000000000000000010002").try_into().unwrap());
+        assert_eq!(checksum_ipv6(src, dst, 17, &udp), 0x09e3);
+
+        let icmp = hex(
+            "8f00bf3c0000000404000000ff0200000000000000000001ff03684c04000000ff0200000000000000000001ffd4a68004000000ff0200000000000000000001ff06ab7204000000ff0200000000000000000001ff2f6552",
+        );
+        assert_eq!(icmp.len(), 88);
+        let src = ip6(hex("fe800000000000001c7b06424e5719cc").try_into().unwrap());
+        let dst = ip6(hex("ff020000000000000000000000000016").try_into().unwrap());
+        assert_eq!(checksum_ipv6(src, dst, 58, &icmp), 0xbf3c);
+
+        let tcp = hex("8d5901bbedb8708b916c8d68501004010d0e0000");
+        assert_eq!(tcp.len(), 20);
+        let src = ip6(hex("200218625deb0000acc359ad846b9780").try_into().unwrap());
+        let dst = ip6(hex("2602ff520000006a000000001fd2945a").try_into().unwrap());
+        assert_eq!(checksum_ipv6(src, dst, 6, &tcp), 0x0d0e);
+    }
+
+    /// util-checksum.c:131-133 (`case 0: return 0`) и :146-148 (`default: return 0xFFFFFFFF`, усечено до u16).
+    #[test]
+    fn checksum_ipv6_special_protocols() {
+        assert_eq!(checksum_ipv6(1, 2, 0, &[0u8; 24]), 0);
+        assert_eq!(checksum_ipv6(1, 2, 99, &[0u8; 24]), 0xFFFF);
     }
 }

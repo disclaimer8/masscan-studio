@@ -1987,6 +1987,10 @@ mod tests {
             "1",
         ])
         .unwrap_err();
-        assert!(!e.is_empty());
+        // main-conf.c:2825-2836: `-iL` keeps its IPv4-only grammar; the error names the file, line and column.
+        assert!(
+            e.ends_with("inc.txt:1:4: invalid IP address on line #1"),
+            "{e}"
+        );
     }
 }

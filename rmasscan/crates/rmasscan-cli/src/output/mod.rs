@@ -165,6 +165,7 @@ mod tests {
             ttl: 64,
             ip_proto: 6,
             mac: None,
+            ip6: None,
         }
     }
 

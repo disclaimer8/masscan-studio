@@ -173,6 +173,8 @@ fn nic_binding(
     Ok(NicBinding {
         source_ipv4_last,
         legacy_c_17_port_mask: nic.is_some_and(|n| n.legacy_c_17_port_mask),
+        // IPv6: адрес источника придёт из автоопределения в T5; до тех пор живой скан отказывает целям IPv6 (R7).
+        source_ipv6: None,
         binding: binding.clone(),
     })
 }

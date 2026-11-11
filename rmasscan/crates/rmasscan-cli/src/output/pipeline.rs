@@ -699,6 +699,7 @@ mod tests {
                 ttl: 57,
                 ip_proto: 6,
                 mac: None,
+                ip6: None,
             })
             .unwrap();
             p.finish().unwrap();

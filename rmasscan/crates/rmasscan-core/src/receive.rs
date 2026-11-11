@@ -38,9 +38,10 @@
 
 use crate::arp::{ArpOp, decode};
 use crate::checksum::{
-    checksum_ipv4, fold, ip_header_checksum, sctp_crc32c, udp_ipv4_checksum_ok, word_sum,
+    checksum_ipv4, checksum_ipv6, fold, ip_header_checksum, sctp_crc32c, udp_ipv4_checksum_ok,
+    word_sum,
 };
-use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4};
+use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4, syn_cookie_ipv6};
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
 use crate::ranges::RangeList;
@@ -89,6 +90,8 @@ pub enum ParseError {
     TotalLengthBeyondFrame { total: u16, available: usize },
     #[error("IPv4 fragment")]
     Fragment,
+    #[error("IPv6 payload length {payload} exceeds the {available} bytes present after the header")]
+    Ipv6PayloadBeyondFrame { payload: u16, available: usize },
     #[error("bad TCP data offset {0}")]
     BadTcpDataOffset(u8),
     #[error("unsupported: {0:?}")]
@@ -120,6 +123,17 @@ pub enum PortStatus {
     Arp,
 }
 
+/// Адреса IPv6-ответа (R2): у ответа IPv6 `remote_ip` и `local_ip` равны 0, потому что Студия читает `remote_ip`
+/// как IPv4; настоящие адреса лежат в [`Reply::ip6`]. Порядок `u128` старший байт первый (сетевой), как у
+/// `ipv6address {hi, lo}` в C.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplyIpv6 {
+    /// Источник ответа (`ip_them`, цель скана).
+    pub remote: u128,
+    /// Получатель ответа (`ip_me`, наш `source_ipv6`).
+    pub local: u128,
+}
+
 /// Принятый ответ. Время ставит engine, не парсер.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reply {
@@ -136,6 +150,10 @@ pub struct Reply {
     pub ip_proto: u8,
     /// MAC соседа (`sha` ответа ARP); `None` у всех остальных ответов.
     pub mac: Option<[u8; 6]>,
+    /// Адреса ответа поверх IPv6; `None` у каждого IPv4-ответа (его байты и поля прежние). У `Some` поля
+    /// `remote_ip` и `local_ip` равны 0 и не значат адреса. Ключ дедупа `DedupCache` (rmasscan-engine) берёт эти
+    /// адреса целиком; `ttl` у такого ответа это hop limit (`px[offset_ip + 7]`).
+    pub ip6: Option<ReplyIpv6>,
 }
 
 /// Преобразование pcap DLT в [`LinkType`]; остальное это явная ошибка.
@@ -185,9 +203,44 @@ pub fn parse_reply_with(
         return Ok(parse_arp_reply(frame, plan));
     }
     let Some(ip) = locate_ipv4(frame, link)? else {
-        return Ok(None);
+        // Не IPv4: IPv6 (`parse_ipv6`, proto-preprocess.c:215) или прочее (ARP разобран выше, NDP и остальное C
+        // обрабатывает вне TCP-ветки, здесь это `None`).
+        // План без `source_ipv6` (IPv4 и Студия) не принимает IPv6 вовсе: такой кадр ни свой, ни ошибка, и пути
+        // IPv4 остаются как были.
+        if plan.nics()[0].source_ipv6.is_none() {
+            return Ok(None);
+        }
+        return match locate_ipv6(frame, link)? {
+            Some(ip6) => parse_ipv6_tcp(ip6, plan, policy),
+            None => Ok(None),
+        };
     };
     parse_ipv4_tcp(ip, plan, policy)
+}
+
+/// Находит заголовок IPv6 (`parse_ethertype` `0x86dd`, proto-preprocess.c:505; Null :522-531; Raw :534-538).
+/// `Ok(None)`: кадр не IPv6. Вызывается только после [`locate_ipv4`] вернул `None`, поэтому ошибки VLAN и версии
+/// там уже обработаны.
+fn locate_ipv6(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError> {
+    match link {
+        LinkType::Ethernet => match be16(frame, 12) {
+            Some(0x86dd) if frame.len() >= 14 => Ok(Some(&frame[14..])),
+            _ => Ok(None),
+        },
+        LinkType::Null => {
+            // Значения 24, 28, 30 (`AF_INET6` разных ОС), в любом порядке байт (proto-preprocess.c:523-531).
+            let family = be32(frame, 0).ok_or(ParseError::Truncated("null header"))?;
+            match family {
+                0x1800_0000 | 0x0000_0018 | 0x1c00_0000 | 0x0000_001c | 0x1e00_0000
+                | 0x0000_001e => Ok(Some(&frame[4..])),
+                _ => Ok(None),
+            }
+        }
+        LinkType::Raw => match frame.first().map(|b| b >> 4) {
+            Some(6) => Ok(Some(frame)),
+            _ => Ok(None),
+        },
+    }
 }
 
 /// Находит IPv4-заголовок. `Ok(None)`: кадр не IPv4 (ARP, IPv6, прочее).
@@ -369,6 +422,157 @@ fn parse_ipv4_tcp(
         ttl,
         ip_proto: 6,
         mac: None,
+        ip6: None,
+    }))
+}
+
+/// Двоичный поиск адреса IPv6 в отсортированных непересекающихся диапазонах (`validate` вызывает `optimize`).
+fn in_sorted_ranges6(list: &crate::ranges6::Range6List, value: u128) -> bool {
+    let ranges = list.as_slice();
+    let idx = ranges.partition_point(|r| r.begin <= value);
+    idx.checked_sub(1)
+        .and_then(|i| ranges.get(i))
+        .is_some_and(|r| value <= r.end)
+}
+
+/// SYN-ACK и RST поверх IPv6 (`receive_thread`, main.c:830-1065 с `preprocess_frame`, proto-preprocess.c:215-312).
+///
+/// Порядок и правила как у [`parse_ipv4_tcp`], с отличиями IPv6:
+/// - заголовок 40 байт, версия 6, `payload_length` обязан поместиться (:227-228) и обрезает кадр (:229-230,
+///   Ethernet-трейлер отбрасывается); IPv6 не имеет суммы заголовка;
+/// - цепочка расширений: Next Header 0 (Hop-by-Hop) пропускается и читается заново
+///   (:285-309; длина по RFC 8200, не по :306, см. ниже); TCP (6) разбирается; ВСЁ ОСТАЛЬНОЕ (UDP, ICMPv6, SCTP, Fragment 44, Routing 43, ...) это `None`: в C
+///   `return 0` (:292-296) или другая ветка, а IPv6-скан этого порта только TCP (R3);
+/// - адрес назначения сверяется с `source_ipv6` адаптера `nic[0]` целиком (`is_my_ip`, stack-src.c:13-14); без
+///   `source_ipv6` ни один кадр не свой;
+/// - cookie это `syn_cookie_ipv6(...)` младшие 32 бита против `ackno - 1` (main.c:825, :1059);
+/// - TCP-сумма это RFC 8200 [`checksum_ipv6`] по сегменту после расширений (политика [`ChecksumPolicy`]);
+/// - `ttl` ответа это hop limit `px[offset_ip + 7]`. Это отличие от C: `parse_ipv6` не заполняет `ip_ttl` (оно
+///   выставляется только в IPv4-ветке, :127), и `main.c:1085` отдал бы мусор из прошлой итерации.
+fn parse_ipv6_tcp(
+    ip: &[u8],
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let b0 = *ip.first().ok_or(ParseError::Truncated("ipv6 header"))?;
+    if ip.len() < 40 {
+        return Err(ParseError::Truncated("ipv6 header"));
+    }
+    if b0 >> 4 != 6 {
+        return Err(ParseError::BadIpVersion(b0 >> 4));
+    }
+    let payload_length = be16(ip, 4).ok_or(ParseError::Truncated("ipv6 header"))?;
+    if 40 + usize::from(payload_length) > ip.len() {
+        return Err(ParseError::Ipv6PayloadBeyondFrame {
+            payload: payload_length,
+            available: ip.len() - 40,
+        });
+    }
+    let ip = &ip[..40 + usize::from(payload_length)];
+    let hop_limit = ip[7];
+    let ip_them = u128::from_be_bytes(ip[8..24].try_into().expect("16 bytes"));
+    let ip_me = u128::from_be_bytes(ip[24..40].try_into().expect("16 bytes"));
+
+    // proto-preprocess.c:285-309.
+    let mut next = ip[6];
+    let mut offset = 40usize;
+    loop {
+        match next {
+            6 => break,
+            0 => {
+                let ext = ip
+                    .get(offset..offset + 8)
+                    .ok_or(ParseError::Truncated("ipv6 hop-by-hop header"))?;
+                next = ext[0];
+                // RFC 8200 §4.3: `Hdr Ext Len` это число 8-байтовых единиц ПОСЛЕ первых 8 байт. C считает
+                // `px[offset+1] + 8` БАЙТ (proto-preprocess.c:306); при 0 это совпадает (8 байт), при n > 0 C
+                // недоскочил бы до TCP и потерял ответ. Порт берёт длину по RFC.
+                let len = (usize::from(ext[1]) + 1) * 8;
+                if offset + len > ip.len() {
+                    return Err(ParseError::Truncated("ipv6 hop-by-hop header"));
+                }
+                offset += len;
+            }
+            _ => return Ok(None),
+        }
+    }
+
+    let seg = &ip[offset..];
+    if seg.len() < 20 {
+        return Err(ParseError::Truncated("tcp header"));
+    }
+    let data_offset = seg[12] >> 4;
+    if data_offset < 5 {
+        return Err(ParseError::BadTcpDataOffset(data_offset));
+    }
+    if seg.len() < usize::from(data_offset) * 4 {
+        return Err(ParseError::Truncated("tcp options"));
+    }
+    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("tcp header"))?;
+    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("tcp header"))?;
+    let ackno = be32(seg, 8).ok_or(ParseError::Truncated("tcp header"))?;
+    let flags = seg[13];
+
+    // main.c:829: is_my_ip (stack-src.c:13-14, один адрес IPv6).
+    if plan.nics()[0].source_ipv6 != Some(ip_me) {
+        return Ok(None);
+    }
+    // main.c:935: is_my_port.
+    let (first, last) = plan.binding().source_ports;
+    if port_me < first || port_me > last {
+        return Ok(None);
+    }
+    // Как у IPv4: ответ относится к текущему заданию (итоговые цели и порты).
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges6(targets.ipv6(), ip_them)
+        || !in_sorted_ranges(targets.ports(), u32::from(port_them))
+    {
+        return Ok(None);
+    }
+    // main.c:1048-1057.
+    let mut status = None;
+    if flags & FLAG_SYNACK_MASK == FLAG_SYNACK_MASK {
+        status = Some(PortStatus::Open);
+    }
+    if flags & FLAG_RST != 0 {
+        status = Some(PortStatus::Closed);
+    }
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    // main.c:825, :1059.
+    let cookie = syn_cookie_ipv6(
+        ip_them,
+        u32::from(port_them),
+        ip_me,
+        u32::from(port_me),
+        plan.effective().seed(),
+    ) as u32;
+    if cookie != ackno.wrapping_sub(1) {
+        return Ok(None);
+    }
+
+    if policy == ChecksumPolicy::Verify {
+        let stored = be16(seg, 16).ok_or(ParseError::Truncated("tcp header"))?;
+        if checksum_ipv6(ip_them, ip_me, 6, seg) != stored {
+            return Err(ParseError::BadTcpChecksum);
+        }
+    }
+
+    Ok(Some(Reply {
+        remote_ip: 0,
+        remote_port: port_them,
+        local_ip: 0,
+        local_port: port_me,
+        status,
+        tcp_flags: flags,
+        ttl: hop_limit,
+        ip_proto: 6,
+        mac: None,
+        ip6: Some(ReplyIpv6 {
+            remote: ip_them,
+            local: ip_me,
+        }),
     }))
 }
 
@@ -407,6 +611,7 @@ fn parse_arp_reply(frame: &[u8], plan: &ReadyPlan) -> Option<Reply> {
         ttl: 0,
         ip_proto: 0,
         mac: Some(a.eth_src),
+        ip6: None,
     })
 }
 
@@ -479,6 +684,7 @@ fn parse_udp_reply(
         ttl,
         ip_proto: 17,
         mac: None,
+        ip6: None,
     }))
 }
 
@@ -561,6 +767,7 @@ fn parse_sctp_reply(
         ttl,
         ip_proto: 132,
         mac: None,
+        ip6: None,
     }))
 }
 
@@ -651,6 +858,7 @@ fn parse_port_unreachable(
         ttl,
         ip_proto,
         mac: None,
+        ip6: None,
     }))
 }
 
@@ -709,5 +917,385 @@ fn parse_icmp_echo_reply(
         ttl,
         ip_proto: 1,
         mac: None,
+        ip6: None,
     }))
+}
+
+#[cfg(test)]
+mod tests_ipv6 {
+    //! IPv6 stage, Task 3: приём SYN-ACK/RST поверх IPv6. Кадры собираются здесь по RFC 8200/9293, независимо от
+    //! парсера; cookie взят из настоящего C (`syn_cookie_ipv6`, syn-cookie.c:155-171, значение напечатано
+    //! собранным `syn-cookie.c`), сумма TCP считается своим верификатором RFC 8200 §8.1.
+    use super::*;
+    use crate::config::{Operation, ScanConfig, validate};
+    use crate::massip::MassIp;
+    use crate::probe::{AdapterBinding, NicBinding};
+    use crate::targets::parse_ports;
+
+    const THEM: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+    const ME: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+    const SEED: u64 = 0x0123_4567_89ab_cdef;
+    /// `syn_cookie_ipv6(THEM, 80, ME, 40000, SEED)` из C: 0x8edac6d1824e4617; `main.c:825` берёт младшие 32 бита.
+    const C_COOKIE: u32 = 0x824e_4617;
+    const MAC_ME: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const MAC_NH: [u8; 6] = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02];
+
+    fn plan(link: LinkType, source_ipv6: Option<u128>) -> ReadyPlan {
+        let mut m = MassIp::new();
+        // 2001:db8::/120 (256 адресов), порт 80.
+        m.ipv6_mut().add(THEM & !0xff, THEM | 0xff);
+        parse_ports(m.ports_mut(), "80").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli_without_ipv6_guard(
+            eff,
+            vec![NicBinding {
+                binding: AdapterBinding {
+                    interface_id: "t0".into(),
+                    link_type: link,
+                    source_ipv4: 0x0aff_0001,
+                    source_mac: MAC_ME,
+                    next_hop_mac: MAC_NH,
+                    source_ports: (40000, 40015),
+                },
+                source_ipv4_last: 0x0aff_0001,
+                legacy_c_17_port_mask: false,
+                source_ipv6,
+            }],
+        )
+        .unwrap()
+    }
+
+    /// Описание входящего кадра; поля можно портить до сборки.
+    #[derive(Clone)]
+    struct Spec {
+        src: u128,
+        dst: u128,
+        port_them: u16,
+        port_me: u16,
+        ack: u32,
+        flags: u8,
+        hop: u8,
+        /// Цепочка расширений: `(next-header вслед за ним уже подставит сборщик, тело)`; тело = байты после
+        /// первых двух (next, len) и длина кратна 8 минус 2.
+        ext: Vec<Vec<u8>>,
+        /// Next Header основного заголовка, когда расширений нет или они есть (первое звено цепочки).
+        proto: u8,
+        trailer: Vec<u8>,
+    }
+
+    impl Spec {
+        fn synack() -> Spec {
+            Spec {
+                src: THEM,
+                dst: ME,
+                port_them: 80,
+                port_me: 40000,
+                ack: C_COOKIE.wrapping_add(1),
+                flags: 0x12,
+                hop: 59,
+                ext: vec![],
+                proto: 6,
+                trailer: vec![],
+            }
+        }
+        fn hbh(mut self) -> Spec {
+            // Hop-by-Hop 8 байт: next (подставится), len 0, PadN(4): 01 04 00 00 00 00.
+            self.ext.push(vec![0, 0x01, 0x04, 0, 0, 0, 0]);
+            self
+        }
+
+        fn segment(&self) -> Vec<u8> {
+            let mut tcp = vec![0u8; 20];
+            tcp[0..2].copy_from_slice(&self.port_them.to_be_bytes());
+            tcp[2..4].copy_from_slice(&self.port_me.to_be_bytes());
+            tcp[4..8].copy_from_slice(&0x0bad_f00du32.to_be_bytes());
+            tcp[8..12].copy_from_slice(&self.ack.to_be_bytes());
+            tcp[12] = 0x50;
+            tcp[13] = self.flags;
+            tcp[14..16].copy_from_slice(&0x0400u16.to_be_bytes());
+            let sum = rfc8200_checksum(self.src, self.dst, &tcp);
+            tcp[16..18].copy_from_slice(&sum.to_be_bytes());
+            tcp
+        }
+
+        /// IPv6 + расширения + TCP, без канального заголовка.
+        fn ip_packet(&self) -> Vec<u8> {
+            let tcp = self.segment();
+            let mut chain: Vec<u8> = Vec::new();
+            for (i, e) in self.ext.iter().enumerate() {
+                // next header звена: следующее расширение (0 = Hop-by-Hop) или TCP.
+                let next = if i + 1 < self.ext.len() { 0 } else { 6 };
+                let mut z = vec![next, e[0]];
+                z.extend_from_slice(&e[1..]);
+                chain.extend_from_slice(&z);
+            }
+            let first = if self.ext.is_empty() { self.proto } else { 0 };
+            let mut p = vec![0x60, 0, 0, 0];
+            p.extend_from_slice(&((chain.len() + tcp.len()) as u16).to_be_bytes());
+            p.push(first);
+            p.push(self.hop);
+            p.extend_from_slice(&self.src.to_be_bytes());
+            p.extend_from_slice(&self.dst.to_be_bytes());
+            p.extend_from_slice(&chain);
+            p.extend_from_slice(&tcp);
+            p.extend_from_slice(&self.trailer);
+            p
+        }
+
+        fn frame(&self, link: LinkType) -> Vec<u8> {
+            let ip = self.ip_packet();
+            match link {
+                LinkType::Ethernet => {
+                    let mut f = vec![0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+                    f.extend_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02]);
+                    f.extend_from_slice(&[0x86, 0xdd]);
+                    f.extend_from_slice(&ip);
+                    f
+                }
+                // proto-preprocess.c:515-529: семейство 0x1e (macOS AF_INET6 = 30), любой порядок.
+                LinkType::Null => [&[0x1e, 0, 0, 0][..], &ip].concat(),
+                LinkType::Raw => ip,
+            }
+        }
+    }
+
+    /// RFC 8200 §8.1, независимо от `checksum_ipv6`: псевдозаголовок + сегмент с нулевым полем суммы.
+    fn rfc8200_checksum(src: u128, dst: u128, seg: &[u8]) -> u16 {
+        let mut w: Vec<u8> = Vec::new();
+        w.extend_from_slice(&src.to_be_bytes());
+        w.extend_from_slice(&dst.to_be_bytes());
+        w.extend_from_slice(&(seg.len() as u32).to_be_bytes());
+        w.extend_from_slice(&[0, 0, 0, 6]);
+        w.extend_from_slice(seg);
+        let mut s: u64 = w
+            .chunks(2)
+            .map(|c| u64::from(c[0]) << 8 | u64::from(*c.get(1).unwrap_or(&0)))
+            .sum();
+        while s > 0xFFFF {
+            s = (s & 0xFFFF) + (s >> 16);
+        }
+        !(s as u16)
+    }
+
+    const LINKS: [LinkType; 3] = [LinkType::Ethernet, LinkType::Null, LinkType::Raw];
+
+    #[test]
+    fn receive_v6_handles_hop_by_hop_extension_and_records_hop_limit() {
+        // proto-preprocess.c:300-312 (`parse_ipv6_hop_by_hop`: next = px[offset], пропуск расширения) и
+        // main.c:1048-1065 (SYN-ACK = Open, `cookie == ackno - 1`, ttl в отчёт).
+        for link in LINKS {
+            let plan = plan(link, Some(ME));
+            let s = Spec::synack().hbh();
+            let r = parse_reply(&s.frame(link), link, &plan)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{link:?}: reply expected"));
+            assert_eq!(r.status, PortStatus::Open, "{link:?}");
+            assert_eq!(r.ttl, 59, "hop limit = px[offset_ip + 7]");
+            assert_eq!((r.remote_port, r.local_port), (80, 40000));
+            assert_eq!(r.tcp_flags, 0x12);
+            assert_eq!(r.ip_proto, 6);
+            assert_eq!(
+                r.ip6,
+                Some(ReplyIpv6 {
+                    remote: THEM,
+                    local: ME
+                })
+            );
+            // IPv4-поля IPv6-ответа не несут адресов (Студия читает `remote_ip` как IPv4).
+            assert_eq!((r.remote_ip, r.local_ip), (0, 0));
+            assert_eq!(r.mac, None);
+            // ackno - 1 обязан равняться cookie из C: сдвиг на единицу в любую сторону это не наш ответ.
+            for bad in [C_COOKIE, C_COOKIE.wrapping_add(2)] {
+                let s = Spec {
+                    ack: bad,
+                    ..Spec::synack().hbh()
+                };
+                assert_eq!(
+                    parse_reply(&s.frame(link), link, &plan),
+                    Ok(None),
+                    "{bad:#x}"
+                );
+            }
+        }
+    }
+
+    /// Hop-by-Hop длиннее 8 байт (`Hdr Ext Len = 1` это 16 байт по RFC 8200 §4.3; C считал бы `1 + 8 = 9` байт,
+    /// proto-preprocess.c:306, отличие порта) и две цепочки подряд (после расширения `parse_ipv6_next` снова видит 0,
+    /// :285-287).
+    #[test]
+    fn receive_v6_walks_longer_and_chained_hop_by_hop() {
+        let plan = plan(LinkType::Ethernet, Some(ME));
+        let mut long = Spec::synack();
+        // len = 1 -> 16 байт: next, len, 14 байт паддинга.
+        long.ext.push([vec![1u8], vec![0u8; 14]].concat());
+        let r = parse_reply(&long.frame(LinkType::Ethernet), LinkType::Ethernet, &plan);
+        assert_eq!(r.unwrap().map(|r| r.status), Some(PortStatus::Open));
+        let chained = Spec::synack().hbh().hbh();
+        let r = parse_reply(
+            &chained.frame(LinkType::Ethernet),
+            LinkType::Ethernet,
+            &plan,
+        );
+        assert_eq!(r.unwrap().map(|r| r.ttl), Some(59));
+    }
+
+    #[test]
+    fn receive_v6_plain_synack_and_rst() {
+        let plan = plan(LinkType::Ethernet, Some(ME));
+        let open = Spec::synack();
+        let r = parse_reply(&open.frame(LinkType::Ethernet), LinkType::Ethernet, &plan)
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.status, r.tcp_flags, r.ttl), (PortStatus::Open, 0x12, 59));
+        // RST|ACK: Closed (main.c:1048-1057, RST перекрывает), cookie тот же (`ackno - 1`).
+        let rst = Spec {
+            flags: 0x14,
+            ..Spec::synack()
+        };
+        let r = parse_reply(&rst.frame(LinkType::Ethernet), LinkType::Ethernet, &plan)
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.status, r.tcp_flags), (PortStatus::Closed, 0x14));
+        // Один SYN без ACK не ответ.
+        let syn = Spec {
+            flags: 0x02,
+            ..Spec::synack()
+        };
+        assert_eq!(
+            parse_reply(&syn.frame(LinkType::Ethernet), LinkType::Ethernet, &plan),
+            Ok(None)
+        );
+        // Ethernet-трейлер после payload_length отбрасывается (proto-preprocess.c:229-230).
+        let padded = Spec {
+            trailer: vec![0; 6],
+            ..Spec::synack()
+        };
+        assert!(
+            parse_reply(&padded.frame(LinkType::Ethernet), LinkType::Ethernet, &plan)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn receive_v6_rejects_what_is_not_ours() {
+        let plan = plan(LinkType::Ethernet, Some(ME));
+        let rx = |s: &Spec| parse_reply(&s.frame(LinkType::Ethernet), LinkType::Ethernet, &plan);
+        // is_my_ip (stack-src.c:13-14): адрес назначения обязан совпасть с source_ipv6 целиком.
+        for dst in [ME ^ 1, ME ^ (1 << 64), ME ^ (1 << 127)] {
+            assert_eq!(
+                rx(&Spec {
+                    dst,
+                    ..Spec::synack()
+                }),
+                Ok(None),
+                "{dst:#x}"
+            );
+        }
+        // is_my_port.
+        assert_eq!(
+            rx(&Spec {
+                port_me: 40016,
+                ..Spec::synack()
+            }),
+            Ok(None)
+        );
+        // Источник вне итогового набора целей (строже C, как у IPv4) и порт цели вне набора.
+        let outside = 0x2001_0db8_0000_0000_0000_0000_0001_0001u128;
+        assert_eq!(
+            rx(&Spec {
+                src: outside,
+                ..Spec::synack()
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            rx(&Spec {
+                port_them: 81,
+                ..Spec::synack()
+            }),
+            Ok(None)
+        );
+        // План без source_ipv6: ни один IPv6-ответ не "мой".
+        let no_src = self::plan(LinkType::Ethernet, None);
+        assert_eq!(
+            parse_reply(
+                &Spec::synack().frame(LinkType::Ethernet),
+                LinkType::Ethernet,
+                &no_src
+            ),
+            Ok(None)
+        );
+        // Битый IPv6-кадр на плане без `source_ipv6` это "не наш", а не ошибка разбора.
+        let mut broken = Spec::synack().frame(LinkType::Ethernet);
+        broken[14 + 4] = 0xff;
+        assert_eq!(parse_reply(&broken, LinkType::Ethernet, &no_src), Ok(None));
+        // Не-TCP поверх IPv6 (R3): UDP (17), ICMPv6 (58), SCTP (132), Fragment (44, :292-293) не разбираются.
+        for proto in [17u8, 58, 132, 44, 43, 50] {
+            let s = Spec {
+                proto,
+                ..Spec::synack()
+            };
+            assert_eq!(rx(&s), Ok(None), "next header {proto}");
+        }
+    }
+
+    #[test]
+    fn receive_v6_checksum_policy() {
+        let plan = plan(LinkType::Ethernet, Some(ME));
+        let mut f = Spec::synack().frame(LinkType::Ethernet);
+        let at = 14 + 40 + 16;
+        f[at] ^= 0x01;
+        assert_eq!(
+            parse_reply(&f, LinkType::Ethernet, &plan),
+            Err(ParseError::BadTcpChecksum)
+        );
+        // TrustHardware не проверяет сумму, cookie проверяется всегда.
+        assert!(
+            parse_reply_with(&f, LinkType::Ethernet, &plan, ChecksumPolicy::TrustHardware)
+                .unwrap()
+                .is_some()
+        );
+        // Сумма с расширением считается по длине TCP-сегмента, не по всему payload_length: верный кадр с HBH проходит.
+        let ok = Spec::synack().hbh().frame(LinkType::Ethernet);
+        assert!(
+            parse_reply(&ok, LinkType::Ethernet, &plan)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn receive_v6_hostile_lengths_are_errors_not_panics() {
+        let plan = plan(LinkType::Ethernet, Some(ME));
+        let good = Spec::synack().hbh().frame(LinkType::Ethernet);
+        for n in 0..good.len() {
+            // Каждый строгий префикс: ошибка или "не наш", но не паника.
+            let _ = parse_reply(&good[..n], LinkType::Ethernet, &plan);
+        }
+        // payload_length больше фактически присутствующих байт (:228 VERIFY_REMAINING).
+        let mut f = good.clone();
+        f[14 + 4] = 0xff;
+        assert!(matches!(
+            parse_reply(&f, LinkType::Ethernet, &plan),
+            Err(ParseError::Ipv6PayloadBeyondFrame { .. })
+        ));
+        // Hop-by-Hop объявляет длину за пределами кадра (:308 VERIFY_REMAINING).
+        let mut f = good.clone();
+        f[14 + 40 + 1] = 0xff;
+        assert!(matches!(
+            parse_reply(&f, LinkType::Ethernet, &plan),
+            Err(ParseError::Truncated(_))
+        ));
+        // Неверная версия.
+        let mut f = good.clone();
+        f[14] = 0x40;
+        assert!(parse_reply(&f, LinkType::Ethernet, &plan).is_err());
+    }
 }

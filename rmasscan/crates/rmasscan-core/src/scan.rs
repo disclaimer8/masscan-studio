@@ -289,10 +289,10 @@ pub fn list_scan<F: FnMut(u32, u32)>(
         resume_count,
         retries,
         max_rate,
-        |target, port| {
-            if let TargetIp::V4(ip) = target {
-                emit(ip, port);
-            }
+        |target, port| match target {
+            TargetIp::V4(ip) => emit(ip, port),
+            // IPv6-цели отклонены выше (`Ipv6Targets`); молчаливый пропуск потерял бы половину листинга.
+            TargetIp::V6(_) => unreachable!("IPv6 targets are refused before the listing starts"),
         },
     )
 }
@@ -425,8 +425,8 @@ pub fn transmit_scan_flow<B, F: FnMut(u64, u64, u64, u32, u32) -> ControlFlow<B>
         max_rate,
         |i, repeats, xxx, target, port| match target {
             TargetIp::V4(ip) => emit(i, repeats, xxx, ip, port),
-            // недостижимо: IPv6-цели отклонены выше
-            TargetIp::V6(_) => ControlFlow::Continue(()),
+            // IPv6-цели отклонены выше (`Ipv6Targets`); молчаливый пропуск потерял бы половину скана.
+            TargetIp::V6(_) => unreachable!("IPv6 targets are refused before the flow starts"),
         },
     )
 }

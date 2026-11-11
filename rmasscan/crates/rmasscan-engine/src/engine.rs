@@ -127,8 +127,11 @@ pub enum EngineError {
 
 // ---------------------------------------------------------------- dedup ---
 
-/// `(remote ip, remote port, local ip, local port, ip_proto, status_bucket)`.
-type DedupKey = (u32, u16, u32, u16, u8, u8);
+/// `(remote ip, remote port, local ip, local port, ip_proto, status_bucket, ipv6 remote+local)`. Последний элемент
+/// `None` у каждого IPv4-ответа, поэтому ключи IPv4 различаются ровно так же, как раньше; у IPv6-ответа
+/// (`remote_ip = local_ip = 0`) он несёт оба адреса целиком (`dedup_is_duplicate` в C принимает `ipaddress`,
+/// main.c:1067, и сравнивает версию и все 128 бит).
+type DedupKey = (u32, u16, u32, u16, u8, u8, Option<(u128, u128)>);
 
 /// Ограниченный dedup по кортежу (remote ip/port, local ip/port, протокол, корзина статуса). Протокол в ключе нужен,
 /// чтобы `80/tcp` и `80/udp` одного хоста не глушили друг друга. Корзина статуса разделяет для не-TCP ответ-датаграмму
@@ -188,6 +191,7 @@ impl DedupCache {
             r.local_port,
             r.ip_proto,
             bucket,
+            r.ip6.map(|a| (a.remote, a.local)),
         );
         if self.set.contains(&key) {
             return false;

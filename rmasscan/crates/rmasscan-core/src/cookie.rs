@@ -35,6 +35,31 @@ pub fn syn_cookie_ipv4(
     siphash24(&data, entropy, entropy)
 }
 
+/// syn-cookie.c:155-171. SipHash-2-4 по `uint64_t data[5]` (LE хоста, 40 байт):
+/// `[ip_them.hi, ip_them.lo, ip_me.hi, ip_me.lo, port_them << 16 | port_me]`, ключ `k0 = k1 = entropy`.
+///
+/// `hi` это СТАРШИЕ 64 бита адреса (первые 8 байт в сетевом порядке, massip-addr.h `struct ipv6address {hi; lo}`,
+/// proto-preprocess.c:234-262 собирает `hi` из `px[offset+8..16]`), поэтому `u128 >> 64` это `hi`. Слово портов
+/// в C вычисляется в `unsigned` (`port_them << 16ULL`: тип результата это тип левого операнда после
+/// повышения, 32 бита), затем расширяется до `uint64_t`; здесь то же самое через `u32`, биты выше 16-го
+/// `port_them` теряются так же, как в C.
+pub fn syn_cookie_ipv6(
+    ip_them: u128,
+    port_them: u32,
+    ip_me: u128,
+    port_me: u32,
+    entropy: u64,
+) -> u64 {
+    let mut data = [0u8; 40];
+    data[0..8].copy_from_slice(&((ip_them >> 64) as u64).to_le_bytes());
+    data[8..16].copy_from_slice(&(ip_them as u64).to_le_bytes());
+    data[16..24].copy_from_slice(&((ip_me >> 64) as u64).to_le_bytes());
+    data[24..32].copy_from_slice(&(ip_me as u64).to_le_bytes());
+    let ports = (port_them << 16) | port_me;
+    data[32..40].copy_from_slice(&u64::from(ports).to_le_bytes());
+    siphash24(&data, entropy, entropy)
+}
+
 /// Cookie `[id|seq]` ICMP Echo: `syn_cookie(ip_them, Templ_ICMP_echo, ip_me, 0, entropy)` с `port_me = 0`,
 /// templ-pkt.c:1065-1072 (передача) и proto-icmp.c:200-205 (приём). В C это значение затирает `seqno` вызывающего
 /// потока, поэтому исходный порт (`--source-port`) в cookie не входит.
@@ -158,5 +183,63 @@ mod tests {
             syn_cookie_ipv4(0x0a000001, 0x12345, 0x0a000002, 0x1ffff, 42),
             0xd6a80d10620028da
         );
+    }
+
+    /// Значения напечатаны настоящим C: `syn_cookie_ipv6` из `syn-cookie.c:155-171`, собранный вместе с
+    /// `crypto-siphash24.c` и вызванный с теми же аргументами (harness вне репозитория, как `h2.c` выше).
+    /// Раскладка `hi/lo` и упаковка портов проверяются этими числами, а не реализацией.
+    #[test]
+    fn syn_cookie_ipv6_matches_c_bytes() {
+        const THEM: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+        const ME: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+        let e = 0x0123_4567_89ab_cdef;
+        assert_eq!(
+            syn_cookie_ipv6(THEM, 80, ME, 40000, e),
+            0x8eda_c6d1_824e_4617
+        );
+        assert_eq!(
+            syn_cookie_ipv6(
+                0x2606_4700_0000_0000_0000_0000_0000_1111,
+                443,
+                0x2001_db80_0000_0001_dead_beef_cafe_f00d,
+                61000,
+                1
+            ),
+            0x4061_b968_1023_75a1
+        );
+        // hi и lo различимы (каждое слово разное), порт 0 и порт 65535, энтропия из одних единиц.
+        assert_eq!(
+            syn_cookie_ipv6(
+                0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+                65535,
+                0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00,
+                0,
+                u64::MAX
+            ),
+            0xa220_19cc_04e9_6948
+        );
+        // `port_them << 16ULL` в C считается в `unsigned` (32 бита): бит 16 порта теряется. Для TCP порта
+        // (<= 0xFFFF) разницы нет, но функция принимает `unsigned`, и значение обязано усекаться так же.
+        assert_eq!(
+            syn_cookie_ipv6(THEM, 0x10005, ME, 40000, e),
+            0x033f_6ac8_4499_0fed
+        );
+    }
+
+    /// Независимая сборка 40 байт `uint64_t data[5]` (LE хоста): `[them.hi, them.lo, me.hi, me.lo, port word]`.
+    /// Берётся `siphash24`, уже сверенный с C-векторами выше, а не реализация `syn_cookie_ipv6`.
+    #[test]
+    fn syn_cookie_ipv6_is_five_u64_le_words() {
+        let them: u128 = 0x0001_0203_0405_0607_0809_0a0b_0c0d_0e0f;
+        let me: u128 = 0xf0f1_f2f3_f4f5_f6f7_f8f9_fafb_fcfd_fefe;
+        let (pt, pm, e) = (0x1234u32, 0x9abcu32, 0xdead_beef_0bad_f00d_u64);
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x0001_0203_0405_0607u64.to_le_bytes());
+        buf.extend_from_slice(&0x0809_0a0b_0c0d_0e0fu64.to_le_bytes());
+        buf.extend_from_slice(&0xf0f1_f2f3_f4f5_f6f7u64.to_le_bytes());
+        buf.extend_from_slice(&0xf8f9_fafb_fcfd_fefeu64.to_le_bytes());
+        buf.extend_from_slice(&0x1234_9abcu64.to_le_bytes());
+        assert_eq!(buf.len(), 40);
+        assert_eq!(syn_cookie_ipv6(them, pt, me, pm, e), siphash24(&buf, e, e));
     }
 }

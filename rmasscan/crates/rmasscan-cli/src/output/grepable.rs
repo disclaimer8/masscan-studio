@@ -4,7 +4,11 @@
 use std::io::{self, Write};
 
 use super::formats::{FileCtx, Formatter};
-use super::record::{MASSCAN_VERSION, Record, civil, status_str};
+use super::record::{MASSCAN_VERSION, Proto, Record, civil, proto_str, status_str};
+use rmasscan_core::targets::{
+    TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST, TEMPL_TCP, TEMPL_TCP_LAST,
+    TEMPL_UDP, TEMPL_UDP_LAST,
+};
 
 /// `strftime("%c")` C-локали над GMT: `%a %b %e %H:%M:%S %Y`, день месяца дополнен пробелом до двух знаков.
 pub fn c_locale_ctime(unix: u64) -> String {
@@ -20,6 +24,33 @@ pub fn c_locale_ctime(unix: u64) -> String {
     )
 }
 
+/// `count_type` (`out-grepable.c:14–37`): сколько портов списка попадает в `[min, max]`.
+fn count_type(ports: &[(u32, u32)], min: u32, max: u32) -> u32 {
+    let mut result = 0u32;
+    for &(begin, end) in ports {
+        if begin > max || end < min {
+            continue;
+        }
+        result = result.wrapping_add(end.min(max).wrapping_sub(begin.max(min)).wrapping_add(1));
+    }
+    result
+}
+
+/// `print_port_list` (`out-grepable.c:42–62`). Печатаются значения со сдвигом протокола (C не вычитает смещение),
+/// а запятая ставится по месту диапазона в ОБЩЕМ списке, а не в группе: после диапазона, за которым в списке
+/// есть что-то ещё (в том числе чужой группы), остаётся «хвостовая запятая». Это причуды C, сохранённые для
+/// паритета `--readscan -oG`.
+fn print_port_list(w: &mut dyn Write, ports: &[(u32, u32)], min: u32, max: u32) -> io::Result<()> {
+    for (i, &(begin, end)) in ports.iter().enumerate() {
+        if begin > max || end < min {
+            continue;
+        }
+        let sep = if i + 1 < ports.len() { "," } else { "" };
+        write!(w, "{}-{}{sep}", begin.max(min), end.min(max))?;
+    }
+    Ok(())
+}
+
 /// `-oG`, `out-grepable.c`.
 pub(super) struct Grepable;
 
@@ -30,31 +61,38 @@ impl Formatter for Grepable {
             "# Masscan {MASSCAN_VERSION} scan initiated {}",
             c_locale_ctime(cx.scan_started)
         )?;
-        // Только TCP: UDP, SCTP и PROTOCOLS всегда пусты. В C разделитель после диапазона зависит от индекса в
-        // списке всех портов, и при поздних не-TCP диапазонах остаётся «хвостовая запятая» (`out-grepable.c:42–62`);
-        // здесь таких диапазонов нет.
-        let count: u64 = cx
-            .tcp_ports
-            .iter()
-            .map(|&(a, b)| u64::from(b) - u64::from(a) + 1)
-            .sum();
-        write!(w, "# Ports scanned: TCP({count};")?;
-        for (i, (a, b)) in cx.tcp_ports.iter().enumerate() {
-            let sep = if i + 1 < cx.tcp_ports.len() { "," } else { "" };
-            write!(w, "{a}-{b}{sep}")?;
+        // `out-grepable.c:84–106`: четыре группы подряд, у каждой своё число и список.
+        for (open, min, max) in [
+            ("# Ports scanned: TCP(", TEMPL_TCP, TEMPL_TCP_LAST),
+            (") UDP(", TEMPL_UDP, TEMPL_UDP_LAST),
+            (") SCTP(", TEMPL_SCTP, TEMPL_SCTP_LAST),
+            (") PROTOCOLS(", TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST),
+        ] {
+            let count = count_type(cx.ports, min, max);
+            write!(w, "{open}{count};")?;
+            if count != 0 {
+                print_port_list(w, cx.ports, min, max)?;
+            }
         }
-        w.write_all(b") UDP(0;) SCTP(0;) PROTOCOLS(0;)\n")
+        w.write_all(b")\n")
     }
 
     fn record(&mut self, w: &mut dyn Write, cx: &FileCtx, r: &Record) -> io::Result<()> {
+        // `out-grepable.c:150–155`: сервис TCP и UDP по порту, остальные протоколы по номеру IP-протокола.
+        let service = match r.proto {
+            Proto::Tcp => cx.services.tcp(r.port),
+            Proto::Udp => cx.services.udp(r.port),
+            p => cx.services.oproto(p as u8),
+        };
         writeln!(
             w,
-            "Timestamp: {}\tHost: {} ()\tPorts: {}/{}/tcp//{}//",
+            "Timestamp: {}\tHost: {} ()\tPorts: {}/{}/{}//{}//",
             r.timestamp,
             r.ip,
             r.port,
             status_str(r.status),
-            cx.services.tcp(r.port)
+            proto_str(r.proto),
+            service
         )
     }
 
@@ -72,6 +110,17 @@ impl Formatter for Unicornscan {
     }
 
     fn record(&mut self, w: &mut dyn Write, cx: &FileCtx, r: &Record) -> io::Result<()> {
+        if r.proto != Proto::Tcp {
+            // `out-unicornscan.c:42–54`: unicornscan знает только TCP, остальное в форме grepable без сервиса.
+            return writeln!(
+                w,
+                "Host: {} ()\tPorts: {}/{}/{}////",
+                r.ip,
+                r.port,
+                status_str(r.status),
+                proto_str(r.proto)
+            );
+        }
         writeln!(
             w,
             "TCP {}\t{:>16}[{:>5}]\t\tfrom {}  ttl {:<3}",
@@ -101,13 +150,15 @@ mod tests {
             timestamp: 1_700_000_000,
             ip: Ipv4Addr::new(1, 2, 3, 4),
             port,
+            proto: Proto::Tcp,
             status: Status::Open,
             reason: 0x12,
             ttl,
+            mac: None,
         }
     }
 
-    fn ctx<'a>(sv: &'a ServiceNames, ports: &'a [(u16, u16)]) -> FileCtx<'a> {
+    fn ctx<'a>(sv: &'a ServiceNames, ports: &'a [(u32, u32)]) -> FileCtx<'a> {
         FileCtx {
             now: 1_388_620_800,
             utc_offset_secs: 0,
@@ -115,7 +166,7 @@ mod tests {
             file_opened: 0,
             counts: Counts::default(),
             stylesheet: None,
-            tcp_ports: ports,
+            ports,
             services: sv,
         }
     }

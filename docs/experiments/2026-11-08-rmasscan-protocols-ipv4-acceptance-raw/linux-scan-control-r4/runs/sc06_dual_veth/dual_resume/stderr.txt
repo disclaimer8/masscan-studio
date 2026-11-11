@@ -1,0 +1,12 @@
+[+] interface = veth-a (given)
+[+] source-mac = 02-aa-00-00-00-01 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-mac = 02-aa-00-00-00-02 (given)
+[+] interface[1] = veth-a2 (given)
+[+] source-mac[1] = 02-aa-00-00-00-03 (given)
+[+] source-ip[1] = 198.18.0.6 (given)
+[+] router-mac[1] = 02-aa-00-00-00-04 (given)
+[+] seed = 1 (given)
+[+] source-port = 53964 (given)
+[+] source-port[1] = 53964 (given)
+rate:  0.01-kpps, 45.00% done,   0:00:02 remaining, found=1       rate:  0.01-kpps, 55.00% done,   0:00:01 remaining, found=1       rate:  0.01-kpps, 65.00% done,   0:00:01 remaining, found=2       rate:  0.01-kpps, 75.00% done,   0:00:00 remaining, found=2       rate:  0.01-kpps, 85.00% done,   0:00:00 remaining, found=2       rate:  0.01-kpps, 95.00% done,   0:00:00 remaining, found=2       rate:  0.01-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 3-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 2-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 1-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 1-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 1-secs, found=2       rate:  0.01-kpps, 100.00% done, waiting 1-secs, found=2                                                                                    [+] finished: Completed, sent 48, replies 48, open 2

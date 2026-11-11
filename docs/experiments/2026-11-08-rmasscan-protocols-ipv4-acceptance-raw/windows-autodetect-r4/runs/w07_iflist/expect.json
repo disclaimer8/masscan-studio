@@ -1,0 +1,8 @@
+{
+  "tag": "w07_iflist",
+  "kind": "iflist",
+  "iflist": {
+    "name": "Ethernet 2",
+    "mac": "52-54-00-04-80-a9"
+  }
+}

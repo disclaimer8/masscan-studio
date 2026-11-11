@@ -1,0 +1,7 @@
+ip netns add wl-scan-2891370-15207; ip netns add wl-peer-2891370-15207
+ip -n wl-scan-2891370-15207 link add veth-a type veth peer name veth-b netns wl-peer-2891370-15207
+ip -n $NS_A route add default via 198.18.0.2 dev veth-a; ip -n $NS_A neigh add {198.18.0.2 198.18.0.3 198.18.0.4 198.18.0.5} lladdr 02:aa:00:00:00:02 dev veth-a nud permanent   # autodetect stand
+ip netns exec $NS_A ethtool -K veth-a tx off; ip netns exec $NS_B ethtool -K veth-b tx off   # veth tx-checksum offload off, this run's veth only
+ip -n $NS_A route show (exactly: 198.18.0.0/24 dev veth-a; default via 198.18.0.2 dev veth-a); ip -n $NS_A route get 8.8.8.8 (via 198.18.0.2 dev veth-a); ip -n $NS_B route show default (empty); ip -n $NS_B route get 8.8.8.8 (fails)  # seal assertions, autodetect stand
+(rmasscan-lab autodetect-suite) ip netns exec $NS_B rmasscan-lab capture responder --ports 80,8080 ...   # started by the suite
+rmasscan-lab autodetect-suite linux ...   # runs everything through ip netns exec $NS_A / $NS_B

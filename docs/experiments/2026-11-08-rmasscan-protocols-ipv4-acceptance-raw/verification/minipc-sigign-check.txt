@@ -1,0 +1,4 @@
+2026-11-10T23:53:07Z
+the script's bash: SigIgn:	0000000000000004
+a child of it (grep): SigIgn:	0000000000000000
+a child shell: SigIgn:	0000000000000000

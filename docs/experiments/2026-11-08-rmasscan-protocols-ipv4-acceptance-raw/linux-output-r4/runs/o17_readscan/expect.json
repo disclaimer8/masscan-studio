@@ -1,0 +1,10 @@
+{
+  "tag": "o17_readscan",
+  "kind": "readscan",
+  "format": "list",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "none",
+  "oracle": true
+}

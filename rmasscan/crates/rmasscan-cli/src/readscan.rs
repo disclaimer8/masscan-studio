@@ -1,7 +1,10 @@
 //! Чтение `-oB` и операция `--readscan` (AGPL-3.0). Порт `in-binary.c` (`_binaryfile_parse` :470–640,
 //! `parse_status2` :100–150, `readscan_binary_scanfile` :650–691) masscan © Robert David Graham. Читается только
-//! то, что пишет `-oB` этой версии: записи типа 6/7 (TCP IPv4) и подвал `'m'`. Остальные типы C (баннеры, IPv6,
-//! ARP, устаревшие 1/2) дают ошибку `Unsupported` (Р13), а не молчаливый пропуск.
+//! то, что пишет `-oB` этой версии: записи типа 6/7 (IPv4: TCP, UDP, SCTP, ICMP) и 8 (ARP) и подвал `'m'`.
+//! Остальные типы C (баннеры, IPv6, устаревшие 1/2) дают ошибку `Unsupported` (Р13), а не молчаливый пропуск.
+//! Отличия от C (Р5, лучше C): тип 8 читается (в `in-binary.c:583–634` нет `case Out_Arp2`, это «unknown type 8»),
+//! а фильтр `-p` сравнивает пару (протокол, порт) со сдвинутыми диапазонами (`in-filter.c:14–17` сравнивает
+//! несдвинутый порт).
 //!
 //! Записи уходят в [`Pipeline::report_record`] со своим исходным временем (никогда не штампуются заново).
 //! Начало скана `s:` берётся из заголовка `masscan/1.1.N` (N >= 2, `in-binary.c:518-534`), иначе из первой записи
@@ -15,9 +18,10 @@ use std::net::Ipv4Addr;
 
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::massip::MassIp;
+use rmasscan_core::targets::{TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP};
 
 use crate::LOGGED;
-use crate::output::{Pipeline, Record, Sink, Status};
+use crate::output::{Pipeline, Proto, Record, Sink, Status};
 
 /// `BUF_MAX` C: наибольшая длина тела записи.
 const BUF_MAX: u64 = 1024 * 1024;
@@ -32,9 +36,9 @@ pub enum ReadError {
     NotMasscan,
     /// Пустая строка значит просто `file corrupt`; иначе уточнение (`unknown type N`).
     Corrupt(String),
-    /// Тип записи, которого этот читатель не умеет (баннеры, IPv6, ARP, v1).
+    /// Тип записи, которого этот читатель не умеет (баннеры, IPv6, v1).
     Unsupported(u64),
-    /// Запись типа 6/7 с протоколом не TCP.
+    /// Запись типа 6/7/8 с номером протокола, который этот порт не выводит (не 1/6/17/132, у типа 8 не 0).
     UnsupportedProtocol(u8),
 }
 
@@ -144,7 +148,7 @@ fn strtoul(s: &[u8]) -> u64 {
     if neg { v.wrapping_neg() } else { v }
 }
 
-/// Читает записи типа 6/7 из файла `-oB`. `f` получает каждую; его ошибка прерывает чтение.
+/// Читает записи типа 6/7/8 из файла `-oB`. `f` получает каждую; его ошибка прерывает чтение.
 pub fn read_records(
     r: &mut dyn Read,
     f: &mut dyn FnMut(Record) -> Result<(), String>,
@@ -197,38 +201,66 @@ fn read_records_counted(
             return Err(corrupt());
         }
         match ty {
-            6 | 7 => {
+            6..=8 => {
                 // `parse_status2`: тело короче 13 байт молча пропускается.
                 if body.len() >= 13 {
-                    if body[8] != 6 {
-                        return Err(ReadError::UnsupportedProtocol(body[8]));
-                    }
+                    // Тип 6/7: IPv4 с протоколом 1/6/17/132 (`out-binary.c:154–211`); тип 8 (`Out_Arp2`): 0.
+                    let proto = match (ty, Proto::from_ip_proto(body[8])) {
+                        (8, Some(Proto::Arp)) => Proto::Arp,
+                        (6 | 7, Some(p)) if p != Proto::Arp => p,
+                        _ => return Err(ReadError::UnsupportedProtocol(body[8])),
+                    };
+                    let ip = Ipv4Addr::new(body[4], body[5], body[6], body[7]);
+                    // `parse_status2`: MAC читается, если адрес 0.0.0.0 и в теле есть ещё 6 байт; иначе нули.
+                    // `-oB` MAC не пишет, так что у файлов этого порта и C он нулевой.
+                    let mac = (proto == Proto::Arp).then(|| {
+                        let mut m = [0u8; 6];
+                        if ip.is_unspecified() && body.len() >= 13 + 6 {
+                            m.copy_from_slice(&body[13..19]);
+                        }
+                        m
+                    });
                     f(Record {
                         timestamp: u64::from(u32::from_be_bytes([
                             body[0], body[1], body[2], body[3],
                         ])),
-                        ip: Ipv4Addr::new(body[4], body[5], body[6], body[7]),
+                        ip,
                         port: u16::from_be_bytes([body[9], body[10]]),
-                        status: if ty == 6 {
-                            Status::Open
-                        } else {
-                            Status::Closed
+                        proto,
+                        status: match ty {
+                            6 => Status::Open,
+                            7 => Status::Closed,
+                            _ => Status::Arp,
                         },
                         reason: body[11],
                         ttl: body[12],
+                        mac,
                     })
                     .map_err(|e| ReadError::Io(io::Error::other(e)))?;
                 }
             }
             // `case 'm'`: подвал.
             0x6D => {}
-            1..=5 | 8..=13 => return Err(ReadError::Unsupported(ty)),
+            1..=5 | 9..=13 => return Err(ReadError::Unsupported(ty)),
             _ => return Err(ReadError::Corrupt(format!("unknown type {ty}"))),
         }
         total += 1;
         progress(total);
     }
     Ok(())
+}
+
+/// Индекс порта записи в списке портов цели со сдвигом протокола (`massip-port.h:11–25`): TCP +0, UDP +65536,
+/// SCTP +131072, ICMP Echo 196608, ARP 196610. C сравнивает тут несдвинутый порт (`in-filter.c:14–17`), из-за
+/// чего `-p U:53` не пропускал ни одной записи.
+fn port_index(r: &Record) -> u32 {
+    match r.proto {
+        Proto::Tcp => u32::from(r.port),
+        Proto::Udp => TEMPL_UDP + u32::from(r.port),
+        Proto::Sctp => TEMPL_SCTP + u32::from(r.port),
+        Proto::Icmp => TEMPL_ICMP_ECHO + u32::from(r.port),
+        Proto::Arp => TEMPL_ARP,
+    }
 }
 
 /// Фильтр целей `--readscan` (`filter->count_ipv4s`, `count_ports` в `parse_status2`).
@@ -255,7 +287,7 @@ impl ReadFilter {
 
     pub fn keeps(&self, r: &Record) -> bool {
         (!self.by_ip || self.targets.has_ip(u32::from(r.ip)))
-            && (!self.by_port || self.targets.has_port(u32::from(r.port)))
+            && (!self.by_port || self.targets.has_port(port_index(r)))
     }
 }
 
@@ -357,9 +389,11 @@ mod tests {
             timestamp: ts,
             ip: Ipv4Addr::from(ip),
             port,
+            proto: Proto::Tcp,
             status,
             reason: if status == Status::Open { 0x12 } else { 0x14 },
             ttl: 57,
+            mac: None,
         }
     }
 
@@ -388,7 +422,7 @@ mod tests {
             let env = OutputEnv {
                 wall: &wall,
                 services: services::empty(),
-                tcp_ports: Vec::new(),
+                ports: Vec::new(),
                 scan_started: None,
             };
             let mut p = Pipeline::new(opts(Format::Binary), &mut out, env);
@@ -432,7 +466,7 @@ mod tests {
             let env = OutputEnv {
                 wall: &wall,
                 services: services::empty(),
-                tcp_ports: Vec::new(),
+                ports: Vec::new(),
                 scan_started: Some(0),
             };
             let mut p = Pipeline::new(opts(format), &mut out, env);
@@ -497,25 +531,102 @@ mod tests {
 
     #[test]
     fn unsupported_types_are_errors() {
-        for t in [1u8, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13] {
+        for t in [1u8, 2, 3, 4, 5, 9, 10, 11, 12, 13] {
             let f = with_header(&[t, 0]);
             match read_all(&f).1 {
                 Err(ReadError::Unsupported(n)) => assert_eq!(n, u64::from(t)),
                 other => panic!("type {t}: {other:?}"),
             }
         }
-        let f = with_header(&record_bytes(6, 13, 17));
+        // Незнакомый номер протокола: C печатает `err`, этот порт отказывает (47 = GRE).
+        let f = with_header(&record_bytes(6, 13, 47));
         match read_all(&f).1 {
-            Err(e @ ReadError::UnsupportedProtocol(17)) => {
-                assert_eq!(e.to_string(), "unsupported record protocol 17")
+            Err(e @ ReadError::UnsupportedProtocol(47)) => {
+                assert_eq!(e.to_string(), "unsupported record protocol 47")
             }
             other => panic!("{other:?}"),
         }
-        let f = with_header(&record_bytes(7, 13, 132));
-        assert!(matches!(
-            read_all(&f).1,
-            Err(ReadError::UnsupportedProtocol(132))
-        ));
+        // ARP живёт только в типе 8, а тип 8 только с протоколом 0.
+        for (ty, proto) in [(6, 0), (7, 0), (8, 6), (8, 17)] {
+            let f = with_header(&record_bytes(ty, 13, proto));
+            assert!(
+                matches!(read_all(&f).1, Err(ReadError::UnsupportedProtocol(p)) if p == proto),
+                "type {ty} proto {proto}"
+            );
+        }
+    }
+
+    /// Review Focus 4: записи UDP/ICMP (тип 6, 7), SCTP (тип 6) и ARP (тип 8) разбираются; фильтр `-p U:53`
+    /// сопоставляет (протокол, порт) со сдвинутым списком (у C `-p U:53` не пропускает ничего, `in-filter.c:14–17`).
+    #[test]
+    fn readscan_handles_non_tcp_and_arp_type_8() {
+        let mk = |ty: u8, ip: [u8; 4], proto: u8, port: u16, ttl: u8| {
+            let mut b = vec![ty, 13, 0x65, 0, 0, 1];
+            b.extend_from_slice(&ip);
+            b.push(proto);
+            b.extend_from_slice(&port.to_be_bytes());
+            b.extend_from_slice(&[0, ttl]);
+            b
+        };
+        let mut tail = Vec::new();
+        tail.extend(mk(6, [192, 0, 2, 1], 17, 53, 64));
+        tail.extend(mk(7, [192, 0, 2, 2], 17, 5353, 64));
+        tail.extend(mk(6, [192, 0, 2, 3], 132, 2905, 57));
+        tail.extend(mk(6, [192, 0, 2, 4], 1, 0, 60));
+        tail.extend(mk(8, [192, 0, 2, 9], 0, 0, 0));
+        tail.extend(mk(6, [192, 0, 2, 5], 6, 80, 57));
+        let bytes = with_header(&tail);
+        let (got, res) = read_all(&bytes);
+        res.unwrap();
+        let seen: Vec<(Proto, Status, u16, Option<[u8; 6]>)> = got
+            .iter()
+            .map(|r| (r.proto, r.status, r.port, r.mac))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (Proto::Udp, Status::Open, 53, None),
+                (Proto::Udp, Status::Closed, 5353, None),
+                (Proto::Sctp, Status::Open, 2905, None),
+                (Proto::Icmp, Status::Open, 0, None),
+                // `-oB` MAC не хранит: `parse_status2` даёт нули (`in-binary.c:116–119`).
+                (Proto::Arp, Status::Arp, 0, Some([0; 6])),
+                (Proto::Tcp, Status::Open, 80, None),
+            ]
+        );
+        // Запись, пройденная через писатель `-oB`, читается обратно тем же.
+        let (again, res) = read_all(&make_bin(&got));
+        res.unwrap();
+        assert_eq!(again, got);
+
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "nontcp", &bytes);
+        let files = std::slice::from_ref(&path);
+        let ports = |spec: &str| {
+            let mut cfg = ScanConfig::default();
+            parse_ports(cfg.targets.ports_mut(), spec).unwrap();
+            ReadFilter::from_config(&cfg)
+        };
+        let kept = |f: &ReadFilter| {
+            let (out, _, res) = convert(files, Format::Binary, f);
+            res.unwrap();
+            read_all(&out)
+                .0
+                .iter()
+                .map(|r| (r.proto, r.port))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kept(&ports("U:53")), vec![(Proto::Udp, 53)]);
+        // `-p 53` это TCP 53: UDP 53 не проходит (у C проходил: сравнивался несдвинутый порт).
+        assert_eq!(kept(&ports("53")), vec![]);
+        assert_eq!(
+            kept(&ports("80,S:2905")),
+            vec![(Proto::Sctp, 2905), (Proto::Tcp, 80)]
+        );
+        assert_eq!(kept(&ports("I:0")), vec![(Proto::Icmp, 0)]);
+        // ARP это `I:2` (`Templ_ARP`).
+        assert_eq!(kept(&ports("I:2")), vec![(Proto::Arp, 0)]);
+        assert_eq!(kept(&no_filter()).len(), 6);
     }
 
     #[test]

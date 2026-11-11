@@ -35,6 +35,13 @@ pub fn syn_cookie_ipv4(
     siphash24(&data, entropy, entropy)
 }
 
+/// Cookie `[id|seq]` ICMP Echo: `syn_cookie(ip_them, Templ_ICMP_echo, ip_me, 0, entropy)` с `port_me = 0`,
+/// templ-pkt.c:1065-1072 (передача) и proto-icmp.c:200-205 (приём). В C это значение затирает `seqno` вызывающего
+/// потока, поэтому исходный порт (`--source-port`) в cookie не входит.
+pub fn icmp_echo_cookie(ip_them: u32, ip_me: u32, entropy: u64) -> u32 {
+    syn_cookie_ipv4(ip_them, crate::targets::TEMPL_ICMP_ECHO, ip_me, 0, entropy) as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

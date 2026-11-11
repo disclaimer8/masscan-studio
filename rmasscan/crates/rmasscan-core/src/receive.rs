@@ -8,7 +8,8 @@
 //!
 //! # Правило приёма (main.c:823-825, :829, :935, :1048-1065)
 //! Ответ принимается, если одновременно:
-//! 1. IPv4, не фрагмент, TCP; адрес назначения лежит в диапазоне `source_ipv4..=source_ipv4_last` плана
+//! 1. IPv4, не фрагмент, TCP (или ICMP Echo Reply и Port Unreachable `3/3`: [`parse_icmp`], UDP: [`parse_udp_reply`], SCTP INIT-ACK и
+//!    ABORT: [`parse_sctp_reply`], у них свои правила, описанные у функций); адрес назначения лежит в диапазоне `source_ipv4..=source_ipv4_last` плана
 //!    (`--adapter-ip A-B`; один адрес это диапазон из одного);
 //! 2. порт назначения лежит в `source_ports` плана (`is_my_port`);
 //! 3. флаги: `(flags & 0x12) == 0x12` даёт Open, `flags & 0x04` даёт Closed
@@ -35,11 +36,15 @@
 //!   старого скана с тем же seed попадал бы в результаты. Порт намеренно
 //!   ужесточает это (ревью 2A, P2).
 
-use crate::checksum::{checksum_ipv4, ip_header_checksum};
-use crate::cookie::syn_cookie_ipv4;
+use crate::arp::{ArpOp, decode};
+use crate::checksum::{
+    checksum_ipv4, fold, ip_header_checksum, sctp_crc32c, udp_ipv4_checksum_ok, word_sum,
+};
+use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4};
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
 use crate::ranges::RangeList;
+use crate::targets::{TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_TCP, TEMPL_UDP};
 
 /// main.c:773 `if (length > 1514) continue;`.
 pub const MAX_FRAME_LEN: usize = 1514;
@@ -96,6 +101,14 @@ pub enum ParseError {
     BadIpChecksum,
     #[error("bad TCP checksum")]
     BadTcpChecksum,
+    #[error("bad ICMP checksum")]
+    BadIcmpChecksum,
+    #[error("bad UDP length {0}")]
+    BadUdpLength(u16),
+    #[error("bad UDP checksum")]
+    BadUdpChecksum,
+    #[error("bad SCTP checksum")]
+    BadSctpChecksum,
 }
 
 /// Открыт или закрыт порт (main.c:1052-1057).
@@ -103,6 +116,8 @@ pub enum ParseError {
 pub enum PortStatus {
     Open,
     Closed,
+    /// ARP-сосед отозвался (`PortStatus_Arp`, `output.c:109–116`, печатается как `up`).
+    Arp,
 }
 
 /// Принятый ответ. Время ставит engine, не парсер.
@@ -116,6 +131,11 @@ pub struct Reply {
     /// Байт флагов TCP (`px[transport_offset + 13]`).
     pub tcp_flags: u8,
     pub ttl: u8,
+    /// Номер IP-протокола ответа (`output_report_status(.., ip_proto, ..)`, `output.c:75–86`): 6 TCP, 17 UDP,
+    /// 132 SCTP, 1 ICMP, 0 ARP. Разбор TCP этого файла всегда ставит 6.
+    pub ip_proto: u8,
+    /// MAC соседа (`sha` ответа ARP); `None` у всех остальных ответов.
+    pub mac: Option<[u8; 6]>,
 }
 
 /// Преобразование pcap DLT в [`LinkType`]; остальное это явная ошибка.
@@ -159,6 +179,10 @@ pub fn parse_reply_with(
 ) -> Result<Option<Reply>, ParseError> {
     if frame.len() > MAX_FRAME_LEN {
         return Err(ParseError::FrameTooLong(frame.len()));
+    }
+    // ARP-скан: ответ ARP это не IPv4, он разбирается до `locate_ipv4` (main.c:874-906, `FOUND_ARP`).
+    if link == LinkType::Ethernet && be16(frame, 12) == Some(0x0806) {
+        return Ok(parse_arp_reply(frame, plan));
     }
     let Some(ip) = locate_ipv4(frame, link)? else {
         return Ok(None);
@@ -254,9 +278,13 @@ fn parse_ipv4_tcp(
     let proto = ip[9];
     let ip_them = be32(ip, 12).ok_or(ParseError::Truncated("ipv4 header"))?;
     let ip_me = be32(ip, 16).ok_or(ParseError::Truncated("ipv4 header"))?;
-    if proto != 6 {
-        // UDP, ICMP, SCTP и прочее: не наш SYN-ответ.
-        return Ok(None);
+    match proto {
+        1 => return parse_icmp(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
+        17 => return parse_udp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
+        132 => return parse_sctp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
+        6 => {}
+        // прочее: не наш SYN-ответ.
+        _ => return Ok(None),
     }
 
     // proto-preprocess.c:208-218.
@@ -339,5 +367,347 @@ fn parse_ipv4_tcp(
         status,
         tcp_flags: flags,
         ttl,
+        ip_proto: 6,
+        mac: None,
+    }))
+}
+
+/// Ответ ARP на наш ARP-скан (ветка `FOUND_ARP`, main.c:874-906, и `arp_recv_response`, proto-arp.c:14-41).
+///
+/// Принимается, если план это ARP-скан (`scan_type.arp`, :893), opcode равен 2 (:889), `tpa` наш адрес и `spa`
+/// входит в итоговый набор целей (:896). `tpa` сверяется, как в C: приёмник отбрасывает каждый кадр, адрес назначения
+/// которого не наш, ещё до ветки ARP (main.c:829–837, `is_my_ip(stack->src, ip_me)` и `continue`), а у ARP адрес
+/// назначения это `tpa` (proto-preprocess.c:619–621). Поэтому ответ другому узлу, увиденный на проводе, и gratuitous
+/// ARP (`tpa == spa`) результатом не становятся. В `local_ip` кладётся `tpa`, как `ip_me` у `dedup_is_duplicate`
+/// (:899). MAC результата это MAC источника Ethernet-кадра (`parsed->mac_src`, proto-arp.c:39), а не `sha`; в обычном
+/// ответе они равны. Дубликаты отсекает `DedupCache` по `(spa, tpa)`, как в C.
+///
+/// Строже C: кодек [`decode`] принимает только Ethernet/IPv4 с длинами 6 и 4 (C берёт любые длины из заголовка), а
+/// кадр с VLAN-тегом и всё нечитаемое это `None` (в C `continue`). Это не ошибка разбора: чужой ARP на проводе
+/// обычное дело.
+fn parse_arp_reply(frame: &[u8], plan: &ReadyPlan) -> Option<Reply> {
+    if !plan.is_arp_scan() {
+        return None;
+    }
+    let a = decode(frame).ok()?;
+    // main.c:829–837: адрес назначения (`tpa`) не наш, кадр отбрасывается до ветки ARP.
+    if !is_my_ip(plan, a.target_ip) {
+        return None;
+    }
+    if a.op != ArpOp::Reply || !in_sorted_ranges(plan.effective().massip().ipv4(), a.sender_ip) {
+        return None;
+    }
+    Some(Reply {
+        remote_ip: a.sender_ip,
+        remote_port: 0,
+        local_ip: a.target_ip,
+        local_port: 0,
+        status: PortStatus::Arp,
+        tcp_flags: 0,
+        ttl: 0,
+        ip_proto: 0,
+        mac: Some(a.eth_src),
+    })
+}
+
+/// Наш ли адрес назначения (`is_my_ip`, main.c:829): диапазон адресов источника адаптера `nic[0]` плана.
+fn is_my_ip(plan: &ReadyPlan, ip_me: u32) -> bool {
+    (plan.binding().source_ipv4..=plan.nics()[0].source_ipv4_last).contains(&ip_me)
+}
+
+/// Один из адресов и портов источника ЛЮБОГО адаптера плана (`matches_me`, proto-icmp.c:12-22: цикл по `out->src[8]`).
+fn matches_me(plan: &ReadyPlan, ip: u32, port: u16) -> bool {
+    plan.nics().iter().any(|n| {
+        let (first, last) = n.binding.source_ports;
+        (n.binding.source_ipv4..=n.source_ipv4_last).contains(&ip) && (first..=last).contains(&port)
+    })
+}
+
+/// Ответ UDP на наш зонд (`handle_udp`, proto-udp.c:55-72: любая датаграмма на наш адрес и порт это `Open`, номер
+/// протокола 17, `reason` 0, TTL из IP-заголовка; разбор прикладных ответов C делает после этого и порт не меняет).
+///
+/// Отличия от C (жёстче, как у TCP): порт и адрес цели обязаны входить в итоговый набор целей плана (`U:порт`), C
+/// отвечает на любую датаграмму к нашему порту; суммы IPv4 и UDP проверяются при [`ChecksumPolicy::Verify`] (поле
+/// суммы 0 допустимо по RFC 768); длина UDP обязана помещаться в пакет. Cookie не проверяется, как в C: в датаграмме
+/// UDP ему нет места, а прикладные поля (DNS, SNMP, ...) вне границ приёмника.
+fn parse_udp_reply(
+    ip: &[u8],
+    header_len: usize,
+    (ip_them, ip_me, ttl): (u32, u32, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let seg = &ip[header_len..];
+    if seg.len() < 8 {
+        return Err(ParseError::Truncated("udp header"));
+    }
+    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("udp header"))?;
+    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("udp header"))?;
+    // main.c:829, :935 (`is_nic_port` для UDP, :911).
+    if !is_my_ip(plan, ip_me) {
+        return Ok(None);
+    }
+    let (first, last) = plan.binding().source_ports;
+    if port_me < first || port_me > last {
+        return Ok(None);
+    }
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges(targets.ipv4(), ip_them)
+        || !in_sorted_ranges(targets.ports(), TEMPL_UDP + u32::from(port_them))
+    {
+        return Ok(None);
+    }
+    let udp_len = be16(seg, 4).ok_or(ParseError::Truncated("udp header"))?;
+    if usize::from(udp_len) < 8 || usize::from(udp_len) > seg.len() {
+        return Err(ParseError::BadUdpLength(udp_len));
+    }
+    if policy == ChecksumPolicy::Verify {
+        if ip_header_checksum(ip, 0, header_len) != 0xffff {
+            return Err(ParseError::BadIpChecksum);
+        }
+        if !udp_ipv4_checksum_ok(ip_them, ip_me, &seg[..usize::from(udp_len)]) {
+            return Err(ParseError::BadUdpChecksum);
+        }
+    }
+    Ok(Some(Reply {
+        remote_ip: ip_them,
+        remote_port: port_them,
+        local_ip: ip_me,
+        local_port: port_me,
+        status: PortStatus::Open,
+        tcp_flags: 0,
+        ttl,
+        ip_proto: 17,
+        mac: None,
+    }))
+}
+
+/// Ответ SCTP на наш INIT (`handle_sctp`, proto-sctp.c:137-189): verification tag ответа равен cookie
+/// `syn_cookie(ip_them, port_them | (Proto_SCTP << 16), ip_me, port_me, entropy)` (main.c:822, это `initiate_tag`
+/// нашего INIT); первый чанк типа 2 (INIT-ACK) даёт `Open`, типа 6 (ABORT) даёт `Closed`, всё прочее молча
+/// отбрасывается. Номер протокола 132, `reason` 0, TTL внешнего пакета, порт цели это порт источника ответа. Мы
+/// ничего не отвечаем (C тоже: ABORT в ответ не шлётся).
+///
+/// Отличия от C (жёстче, как у остальных приёмников): адрес и порт источника обязаны входить в итоговый набор целей
+/// плана (`S:порт`), а порт назначения обязан лежать в `source_ports` (в C `handle_sctp` вызывается до `is_my_port` и
+/// отчёт уходит при любом порте); суммы IPv4 и CRC-32C SCTP проверяются при [`ChecksumPolicy::Verify`] (C их не
+/// проверяет, "TODO: verify checksum"); короче общего заголовка (12 байт) это ошибка разбора.
+fn parse_sctp_reply(
+    ip: &[u8],
+    header_len: usize,
+    (ip_them, ip_me, ttl): (u32, u32, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let seg = &ip[header_len..];
+    // proto-preprocess.c:198-207: общий заголовок SCTP 12 байт.
+    if seg.len() < 12 {
+        return Err(ParseError::Truncated("sctp header"));
+    }
+    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("sctp header"))?;
+    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("sctp header"))?;
+    let tag = be32(seg, 4).ok_or(ParseError::Truncated("sctp header"))?;
+    // main.c:829: is_my_ip; main.c:935: is_my_port (в C после отчёта, здесь до него).
+    if !is_my_ip(plan, ip_me) {
+        return Ok(None);
+    }
+    let (first, last) = plan.binding().source_ports;
+    if port_me < first || port_me > last {
+        return Ok(None);
+    }
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges(targets.ipv4(), ip_them)
+        || !in_sorted_ranges(targets.ports(), TEMPL_SCTP + u32::from(port_them))
+    {
+        return Ok(None);
+    }
+    // proto-sctp.c:150-153: verification tag это cookie; main.c:822: `port_them | (Proto_SCTP << 16)` = индекс порта.
+    let cookie = syn_cookie_ipv4(
+        ip_them,
+        TEMPL_SCTP + u32::from(port_them),
+        ip_me,
+        u32::from(port_me),
+        plan.effective().seed(),
+    ) as u32;
+    if cookie != tag {
+        return Ok(None);
+    }
+    // proto-sctp.c:155-156: `offset + 16 > length` (заголовок чанка 4 байта).
+    let Some(&chunk_type) = seg.get(12).filter(|_| seg.len() >= 16) else {
+        return Ok(None);
+    };
+    let status = match chunk_type {
+        2 => PortStatus::Open,   // INIT ACK
+        6 => PortStatus::Closed, // ABORT
+        _ => return Ok(None),
+    };
+    // Суммы проверяются после дешёвых фильтров и cookie.
+    if policy == ChecksumPolicy::Verify {
+        if ip_header_checksum(ip, 0, header_len) != 0xffff {
+            return Err(ParseError::BadIpChecksum);
+        }
+        // CRC-32C считается по всему пакету SCTP (по длине IP-пакета, без трейлера кадра), поле суммы как нули.
+        if be32(seg, 8) != Some(sctp_crc32c(seg)) {
+            return Err(ParseError::BadSctpChecksum);
+        }
+    }
+    Ok(Some(Reply {
+        remote_ip: ip_them,
+        remote_port: port_them,
+        local_ip: ip_me,
+        local_port: port_me,
+        status,
+        tcp_flags: 0,
+        ttl,
+        ip_proto: 132,
+        mac: None,
+    }))
+}
+
+/// Диспетчер ICMP по `type`/`code` (`handle_icmp`, proto-icmp.c:94-226): Echo Reply `0/0` и Port Unreachable `3/3`.
+fn parse_icmp(
+    ip: &[u8],
+    header_len: usize,
+    addrs: (u32, u32, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let msg = &ip[header_len..];
+    if msg.len() >= 8 && msg[0] == 3 && msg[1] == 3 {
+        return parse_port_unreachable(ip, header_len, addrs, plan, policy);
+    }
+    parse_icmp_echo_reply(ip, header_len, addrs, plan, policy)
+}
+
+/// ICMP Type 3 Code 3 с цитатой нашего зонда (proto-icmp.c:157-199): внутри заголовок IPv4 и первые 8 байт L4
+/// (RFC 792). Порт цели закрыт: `Closed`, номер протокола внутренний (6, 17 или 132), `reason` 0, TTL внешнего пакета.
+///
+/// Проверка как в C (`parse_port_unreachable` :27-47 и `matches_me`): цитата не короче 24 байт, источник цитаты
+/// (адрес и порт) наш; других типов и кодов Type 3 (сеть, хост, протокол недоступны) C не использует. Cookie C здесь
+/// не сверяет (в `proto-icmp.c` её нет), порт тоже. Отличия (жёстче, как у остальных приёмников): цитата обязана быть
+/// IPv4 с IHL не меньше 5 и помещаться целиком (C при большом IHL читает за границей), цель цитаты и её порт
+/// (со сдвигом протокола) обязаны входить в итоговый набор целей плана, суммы внешнего IPv4 и ICMP проверяются при
+/// [`ChecksumPolicy::Verify`].
+fn parse_port_unreachable(
+    ip: &[u8],
+    header_len: usize,
+    (_router, ip_me, ttl): (u32, u32, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let msg = &ip[header_len..];
+    // main.c:829: адрес назначения внешнего пакета наш.
+    if !is_my_ip(plan, ip_me) {
+        return Ok(None);
+    }
+    let q = &msg[8..];
+    if q.len() < 24 || q[0] >> 4 != 4 {
+        return Ok(None);
+    }
+    let inner_header = usize::from(q[0] & 0x0F) * 4;
+    if inner_header < 20 || q.len() < inner_header + 4 {
+        return Ok(None);
+    }
+    let (Some(ip_me2), Some(ip_them2), Some(port_me2), Some(port_them2)) = (
+        be32(q, 12),
+        be32(q, 16),
+        be16(q, inner_header),
+        be16(q, inner_header + 2),
+    ) else {
+        return Ok(None);
+    };
+    if !matches_me(plan, ip_me2, port_me2) {
+        return Ok(None);
+    }
+    // proto-icmp.c:157-196: только TCP, UDP и SCTP.
+    let ip_proto = q[9];
+    let offset = match ip_proto {
+        6 => TEMPL_TCP,
+        17 => TEMPL_UDP,
+        132 => TEMPL_SCTP,
+        _ => return Ok(None),
+    };
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges(targets.ipv4(), ip_them2)
+        || !in_sorted_ranges(targets.ports(), offset + u32::from(port_them2))
+    {
+        return Ok(None);
+    }
+    if policy == ChecksumPolicy::Verify {
+        if ip_header_checksum(ip, 0, header_len) != 0xffff {
+            return Err(ParseError::BadIpChecksum);
+        }
+        if fold(word_sum(msg)) != 0xffff {
+            return Err(ParseError::BadIcmpChecksum);
+        }
+    }
+    Ok(Some(Reply {
+        remote_ip: ip_them2,
+        remote_port: port_them2,
+        local_ip: ip_me2,
+        local_port: port_me2,
+        status: PortStatus::Closed,
+        tcp_flags: 0,
+        ttl,
+        ip_proto,
+        mac: None,
+    }))
+}
+
+/// ICMP Echo Reply на наш Echo Request (proto-icmp.c:200-226, `handle_icmp`).
+///
+/// Принимается только `type 0, code 0`, у которого `[id|seq]` (байты 4..8 ICMP, `seqno_me`) равны
+/// `icmp_echo_cookie(ip_them, ip_me, seed)`: `syn_cookie(ip_them, Templ_ICMP_echo, ip_me, 0, entropy)` с
+/// `port_me = 0` (:203). Отличие от C (жёстче): C берёт любой `code` при `type 0` и не проверяет суммы; здесь
+/// `code != 0` отбрасывается, суммы проверяются при [`ChecksumPolicy::Verify`], а адрес и порт `I:0` должны
+/// входить в итоговый набор целей задания (как у TCP). Порта у ICMP нет: `remote_port = local_port = 0`.
+fn parse_icmp_echo_reply(
+    ip: &[u8],
+    header_len: usize,
+    (ip_them, ip_me, ttl): (u32, u32, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    let msg = &ip[header_len..];
+    if msg.len() < 8 {
+        return Err(ParseError::Truncated("icmp header"));
+    }
+    // main.c:829: is_my_ip, как у TCP.
+    let ip_last = plan.nics()[0].source_ipv4_last;
+    if !(plan.binding().source_ipv4..=ip_last).contains(&ip_me) {
+        return Ok(None);
+    }
+    if msg[0] != 0 || msg[1] != 0 {
+        return Ok(None);
+    }
+    let targets = plan.effective().massip();
+    if !in_sorted_ranges(targets.ipv4(), ip_them)
+        || !in_sorted_ranges(targets.ports(), TEMPL_ICMP_ECHO)
+    {
+        return Ok(None);
+    }
+    let seqno_me = be32(msg, 4).ok_or(ParseError::Truncated("icmp header"))?;
+    if icmp_echo_cookie(ip_them, ip_me, plan.effective().seed()) != seqno_me {
+        return Ok(None);
+    }
+    if policy == ChecksumPolicy::Verify {
+        if ip_header_checksum(ip, 0, header_len) != 0xffff {
+            return Err(ParseError::BadIpChecksum);
+        }
+        // RFC 792: сумма всего сообщения вместе с полем суммы сворачивается в 0xFFFF (без псевдозаголовка).
+        if fold(word_sum(msg)) != 0xffff {
+            return Err(ParseError::BadIcmpChecksum);
+        }
+    }
+    Ok(Some(Reply {
+        remote_ip: ip_them,
+        remote_port: 0,
+        local_ip: ip_me,
+        local_port: 0,
+        status: PortStatus::Open,
+        tcp_flags: 0,
+        ttl,
+        ip_proto: 1,
+        mac: None,
     }))
 }

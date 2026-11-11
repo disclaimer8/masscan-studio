@@ -1,0 +1,12 @@
+{"ip":"192.0.2.10","timestamp":"1700007200","port":80,"proto":"tcp","rec_type":"status","data":{"status":"open","reason":"syn-ack","ttl":64}}
+{"ip":"192.0.2.10","timestamp":"1700007200","port":53,"proto":"udp","rec_type":"status","data":{"status":"open","reason":"none","ttl":64}}
+{"ip":"192.0.2.11","timestamp":"1700007201","port":59999,"proto":"udp","rec_type":"status","data":{"status":"open","reason":"none","ttl":63}}
+{"ip":"192.0.2.11","timestamp":"1700007201","port":161,"proto":"udp","rec_type":"status","data":{"status":"closed","reason":"none","ttl":63}}
+{"ip":"192.0.2.12","timestamp":"1700007202","port":500,"proto":"udp","rec_type":"status","data":{"status":"closed","reason":"none","ttl":62}}
+{"ip":"192.0.2.12","timestamp":"1700007202","port":443,"proto":"tcp","rec_type":"status","data":{"status":"closed","reason":"rst-ack","ttl":62}}
+{"ip":"192.0.2.12","timestamp":"1700007203","port":8080,"proto":"tcp","rec_type":"status","data":{"status":"closed","reason":"none","ttl":62}}
+{"ip":"198.51.100.5","timestamp":"1700007203","port":2905,"proto":"sctp","rec_type":"status","data":{"status":"open","reason":"none","ttl":64}}
+{"ip":"198.51.100.5","timestamp":"1700007204","port":2906,"proto":"sctp","rec_type":"status","data":{"status":"closed","reason":"none","ttl":64}}
+{"ip":"198.51.100.6","timestamp":"1700007204","port":0,"proto":"icmp","rec_type":"status","data":{"status":"open","reason":"none","ttl":128}}
+{"ip":"203.0.113.9","timestamp":"1700007205","port":0,"proto":"icmp","rec_type":"status","data":{"status":"open","reason":"none","ttl":255}}
+{"ip":"203.0.113.9","timestamp":"1700007205","port":123,"proto":"udp","rec_type":"status","data":{"status":"open","reason":"none","ttl":255}}

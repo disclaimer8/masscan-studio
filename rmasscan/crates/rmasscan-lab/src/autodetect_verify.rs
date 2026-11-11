@@ -1912,6 +1912,20 @@ pub(crate) struct Wire {
     rst_from_scanner: usize,
 }
 
+/// An ARP request of a scanner's own resolver: exactly 60 bytes with zero padding (N5), the form C (stack-arpv4.c)
+/// and rmasscan send; the scanner host's kernel sends 42.
+pub(crate) fn resolver_request(f: &[u8]) -> bool {
+    f.get(12..14) == Some(&[0x08, 0x06][..])
+        && matches!(decode(f).map(|p| p.op), Ok(ArpOp::Request))
+        && f.len() == ARP_FRAME_LEN
+        && f[42..].iter().all(|b| *b == 0)
+}
+/// A TCP segment with RST set: from the scanner MAC, a reset of a reply (the scanner host's kernel resets a SYN-ACK
+/// no socket owns; C resets each first reply itself, main.c:1095).
+pub(crate) fn is_reset(f: &[u8]) -> bool {
+    tcp(f).is_some_and(|i| i.flags & 4 != 0)
+}
+
 pub(crate) fn classify(fr: &Frames, mac: [u8; 6]) -> Wire {
     let mut w = Wire::default();
     for (t, f) in fr {
@@ -1925,18 +1939,14 @@ pub(crate) fn classify(fr: &Frames, mac: [u8; 6]) -> Wire {
         }
         if f.get(12..14) == Some(&[0x08, 0x06][..]) {
             match decode(f).map(|p| p.op) {
-                Ok(ArpOp::Request)
-                    if f.len() == ARP_FRAME_LEN && f[42..].iter().all(|b| *b == 0) =>
-                {
-                    w.scanner_arp.push((*t, f.clone()))
-                }
+                Ok(ArpOp::Request) if resolver_request(f) => w.scanner_arp.push((*t, f.clone())),
                 Ok(ArpOp::Request) if f.len() == 42 => w.os_requests += 1,
                 Ok(ArpOp::Reply) => w.os_replies += 1,
                 _ => w.odd_arp += 1,
             }
         } else if pcap::is_syn(f) {
             w.syns.push((*t, f.clone()));
-        } else if tcp(f).is_some_and(|i| i.flags & 4 != 0) {
+        } else if is_reset(f) {
             w.rst_from_scanner += 1;
         }
     }

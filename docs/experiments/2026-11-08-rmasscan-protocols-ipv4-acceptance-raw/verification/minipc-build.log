@@ -1,0 +1,43 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling typenum v1.20.1
+   Compiling thiserror v2.0.21
+   Compiling utf8parse v0.2.2
+   Compiling libc v0.2.191
+   Compiling cfg-if v1.0.5
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle-query v1.1.5
+   Compiling anstyle v1.0.14
+   Compiling siphasher v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling anstream v1.0.0
+   Compiling syn v3.0.9
+   Compiling hybrid-array v0.4.15
+   Compiling strsim v0.11.1
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling heck v0.5.0
+   Compiling clap_lex v1.1.1
+   Compiling getrandom v0.4.3
+   Compiling serde_core v1.0.229
+   Compiling clap_builder v4.6.7
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
+   Compiling zmij v1.0.23
+   Compiling thiserror-impl v2.0.21
+   Compiling clap_derive v4.6.7
+   Compiling rmasscan-core v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-core)
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.154
+   Compiling serde_derive v1.0.229
+   Compiling clap v4.6.7
+   Compiling itoa v1.0.18
+   Compiling rmasscan-engine v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-net)
+   Compiling memchr v2.8.3
+   Compiling rmasscan-cli v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-cli)
+   Compiling rmasscan-lab v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-lab)
+    Finished `release` profile [optimized] target(s) in 1m 21s

@@ -6,7 +6,7 @@
 #
 # BIN is the pinned C masscan (built by build-oracle.sh); DIR holds the `-oB` inputs written by
 # `cargo run -p rmasscan-cli --example format_inputs -- DIR`. Writes into --out: manifest.json,
-# services.txt and outputs/<case>.out. Runs on the oracle host (Linux, sudo, getent, jq).
+# services.txt, protocols.txt and outputs/<case>.out. Runs on the oracle host (Linux, sudo, getent, jq).
 #
 # SAFETY: masscan only converts files here (`--readscan`, no scan), and every invocation still runs
 # inside a fresh network namespace (`sudo -n unshare -n`, only a DOWN loopback exists).
@@ -105,14 +105,17 @@ masked() {
 }
 
 # ---- inputs ----------------------------------------------------------------
-# records_ports FILE : TCP ports of the 15-byte status records (type 6/7, length 13; out-binary.c:154-211)
+# records_ports FILE : "ip_proto port" of the 15-byte status records (type 6/7, length 13; out-binary.c:154-211).
+# The bytes are regrouped by 15 in awk, whatever line width od prints (uutils od does not keep `-w15` lines on
+# large inputs).
 records_ports() {
   local f=$1 size n
   size=$(stat -c %s "$f")
   n=$(( (size - 198) / 15 ))
   [ "$n" -gt 0 ] || return 0
-  od -An -v -tu1 -w15 -j99 -N$((n * 15)) "$f" |
-    awk '($1 == 6 || $1 == 7) && $2 == 13 && $11 == 6 { print $12 * 256 + $13 }'
+  od -An -v -tu1 -j99 -N$((n * 15)) "$f" |
+    awk '{ for (k = 1; k <= NF; k++) { v[c++] = $k; if (c == 15) {
+             if ((v[0] == 6 || v[0] == 7) && v[1] == 13) print v[10], v[11] * 256 + v[12]; c = 0 } } }'
 }
 
 declare -A STORED
@@ -135,13 +138,24 @@ for f in "${inputs[@]}"; do
 done
 [ -n "${STORED[basic.scan.bin]:-}" ] || die "basic.scan.bin is required (filter cases)"
 
-# ---- services --------------------------------------------------------------
-# What getservbyport(port, "tcp") answers on this host (out-tcp-services.c), in /etc/services form.
+# ---- services and protocols ------------------------------------------------
+# What getservbyport(port, "tcp") answers for TCP records and getservbyport(port, "udp") for UDP records on this
+# host (out-tcp-services.c:34-99), in /etc/services form: TCP ports first, then UDP ports, each in port order.
 : >"$OUT/services.txt"
-for p in $(sort -n -u "$ports_all"); do
-  getent services "$p/tcp" >>"$OUT/services.txt" || true   # exit 2: no entry, C prints `unknown`
+for proto_name in 6:tcp 17:udp; do
+  num=${proto_name%%:*} name=${proto_name#*:}
+  for p in $(awk -v n="$num" '$1 == n { print $2 }' "$ports_all" | sort -n -u); do
+    getent services "$p/$name" >>"$OUT/services.txt" || true   # exit 2: no entry, C prints `unknown`
+  done
 done
 echo "[*] services.txt: $(wc -l <"$OUT/services.txt") entries"
+# What getprotobynumber answers for every other ip_proto of the records (oproto_service_name,
+# out-tcp-services.c:101-118: -oG names an ICMP or SCTP record's service by its protocol), in /etc/protocols form.
+: >"$OUT/protocols.txt"
+for n in $(awk '$1 != 6 && $1 != 17 { print $1 }' "$ports_all" | sort -n -u); do
+  getent protocols "$n" >>"$OUT/protocols.txt" || true   # exit 2: no entry, C prints `unknown`
+done
+echo "[*] protocols.txt: $(wc -l <"$OUT/protocols.txt") entries"
 
 # ---- cases -----------------------------------------------------------------
 # run_case NAME INPUT KIND ARGS... : ARGS use @INPUT@ and @OUTPUT@ for the two paths. KIND (xml,
@@ -224,6 +238,12 @@ done
 # following argument without a leading '-' as a file (main-conf.c:3266-3278, main.c:1764).
 run_case filter.open.list basic.scan.bin other --range 10.0.0.0/31 -p80 --readscan @INPUT@ -oL @OUTPUT@
 run_case filter.open.grepable basic.scan.bin grepable --range 10.0.0.0/31 -p80 --readscan @INPUT@ -oG @OUTPUT@
+# Non-TCP records: an address filter only. A `-p` filter is not captured: C compares the record's unshifted port
+# with the shifted ranges (in-filter.c:14-17), rmasscan compares (ip_proto, port) (design 2026-11-08 protocols Р5).
+if [ -n "${STORED[protocols.scan.bin]:-}" ]; then
+  run_case filter.protocols.list protocols.scan.bin other --range 192.0.2.0/28 --readscan @INPUT@ -oL @OUTPUT@
+  run_case filter.protocols.grepable protocols.scan.bin grepable --range 192.0.2.0/28 --readscan @INPUT@ -oG @OUTPUT@
+fi
 
 # ---- manifest --------------------------------------------------------------
 # Subshell: os-release defines VERSION too.
@@ -232,6 +252,8 @@ jq -n --arg pin "$PIN" --arg sha "$PIN_SHA256" --arg version "$ORACLE_VERSION" \
   --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg host "$HOST" \
   --slurpfile inputs "$STAGE/inputs.jsonl" --slurpfile cases "$STAGE/cases.jsonl" \
   '{oracle: {git_head: $pin, binary_sha256: $sha, version: $version}, captured_at: $at, host: $host,
-    isolation: "sudo unshare -n", services_source: "getent services <port>/tcp on the oracle host",
+    isolation: "sudo unshare -n",
+    services_source: "getent services <port>/tcp (TCP records) and <port>/udp (UDP records) on the oracle host",
+    protocols_source: "getent protocols <ip_proto> on the oracle host for the records that are neither TCP nor UDP",
     store_max_bytes: '"$STORE_MAX"', inputs: $inputs, cases: $cases}' >"$OUT/manifest.json"
 echo "[*] done: $(jq '.cases | length' "$OUT/manifest.json") cases in $OUT"

@@ -1,0 +1,10 @@
+{
+  "tag": "o11_interactive",
+  "kind": "scan",
+  "format": "list",
+  "target": "file",
+  "show_closed": false,
+  "stdout": "discovered",
+  "status": "text",
+  "oracle": true
+}

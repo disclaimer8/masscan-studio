@@ -79,6 +79,92 @@ pub fn tcp_ipv4_partial(px: &[u8], offset_ip: usize, offset_tcp: usize, offset_a
     fold(u64::from(xsum))
 }
 
+/// Сумма 16-битных слов big-endian без свёртки и инверсии (RFC 1071): нечётный хвост дополняется нулевым байтом справа.
+/// Общая основа проверок и расчётов ICMP и UDP; `u64` не переполняется на любом кадре.
+pub fn word_sum(buf: &[u8]) -> u64 {
+    let (pairs, rest) = buf.as_chunks::<2>();
+    let mut sum: u64 = pairs
+        .iter()
+        .map(|c| u64::from(u16::from_be_bytes(*c)))
+        .sum();
+    if let [last] = rest {
+        sum += u64::from(*last) << 8;
+    }
+    sum
+}
+
+/// Сумма псевдозаголовка IPv4 для UDP (RFC 768): адреса, протокол 17 и длина датаграммы.
+fn udp_pseudo_sum(ip_src: u32, ip_dst: u32, udp_len: usize) -> u64 {
+    u64::from(ip_src >> 16)
+        + u64::from(ip_src & 0xFFFF)
+        + u64::from(ip_dst >> 16)
+        + u64::from(ip_dst & 0xFFFF)
+        + 17
+        + udp_len as u64
+}
+
+/// Контрольная сумма UDP для передачи (RFC 768, как `udp_checksum2`, templ-pkt.c:278, но с правилом RFC: результат 0
+/// заменяется на `0xFFFF`, потому что 0 в поле значит "суммы нет"; C пишет 0). `datagram` это заголовок UDP и нагрузка
+/// с полем суммы, равным нулю.
+pub fn udp_ipv4_checksum(ip_src: u32, ip_dst: u32, datagram: &[u8]) -> u16 {
+    let sum = udp_pseudo_sum(ip_src, ip_dst, datagram.len()) + word_sum(datagram);
+    match !fold(sum) {
+        0 => 0xFFFF,
+        c => c,
+    }
+}
+
+/// Проверка суммы принятой датаграммы UDP (RFC 768): поле 0 значит "отправитель сумму не считал" и допустимо;
+/// иначе сумма всей датаграммы вместе с полем и псевдозаголовком сворачивается в `0xFFFF`.
+pub fn udp_ipv4_checksum_ok(ip_src: u32, ip_dst: u32, datagram: &[u8]) -> bool {
+    if datagram.get(6..8) == Some(&[0, 0]) {
+        return true;
+    }
+    fold(udp_pseudo_sum(ip_src, ip_dst, datagram.len()) + word_sum(datagram)) == 0xFFFF
+}
+
+/// Таблица CRC-32C (Castagnoli, отражённый полином 0x82F63B78 = `0x1EDC6F41` в обычной записи), `crc_c[256]`,
+/// proto-sctp.c:9-131. C хранит её литералом; здесь она строится при компиляции, а совпадение с C проверяет
+/// побитовый эталон в тестах и вектор `sctp_selftest`.
+const CRC32C_TABLE: [u32; 256] = {
+    let mut t = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut c = i as u32;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 != 0 {
+                (c >> 1) ^ 0x82F6_3B78
+            } else {
+                c >> 1
+            };
+            k += 1;
+        }
+        t[i] = c;
+        i += 1;
+    }
+    t
+};
+
+/// `sctp_checksum`, proto-sctp.c:134-176: CRC-32C пакета SCTP целиком (общий заголовок и чанки). Байты `[8..12]` (поле
+/// суммы) считаются нулями. Возвращается значение C, то есть `~crc` с переставленными байтами; C пишет его в пакет
+/// big-endian (templ-pkt.c:1060-1063), на проводе это стандартный CRC-32C в little-endian (`to_be_bytes()` этого
+/// значения равно `(~crc).to_le_bytes()`). Недостающие байты короче 12 считаются нулями (C читает за границей).
+pub fn sctp_crc32c(packet: &[u8]) -> u32 {
+    let step = |c: u32, b: u8| (c >> 8) ^ CRC32C_TABLE[((c ^ u32::from(b)) & 0xFF) as usize];
+    let mut crc = !0u32;
+    for i in 0..8 {
+        crc = step(crc, packet.get(i).copied().unwrap_or(0));
+    }
+    for _ in 0..4 {
+        crc = step(crc, 0);
+    }
+    for &b in packet.iter().skip(12) {
+        crc = step(crc, b);
+    }
+    (!crc).swap_bytes()
+}
+
 /// Складывает и инвертирует, util-checksum.c:62.
 pub fn fold_and_invert(sum: u32) -> u16 {
     let sum = (sum >> 16) + (sum & 0xFFFF);
@@ -217,5 +303,71 @@ mod tests {
         assert_eq!(ip_header_checksum(&h, 0, 12), 50564);
         // odd max: last word still reads px[max]
         assert_eq!(ip_header_checksum(&h, 0, 13), 34349);
+    }
+
+    /// Эталон без таблицы: побитовый CRC-32C (отражённый полином 0x82F63B78, init и xorout 0xFFFFFFFF).
+    fn crc32c_bitwise(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0x82F6_3B78
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    /// `sctp_selftest` из proto-sctp.c:195-208: те же 32 байта и то же значение 0x58e45d36.
+    #[test]
+    fn sctp_crc32c_matches_c_selftest() {
+        let testcase: [u8; 32] = [
+            0xd1, 0x60, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x58, 0xe4, 0x5d, 0x36, 0x01, 0x00,
+            0x00, 0x14, 0x9e, 0x8d, 0x52, 0x25, 0x00, 0x00, 0x80, 0x00, 0x00, 0x0a, 0x08, 0x00,
+            0x46, 0x1a, 0xdf, 0x3d,
+        ];
+        assert_eq!(sctp_crc32c(&testcase), 0x58e4_5d36);
+        // поле [8..12] при подсчёте считается нулём: другое содержимое результата не меняет
+        let mut other = testcase;
+        other[8..12].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(sctp_crc32c(&other), 0x58e4_5d36);
+        // на проводе это те же четыре байта 58 e4 5d 36, что стоят в тестовом векторе (C пишет значение big-endian,
+        // то есть стандартный CRC-32C little-endian)
+        assert_eq!(sctp_crc32c(&testcase).to_be_bytes(), testcase[8..12]);
+        assert_eq!(
+            sctp_crc32c(&testcase).swap_bytes(),
+            {
+                let mut z = testcase;
+                z[8..12].fill(0);
+                crc32c_bitwise(&z)
+            },
+            "C-значение это стандартный CRC-32C с переставленными байтами"
+        );
+    }
+
+    #[test]
+    fn crc32c_table_agrees_with_the_bitwise_reference() {
+        assert_eq!(
+            crc32c_bitwise(b"123456789"),
+            0xE306_9283,
+            "стандартный check-вектор CRC-32C"
+        );
+        let mut buf: Vec<u8> = (0..300u32).map(|i| (i * 31 + 7) as u8).collect();
+        for len in [12usize, 13, 32, 66 - 34, 100, 300] {
+            buf[8..12].fill(0);
+            assert_eq!(
+                sctp_crc32c(&buf[..len]).swap_bytes(),
+                crc32c_bitwise(&buf[..len]),
+                "len {len}"
+            );
+        }
+        // короче 12 байт: C читает за границей, здесь недостающие байты нули (как в остальном файле), паники нет
+        let mut padded = [0u8; 12];
+        padded[..3].copy_from_slice(&[1, 2, 3]);
+        assert_eq!(sctp_crc32c(&[1, 2, 3]), sctp_crc32c(&padded));
+        assert_eq!(sctp_crc32c(&[]), sctp_crc32c(&[0u8; 12]));
     }
 }

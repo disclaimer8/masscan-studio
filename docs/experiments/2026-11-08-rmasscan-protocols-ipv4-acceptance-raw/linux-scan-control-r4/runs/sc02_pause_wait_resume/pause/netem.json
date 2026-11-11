@@ -1,0 +1,6 @@
+{
+  "iface": "veth-b",
+  "delay_ms": 1000,
+  "applied": true,
+  "removed": true
+}

@@ -1,0 +1,10 @@
+{
+  "tag": "o16_interrupt_binary",
+  "kind": "interrupt",
+  "format": "binary",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": false
+}

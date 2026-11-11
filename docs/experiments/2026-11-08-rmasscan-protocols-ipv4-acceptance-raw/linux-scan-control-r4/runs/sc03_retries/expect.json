@@ -1,0 +1,19 @@
+{
+  "tag": "sc03_retries",
+  "steps": [
+    {
+      "name": "retries",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    },
+    {
+      "name": "oracle",
+      "who": "oracle",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    }
+  ]
+}

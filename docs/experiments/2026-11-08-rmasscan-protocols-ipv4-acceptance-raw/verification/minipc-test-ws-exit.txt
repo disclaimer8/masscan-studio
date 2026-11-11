@@ -1,0 +1,6 @@
+SigIgn of this bash (bash ignores SIGQUIT for itself): SigIgn:	0000000000000004
+SigIgn of its children: SigIgn:	0000000000000000
+start 2026-11-10T23:47:28Z
+TEST_WS_EXIT=0
+CLIPPY_EXIT=0
+end 2026-11-10T23:55:51Z

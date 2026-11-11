@@ -1,6 +1,6 @@
-//! Запись о порте и общие помощники форматов (AGPL-3.0). Порт `output.c:71–136` (`status_string`,
-//! `reason_string`) masscan © Robert David Graham. Запись это то, что `output_report_status` получает от приёма:
-//! время, адрес, порт, статус, флаги TCP (`reason`) и TTL.
+//! Запись о порте и общие помощники форматов (AGPL-3.0). Порт `output.c:71–136` (`name_from_ip_proto`,
+//! `status_string`, `reason_string`) masscan © Robert David Graham. Запись это то, что `output_report_status`
+//! получает от приёма: время, адрес, порт, протокол, статус, флаги TCP (`reason`), TTL и (у ARP) MAC.
 
 use std::net::Ipv4Addr;
 
@@ -13,32 +13,85 @@ pub const MASSCAN_VERSION: &str = "1.3.9-integration";
 pub enum Status {
     Open,
     Closed,
+    /// `PortStatus_Arp`: сосед ARP (`output.c:109–116`, строка `up`).
+    Arp,
 }
 
-/// Одна запись о TCP-порте. `timestamp` хранится целиком; форматы режут его так же, как C (`%u`, `(int)`).
+/// Протокол записи; значение это номер IP-протокола, как `ip_proto` в `output_report_status` и в байте 10
+/// записи `-oB` (`output.c:75–86`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Proto {
+    Tcp = 6,
+    Udp = 17,
+    Sctp = 132,
+    Icmp = 1,
+    Arp = 0,
+}
+
+impl Proto {
+    /// `None` для номеров, которых этот порт не выводит (C печатает для них `err`, `output.c:84`).
+    pub fn from_ip_proto(n: u8) -> Option<Proto> {
+        match n {
+            6 => Some(Proto::Tcp),
+            17 => Some(Proto::Udp),
+            132 => Some(Proto::Sctp),
+            1 => Some(Proto::Icmp),
+            0 => Some(Proto::Arp),
+            _ => None,
+        }
+    }
+}
+
+/// `name_from_ip_proto` (`output.c:75–86`).
+pub fn proto_str(p: Proto) -> &'static str {
+    match p {
+        Proto::Arp => "arp",
+        Proto::Icmp => "icmp",
+        Proto::Tcp => "tcp",
+        Proto::Udp => "udp",
+        Proto::Sctp => "sctp",
+    }
+}
+
+/// Одна запись о порте. `timestamp` хранится целиком; форматы режут его так же, как C (`%u`, `(int)`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Record {
     pub timestamp: u64,
     pub ip: Ipv4Addr,
     pub port: u16,
+    pub proto: Proto,
     pub status: Status,
-    /// Байт флагов TCP (`px[transport_offset + 13]`).
+    /// Байт флагов TCP (`px[transport_offset + 13]`); у остальных протоколов 0.
     pub reason: u8,
     pub ttl: u8,
+    /// MAC соседа: только у записей `arp`; в `-oB` не пишется (`out-binary.c:154–211`), виден лишь в
+    /// интерактивной строке (`output.c:770–778`).
+    pub mac: Option<[u8; 6]>,
 }
 
 impl Record {
     pub fn from_reply(r: &Reply, timestamp: u64) -> Record {
+        debug_assert!(
+            Proto::from_ip_proto(r.ip_proto).is_some(),
+            "unknown ip_proto {}",
+            r.ip_proto
+        );
         Record {
             timestamp,
             ip: Ipv4Addr::from(r.remote_ip),
             port: r.remote_port,
+            // Приём других протоколов ставит только 0/1/6/17/132 (`output.c:75–86`); незнакомый номер был бы
+            // `err` в C, здесь его не бывает.
+            proto: Proto::from_ip_proto(r.ip_proto).unwrap_or(Proto::Tcp),
             status: match r.status {
                 PortStatus::Open => Status::Open,
                 PortStatus::Closed => Status::Closed,
+                PortStatus::Arp => Status::Arp,
             },
             reason: r.tcp_flags,
             ttl: r.ttl,
+            mac: r.mac,
         }
     }
 }
@@ -48,6 +101,7 @@ pub fn status_str(s: Status) -> &'static str {
     match s {
         Status::Open => "open",
         Status::Closed => "closed",
+        Status::Arp => "up",
     }
 }
 

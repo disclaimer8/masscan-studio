@@ -166,7 +166,7 @@ CI-сборкой не подменяются.
 | Фикстуры C | `docs/experiments/2026-10-24-rmasscan-windows-vm-acceptance-raw/functional/fixtures` (masscan `8e6b3b0`, бинарь `8afc8ec8…`) |
 | Бюджеты | `MAX_IO_TIMEOUT` 50 мс (контракт), `IO_BUDGET` 42 мс (Windows, спайк 2B), порог выбора пачки p99.9 ≤ 21 мс / max ≤ 42 мс |
 | Пачка | `TX_BATCH_FRAMES` (предварительно 256; окончательно по спайку, из ряда 16/64/256/1024/4096), байты очереди `TX_BATCH_FRAMES × (16 + MAX_TX_FRAME = 1518)`; engine `MAX_TX_BATCH = 4096` |
-| Доступ | `home-pc` (Ubuntu, `sudo -n` без пароля у `a1`), гость `ssh -J home-pc -p 2222 lab@127.0.0.1`, QMP `~/winvm/qmp.sock`, стенд `~/winvm/lab/n2.json` |
+| Доступ | `home-pc` (Ubuntu, `sudo -n` без пароля у `<LAB_ACCOUNT>`), гость `ssh -J home-pc -p 2222 lab@127.0.0.1`, QMP `~/winvm/qmp.sock`, стенд `~/winvm/lab/n2.json` |
 
 ## Задача 0. База и контракты sendqueue
 

@@ -1,0 +1,27 @@
+{
+  "tag": "p03_sctp_init_ack_abort",
+  "plan_ports": "S:2905,2906",
+  "arp": false,
+  "steps": [
+    {
+      "name": "binary",
+      "who": "rmasscan",
+      "out": "binary"
+    },
+    {
+      "name": "oracle-binary",
+      "who": "oracle",
+      "out": "binary"
+    },
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ]
+}

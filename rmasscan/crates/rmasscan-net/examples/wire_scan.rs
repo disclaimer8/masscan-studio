@@ -494,6 +494,7 @@ fn reply_str(r: &Reply) -> String {
     let st = match r.status {
         PortStatus::Open => "open",
         PortStatus::Closed => "closed",
+        PortStatus::Arp => "up",
     };
     format!("{}:{}:{st}", Ipv4Addr::from(r.remote_ip), r.remote_port)
 }

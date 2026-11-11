@@ -1,0 +1,23 @@
+OUT=/tmp/rmasscan-out.0YulsN/protocols-out/linux-protocols-r4
+SigIgn of this bash (bash ignores SIGQUIT for itself): SigIgn:	0000000000000004
+SigIgn of its children: SigIgn:	0000000000000000
+f4bc592f69913b6ee9cbfaac34490b621b0ffa6c68aef8b0c3538fcb76a29e86  target/release/rmasscan-lab
+b6725146d8c76be0b13127250ab092cb101ae1417cf2b32451fcc0a9d226b54f  target/release/rmasscan
+2026-11-10T23:33:57Z
+[wire-lab] suite protocols finished rc=0 (see /tmp/rmasscan-out.0YulsN/protocols-out/linux-protocols-r4/suite.log)
+[wire-lab] done: /tmp/rmasscan-out.0YulsN/protocols-out/linux-protocols-r4
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+2026-11-10T23:37:19Z
+PASS     manifest 
+PASS     p01_ping 
+PASS     p02_udp_payloads_and_closed 
+PASS     p03_sctp_init_ack_abort 
+PASS     p04_arp_scan 
+PASS     p05_mixed_protos 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":6}
+VERIFY_RC=0
+2026-11-10T23:37:19Z
+ae05acb5fbb6224ad27ac25adddb7270f108d6705291dfacef1de81c0e3b1a8a  /tmp/rmasscan-out.0YulsN/protocols-out/linux-protocols-r4/verdict.json
+0
+FINISHED

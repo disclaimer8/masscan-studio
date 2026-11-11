@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
-use rmasscan_core::receive::{Reply, parse_reply};
+use rmasscan_core::receive::{PortStatus, Reply, parse_reply};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
 use crate::checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
@@ -127,9 +127,15 @@ pub enum EngineError {
 
 // ---------------------------------------------------------------- dedup ---
 
-type DedupKey = (u32, u16, u32, u16);
+/// `(remote ip, remote port, local ip, local port, ip_proto, status_bucket)`.
+type DedupKey = (u32, u16, u32, u16, u8, u8);
 
-/// Ограниченный dedup по кортежу (remote ip/port, local ip/port).
+/// Ограниченный dedup по кортежу (remote ip/port, local ip/port, протокол, корзина статуса). Протокол в ключе нужен,
+/// чтобы `80/tcp` и `80/udp` одного хоста не глушили друг друга. Корзина статуса разделяет для не-TCP ответ-датаграмму
+/// (`Open`) и ICMP Port Unreachable (`Closed`) на тот же порт. У TCP она 0 для SYN-ACK и RST: RST вслед за SYN-ACK на тот
+/// же кортеж остаётся повтором, как в C (`dedup_is_duplicate`, main.c:1067–1068, статус не различает). Closed TCP от ICMP
+/// 3/3 (флагов нет) идёт в корзину 1. C такие ответы не дедуплицирует вовсе (`handle_icmp` сообщает каждый,
+/// proto-icmp.c:182); rmasscan пропускает их через этот же кэш, отдельная корзина нужна, чтобы они не глушили SYN-ACK.
 ///
 /// Политика вытеснения: FIFO по порядку первой вставки. При заполнении
 /// вытесняется самая старая запись; повторное попадание уже известного ключа
@@ -167,7 +173,22 @@ impl DedupCache {
 
     /// `true`, если кортеж новый (и теперь запомнен); `false` для повтора.
     pub fn insert(&mut self, r: &Reply) -> bool {
-        let key = (r.remote_ip, r.remote_port, r.local_ip, r.local_port);
+        let bucket = match (r.ip_proto, r.status) {
+            // Closed без флагов TCP приходит только из ICMP 3/3 (RST всегда несёт 0x04): у него своя корзина, иначе он
+            // глушил бы настоящий SYN-ACK (C не пропускает ICMP через dedup, main.c:917-919).
+            (6, PortStatus::Closed) if r.tcp_flags == 0 => 1,
+            (6, _) | (_, PortStatus::Open) => 0,
+            (_, PortStatus::Closed) => 1,
+            (_, PortStatus::Arp) => 2,
+        };
+        let key = (
+            r.remote_ip,
+            r.remote_port,
+            r.local_ip,
+            r.local_port,
+            r.ip_proto,
+            bucket,
+        );
         if self.set.contains(&key) {
             return false;
         }
@@ -602,6 +623,11 @@ fn run_tx(
         // завершение, а не checkpoint с пустым остатком.
         // `--infinite` (`main.c:445-449`): конец прохода запускает следующий, пока не придёт команда остановки.
         if cursor.current().is_none() && !cursor.advance_pass() {
+            // Probe, который не построился, это отказ, а не естественный конец скана.
+            if let Some(e) = cursor.build_error() {
+                shared.fail(FailReason::ProbeBuild(e.to_string()));
+                break END_HALTED;
+            }
             break END_NATURAL;
         }
         if halted() {
@@ -633,6 +659,10 @@ fn run_tx(
                 // `--infinite`: проход кончился посреди окна throttle, продолжаем со следующего прохода.
                 if cursor.advance_pass() {
                     continue;
+                }
+                if let Some(e) = cursor.build_error() {
+                    shared.fail(FailReason::ProbeBuild(e.to_string()));
+                    break 'run END_HALTED;
                 }
                 break 'run END_NATURAL;
             }
@@ -1098,7 +1128,7 @@ fn rx_plan(plan: &ReadyPlan, k: usize) -> Result<ReadyPlan, PlanError> {
     }
     let mut nics: Vec<NicBinding> = plan.nics().to_vec();
     nics.swap(0, k);
-    ReadyPlan::new_cli(plan.effective().clone(), nics)
+    ReadyPlan::new_cli_with_payloads(plan.effective().clone(), nics, plan.payloads().clone())
 }
 
 /// Владелец запуска. `Drop` останавливает и дожидается оба потока.

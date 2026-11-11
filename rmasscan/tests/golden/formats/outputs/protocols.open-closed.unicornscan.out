@@ -1,0 +1,14 @@
+#masscan
+TCP open	            http[   80]		from 192.0.2.10  ttl 64 
+Host: 192.0.2.10 ()	Ports: 53/open/udp////
+Host: 192.0.2.11 ()	Ports: 59999/open/udp////
+Host: 192.0.2.11 ()	Ports: 161/closed/udp////
+Host: 192.0.2.12 ()	Ports: 500/closed/udp////
+TCP closed	           https[  443]		from 192.0.2.12  ttl 62 
+TCP closed	        http-alt[ 8080]		from 192.0.2.12  ttl 62 
+Host: 198.51.100.5 ()	Ports: 2905/open/sctp////
+Host: 198.51.100.5 ()	Ports: 2906/closed/sctp////
+Host: 198.51.100.6 ()	Ports: 0/open/icmp////
+Host: 203.0.113.9 ()	Ports: 0/open/icmp////
+Host: 203.0.113.9 ()	Ports: 123/open/udp////
+# end

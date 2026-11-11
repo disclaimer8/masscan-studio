@@ -37,7 +37,7 @@ impl Row {
         let source = if simulation {
             "Simulation"
         } else {
-            "BPF observation"
+            "TCP response"
         };
         let cells = [
             ip.to_string(),

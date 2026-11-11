@@ -1,5 +1,14 @@
 # Masscan Studio (Rust + Slint)
 
+**Development branch:** ordinary IPv4/TCP scanning has separate native profiles:
+`MacPhysical`, `LinuxPhysical` and `WindowsPhysical`. A saved profile from another
+OS remains readable but cannot start on the wrong OS. The older `MacNetwork`
+profile retains its sealed fixture and single-target acceptance restrictions.
+IPC v5 requires the matching helper. This is not a notarized release.
+Use the [release checklist](RELEASE-CHECKLIST.md) and
+[current integration evidence](../docs/experiments/2026-11-10-studio-integration.md)
+for the exact scope of verification.
+
 This workspace connects the selected Slint interface to the current `rmasscan`
 engine through a separate Rust runner. Engine/core/net remain in `../rmasscan`;
 there is no vendored second engine. Studio is a Rust/Slint application.
@@ -27,7 +36,10 @@ development signature, not Developer ID/notarization. Windows packages contain
 `studio-ui.exe`, `studio-runner.exe`, `studio-inspect.exe`, `studio-tools.exe`
 and `sqlite3.dll`; keep them together.
 `manifest.json` records the source revision, dirty state, Cargo lock hash and
-binary hashes. No Npcap or Nmap is bundled.
+the complete package file inventory, protocol version and enabled profiles.
+`cargo xtask verify-package dist/build-…` checks package integrity; see
+[PACKAGING.md](PACKAGING.md) for optimized builds and signing limits.
+No Npcap or Nmap is bundled.
 
 History lives in `~/Library/Application Support/Masscan Studio
 Rust` on macOS, `%LOCALAPPDATA%/Masscan Studio` on Windows, and
@@ -55,6 +67,11 @@ Choose **Simulation · no network packets** to exercise this flow on any OS. Thi
 uses the real engine with its fake packet adapter, not a prerecorded UI animation.
 It does not prove raw packet I/O or network correctness.
 
+The results summary covers all runs of the selected scan, including those before
+Pause/Resume. The footer's **latest run** sent/received counters start over on
+each Start or Resume. Replies can update an existing saved result, so the received
+count is not the number of unique results in history.
+
 The **Mac feth** profile is open at a compile-time per-profile gate
 (`raw_profile_enabled`) on macOS only; Windows and Linux builds keep it closed,
 and Simulation never touches the network. Raw Start/Resume requires an
@@ -66,6 +83,81 @@ only the sealed pair (`198.18.0.2`); it is not a physical NIC. Acceptance throug
 Studio (one Mac, one macOS version, debug build) is recorded in
 `docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md`; its status
 words there govern.
+
+## Ordinary network scanning
+
+Fresh settings select the native OS profile with empty targets and rate 100.
+Enter the IPv4 addresses and TCP ports you are authorized to test, check settings
+and routes, then authorize the matching runner and start. There is no laboratory
+manifest or single-use permit in this user flow. Route checks are read-only;
+ARP begins only after an authorized Start.
+
+The runner uses the shared engine/net libraries to select one Ethernet-compatible
+interface and source, resolve next-hop MACs and retain complete preparation
+coverage. Start waits for the report to be committed to history. Pause/Resume
+pins the job, interface, routes and destination MAC map; a changed snapshot
+requires a new scan. Stop, disconnect and network/clock guards stop the attempt.
+Limits are 2,048 candidates, 1,024 effective addresses, 1,048,576 TCP probes and
+1–1,000 packets/s. IPv6, UDP, hostnames, tunnels and multi-interface jobs are not
+supported in these Studio profiles. Linux uses an authorized root runner and
+AF_PACKET; Windows uses same-account UAC and an existing Npcap installation.
+Studio does not install Npcap or change its driver permissions. Windows freezes
+the Npcap device GUID, rather than a potentially ambiguous friendly adapter name.
+
+IPC version 5 requires the matching helper packaged with this build. Existing
+history, profiles and supported engine checkpoints remain readable. CLI retries,
+sharding and multiple adapters are not exposed by Studio merely because the
+integrated engine supports them.
+
+## Mac network · local test only
+
+On macOS this acceptance branch enables the **Mac network · local test only**
+profile exclusively for a sealed synthetic multi-peer/routed fixture on this Mac.
+The helper enforces its exact topology before opening a packet adapter. Arbitrary
+Wi-Fi/Ethernet devices are not enabled through this fixture profile; use the
+separate ordinary-network profile above for authorized devices.
+Windows/Linux show **Mac network · scanning disabled**; read-only physical route
+checks are macOS-only. This is not a general-network release.
+
+No targets are inferred from the current network. Existing feth and Simulation
+profile meanings and saved settings are unchanged. Follow the
+[release checklist](RELEASE-CHECKLIST.md) for the separate owned-target policy and
+physical-interface acceptance still required before enabling broader use.
+
+Enter IPv4 addresses, CIDRs or ranges, TCP ports, optional exclusions and a rate.
+**Check settings** validates without manufacturing an adapter or sending packets.
+It shows deduplicated requested addresses/probes and candidates after your
+exclusions. **Check network** on macOS is read-only: it reports the selected
+interface/source, direct/routed counts and automatic exclusions. A successful
+route check does not authorize a helper session, resolve neighbours or establish
+packet access. macOS may mask the source hardware address during this check.
+**Authorize session…** grants a separate verified helper session for the selected
+job; it does not start a scan or send ARP/TCP. Install this build's matching helper
+through **Scanner setup** before requesting authorization.
+
+The implemented gated path accepts at most 2,048 candidates after user exclusions,
+1,024 effective addresses and 1,048,576 TCP probes, at rate 1–1,000 packets/s.
+One scan requires one Ethernet-compatible interface/source; mixed interfaces,
+tunnel/loopback routes, IPv6, UDP and hostname targets are unsupported.
+After an accepted fixture Start, **Preparing network** resolves neighbours;
+**Stop** and **Lock** remain available, and Pause becomes available only when TCP
+scanning begins. Frozen preparation coverage remains visible above results and
+under **Coverage…**, including addresses not scanned due to no neighbour response
+and automatic exclusions. Eligible counts describe the prepared plan, not a claim
+that every probe was sent. An all-unresolved scan has no TCP results and still has
+saved coverage. History reopening preserves these facts and original settings.
+Editing new settings, loading a profile or repeating settings invalidates route
+readiness while retaining coverage for the selected saved scan and its displayed
+results. Export continues to describe that selected scan until a new scan starts
+or another History selection clears/replaces the view.
+
+The optimized packaged GUI passed isolated multi-peer/routed Complete, Stop and
+another Complete in separate launches (96, 5 and 96 saved rows), with independent
+root packet evidence. This does not establish physical Wi-Fi/Ethernet delivery,
+same-window native restart, or manual keyboard/mouse acceptance. Exact source and
+artifact provenance is in the [GUI/session report](../docs/experiments/2026-11-02-studio-gui-work-session.md).
+A separately reviewed owned-target policy and authorized physical target remain
+required; see [VERIFICATION.md](VERIFICATION.md).
 
 Active attempts interrupt after a long scheduling/clock gap instead of silently
 resuming. The gated Mac feth path also repeats isolation checks in a background
@@ -95,7 +187,7 @@ again** to discover its result. Waiting is bounded to 180 seconds.
 Linux requires `pkexec`, `polkitd`, `binutils` and a desktop authentication agent.
 Windows requires a system-wide PowerShell 7 installation in Program Files; user
 or PATH-only installations are refused. No driver, Npcap, service or automatic
-update is installed by this action. Raw network gates remain unchanged.
+update is installed by this action. Installation never authorizes or starts a scan.
 
 Native setup installation is recorded for [macOS](../docs/experiments/2026-10-27-studio-runner-setup.md),
 [Windows](../docs/experiments/2026-10-28-studio-windows-setup.md) and
@@ -202,6 +294,15 @@ hardware identity. All inspection data belongs to its original saved scan.
 snapshot taken before the native save dialog. CSV neutralizes spreadsheet formulas;
 JSON includes inspection details only for exported ports. Export runs in the
 background. Existing exports are replaced only after the full new file is written.
+Physical reports retain whole-scan preparation coverage in the same atomic file,
+even with zero visible result rows. JSON version 2 adds original settings, counts,
+interface/source, routes, unresolved neighbours and exclusions alongside the
+filtered `rows`. Physical CSV adds `Record kind`/`Detail`: `scan_coverage` holds the
+complete metadata as JSON, `not_scanned` and `automatically_excluded` have empty
+port/protocol/state cells, and `result` rows retain the current filtered order.
+Unscanned addresses never become closed-port rows. Nonphysical export formats
+remain unchanged. Whole-scan settings may list ports hidden by a result filter;
+hidden result or inspection details are never exported.
 Old history rows without discovery times remain unknown. Pending host checks are
 marked cancelled after an interrupted application run.
 

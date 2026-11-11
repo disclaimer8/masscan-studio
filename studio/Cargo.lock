@@ -4148,6 +4148,7 @@ dependencies = [
  "const-field-offset",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",
@@ -4371,6 +4372,9 @@ dependencies = [
 name = "studio-app"
 version = "0.1.0"
 dependencies = [
+ "rmasscan-core",
+ "rmasscan-engine",
+ "rmasscan-net",
  "rusqlite",
  "serde_json",
  "studio-inspection",
@@ -4399,9 +4403,11 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
+ "rmasscan-net",
  "serde",
  "serde_json",
  "sha2",
+ "studio-protocol",
  "windows-sys 0.61.2",
 ]
 
@@ -4412,6 +4418,7 @@ dependencies = [
  "getrandom 0.4.3",
  "rmasscan-core",
  "rmasscan-engine",
+ "rmasscan-net",
  "serde",
  "serde_json",
 ]
@@ -4455,14 +4462,19 @@ version = "0.1.0"
 dependencies = [
  "i-slint-backend-testing",
  "image",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "pollster 1.0.1",
  "rfd",
+ "rmasscan-net",
  "serde",
  "serde_json",
  "slint",
  "slint-build",
  "studio-app",
  "studio-inspection",
+ "studio-platform",
  "studio-protocol",
  "studio-store",
  "studio-table",
@@ -5866,8 +5878,14 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "rmasscan-core",
+ "rmasscan-engine",
+ "rmasscan-net",
+ "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
+ "studio-app",
  "studio-platform",
  "studio-protocol",
  "studio-store",

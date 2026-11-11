@@ -31,6 +31,14 @@ fn answer_router(fake: &FakeAdapter) {
 }
 
 fn run(fake: &FakeAdapter, clock: &Arc<ManualClock>) -> Result<ArpReport, ArpResolveError> {
+    run_policy(fake, clock, ArpPolicy::default())
+}
+
+fn run_policy(
+    fake: &FakeAdapter,
+    clock: &Arc<ManualClock>,
+    policy: ArpPolicy,
+) -> Result<ArpReport, ArpResolveError> {
     let mut io = fake.pair();
     resolve_next_hop(
         &mut io,
@@ -39,9 +47,118 @@ fn run(fake: &FakeAdapter, clock: &Arc<ManualClock>) -> Result<ArpReport, ArpRes
         MY_IP,
         ROUTER,
         NextHopKind::Router,
-        &ArpPolicy::default(),
+        &policy,
         &**clock,
     )
+}
+
+#[test]
+fn policy_rejects_intervals_below_clock_resolution_before_io() {
+    for interval in [
+        Duration::ZERO,
+        Duration::from_nanos(1),
+        Duration::from_nanos(999),
+    ] {
+        let (fake, clock) = setup();
+        // Terminate the old implementation's first send instead of hanging its zero-time loop.
+        fake.script_tx([TxStep::Uncertain]);
+        let result = run_policy(
+            &fake,
+            &clock,
+            ArpPolicy {
+                interval,
+                ..ArpPolicy::default()
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            fake.send_calls(),
+            0,
+            "invalid interval {interval:?} reached I/O"
+        );
+        assert_eq!(clock.now_micros(), 1_000_000);
+    }
+}
+
+#[test]
+fn policy_rejects_unrepresentable_durations_and_deadlines_before_io() {
+    for policy in [
+        ArpPolicy {
+            interval: Duration::MAX,
+            ..ArpPolicy::default()
+        },
+        ArpPolicy {
+            timeout: Duration::MAX,
+            ..ArpPolicy::default()
+        },
+        ArpPolicy {
+            timeout: Duration::from_micros(u64::MAX),
+            ..ArpPolicy::default()
+        },
+    ] {
+        let (fake, clock) = setup();
+        fake.script_tx([TxStep::Uncertain]);
+        assert!(run_policy(&fake, &clock, policy).is_err());
+        assert_eq!(
+            fake.send_calls(),
+            0,
+            "invalid policy {policy:?} reached I/O"
+        );
+    }
+}
+
+#[test]
+fn policy_supports_microsecond_resolution_and_large_intervals_near_clock_limit() {
+    for interval in [Duration::from_micros(1), Duration::from_micros(u64::MAX)] {
+        let (fake, clock) = setup();
+        clock.advance_micros(u64::MAX - 3 - clock.now_micros());
+        let result = run_policy(
+            &fake,
+            &clock,
+            ArpPolicy {
+                interval,
+                timeout: Duration::from_micros(3),
+            },
+        );
+        let expected = if interval == Duration::from_micros(1) {
+            3
+        } else {
+            1
+        };
+        assert!(
+            matches!(result, Err(ArpResolveError::Timeout { requests_sent, .. }) if requests_sent == expected)
+        );
+        assert_eq!(fake.sent_count(), expected as usize);
+        assert_eq!(clock.now_micros(), u64::MAX);
+    }
+}
+
+#[test]
+fn policy_deadline_caps_would_block_sleep_near_clock_limit() {
+    let (fake, clock) = setup();
+    clock.advance_micros(u64::MAX - 3 - clock.now_micros());
+    fake.script_tx([TxStep::WouldBlockUnsent, TxStep::Uncertain]);
+    // Bound the defective implementation after its clock wraps on the first sleep.
+    fake.push_rx(rmasscan_engine::fake::RxStep::Fail(
+        "sleep crossed deadline".into(),
+    ));
+    let result = run_policy(
+        &fake,
+        &clock,
+        ArpPolicy {
+            timeout: Duration::from_micros(3),
+            ..ArpPolicy::default()
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(ArpResolveError::Timeout {
+            requests_sent: 0,
+            ..
+        })
+    ));
+    assert_eq!(fake.send_calls(), 1);
+    assert_eq!(clock.now_micros(), u64::MAX);
 }
 
 #[test]

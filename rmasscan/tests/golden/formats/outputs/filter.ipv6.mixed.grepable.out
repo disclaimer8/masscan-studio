@@ -1,0 +1,9 @@
+# Masscan 1.3.9-integration scan initiated Wed Nov 15 02:13:20 2023
+# Ports scanned: TCP(0;) UDP(0;) SCTP(0;) PROTOCOLS(0;)
+Timestamp: 1700014400	Host: 2001:db8::1 ()	Ports: 80/open/tcp//http//
+Timestamp: 1700014400	Host: 192.0.2.1 ()	Ports: 80/open/tcp//http//
+Timestamp: 1700014401	Host: 2001:db8::1:0:0:1 ()	Ports: 22/open/tcp//ssh//
+Timestamp: 1700014404	Host: 2001:db8:: ()	Ports: 53/open/tcp//domain//
+Timestamp: 1700014405	Host: 2001:db8::53 ()	Ports: 53/open/udp//domain//
+Timestamp: 1700014407	Host: 192.0.2.3 ()	Ports: 22/open/tcp//ssh//
+# Masscan done at Wed Nov 11 11:52:03 2026

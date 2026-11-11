@@ -296,7 +296,7 @@ mod tests {
     fn open_rec() -> Record {
         Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(1, 2, 3, 4),
+            ip: Ipv4Addr::new(1, 2, 3, 4).into(),
             port: 80,
             proto: Proto::Tcp,
             status: Status::Open,
@@ -309,7 +309,7 @@ mod tests {
     fn closed_rec() -> Record {
         Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(10, 0, 0, 255),
+            ip: Ipv4Addr::new(10, 0, 0, 255).into(),
             port: 443,
             proto: Proto::Tcp,
             status: Status::Closed,
@@ -354,7 +354,7 @@ mod tests {
     fn non_tcp(proto: Proto, status: Status, port: u16, ip: u8) -> Record {
         Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(192, 0, 2, ip),
+            ip: Ipv4Addr::new(192, 0, 2, ip).into(),
             port,
             proto,
             status,

@@ -105,17 +105,26 @@ masked() {
 }
 
 # ---- inputs ----------------------------------------------------------------
-# records_ports FILE : "ip_proto port" of the 15-byte status records (type 6/7, length 13; out-binary.c:154-211).
-# The bytes are regrouped by 15 in awk, whatever line width od prints (uutils od does not keep `-w15` lines on
-# large inputs).
-records_ports() {
-  local f=$1 size n
+# walk_records FILE : one line "type ip_proto port" per record between the 99-byte header and the 99-byte footer:
+# types 6/7 (IPv4, length 13; out-binary.c:154-211) and 10/11 (IPv6, length 26; out-binary.c:103-149). Fails when the
+# records do not end exactly at the footer. The bytes are regrouped in awk, whatever line width od prints (uutils od
+# does not keep `-w15` lines on large inputs).
+walk_records() {
+  local f=$1 size
   size=$(stat -c %s "$f")
-  n=$(( (size - 198) / 15 ))
-  [ "$n" -gt 0 ] || return 0
-  od -An -v -tu1 -j99 -N$((n * 15)) "$f" |
-    awk '{ for (k = 1; k <= NF; k++) { v[c++] = $k; if (c == 15) {
-             if ((v[0] == 6 || v[0] == 7) && v[1] == 13) print v[10], v[11] * 256 + v[12]; c = 0 } } }'
+  [ "$size" -ge 198 ] || return 1
+  [ "$size" -gt 198 ] || return 0
+  od -An -v -tu1 -j99 -N$((size - 198)) "$f" |
+    awk '{ for (k = 1; k <= NF; k++) v[c++] = $k }
+         END { i = 0
+               while (i < c) {
+                 t = v[i]; l = v[i + 1]
+                 if (l >= 128 || i + 2 + l > c) exit 1
+                 if ((t == 6 || t == 7) && l == 13) print t, v[i + 10], v[i + 11] * 256 + v[i + 12]
+                 else if ((t == 10 || t == 11) && l == 26) print t, v[i + 6], v[i + 7] * 256 + v[i + 8]
+                 else exit 1
+                 i += 2 + l
+               } }'
 }
 
 declare -A STORED
@@ -128,11 +137,13 @@ for f in "${inputs[@]}"; do
   name=${f##*/}
   size=$(stat -c %s "$f")
   head -c 11 "$f" | cmp -s - <(printf 'masscan/1.1') || die "$name: not a masscan -oB file"
-  [ $(( (size - 198) % 15 )) -eq 0 ] || die "$name: not 99 + 15*n + 99 bytes"
+  recs=$(walk_records "$f") || die "$name: not 99 + records (types 6/7 of 15 bytes, 10/11 of 28) + 99 bytes"
+  nrec=0
+  [ -z "$recs" ] || nrec=$(printf '%s\n' "$recs" | wc -l)
   if [ "$size" -le "$STORE_MAX" ]; then STORED[$name]=true; else STORED[$name]=false; fi
-  records_ports "$f" >>"$ports_all"
+  printf '%s\n' "$recs" | awk 'NF == 3 { print $2, $3 }' >>"$ports_all"
   jq -n -c --arg name "$name" --arg sha "$(sha256sum <"$f" | cut -d' ' -f1)" \
-    --argjson size "$size" --argjson records $(( (size - 198) / 15 )) --argjson stored "${STORED[$name]}" \
+    --argjson size "$size" --argjson records "$nrec" --argjson stored "${STORED[$name]}" \
     '{name: $name, sha256: $sha, size_bytes: $size, records: $records, stored: $stored}' >>"$STAGE/inputs.jsonl"
   echo "[*] input $name: $size bytes, stored=${STORED[$name]}"
 done
@@ -238,6 +249,21 @@ done
 # following argument without a leading '-' as a file (main-conf.c:3266-3278, main.c:1764).
 run_case filter.open.list basic.scan.bin other --range 10.0.0.0/31 -p80 --readscan @INPUT@ -oL @OUTPUT@
 run_case filter.open.grepable basic.scan.bin grepable --range 10.0.0.0/31 -p80 --readscan @INPUT@ -oG @OUTPUT@
+# IPv6 records (types 10/11): an IPv6 target filter. C tests the address only when the filter has an IPv4 range
+# (in-binary.c:254, in-filter.c:10, `count_ipv4s`): a filter of IPv6 ranges alone passes every record, a filter with
+# an IPv4 range drops the IPv6 records outside its IPv6 ranges (massip.c:45-51). `-p` applies to both versions. With a
+# port the IPv6 range must stay under 63 bits (main.c:1698-1704, `/120` here; a `/64` with a port exits 1).
+if [ -n "${STORED[ipv6.scan.bin]:-}" ]; then
+  run_case filter.ipv6.only6.list ipv6.scan.bin other --range 2001:db8::/32 --readscan @INPUT@ -oL @OUTPUT@
+  run_case filter.ipv6.only6.grepable ipv6.scan.bin grepable --range 2001:db8::/32 --readscan @INPUT@ -oG @OUTPUT@
+  run_case filter.ipv6.mixed.list ipv6.scan.bin other --range 2001:db8::/48,192.0.2.0/24 --readscan @INPUT@ -oL @OUTPUT@
+  run_case filter.ipv6.mixed.grepable ipv6.scan.bin grepable --range 2001:db8::/48,192.0.2.0/24 --readscan @INPUT@ -oG @OUTPUT@
+  run_case filter.ipv6.only4.list ipv6.scan.bin other --range 192.0.2.0/24 --readscan @INPUT@ -oL @OUTPUT@
+  run_case filter.ipv6.only4.grepable ipv6.scan.bin grepable --range 192.0.2.0/24 --readscan @INPUT@ -oG @OUTPUT@
+  run_case filter.ipv6.port.list ipv6.scan.bin other -p443,22 --readscan @INPUT@ -oL @OUTPUT@
+  run_case filter.ipv6.port.grepable ipv6.scan.bin grepable -p443,22 --readscan @INPUT@ -oG @OUTPUT@
+  run_case filter.ipv6.mixedport.list ipv6.scan.bin other --range 2001:db8::/120,192.0.2.0/30 -p22,80 --readscan @INPUT@ -oL @OUTPUT@
+fi
 # Non-TCP records: an address filter only. A `-p` filter is not captured: C compares the record's unshifted port
 # with the shifted ranges (in-filter.c:14-17), rmasscan compares (ip_proto, port) (design 2026-11-08 protocols Р5).
 if [ -n "${STORED[protocols.scan.bin]:-}" ]; then

@@ -2,8 +2,10 @@
 //! `status_string`, `reason_string`) masscan © Robert David Graham. Запись это то, что `output_report_status`
 //! получает от приёма: время, адрес, порт, протокол, статус, флаги TCP (`reason`), TTL и (у ARP) MAC.
 
-use std::net::Ipv4Addr;
+use std::fmt;
+use std::net::{IpAddr, Ipv6Addr};
 
+use rmasscan_core::ranges6::format_ipv6_c;
 use rmasscan_core::receive::{PortStatus, Reply};
 
 /// `masscan-version.h:3`.
@@ -54,11 +56,27 @@ pub fn proto_str(p: Proto) -> &'static str {
     }
 }
 
+/// Адрес в тексте C: `ipaddress_fmt` (`massip-addr.c:191-216`). IPv4 это `a.b.c.d`; IPv6 это `ipv6address_fmt`
+/// (`massip-addr.c:33-109`, сжимается ПЕРВАЯ серия нулевых слов, `2a03:9060::400:0:0:0:2`, а не `Ipv6Addr::Display`)
+/// без скобок: ни один формат вывода C их не ставит.
+#[derive(Clone, Copy, Debug)]
+pub struct CIp(pub IpAddr);
+
+impl fmt::Display for CIp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            IpAddr::V4(a) => write!(f, "{a}"),
+            IpAddr::V6(a) => f.write_str(&format_ipv6_c(u128::from(a))),
+        }
+    }
+}
+
 /// Одна запись о порте. `timestamp` хранится целиком; форматы режут его так же, как C (`%u`, `(int)`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Record {
     pub timestamp: u64,
-    pub ip: Ipv4Addr,
+    /// Адрес цели: IPv4 или IPv6 (`ipaddress` C, `massip-addr.h`). Текст всегда через [`CIp`].
+    pub ip: IpAddr,
     pub port: u16,
     pub proto: Proto,
     pub status: Status,
@@ -79,7 +97,11 @@ impl Record {
         );
         Record {
             timestamp,
-            ip: Ipv4Addr::from(r.remote_ip),
+            // `Reply.remote_ip` остаётся `u32` (контракт Studio, 0 у IPv6); адрес IPv6 лежит в `Reply.ip6`.
+            ip: match r.ip6 {
+                Some(v6) => IpAddr::V6(Ipv6Addr::from(v6.remote)),
+                None => IpAddr::V4(r.remote_ip.into()),
+            },
             port: r.remote_port,
             // Приём других протоколов ставит только 0/1/6/17/132 (`output.c:75–86`); незнакомый номер был бы
             // `err` в C, здесь его не бывает.

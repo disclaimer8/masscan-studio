@@ -69,8 +69,8 @@ fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
 }
 
 /// R7/R3: цели IPv6 принимают только `-sL`, `--echo`/`--echo-all`, `--iflist` (адреса он не читает) и
-/// `--offline` без `--packet-trace` (ничего не строит и не шлёт). Живой скан, `--packet-trace` и `--readscan`
-/// отказывают до обнаружения адаптера, до кадра и до чтения файла: принять цель и не просканировать её это
+/// `--offline` без `--packet-trace` (ничего не строит и не шлёт), а `--readscan` читает файл записей с фильтром
+/// IPv6 (задача 6). Живой скан и `--packet-trace` отказывают до обнаружения адаптера и до кадра: принять цель и не просканировать её это
 /// молчаливая потеря (временно, пока IPv6 не дойдёт до живого пути). Порт не TCP (`U:`, `S:`, `I:`, `O:`, `--arp`)
 /// при цели IPv6 получает своё сообщение: C шлёт их по IPv6, здесь это отложено.
 fn refuse_ipv6_outside_listing(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
@@ -78,11 +78,9 @@ fn refuse_ipv6_outside_listing(cli: &Cli, cfg: &ScanConfig) -> Result<(), String
         return Ok(());
     }
     let listing = cli.list || cli.echo || cli.echo_all || cli.iflist;
-    if listing || (cli.offline && !cli.packet_trace) {
+    // `--readscan` только читает файл и ничего не шлёт: IPv6-фильтр записей работает (`in-binary.c:254`).
+    if listing || (cli.offline && !cli.packet_trace) || !cli.readscan.is_empty() {
         return Ok(());
-    }
-    if !cli.readscan.is_empty() {
-        return Err("an IPv6 target filter is not supported for --readscan yet".into());
     }
     let non_tcp = cfg
         .targets
@@ -198,6 +196,9 @@ fn readscan(
 ) -> Result<(), String> {
     let opts = checked_output_options(cli)?;
     let filter = readscan::ReadFilter::from_config(cfg);
+    // `main.c:1698-1704`: the 63-bit check runs before every operation, `--readscan` included (an IPv6 filter
+    // such as `/64` with a port is 65 bits there). IPv4 targets never reach it.
+    filter.targets.try_range().map_err(|e| e.to_string())?;
     let env = output_env(backend, &opts, cfg, Some(0));
     readscan::run_readscan(
         &cli.readscan,
@@ -579,7 +580,7 @@ mod tests {
     fn open_rec() -> output::Record {
         output::Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(1, 2, 3, 4),
+            ip: Ipv4Addr::new(1, 2, 3, 4).into(),
             port: 80,
             proto: output::Proto::Tcp,
             status: output::Status::Open,
@@ -592,7 +593,7 @@ mod tests {
     fn closed_rec() -> output::Record {
         output::Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(10, 0, 0, 255),
+            ip: Ipv4Addr::new(10, 0, 0, 255).into(),
             port: 443,
             proto: output::Proto::Tcp,
             status: output::Status::Closed,
@@ -1964,11 +1965,66 @@ mod tests {
         assert_eq!(run_args(&a).unwrap(), "");
     }
 
-    /// `--readscan` filters by IPv4 only; an IPv6 filter would be ignored silently, so it is refused.
+    /// Task 6: `--readscan` reads types 10/11 and takes IPv6 target filters (`in-binary.c:228-276`); only live and
+    /// `--packet-trace` stay refused (R7). `--range` with IPv6 ranges and an IPv4 range keeps the IPv6 records of
+    /// the IPv6 ranges (C: the address test runs when `count_ipv4s` is non-zero, `in-binary.c:254`).
     #[test]
-    fn readscan_refuses_an_ipv6_filter() {
-        let e = ipv6_refusal(&["rmasscan", "2001:db8::/32", "--readscan", "x.scan"]);
-        assert!(e.contains("--readscan"), "{e}");
+    fn readscan_accepts_an_ipv6_filter() {
+        let scratch = Scratch::new();
+        let v6 = |ip: &str, port| output::Record {
+            ip: ip.parse::<std::net::IpAddr>().unwrap(),
+            port,
+            ..open_rec()
+        };
+        let input = scan_file(
+            &scratch,
+            "v6.scan",
+            &[
+                v6("2a03:9060:0:400::2", 443),
+                v6("2001:db8::5", 22),
+                open_rec(),
+            ],
+        );
+        let input = input.to_str().unwrap();
+        let (r, out, log) = readscan_run(
+            &FakeBackend::default(),
+            &[
+                "--range",
+                "2a03:9060:0:400::/64,1.2.3.0/24",
+                "--readscan",
+                input,
+                "-oL",
+                "-",
+            ],
+        );
+        r.unwrap();
+        assert_eq!(log, format!("[+] --readscan {input}\n"));
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "#masscan\nopen tcp 443 2a03:9060::400:0:0:0:2 1700000000\nopen tcp 80 1.2.3.4 1700000000\n# end\n"
+        );
+        // C checks the 63-bit limit before `--readscan` too (`main.c:1698-1704`): /64 times one port is 65 bits.
+        let (r, _, log) = readscan_run(
+            &FakeBackend::default(),
+            &[
+                "--range",
+                "2001:db8::/64",
+                "-p22",
+                "--readscan",
+                input,
+                "-oL",
+                "-",
+            ],
+        );
+        let e = r.unwrap_err();
+        assert!(
+            e.contains("scan range too large, max is 63-bits, requested is 65 bits"),
+            "{e}"
+        );
+        assert_eq!(log, "");
+        // A live scan of the same targets is still refused.
+        let e = ipv6_refusal(&["rmasscan", "2001:db8::/32", "-p80", "--seed", "1"]);
+        assert!(e.contains("IPv6 targets cannot be scanned yet"), "{e}");
     }
 
     /// `-iL` still takes IPv4 only (its own grammar, main-conf.c:2825-2836): an IPv6 entry is

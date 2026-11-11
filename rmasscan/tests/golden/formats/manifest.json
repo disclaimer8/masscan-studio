@@ -32,6 +32,13 @@
       "stored": true
     },
     {
+      "name": "ipv6.scan.bin",
+      "sha256": "39b2cf0dc9c8f79c789e0f3d131e99ea7290b7f163c39380e3ab8b6f0e3bf979",
+      "size_bytes": 663,
+      "records": 18,
+      "stored": true
+    },
+    {
       "name": "many.scan.bin",
       "sha256": "a7eb7a3430d5997255d3e3d1da4089234fb3ad63ddb24cc37e7d039490cd2e9c",
       "size_bytes": 1050198,
@@ -1906,6 +1913,554 @@
       ],
       "stdout": "",
       "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.list",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.list.out",
+      "sha256": "9544daad2e657450cbe903a0defa0b3117f4df156cb98215e9dfc008bfe071a4",
+      "masked_sha256": "9544daad2e657450cbe903a0defa0b3117f4df156cb98215e9dfc008bfe071a4",
+      "size_bytes": 478,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.json",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.json.out",
+      "sha256": "b6cf86c04a7ca2002581ccd8de38d0aba5d7a199f5d7806d8b9f7048177ac626",
+      "masked_sha256": "b6cf86c04a7ca2002581ccd8de38d0aba5d7a199f5d7806d8b9f7048177ac626",
+      "size_bytes": 1857,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.ndjson",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.ndjson.out",
+      "sha256": "12022c4d9c728a977af42a1950d5b87f743f3e3f6c93718c3d9d40ca95feb972",
+      "masked_sha256": "12022c4d9c728a977af42a1950d5b87f743f3e3f6c93718c3d9d40ca95feb972",
+      "size_bytes": 1771,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.grepable",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.grepable.out",
+      "sha256": "f66725d61136b90761eadcda84fd29c06d29e6d91bd7182bd857cdc0e23d50cc",
+      "masked_sha256": "37b578df454519ea42b3cd425343a29b9f9982f22252fe135182c4f847ddd95e",
+      "size_bytes": 1063,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.xml",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.xml.out",
+      "sha256": "46318ff29a74930e08fc460abb5555b1ddccc293b4e301379df64c1ae141b5da",
+      "masked_sha256": "724978c10ec6f4edcbae4a0b29765d5546ea1b7f8a4481d8df019dc924cb6b03",
+      "size_bytes": 2666,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.binary",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.binary.out",
+      "sha256": "e9e12aacf949f5af0ca106d33c76a4b44bd709a3a9e5fb36a02dad5ac9047924",
+      "masked_sha256": "e9e12aacf949f5af0ca106d33c76a4b44bd709a3a9e5fb36a02dad5ac9047924",
+      "size_bytes": 508,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.hostonly",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.hostonly.out",
+      "sha256": "793f167cc96a82e63d5f2c94a42677049f7fe60040548fd4b792896a714fb002",
+      "masked_sha256": "793f167cc96a82e63d5f2c94a42677049f7fe60040548fd4b792896a714fb002",
+      "size_bytes": 179,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.unicornscan",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/ipv6.open.unicornscan.out",
+      "sha256": "28ed54cee6bcd743da2d3a1ce92fc91497b7a32856e2f5565d9c7add2294ad38",
+      "masked_sha256": "28ed54cee6bcd743da2d3a1ce92fc91497b7a32856e2f5565d9c7add2294ad38",
+      "size_bytes": 725,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open.xml-webxml",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": "outputs/ipv6.open.xml-webxml.out",
+      "sha256": "a039f36cadb121b44ff7f4e3db2f68e91abcd26ecf0a1d64dd72521cedf79c56",
+      "masked_sha256": "b8e326c08a517156e8a76b48c448eb4f88c291a01289fe0ffc6b3a8c03250d42",
+      "size_bytes": 2743,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.list",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.list.out",
+      "sha256": "c6c4b25956671d95010023cca3adbdb6edb3ec76d934254b1d5b56b237f5c08c",
+      "masked_sha256": "c6c4b25956671d95010023cca3adbdb6edb3ec76d934254b1d5b56b237f5c08c",
+      "size_bytes": 721,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.json",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.json.out",
+      "sha256": "f4b59234491a2c1379924c669344df35dc523bf024c7bf4d706eaf35d6470ee3",
+      "masked_sha256": "f4b59234491a2c1379924c669344df35dc523bf024c7bf4d706eaf35d6470ee3",
+      "size_bytes": 2784,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.ndjson",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.ndjson.out",
+      "sha256": "c008403d9273250b55d30c37a2defb44e57487e5556d0df6df37a2835ff78d30",
+      "masked_sha256": "c008403d9273250b55d30c37a2defb44e57487e5556d0df6df37a2835ff78d30",
+      "size_bytes": 2656,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.grepable",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.grepable.out",
+      "sha256": "8dffd5a6610bc70986c5d53b690d816e983571dfbad1849c5183642b6e660c74",
+      "masked_sha256": "83976f6030c863941bffe56c786fb9d85618cf54b4079ff22db0e38ece89117e",
+      "size_bytes": 1520,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.xml",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.xml.out",
+      "sha256": "0f01b7fe41bcffc5712894b434471316059a792150d76e7da6351bead0ffbd16",
+      "masked_sha256": "89f01d918b002b7471858516b0cd0b8ade2034e71f2d16ffdd78880b1fc48303",
+      "size_bytes": 3834,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.binary",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.binary.out",
+      "sha256": "39b2cf0dc9c8f79c789e0f3d131e99ea7290b7f163c39380e3ab8b6f0e3bf979",
+      "masked_sha256": "39b2cf0dc9c8f79c789e0f3d131e99ea7290b7f163c39380e3ab8b6f0e3bf979",
+      "size_bytes": 663,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.hostonly",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.hostonly.out",
+      "sha256": "be267e8d619e034bec15c3bde75c56c8195f4bc807a3b4db93f513c20a0b4d87",
+      "masked_sha256": "be267e8d619e034bec15c3bde75c56c8195f4bc807a3b4db93f513c20a0b4d87",
+      "size_bytes": 266,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.unicornscan",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.unicornscan.out",
+      "sha256": "fdec59754af11113ba0455aa0fa9cf7fc74385f29f3306d89aac54ac4522e064",
+      "masked_sha256": "fdec59754af11113ba0455aa0fa9cf7fc74385f29f3306d89aac54ac4522e064",
+      "size_bytes": 1097,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "ipv6.open-closed.xml-webxml",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/ipv6.open-closed.xml-webxml.out",
+      "sha256": "27b2a00842be2ea41a5de851e6ac6e594048bc4ee688959b79af06c202fa8e06",
+      "masked_sha256": "22ed31c6ec3a3f8b6c459fd8f23386cf4eb0c039760217ae6b7c23c37ab54c8f",
+      "size_bytes": 3911,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.only6.list",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--range",
+        "2001:db8::/32",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.only6.list.out",
+      "sha256": "9544daad2e657450cbe903a0defa0b3117f4df156cb98215e9dfc008bfe071a4",
+      "masked_sha256": "9544daad2e657450cbe903a0defa0b3117f4df156cb98215e9dfc008bfe071a4",
+      "size_bytes": 478,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.only6.grepable",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--range",
+        "2001:db8::/32",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.only6.grepable.out",
+      "sha256": "600046ca59d00ff2e7a07a9cd34aad89592c3ce3b4707d8971d857fa85ab0f3f",
+      "masked_sha256": "37b578df454519ea42b3cd425343a29b9f9982f22252fe135182c4f847ddd95e",
+      "size_bytes": 1063,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.mixed.list",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--range",
+        "2001:db8::/48,192.0.2.0/24",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.mixed.list.out",
+      "sha256": "de0e19b9ed78e49cad43b1a3007dd4ef3ac4c6e31288e235a1412469f120acd2",
+      "masked_sha256": "de0e19b9ed78e49cad43b1a3007dd4ef3ac4c6e31288e235a1412469f120acd2",
+      "size_bytes": 227,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.mixed.grepable",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--range",
+        "2001:db8::/48,192.0.2.0/24",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.mixed.grepable.out",
+      "sha256": "68879d72bd044d8043e674880cdad8d41634eb944d586e28e6934b0b630031a1",
+      "masked_sha256": "7febb6c5c862bef36556d1a5423b66fb277f884f7312867658958b6f0e7a2511",
+      "size_bytes": 591,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.only4.list",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--range",
+        "192.0.2.0/24",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.only4.list.out",
+      "sha256": "e06265d5cc46ff8099bc5610ab42871c69ff8e90a417421a2dedf8a64ead4e72",
+      "masked_sha256": "e06265d5cc46ff8099bc5610ab42871c69ff8e90a417421a2dedf8a64ead4e72",
+      "size_bytes": 81,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.only4.grepable",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--range",
+        "192.0.2.0/24",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.only4.grepable.out",
+      "sha256": "30df6a9f9b6d4543dbf0c2867a4c340fd7399f0279575184117ef8a8ee17a457",
+      "masked_sha256": "d067f614a3d494e74ead31d65fff75b763e214e0f5a884e3e968676db3b1cbf8",
+      "size_bytes": 302,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.port.list",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "-p443,22",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.port.list.out",
+      "sha256": "19973703447efb1053a68cc1d7ee30d68b1f006912074b76e11349e1e6669db0",
+      "masked_sha256": "19973703447efb1053a68cc1d7ee30d68b1f006912074b76e11349e1e6669db0",
+      "size_bytes": 136,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.port.grepable",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "-p443,22",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.port.grepable.out",
+      "sha256": "d80e59fb281699b04bb0e94778cec27afa0677ee3c9170ce2bcd00c6637d8cbc",
+      "masked_sha256": "5c8d1200b59ed66b9b17dbd8e4925457de6df3dc1e22642386d14b3b27805bb2",
+      "size_bytes": 405,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.ipv6.mixedport.list",
+      "input": "ipv6.scan.bin",
+      "args": [
+        "--range",
+        "2001:db8::/120,192.0.2.0/30",
+        "-p22,80",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.ipv6.mixedport.list.out",
+      "sha256": "6b38cfea8103a292a10b25ca278e0e5e2091881979d9039ce6d8bb14b77a8850",
+      "masked_sha256": "6b38cfea8103a292a10b25ca278e0e5e2091881979d9039ce6d8bb14b77a8850",
+      "size_bytes": 116,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
     }
   ],
   "protocols_source": "getent protocols <ip_proto> on the oracle host for the records that are neither TCP nor UDP",
@@ -1939,6 +2494,43 @@
         "filter.protocols.grepable"
       ],
       "note": "the protocols cases were captured later with the same oracle and script; every earlier case reproduced (masked_sha256, stdout, stderr) and was kept as committed"
+    },
+    {
+      "captured_at": "2026-11-11T11:52:04Z",
+      "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
+      "inputs": [
+        "ipv6.scan.bin"
+      ],
+      "cases": [
+        "ipv6.open.list",
+        "ipv6.open.json",
+        "ipv6.open.ndjson",
+        "ipv6.open.grepable",
+        "ipv6.open.xml",
+        "ipv6.open.binary",
+        "ipv6.open.hostonly",
+        "ipv6.open.unicornscan",
+        "ipv6.open.xml-webxml",
+        "ipv6.open-closed.list",
+        "ipv6.open-closed.json",
+        "ipv6.open-closed.ndjson",
+        "ipv6.open-closed.grepable",
+        "ipv6.open-closed.xml",
+        "ipv6.open-closed.binary",
+        "ipv6.open-closed.hostonly",
+        "ipv6.open-closed.unicornscan",
+        "ipv6.open-closed.xml-webxml",
+        "filter.ipv6.only6.list",
+        "filter.ipv6.only6.grepable",
+        "filter.ipv6.mixed.list",
+        "filter.ipv6.mixed.grepable",
+        "filter.ipv6.only4.list",
+        "filter.ipv6.only4.grepable",
+        "filter.ipv6.port.list",
+        "filter.ipv6.port.grepable",
+        "filter.ipv6.mixedport.list"
+      ],
+      "note": "the ipv6 cases (records of types 10/11 mixed with IPv4 records, and the IPv6 read-filter cases) were captured later with the same oracle and script; every earlier case reproduced (masked_sha256, stdout, stderr; the raw sha256 of the 26 clock-masked outputs differs by the masked fields only) and was kept as committed"
     }
   ]
 }

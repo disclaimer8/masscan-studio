@@ -4,9 +4,10 @@
 //! подвал и счётчики ведёт конвейер ([`super::pipeline`]).
 
 use std::io::{self, Write};
+use std::net::IpAddr;
 
 use super::grepable::{Grepable, Unicornscan};
-use super::record::{Record, Status, civil, proto_str, reason_string, status_str};
+use super::record::{CIp, Record, Status, civil, proto_str, reason_string, status_str};
 use super::services::ServiceNames;
 
 /// `--output-format` и `-o?` (`masscan.h:50–65`, нужное подмножество).
@@ -92,7 +93,7 @@ impl Formatter for List {
             status_str(r.status),
             proto_str(r.proto),
             r.port,
-            r.ip,
+            CIp(r.ip),
             ts_u32(r)
         )
     }
@@ -120,7 +121,7 @@ impl Formatter for Json {
             w,
             "{{   \"ip\": \"{}\",   \"timestamp\": \"{}\", \"ports\": [ {{\"port\": {}, \"proto\": \"{}\", \
              \"status\": \"{}\", \"reason\": \"{}\", \"ttl\": {}}} ] }}",
-            r.ip,
+            CIp(r.ip),
             ts_i32(r),
             r.port,
             proto_str(r.proto),
@@ -146,7 +147,7 @@ impl Formatter for Ndjson {
             w,
             "{{\"ip\":\"{}\",\"timestamp\":\"{}\",\"port\":{},\"proto\":\"{}\",\"rec_type\":\"status\",\
              \"data\":{{\"status\":\"{}\",\"reason\":\"{}\",\"ttl\":{}}}}}",
-            r.ip,
+            CIp(r.ip),
             ts_i32(r),
             r.port,
             proto_str(r.proto),
@@ -168,7 +169,7 @@ impl Formatter for Hostonly {
         Ok(())
     }
     fn record(&mut self, w: &mut dyn Write, _: &FileCtx, r: &Record) -> io::Result<()> {
-        writeln!(w, "{}", r.ip)
+        writeln!(w, "{}", CIp(r.ip))
     }
     fn footer(&mut self, _: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
         Ok(())
@@ -194,11 +195,13 @@ impl Formatter for Xml {
     fn record(&mut self, w: &mut dyn Write, _: &FileCtx, r: &Record) -> io::Result<()> {
         write!(
             w,
-            "<host endtime=\"{}\"><address addr=\"{}\" addrtype=\"ipv4\"/><ports>\
+            "<host endtime=\"{}\"><address addr=\"{}\" addrtype=\"{}\"/><ports>\
              <port protocol=\"{}\" portid=\"{}\"><state state=\"{}\" reason=\"{}\" reason_ttl=\"{}\"/>\
              </port></ports></host>\r\n",
             ts_u32(r),
-            r.ip,
+            CIp(r.ip),
+            // `name_from_ip_version` (`output.c:89-96`).
+            if r.ip.is_ipv6() { "ipv6" } else { "ipv4" },
             proto_str(r.proto),
             r.port,
             status_str(r.status),
@@ -236,6 +239,28 @@ impl Formatter for Binary {
         w.write_all(&buf)
     }
     fn record(&mut self, w: &mut dyn Write, _: &FileCtx, r: &Record) -> io::Result<()> {
+        let a = match r.ip {
+            IpAddr::V4(a) => a,
+            IpAddr::V6(a) => {
+                // `binary_out_status_ipv6` (`out-binary.c:103-149`): `Out_Open6` 10, `Out_Closed6` 11, `Out_Arp6` 12
+                // (`out-record.h:13-15`), длина 26, затем время, протокол, порт, reason, TTL, версия 6, `hi` и `lo`.
+                let mut b = [0u8; 28];
+                b[0] = match r.status {
+                    Status::Open => 10,
+                    Status::Closed => 11,
+                    Status::Arp => 12,
+                };
+                b[1] = 26;
+                b[2..6].copy_from_slice(&ts_u32(r).to_be_bytes());
+                b[6] = r.proto as u8;
+                b[7..9].copy_from_slice(&r.port.to_be_bytes());
+                b[9] = r.reason;
+                b[10] = r.ttl;
+                b[11] = 6;
+                b[12..28].copy_from_slice(&a.octets());
+                return w.write_all(&b);
+            }
+        };
         let mut b = [0u8; 15];
         // `out-binary.c:154–211`: `Out_Open2` 6, `Out_Closed2` 7, `Out_Arp2` 8 (`out-record.h:8–10`); MAC не пишется.
         b[0] = match r.status {
@@ -245,7 +270,7 @@ impl Formatter for Binary {
         };
         b[1] = 13;
         b[2..6].copy_from_slice(&ts_u32(r).to_be_bytes());
-        b[6..10].copy_from_slice(&r.ip.octets());
+        b[6..10].copy_from_slice(&a.octets());
         b[10] = r.proto as u8;
         b[11..13].copy_from_slice(&r.port.to_be_bytes());
         b[13] = r.reason;
@@ -264,12 +289,12 @@ mod tests {
     use super::*;
     use crate::output::record::Proto;
     use crate::output::services;
-    use std::net::Ipv4Addr;
+    use std::net::{IpAddr, Ipv4Addr};
 
     fn open_rec() -> Record {
         Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(1, 2, 3, 4),
+            ip: Ipv4Addr::new(1, 2, 3, 4).into(),
             port: 80,
             proto: Proto::Tcp,
             status: Status::Open,
@@ -282,7 +307,7 @@ mod tests {
     fn closed_rec() -> Record {
         Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(10, 0, 0, 255),
+            ip: Ipv4Addr::new(10, 0, 0, 255).into(),
             port: 443,
             proto: Proto::Tcp,
             status: Status::Closed,
@@ -429,7 +454,7 @@ mod tests {
         let t: u64 = 1_700_000_000;
         let mk = |dt: u64, ip: u8, port: u16, proto, status, ttl: u8| Record {
             timestamp: t + dt,
-            ip: Ipv4Addr::new(192, 0, 2, ip),
+            ip: Ipv4Addr::new(192, 0, 2, ip).into(),
             port,
             proto,
             status,
@@ -620,13 +645,99 @@ mod tests {
         }
     }
 
+    fn v6_rec(status: Status) -> Record {
+        Record {
+            timestamp: 1_700_000_000,
+            ip: IpAddr::V6("2a03:9060:0:400::2".parse().unwrap()),
+            port: 443,
+            proto: Proto::Tcp,
+            status,
+            reason: if status == Status::Open { 0x12 } else { 0x14 },
+            ttl: 57,
+            mac: None,
+        }
+    }
+
+    /// `out-binary.c:103-149` (`binary_out_status_ipv6`): type 10 (`Out_Open6`) / 11 (`Out_Closed6`), length 26 and
+    /// `[ts BE4, ip_proto, port BE2, reason, ttl, version 6, hi BE8, lo BE8]` (`out-record.h:13-14`); the text
+    /// formats print `ipv6address_fmt` (`massip-addr.c:33-109`: first zero run compressed, `::400:0:0:0:2`, which
+    /// `Ipv6Addr::Display` does not give), no brackets (`out-text.c:42`, `out-json.c:49`, `out-ndjson.c:40`,
+    /// `out-hostonly.c:39`, `out-grepable.c:160`, `out-unicornscan.c:41`) and `addrtype="ipv6"`
+    /// (`out-xml.c:75-83`, `output.c:89-96`).
+    #[test]
+    fn binary_records_10_11_layout_is_exact_28_bytes() {
+        let sv = services::empty();
+        let c = cx(&sv);
+        for (status, ty) in [(Status::Open, 10u8), (Status::Closed, 11)] {
+            let bin = render(Format::Binary, &c, &[v6_rec(status)]);
+            assert_eq!(bin.len(), 99 + 28 + 99);
+            let mut want = vec![ty, 26];
+            want.extend_from_slice(&1_700_000_000u32.to_be_bytes());
+            want.push(6);
+            want.extend_from_slice(&443u16.to_be_bytes());
+            want.push(if status == Status::Open { 0x12 } else { 0x14 });
+            want.push(57);
+            want.push(6);
+            want.extend_from_slice(&0x2a03_9060_0000_0400u64.to_be_bytes());
+            want.extend_from_slice(&2u64.to_be_bytes());
+            assert_eq!(want.len(), 28);
+            assert_eq!(bin[99..99 + 28], want[..]);
+            assert_eq!(bin[99 + 11], 6, "byte 11 is the IP version");
+        }
+        // The v4 record next to it is still 15 bytes (type 6/7, length 13).
+        let mixed = render(
+            Format::Binary,
+            &c,
+            &[open_rec(), v6_rec(Status::Open), closed_rec()],
+        );
+        assert_eq!(mixed.len(), 99 + 15 + 28 + 15 + 99);
+        assert_eq!(mixed[99..101], [6, 13]);
+        assert_eq!(mixed[114..116], [10, 26]);
+        assert_eq!(mixed[142..144], [7, 13]);
+
+        let addr = "2a03:9060::400:0:0:0:2";
+        let r = [v6_rec(Status::Open)];
+        assert_ne!(addr, "2a03:9060:0:400::2");
+        let list = s(&render(Format::List, &c, &r));
+        assert_eq!(
+            list,
+            format!("#masscan\nopen tcp 443 {addr} 1700000000\n# end\n")
+        );
+        let json = s(&render(Format::Json, &c, &r));
+        assert!(
+            json.contains(&format!("\"ip\": \"{addr}\",   \"timestamp\"")),
+            "{json}"
+        );
+        let nd = s(&render(Format::Ndjson, &c, &r));
+        assert!(
+            nd.starts_with(&format!("{{\"ip\":\"{addr}\",\"timestamp\"")),
+            "{nd}"
+        );
+        assert_eq!(s(&render(Format::Hostonly, &c, &r)), format!("{addr}\n"));
+        let g = s(&render(Format::Grepable, &c, &r));
+        assert!(
+            g.contains(&format!("\tHost: {addr} ()\tPorts: 443/open/tcp//")),
+            "{g}"
+        );
+        let u = s(&render(Format::Unicornscan, &c, &r));
+        assert!(u.contains(&format!("\t\tfrom {addr}  ttl 57 \n")), "{u}");
+        let x = s(&render(Format::Xml, &c, &r));
+        assert!(
+            x.contains(&format!("<address addr=\"{addr}\" addrtype=\"ipv6\"/>")),
+            "{x}"
+        );
+        // A v4 record keeps addrtype="ipv4".
+        let x4 = s(&render(Format::Xml, &c, &[open_rec()]));
+        assert!(x4.contains("<address addr=\"1.2.3.4\" addrtype=\"ipv4\"/>"));
+    }
+
     #[test]
     fn edge_values_render_like_c() {
         let sv = services::empty();
         let c = cx(&sv);
         let lo = Record {
             timestamp: 4_294_967_296 + 5,
-            ip: Ipv4Addr::new(0, 0, 0, 0),
+            ip: Ipv4Addr::new(0, 0, 0, 0).into(),
             port: 0,
             proto: Proto::Tcp,
             status: Status::Open,
@@ -636,7 +747,7 @@ mod tests {
         };
         let hi = Record {
             timestamp: 4_294_967_296 + 5,
-            ip: Ipv4Addr::new(255, 255, 255, 255),
+            ip: Ipv4Addr::new(255, 255, 255, 255).into(),
             port: 65535,
             proto: Proto::Tcp,
             status: Status::Closed,

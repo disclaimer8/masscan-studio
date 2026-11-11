@@ -1,0 +1,14 @@
+#masscan
+open tcp 80 2001:db8::1 1700014400
+open tcp 80 192.0.2.1 1700014400
+open tcp 22 2001:db8::1:0:0:1 1700014401
+open tcp 0 :: 1700014401
+open tcp 8080 fe80::1 1700014403
+open tcp 47001 ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 1700014403
+open tcp 53 2001:db8:: 1700014404
+open udp 53 2001:db8::53 1700014405
+open sctp 2905 2001:db8:2::2905 1700014406
+open icmp 0 2001:db8:3::1 1700014407
+open tcp 22 192.0.2.3 1700014407
+open tcp 443 2a03:9060::400:0:0:0:2 1700014408
+# end

@@ -1,0 +1,20 @@
+#masscan
+TCP open	            http[   80]		from 2001:db8::1  ttl 64 
+TCP open	            http[   80]		from 192.0.2.1  ttl 64 
+TCP closed	           https[  443]		from 2001:db8::1:0:0:0:1  ttl 57 
+TCP open	             ssh[   22]		from 2001:db8::1:0:0:1  ttl 128
+TCP open	         unknown[    0]		from ::  ttl 0  
+TCP closed	         unknown[65535]		from ::1  ttl 255
+TCP closed	           https[  443]		from 192.0.2.2  ttl 64 
+TCP open	        http-alt[ 8080]		from fe80::1  ttl 64 
+TCP open	         unknown[47001]		from ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff  ttl 1  
+TCP closed	            smtp[   25]		from ::ffff:c000:201  ttl 62 
+TCP open	          domain[   53]		from 2001:db8::  ttl 60 
+Host: 2001:db8::53 ()	Ports: 53/open/udp////
+Host: 2001:db8:1::1 ()	Ports: 161/closed/udp////
+Host: 2001:db8:2::2905 ()	Ports: 2905/open/sctp////
+Host: 2001:db8:3::1 ()	Ports: 0/open/icmp////
+TCP open	             ssh[   22]		from 192.0.2.3  ttl 57 
+TCP open	           https[  443]		from 2a03:9060::400:0:0:0:2  ttl 57 
+TCP closed	             ssh[   22]		from 2a03:9060::400:0:0:0:2  ttl 57 
+# end

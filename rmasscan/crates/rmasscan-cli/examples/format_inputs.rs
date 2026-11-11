@@ -2,8 +2,8 @@
 //! (порт `out-binary.c` masscan © Robert David Graham) напрямую через форматтер: так пишутся и заголовок с подвалом
 //! без записей (`empty`), чего конвейер с ленивым заголовком не делает (`output.c:867–870`).
 //!
-//! `cargo run -p rmasscan-cli --example format_inputs -- OUTDIR` пишет пять файлов; `tests/golden/formats/inputs/`
-//! хранит четыре маленьких, `many` (1 МиБ) не коммитится. Тот же модуль подключает `tests/formats_golden.rs`: тест
+//! `cargo run -p rmasscan-cli --example format_inputs -- OUTDIR` пишет шесть файлов; `tests/golden/formats/inputs/`
+//! хранит пять маленьких, `many` (1 МиБ) не коммитится. Тот же модуль подключает `tests/formats_golden.rs`: тест
 //! сверяет закоммиченные входы и sha256 из манифеста с [`inputs`] и строит `many` на лету.
 //!
 //! Имена `*.scan.bin`, а не `*.scan` C: расширение `.scan` не входит в список данных языкового сторожа репозитория
@@ -11,7 +11,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -30,7 +30,7 @@ pub const MANY_RECORDS: u32 = 70_000;
 fn rec(ip: [u8; 4], port: u16, status: Status, reason: u8, ttl: u8, timestamp: u64) -> Record {
     Record {
         timestamp,
-        ip: Ipv4Addr::from(ip),
+        ip: Ipv4Addr::from(ip).into(),
         port,
         proto: Proto::Tcp,
         status,
@@ -113,6 +113,60 @@ fn protocols() -> Vec<Record> {
     ]
 }
 
+/// Время записей `ipv6`: `BASE + 14_400`, через четыре часа после `basic`.
+pub const IPV6_BASE: u64 = BASE + 14_400;
+
+/// Запись IPv6 (тип 10/11 `-oB`, 28 байт, `out-binary.c:103-149`) протокола `proto`.
+fn rec6(proto: Proto, ip: &str, port: u16, status: Status, reason: u8, ttl: u8, at: u64) -> Record {
+    Record {
+        timestamp: IPV6_BASE + at,
+        ip: IpAddr::V6(ip.parse::<Ipv6Addr>().expect("IPv6 literal")),
+        port,
+        proto,
+        status,
+        reason,
+        ttl,
+        mac: None,
+    }
+}
+
+/// Записи IPv6 вперемешку с IPv4 (порядок файла сохраняется): адреса RFC 3849 с каждым случаем `ipv6address_fmt`
+/// (`massip-addr.c:33-109`: сжимается первая серия нулей, а не самая длинная, у `Ipv6Addr::Display` наоборот:
+/// `2001:db8:0:1::1` у него, `2001:db8::1:0:0:0:1` у C), `::`, `::1`, `fe80::1`, `ffff:…:ffff`, отображённый IPv4 и
+/// старшая половина без младшей; TCP open и closed, UDP, SCTP и ICMP, порты 0 и 65535, TTL 0 и 255.
+fn ipv6() -> Vec<Record> {
+    use Proto::{Icmp, Sctp, Tcp, Udp};
+    use Status::{Closed, Open};
+    vec![
+        rec6(Tcp, "2001:db8::1", 80, Open, 0x12, 64, 0),
+        rec([192, 0, 2, 1], 80, Open, 0x12, 64, IPV6_BASE),
+        rec6(Tcp, "2001:db8:0:1:0:0:0:1", 443, Closed, 0x14, 57, 0),
+        rec6(Tcp, "2001:db8:0:0:1:0:0:1", 22, Open, 0x12, 128, 1),
+        rec6(Tcp, "::", 0, Open, 0x12, 0, 1),
+        rec6(Tcp, "::1", 65535, Closed, 0x04, 255, 2),
+        rec([192, 0, 2, 2], 443, Closed, 0x14, 64, IPV6_BASE + 2),
+        rec6(Tcp, "fe80::1", 8080, Open, 0x00, 64, 3),
+        rec6(
+            Tcp,
+            "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            47001,
+            Open,
+            0xFF,
+            1,
+            3,
+        ),
+        rec6(Tcp, "::ffff:192.0.2.1", 25, Closed, 0x14, 62, 4),
+        rec6(Tcp, "2001:db8::", 53, Open, 0x12, 60, 4),
+        rec6(Udp, "2001:db8::53", 53, Open, 0x00, 64, 5),
+        rec6(Udp, "2001:db8:1::1", 161, Closed, 0x00, 63, 5),
+        rec6(Sctp, "2001:db8:2::2905", 2905, Open, 0x00, 64, 6),
+        rec6(Icmp, "2001:db8:3::1", 0, Open, 0x00, 128, 7),
+        rec([192, 0, 2, 3], 22, Open, 0x12, 57, IPV6_BASE + 7),
+        rec6(Tcp, "2a03:9060:0:400::2", 443, Open, 0x12, 57, 8),
+        rec6(Tcp, "2a03:9060:0:400::2", 22, Closed, 0x14, 57, 8),
+    ]
+}
+
 /// [`MANY_RECORDS`] записей с адресов подряд от `10.1.0.0`, порты по кругу 22/80/443/8080, каждая третья closed,
 /// по тысяче записей на секунду.
 fn many() -> Vec<Record> {
@@ -122,7 +176,7 @@ fn many() -> Vec<Record> {
             let closed = i % 3 == 2;
             Record {
                 timestamp: BASE + u64::from(i / 1000),
-                ip: Ipv4Addr::from(0x0A01_0000 + i),
+                ip: Ipv4Addr::from(0x0A01_0000 + i).into(),
                 port: PORTS[i as usize % PORTS.len()],
                 proto: Proto::Tcp,
                 status: if closed { Status::Closed } else { Status::Open },
@@ -135,7 +189,7 @@ fn many() -> Vec<Record> {
 }
 
 /// Файл `-oB`: заголовок 99 байт с `s:` = время первой записи (как пишет C `--readscan`, `in-binary.c` и
-/// `out-binary.c:11–29`; без записей `BASE`), записи по 15 байт, подвал 99 байт.
+/// `out-binary.c:11–29`; без записей `BASE`), записи по 15 байт (IPv4) и по 28 (IPv6), подвал 99 байт.
 fn scan_file(records: &[Record]) -> Vec<u8> {
     let started = records.first().map_or(BASE, |r| r.timestamp);
     let services = ServiceNames::empty();
@@ -167,6 +221,7 @@ pub fn inputs() -> Vec<(&'static str, Vec<u8>)> {
         ("many.scan.bin", scan_file(&many())),
         ("empty.scan.bin", scan_file(&[])),
         ("protocols.scan.bin", scan_file(&protocols())),
+        ("ipv6.scan.bin", scan_file(&ipv6())),
     ]
 }
 

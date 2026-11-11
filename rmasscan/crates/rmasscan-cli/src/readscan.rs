@@ -1,7 +1,8 @@
 //! Чтение `-oB` и операция `--readscan` (AGPL-3.0). Порт `in-binary.c` (`_binaryfile_parse` :470–640,
 //! `parse_status2` :100–150, `readscan_binary_scanfile` :650–691) masscan © Robert David Graham. Читается только
-//! то, что пишет `-oB` этой версии: записи типа 6/7 (IPv4: TCP, UDP, SCTP, ICMP) и 8 (ARP) и подвал `'m'`.
-//! Остальные типы C (баннеры, IPv6, устаревшие 1/2) дают ошибку `Unsupported` (Р13), а не молчаливый пропуск.
+//! то, что пишет `-oB` этой версии: записи типа 6/7 (IPv4: TCP, UDP, SCTP, ICMP), 8 (ARP), 10/11 (IPv6, 28 байт,
+//! `parse_status6` :228–276) и подвал `'m'`. Остальные типы C (баннеры, устаревшие 1/2, 12 `Out_Arp6`) дают ошибку
+//! `Unsupported` (Р13), а не молчаливый пропуск.
 //! Отличия от C (Р5, лучше C): тип 8 читается (в `in-binary.c:583–634` нет `case Out_Arp2`, это «unknown type 8»),
 //! а фильтр `-p` сравнивает пару (протокол, порт) со сдвинутыми диапазонами (`in-filter.c:14–17` сравнивает
 //! несдвинутый порт).
@@ -14,7 +15,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::massip::MassIp;
@@ -36,9 +37,9 @@ pub enum ReadError {
     NotMasscan,
     /// Пустая строка значит просто `file corrupt`; иначе уточнение (`unknown type N`).
     Corrupt(String),
-    /// Тип записи, которого этот читатель не умеет (баннеры, IPv6, v1).
+    /// Тип записи, которого этот читатель не умеет (баннеры, `Out_Arp6`, v1).
     Unsupported(u64),
-    /// Запись типа 6/7/8 с номером протокола, который этот порт не выводит (не 1/6/17/132, у типа 8 не 0).
+    /// Запись типа 6/7/8/10/11 с номером протокола, который этот порт не выводит (не 1/6/17/132, у типа 8 не 0).
     UnsupportedProtocol(u8),
 }
 
@@ -148,12 +149,12 @@ fn strtoul(s: &[u8]) -> u64 {
     if neg { v.wrapping_neg() } else { v }
 }
 
-/// Читает записи типа 6/7/8 из файла `-oB`. `f` получает каждую; его ошибка прерывает чтение.
+/// Читает записи типа 6/7/8/10/11 из файла `-oB`. `f` получает каждую; его ошибка прерывает чтение.
 pub fn read_records(
     r: &mut dyn Read,
     f: &mut dyn FnMut(Record) -> Result<(), String>,
 ) -> Result<(), ReadError> {
-    read_records_counted(r, f, &mut |_| {}, &mut |_| {})
+    read_records_counted(r, f, &mut |_| {}, &mut |_| {}, &mut || {})
 }
 
 /// То же, с обратным вызовом после каждой записи (в том числе `'m'`) с общим числом: для строки прогресса.
@@ -162,6 +163,7 @@ fn read_records_counted(
     f: &mut dyn FnMut(Record) -> Result<(), String>,
     progress: &mut dyn FnMut(u64),
     scan_start: &mut dyn FnMut(u64),
+    corrupt_record: &mut dyn FnMut(),
 ) -> Result<(), ReadError> {
     let mut head = [0u8; BLOCK];
     let n = read_up_to(r, &mut head).map_err(ReadError::Io)?;
@@ -224,7 +226,7 @@ fn read_records_counted(
                         timestamp: u64::from(u32::from_be_bytes([
                             body[0], body[1], body[2], body[3],
                         ])),
-                        ip,
+                        ip: IpAddr::V4(ip),
                         port: u16::from_be_bytes([body[9], body[10]]),
                         proto,
                         status: match ty {
@@ -239,9 +241,44 @@ fn read_records_counted(
                     .map_err(|e| ReadError::Io(io::Error::other(e)))?;
                 }
             }
+            10 | 11 => {
+                // `parse_status6` (`in-binary.c:228-276`): поля читаются `_get_*` (за концом тела 0xFF…), версия не 6
+                // это `[-] corrupt record` в stderr и запись пропущена, чтение идёт дальше.
+                let get = |off: usize, n: usize| -> Option<u128> {
+                    body.get(off..off + n)
+                        .map(|b| b.iter().fold(0u128, |v, &x| (v << 8) | u128::from(x)))
+                };
+                if get(9, 1) != Some(6) {
+                    corrupt_record();
+                } else {
+                    let ip_proto = body[4];
+                    let proto = match Proto::from_ip_proto(ip_proto) {
+                        Some(p) if p != Proto::Arp => p,
+                        _ => return Err(ReadError::UnsupportedProtocol(ip_proto)),
+                    };
+                    // `_get_long` (`in-binary.c:200-218`): половина адреса, которой не хватает целиком, это 2^64-1.
+                    let half = |off: usize| get(off, 8).unwrap_or(u128::from(u64::MAX));
+                    let ip = Ipv6Addr::from(half(10) << 64 | half(18));
+                    f(Record {
+                        timestamp: get(0, 4).unwrap_or(0xFFFF_FFFF) as u64,
+                        ip: IpAddr::V6(ip),
+                        port: get(5, 2).unwrap_or(0xFFFF) as u16,
+                        proto,
+                        status: if ty == 10 {
+                            Status::Open
+                        } else {
+                            Status::Closed
+                        },
+                        reason: get(7, 1).unwrap_or(0xFF) as u8,
+                        ttl: get(8, 1).unwrap_or(0xFF) as u8,
+                        mac: None,
+                    })
+                    .map_err(|e| ReadError::Io(io::Error::other(e)))?;
+                }
+            }
             // `case 'm'`: подвал.
             0x6D => {}
-            1..=5 | 9..=13 => return Err(ReadError::Unsupported(ty)),
+            1..=5 | 9 | 12 | 13 => return Err(ReadError::Unsupported(ty)),
             _ => return Err(ReadError::Corrupt(format!("unknown type {ty}"))),
         }
         total += 1;
@@ -263,7 +300,11 @@ fn port_index(r: &Record) -> u32 {
     }
 }
 
-/// Фильтр целей `--readscan` (`filter->count_ipv4s`, `count_ports` в `parse_status2`).
+/// Фильтр целей `--readscan` (`filter->count_ipv4s`, `count_ports` в `parse_status2` и `parse_status6`).
+///
+/// Как у C, проверка адреса включается только при непустом списке IPv4 (`in-binary.c:132,254`, `in-filter.c:10`):
+/// фильтр из одних диапазонов IPv6 адрес не проверяет вовсе (снято с оракула `8e6b3b0`: все записи проходят), а
+/// фильтр с диапазоном IPv4 отбрасывает записи IPv6 вне диапазонов IPv6 (`massip_has_ip`, `massip.c:45-51`).
 pub struct ReadFilter {
     pub targets: MassIp,
     pub by_ip: bool,
@@ -286,7 +327,11 @@ impl ReadFilter {
     }
 
     pub fn keeps(&self, r: &Record) -> bool {
-        (!self.by_ip || self.targets.has_ip(u32::from(r.ip)))
+        (!self.by_ip
+            || match r.ip {
+                IpAddr::V4(a) => self.targets.has_ip(u32::from(a)),
+                IpAddr::V6(a) => self.targets.has_ip6(u128::from(a)),
+            })
             && (!self.by_port || self.targets.has_port(port_index(r)))
     }
 }
@@ -334,6 +379,7 @@ fn read_one(
         }
     };
     let _ = log.write_all(format!("[+] --readscan {name}\n").as_bytes());
+    let log = RefCell::new(log);
     let mut reader = BufReader::new(file);
     let sink = RefCell::new(sink);
     let mut sink_failure: Option<String> = None;
@@ -351,17 +397,23 @@ fn read_one(
         },
         &mut |n| {
             if n & 0xFFFF == 0 {
-                let _ = log.write_all(format!("[+] {name}: {n:8}\r").as_bytes());
+                let _ = log
+                    .borrow_mut()
+                    .write_all(format!("[+] {name}: {n:8}\r").as_bytes());
             }
         },
         // `in-binary.c:518-534`: `s:` заголовка перекрывает начало скана (C присваивает без проверки на ноль).
         &mut |ts| sink.borrow_mut().set_scan_started(ts),
+        // `parse_status6`: `fprintf(stderr, "[-] corrupt record\n")` без имени файла (`in-binary.c:244-247`).
+        &mut || {
+            let _ = log.borrow_mut().write_all(b"[-] corrupt record\n");
+        },
     );
     if let Some(msg) = sink_failure {
         return Err(msg);
     }
     if let Err(e) = res {
-        let _ = log.write_all(e.log_line(name).as_bytes());
+        let _ = log.borrow_mut().write_all(e.log_line(name).as_bytes());
         return Err(LOGGED.into());
     }
     Ok(())
@@ -373,6 +425,7 @@ mod tests {
     use crate::output::{Format, OutputEnv, OutputOptions, Wall, services};
     use crate::scratch::Scratch;
     use rmasscan_core::targets::{add_target_string, parse_ports};
+    use std::net::IpAddr;
 
     struct FakeWall(u64);
     impl Wall for FakeWall {
@@ -387,7 +440,7 @@ mod tests {
     fn rec(ts: u64, ip: [u8; 4], port: u16, status: Status) -> Record {
         Record {
             timestamp: ts,
-            ip: Ipv4Addr::from(ip),
+            ip: Ipv4Addr::from(ip).into(),
             port,
             proto: Proto::Tcp,
             status,
@@ -531,7 +584,7 @@ mod tests {
 
     #[test]
     fn unsupported_types_are_errors() {
-        for t in [1u8, 2, 3, 4, 5, 9, 10, 11, 12, 13] {
+        for t in [1u8, 2, 3, 4, 5, 9, 12, 13] {
             let f = with_header(&[t, 0]);
             match read_all(&f).1 {
                 Err(ReadError::Unsupported(n)) => assert_eq!(n, u64::from(t)),
@@ -792,7 +845,7 @@ mod tests {
         assert_eq!(started_of(&path, &by_ip), header_for(1_700_000_001));
         // Порт 443 есть только у второй записи: первая (порт 80) отфильтрована, начало скана всё равно из неё.
         let mut recs443 = recs.clone();
-        recs443[0].ip = Ipv4Addr::new(10, 0, 0, 1);
+        recs443[0].ip = Ipv4Addr::new(10, 0, 0, 1).into();
         recs443[1].port = 443;
         let p443 = file_with_header(&scratch, "filt3", b"masscan/1.1\ns:1234567890\n", &recs443);
         assert_eq!(started_of(&p443, &by_port), header_for(1_700_000_001));
@@ -852,6 +905,116 @@ mod tests {
         // Без целей и портов пропускается всё.
         let (out, _, _) = convert(files, Format::Binary, &no_filter());
         assert_eq!(read_all(&out).0, all);
+    }
+
+    fn v6(ts: u64, ip: &str, port: u16, status: Status) -> Record {
+        Record {
+            ip: IpAddr::V6(ip.parse().unwrap()),
+            ..rec(ts, [0; 4], port, status)
+        }
+    }
+
+    /// One 28-byte type 10/11 record as `binary_out_status_ipv6` writes it (`out-binary.c:103-149`), with the
+    /// version byte and the body length overridable.
+    fn raw6(ty: u8, ip: &str, port: u16, proto: u8, version: u8, len: usize) -> Vec<u8> {
+        let n = u128::from(ip.parse::<std::net::Ipv6Addr>().unwrap());
+        let mut b = vec![0x65, 0, 0, 1, proto];
+        b.extend_from_slice(&port.to_be_bytes());
+        b.extend_from_slice(&[0x12, 57, version]);
+        b.extend_from_slice(&n.to_be_bytes());
+        b.truncate(len);
+        let mut v = vec![ty, len as u8];
+        v.extend_from_slice(&b);
+        v
+    }
+
+    /// Review Focus 5. Types 10/11 (`in-binary.c:228-276`, `parse_status6`) are read back exactly as written and
+    /// mixed with IPv4 records in file order. The filter is C's, measured against the oracle binary: the IP test
+    /// runs only when `count_ipv4s` is non-zero (`in-binary.c:254`, `in-filter.c:10`), then `massip_has_ip`
+    /// picks the list by the record's version (`massip.c:45-51`). So a filter with an IPv4 range drops IPv6
+    /// records outside its IPv6 ranges, and a filter of IPv6 ranges only leaves everything through.
+    #[test]
+    fn readscan_v6_types_10_11_and_filter_match_c() {
+        let all = vec![
+            v6(1_700_000_000, "2a03:9060:0:400::2", 443, Status::Open),
+            rec(1_700_000_001, [10, 0, 0, 1], 80, Status::Open),
+            v6(1_700_000_002, "2001:db8::5", 22, Status::Closed),
+            v6(1_700_000_003, "2001:db8:1::5", 8080, Status::Open),
+        ];
+        let bin = make_bin(&all);
+        let (got, res) = read_all(&bin);
+        res.unwrap();
+        assert_eq!(got, all);
+        // type 10 for Open, 11 for Closed, 28 bytes each.
+        assert_eq!(bin[BLOCK..BLOCK + 2], [10, 26]);
+        assert_eq!(bin[BLOCK + 28 + 15..BLOCK + 28 + 17], [11, 26]);
+
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "v6", &bin);
+        let files = std::slice::from_ref(&path);
+        let filter = |targets: &[&str], ports: Option<&str>| {
+            let mut cfg = ScanConfig::default();
+            for t in targets {
+                cfg.targets.add_target_string(t).unwrap();
+            }
+            if let Some(p) = ports {
+                parse_ports(cfg.targets.ports_mut(), p).unwrap();
+            }
+            ReadFilter::from_config(&cfg)
+        };
+        let kept = |f: &ReadFilter| {
+            let (out, _, res) = convert(files, Format::Binary, f);
+            res.unwrap();
+            read_all(&out).0
+        };
+        // No IPv4 range: C does not filter by address at all, IPv4 and IPv6 records alike.
+        assert_eq!(kept(&filter(&["2a03:9060:0:400::/64"], None)), all);
+        assert_eq!(kept(&filter(&["2001:db8::/48"], None)), all);
+        // `2a03:9060::/64` is the block before `...:400::`, not the record's /64.
+        assert_eq!(
+            kept(&filter(&["2a03:9060::/64", "10.0.0.0/24"], None)),
+            vec![all[1]]
+        );
+        // IPv4 range only: every IPv6 record is outside the (empty) IPv6 list.
+        assert_eq!(kept(&filter(&["10.0.0.0/24"], None)), vec![all[1]]);
+        // Both: IPv6 records are matched against the IPv6 ranges.
+        assert_eq!(
+            kept(&filter(&["2a03:9060:0:400::/64", "10.0.0.0/24"], None)),
+            vec![all[0], all[1]]
+        );
+        assert_eq!(
+            kept(&filter(&["2001:db8::/48", "10.0.0.0/24"], None)),
+            vec![all[1], all[2]]
+        );
+        // Ports apply to IPv6 records (`in-binary.c:258`).
+        assert_eq!(kept(&filter(&[], Some("22,8080"))), vec![all[2], all[3]]);
+        assert_eq!(kept(&no_filter()), all);
+
+        // `parse_status6`: version != 6 or a body too short for the version byte is `[-] corrupt record` on
+        // stderr (no file name) and the record is skipped; the read goes on. A body cut inside the address reads
+        // the missing 8-byte halves as all ones (`_get_long`).
+        let mut tail = raw6(10, "2001:db8::2", 1, 6, 4, 26);
+        tail.extend(raw6(10, "2001:db8::2", 2, 6, 6, 5));
+        tail.extend(raw6(10, "2001:db8::2", 3, 6, 6, 11));
+        tail.extend(raw6(11, "2001:db8::1", 443, 6, 6, 26));
+        let path = tmp_file(&scratch, "corrupt", &with_header(&tail));
+        let (out, log, res) = convert(std::slice::from_ref(&path), Format::List, &no_filter());
+        res.unwrap();
+        assert_eq!(
+            log,
+            format!("[+] --readscan {path}\n[-] corrupt record\n[-] corrupt record\n")
+        );
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "#masscan\nopen tcp 3 ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 1694498817\n\
+             closed tcp 443 2001:db8::1 1694498817\n# end\n"
+        );
+        // An unknown ip_proto is refused like in types 6/7 (design decision Р13), not printed as `err`.
+        let f = with_header(&raw6(10, "2001:db8::2", 9, 47, 6, 26));
+        assert!(matches!(
+            read_all(&f).1,
+            Err(ReadError::UnsupportedProtocol(47))
+        ));
     }
 
     #[test]

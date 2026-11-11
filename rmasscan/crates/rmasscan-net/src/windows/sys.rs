@@ -435,9 +435,15 @@ fn unicast_v6(
     out
 }
 
-/// Адреса IPv6 адаптеров (`GetAdaptersAddresses(AF_INET6)`, как C `rawsock-getip6.c:114-119`): `(AdapterName,
-/// [(адрес, DadState)])`. Только чтение; адаптеров без IPv6 нет в списке.
-pub(crate) fn adapters6() -> Result<Vec<(String, Vec<(Ipv6Addr, i32)>)>, NetError> {
+/// Адаптер `GetAdaptersAddresses(AF_INET6)`: `AdapterName` (`{GUID}`) и его адреса IPv6 с `DadState` по порядку.
+pub(crate) struct Adapter6 {
+    pub name: String,
+    pub addrs: Vec<(Ipv6Addr, i32)>,
+}
+
+/// Адреса IPv6 адаптеров (`GetAdaptersAddresses(AF_INET6)`, как C `rawsock-getip6.c:114-119`). Только чтение;
+/// адаптеров без IPv6 нет в списке.
+pub(crate) fn adapters6() -> Result<Vec<Adapter6>, NetError> {
     use windows_sys::Win32::Networking::WinSock::AF_INET6;
 
     let Some(buf) = adapters_buffer(u32::from(AF_INET6))
@@ -447,11 +453,9 @@ pub(crate) fn adapters6() -> Result<Vec<(String, Vec<(Ipv6Addr, i32)>)>, NetErro
     };
     Ok(adapter_nodes(&buf)
         .into_iter()
-        .map(|a| {
-            (
-                ansi_string(a.AdapterName).unwrap_or_default(),
-                unicast_v6(a.FirstUnicastAddress),
-            )
+        .map(|a| Adapter6 {
+            name: ansi_string(a.AdapterName).unwrap_or_default(),
+            addrs: unicast_v6(a.FirstUnicastAddress),
         })
         .collect())
 }
@@ -496,11 +500,14 @@ pub(crate) fn best_route6(dst: Ipv6Addr) -> Result<Option<(Fwd6, Option<Ipv6Addr
         AF_INET6, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN6, SOCKADDR_INET,
     };
 
-    let mut sin6 = SOCKADDR_IN6::default();
-    sin6.sin6_family = AF_INET6;
-    sin6.sin6_addr = IN6_ADDR {
-        u: IN6_ADDR_0 { Byte: dst.octets() },
+    let sin6 = SOCKADDR_IN6 {
+        sin6_family: AF_INET6,
+        sin6_addr: IN6_ADDR {
+            u: IN6_ADDR_0 { Byte: dst.octets() },
+        },
+        ..Default::default()
     };
+    // Как у `best_route` (IPv4): объединение пишется полем, остальные байты нулевые.
     let mut to = SOCKADDR_INET::default();
     to.Ipv6 = sin6;
     let mut row = std::mem::MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();

@@ -592,3 +592,33 @@ fn a_table_without_ipv6_support_refuses_with_no_route() {
     let e = detect_v6(&t6("2001:db8::1", "2001:db8::1"), &given, &V4Only, &Ifs).unwrap_err();
     assert_eq!(e, DetectError::NoIpv6("eth0".into()));
 }
+
+/// Fix round 1: источник маршрута ОС подчиняется тому же правилу link-local, что и адреса интерфейса. Link-local
+/// источник маршрута (ядро даёт его, когда у интерфейса только link-local или глобальный адрес ещё tentative) для
+/// глобальной цели не берётся: скан с `fe80::…` роутеры отбрасывают, и он молча ничего не нашёл бы.
+#[test]
+fn route_link_local_source_never_serves_a_global_target() {
+    let world = |addrs: &[&str], target_rule: (&str, &str)| {
+        World::default()
+            .iface(iface("eth0", 2, true, Some(MAC_A), &[]), addrs)
+            .rule6(
+                target_rule.0,
+                target_rule.1,
+                Some(r6(2, "eth0", Some("fe80::1"), Some("fe80::aa"))),
+            )
+    };
+    let all = ("::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff");
+    let ov = Overrides::default();
+    let global = t6("2001:db8:9::1", "2001:db8:9::1");
+    // Глобальный адрес на интерфейсе есть: берётся он, а не link-local источник маршрута.
+    let w = world(&["fe80::aa", "2001:db8:1::5"], all);
+    let d = detect_v6(&global, &ov, &w, &w).unwrap();
+    assert_eq!(d.source_ipv6, (v6("2001:db8:1::5"), Source::Detected));
+    // Только link-local: отказ C (`NoIpv6`), а не скан с link-local источника.
+    let w = world(&["fe80::aa"], all);
+    let e = detect_v6(&global, &ov, &w, &w).unwrap_err();
+    assert_eq!(e, DetectError::NoIpv6("eth0".into()));
+    // Цель link-local: link-local источник маршрута годится.
+    let d = detect_v6(&t6("fe80::77", "fe80::77"), &ov, &w, &w).unwrap();
+    assert_eq!(d.source_ipv6, (v6("fe80::aa"), Source::Detected));
+}

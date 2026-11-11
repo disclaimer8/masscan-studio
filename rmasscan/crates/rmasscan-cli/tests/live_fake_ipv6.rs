@@ -8,6 +8,7 @@
 mod scratch;
 
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmasscan_cli::args::Cli;
@@ -125,6 +126,9 @@ struct FakeBackend {
     open6: Vec<(Ipv6Addr, u16)>,
     /// На первый SYN соседний роутер спрашивает наш адрес IPv6 (NS): ответ NA есть только у скана IPv6.
     ns_on_first_syn: bool,
+    /// Ctrl-C во время NDP: уход Neighbor Solicitation считается одним нажатием (ответа нет).
+    press_during_ndp: bool,
+    presses: Arc<AtomicU32>,
     panic_on_open: bool,
     clock: Arc<ManualClock>,
     opened: Mutex<Vec<Opened>>,
@@ -187,6 +191,8 @@ impl FakeBackend {
             open4: vec![(Ipv4Addr::new(198, 51, 100, 1), 80)],
             open6: vec![(v6("2001:db8:9::1"), 80), (v6("2001:db8:9::2"), 443)],
             ns_on_first_syn: false,
+            press_during_ndp: false,
+            presses: Arc::new(AtomicU32::new(0)),
             panic_on_open: false,
             clock: ManualClock::new(),
             opened: Mutex::new(Vec::new()),
@@ -274,8 +280,13 @@ impl Backend for FakeBackend {
         let (o4, o6) = (self.open4.clone(), self.open6.clone());
         let tx = self.tx.clone();
         let mut ask = self.ns_on_first_syn;
+        let (presses, press_during_ndp) = (self.presses.clone(), self.press_during_ndp);
         adapter.set_responder(move |f| {
             tx.lock().unwrap().push(f.to_vec());
+            if press_during_ndp && is_ns(f) {
+                presses.fetch_max(1, Ordering::SeqCst);
+                return vec![];
+            }
             let mut out = respond(f, &n4, &n6, &o4, &o6);
             if ask && (is_syn6(f) || is_syn4(f)) {
                 ask = false;
@@ -306,7 +317,7 @@ impl Backend for FakeBackend {
         ServiceNames::parse("http 80/tcp\n")
     }
     fn interrupts(&self) -> u32 {
-        0
+        self.presses.load(Ordering::SeqCst)
     }
     fn write_paused_conf(&self, _: &str) -> Result<(), String> {
         panic!("no Ctrl-C in these tests")
@@ -783,4 +794,39 @@ fn paused_conf_of_a_mixed_scan_resumes_exactly_the_tail() {
     assert!(all.iter().any(|p| matches!(p.target, TargetIp::V6(_))));
     let want: Vec<_> = all.into_iter().filter(|p| p.index >= 5).collect();
     assert_eq!(tail, want);
+}
+
+/// Р18 в фазе NDP: Ctrl-C, пока ждём Neighbor Advertisement, останавливает запуск так же, как в фазе ARP
+/// (`early_stop`, C `main.c:1131-1154`): строка C, итог `Stopped`, exit 0, без отказа `NDP timed-out`; адаптер скана
+/// не открывается, кроме одного NS ничего не уходит.
+#[test]
+fn interrupt_during_ndp_stops_before_the_scan_adapter() {
+    let mut b = FakeBackend::new();
+    b.press_during_ndp = true;
+    let t0 = b.clock.now_micros();
+    let (r, out, log) = cli(&b, &LIVE6);
+    r.unwrap_or_else(|e| panic!("{e}\n{log}"));
+    assert!(out.is_empty(), "{out:?}");
+    assert!(!log.contains("timed-out"), "{log}");
+    assert_eq!(
+        log.matches("waiting several seconds to exit...").count(),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        plus_lines(&log).last().map(String::as_str),
+        Some("[+] finished: Stopped, sent 0, replies 0, open 0")
+    );
+    assert!(!log.contains("router-mac-ipv6"), "{log}");
+    let opened = b.opened.lock().unwrap();
+    assert_eq!(opened.len(), 1, "only the NDP adapter is opened");
+    assert_eq!(opened[0].adapter.sent_frames().len(), 1, "one solicitation");
+    assert!(
+        b.tx.lock().unwrap().iter().all(|f| is_ns(f)),
+        "no SYN leaves the host"
+    );
+    assert!(
+        b.clock.now_micros() - t0 < 10_000_000,
+        "the press ends NDP before the timeout"
+    );
 }

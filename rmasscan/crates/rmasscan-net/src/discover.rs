@@ -689,11 +689,14 @@ fn choose_v6(
         None => {
             let addrs = ifaces.ipv6_addrs(&iface)?;
             // Источник, который выбрала ОС для маршрута (Linux `RTA_PREFSRC`, Windows `BestSourceAddress`), если это
-            // пригодный адрес самого интерфейса; иначе правило адресов интерфейса.
-            let from_route = route
-                .as_ref()
-                .and_then(|r| r.source)
-                .filter(|s| usable_source_ipv6(s) && addrs.contains(s));
+            // пригодный адрес самого интерфейса под тем же правилом link-local, что у `pick_source_ipv6` (link-local
+            // только для цели link-local: ядро отдаёт его, когда глобального адреса нет или он ещё tentative, а скан с
+            // `fe80::…` роутеры отбрасывают); иначе правило адресов интерфейса или отказ `NoIpv6`, как у C.
+            let from_route = route.as_ref().and_then(|r| r.source).filter(|s| {
+                usable_source_ipv6(s)
+                    && (!is_link_local6(s) || is_link_local6(&t.first))
+                    && addrs.contains(s)
+            });
             match from_route.or_else(|| pick_source_ipv6(&addrs, &t.first)) {
                 Some(ip) => (ip, Source::Detected),
                 None => return Err(DetectError::NoIpv6(iface.name)),

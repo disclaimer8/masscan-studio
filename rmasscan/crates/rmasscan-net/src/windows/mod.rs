@@ -53,7 +53,7 @@ mod os {
     fn own_ipv6() -> Result<Vec<Ipv6Addr>, NetError> {
         Ok(sys::adapters6()?
             .iter()
-            .flat_map(|(_, entries)| usable_win_addrs6(entries))
+            .flat_map(|a| usable_win_addrs6(&a.addrs))
             .collect())
     }
 
@@ -109,8 +109,8 @@ mod os {
                 .unwrap_or(&iface.device_id);
             Ok(sys::adapters6()?
                 .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(guid))
-                .map(|(_, entries)| usable_win_addrs6(entries))
+                .find(|a| a.name.eq_ignore_ascii_case(guid))
+                .map(|a| usable_win_addrs6(&a.addrs))
                 .unwrap_or_default())
         }
     }

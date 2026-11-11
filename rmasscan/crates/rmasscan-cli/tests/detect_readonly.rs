@@ -300,9 +300,14 @@ fn ipv6_lookup_and_detection_read_only() {
                 assert!(no_zone(&ip), "next hop without an embedded zone");
             }
         }
-        // VPN-туннель, интерфейс без глобального адреса IPv6, MAC скрыт ОС.
-        Err(DetectError::NotUsable { .. } | DetectError::NoIpv6(_) | DetectError::MacMasked(_)) => {
-        }
+        // VPN-туннель, интерфейс без глобального адреса IPv6, MAC скрыт ОС; Windows: маршрут через адаптер без
+        // привязки IPv4 (например туннель), которого нет в списке интерфейсов `GetAdaptersAddresses(AF_INET)`.
+        Err(
+            DetectError::NotUsable { .. }
+            | DetectError::NoIpv6(_)
+            | DetectError::MacMasked(_)
+            | DetectError::NoSuchAdapter(_),
+        ) => {}
         Err(e) => panic!("detect_v6 refused unexpectedly: {}", kind(&e)),
     }
 }
@@ -347,6 +352,7 @@ fn binary_offline_ipv6_detects_or_refuses_read_only() {
                 "failed to detect IPv6 address of interface",
                 "is os-masked",
                 "is not usable",
+                "no such interface",
             ];
             assert!(
                 kinds.iter().any(|k| err.contains(k)),

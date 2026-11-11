@@ -760,6 +760,9 @@ where
                     .ok_or_else(|| format!("{name}: empty parameter"))?,
             };
             out.push(format!("--rmasscan-nic={name}={value}"));
+        } else if a.starts_with("-6") {
+            // main-conf.c:3321-3324 (`case '6'` on `argv[i][1]`): "Silently ignore this: IPv6 features enabled
+            // all the time". Тоже для `-6x`: C смотрит только вторую букву.
         } else if a == "-sL" {
             out.push("--list".into());
         } else if let Some(t @ ("S" | "U" | "Z")) = a.strip_prefix("-s") {
@@ -2092,6 +2095,21 @@ mod tests {
             seed_policy(&parse(&["--readscan", "f"]).unwrap()),
             SeedPolicy::Entropy
         );
+    }
+
+    /// main-conf.c:3321-3324: `-6` (any single-dash word starting `-6`) is
+    /// silently ignored, "IPv6 features enabled all the time".
+    #[test]
+    fn dash_six_is_a_silent_no_op() {
+        let plain = parse(&["10.0.0.1", "-p80"]).unwrap();
+        for six in ["-6", "-6x"] {
+            let c = parse(&[six, "10.0.0.1", "-p80"]).unwrap();
+            assert_eq!(c.targets, plain.targets, "{six}");
+            assert_eq!(c.ports, plain.ports, "{six}");
+            let c = parse(&["10.0.0.1", "-p80", six]).unwrap();
+            assert_eq!(c.targets, plain.targets, "{six}");
+        }
+        assert_eq!(preprocess_args(["rmasscan", "-6"]).unwrap(), ["rmasscan"]);
     }
 
     #[test]

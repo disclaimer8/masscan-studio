@@ -12,6 +12,7 @@ pub mod packet;
 pub mod payloads;
 pub mod probe;
 pub mod ranges;
+pub mod ranges6;
 pub mod receive;
 pub mod scan;
 pub mod targets;

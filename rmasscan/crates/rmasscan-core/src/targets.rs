@@ -4,6 +4,7 @@
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 
 use crate::ranges::{Range, RangeList};
+use crate::ranges6::{Range6List, parse_ipv6_range_at};
 
 /// Ошибка разбора цели или порта.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -16,6 +17,8 @@ pub enum ParseError {
     Ipv6NotSupported,
     #[error("range end comes before range start")]
     ReversedRange,
+    #[error("bad IPv6 address or range")]
+    BadIpv6,
 }
 
 pub const TEMPL_TCP: u32 = 0;
@@ -376,6 +379,42 @@ pub fn add_target_string(targets: &mut RangeList, s: &str) -> Result<(), ParseEr
     }
     for r in found {
         targets.add_range(r.begin, r.end);
+    }
+    Ok(())
+}
+
+/// massip.c:72-100 `massip_add_target_string` с обеими ветками: IPv4-диапазоны
+/// идут в `ipv4`, IPv6 (`Ipv6_Address`, :89 `range6list_add_range`) в `ipv6`.
+/// Строка, разбираемая как IPv4, ведёт себя ровно как [`add_target_string`]
+/// (включая ошибки); токен, который C-автомат переводит в IPv6
+/// (`_switch_to_ipv6`, massip-parse.c:150), разбирает `parse_ipv6_range_at`.
+/// При ошибке не меняется ни один из списков (всё или ничего).
+pub fn add_target_string_v46(
+    ipv4: &mut RangeList,
+    ipv6: &mut Range6List,
+    s: &str,
+) -> Result<(), ParseError> {
+    let buf = s.as_bytes();
+    let mut offset = 0;
+    let mut found4 = Vec::new();
+    let mut found6 = Vec::new();
+    while offset < buf.len() {
+        match parse_range_at(buf, &mut offset) {
+            Ok(r) => found4.push(r),
+            Err(ParseError::Ipv6NotSupported) => {
+                found6.push(parse_ipv6_range_at(buf, &mut offset)?)
+            }
+            Err(e) => return Err(e),
+        }
+        while offset < buf.len() && (is_c_space(buf[offset]) || buf[offset] == b',') {
+            offset += 1;
+        }
+    }
+    for r in found4 {
+        ipv4.add_range(r.begin, r.end);
+    }
+    for r in found6 {
+        ipv6.add(r.begin, r.end);
     }
     Ok(())
 }
@@ -1034,5 +1073,105 @@ mod tests {
         assert_eq!(all.count(), 31);
         // N = 0 ничего не добавляет
         assert!(list(0, true, true).is_empty());
+    }
+    /// massip.c:72-100 `massip_add_target_string` with the IPv6 branch
+    /// (`range6list_add_range`, :89).
+    #[test]
+    fn add_target_string_v46_splits_families() {
+        use crate::ranges6::{Ipv6Range, Range6List};
+        let mut v4 = RangeList::new();
+        let mut v6 = Range6List::new();
+        add_target_string_v46(
+            &mut v4,
+            &mut v6,
+            "10.0.0.1,fd00::/126 [::1]-[::3]\t192.168.0.0/30",
+        )
+        .unwrap();
+        assert_eq!(v4.len(), 2);
+        assert_eq!(
+            v4.get(0),
+            Range {
+                begin: 0x0a00_0001,
+                end: 0x0a00_0001
+            }
+        );
+        assert_eq!(
+            v4.get(1),
+            Range {
+                begin: 0xc0a8_0000,
+                end: 0xc0a8_0003
+            }
+        );
+        let fd = 0xfd00u128 << 112;
+        assert_eq!(
+            v6.as_slice(),
+            &[
+                Ipv6Range {
+                    begin: fd,
+                    end: fd + 3
+                },
+                Ipv6Range { begin: 1, end: 3 }
+            ]
+        );
+    }
+
+    /// Mixed-family string with a bad token: all or nothing, in both lists,
+    /// like `add_target_string` (the C code keeps the part parsed before the
+    /// error, we do not).
+    #[test]
+    fn add_target_string_v46_is_atomic() {
+        use crate::ranges6::Range6List;
+        let mut v4 = RangeList::new();
+        let mut v6 = Range6List::new();
+        for bad in [
+            "10.0.0.1,::1,zz",
+            "::1,1.2.3.4-::1",
+            "1::2::3",
+            "::2-::1",
+            "10.0.0.1,::1/129",
+        ] {
+            assert!(
+                add_target_string_v46(&mut v4, &mut v6, bad).is_err(),
+                "{bad}"
+            );
+            assert!(v4.is_empty() && v6.is_empty(), "{bad}");
+        }
+        assert_eq!(
+            add_target_string_v46(&mut v4, &mut v6, "::2-::1"),
+            Err(ParseError::ReversedRange)
+        );
+        assert_eq!(
+            add_target_string_v46(&mut v4, &mut v6, "1::2::3"),
+            Err(ParseError::BadIpv6)
+        );
+    }
+
+    /// IPv4-only strings behave exactly as `add_target_string`, including its
+    /// error values (IPv4 behaviour is frozen).
+    #[test]
+    fn add_target_string_v46_matches_v4_on_v4_input() {
+        use crate::ranges6::Range6List;
+        for s in [
+            "1.2.3.4",
+            "10.0.0.0/8,192.168.1.1-192.168.1.9",
+            " 1.2.3.4, ",
+            "",
+            "  ",
+            ",1.2.3.4",
+            "1.2.3.4-1.2.3.3",
+            "1.2.3",
+            "256.1.1.1",
+            "1.2.3.4:80",
+            "#c\n5.6.7.8",
+        ] {
+            let mut a = RangeList::new();
+            let mut b = RangeList::new();
+            let mut v6 = Range6List::new();
+            let ra = add_target_string(&mut a, s);
+            let rb = add_target_string_v46(&mut b, &mut v6, s);
+            assert_eq!(ra, rb, "{s:?}");
+            assert_eq!(a.as_slice(), b.as_slice(), "{s:?}");
+            assert!(v6.is_empty(), "{s:?}");
+        }
     }
 }

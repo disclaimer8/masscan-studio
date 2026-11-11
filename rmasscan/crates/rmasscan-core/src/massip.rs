@@ -2,11 +2,14 @@
 //! Порт `src/massip.c` и `src/massip.h` из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! IPv6 в v1 не поддерживается: его счётчик в C равен 0, поэтому индексы
-//! и `range` не смещаются. Порты хранятся со смещениями протоколов
+//! IPv6-список (`ipv6`) хранится, исключается и оптимизируется как в C
+//! (massip.c:8-25), но пока не входит в `range`/`pick` (его счётчик не
+//! смещает индексы IPv4; см. Задачу 2 плана этапа IPv6). Порты хранятся со смещениями протоколов
 //! (`targets::TEMPL_*`, massip-port.h); для TCP смещение 0.
 
 use crate::ranges::RangeList;
+use crate::ranges6::Range6List;
+use crate::targets::{ParseError, add_target_string_v46};
 
 /// Диапазон индексов не помещается в 63 бита (main.c:1698-1704).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -16,12 +19,15 @@ pub struct RangeOverflow;
 #[derive(Debug, Clone, Default)]
 pub struct MassIp {
     ipv4: RangeList,
+    ipv6: Range6List,
     ports: RangeList,
     /// `true` между `optimize` и следующим изменением списков; `pick` и
     /// `range` требуют `true`, иначе счётчики устарели.
     optimized: bool,
     count_ports: u64,
     count_ipv4s: u64,
+    /// massip.c:21 `range6list_count(...).lo`: младшие 64 бита счёта.
+    count_ipv6s: u64,
     ipv4_index_threshold: u64,
 }
 
@@ -34,8 +40,25 @@ impl MassIp {
         &self.ipv4
     }
 
+    pub fn ipv6(&self) -> &Range6List {
+        &self.ipv6
+    }
+
     pub fn ports(&self) -> &RangeList {
         &self.ports
+    }
+
+    /// Изменяемый доступ к IPv6-целям; сбрасывает признак `optimized`.
+    pub fn ipv6_mut(&mut self) -> &mut Range6List {
+        self.optimized = false;
+        &mut self.ipv6
+    }
+
+    /// massip.c:72-100 `massip_add_target_string`: IPv4 и IPv6 через запятую
+    /// или пробел. При ошибке списки не меняются.
+    pub fn add_target_string(&mut self, s: &str) -> Result<(), ParseError> {
+        self.optimized = false;
+        add_target_string_v46(&mut self.ipv4, &mut self.ipv6, s)
     }
 
     /// Изменяемый доступ к целям; сбрасывает признак `optimized`.
@@ -56,6 +79,7 @@ impl MassIp {
     pub fn apply_excludes(&mut self, exclude: &mut MassIp) {
         self.optimized = false;
         self.ipv4.exclude(&mut exclude.ipv4);
+        self.ipv6.apply_excludes(&exclude.ipv6);
         self.ports.exclude(&mut exclude.ports);
     }
 
@@ -64,9 +88,11 @@ impl MassIp {
     /// `uint64_t` в C; переполнение ловит [`MassIp::try_range`].
     pub fn optimize(&mut self) {
         self.ipv4.optimize();
+        self.ipv6.optimize();
         self.ports.optimize();
         self.count_ports = self.ports.count();
         self.count_ipv4s = self.ipv4.count();
+        self.count_ipv6s = self.ipv6.count_u128() as u64;
         self.ipv4_index_threshold = self.count_ipv4s.wrapping_mul(self.ports.count());
         self.optimized = true;
     }
@@ -77,6 +103,17 @@ impl MassIp {
 
     pub fn count_ipv4s(&self) -> u64 {
         self.count_ipv4s
+    }
+
+    /// massip.c:21: младшие 64 бита `range6list_count` (для `::/0` это
+    /// `u64::MAX`; полное значение: `ipv6().count_u128()`).
+    pub fn count_ipv6s(&self) -> u64 {
+        self.count_ipv6s
+    }
+
+    /// massip.c:60-66 `massip_has_ipv6_targets`.
+    pub fn has_ipv6_targets(&self) -> bool {
+        !self.ipv6.is_empty()
     }
 
     /// massip.h:36 `massip_range` без IPv6-слагаемого, с проверкой main.c:1698-1704:
@@ -122,6 +159,11 @@ impl MassIp {
     /// massip.c:45 `massip_has_ip` (IPv4).
     pub fn has_ip(&self, ip: u32) -> bool {
         self.ipv4.is_contains(ip)
+    }
+
+    /// massip.c:45 `massip_has_ip` (IPv6).
+    pub fn has_ip6(&self, ip: u128) -> bool {
+        self.ipv6.is_contains(ip)
     }
 
     /// massip.c:53 `massip_has_port`.
@@ -256,5 +298,46 @@ mod tests {
         let mut t = MassIp::new();
         t.optimize();
         assert_eq!(t.range(), 0);
+    }
+    #[test]
+    fn ipv6_targets_excludes_and_counts_follow_c() {
+        // massip.c:112-145 massip_selftest, plus massip_apply_excludes (:8-13)
+        // and massip_optimize (:15-25) for the IPv6 list.
+        let mut t = MassIp::new();
+        t.add_target_string("2607:f8b0:4002:801::2004/124,1111::1")
+            .unwrap();
+        t.ports_mut().add_range(80, 80);
+        let mut ex = MassIp::new();
+        ex.add_target_string("2607:f8b0:4002:801::2004/126,1111::/16")
+            .unwrap();
+        t.apply_excludes(&mut ex);
+        t.optimize();
+        assert_eq!(t.count_ipv6s(), 12);
+        assert!(t.has_ipv6_targets());
+        assert!(t.has_ip6(0x2607_f8b0_4002_0801_0000_0000_0000_2004 + 4));
+        assert!(!t.has_ip6(0x2607_f8b0_4002_0801_0000_0000_0000_2004));
+        // massip.c:60-66 `massip_has_ipv6_targets`
+        assert!(!MassIp::new().has_ipv6_targets());
+    }
+
+    /// Invariant: with no IPv6 target the IPv4 side is exactly as before the
+    /// IPv6 list existed (range, pick, counts).
+    #[test]
+    fn ipv6_list_does_not_change_pure_ipv4_numbers() {
+        let mut t = MassIp::new();
+        t.add_target_string("10.0.0.0/30").unwrap();
+        t.ports_mut().add_range(80, 81);
+        t.optimize();
+        assert_eq!(t.count_ipv6s(), 0);
+        assert_eq!(t.range(), 8);
+        assert_eq!(t.pick(0), (0x0a00_0000, 80));
+        assert_eq!(t.pick(5), (0x0a00_0001, 81));
+    }
+
+    #[test]
+    fn massip_add_target_string_reports_errors_atomically() {
+        let mut t = MassIp::new();
+        assert!(t.add_target_string("10.0.0.1,::1,nope").is_err());
+        assert!(t.ipv4().is_empty() && t.ipv6().is_empty());
     }
 }

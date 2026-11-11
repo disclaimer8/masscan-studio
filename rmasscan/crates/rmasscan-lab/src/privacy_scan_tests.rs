@@ -336,3 +336,78 @@ fn a_token_in_capture_record_headers_is_not_a_hit_but_in_frames_and_pcapng_text_
     );
     fs::remove_dir_all(d).unwrap();
 }
+
+/// An Ethernet + IPv6 frame carrying ICMPv6 `icmp` (checksum left 0: the scan reads names, not sums).
+fn eth_ipv6_icmp(icmp: &[u8]) -> Vec<u8> {
+    let mut f = vec![
+        0x33, 0x33, 0, 0, 0, 1, 2, 0xaa, 0, 0, 0, 2, 0x86, 0xdd, 0x60, 0, 0, 0,
+    ];
+    f.extend((icmp.len() as u16).to_be_bytes());
+    f.extend([58, 255]);
+    f.extend([
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0xaa, 0, 0xff, 0xfe, 0, 0, 2,
+    ]);
+    f.extend([0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    f.extend(icmp);
+    f
+}
+/// A Router Advertisement with a DNS Search List option (RFC 8106, type 31) naming `domain`.
+fn ra_with_dnssl(domain: &str) -> Vec<u8> {
+    let mut icmp = vec![134, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut names = Vec::new();
+    for l in domain.split('.') {
+        names.extend(label(l));
+    }
+    names.push(0);
+    while (8 + names.len()) % 8 != 0 {
+        names.push(0);
+    }
+    icmp.extend([31, ((8 + names.len()) / 8) as u8, 0, 0, 0, 0, 0x0e, 0x10]);
+    icmp.extend(names);
+    icmp
+}
+/// An ICMPv6 Node Information Reply (RFC 4620, type 140) with a Node Name (Qtype 2): TTL, then the DNS-encoded name.
+fn node_name_reply(name: &str) -> Vec<u8> {
+    let mut icmp = vec![140, 0, 0, 0, 0, 2, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0];
+    for l in name.split('.') {
+        icmp.extend(label(l));
+    }
+    icmp.push(0);
+    icmp
+}
+
+#[test]
+fn icmpv6_messages_that_carry_names_are_hits_with_masked_names_and_ndp_without_names_is_not() {
+    let d = scratch();
+    // an NS (ICMPv6 135, no name) is no hit
+    let mut ns = vec![135, 0, 0, 0, 0, 0, 0, 0];
+    ns.extend([
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0xaa, 0, 0xff, 0xfe, 0, 0, 2, 1, 1, 2, 0xaa, 0, 0, 0, 1,
+    ]);
+    write_pcap(
+        &d,
+        "peer.pcap",
+        &[
+            eth_ipv6_icmp(&ns),
+            eth_ipv6_icmp(&ra_with_dnssl("corp.example")),
+            eth_ipv6_icmp(&node_name_reply("hostname.example")),
+        ],
+    );
+    let hits = scan(&d, &[]).unwrap();
+    let lines: Vec<String> = hits.iter().map(Hit::line).collect();
+    assert_eq!(hits.len(), 2, "{lines:#?}");
+    assert_eq!(
+        lines[0],
+        "peer.pcap: frame 2: NDP Router Advertisement DNS Search List frame, names: cor…"
+    );
+    assert_eq!(
+        lines[1],
+        "peer.pcap: frame 3: ICMPv6 Node Information frame, names: hos…"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|l| !l.contains("corp.example") && !l.contains("hostname"))
+    );
+    fs::remove_dir_all(&d).unwrap();
+}

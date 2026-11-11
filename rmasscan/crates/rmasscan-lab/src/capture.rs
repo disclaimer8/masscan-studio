@@ -127,7 +127,8 @@ fn port_list(ports: &str) -> Result<Vec<u16>, String> {
 ///   for every other port;
 /// - `--sctp-iface IF --sctp-open P,..`: every SCTP INIT on the link `IF` answered on the link with
 ///   `protocols_verify::sctp_reply` (INIT-ACK on the open ports, ABORT elsewhere). The host kernel must have no SCTP
-///   (the suite checks it): no SCTP socket is ever opened here, so no module is loaded either.
+///   (the suite checks it): no SCTP socket is ever opened here, so no module is loaded either;
+/// - `--tcp6-ips A,..` (the IPv6 stand): the `--ports` listeners again on each of these IPv6 addresses.
 ///
 /// Each UDP socket and the SCTP link has its own thread, so a reply leaves within the probe's own interval.
 fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
@@ -138,10 +139,24 @@ fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
         listeners
             .push(std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, p)).map_err(err)?);
     }
+    // The IPv6 stand (`wire-lab.sh --suite ipv6`): the same ports on each peer IPv6 address. A listener per address
+    // never claims IPv4 (only `::` does, with `bindv6only` 0), and an address that is still tentative cannot be
+    // bound, so the responder never says ready on a stand whose addresses are not usable yet.
+    if let Some(ips) = a.get("tcp6-ips") {
+        for ip in ips.split(',') {
+            let ip: std::net::Ipv6Addr = ip.parse().map_err(err)?;
+            for p in port_list(ports)? {
+                listeners.push(std::net::TcpListener::bind((ip, p)).map_err(err)?);
+            }
+        }
+    }
     // Every answerer polls `halt` beside the stop request: one that fails stops the others (see `supervise`).
     let halt = std::sync::Arc::new(AtomicBool::new(false));
     let mut workers: Vec<Worker> = Vec::new();
     let mut said = format!("listening {ports}");
+    if let Some(ips) = a.get("tcp6-ips") {
+        said.push_str(&format!(" tcp6 {ips}"));
+    }
     if let Some(udp) = a.get("udp-ports") {
         for ip in get(a, "udp-ips")?.split(',') {
             let ip: std::net::Ipv4Addr = ip.parse().map_err(err)?;
@@ -606,13 +621,16 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         }
         Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
-    let (autodetect, scan_control) = match a.get("mode").map(String::as_str) {
-        None | Some("default") => (false, false),
-        Some("autodetect") => (true, false),
+    let (autodetect, scan_control, ipv6) = match a.get("mode").map(String::as_str) {
+        None | Some("default") => (false, false, false),
+        Some("autodetect") => (true, false, false),
         // The scan-control stand: the autodetect stand plus one more veth pair (`SECOND_*`), in the same namespaces.
-        Some("scan-control") => (true, true),
+        Some("scan-control") => (true, true, false),
+        // The IPv6 stand: the autodetect stand with IPv6 raised on the lab veth pair only (`check_ipv6_side`).
+        Some("ipv6") => (true, false, true),
         Some(other) => return Err(format!("unknown isolation mode {other}")),
     };
+    let mut ipv6_sides = serde_json::Map::new();
     let before = fs::read_to_string(get(a, "host-links-before")?).map_err(err)?;
     let now_links = checked(&["ip", "-o", "link"])?;
     let mut names = now_links
@@ -683,19 +701,72 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         if iface.contains('/') {
             return Err("invalid namespace interface".into());
         }
-        if checked(&[
-            "ip",
-            "netns",
-            "exec",
-            ns,
-            "cat",
-            &format!("/proc/sys/net/ipv6/conf/{iface}/disable_ipv6"),
-        ])? != "1"
-        {
-            return Err("IPv6 not disabled on lab veth".into());
-        }
-        if !checked(&["ip", "-n", ns, "-6", "route", "show", "default"])?.is_empty() {
-            return Err("IPv6 default route in lab".into());
+        if ipv6 {
+            // IPv6 on the lab veth with the stand's settings, addresses, routes and neighbours, nothing else.
+            let files: Vec<String> = IPV6_SYSCTLS
+                .iter()
+                .map(|(k, _)| format!("/proc/sys/net/ipv6/conf/{iface}/{k}"))
+                .collect();
+            let mut cat = vec!["ip", "netns", "exec", ns, "cat"];
+            cat.extend(files.iter().map(String::as_str));
+            let values = checked(&cat)?;
+            let sysctls: Vec<(String, String)> = IPV6_SYSCTLS
+                .iter()
+                .zip(values.lines().chain(std::iter::repeat("")))
+                .map(|((k, _), v)| ((*k).to_owned(), v.trim().to_owned()))
+                .collect();
+            let json6 = |args: &[&str]| -> Result<Value, String> {
+                let mut full = vec!["ip", "-n", ns, "-6", "-j"];
+                full.extend(args);
+                serde_json::from_str(&checked(&full)?).map_err(err)
+            };
+            let route_get6 = Command::new("ip")
+                .args([
+                    "netns",
+                    "exec",
+                    ns,
+                    "ip",
+                    "-6",
+                    "route",
+                    "get",
+                    IPV6_ROUTE_PROBE,
+                ])
+                .output()
+                .map_err(err)?;
+            let got = route_get6.status.success().then(|| {
+                String::from_utf8_lossy(&route_get6.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+            let rec = check_ipv6_side(
+                side,
+                iface,
+                &Ipv6Snapshot {
+                    addrs: json6(&["addr", "show", "dev", iface])?,
+                    routes: json6(&["route", "show"])?,
+                    neigh: json6(&["neigh", "show"])?,
+                    sysctls,
+                    route_get: got,
+                },
+            )?;
+            ipv6_sides.insert(k.to_owned(), rec);
+        } else {
+            if checked(&[
+                "ip",
+                "netns",
+                "exec",
+                ns,
+                "cat",
+                &format!("/proc/sys/net/ipv6/conf/{iface}/disable_ipv6"),
+            ])? != "1"
+            {
+                return Err("IPv6 not disabled on lab veth".into());
+            }
+            if !checked(&["ip", "-n", ns, "-6", "route", "show", "default"])?.is_empty() {
+                return Err("IPv6 default route in lab".into());
+            }
         }
         let route_get = Command::new("ip")
             .args(["netns", "exec", ns, "ip", "route", "get", "8.8.8.8"])
@@ -707,11 +778,13 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
             }
             let out = String::from_utf8_lossy(&route_get.stdout);
             check_route_get(&out, iface)?;
-            check_isolation_neighbours(
-                &serde_json::from_str(&checked(&["ip", "-n", ns, "-j", "neigh", "show"])?)
-                    .map_err(err)?,
-                iface,
-            )?;
+            // The IPv6 stand's IPv6 neighbours are judged by `check_ipv6_side`; here the IPv4 ones only.
+            let neigh = if ipv6 {
+                checked(&["ip", "-n", ns, "-4", "-j", "neigh", "show"])?
+            } else {
+                checked(&["ip", "-n", ns, "-j", "neigh", "show"])?
+            };
+            check_isolation_neighbours(&serde_json::from_str(&neigh).map_err(err)?, iface)?;
             v[format!("{k}_route_get_8_8_8_8")] = json!(out.lines().next().unwrap_or_default());
         } else {
             if route_get.status.success() {
@@ -748,9 +821,15 @@ fn isolation(a: &BTreeMap<String, String>) -> Result<i32, String> {
         }
         v["second_link"] = json!({"scanner": SECOND_SCANNER_IF, "peer": SECOND_PEER_IF, "adapter_ip": SECOND_ADAPTER_IP});
     }
+    if ipv6 {
+        v["ipv6"] = json!({"lab_veth_only": true, "prefix": IPV6_PREFIX, "scanner": ipv6_sides["scanner"],
+            "peer": ipv6_sides["peer"]});
+    }
     if autodetect {
         v["mode"] = json!(if scan_control {
             "scan-control"
+        } else if ipv6 {
+            "ipv6"
         } else {
             "autodetect"
         });
@@ -813,6 +892,224 @@ pub fn isolation_permits(v: &Value, mode: IsolationMode) -> bool {
         && v["ipv6"] == "disabled"
         && v["veth_created_inside_scanner_ns_peer_moved_to_peer_ns"] == true
         && v["host_link_list_unchanged"] == true
+}
+
+/// The IPv6 stand (`wire-lab.sh --suite ipv6`): the autodetect stand with IPv6 raised on the lab veth pair (and the
+/// namespaces' `lo`) only. ULA `fd00:198:18::/64`; the link-local addresses are the EUI-64 ones of the stand MACs
+/// (`addr_gen_mode` 0); the scanner namespace's IPv6 default route goes via the peer's link-local address.
+pub const IPV6_PREFIX: &str = "fd00:198:18::/64";
+pub const IPV6_SCANNER: &str = "fd00:198:18::1";
+pub const IPV6_PEERS: [&str; 4] = [
+    "fd00:198:18::2",
+    "fd00:198:18::3",
+    "fd00:198:18::4",
+    "fd00:198:18::5",
+];
+pub const IPV6_SCANNER_LL: &str = "fe80::aa:ff:fe00:1";
+pub const IPV6_PEER_LL: &str = "fe80::aa:ff:fe00:2";
+/// A documentation address (RFC 3849) whose route proves the seal: via the peer from the scanner namespace, none
+/// from the peer namespace (the IPv6 counterpart of the `8.8.8.8` probe).
+pub const IPV6_ROUTE_PROBE: &str = "2001:db8::1";
+/// The IPv6 settings of every lab veth end on the IPv6 stand (`/proc/sys/net/ipv6/conf/<veth>/<key>`), in the order
+/// `capture isolation` and `ipv6-suite` read them: IPv6 on, no Duplicate Address Detection (no DAD NS, no tentative
+/// address), no router discovery (no RS, no RA processed), no forwarding (the peer answers NS without the router
+/// flag and routes nothing), EUI-64 link-local addresses.
+pub const IPV6_SYSCTLS: [(&str, &str); 6] = [
+    ("disable_ipv6", "0"),
+    ("accept_dad", "0"),
+    ("accept_ra", "0"),
+    ("router_solicitations", "0"),
+    ("forwarding", "0"),
+    ("addr_gen_mode", "0"),
+];
+/// Address flags (`ip -j addr`) that make an address unusable for the stand: not yet (or never) valid, or about to go.
+pub const IPV6_UNUSABLE_FLAGS: [&str; 4] = ["tentative", "dadfailed", "optimistic", "deprecated"];
+const STAND_SCANNER_MAC: &str = "02:aa:00:00:00:01";
+const STAND_PEER_MAC: &str = "02:aa:00:00:00:02";
+
+/// What `capture isolation --mode ipv6` reads of one namespace's IPv6: `ip -6 -j addr show dev <veth>`,
+/// `ip -6 -j route show`, `ip -6 -j neigh show`, the veth's [`IPV6_SYSCTLS`] (key, value read) and the first line of
+/// `ip -6 route get` [`IPV6_ROUTE_PROBE`] (`None` when it failed).
+pub struct Ipv6Snapshot {
+    pub addrs: Value,
+    pub routes: Value,
+    pub neigh: Value,
+    pub sysctls: Vec<(String, String)>,
+    pub route_get: Option<String>,
+}
+
+fn v6(s: &str) -> Option<std::net::Ipv6Addr> {
+    s.parse().ok()
+}
+/// Inside `fd00:198:18::/64` or `fe80::/64`.
+fn on_stand6(ip: std::net::Ipv6Addr) -> bool {
+    let s = ip.segments();
+    s[..4] == [0xfd00, 0x198, 0x18, 0] || s[..4] == [0xfe80, 0, 0, 0]
+}
+
+/// One side of the IPv6 stand as `snap` shows it: the veth's settings are [`IPV6_SYSCTLS`]; its addresses are exactly
+/// the stand's (scanner `fd00:198:18::1/64` and its link-local, peer `fd00:198:18::2-5/64` and its link-local), none
+/// tentative, failed, optimistic or deprecated; the main table holds exactly the connected ULA and link-local routes
+/// (and on the scanner side the default route via the peer's link-local address; `::1` on `lo` is tolerated); every
+/// IPv6 neighbour is on the stand, and the other side's ULA addresses are permanent neighbours with its MAC; the
+/// documentation address routes via the peer from the scanner side and not at all from the peer side. The record
+/// kept in `isolation.json`, or why the side is not the stand.
+pub fn check_ipv6_side(side: Side, iface: &str, snap: &Ipv6Snapshot) -> Result<Value, String> {
+    let want_sysctls: Vec<(String, String)> = IPV6_SYSCTLS
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    if snap.sysctls != want_sysctls {
+        return Err(format!(
+            "IPv6 settings of {iface} are {:?}, not the stand's {want_sysctls:?}",
+            snap.sysctls
+        ));
+    }
+    let (own, own_ll, other, other_mac): (Vec<&str>, &str, Vec<&str>, &str) = match side {
+        Side::Scanner => (
+            vec![IPV6_SCANNER],
+            IPV6_SCANNER_LL,
+            IPV6_PEERS.to_vec(),
+            STAND_PEER_MAC,
+        ),
+        Side::Peer => (
+            IPV6_PEERS.to_vec(),
+            IPV6_PEER_LL,
+            vec![IPV6_SCANNER],
+            STAND_SCANNER_MAC,
+        ),
+    };
+    // addresses
+    let links = snap
+        .addrs
+        .as_array()
+        .ok_or("invalid IPv6 address inventory")?;
+    if links.len() != 1 || links[0]["ifname"] != iface {
+        return Err(format!(
+            "the IPv6 address inventory is not that of {iface} alone"
+        ));
+    }
+    let mut addrs = Vec::new();
+    for a in links[0]["addr_info"].as_array().ok_or("no addr_info")? {
+        let ip = a["local"]
+            .as_str()
+            .and_then(v6)
+            .ok_or("an address that is no IPv6 address")?;
+        if a["family"] != "inet6" {
+            return Err(format!("{ip} is not inet6"));
+        }
+        if let Some(f) = IPV6_UNUSABLE_FLAGS.iter().find(|f| a[**f] == true) {
+            return Err(format!("{ip} on {iface} is {f}"));
+        }
+        addrs.push((ip, a["prefixlen"].as_u64().unwrap_or(0)));
+    }
+    addrs.sort();
+    let mut want: Vec<(std::net::Ipv6Addr, u64)> = own
+        .iter()
+        .chain([&own_ll])
+        .filter_map(|s| v6(s).map(|ip| (ip, 64)))
+        .collect();
+    want.sort();
+    if addrs != want {
+        return Err(format!(
+            "IPv6 addresses of {iface} are {addrs:?}, not the stand's {want:?}"
+        ));
+    }
+    // routes
+    let routes = snap
+        .routes
+        .as_array()
+        .ok_or("invalid IPv6 route inventory")?;
+    let mut need: Vec<(String, Option<String>)> = vec![
+        (IPV6_PREFIX.to_owned(), None),
+        ("fe80::/64".to_owned(), None),
+    ];
+    if side == Side::Scanner {
+        need.push(("default".to_owned(), Some(IPV6_PEER_LL.to_owned())));
+    }
+    let mut seen = Vec::new();
+    for r in routes {
+        let (dst, dev) = (
+            r["dst"].as_str().unwrap_or(""),
+            r["dev"].as_str().unwrap_or(""),
+        );
+        let gw = r["gateway"].as_str().map(str::to_owned);
+        if dev == "lo" && dst == "::1" && gw.is_none() {
+            continue;
+        }
+        if dev != iface || !need.contains(&(dst.to_owned(), gw.clone())) {
+            return Err(format!("unexpected IPv6 route {dst} via {gw:?} dev {dev}"));
+        }
+        seen.push((dst.to_owned(), gw));
+    }
+    seen.sort();
+    need.sort();
+    if seen != need {
+        return Err(format!("IPv6 routes are {seen:?}, not exactly {need:?}"));
+    }
+    // neighbours
+    let neigh = snap
+        .neigh
+        .as_array()
+        .ok_or("invalid IPv6 neighbour inventory")?;
+    for n in neigh {
+        if !n["dst"].as_str().and_then(v6).is_some_and(on_stand6) {
+            return Err(format!("IPv6 neighbour outside the stand: {}", n["dst"]));
+        }
+    }
+    for ip in &other {
+        let ok = neigh.iter().any(|n| {
+            n["dst"].as_str().and_then(v6) == v6(ip)
+                && n["dev"] == iface
+                && n["lladdr"] == other_mac
+                && n["state"]
+                    .as_array()
+                    .is_some_and(|s| s.iter().any(|x| x == "PERMANENT"))
+        });
+        if !ok {
+            return Err(format!(
+                "IPv6 neighbour {ip} is not permanent with {other_mac} on {iface}"
+            ));
+        }
+    }
+    // the seal
+    let route_get = match (side, &snap.route_get) {
+        (Side::Scanner, Some(l))
+            if l.starts_with(&format!("{IPV6_ROUTE_PROBE} "))
+                && l.contains(&format!(" via {IPV6_PEER_LL} dev {iface}")) =>
+        {
+            l.clone()
+        }
+        (Side::Peer, None) => "unreachable".to_owned(),
+        (_, got) => {
+            return Err(format!(
+                "ip -6 route get {IPV6_ROUTE_PROBE} gave {got:?} (the scanner routes it via {IPV6_PEER_LL} dev {iface}, the peer nowhere)"
+            ));
+        }
+    };
+    Ok(json!({
+        "addresses": addrs.iter().map(|(ip, n)| format!("{ip}/{n}")).collect::<Vec<_>>(),
+        "routes": seen.iter().map(|(d, g)| match g {
+            Some(g) => format!("{d} via {g} dev {iface}"),
+            None => format!("{d} dev {iface}"),
+        }).collect::<Vec<_>>(),
+        "permanent_neighbours": other.iter().map(|ip| format!("{ip} lladdr {other_mac}")).collect::<Vec<_>>(),
+        "sysctls": snap.sysctls.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>(),
+        "route_get_probe": route_get,
+    }))
+}
+
+/// Whether an `isolation.json` permits a run on the IPv6 stand: written by `capture isolation --mode ipv6` (which
+/// writes it only once both sides passed [`check_ipv6_side`]), and the autodetect stand's seal holds for the rest.
+pub fn isolation_permits_ipv6(v: &Value) -> bool {
+    let mut rest = v.clone();
+    rest["ipv6"] = json!("disabled");
+    v["mode"] == "ipv6"
+        && v["ipv6"]["lab_veth_only"] == true
+        && v["ipv6"]["prefix"] == IPV6_PREFIX
+        && v["ipv6"]["scanner"].is_object()
+        && v["ipv6"]["peer"].is_object()
+        && isolation_permits(&rest, IsolationMode::Autodetect)
 }
 
 /// The second veth pair of the scan-control stand (`wire-lab.sh --suite scan-control`), for `--adapter[1]`: no
@@ -1437,5 +1734,200 @@ mod tests {
             scrub(&mut v);
             assert_eq!(v, want, "{input}");
         }
+    }
+
+    /// One side of the IPv6 stand as iproute2 6.19 prints it (`ip -6 -j addr|route|neigh`; key names as in its
+    /// `print_bool`/`print_string` calls: `tentative`, `nodad`, `state: ["PERMANENT"]`).
+    pub(crate) fn ipv6_snapshot(side: Side) -> Ipv6Snapshot {
+        let (iface, ulas, ll, others, mac): (&str, Vec<&str>, &str, Vec<&str>, &str) = match side {
+            Side::Scanner => (
+                "veth-a",
+                vec![IPV6_SCANNER],
+                IPV6_SCANNER_LL,
+                IPV6_PEERS.to_vec(),
+                STAND_PEER_MAC,
+            ),
+            Side::Peer => (
+                "veth-b",
+                IPV6_PEERS.to_vec(),
+                IPV6_PEER_LL,
+                vec![IPV6_SCANNER],
+                STAND_SCANNER_MAC,
+            ),
+        };
+        let mut info: Vec<Value> = ulas
+            .iter()
+            .map(|a| {
+                json!({"family":"inet6","local":a,"prefixlen":64,"scope":"global","nodad":true,
+                "valid_life_time":4294967295u64,"preferred_life_time":4294967295u64})
+            })
+            .collect();
+        info.push(
+            json!({"family":"inet6","local":ll,"prefixlen":64,"scope":"link",
+            "valid_life_time":4294967295u64,"preferred_life_time":4294967295u64}),
+        );
+        let mut routes = vec![
+            json!({"dst":IPV6_PREFIX,"dev":iface,"protocol":"kernel","metric":256,"flags":[],"pref":"medium"}),
+            json!({"dst":"fe80::/64","dev":iface,"protocol":"kernel","metric":256,"flags":[],"pref":"medium"}),
+        ];
+        if side == Side::Scanner {
+            routes.push(json!({"dst":"default","gateway":IPV6_PEER_LL,"dev":iface,"metric":1024,"flags":[],"pref":"medium"}));
+        }
+        Ipv6Snapshot {
+            addrs: json!([{"ifindex":2,"ifname":iface,"flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"mtu":1500,
+                "addr_info":info}]),
+            routes: json!(routes),
+            neigh: json!(
+                others
+                    .iter()
+                    .map(|ip| json!({"dst":ip,"dev":iface,"lladdr":mac,"state":["PERMANENT"]}))
+                    .collect::<Vec<_>>()
+            ),
+            sysctls: IPV6_SYSCTLS
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            route_get: (side == Side::Scanner).then(|| {
+                format!("{IPV6_ROUTE_PROBE} from :: via {IPV6_PEER_LL} dev veth-a proto boot src {IPV6_SCANNER} metric 1024 pref medium")
+            }),
+        }
+    }
+
+    #[test]
+    fn the_ipv6_stand_passes_its_seal_and_every_single_departure_breaks_it() {
+        for (side, iface) in [(Side::Scanner, "veth-a"), (Side::Peer, "veth-b")] {
+            let rec = check_ipv6_side(side, iface, &ipv6_snapshot(side)).unwrap();
+            assert!(rec["addresses"].as_array().unwrap().len() >= 2, "{rec}");
+            // `::1` on lo (an older kernel lists it in main) is tolerated
+            let mut s = ipv6_snapshot(side);
+            s.routes
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"dst":"::1","dev":"lo","protocol":"kernel","metric":256}));
+            assert!(check_ipv6_side(side, iface, &s).is_ok());
+        }
+        type Break = fn(&mut Ipv6Snapshot);
+        let cases: [(&str, Side, Break, &str); 13] = [
+            (
+                "tentative",
+                Side::Scanner,
+                |s| s.addrs[0]["addr_info"][0]["tentative"] = json!(true),
+                "tentative",
+            ),
+            (
+                "dadfailed",
+                Side::Peer,
+                |s| s.addrs[0]["addr_info"][4]["dadfailed"] = json!(true),
+                "dadfailed",
+            ),
+            (
+                "another address",
+                Side::Scanner,
+                |s| s.addrs[0]["addr_info"][0]["local"] = json!("fd00:198:18::9"),
+                "IPv6 addresses",
+            ),
+            (
+                "DAD on",
+                Side::Scanner,
+                |s| s.sysctls[1].1 = "1".into(),
+                "IPv6 settings",
+            ),
+            (
+                "router solicitations",
+                Side::Peer,
+                |s| s.sysctls[3].1 = "-1".into(),
+                "IPv6 settings",
+            ),
+            (
+                "forwarding peer",
+                Side::Peer,
+                |s| s.sysctls[4].1 = "1".into(),
+                "IPv6 settings",
+            ),
+            (
+                "a default route on the peer",
+                Side::Peer,
+                |s| {
+                    s.routes
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"dst":"default","gateway":IPV6_SCANNER_LL,"dev":"veth-b"}))
+                },
+                "unexpected IPv6 route",
+            ),
+            (
+                "no default route on the scanner",
+                Side::Scanner,
+                |s| {
+                    s.routes.as_array_mut().unwrap().pop();
+                },
+                "IPv6 routes are",
+            ),
+            (
+                "a default via another gateway",
+                Side::Scanner,
+                |s| s.routes[2]["gateway"] = json!("fe80::1"),
+                "unexpected IPv6 route",
+            ),
+            (
+                "a neighbour off the stand",
+                Side::Scanner,
+                |s| {
+                    s.neigh
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"dst":"2001:db8::7","dev":"veth-a","state":["STALE"]}))
+                },
+                "outside the stand",
+            ),
+            (
+                "a learnt, not permanent neighbour",
+                Side::Peer,
+                |s| s.neigh[0]["state"] = json!(["REACHABLE"]),
+                "not permanent",
+            ),
+            (
+                "the scanner cannot route out",
+                Side::Scanner,
+                |s| s.route_get = None,
+                "route get",
+            ),
+            (
+                "the peer routes out",
+                Side::Peer,
+                |s| s.route_get = Some(format!("{IPV6_ROUTE_PROBE} via fe80::1 dev veth-b")),
+                "route get",
+            ),
+        ];
+        for (what, side, f, needle) in cases {
+            let iface = if side == Side::Scanner {
+                "veth-a"
+            } else {
+                "veth-b"
+            };
+            let mut s = ipv6_snapshot(side);
+            f(&mut s);
+            let e = check_ipv6_side(side, iface, &s).expect_err(what);
+            assert!(e.contains(needle), "{what}: {e}");
+        }
+    }
+
+    #[test]
+    fn an_ipv6_record_permits_only_the_ipv6_stand_and_never_an_older_suite() {
+        let mut v = json!({"uplink":false,"bridge":false,"nat":false,"ip_forward":0,
+            "veth_created_inside_scanner_ns_peer_moved_to_peer_ns":true,"host_link_list_unchanged":true,
+            "default_route": isolation_default_route(IsolationMode::Autodetect, "veth-a"), "mode":"ipv6",
+            "ipv6":{"lab_veth_only":true,"prefix":IPV6_PREFIX,"scanner":{},"peer":{}}});
+        assert!(isolation_permits_ipv6(&v));
+        // an older suite's rule still wants IPv6 disabled: the IPv6 stand never passes for the autodetect stand
+        assert!(!isolation_permits(&v, IsolationMode::Autodetect));
+        let mut w = v.clone();
+        w["mode"] = json!("autodetect");
+        assert!(!isolation_permits_ipv6(&w));
+        let mut w = v.clone();
+        w["ipv6"] = json!("disabled");
+        assert!(!isolation_permits_ipv6(&w));
+        v["uplink"] = json!(true);
+        assert!(!isolation_permits_ipv6(&v));
     }
 }

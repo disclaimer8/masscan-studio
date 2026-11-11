@@ -218,7 +218,7 @@ fn one(
         )?;
     }
     for s in specs {
-        step(l, tag, s, base, run, t)?;
+        step(l, tag, s, base, run, t, &pv::responder_args())?;
     }
     if let Some(mut p) = t.responder.take() {
         ad::stop(p.as_mut(), "TERM", &l.pause(), RESPONDER_POLLS);
@@ -232,14 +232,20 @@ fn one(
         })
 }
 
-/// The peer's responder of the protocols stand ([`pv::responder_args`]), restarted for every step.
-fn responder(l: &Linux, base: &Path, t: &mut LinuxTools) -> Result<(), SuiteError> {
+/// The peer's responder with `options` after `capture responder` (the protocols stand's [`pv::responder_args`], the
+/// IPv6 stand's `ipv6_verify::responder_args`), restarted for every step.
+fn responder(
+    l: &Linux,
+    base: &Path,
+    t: &mut LinuxTools,
+    options: &[String],
+) -> Result<(), SuiteError> {
     if let Some(mut p) = t.responder.take() {
         ad::stop(p.as_mut(), "TERM", &l.pause(), RESPONDER_POLLS);
     }
     let ready = base.join(format!("responder-{}.ready", nonce()));
     let mut args = vec!["capture".to_owned(), "responder".to_owned()];
-    args.extend(pv::responder_args());
+    args.extend(options.iter().cloned());
     args.extend(["--ready".to_owned(), p2s(&ready)]);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let argv = l.ns(&l.ns_b, l.lab(&refs));
@@ -292,20 +298,22 @@ pub(crate) fn responder_end(p: Option<&mut Box<dyn Running>>) -> pv::ResponderRe
     rec
 }
 
-/// One step: its own responder and witness, the scanner in its own working directory, the document collected.
-fn step(
+/// One step: its own responder (with `responder_options`) and witness, the scanner in its own working directory, the
+/// document collected. The IPv6 suite runs its steps through it too.
+pub(crate) fn step(
     l: &Linux,
     tag: &str,
     s: &StepSpec,
     base: &Path,
     run: &Path,
     t: &mut LinuxTools,
+    responder_options: &[String],
 ) -> Result<(), SuiteError> {
     let (sd, sb) = (run.join(s.name), base.join(format!("step-{}", s.name)));
     io(fs::create_dir_all(&sb), "the step's work directory")?;
     let cwd = base.join(format!("cwd-{}", s.name));
     io(fs::create_dir_all(&cwd), "the scanner's working directory")?;
-    responder(l, &sb, t)?;
+    responder(l, &sb, t, responder_options)?;
     let w = l.witness(&sb, &sd, pv::PEER_FILES[0], t)?;
     if l.host.stopped() {
         return Err(SuiteError::Interrupted(format!(

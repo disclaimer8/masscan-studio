@@ -126,7 +126,7 @@ impl Out {
             Out::Stdout => None,
         }
     }
-    fn step(self, who: Who) -> &'static str {
+    pub(crate) fn step(self, who: Who) -> &'static str {
         match (self, who) {
             (Out::List, Who::Rmasscan) => "list",
             (Out::Json, Who::Rmasscan) => "json",
@@ -1277,8 +1277,8 @@ pub struct Document {
     pub complete: bool,
 }
 
-const LIST_REC: &str = "@ @ @ @ @";
-const JSON_REC: &str = "{   \"ip\": \"@\",   \"timestamp\": \"@\", \"ports\": [ {\"port\": @, \"proto\": \"@\", \"status\": \"@\", \"reason\": \"@\", \"ttl\": @} ] }";
+pub(crate) const LIST_REC: &str = "@ @ @ @ @";
+pub(crate) const JSON_REC: &str = "{   \"ip\": \"@\",   \"timestamp\": \"@\", \"ports\": [ {\"port\": @, \"proto\": \"@\", \"status\": \"@\", \"reason\": \"@\", \"ttl\": @} ] }";
 
 fn field_rec(
     st: &str,
@@ -1485,8 +1485,12 @@ pub struct Swaps {
 /// `got` (a document's records, time aside) holds exactly the records `want` (the wire's, in reply order, each with
 /// its reply's capture time), in reply order up to records whose replies were captured at most
 /// [`REPLY_REORDER_WINDOW_US`] apart. `Ok`: the pairs in the other order ([`Swaps`]); `Err`: the difference.
-pub fn in_reply_order(got: &[Rec], want: &[(Rec, f64)]) -> Result<Swaps, String> {
-    let plain: Vec<Rec> = want.iter().map(|(r, _)| r.clone()).collect();
+/// Generic over the record type: the IPv6 verifier judges its own records (`ipv6_verify::Rec`) with the same rule.
+pub fn in_reply_order<R: Clone + PartialEq + Shown>(
+    got: &[R],
+    want: &[(R, f64)],
+) -> Result<Swaps, String> {
+    let plain: Vec<R> = want.iter().map(|(r, _)| r.clone()).collect();
     if got.len() != want.len() {
         return Err(first_difference(got, &plain));
     }
@@ -1624,13 +1628,22 @@ fn cap(r: &mut Run, s: &Side, name: &str, ok: bool, detail: impl ToString) {
         Who::Oracle => r.inv(&name, ok, detail),
     }
 }
-fn shown(recs: &[Rec]) -> String {
-    recs.iter().map(Rec::show).collect::<Vec<_>>().join("; ")
+/// A record in a few words, for the detail of a check ([`in_reply_order`], [`first_difference`]).
+pub trait Shown {
+    fn show(&self) -> String;
+}
+impl Shown for Rec {
+    fn show(&self) -> String {
+        Rec::show(self)
+    }
+}
+pub(crate) fn shown<R: Shown>(recs: &[R]) -> String {
+    recs.iter().map(Shown::show).collect::<Vec<_>>().join("; ")
 }
 /// Where two record lists first differ.
-fn first_difference(got: &[Rec], want: &[Rec]) -> String {
+pub(crate) fn first_difference<R: PartialEq + Shown>(got: &[R], want: &[R]) -> String {
     let at = got.iter().zip(want).position(|(a, b)| a != b);
-    let show = |x: Option<&Rec>| x.map_or("<none>".to_owned(), Rec::show);
+    let show = |x: Option<&R>| x.map_or("<none>".to_owned(), Shown::show);
     let i = at.unwrap_or(got.len().min(want.len()));
     format!(
         "{} records, {} wanted; first difference at {i}: {} vs {}",
@@ -2256,7 +2269,7 @@ fn binary_problems(b: &[u8]) -> Vec<String> {
     }
 }
 /// The interface a `[+] interface` line names, when it is not the stand's.
-fn iface_problems(text: &str) -> Vec<String> {
+pub(crate) fn iface_problems(text: &str) -> Vec<String> {
     text.split(['\n', '\r'])
         .filter_map(|l| l.strip_prefix("[+] interface"))
         .filter_map(|v| {
@@ -2315,7 +2328,7 @@ fn privacy(r: &mut Run, d: &Path, files: &[String]) {
         );
     }
 }
-fn evidence_extension(f: &str) -> bool {
+pub(crate) fn evidence_extension(f: &str) -> bool {
     Path::new(f)
         .extension()
         .and_then(|e| e.to_str())

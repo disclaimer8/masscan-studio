@@ -9,6 +9,7 @@
 #   wire-lab.sh --oracle BIN --out DIR --suite output --rmasscan RMASSCAN_CLI
 #   wire-lab.sh --oracle BIN --out DIR --suite scan-control --rmasscan RMASSCAN_CLI
 #   wire-lab.sh --oracle BIN --out DIR --suite protocols --rmasscan RMASSCAN_CLI
+#   wire-lab.sh --oracle BIN --out DIR --suite ipv6 --rmasscan RMASSCAN_CLI
 #
 # Suite autodetect runs rmasscan-lab autodetect-suite linux inside the lab, with ONE controlled change to the
 # seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
@@ -32,10 +33,20 @@
 # instead of rate-limiting them. The suite's own responder answers UDP and SCTP; it never loads a kernel module and
 # refuses the SCTP cases when the host kernel has SCTP. The setting dies with the namespace.
 #
+# Suite ipv6 runs rmasscan-lab ipv6-suite linux on the autodetect stand (same seal, lab id, teardown record, kept work
+# and refusal of an earlier lab's OUT) with IPv6 raised on the lab veth pair and the two namespaces' lo ONLY, and only
+# for this suite: every line above that disables IPv6 runs as for the other suites first. On each veth end, while
+# IPv6 is still off and the link down: no Duplicate Address Detection, no router solicitation or advertisement, no
+# forwarding, EUI-64 link-local addresses (the IPV6_SETTINGS line); then the ULA fd00:198:18::1/64 on veth-a,
+# fd00:198:18::2-5/64 on veth-b (nodad), in the scanner namespace an IPv6 default route via the peer's link-local
+# fe80::aa:ff:fe00:2 and permanent IPv6 neighbours for the peers, in the peer namespace the scanner as a permanent
+# neighbour, and a settle wait so that the kernels' MLD reports for the new groups are over before any capture.
+# Every setting dies with the namespaces; the seal is `capture isolation --mode ipv6`.
+#
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
 #
-# SEALED: no uplink, no bridge, no NAT, no default route, ip_forward=0, IPv6 off.
+# SEALED: no uplink, no bridge, no NAT, no default route, ip_forward=0, IPv6 off (suite ipv6: on the lab veth only).
 # The veth pair is created INSIDE the scanner namespace (peer moved straight
 # into the second one), so no lab link ever exists in the host namespace.
 # CLEANUP touches only this run's own namespaces, child PIDs and files:
@@ -66,7 +77,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ORACLE" ] && [ -n "$OUT" ] || { echo "usage: wire-lab.sh --oracle BIN --out DIR" >&2; exit 64; }
-case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;; scan-control) [ -n "$RMASSCAN_BIN" ] || { echo "--suite scan-control needs --rmasscan" >&2; exit 64; } ;; protocols) [ -n "$RMASSCAN_BIN" ] || { echo "--suite protocols needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
+case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;; scan-control) [ -n "$RMASSCAN_BIN" ] || { echo "--suite scan-control needs --rmasscan" >&2; exit 64; } ;; protocols) [ -n "$RMASSCAN_BIN" ] || { echo "--suite protocols needs --rmasscan" >&2; exit 64; } ;; ipv6) [ -n "$RMASSCAN_BIN" ] || { echo "--suite ipv6 needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
 [ "$SUITE" != rust ] || [ -n "$FIXTURES" ] || { echo "--suite rust needs --fixtures" >&2; exit 64; }
 [ "$(uname -s)" = Linux ] || { echo "FATAL: Linux only" >&2; exit 2; }
 if [ "$(id -u)" != 0 ]; then
@@ -95,6 +106,10 @@ NS_A="wl-scan-$RUN_ID"; NS_B="wl-peer-$RUN_ID"
 IF_A=veth-a; IF_B=veth-b
 # The second pair of the scan-control stand (see the header): fixed here, like the rest of the stand.
 IF_A2=veth-a2; IF_B2=veth-b2; MAC_A2=02:aa:00:00:00:03; MAC_B2=02:aa:00:00:00:04; IP_ADAPTER2=198.18.0.6
+# The IPv6 stand of the ipv6 suite (see the header): fixed here too. The settings are the Rust IPV6_SYSCTLS, written
+# while IPv6 is still off; disable_ipv6=0 comes last.
+IP6_A=fd00:198:18::1; IP6_PEERS="fd00:198:18::2 fd00:198:18::3 fd00:198:18::4 fd00:198:18::5"; IP6_GW=fe80::aa:ff:fe00:2
+IPV6_SETTINGS="accept_dad=0 accept_ra=0 router_solicitations=0 forwarding=0 addr_gen_mode=0 disable_ipv6=0"
 # The defaults are the Linux binding. The Windows stand overrides them (same script, same capture path) with
 # WIRELAB_* so that the C oracle fixtures use the SAME source IP/MAC and peer MAC as the real Windows run.
 MAC_A=${WIRELAB_MAC_A:-02:aa:00:00:00:01}; MAC_B=${WIRELAB_MAC_B:-02:aa:00:00:00:02}
@@ -107,6 +122,8 @@ CASES_FILE=${WIRELAB_CASES_FILE:-}                      # optional "name|syn|syn
 DEFAULT_VIA=""
 # The suites that run on the autodetect stand (the Rust driver inside the lab, a lab id, a teardown record).
 STAND_SUITE=0; case "$SUITE" in autodetect|output|scan-control|protocols) STAND_SUITE=1 ;; esac
+# ipv6: the same stand, IPv6 raised on its veth pair only (see the header)
+[ "$SUITE" != ipv6 ] || STAND_SUITE=1
 if [ "$STAND_SUITE" = 1 ]; then
   # Fixed stand of the autodetect and output suites (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
   # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
@@ -251,6 +268,13 @@ if [ "$SUITE" = scan-control ]; then
   ip -n "$NS_B" link set "$IF_B2" address "$MAC_B2"
   nsa sysctl -qw "net.ipv6.conf.$IF_A2.disable_ipv6=1"; nsb sysctl -qw "net.ipv6.conf.$IF_B2.disable_ipv6=1"
 fi
+if [ "$SUITE" = ipv6 ]; then
+  # ipv6: IPv6 back on for the lab veth pair and lo only, in both namespaces, links still down. DAD is off for the
+  # namespace too (the kernel runs it while either `all` or the link asks for it).
+  for kv in $IPV6_SETTINGS; do nsa sysctl -qw "net.ipv6.conf.$IF_A.$kv"; nsb sysctl -qw "net.ipv6.conf.$IF_B.$kv"; done
+  for ns in "$NS_A" "$NS_B"; do ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.lo.disable_ipv6=0; done
+  note_cmd "ip netns exec \$NS sysctl -qw net.ipv6.conf.{$IF_A,$IF_B}.{$IPV6_SETTINGS} net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.lo.disable_ipv6=0   # ipv6: IPv6 on the lab veth pair only"
+fi
 [ -z "$IP_A_LINK" ] || ip -n "$NS_A" addr add "$IP_A_LINK/24" dev "$IF_A"
 for ip_ in $PEER_IPS; do ip -n "$NS_B" addr add "$ip_/$PEER_PREFIX" dev "$IF_B"; done
 ip -n "$NS_B" neigh add "$IP_ADAPTER" lladdr "$MAC_A" dev "$IF_B" nud permanent   # no ARP needed on the lab wire
@@ -271,6 +295,21 @@ if [ -n "$DEFAULT_VIA" ]; then
   ip -n "$NS_A" route add default via "$DEFAULT_VIA" dev "$IF_A"
   for ip_ in $PEER_IPS; do ip -n "$NS_A" neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done
   note_cmd "ip -n \$NS_A route add default via $DEFAULT_VIA dev $IF_A; ip -n \$NS_A neigh add {$PEER_IPS} lladdr $MAC_B dev $IF_A nud permanent   # autodetect stand"
+fi
+if [ "$SUITE" = ipv6 ]; then
+  # ipv6: the ULA addresses without DAD, the scanner's IPv6 default route via the peer's link-local (several on-link
+  # targets resolve the interface's default gateway, so rmasscan's NS goes to the router), and permanent neighbours on
+  # both ends: no kernel ever solicits on the wire (rmasscan's resolver does not read the neighbour table), and the
+  # peer answers the C oracle without asking the scanner, which C never answers.
+  ip -n "$NS_A" -6 addr add "$IP6_A/64" dev "$IF_A" nodad
+  for ip_ in $IP6_PEERS; do ip -n "$NS_B" -6 addr add "$ip_/64" dev "$IF_B" nodad; done
+  ip -n "$NS_A" -6 route add default via "$IP6_GW" dev "$IF_A"
+  for ip_ in $IP6_PEERS; do ip -n "$NS_A" -6 neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done
+  ip -n "$NS_B" -6 neigh add "$IP6_A" lladdr "$MAC_A" dev "$IF_B" nud permanent
+  note_cmd "ip -n \$NS_A -6 addr add $IP6_A/64 dev $IF_A nodad; ip -n \$NS_B -6 addr add {$IP6_PEERS}/64 dev $IF_B nodad; ip -n \$NS_A -6 route add default via $IP6_GW dev $IF_A; ip -n \$NS_A -6 neigh add {$IP6_PEERS} lladdr $MAC_B dev $IF_A nud permanent; ip -n \$NS_B -6 neigh add $IP6_A lladdr $MAC_A dev $IF_B nud permanent   # ipv6 stand"
+  # The kernels' MLD reports for the groups just joined repeat for up to mldv2_unsolicited_report_interval (1 s):
+  # they are over before the first capture starts.
+  sleep 3
 fi
 if [ "$SUITE" != oracle ]; then
   # veth hands CHECKSUM_PARTIAL frames to AF_PACKET readers: the peer kernel's SYN-ACK arrives with
@@ -293,7 +332,15 @@ for ns in "$NS_A" "$NS_B"; do
   if [ -n "$DEFAULT_VIA" ] && [ "$ns" = "$NS_A" ]; then :; else
     [ -z "$(ip -n "$ns" route show default)" ] || fail "$ns has a default route"
   fi
-  [ -z "$(ip -n "$ns" -6 route show default)" ] || fail "$ns has an IPv6 default route"
+  if [ "$SUITE" = ipv6 ] && [ "$ns" = "$NS_A" ]; then
+    # ipv6 scanner namespace: exactly one IPv6 default route, via the peer's link-local on the lab veth
+    [ "$(ip -n "$ns" -6 route show default | grep -c .)" = 1 ] && ip -n "$ns" -6 route show default | grep -Eq "^default via $IP6_GW dev $IF_A( |\$)" || fail "$ns IPv6 default route is not exactly via $IP6_GW dev $IF_A"
+  else
+    [ -z "$(ip -n "$ns" -6 route show default)" ] || fail "$ns has an IPv6 default route"
+    if [ "$SUITE" = ipv6 ]; then
+      ip netns exec "$ns" ip -6 route get 2001:db8::1 >/dev/null 2>&1 && fail "$ns can route to 2001:db8::1"
+    fi
+  fi
   links=$(ip -n "$ns" -o link | awk -F': ' '{print $2}' | sed 's/@.*//' | sort | tr '\n' ' ')
   case "$ns" in "$NS_A") want="lo $IF_A ";; *) want="lo $IF_B ";; esac
   if [ "$SUITE" = scan-control ]; then
@@ -326,6 +373,8 @@ else
   note_cmd "ip -n \$NS route show default (empty); ip -n \$NS route get 8.8.8.8 (fails)  # seal assertions, both namespaces"
 fi
 ISOLATION_MODE=autodetect; [ "$SUITE" != scan-control ] || ISOLATION_MODE=scan-control
+[ "$SUITE" != ipv6 ] || ISOLATION_MODE=ipv6
+[ "$SUITE" != ipv6 ] || note_cmd "ip -n \$NS_A -6 route show default (exactly: default via $IP6_GW dev $IF_A); ip -n \$NS_B -6 route show default (empty); ip -n \$NS_B -6 route get 2001:db8::1 (fails); capture isolation --mode ipv6  # seal assertions, ipv6 stand"
 "$LAB_BIN" capture isolation ${DEFAULT_VIA:+--mode $ISOLATION_MODE} --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
 
 topo() {  # topo FILE : save topology + routes of both namespaces
@@ -336,6 +385,10 @@ topo() {  # topo FILE : save topology + routes of both namespaces
       echo "## ip -4 addr"; ip -n "$ns" -4 addr show
       echo "## ip route"; ip -n "$ns" route show
       echo "## ip -6 route"; ip -n "$ns" -6 route show
+      if [ "$SUITE" = ipv6 ]; then
+        echo "## ip -6 addr"; ip -n "$ns" -6 addr show
+        echo "## ip -6 neigh"; ip -n "$ns" -6 neigh show
+      fi
       echo "## ip rule"; ip -n "$ns" rule show
       echo "## ip neigh"; ip -n "$ns" neigh show
       echo "## ip_forward"; ip netns exec "$ns" cat /proc/sys/net/ipv4/ip_forward
@@ -457,6 +510,16 @@ elif [ "$SUITE" = protocols ]; then
   # ---- protocols suite: the same driver on the same stand, ICMP Echo, UDP, SCTP and ARP of the C oracle and rmasscan
   note_cmd "rmasscan-lab protocols-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
   start_suite_group "$OUT/suite.log" "$LAB_BIN" protocols-suite linux --out "$OUT" --work "$WORK" \
+    --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
+    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
+  SUITE_PID=$SUITE_PGID
+  SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  stop_suite_group
+  log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
+elif [ "$SUITE" = ipv6 ]; then
+  # ---- ipv6 suite: the same driver on the same stand with IPv6 on its veth pair, TCP SYN over IPv6 of both scanners
+  note_cmd "rmasscan-lab ipv6-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_suite_group "$OUT/suite.log" "$LAB_BIN" ipv6-suite linux --out "$OUT" --work "$WORK" \
     --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
     --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
   SUITE_PID=$SUITE_PGID

@@ -137,6 +137,11 @@ pub struct NicBinding {
     /// источника IPv6 всегда `source_ports.0` (main.c:346). `None` у плана IPv4 и у Студии. Приёмник считает кадр
     /// IPv6 своим, только если адрес назначения равен этому (`is_my_ip`, stack-src.c:13-14).
     pub source_ipv6: Option<u128>,
+    /// MAC следующего хопа для кадров IPv6 (шлюз или сосед, найденный NDP Neighbor Solicitation). `None`: берётся
+    /// `binding.next_hop_mac` (IPv4). Отдельное поле нужно потому, что IPv4-хоп разрешает ARP, а IPv6-хоп NDP, и
+    /// это могут быть разные устройства; шаблон `Tcp6SynTemplate` читает только это поле (templ-pkt.c:1110-1202,
+    /// `router_mac_ipv6`). На кадры IPv4 не влияет и в `canonical_job_bytes` не входит.
+    pub next_hop_mac_ipv6: Option<[u8; 6]>,
 }
 
 impl From<AdapterBinding> for NicBinding {
@@ -145,6 +150,7 @@ impl From<AdapterBinding> for NicBinding {
             source_ipv4_last: binding.source_ipv4,
             legacy_c_17_port_mask: false,
             source_ipv6: None,
+            next_hop_mac_ipv6: None,
             binding,
         }
     }
@@ -187,7 +193,7 @@ fn check_source_ports(first: u16, last: u16, legacy_c_17: bool) -> Result<(), Pl
 #[derive(Debug, Clone)]
 struct Builder {
     tmpl: TcpSynTemplate,
-    /// Шаблон TCP SYN поверх IPv6 (78 байт, templ-pkt.c:1110-1202), `router_mac_ipv6` это `next_hop_mac` адаптера.
+    /// Шаблон TCP SYN поверх IPv6 (78 байт, templ-pkt.c:1110-1202), `router_mac_ipv6` это `next_hop_mac_ipv6` адаптера, а без него `next_hop_mac`.
     tmpl6: Tcp6SynTemplate,
     /// `src.ipv6` (main.c:188); `None`: IPv6-зонд отказывает ([`PlanError::NoSourceIpv6`]).
     source_ipv6: Option<u128>,
@@ -238,7 +244,7 @@ impl Builder {
             ),
             tmpl6: Tcp6SynTemplate::new_with_options(
                 binding.source_mac,
-                binding.next_hop_mac,
+                nic.next_hop_mac_ipv6.unwrap_or(binding.next_hop_mac),
                 binding.link_type,
                 mods,
             ),
@@ -1447,6 +1453,7 @@ mod tests {
             source_ipv4_last: last,
             legacy_c_17_port_mask: legacy,
             source_ipv6: None,
+            next_hop_mac_ipv6: None,
         }
     }
 
@@ -2207,6 +2214,7 @@ mod tests {
             source_ipv4_last: 0,
             legacy_c_17_port_mask: false,
             source_ipv6: Some(ME),
+            next_hop_mac_ipv6: None,
         };
         let nic = NicBinding {
             source_ipv4_last: nic.binding.source_ipv4,
@@ -2250,5 +2258,35 @@ mod tests {
             plan.probe_v6(1, 0, THEM, 80).unwrap_err(),
             PlanError::NicIndexOutOfRange { index: 1, count: 1 }
         );
+    }
+
+    /// T4: MAC следующего хопа IPv6 (результат NDP) живёт отдельно от IPv4-хопа (ARP). С `next_hop_mac_ipv6`
+    /// кадр IPv6 идёт на него, а без него на `next_hop_mac`; кадры IPv4 всегда на `next_hop_mac`.
+    #[test]
+    fn ipv6_frames_use_the_separate_ndp_next_hop_mac() {
+        const THEM: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+        const ME: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+        const V4_HOP: [u8; 6] = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02];
+        const V6_HOP: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x00, 0x09];
+        let mut b = binding();
+        b.link_type = LinkType::Ethernet;
+        b.source_mac = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+        b.next_hop_mac = V4_HOP;
+        b.source_ports = (40000, 40015);
+        let mut nic = NicBinding::from(b);
+        nic.source_ipv6 = Some(ME);
+        let e = eff_v46("2001:db8::1", "80");
+        let plain = ReadyPlan::new_cli_without_ipv6_guard(e.clone(), vec![nic.clone()]).unwrap();
+        assert_eq!(
+            &plain.probe_v6(0, 0, THEM, 80).unwrap().frame[0..6],
+            &V4_HOP
+        );
+        nic.next_hop_mac_ipv6 = Some(V6_HOP);
+        let plan = ReadyPlan::new_cli_without_ipv6_guard(e, vec![nic]).unwrap();
+        let f = plan.probe_v6(0, 0, THEM, 80).unwrap().frame;
+        assert_eq!(&f[0..6], &V6_HOP);
+        // Остальные байты кадра те же.
+        let g = plain.probe_v6(0, 0, THEM, 80).unwrap().frame;
+        assert_eq!(&f[6..], &g[6..]);
     }
 }

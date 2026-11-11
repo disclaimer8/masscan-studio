@@ -42,6 +42,7 @@ use crate::checksum::{
     word_sum,
 };
 use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4, syn_cookie_ipv6};
+use crate::ndp::{NDP_FRAME_LEN, answer_neighbor_solicitation};
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
 use crate::ranges::RangeList;
@@ -216,6 +217,26 @@ pub fn parse_reply_with(
         };
     };
     parse_ipv4_tcp(ip, plan, policy)
+}
+
+/// Ответ на входящий Neighbor Solicitation для `source_ipv6` адаптера `nic[0]` (`main.c:829-840` и `:859`,
+/// `stack_ndpv6_incoming_request`, `stack-ndpv6.c:95-182`): готовый кадр Neighbor Advertisement (86 байт,
+/// `payload_length` 32) или `None`. `None` для плана без `source_ipv6` (IPv4 и Студия), для не Ethernet, для кадра
+/// не NS и для NS чужого адреса. Кадр не парсится как зонд и в результаты не попадает.
+///
+/// Отличие от C: адресат NS это наш адрес либо его solicited-node multicast (RFC 4861 §7.1.1); C принимает любой
+/// `ff02::/16` (`is_ipv6_multicast`, main.c:515-520).
+pub fn ndp_reply_for(
+    frame: &[u8],
+    link: LinkType,
+    plan: &ReadyPlan,
+) -> Option<[u8; NDP_FRAME_LEN]> {
+    if link != LinkType::Ethernet {
+        return None;
+    }
+    let nic = plan.nics().first()?;
+    let my_ip = nic.source_ipv6?;
+    answer_neighbor_solicitation(frame, nic.binding.source_mac, my_ip)
 }
 
 /// Находит заголовок IPv6 (`parse_ethertype` `0x86dd`, proto-preprocess.c:505; Null :522-531; Raw :534-538).
@@ -966,6 +987,7 @@ mod tests_ipv6 {
                 source_ipv4_last: 0x0aff_0001,
                 legacy_c_17_port_mask: false,
                 source_ipv6,
+                next_hop_mac_ipv6: None,
             }],
         )
         .unwrap()
@@ -1297,5 +1319,37 @@ mod tests_ipv6 {
         let mut f = good.clone();
         f[14] = 0x40;
         assert!(parse_reply(&f, LinkType::Ethernet, &plan).is_err());
+    }
+
+    /// Ответчик NS (main.c:829-840): только для плана с `source_ipv6`, только Ethernet, только NS для нашего адреса.
+    #[test]
+    fn ndp_reply_for_answers_only_our_address_on_ethernet() {
+        use crate::ndp::{
+            encode_neighbor_advertisement, encode_neighbor_solicitation, solicited_node_address,
+        };
+        let router_mac = [0x0a, 0xbb, 0xcc, 0xdd, 0xee, 0x01];
+        let router_ip = 0xfe80_0000_0000_0000_0000_0000_0000_abcdu128;
+        // NS роутера на ME: кадр собирает кодировщик (его байты проверены против C в ndp_tests).
+        let mut ns = encode_neighbor_solicitation(router_mac, router_ip, ME);
+        // Адресат это solicited-node ME (кодировщик так и ставит).
+        assert_eq!(
+            u128::from_be_bytes(ns[38..54].try_into().unwrap()),
+            solicited_node_address(ME)
+        );
+        let with = plan(LinkType::Ethernet, Some(ME));
+        let na = ndp_reply_for(&ns, LinkType::Ethernet, &with).unwrap();
+        assert_eq!(na.len(), 86);
+        assert_eq!(&na[0..6], &router_mac);
+        assert_eq!(&na[6..12], &MAC_ME);
+        assert_eq!(
+            na,
+            encode_neighbor_advertisement(MAC_ME, ME, router_mac, router_ip)
+        );
+        // План без source_ipv6 (IPv4, Студия) и не Ethernet не отвечают.
+        assert!(ndp_reply_for(&ns, LinkType::Ethernet, &plan(LinkType::Ethernet, None)).is_none());
+        assert!(ndp_reply_for(&ns, LinkType::Raw, &with).is_none());
+        // NS для чужого адреса.
+        ns = encode_neighbor_solicitation(router_mac, router_ip, ME + 1);
+        assert!(ndp_reply_for(&ns, LinkType::Ethernet, &with).is_none());
     }
 }

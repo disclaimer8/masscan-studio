@@ -406,6 +406,7 @@ fn replies_to_any_address_of_the_source_range_are_accepted() {
             source_ipv4_last: FIRST_IP + 3,
             legacy_c_17_port_mask: false,
             source_ipv6: None,
+            next_hop_mac_ipv6: None,
         }],
     )
     .unwrap();

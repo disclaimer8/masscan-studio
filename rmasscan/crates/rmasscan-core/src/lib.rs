@@ -8,6 +8,7 @@ pub mod checksum;
 pub mod config;
 pub mod cookie;
 pub mod massip;
+pub mod ndp;
 pub mod packet;
 pub mod payloads;
 pub mod probe;

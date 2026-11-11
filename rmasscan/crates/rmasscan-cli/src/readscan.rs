@@ -302,9 +302,10 @@ fn port_index(r: &Record) -> u32 {
 
 /// Фильтр целей `--readscan` (`filter->count_ipv4s`, `count_ports` в `parse_status2` и `parse_status6`).
 ///
-/// Как у C, проверка адреса включается только при непустом списке IPv4 (`in-binary.c:132,254`, `in-filter.c:10`):
-/// фильтр из одних диапазонов IPv6 адрес не проверяет вовсе (снято с оракула `8e6b3b0`: все записи проходят), а
-/// фильтр с диапазоном IPv4 отбрасывает записи IPv6 вне диапазонов IPv6 (`massip_has_ip`, `massip.c:45-51`).
+/// C включает проверку адреса только при непустом списке IPv4 (`in-binary.c:132,254`, `in-filter.c:10`): фильтр из
+/// одних диапазонов IPv6 у него ничего не фильтрует (снято с оракула `8e6b3b0`: все записи проходят). R14, названное
+/// отличие от C (как Р5): такой фильтр работает, остаются записи внутри его диапазонов IPv6, записи IPv4 вне набора
+/// целей отбрасываются. Смешанный фильтр и фильтр из одного IPv4 ведут себя как у C (`massip_has_ip`, `massip.c:45-51`).
 pub struct ReadFilter {
     pub targets: MassIp,
     pub by_ip: bool,
@@ -320,7 +321,8 @@ impl ReadFilter {
         targets.apply_excludes(&mut excludes);
         targets.optimize();
         ReadFilter {
-            by_ip: targets.count_ipv4s() > 0,
+            // `count_ipv6s` is the low 64 bits of the count (0 for a /64), so ask for the ranges themselves.
+            by_ip: targets.count_ipv4s() > 0 || targets.has_ipv6_targets(),
             by_port: targets.count_ports() > 0,
             targets,
         }
@@ -929,10 +931,8 @@ mod tests {
     }
 
     /// Review Focus 5. Types 10/11 (`in-binary.c:228-276`, `parse_status6`) are read back exactly as written and
-    /// mixed with IPv4 records in file order. The filter is C's, measured against the oracle binary: the IP test
-    /// runs only when `count_ipv4s` is non-zero (`in-binary.c:254`, `in-filter.c:10`), then `massip_has_ip`
-    /// picks the list by the record's version (`massip.c:45-51`). So a filter with an IPv4 range drops IPv6
-    /// records outside its IPv6 ranges, and a filter of IPv6 ranges only leaves everything through.
+    /// mixed with IPv4 records in file order. Mixed and IPv4-only filters are C's (`massip_has_ip` picks the list by
+    /// the record's version, `massip.c:45-51`); the IPv6-only filter is R14, see below.
     #[test]
     fn readscan_v6_types_10_11_and_filter_match_c() {
         let all = vec![
@@ -967,9 +967,16 @@ mod tests {
             res.unwrap();
             read_all(&out).0
         };
-        // No IPv4 range: C does not filter by address at all, IPv4 and IPv6 records alike.
-        assert_eq!(kept(&filter(&["2a03:9060:0:400::/64"], None)), all);
-        assert_eq!(kept(&filter(&["2001:db8::/48"], None)), all);
+        // R14 (named difference from C). IPv6 ranges only: C runs the address test only when `count_ipv4s` is
+        // non-zero (`in-binary.c:254`, `in-filter.c:10`), so the oracle passes every record, IPv4 and IPv6 alike
+        // (measured on 8e6b3b0). rmasscan filters: only records inside the IPv6 ranges stay, IPv4 records are
+        // outside the target set.
+        assert_eq!(kept(&filter(&["2a03:9060:0:400::/64"], None)), vec![all[0]]);
+        assert_eq!(kept(&filter(&["2001:db8::/48"], None)), vec![all[2]]);
+        assert_eq!(
+            kept(&filter(&["2001:db8::/32"], None)),
+            vec![all[2], all[3]]
+        );
         // `2a03:9060::/64` is the block before `...:400::`, not the record's /64.
         assert_eq!(
             kept(&filter(&["2a03:9060::/64", "10.0.0.0/24"], None)),

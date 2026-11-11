@@ -390,8 +390,9 @@ fn inputs_are_the_generator_output() {
 
 /// Манифест снят с закреплённого оракула и содержит всю матрицу скрипта: 6 входов × 2 режима `--show` ×
 /// (8 форматов + `-oX --webxml`), 2 кейса фильтра на `basic` (`--range` и `-p80`), 2 на `protocols` (только
-/// `--range`: фильтр `-p` по не-TCP записям это отличие Р5, его эталонов C нет) и 9 на `ipv6` (адресный фильтр
-/// из одних диапазонов IPv6, со смешанным списком, из одного IPv4, порты и порты со смешанным списком); имена уникальны, пропуски
+/// `--range`: фильтр `-p` по не-TCP записям это отличие Р5, его эталонов C нет) и 7 на `ipv6` (адресный фильтр
+/// со смешанным списком, из одного IPv4, порты и порты со смешанным списком; фильтр из одних диапазонов IPv6 не
+/// снят: C его игнорирует, rmasscan фильтрует, R14); имена уникальны, пропуски
 /// называют существующие кейсы, у хранимых входов есть файл эталона, у остальных его нет.
 #[test]
 fn manifest_covers_the_capture_matrix() {
@@ -399,7 +400,7 @@ fn manifest_covers_the_capture_matrix() {
     assert_eq!(m.oracle.git_head, ORACLE_GIT_HEAD);
     assert_eq!(m.oracle.binary_sha256, ORACLE_SHA256);
     assert_eq!(m.inputs.len(), 6);
-    assert_eq!(m.cases.len(), 6 * 2 * 9 + 2 + 2 + 9);
+    assert_eq!(m.cases.len(), 6 * 2 * 9 + 2 + 2 + 7);
     let mut names: Vec<&str> = m.cases.iter().map(|c| c.name.as_str()).collect();
     names.sort_unstable();
     names.dedup();
@@ -423,8 +424,8 @@ fn manifest_covers_the_capture_matrix() {
 }
 
 /// Задача 6, Review Focus 5: вход `ipv6` читается C-оракулом и rmasscan одинаково, а кейсы фильтра фиксируют то, чем
-/// C отличается от плана: адрес не проверяется, пока в фильтре нет диапазона IPv4 (`in-binary.c:254`), так что
-/// фильтр из одних диапазонов IPv6 пропускает всё, а фильтр с IPv4 отбрасывает записи IPv6 вне своих диапазонов.
+/// C делает со смешанным фильтром и фильтром из одного IPv4 (`in-binary.c:254`): фильтр с IPv4 отбрасывает записи IPv6
+/// вне своих диапазонов. Фильтр из одних диапазонов IPv6 C игнорирует, здесь он не снят (R14).
 /// Сам разбор сверяет `every_golden_case_is_checked`; здесь выписаны ожидаемые строки (снято с оракула).
 #[test]
 fn ipv6_cases_pin_the_c_filter_semantics() {
@@ -445,8 +446,6 @@ fn ipv6_cases_pin_the_c_filter_semantics() {
     assert_eq!(all[1], "open tcp 80 192.0.2.1 1700014400");
     assert_eq!(all[2], "closed tcp 443 2001:db8::1:0:0:0:1 1700014400");
     assert_eq!(all[9], "closed tcp 25 ::ffff:c000:201 1700014404");
-    // `--range 2001:db8::/32` alone: no IPv4 range, no address test, every OPEN record passes (default `--show`).
-    assert_eq!(lines("filter.ipv6.only6.list"), lines("ipv6.open.list"));
     // `--range 192.0.2.0/24`: an IPv4 range drops every IPv6 record.
     assert_eq!(
         lines("filter.ipv6.only4.list"),

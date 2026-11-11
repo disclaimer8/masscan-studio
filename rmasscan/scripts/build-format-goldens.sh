@@ -250,12 +250,10 @@ done
 run_case filter.open.list basic.scan.bin other --range 10.0.0.0/31 -p80 --readscan @INPUT@ -oL @OUTPUT@
 run_case filter.open.grepable basic.scan.bin grepable --range 10.0.0.0/31 -p80 --readscan @INPUT@ -oG @OUTPUT@
 # IPv6 records (types 10/11): an IPv6 target filter. C tests the address only when the filter has an IPv4 range
-# (in-binary.c:254, in-filter.c:10, `count_ipv4s`): a filter of IPv6 ranges alone passes every record, a filter with
-# an IPv4 range drops the IPv6 records outside its IPv6 ranges (massip.c:45-51). `-p` applies to both versions. With a
+# (in-binary.c:254, in-filter.c:10, `count_ipv4s`); a filter of IPv6 ranges alone is a no-op there and is not captured
+# (rmasscan filters, R14). A filter with an IPv4 range drops the IPv6 records outside its IPv6 ranges (massip.c:45-51). `-p` applies to both versions. With a
 # port the IPv6 range must stay under 63 bits (main.c:1698-1704, `/120` here; a `/64` with a port exits 1).
 if [ -n "${STORED[ipv6.scan.bin]:-}" ]; then
-  run_case filter.ipv6.only6.list ipv6.scan.bin other --range 2001:db8::/32 --readscan @INPUT@ -oL @OUTPUT@
-  run_case filter.ipv6.only6.grepable ipv6.scan.bin grepable --range 2001:db8::/32 --readscan @INPUT@ -oG @OUTPUT@
   run_case filter.ipv6.mixed.list ipv6.scan.bin other --range 2001:db8::/48,192.0.2.0/24 --readscan @INPUT@ -oL @OUTPUT@
   run_case filter.ipv6.mixed.grepable ipv6.scan.bin grepable --range 2001:db8::/48,192.0.2.0/24 --readscan @INPUT@ -oG @OUTPUT@
   run_case filter.ipv6.only4.list ipv6.scan.bin other --range 192.0.2.0/24 --readscan @INPUT@ -oL @OUTPUT@

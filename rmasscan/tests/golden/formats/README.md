@@ -63,7 +63,7 @@ Cases: for each input, with and without `--show open,closed`, every format plus 
 `--range 10.0.0.0/31 -p80 --readscan basic -oL|-oG out` (`filter.open.*`; targets and ports go
 before `--readscan`, C takes every following argument without `-` as a file, `main-conf.c:3266–3278`),
 and two on `protocols`: `--range 192.0.2.0/28 --readscan protocols -oL|-oG out` (`filter.protocols.*`),
-and nine on `ipv6` (`filter.ipv6.*`, `-oL` and `-oG` unless noted): `only6` (`--range 2001:db8::/32`), `mixed`
+and seven on `ipv6` (`filter.ipv6.*`, `-oL` and `-oG` unless noted): `mixed`
 (`--range 2001:db8::/48,192.0.2.0/24`), `only4` (`--range 192.0.2.0/24`), `port` (`-p443,22`) and `mixedport`
 (`-oL` only: `--range 2001:db8::/120,192.0.2.0/30 -p22,80`; with a port the IPv6 range must stay under 63 bits,
 see below).
@@ -124,9 +124,11 @@ sha256 against `inputs` first.
 - A mixed file keeps the file order; an IPv4 record is 15 bytes and an IPv6 one 28 in `-oB` output too.
 - The read filter tests the address only when the filter has an IPv4 range (`filter->count_ipv4s`,
   `in-binary.c:132, 254`, `in-filter.c:10`), then `massip_has_ip` picks the IPv4 or IPv6 list by the record's
-  version (`massip.c:45-51`). So `--range 2001:db8::/32 --readscan` (IPv6 ranges only) filters nothing, every IPv4 and
-  IPv6 record passes (`filter.ipv6.only6.*`); `--range 192.0.2.0/24` drops every IPv6 record (`only4`); a list with
-  both matches IPv6 records against the IPv6 ranges (`mixed`). `-p` applies to both versions (`port`).
+  version (`massip.c:45-51`). So `--range 2001:db8::/32 --readscan` (IPv6 ranges only) filters nothing in C, every IPv4 and
+  IPv6 record passes (measured on the oracle). rmasscan filters it (ruling R14, a named difference like the protocols
+  stage's Р5): only records inside the IPv6 ranges stay, IPv4 records are outside the target set. No golden pins that
+  case, goldens exist only where C and rmasscan agree. `--range 192.0.2.0/24` drops every IPv6 record (`only4`); a
+  list with both matches IPv6 records against the IPv6 ranges (`mixed`). `-p` applies to both versions (`port`).
 - C checks the 63-bit scan range for `--readscan` too (`main.c:1698-1704`): `--range 2001:db8::/64 -p22 --readscan`
   exits 1 with `scan range too large`. That case has no golden (the capture script expects exit 0); the unit test
   `readscan_accepts_an_ipv6_filter` covers it.

@@ -2277,48 +2277,6 @@
       "stderr": "[+] --readscan @INPUT@\n"
     },
     {
-      "name": "filter.ipv6.only6.list",
-      "input": "ipv6.scan.bin",
-      "args": [
-        "--range",
-        "2001:db8::/32",
-        "--readscan",
-        "@INPUT@",
-        "-oL",
-        "@OUTPUT@"
-      ],
-      "output": "outputs/filter.ipv6.only6.list.out",
-      "sha256": "9544daad2e657450cbe903a0defa0b3117f4df156cb98215e9dfc008bfe071a4",
-      "masked_sha256": "9544daad2e657450cbe903a0defa0b3117f4df156cb98215e9dfc008bfe071a4",
-      "size_bytes": 478,
-      "masks": [],
-      "stdout": "",
-      "stderr": "[+] --readscan @INPUT@\n"
-    },
-    {
-      "name": "filter.ipv6.only6.grepable",
-      "input": "ipv6.scan.bin",
-      "args": [
-        "--range",
-        "2001:db8::/32",
-        "--readscan",
-        "@INPUT@",
-        "-oG",
-        "@OUTPUT@"
-      ],
-      "output": "outputs/filter.ipv6.only6.grepable.out",
-      "sha256": "600046ca59d00ff2e7a07a9cd34aad89592c3ce3b4707d8971d857fa85ab0f3f",
-      "masked_sha256": "37b578df454519ea42b3cd425343a29b9f9982f22252fe135182c4f847ddd95e",
-      "size_bytes": 1063,
-      "masks": [
-        {
-          "kind": "grepable_done"
-        }
-      ],
-      "stdout": "",
-      "stderr": "[+] --readscan @INPUT@\n"
-    },
-    {
       "name": "filter.ipv6.mixed.list",
       "input": "ipv6.scan.bin",
       "args": [
@@ -2520,8 +2478,6 @@
         "ipv6.open-closed.hostonly",
         "ipv6.open-closed.unicornscan",
         "ipv6.open-closed.xml-webxml",
-        "filter.ipv6.only6.list",
-        "filter.ipv6.only6.grepable",
         "filter.ipv6.mixed.list",
         "filter.ipv6.mixed.grepable",
         "filter.ipv6.only4.list",
@@ -2530,7 +2486,7 @@
         "filter.ipv6.port.grepable",
         "filter.ipv6.mixedport.list"
       ],
-      "note": "the ipv6 cases (records of types 10/11 mixed with IPv4 records, and the IPv6 read-filter cases) were captured later with the same oracle and script; every earlier case reproduced (masked_sha256, stdout, stderr; the raw sha256 of the 26 clock-masked outputs differs by the masked fields only) and was kept as committed"
+      "note": "the ipv6 cases (records of types 10/11 mixed with IPv4 records, and the IPv6 read-filter cases) were captured later with the same oracle and script; every earlier case reproduced (masked_sha256, stdout, stderr; the raw sha256 of the 26 clock-masked outputs differs by the masked fields only) and was kept as committed; the IPv6-only read filter is not captured: C ignores it (in-binary.c:254), rmasscan filters (R14)"
     }
   ]
 }

@@ -22,8 +22,7 @@ use rmasscan_core::config::{
     parse_rate, parse_shard, parse_source_port,
 };
 use rmasscan_core::targets::{
-    TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP, add_target_string, add_top_ports, parse_ports_with,
-    range_parse_ipv4,
+    TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP, add_top_ports, parse_ports_with, range_parse_ipv4,
 };
 
 use crate::conf::{FullConf, OutputConfPatch, apply_conf_key};
@@ -1299,12 +1298,15 @@ impl Cli {
         let take = |id: &'static str| self.in_segment(id, seg);
         if seg == 0 {
             for t in self.targets.iter().chain(&self.range) {
-                add_target_string(cfg.targets.ipv4_mut(), t)
+                // massip.c:72-100: IPv4 и IPv6.
+                cfg.targets
+                    .add_target_string(t)
                     .map_err(|e| format!("bad target {t:?}: {e}"))?;
             }
             self.apply_port_options(cfg)?;
             for x in &self.exclude {
-                add_target_string(cfg.excludes.ipv4_mut(), x)
+                cfg.excludes
+                    .add_target_string(x)
                     .map_err(|e| format!("bad --exclude {x:?}: {e}"))?;
             }
             for f in &self.excludefile {
@@ -1612,7 +1614,8 @@ fn read_exclude_file(cfg: &mut ScanConfig, path: &str) -> Result<(), String> {
         if line.is_empty() {
             continue;
         }
-        add_target_string(cfg.excludes.ipv4_mut(), line)
+        cfg.excludes
+            .add_target_string(line)
             .map_err(|e| format!("{path}:{}: invalid IP address: {e}", n + 1))?;
     }
     Ok(())

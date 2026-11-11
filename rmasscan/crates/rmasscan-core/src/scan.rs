@@ -13,7 +13,8 @@ use std::net::Ipv4Addr;
 use std::ops::ControlFlow;
 
 use crate::blackrock::{BlackRock, BlackRockError};
-use crate::massip::{MassIp, RangeOverflow};
+use crate::massip::{MassIp, RangeOverflow, TargetIp};
+use crate::ranges6::format_ipv6_c;
 
 /// `--shard one/of` (masscan.h `shard.one`, `shard.of`; по умолчанию 1/1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,11 @@ pub enum ScanError {
     /// в C бесконечный цикл (main-listscan.c:14,65; main.c:223,422).
     #[error("shard divisor must be non-zero")]
     ZeroShard,
+    /// IPv4-вариант API (`list_scan`, `transmit_scan`, `transmit_scan_flow`) вызван
+    /// с IPv6-целями: молча пропустить их нельзя (`list_scan_v46`,
+    /// `transmit_scan_flow_v46`).
+    #[error("the targets include IPv6 addresses; this IPv4-only entry point cannot scan them")]
+    Ipv6Targets,
     #[error(transparent)]
     BlackRock(#[from] BlackRockError),
     /// `-sL` с `retries > 0`: индекс `index >= range` не выходит из cycle-walk
@@ -60,6 +66,17 @@ pub fn format_list_line(ip: u32, port: u32, single_port: bool) -> String {
         ip.to_string()
     } else {
         format!("{ip}:{port}")
+    }
+}
+
+/// Строка `-sL` (main-listscan.c:53-62) для IPv4 и IPv6: один порт даёт только
+/// адрес (:54-56), иначе `ip:port` для IPv4 и `[ip]:port` для IPv6 (:58-60).
+/// Адрес IPv6 печатает `ipv6address_fmt` ([`format_ipv6_c`]).
+pub fn format_list_line_v46(target: TargetIp, port: u32, single_port: bool) -> String {
+    match target {
+        TargetIp::V4(ip) => format_list_line(ip, port, single_port),
+        TargetIp::V6(ip) if single_port => format_ipv6_c(ip),
+        TargetIp::V6(ip) => format!("[{}]:{port}", format_ipv6_c(ip)),
     }
 }
 
@@ -237,10 +254,12 @@ pub fn transmit_index_stream(
     }
 }
 
-/// `main_listscan` (main-listscan.c:6-72), IPv4. `massip` должен быть
+/// `main_listscan` (main-listscan.c:6-72), только IPv4. `massip` должен быть
 /// оптимизирован. Для каждого индекса вызывает `emit(ip, port)`.
 /// Форматирование строки: [`format_list_line`] (одиночный порт:
-/// `massip.count_ports() == 1`).
+/// `massip.count_ports() == 1`). С IPv6-целями отказывает
+/// [`ScanError::Ipv6Targets`] до первого вывода: смесь печатает
+/// [`list_scan_v46`].
 ///
 /// При `retries > 0` в C `-sL` может зациклиться в cycle-walk BlackRock
 /// (main-listscan.c:35 -> crypto-blackrock.c:268-276). Здесь это проверяется до
@@ -248,6 +267,42 @@ pub fn transmit_index_stream(
 /// transmit безопасен: xXx сначала приводится по модулю range.
 #[allow(clippy::too_many_arguments)]
 pub fn list_scan<F: FnMut(u32, u32)>(
+    massip: &MassIp,
+    seed: u64,
+    rounds: u32,
+    shard: Shard,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+    max_rate: f64,
+    mut emit: F,
+) -> Result<(), ScanError> {
+    if massip.has_ipv6_targets() {
+        return Err(ScanError::Ipv6Targets);
+    }
+    list_scan_v46(
+        massip,
+        seed,
+        rounds,
+        shard,
+        resume_index,
+        resume_count,
+        retries,
+        max_rate,
+        |target, port| {
+            if let TargetIp::V4(ip) = target {
+                emit(ip, port);
+            }
+        },
+    )
+}
+
+/// [`list_scan`] для IPv4 и IPv6. Порядок индексов `massip_pick` (massip.c:27-43,
+/// main-listscan.c:44): IPv4 на `0..count_ipv4 * ports`, IPv6 выше; без
+/// IPv6-целей результат побайтно совпадает с [`list_scan`]. Строка:
+/// [`format_list_line_v46`].
+#[allow(clippy::too_many_arguments)]
+pub fn list_scan_v46<F: FnMut(TargetIp, u32)>(
     massip: &MassIp,
     seed: u64,
     rounds: u32,
@@ -288,13 +343,14 @@ pub fn list_scan<F: FnMut(u32, u32)>(
     }
     for i in list_scan_indices(range, shard, resume_index, resume_count, retries, max_rate) {
         let x = blackrock.shuffle(i); // :42
-        let (ip, port) = massip.pick(x); // :44
-        emit(ip, port);
+        let (target, port) = massip.pick_list(x); // :44
+        emit(target, port);
     }
     Ok(())
 }
 
-/// Индексная часть `transmit_thread` (main.c:203-448), IPv4, без отправки.
+/// Индексная часть `transmit_thread` (main.c:203-448), только IPv4, без отправки.
+/// С IPv6-целями отказывает [`ScanError::Ipv6Targets`]: см. [`transmit_scan_flow_v46`].
 /// `emit(i, repeats, xXx, ip, port)` вызывается на каждую отправку:
 /// - `i` — индекс цикла, `repeats` — счётчик `--infinite` (всегда 0: `--infinite`
 ///   вне области v1); вместе они дают `(unsigned)(i+repeats)` для источника
@@ -338,8 +394,55 @@ pub fn transmit_scan<F: FnMut(u64, u64, u64, u32, u32)>(
 /// [`transmit_scan`] с досрочной остановкой: как только `emit` вернул
 /// `ControlFlow::Break(b)`, обход прекращается немедленно (без прохода до
 /// конца диапазона) и возвращается `Ok(Break(b))`. Порядок и значения те же.
+/// С IPv6-целями отказывает [`ScanError::Ipv6Targets`] до первой отправки.
 #[allow(clippy::too_many_arguments)]
 pub fn transmit_scan_flow<B, F: FnMut(u64, u64, u64, u32, u32) -> ControlFlow<B>>(
+    massip: &MassIp,
+    seed: u64,
+    rounds: u32,
+    shard: Shard,
+    nic_count: u32,
+    nic_index: u32,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+    max_rate: f64,
+    mut emit: F,
+) -> Result<ControlFlow<B>, ScanError> {
+    if massip.has_ipv6_targets() {
+        return Err(ScanError::Ipv6Targets);
+    }
+    transmit_scan_flow_v46(
+        massip,
+        seed,
+        rounds,
+        shard,
+        nic_count,
+        nic_index,
+        resume_index,
+        resume_count,
+        retries,
+        max_rate,
+        |i, repeats, xxx, target, port| match target {
+            TargetIp::V4(ip) => emit(i, repeats, xxx, ip, port),
+            // недостижимо: IPv6-цели отклонены выше
+            TargetIp::V6(_) => ControlFlow::Continue(()),
+        },
+    )
+}
+
+/// [`transmit_scan_flow`] для IPv4 и IPv6 (main.c:251-373). Индексы
+/// `xxx < range_ipv6 = count_ipv6 * ports` дают IPv6 (`range6list_pick(xxx %
+/// count_ipv6)`, порт `xxx / count_ipv6`), остальные IPv4 с вычетом
+/// `range_ipv6` (:342-343, :369-372; [`MassIp::pick_transmit`]). Это обратный
+/// порядок `-sL` ([`list_scan_v46`]): у C `massip_pick` и `transmit_thread`
+/// нумеруют по-разному.
+///
+/// `emit(i, repeats, xXx, target, port)`: `xXx` как в C на момент SYN-cookie, то
+/// есть у IPv4 после вычитания `range_ipv6` (:369, до :381), у IPv6 как после
+/// shuffle. Без IPv6-целей `range_ipv6 == 0` и всё побайтно как раньше.
+#[allow(clippy::too_many_arguments)]
+pub fn transmit_scan_flow_v46<B, F: FnMut(u64, u64, u64, TargetIp, u32) -> ControlFlow<B>>(
     massip: &MassIp,
     seed: u64,
     rounds: u32,
@@ -372,8 +475,8 @@ pub fn transmit_scan_flow<B, F: FnMut(u64, u64, u64, u32, u32) -> ControlFlow<B>
         max_rate,
     ) {
         let xxx = blackrock.shuffle(x); // main.c:334
-        let (ip, port) = massip.pick(xxx);
-        if let ControlFlow::Break(b) = emit(i, repeats, xxx, ip, port) {
+        let (target, port, xxx) = massip.pick_transmit(xxx);
+        if let ControlFlow::Break(b) = emit(i, repeats, xxx, target, port) {
             return Ok(ControlFlow::Break(b));
         }
     }
@@ -621,5 +724,246 @@ mod tests {
         })
         .unwrap();
         assert_eq!(a, b);
+    }
+
+    fn mixed(targets: &str, ports: &str) -> MassIp {
+        let mut t = MassIp::new();
+        t.add_target_string(targets).unwrap();
+        parse_ports(t.ports_mut(), ports).unwrap();
+        t.optimize();
+        t
+    }
+
+    fn v6(low: u128) -> TargetIp {
+        TargetIp::V6((0x2001_0db8u128 << 96) | low)
+    }
+
+    /// main.c:251-260, :336-373: `count_ipv6 = 2, count_ipv4 = 3, ports = 2`.
+    /// `range_ipv6 = 4`: shuffled indices `0..4` are IPv6, `4..10` IPv4 with 4
+    /// subtracted. Expected values are recomputed here from the raw lists and the
+    /// formulas of main.c:342-343 and :371-372, not through `MassIp::pick_transmit`.
+    #[test]
+    fn mixed_v4_v6_transmit_puts_v6_in_low_indices_and_v4_after() {
+        let t = mixed("2001:db8::10-2001:db8::11,192.0.2.1-192.0.2.3", "80,443");
+        assert_eq!(
+            (t.count_ipv6s(), t.count_ipv4s(), t.count_ports()),
+            (2, 3, 2)
+        );
+        assert_eq!((t.range(), t.range_ipv6()), (10, 4));
+        let br = BlackRock::try_new(10, 7, 14).unwrap();
+        let (mut raw, mut got) = (Vec::new(), Vec::new());
+        // rate 0: xXx == i
+        let _ = transmit_scan_flow_v46(
+            &t,
+            7,
+            14,
+            ONE,
+            1,
+            0,
+            0,
+            None,
+            0,
+            0.0,
+            |i, rep, xxx, tg, port| {
+                assert_eq!((i, rep), (got.len() as u64, 0));
+                raw.push(br.shuffle(i));
+                got.push((xxx, tg, port));
+                ControlFlow::<()>::Continue(())
+            },
+        )
+        .unwrap();
+        let ports = [80u32, 443];
+        let v6s = [0x10u128, 0x11];
+        let v4s = [0xc000_0201u32, 0xc000_0202, 0xc000_0203];
+        for (r, (xxx, tg, port)) in raw.iter().zip(&got) {
+            if *r < 4 {
+                // main.c:342-343, :357 (cookie xXx unchanged for IPv6)
+                assert_eq!(*xxx, *r);
+                assert_eq!(*tg, v6(v6s[(*r % 2) as usize]), "raw {r}");
+                assert_eq!(*port, ports[(*r / 2) as usize]);
+            } else {
+                // main.c:369-372: xXx -= range_ipv6 before the pick and the cookie
+                let x = *r - 4;
+                assert_eq!(*xxx, x);
+                assert_eq!(*tg, TargetIp::V4(v4s[(x % 3) as usize]), "raw {r}");
+                assert_eq!(*port, ports[(x / 3) as usize]);
+            }
+        }
+        // the shuffle is a permutation, so exactly 4 IPv6 and 6 IPv4 targets appear,
+        // each (target, port) pair once
+        let mut raw_sorted = raw.clone();
+        raw_sorted.sort_unstable();
+        assert_eq!(raw_sorted, (0..10).collect::<Vec<u64>>());
+        assert_eq!(
+            got.iter()
+                .filter(|g| matches!(g.1, TargetIp::V6(_)))
+                .count(),
+            4
+        );
+        let mut pairs: Vec<_> = got.iter().map(|g| format!("{:?}{}", g.1, g.2)).collect();
+        pairs.sort();
+        pairs.dedup();
+        assert_eq!(pairs.len(), 10);
+    }
+
+    /// The IPv4-only entry points never skip IPv6 targets silently.
+    #[test]
+    fn ipv4_only_entry_points_refuse_ipv6_targets() {
+        let t = mixed("2001:db8::10,192.0.2.1", "80");
+        assert_eq!(
+            list_scan(&t, 1, 14, ONE, 0, None, 0, 0.0, |_, _| panic!("emitted")),
+            Err(ScanError::Ipv6Targets)
+        );
+        assert_eq!(
+            transmit_scan(&t, 1, 14, ONE, 1, 0, 0, None, 0, 0.0, |_, _, _, _, _| {
+                panic!("emitted")
+            }),
+            Err(ScanError::Ipv6Targets)
+        );
+    }
+
+    fn list_lines(t: &MassIp, seed: u64) -> Vec<String> {
+        let single = t.count_ports() == 1;
+        let mut out = Vec::new();
+        list_scan_v46(t, seed, 14, ONE, 0, None, 0, 0.0, |tg, p| {
+            out.push(format_list_line_v46(tg, p, single));
+        })
+        .unwrap();
+        out
+    }
+
+    /// Output of the C binary 8e6b3b0 (`~/masscan/bin/masscan -sL --seed 42
+    /// 2001:db8::/126 192.0.2.0/30 -p80,443`), main-listscan.c:53-62: IPv4 as
+    /// `ip:port`, IPv6 as `[ip]:port`, in the `massip_pick` order (massip.c:30-41).
+    #[test]
+    fn list_scan_mixed_two_ports_matches_c_binary() {
+        let t = mixed("2001:db8::/126,192.0.2.0/30", "80,443");
+        let want = [
+            "[2001:db8::1]:443",
+            "[2001:db8::2]:80",
+            "192.0.2.2:80",
+            "[2001:db8::3]:80",
+            "192.0.2.1:80",
+            "[2001:db8::1]:80",
+            "[2001:db8::]:443",
+            "192.0.2.3:443",
+            "192.0.2.0:443",
+            "[2001:db8::2]:443",
+            "192.0.2.2:443",
+            "[2001:db8::3]:443",
+            "192.0.2.3:80",
+            "192.0.2.1:443",
+            "[2001:db8::]:80",
+            "192.0.2.0:80",
+        ];
+        assert_eq!(list_lines(&t, 42), want);
+    }
+
+    /// C binary, same targets with `-p80` (one port: address only, :54-56).
+    #[test]
+    fn list_scan_mixed_single_port_matches_c_binary() {
+        let t = mixed("2001:db8::/126,192.0.2.0/30", "80");
+        let want = [
+            "192.0.2.0",
+            "192.0.2.3",
+            "192.0.2.2",
+            "2001:db8::",
+            "2001:db8::3",
+            "192.0.2.1",
+            "2001:db8::1",
+            "2001:db8::2",
+        ];
+        assert_eq!(list_lines(&t, 42), want);
+    }
+
+    /// C binary: `-sL --seed 42 --range 2001:db8::/66 -p80 | head -4` (a 2^62 range:
+    /// the first lines are pulled through the index iterator, not a full scan).
+    #[test]
+    fn list_scan_ipv6_slash_66_first_lines_match_c_binary() {
+        let t = mixed("2001:db8::/66", "80");
+        let range = t.try_range().unwrap();
+        assert_eq!(range, 1 << 62);
+        let br = BlackRock::try_new(range, 42, 14).unwrap();
+        let got: Vec<String> = list_scan_indices(range, ONE, 0, None, 0, 0.0)
+            .take(4)
+            .map(|i| {
+                let (tg, p) = t.pick_list(br.shuffle(i));
+                format_list_line_v46(tg, p, true)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "2001:db8::2820:3055:ec41:2e9f",
+                "2001:db8::83c:59d4:24fe:3acf",
+                "2001:db8::f80:7f3a:4bfd:1dfd",
+                "2001:db8::34f:31cd:7127:1efe",
+            ]
+        );
+    }
+
+    /// Without IPv6 targets the v46 entry points emit exactly what the IPv4 ones do.
+    #[test]
+    fn v46_entry_points_equal_ipv4_ones_on_pure_ipv4() {
+        let t = mixed("198.18.0.0/28", "80,443");
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        list_scan(&t, 42, 14, ONE, 0, None, 0, 100.0, |ip, p| a.push((ip, p))).unwrap();
+        list_scan_v46(&t, 42, 14, ONE, 0, None, 0, 100.0, |tg, p| b.push((tg, p))).unwrap();
+        assert_eq!(
+            a.iter()
+                .map(|&(ip, p)| (TargetIp::V4(ip), p))
+                .collect::<Vec<_>>(),
+            b
+        );
+        let (mut c, mut d) = (Vec::new(), Vec::new());
+        transmit_scan(
+            &t,
+            42,
+            14,
+            ONE,
+            1,
+            0,
+            0,
+            None,
+            0,
+            100.0,
+            |i, r, x, ip, p| {
+                c.push((i, r, x, TargetIp::V4(ip), p));
+            },
+        )
+        .unwrap();
+        let _ = transmit_scan_flow_v46(
+            &t,
+            42,
+            14,
+            ONE,
+            1,
+            0,
+            0,
+            None,
+            0,
+            100.0,
+            |i, r, x, tg, p| {
+                d.push((i, r, x, tg, p));
+                ControlFlow::<()>::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(c, d);
+    }
+
+    /// An IPv6-only plan: `range_ipv6 == range`, no IPv4 pick is reached.
+    #[test]
+    fn ipv6_only_transmit_uses_the_whole_range_for_ipv6() {
+        let t = mixed("2001:db8::10-2001:db8::13", "80,443");
+        let mut n = 0;
+        let _ =
+            transmit_scan_flow_v46(&t, 3, 14, ONE, 1, 0, 0, None, 0, 0.0, |_, _, xxx, tg, _| {
+                assert!(xxx < 8 && matches!(tg, TargetIp::V6(_)));
+                n += 1;
+                ControlFlow::<()>::Continue(())
+            })
+            .unwrap();
+        assert_eq!(n, 8);
     }
 }

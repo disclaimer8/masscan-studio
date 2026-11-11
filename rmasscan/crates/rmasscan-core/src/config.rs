@@ -22,6 +22,7 @@ use std::net::Ipv4Addr;
 
 use crate::massip::{MassIp, RangeOverflow};
 use crate::ranges::{RangeList, range_is_cidr};
+use crate::ranges6::format_ipv6_c;
 use crate::scan::Shard;
 use crate::targets::{
     self, ParseError, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_UDP,
@@ -510,7 +511,8 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
     source_targets.optimize();
     let mut source_excludes = excludes.clone();
     source_excludes.optimize();
-    let has_addresses = !massip.ipv4().is_empty(); // main.c:1671
+    // main.c:1671 `massip_has_ipv4_targets || massip_has_ipv6_targets`
+    let has_addresses = !massip.ipv4().is_empty() || massip.has_ipv6_targets();
     let has_ports = !massip.ports().is_empty(); // main.c:1672
     massip.apply_excludes(&mut excludes);
     if op == Operation::List && !has_ports {
@@ -529,7 +531,8 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
         massip.optimize();
     }
 
-    if massip.ipv4().is_empty() {
+    // main.c:1717: `rangelist_count(ipv4) == 0 && range6list_count(ipv6) == 0`
+    if massip.ipv4().is_empty() && !massip.has_ipv6_targets() {
         return Err(if has_addresses {
             ConfigError::TargetsExcluded
         } else {
@@ -543,8 +546,10 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
             ConfigError::EmptyPorts
         });
     }
+    // main.c:1204, :1235: `count_ips` это IPv4 плюс младшие 64 бита счёта IPv6, а
+    // подтверждением служит только `exclude.ipv4` (исключение IPv6 его не даёт).
     if op == Operation::Scan
-        && massip.count_ipv4s() > 1_000_000_000
+        && massip.count_ipv4s().wrapping_add(massip.count_ipv6s()) > 1_000_000_000
         && cfg.excludes.ipv4().is_empty()
     {
         return Err(ConfigError::ExcludeRequired);
@@ -834,6 +839,46 @@ pub fn echo_with(cfg: &ScanConfig, echo_all: bool, extras: &EchoExtras<'_>, out:
     for r in targets.ipv4().as_slice() {
         echo_range(out, *r);
     }
+    // main-conf.c:3762-3781
+    for r in targets.ipv6().as_slice() {
+        echo_range6(out, *r);
+    }
+}
+
+/// main-conf.c:245-285 `count_cidr6_bits`: сколько бит префикса у диапазона и точен ли он.
+/// Побайтно как C: первый `i`, у которого `begin` кратен блоку; если `end` лежит в том же блоке
+/// и заполняет его, префикс точен; если `end` в другом блоке, `exact = false`. Если `end` в
+/// том же блоке, но не заполняет его, цикл идёт дальше. После цикла 128 и `exact = false`.
+fn count_cidr6_bits(begin: u128, end: u128) -> (u32, bool) {
+    for i in 0..128u32 {
+        let mask = u128::MAX >> i;
+        if begin & mask != 0 {
+            continue;
+        }
+        if begin & !mask == end & !mask {
+            if end & mask == mask {
+                return (i, true);
+            }
+        } else {
+            return (i, false);
+        }
+    }
+    (128, false)
+}
+
+/// main-conf.c:3762-3781: `range = <begin>`, затем `/<bits>`, если префикс точен и не нулевой,
+/// иначе `-<end>`. Адреса печатает `ipv6address_fmt`.
+fn echo_range6(out: &mut String, r: crate::ranges6::Ipv6Range) {
+    let _ = write!(out, "range = {}", format_ipv6_c(r.begin));
+    if r.begin != r.end {
+        let (bits, exact) = count_cidr6_bits(r.begin, r.end);
+        if exact && bits != 0 {
+            let _ = write!(out, "/{bits}");
+        } else {
+            let _ = write!(out, "-{}", format_ipv6_c(r.end));
+        }
+    }
+    out.push('\n');
 }
 
 /// Одиночные поля как `nic[0]` (когда `nics` пуст).
@@ -1391,8 +1436,9 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         // Здесь всегда TCP по умолчанию. Строку `ports =` файла конфигурации CLI разбирает сам, с префиксом типа скана,
         // заданного в `argv` левее файла (rmasscan-cli `conf.rs`, main-conf.c:2663–2674).
         "ports" | "port" => targets::parse_ports(cfg.targets.ports_mut(), value)?,
-        "range" => targets::add_target_string(cfg.targets.ipv4_mut(), value)?,
-        "exclude" => targets::add_target_string(cfg.excludes.ipv4_mut(), value)?,
+        // massip.c:72-100: адреса IPv4 и IPv6.
+        "range" => cfg.targets.add_target_string(value)?,
+        "exclude" => cfg.excludes.add_target_string(value)?,
         _ => return Ok(false),
     }
     Ok(true)
@@ -1662,11 +1708,11 @@ mod tests {
         cfg.targets.ports_mut().add_range(0, 0x7fff_ffff);
         assert_eq!(
             err(&cfg, Operation::List),
-            ConfigError::RangeOverflow(RangeOverflow)
+            ConfigError::RangeOverflow(RangeOverflow { bits: 64 })
         );
         assert_eq!(
             err(&cfg, Operation::Scan),
-            ConfigError::RangeOverflow(RangeOverflow)
+            ConfigError::RangeOverflow(RangeOverflow { bits: 64 })
         );
     }
 
@@ -1989,10 +2035,14 @@ mod tests {
             read_paused_conf("ports = U:65536\n").unwrap_err(),
             ConfigError::Parse(ParseError::BadPort)
         );
-        assert_eq!(
-            read_paused_conf("range = ::1\n").unwrap_err(),
-            ConfigError::Parse(ParseError::Ipv6NotSupported)
-        );
+        // IPv6 stage Task 2: `range` takes IPv6 (massip.c:72-100 `massip_add_target_string`)
+        let cfg = read_paused_conf("range = ::1\nexclude = 2001:db8::/32\n").unwrap();
+        assert_eq!(cfg.targets.ipv6().len(), 1);
+        assert_eq!(cfg.excludes.ipv6().len(), 1);
+        assert!(matches!(
+            read_paused_conf("range = 2001:db8::zz\n").unwrap_err(),
+            ConfigError::Parse(_)
+        ));
         assert_eq!(
             read_paused_conf(
                 "router-mac-ipv4 = 00-00-00-00-00-01\nrouter-mac-ipv6 = 00-00-00-00-00-02\n"
@@ -2052,7 +2102,7 @@ mod tests {
         cfg.targets.ports_mut().add_range(0, 0x7fff_ffff);
         assert_eq!(
             err(&cfg, Operation::Echo),
-            ConfigError::RangeOverflow(RangeOverflow)
+            ConfigError::RangeOverflow(RangeOverflow { bits: 64 })
         );
         // rounds are not checked by --echo
         let mut cfg = cfg_with("10.0.0.0/24", "80");
@@ -2399,5 +2449,187 @@ mod tests {
             s.contains("ports = 80-81,U:53,U:161,S:2905,I:0,I:303\n"),
             "{s}"
         );
+    }
+
+    // ---- IPv6 stage, Task 2 --------------------------------------------------------------------
+
+    fn cfg_v46(targets_s: &str, ports_s: &str) -> ScanConfig {
+        let mut cfg = ScanConfig {
+            seed: 1,
+            ..ScanConfig::default()
+        };
+        cfg.targets.add_target_string(targets_s).unwrap();
+        targets::parse_ports(cfg.targets.ports_mut(), ports_s).unwrap();
+        cfg
+    }
+
+    /// Review Focus 1. C binary: `-sL --seed 42 --range 2001:db8::/64 -p80` fails with
+    /// "scan range too large, max is 63-bits, requested is 65 bits" (main.c:1698-1704),
+    /// `/66 -p80` lists, `/66 -p80,81` fails (2^63 is 64 bits).
+    #[test]
+    fn ipv6_slash_64_exceeds_63_bits_while_slash_66_succeeds() {
+        for op in [Operation::List, Operation::Scan, Operation::Echo] {
+            assert_eq!(
+                err(&cfg_v46("2001:db8::/64", "80"), op),
+                ConfigError::RangeOverflow(RangeOverflow { bits: 65 }),
+                "{op:?}"
+            );
+            assert_eq!(
+                err(&cfg_v46("2001:db8::/66", "80,81"), op),
+                ConfigError::RangeOverflow(RangeOverflow { bits: 64 }),
+                "{op:?}"
+            );
+        }
+        let text = err(&cfg_v46("2001:db8::/64", "80"), Operation::List).to_string();
+        assert!(
+            text.starts_with("scan range too large, max is 63-bits, requested is 65 bits"),
+            "{text}"
+        );
+        assert!(text.contains("/66"), "{text}");
+        // `::/0` (count_u128 == u128::MAX is an overflow marker): 128 bits, never printed as exact
+        assert_eq!(
+            err(&cfg_v46("::/0", "80"), Operation::List),
+            ConfigError::RangeOverflow(RangeOverflow { bits: 128 })
+        );
+        // /66 with one port is exactly 2^62
+        for op in [Operation::List, Operation::Echo] {
+            assert_eq!(
+                validate(&cfg_v46("2001:db8::/66", "80"), op)
+                    .unwrap()
+                    .range(),
+                1 << 62
+            );
+        }
+        // main.c:1235: the confirmation is an IPv4 --exclude; an IPv6 one does not count
+        let mut cfg = cfg_v46("2001:db8::/66", "80");
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
+        cfg.excludes
+            .add_target_string("2001:db8:0:0:8000::/66")
+            .unwrap();
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
+        cfg.excludes.add_target_string("255.255.255.255").unwrap();
+        assert_eq!(validate(&cfg, Operation::Scan).unwrap().range(), 1 << 62);
+    }
+
+    #[test]
+    fn validate_counts_ipv6_targets_for_emptiness() {
+        // IPv6 only: the list is not empty (main.c:1717)
+        let eff = validate(
+            &cfg_v46("2001:db8::10-2001:db8::13", "80,443"),
+            Operation::Scan,
+        )
+        .unwrap();
+        assert_eq!((eff.range(), eff.massip().range_ipv6()), (8, 8));
+        // everything excluded: the "removed by exclusion ranges" error, not "empty"
+        let mut cfg = cfg_v46("2001:db8::10", "80");
+        cfg.excludes.add_target_string("2001:db8::/64").unwrap();
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::TargetsExcluded);
+        assert_eq!(err(&cfg, Operation::List), ConfigError::TargetsExcluded);
+        // an IPv4 exclude does not touch IPv6 targets
+        let mut cfg = cfg_v46("2001:db8::10", "80");
+        exclude(&mut cfg, "10.0.0.0/8");
+        assert_eq!(validate(&cfg, Operation::Scan).unwrap().range(), 1);
+        // no targets at all
+        assert_eq!(
+            err(&cfg_v46("", "80"), Operation::Scan),
+            ConfigError::EmptyTargets
+        );
+    }
+
+    /// Output of the C binary 8e6b3b0 for
+    /// `--echo --seed 42 2001:db8::/126 2001:db8::5-2001:db8::9 ::1 192.0.2.0/30 -p80,U:53
+    /// --exclude 2001:db8::2`: IPv4 `range =` lines first, then IPv6 sorted by
+    /// address (main-conf.c:3762-3781).
+    #[test]
+    fn echo_ipv6_ranges_match_c_binary() {
+        let mut cfg = cfg_v46(
+            "2001:db8::/126,2001:db8::5-2001:db8::9,::1,192.0.2.0/30",
+            "80",
+        );
+        cfg.targets
+            .ports_mut()
+            .add_range(TEMPL_UDP + 53, TEMPL_UDP + 53);
+        cfg.excludes.add_target_string("2001:db8::2").unwrap();
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(
+            s.ends_with(
+                "ports = 80,U:53\nrange = 192.0.2.0/30\nrange = ::1\nrange = 2001:db8::/127\n\
+                 range = 2001:db8::3\nrange = 2001:db8::5-2001:db8::9\n"
+            ),
+            "{s}"
+        );
+    }
+
+    /// C binary, `--echo --range ...` of many shapes: `count_cidr6_bits` decides between
+    /// `/bits` (exact, nonzero) and `-end` (main-conf.c:245-285, :3768-3776).
+    #[test]
+    fn echo_ipv6_cidr_or_range_matches_c_binary() {
+        let mut cfg = cfg_v46(
+            "2001:db8::/120,2001:db8:1::1-2001:db8:1::2,2001:db8:2::4-2001:db8:2::7,\
+             2001:db8:3::1-2001:db8:3::4,::/66,2001:db8:4::8/125,2001:db8:5::0-2001:db8:5::0,\
+             2001:db8:6::10/128,2001:DB8:7::ffff:0:0/96,2001:db8:8::1-2001:db8:8::f",
+            "80",
+        );
+        cfg.seed = 42;
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        let tail = s.split_once("ports = 80\n").unwrap().1;
+        assert_eq!(
+            tail,
+            "range = ::/66\n\
+             range = 2001:db8::/120\n\
+             range = 2001:db8:1::1-2001:db8:1::2\n\
+             range = 2001:db8:2::4/126\n\
+             range = 2001:db8:3::1-2001:db8:3::4\n\
+             range = 2001:db8:4::8/125\n\
+             range = 2001:db8:5::\n\
+             range = 2001:db8:6::10\n\
+             range = 2001:db8:7::ffff:0:0/96\n\
+             range = 2001:db8:8::1-2001:db8:8::f\n"
+        );
+    }
+
+    /// C binary: `--exclude 2001:db8::1 --range 2001:db8::/126 --exclude 2001:db8::/127`
+    /// leaves `range = 2001:db8::2/127`.
+    #[test]
+    fn echo_ipv6_after_excludes_matches_c_binary() {
+        let mut cfg = cfg_v46("2001:db8::/126", "80");
+        cfg.excludes.add_target_string("2001:db8::1").unwrap();
+        cfg.excludes.add_target_string("2001:db8::/127").unwrap();
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(s.ends_with("range = 2001:db8::2/127\n"), "{s}");
+    }
+
+    /// `count_cidr6_bits` edge cases the C loop has: a range inside one block that does not
+    /// fill it keeps looking, a range spanning blocks answers non-exact, `::/0` answers
+    /// exact with 0 bits (printed as `-end`).
+    #[test]
+    fn count_cidr6_bits_follows_c_loop() {
+        assert_eq!(count_cidr6_bits(0, u128::MAX), (0, true));
+        assert_eq!(count_cidr6_bits(0, 3), (126, true));
+        assert_eq!(count_cidr6_bits(0, 2), (127, false));
+        assert_eq!(count_cidr6_bits(1, 2), (128, false));
+        assert_eq!(count_cidr6_bits(4, 7), (126, true));
+        assert_eq!(count_cidr6_bits(1, 4), (128, false));
+    }
+
+    /// `paused.conf` written by `--echo` reads back into the same targets.
+    #[test]
+    fn echo_with_ipv6_reads_back_through_paused_conf() {
+        let mut cfg = cfg_v46(
+            "2001:db8::/120,2001:db8:1::1-2001:db8:1::2,192.0.2.0/30",
+            "80",
+        );
+        cfg.seed = 9;
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        let back = read_paused_conf(&s).unwrap();
+        let (mut a, mut b) = (cfg.targets.clone(), back.targets.clone());
+        a.optimize();
+        b.optimize();
+        assert_eq!(a.ipv6().as_slice(), b.ipv6().as_slice());
+        assert_eq!(a.ipv4().as_slice(), b.ipv4().as_slice());
     }
 }

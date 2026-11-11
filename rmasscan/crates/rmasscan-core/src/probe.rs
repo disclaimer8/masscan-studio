@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
+pub use crate::massip::TargetIp;
 use crate::packet::{
     ArpTemplate, IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, TcpSynTemplate,
     UdpTemplate,
@@ -82,6 +83,13 @@ pub enum PlanError {
     TooManyRetries(u32),
     #[error("blackrock rounds must be at least 1, got {0}")]
     ZeroRounds(u32),
+    /// Цели IPv6: скан пока не умеет ни живого, ни `--packet-trace` пути (R7). C
+    /// шлёт их; здесь отказ до первого кадра, а не молчаливый пропуск.
+    #[error(
+        "IPv6 targets cannot be scanned yet: IPv6 is accepted only for -sL, --echo and --offline \
+         (without --packet-trace)"
+    )]
+    Ipv6TargetsNotSupported,
     #[error("need 1..=8 adapters, got {0}")]
     BadNicCount(usize),
     #[error("adapter index {index} is out of range for {count} adapters")]
@@ -141,6 +149,10 @@ pub struct Probe {
     pub ip_me: u32,
     pub port_me: u16,
     pub ip_them: u32,
+    /// Цель как `TargetIp` (R2): рядом с IPv4-полями `ip_them` и `port_them`, которые остаются
+    /// прежними и дают те же байты кадра. Сейчас всегда `V4(ip_them)`: IPv6-цели план отклоняет
+    /// ([`PlanError::Ipv6TargetsNotSupported`]), а `V6` понадобится живому пути IPv6.
+    pub target: TargetIp,
     pub port_them: u16,
     /// Порт цели с протокольным смещением, как `port_them` в `transmit_thread` (main.c:389): порт TCP как есть,
     /// `65536 + порт` для UDP, `196608` для ICMP Echo. Этот индекс (а не 16-битный `port_them`) входит в cookie.
@@ -248,6 +260,7 @@ impl Builder {
         ip_them: u32,
         port_them: u32,
     ) -> Result<(), PlanError> {
+        p.target = TargetIp::V4(ip_them);
         let ipv4_mask = self.ipv4_mask;
         let (ip_me, port_me) = if ipv4_mask != 0 || self.port_mask != 0 {
             let n = i.wrapping_add(repeats);
@@ -592,6 +605,10 @@ impl ReadyPlan {
         if nics.is_empty() || nics.len() > 8 {
             return Err(PlanError::BadNicCount(nics.len()));
         }
+        // R7: пока нет живого пути IPv6, цель IPv6 не принимается ни молча, ни пропуском.
+        if effective.massip().has_ipv6_targets() {
+            return Err(PlanError::Ipv6TargetsNotSupported);
+        }
         let builders = nics
             .iter()
             .map(|n| {
@@ -826,7 +843,13 @@ impl ProbeCursor {
         let inner = &*self.plan.inner;
         let builder = &inner.builders[self.nic_index];
         let xxx = self.blackrock.shuffle(x);
-        let (ip, port) = inner.effective.massip().pick(xxx);
+        // main.c:336-373; цели IPv6 план не пропускает (`Ipv6TargetsNotSupported`), `V6` тут нарушение.
+        let (target, port, xxx) = inner.effective.massip().pick_transmit(xxx);
+        let TargetIp::V4(ip) = target else {
+            self.ended = true;
+            self.failed = Some(PlanError::Ipv6TargetsNotSupported);
+            return false;
+        };
         let mut p = Probe::default();
         // `ReadyPlan::new` и `new_cli` отклоняют порты без построителя заранее, поэтому отказ здесь это
         // нарушение инварианта. Он не паникует и не выдаётся за конец скана: курсор останавливается и хранит
@@ -1807,5 +1830,254 @@ mod tests {
             oracle_frames,
             all.iter().map(|p| p.frame.clone()).collect::<Vec<_>>()
         );
+    }
+
+    // ---- IPv6 stage, Task 2: the IPv4 order must not move --------------------------------------
+
+    /// FNV-1a 64, the hash the vector below was captured with.
+    fn fnv1a(h: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *h ^= u64::from(*b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    /// Review Focus 2. The constants below were captured from the code at the
+    /// Task 2 BASE (68c0e2e, before any change of this task) with the same
+    /// scenario: `198.18.0.0/28`, ports `80,443`, `seed = 42`, default rounds (14)
+    /// and rate (100), adapter `10.255.0.1` / `00:11:22:33:44:55` -> `66:55:44:33:22:11`,
+    /// source ports 40000-40003. `PROBES` is `(index, ip_them, port_them)` of
+    /// `for_each_probe`; `FRAME_HASH` is FNV-1a 64 over, per probe, little-endian
+    /// u64 of `index, ip_me, port_me, ip_them, port_them, port_index, seqno` then
+    /// the frame bytes; `TRANSMIT` is `(i, repeats, xXx, ip, port)` of
+    /// `transmit_scan`; `LIST` is `(ip, port)` of `list_scan`. With no IPv6 target
+    /// every index, probe and frame stays byte-identical (main.c:258-260: range_ipv6 == 0).
+    #[test]
+    fn pure_ipv4_sequence_unchanged_with_ipv6_support() {
+        const PROBES: [(u64, u32, u16); 32] = [
+            (0, 0xc612000d, 443),
+            (1, 0xc612000f, 80),
+            (2, 0xc6120000, 80),
+            (3, 0xc6120007, 80),
+            (4, 0xc6120008, 80),
+            (5, 0xc612000b, 80),
+            (6, 0xc6120005, 80),
+            (7, 0xc6120006, 80),
+            (8, 0xc612000e, 80),
+            (9, 0xc6120007, 443),
+            (10, 0xc6120009, 80),
+            (11, 0xc6120001, 80),
+            (12, 0xc6120009, 443),
+            (13, 0xc6120006, 443),
+            (14, 0xc6120008, 443),
+            (15, 0xc612000f, 443),
+            (16, 0xc6120002, 80),
+            (17, 0xc612000c, 443),
+            (18, 0xc6120001, 443),
+            (19, 0xc612000e, 443),
+            (20, 0xc6120000, 443),
+            (21, 0xc612000a, 80),
+            (22, 0xc6120002, 443),
+            (23, 0xc6120003, 80),
+            (24, 0xc612000c, 80),
+            (25, 0xc612000d, 80),
+            (26, 0xc6120004, 443),
+            (27, 0xc6120003, 443),
+            (28, 0xc612000a, 443),
+            (29, 0xc612000b, 443),
+            (30, 0xc6120005, 443),
+            (31, 0xc6120004, 80),
+        ];
+        const FRAME_HASH: u64 = 0x205e28f8c5c6f857;
+        const TRANSMIT: [(u64, u64, u64, u32, u32); 32] = [
+            (0, 0, 29, 0xc612000d, 443),
+            (1, 0, 15, 0xc612000f, 80),
+            (2, 0, 0, 0xc6120000, 80),
+            (3, 0, 7, 0xc6120007, 80),
+            (4, 0, 8, 0xc6120008, 80),
+            (5, 0, 11, 0xc612000b, 80),
+            (6, 0, 5, 0xc6120005, 80),
+            (7, 0, 6, 0xc6120006, 80),
+            (8, 0, 14, 0xc612000e, 80),
+            (9, 0, 23, 0xc6120007, 443),
+            (10, 0, 9, 0xc6120009, 80),
+            (11, 0, 1, 0xc6120001, 80),
+            (12, 0, 25, 0xc6120009, 443),
+            (13, 0, 22, 0xc6120006, 443),
+            (14, 0, 24, 0xc6120008, 443),
+            (15, 0, 31, 0xc612000f, 443),
+            (16, 0, 2, 0xc6120002, 80),
+            (17, 0, 28, 0xc612000c, 443),
+            (18, 0, 17, 0xc6120001, 443),
+            (19, 0, 30, 0xc612000e, 443),
+            (20, 0, 16, 0xc6120000, 443),
+            (21, 0, 10, 0xc612000a, 80),
+            (22, 0, 18, 0xc6120002, 443),
+            (23, 0, 3, 0xc6120003, 80),
+            (24, 0, 12, 0xc612000c, 80),
+            (25, 0, 13, 0xc612000d, 80),
+            (26, 0, 20, 0xc6120004, 443),
+            (27, 0, 19, 0xc6120003, 443),
+            (28, 0, 26, 0xc612000a, 443),
+            (29, 0, 27, 0xc612000b, 443),
+            (30, 0, 21, 0xc6120005, 443),
+            (31, 0, 4, 0xc6120004, 80),
+        ];
+        const LIST: [(u32, u32); 32] = [
+            (0xc612000a, 443),
+            (0xc612000b, 443),
+            (0xc6120005, 443),
+            (0xc6120004, 80),
+            (0xc612000d, 443),
+            (0xc612000f, 80),
+            (0xc6120000, 80),
+            (0xc6120007, 80),
+            (0xc6120008, 80),
+            (0xc612000b, 80),
+            (0xc6120005, 80),
+            (0xc6120006, 80),
+            (0xc612000e, 80),
+            (0xc6120007, 443),
+            (0xc6120009, 80),
+            (0xc6120001, 80),
+            (0xc6120009, 443),
+            (0xc6120006, 443),
+            (0xc6120008, 443),
+            (0xc612000f, 443),
+            (0xc6120002, 80),
+            (0xc612000c, 443),
+            (0xc6120001, 443),
+            (0xc612000e, 443),
+            (0xc6120000, 443),
+            (0xc612000a, 80),
+            (0xc6120002, 443),
+            (0xc6120003, 80),
+            (0xc612000c, 80),
+            (0xc612000d, 80),
+            (0xc6120004, 443),
+            (0xc6120003, 443),
+        ];
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.0.0/28").unwrap();
+        parse_ports(m.ports_mut(), "80,443").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: 42,
+            ..ScanConfig::default()
+        };
+        let e = validate(&cfg, Operation::Scan).unwrap();
+        assert!(!e.massip().has_ipv6_targets());
+        let (mut h, mut got) = (0xcbf2_9ce4_8422_2325u64, Vec::new());
+        let flow = for_each_probe(&e, &binding(), |p| {
+            assert_eq!(p.target, TargetIp::V4(p.ip_them));
+            for v in [
+                p.index,
+                u64::from(p.ip_me),
+                u64::from(p.port_me),
+                u64::from(p.ip_them),
+                u64::from(p.port_them),
+                u64::from(p.port_index),
+                u64::from(p.seqno),
+            ] {
+                fnv1a(&mut h, &v.to_le_bytes());
+            }
+            fnv1a(&mut h, &p.frame);
+            got.push((p.index, p.ip_them, p.port_them));
+            ControlFlow::<()>::Continue(())
+        })
+        .unwrap();
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(got, PROBES);
+        assert_eq!(h, FRAME_HASH);
+        // the runtime cursor yields the same probes, frame for frame
+        let plan = ReadyPlan::new_cli(e.clone(), nics(1)).unwrap();
+        let from_cursor = drain(&mut plan.cursor_for_nic(0, None).unwrap());
+        assert_eq!(from_cursor, oracle(&e));
+        let mut hc = 0xcbf2_9ce4_8422_2325u64;
+        for p in &from_cursor {
+            for v in [
+                p.index,
+                u64::from(p.ip_me),
+                u64::from(p.port_me),
+                u64::from(p.ip_them),
+                u64::from(p.port_them),
+                u64::from(p.port_index),
+                u64::from(p.seqno),
+            ] {
+                fnv1a(&mut hc, &v.to_le_bytes());
+            }
+            fnv1a(&mut hc, &p.frame);
+        }
+        assert_eq!(hc, FRAME_HASH);
+        // the index streams the probes come from
+        let mut tr = Vec::new();
+        crate::scan::transmit_scan(
+            e.massip(),
+            e.seed(),
+            e.blackrock_rounds(),
+            e.shard(),
+            1,
+            0,
+            e.resume_index(),
+            e.resume_count(),
+            e.retries(),
+            e.max_rate(),
+            |i, rep, x, ip, port| tr.push((i, rep, x, ip, port)),
+        )
+        .unwrap();
+        assert_eq!(tr, TRANSMIT);
+        let mut ls = Vec::new();
+        crate::scan::list_scan(
+            e.massip(),
+            e.seed(),
+            e.blackrock_rounds(),
+            e.shard(),
+            0,
+            None,
+            0,
+            e.max_rate(),
+            |ip, port| ls.push((ip, port)),
+        )
+        .unwrap();
+        assert_eq!(ls, LIST);
+    }
+
+    fn eff_v46(targets: &str, ports: &str) -> EffectiveConfig {
+        let mut m = MassIp::new();
+        m.add_target_string(targets).unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: 42,
+            ..ScanConfig::default()
+        };
+        validate(&cfg, Operation::Scan).unwrap()
+    }
+
+    /// R7: a plan with an IPv6 target is refused before any frame, on every way in
+    /// (Studio `new`, CLI `new_cli`, the streaming oracle). IPv4 targets in the same
+    /// plan do not rescue it: that would silently drop the IPv6 half.
+    #[test]
+    fn plans_and_oracle_refuse_ipv6_targets_never_skip_them() {
+        for t in ["2001:db8::10", "2001:db8::10,198.18.0.1"] {
+            let e = eff_v46(t, "80");
+            assert_eq!(
+                ReadyPlan::new(e.clone(), binding()).unwrap_err(),
+                PlanError::Ipv6TargetsNotSupported,
+                "{t}"
+            );
+            assert_eq!(
+                ReadyPlan::new_cli(e.clone(), nics(1)).unwrap_err(),
+                PlanError::Ipv6TargetsNotSupported,
+                "{t}"
+            );
+            let mut sent = 0;
+            let r = for_each_probe(&e, &binding(), |_| {
+                sent += 1;
+                ControlFlow::<()>::Continue(())
+            });
+            assert_eq!(r.unwrap_err(), PlanError::Scan(ScanError::Ipv6Targets));
+            assert_eq!(sent, 0);
+        }
     }
 }

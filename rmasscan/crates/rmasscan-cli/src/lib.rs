@@ -33,7 +33,7 @@ use output::{
     Format, OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, ServiceNames, io_fail,
 };
 use rmasscan_core::config::{EchoExtras, Operation, ScanConfig, echo_with, validate};
-use rmasscan_core::scan::{format_list_line, list_scan};
+use rmasscan_core::scan::{format_list_line_v46, list_scan_v46};
 
 /// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
 /// corrupt`, `in-binary.c`): exit 1 без второй копии. [`error_text`] даёт для неё пустую строку.
@@ -66,6 +66,43 @@ fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
         return Err(ARP_PORTSCAN_REFUSAL.into());
     }
     Ok(())
+}
+
+/// R7/R3: цели IPv6 принимают только `-sL`, `--echo`/`--echo-all`, `--iflist` (адреса он не читает) и
+/// `--offline` без `--packet-trace` (ничего не строит и не шлёт). Живой скан, `--packet-trace` и `--readscan`
+/// отказывают до обнаружения адаптера, до кадра и до чтения файла: принять цель и не просканировать её это
+/// молчаливая потеря (временно, пока IPv6 не дойдёт до живого пути). Порт не TCP (`U:`, `S:`, `I:`, `O:`, `--arp`)
+/// при цели IPv6 получает своё сообщение: C шлёт их по IPv6, здесь это отложено.
+fn refuse_ipv6_outside_listing(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
+    if !cfg.targets.has_ipv6_targets() {
+        return Ok(());
+    }
+    let listing = cli.list || cli.echo || cli.echo_all || cli.iflist;
+    if listing || (cli.offline && !cli.packet_trace) {
+        return Ok(());
+    }
+    if !cli.readscan.is_empty() {
+        return Err("an IPv6 target filter is not supported for --readscan yet".into());
+    }
+    let non_tcp = cfg
+        .targets
+        .ports()
+        .as_slice()
+        .iter()
+        .any(|r| r.end > u32::from(u16::MAX));
+    if non_tcp {
+        return Err(
+            "IPv6 targets support only TCP ports: U:, S:, I:, O: and --arp ports cannot be \
+             scanned over IPv6 yet (IPv6 targets are accepted only for -sL, --echo and --offline \
+             without --packet-trace)"
+                .into(),
+        );
+    }
+    Err(
+        "IPv6 targets cannot be scanned yet: they are accepted only for -sL, --echo and --offline \
+         (without --packet-trace)"
+            .into(),
+    )
 }
 
 /// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) и отказ открытия файла
@@ -190,6 +227,7 @@ pub fn run(
     }
     let cfg = cli.to_config()?;
     let full = cli.resolve()?;
+    refuse_ipv6_outside_listing(cli, &cfg)?;
     // Р2, main-conf.c:3625-3627: в конце разбора командной строки, для любой операции, `--shard` с `OF > 1` и seed 0
     // (не задан ни в argv, ни в файле) печатает предупреждение: каждый процесс шарда взял бы свою энтропию.
     if cfg.shard.of > 1 && cfg.seed == 0 {
@@ -236,7 +274,7 @@ pub fn run(
         let eff = validate(&cfg, Operation::List).map_err(|e| e.to_string())?;
         let single_port = eff.massip().count_ports() == 1;
         let mut res = Ok(());
-        list_scan(
+        list_scan_v46(
             eff.massip(),
             eff.seed(),
             eff.blackrock_rounds(),
@@ -245,9 +283,9 @@ pub fn run(
             eff.resume_count(),
             eff.retries(),
             eff.max_rate(),
-            |ip, port| {
+            |target, port| {
                 if res.is_ok() {
-                    let mut line = format_list_line(ip, port, single_port);
+                    let mut line = format_list_line_v46(target, port, single_port);
                     line.push('\n');
                     res = write_out(out, &line);
                 }
@@ -974,7 +1012,9 @@ mod tests {
                 "fast",
             ][..],
             &["rmasscan", "-sL", "10.0.0.0/30", "-p80"][..],
-            &["rmasscan", "-sL", "2001:db8::/126", "-p80", "--seed", "1"][..],
+            // IPv6 is accepted since the IPv6 stage (Task 2), malformed IPv6 is not
+            &["rmasscan", "-sL", "2001:db8::zz", "-p80", "--seed", "1"][..],
+            &["rmasscan", "-sL", "2001:db8::/129", "-p80", "--seed", "1"][..],
         ] {
             assert!(run_args(args).is_err(), "{args:?}");
         }
@@ -1727,5 +1767,226 @@ mod tests {
     fn offline_without_seed_errors() {
         let e = run_args(&["rmasscan", "--offline", "10.0.0.0/30", "-p80"]).unwrap_err();
         assert!(e.contains("--seed"), "{e}");
+    }
+
+    // ---- IPv6 stage, Task 2 (R7, R3) -------------------------------------------------------------
+
+    /// C binary 8e6b3b0: `masscan -sL --seed 42 2001:db8::/126 192.0.2.0/30 -p80,443`
+    /// (main-listscan.c:53-62, `massip_pick` order).
+    #[test]
+    fn list_scan_accepts_ipv6_and_matches_c_binary() {
+        let out = run_args(&[
+            "rmasscan",
+            "-sL",
+            "--seed",
+            "42",
+            "2001:db8::/126",
+            "192.0.2.0/30",
+            "-p80,443",
+        ])
+        .unwrap();
+        assert_eq!(
+            out,
+            "[2001:db8::1]:443\n[2001:db8::2]:80\n192.0.2.2:80\n[2001:db8::3]:80\n192.0.2.1:80\n\
+             [2001:db8::1]:80\n[2001:db8::]:443\n192.0.2.3:443\n192.0.2.0:443\n[2001:db8::2]:443\n\
+             192.0.2.2:443\n[2001:db8::3]:443\n192.0.2.3:80\n192.0.2.1:443\n[2001:db8::]:80\n\
+             192.0.2.0:80\n"
+        );
+        // one port: addresses only
+        let out = run_args(&[
+            "rmasscan",
+            "-sL",
+            "--seed",
+            "42",
+            "--range",
+            "2001:db8::/126",
+            "--range",
+            "192.0.2.0/30",
+            "-p80",
+        ])
+        .unwrap();
+        assert_eq!(
+            out,
+            "192.0.2.0\n192.0.2.3\n192.0.2.2\n2001:db8::\n2001:db8::3\n192.0.2.1\n2001:db8::1\n\
+             2001:db8::2\n"
+        );
+        // an IPv6 --exclude applies (and the excludefile reads IPv6 too)
+        let out = run_args(&[
+            "rmasscan",
+            "-sL",
+            "--seed",
+            "42",
+            "2001:db8::/126",
+            "--exclude",
+            "2001:db8::/127",
+            "-p80",
+        ])
+        .unwrap();
+        let mut lines: Vec<_> = out.lines().collect();
+        lines.sort_unstable();
+        assert_eq!(lines, ["2001:db8::2", "2001:db8::3"]);
+    }
+
+    /// C binary: `-sL --seed 42 2001:db8::/64 -p80` exits 1 with the 63-bit message.
+    #[test]
+    fn list_scan_refuses_ipv6_slash_64_with_the_c_message() {
+        let e =
+            run_args(&["rmasscan", "-sL", "--seed", "42", "2001:db8::/64", "-p80"]).unwrap_err();
+        assert!(
+            e.contains("scan range too large, max is 63-bits, requested is 65 bits")
+                && e.contains("/66"),
+            "{e}"
+        );
+        let e = run_args(&["rmasscan", "--echo", "--seed", "42", "::/0", "-p80"]).unwrap_err();
+        assert!(e.contains("requested is 128 bits"), "{e}");
+    }
+
+    /// C binary: `--echo --seed 42 2001:db8::/126 2001:db8::5-2001:db8::9 ::1 192.0.2.0/30 -p80,U:53
+    /// --exclude 2001:db8::2`.
+    #[test]
+    fn echo_accepts_ipv6_targets_and_excludes() {
+        for flag in ["--echo", "--echo-all"] {
+            let out = run_args(&[
+                "rmasscan",
+                flag,
+                "--seed",
+                "42",
+                "2001:db8::/126",
+                "2001:db8::5-2001:db8::9",
+                "--range",
+                "::1",
+                "192.0.2.0/30",
+                "-p80,U:53",
+                "--exclude",
+                "2001:db8::2",
+            ])
+            .unwrap();
+            assert!(
+                out.ends_with(
+                    "ports = 80,U:53\nrange = 192.0.2.0/30\nrange = ::1\nrange = 2001:db8::/127\n\
+                     range = 2001:db8::3\nrange = 2001:db8::5-2001:db8::9\n"
+                ),
+                "{flag}: {out}"
+            );
+        }
+    }
+
+    fn ipv6_refusal(args: &[&str]) -> String {
+        run_args(args).expect_err(&format!("{args:?} must be refused"))
+    }
+
+    /// R7: a live scan with any IPv6 target is refused up front (before the adapter is opened: the
+    /// fake backend panics on `open`), also when IPv4 targets come along.
+    #[test]
+    fn live_scan_refuses_any_ipv6_target() {
+        for targets in [&["2001:db8::10"][..], &["10.0.0.0/30", "2001:db8::10"][..]] {
+            let mut a = vec!["rmasscan"];
+            a.extend_from_slice(targets);
+            a.extend_from_slice(&["-p80", "--seed", "1"]);
+            let e = ipv6_refusal(&a);
+            assert!(e.contains("IPv6 targets cannot be scanned yet"), "{e}");
+            assert!(
+                e.contains("-sL") && e.contains("--echo") && e.contains("--offline"),
+                "{e}"
+            );
+        }
+        // the entropy-seed path takes the same exit
+        let e = ipv6_refusal(&["rmasscan", "2001:db8::10", "-p80"]);
+        assert!(e.contains("IPv6 targets cannot be scanned yet"), "{e}");
+    }
+
+    /// R7: `--offline --packet-trace` refuses IPv6 targets too, even when IPv4 targets are
+    /// there and the adapter options are complete: no frame for the IPv4 half.
+    #[test]
+    fn packet_trace_refuses_any_ipv6_target() {
+        for v6 in ["2001:db8::10", "2001:db8::/126"] {
+            let mut a = trace_args(&[v6]);
+            let e = ipv6_refusal(&a);
+            assert!(
+                e.contains("IPv6 targets cannot be scanned yet"),
+                "{v6}: {e}"
+            );
+            // IPv6 alone
+            a[3] = v6;
+            let e = ipv6_refusal(&a);
+            assert!(
+                e.contains("IPv6 targets cannot be scanned yet"),
+                "{v6}: {e}"
+            );
+        }
+        // without an IPv6 target the same command still traces
+        assert_eq!(run_args(&trace_args(&[])).unwrap().lines().count(), 8);
+    }
+
+    /// R3: a non-TCP port with an IPv6 target gets its own message on live and `--packet-trace`.
+    #[test]
+    fn non_tcp_ports_with_ipv6_target_are_refused_with_a_specific_message() {
+        for ports in ["-pU:53", "-pS:80", "-pI:0", "-p80,U:53", "-pO:47"] {
+            let e = ipv6_refusal(&["rmasscan", "2001:db8::10", ports, "--seed", "1"]);
+            assert!(
+                e.contains("IPv6 targets support only TCP ports"),
+                "{ports}: {e}"
+            );
+            let mut a = trace_args(&[ports]);
+            a[3] = "2001:db8::10";
+            let e = ipv6_refusal(&a);
+            assert!(
+                e.contains("IPv6 targets support only TCP ports"),
+                "{ports}: {e}"
+            );
+        }
+        let e = ipv6_refusal(&["rmasscan", "2001:db8::10", "--arp", "--seed", "1"]);
+        assert!(e.contains("IPv6 targets support only TCP ports"), "{e}");
+        let e = ipv6_refusal(&["rmasscan", "2001:db8::10", "--ping", "--seed", "1"]);
+        assert!(e.contains("IPv6 targets support only TCP ports"), "{e}");
+        // -sL and --echo keep working with such ports (they transmit nothing)
+        assert!(run_args(&["rmasscan", "-sL", "2001:db8::10", "-pU:53", "--seed", "1"]).is_ok());
+        assert!(
+            run_args(&[
+                "rmasscan",
+                "--echo",
+                "2001:db8::10",
+                "-pU:53",
+                "--seed",
+                "1"
+            ])
+            .is_ok()
+        );
+    }
+
+    /// R7: `--offline` without `--packet-trace` builds nothing, so IPv6 targets are accepted there.
+    #[test]
+    fn offline_without_packet_trace_accepts_ipv6_targets() {
+        let mut a = trace_without(&[]);
+        a.retain(|x| *x != "--packet-trace");
+        let t = a.iter().position(|x| *x == "10.0.0.0/30").unwrap();
+        a[t] = "2001:db8::10";
+        assert_eq!(run_args(&a).unwrap(), "");
+    }
+
+    /// `--readscan` filters by IPv4 only; an IPv6 filter would be ignored silently, so it is refused.
+    #[test]
+    fn readscan_refuses_an_ipv6_filter() {
+        let e = ipv6_refusal(&["rmasscan", "2001:db8::/32", "--readscan", "x.scan"]);
+        assert!(e.contains("--readscan"), "{e}");
+    }
+
+    /// `-iL` still takes IPv4 only (its own grammar, main-conf.c:2825-2836): an IPv6 entry is
+    /// an error, not a skipped line.
+    #[test]
+    fn includefile_with_ipv6_is_still_an_error() {
+        let scratch = Scratch::new();
+        let f = scratch.write("inc.txt", b"2001:db8::1\n");
+        let e = run_args(&[
+            "rmasscan",
+            "-sL",
+            "-iL",
+            f.to_str().unwrap(),
+            "-p80",
+            "--seed",
+            "1",
+        ])
+        .unwrap_err();
+        assert!(!e.is_empty());
     }
 }

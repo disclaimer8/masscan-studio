@@ -1,6 +1,6 @@
-SigIgn:	0000000000000000
- 20:19:08 up 26 days,  1:11,  3 users,  load average: 0.41, 0.50, 0.67
+SigIgn of this bash (bash ignores SIGQUIT for itself): SigIgn:	0000000000000004
+SigIgn of its children: SigIgn:	0000000000000000
+start 2026-11-10T23:47:28Z
 TEST_WS_EXIT=0
- 20:27:12 up 26 days,  1:19,  4 users,  load average: 2.07, 3.02, 2.05
 CLIPPY_EXIT=0
- 20:27:50 up 26 days,  1:19,  4 users,  load average: 3.48, 3.29, 2.18
+end 2026-11-10T23:55:51Z

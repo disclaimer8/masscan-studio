@@ -1,8 +1,51 @@
-# Attempts superseded by the r3 set (C = 0ed6e36a8a52c624b1422e008977b7b26b25797d)
+# Attempts superseded by the r4 set (C = 82f048352f72929d5573c6b4d20f758ce13edbf3)
+# r3 was committed (63c88b9) and is removed from this directory by the r4 evidence commit; git history keeps it.
+# The first r4 attempt (on e43640c), r1 and r2 were never committed; their directories were kept in a neutral
+# directory of the operator on the Mac during their task and removed at the cleanup.
+
+## r3 on 0ed6e36a8a52c624b1422e008977b7b26b25797d (committed in 63c88b9, all five windows)
+Superseded by the final-review fix wave of the stage (controller rulings R20-R22): product fixes after r3 (an ARP
+reply counts only when its tpa is one of the scan's source addresses, as C main.c:829-837; -sU/-sZ left of a -c or
+--resume file prefix the file's ports, as C main-conf.c:2663-2674; --arp drops the TCP default of --top-ports, as C
+main-conf.c:3609), test and comment fixes, and the verifier tightening of R21 (reorder window 1 ms -> 50 us with the
+largest swapped gap in the notes, an exact rmasscan-vs-C cross-check test, oracle RST bound SYN-ACK frames + distinct
+SYN-ACKs, responder.json telling exit / signal / unknown state apart). The ARP fix changes receive behaviour, so every
+window was rerun on the new code. The r3 verdicts as committed:
+  linux-protocols-r3      PASS 6/6    57fbf95084ef11767a7bf8ec52e6270b2259308612ad829d0fc5a349630014e0  window 20:05:14Z-20:08:36Z
+  linux-scan-control-r3   PASS 7/7    6ccc5b147a32aea4a64a295f98f0023d3663cc5765f682e6cff6f5559d24d025  window 20:08:50Z-20:11:03Z
+  linux-output-r3         PASS 18/18  0aedd55cf947de73439ba65d4bafa065eb9b22b8a36574e526ba232b6ca23fb7  window 20:11:03Z-20:16:18Z
+  linux-autodetect-r3     PASS 13/13  42e443704a86f0fc872d2abce81458d65f50fdf8aeefbe81faa9b4173710e66c  window 20:16:18Z-20:17:52Z
+  windows-autodetect-r3   PASS 10/10  ebbb0b0b1f9a81ada84a1213040167b68ec80ed53f3ff57d9289c6a2c4606454  window 20:18:27Z-20:52:14Z
+  (minipc rmasscan 73409675ea27251de3a09de9a02060bbde7c850183a06c745241712bcd5c60e6, the product before the fixes)
+The committed r3 directories re-judged by the Mac rmasscan-lab of C (2cae274c...), hashes-before-copy.txt ok in every
+run: linux-protocols-r3 PASS 6/6 (verdict 0a57af4cf06af7ac4e85409d123bf37dd1623f3e1440077db906a8e5e755acb8: the
+notes change with the new verifier; under the 50 us window r3's one swapped pair, p05 json, has largest_gap_us 6 --
+7b reported 7 us from microsecond timestamps, the nanosecond capture rounds to 6); the other four byte-identical to
+their committed verdicts (the regression verifiers are unchanged).
+
+## First r4 attempt on e43640cb32bd7191197afede6440884e80b8d2f0 (A-C of the fix wave; not committed)
+linux-protocols-r4      PASS 6/6    c1dff79263ea423c468953011de2958e3ea0e02a2bdd9e60886dd444342fe726  window 23:06:38Z-23:10:00Z
+linux-scan-control-r4   PASS 7/7    e7d303e3e61d5355c540c6ca4ff3fec582cabb86f659bd5268f8fe431194b0c0  window 23:12:38Z-23:14:49Z
+linux-output-r4         PASS 18/18  f0d8fbdfb12189c407633edecb825e77be69696d3066663e2c5275f217d4e38f  window 23:15:40Z-23:20:56Z
+linux-autodetect-r4     PASS 13/13  a472a570b73e5c60ca404d024e0e418668af017f1344641119a741506338b306  window 23:21:10Z-23:22:45Z
+(minipc rmasscan-lab b5c79887a0b20cff..., rmasscan b6725146d8c76be0b13127250ab092cb101ae1417cf2b32451fcc0a9d226b54f,
+the same product binary as on C; all four re-derived byte for byte on the Mac before the stop)
+Not run on e43640c: windows-autodetect-r4 and the minipc workspace tests (stopped by the operator when the stop
+below was found; their remains were removed).
+Stop: the guest build of e43640c. `cargo clippy --locked --workspace --all-targets -- -D warnings` exit 101:
+"variant `Signal` is never constructed" (rmasscan-lab autodetect_suite.rs:542; on Windows nothing builds
+Ended::Signal), a lab defect, fixed in 82f0483 (#[cfg_attr(not(unix), allow(dead_code))]). The guest tests of that
+attempt also exit 101, from an operator error, not the code: the build script was started through cmd.exe as
+`... -Commit <sha>; echo ...`, cmd does not split on ';', so RMASSCAN_LAB_BUILD_COMMIT was "<sha>;" and the 29
+provenance and windows-suite tests of rmasscan-lab refused it ("build_commit is neither a full commit id nor
+unknown"); every other test passed. On C the script was started without the trailing commands: tests and clippy 0.
+As a code change 82f0483 made C the code under every window, so all five windows ran again on it (the r4 set below).
+
+## Earlier attempts, superseded by the r3 set (recorded with r3, unchanged)
 # Neither attempt is committed. Their directories were kept in a neutral directory of the operator on the Mac during
-# the task, re-judged there with the Mac rmasscan-lab built at C (binaries.sha256.txt), and removed at the cleanup.
+# the task, re-judged there with the Mac rmasscan-lab built at 0ed6e36, the C of r3, and removed at the cleanup.
 # The product binary was the same in all three attempts: minipc rmasscan sha256
-# 73409675ea27251de3a09de9a02060bbde7c850183a06c745241712bcd5c60e6 (no product code changed in this task).
+# 73409675ea27251de3a09de9a02060bbde7c850183a06c745241712bcd5c60e6 (no product code changed in task 7b).
 # Stop rule: an attempt that did not PASS stopped the set; no other window ran on its commit.
 
 ## r1 on 68ffcf3a268f4ff37a75e93624fea3f2aebce389 (bac7a38 plus the pre-window lab tightening of the brief)
@@ -25,7 +68,7 @@ linux-protocols-r1: minipc, window 2026-11-10T19:39:35Z..19:42:56Z, minipc rmass
   of the two documents compared the stand's timing, not the scanners.
   Fixed in 5661a6e (lab only): the documents are compared with C as a multiset of records, each document's order
   stays judged against its own wire.
-  Re-judged with the verifier of C: PASS 6/6, verdict sha256 7fd12b919226b03fc21eb250400e498abb99bb20c758332226c67557eac1124c
+  Re-judged with the verifier of 0ed6e36 (the C of r3): PASS 6/6, verdict sha256 7fd12b919226b03fc21eb250400e498abb99bb20c758332226c67557eac1124c
 
 ## r2 on 5661a6e96757bb0dc1f8938e454fbeec29249e1a
 linux-protocols-r2: minipc, window 2026-11-10T19:52:36Z..19:55:58Z, minipc rmasscan-lab bd74f9756f500865...
@@ -42,5 +85,5 @@ linux-protocols-r2: minipc, window 2026-11-10T19:52:36Z..19:55:58Z, minipc rmass
   be written in either order; pairs written in the other order are counted per step in the notes
   (reply_order_swaps); records of different send slots may still not trade places (on the r3 captures
   neighbouring probes of a burst left within about 0.25 ms of each other, a whole burst spans up to about 1 ms, bursts are at least 8.4 ms apart).
-  Re-judged with the verifier of C: PASS 6/6 (p05 oracle-json reply_order_swaps 1), verdict sha256
+  Re-judged with the verifier of 0ed6e36 (the C of r3): PASS 6/6 (p05 oracle-json reply_order_swaps 1), verdict sha256
   dd4caae948b075d10c87ba4d38d6d8aa013839d08f02909bddeaf6f76839923f

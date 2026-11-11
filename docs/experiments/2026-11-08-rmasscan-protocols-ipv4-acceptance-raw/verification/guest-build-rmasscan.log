@@ -1,38 +1,38 @@
    Compiling proc-macro2 v1.0.107
-   Compiling unicode-ident v1.0.27
    Compiling quote v1.0.47
-   Compiling typenum v1.20.1
+   Compiling unicode-ident v1.0.27
    Compiling windows-link v0.2.1
+   Compiling typenum v1.20.1
    Compiling thiserror v2.0.21
    Compiling windows-sys v0.61.2
-   Compiling utf8parse v0.2.2
    Compiling once_cell_polyfill v1.70.2
    Compiling anstyle v1.0.14
+   Compiling utf8parse v0.2.2
    Compiling hybrid-array v0.4.15
    Compiling cfg-if v1.0.5
    Compiling anstyle-query v1.1.5
+   Compiling anstyle-wincon v3.0.11
    Compiling anstyle-parse v1.0.0
    Compiling is_terminal_polyfill v1.70.2
-   Compiling anstyle-wincon v3.0.11
-   Compiling siphasher v1.0.4
    Compiling cpufeatures v0.3.1
    Compiling colorchoice v1.0.5
-   Compiling clap_lex v1.1.1
+   Compiling siphasher v1.0.4
+   Compiling anstream v1.0.0
+   Compiling heck v0.5.0
    Compiling syn v3.0.9
    Compiling crypto-common v0.2.2
    Compiling block-buffer v0.12.1
-   Compiling anstream v1.0.0
-   Compiling getrandom v0.4.3
-   Compiling heck v0.5.0
    Compiling strsim v0.11.1
+   Compiling clap_lex v1.1.1
+   Compiling getrandom v0.4.3
    Compiling clap_builder v4.6.7
    Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
    Compiling thiserror-impl v2.0.21
    Compiling clap_derive v4.6.7
-   Compiling sha2 v0.11.1
    Compiling clap v4.6.7
-   Compiling rmasscan-core v0.1.0 (C:\Users\lab\src\rmasscan-0ed6e36\rmasscan\crates\rmasscan-core)
-   Compiling rmasscan-engine v0.1.0 (C:\Users\lab\src\rmasscan-0ed6e36\rmasscan\crates\rmasscan-engine)
-   Compiling rmasscan-net v0.1.0 (C:\Users\lab\src\rmasscan-0ed6e36\rmasscan\crates\rmasscan-net)
-   Compiling rmasscan-cli v0.1.0 (C:\Users\lab\src\rmasscan-0ed6e36\rmasscan\crates\rmasscan-cli)
-    Finished `release` profile [optimized] target(s) in 49.74s
+   Compiling rmasscan-core v0.1.0 (C:\Users\lab\src\rmasscan-ff-39258a7e\rmasscan\crates\rmasscan-core)
+   Compiling rmasscan-engine v0.1.0 (C:\Users\lab\src\rmasscan-ff-39258a7e\rmasscan\crates\rmasscan-engine)
+   Compiling rmasscan-net v0.1.0 (C:\Users\lab\src\rmasscan-ff-39258a7e\rmasscan\crates\rmasscan-net)
+   Compiling rmasscan-cli v0.1.0 (C:\Users\lab\src\rmasscan-ff-39258a7e\rmasscan\crates\rmasscan-cli)
+    Finished `release` profile [optimized] target(s) in 36.16s

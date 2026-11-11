@@ -5,7 +5,7 @@
    Compiling libc v0.2.191
     Checking typenum v1.20.1
     Checking rand_core v0.10.1
-    Checking rmasscan-core v0.1.0 (/tmp/rmasscan-out.6r6maY/full/rmasscan/crates/rmasscan-core)
+    Checking rmasscan-core v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-core)
    Compiling getrandom v0.4.3
    Compiling serde_core v1.0.229
    Compiling zmij v1.0.23
@@ -22,17 +22,17 @@
     Checking crypto-common v0.2.2
     Checking block-buffer v0.12.1
     Checking anstyle v1.0.14
-    Checking clap_lex v1.1.1
-    Checking anstream v1.0.0
     Checking strsim v0.11.1
+    Checking anstream v1.0.0
+    Checking clap_lex v1.1.1
    Compiling rustix v1.1.6
     Checking clap_builder v4.6.7
     Checking linux-raw-sys v0.12.1
-    Checking bitflags v2.13.2
     Checking digest v0.11.3
+    Checking bitflags v2.13.2
     Checking sha2 v0.11.1
-    Checking rmasscan-engine v0.1.0 (/tmp/rmasscan-out.6r6maY/full/rmasscan/crates/rmasscan-engine)
-    Checking rmasscan-net v0.1.0 (/tmp/rmasscan-out.6r6maY/full/rmasscan/crates/rmasscan-net)
+    Checking rmasscan-engine v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-engine)
+    Checking rmasscan-net v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-net)
     Checking clap v4.6.7
     Checking once_cell v1.21.4
     Checking fastrand v2.5.0
@@ -42,15 +42,15 @@
     Checking quick-error v1.2.3
     Checking fnv v1.0.7
     Checking rand v0.10.3
-    Checking tempfile v3.27.0
     Checking bit-set v0.11.1
-    Checking rusty-fork v0.3.1
-    Checking chacha20 v0.10.2
+    Checking tempfile v3.27.0
     Checking rand_xorshift v0.5.0
+    Checking chacha20 v0.10.2
+    Checking rusty-fork v0.3.1
     Checking unarray v0.1.4
     Checking core_detect v1.0.0
     Checking regex-syntax v0.8.11
-    Checking rmasscan-cli v0.1.0 (/tmp/rmasscan-out.6r6maY/full/rmasscan/crates/rmasscan-cli)
-    Checking rmasscan-lab v0.1.0 (/tmp/rmasscan-out.6r6maY/full/rmasscan/crates/rmasscan-lab)
+    Checking rmasscan-cli v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-cli)
+    Checking rmasscan-lab v0.1.0 (/tmp/rmasscan-out.zewiYp/rmasscan/crates/rmasscan-lab)
     Checking proptest v1.12.0
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 37.77s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 37.61s

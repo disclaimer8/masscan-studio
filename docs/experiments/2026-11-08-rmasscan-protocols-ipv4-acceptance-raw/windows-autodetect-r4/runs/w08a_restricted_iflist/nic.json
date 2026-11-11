@@ -1,0 +1,11 @@
+{
+  "nic": "Ethernet 2",
+  "before": {
+    "utc": 1794356227.173,
+    "error": "Cannot connect to CIM server. Access denied "
+  },
+  "after": {
+    "utc": 1794356237.239,
+    "error": "Cannot connect to CIM server. Access denied "
+  }
+}

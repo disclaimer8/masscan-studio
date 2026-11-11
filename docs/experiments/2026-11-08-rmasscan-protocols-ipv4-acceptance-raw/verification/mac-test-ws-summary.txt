@@ -1,0 +1,108 @@
+# Mac (macOS 27.2), clean worktree at C = 82f048352f72929d5573c6b4d20f758ce13edbf3, run while the Linux windows ran
+# CARGO_TARGET_DIR outside the repository (the agent's scratch dir), CARGO_INCREMENTAL=0, CARGO_PROFILE_DEV_DEBUG=line-tables-only
+# cargo test --locked --workspace --no-fail-fast (from rmasscan/): the 'Running' lines and every 'test result' line (target paths shortened)
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_cli-4b19b2000b30bd28)
+test result: ok. 150 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running unittests src/main.rs (target/debug/deps/rmasscan-9df964b46e746c24)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/detect_readonly.rs (target/debug/deps/detect_readonly-8614d1b612fff877)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/differential.rs (target/debug/deps/differential-82b333b2d1287790)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.03s
+     Running tests/formats_golden.rs (target/debug/deps/formats_golden-3acc8263ac8725ff)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+     Running tests/live_fake.rs (target/debug/deps/live_fake-ef25b68a74f82cc5)
+test result: ok. 83 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s
+     Running tests/readscan_binary.rs (target/debug/deps/readscan_binary-6d50f9cfdcc4e1fb)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/spawn_guard.rs (target/debug/deps/spawn_guard-3d4eafa90103a907)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_core-c95fd083f0209d2c)
+test result: ok. 196 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+     Running tests/blackrock_golden.rs (target/debug/deps/blackrock_golden-cb794f6d274f8354)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/echo_golden.rs (target/debug/deps/echo_golden-875472751bbb6b3d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/no_c_in_build.rs (target/debug/deps/no_c_in_build-b93ca9c24a9fbcfd)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/offline_gen.rs (target/debug/deps/offline_gen-527aa2751cf42699)
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/probe_cursor.rs (target/debug/deps/probe_cursor-613b22171b901e2b)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/proptest_order.rs (target/debug/deps/proptest_order-caf7fca57f699414)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/receive.rs (target/debug/deps/receive-1c06d312249ef971)
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/scan_golden.rs (target/debug/deps/scan_golden-9f0f577d7e191a63)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.06s
+     Running tests/selftest_parity.rs (target/debug/deps/selftest_parity-afbed36bf5ade93f)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/sha256_vectors.rs (target/debug/deps/sha256_vectors-3105f351bf1fc3b2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_engine-c613e0fd0a246ff2)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running tests/backpressure.rs (target/debug/deps/backpressure-e10ac0ddd92a2811)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/bounded_memory.rs (target/debug/deps/bounded_memory-c2cebc2aa84a919b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+     Running tests/icmp_echo.rs (target/debug/deps/icmp_echo-bf84ee4801092eb2)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/identity.rs (target/debug/deps/identity-2c7855b6507419f8)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-90c473b3e66972f3)
+test result_batches_respect_event_batch_limit ... ok
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+     Running tests/pause_resume.rs (target/debug/deps/pause_resume-d0fb0a9b1a95b741)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+     Running tests/probe_build_failure.rs (target/debug/deps/probe_build_failure-3b6905215bcbf309)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rx_integrity.rs (target/debug/deps/rx_integrity-3db0cf6839e551a1)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/tx_batch.rs (target/debug/deps/tx_batch-75a546598c884740)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+     Running tests/tx_stall.rs (target/debug/deps/tx_stall-7bb3b9ed9345abe8)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running tests/udp_scan.rs (target/debug/deps/udp_scan-15df6e9d301ecc80)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_lab-c251e9944d4eb84d)
+test result: ok. 974 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 42.83s
+     Running unittests src/main.rs (target/debug/deps/rmasscan_lab-33281bbabdc5d1bc)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/capture.rs (target/debug/deps/capture-4071bd3e3f41cb6c)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/oracle_util.rs (target/debug/deps/oracle_util-c37d4b210a03f882)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/process_group.rs (target/debug/deps/process_group-d504b79058b2ad89)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rust_only.rs (target/debug/deps/rust_only-11278d78f8edbe11)
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.76s
+     Running tests/windows_evidence.rs (target/debug/deps/windows_evidence-1ab166c66155f1b7)
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/rmasscan_net-ed65d97ff77251e8)
+test result: ok. 276 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 16.32s
+     Running tests/interrupt.rs (target/debug/deps/interrupt-21da40df98764f57)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/linux_io.rs (target/debug/deps/linux_io-d36186892945c8fd)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/linux_wire.rs (target/debug/deps/linux_wire-4fc0a40757c258a1)
+test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/macos_live.rs (target/debug/deps/macos_live-f3a5cea53253c2d5)
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_io.rs (target/debug/deps/windows_io-7d5ba7599c084094)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_live.rs (target/debug/deps/windows_live-549da68580b92343)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_cli
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+   Doc-tests rmasscan_core
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_engine
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_lab
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests rmasscan_net
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+TEST_RC=0
+# total: 51 result lines, passed 1964, failed 0, ignored 23
+# cargo clippy --locked --workspace --all-targets -- -D warnings:
+CLIPPY_RC=0

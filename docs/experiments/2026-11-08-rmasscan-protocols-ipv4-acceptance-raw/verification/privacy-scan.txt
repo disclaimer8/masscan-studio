@@ -1,4 +1,4 @@
-# rmasscan-lab privacy-scan (C = 0ed6e36, Mac build e759714f), run on the final staged copy of the
+# rmasscan-lab privacy-scan (C = 82f0483, Mac build 2cae274c), run on the final staged copy of the
 # raw directory before the repository copy, and again on the repository copy before the commit
 # tokens (masked, by number; every token is 4+ bytes, so none is refused; matching is case-insensitive):
 #   #1 Mac host name (hostname), #2 Mac LocalHostName, #3 Mac computer name (ComputerName), #4 Mac account,
@@ -20,28 +20,28 @@
   privacy-scan: 1 hits in $CONTROL
   rc=1
 
-## linux-autodetect-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-autodetect-r3 --forbid #1 ... --forbid #9
-privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-autodetect-r3
+## linux-autodetect-r4: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-autodetect-r4 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-autodetect-r4
 rc=0
 
-## linux-output-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-output-r3 --forbid #1 ... --forbid #9
-privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-output-r3
+## linux-output-r4: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-output-r4 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-output-r4
 rc=0
 
-## linux-protocols-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-protocols-r3 --forbid #1 ... --forbid #9
-privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-protocols-r3
+## linux-protocols-r4: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-protocols-r4 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-protocols-r4
 rc=0
 
-## linux-scan-control-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-scan-control-r3 --forbid #1 ... --forbid #9
-privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-scan-control-r3
+## linux-scan-control-r4: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-scan-control-r4 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/linux-scan-control-r4
 rc=0
 
 ## verification: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/verification --forbid #1 ... --forbid #9
 privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/verification
 rc=0
 
-## windows-autodetect-r3: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/windows-autodetect-r3 --forbid #1 ... --forbid #9
-privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/windows-autodetect-r3
+## windows-autodetect-r4: privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/windows-autodetect-r4 --forbid #1 ... --forbid #9
+privacy-scan: 0 hits in 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw/windows-autodetect-r4
 rc=0
 
 ## 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw (the whole directory, README.md included): privacy-scan --dir 2026-11-08-rmasscan-protocols-ipv4-acceptance-raw --forbid #1 ... --forbid #9
@@ -58,7 +58,6 @@ rc=0
   a slash), the home LAN prefix (192.168 followed by a dot) and the agent scratch root: 0 files. Windows paths with
   Users name only the guest account lab (C:\Users\lab\...).
 - the case-sensitive word-bounded grep -ralwE of rust-lab.md over every host and account name of the Mac, minipc,
-  home-pc and the guest (the short ones included) plus the mDNS service suffixes: one file,
-  linux-output-r3/runs/o12_nostatus/peer.pcap, a match of the 2-character minipc/home-pc account at byte 2711
-  (0xa97): the microseconds field of a pcap record header (bytes 23 61 31 03), not frame data and not a name;
-  inspected by eye as rust-lab.md requires.
+  home-pc and the guest (the short ones included) plus the mDNS service suffixes: 0 files.
+- the scan was run on the staged copy, again on the repository copy (this file's lines above), and once more on the
+  complete directory with this file and MANIFEST.sha256 right before the commit: 0 hits, rc 0.

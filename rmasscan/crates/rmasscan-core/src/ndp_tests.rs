@@ -345,3 +345,22 @@ fn ns_with_multicast_source_is_never_reflected() {
         );
     }
 }
+
+/// DAD: NS от `::` не получает ответа ни на `::`, ни на all-nodes (мы выбираем молчание: адрес сканера не
+/// проходит проверку дубликата). Это решение принимает `decode_neighbor_solicitation` (`UnspecifiedSource`).
+#[test]
+fn ns_from_unspecified_source_gets_no_reply() {
+    let mut f = router_ns(false);
+    f[22..38].fill(0);
+    fix_checksum(&mut f);
+    assert_eq!(
+        decode_neighbor_solicitation(&f),
+        Err(NdpError::UnspecifiedSource)
+    );
+    assert!(answer_neighbor_solicitation(&f, MY_MAC, MY_IP2).is_none());
+    // То же с полным NS (опция SLLA), как в настоящей проверке дубликата.
+    let mut g = router_ns(true);
+    g[22..38].fill(0);
+    fix_checksum(&mut g);
+    assert!(answer_neighbor_solicitation(&g, MY_MAC, MY_IP2).is_none());
+}

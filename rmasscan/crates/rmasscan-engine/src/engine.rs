@@ -807,7 +807,9 @@ fn run_tx(
             let done = shared.rx_end() != END_RUNNING || shared.halted() >= STOP;
             flush_ndp(
                 &shared.ndp_out[idx],
-                &|| shared.halted() == RUN,
+                // Linger шлёт NA и после Pause: RX принимает до конца окна ожидания (main.c:470-493 сбрасывает
+                // очередь до `is_rx_done`); не шлёт только после Stop/Fail.
+                &|| shared.halted() < STOP,
                 &mut *tx,
                 shared.io_timeout,
             );
@@ -1998,11 +2000,15 @@ mod tests {
         assert_eq!(leg.outcome.reason, Reason::Paused);
     }
 
-    /// Цель linger: NS, пришедший ПОСЛЕ конца передачи, в окне ожидания, тоже получает NA. 12 SYN уходят до
-    /// NS (100 пустых приёмов отодвигают NS на 5 с из 100 с окна), NA идёт последним кадром.
-    #[test]
-    fn ns_arriving_after_tx_finished_still_gets_its_na() {
-        use rmasscan_core::ndp::{encode_neighbor_advertisement, encode_neighbor_solicitation};
+    /// Прогон с NS, который приходит после `idles` пустых приёмов RX (по 50 мс часов fake) внутри окна ожидания
+    /// `wait_secs`. Часы стоят, пока TX ждёт в linger, и идут только от пустых приёмов RX. `pause_after = Some(n)`
+    /// подаёт Pause изнутри n-й отправки.
+    fn run_late_ns(
+        idles: u32,
+        wait_secs: u32,
+        pause_after: Option<usize>,
+    ) -> (Vec<Vec<u8>>, Outcome) {
+        use rmasscan_core::ndp::encode_neighbor_solicitation;
         let mut m = MassIp::new();
         add_target_string(m.ipv4_mut(), "198.18.0.0/30").unwrap();
         parse_ports(m.ports_mut(), "80,443,8080").unwrap();
@@ -2010,7 +2016,7 @@ mod tests {
             targets: m,
             seed: SEED,
             max_rate: 1_000_000.0,
-            wait_secs: 100,
+            wait_secs,
             ..ScanConfig::default()
         };
         let eff = validate(&cfg, Operation::Scan).unwrap();
@@ -2018,10 +2024,24 @@ mod tests {
         nic.source_ipv6 = Some(NDP_ME);
         let plan = ReadyPlan::new_cli(eff, vec![nic]).unwrap();
         let clock = ManualClock::new();
-        // Часы стоят, пока TX ждёт в linger (`sleep_micros` спит по-настоящему), и идут только от пустых приёмов RX.
         clock.set_hold(true);
         let fake = FakeAdapter::new().with_clock(clock.clone());
-        fake.push_rx(crate::fake::RxStep::Idle(100));
+        let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+        if let Some(n) = pause_after {
+            let c2 = cell.clone();
+            fake.set_send_hook(move |sent| {
+                if sent == n {
+                    let c = loop {
+                        if let Some(c) = c2.get() {
+                            break c;
+                        }
+                        std::thread::yield_now();
+                    };
+                    c.pause();
+                }
+            });
+        }
+        fake.push_rx(crate::fake::RxStep::Idle(idles));
         fake.push_frame(
             encode_neighbor_solicitation(NDP_ROUTER_MAC, NDP_ROUTER_IP, NDP_ME).to_vec(),
         );
@@ -2034,20 +2054,48 @@ mod tests {
             None,
         )
         .unwrap();
+        cell.set(h.cancel_handle()).ok();
         let t = Instant::now();
         loop {
             match h.recv_event_timeout(Duration::from_millis(50)) {
                 Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
                 Ok(_) => {}
-                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(20)),
+                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(60)),
             }
         }
-        h.join().unwrap();
-        let sent = fake.sent_frames();
+        let outcome = h.join().unwrap();
+        (fake.sent_frames(), outcome)
+    }
+
+    /// Цель linger: NS, пришедший ПОСЛЕ конца передачи, в окне ожидания, тоже получает NA. 12 SYN уходят до NS
+    /// (2000 пустых приёмов = 100 с часов из окна в 1000 с, то есть сотни мс настоящего времени: голодный TX-поток
+    /// на загруженном раннере не успеет вклинить NA между SYN), NA идёт последним кадром.
+    #[test]
+    fn ns_arriving_after_tx_finished_still_gets_its_na() {
+        use rmasscan_core::ndp::encode_neighbor_advertisement;
+        let (sent, outcome) = run_late_ns(2000, 1000, None);
+        assert_eq!(outcome.reason, Reason::Completed);
         assert_eq!(sent.len(), 13);
         assert!(sent[..12].iter().all(|f| f.len() == 58), "SYNs first");
         assert_eq!(
             sent[12],
+            encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
+                .to_vec()
+        );
+    }
+
+    /// После Pause RX принимает до конца окна ожидания, и NS в этом окне тоже получает NA (в C очередь
+    /// сбрасывается до `is_rx_done`, main.c:470-493); linger заканчивается вместе с RX (скан завершается
+    /// `Paused`, а не зависает).
+    #[test]
+    fn ns_arriving_during_a_pause_wait_window_still_gets_its_na() {
+        use rmasscan_core::ndp::encode_neighbor_advertisement;
+        let (sent, outcome) = run_late_ns(2000, 1000, Some(5));
+        assert_eq!(outcome.reason, Reason::Paused);
+        assert_eq!(sent.len(), 6, "5 SYN before the pause, then the NA");
+        assert!(sent[..5].iter().all(|f| f.len() == 58));
+        assert_eq!(
+            sent[5],
             encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
                 .to_vec()
         );

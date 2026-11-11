@@ -239,6 +239,7 @@ fn kind(e: &DetectError) -> &'static str {
         DetectError::NoIpv6(_) => "NoIpv6",
         DetectError::NoGateway6 { .. } => "NoGateway6",
         DetectError::RouteNotViaAdapter6 { .. } => "RouteNotViaAdapter6",
+        DetectError::RouteIfaceNotListed6 { .. } => "RouteIfaceNotListed6",
         DetectError::FamiliesSplit { .. } => "FamiliesSplit",
         DetectError::Os(_) => "Os",
     }
@@ -300,16 +301,35 @@ fn ipv6_lookup_and_detection_read_only() {
                 assert!(no_zone(&ip), "next hop without an embedded zone");
             }
         }
-        // VPN-туннель, интерфейс без глобального адреса IPv6, MAC скрыт ОС; Windows: маршрут через адаптер без
-        // привязки IPv4 (например туннель), которого нет в списке интерфейсов `GetAdaptersAddresses(AF_INET)`.
-        Err(
-            DetectError::NotUsable { .. }
-            | DetectError::NoIpv6(_)
-            | DetectError::MacMasked(_)
-            | DetectError::NoSuchAdapter(_),
-        ) => {}
+        // VPN-туннель, интерфейс без глобального адреса IPv6, MAC скрыт ОС.
+        Err(DetectError::NotUsable { .. } | DetectError::NoIpv6(_) | DetectError::MacMasked(_)) => {
+        }
+        // Только Windows: маршрут через адаптер без привязки IPv4 (например туннель), которого нет в списке
+        // `GetAdaptersAddresses(AF_INET)`. Это должен быть настоящий индекс маршрута, и его действительно нет в списке;
+        // на Linux и macOS список полный, и такой отказ это дефект.
+        Err(DetectError::RouteIfaceNotListed6 { ifindex, .. }) if cfg!(windows) => {
+            assert_route_iface_not_listed(ifindex, route.ifindex);
+        }
         Err(e) => panic!("detect_v6 refused unexpectedly: {}", kind(&e)),
     }
+}
+
+/// `RouteIfaceNotListed6` (только Windows): индекс из отказа это индекс маршрута, не 0 (строка `GetBestRoute2`
+/// заполнена) и его правда нет в списке интерфейсов (адаптер без привязки IPv4).
+fn assert_route_iface_not_listed(ifindex: u32, route_ifindex: u32) {
+    assert!(ifindex != 0, "a real interface index, not an unfilled row");
+    assert_eq!(
+        ifindex, route_ifindex,
+        "the refusal names the route's interface"
+    );
+    let list = os_interfaces()
+        .expect("os_interfaces")
+        .list()
+        .expect("list");
+    assert!(
+        !list.iter().any(|i| i.index == ifindex),
+        "the route's interface is really absent from the interface list"
+    );
 }
 
 /// `--offline` с целью IPv6 обнаруживает только чтением: строки `[+]` IPv6 с фиктивным MAC шлюза IPv6 либо отказ в
@@ -352,8 +372,24 @@ fn binary_offline_ipv6_detects_or_refuses_read_only() {
                 "failed to detect IPv6 address of interface",
                 "is os-masked",
                 "is not usable",
-                "no such interface",
             ];
+            // Только Windows: маршрут IPv6 через адаптер без привязки IPv4 (см. `ipv6_lookup_and_detection_read_only`).
+            const NOT_LISTED: &str = " uses interface index ";
+            if cfg!(windows) && err.contains(NOT_LISTED) {
+                let index: u32 = err
+                    .split(NOT_LISTED)
+                    .nth(1)
+                    .and_then(|rest| rest.split(',').next())
+                    .and_then(|n| n.parse().ok())
+                    .expect("the refusal names the route's interface index");
+                let route = os_route_table()
+                    .expect("os_route_table")
+                    .lookup_v6("2001:db8::1".parse().unwrap())
+                    .expect("lookup_v6")
+                    .expect("the refusal came from a route");
+                assert_route_iface_not_listed(index, route.ifindex);
+                return;
+            }
             assert!(
                 kinds.iter().any(|k| err.contains(k)),
                 "the refusal is one of {kinds:?}"

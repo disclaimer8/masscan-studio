@@ -622,3 +622,47 @@ fn route_link_local_source_never_serves_a_global_target() {
     let d = detect_v6(&t6("fe80::77", "fe80::77"), &ov, &w, &w).unwrap();
     assert_eq!(d.source_ipv6, (v6("fe80::aa"), Source::Detected));
 }
+
+/// Fix round 2: интерфейс, который выбрал маршрут IPv6 (а не пользователь), отсутствует в списке интерфейсов (Windows:
+/// адаптер без привязки IPv4 не попадает в `GetAdaptersAddresses(AF_INET)`). Отказ говорит, что случилось, без «did
+/// you spell the name correctly?» про имя, которого пользователь не называл. Путь IPv4 и `--adapter` не меняются.
+#[test]
+fn route_chosen_ipv6_interface_missing_from_the_list_is_named_by_index() {
+    let w = World::default()
+        .iface(
+            iface("eth0", 2, true, Some(MAC_A), &["192.0.2.5"]),
+            &["2001:db8:1::5"],
+        )
+        .rule4("0.0.0.0", "255.255.255.255", Some(r4(7, "ifindex 7", None)))
+        .rule6(
+            "::",
+            "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            Some(r6(7, "ifindex 7", Some("fe80::1"), None)),
+        );
+    let ov = Overrides::default();
+    let e = detect_v6(&t6("2001:db8:9::1", "2001:db8:9::1"), &ov, &w, &w).unwrap_err();
+    assert_eq!(
+        e,
+        DetectError::RouteIfaceNotListed6 {
+            ip: v6("2001:db8:9::1"),
+            ifindex: 7
+        }
+    );
+    assert_eq!(
+        e.to_string(),
+        "FAIL: the IPv6 route to [2001:db8:9::1] uses interface index 7, which is not in the adapter list (on \
+         Windows: an adapter without an IPv4 binding)\n    [hint] try \"--interface ethX\" with \"--source-ip \
+         2001:db8::1\" and \"--router-mac-ipv6 66-55-44-33-22-11\""
+    );
+    assert!(!e.to_string().contains("spell"));
+    // IPv4 по маршруту и `--adapter` с неизвестным именем: прежний `NoSuchAdapter`.
+    let e = detect(&t4("198.51.100.1", "198.51.100.1"), &ov, &w, &w).unwrap_err();
+    assert_eq!(e, DetectError::NoSuchAdapter("ifindex 7".into()));
+    let named = Overrides {
+        adapter: Some("nosuch0".into()),
+        ..Default::default()
+    };
+    let e = detect_v6(&t6("2001:db8:9::1", "2001:db8:9::1"), &named, &w, &w).unwrap_err();
+    assert_eq!(e, DetectError::NoSuchAdapter("nosuch0".into()));
+    assert!(e.to_string().contains("did you spell the name correctly?"));
+}

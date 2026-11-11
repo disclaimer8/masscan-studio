@@ -304,6 +304,15 @@ pub enum DetectError {
         adapter: String,
         route_ifname: String,
     },
+    /// Маршрут IPv6 к первой цели (а не пользователь) выбрал интерфейс, которого нет в списке интерфейсов. Windows:
+    /// адаптер без привязки IPv4 (список это `GetAdaptersAddresses(AF_INET)`); на Linux и macOS список полный, там
+    /// это гонка с исчезнувшим интерфейсом. Пользователь имени не называл, поэтому не `NoSuchAdapter` с «did you
+    /// spell the name correctly?».
+    #[error(
+        "FAIL: the IPv6 route to {} uses interface index {ifindex}, which is not in the adapter list (on Windows: an adapter without an IPv4 binding)\n    [hint] try \"--interface ethX\" with \"--source-ip 2001:db8::1\" and \"--router-mac-ipv6 66-55-44-33-22-11\"",
+        bracket6(.ip)
+    )]
+    RouteIfaceNotListed6 { ip: Ipv6Addr, ifindex: u32 },
     /// Смешанный скан: первая цель IPv4 и первая цель IPv6 уходят разными интерфейсами, а адаптер у скана один.
     #[error(
         "FAIL: IPv4 and IPv6 targets are routed via different interfaces ({} via {}, {} via {})\n    [hint] scan the IPv4 and the IPv6 targets separately, or try \"--interface ethX\"",
@@ -677,7 +686,10 @@ fn choose_v6(
             let r = route6_for_targets(t, routes, false)?;
             let found = list.into_iter().find(|i| i.index == r.ifindex);
             (
-                found.ok_or_else(|| DetectError::NoSuchAdapter(r.ifname.clone()))?,
+                found.ok_or(DetectError::RouteIfaceNotListed6 {
+                    ip: t.first,
+                    ifindex: r.ifindex,
+                })?,
                 Source::Detected,
                 Some(r),
             )

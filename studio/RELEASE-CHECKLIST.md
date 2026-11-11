@@ -1,6 +1,6 @@
 # Path to a usable release
 
-Updated 2026-11-10. This development branch has ordinary IPv4/TCP profiles for
+Updated 2026-11-11. This development branch has ordinary IPv4/TCP profiles for
 macOS, Linux and Windows, with IPC v5 and matching packaged helpers. It is not
 fixture-only. The separate macOS fixture profiles keep their admission checks.
 Protocol work in Claude's other branch is not integrated here.
@@ -38,6 +38,7 @@ Latest UI evidence: [draft queue and native export](../docs/experiments/2026-11-
 Keyboard follow-up: [macOS event diagnosis and verification](../docs/experiments/2026-11-10-studio-keyboard.md).
 Latest UI completion: [native Save, input layouts and minimum width](../docs/experiments/2026-11-10-studio-ui-finish.md).
 Latest native release: [static SQLite and physical lifecycle](../docs/experiments/2026-11-10-studio-native-release.md).
+Fault follow-up: [sealed network interruption, recovery and coverage](../docs/experiments/2026-11-11-studio-fault-acceptance.md).
 
 ## 2. Physical-network acceptance
 
@@ -48,7 +49,12 @@ Latest native release: [static SQLite and physical lifecycle](../docs/experiment
 - [x] Verify source/interface selection and direct delivery, Stop,
   Pause/reopen/Resume and restart on the clean macOS `de7ee4ad` release, with
   29 independently correlated probe/reply pairs.
-- [ ] Verify routed delivery and partial neighbour coverage on the final candidate.
+- [x] Verify the exact `de7ee4ad` packaged runner on the isolated MacNetwork
+  stand: 96 direct/routed probes, partial neighbour coverage, and interface-down
+  interruption after 5 probes. Reopen/export Interrupted history in the release
+  GUI and confirm Repeat settings creates only a draft.
+- [ ] Verify routed delivery and partial neighbour coverage on ordinary physical
+  profiles; the sealed MacNetwork stand does not establish that acceptance.
 - [ ] Exercise network loss, route/interface changes, sleep/wake and stale
   observations; compare Interrupted status and partial history with packet capture.
 

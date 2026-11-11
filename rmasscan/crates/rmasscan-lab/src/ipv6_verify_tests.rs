@@ -5,7 +5,7 @@
 use super::*;
 use crate::{
     autodetect_verify::{
-        HASHES,
+        ArgvRecord, HASHES, MANIFEST_JSON,
         tests::{
             LAB_ID, Sim as AdSim, T0, TEARDOWN, arp_request, linux_isolation, marker,
             status_fragments,
@@ -13,9 +13,14 @@ use crate::{
     },
     link::{END_PAYLOAD, START_PAYLOAD},
     pcap,
+    protocols_verify::{
+        ResponderRecord,
+        tests::{bad, erased, has, ip_frame, run_of, sum16},
+    },
+    verify::{self, FAIL, INVALID, PASS},
     windows_suite::nonce,
 };
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 fn scratch() -> PathBuf {
     let d = std::env::temp_dir().join(format!("rml-ipv6-verify-{}", nonce()));
@@ -32,46 +37,12 @@ const TTL: u8 = 64;
 /// What C prints as the ttl of an IPv6 record (a stale value, never the hop limit).
 const C_STALE_TTL6: u8 = 0;
 
-fn sum16(b: &[u8], init: u32) -> u16 {
-    let mut s = init;
-    for c in b.chunks(2) {
-        s += (u32::from(c[0]) << 8) | u32::from(*c.get(1).unwrap_or(&0));
-    }
-    while s > 0xffff {
-        s = (s & 0xffff) + (s >> 16);
-    }
-    !(s as u16)
-}
 fn pseudo_sum(p: &[u8]) -> u32 {
     let mut init = 0u32;
     for c in p.chunks(2) {
         init += (u32::from(c[0]) << 8) | u32::from(c[1]);
     }
     init
-}
-fn ip4_frame(dmac: [u8; 6], smac: [u8; 6], s: Ipv4Addr, d: Ipv4Addr, mut l4: Vec<u8>) -> Vec<u8> {
-    l4[16..18].fill(0);
-    let mut pseudo = Vec::new();
-    pseudo.extend(s.octets());
-    pseudo.extend(d.octets());
-    pseudo.extend([0, 6]);
-    pseudo.extend((l4.len() as u16).to_be_bytes());
-    let v = sum16(&l4, pseudo_sum(&pseudo));
-    l4[16..18].copy_from_slice(&v.to_be_bytes());
-    let mut f = Vec::new();
-    f.extend(dmac);
-    f.extend(smac);
-    f.extend([8, 0]);
-    let mut ip = vec![0x45, 0];
-    ip.extend(((20 + l4.len()) as u16).to_be_bytes());
-    ip.extend([0x12, 0x34, 0x40, 0, TTL, 6, 0, 0]);
-    ip.extend(s.octets());
-    ip.extend(d.octets());
-    let v = sum16(&ip, 0);
-    ip[10..12].copy_from_slice(&v.to_be_bytes());
-    f.extend(ip);
-    f.extend(l4);
-    f
 }
 /// An Ethernet + IPv6 frame around `l4` (next header `next`, checksum field at `sum_at` set when given), optionally
 /// behind a Hop-by-Hop header with the Router Alert option (MLD).
@@ -147,7 +118,7 @@ fn tcp_reply(p: &[u8], flags: u8) -> Vec<u8> {
     let seq = be32(p, l4_at(p) + 4);
     let l4 = tcp_l4(dp, sp, 0x5000_0000, seq.wrapping_add(1), flags);
     match probe_dst(p) {
-        IpAddr::V4(d) => ip4_frame(SCANNER_MAC, PEER_MAC, d, SCANNER_IP, l4),
+        IpAddr::V4(d) => ip_frame(SCANNER_MAC, PEER_MAC, d, SCANNER_IP, 6, l4),
         IpAddr::V6(d) => ip6_frame(
             SCANNER_MAC,
             PEER_MAC,
@@ -166,11 +137,12 @@ fn scanner_rst(r: &[u8]) -> Vec<u8> {
     let at = l4_at(r);
     let l4 = tcp_l4(be16(r, at + 2), be16(r, at), be32(r, at + 8), 0, 0x04);
     if r[12..14] == [8, 0] {
-        ip4_frame(
+        ip_frame(
             PEER_MAC,
             SCANNER_MAC,
             SCANNER_IP,
             Ipv4Addr::new(r[26], r[27], r[28], r[29]),
+            6,
             l4,
         )
     } else {
@@ -437,7 +409,6 @@ pub(crate) fn stack() -> Ipv6Stack {
     Ipv6Stack {
         scanner: side_stack("veth-a", &[IPV6_SCANNER], IPV6_SCANNER_LL),
         peer: side_stack("veth-b", &IPV6_PEERS, IPV6_PEER_LL),
-        responder: responder_args(),
     }
 }
 /// `capture isolation --mode ipv6` on the stand: the autodetect record with the IPv6 stand's.
@@ -603,35 +574,12 @@ impl Sim {
         d
     }
 }
-mod erased {
-    pub(crate) trait Ser {
-        fn bytes(&self) -> Vec<u8>;
-    }
-    impl<T: serde::Serialize> Ser for T {
-        fn bytes(&self) -> Vec<u8> {
-            serde_json::to_vec_pretty(self).unwrap()
-        }
-    }
-}
 
 fn all_cases(root: &Path) {
     for tag in planned_tags() {
         Sim::new(tag).write(root);
     }
     fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
-}
-fn run_of<'a>(res: &'a Value, tag: &str) -> &'a Value {
-    array(&res["runs"])
-        .iter()
-        .find(|r| r["tag"] == tag)
-        .unwrap_or_else(|| panic!("no run {tag}"))
-}
-fn bad(run: &Value) -> Vec<String> {
-    array(&run["checks"])
-        .iter()
-        .filter(|c| c["result"] != PASS)
-        .map(|c| format!("{} {}: {}", s(&c["result"]), s(&c["name"]), s(&c["detail"])))
-        .collect()
 }
 fn judge_one(sim: &Sim) -> (String, Vec<String>) {
     let root = scratch();
@@ -641,10 +589,6 @@ fn judge_one(sim: &Sim) -> (String, Vec<String>) {
     let run = run_of(&res, sim.tag).clone();
     fs::remove_dir_all(&root).unwrap();
     (s(&run["verdict"]).to_owned(), bad(&run))
-}
-fn has(bad: &[String], result: &str, needle: &str) -> bool {
-    bad.iter()
-        .any(|b| b.starts_with(result) && b.contains(needle))
 }
 /// The index of the first frame of `frames` that `pick` selects.
 fn find(frames: &Frames, pick: impl Fn(&[u8]) -> bool) -> usize {
@@ -910,9 +854,6 @@ fn the_stack_rules_name_a_tentative_address_and_every_other_unready_state() {
     let mut s = stack();
     s.scanner.addresses.pop();
     assert!(stack_problem(&s).unwrap().contains("IPv6 addresses"));
-    let mut s = stack();
-    s.responder.pop();
-    assert!(stack_problem(&s).unwrap().contains("responder"));
     // `ip -6 -j addr` as the suite reads it: the true flags only
     let a = addresses_of(&json!([{"ifname":"veth-a","addr_info":[
         {"family":"inet6","local":"fd00:198:18::1","prefixlen":64,"scope":"global","tentative":true,"nodad":true,"valid_life_time":4294967295u64},
@@ -1050,7 +991,8 @@ fn an_ns_count_over_the_resolvers_bound_fails() {
         has(&b, FAIL, "json: rmasscan resolved its IPv6 next hop by NDP"),
         "{b:#?}"
     );
-    // an NS for the wrong target is the scanner's own extra frame
+    // an NS for a target that is neither the router nor a peer is the scanner's own extra frame (an NS for a peer's ULA
+    // is the stand noise `scanner_ns_for_peer`: a_scanner_kernel_ns_for_a_peer_is_named_noise_and_invalid)
     let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
     let s = sim.step_mut("json");
     let at = find(&s.frames, |f| f == rm_ns());
@@ -1058,7 +1000,7 @@ fn an_ns_count_over_the_resolvers_bound_fails() {
         at,
         (
             s.frames[at].0 - 0.001,
-            ns_frame(SCANNER_MAC, scanner6(), peers6()[1]),
+            ns_frame(SCANNER_MAC, scanner6(), "fd00:198:18::9".parse().unwrap()),
         ),
     );
     let (v, b) = judge_one(&sim);
@@ -1330,4 +1272,91 @@ fn the_oracle_is_held_to_its_own_wire_but_not_to_an_ipv6_ttl() {
     s.doc = Some(render(Out::Json, &recs, false));
     let (v, b) = judge_one(&sim);
     assert_eq!(v, INVALID, "{b:#?}");
+}
+
+/// The verdict and exit code of `ipv6-verify` on one case written alone.
+fn verdict_and_exit(sim: &Sim) -> (String, Vec<String>, i32) {
+    let root = scratch();
+    sim.write(&root);
+    fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
+    let res = verify_dir(&root);
+    let run_ = run_of(&res, sim.tag).clone();
+    let code = run(&["--dir".to_owned(), root.to_string_lossy().into_owned()]).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    (s(&run_["verdict"]).to_owned(), bad(&run_), code)
+}
+
+#[test]
+fn rmasscan_without_its_ndp_is_its_own_fail_never_a_broken_stand() {
+    // No NS at all, the [+] line saying 0: the run is rmasscan's FAIL (exit 1), not INVALID.
+    let (v, b, code) = verdict_and_exit(&Sim::with_ns("v01_ndp_and_tcp6_syn", 0));
+    assert_eq!((v.as_str(), code), (FAIL, 1), "{b:#?}");
+    assert!(
+        has(&b, FAIL, "json: rmasscan resolved its IPv6 next hop by NDP"),
+        "{b:#?}"
+    );
+    assert!(!b.iter().any(|x| x.starts_with(INVALID)), "{b:#?}");
+    // `(ndp: 1` printed, but the NS and its NA stripped from the wire: the same.
+    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+    for step in ["json", "binary"] {
+        let s = sim.step_mut(step);
+        s.frames.retain(|(_, f)| *f != rm_ns() && *f != peer_na());
+    }
+    let (v, b, code) = verdict_and_exit(&sim);
+    assert_eq!((v.as_str(), code), (FAIL, 1), "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "binary: rmasscan resolved its IPv6 next hop by NDP"
+        ),
+        "{b:#?}"
+    );
+    assert!(!b.iter().any(|x| x.starts_with(INVALID)), "{b:#?}");
+    // rmasscan printing another source than the one it detects is its FAIL too (the detection check)
+    let mut sim = Sim::new("v03_explicit_router_mac_ipv6");
+    let s = sim.step_mut("json");
+    s.stderr = s
+        .stderr
+        .replace("[fd00:198:18::1] (detected)", "[fd00:198:18::1] (given)");
+    let (v, b, code) = verdict_and_exit(&sim);
+    assert_eq!((v.as_str(), code), (FAIL, 1), "{b:#?}");
+    assert!(has(&b, FAIL, "json: [+] lines are the stand's"), "{b:#?}");
+}
+
+#[test]
+fn a_scanner_kernel_ns_for_a_peer_is_named_noise_and_invalid() {
+    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+    let s = sim.step_mut("json");
+    let at = find(&s.frames, |f| {
+        f[6..12] == PEER_MAC
+            && pkt(f)
+                .and_then(|p| tcp(&p))
+                .is_some_and(|x| x.flags == 0x12)
+    });
+    let t = s.frames[at].0 + 0.0001;
+    s.frames
+        .insert(at + 1, (t, ns_frame(SCANNER_MAC, scanner6(), peers6()[0])));
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(
+        has(&b, INVALID, "no kernel noise of either side")
+            && b.iter().any(|x| x.contains("scanner_ns_for_peer")),
+        "{b:#?}"
+    );
+    assert!(!b.iter().any(|x| x.starts_with(FAIL)), "{b:#?}");
+}
+
+#[test]
+fn the_products_ns_passes_the_verifiers_hand_written_resolver_form() {
+    // The codec cross-check: rmasscan-core's own NS encoder, with the stand's MAC, source and router, is the form the
+    // verifier names `next_hop_ns`; the verifier's hand-built NS is the same 86 bytes.
+    let f = rmasscan_core::ndp::PendingNdp::new(
+        SCANNER_MAC,
+        u128::from(scanner6()),
+        u128::from(router6()),
+    )
+    .request_frame();
+    assert!(is_next_hop_ns(&f, &stand()));
+    assert_eq!(f.to_vec(), rm_ns());
 }

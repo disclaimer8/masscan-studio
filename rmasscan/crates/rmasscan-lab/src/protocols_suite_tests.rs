@@ -26,20 +26,20 @@ fn scratch() -> PathBuf {
     fs::create_dir_all(&d).unwrap();
     d
 }
-fn strings(v: &[&str]) -> Vec<String> {
+pub(crate) fn strings(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| (*x).to_owned()).collect()
 }
-fn after<'a>(a: &'a [String], k: &str) -> &'a str {
+pub(crate) fn after<'a>(a: &'a [String], k: &str) -> &'a str {
     let i = a
         .iter()
         .position(|x| x == k)
         .unwrap_or_else(|| panic!("{k} not in {a:?}"));
     &a[i + 1]
 }
-fn slashes(s: &str) -> String {
+pub(crate) fn slashes(s: &str) -> String {
     s.replace('\\', "/")
 }
-fn bad(res: &Value) -> Vec<String> {
+pub(crate) fn bad(res: &Value) -> Vec<String> {
     array(&res["runs"])
         .iter()
         .flat_map(|r| {
@@ -57,11 +57,11 @@ fn bad(res: &Value) -> Vec<String> {
 }
 
 /// A scripted process: it exits with `rc` at once, or runs until signalled (`on_stop` then gives its exit code).
-struct FakeRun {
-    rc: Option<i32>,
-    on_stop: Option<Box<dyn FnOnce() -> i32>>,
-    name: String,
-    log: Rc<RefCell<Vec<String>>>,
+pub(crate) struct FakeRun {
+    pub(crate) rc: Option<i32>,
+    pub(crate) on_stop: Option<Box<dyn FnOnce() -> i32>>,
+    pub(crate) name: String,
+    pub(crate) log: Rc<RefCell<Vec<String>>>,
 }
 impl Running for FakeRun {
     fn try_wait(&mut self) -> Result<Option<i32>, String> {
@@ -379,7 +379,7 @@ fn run_suite(s: &Setup) -> Result<i32, SuiteError> {
 fn teardown(s: &Setup) {
     fs::write(s.out.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
 }
-fn not_run_text(r: Result<i32, SuiteError>) -> String {
+pub(crate) fn not_run_text(r: Result<i32, SuiteError>) -> String {
     match r {
         Err(SuiteError::NotRun(m)) => m,
         other => panic!("not a NOT RUN: {other:?}"),

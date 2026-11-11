@@ -11,14 +11,16 @@ use crate::{
     },
     ipv6_verify::tests::{Sim, ipv6_isolation},
     pcap,
+    protocols_suite::tests::{FakeRun, after, bad, not_run_text, slashes, strings},
     scan_control_suite::IN_DIR_SCRIPT,
     scan_control_verify::Who,
-    verify::{PASS, array},
+    verify::PASS,
     windows_suite::{Output, nonce},
 };
 use serde_json::Value;
 use std::{
     cell::{Cell, RefCell},
+    fs,
     rc::Rc,
     time::Duration,
 };
@@ -27,61 +29,6 @@ fn scratch() -> PathBuf {
     let d = std::env::temp_dir().join(format!("rml-ipv6-suite-{}", nonce()));
     fs::create_dir_all(&d).unwrap();
     d
-}
-fn strings(v: &[&str]) -> Vec<String> {
-    v.iter().map(|x| (*x).to_owned()).collect()
-}
-fn after<'a>(a: &'a [String], k: &str) -> &'a str {
-    let i = a
-        .iter()
-        .position(|x| x == k)
-        .unwrap_or_else(|| panic!("{k} not in {a:?}"));
-    &a[i + 1]
-}
-fn slashes(s: &str) -> String {
-    s.replace('\\', "/")
-}
-fn bad(res: &Value) -> Vec<String> {
-    array(&res["runs"])
-        .iter()
-        .flat_map(|r| {
-            array(&r["checks"])
-                .iter()
-                .filter(|c| c["result"] != "PASS")
-                .map(move |c| {
-                    format!(
-                        "{} {}: {} ({})",
-                        r["tag"], c["result"], c["name"], c["detail"]
-                    )
-                })
-        })
-        .collect()
-}
-
-struct FakeRun {
-    rc: Option<i32>,
-    on_stop: Option<Box<dyn FnOnce() -> i32>>,
-    name: String,
-    log: Rc<RefCell<Vec<String>>>,
-}
-impl Running for FakeRun {
-    fn try_wait(&mut self) -> Result<Option<i32>, String> {
-        Ok(self.rc)
-    }
-    fn signal(&mut self, sig: &str) {
-        self.log
-            .borrow_mut()
-            .push(format!("signal {}:{sig}", self.name));
-        if self.rc.is_none() {
-            self.rc = Some(self.on_stop.take().map_or(0, |f| f()));
-        }
-    }
-    fn kill(&mut self) {
-        self.log
-            .borrow_mut()
-            .push(format!("signal {}:KILL", self.name));
-        self.rc.get_or_insert(-9);
-    }
 }
 
 /// `ip -6 -j addr show dev IF` of a side of the stand, the scanner's ULA `tentative` when asked.
@@ -372,12 +319,6 @@ fn setup(tags: &[&'static str]) -> Setup {
 fn run_suite(s: &Setup) -> Result<i32, SuiteError> {
     linux_with(&s.args, &s.fake, &s.lab)
 }
-fn not_run_text(r: Result<i32, SuiteError>) -> String {
-    match r {
-        Err(SuiteError::NotRun(m)) => m,
-        other => panic!("not a NOT RUN: {other:?}"),
-    }
-}
 
 #[test]
 fn the_suite_writes_what_the_verifier_reads_for_every_case() {
@@ -636,46 +577,67 @@ fn wire_lab_raises_ipv6_only_for_the_ipv6_suite_and_only_on_the_lab_veth_pair() 
     assert!(text.contains(r#"ipv6) [ -n "$RMASSCAN_BIN" ] || { echo "--suite ipv6 needs --rmasscan" >&2; exit 64; } ;;"#));
     assert!(text.contains(r#"[ "$SUITE" != ipv6 ] || STAND_SUITE=1"#));
     assert!(text.contains(r#"[ "$SUITE" != ipv6 ] || ISOLATION_MODE=ipv6"#));
-    // Every line that turns IPv6 on, adds an IPv6 address, route or neighbour, sits inside an `if [ "$SUITE" = ipv6 ]`
-    // block and names a namespace of this lab.
-    let mut in_ipv6 = false;
-    let mut enabling = 0;
+    // Every line that turns IPv6 on or adds an IPv6 address, route or neighbour is one of these exact lines, and each
+    // sits inside a top-level `if [ "$SUITE" = ipv6 ]; then` .. `fi` block (opened and closed at column 0; an indented
+    // `if`/`fi` inside it, or an indented ipv6 test elsewhere, neither opens nor closes one).
+    let raising = [
+        r#"  for kv in $IPV6_SETTINGS; do nsa sysctl -qw "net.ipv6.conf.$IF_A.$kv"; nsb sysctl -qw "net.ipv6.conf.$IF_B.$kv"; done"#,
+        r#"  for ns in "$NS_A" "$NS_B"; do ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.lo.disable_ipv6=0; done"#,
+        r#"  ip -n "$NS_A" -6 addr add "$IP6_A/64" dev "$IF_A" nodad"#,
+        r#"  for ip_ in $IP6_PEERS; do ip -n "$NS_B" -6 addr add "$ip_/64" dev "$IF_B" nodad; done"#,
+        r#"  ip -n "$NS_A" -6 route add default via "$IP6_GW" dev "$IF_A""#,
+        r#"  for ip_ in $IP6_PEERS; do ip -n "$NS_A" -6 neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done"#,
+        r#"  ip -n "$NS_B" -6 neigh add "$IP6_A" lladdr "$MAC_A" dev "$IF_B" nud permanent"#,
+    ];
+    let (mut depth_open, mut inside, mut found, mut body) =
+        (false, Vec::new(), Vec::new(), Vec::new());
     for l in text.lines() {
-        let t = l.trim_start();
-        if t.starts_with("if [ \"$SUITE\" = ipv6 ]") {
-            in_ipv6 = true;
-        } else if l == "fi" {
-            in_ipv6 = false;
+        if l == r#"if [ "$SUITE" = ipv6 ]; then"# {
+            assert!(!depth_open, "nested top-level ipv6 block");
+            depth_open = true;
+            continue;
         }
+        if l == "fi" {
+            depth_open = false;
+            continue;
+        }
+        let t = l.trim_start();
         if t.starts_with('#') || t.starts_with("note_cmd") || t.starts_with("IPV6_SETTINGS=") {
+            continue;
+        }
+        if depth_open {
+            body.push(l);
+        }
+        if t.is_empty() {
             continue;
         }
         let turns_on = t.contains("$IPV6_SETTINGS")
             || t.contains("disable_ipv6=0")
-            || t.contains(" -6 addr add")
-            || t.contains(" -6 route add")
-            || t.contains(" -6 neigh add");
+            || t.contains("-6 addr add")
+            || t.contains("-6 route add")
+            || t.contains("-6 neigh add");
         if turns_on {
-            enabling += 1;
-            assert!(in_ipv6, "IPv6 raised outside the ipv6 suite: {l}");
-            assert!(
-                [
-                    "nsa ",
-                    "nsb ",
-                    r#"-n "$NS_A""#,
-                    r#"-n "$NS_B""#,
-                    r#"exec "$ns""#
-                ]
-                .iter()
-                .any(|n| t.contains(n)),
-                "an IPv6 change outside the lab's namespaces: {l}"
-            );
+            found.push(l);
+            if depth_open {
+                inside.push(l);
+            }
         }
     }
+    assert_eq!(found, raising, "the lines that raise IPv6, in order");
     assert_eq!(
-        enabling, 7,
-        "settings, lo + all.accept_dad, scanner address, peer addresses, route, two neighbour lines"
+        inside, raising,
+        "each of them inside a top-level ipv6 block"
     );
+    // The ipv6 blocks are two at top level, and their bodies hold exactly those lines besides comments, note_cmd
+    // and the settle wait.
+    let opened = text
+        .lines()
+        .filter(|l| *l == r#"if [ "$SUITE" = ipv6 ]; then"#)
+        .count();
+    assert_eq!(opened, 2);
+    let mut want_body: Vec<&str> = raising.to_vec();
+    want_body.push("  sleep 3");
+    assert_eq!(body, want_body);
     // The settings are the Rust stand's, IPv6 itself turned on last.
     let settings = text
         .lines()

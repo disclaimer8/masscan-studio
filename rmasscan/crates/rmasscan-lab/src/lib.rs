@@ -18,6 +18,7 @@ pub mod oracle;
 pub mod oracle_util;
 pub mod output_suite;
 pub mod output_verify;
+pub mod pair_verify;
 pub mod pcap;
 pub mod peer;
 pub mod privacy_scan;

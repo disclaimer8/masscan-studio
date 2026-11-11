@@ -15,18 +15,19 @@
 use crate::{
     autodetect_suite::{
         self as ad, IP, Linux, LinuxHost, LinuxTools, RESPONDER_POLLS, addresses_outside_the_lab,
-        io, not_run, say, write_record,
+        not_run, write_record,
     },
-    autodetect_verify::ArgvRecord,
     capture::{self, IPV6_PREFIX, IPV6_SYSCTLS},
     ipv6_verify::{self as iv, CaseSpec, Ipv6Stack, SideStack, StepSpec},
-    protocols_suite::{CAT, step},
-    windows_suite::{SuiteError, options_for, read_json, required},
+    protocols_suite::{
+        CAT, SuiteDef, linux_entry_def, linux_with_def, run_cases, run_def, selected_of, step,
+        write_step_argv,
+    },
+    windows_suite::{SuiteError, read_json},
 };
 use serde_json::json;
 use std::{
     collections::BTreeMap,
-    fs,
     net::Ipv6Addr,
     path::{Path, PathBuf},
 };
@@ -36,20 +37,12 @@ const SUITE: &str = "wire-lab.sh --suite ipv6";
 const USAGE: &str = "ipv6-suite linux --out DIR --work DIR --ns-a NS --ns-b NS --iface-a IF --iface-b IF --mac-a MAC --mac-b MAC --rmasscan PATH --oracle PATH --conf-masked 0|1 --lab-id ID [--only TAG ...]   (run by wire-lab.sh --suite ipv6, as root)
 exit 0 every selected run executed, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH, 130 INTERRUPTED; judge the directory with ipv6-verify";
 
-/// The cases to run: the whole table in its order, or the `--only` subset of it.
-fn selected(only: &[String]) -> Result<Vec<&'static str>, SuiteError> {
-    let all = iv::planned_tags();
-    if let Some(t) = only.iter().find(|t| !all.contains(&t.as_str())) {
-        return Err(not_run(format!(
-            "{t} is not an ipv6 case ({})",
-            all.join(" ")
-        )));
-    }
-    Ok(all
-        .into_iter()
-        .filter(|t| only.is_empty() || only.iter().any(|o| o == t))
-        .collect())
-}
+const IPV6_SUITE: SuiteDef = SuiteDef {
+    wire_lab: SUITE,
+    name: "ipv6",
+    a_case: "an ipv6 case",
+    usage: USAGE,
+};
 
 /// Every IPv6 address, `a-b` range (bracketed or not) or CIDR block an argv names outside `fd00:198:18::/64` (a
 /// prefix shorter than /64 included), and anything with a `:` that is no IPv6 address. MACs (`02-aa-..`) are not
@@ -101,23 +94,7 @@ pub(crate) fn linux_with(
     host: &dyn LinuxHost,
     lab: &Path,
 ) -> Result<i32, SuiteError> {
-    let o = options_for("ipv6-suite linux", args, ad::LINUX_OPTIONS)?;
-    if o.contains_key("help") {
-        say(USAGE);
-        return Ok(0);
-    }
-    let euid = host.euid()?;
-    if euid != 0 {
-        return Err(not_run(format!(
-            "ipv6-suite linux runs as root inside {SUITE} (effective uid {euid}); it never calls sudo itself"
-        )));
-    }
-    let (out, work) = (
-        PathBuf::from(required(&o, "out")?),
-        PathBuf::from(required(&o, "work")?),
-    );
-    let sc = crate::capture::Scrubber::new(&out, Some(&work), host.account().as_deref());
-    linux_run(&o, host, lab, out, work, &sc).map_err(|e| e.map_message(|m| sc.str(m)))
+    linux_with_def(args, host, lab, &IPV6_SUITE, linux_run)
 }
 
 fn linux_run(
@@ -129,7 +106,7 @@ fn linux_run(
     sc: &crate::capture::Scrubber,
 ) -> Result<i32, SuiteError> {
     let a = ad::linux_args(o, SUITE)?;
-    let tags = selected(ad::only_of(o)?)?;
+    let tags = selected_of(ad::only_of(o)?, iv::planned_tags(), &IPV6_SUITE)?;
     for tag in &tags {
         for s in iv::steps(tag).unwrap_or_default() {
             let mut bad = addresses_outside_the_lab(&s.argv);
@@ -167,27 +144,16 @@ fn linux_run(
             "the stand's IPv6 is not ready: {p}; nothing was started"
         )));
     }
-    for tag in &tags {
-        if host.stopped() {
-            return Err(SuiteError::Interrupted(format!(
-                "stop requested before {tag} started; nothing was left running"
-            )));
-        }
+    run_cases(&suite, &tags, &IPV6_SUITE, &out, sc, |tag, base, run, t| {
         let (Some(c), Some(specs)) = (iv::case(tag), iv::steps(tag)) else {
-            continue;
+            return Err(not_run(format!("{tag} is not a case")));
         };
-        suite.one_with(tag, |base, run, t| one(&suite, &c, &specs, base, run, t))?;
-        say(&format!("done {0} -> runs/{0}", tag));
-    }
-    say(&sc.str(&format!(
-        "all selected runs executed; verify offline with rmasscan-lab ipv6-verify --dir {}",
-        out.display()
-    )));
-    Ok(0)
+        one(&suite, &c, &specs, base, run, t)
+    })
 }
 
 /// The stand's IPv6, read in each namespace: the lab veth's [`IPV6_SYSCTLS`] (one `cat` of their `/proc` files) and
-/// its addresses with their flags (`ip -6 -j addr show dev <veth>`), and the responder the suite starts.
+/// its addresses with their flags (`ip -6 -j addr show dev <veth>`).
 pub(crate) fn ipv6_stack(l: &Linux) -> Result<Ipv6Stack, String> {
     let side = |ns: &str, iface: &str| -> Result<SideStack, String> {
         let mut cat = vec![CAT.to_owned()];
@@ -228,7 +194,6 @@ pub(crate) fn ipv6_stack(l: &Linux) -> Result<Ipv6Stack, String> {
     Ok(Ipv6Stack {
         scanner: side(&l.ns_a, "veth-a")?,
         peer: side(&l.ns_b, "veth-b")?,
-        responder: iv::responder_args(),
     })
 }
 
@@ -262,16 +227,7 @@ fn one(
     }
     let expect = iv::expect(tag).ok_or_else(|| not_run(format!("{tag} is not a case")))?;
     write_record(&run.join(iv::EXPECT_JSON), &expect)?;
-    for s in specs {
-        let dir = run.join(s.name);
-        io(fs::create_dir_all(&dir), "the step's evidence directory")?;
-        write_record(
-            &dir.join("argv.json"),
-            &ArgvRecord {
-                argv: s.argv.clone(),
-            },
-        )?;
-    }
+    write_step_argv(run, specs)?;
     let options = iv::responder_args();
     for s in specs {
         step(l, tag, s, base, run, t, &options)?;
@@ -289,33 +245,13 @@ fn one(
 
 /// The Linux suite, refused at once off Linux. One code path on every OS: it is compiled and linted everywhere.
 fn linux_entry(args: &[String], exe: &Path) -> Result<i32, SuiteError> {
-    if !cfg!(target_os = "linux") {
-        return Err(not_run(format!(
-            "ipv6-suite linux runs on the Linux lab host, inside {SUITE}"
-        )));
-    }
-    linux_with(args, &ad::RealLinux, exe)
+    linux_entry_def(args, exe, &IPV6_SUITE, linux_with)
 }
 
 /// `ipv6-suite linux ...`: 0 every selected run executed, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH, 130 INTERRUPTED.
 /// Whether a run passed is `ipv6-verify`'s verdict, never this exit code.
 pub fn run(args: &[String]) -> Result<i32, String> {
-    let Some((stand, rest)) = args.split_first() else {
-        return Err(format!("which stand?\n{USAGE}"));
-    };
-    if matches!(stand.as_str(), "--help" | "-h" | "help") {
-        say(USAGE);
-        return Ok(0);
-    }
-    rmasscan_net::lab_io::install_signal_handlers()
-        .map_err(|e| format!("cannot install the stop-signal handlers: {e}"))?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    ad::report(match stand.as_str() {
-        "linux" => linux_entry(rest, &exe),
-        other => Err(not_run(format!(
-            "unknown stand {other}; the ipv6 suite runs on linux"
-        ))),
-    })
+    run_def(args, &IPV6_SUITE, linux_entry)
 }
 
 #[cfg(test)]

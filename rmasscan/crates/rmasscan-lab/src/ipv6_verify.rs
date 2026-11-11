@@ -33,20 +33,21 @@
 //! `hashes-before-copy.txt`, and one directory per step: `argv.json`, `stdout.txt stderr.txt exit.txt`, the document
 //! under its neutral name, `peer.pcap capture.json peer.err` and `responder.json`.
 use crate::{
-    autodetect_verify::{self as av, ArgvRecord, MANIFEST_JSON, Plan, Stand},
+    autodetect_verify::{self as av, Stand},
     capture::{
         self, IPV6_PEER_LL, IPV6_PEERS, IPV6_SCANNER, IPV6_SCANNER_LL, IPV6_SYSCTLS,
         IPV6_UNUSABLE_FLAGS,
     },
-    macos_verify::{hashes_match_tree, tree},
-    output_verify::{BINARY_BLOCK, canon, fields, text_lines},
-    pcap::Frames,
-    protocols_verify::{
-        self as pv, ExpectStep, JSON_REC, LIST_REC, Out, REPLY_REORDER_WINDOW_US, ResponderRecord,
-        Shown, St, first_difference, in_reply_order, reason_string, shown,
+    output_verify::{BINARY_BLOCK, canon},
+    pair_verify::{
+        self, Doc, PairPlan, Record, Side, StepView, Tally, WireSummary, beh, cap, case_of,
+        expect_steps, named_deviations, pair_steps, parse_doc_with, plan_probes, scan_tail,
+        scanner_counts, scanner_frame_checks, tags_of,
     },
-    scan_control_verify::{self as sv, Who},
-    verify::{self, FAIL, INVALID, NOT_RUN, PASS, Run, array, read_json, s},
+    pcap::Frames,
+    protocols_verify::{self as pv, ExpectStep, Out, Shown, St, reason_string},
+    scan_control_verify::Who,
+    verify::{NOT_RUN, Run, array, read_json, s},
 };
 use rmasscan_core::{
     blackrock::BlackRock,
@@ -61,12 +62,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::Path,
 };
 
-pub use pv::{EXPECT_JSON, ISOLATION_JSON, ISOLATION_POST_JSON, PEER_FILES, RESPONDER_JSON};
+pub use pv::{EXPECT_JSON, ISOLATION_JSON, ISOLATION_POST_JSON, PEER_FILES, RESPONDER_JSON, stand};
 
 // ------------------------------------------------------------------ the case table
 
@@ -96,11 +96,11 @@ pub const NEXT_HOP_NS_MAX: usize = (rmasscan_net::ndp_resolve::NDP_TIMEOUT.as_se
 pub const DEVIATIONS: [(&str, &str); 4] = [
     (
         "ndp-ns-not-rs",
-        "R11: rmasscan resolves its IPv6 next hop with a Neighbor Solicitation to the route's next hop (here the interface default gateway, the peer's link-local), C with a Router Solicitation and the Router Advertisement (stack_ndpv6_resolve); a Linux peer without a router daemon sends no RA, so the oracle step is given --router-mac-ipv6 02-aa-00-00-00-02: its wire holds no NS of the scanner, rmasscan's holds its NS answered by the peer's NA",
+        "R11: rmasscan resolves its IPv6 next hop with a Neighbor Solicitation to the route's next hop (here the interface default gateway, the peer's link-local), C with a Router Solicitation and the Router Advertisement (stack_ndpv6_resolve); a Linux peer without a router daemon sends no RA, so the oracle step is given --router-mac-ipv6 02-aa-00-00-00-02: the condition checked here is the oracle's (its wire holds no NS of the scanner); rmasscan's NS are its own checks (1 to NEXT_HOP_NS_MAX, as many as its ndp: line)",
     ),
     (
         "oracle-source-given",
-        "C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects: every IPv6 probe of both steps leaves from it",
+        "C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects; the condition checked here is the oracle's (every IPv6 probe of its wire leaves from it); rmasscan's detected source is its detection check",
     ),
     (
         "ipv6-ttl-not-compared",
@@ -108,7 +108,7 @@ pub const DEVIATIONS: [(&str, &str); 4] = [
     ),
     (
         "families-one-interface",
-        "R17: C sends IPv6 out of the IPv4 default interface, rmasscan routes each family by its own table and refuses a mixed scan whose families leave by different interfaces; on the stand both families route via veth-a, so the mixed scan is not refused: rmasscan's step prints one interface and both source addresses",
+        "R17: C sends IPv6 out of the IPv4 default interface, rmasscan routes each family by its own table and refuses a mixed scan whose families leave by different interfaces; on the stand both families route via veth-a, so the mixed scan is not refused; the condition checked here is the oracle's (both families' probes on the stand's one link); rmasscan's one interface and two source lines are its detection check",
     ),
 ];
 
@@ -168,10 +168,10 @@ pub const CASES: [CaseSpec; 3] = [
     },
 ];
 pub fn case(tag: &str) -> Option<CaseSpec> {
-    CASES.iter().find(|c| c.tag == tag).copied()
+    case_of::<Ipv6>(tag)
 }
 pub fn planned_tags() -> Vec<&'static str> {
-    CASES.iter().map(|c| c.tag).collect()
+    tags_of::<Ipv6>()
 }
 impl CaseSpec {
     pub fn has_ipv4(&self) -> bool {
@@ -185,26 +185,7 @@ pub use pv::StepSpec;
 /// shows closed ports, `--seed 1 --rate 100 --wait 3 --source-port 40000`, and `--router-mac-ipv6` when given.
 pub fn argv(c: &CaseSpec, out: Out) -> Vec<String> {
     let mut a = vec![c.targets.to_owned(), format!("-p{}", c.ports)];
-    if let (Some(flag), Some(file)) = (out.flag(), out.file()) {
-        a.extend([flag.to_owned(), file.to_owned()]);
-    }
-    if c.show_closed {
-        a.extend(["--show".to_owned(), "open,closed".to_owned()]);
-    }
-    let port = SOURCE_PORT.to_string();
-    a.extend(
-        [
-            "--seed",
-            "1",
-            "--rate",
-            RATE,
-            "--wait",
-            WAIT,
-            "--source-port",
-            &port,
-        ]
-        .map(str::to_owned),
-    );
+    scan_tail(&mut a, out, c.show_closed, RATE, WAIT, SOURCE_PORT);
     if c.router_mac_given {
         a.extend(["--router-mac-ipv6".to_owned(), PEER_MAC_ARG.to_owned()]);
     }
@@ -221,22 +202,13 @@ pub fn oracle_extra(c: &CaseSpec) -> Vec<String> {
 /// The steps of a case, in the order they run; defined here and nowhere else.
 pub fn steps(tag: &str) -> Option<Vec<StepSpec>> {
     let c = case(tag)?;
-    let mut v = Vec::new();
-    for out in c.outs {
-        for who in [Who::Rmasscan, Who::Oracle] {
-            let mut a = argv(&c, *out);
-            if who == Who::Oracle {
-                a.extend(oracle_extra(&c));
-            }
-            v.push(StepSpec {
-                name: out.step(who),
-                who,
-                out: *out,
-                argv: a,
-            });
+    Some(pair_steps(c.outs, |out, who| {
+        let mut a = argv(&c, out);
+        if who == Who::Oracle {
+            a.extend(oracle_extra(&c));
         }
-    }
-    Some(v)
+        a
+    }))
 }
 
 /// `expect.json`: the case as the suite planned it.
@@ -258,14 +230,7 @@ pub fn expect(tag: &str) -> Option<Ipv6Expect> {
         ports: c.ports.into(),
         router_mac_given: c.router_mac_given,
         oracle_extra: oracle_extra(&c),
-        steps: steps(tag)?
-            .iter()
-            .map(|s| ExpectStep {
-                name: s.name.into(),
-                who: s.who,
-                out: s.out,
-            })
-            .collect(),
+        steps: expect_steps(&steps(tag)?),
     })
 }
 
@@ -277,11 +242,8 @@ pub struct Ipv6Manifest {
     pub lab_id: Option<String>,
 }
 
-// ------------------------------------------------------------------ the stand
+// ------------------------------------------------------------------ the stand (the protocols stand, `pv::stand`, with IPv6)
 
-pub fn stand() -> Stand {
-    av::stand(Plan::Linux)
-}
 fn a6(s: &str) -> Ipv6Addr {
     s.parse().unwrap_or(Ipv6Addr::UNSPECIFIED)
 }
@@ -341,13 +303,14 @@ pub struct SideStack {
     pub sysctls: Vec<(String, String)>,
     pub addresses: Vec<Addr6>,
 }
-/// `ipv6-stack.json`: the stand's IPv6 as the suite read it right before the case, and the responder it starts.
+/// `ipv6-stack.json`: the stand's IPv6 as the suite read it right before the case. The responder is not in it: its
+/// options are a constant of the suite (a record of them could never differ), and what its listeners do is judged on
+/// the wire (every probe to 80 and 8080 of a peer address of either family owes a SYN-ACK, `stand_answers`).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Ipv6Stack {
     pub scanner: SideStack,
     pub peer: SideStack,
-    pub responder: Vec<String>,
 }
 /// The addresses of `ip -6 -j addr show dev IF` (one link), each with its `true` flags.
 pub fn addresses_of(addrs: &Value) -> Result<Vec<Addr6>, String> {
@@ -372,7 +335,7 @@ pub fn addresses_of(addrs: &Value) -> Result<Vec<Addr6>, String> {
 }
 /// Why the stand's IPv6 was not ready for a case, or `None`: a veth whose settings are not [`IPV6_SYSCTLS`], an
 /// address set that is not the stand's, an address that is tentative, failed DAD, optimistic or deprecated (it cannot
-/// be bound or answer yet), or another responder.
+/// be bound or answer yet).
 pub fn stack_problem(p: &Ipv6Stack) -> Option<String> {
     let want_sysctls: Vec<(String, String)> = IPV6_SYSCTLS
         .iter()
@@ -428,13 +391,6 @@ pub fn stack_problem(p: &Ipv6Stack) -> Option<String> {
                     .collect::<Vec<_>>()
             ));
         }
-    }
-    if p.responder != responder_args() {
-        return Some(format!(
-            "the responder runs with {:?}, not the stand's {:?}",
-            p.responder,
-            responder_args()
-        ));
     }
     None
 }
@@ -609,16 +565,18 @@ pub fn is_stand_na(f: &[u8], st: &Stand, ns_src: Ipv6Addr, target: Ipv6Addr) -> 
 }
 
 /// The kernel traffic the stand is set up to never send during a step, by key, and why; any frame of one of these
-/// makes the step INVALID (bound 0), never FAIL: rmasscan sends no such frame (its only IPv6 frames are SYNs, the NS of
-/// its resolver and the NA of its responder), so each is a stand that was not quiet.
-pub const STAND_NOISE: [(&str, &str); 5] = [
+/// makes the step INVALID (bound 0), never FAIL. rmasscan's only IPv6 frames are SYNs, the NS of its resolver (for the
+/// router, [`is_next_hop_ns`]) and the NA of its responder, so each of these is a stand that was not quiet. The
+/// scanner kernel and rmasscan share the scanner MAC: a frame of these classes from the scanner MAC is INVALID even if
+/// rmasscan had sent it (no capture can tell the two apart by MAC), never a PASS and never rmasscan's FAIL.
+pub const STAND_NOISE: [(&str, &str); 6] = [
     (
         "mld",
-        "an MLD query, report or done (ICMPv6 130, 131, 132, 143) from either kernel: a host reports only when it joins or leaves a group; the stand's groups are joined when it is raised, before wire-lab.sh's settle wait (an unsolicited report repeats within mldv2_unsolicited_report_interval, 1 s), so none may fall into a step",
+        "an MLD query, report or done (ICMPv6 130, 131, 132, 143) from either MAC: a host reports only when it joins or leaves a group; the stand's groups are joined when it is raised, before wire-lab.sh's settle wait (an unsolicited report is expected to repeat within mldv2_unsolicited_report_interval, 1 s), so none may fall into a step",
     ),
     (
         "router_solicitation",
-        "ICMPv6 133 from either kernel: the stand sets accept_ra=0 and router_solicitations=0 on both veth ends",
+        "ICMPv6 133 from either MAC: the stand sets accept_ra=0 and router_solicitations=0 on both veth ends",
     ),
     (
         "router_advertisement",
@@ -626,11 +584,15 @@ pub const STAND_NOISE: [(&str, &str); 5] = [
     ),
     (
         "dad_ns",
-        "a Neighbor Solicitation from :: (Duplicate Address Detection): the stand sets accept_dad=0 and adds its addresses nodad",
+        "a Neighbor Solicitation from :: (Duplicate Address Detection) from either MAC: the stand sets accept_dad=0 and adds its addresses nodad",
     ),
     (
         "peer_ns_for_scanner",
         "a Neighbor Solicitation of the peer for the scanner's address: the peer has fd00:198:18::1 as a permanent neighbour, so it never resolves the scanner",
+    ),
+    (
+        "scanner_ns_for_peer",
+        "a Neighbor Solicitation of the scanner MAC for a peer's ULA fd00:198:18::2-5: the scanner namespace kernel resolving a peer before it resets a SYN-ACK; the scanner has the peers as permanent neighbours, which prevents it. It is told apart from rmasscan's resolver NS by its target (a peer ULA, not the router fe80::aa:ff:fe00:2) and its time (after the SYN-ACKs, not before the first probe)",
     ),
 ];
 fn noise(p: &Pkt, from_peer: bool) -> Option<&'static str> {
@@ -640,9 +602,13 @@ fn noise(p: &Pkt, from_peer: bool) -> Option<&'static str> {
         133 => Some(STAND_NOISE[1].0),
         134 => Some(STAND_NOISE[2].0),
         135 if p.src == IpAddr::V6(Ipv6Addr::UNSPECIFIED) => Some(STAND_NOISE[3].0),
-        135 if from_peer && p.l4.len() >= 24 => {
+        135 if p.l4.len() >= 24 => {
             let target = v6_at(p.l4, 8);
-            (target == scanner6() || target == a6(IPV6_SCANNER_LL)).then_some(STAND_NOISE[4].0)
+            if from_peer {
+                (target == scanner6() || target == a6(IPV6_SCANNER_LL)).then_some(STAND_NOISE[4].0)
+            } else {
+                peers6().contains(&target).then_some(STAND_NOISE[5].0)
+            }
         }
         _ => None,
     }
@@ -678,7 +644,7 @@ pub fn probe_of(t: f64, f: &[u8], st: &Stand) -> Option<Probe> {
     })
 }
 
-/// A reply of the peer to one probe, as a scanner reads it.
+/// The peer's TCP answer (SYN-ACK or RST) to one probe of either family, as a scanner reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
     pub t: f64,
@@ -828,6 +794,11 @@ impl WireView {
     }
 }
 
+impl StepView for WireView {
+    fn probe_frames(&self) -> Vec<Vec<u8>> {
+        WireView::probe_frames(self)
+    }
+}
 /// The frames of the scanner MAC that are no probe of the scan and that the scanner side sends on the stand.
 pub const SCANNER_CLASSES: [(&str, &str); 4] = [
     (
@@ -1135,20 +1106,10 @@ pub fn effective(targets: &str, ports: &str) -> Result<EffectiveConfig, String> 
 pub fn plan_frames(targets: &str, ports: &str) -> Result<Vec<Vec<u8>>, String> {
     let eff = effective(targets, ports)?;
     let plan = ReadyPlan::new_cli(eff, vec![nic_binding()]).map_err(|e| e.to_string())?;
-    let mut cur = plan.cursor_for_nic(0, None).map_err(|e| e.to_string())?;
-    let mut frames = Vec::new();
-    loop {
-        let batch: Vec<Vec<u8>> = cur.preload(64).iter().map(|p| p.frame.clone()).collect();
-        if batch.is_empty() {
-            break;
-        }
-        cur.advance_sent_n(batch.len());
-        frames.extend(batch);
+    match plan_probes(&plan)? {
+        (frames, None) => Ok(frames),
+        (_, Some(e)) => Err(e),
     }
-    if let Some(e) = cur.build_error() {
-        return Err(e.to_string());
-    }
-    Ok(frames)
 }
 pub fn plan_stream(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
     plan_frames(c.targets, c.ports)
@@ -1303,13 +1264,12 @@ impl Shown for Rec {
     }
 }
 /// A document taken apart.
-#[derive(Debug, Clone, Default)]
-pub struct Document {
-    pub records: Vec<Rec>,
-    /// The footer is written.
-    pub complete: bool,
+pub type Document = Doc<Rec>;
+impl Record for Rec {
+    fn ts(&self) -> Option<u64> {
+        self.ts
+    }
 }
-/// An address as C prints it (`ipaddress_fmt`): IPv4 dotted, IPv6 in `ipv6address_fmt`'s form.
 fn ip_text(s: &str) -> Option<IpAddr> {
     if s.contains(':') {
         let a: Ipv6Addr = s.parse().ok()?;
@@ -1347,12 +1307,6 @@ fn field_rec(
             .transpose()?,
         ts: Some(canon(ts).ok_or(format!("time {ts:?}"))?),
     })
-}
-fn each(lines: &[&str], parse: impl Fn(&str) -> Result<Rec, String>) -> Result<Vec<Rec>, String> {
-    lines
-        .iter()
-        .map(|l| parse(l).map_err(|e| format!("{l:?}: {e}")))
-        .collect()
 }
 /// The status records of a `-oB` file after its header: IPv4 (types 6 and 7, length 13: time, address, protocol,
 /// port, reason, ttl) and IPv6 (types 10 and 11, length 26: time, protocol, port, reason, ttl, version 6, address;
@@ -1422,60 +1376,20 @@ fn binary_records(rest: &[u8]) -> Result<(Vec<Rec>, bool), String> {
         at += 2 + usize::from(len);
     }
 }
-/// A document of `out` in its C form (`out-text.c`, `out-json.c`, `out-binary.c` types 6, 7, 10, 11): an empty file
-/// is a document without a record; a file that stops after a record, without its footer, is not `complete`; any other
-/// malformation is an error.
+/// A document of `out` in its C form (`out-text.c`, `out-json.c` through [`parse_doc_with`], `out-binary.c` types 6,
+/// 7, 10, 11): an empty file is a document without a record; a file that stops after a record, without its footer,
+/// is not `complete`; any other malformation is an error.
 pub fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
-    if b.is_empty() {
-        return Ok(Document {
-            records: Vec::new(),
-            complete: true,
-        });
-    }
-    let mut d = Document::default();
-    match out {
-        Out::List => {
-            let lines = text_lines(b, "\n")?;
-            if lines[0] != "#masscan" {
-                return Err("no `#masscan` header".into());
-            }
-            d.complete = lines.len() > 1 && lines.last() == Some(&"# end");
-            let body = &lines[1..lines.len() - usize::from(d.complete)];
-            d.records = each(body, |l| {
-                let f = fields(LIST_REC, l).ok_or("not the record form")?;
-                field_rec(f[0], f[1], f[3], f[2], f[4], None, None)
-            })?;
+    parse_doc_with(out, b, field_rec, |b, d| {
+        if out == Out::Stdout {
+            return Err("no case of this suite writes the interactive form".into());
         }
-        Out::Json => {
-            let lines = text_lines(b, "\n")?;
-            if lines[0] != "[" {
-                return Err("no `[` header".into());
-            }
-            d.complete = lines.len() > 1 && lines.last() == Some(&"]");
-            let body = &lines[1..lines.len() - usize::from(d.complete)];
-            if body.len().is_multiple_of(2) || body.iter().skip(1).step_by(2).any(|l| *l != ",") {
-                return Err("the records are not separated by `,` lines".into());
-            }
-            let recs: Vec<&str> = body.iter().step_by(2).copied().collect();
-            d.records = each(&recs, |l| {
-                let f = fields(JSON_REC, l).ok_or("not the record form")?;
-                field_rec(f[4], f[3], f[0], f[2], f[1], Some(f[5]), Some(f[6]))
-            })?;
+        if b.len() < BINARY_BLOCK || !b.starts_with(b"masscan/1.1\ns:") {
+            return Err("not the 99-byte `masscan/1.1` header".into());
         }
-        Out::Binary => {
-            if b.len() < BINARY_BLOCK || !b.starts_with(b"masscan/1.1\ns:") {
-                return Err("not the 99-byte `masscan/1.1` header".into());
-            }
-            (d.records, d.complete) = binary_records(&b[BINARY_BLOCK..])?;
-        }
-        Out::Stdout => return Err("no case of this suite writes the interactive form".into()),
-    }
-    if d.records.is_empty() {
-        return Err(
-            "a header without a record (the header is written with the first record)".into(),
-        );
-    }
-    Ok(d)
+        (d.records, d.complete) = binary_records(&b[BINARY_BLOCK..])?;
+        Ok(())
+    })
 }
 
 /// The records a scanner reports for the replies of its wire, in reply order, each with its reply's capture time:
@@ -1503,84 +1417,8 @@ pub fn wire_records(v: &WireView, who: Who, out: Out, show_closed: bool) -> Vec<
         .collect()
 }
 
-// ------------------------------------------------------------------ what a step left
-
-struct Side {
-    spec: StepSpec,
-    exit: Option<i32>,
-    stdout: Option<String>,
-    stderr: Option<String>,
-    se: sv::Stderr,
-    view: Option<WireView>,
-    frames: Option<Frames>,
-    raw: Option<Vec<u8>>,
-    forced_exit: bool,
-}
-
-fn read_side(r: &mut Run, d: &Path, spec: &StepSpec, links: &[String]) -> Side {
-    let name = spec.name;
-    let sd = d.join(name);
-    let rel = |f: &str| format!("{name}/{f}");
-    let exit = av::need(r, &sd, "exit.txt").and_then(|t| {
-        let rc = av::parse_exit(&t);
-        if rc.is_none() {
-            r.inv(
-                &format!("{name}/exit.txt holds an exit code"),
-                false,
-                t.trim(),
-            );
-        }
-        rc
-    });
-    let stdout = av::need(r, &sd, "stdout.txt");
-    let stderr = av::need(r, &sd, "stderr.txt");
-    let st = stand();
-    let cap = av::capture(r, d, &rel(PEER_FILES[0]), links);
-    if let Some(cp) = &cap {
-        av::witness(r, d, &rel(PEER_FILES[0]), &rel(PEER_FILES[1]), cp, &st);
-    }
-    let raw = spec.out.file().and_then(|n| {
-        let b = fs::read(sd.join(n)).ok();
-        if b.is_none() {
-            sv_beh(r, spec, &format!("{n} written"), false, "missing");
-        }
-        b
-    });
-    let se = stderr.as_deref().map(sv::parse_stderr).unwrap_or_default();
-    Side {
-        spec: spec.clone(),
-        exit,
-        forced_exit: spec.who == Who::Oracle && stderr.as_deref().is_some_and(sv::forced_exit),
-        stdout,
-        stderr,
-        se,
-        view: cap.as_ref().map(|(fr, _)| view(fr, &st)),
-        frames: cap.map(|(fr, _)| fr),
-        raw,
-    }
-}
-
 // ------------------------------------------------------------------ checks
 
-/// rmasscan's misbehaviour FAILs; a broken oracle is a broken stand (INVALID).
-fn sv_beh(r: &mut Run, spec: &StepSpec, name: &str, ok: bool, detail: impl ToString) {
-    let name = format!("{}: {name}", spec.name);
-    match spec.who {
-        Who::Rmasscan => r.beh(&name, ok, detail),
-        Who::Oracle => r.inv(&name, ok, detail),
-    }
-}
-fn beh(r: &mut Run, s: &Side, name: &str, ok: bool, detail: impl ToString) {
-    sv_beh(r, &s.spec, name, ok, detail);
-}
-/// A check against the capture: FAIL only once the evidence is proven (rmasscan); INVALID for the oracle.
-fn cap(r: &mut Run, s: &Side, name: &str, ok: bool, detail: impl ToString) {
-    let name = format!("{}: {name}", s.spec.name);
-    match s.spec.who {
-        Who::Rmasscan => r.cap(&name, ok, detail),
-        Who::Oracle => r.inv(&name, ok, detail),
-    }
-}
 fn first(v: &[String]) -> String {
     v.iter().take(4).cloned().collect::<Vec<_>>().join("; ")
 }
@@ -1588,7 +1426,7 @@ fn first(v: &[String]) -> String {
 /// The stand owes every probe its answer (TCP 80 and 8080 open, the rest reset), every NS of the scanner exactly one
 /// NA of its form, and no other frame and no kernel noise; anything else is a stand that did not behave (INVALID for
 /// both scanners).
-fn stand_answers(r: &mut Run, s: &Side, v: &WireView) {
+fn stand_answers(r: &mut Run, s: &Side<WireView>, v: &WireView) {
     let mut problems = Vec::new();
     for (i, p) in v.probes.iter().enumerate() {
         let answers: Vec<&Reply> = v.replies.iter().filter(|x| x.probe == i).collect();
@@ -1641,7 +1479,7 @@ fn stand_answers(r: &mut Run, s: &Side, v: &WireView) {
     );
     r.inv(
         &format!(
-            "{}: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner; bound 0 each)",
+            "{}: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
             s.spec.name
         ),
         v.noise.is_empty(),
@@ -1658,29 +1496,14 @@ fn stand_answers(r: &mut Run, s: &Side, v: &WireView) {
 }
 
 /// Every frame of the scanner MAC is a probe or of a named class within its bound.
-fn scanner_frames(r: &mut Run, s: &Side, v: &WireView, c: &CaseSpec) {
-    cap(
+fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView, c: &CaseSpec) {
+    scanner_frame_checks(
         r,
         s,
         "every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, NA to a peer NS)",
-        v.scanner_unexplained.is_empty(),
-        format!(
-            "{} other frames: {}",
-            v.scanner_unexplained.len(),
-            first(&v.scanner_unexplained)
-        ),
-    );
-    let bounds = scanner_bounds(v, s.spec.who, c);
-    cap(
-        r,
-        s,
+        &v.scanner_unexplained,
         "the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
-        bounds.iter().all(|(_, n, max)| n <= max),
-        bounds
-            .iter()
-            .map(|(k, n, max)| format!("{k} {n} of at most {max}"))
-            .collect::<Vec<_>>()
-            .join(", "),
+        &scanner_bounds(v, s.spec.who, c),
     );
 }
 
@@ -1728,7 +1551,7 @@ pub fn requests_of(v: &str) -> Option<u64> {
     let rest = v.split_once(": ")?.1;
     rest.split(' ').next()?.parse().ok()
 }
-fn detection(r: &mut Run, s: &Side, c: &CaseSpec) {
+fn detection(r: &mut Run, s: &Side<WireView>, c: &CaseSpec) {
     let want = want_plus(c);
     let ok = s.se.plus.len() == want.len()
         && s.se.plus.iter().zip(&want).all(|((k, v), (wk, wv))| {
@@ -1753,114 +1576,38 @@ fn detection(r: &mut Run, s: &Side, c: &CaseSpec) {
         format!("{:?}", s.se.plus),
     );
 }
-fn plus_value<'a>(s: &'a Side, key: &str) -> Option<&'a str> {
+fn plus_value<'a>(s: &'a Side<WireView>, key: &str) -> Option<&'a str> {
     s.se.plus
         .iter()
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.as_str())
 }
 
-/// A rmasscan step: exit, stdout, stderr grammar, `[+]` lines, `[+] finished` against the wire, record times.
-fn rmasscan_step(r: &mut Run, s: &Side, c: &CaseSpec, doc: Option<&Document>) {
-    if let Some(rc) = s.exit {
-        beh(r, s, "exit.txt is 0", rc == 0, rc);
-    }
-    if let Some(t) = &s.stdout {
-        beh(
-            r,
-            s,
-            "stdout.txt is empty (a file format silences stdout)",
-            t.is_empty(),
-            t.len(),
-        );
-    }
-    if s.stderr.is_none() {
-        return;
-    }
-    beh(
+/// A rmasscan step: the shared checks (exit, stdout, stderr grammar, `[+] finished` against the wire, record times)
+/// with this suite's `[+]` lines, then what the case proves.
+fn rmasscan_step(r: &mut Run, s: &Side<WireView>, c: &CaseSpec, doc: Option<&Document>) {
+    pair_verify::rmasscan_step(
         r,
         s,
-        "stderr.txt holds only [+] lines and rmasscan's status forms",
-        s.se.stray.is_empty(),
-        format!("{:?}", s.se.stray),
-    );
-    detection(r, s, c);
-    let fin = s.se.fin.as_ref();
-    beh(
-        r,
-        s,
-        "[+] finished: Completed",
-        fin.is_some_and(|f| f.reason == "Completed"),
-        format!("{fin:?}"),
-    );
-    let Some(v) = &s.view else { return };
-    let all = wire_records(v, Who::Rmasscan, Out::Json, true);
-    let open = all.iter().filter(|x| x.st == St::Open).count() as u64;
-    let want = (v.probes.len() as u64, all.len() as u64, open);
-    cap(
-        r,
-        s,
-        "[+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
-        fin.map(|f| (f.sent, f.replies, f.open)) == Some(want),
-        format!(
-            "printed {:?}, wire (sent, replies, open) {want:?}",
-            fin.map(|f| (f.sent, f.replies, f.open))
-        ),
-    );
-    if let Some(d) = doc {
-        let (lo, hi) = (
-            v.probes.first().map_or(0.0, |p| p.t) - 2.0,
-            v.replies.last().map_or(0.0, |p| p.t) + 2.0,
-        );
-        let off: Vec<u64> = d
-            .records
-            .iter()
-            .filter_map(|x| x.ts)
-            .filter(|t| !(lo..=hi).contains(&(*t as f64)))
-            .collect();
-        cap(
-            r,
-            s,
-            "every record's time lies within the scan on the wire (2 s either side)",
-            off.is_empty(),
-            format!("{off:?}"),
-        );
-    }
-}
-
-/// The document of a step: well formed; rmasscan's complete, the oracle's complete or cut by its forced exit.
-fn doc_of(r: &mut Run, s: &Side) -> Option<Document> {
-    let raw = s.raw.as_ref()?;
-    let what = s.spec.out.file().unwrap_or("stdout.txt");
-    match parse_doc(s.spec.out, raw) {
-        Ok(d) => {
-            beh(
-                r,
-                s,
-                &format!("{what} is a well-formed document"),
-                true,
-                format!("{} records", d.records.len()),
-            );
-            if !d.complete {
-                beh(
-                    r,
-                    s,
-                    "its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
-                    s.spec.who == Who::Oracle && s.forced_exit,
-                    "no footer",
-                );
+        doc,
+        |r, s| detection(r, s, c),
+        |v| {
+            let all = wire_records(v, Who::Rmasscan, Out::Json, true);
+            let open = all.iter().filter(|x| x.st == St::Open).count() as u64;
+            WireSummary {
+                counts: (v.probes.len() as u64, all.len() as u64, open),
+                first_probe: v.probes.first().map(|p| p.t),
+                last_reply: v.replies.last().map(|p| p.t),
             }
-            Some(d)
-        }
-        Err(e) => {
-            beh(r, s, &format!("{what} is a well-formed document"), false, e);
-            None
-        }
+        },
+    );
+    if let Some(v) = &s.view {
+        case_checks(r, c, s, v);
     }
 }
 
 /// What a case proves beyond the common checks, on rmasscan's steps.
-fn case_checks(r: &mut Run, c: &CaseSpec, s: &Side, v: &WireView) {
+fn case_checks(r: &mut Run, c: &CaseSpec, s: &Side<WireView>, v: &WireView) {
     let st = stand();
     let v6_dst_ok = v
         .probes
@@ -1950,48 +1697,36 @@ fn case_checks(r: &mut Run, c: &CaseSpec, s: &Side, v: &WireView) {
 }
 
 /// Each named deviation of the case: the wire condition that keeps it from changing the comparison, and the notes.
-fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side], docs: &[Option<Document>]) {
-    let mut notes = Vec::new();
-    for name in c.deviations {
-        let rule = DEVIATIONS
-            .iter()
-            .find(|(n, _)| n == name)
-            .map_or("", |(_, x)| *x);
+fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side<WireView>], docs: &[Option<Document>]) {
+    named_deviations(r, c.deviations, &DEVIATIONS, |name| {
         let views = |who: Who| {
             sides
                 .iter()
                 .filter(move |s| s.spec.who == who)
                 .filter_map(|s| s.view.as_ref())
         };
-        let (ok, observed): (bool, String) = match *name {
+        match name {
+            // Each condition here is the ORACLE's (a broken oracle is a broken stand: INVALID). rmasscan's side of the
+            // same rule is its own FAIL elsewhere: its NS count against the `ndp:` line and the plan (case_checks),
+            // its detected source and interface lines (detection), its probes' source (the plan).
             "ndp-ns-not-rs" => {
                 let oracle_ns: usize = views(Who::Oracle).map(|v| v.ns.len()).sum();
                 let rm: Vec<usize> = views(Who::Rmasscan).map(|v| v.ns.len()).collect();
                 (
-                    oracle_ns == 0 && rm.iter().all(|n| *n >= 1),
-                    format!("NS of the scanner: rmasscan steps {rm:?}, oracle steps {oracle_ns}"),
+                    oracle_ns == 0,
+                    format!("NS of the scanner: oracle steps {oracle_ns}, rmasscan steps {rm:?}"),
                 )
             }
             "oracle-source-given" => {
-                let off = sides
-                    .iter()
-                    .filter_map(|s| s.view.as_ref())
+                let off = views(Who::Oracle)
                     .flat_map(|v| &v.probes)
                     .filter(|p| p.ip.is_ipv6())
                     .filter(|p| pkt(&p.frame).map(|q| q.src) != Some(IpAddr::V6(scanner6())))
                     .count();
-                let detected = sides
-                    .iter()
-                    .filter(|s| s.spec.who == Who::Rmasscan && s.stderr.is_some())
-                    .all(|s| {
-                        s.se.plus.iter().any(|(k, v)| {
-                            k == "source-ip" && *v == format!("[{IPV6_SCANNER}] (detected)")
-                        })
-                    });
                 (
-                    off == 0 && detected,
+                    off == 0,
                     format!(
-                        "{off} IPv6 probes from another source; rmasscan detected {IPV6_SCANNER}: {detected}"
+                        "{off} IPv6 probes of the oracle from another source than {IPV6_SCANNER}"
                     ),
                 )
             }
@@ -2024,212 +1759,28 @@ fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side], docs: &[Option<Document
                 )
             }
             "families-one-interface" => {
-                let ok = sides
-                    .iter()
-                    .filter(|s| s.spec.who == Who::Rmasscan && s.stderr.is_some())
-                    .all(|s| {
-                        plus_value(s, "interface").is_some_and(|i| i.starts_with("veth-a "))
-                            && s.se.plus.iter().filter(|(k, _)| k == "source-ip").count() == 2
-                    });
+                // C sends both families out of its IPv4 default interface, the stand's one link: both are on the
+                // oracle's wire. rmasscan's one interface and two source lines are its detection check.
+                let both: Vec<(usize, usize)> = views(Who::Oracle)
+                    .map(|v| {
+                        let six = v.probes.iter().filter(|p| p.ip.is_ipv6()).count();
+                        (v.probes.len() - six, six)
+                    })
+                    .collect();
                 (
-                    ok,
-                    format!(
-                        "rmasscan printed one interface (veth-a) and both source addresses: {ok}"
-                    ),
+                    both.iter().all(|(a, b)| *a > 0 && *b > 0),
+                    format!("oracle steps (IPv4, IPv6) probes on the stand's one link: {both:?}"),
                 )
             }
             _ => (false, "unknown deviation".into()),
-        };
-        r.inv(&format!("deviation {name}: {rule}"), ok, &observed);
-        notes.push(json!({"name": name, "rule": rule, "observed": observed}));
-    }
-    r.notes.insert("deviations".into(), json!(notes));
-}
-
-/// One case: every step's own checks, then each document's rmasscan step against its oracle step.
-fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
-    let plan = match plan_stream(c) {
-        Ok(p) => Some(p),
-        Err(e) => {
-            r.inv("the case's plan rebuilds from the case table", false, e);
-            None
         }
-    };
-    let mut docs: Vec<Option<Document>> = Vec::new();
-    let mut scanner_notes = serde_json::Map::new();
-    let mut swaps = serde_json::Map::new();
-    for s in sides {
-        if let Some(v) = &s.view {
-            stand_answers(r, s, v);
-            scanner_frames(r, s, v, c);
-            let mut counts: serde_json::Map<String, Value> = SCANNER_CLASSES
-                .iter()
-                .map(|(k, _)| {
-                    (
-                        (*k).into(),
-                        json!(v.scanner_named.get(k).copied().unwrap_or(0)),
-                    )
-                })
-                .collect();
-            counts.insert("unexplained".into(), json!(v.scanner_unexplained.len()));
-            counts.insert("stand_noise".into(), json!(v.noise));
-            counts.insert(
-                "at_most".into(),
-                json!(
-                    scanner_bounds(v, s.spec.who, c)
-                        .iter()
-                        .map(|(k, _, max)| (*k, *max))
-                        .collect::<BTreeMap<_, _>>()
-                ),
-            );
-            scanner_notes.insert(s.spec.name.into(), Value::Object(counts));
-        }
-        let d = doc_of(r, s);
-        match s.spec.who {
-            Who::Rmasscan => {
-                rmasscan_step(r, s, c, d.as_ref());
-                if let Some(v) = &s.view {
-                    case_checks(r, c, s, v);
-                }
-            }
-            Who::Oracle => {
-                if let Some(rc) = s.exit {
-                    beh(r, s, "exit.txt is 0", rc == 0, rc);
-                }
-            }
-        }
-        if let (Some(v), Some(d)) = (&s.view, &d) {
-            let want = wire_records_at(v, s.spec.who, s.spec.out, c.show_closed);
-            let got: Vec<Rec> = d
-                .records
-                .iter()
-                .map(|x| match s.spec.who {
-                    Who::Rmasscan => x.bare(),
-                    Who::Oracle => x.masked(),
-                })
-                .collect();
-            let order = in_reply_order(&got, &want);
-            if let Ok(n) = order {
-                swaps.insert(
-                    s.spec.name.into(),
-                    json!({"pairs": n.pairs, "largest_gap_us": n.largest_gap_us}),
-                );
-            }
-            cap(
-                r,
-                s,
-                "the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link may come in either order: REPLY_REORDER_WINDOW_US)",
-                order.is_ok(),
-                order.map_or_else(|e| e, |_| shown(&got)),
-            );
-        }
-        if let (Some(v), Some(p), Who::Rmasscan) = (&s.view, &plan, s.spec.who) {
-            let act = v.probe_frames();
-            let at = act.iter().zip(p).position(|(a, b)| a != b);
-            cap(
-                r,
-                s,
-                "the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
-                act == *p,
-                format!(
-                    "{} probes, {} planned, first difference at {at:?}",
-                    act.len(),
-                    p.len()
-                ),
-            );
-        }
-        docs.push(d);
-    }
-    let mut order = serde_json::Map::new();
-    for (i, pair) in sides.chunks(2).enumerate() {
-        let [rm, or] = pair else { continue };
-        let k = 2 * i;
-        if let (Some(a), Some(b)) = (&rm.view, &or.view) {
-            let same = a.probe_frames() == b.probe_frames();
-            r.cap(
-                &format!(
-                    "{}: the probes equal the C oracle's ({}), byte for byte and in order",
-                    rm.spec.name, or.spec.name
-                ),
-                same,
-                format!(
-                    "{} probes, the oracle {}, first difference at {:?}",
-                    a.probes.len(),
-                    b.probes.len(),
-                    a.probes
-                        .iter()
-                        .zip(&b.probes)
-                        .position(|(x, y)| x.frame != y.frame)
-                ),
-            );
-        }
-        if let (Some(Some(x)), Some(Some(y))) = (docs.get(k), docs.get(k + 1)) {
-            let got: Vec<Rec> = x.records.iter().map(Rec::masked).collect();
-            let want: Vec<Rec> = y.records.iter().map(Rec::masked).collect();
-            let (mut got_set, mut want_set) = (got.clone(), want.clone());
-            got_set.sort();
-            want_set.sort();
-            let same = got_set == want_set;
-            order.insert(
-                rm.spec.name.into(),
-                json!(match (same, got == want) {
-                    (true, true) => "the same records in the same order",
-                    (true, false) => "the same records, in another order",
-                    (false, _) => "other records",
-                }),
-            );
-            r.cap(
-                &format!(
-                    "{}: the records equal the C oracle's ({}) field for field but the time and the IPv6 ttl, in any order (each document's order is its own wire's reply order, judged above)",
-                    rm.spec.name, or.spec.name
-                ),
-                same,
-                if same {
-                    shown(&got)
-                } else {
-                    first_difference(&got_set, &want_set)
-                },
-            );
-        }
-    }
-    r.notes.insert(
-        "record_order_vs_c".into(),
-        json!({"rule": RECORD_ORDER_VS_C, "documents": order}),
-    );
-    r.notes
-        .insert("reply_order_swaps".into(), Value::Object(swaps));
-    r.notes.insert(
-        "reply_order_window".into(),
-        json!(format!(
-            "{REPLY_REORDER_WINDOW_US} us: two replies captured on the peer link at most this far apart (rounded to the microsecond) may reach the scanner in the other order; reply_order_swaps gives, per step, the pairs of records written in the other order within it and the largest gap among them"
-        )),
-    );
-    deviations(r, c, sides, &docs);
-    r.notes.insert(
-        "scanner_frame_classes".into(),
-        json!(SCANNER_CLASSES.iter().copied().collect::<BTreeMap<_, _>>()),
-    );
-    r.notes.insert(
-        "stand_noise_classes".into(),
-        json!(STAND_NOISE.iter().copied().collect::<BTreeMap<_, _>>()),
-    );
-    r.notes
-        .insert("scanner_frames".into(), Value::Object(scanner_notes));
+    });
 }
 
 // ------------------------------------------------------------------ privacy and evidence
 
-/// The files a scanner wrote or that name its argv: their addresses must be the stand's.
-const SCANNER_TEXT: [&str; 8] = [
-    "argv.json",
-    "expect.json",
-    "stdout.txt",
-    "stderr.txt",
-    "output.txt",
-    "output.json",
-    "exit.txt",
-    IPV6_STACK_JSON,
-];
+/// The case record whose addresses must be the stand's, beside the steps' files (`pair_verify::STEP_TEXT`).
+const SCANNER_TEXT: [&str; 1] = [IPV6_STACK_JSON];
 /// The IPv6 address C's own hint text names (`main-initadapter.c`: `--source-ip 2001:3b8::1234`).
 const C_HINT_IPV6: &str = "2001:3b8::1234";
 /// Candidate IPv6 addresses in a text: runs of hex digits, `:` and `.` with at least two colons, delimited by anything
@@ -2282,61 +1833,6 @@ fn binary_problems(b: &[u8]) -> Vec<String> {
             .collect(),
     }
 }
-fn privacy(r: &mut Run, d: &Path, files: &[String]) {
-    let mut clean = true;
-    let mut seen = 0;
-    for rel in files {
-        let ext = Path::new(rel)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if ext != "bin" && !av::TEXT_EXTENSIONS.contains(&ext) {
-            continue;
-        }
-        let base = rel.rsplit('/').next().unwrap_or(rel);
-        let scanner_text = SCANNER_TEXT.contains(&base);
-        let mut p = match fs::read(d.join(rel)) {
-            Err(e) => vec![format!("unreadable: {e}")],
-            Ok(b) if ext == "bin" => binary_problems(&b),
-            Ok(b) => {
-                // The table's case names are no host names (`v01_ndp_and_tcp6_syn` reads like a DNS-SD `_tcp` label).
-                let text = CASES
-                    .iter()
-                    .fold(String::from_utf8_lossy(&b).into_owned(), |t, c| {
-                        t.replace(c.tag, "<case>")
-                    });
-                let mut p = av::token_problems(&text, scanner_text);
-                p.extend(pv::iface_problems(&text));
-                p.extend(
-                    ipv6_tokens(&text)
-                        .into_iter()
-                        .filter(|ip| !ipv6_allowed(*ip, scanner_text))
-                        .map(|ip| format!("IPv6 address {ip}")),
-                );
-                p
-            }
-        };
-        seen += 1;
-        p.sort();
-        p.dedup();
-        if !p.is_empty() {
-            clean = false;
-            r.inv(
-                &format!("privacy: {rel} holds only allowlisted names, addresses and paths"),
-                false,
-                p.join("; "),
-            );
-        }
-    }
-    if clean {
-        r.add(
-            "privacy: every text and binary file holds only allowlisted names, IPv4 and IPv6 addresses and paths",
-            PASS,
-            format!("{seen} files"),
-            false,
-        );
-    }
-}
 /// The IPv6 stand's seal before and after the case (`capture isolation --mode ipv6`).
 fn seal(r: &mut Run, d: &Path) {
     match read_json(d.join(ISOLATION_JSON)) {
@@ -2362,344 +1858,154 @@ fn seal(r: &mut Run, d: &Path) {
         ),
     );
 }
-fn gate(r: &mut Run, d: &Path, files: &[String]) {
-    match hashes_match_tree(d, true) {
-        Ok(()) => r.add(
-            "hashes-before-copy.txt matches every file of the case directory",
-            PASS,
-            files.len(),
-            false,
-        ),
-        Err(e) => r.add(
-            "hashes-before-copy.txt matches every file of the case directory",
-            INVALID,
-            e,
-            false,
-        ),
-    }
-    let odd: Vec<&String> = files
-        .iter()
-        .filter(|f| !pv::evidence_extension(f))
-        .collect();
-    r.inv(
-        "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
-        odd.is_empty(),
-        format!("{odd:?}"),
-    );
-    seal(r, d);
-}
 
-// ------------------------------------------------------------------ one case
+// ------------------------------------------------------------------ the plan of the shared verifier
 
-fn verify_run(root: &Path, c: &CaseSpec, root_links: &[String]) -> Run {
-    let tag = c.tag;
-    let mut r = Run::new(tag);
-    let rel = format!("runs/{tag}");
-    if root_links.iter().any(|l| l == "runs" || *l == rel) {
-        r.inv(
-            "the case directory is a real directory, not a symbolic link",
-            false,
-            rel,
+/// The IPv6 suite as [`pair_verify`] judges it.
+pub(crate) struct Ipv6;
+impl PairPlan for Ipv6 {
+    type Case = CaseSpec;
+    type View = WireView;
+    type Rec = Rec;
+    type Expect = Ipv6Expect;
+    const KEY: &'static str = "ipv6";
+    const SCANNER_TEXT: &'static [&'static str] = &SCANNER_TEXT;
+    const RECORD_ORDER_VS_C: &'static str = RECORD_ORDER_VS_C;
+    const SCANNER_CLASSES: &'static [(&'static str, &'static str)] = &SCANNER_CLASSES;
+    const PROBES_VS_C: &'static str = "";
+    const OWN_WIRE: &'static str = "the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)";
+    const ORACLE_NOTE: &'static str = "the pinned C masscan 8e6b3b0 with rmasscan's argv plus oracle_extra, one run per document, on the same stand";
+
+    fn cases() -> Vec<CaseSpec> {
+        CASES.to_vec()
+    }
+    fn tag(c: &CaseSpec) -> &'static str {
+        c.tag
+    }
+    fn steps(c: &CaseSpec) -> Vec<StepSpec> {
+        steps(c.tag).unwrap_or_default()
+    }
+    fn expect(c: &CaseSpec) -> Option<Ipv6Expect> {
+        expect(c.tag)
+    }
+    fn manifest(v: Value) -> Option<Option<String>> {
+        serde_json::from_value::<Ipv6Manifest>(v)
+            .ok()
+            .filter(|x| x.ipv6 == "linux")
+            .map(|x| x.lab_id)
+    }
+    fn view(_c: &CaseSpec, fr: &Frames, st: &Stand) -> WireView {
+        view(fr, st)
+    }
+    fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
+        parse_doc(out, b)
+    }
+    fn foreign(fr: &Frames, st: &Stand) -> Vec<String> {
+        let mut off = pv::foreign_probes(fr, st);
+        off.extend(foreign_probes6(fr, st));
+        off
+    }
+    fn text_problems(text: &str, scanner_text: bool) -> Vec<String> {
+        let mut p = pv::iface_problems(text);
+        p.extend(
+            ipv6_tokens(text)
+                .into_iter()
+                .filter(|ip| !ipv6_allowed(*ip, scanner_text))
+                .map(|ip| format!("IPv6 address {ip}")),
         );
-        return r;
+        p
     }
-    let d = root.join("runs").join(tag);
-    if !d.is_dir() {
-        r.add("case directory present", NOT_RUN, "missing", false);
-        return r;
+    fn binary_problems(b: &[u8]) -> Vec<String> {
+        binary_problems(b)
     }
-    let Some(specs) = steps(tag) else { return r };
-    let t = tree(&d);
-    r.safety(
-        "no compressed capture in the case directory",
-        !t.files.iter().chain(&t.links).any(|f| f.ends_with(".gz")),
-        "captures are stored uncompressed; the verifier has no decompression",
-    );
-    let st = stand();
-    let sides: Vec<Side> = specs
-        .iter()
-        .map(|spec| read_side(&mut r, &d, spec, &t.links))
-        .collect();
-    for s in &sides {
-        if let Some(fr) = &s.frames {
-            let who = s.spec.name;
-            let n = av::foreign_syns(fr, &st);
-            r.safety(
-                &format!("no IPv4 SYN on the {who} capture from outside the stand binding or to an address off the stand"),
-                n == 0,
-                n,
-            );
-            let mut off = pv::foreign_probes(fr, &st);
-            off.extend(foreign_probes6(fr, &st));
-            r.safety(
-                &format!("no frame of the scanner on the {who} capture to an IPv4 or IPv6 address off the stand or from another source"),
-                off.is_empty(),
-                off.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
-            );
-            av::no_foreign_frame(&mut r, who, fr, &st);
-        }
+    fn seal(r: &mut Run, d: &Path) {
+        seal(r, d);
     }
-    if !t.links.is_empty() {
-        r.inv(
-            "no symbolic link in the case directory (links are never followed)",
-            false,
-            format!("{:?}", t.links),
-        );
-        return r;
-    }
-    gate(&mut r, &d, &t.files);
-    privacy(&mut r, &d, &t.files);
-    let expect_rec: Option<Ipv6Expect> = av::typed(&mut r, &d, EXPECT_JSON);
-    let expect_ok = expect_rec.as_ref() == expect(tag).as_ref();
-    if expect_rec.is_some() {
-        r.inv(
-            "expect.json equals the case table's entry",
-            expect_ok,
-            format!("table {:?}", expect(tag)),
-        );
-    }
-    let mut argv_ok = expect_ok;
-    for spec in &specs {
-        let rec: Option<ArgvRecord> = av::typed(&mut r, &d.join(spec.name), "argv.json");
-        if let Some(a) = &rec {
-            let ok = a.argv == spec.argv;
-            r.inv(
-                &format!(
-                    "{}/argv.json is the step's argv in the case table",
-                    spec.name
-                ),
-                ok,
-                format!("{:?}, table {:?}", a.argv, spec.argv),
-            );
-            argv_ok &= ok;
-        } else {
-            argv_ok = false;
-        }
-    }
-    r.argv_ok = argv_ok;
-    for spec in &specs {
-        if let Some(rec) = av::typed::<ResponderRecord>(&mut r, &d.join(spec.name), RESPONDER_JSON)
-        {
-            let problem = pv::responder_problem(&rec);
-            r.inv(
-                &format!(
-                    "{}/{RESPONDER_JSON}: the peer responder ran until the scanner ended",
-                    spec.name
-                ),
+    fn case_records(r: &mut Run, d: &Path, _c: &CaseSpec) {
+        // The stand's IPv6 before the case: an address that was tentative (or any other unready state) means the
+        // case did not run on the stand at all, so NOT RUN, never a PASS or a FAIL.
+        if let Some(p) = av::typed::<Ipv6Stack>(r, d, IPV6_STACK_JSON) {
+            let problem = stack_problem(&p);
+            r.check(
+                "ipv6-stack.json: the stand's IPv6 was ready before the case (the veth settings, the stand's addresses none tentative or failed)",
                 problem.is_none(),
-                problem.unwrap_or_else(|| "it still ran".into()),
+                problem.unwrap_or_else(|| "ready".into()),
+                NOT_RUN,
+                false,
             );
         }
     }
-    // The stand's IPv6 before the case: an address that was tentative (or any other unready state) means the case
-    // did not run on the stand at all, so NOT RUN, never a PASS or a FAIL.
-    if let Some(p) = av::typed::<Ipv6Stack>(&mut r, &d, IPV6_STACK_JSON) {
-        let problem = stack_problem(&p);
-        r.check(
-            "ipv6-stack.json: the stand's IPv6 was ready before the case (the veth settings, the stand's addresses none tentative or failed, the stand's responder)",
-            problem.is_none(),
-            problem.unwrap_or_else(|| "ready".into()),
-            NOT_RUN,
-            false,
+    fn plan(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
+        plan_stream(c)
+    }
+    fn step_wire(
+        r: &mut Run,
+        c: &CaseSpec,
+        s: &Side<WireView>,
+        v: &WireView,
+    ) -> serde_json::Map<String, Value> {
+        stand_answers(r, s, v);
+        scanner_frames(r, s, v, c);
+        let mut counts = scanner_counts(
+            &SCANNER_CLASSES,
+            &v.scanner_named,
+            v.scanner_unexplained.len(),
+            &scanner_bounds(v, s.spec.who, c),
+        );
+        counts.insert("stand_noise".into(), json!(v.noise));
+        counts
+    }
+    fn rmasscan_step(r: &mut Run, c: &CaseSpec, s: &Side<WireView>, doc: Option<&Document>) {
+        rmasscan_step(r, s, c, doc);
+    }
+    fn wire_records_at(c: &CaseSpec, v: &WireView, who: Who, out: Out) -> Vec<(Rec, f64)> {
+        wire_records_at(v, who, out, c.show_closed)
+    }
+    fn doc_record(x: &Rec, who: Who) -> Rec {
+        match who {
+            Who::Rmasscan => x.bare(),
+            Who::Oracle => x.masked(),
+        }
+    }
+    fn same_probe(rm: &[u8], c: &[u8]) -> Option<bool> {
+        (rm == c).then_some(false)
+    }
+    fn vs_c(
+        _c: &CaseSpec,
+        rm: &[Rec],
+        oracle: &[Rec],
+    ) -> (Vec<Rec>, Vec<Rec>, usize, &'static str) {
+        (
+            rm.iter().map(Rec::masked).collect(),
+            oracle.iter().map(Rec::masked).collect(),
+            0,
+            " (ipv6-ttl-not-compared applied)",
+        )
+    }
+    fn finish(
+        r: &mut Run,
+        c: &CaseSpec,
+        sides: &[Side<WireView>],
+        docs: &[Option<Document>],
+        _tally: Tally,
+    ) {
+        deviations(r, c, sides, docs);
+        r.notes.insert(
+            "stand_noise_classes".into(),
+            json!(STAND_NOISE.iter().copied().collect::<BTreeMap<_, _>>()),
         );
     }
-    judge(&mut r, c, &sides);
-    r.notes.insert(
-        "oracle".into(),
-        json!("the pinned C masscan 8e6b3b0 with rmasscan's argv plus oracle_extra, one run per document, on the same stand"),
-    );
-    r
 }
-
-// ------------------------------------------------------------------ the directory
 
 /// Judge an evidence directory: the manifest, every planned case, and a safety walk of everything else. Symbolic
 /// links are never followed.
 pub fn verify_dir(root: &Path) -> Value {
-    let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[],"aborted":[]});
-    let t = tree(root);
-    let mut m = Run::new("manifest");
-    m.argv_ok = true;
-    m.safety(
-        "no compressed capture anywhere in the evidence directory",
-        !t.files.iter().chain(&t.links).any(|f| f.ends_with(".gz")),
-        "captures are stored uncompressed; the verifier has no decompression",
-    );
-    m.inv(
-        "no symbolic link in the evidence directory (links are never followed)",
-        t.links.is_empty(),
-        format!("{:?}", t.links),
-    );
-    let manifest = (!t.links.iter().any(|l| l == MANIFEST_JSON))
-        .then(|| read_json(root.join(MANIFEST_JSON)))
-        .flatten()
-        .and_then(|v| serde_json::from_value::<Ipv6Manifest>(v).ok())
-        .filter(|x| x.ipv6 == "linux");
-    m.check(
-        "manifest.json names the ipv6 plan (linux)",
-        manifest.is_some(),
-        "",
-        NOT_RUN,
-        false,
-    );
-    let tags = if manifest.is_some() {
-        planned_tags()
-    } else {
-        Vec::new()
-    };
-    let outside: Vec<String> = t
-        .files
-        .iter()
-        .filter(|f| {
-            *f != "verdict.json"
-                && !tags
-                    .iter()
-                    .any(|tag| f.starts_with(&format!("runs/{tag}/")))
-        })
-        .cloned()
-        .collect();
-    let odd: Vec<&String> = outside
-        .iter()
-        .filter(|f| !pv::evidence_extension(f))
-        .collect();
-    m.inv(
-        "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md bin)",
-        odd.is_empty(),
-        format!("{odd:?}"),
-    );
-    privacy(&mut m, root, &outside);
-    let unplanned: Vec<&str> = t
-        .dirs
-        .iter()
-        .chain(&t.files)
-        .chain(&t.links)
-        .filter_map(|p| p.strip_prefix("runs/"))
-        .filter(|p| !p.contains('/') && !tags.contains(p))
-        .collect();
-    m.inv(
-        "runs/ holds only the planned case directories",
-        unplanned.is_empty(),
-        format!("{unplanned:?}"),
-    );
-    let attempts = av::attempts(&t, |name| av::attempt_of(&tags, name));
-    if !attempts.is_empty() {
-        let strays: Vec<&str> = attempts
-            .iter()
-            .filter(|a| a.case.is_none())
-            .map(|a| a.name.as_str())
-            .collect();
-        m.inv(
-            "runs_aborted/ holds only attempts of planned cases (<tag>.<run id>)",
-            strays.is_empty(),
-            format!("{strays:?}"),
-        );
-    }
-    if manifest.is_some() {
-        let id = manifest.as_ref().and_then(|x| x.lab_id.as_deref());
-        av::teardown(&mut m, root, &t.links, id);
-    }
-    let mut runs = vec![m.summary()];
-    if manifest.is_some() {
-        runs.extend(CASES.iter().map(|c| {
-            let mut r = verify_run(root, c, &t.links);
-            let earlier: Vec<String> = attempts
-                .iter()
-                .filter(|a| a.case == Some(c.tag))
-                .map(|a| format!("runs_aborted/{}", a.name))
-                .collect();
-            if !earlier.is_empty() {
-                r.inv(
-                    "no aborted attempt of this case in runs_aborted/ (a case runs once into one --out)",
-                    false,
-                    earlier.join(", "),
-                );
-            }
-            r.summary()
-        }));
-    }
-    result["runs"] = json!(runs);
-    result["aborted"] = json!(
-        attempts
-            .iter()
-            .map(av::Attempt::summary)
-            .collect::<Vec<_>>()
-    );
-    result["safety_scan"] = json!(stray_scan(root, &tags, &t));
-    verify::finish(result)
-}
-
-/// The captures outside the planned cases: `stray_scan`'s SYN and MAC checks, and the scanner's frames of either
-/// family off the stand.
-fn stray_scan(root: &Path, tags: &[&'static str], t: &crate::macos_verify::Tree) -> Vec<Value> {
-    let planned = |rel: &str| {
-        tags.iter()
-            .any(|tag| rel.starts_with(&format!("runs/{tag}/")))
-    };
-    let st = stand();
-    let mut out = av::stray_scan(root, Some(Plan::Linux), tags, t);
-    for f in t
-        .files
-        .iter()
-        .filter(|f| f.ends_with(PEER_FILES[0]) && !planned(f))
-    {
-        let mut r = Run::new(&format!("{f} (IPv4 and IPv6)"));
-        r.argv_ok = true;
-        if let Some((fr, _)) = verify::load_pcap(&mut r, &root.join(f)) {
-            let mut off = pv::foreign_probes(&fr, &st);
-            off.extend(foreign_probes6(&fr, &st));
-            r.safety(
-                "no frame of the scanner on the capture to an IPv4 or IPv6 address off the stand or from another source",
-                off.is_empty(),
-                off.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
-            );
-        }
-        out.push(r.summary());
-    }
-    out
+    pair_verify::verify_dir::<Ipv6>(root)
 }
 
 /// `ipv6-verify --dir DIR [--out FILE]`: 0 PASS, 1 FAIL, 2 INVALID or NOT RUN.
 pub fn run(args: &[String]) -> Result<i32, String> {
-    let o = crate::windows_suite::options_for("ipv6-verify", args, &["dir", "out"])?;
-    if o.contains_key("help") {
-        println!("ipv6-verify --dir DIR [--out FILE]  (exit 0 PASS, 1 FAIL, 2 INVALID or NOT RUN)");
-        return Ok(0);
-    }
-    let dir = crate::windows_suite::required(&o, "dir")?;
-    let res = verify_dir(Path::new(&dir));
-    if let Some(out) = o.get("out").and_then(|v| v.first()) {
-        fs::write(
-            out,
-            format!(
-                "{}\n",
-                serde_json::to_string_pretty(&res).map_err(|e| e.to_string())?
-            ),
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    for r in array(&res["runs"]) {
-        let bad: Vec<_> = array(&r["checks"])
-            .iter()
-            .filter(|c| c["result"] != PASS)
-            .take(3)
-            .map(|c| format!("{}: {}", s(&c["result"]), s(&c["name"])))
-            .collect();
-        println!(
-            "{:<8} {} {}",
-            s(&r["verdict"]),
-            s(&r["tag"]),
-            bad.join("; ")
-        );
-    }
-    for line in verify::safety_report_lines(&res) {
-        println!("{line}");
-    }
-    println!("overall: {} {}", s(&res["overall"]), res["totals"]);
-    Ok(match s(&res["overall"]) {
-        PASS => 0,
-        FAIL => 1,
-        _ => 2,
-    })
+    pair_verify::run::<Ipv6>(args)
 }
 
 #[cfg(test)]

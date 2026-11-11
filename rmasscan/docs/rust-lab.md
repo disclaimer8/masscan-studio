@@ -801,47 +801,33 @@ target/release/rmasscan-lab protocols-verify --dir "$OUT" --out "$OUT/verdict.js
 
 ## IPv6 suite
 
-TCP SYN поверх IPv6 (Р3: только TCP) идёт на стенде autodetect с IPv6 только на лабораторной паре veth:
+TCP SYN поверх IPv6 (Р3: только TCP) на стенде autodetect; код и офлайн-тесты есть, живого окна ещё не было (7b).
 `wire-lab.sh --suite ipv6` сначала выключает IPv6 везде, как для прочих наборов (строки `disable_ipv6=1` общие и не
-менялись), затем только для этого набора и только в двух netns включает его на `veth-a`, `veth-b` и `lo`: без DAD
-(`accept_dad=0`, адреса `nodad`, ни одного tentative), без RS/RA (`accept_ra=0`, `router_solicitations=0`), без
-форвардинга, link-local по EUI-64 (`IPV6_SETTINGS` равен `capture::IPV6_SYSCTLS`, тест сверяет). Сканер
-`fd00:198:18::1/64`, пиры `fd00:198:18::2`-`::5/64`; у сканера IPv6-маршрут по умолчанию через link-local пира
-`fe80::aa:ff:fe00:2`, поэтому несколько on-link целей резолвят шлюз интерфейса и NS rmasscan уходит с глобального
-адреса на link-local роутера (R11). Соседи IPv6 постоянные с обеих сторон: ядра не шлют NS вовсе, резолвер rmasscan
-таблицу соседей не читает (NDP всё равно идёт, как ARP на стенде autodetect), пир отвечает оракулу, не спрашивая сканер.
-После настройки ожидание 3 с: отчёты MLD ядер о новых группах заканчиваются до первого захвата. Печать стенда
-`capture isolation --mode ipv6` (`check_ipv6_side`: настройки, ровно адреса стенда, маршруты, постоянные соседи, маршрут
-к `2001:db8::1` у сканера через пира и никакого у пира). Ответчик пира слушает 80 и 8080 ещё и на каждом IPv6-адресе
-(`capture responder --tcp6-ips`). Перед стартом и перед каждым кейсом suite читает IPv6 обеих сторон в
-`ipv6-stack.json`; адрес tentative или любая другая неготовность это NOT RUN до запуска (и NOT RUN у верификатора).
+менялись), затем только для этого набора включает его на `veth-a`, `veth-b` и `lo` двух netns: без DAD, без RS/RA,
+без форвардинга, link-local по EUI-64 (`IPV6_SETTINGS` = `capture::IPV6_SYSCTLS`). Сканер `fd00:198:18::1/64`, пиры
+`fd00:198:18::2`-`::5/64`, IPv6-маршрут сканера по умолчанию через link-local пира `fe80::aa:ff:fe00:2` (NS rmasscan
+идёт с глобального адреса на link-local роутера), постоянные соседи IPv6 с обеих сторон, затем ожидание 3 с.
+Печать `capture isolation --mode ipv6`; ответчик слушает 80 и 8080 и на IPv6 (`capture responder --tcp6-ips`); suite
+читает IPv6 сторон перед стартом и перед каждым кейсом (`ipv6-stack.json`), адрес tentative это NOT RUN.
 
-| Кейс | Цели, порты | Документы | Что доказывает |
-|---|---|---|---|
-| `v01_ndp_and_tcp6_syn` | `[fd00:198:18::2]-[fd00:198:18::5] -p80,81 --show open,closed` | `-oJ`, `-oB` | источник и шлюз определены, 1-10 NS резолвера (столько, сколько в `(ndp: N requests`) на `ff02::1:ff00:2` для `fe80::aa:ff:fe00:2`, ответ NA формы стенда, SYN побайтно равны плану и C |
-| `v02_mixed_v4_v6` | `198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5] -p80,81 --show open,closed` | `-oB` (типы 6, 7, 10, 11), `-oL` | ARP и NDP; инвариант v4: байты каждого IPv4-зонда равны плану только IPv4, IPv6 в нижних перемешанных индексах (`main.c:258-260`), IPv4-зонд позиции i это цель плана только IPv4 индекса `shuffle((i + rate) mod range) - range_ipv6` |
-| `v03_explicit_router_mac_ipv6` | как v01, `--router-mac-ipv6 02-aa-00-00-00-02`, без closed | `-oJ` | ни одного NS, все IPv6-зонды на заданный MAC |
+Ожидается, подтвердить в 7b: ядра сторон во время шага не шлют NS (их предотвращают постоянные соседи; NS ядра
+сканера отличался бы целью и временем и назван `scanner_ns_for_peer`), отчёты MLD о новых группах кончаются за
+3 с ожидания, пир отвечает на NS ровно одним NA формы Linux (S|O, TLLA), C принимает argv и шлёт те же SYN.
 
-Argv оракула это argv rmasscan плюс два названных отличия (`ipv6_verify::oracle_extra`): `--adapter-ip fd00:198:18::1`
-(C не берёт ULA источником, `rawsock-getip6.c:68-71`) и `--router-mac-ipv6 02-aa-00-00-00-02` (C ищет роутер RS/RA, а
-Linux-пир без демона RA не шлёт). Цели IPv6 в скобках: позиционный адрес без скобок на букву C не принимает.
+| Кейс | Документы | Что доказывает |
+|---|---|---|
+| `v01_ndp_and_tcp6_syn` | `-oJ`, `-oB` | 1-10 NS резолвера (столько, сколько в `(ndp: N requests`) для `fe80::aa:ff:fe00:2`, SYN равны плану и C |
+| `v02_mixed_v4_v6` | `-oB` (6, 7, 10, 11), `-oL` | ARP и NDP; инвариант v4: байты IPv4-зондов равны плану только IPv4, IPv6 в нижних перемешанных индексах |
+| `v03_explicit_router_mac_ipv6` | `-oJ` | `--router-mac-ipv6`: ни одного NS, зонды на заданный MAC |
 
-**Что судит `ipv6-verify --dir DIR`** (0 PASS, 1 FAIL, 2 INVALID или NOT RUN): правила протоколов из коробки (R4).
-Зонды rmasscan равны плану продукта по порядку, зонды оракула равны им побайтно; каждый кадр MAC сканера это зонд или
-класс `SCANNER_CLASSES` в своей границе (`next_hop_who_has`: 10 у rmasscan и 12 у C только при целях IPv4;
-`next_hop_ns`: `NEXT_HOP_NS_MAX` = 10 только у rmasscan без `--router-mac-ipv6`, у C всегда 0; `rst_to_syn_ack` как у
-протоколов, обе семьи; `na_to_peer_ns`: на NS пира к сканеру по NA ядра и у rmasscan ещё NA его ответчика). Шум ядра
-`STAND_NOISE` (MLD, RS, RA, DAD NS, NS пира к сканеру) назван и делает шаг INVALID с границей 0. Стенд обязан ответить
-на каждый зонд и ровно одним NA формы стенда на NS резолвера; иначе INVALID. Документ судится по своему проводу с окном
-50 мкс, против C как мультимножество; TTL записей IPv6 с C не сравнивается (`ipv6-ttl-not-compared`: у C он устаревший,
-у rmasscan это hop limit, проверяемый по своему проводу). Названные отклонения в `notes.deviations`: `ndp-ns-not-rs`,
-`oracle-source-given`, `ipv6-ttl-not-compared`, `families-one-interface` (R17). Безопасность: `foreign_probes` и
-`foreign_probes6` (кадр IPv6 сканера не со своего адреса или не к адресу стенда). Privacy: вдобавок к правилам протоколов
-каждый IPv6-адрес в тексте обязан быть адресом стенда (вне текстов сканера ещё `::`, `::1`, `ff02::/16`, `2001:db8::/32`);
-`privacy-scan` дополнительно декодирует имена ICMPv6 (DNSSL в RA, Node Information).
+Argv оракула это argv rmasscan плюс `--adapter-ip fd00:198:18::1` (C не берёт ULA источником) и
+`--router-mac-ipv6 02-aa-00-00-00-02` (C ищет роутер RS/RA, Linux-пир RA не шлёт); цели IPv6 в скобках.
+`ipv6-verify --dir DIR` (0 PASS, 1 FAIL, 2 INVALID или NOT RUN) судит по правилам протоколов (R4) общим кодом
+`pair_verify.rs`: классы кадров сканера с границами (`SCANNER_CLASSES`), шум ядер `STAND_NOISE` с границей 0 (INVALID,
+даже с MAC сканера), отклонения по имени (`ndp-ns-not-rs`, `oracle-source-given`, `ipv6-ttl-not-compared`,
+`families-one-interface`, их условие проверяется на стороне оракула), TTL записей IPv6 с C не сравнивается.
 
 ```sh
-cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
 OUT=$(mktemp -d /tmp/rmasscan-out.XXXXXX)/ipv6-out/linux-ipv6-r1
 RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite ipv6 \
   --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"

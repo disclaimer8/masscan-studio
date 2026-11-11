@@ -49,12 +49,42 @@ pub(crate) const PROTOCOLS: &str = "/proc/net/protocols";
 const USAGE: &str = "protocols-suite linux --out DIR --work DIR --ns-a NS --ns-b NS --iface-a IF --iface-b IF --mac-a MAC --mac-b MAC --rmasscan PATH --oracle PATH --conf-masked 0|1 --lab-id ID [--only TAG ...]   (run by wire-lab.sh --suite protocols, as root)
 exit 0 every selected run executed, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH, 130 INTERRUPTED; judge the directory with protocols-verify";
 
-/// The cases to run: the whole table in its order, or the `--only` subset of it.
-fn selected(only: &[String]) -> Result<Vec<&'static str>, SuiteError> {
-    let all = pv::planned_tags();
+/// A Linux stand suite of this driver, by its fixed texts: the protocols suite's and the IPv6 suite's (`ipv6_suite`).
+pub(crate) struct SuiteDef {
+    /// `wire-lab.sh`'s mode that raises the stand (`wire-lab.sh --suite protocols`).
+    pub(crate) wire_lab: &'static str,
+    /// The plan's name in the command and the verifier: `protocols-suite`, `protocols-verify`.
+    pub(crate) name: &'static str,
+    /// One of its cases in a refusal: `a protocols case`.
+    pub(crate) a_case: &'static str,
+    pub(crate) usage: &'static str,
+}
+const PROTOCOLS_SUITE: SuiteDef = SuiteDef {
+    wire_lab: SUITE,
+    name: "protocols",
+    a_case: "a protocols case",
+    usage: USAGE,
+};
+/// What a suite does once its `--out`, `--work` and account are known ([`linux_with_def`]).
+pub(crate) type SuiteBody = fn(
+    &BTreeMap<String, Vec<String>>,
+    &dyn LinuxHost,
+    &Path,
+    PathBuf,
+    PathBuf,
+    &crate::capture::Scrubber,
+) -> Result<i32, SuiteError>;
+
+/// The cases to run: the whole table `all` in its order, or the `--only` subset of it.
+pub(crate) fn selected_of(
+    only: &[String],
+    all: Vec<&'static str>,
+    def: &SuiteDef,
+) -> Result<Vec<&'static str>, SuiteError> {
     if let Some(t) = only.iter().find(|t| !all.contains(&t.as_str())) {
         return Err(not_run(format!(
-            "{t} is not a protocols case ({})",
+            "{t} is not {} ({})",
+            def.a_case,
             all.join(" ")
         )));
     }
@@ -63,22 +93,30 @@ fn selected(only: &[String]) -> Result<Vec<&'static str>, SuiteError> {
         .filter(|t| only.is_empty() || only.iter().any(|o| o == t))
         .collect())
 }
+fn selected(only: &[String]) -> Result<Vec<&'static str>, SuiteError> {
+    selected_of(only, pv::planned_tags(), &PROTOCOLS_SUITE)
+}
 
-/// `protocols-suite linux`, inside the lab `wire-lab.sh --suite protocols` sealed. `lab` is this binary.
-pub(crate) fn linux_with(
+/// `<name>-suite linux`, inside the lab `wire-lab.sh` sealed: its options, root and nothing else, the scrubber of
+/// `--out`, `--work` and the account, then `body`. `lab` is this binary.
+pub(crate) fn linux_with_def(
     args: &[String],
     host: &dyn LinuxHost,
     lab: &Path,
+    def: &SuiteDef,
+    body: SuiteBody,
 ) -> Result<i32, SuiteError> {
-    let o = options_for("protocols-suite linux", args, ad::LINUX_OPTIONS)?;
+    let cmd = format!("{}-suite linux", def.name);
+    let o = options_for(&cmd, args, ad::LINUX_OPTIONS)?;
     if o.contains_key("help") {
-        say(USAGE);
+        say(def.usage);
         return Ok(0);
     }
     let euid = host.euid()?;
     if euid != 0 {
         return Err(not_run(format!(
-            "protocols-suite linux runs as root inside {SUITE} (effective uid {euid}); it never calls sudo itself"
+            "{cmd} runs as root inside {} (effective uid {euid}); it never calls sudo itself",
+            def.wire_lab
         )));
     }
     let (out, work) = (
@@ -86,7 +124,56 @@ pub(crate) fn linux_with(
         PathBuf::from(required(&o, "work")?),
     );
     let sc = crate::capture::Scrubber::new(&out, Some(&work), host.account().as_deref());
-    linux_run(&o, host, lab, out, work, &sc).map_err(|e| e.map_message(|m| sc.str(m)))
+    body(&o, host, lab, out, work, &sc).map_err(|e| e.map_message(|m| sc.str(m)))
+}
+/// `protocols-suite linux`, inside the lab `wire-lab.sh --suite protocols` sealed. `lab` is this binary.
+pub(crate) fn linux_with(
+    args: &[String],
+    host: &dyn LinuxHost,
+    lab: &Path,
+) -> Result<i32, SuiteError> {
+    linux_with_def(args, host, lab, &PROTOCOLS_SUITE, linux_run)
+}
+
+/// Every selected case in order, each through `one` inside [`Linux::one_with`] (a stop request ends the suite before
+/// the next case), and the line that says where to verify.
+pub(crate) fn run_cases(
+    suite: &Linux,
+    tags: &[&'static str],
+    def: &SuiteDef,
+    out: &Path,
+    sc: &crate::capture::Scrubber,
+    mut one: impl FnMut(&str, &Path, &Path, &mut LinuxTools) -> Result<(), SuiteError>,
+) -> Result<i32, SuiteError> {
+    for tag in tags {
+        if suite.host.stopped() {
+            return Err(SuiteError::Interrupted(format!(
+                "stop requested before {tag} started; nothing was left running"
+            )));
+        }
+        suite.one_with(tag, |base, run, t| one(tag, base, run, t))?;
+        say(&format!("done {0} -> runs/{0}", tag));
+    }
+    say(&sc.str(&format!(
+        "all selected runs executed; verify offline with rmasscan-lab {}-verify --dir {}",
+        def.name,
+        out.display()
+    )));
+    Ok(0)
+}
+/// Every step's `argv.json` in its evidence directory, before the first step runs.
+pub(crate) fn write_step_argv(run: &Path, specs: &[StepSpec]) -> Result<(), SuiteError> {
+    for s in specs {
+        let dir = run.join(s.name);
+        io(fs::create_dir_all(&dir), "the step's evidence directory")?;
+        write_record(
+            &dir.join("argv.json"),
+            &ArgvRecord {
+                argv: s.argv.clone(),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn linux_run(
@@ -140,23 +227,19 @@ fn linux_run(
             refused.join("; ")
         )));
     }
-    for tag in &tags {
-        if host.stopped() {
-            return Err(SuiteError::Interrupted(format!(
-                "stop requested before {tag} started; nothing was left running"
-            )));
-        }
-        let (Some(c), Some(specs)) = (pv::case(tag), pv::steps(tag)) else {
-            continue;
-        };
-        suite.one_with(tag, |base, run, t| one(&suite, &c, &specs, base, run, t))?;
-        say(&format!("done {0} -> runs/{0}", tag));
-    }
-    say(&sc.str(&format!(
-        "all selected runs executed; verify offline with rmasscan-lab protocols-verify --dir {}",
-        out.display()
-    )));
-    Ok(0)
+    run_cases(
+        &suite,
+        &tags,
+        &PROTOCOLS_SUITE,
+        &out,
+        sc,
+        |tag, base, run, t| {
+            let (Some(c), Some(specs)) = (pv::case(tag), pv::steps(tag)) else {
+                return Err(not_run(format!("{tag} is not a case")));
+            };
+            one(&suite, &c, &specs, base, run, t)
+        },
+    )
 }
 
 /// The peer stack, read in the peer namespace: `net.ipv4.icmp_ratemask`, `net.ipv4.icmp_echo_ignore_all`, whether
@@ -207,16 +290,7 @@ fn one(
     }
     let expect = pv::expect(tag).ok_or_else(|| not_run(format!("{tag} is not a case")))?;
     write_record(&run.join(pv::EXPECT_JSON), &expect)?;
-    for s in specs {
-        let dir = run.join(s.name);
-        io(fs::create_dir_all(&dir), "the step's evidence directory")?;
-        write_record(
-            &dir.join("argv.json"),
-            &ArgvRecord {
-                argv: s.argv.clone(),
-            },
-        )?;
-    }
+    write_step_argv(run, specs)?;
     for s in specs {
         step(l, tag, s, base, run, t, &pv::responder_args())?;
     }
@@ -353,36 +427,54 @@ pub(crate) fn step(
 }
 
 /// The Linux suite, refused at once off Linux. One code path on every OS: it is compiled and linted everywhere.
-fn linux_entry(args: &[String], exe: &Path) -> Result<i32, SuiteError> {
+pub(crate) fn linux_entry_def(
+    args: &[String],
+    exe: &Path,
+    def: &SuiteDef,
+    with: fn(&[String], &dyn LinuxHost, &Path) -> Result<i32, SuiteError>,
+) -> Result<i32, SuiteError> {
     if !cfg!(target_os = "linux") {
         return Err(not_run(format!(
-            "protocols-suite linux runs on the Linux lab host, inside {SUITE}"
+            "{}-suite linux runs on the Linux lab host, inside {}",
+            def.name, def.wire_lab
         )));
     }
-    linux_with(args, &ad::RealLinux, exe)
+    with(args, &ad::RealLinux, exe)
+}
+fn linux_entry(args: &[String], exe: &Path) -> Result<i32, SuiteError> {
+    linux_entry_def(args, exe, &PROTOCOLS_SUITE, linux_with)
 }
 
-/// `protocols-suite linux ...`: 0 every selected run executed, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH,
-/// 130 INTERRUPTED. Whether a run passed is `protocols-verify`'s verdict, never this exit code.
-pub fn run(args: &[String]) -> Result<i32, String> {
+/// `<name>-suite linux ...`: 0 every selected run executed, 2 NOT RUN, 10 ABORT, 13 ISOLATION BREACH,
+/// 130 INTERRUPTED. Whether a run passed is `<name>-verify`'s verdict, never this exit code.
+pub(crate) fn run_def(
+    args: &[String],
+    def: &SuiteDef,
+    entry: fn(&[String], &Path) -> Result<i32, SuiteError>,
+) -> Result<i32, String> {
     let Some((stand, rest)) = args.split_first() else {
-        return Err(format!("which stand?\n{USAGE}"));
+        return Err(format!("which stand?\n{}", def.usage));
     };
     if matches!(stand.as_str(), "--help" | "-h" | "help") {
-        say(USAGE);
+        say(def.usage);
         return Ok(0);
     }
     rmasscan_net::lab_io::install_signal_handlers()
         .map_err(|e| format!("cannot install the stop-signal handlers: {e}"))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     ad::report(match stand.as_str() {
-        "linux" => linux_entry(rest, &exe),
+        "linux" => entry(rest, &exe),
         other => Err(not_run(format!(
-            "unknown stand {other}; the protocols suite runs on linux"
+            "unknown stand {other}; the {} suite runs on linux",
+            def.name
         ))),
     })
+}
+/// `protocols-suite linux ...` ([`run_def`]).
+pub fn run(args: &[String]) -> Result<i32, String> {
+    run_def(args, &PROTOCOLS_SUITE, linux_entry)
 }
 
 #[cfg(test)]
 #[path = "protocols_suite_tests.rs"]
-mod tests;
+pub(crate) mod tests;

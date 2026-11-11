@@ -45,12 +45,16 @@
 //! `output.bin`; the interactive form is `stdout.txt` itself), the peer witness `peer.pcap capture.json peer.err`
 //! and `responder.json` ([`ResponderRecord`]: the peer responder at the scanner's end, with its stderr).
 use crate::{
-    autodetect_verify::{self as av, ArgvRecord, EVIDENCE_EXTENSIONS, MANIFEST_JSON, Plan, Stand},
-    macos_verify::{hashes_match_tree, tree},
+    autodetect_verify::{self as av, EVIDENCE_EXTENSIONS, Plan, Stand},
     output_verify::{BINARY_BLOCK, BINARY_REC, FLAG_NAMES, canon, fields, text_lines},
+    pair_verify::{
+        self, Doc, PairPlan, Record, Side, Tally, WireSummary, beh, cap, case_of, each,
+        expect_steps, named_deviations, pair_steps, parse_doc_with, plan_probes, scan_tail,
+        scanner_counts, scanner_frame_checks, tags_of,
+    },
     pcap::Frames,
-    scan_control_verify::{self as sv, Who},
-    verify::{self, FAIL, INVALID, NOT_RUN, PASS, Run, array, read_json, s},
+    scan_control_verify::Who,
+    verify::{self, Run},
 };
 use rmasscan_core::{
     config::{Operation, ScanConfig, parse_rate, validate},
@@ -60,13 +64,22 @@ use rmasscan_core::{
     targets::{add_target_string, parse_ports},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     net::Ipv4Addr,
     path::Path,
 };
+// What the fixture tests (`protocols_verify_tests.rs`, `use super::*`) took from this module's scope before the shared
+// machinery moved to `pair_verify`.
+#[cfg(test)]
+use crate::{
+    autodetect_verify::{ArgvRecord, MANIFEST_JSON},
+    scan_control_verify as sv,
+    verify::{FAIL, INVALID, NOT_RUN, PASS, array, s},
+};
+#[cfg(test)]
+use {serde_json::json, std::fs};
 
 // ------------------------------------------------------------------ the case table
 
@@ -245,10 +258,10 @@ pub const CASES: [CaseSpec; 5] = [
     },
 ];
 pub fn case(tag: &str) -> Option<CaseSpec> {
-    CASES.iter().find(|c| c.tag == tag).copied()
+    case_of::<Protocols>(tag)
 }
 pub fn planned_tags() -> Vec<&'static str> {
-    CASES.iter().map(|c| c.tag).collect()
+    tags_of::<Protocols>()
 }
 impl CaseSpec {
     /// The case probes SCTP: it needs a host kernel without SCTP.
@@ -270,43 +283,13 @@ pub struct StepSpec {
 pub fn argv(c: &CaseSpec, out: Out) -> Vec<String> {
     let mut a = vec![TARGETS.to_owned()];
     a.extend(c.flags.iter().map(|f| (*f).to_owned()));
-    if let (Some(flag), Some(file)) = (out.flag(), out.file()) {
-        a.extend([flag.to_owned(), file.to_owned()]);
-    }
-    if c.show_closed {
-        a.extend(["--show".to_owned(), "open,closed".to_owned()]);
-    }
-    let port = SOURCE_PORT.to_string();
-    a.extend(
-        [
-            "--seed",
-            "1",
-            "--rate",
-            RATE,
-            "--wait",
-            WAIT,
-            "--source-port",
-            &port,
-        ]
-        .map(str::to_owned),
-    );
+    scan_tail(&mut a, out, c.show_closed, RATE, WAIT, SOURCE_PORT);
     a
 }
 /// The steps of a case, in the order they run; defined here and nowhere else.
 pub fn steps(tag: &str) -> Option<Vec<StepSpec>> {
     let c = case(tag)?;
-    let mut v = Vec::new();
-    for out in c.outs {
-        for who in [Who::Rmasscan, Who::Oracle] {
-            v.push(StepSpec {
-                name: out.step(who),
-                who,
-                out: *out,
-                argv: argv(&c, *out),
-            });
-        }
-    }
-    Some(v)
+    Some(pair_steps(c.outs, |out, _| argv(&c, out)))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -331,14 +314,7 @@ pub fn expect(tag: &str) -> Option<ProtoExpect> {
         tag: tag.into(),
         plan_ports: c.plan_ports.into(),
         arp: c.arp,
-        steps: steps(tag)?
-            .iter()
-            .map(|s| ExpectStep {
-                name: s.name.into(),
-                who: s.who,
-                out: s.out,
-            })
-            .collect(),
+        steps: expect_steps(&steps(tag)?),
     })
 }
 
@@ -899,6 +875,11 @@ impl WireView {
     }
 }
 
+impl pair_verify::StepView for WireView {
+    fn probe_frames(&self) -> Vec<Vec<u8>> {
+        WireView::probe_frames(self)
+    }
+}
 /// The frames of the scanner MAC that are no probe of the scan and that the stand makes the scanner side send: the
 /// key they are counted under in the notes, and what they are. Any other frame of the scanner MAC is the scanner's own
 /// extra frame: a FAIL on rmasscan's step, INVALID on the oracle's.
@@ -1168,17 +1149,7 @@ pub fn plan_stream(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
     let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
     let plan =
         ReadyPlan::new_cli(eff, vec![NicBinding::from(binding)]).map_err(|e| e.to_string())?;
-    let mut cur = plan.cursor_for_nic(0, None).map_err(|e| e.to_string())?;
-    let mut frames = Vec::new();
-    loop {
-        let batch: Vec<Vec<u8>> = cur.preload(64).iter().map(|p| p.frame.clone()).collect();
-        if batch.is_empty() {
-            break;
-        }
-        cur.advance_sent_n(batch.len());
-        frames.extend(batch);
-    }
-    Ok(frames)
+    Ok(plan_probes(&plan)?.0)
 }
 
 /// rmasscan's probe `rm` and C's probe `c` are the same probe: equal, or (R12) two UDP datagrams that differ only in a
@@ -1270,11 +1241,11 @@ impl Rec {
     }
 }
 /// A document taken apart.
-#[derive(Debug, Clone, Default)]
-pub struct Document {
-    pub records: Vec<Rec>,
-    /// The footer is written (always for the interactive form).
-    pub complete: bool,
+pub type Document = Doc<Rec>;
+impl Record for Rec {
+    fn ts(&self) -> Option<u64> {
+        self.ts
+    }
 }
 
 pub(crate) const LIST_REC: &str = "@ @ @ @ @";
@@ -1301,12 +1272,6 @@ fn field_rec(
         mac: None,
         ts: Some(canon(ts).ok_or(format!("time {ts:?}"))?),
     })
-}
-fn each(lines: &[&str], parse: impl Fn(&str) -> Result<Rec, String>) -> Result<Vec<Rec>, String> {
-    lines
-        .iter()
-        .map(|l| parse(l).map_err(|e| format!("{l:?}: {e}")))
-        .collect()
 }
 /// `Discovered %s port %u/%s on %s`, an ARP record with ` (%02x:..) %s` (output.c:766-790), padded with spaces to 79
 /// characters when shorter.
@@ -1354,77 +1319,36 @@ fn binary_rec(b: &[u8]) -> Result<Rec, String> {
 /// empty file is a document without a record; a file that stops after a record, without its footer, is not `complete`;
 /// any other malformation is an error.
 pub fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
-    if b.is_empty() {
-        return Ok(Document {
-            records: Vec::new(),
-            complete: true,
-        });
-    }
-    let mut d = Document::default();
-    match out {
-        Out::List => {
-            let lines = text_lines(b, "\n")?;
-            if lines[0] != "#masscan" {
-                return Err("no `#masscan` header".into());
-            }
-            d.complete = lines.len() > 1 && lines.last() == Some(&"# end");
-            let body = &lines[1..lines.len() - usize::from(d.complete)];
-            d.records = each(body, |l| {
-                let f = fields(LIST_REC, l).ok_or("not the record form")?;
-                field_rec(f[0], f[1], f[3], f[2], f[4], None, None)
-            })?;
-        }
-        Out::Json => {
-            let lines = text_lines(b, "\n")?;
-            if lines[0] != "[" {
-                return Err("no `[` header".into());
-            }
-            d.complete = lines.len() > 1 && lines.last() == Some(&"]");
-            let body = &lines[1..lines.len() - usize::from(d.complete)];
-            if body.len().is_multiple_of(2) || body.iter().skip(1).step_by(2).any(|l| *l != ",") {
-                return Err("the records are not separated by `,` lines".into());
-            }
-            let recs: Vec<&str> = body.iter().step_by(2).copied().collect();
-            d.records = each(&recs, |l| {
-                let f = fields(JSON_REC, l).ok_or("not the record form")?;
-                field_rec(f[4], f[3], f[0], f[2], f[1], Some(f[5]), Some(f[6]))
-            })?;
-        }
-        Out::Binary => {
-            if b.len() < BINARY_BLOCK || !b.starts_with(b"masscan/1.1\ns:") {
-                return Err("not the 99-byte `masscan/1.1` header".into());
-            }
-            let rest = &b[BINARY_BLOCK..];
-            let mut foot = [0u8; BINARY_BLOCK];
-            foot[..11].copy_from_slice(b"masscan/1.1");
-            let body = if rest.len() >= BINARY_BLOCK
-                && rest.ends_with(&foot)
-                && (rest.len() - BINARY_BLOCK).is_multiple_of(BINARY_REC)
-            {
-                d.complete = true;
-                &rest[..rest.len() - BINARY_BLOCK]
-            } else if rest.len().is_multiple_of(BINARY_REC) {
-                rest
-            } else {
-                return Err(format!("{} bytes are not 99 + 15n (+ 99)", b.len()));
-            };
-            d.records = body
-                .chunks(BINARY_REC)
-                .map(binary_rec)
-                .collect::<Result<_, _>>()?;
-        }
-        Out::Stdout => {
+    parse_doc_with(out, b, field_rec, |b, d| {
+        if out == Out::Stdout {
             let lines = text_lines(b, "\n")?;
             d.records = each(&lines, stdout_rec)?;
             d.complete = true;
+            return Ok(());
         }
-    }
-    if d.records.is_empty() && out != Out::Stdout {
-        return Err(
-            "a header without a record (the header is written with the first record)".into(),
-        );
-    }
-    Ok(d)
+        if b.len() < BINARY_BLOCK || !b.starts_with(b"masscan/1.1\ns:") {
+            return Err("not the 99-byte `masscan/1.1` header".into());
+        }
+        let rest = &b[BINARY_BLOCK..];
+        let mut foot = [0u8; BINARY_BLOCK];
+        foot[..11].copy_from_slice(b"masscan/1.1");
+        let body = if rest.len() >= BINARY_BLOCK
+            && rest.ends_with(&foot)
+            && (rest.len() - BINARY_BLOCK).is_multiple_of(BINARY_REC)
+        {
+            d.complete = true;
+            &rest[..rest.len() - BINARY_BLOCK]
+        } else if rest.len().is_multiple_of(BINARY_REC) {
+            rest
+        } else {
+            return Err(format!("{} bytes are not 99 + 15n (+ 99)", b.len()));
+        };
+        d.records = body
+            .chunks(BINARY_REC)
+            .map(binary_rec)
+            .collect::<Result<_, _>>()?;
+        Ok(())
+    })
 }
 
 /// The records a scanner reports for the replies of its wire, in reply order: rmasscan once per (protocol, address,
@@ -1545,89 +1469,8 @@ pub fn collapse(c: &[Rec], non_tcp_dedup: bool) -> (Vec<Rec>, usize) {
     (kept, n)
 }
 
-// ------------------------------------------------------------------ what a step left
-
-struct Side {
-    spec: StepSpec,
-    exit: Option<i32>,
-    stdout: Option<String>,
-    stderr: Option<String>,
-    se: sv::Stderr,
-    view: Option<WireView>,
-    /// The raw capture, for the safety checks.
-    frames: Option<Frames>,
-    /// The document's bytes (stdout for the interactive form).
-    raw: Option<Vec<u8>>,
-    forced_exit: bool,
-}
-
-fn read_side(r: &mut Run, d: &Path, c: &CaseSpec, spec: &StepSpec, links: &[String]) -> Side {
-    let name = spec.name;
-    let sd = d.join(name);
-    let rel = |f: &str| format!("{name}/{f}");
-    let exit = av::need(r, &sd, "exit.txt").and_then(|t| {
-        let rc = av::parse_exit(&t);
-        if rc.is_none() {
-            r.inv(
-                &format!("{name}/exit.txt holds an exit code"),
-                false,
-                t.trim(),
-            );
-        }
-        rc
-    });
-    let stdout = av::need(r, &sd, "stdout.txt");
-    let stderr = av::need(r, &sd, "stderr.txt");
-    let st = stand();
-    let cap = av::capture(r, d, &rel(PEER_FILES[0]), links);
-    if let Some(cp) = &cap {
-        av::witness(r, d, &rel(PEER_FILES[0]), &rel(PEER_FILES[1]), cp, &st);
-    }
-    let raw = match spec.out.file() {
-        Some(n) => {
-            let b = fs::read(sd.join(n)).ok();
-            if b.is_none() {
-                sv_beh(r, spec, &format!("{n} written"), false, "missing");
-            }
-            b
-        }
-        None => fs::read(sd.join("stdout.txt")).ok(),
-    };
-    let se = stderr.as_deref().map(sv::parse_stderr).unwrap_or_default();
-    Side {
-        spec: spec.clone(),
-        exit,
-        forced_exit: spec.who == Who::Oracle && stderr.as_deref().is_some_and(sv::forced_exit),
-        stdout,
-        stderr,
-        se,
-        view: cap.as_ref().map(|(fr, _)| view(fr, &st, c.arp)),
-        frames: cap.map(|(fr, _)| fr),
-        raw,
-    }
-}
-
 // ------------------------------------------------------------------ checks
 
-/// rmasscan's misbehaviour FAILs; a broken oracle is a broken stand (INVALID).
-fn sv_beh(r: &mut Run, spec: &StepSpec, name: &str, ok: bool, detail: impl ToString) {
-    let name = format!("{}: {name}", spec.name);
-    match spec.who {
-        Who::Rmasscan => r.beh(&name, ok, detail),
-        Who::Oracle => r.inv(&name, ok, detail),
-    }
-}
-fn beh(r: &mut Run, s: &Side, name: &str, ok: bool, detail: impl ToString) {
-    sv_beh(r, &s.spec, name, ok, detail);
-}
-/// A check against the capture: FAIL only once the evidence is proven (rmasscan); INVALID for the oracle.
-fn cap(r: &mut Run, s: &Side, name: &str, ok: bool, detail: impl ToString) {
-    let name = format!("{}: {name}", s.spec.name);
-    match s.spec.who {
-        Who::Rmasscan => r.cap(&name, ok, detail),
-        Who::Oracle => r.inv(&name, ok, detail),
-    }
-}
 /// A record in a few words, for the detail of a check ([`in_reply_order`], [`first_difference`]).
 pub trait Shown {
     fn show(&self) -> String;
@@ -1656,7 +1499,7 @@ pub(crate) fn first_difference<R: PartialEq + Shown>(got: &[R], want: &[R]) -> S
 
 /// The stand owes every probe exactly one answer of a known form; anything else on the peer side, or an answer of
 /// another form, is a stand that did not behave (INVALID for both scanners).
-fn stand_answers(r: &mut Run, s: &Side, v: &WireView) {
+fn stand_answers(r: &mut Run, s: &Side<WireView>, v: &WireView) {
     let st = stand();
     let mut problems = Vec::new();
     for (i, p) in v.probes.iter().enumerate() {
@@ -1730,7 +1573,7 @@ fn stand_answers(r: &mut Run, s: &Side, v: &WireView) {
 
 /// What the `[+]` lines of a rmasscan step must say: the stand's interface, MAC and address detected, the next hop by
 /// the route and ARP (an ARP scan: the broadcast MAC as given, no next-hop resolution), seed 1 and port 40000 given.
-fn detection(r: &mut Run, s: &Side, c: &CaseSpec) {
+fn detection(r: &mut Run, s: &Side<WireView>, c: &CaseSpec) {
     let get = |k: &str| s.se.value(k).map(str::to_owned);
     let keys: Vec<&str> = s.se.plus.iter().map(|(k, _)| k.as_str()).collect();
     let common = get("interface").as_deref() == Some("veth-a (detected: route to 198.18.0.2)")
@@ -1781,122 +1624,34 @@ fn detection(r: &mut Run, s: &Side, c: &CaseSpec) {
 }
 
 /// A rmasscan step: exit, stdout, stderr grammar, `[+] finished` against the wire and the records.
-fn rmasscan_step(r: &mut Run, s: &Side, c: &CaseSpec, doc: Option<&Document>) {
-    if let Some(rc) = s.exit {
-        beh(r, s, "exit.txt is 0", rc == 0, rc);
-    }
-    if s.spec.out != Out::Stdout
-        && let Some(t) = &s.stdout
-    {
-        beh(
-            r,
-            s,
-            "stdout.txt is empty (a file format silences stdout)",
-            t.is_empty(),
-            t.len(),
-        );
-    }
-    if s.stderr.is_none() {
-        return;
-    }
-    beh(
+fn rmasscan_step(r: &mut Run, s: &Side<WireView>, c: &CaseSpec, doc: Option<&Document>) {
+    pair_verify::rmasscan_step(
         r,
         s,
-        "stderr.txt holds only [+] lines and rmasscan's status forms",
-        s.se.stray.is_empty(),
-        format!("{:?}", s.se.stray),
-    );
-    detection(r, s, c);
-    let fin = s.se.fin.as_ref();
-    beh(
-        r,
-        s,
-        "[+] finished: Completed",
-        fin.is_some_and(|f| f.reason == "Completed"),
-        format!("{fin:?}"),
-    );
-    if let Some(v) = &s.view {
-        let all = wire_records(v, Who::Rmasscan, Out::Json, true);
-        let open = all.iter().filter(|x| x.st == St::Open).count() as u64;
-        let want = (v.probes.len() as u64, all.len() as u64, open);
-        cap(
-            r,
-            s,
-            "[+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
-            fin.map(|f| (f.sent, f.replies, f.open)) == Some(want),
-            format!(
-                "printed {:?}, wire (sent, replies, open) {want:?}",
-                fin.map(|f| (f.sent, f.replies, f.open))
-            ),
-        );
-        if let Some(d) = doc {
-            let (lo, hi) = (
-                v.probes.first().map_or(0.0, |p| p.t) - 2.0,
-                v.replies.last().map_or(0.0, |p| p.t) + 2.0,
-            );
-            let off: Vec<u64> = d
-                .records
-                .iter()
-                .filter_map(|x| x.ts)
-                .filter(|t| !(lo..=hi).contains(&(*t as f64)))
-                .collect();
-            cap(
-                r,
-                s,
-                "every record's time lies within the scan on the wire (2 s either side)",
-                off.is_empty(),
-                format!("{off:?}"),
-            );
-        }
-    }
-}
-
-/// The document of a step: well formed; rmasscan's complete, the oracle's complete or cut by its forced exit.
-fn doc_of(r: &mut Run, s: &Side) -> Option<Document> {
-    let raw = s.raw.as_ref()?;
-    let what = s.spec.out.file().unwrap_or("stdout.txt");
-    match parse_doc(s.spec.out, raw) {
-        Ok(d) => {
-            beh(
-                r,
-                s,
-                &format!("{what} is a well-formed document"),
-                true,
-                format!("{} records", d.records.len()),
-            );
-            if !d.complete {
-                beh(
-                    r,
-                    s,
-                    "its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
-                    s.spec.who == Who::Oracle && s.forced_exit,
-                    "no footer",
-                );
+        doc,
+        |r, s| detection(r, s, c),
+        |v| {
+            let all = wire_records(v, Who::Rmasscan, Out::Json, true);
+            let open = all.iter().filter(|x| x.st == St::Open).count() as u64;
+            WireSummary {
+                counts: (v.probes.len() as u64, all.len() as u64, open),
+                first_probe: v.probes.first().map(|p| p.t),
+                last_reply: v.replies.last().map(|p| p.t),
             }
-            Some(d)
-        }
-        Err(e) => {
-            beh(r, s, &format!("{what} is a well-formed document"), false, e);
-            None
-        }
-    }
+        },
+    );
 }
 
 /// Each named deviation of the case: the wire condition that keeps it from changing the comparison, and the notes.
-fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side], r12: usize, collapsed: usize) {
-    let mut notes = Vec::new();
-    for name in c.deviations {
-        let rule = DEVIATIONS
-            .iter()
-            .find(|(n, _)| n == name)
-            .map_or("", |(_, x)| *x);
+fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side<WireView>], r12: usize, collapsed: usize) {
+    named_deviations(r, c.deviations, &DEVIATIONS, |name| {
         let replies = || {
             sides
                 .iter()
                 .filter_map(|s| s.view.as_ref())
                 .flat_map(|v| &v.replies)
         };
-        let (ok, observed): (bool, String) = match *name {
+        match name {
             "udp-checksum-ffff" => (true, format!("{r12} probe pairs equal by this rule")),
             "icmp-echo-code-0" => {
                 let bad = replies()
@@ -1944,213 +1699,31 @@ fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side], r12: usize, collapsed: 
                 )
             }
             _ => (false, "unknown deviation".into()),
-        };
-        r.inv(&format!("deviation {name}: {rule}"), ok, &observed);
-        notes.push(json!({"name": name, "rule": rule, "observed": observed}));
-    }
-    r.notes.insert("deviations".into(), json!(notes));
-}
-
-/// One case: every step's own checks, then each document's rmasscan step against its oracle step.
-fn judge(r: &mut Run, c: &CaseSpec, sides: &[Side]) {
-    let plan = match plan_stream(c) {
-        Ok(p) => Some(p),
-        Err(e) => {
-            r.inv("the case's plan rebuilds from the case table", false, e);
-            None
         }
-    };
-    let st = stand();
-    let mut docs: Vec<Option<Document>> = Vec::new();
-    let mut scanner_notes = serde_json::Map::new();
-    // Per step: pairs of records in the other order than their replies on the peer capture, within the window.
-    let mut swaps = serde_json::Map::new();
-    for s in sides {
-        if let Some(v) = &s.view {
-            stand_answers(r, s, v);
-            scanner_frames(r, s, v);
-            let mut counts: serde_json::Map<String, Value> = SCANNER_CLASSES
-                .iter()
-                .map(|(k, _)| {
-                    (
-                        (*k).into(),
-                        json!(v.scanner_named.get(k).copied().unwrap_or(0)),
-                    )
-                })
-                .collect();
-            counts.insert("unexplained".into(), json!(v.scanner_unexplained.len()));
-            counts.insert(
-                "at_most".into(),
-                json!(
-                    scanner_bounds(v, s.spec.who)
-                        .iter()
-                        .map(|(k, _, max)| (*k, *max))
-                        .collect::<BTreeMap<_, _>>()
-                ),
-            );
-            scanner_notes.insert(s.spec.name.into(), Value::Object(counts));
-        }
-        let d = doc_of(r, s);
-        match s.spec.who {
-            Who::Rmasscan => rmasscan_step(r, s, c, d.as_ref()),
-            Who::Oracle => {
-                if let Some(rc) = s.exit {
-                    beh(r, s, "exit.txt is 0", rc == 0, rc);
-                }
-            }
-        }
-        if let (Some(v), Some(d)) = (&s.view, &d) {
-            let want = wire_records_at(v, s.spec.who, s.spec.out, c.show_closed);
-            let got: Vec<Rec> = d.records.iter().map(Rec::bare).collect();
-            let order = in_reply_order(&got, &want);
-            if let Ok(n) = order {
-                swaps.insert(
-                    s.spec.name.into(),
-                    json!({"pairs": n.pairs, "largest_gap_us": n.largest_gap_us}),
-                );
-            }
-            cap(
-                r,
-                s,
-                "the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
-                order.is_ok(),
-                order.map_or_else(|e| e, |_| shown(&got)),
-            );
-        }
-        if let (Some(v), Some(p), Who::Rmasscan) = (&s.view, &plan, s.spec.who) {
-            let act = v.probe_frames();
-            let at = act.iter().zip(p).position(|(a, b)| a != b);
-            cap(
-                r,
-                s,
-                "the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
-                act == *p,
-                format!(
-                    "{} probes, {} planned, first difference at {at:?}",
-                    act.len(),
-                    p.len()
-                ),
-            );
-        }
-        docs.push(d);
-    }
-    // Each document: rmasscan's step against the oracle's step of the same document.
-    let (mut r12, mut collapsed) = (0, 0);
-    let mut order = serde_json::Map::new();
-    for (i, pair) in sides.chunks(2).enumerate() {
-        let [rm, or] = pair else { continue };
-        let k = 2 * i;
-        if let (Some(a), Some(b)) = (&rm.view, &or.view) {
-            let mut same = a.probes.len() == b.probes.len();
-            for (x, y) in a.probes.iter().zip(&b.probes) {
-                match same_probe(&x.frame, &y.frame) {
-                    Some(true) => r12 += 1,
-                    Some(false) => {}
-                    None => same = false,
-                }
-            }
-            r.cap(
-                &format!(
-                    "{}: the probes equal the C oracle's ({}), byte for byte and in order (udp-checksum-ffff applied)",
-                    rm.spec.name, or.spec.name
-                ),
-                same,
-                format!("{} probes, the oracle {}", a.probes.len(), b.probes.len()),
-            );
-        }
-        if let (Some(Some(x)), Some(Some(y))) = (docs.get(k), docs.get(k + 1)) {
-            let got: Vec<Rec> = x.records.iter().map(Rec::bare).collect();
-            let dedup = c.deviations.contains(&"non-tcp-dedup");
-            let (want, n) = collapse(&y.records, dedup);
-            collapsed += n;
-            // The order of each document is its own wire's reply order (judged above, for both scanners); the two
-            // wires need not answer in the same order (RECORD_ORDER_VS_C), so the records are compared as a multiset.
-            let (mut got_set, mut want_set) = (got.clone(), want.clone());
-            got_set.sort();
-            want_set.sort();
-            let same = got_set == want_set;
-            order.insert(
-                rm.spec.name.into(),
-                json!(match (same, got == want) {
-                    (true, true) => "the same records in the same order",
-                    (true, false) => "the same records, in another order",
-                    (false, _) => "other records",
-                }),
-            );
-            r.cap(
-                &format!(
-                    "{}: the records equal the C oracle's ({}) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ){}",
-                    rm.spec.name,
-                    or.spec.name,
-                    if dedup { " (non-tcp-dedup applied)" } else { "" }
-                ),
-                same,
-                if same {
-                    shown(&got)
-                } else {
-                    first_difference(&got_set, &want_set)
-                },
-            );
-        }
-    }
-    r.notes.insert(
-        "record_order_vs_c".into(),
-        json!({"rule": RECORD_ORDER_VS_C, "documents": order}),
-    );
-    r.notes
-        .insert("reply_order_swaps".into(), Value::Object(swaps));
-    r.notes.insert(
-        "reply_order_window".into(),
-        json!(format!(
-            "{REPLY_REORDER_WINDOW_US} us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly {REPLY_REORDER_WINDOW_US} us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)"
-        )),
-    );
-    case_checks(r, c, sides, &docs, &st);
-    deviations(r, c, sides, r12, collapsed);
-    r.notes.insert(
-        "scanner_frame_classes".into(),
-        json!(SCANNER_CLASSES.iter().copied().collect::<BTreeMap<_, _>>()),
-    );
-    r.notes
-        .insert("scanner_frames".into(), Value::Object(scanner_notes));
+    });
 }
 
 /// Every frame of the scanner MAC is a probe of the scan or one of [`SCANNER_CLASSES`]; any other is the scanner's
 /// own extra frame: a FAIL on rmasscan's step (once the evidence is proven), INVALID on the oracle's.
-fn scanner_frames(r: &mut Run, s: &Side, v: &WireView) {
-    cap(
+fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView) {
+    scanner_frame_checks(
         r,
         s,
         "every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
-        v.scanner_unexplained.is_empty(),
-        format!(
-            "{} other frames: {}",
-            v.scanner_unexplained.len(),
-            v.scanner_unexplained
-                .iter()
-                .take(4)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("; ")
-        ),
-    );
-    // A named class is judged per frame above; here its count: no more than the scanner side can send.
-    let bounds = scanner_bounds(v, s.spec.who);
-    cap(
-        r,
-        s,
+        &v.scanner_unexplained,
         "the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
-        bounds.iter().all(|(_, n, max)| n <= max),
-        bounds
-            .iter()
-            .map(|(k, n, max)| format!("{k} {n} of at most {max}"))
-            .collect::<Vec<_>>()
-            .join(", "),
+        &scanner_bounds(v, s.spec.who),
     );
 }
 
 /// What a case proves beyond the common checks.
-fn case_checks(r: &mut Run, c: &CaseSpec, sides: &[Side], docs: &[Option<Document>], st: &Stand) {
+fn case_checks(
+    r: &mut Run,
+    c: &CaseSpec,
+    sides: &[Side<WireView>],
+    docs: &[Option<Document>],
+    st: &Stand,
+) {
     for (s, d) in sides.iter().zip(docs) {
         let (Some(v), Who::Rmasscan) = (&s.view, s.spec.who) else {
             continue;
@@ -2244,16 +1817,7 @@ fn case_checks(r: &mut Run, c: &CaseSpec, sides: &[Side], docs: &[Option<Documen
 // ------------------------------------------------------------------ privacy and evidence
 
 /// The files a scanner wrote or that name its argv: their addresses must be the stand's.
-const SCANNER_TEXT: [&str; 8] = [
-    "argv.json",
-    "expect.json",
-    "stdout.txt",
-    "stderr.txt",
-    "output.txt",
-    "output.json",
-    "exit.txt",
-    PEER_STACK_JSON,
-];
+const SCANNER_TEXT: [&str; 1] = [PEER_STACK_JSON];
 fn binary_problems(b: &[u8]) -> Vec<String> {
     let st = stand();
     match parse_doc(Out::Binary, b) {
@@ -2280,389 +1844,143 @@ pub(crate) fn iface_problems(text: &str) -> Vec<String> {
         .map(|n| format!("interface name {n:?}"))
         .collect()
 }
-fn privacy(r: &mut Run, d: &Path, files: &[String]) {
-    let mut clean = true;
-    let mut seen = 0;
-    for rel in files {
-        let ext = Path::new(rel)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if ext != "bin" && !av::TEXT_EXTENSIONS.contains(&ext) {
-            continue;
-        }
-        let base = rel.rsplit('/').next().unwrap_or(rel);
-        let mut p = match fs::read(d.join(rel)) {
-            Err(e) => vec![format!("unreadable: {e}")],
-            Ok(b) if ext == "bin" => binary_problems(&b),
-            Ok(b) => {
-                // The table's own case names are no host names (`p02_udp_...` reads like a DNS-SD `_udp` label).
-                let text = CASES
-                    .iter()
-                    .fold(String::from_utf8_lossy(&b).into_owned(), |t, c| {
-                        t.replace(c.tag, "<case>")
-                    });
-                let mut p = av::token_problems(&text, SCANNER_TEXT.contains(&base));
-                p.extend(iface_problems(&text));
-                p
-            }
-        };
-        seen += 1;
-        p.sort();
-        p.dedup();
-        if !p.is_empty() {
-            clean = false;
-            r.inv(
-                &format!("privacy: {rel} holds only allowlisted names, addresses and paths"),
-                false,
-                p.join("; "),
-            );
-        }
-    }
-    if clean {
-        r.add(
-            "privacy: every text and binary file holds only allowlisted names, addresses and paths",
-            PASS,
-            format!("{seen} files"),
-            false,
-        );
-    }
-}
 pub(crate) fn evidence_extension(f: &str) -> bool {
     Path::new(f)
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e == "bin" || EVIDENCE_EXTENSIONS.contains(&e))
 }
-fn gate(r: &mut Run, d: &Path, files: &[String]) {
-    match hashes_match_tree(d, true) {
-        Ok(()) => r.add(
-            "hashes-before-copy.txt matches every file of the case directory",
-            PASS,
-            files.len(),
-            false,
-        ),
-        Err(e) => r.add(
-            "hashes-before-copy.txt matches every file of the case directory",
-            INVALID,
-            e,
-            false,
-        ),
-    }
-    let odd: Vec<&String> = files.iter().filter(|f| !evidence_extension(f)).collect();
-    r.inv(
-        "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
-        odd.is_empty(),
-        format!("{odd:?}"),
-    );
-    av::linux_seal(r, d);
-}
 
-// ------------------------------------------------------------------ one case
+// ------------------------------------------------------------------ the plan of the shared verifier
 
-fn verify_run(root: &Path, c: &CaseSpec, root_links: &[String]) -> Run {
-    let tag = c.tag;
-    let mut r = Run::new(tag);
-    let rel = format!("runs/{tag}");
-    if root_links.iter().any(|l| l == "runs" || *l == rel) {
-        r.inv(
-            "the case directory is a real directory, not a symbolic link",
-            false,
-            rel,
-        );
-        return r;
+/// The protocols suite as [`pair_verify`] judges it.
+pub(crate) struct Protocols;
+impl PairPlan for Protocols {
+    type Case = CaseSpec;
+    type View = WireView;
+    type Rec = Rec;
+    type Expect = ProtoExpect;
+    const KEY: &'static str = "protocols";
+    const SCANNER_TEXT: &'static [&'static str] = &SCANNER_TEXT;
+    const RECORD_ORDER_VS_C: &'static str = RECORD_ORDER_VS_C;
+    const SCANNER_CLASSES: &'static [(&'static str, &'static str)] = &SCANNER_CLASSES;
+    const PROBES_VS_C: &'static str = " (udp-checksum-ffff applied)";
+    const OWN_WIRE: &'static str = "the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)";
+    const ORACLE_NOTE: &'static str =
+        "the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand";
+
+    fn cases() -> Vec<CaseSpec> {
+        CASES.to_vec()
     }
-    let d = root.join("runs").join(tag);
-    if !d.is_dir() {
-        r.add("case directory present", NOT_RUN, "missing", false);
-        return r;
+    fn tag(c: &CaseSpec) -> &'static str {
+        c.tag
     }
-    let Some(specs) = steps(tag) else { return r };
-    let t = tree(&d);
-    r.safety(
-        "no compressed capture in the case directory",
-        !t.files.iter().chain(&t.links).any(|f| f.ends_with(".gz")),
-        "captures are stored uncompressed; the verifier has no decompression",
-    );
-    let st = stand();
-    let sides: Vec<Side> = specs
-        .iter()
-        .map(|spec| read_side(&mut r, &d, c, spec, &t.links))
-        .collect();
-    for s in &sides {
-        if let Some(fr) = &s.frames {
-            let who = s.spec.name;
-            let n = av::foreign_syns(fr, &st);
-            r.safety(
-                &format!("no SYN on the {who} capture from outside the stand binding or to an address off the stand"),
-                n == 0,
-                n,
-            );
-            let off = foreign_probes(fr, &st);
-            r.safety(
-                &format!("no frame of the scanner on the {who} capture to an address off the stand or from another source"),
-                off.is_empty(),
-                off.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
-            );
-            av::no_foreign_frame(&mut r, who, fr, &st);
-        }
+    fn steps(c: &CaseSpec) -> Vec<StepSpec> {
+        steps(c.tag).unwrap_or_default()
     }
-    if !t.links.is_empty() {
-        r.inv(
-            "no symbolic link in the case directory (links are never followed)",
-            false,
-            format!("{:?}", t.links),
-        );
-        return r;
+    fn expect(c: &CaseSpec) -> Option<ProtoExpect> {
+        expect(c.tag)
     }
-    gate(&mut r, &d, &t.files);
-    privacy(&mut r, &d, &t.files);
-    let expect_rec: Option<ProtoExpect> = av::typed(&mut r, &d, EXPECT_JSON);
-    let expect_ok = expect_rec.as_ref() == expect(tag).as_ref();
-    if expect_rec.is_some() {
-        r.inv(
-            "expect.json equals the case table's entry",
-            expect_ok,
-            format!("table {:?}", expect(tag)),
-        );
+    fn manifest(v: Value) -> Option<Option<String>> {
+        serde_json::from_value::<ProtoManifest>(v)
+            .ok()
+            .filter(|x| x.protocols == "linux")
+            .map(|x| x.lab_id)
     }
-    let mut argv_ok = expect_ok;
-    for spec in &specs {
-        let rec: Option<ArgvRecord> = av::typed(&mut r, &d.join(spec.name), "argv.json");
-        if let Some(a) = &rec {
-            let ok = a.argv == spec.argv;
+    fn view(c: &CaseSpec, fr: &Frames, st: &Stand) -> WireView {
+        view(fr, st, c.arp)
+    }
+    fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
+        parse_doc(out, b)
+    }
+    fn foreign(fr: &Frames, st: &Stand) -> Vec<String> {
+        foreign_probes(fr, st)
+    }
+    fn text_problems(text: &str, _scanner_text: bool) -> Vec<String> {
+        iface_problems(text)
+    }
+    fn binary_problems(b: &[u8]) -> Vec<String> {
+        binary_problems(b)
+    }
+    fn seal(r: &mut Run, d: &Path) {
+        av::linux_seal(r, d);
+    }
+    fn case_records(r: &mut Run, d: &Path, c: &CaseSpec) {
+        if let Some(p) = av::typed::<PeerStack>(r, d, PEER_STACK_JSON) {
+            let problem = peer_stack_problem(&p, c);
             r.inv(
-                &format!(
-                    "{}/argv.json is the step's argv in the case table",
-                    spec.name
-                ),
-                ok,
-                format!("{:?}, table {:?}", a.argv, spec.argv),
-            );
-            argv_ok &= ok;
-        } else {
-            argv_ok = false;
-        }
-    }
-    r.argv_ok = argv_ok;
-    // A responder that died mid-step is a stand that stopped answering: named here, with its own error.
-    for spec in &specs {
-        if let Some(rec) = av::typed::<ResponderRecord>(&mut r, &d.join(spec.name), RESPONDER_JSON)
-        {
-            let problem = responder_problem(&rec);
-            r.inv(
-                &format!(
-                    "{}/{RESPONDER_JSON}: the peer responder ran until the scanner ended",
-                    spec.name
-                ),
+                "peer-stack.json: the peer answers the stand's way (icmp_ratemask 0, Echo answered, the stand's responder, no SCTP in the kernel for an SCTP case)",
                 problem.is_none(),
-                problem.unwrap_or_else(|| "it still ran".into()),
+                problem.unwrap_or_else(|| format!("{p:?}")),
             );
         }
     }
-    if let Some(p) = av::typed::<PeerStack>(&mut r, &d, PEER_STACK_JSON) {
-        let problem = peer_stack_problem(&p, c);
-        r.inv(
-            "peer-stack.json: the peer answers the stand's way (icmp_ratemask 0, Echo answered, the stand's responder, no SCTP in the kernel for an SCTP case)",
-            problem.is_none(),
-            problem.unwrap_or_else(|| format!("{p:?}")),
-        );
+    fn plan(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
+        plan_stream(c)
     }
-    judge(&mut r, c, &sides);
-    r.notes.insert(
-        "oracle".into(),
-        json!("the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand"),
-    );
-    r
+    fn step_wire(
+        r: &mut Run,
+        _c: &CaseSpec,
+        s: &Side<WireView>,
+        v: &WireView,
+    ) -> serde_json::Map<String, Value> {
+        stand_answers(r, s, v);
+        scanner_frames(r, s, v);
+        scanner_counts(
+            &SCANNER_CLASSES,
+            &v.scanner_named,
+            v.scanner_unexplained.len(),
+            &scanner_bounds(v, s.spec.who),
+        )
+    }
+    fn rmasscan_step(r: &mut Run, c: &CaseSpec, s: &Side<WireView>, doc: Option<&Document>) {
+        rmasscan_step(r, s, c, doc);
+    }
+    fn wire_records_at(c: &CaseSpec, v: &WireView, who: Who, out: Out) -> Vec<(Rec, f64)> {
+        wire_records_at(v, who, out, c.show_closed)
+    }
+    fn doc_record(x: &Rec, _who: Who) -> Rec {
+        x.bare()
+    }
+    fn same_probe(rm: &[u8], c: &[u8]) -> Option<bool> {
+        same_probe(rm, c)
+    }
+    fn vs_c(c: &CaseSpec, rm: &[Rec], oracle: &[Rec]) -> (Vec<Rec>, Vec<Rec>, usize, &'static str) {
+        let got: Vec<Rec> = rm.iter().map(Rec::bare).collect();
+        let dedup = c.deviations.contains(&"non-tcp-dedup");
+        let (want, n) = collapse(oracle, dedup);
+        (
+            got,
+            want,
+            n,
+            if dedup {
+                " (non-tcp-dedup applied)"
+            } else {
+                ""
+            },
+        )
+    }
+    fn finish(
+        r: &mut Run,
+        c: &CaseSpec,
+        sides: &[Side<WireView>],
+        docs: &[Option<Document>],
+        tally: Tally,
+    ) {
+        case_checks(r, c, sides, docs, &stand());
+        deviations(r, c, sides, tally.by_rule, tally.collapsed);
+    }
 }
-
-// ------------------------------------------------------------------ the directory
 
 /// Judge an evidence directory: the manifest, every planned case, and a safety walk of everything else. Symbolic
 /// links are never followed.
 pub fn verify_dir(root: &Path) -> Value {
-    let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[],"aborted":[]});
-    let t = tree(root);
-    let mut m = Run::new("manifest");
-    m.argv_ok = true;
-    m.safety(
-        "no compressed capture anywhere in the evidence directory",
-        !t.files.iter().chain(&t.links).any(|f| f.ends_with(".gz")),
-        "captures are stored uncompressed; the verifier has no decompression",
-    );
-    m.inv(
-        "no symbolic link in the evidence directory (links are never followed)",
-        t.links.is_empty(),
-        format!("{:?}", t.links),
-    );
-    let manifest = (!t.links.iter().any(|l| l == MANIFEST_JSON))
-        .then(|| read_json(root.join(MANIFEST_JSON)))
-        .flatten()
-        .and_then(|v| serde_json::from_value::<ProtoManifest>(v).ok())
-        .filter(|x| x.protocols == "linux");
-    m.check(
-        "manifest.json names the protocols plan (linux)",
-        manifest.is_some(),
-        "",
-        NOT_RUN,
-        false,
-    );
-    let tags = if manifest.is_some() {
-        planned_tags()
-    } else {
-        Vec::new()
-    };
-    let outside: Vec<String> = t
-        .files
-        .iter()
-        .filter(|f| {
-            *f != "verdict.json"
-                && !tags
-                    .iter()
-                    .any(|tag| f.starts_with(&format!("runs/{tag}/")))
-        })
-        .cloned()
-        .collect();
-    let odd: Vec<&String> = outside.iter().filter(|f| !evidence_extension(f)).collect();
-    m.inv(
-        "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md bin)",
-        odd.is_empty(),
-        format!("{odd:?}"),
-    );
-    privacy(&mut m, root, &outside);
-    let unplanned: Vec<&str> = t
-        .dirs
-        .iter()
-        .chain(&t.files)
-        .chain(&t.links)
-        .filter_map(|p| p.strip_prefix("runs/"))
-        .filter(|p| !p.contains('/') && !tags.contains(p))
-        .collect();
-    m.inv(
-        "runs/ holds only the planned case directories",
-        unplanned.is_empty(),
-        format!("{unplanned:?}"),
-    );
-    let attempts = av::attempts(&t, |name| av::attempt_of(&tags, name));
-    if !attempts.is_empty() {
-        let strays: Vec<&str> = attempts
-            .iter()
-            .filter(|a| a.case.is_none())
-            .map(|a| a.name.as_str())
-            .collect();
-        m.inv(
-            "runs_aborted/ holds only attempts of planned cases (<tag>.<run id>)",
-            strays.is_empty(),
-            format!("{strays:?}"),
-        );
-    }
-    if manifest.is_some() {
-        let id = manifest.as_ref().and_then(|x| x.lab_id.as_deref());
-        av::teardown(&mut m, root, &t.links, id);
-    }
-    let mut runs = vec![m.summary()];
-    if manifest.is_some() {
-        runs.extend(CASES.iter().map(|c| {
-            let mut r = verify_run(root, c, &t.links);
-            let earlier: Vec<String> = attempts
-                .iter()
-                .filter(|a| a.case == Some(c.tag))
-                .map(|a| format!("runs_aborted/{}", a.name))
-                .collect();
-            if !earlier.is_empty() {
-                r.inv(
-                    "no aborted attempt of this case in runs_aborted/ (a case runs once into one --out)",
-                    false,
-                    earlier.join(", "),
-                );
-            }
-            r.summary()
-        }));
-    }
-    result["runs"] = json!(runs);
-    result["aborted"] = json!(
-        attempts
-            .iter()
-            .map(av::Attempt::summary)
-            .collect::<Vec<_>>()
-    );
-    result["safety_scan"] = json!(stray_scan(root, &tags, &t));
-    verify::finish(result)
-}
-
-/// The captures outside the planned cases (aborted attempts, every step directory under them): `stray_scan`'s SYN and
-/// MAC checks, and the probes of every protocol off the stand ([`foreign_probes`]).
-fn stray_scan(root: &Path, tags: &[&'static str], t: &crate::macos_verify::Tree) -> Vec<Value> {
-    let planned = |rel: &str| {
-        tags.iter()
-            .any(|tag| rel.starts_with(&format!("runs/{tag}/")))
-    };
-    let st = stand();
-    let mut out = av::stray_scan(root, Some(Plan::Linux), tags, t);
-    for f in t
-        .files
-        .iter()
-        .filter(|f| f.ends_with(PEER_FILES[0]) && !planned(f))
-    {
-        let mut r = Run::new(&format!("{f} (every protocol)"));
-        r.argv_ok = true;
-        if let Some((fr, _)) = verify::load_pcap(&mut r, &root.join(f)) {
-            let off = foreign_probes(&fr, &st);
-            r.safety(
-                "no frame of the scanner on the capture to an address off the stand or from another source",
-                off.is_empty(),
-                off.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
-            );
-        }
-        out.push(r.summary());
-    }
-    out
+    pair_verify::verify_dir::<Protocols>(root)
 }
 
 /// `protocols-verify --dir DIR [--out FILE]`: 0 PASS, 1 FAIL, 2 INVALID or NOT RUN.
 pub fn run(args: &[String]) -> Result<i32, String> {
-    let o = crate::windows_suite::options_for("protocols-verify", args, &["dir", "out"])?;
-    if o.contains_key("help") {
-        println!(
-            "protocols-verify --dir DIR [--out FILE]  (exit 0 PASS, 1 FAIL, 2 INVALID or NOT RUN)"
-        );
-        return Ok(0);
-    }
-    let dir = crate::windows_suite::required(&o, "dir")?;
-    let res = verify_dir(Path::new(&dir));
-    if let Some(out) = o.get("out").and_then(|v| v.first()) {
-        fs::write(
-            out,
-            format!(
-                "{}\n",
-                serde_json::to_string_pretty(&res).map_err(|e| e.to_string())?
-            ),
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    for r in array(&res["runs"]) {
-        let bad: Vec<_> = array(&r["checks"])
-            .iter()
-            .filter(|c| c["result"] != PASS)
-            .take(3)
-            .map(|c| format!("{}: {}", s(&c["result"]), s(&c["name"])))
-            .collect();
-        println!(
-            "{:<8} {} {}",
-            s(&r["verdict"]),
-            s(&r["tag"]),
-            bad.join("; ")
-        );
-    }
-    for line in verify::safety_report_lines(&res) {
-        println!("{line}");
-    }
-    println!("overall: {} {}", s(&res["overall"]), res["totals"]);
-    Ok(match s(&res["overall"]) {
-        PASS => 0,
-        FAIL => 1,
-        _ => 2,
-    })
+    pair_verify::run::<Protocols>(args)
 }
 
 #[cfg(test)]

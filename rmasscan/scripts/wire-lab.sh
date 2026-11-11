@@ -40,7 +40,7 @@
 # forwarding, EUI-64 link-local addresses (the IPV6_SETTINGS line); then the ULA fd00:198:18::1/64 on veth-a,
 # fd00:198:18::2-5/64 on veth-b (nodad), in the scanner namespace an IPv6 default route via the peer's link-local
 # fe80::aa:ff:fe00:2 and permanent IPv6 neighbours for the peers, in the peer namespace the scanner as a permanent
-# neighbour, and a settle wait so that the kernels' MLD reports for the new groups are over before any capture.
+# neighbour, and a settle wait so that the kernels' MLD reports for the new groups are expected to be over before any capture.
 # Every setting dies with the namespaces; the seal is `capture isolation --mode ipv6`.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
@@ -299,7 +299,7 @@ fi
 if [ "$SUITE" = ipv6 ]; then
   # ipv6: the ULA addresses without DAD, the scanner's IPv6 default route via the peer's link-local (several on-link
   # targets resolve the interface's default gateway, so rmasscan's NS goes to the router), and permanent neighbours on
-  # both ends: no kernel ever solicits on the wire (rmasscan's resolver does not read the neighbour table), and the
+  # both ends: no kernel needs to solicit on the wire (rmasscan's resolver does not read the neighbour table), and the
   # peer answers the C oracle without asking the scanner, which C never answers.
   ip -n "$NS_A" -6 addr add "$IP6_A/64" dev "$IF_A" nodad
   for ip_ in $IP6_PEERS; do ip -n "$NS_B" -6 addr add "$ip_/64" dev "$IF_B" nodad; done
@@ -308,7 +308,7 @@ if [ "$SUITE" = ipv6 ]; then
   ip -n "$NS_B" -6 neigh add "$IP6_A" lladdr "$MAC_A" dev "$IF_B" nud permanent
   note_cmd "ip -n \$NS_A -6 addr add $IP6_A/64 dev $IF_A nodad; ip -n \$NS_B -6 addr add {$IP6_PEERS}/64 dev $IF_B nodad; ip -n \$NS_A -6 route add default via $IP6_GW dev $IF_A; ip -n \$NS_A -6 neigh add {$IP6_PEERS} lladdr $MAC_B dev $IF_A nud permanent; ip -n \$NS_B -6 neigh add $IP6_A lladdr $MAC_A dev $IF_B nud permanent   # ipv6 stand"
   # The kernels' MLD reports for the groups just joined repeat for up to mldv2_unsolicited_report_interval (1 s):
-  # they are over before the first capture starts.
+  # they are expected to be over before the first capture starts (to be confirmed live).
   sleep 3
 fi
 if [ "$SUITE" != oracle ]; then

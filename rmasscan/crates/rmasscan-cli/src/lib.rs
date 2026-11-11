@@ -56,13 +56,28 @@ fn finish(out: &mut dyn Write) -> Result<(), String> {
     out.flush().map_err(io_fail)
 }
 
+/// Отказ `main_scan` C (`main.c:1224-1229`): порт скана вместе с `--arp`. Текст как есть, без `[-]` и обёртки.
+const ARP_PORTSCAN_REFUSAL: &str = "FAIL: cannot arpscan and portscan at the same time";
+
+/// Проверка `main.c:1224-1229` (после проверок пустых целей и портов): ARP только единственным портом.
+fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
+    let ports = cfg.targets.ports();
+    if rmasscan_core::probe::is_arp_scan_ports(ports) && ports.count() != 1 {
+        return Err(ARP_PORTSCAN_REFUSAL.into());
+    }
+    Ok(())
+}
+
 /// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) и отказ открытия файла
 /// вывода (`out: could not open file for …`) как есть, [`LOGGED`] пусто (уже в `log`), прочие ошибки с обёрткой
 /// `rmasscan: error:`. Любая ошибка даёт exit 1.
 pub fn error_text(msg: &str) -> String {
     if msg == LOGGED {
         String::new()
-    } else if msg.starts_with(live::REFUSAL_PREFIX) || msg.starts_with(OPEN_FAILURE_PREFIX) {
+    } else if msg.starts_with(live::REFUSAL_PREFIX)
+        || msg.starts_with(OPEN_FAILURE_PREFIX)
+        || msg == ARP_PORTSCAN_REFUSAL
+    {
         msg.to_string()
     } else {
         format!("rmasscan: error: {msg}")
@@ -98,9 +113,10 @@ fn output_patch(o: &OutputOptions) -> conf::OutputConfPatch {
     }
 }
 
-/// Порты TCP целей за вычетом исключений, отсортированные и слитые: `masscan->targets.ports` после
-/// `massip_apply_excludes` и `massip_optimize` (main.c:1672–1684), строка `# Ports scanned` заголовка `-oG`.
-fn tcp_ports(cfg: &ScanConfig) -> Vec<(u16, u16)> {
+/// Все порты целей за вычетом исключений со сдвигами протоколов, отсортированные и слитые:
+/// `masscan->targets.ports` после `massip_apply_excludes` и `massip_optimize` (main.c:1672–1684), строка
+/// `# Ports scanned` заголовка `-oG`.
+fn target_ports(cfg: &ScanConfig) -> Vec<(u32, u32)> {
     let mut targets = cfg.targets.clone();
     targets.apply_excludes(&mut cfg.excludes.clone());
     targets.optimize();
@@ -108,8 +124,7 @@ fn tcp_ports(cfg: &ScanConfig) -> Vec<(u16, u16)> {
         .ports()
         .as_slice()
         .iter()
-        .filter(|r| r.begin <= 0xFFFF)
-        .map(|r| (r.begin as u16, r.end.min(0xFFFF) as u16))
+        .map(|r| (r.begin, r.end))
         .collect()
 }
 
@@ -128,7 +143,7 @@ fn output_env<'a>(
     OutputEnv {
         wall: backend,
         services,
-        tcp_ports: tcp_ports(cfg),
+        ports: target_ports(cfg),
         scan_started,
     }
 }
@@ -243,6 +258,12 @@ pub fn run(
         return finish(out);
     }
     if cli.offline {
+        // `--offline` это тот же `main_scan`: отказ ARP и портов виден и без трассировки.
+        let mut probe = cfg.clone();
+        probe.seed = probe.seed.max(1);
+        if validate(&probe, Operation::Scan).is_ok() {
+            refuse_arp_with_ports(&cfg)?;
+        }
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
@@ -255,6 +276,8 @@ pub fn run(
         }
         validate(&probe, Operation::Scan).map_err(|e| e.to_string())?;
     }
+    // main.c:1224-1229: сразу после проверок пустых целей и портов, до вывода и адаптера.
+    refuse_arp_with_ports(&cfg)?;
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени
@@ -520,9 +543,11 @@ mod tests {
             timestamp: 1_700_000_000,
             ip: Ipv4Addr::new(1, 2, 3, 4),
             port: 80,
+            proto: output::Proto::Tcp,
             status: output::Status::Open,
             reason: 0x12,
             ttl: 57,
+            mac: None,
         }
     }
 
@@ -531,9 +556,11 @@ mod tests {
             timestamp: 1_700_000_000,
             ip: Ipv4Addr::new(10, 0, 0, 255),
             port: 443,
+            proto: output::Proto::Tcp,
             status: output::Status::Closed,
             reason: 0x14,
             ttl: 64,
+            mac: None,
         }
     }
 
@@ -553,7 +580,7 @@ mod tests {
         let env = OutputEnv {
             wall: &W,
             services: output::ServiceNames::empty(),
-            tcp_ports: Vec::new(),
+            ports: Vec::new(),
             scan_started: None,
         };
         let o = OutputOptions {
@@ -935,7 +962,7 @@ mod tests {
                 "1",
             ][..],
             &["rmasscan", "-sL", "10.0.0.0/30", "-p80x", "--seed", "1"][..],
-            &["rmasscan", "-sL", "10.0.0.0/30", "-pU:53", "--seed", "1"][..],
+            &["rmasscan", "-sL", "10.0.0.0/30", "-pU:65536", "--seed", "1"][..],
             &[
                 "rmasscan",
                 "-sL",
@@ -1039,6 +1066,464 @@ mod tests {
                 "{l}"
             );
         }
+    }
+
+    #[test]
+    fn packet_trace_refuses_oproto_and_icmp_but_echo_and_list_accept_all_prefixes() {
+        // Р1: трассировка (как и живой скан) отказывает на O:* и I:1+, текст называет порт
+        let e = run_args(&trace_args(&["-pO:47"])).unwrap_err();
+        assert!(e.contains("O:47"), "{e}");
+        let e = run_args(&trace_args(&["-pI:1"])).unwrap_err();
+        assert!(e.contains("I:1"), "{e}");
+        // SCTP построен (Задача 5): `S:` проходит, UNK-строки проверяет `packet_trace_prints_the_c_unk_line_for_sctp`.
+        let out = run_args(&trace_args(&["-pS:2905"])).unwrap();
+        assert_eq!(out.lines().count(), 12, "{out}");
+        // I:0 строит ICMP Echo: к 8 SYN (TRACE шлёт на 80 и 443) добавляется по строке ICMP на каждый из 4 адресов
+        let out = run_args(&trace_args(&["-pI:0"])).unwrap();
+        assert_eq!(out.lines().count(), 12, "{out}");
+        let icmp = out
+            .lines()
+            .filter(|l| l.contains(") ICMP [10.255.0.1]:8 "))
+            .count();
+        assert_eq!(icmp, 4, "{out}");
+        // ARP-индекс вместе с TCP-портами трассировки: отказ смеси текстом C (main.c:1224-1229)
+        let (res, out, log) = run_capture(&trace_args(&["-pI:2"]));
+        assert_eq!(
+            res.unwrap_err(),
+            "FAIL: cannot arpscan and portscan at the same time"
+        );
+        assert!(out.is_empty() && log.is_empty());
+        assert_eq!(
+            run_args(&trace_args(&[])).unwrap().lines().count(),
+            8,
+            "pure TCP trace still runs"
+        );
+        // --echo и -sL принимают все пять префиксов и печатают их как C (O:47 как I:303)
+        let echo = run_args(&[
+            "rmasscan",
+            "--echo",
+            "10.0.0.1",
+            "-pU:53,T:80-81,s:2905,I:0,o:47",
+            "--seed",
+            "1",
+        ])
+        .unwrap();
+        assert!(
+            echo.contains("ports = 80-81,U:53,S:2905,I:0,I:303\n"),
+            "{echo}"
+        );
+        run_args(&["rmasscan", "-sL", "10.0.0.1", "-pO:47,U:53", "--seed", "1"]).unwrap();
+        // без трассировки --offline ничего не строит и не отказывает
+        run_args(&["rmasscan", "--offline", "10.0.0.1", "-pO:47", "--seed", "1"]).unwrap();
+    }
+
+    /// C `main-ptrace.c` не знает `FOUND_SCTP` и печатает ветку `default`: `SENT (%5.4f) UNK  %-21s > %-21s [%u]\n` с
+    /// номером `FOUND_SCTP` = 7 (образец снят с C 8e6b3b0 `packet_trace()` на кадре SCTP INIT).
+    #[test]
+    fn packet_trace_prints_the_c_unk_line_for_sctp() {
+        let out = run_args(&trace_args(&["-pS:2905"])).unwrap();
+        let unk: Vec<&str> = out
+            .split_inclusive('\n')
+            .filter(|l| l.contains(") UNK  "))
+            .collect();
+        assert_eq!(unk.len(), 4, "{out}");
+        let p = prepared(&trace_args(&["-pS:2905"]));
+        let mut want = Vec::new();
+        live::for_each_probe(&p.eff, &p.binding, |pr| {
+            if pr.frame[23] == 132 {
+                want.push((
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_me), pr.port_me),
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_them), pr.port_them),
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(want.len(), 4);
+        for (line, (from, to)) in unk.iter().zip(&want) {
+            let tail = format!("UNK  {from:<21} > {to:<21} [7]\n");
+            assert!(line.starts_with("SENT ("), "{line:?}");
+            assert!(line.ends_with(&tail), "{line:?} vs {tail:?}");
+        }
+        // SCTP не печатает ни TCP, ни UDP
+        assert_eq!(out.lines().count(), 12, "8 SYN и 4 INIT: {out}");
+    }
+
+    /// `main-ptrace.c` `FOUND_UDP`/`FOUND_DNS`: `SENT (%5.4f) UDP  %-21s > %-21s \n` (после второго адреса остаётся пробел).
+    #[test]
+    fn packet_trace_prints_the_c_udp_sent_line() {
+        let out = run_args(&trace_args(&["-pU:53,U:59999"])).unwrap();
+        // 8 SYN на 80 и 443, по 4 строки UDP на 53 и на 59999
+        assert_eq!(out.lines().count(), 16, "{out}");
+        let udp: Vec<&str> = out
+            .split_inclusive('\n')
+            .filter(|l| l.contains(") UDP  "))
+            .collect();
+        assert_eq!(udp.len(), 8, "{out}");
+        let p = prepared(&trace_args(&["-pU:53,U:59999"]));
+        let mut want = Vec::new();
+        live::for_each_probe(&p.eff, &p.binding, |pr| {
+            if pr.frame[23] == 17 {
+                want.push((
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_me), pr.port_me),
+                    format!("[{}]:{}", Ipv4Addr::from(pr.ip_them), pr.port_them),
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(want.len(), 8);
+        for (line, (from, to)) in udp.iter().zip(&want) {
+            // SENT (0.0000) UDP  [10.255.0.1]:4000N         > [10.0.0.N]:53        <пробел>\n
+            let tail = format!("UDP  {from:<21} > {to:<21} \n");
+            assert!(line.starts_with("SENT ("), "{line:?}");
+            assert!(line.ends_with(&tail), "{line:?} vs {tail:?}");
+            let secs = line["SENT (".len()..].split_once(')').unwrap().0;
+            assert_eq!(secs.len(), "0.0000".len(), "{line:?}");
+        }
+        assert!(udp[0].contains(") UDP  [10.255.0.1]:4000"), "{}", udp[0]);
+        assert!(udp.iter().any(|l| l.contains("> [10.0.0.0]:59999 ")));
+        // у UDP нет флагов TCP и числа байт нагрузки (в C `%u-bytes` только у TCP с `app_length`)
+        assert!(
+            udp.iter()
+                .all(|l| !l.contains("SYN") && !l.contains("-bytes"))
+        );
+    }
+
+    /// `--nmap-payloads` и `--pcap-payloads`: порядок в `--echo` снят с C (`masscan --echo 10.0.0.0/30 -p80 --seed 1
+    /// --nmap-payloads /tmp/x.txt --pcap-payloads /tmp/y.pcap --noreset --offline --pcap /tmp/z.pcap --ndjson-status
+    /// --retries 2`, config_parameters[], main-conf.c:2380-2399; `--ndjson-status` с `--echo` здесь отказывает); синонимы в единственном числе и файл `-c`.
+    #[test]
+    fn payload_options_are_positional_and_echoed_in_c_order() {
+        let head = |extra: &[&str]| {
+            let mut args = vec![
+                "rmasscan",
+                "--echo",
+                "10.0.0.0/30",
+                "-p80",
+                "--seed",
+                "1",
+                "--nmap-payloads",
+                "/tmp/x.txt",
+                "--pcap-payloads",
+                "/tmp/y.pcap",
+                "--noreset",
+                "--retries",
+                "2",
+            ];
+            args.extend_from_slice(extra);
+            run_args(&args)
+                .unwrap()
+                .lines()
+                .take_while(|l| !l.starts_with("nocapture"))
+                .map(|l| format!("{l}\n"))
+                .collect::<String>()
+        };
+        let top = "seed = 1\nrate = 100       \nshard = 1/1\nretries = 2\nnoreset = true\nnmap-payloads = /tmp/x.txt\n";
+        // `--offline` стоит между двумя ключами; `--pcap` (только живой скан) между `offline` и `pcap-payloads`
+        assert_eq!(
+            head(&["--offline"]),
+            format!("{top}offline = true\npcap-payloads = /tmp/y.pcap\n")
+        );
+        assert_eq!(
+            head(&["--pcap", "/tmp/z.pcap"]),
+            format!("{top}pcap-filename = /tmp/z.pcap\npcap-payloads = /tmp/y.pcap\n")
+        );
+        // единственное число, как синонимы C (`nmap-payload`, `pcap-payload`)
+        let cfg = Cli::try_parse_masscan([
+            "rmasscan",
+            "10.0.0.1",
+            "--nmap-payload",
+            "a.txt",
+            "--pcap-payload",
+            "b.pcap",
+        ])
+        .unwrap()
+        .to_config()
+        .unwrap();
+        assert_eq!(cfg.nmap_payloads.as_deref(), Some("a.txt"));
+        assert_eq!(cfg.pcap_payloads.as_deref(), Some("b.pcap"));
+        // ключ файла и позиция в argv: правее файла побеждает аргумент, левее победит файл
+        let scratch = Scratch::new();
+        let conf = scratch.write(
+            "p.conf",
+            b"nmap-payloads = from-file.txt\npcap-payloads = from-file.pcap\n",
+        );
+        let c = conf.to_str().unwrap();
+        let cfg = |args: &[&str]| {
+            Cli::try_parse_masscan(args.iter().copied())
+                .unwrap()
+                .to_config()
+                .unwrap()
+        };
+        let right = cfg(&[
+            "rmasscan",
+            "10.0.0.1",
+            "-c",
+            c,
+            "--nmap-payloads",
+            "arg.txt",
+        ]);
+        assert_eq!(right.nmap_payloads.as_deref(), Some("arg.txt"));
+        assert_eq!(right.pcap_payloads.as_deref(), Some("from-file.pcap"));
+        let left = cfg(&[
+            "rmasscan",
+            "10.0.0.1",
+            "--nmap-payloads",
+            "arg.txt",
+            "-c",
+            c,
+        ]);
+        assert_eq!(left.nmap_payloads.as_deref(), Some("from-file.txt"));
+        // без опций ключей в `--echo` нет
+        let plain = run_args(&["rmasscan", "--echo", "10.0.0.1", "-p80", "--seed", "1"]).unwrap();
+        assert!(!plain.contains("payloads"), "{plain}");
+    }
+
+    /// Файл `-c`/`--resume` C разбирает на его месте в `argv` (`masscan_set_parameter` по ходу разбора), поэтому
+    /// префикс по умолчанию его строки `ports =` задают `-sU`/`-sZ`/`--udp-ports` левее файла, а правее нет
+    /// (main-conf.c:2663–2674: UDP важнее SCTP; `--udp-ports` ставит `scan_type.udp`, :2642–2648). Ожидания сняты с
+    /// C 8e6b3b0 (`masscan 10.0.0.1 <argv> --echo`, файл `f` это `ports = 53`, `g` это `ports = 53,U:161`, `nest`
+    /// это `conf = f`); строка `ports = …` вывода C:
+    /// - `-sU -c f` → `ports = U:53`; `-c f -sU` → `ports = 53`;
+    /// - `-sZ -c f` → `ports = S:53`; `-c f -sZ` → `ports = 53`; `-c f` → `ports = 53`;
+    /// - `-sU -sZ -c f` и `-sZ -sU -c f` → `ports = U:53`; `-sS -sU -c f` → `ports = U:53`;
+    /// - `--udp-ports 7 -c f` → `ports = U:7,U:53`; `-sU -c g` → `ports = U:53,U:161`;
+    /// - `-sU -c nest` → `ports = U:53`; `-sU --resume f` → `ports = U:53`; `-c f -sU -p 80` → `ports = 53,U:80`.
+    #[test]
+    fn scan_type_left_of_a_conf_file_prefixes_its_ports_as_in_c() {
+        let scratch = Scratch::new();
+        let f = scratch.write("f", b"ports = 53\n");
+        let g = scratch.write("g", b"ports = 53,U:161\n");
+        let nest = scratch.write("nest", format!("conf = {}\n", f.display()).as_bytes());
+        let (f, g, nest) = (
+            f.to_str().unwrap(),
+            g.to_str().unwrap(),
+            nest.to_str().unwrap(),
+        );
+        let ports = |argv: &[&str]| {
+            let mut a = vec!["rmasscan", "10.0.0.1"];
+            a.extend_from_slice(argv);
+            a.extend_from_slice(&["--seed", "1", "--echo"]);
+            let out = run_args(&a).unwrap();
+            out.lines()
+                .find(|l| l.starts_with("ports = "))
+                .unwrap_or_else(|| panic!("{argv:?}: no ports line in {out}"))
+                .to_string()
+        };
+        for (argv, c) in [
+            (&["-sU", "-c", f][..], "ports = U:53"),
+            (&["-c", f, "-sU"][..], "ports = 53"),
+            (&["-sZ", "-c", f][..], "ports = S:53"),
+            (&["-c", f, "-sZ"][..], "ports = 53"),
+            (&["-c", f][..], "ports = 53"),
+            (&["-sU", "-sZ", "-c", f][..], "ports = U:53"),
+            (&["-sZ", "-sU", "-c", f][..], "ports = U:53"),
+            (&["-sS", "-sU", "-c", f][..], "ports = U:53"),
+            (&["--udp-ports", "7", "-c", f][..], "ports = U:7,U:53"),
+            (&["-sU", "-c", g][..], "ports = U:53,U:161"),
+            (&["-sU", "-c", nest][..], "ports = U:53"),
+            (&["-sU", "--resume", f][..], "ports = U:53"),
+            (&["-c", f, "-sU", "-p", "80"][..], "ports = 53,U:80"),
+        ] {
+            assert_eq!(ports(argv), c, "{argv:?}");
+        }
+    }
+
+    /// `--top-ports` C строит в конце разбора по итоговым типам скана, и TCP по умолчанию только если нет ни UDP, ни
+    /// SCTP, ни ping, ни ARP, ни oproto (main-conf.c:3609–3619); `scan_type.arp` ставит `SET_arpscan` (`--arp`,
+    /// `--arpscan`, ключ файла `arpscan =`, main-conf.c:1088–1102), а `-pI:2` его не ставит. Ожидания сняты с C 8e6b3b0
+    /// (`masscan 10.0.0.1 <argv> --echo`, файл `a` это `arpscan = true`); строка `ports = …` вывода C:
+    /// - `--arp --top-ports 5` и `--top-ports 5 --arp` → `ports = I:2`; `--arpscan --top-ports 3` → `ports = I:2`;
+    /// - `--arp --top-ports 5 -sS` → `ports = 21,80,443,990,8080,I:2`;
+    /// - `--arp --top-ports 5 -sU` → `ports = U:135,U:137-138,U:161,U:500,I:2`;
+    /// - `--arp --top-ports 5 --ping` → `ports = I:0,I:2`;
+    /// - `-pI:2 --top-ports 5` → `ports = 21,80,443,990,8080,I:2`;
+    /// - `-c a --top-ports 5` и `--top-ports 5 -c a` → `ports = I:2`.
+    ///
+    /// oproto: у rmasscan нет ни `-sO`, ни ключа `oprotos` (C main-conf.c:2649–2655, :3524), а `-pO:47` у C
+    /// `scan_type.oproto` не ставит, поэтому эту часть условия у rmasscan ничто не задаёт.
+    #[test]
+    fn arp_scan_drops_the_tcp_default_of_top_ports_as_in_c() {
+        let scratch = Scratch::new();
+        let a = scratch.write("a", b"arpscan = true\n");
+        let a = a.to_str().unwrap();
+        let ports = |argv: &[&str]| {
+            let mut v = vec!["rmasscan", "10.0.0.1"];
+            v.extend_from_slice(argv);
+            v.extend_from_slice(&["--seed", "1", "--echo"]);
+            let out = run_args(&v).unwrap();
+            out.lines()
+                .find(|l| l.starts_with("ports = "))
+                .unwrap_or_else(|| panic!("{argv:?}: no ports line in {out}"))
+                .to_string()
+        };
+        for (argv, c) in [
+            (&["--arp", "--top-ports", "5"][..], "ports = I:2"),
+            (&["--top-ports", "5", "--arp"][..], "ports = I:2"),
+            (&["--arpscan", "--top-ports", "3"][..], "ports = I:2"),
+            (
+                &["--arp", "--top-ports", "5", "-sS"][..],
+                "ports = 21,80,443,990,8080,I:2",
+            ),
+            (
+                &["--arp", "--top-ports", "5", "-sU"][..],
+                "ports = U:135,U:137-138,U:161,U:500,I:2",
+            ),
+            (
+                &["--arp", "--top-ports", "5", "--ping"][..],
+                "ports = I:0,I:2",
+            ),
+            (
+                &["-pI:2", "--top-ports", "5"][..],
+                "ports = 21,80,443,990,8080,I:2",
+            ),
+            (&["-c", a, "--top-ports", "5"][..], "ports = I:2"),
+            (&["--top-ports", "5", "-c", a][..], "ports = I:2"),
+        ] {
+            assert_eq!(ports(argv), c, "{argv:?}");
+        }
+    }
+
+    /// Файлы нагрузок доходят до кадров: сначала pcap, потом nmap (main-conf.c:3163-3183), оба заменяют встроенные.
+    #[test]
+    fn payload_files_reach_the_probe_frames() {
+        let scratch = Scratch::new();
+        let nmap = scratch.write(
+            "payloads.txt",
+            b"udp 59999\n\"from-nmap\"\nudp 161\n\"x\"\n",
+        );
+        // pcap с одним пакетом UDP на порт 161 (Ethernet/IPv4, документационные адреса) и одним на 59999
+        let udp = |dport: u16, payload: &[u8]| {
+            let mut f = vec![
+                0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0, 0x11, 0x22, 0x33, 0x44, 0x55, 8, 0,
+            ];
+            f.extend_from_slice(&[0x45, 0]);
+            f.extend_from_slice(&((28 + payload.len()) as u16).to_be_bytes());
+            f.extend_from_slice(&[
+                0, 0, 0, 0, 64, 17, 0, 0, 198, 18, 0, 1, 198, 18, 0, 2, 0x30, 0x39,
+            ]);
+            f.extend_from_slice(&dport.to_be_bytes());
+            f.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+            f.extend_from_slice(&[0, 0]);
+            f.extend_from_slice(payload);
+            f
+        };
+        let mut pcap = vec![
+            0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1, 0, 0,
+            0,
+        ];
+        for (port, body) in [(161u16, &b"from-pcap"[..]), (59999, b"pcap-loses")] {
+            let f = udp(port, body);
+            for v in [1u32, 2, f.len() as u32, f.len() as u32] {
+                pcap.extend_from_slice(&v.to_le_bytes());
+            }
+            pcap.extend_from_slice(&f);
+        }
+        let pcap = scratch.write("payloads.pcap", &pcap);
+        let frames = |extra: &[&str]| {
+            let p = prepared(&trace_args(
+                &[&["-pU:161,U:59999,U:53"][..], extra].concat(),
+            ));
+            let mut v = Vec::new();
+            live::for_each_probe_with(&p.eff, &p.binding, &p.payloads, |pr| {
+                if pr.frame[23] == 17 {
+                    v.push((pr.port_them, pr.frame[42..].to_vec()));
+                }
+                Ok(())
+            })
+            .unwrap();
+            v
+        };
+        let find =
+            |v: &[(u16, Vec<u8>)], port: u16| v.iter().find(|f| f.0 == port).unwrap().1.clone();
+        let builtin = frames(&[]);
+        assert_eq!(builtin.len(), 12);
+        assert_eq!(find(&builtin, 161).len(), 59, "built-in SNMP probe");
+        assert_eq!(find(&builtin, 59999), b"", "no entry: empty payload");
+        assert_eq!(find(&builtin, 53).len(), 31);
+        let with_pcap = frames(&["--pcap-payloads", pcap.to_str().unwrap()]);
+        assert_eq!(find(&with_pcap, 161), b"from-pcap");
+        assert_eq!(find(&with_pcap, 59999), b"pcap-loses");
+        assert_eq!(find(&with_pcap, 53).len(), 31, "other built-ins stay");
+        let both = frames(&[
+            "--pcap-payloads",
+            pcap.to_str().unwrap(),
+            "--nmap-payloads",
+            nmap.to_str().unwrap(),
+        ]);
+        assert_eq!(find(&both, 161), b"x", "nmap file wins over pcap");
+        assert_eq!(find(&both, 59999), b"from-nmap");
+        // порядок опций в argv на победителя не влияет (C грузит pcap, затем nmap)
+        let swapped = frames(&[
+            "--nmap-payloads",
+            nmap.to_str().unwrap(),
+            "--pcap-payloads",
+            pcap.to_str().unwrap(),
+        ]);
+        assert_eq!(swapped, both);
+    }
+
+    #[test]
+    fn payload_file_errors_refuse_before_any_output() {
+        let scratch = Scratch::new();
+        let bad = scratch.write("bad.txt", b"# header\ntcp 80\n\"x\"\n");
+        let notpcap = scratch.write("not.pcap", &[0u8; 40]);
+        let missing = scratch.dir().join("missing");
+        for (opt, file, want) in [
+            (
+                "--nmap-payloads",
+                missing.to_str().unwrap(),
+                "--nmap-payloads",
+            ),
+            (
+                "--pcap-payloads",
+                missing.to_str().unwrap(),
+                "--pcap-payloads",
+            ),
+            (
+                "--nmap-payloads",
+                bad.to_str().unwrap(),
+                "line 2: expected \"udp\"",
+            ),
+            (
+                "--pcap-payloads",
+                notpcap.to_str().unwrap(),
+                "unknown byte order",
+            ),
+        ] {
+            let (res, out, log) = run_capture(&trace_args(&["-pU:53", opt, file]));
+            let e = res.unwrap_err();
+            assert!(e.contains(want), "{opt}: {e}");
+            assert!(
+                out.is_empty() && log.is_empty(),
+                "{opt}: output before the refusal: {out}{log}"
+            );
+        }
+        // `--echo` и `-sL` файлов не читают (в них нет кадров)
+        run_args(&[
+            "rmasscan",
+            "--echo",
+            "10.0.0.1",
+            "-p80",
+            "--seed",
+            "1",
+            "--nmap-payloads",
+            "/nonexistent",
+        ])
+        .unwrap();
+    }
+
+    /// Итог запуска вместе со stdout и stderr (то, что напечатано до отказа).
+    fn run_capture(args: &[&str]) -> (Result<(), String>, String, String) {
+        let cli = Cli::try_parse_masscan(args.iter().copied()).unwrap();
+        let (mut out, mut log) = (Vec::new(), Vec::new());
+        let res = run(&cli, &FakeBackend::default(), &mut out, &mut log);
+        (
+            res,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(log).unwrap(),
+        )
     }
 
     fn prepared(args: &[&str]) -> live::Prepared {

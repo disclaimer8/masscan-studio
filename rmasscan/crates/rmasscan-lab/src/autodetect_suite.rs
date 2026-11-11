@@ -533,10 +533,25 @@ pub(crate) fn binary(path: &str) -> Result<Value, String> {
 
 // ------------------------------------------------------------------ Linux: the seam
 
+/// How a process the Linux suite started ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ended {
+    /// It exited with this code.
+    Code(i32),
+    /// A signal ended it (Unix: no exit code; `ExitStatusExt::signal`). Windows has no signals: nothing builds it
+    /// there (`ended_by_signal` reads -1 as a code), so `clippy -D warnings` on the guest would call it dead.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Signal(i32),
+}
 /// A process the Linux suite started.
 pub(crate) trait Running {
-    /// `None` while it runs.
+    /// `None` while it runs. A process without an exit code (a signal ended it) reads as -1.
     fn try_wait(&mut self) -> Result<Option<i32>, String>;
+    /// How it ended, `None` while it runs. The default reads [`Running::try_wait`] as an exit code; the real child
+    /// tells a signal apart.
+    fn try_end(&mut self) -> Result<Option<Ended>, String> {
+        self.try_wait().map(|r| r.map(Ended::Code))
+    }
     /// A graceful stop (`INT`, `TERM`).
     fn signal(&mut self, sig: &str);
     fn kill(&mut self);
@@ -562,6 +577,17 @@ pub(crate) trait LinuxHost {
     }
 }
 
+/// A status without an exit code: the signal that ended the process (Unix), or -1 where there is none to read.
+#[cfg(unix)]
+fn ended_by_signal(s: &std::process::ExitStatus) -> Ended {
+    use std::os::unix::process::ExitStatusExt;
+    s.signal().map_or(Ended::Code(-1), Ended::Signal)
+}
+#[cfg(not(unix))]
+fn ended_by_signal(_s: &std::process::ExitStatus) -> Ended {
+    Ended::Code(-1)
+}
+
 /// The lab host: children of this process. They stay in the suite's process group, which `wire-lab.sh` stops as a
 /// whole if the suite dies.
 pub(crate) struct RealLinux;
@@ -572,6 +598,13 @@ impl Running for RealChild {
             .try_wait()
             .map(|s| s.map(|s| s.code().unwrap_or(-1)))
             .map_err(|e| e.to_string())
+    }
+    fn try_end(&mut self) -> Result<Option<Ended>, String> {
+        let status = self.0.try_wait().map_err(|e| e.to_string())?;
+        Ok(status.map(|s| match s.code() {
+            Some(rc) => Ended::Code(rc),
+            None => ended_by_signal(&s),
+        }))
     }
     fn signal(&mut self, sig: &str) {
         crate::wire_suite::signal_process(sig, self.0.id());
@@ -1879,3 +1912,50 @@ pub fn run(args: &[String]) -> Result<i32, String> {
 #[cfg(test)]
 #[path = "autodetect_suite_tests.rs"]
 mod tests;
+
+/// The real child tells a signal apart from an exit code (`try_wait` alone reads both as a code, a signal as -1).
+/// These run `/bin/sh` and nothing else: no interface, no frame.
+#[cfg(all(test, unix))]
+mod real_child_tests {
+    use super::{Ended, RealChild, Running};
+    use std::{process::Command, thread, time::Duration};
+
+    fn ended(script: &str) -> Ended {
+        let mut c = RealChild(
+            Command::new("/bin/sh")
+                .args(["-c", script])
+                .spawn()
+                .unwrap(),
+        );
+        for _ in 0..500 {
+            if let Some(e) = c.try_end().unwrap() {
+                return e;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        c.kill();
+        panic!("{script}: still running after 5 s");
+    }
+
+    #[test]
+    fn a_signal_and_an_exit_code_are_told_apart() {
+        assert_eq!(ended("kill -9 $$"), Ended::Signal(9));
+        assert_eq!(ended("kill -15 $$"), Ended::Signal(15));
+        assert_eq!(ended("exit 3"), Ended::Code(3));
+        assert_eq!(ended("exit 0"), Ended::Code(0));
+        // try_wait keeps its old reading for the other suites: a signal is -1
+        let mut c = RealChild(
+            Command::new("/bin/sh")
+                .args(["-c", "kill -9 $$"])
+                .spawn()
+                .unwrap(),
+        );
+        let rc = loop {
+            if let Some(rc) = c.try_wait().unwrap() {
+                break rc;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(rc, -1);
+    }
+}

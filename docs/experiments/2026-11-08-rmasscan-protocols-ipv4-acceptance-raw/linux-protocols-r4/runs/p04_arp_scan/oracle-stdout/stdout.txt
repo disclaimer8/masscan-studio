@@ -1,0 +1,4 @@
+Discovered up port 0/arp on 198.18.0.2 (02:aa:00:00:00:02)                     
+Discovered up port 0/arp on 198.18.0.3 (02:aa:00:00:00:02)                     
+Discovered up port 0/arp on 198.18.0.4 (02:aa:00:00:00:02)                     
+Discovered up port 0/arp on 198.18.0.5 (02:aa:00:00:00:02)                     

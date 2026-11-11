@@ -12,7 +12,7 @@
   "built_at": "2026-10-23T11:24:04Z",
   "offline_gen_pps": 2843897,
   "offline_gen_bench": {
-    "command": "sudo -n unshare -n /usr/bin/time -v -o /home/a1/rmasscan-oracle/bench.time timeout 120 /home/a1/rmasscan-oracle/masscan-offline/bin/masscan 0.0.0.0/4 -p80 --rate 100000000 --offline --interface lo --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --router-mac 66-55-44-33-22-11 --source-port 40000 --seed 1 --wait 0",
+    "command": "sudo -n unshare -n /usr/bin/time -v -o $HOME/rmasscan-oracle/bench.time timeout 120 $HOME/rmasscan-oracle/masscan-offline/bin/masscan 0.0.0.0/4 -p80 --rate 100000000 --offline --interface lo --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --router-mac 66-55-44-33-22-11 --source-port 40000 --seed 1 --wait 0",
     "targets_total": 268435456,
     "wall_seconds": 94.39,
     "method": "total targets (2^28 for /4 x 1 port) divided by wall clock from /usr/bin/time -v (includes process start and exit)",

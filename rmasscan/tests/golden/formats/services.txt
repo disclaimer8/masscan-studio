@@ -2,3 +2,7 @@ ssh                   22/tcp
 http                  80/tcp www
 https                 443/tcp
 http-alt              8080/tcp webcache
+domain                53/udp
+ntp                   123/udp
+snmp                  161/udp
+isakmp                500/udp

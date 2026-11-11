@@ -23,8 +23,17 @@ use std::sync::Arc;
 use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
 use crate::cookie::syn_cookie_ipv4;
-use crate::packet::{LinkType, PacketModifiers, TcpSynTemplate};
+use crate::packet::{
+    ArpTemplate, IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, TcpSynTemplate,
+    UdpTemplate,
+};
+use crate::payloads::PayloadTable;
+use crate::ranges::RangeList;
 use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
+use crate::targets::{
+    TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST,
+    TEMPL_UDP, TEMPL_UDP_LAST,
+};
 
 /// Раунды BlackRock, которые принимает runtime v1 (masscan по умолчанию).
 pub const RUNTIME_BLACKROCK_ROUNDS: u32 = 14;
@@ -56,6 +65,15 @@ pub enum PlanError {
     PortNotTcp(u32),
     #[error("port {port_them}/{port_me} does not fit TCP (v1 is TCP only)")]
     PortDoesNotFit { port_them: u32, port_me: u32 },
+    #[error("raw IP protocol ports (O:{}) are not supported for scanning; rmasscan sends no raw-protocol probes", .0 - TEMPL_OPROTO_FIRST)]
+    OprotoNotSupported(u32),
+    #[error("ICMP ports other than I:0 (echo) and the ARP index are not supported for scanning (I:{})", .0 - TEMPL_ICMP_ECHO)]
+    IcmpTypeNotSupported(u32),
+    #[error("ARP scan cannot be mixed with other ports")]
+    ArpMixedWithPorts,
+    /// Построитель зонда отказал посреди прохода: это отказ скана, а не его конец.
+    #[error("probe could not be built: {0}")]
+    ProbeBuild(Box<PlanError>),
     #[error("next index {next_index} is beyond the transmit limit {limit}")]
     NextIndexBeyondRange { next_index: u64, limit: u64 },
     #[error("invalid shard {one}/{of}: need 1 <= one <= of")]
@@ -132,6 +150,9 @@ pub struct Probe {
     pub port_me: u16,
     pub ip_them: u32,
     pub port_them: u16,
+    /// Порт цели с протокольным смещением, как `port_them` в `transmit_thread` (main.c:389): порт TCP как есть,
+    /// `65536 + порт` для UDP, `196608` для ICMP Echo. Этот индекс (а не 16-битный `port_them`) входит в cookie.
+    pub port_index: u32,
     pub seqno: u32,
     pub frame: Vec<u8>,
 }
@@ -152,6 +173,15 @@ fn check_source_ports(first: u16, last: u16, legacy_c_17: bool) -> Result<(), Pl
 #[derive(Debug, Clone)]
 struct Builder {
     tmpl: TcpSynTemplate,
+    /// Шаблон ICMP Echo (`I:0`, templ-pkt.c:105): тот же путь адаптера, что у TCP.
+    icmp: IcmpEchoTemplate,
+    /// Шаблон UDP (`U:`, templ-pkt.c:56): тот же путь адаптера и та же таблица нагрузок на все адаптеры.
+    udp: UdpTemplate,
+    /// Шаблон SCTP INIT (`S:`, templ-pkt.c:76): тот же путь адаптера.
+    sctp: SctpTemplate,
+    /// Шаблон ARP who-has (`--arp`, `I:2`, templ-pkt.c:162): тот же путь адаптера, всегда широковещательный.
+    arp: ArpTemplate,
+    payloads: Arc<PayloadTable>,
     ip_me0: u32,
     first: u16,
     port_mask: u32,
@@ -161,7 +191,12 @@ struct Builder {
 }
 
 impl Builder {
-    fn from_nic(nic: &NicBinding, seed: u64, mods: &PacketModifiers) -> Result<Builder, PlanError> {
+    fn from_nic(
+        nic: &NicBinding,
+        seed: u64,
+        mods: &PacketModifiers,
+        payloads: &Arc<PayloadTable>,
+    ) -> Result<Builder, PlanError> {
         let binding = &nic.binding;
         let (first, last) = binding.source_ports;
         check_source_ports(first, last, nic.legacy_c_17_port_mask)?;
@@ -183,6 +218,26 @@ impl Builder {
                 binding.link_type,
                 mods,
             ),
+            icmp: IcmpEchoTemplate::new(
+                binding.source_mac,
+                binding.next_hop_mac,
+                binding.link_type,
+                mods.ttl,
+            ),
+            udp: UdpTemplate::new(
+                binding.source_mac,
+                binding.next_hop_mac,
+                binding.link_type,
+                mods.ttl,
+            ),
+            sctp: SctpTemplate::new(
+                binding.source_mac,
+                binding.next_hop_mac,
+                binding.link_type,
+                mods.ttl,
+            ),
+            arp: ArpTemplate::new(binding.source_mac),
+            payloads: payloads.clone(),
             ip_me0: binding.source_ipv4,
             ipv4_mask: nic.source_ipv4_last - binding.source_ipv4,
             first,
@@ -219,6 +274,82 @@ impl Builder {
         } else {
             (self.ip_me0, u32::from(self.first))
         };
+        if port_them == TEMPL_ARP {
+            // templ-pkt.c:914-928: у ARP нет ни порта, ни cookie в кадре, только `spa = ip_me` и `tpa = ip_them`.
+            // Cookie и порт источника считаются как у остальных (main.c:389), чтобы поток источников адаптера
+            // не зависел от типа скана; в кадр они не попадают.
+            let port_me16 = u16::try_from(port_me)
+                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
+            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+            self.arp.build_arp(ip_them, ip_me, &mut p.frame);
+            p.index = i;
+            p.ip_me = ip_me;
+            p.port_me = port_me16;
+            p.ip_them = ip_them;
+            p.port_them = 0;
+            p.port_index = port_them;
+            p.seqno = seqno;
+            return Ok(());
+        }
+        if port_them == TEMPL_ICMP_ECHO {
+            // main.c:389 даёт seqno с реальным port_me: он идёт только в ip_id (templ-pkt.c:942); [id|seq] кадра
+            // это cookie с port_me = 0 (templ-pkt.c:1067), его считает `build_echo`.
+            let port_me16 = u16::try_from(port_me)
+                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
+            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+            self.icmp
+                .build_echo(ip_them, ip_me, seqno, self.entropy, &mut p.frame);
+            p.index = i;
+            p.ip_me = ip_me;
+            p.port_me = port_me16;
+            p.ip_them = ip_them;
+            // у ICMP порта получателя нет: индекс 196608 в u16 не помещается, как в кадре его нет вовсе
+            p.port_them = 0;
+            p.port_index = port_them;
+            p.seqno = seqno;
+            return Ok(());
+        }
+        if (TEMPL_UDP..=TEMPL_UDP_LAST).contains(&port_them) {
+            // templ-pkt.c:903-906: порт в кадре 16-битный (`port_them &= 0xFFFF`), а cookie (main.c:389) берётся по
+            // индексу `Templ_UDP + порт`. Нагрузка ищется по порту; нет записи - 0 байт.
+            let port16 = (port_them & 0xFFFF) as u16;
+            let port_me16 = u16::try_from(port_me)
+                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
+            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+            self.udp.build_udp(
+                (ip_them, port16),
+                (ip_me, port_me16),
+                seqno,
+                self.payloads.get(port16),
+                &mut p.frame,
+            );
+            p.index = i;
+            p.ip_me = ip_me;
+            p.port_me = port_me16;
+            p.ip_them = ip_them;
+            p.port_them = port16;
+            p.port_index = port_them;
+            p.seqno = seqno;
+            return Ok(());
+        }
+        if (TEMPL_SCTP..=TEMPL_SCTP_LAST).contains(&port_them) {
+            // templ-pkt.c:907-910: порт в кадре 16-битный (`port_them &= 0xFFFF`), cookie (main.c:389) берётся по
+            // индексу `Templ_SCTP + порт`; он же идёт в initiate_tag INIT, а приёмник сверяет с ним verification tag.
+            let port16 = (port_them & 0xFFFF) as u16;
+            let port_me16 = u16::try_from(port_me)
+                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
+            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+            self.sctp
+                .build_init((ip_them, port16), (ip_me, port_me16), seqno, &mut p.frame);
+            p.index = i;
+            p.ip_me = ip_me;
+            p.port_me = port_me16;
+            p.ip_them = ip_them;
+            p.port_them = port16;
+            p.port_index = port_them;
+            p.seqno = seqno;
+            return Ok(());
+        }
         let (Ok(port_them16), Ok(port_me16)) = (u16::try_from(port_them), u16::try_from(port_me))
         else {
             return Err(PlanError::PortDoesNotFit { port_them, port_me });
@@ -232,6 +363,7 @@ impl Builder {
         p.port_me = port_me16;
         p.ip_them = ip_them;
         p.port_them = port_them16;
+        p.port_index = port_them;
         p.seqno = seqno;
         Ok(())
     }
@@ -256,9 +388,24 @@ pub fn for_each_probe<B>(
 pub fn for_each_probe_nic<B>(
     eff: &EffectiveConfig,
     nic: &NicBinding,
+    f: impl FnMut(&Probe) -> ControlFlow<B>,
+) -> Result<ControlFlow<B>, PlanError> {
+    for_each_probe_nic_with_payloads(eff, nic, &PayloadTable::builtin(), f)
+}
+
+/// [`for_each_probe_nic`] с таблицей нагрузок UDP, собранной из `--nmap-payloads` и `--pcap-payloads`.
+pub fn for_each_probe_nic_with_payloads<B>(
+    eff: &EffectiveConfig,
+    nic: &NicBinding,
+    payloads: &PayloadTable,
     mut f: impl FnMut(&Probe) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, PlanError> {
-    let builder = Builder::from_nic(nic, eff.seed(), &eff.packet_modifiers())?;
+    let builder = Builder::from_nic(
+        nic,
+        eff.seed(),
+        &eff.packet_modifiers(),
+        &Arc::new(payloads.clone()),
+    )?;
     let mut probe = Probe::default();
     let flow = transmit_scan_flow(
         eff.massip(),
@@ -297,6 +444,47 @@ struct PlanInner {
     blackrock: BlackRock,
     /// По одному на адаптер (у каждого свои адреса и порты источника).
     builders: Vec<Builder>,
+    /// Таблица нагрузок UDP, общая у всех адаптеров.
+    payloads: Arc<PayloadTable>,
+}
+
+/// Проверка портов плана CLI (спека Р1, решение R1): живой скан и
+/// `--offline --packet-trace` не шлют сырые IP-протоколы (`O:*`, в C нет
+/// отправки: templ-pkt.c:932) и ICMP кроме Echo (в C нет приёма `I:1`:
+/// proto-icmp.c:222). `Templ_ARP` = 65536*3+2 (`I:2`, massip-port.h:18-20)
+/// допустим, но только единственным портом. Диапазон сообщается по
+/// наименьшему недопустимому индексу.
+pub fn check_cli_ports(ports: &RangeList) -> Result<(), PlanError> {
+    let allowed = |i: u32| i == TEMPL_ICMP_ECHO || i == TEMPL_ARP;
+    for r in ports.as_slice() {
+        if r.end < TEMPL_ICMP_ECHO {
+            continue;
+        }
+        let mut i = r.begin.max(TEMPL_ICMP_ECHO);
+        while i <= r.end && allowed(i) {
+            i += 1;
+        }
+        if i > r.end {
+            continue;
+        }
+        return Err(if (TEMPL_OPROTO_FIRST..=TEMPL_OPROTO_LAST).contains(&i) {
+            PlanError::OprotoNotSupported(i)
+        } else {
+            PlanError::IcmpTypeNotSupported(i)
+        });
+    }
+    let has_arp = is_arp_scan_ports(ports);
+    if has_arp && ports.count() != 1 {
+        return Err(PlanError::ArpMixedWithPorts);
+    }
+    Ok(())
+}
+
+/// Список портов задаёт ARP-скан: в нём есть `Templ_ARP`. Смесь с другими портами отклоняет [`check_cli_ports`]
+/// (`FAIL: cannot arpscan and portscan at the same time`, main.c:1224-1229). Как в C, `-p I:2` без `--arp` это тоже
+/// ARP-скан (решение R1).
+pub fn is_arp_scan_ports(ports: &RangeList) -> bool {
+    ports.is_contains(TEMPL_ARP)
 }
 
 /// Проверенный план нового запуска. Поля приватны; создать можно только через
@@ -376,7 +564,13 @@ impl ReadyPlan {
         if effective.packet_modifiers() != PacketModifiers::default() {
             return Err(PlanError::UnsupportedPacketModifiers);
         }
-        ReadyPlan::build(effective, vec![NicBinding::from(binding)], destinations)
+        ReadyPlan::build(
+            effective,
+            vec![NicBinding::from(binding)],
+            true,
+            Arc::new(PayloadTable::builtin()),
+            destinations,
+        )
     }
 
     /// План CLI: любой валидный shard, retries до 999, `resume_index` и
@@ -385,6 +579,35 @@ impl ReadyPlan {
     pub fn new_cli(
         effective: EffectiveConfig,
         nics: Vec<NicBinding>,
+    ) -> Result<ReadyPlan, PlanError> {
+        ReadyPlan::new_cli_with_payloads(effective, nics, PayloadTable::builtin())
+    }
+
+    /// [`ReadyPlan::new_cli`] с таблицей нагрузок UDP из `--nmap-payloads` и `--pcap-payloads` (по умолчанию
+    /// встроенная таблица из 28 записей). Таблица одна на все адаптеры плана.
+    pub fn new_cli_with_payloads(
+        effective: EffectiveConfig,
+        nics: Vec<NicBinding>,
+        payloads: PayloadTable,
+    ) -> Result<ReadyPlan, PlanError> {
+        ReadyPlan::new_cli_checked(effective, nics, true, Arc::new(payloads))
+    }
+
+    /// Только для тестов отказа движка: как [`ReadyPlan::new_cli`], но без проверки портов, поэтому план с
+    /// портом без построителя зонда строится и курсор упирается в отказ посреди прохода. Не для рабочего кода.
+    #[doc(hidden)]
+    pub fn new_cli_without_port_checks(
+        effective: EffectiveConfig,
+        nics: Vec<NicBinding>,
+    ) -> Result<ReadyPlan, PlanError> {
+        ReadyPlan::new_cli_checked(effective, nics, false, Arc::new(PayloadTable::builtin()))
+    }
+
+    fn new_cli_checked(
+        effective: EffectiveConfig,
+        nics: Vec<NicBinding>,
+        check_ports: bool,
+        payloads: Arc<PayloadTable>,
     ) -> Result<ReadyPlan, PlanError> {
         if effective.operation() != Operation::Scan {
             return Err(PlanError::NotScanOperation(effective.operation()));
@@ -402,12 +625,18 @@ impl ReadyPlan {
         if effective.blackrock_rounds() < 1 {
             return Err(PlanError::ZeroRounds(effective.blackrock_rounds()));
         }
-        ReadyPlan::build(effective, nics, None)
+        // Р1: O:*, I:n и смесь ARP с другими портами отклоняются навсегда.
+        if check_ports {
+            check_cli_ports(effective.massip().ports())?;
+        }
+        ReadyPlan::build(effective, nics, false, payloads, None)
     }
 
     fn build(
         effective: EffectiveConfig,
         nics: Vec<NicBinding>,
+        tcp_only: bool,
+        payloads: Arc<PayloadTable>,
         destinations: Option<BTreeMap<u32, [u8; 6]>>,
     ) -> Result<ReadyPlan, PlanError> {
         if nics.is_empty() || nics.len() > 8 {
@@ -415,14 +644,23 @@ impl ReadyPlan {
         }
         let builders = nics
             .iter()
-            .map(|n| Builder::from_nic(n, effective.seed(), &effective.packet_modifiers()))
+            .map(|n| {
+                Builder::from_nic(
+                    n,
+                    effective.seed(),
+                    &effective.packet_modifiers(),
+                    &payloads,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        if let Some(r) = effective
-            .massip()
-            .ports()
-            .as_slice()
-            .iter()
-            .find(|r| r.end > u32::from(u16::MAX))
+        // Студия (`new`) принимает только TCP; план CLI проверил порты в `check_cli_ports`.
+        if tcp_only
+            && let Some(r) = effective
+                .massip()
+                .ports()
+                .as_slice()
+                .iter()
+                .find(|r| r.end > u32::from(u16::MAX))
         {
             return Err(PlanError::PortNotTcp(r.end));
         }
@@ -440,12 +678,24 @@ impl ReadyPlan {
                 range,
                 blackrock,
                 builders,
+                payloads,
             }),
         })
     }
 
     pub fn effective(&self) -> &EffectiveConfig {
         &self.inner.effective
+    }
+
+    /// ARP-скан (`--arp`, `I:2`): единственный порт плана это `Templ_ARP`. Приёмник принимает ARP-ответы только в
+    /// нём (`scan_type.arp`, main.c:893), а CLI не резолвит шлюз (main-initadapter.c:170).
+    pub fn is_arp_scan(&self) -> bool {
+        is_arp_scan_ports(self.inner.effective.massip().ports())
+    }
+
+    /// Таблица нагрузок UDP плана.
+    pub fn payloads(&self) -> &PayloadTable {
+        &self.inner.payloads
     }
 
     /// Привязка первого адаптера (для плана `new` единственного).
@@ -545,7 +795,7 @@ impl ReadyPlan {
             stream: stream.peekable(),
             loaded: VecDeque::new(),
             ended: false,
-            failed: false,
+            failed: None,
             blackrock: self.inner.blackrock,
             repeats: 0,
             position: start,
@@ -568,8 +818,9 @@ pub struct ProbeCursor {
     /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
     /// пропущенный индекс не сдвинул последовательность.
     ended: bool,
-    /// Probe не построился (порт не влез в TCP): конец не естественный, и `--infinite` не перезапускает проход.
-    failed: bool,
+    /// Probe не построился: конец не естественный, `--infinite` не перезапускает проход, а движок обязан
+    /// объявить отказ ([`ProbeCursor::build_error`]).
+    failed: Option<PlanError>,
     /// Перестановка текущего прохода: у прохода `n` это `BlackRock(seed + n)` (`main.c:225-228, 445-449`), у
     /// прохода 0 перестановка плана.
     blackrock: BlackRock,
@@ -633,21 +884,32 @@ impl ProbeCursor {
         let xxx = self.blackrock.shuffle(x);
         let (ip, port) = inner.effective.massip().pick(xxx);
         let mut p = Probe::default();
-        // План уже проверил, что порты помещаются в TCP; при ошибке probe не
-        // выдаётся (курсор заканчивается), а не паникует.
-        if builder.fill(&mut p, i, self.repeats, xxx, ip, port).is_ok() {
-            if let Some(destinations) = &inner.destinations {
-                // Constructor guarantees complete immutable coverage and Ethernet framing.
-                // Only L2 destination bytes change; cookies and IP/TCP checksums stay intact.
-                p.frame[..6].copy_from_slice(&destinations[&ip]);
+        // `ReadyPlan::new` и `new_cli` отклоняют порты без построителя заранее, поэтому отказ здесь это
+        // нарушение инварианта. Он не паникует и не выдаётся за конец скана: курсор останавливается и хранит
+        // причину, а движок завершает запуск отказом.
+        match builder.fill(&mut p, i, self.repeats, xxx, ip, port) {
+            Ok(()) => {
+                if let Some(destinations) = &inner.destinations {
+                    // Constructor guarantees complete immutable coverage and Ethernet framing.
+                    // Only L2 destination bytes change; cookies and IP/TCP checksums stay intact.
+                    p.frame[..6].copy_from_slice(&destinations[&ip]);
+                }
+                self.loaded.push_back(p);
+                true
             }
-            self.loaded.push_back(p);
-            true
-        } else {
-            self.ended = true;
-            self.failed = true;
-            false
+            Err(e) => {
+                self.ended = true;
+                self.failed = Some(e);
+                false
+            }
         }
+    }
+
+    /// Причина, по которой probe не построился. `Some` означает, что конец курсора не естественный.
+    pub fn build_error(&self) -> Option<PlanError> {
+        self.failed
+            .clone()
+            .map(|e| PlanError::ProbeBuild(Box::new(e)))
     }
 
     /// Номер прохода `--infinite` (0 для первого).
@@ -666,7 +928,11 @@ impl ProbeCursor {
     /// `seqno` и порт источника проверяются приёмом для обоих проходов. `true`, если проход начат заново.
     pub fn advance_pass(&mut self) -> bool {
         let e = self.plan.effective();
-        if !e.infinite() || self.failed || !self.loaded.is_empty() || self.stream.peek().is_some() {
+        if !e.infinite()
+            || self.failed.is_some()
+            || !self.loaded.is_empty()
+            || self.stream.peek().is_some()
+        {
             return false;
         }
         let inner = &*self.plan.inner;
@@ -1248,5 +1514,359 @@ mod tests {
         // Умолчание не меняет кадр.
         let d = oracle(&eff("198.18.1.0/30", "80", |_| {}));
         assert!(d.iter().all(|p| p.frame.len() == 58 && p.frame[22] == 255));
+    }
+
+    fn cli_err(ports: &str) -> PlanError {
+        ReadyPlan::new_cli(eff("198.18.2.0/30", ports, |_| {}), nics(1)).unwrap_err()
+    }
+
+    #[test]
+    fn sticky_port_prefixes_and_oproto_live_refusal() {
+        // Р1/R1/R3: O:* и I:n (кроме I:0 и ARP = I:2) отклоняются планом CLI.
+        for ports in ["O:47", "o:0", "O:255", "T:80,O:47", "U:53,O:1-3"] {
+            assert!(
+                matches!(cli_err(ports), PlanError::OprotoNotSupported(_)),
+                "{ports}"
+            );
+        }
+        for ports in [
+            "I:1", "I:3", "I:255", "I:0-1", "S:1,I:1", "I:0-300", "I:512",
+        ] {
+            assert!(
+                matches!(cli_err(ports), PlanError::IcmpTypeNotSupported(_)),
+                "{ports}"
+            );
+        }
+        // O:47 это I:303 (тот же индекс 196911): оба отказа текстом называют индекс
+        assert_eq!(cli_err("I:303"), PlanError::OprotoNotSupported(196_911));
+        assert_eq!(cli_err("I:1"), PlanError::IcmpTypeNotSupported(196_609));
+        assert!(cli_err("I:1").to_string().contains("I:1"));
+        assert!(cli_err("O:47").to_string().contains("O:47"));
+        // Постоянная проверка принимает I:0 и ARP (I:2) как допустимые порты; ARP только единственным
+        let ok = |ports: &str| {
+            let e = eff("198.18.2.0/30", ports, |_| {});
+            check_cli_ports(e.massip().ports())
+        };
+        assert_eq!(ok("I:0"), Ok(()));
+        assert_eq!(ok("I:2"), Ok(()));
+        assert_eq!(ok("U:53,S:2905,I:0,T:80"), Ok(()));
+        assert_eq!(ok("80,O:47"), Err(PlanError::OprotoNotSupported(196_911)));
+        for ports in ["I:2,T:80", "I:2,U:53", "I:0,I:2"] {
+            assert_eq!(ok(ports), Err(PlanError::ArpMixedWithPorts), "{ports}");
+        }
+        assert_eq!(ok("I:2-3"), Err(PlanError::IcmpTypeNotSupported(196_611)));
+        // new_cli: смесь с ARP отказывает тем же `ArpMixedWithPorts`
+        assert_eq!(cli_err("I:2,T:80"), PlanError::ArpMixedWithPorts);
+        assert_eq!(cli_err("I:0,I:2"), PlanError::ArpMixedWithPorts);
+        // Студия: `new` по-прежнему только TCP
+        for ports in ["U:53", "S:1", "I:0"] {
+            assert!(matches!(
+                ReadyPlan::new(eff("198.18.2.0/30", ports, |_| {}), binding()).unwrap_err(),
+                PlanError::PortNotTcp(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn icmp_echo_plan_builds_through_the_cli_path_and_splits_across_nics() {
+        // I:0 больше не отказывает: 90-байтные кадры, ip_id и [id|seq] как у C; адаптеры делят поток по чётности
+        let e = || eff("198.18.2.0/30", "I:0", |_| {});
+        let one = ReadyPlan::new_cli(e(), nics(1)).unwrap();
+        let all = drain(&mut one.cursor_for_nic(0, None).unwrap());
+        assert_eq!(all.len(), 4);
+        for p in &all {
+            assert_eq!(p.frame.len(), 90);
+            assert_eq!(p.frame[23], 1, "proto ICMP");
+            assert_eq!(p.port_them, 0);
+            let id_seq = u32::from_be_bytes(p.frame[38..42].try_into().unwrap());
+            assert_eq!(
+                id_seq,
+                crate::cookie::icmp_echo_cookie(p.ip_them, p.ip_me, 0x1234_5678)
+            );
+        }
+        let two = ReadyPlan::new_cli(e(), nics(2)).unwrap();
+        let k0 = drain(&mut two.cursor_for_nic(0, None).unwrap());
+        let k1 = drain(&mut two.cursor_for_nic(1, None).unwrap());
+        assert_eq!(
+            k0.iter().map(|p| p.index).collect::<Vec<_>>(),
+            [0, 2],
+            "even outer indices"
+        );
+        assert_eq!(k1.iter().map(|p| p.index).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(
+            [
+                k0[0].frame.clone(),
+                k1[0].frame.clone(),
+                k0[1].frame.clone(),
+                k1[1].frame.clone()
+            ],
+            [
+                all[0].frame.clone(),
+                all[1].frame.clone(),
+                all[2].frame.clone(),
+                all[3].frame.clone()
+            ],
+            "same source address on both test NICs: the split reproduces the single stream"
+        );
+        // Смешанный список: ICMP и TCP в одном потоке без ошибок сборки
+        let mixed = ReadyPlan::new_cli(eff("198.18.2.0/30", "80,I:0", |_| {}), nics(1)).unwrap();
+        let mut cur = mixed.cursor_for_nic(0, None).unwrap();
+        let frames = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        assert_eq!(frames.iter().filter(|p| p.frame.len() == 90).count(), 4);
+        assert_eq!(frames.iter().filter(|p| p.frame.len() == 58).count(), 4);
+    }
+
+    #[test]
+    fn arp_plan_builds_and_unbuildable_ports_still_fail_the_run() {
+        // Временной таблицы отказов больше нет: чистый ARP, TCP, UDP, SCTP и ICMP Echo проходят план CLI.
+        let arp = ReadyPlan::new_cli(eff("198.18.2.0/30", "I:2", |_| {}), nics(1)).unwrap();
+        assert!(arp.is_arp_scan());
+        ReadyPlan::new_cli(eff("198.18.2.0/30", "80,443,1000-1002", |_| {}), nics(1)).unwrap();
+        ReadyPlan::new_cli(eff("198.18.2.0/30", "80,U:53,U:59999,I:0", |_| {}), nics(1)).unwrap();
+        ReadyPlan::new_cli(
+            eff("198.18.2.0/30", "80,S:2905,S:1,S:65535", |_| {}),
+            nics(1),
+        )
+        .unwrap();
+        // постоянный отказ сильнее остальных
+        assert_eq!(
+            cli_err("S:2905,O:47"),
+            PlanError::OprotoNotSupported(196_911)
+        );
+        // 4 кадра ARP: 42 байта, адресат ff..ff, tpa пробегает цели
+        let mut cur = arp.cursor_for_nic(0, None).unwrap();
+        let frames = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        assert_eq!(frames.len(), 4);
+        assert!(
+            frames
+                .iter()
+                .all(|p| p.frame.len() == 42 && p.port_them == 0)
+        );
+        // без проверки портов (тестовый вход) порт без построителя (I:1) бьёт посреди прохода, а не заканчивает
+        // скан естественно
+        let plan =
+            ReadyPlan::new_cli_without_port_checks(eff("198.18.2.0/30", "80,I:1", |_| {}), nics(1))
+                .unwrap();
+        let mut cur = plan.cursor_for_nic(0, None).unwrap();
+        assert!(cur.build_error().is_none());
+        let sent = drain(&mut cur).len();
+        assert!(sent < 8, "sent {sent}");
+        // конец не естественный: причина хранится и называет порт
+        let e = cur.build_error().expect("failure must be recorded");
+        assert!(matches!(e, PlanError::ProbeBuild(_)), "{e:?}");
+        assert!(e.to_string().contains("does not fit TCP"), "{e}");
+    }
+
+    /// Независимая проверка кадра SCTP INIT: сумма IP, CRC-32C (побитово, без таблицы), длины, порты и поля INIT.
+    fn check_sctp_frame(p: &Probe) {
+        let f = &p.frame;
+        assert_eq!(f.len(), 66);
+        assert_eq!(f[23], 132, "proto SCTP");
+        assert_eq!(crate::checksum::ip_header_checksum(f, 14, 34), 0xffff);
+        assert_eq!(u16::from_be_bytes([f[16], f[17]]), 52);
+        assert_eq!(&f[34..36], &p.port_me.to_be_bytes());
+        assert_eq!(&f[36..38], &p.port_them.to_be_bytes());
+        assert_eq!(&f[38..42], &[0; 4], "vtag 0");
+        assert_eq!(&f[46..50], &[1, 0, 0, 0x14]);
+        assert_eq!(&f[50..54], &p.seqno.to_be_bytes(), "initiate_tag = seqno");
+        let mut z = f[34..].to_vec();
+        z[8..12].fill(0);
+        let mut crc = !0u32;
+        for &b in &z {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0x82F6_3B78
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        assert_eq!(&f[42..46], &(!crc).to_le_bytes());
+    }
+
+    #[test]
+    fn sctp_plan_builds_init_frames_and_splits_across_nics() {
+        // S:2905 и S:1 через путь CLI: 66-байтовый INIT, cookie по индексу Templ_SCTP + порт (main.c:389).
+        let e = || eff("198.18.2.0/30", "S:2905,S:1,S:65535", |_| {});
+        let one = ReadyPlan::new_cli(e(), nics(1)).unwrap();
+        let mut cur = one.cursor_for_nic(0, None).unwrap();
+        let all = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        assert_eq!(all.len(), 12);
+        for p in &all {
+            check_sctp_frame(p);
+            assert_eq!(p.port_index, TEMPL_SCTP + u32::from(p.port_them));
+            let cookie = syn_cookie_ipv4(
+                p.ip_them,
+                p.port_index,
+                p.ip_me,
+                u32::from(p.port_me),
+                0x1234_5678,
+            ) as u32;
+            assert_eq!(
+                p.seqno, cookie,
+                "seqno is the cookie over Templ_SCTP + port"
+            );
+            let ip_id = (p.ip_them ^ u32::from(p.port_them) ^ p.seqno) as u16;
+            assert_eq!(&p.frame[18..20], &ip_id.to_be_bytes());
+        }
+        for port in [2905u16, 1, 65535] {
+            assert_eq!(all.iter().filter(|p| p.port_them == port).count(), 4);
+        }
+        let two = ReadyPlan::new_cli(e(), nics(2)).unwrap();
+        let k0 = drain(&mut two.cursor_for_nic(0, None).unwrap());
+        let k1 = drain(&mut two.cursor_for_nic(1, None).unwrap());
+        assert_eq!(k0.len() + k1.len(), 12);
+        let mut merged: Vec<_> = k0.iter().chain(&k1).collect();
+        merged.sort_by_key(|p| p.index);
+        assert_eq!(
+            merged.iter().map(|p| &p.frame).collect::<Vec<_>>(),
+            all.iter().map(|p| &p.frame).collect::<Vec<_>>(),
+            "the split reproduces the single stream"
+        );
+        // Смешанный список: TCP, UDP, SCTP и ICMP в одном потоке без ошибок сборки.
+        let mixed = ReadyPlan::new_cli(eff("198.18.2.0/30", "80,U:53,S:2905,I:0", |_| {}), nics(1))
+            .unwrap();
+        let mut cur = mixed.cursor_for_nic(0, None).unwrap();
+        let frames = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        for (len, n) in [(58, 4), (73, 4), (66, 4), (90, 4)] {
+            assert_eq!(
+                frames.iter().filter(|p| p.frame.len() == len).count(),
+                n,
+                "{len}"
+            );
+        }
+    }
+
+    /// Независимая проверка кадра UDP: сумма IP, сумма UDP (RFC 768), длины и порты.
+    fn check_udp_frame(p: &Probe) {
+        use crate::checksum::{ip_header_checksum, word_sum};
+        let f = &p.frame;
+        assert_eq!(f[23], 17, "proto UDP");
+        assert_eq!(ip_header_checksum(f, 14, 34), 0xffff);
+        assert_eq!(u16::from_be_bytes([f[16], f[17]]) as usize, f.len() - 14);
+        assert_eq!(u16::from_be_bytes([f[38], f[39]]) as usize, f.len() - 34);
+        assert_eq!(&f[34..36], &p.port_me.to_be_bytes());
+        assert_eq!(&f[36..38], &p.port_them.to_be_bytes());
+        let sum = 17 + (f.len() - 34) as u64 + word_sum(&f[26..34]) + word_sum(&f[34..]);
+        assert_eq!(crate::checksum::fold(sum), 0xffff);
+    }
+
+    #[test]
+    fn udp_plan_builds_frames_with_payloads_and_splits_across_nics() {
+        // U:53 (DNS, 73 байта с cookie в txid) и U:59999 (нет в таблице, 42 байта) через путь CLI.
+        let e = || eff("198.18.2.0/30", "U:53,U:59999", |_| {});
+        let one = ReadyPlan::new_cli(e(), nics(1)).unwrap();
+        let all = drain(&mut one.cursor_for_nic(0, None).unwrap());
+        assert_eq!(all.len(), 8);
+        for p in &all {
+            check_udp_frame(p);
+            assert_eq!(p.port_index, 65536 + u32::from(p.port_them));
+            let cookie = syn_cookie_ipv4(
+                p.ip_them,
+                p.port_index,
+                p.ip_me,
+                u32::from(p.port_me),
+                0x1234_5678,
+            ) as u32;
+            assert_eq!(p.seqno, cookie, "seqno is the cookie over Templ_UDP + port");
+            let ip_id = (p.ip_them ^ u32::from(p.port_them) ^ p.seqno) as u16;
+            assert_eq!(&p.frame[18..20], &ip_id.to_be_bytes());
+            match p.port_them {
+                53 => {
+                    assert_eq!(p.frame.len(), 73);
+                    assert_eq!(
+                        &p.frame[42..44],
+                        &(p.seqno as u16).to_be_bytes(),
+                        "DNS txid"
+                    );
+                }
+                59999 => assert_eq!(p.frame.len(), 42),
+                other => panic!("port {other}"),
+            }
+        }
+        assert_eq!(all.iter().filter(|p| p.port_them == 53).count(), 4);
+        let two = ReadyPlan::new_cli(e(), nics(2)).unwrap();
+        let k0 = drain(&mut two.cursor_for_nic(0, None).unwrap());
+        let k1 = drain(&mut two.cursor_for_nic(1, None).unwrap());
+        assert_eq!(k0.len() + k1.len(), 8);
+        assert_eq!(
+            k0.iter().map(|p| p.index).collect::<Vec<_>>(),
+            [0, 2, 4, 6],
+            "even outer indices"
+        );
+        let mut merged: Vec<_> = k0.iter().chain(&k1).collect();
+        merged.sort_by_key(|p| p.index);
+        assert_eq!(
+            merged.iter().map(|p| &p.frame).collect::<Vec<_>>(),
+            all.iter().map(|p| &p.frame).collect::<Vec<_>>(),
+            "same source address on both test NICs: the split reproduces the single stream"
+        );
+        // Смешанный список: TCP, UDP и ICMP в одном потоке без ошибок сборки.
+        let mixed =
+            ReadyPlan::new_cli(eff("198.18.2.0/30", "80,U:53,I:0", |_| {}), nics(1)).unwrap();
+        let mut cur = mixed.cursor_for_nic(0, None).unwrap();
+        let frames = drain(&mut cur);
+        assert!(cur.build_error().is_none());
+        for (len, n) in [(58, 4), (73, 4), (90, 4)] {
+            assert_eq!(
+                frames.iter().filter(|p| p.frame.len() == len).count(),
+                n,
+                "{len}"
+            );
+        }
+        let tcp = frames.iter().find(|p| p.frame.len() == 58).unwrap();
+        assert_eq!(tcp.port_index, u32::from(tcp.port_them));
+        let icmp = frames.iter().find(|p| p.frame.len() == 90).unwrap();
+        assert_eq!(icmp.port_index, TEMPL_ICMP_ECHO);
+    }
+
+    #[test]
+    fn udp_payload_table_from_files_reaches_the_frames() {
+        use crate::payloads::PayloadTable;
+        let mut table = PayloadTable::builtin();
+        table
+            .load_nmap_payloads("udp 59999\n\"hi\"\nudp 53\n\"x\"\n")
+            .unwrap();
+        let plan = ReadyPlan::new_cli_with_payloads(
+            eff("198.18.2.0/30", "U:53,U:59999,U:161", |_| {}),
+            nics(1),
+            table.clone(),
+        )
+        .unwrap();
+        let all = drain(&mut plan.cursor_for_nic(0, None).unwrap());
+        assert_eq!(all.len(), 12);
+        for p in &all {
+            check_udp_frame(p);
+            match p.port_them {
+                59999 => assert_eq!(&p.frame[42..], b"hi"),
+                53 => assert_eq!(&p.frame[42..], b"x", "file replaces the built-in DNS probe"),
+                161 => assert_eq!(p.frame.len(), 42 + 59),
+                other => panic!("port {other}"),
+            }
+        }
+        // План помнит таблицу: RX-потоки адаптеров пересоздают план через неё.
+        assert_eq!(plan.payloads().len(), table.len());
+        // Оракул без сети строит те же кадры.
+        let mut oracle_frames = Vec::new();
+        let flow = for_each_probe_nic_with_payloads(
+            &eff("198.18.2.0/30", "U:53,U:59999,U:161", |_| {}),
+            &nics(1)[0],
+            &table,
+            |p| {
+                oracle_frames.push(p.frame.clone());
+                ControlFlow::<()>::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(
+            oracle_frames,
+            all.iter().map(|p| p.frame.clone()).collect::<Vec<_>>()
+        );
     }
 }

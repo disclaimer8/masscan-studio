@@ -41,30 +41,42 @@ sudo target/release/rmasscan --infinite 198.51.100.0/24 -p80
 sudo target/release/rmasscan -c scan.conf -iL targets.txt --adapter[0] eth0 --adapter[1] eth1 --pcap rx.pcap
 # поля пакета: TTL, неверная L4-сумма, TCP-опции
 sudo target/release/rmasscan 198.51.100.0/24 -p80 --ttl 42 --badsum --tcp-mss 1400 --tcp-wscale 7 --tcp-sackok
+# протоколы IPv4: префиксы T:/U:/S:/I:/O: в -p липкие (действуют до следующего); UDP, SCTP INIT и ICMP Echo в одном скане
+sudo target/release/rmasscan 198.51.100.0/24 -pT:80,U:53,161,S:2905,I:0
+# UDP: -sU сам портов не добавляет, а задаёт префикс по умолчанию для следующего -p и таблицу --top-ports; --udp-ports это -pU:
+sudo target/release/rmasscan 198.51.100.0/24 -sU -p53,161 --show open,closed
+sudo target/release/rmasscan 198.51.100.0/24 --udp-ports 53,161 --nmap-payloads payloads.txt --pcap-payloads udp.pcap
+sudo target/release/rmasscan 198.51.100.0/24 -sU --top-ports 20      # UDP; TCP и UDP вместе: -sS -sU
+# SCTP INIT (-sZ даёт префикс S:), ICMP Echo (--ping, синоним --ping-sweep, это -pI:0)
+sudo target/release/rmasscan 198.51.100.0/24 -sZ -p2905,2906
+sudo target/release/rmasscan 198.51.100.0/24 --ping
+# ARP-скан своего сегмента (--arp, синоним --arpscan; шлюз не определяется, с портами не сочетается)
+sudo target/release/rmasscan 198.51.100.0/24 --arp -oB arp.bin
+target/release/rmasscan --readscan arp.bin -oL arp.txt
 cargo run -p rmasscan-cli -- -sL 10.0.0.0/30 -p80,443 --seed 1
 cargo run -p rmasscan-cli -- --echo 10.0.0.0/24 -p80 --seed 1
 cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \
   --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003
 ```
 
-Без флага операции rmasscan сканирует (IPv4, TCP SYN). Порядок: значения по умолчанию (seed, порт источника) →
+Без флага операции rmasscan сканирует по IPv4: TCP SYN, а с префиксами и флагами протоколов (раздел «Команды») ещё UDP, ICMP Echo, SCTP INIT и ARP. Порядок: значения по умолчанию (seed, порт источника) →
 проверка конфигурации → обнаружение (только чтение таблицы маршрутов и интерфейсов, без привилегий) → строки `[+]` →
 ARP к следующему хопу (если не задан `--router-mac`) → открытие адаптера → скан. Привилегии нужны только для
 открытия адаптера: Linux root или `CAP_NET_RAW`, macOS root или доступ к `/dev/bpf*`, Windows Administrator и
 Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip`, `router-ip`, `router-mac`, `seed`,
 `source-port` и `[+] finished: <итог>, sent N, replies N, open N`; в stdout строки
-`Discovered open port N/tcp on IP` (побайтно как masscan). Отказ обнаружения или ARP печатается в форме C
+`Discovered open port N/tcp on IP` (побайтно как masscan; для других протоколов `N/udp`, `N/sctp`, `0/icmp`, у ARP строка с MAC и OUI). Отказ обнаружения или ARP печатается в форме C
 (`[-] FAIL: …` и строки `[hint]`), код выхода 1; итог `Completed`/`Stopped` даёт 0, любой другой 1.
 `-sL` и `--echo` побайтно совпадают с golden-фикстурами C.
 
 Вывод. Форматы `-oL` (list), `-oJ` (json), `-oD` (ndjson), `-oG` (grepable), `-oX` (xml), `-oB` (binary), `-oH`
-(hostonly), `-oU` (unicornscan) и `--output-format none` для записей статуса TCP-порта побайтно равны masscan `8e6b3b0`
-(кроме полей, которые C берёт из часов в момент записи; 74 эталона C в `tests/golden/formats/`). Опции:
+(hostonly), `-oU` (unicornscan) и `--output-format none` для записей статуса TCP, UDP, SCTP и ICMP побайтно равны masscan `8e6b3b0`
+(кроме полей, которые C берёт из часов в момент записи; 94 эталона C в `tests/golden/formats/`: 74 для TCP и 20 для UDP, SCTP и ICMP). Записи ARP C `--readscan` не читает, их формат проверен по коду C. Опции:
 `--output-format`, `--output-filename`/`--output-file`, `--append-output`/`--output-append`, `--output-flush`,
 `--open`/`--output-show-open`, `--show`, `--noshow`, `--interactive`/`--nointeractive`, `--stylesheet`, `--webxml`,
 `--no-stylesheet`, `--status`/`--nostatus`, `--ndjson-status`.
 С `-o…` stdout молчит (кроме `--interactive`), иначе идут строки `Discovered …`. `--readscan FILE…` читает файлы `-oB`
-(записи статуса TCP) и пишет их теми же форматами; цели и порты, заданные до него, фильтруют записи. На stderr
+(записи статуса TCP, UDP, SCTP, ICMP Echo и ARP) и пишет их теми же форматами; цели и порты, заданные до него, фильтруют записи. На stderr
 скан печатает строку статуса masscan (`rate`, `done`, `found`) и стирает её 77 пробелами перед `[+] finished`.
 С `--nostatus` строки статуса нет, а после скана в stdout идёт `N milliseconds elapsed`, кроме случая, когда stdout
 это файл вывода (`-o… -`): C закрывает его вместе с файлом, и в stdout остаётся только формат. Ctrl-C: первое нажатие
@@ -124,9 +136,10 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
     `getservbyport`, на хосте с NSS-источником помимо files имена могут разойтись (Р10).
   - Одинаковые байты на всех ОС: `\n` не превращается в `\r\n` на Windows, XML сохраняет свои CRLF; C на Windows
     пишет в текстовом режиме (Р12).
-  - `--readscan` читает только записи статуса TCP (Р13), остальное — ошибка с кодом 1: баннеры, IPv6, ARP и
-    устаревшие типы дают `<файл>: unsupported record type N`, запись статуса (тип 6 или 7) с протоколом не TCP —
-    `<файл>: unsupported record protocol P`. Обрыв посреди записи — `[-] file corrupt` и код 1 (C молча
+  - `--readscan` читает записи статуса IPv4 (Р13, расширен этапом протоколов): типы 6 и 7 с протоколом TCP, UDP,
+    SCTP или ICMP (`ip_proto` 6, 17, 132, 1) и тип 8 (ARP, `ip_proto` 0). Остальное — ошибка с кодом 1: баннеры, IPv6 и
+    устаревшие типы дают `<файл>: unsupported record type N`, запись типа 6 или 7 с другим протоколом (в том числе с 0)
+    и запись типа 8 с протоколом не 0 — `<файл>: unsupported record protocol P`. Обрыв посреди записи — `[-] file corrupt` и код 1 (C молча
     останавливается с кодом 0); файл короче 99-байтового заголовка с верным началом `masscan/1.1` — тоже
     `[-] file corrupt` и код 1 (C печатает `[-] <файл>: ` и `strerror(errno)`); пустой файл (0 байт) — сообщение о
     неизвестном формате (C: `feof` до первого `fread` ложно, поэтому 0-байтовый файл доходит до `bytes_read < 'a'+2` и
@@ -175,6 +188,75 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
   - `--offline` поддерживает один адаптер; `-iL` с более узкой грамматикой, чем у C, без чтения stdin.
   - Индекс адаптера больше 7 отказывает (в C переполняется массив `nic[8]`).
   - `--resume-count` завершает скан на усечённом пределе (C зависает в ожидании `range`, `main.c:1425`).
+- Протоколы IPv4 (спека этапа `../docs/superpowers/specs/2026-11-08-rmasscan-protocols-ipv4-design.md`, §8 и раздел
+  «Изменения по итогам реализации»; принято на Linux (netns и veth), на Windows VM снята только регрессия автоопределения,
+  отчёт `../docs/experiments/2026-11-08-rmasscan-protocols-ipv4-acceptance.md`). Ссылки на C это masscan `8e6b3b0`:
+  - Контрольная сумма UDP, равная нулю, уходит как `0xFFFF` (RFC 768: ноль в поле значит «суммы нет»); C пишет `0x0000`
+    (`templ-pkt.c:278–303` возвращает свёртку, сумму инвертирует вызывающий). Расхождение у одного кадра из 65536,
+    остальные байты кадров UDP, SCTP, ICMP Echo и ARP равны C.
+  - Приём UDP: ответ принимается, только если отправитель это порт из `U:` задания, адрес входит в цели, а суммы IPv4 и
+    UDP верны (политика `Verify`, по умолчанию; нулевое поле суммы UDP допустимо). C принимает любую датаграмму на наш
+    адрес и порт (`main.c:909–916`, `proto-udp.c:55–72`). Cookie не проверяют ни C, ни rmasscan.
+  - Файлы нагрузок `--nmap-payloads` и `--pcap-payloads` читаются только для скана и `--offline`, для `--echo` файл не
+    открывается (C читает и там). Любая ошибка файла отказывает до первого кадра с кодом 1: нет файла, синтаксис
+    (`--nmap-payloads <файл>: line N: expected "udp"`), неизвестный порядок байт или тип канала pcap, повреждённый заголовок кадра,
+    нагрузка длиннее 2006 байт. C печатает сообщение и сканирует дальше с тем, что успел загрузить. Например,
+    комментарий после строки нагрузки (`udp 7 "x" # c`) в обоих разборах это ошибка `expected "udp"` на следующем витке:
+    C бросает остаток файла и продолжает скан, rmasscan отказывает.
+  - Разбор pcap это подмножество `preprocess_frame`: Ethernet (в том числе с 802.1Q), IPv4 без фрагментов, IPv6 с UDP
+    сразу за заголовком; остальные кадры пропускаются. Датаграмма без нагрузки заменяет запись порта, как в C. Нагрузка
+    до 2006 байт принимается при загрузке (буфер кадра C 2048 байт, длиннее C режет молча), но кадр, который адаптер не примет, завершает
+    скан ошибкой передачи (`TxError`): macOS отказывает кадру длиннее 1514 байт, Windows длиннее 1518; у Linux явной
+    проверки длины нет, ошибка `send()` ядра (кроме EAGAIN и EINTR) тоже становится ошибкой передачи.
+  - ICMP Echo: ответ принимается только с `code == 0` (C принимает любой код, `proto-icmp.c:117–123`), суммы IPv4 и ICMP
+    проверяются (C не проверяет), удалённый адрес и `I:0` обязаны входить в задание.
+  - ICMP 3/3 (порт недоступен) проверяется как в C, без cookie (`handle_icmp` сверяет только свой адрес и порт); сверх C
+    внутренние адрес и порт должны входить в цели, цитата должна быть целой (C читает за концом кадра при большом IHL,
+    `proto-icmp.c:42`). Закрытый порт из ICMP 3/3 теперь попадает в результаты и у скана только TCP (как у C; в прежних
+    этапах такого не было).
+  - Дедупликация: rmasscan пропускает ответы UDP, SCTP и закрытые порты из ICMP 3/3 через `DedupCache` (ключ: протокол,
+    адрес и порт цели, свой адрес и порт, статус), по одной записи на ключ. C печатает каждый такой ответ
+    (`proto-udp.c:64`, `proto-sctp.c:160` и `:172`, `proto-icmp.c:182`, `:194`, `:206`), поэтому с `--retries` C даёт по
+    строке на каждый ответ. Закрытый порт TCP из ICMP 3/3 rmasscan тоже дедуплицирует, C нет (`proto-icmp.c:182`).
+    Echo Reply и ARP дедуплицируются в обоих (`proto-icmp.c:125`, `main.c:901`).
+  - SCTP: в C ветка SCTP не завершает обработку, `main.c:920–922` (`handle_sctp(...); break;`) проваливается в
+    TCP-путь, и чанк с флагами `0x12` или `0x04` даёт ещё и ложную запись TCP. Это не повторяется. Приём SCTP строже C:
+    порт получателя из наших портов адаптера (C сообщает до этой проверки), отправитель и порт из `S:` задания,
+    CRC-32C при `Verify`, пакет короче 12 байт отбрасывается. `--packet-trace` для
+    SCTP печатает строку C `SENT … UNK … [7]`, потому что в `main-ptrace.c` для SCTP нет ветки.
+  - `-pO:…` и `-pI:N`, кроме `I:0` (Echo) и `I:2` (ARP), живой скан и `--packet-trace` отклоняют до первого кадра (C шлёт
+    неинициализированный шаблон, `templ-pkt.c:932`); `-sL` и `--echo` принимают все пять префиксов. Верхняя граница
+    диапазона `O:` выше 255 (`O:1-300`) отказывает при разборе, C проверяет только начало (`massip-rangesv4.c:1067`).
+  - `-sU` как в C (`main-conf.c:3524–3549`, `:3609`): сам портов не добавляет, а задаёт префикс по умолчанию для следующего
+    `-p`, для строки `ports =` файла `-c` или `--resume` правее него (C разбирает файл на его месте в `argv`,
+    `main-conf.c:2663–2674`; `-sU -c f` с `ports = 53` это `U:53`, `-c f -sU` это TCP 53; так же `-sZ`) и таблицу
+    `--top-ports`; `--top-ports N -sU` это только UDP, TCP и UDP вместе дают `-sS -sU`. `-sT` у C печатает
+    предупреждение и сканирует SYN (`main-conf.c:3530–3533`), у rmasscan это ошибка разбора. Таблица `--top-ports` взята
+    из C как есть (1008 записей, четыре повтора).
+  - ARP: `--arp` и `-pI:2` дают скан сегмента, шлюз не определяется, кадры широковещательные (42 байта), с портами
+    не сочетается (`FAIL: cannot arpscan and portscan at the same time`, как `main.c:1224–1229`). `--top-ports N`
+    с `--arp` (или с `arpscan =` в файле) TCP по умолчанию не добавляет, как C (`main-conf.c:3609–3619`):
+    `--arp --top-ports 5` это только `I:2`; `-pI:2 --top-ports 5` (без `--arp`) добавляет TCP, как у C. У C `-pI:2`
+    без `--arp` сначала определяет MAC шлюза, а ответы ARP игнорирует, потому что `scan_type.arp = 0` (`main.c:893`);
+    rmasscan считает это ARP-сканом. Ответ принимается, как в C, если адрес отправителя входит в цели, а адрес
+    назначения (`tpa`) наш: приёмник C отбрасывает кадр с чужим адресом назначения ещё до ветки ARP (`main.c:829–837`,
+    `proto-preprocess.c:619–621`, затем `main.c:889–905`), поэтому ответ другому узлу и gratuitous ARP записью не
+    становятся. MAC берётся из Ethernet-источника кадра (`proto-arp.c:39`), как в C; кодек строже, чем разбор C
+    (аппаратный тип 1, протокол `0x0800`, длины 6 и 4, VLAN игнорируется). MAC найденного соседа в шаблоны TCP, UDP
+    и SCTP не подставляется.
+  - ARP: `--echo --router-mac X --arp` печатает `X`, а C печатает `ff-ff-ff-ff-ff-ff`: `--arp` у C ставит `router-mac`
+    на своём месте в argv (`main-conf.c:1100`) и затирает `--router-mac` левее себя; у rmasscan явный `--router-mac`
+    побеждает на любом месте. На проводе разницы нет: запросы ARP всегда широковещательные, живой `[+] router-mac` равен `ff-ff-ff-ff-ff-ff`.
+  - Интерактивная строка ARP повторяет C (`output.c:770–778`): `Discovered up port 0/arp on IP (aa:bb:cc:dd:ee:ff) OUI`.
+    Таблица OUI это собственная таблица masscan (`output.c:687–737`, 46 записей), перенесена как есть; сторонних баз нет.
+  - `[+] finished: …, open N` (у C такой строки нет) считает только открытые порты: записи ARP `up` в `open` не
+    входят, ARP-скан пишет `open 0`; ответы Echo (`open`) входят.
+  - `--readscan`: читает записи типа 8 (ARP), которых C не читает; фильтр `-p` учитывает протокол (`-p U:53` оставляет
+    только UDP 53), а C сравнивает порт без сдвига со сдвинутыми диапазонами (`in-filter.c:14–17`), так что `-p U:53`
+    в C не оставляет ничего; запись типа 6 или 7 с `ip_proto` 0 или неизвестным rmasscan отказывает (см. выше), C
+    её выводит (`err` или `arp`). Эталонов C для фильтра по порту у не-TCP нет, только по адресу.
+  - `--pcap` пишет только кадры TCP (`ip_proto` 6): при сканах UDP, ICMP и ARP в файле один заголовок. C не пишет их тоже
+    (ветки `continue`, `main.c:874–919`), но пишет ответы SCTP и других протоколов IP через тот же `break` и проваливание в путь TCP (`main.c:920–925`, затем `:943`).
 - `--adapter` на Windows принимает `\Device\NPF_{GUID}` или имя адаптера; числовых индексов нет. Wi-Fi
   (IfType 71) принимается как Ethernet (как C и Npcap `DLT_EN10MB`).
 - Явный не-Ethernet `--adapter` отказывает (masscan проверяет тип только при автовыборе).
@@ -264,6 +346,10 @@ cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (n
 Все активные лабораторные инструменты и проверки перенесены в Rust crate
 `rmasscan-lab`; Python не требуется. [Команды и границы проверки](docs/rust-lab.md).
 
+Живой паритет протоколов IPv4 идёт на том же стенде: `scripts/wire-lab.sh --suite protocols` (случаи `p01`–`p05`, UDP,
+SCTP и ICMP Echo, ARP, смесь; пиры отвечают сокетами ответчика лаборатории и ядром netns пира), офлайн-вердикт
+`rmasscan-lab protocols-verify --dir DIR`. Подробности, границы и названные отклонения: [раздел «Protocols suite»](docs/rust-lab.md).
+
 `examples/wire_scan.rs` это лабораторный harness (`ReadyPlan` + `Engine` + `open_explicit`,
 `--pause-after N`, `--resume-checkpoint FILE`), а не CLI. Тесты `linux_wire.rs` с `--ignored`
 без каталога результатов падают с «NOT RUN», пропуск никогда не PASS.
@@ -275,7 +361,7 @@ cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (n
 только в бинарнике вне `cfg(test)`), бинарник в тестах запускается только с `--iflist`, `--offline`, `-sL`,
 `--echo` или `--help`. Живые прогоны автоопределения выполняются только на запечатанных лабораторных стендах вне
 CI; raw-сокеты в лабораторных тестах `rmasscan-net` (нужны CAP_NET_RAW и замкнутый стенд) тоже вне CI. Скан
-идёт по IPv4, TCP SYN, до 8 адаптеров с одним следующим хопом на адаптер; туннели, VLAN и IPv6 не поддержаны.
+идёт по IPv4 (TCP SYN, UDP, ICMP Echo, SCTP INIT, ARP), до 8 адаптеров с одним следующим хопом на адаптер; баннеры, туннели, VLAN и IPv6 не поддержаны.
 
 Живой скан из CLI поддержан и принят только на запечатанных лабораторных стендах (Linux netns и veth, Windows VM с Npcap
 в режиме Admin-only, пара `feth` на Mac); на физических NIC он не проверялся (NOT RUN). Вживую не проверены шлюз маршрута
@@ -292,6 +378,14 @@ Ctrl-C на Windows не снимался (консольное событие �
 проверен вживую только на Linux (вторая пара veth); на Windows и macOS несколько адаптеров покрыты тестами с
 fake-бэкендом. Тесты Studio этого этапа идут в CI PR.
 
+Протоколы IPv4 (UDP, ICMP Echo, SCTP INIT, ARP, префиксы `-p`, `--top-ports`, файлы нагрузок) приняты на Linux (netns и
+veth, окно `protocols`, случаи `p01`–`p05`, C-оракул masscan `8e6b3b0`); на Windows VM снята только регрессия
+автоопределения, протоколы вживую на Windows не запускались. Пир SCTP в окне это ответчик лаборатории на линке, а не
+стек ядра (в ядре стенда SCTP не загружен). Живое окно не задействовало отклонения от C: дедупликацию повторов, отбрасывание
+Echo с кодом не 0 и неверных сумм, нулевую сумму UDP (на проводе стенда ни одного такого случая), эти пути покрыты
+офлайн-тестами. NOT RUN: macOS живое окно (нужен `sudo` пользователя), физические NIC; Studio проверяется в CI PR.
+Скан ARP работает только в своём сегменте и не сочетается с портами; IPv6, баннеры, VLAN и туннели не поддержаны.
+
 Маршрут по умолчанию читается не в любой форме. На Linux маршрут, заданный объектом nexthop (`RTA_NH_ID`) или
 многопутевой (`RTA_MULTIPATH`), не читается: на таком хосте скан нескольких целей on-link получает отказ
 `NoGateway`. На macOS читается только основной маршрут по умолчанию (`RTM_GET 0.0.0.0`): если его держит VPN
@@ -299,35 +393,44 @@ fake-бэкендом. Тесты Studio этого этапа идут в CI PR
 
 ## Статус
 
-Управление сканом (код `11a2235`, evidence `28c956e`, 2026-11-10, ветка `feat/rmasscan-scan-control`): `--shard`,
+Протоколы IPv4 (код `82f0483`, evidence `1ddb975`, 2026-11-11, ветка `feat/rmasscan-protocols-ipv4`; повтор r4 после
+итогового ревью этапа): UDP со встроенными и внешними нагрузками, ICMP Echo, SCTP INIT, ARP-скан, префиксы
+`T:`/`U:`/`S:`/`I:`/`O:` в `-p`, `-sU`/`-sS`/`-sZ`, `--top-ports`, `--udp-ports`, `--ping`, `--arp`, записи этих протоколов во
+всех форматах вывода и в `--readscan` (94 эталона C). Живая приёмка: Linux `protocols` PASS 6/6 (`p01`–`p05`), регрессии управления сканом Linux PASS 7/7, вывода
+Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты Mac 1964/0 (сводка в
+`verification/mac-test-ws-summary.txt`), minipc 1836/0 и гость 1731/0.
+GO (stands) условно: зелёный CI на точном HEAD и итоговое ревью ветки фиксирует контролёр при слиянии. macOS живой и
+физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-11-08-rmasscan-protocols-ipv4-acceptance.md`.
+
+Управление сканом (код `8059eac`, evidence `6509a8c`, 2026-11-10, ветка `feat/rmasscan-scan-control`): `--shard`,
 `--retries`, `--wait`, пауза первым Ctrl-C с `paused.conf`, `--resume`/`--resume-index`/`--resume-count`, `--infinite`,
 `-c`/`-iL`, `--adapter[0..7]`, `--pcap`, `--ttl`, `--badsum`, `--tcp-*`. Живая приёмка: Linux `scan-control` PASS 7/7,
 регрессия вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты minipc 1702/0 и
-гость 1598/0; CI `rmasscan` и `language-guard` на `11a2235` зелёные. macOS живой и физические NIC: NOT RUN.
+гость 1598/0; CI `rmasscan` и `language-guard` на `8059eac` зелёные. macOS живой и физические NIC: NOT RUN.
 Отчёт: `../docs/experiments/2026-11-08-rmasscan-scan-control-acceptance.md`.
 
-Форматы вывода masscan, `--readscan`, строка статуса и Ctrl-C (код `2b0e92c`, evidence `86f384f`, 2026-11-06, ветка
+Форматы вывода masscan, `--readscan`, строка статуса и Ctrl-C (код `cd0ad38`, evidence `f63d23f`, 2026-11-06, ветка
 `feat/rmasscan-output-formats`): офлайн-паритет с C `8e6b3b0` на 74 эталонах `--readscan` (байты равны после маски только
 полей «часы в момент записи»); живая приёмка на Linux netns PASS 18/18 (записи и заголовок равны C-оракулу в `o01`–`o11`,
 подвал оракула в живом скане отсутствует, потому что C не заканчивает скан на этом стенде; подвал rmasscan равен подвалу
 своего формата из его записей; `--nostatus`, прерывание и открытие файла проверены без оракула), регрессия
 автоопределения Linux PASS 13/13 и Windows VM PASS 10/10. macOS живой, живой Ctrl-C на Windows и физические NIC:
-NOT RUN. GO (stands): итоговое ревью ветки APPROVED, CI зелёный на последнем коммите с кодом `9907de0` (PR #50). Отчёт:
+NOT RUN. GO (stands): итоговое ревью ветки APPROVED, CI зелёный на последнем коммите с кодом `15f3e00` (PR #50). Отчёт:
 `../docs/experiments/2026-11-06-rmasscan-output-acceptance.md`.
 
-Живой скан CLI с автоопределением интерфейса, адреса и MAC источника и следующего хопа (код `6c87e94`, evidence
-`00110f9`, 2026-11-04, ветка `feat/rmasscan-autodetect`) принят на трёх запечатанных стендах: Linux netns PASS 13/13
+Живой скан CLI с автоопределением интерфейса, адреса и MAC источника и следующего хопа (код `5682194`, evidence
+`f85ec33`, 2026-11-04, ветка `feat/rmasscan-autodetect`) принят на трёх запечатанных стендах: Linux netns PASS 13/13
 (паритет с C-оракулом по байтам ARP-запроса, порядку SYN и строкам `Discovered`), Windows VM PASS 10/10, Mac `feth`
 PASS 8/8 и под root 3/3; `[+] finished … sent N` равен числу SYN на проводе, до скана уходит только 60-байтовый
 ARP-запрос к напечатанному `router-ip`. GO (stands): итоговое ревью ветки APPROVED, CI зелёный на точном HEAD.
 Физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-10-27-rmasscan-autodetect-acceptance.md`.
 
-Состояние остальных слоёв на commit `27e3042` (код; evidence `8479ff2`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
+Состояние остальных слоёв на commit `b346d4d` (код; evidence `7aa5b12`; 2026-10-24, ветка `feat/rmasscan-stage2b-linux`);
 полная таблица (capability / слой / реализовано / проверка / ограничение / следующий этап)
 находится в §0.2 спеки Studio. Кратко: raw I/O: Linux AF_PACKET
 (замкнутый стенд); Windows (Npcap) реализован и принят на виртуальной машине (физический NIC открыт); macOS (BPF) реализован, живая приёмка выполнена на паре `feth` (части A и C PASS, часть B с одним INVALID `linkloss`), физический NIC открыт, см. `../docs/experiments/2026-10-25-rmasscan-macos-bpf-acceptance.md`. Дедупликация живёт в engine
 (ограниченный FIFO), не в core. VLAN не поддержан (`Unsupported`). ARP: кодек в core,
-резолвер следующего хопа (`arp_resolve`) и обнаружение шлюза (`discover`) в `rmasscan-net` (с `6c87e94`). Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
+резолвер следующего хопа (`arp_resolve`) и обнаружение шлюза (`discover`) в `rmasscan-net` (с `5682194`). Парсер paused.conf есть, пользовательского импорта нет. Engine реализует
 контроль достоверности приёма (`Rx::health`, `RxLoss`/`RxStatsUnavailable`/`RxError`,
 `Outcome.rx_health`) и watchdog TX (`EngineOptions::tx_stall_timeout`, 10 с,
 `TxStalled`); `Completed` означает завершение с доступной статистикой без kernel drops,

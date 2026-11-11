@@ -1,0 +1,2737 @@
+{
+  "aborted": [],
+  "behaviour_fail": [],
+  "dir": "linux-autodetect-r4",
+  "discarded": [],
+  "discarded_totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 0
+  },
+  "groups": [],
+  "overall": "PASS",
+  "runs": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture anywhere in the evidence directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "no symbolic link in the evidence directory (links are never followed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.json names the autodetect plan (linux, macos, macos-root or windows)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "runs/ holds only the planned case directories",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "deleted [\"wl-scan-RUNID\", \"wl-peer-RUNID\"], left 0",
+          "name": "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest Some(\"f8794a64-b7aa-448a-8750-468e7ce2cbd0\"), teardown \"f8794a64-b7aa-448a-8750-468e7ce2cbd0\"",
+          "name": "teardown.json belongs to the lab of manifest.json (lab_id)",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "manifest",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354305.640262 .. 1794354310.6657672",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l01_auto\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"54305\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.2))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354305.7239742), reply Some(1794354305.724015), first SYN Some(1794354305.7384562)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 3",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(3), wire 3",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 2, lines 2",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 2,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l01_auto",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354311.7611334 .. 1794354316.7856765",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,81,8080\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,81,8080\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l02_auto_multi\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"54311\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.2))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354311.8424866), reply Some(1794354311.8425038), first SYN Some(1794354311.8546169)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 12",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 8, lines 8",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 8,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l02_auto_multi",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354317.877364 .. 1794354322.9028025",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--adapter\", \"veth-a\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--adapter\", \"veth-a\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l03_adapter\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"given\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"given\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"54317\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.2))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354317.9464846), reply Some(1794354317.9465272), first SYN Some(1794354317.9596498)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 3",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(3), wire 3",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 2, lines 2",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 2,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l03_adapter",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354323.93086 .. 1794354329.0050313",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--adapter-ip\", \"198.18.0.1\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--adapter-ip\", \"198.18.0.1\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l04_adapter_ip\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"given\" }, router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"given\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"54324\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.2))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354324.012389), reply Some(1794354324.0124073), first SYN Some(1794354324.0346043)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 3",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(3), wire 3",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 2, lines 2",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 2,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l04_adapter_ip",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354330.0850322 .. 1794354335.1617112",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--adapter-mac\", \"02-aa-00-00-00-01\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--adapter-mac\", \"02-aa-00-00-00-01\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l05_adapter_mac\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"given\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"given\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"54330\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.2))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354330.171687), reply Some(1794354330.1717305), first SYN Some(1794354330.1904058)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 3",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(3), wire 3",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 2, lines 2",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 2,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l05_adapter_mac",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354336.265782 .. 1794354341.3404734",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--router-ip\", \"198.18.0.3\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--router-ip\", \"198.18.0.3\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l06_router_ip\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.3\", source: \"given\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.3\", source: \"given\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"54336\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.3))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354336.349527), reply Some(1794354336.3495677), first SYN Some(1794354336.3590696)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 3",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(3), wire 3",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 2, lines 2",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 2,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l06_router_ip",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "14",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14 frames recorded, 14 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354342.417648 .. 1794354347.4394383",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--router-mac\", \"02-aa-00-00-00-02\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--router-mac\", \"02-aa-00-00-00-02\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l07_router_mac\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: None, router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"given\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: None, router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"given\", arp: None }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"54342\", source: \"time\" }), finished: Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 0 differ (router-ip None)",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no scanner ARP request when --router-mac is given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 3",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(3), wire 3",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 2, lines 2",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 2,
+        "scanner_arp_requests": 0
+      },
+      "safety_trip": false,
+      "tag": "l07_router_mac",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354348.5539737 .. 1794354353.620589",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--source-port\", \"50000-50015\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--source-port\", \"50000-50015\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l08_source_port\", kind: Scan, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"on-link target\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"50000-50015\", source: \"given\" }), finished: Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 3, replies: 3, open: 2 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.2))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354348.6374733), reply Some(1794354348.6375155), first SYN Some(1794354348.6524425)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 3",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(3), wire 3",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 2, lines 2",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 2,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l08_source_port",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354354.7284777 .. 1794354366.6417553",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--router-ip\", \"198.18.0.9\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--router-ip\", \"198.18.0.9\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l09_arp_timeout\", kind: ArpTimeout, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.9\", source: \"given\" }), router_mac: None }), refusal: Some(ExpectRefusal { fail: Some(\"ARP timed-out resolving MAC address for router veth-a: \\\"198.18.0.9\\\"\"), hints: [\"    [hint] try \\\"--router-ip 192.0.2.1\\\" to specify different router\", \"    [hint] try \\\"--router-mac 66-55-44-33-22-11\\\" instead to bypass ARP\", \"    [hint] try \\\"--interface eth0\\\" to change interface\"] }), iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "exit.txt is 1",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.9\", source: \"given\" }), router_mac: None, seed: None, source_port: None, finished: None, fail: Some(\"ARP timed-out resolving MAC address for router veth-a: \\\"198.18.0.9\\\"\"), error: None, hints: [\"    [hint] try \\\"--router-ip 192.0.2.1\\\" to specify different router\", \"    [hint] try \\\"--router-mac 66-55-44-33-22-11\\\" instead to bypass ARP\", \"    [hint] try \\\"--interface eth0\\\" to change interface\"] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(\"ARP timed-out resolving MAC address for router veth-a: \\\"198.18.0.9\\\"\") None [\"    [hint] try \\\"--router-ip 192.0.2.1\\\" to specify different router\", \"    [hint] try \\\"--router-mac 66-55-44-33-22-11\\\" instead to bypass ARP\", \"    [hint] try \\\"--interface eth0\\\" to change interface\"]",
+          "name": "stderr.txt carries the expected refusal ([-] FAIL: and masscan's hints)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 10 differ (router-ip Some(198.18.0.9))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "10 requests, steps [\"1.001\", \"1.000\", \"1.000\", \"1.000\", \"1.000\", \"1.000\", \"1.000\", \"1.000\", \"1.000\"]",
+          "name": "exactly 10 scanner ARP requests, 1 ± 0.3 s apart (ARP timeout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no ARP reply from the router-ip reached the scanner during the timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no scanner SYN after an ARP timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 0,
+        "scanner_arp_requests": 10
+      },
+      "safety_trip": false,
+      "tag": "l09_arp_timeout",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "6",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6 frames recorded, 6 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354367.7851639 .. 1794354369.6930516",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2\", \"-p80,81,8080\", \"--adapter\", \"nosuch0\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2\", \"-p80,81,8080\", \"--adapter\", \"nosuch0\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l10_no_such_adapter\", kind: Refusal, detection: None, refusal: Some(ExpectRefusal { fail: Some(\"no such interface \\\"nosuch0\\\"\"), hints: [\"    [hint] did you spell the name correctly?\"] }), iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "exit.txt is 1",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: None, source_mac: None, source_ip: None, router_ip: None, router_mac: None, seed: None, source_port: None, finished: None, fail: Some(\"no such interface \\\"nosuch0\\\"\"), error: None, hints: [\"    [hint] did you spell the name correctly?\"] }",
+          "name": "stderr.txt has no [+] detection line before this refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(\"no such interface \\\"nosuch0\\\"\") None [\"    [hint] did you spell the name correctly?\"]",
+          "name": "stderr.txt carries the expected refusal ([-] FAIL: and masscan's hints)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 ARP requests, 0 SYNs",
+          "name": "no scanner frame (ARP request or SYN) in a refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 0,
+        "scanner_arp_requests": 0
+      },
+      "safety_trip": false,
+      "tag": "l10_no_such_adapter",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "32",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "oracle.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "18",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "32 frames recorded, 32 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354370.7913346 .. 1794354375.8577008",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "oracle-capture.json describes oracle.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354376.7994084 .. 1794354394.8746066",
+          "name": "oracle.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,8080\", \"--source-port\", \"40000\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,8080\", \"--source-port\", \"40000\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l11_parity\", kind: Parity, detection: Some(ExpectDetection { interface: Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }, source_mac: Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }, source_ip: Sourced { value: \"198.18.0.1\", source: \"detected\" }, router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(Sourced { value: \"02-aa-00-00-00-02\", source: \"arp\" }) }), refusal: None, iflist: None, preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "detected.json is the parse of stderr.txt",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed DetectedRecord { interface: Some(Sourced { value: \"veth-a\", source: \"detected: route to 198.18.0.2\" }), source_mac: Some(Sourced { value: \"02-aa-00-00-00-01\", source: \"detected\" }), source_ip: Some(Sourced { value: \"198.18.0.1\", source: \"detected\" }), router_ip: Some(Sourced { value: \"198.18.0.2\", source: \"interface default gateway\" }), router_mac: Some(RouterMac { value: \"02-aa-00-00-00-02\", source: \"arp\", arp: Some(ArpCount { requests: 1, ms: 0 }) }), seed: Some(Sourced { value: \"1\", source: \"given\" }), source_port: Some(Sourced { value: \"40000\", source: \"given\" }), finished: Some(Finished { reason: \"Completed\", sent: 8, replies: 8, open: 8 }), fail: None, error: None, hints: [] }",
+          "name": "[+] detection lines equal expect.json (interface, source MAC and IP, router-ip and its reason, next hop)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the printed sources agree with argv (a given value printed as given, the rest detected or chosen)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Finished { reason: \"Completed\", sent: 8, replies: 8, open: 8 })",
+          "name": "[+] finished: Completed and no refusal",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 1 differ (router-ip Some(198.18.0.2))",
+          "name": "every scanner ARP request asks for the router-ip with encode_request's bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 requests, steps []",
+          "name": "1 to 10 scanner ARP requests, 1 ± 0.3 s apart, until the reply",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(1), wire 1",
+          "name": "[+] router-mac reports the scanner ARP requests on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "last request Some(1794354370.8678985), reply Some(1794354370.8679168), first SYN Some(1794354370.8836155)",
+          "name": "the peer's ARP reply comes after the scanner's requests and before the first SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 8",
+          "name": "every scanner SYN goes to the router-mac from the source IP and a port of [+] source-port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 SYN frames identical and in order",
+          "name": "the scanner SYNs equal the plan of argv.json and the [+] lines, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(8), wire 8",
+          "name": "[+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "every stdout.txt line is a Discovered line of exactly 80 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout.txt has no result twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed 8, lines 8",
+          "name": "[+] finished reports open equal to the Discovered lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "without a SYN-ACK [], SYN-ACKed without a line []",
+          "name": "the Discovered lines are exactly the ports the peer SYN-ACKed in the run window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "the oracle exited 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan [\"ffffffffffff02aa000000010806000108000604000102aa00000001c6120001000000000000c6120002000000000000000000000000000000000000\"], oracle [\"ffffffffffff02aa000000010806000108000604000102aa00000001c6120001000000000000c6120002000000000000000000000000000000000000\"]",
+          "name": "the oracle's ARP request equals rmasscan's byte for byte",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 SYN frames identical and in order",
+          "name": "the oracle's SYNs equal rmasscan's in order (compare_streams)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "oracle 8, rmasscan 8",
+          "name": "the oracle's Discovered lines equal rmasscan's",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 8,
+        "scanner_arp_requests": 1
+      },
+      "safety_trip": false,
+      "tag": "l11_parity",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the run directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "6",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "a Linux or macOS run uses the plain file names (no guest-*.txt)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6 frames recorded, 6 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794354395.980451 .. 1794354397.8880327",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "11 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"--iflist\"], table [\"--iflist\"]",
+          "name": "argv.json is the case's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table ExpectRecord { tag: \"l12_iflist\", kind: Iflist, detection: None, refusal: None, iflist: Some(ExpectIflist { name: \"veth-a\", mac: \"02-aa-00-00-00-01\" }), preflight: None }",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stderr.txt parses into [+], FAIL, hint and error lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "OS ARP: no 42-byte request from the scanner MAC on the Linux stand (permanent neighbours)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the full --iflist output is not stored (stdout.txt absent)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the full --iflist output is not stored (guest-stdout.txt absent)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "--iflist exited 0 (iflist.json rc)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3",
+          "name": "--iflist listed at least two lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "e03448d2f27736e948b74bd6389c5e7cb70c83c5493f57ad513bbe8b6524ec0d",
+          "name": "iflist.json sha256 is a sha256",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(\"veth-a index=2 mac=02-aa-00-00-00-01 ipv4=198.18.0.1 up ethernet\"), expected veth-a with mac=02-aa-00-00-00-01",
+          "name": "iflist.json stand line names the stand NIC with its expected MAC",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 vs 0",
+          "name": "exit.txt equals the rc of iflist.json",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "DetectedRecord { interface: None, source_mac: None, source_ip: None, router_ip: None, router_mac: None, seed: None, source_port: None, finished: None, fail: None, error: None, hints: [] }",
+          "name": "stderr.txt is empty for --iflist",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 ARP requests, 0 SYNs",
+          "name": "no scanner frame (ARP request or SYN) during --iflist",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the oracle's full --iflist output is not stored (oracle/stdout.txt absent)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the oracle's full --iflist output is not stored (oracle/stderr.txt absent)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "rc 0, lines 8",
+          "name": "the oracle's --iflist exited 0 and listed at least two lines",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "c165b1ad93cd38ef5770e3f76df0e9673de1f20109781ca56cf35c658421b0f9",
+          "name": "the oracle's iflist.json sha256 is a sha256",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "Some(\" 0  veth-a \\t(No description available)\"), expected masscan's line of veth-a",
+          "name": "the oracle's iflist.json stand line names the stand NIC in masscan's form",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "os_arp": {
+          "replies": 0,
+          "requests": 0
+        },
+        "rst_from_scanner": 0,
+        "scanner_arp_requests": 0
+      },
+      "safety_trip": false,
+      "tag": "l12_iflist",
+      "verdict": "PASS"
+    }
+  ],
+  "safety_scan": [],
+  "safety_trips": [],
+  "schema": 1,
+  "totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 13
+  }
+}

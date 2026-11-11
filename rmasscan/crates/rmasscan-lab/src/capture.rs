@@ -3,7 +3,14 @@ use crate::link;
 use rmasscan_net::lab_io;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, path::Path, process::Command, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::Path,
+    process::Command,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 pub fn classify(frames: &[(f64, Vec<u8>)], scanner: [u8; 6], peer: [u8; 6]) -> Value {
     let mut result = json!({"syn_from_scanner":0,"synack_from_peer":0,"rst_from_peer":0,"rst_from_scanner":0,"marker":0,"other":0});
@@ -102,24 +109,145 @@ fn marker(a: &BTreeMap<String, String>) -> Result<i32, String> {
     }
     Ok(0)
 }
-fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
-    lab_io::install_signal_handlers().map_err(err)?;
-    let ports = get(a, "ports")?;
-    let mut listeners = Vec::new();
+fn port_list(ports: &str) -> Result<Vec<u16>, String> {
+    let mut out = Vec::new();
     for p in ports.split(',').filter(|s| !s.is_empty()) {
         let p = p.parse::<u16>().map_err(err)?;
         if p == 0 {
             return Err("port zero".into());
         }
+        out.push(p);
+    }
+    Ok(out)
+}
+/// The peer's listeners: the TCP ports (`--ports`; the kernel answers SYN-ACK there and resets every other port) and,
+/// for the protocols stand, UDP and SCTP:
+/// - `--udp-ports P,.. --udp-ips A,..`: one UDP socket per address and port (a reply leaves from the address the
+///   datagram went to), each datagram answered once with `protocols_verify::UDP_REPLY`; the kernel sends ICMP 3/3
+///   for every other port;
+/// - `--sctp-iface IF --sctp-open P,..`: every SCTP INIT on the link `IF` answered on the link with
+///   `protocols_verify::sctp_reply` (INIT-ACK on the open ports, ABORT elsewhere). The host kernel must have no SCTP
+///   (the suite checks it): no SCTP socket is ever opened here, so no module is loaded either.
+///
+/// Each UDP socket and the SCTP link has its own thread, so a reply leaves within the probe's own interval.
+fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
+    lab_io::install_signal_handlers().map_err(err)?;
+    let ports = get(a, "ports")?;
+    let mut listeners = Vec::new();
+    for p in port_list(ports)? {
         listeners
             .push(std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, p)).map_err(err)?);
     }
-    fs::write(get(a, "ready")?, format!("listening {ports}\n")).map_err(err)?;
-    while !lab_io::stop_requested() {
-        std::thread::sleep(Duration::from_millis(100));
+    // Every answerer polls `halt` beside the stop request: one that fails stops the others (see `supervise`).
+    let halt = std::sync::Arc::new(AtomicBool::new(false));
+    let mut workers: Vec<Worker> = Vec::new();
+    let mut said = format!("listening {ports}");
+    if let Some(udp) = a.get("udp-ports") {
+        for ip in get(a, "udp-ips")?.split(',') {
+            let ip: std::net::Ipv4Addr = ip.parse().map_err(err)?;
+            for p in port_list(udp)? {
+                let s = std::net::UdpSocket::bind((ip, p)).map_err(err)?;
+                s.set_read_timeout(Some(Duration::from_millis(100)))
+                    .map_err(err)?;
+                let h = halt.clone();
+                workers.push(std::thread::spawn(move || udp_answers(&s, &h)));
+            }
+        }
+        said.push_str(&format!(" udp {udp}"));
     }
+    if let Some(iface) = a.get("sctp-iface") {
+        let open = port_list(get(a, "sctp-open")?)?;
+        let mac = link::iface_mac(iface)?;
+        let l = link::open(iface)?;
+        let h = halt.clone();
+        workers.push(std::thread::spawn(move || sctp_answers(l, mac, &open, &h)));
+        said.push_str(&format!(" sctp {iface} open {}", get(a, "sctp-open")?));
+    }
+    fs::write(get(a, "ready")?, format!("{said}\n")).map_err(err)?;
+    let done = supervise(
+        workers,
+        &halt,
+        &lab_io::stop_requested,
+        Duration::from_millis(100),
+    );
     drop(listeners);
-    Ok(0)
+    done.map(|()| 0)
+}
+type Worker = std::thread::JoinHandle<Result<(), String>>;
+/// The responder's answerers until the stop request. One that ends before it has failed: `halt` is set at once, so
+/// every other answerer ends at its next poll (100 ms), and the responder ends with the first failure, which `main`
+/// prints to its stderr (`responder.err.txt`) with exit 2, instead of waiting for SIGTERM. Without answerers (no
+/// `--udp-ports`, no `--sctp-iface`) this is the plain wait for the stop request of the TCP-only responder.
+fn supervise(
+    workers: Vec<Worker>,
+    halt: &AtomicBool,
+    stop: &dyn Fn() -> bool,
+    tick: Duration,
+) -> Result<(), String> {
+    while !stop() && !workers.iter().any(|w| w.is_finished()) {
+        std::thread::sleep(tick);
+    }
+    let early = !stop();
+    halt.store(true, Ordering::SeqCst);
+    // The answerers that already ended first: theirs is the error that stopped the responder.
+    let (ended, running): (Vec<Worker>, Vec<Worker>) =
+        workers.into_iter().partition(|w| w.is_finished());
+    let mut failure = None;
+    for w in ended.into_iter().chain(running) {
+        if let Err(e) = w
+            .join()
+            .unwrap_or_else(|_| Err("a responder thread panicked".into()))
+        {
+            failure.get_or_insert(e);
+        }
+    }
+    match failure {
+        Some(e) => Err(e),
+        None if early => Err("a responder answerer ended before the stop request".into()),
+        None => Ok(()),
+    }
+}
+/// Answer every datagram on `s` once with the stand's reply, until the stop request or `halt`.
+fn udp_answers(s: &std::net::UdpSocket, halt: &AtomicBool) -> Result<(), String> {
+    let mut buf = [0u8; 2048];
+    while !lab_io::stop_requested() && !halt.load(Ordering::SeqCst) {
+        match s.recv_from(&mut buf) {
+            Ok((_, from)) => {
+                s.send_to(crate::protocols_verify::UDP_REPLY, from)
+                    .map_err(err)?;
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            // The scanner host's kernel answers a reply with ICMP 3/3; Linux may hand that to the socket as an error.
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
+            Err(e) => return Err(format!("udp responder: {e}")),
+        }
+    }
+    Ok(())
+}
+/// Answer every SCTP INIT on the link with `protocols_verify::sctp_reply`, until the stop request or `halt`.
+fn sctp_answers(
+    mut l: link::Link,
+    mac: [u8; 6],
+    open: &[u16],
+    halt: &AtomicBool,
+) -> Result<(), String> {
+    let mut buf = vec![0u8; 65536];
+    let stopped = || lab_io::stop_requested() || halt.load(Ordering::SeqCst);
+    while !stopped() {
+        let n =
+            l.rx.recv(&mut buf, Duration::from_millis(100))
+                .map_err(|e| format!("sctp responder: {e:?}"))?;
+        if let Some(reply) =
+            n.and_then(|n| crate::protocols_verify::sctp_reply(&buf[..n], mac, open))
+        {
+            link::send_blocking(&mut *l.tx, &reply, link::SEND_PATIENCE, &stopped)?;
+        }
+    }
+    Ok(())
 }
 /// Hashes of the harness that is actually executing (L M4): the running binary, and the exact
 /// scripts the caller names (wire-lab.sh passes its own path and the helper it sourced, never a
@@ -984,6 +1112,92 @@ mod tests {
             "/nonexistent/ready",
         ]);
         assert_eq!(run(&responder), Ok(2));
+    }
+
+    /// Runs `supervise` on its own thread: its result, or `None` when it has not ended within `limit`.
+    fn supervised(
+        workers: Vec<Worker>,
+        halt: std::sync::Arc<AtomicBool>,
+        stop: bool,
+        limit: Duration,
+    ) -> Option<Result<(), String>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(supervise(
+                workers,
+                &halt,
+                &move || stop,
+                Duration::from_millis(5),
+            ));
+        });
+        rx.recv_timeout(limit).ok()
+    }
+    /// A worker that runs until it is halted, as the UDP and SCTP answerers do.
+    fn healthy(halt: &std::sync::Arc<AtomicBool>) -> Worker {
+        let h = halt.clone();
+        std::thread::spawn(move || {
+            while !h.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn a_responder_worker_that_fails_ends_the_responder_at_once_with_its_error() {
+        let limit = Duration::from_secs(5);
+        // One answerer fails while two others are healthy: the responder ends with that error, not at SIGTERM.
+        let halt = std::sync::Arc::new(AtomicBool::new(false));
+        let failing: Worker = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(20));
+            Err("udp responder: Network is down (os error 100)".to_owned())
+        });
+        let workers = vec![healthy(&halt), failing, healthy(&halt)];
+        assert_eq!(
+            supervised(workers, halt, false, limit),
+            Some(Err("udp responder: Network is down (os error 100)".into())),
+            "the responder must end with the failed worker's error"
+        );
+        // A worker that ends without an error before the stop request has failed too.
+        let halt = std::sync::Arc::new(AtomicBool::new(false));
+        let quiet: Worker = std::thread::spawn(|| Ok(()));
+        let got = supervised(vec![healthy(&halt), quiet], halt, false, limit);
+        assert!(
+            matches!(&got, Some(Err(e)) if e.contains("ended before the stop request")),
+            "{got:?}"
+        );
+        // The stop request ends healthy workers: no error.
+        let halt = std::sync::Arc::new(AtomicBool::new(false));
+        let workers = vec![healthy(&halt), healthy(&halt)];
+        assert_eq!(supervised(workers, halt, true, limit), Some(Ok(())));
+        // Without workers (no --udp-ports, no --sctp-iface) it waits for the stop request alone, as before.
+        let halt = std::sync::Arc::new(AtomicBool::new(false));
+        assert_eq!(
+            supervised(Vec::new(), halt.clone(), false, Duration::from_millis(200)),
+            None,
+            "without a stop request the TCP-only responder keeps running"
+        );
+        assert_eq!(supervised(Vec::new(), halt, true, limit), Some(Ok(())));
+    }
+
+    #[test]
+    fn the_udp_answerer_replies_once_per_datagram_and_ends_on_halt() {
+        let s = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        let at = s.local_addr().unwrap();
+        let halt = std::sync::Arc::new(AtomicBool::new(false));
+        let h = halt.clone();
+        let w = std::thread::spawn(move || udp_answers(&s, &h));
+        let c = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.send_to(b"probe", at).unwrap();
+        let mut buf = [0u8; 64];
+        let (n, from) = c.recv_from(&mut buf).unwrap();
+        assert_eq!((&buf[..n], from), (crate::protocols_verify::UDP_REPLY, at));
+        halt.store(true, Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        assert_eq!(w.join().unwrap(), Ok(()));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {

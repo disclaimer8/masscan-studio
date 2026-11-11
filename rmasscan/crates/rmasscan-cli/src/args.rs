@@ -21,7 +21,10 @@ use rmasscan_core::config::{
     NicConfig, ScanConfig, apply_core_kv, is_boolean, is_integer, normalize_key, parse_mac,
     parse_rate, parse_shard, parse_source_port,
 };
-use rmasscan_core::targets::{add_target_string, parse_ports, range_parse_ipv4};
+use rmasscan_core::targets::{
+    TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP, add_target_string, add_top_ports, parse_ports_with,
+    range_parse_ipv4,
+};
 
 use crate::conf::{FullConf, OutputConfPatch, apply_conf_key};
 use crate::output::{Format, OutputOptions};
@@ -72,14 +75,67 @@ pub struct Cli {
         help = "Save the inbound frames addressed to the scanner to a .pcap file (live scan only; alias: --pcap-filename)"
     )]
     pub pcap: Option<String>,
+    // `nmap-payloads` и синоним `nmap-payload` (main-conf.c:2382): нагрузки UDP в синтаксисе `nmap-payloads`.
+    #[arg(
+        long = "nmap-payloads",
+        alias = "nmap-payload",
+        value_name = "FILE",
+        help = "Read UDP probe payloads from FILE in the nmap-payloads syntax (replaces the built-in payload of a port)"
+    )]
+    pub nmap_payloads: Option<String>,
+    // `pcap-payloads` и синоним `pcap-payload` (main-conf.c:2386): нагрузки UDP из захвата pcap.
+    #[arg(
+        long = "pcap-payloads",
+        alias = "pcap-payload",
+        value_name = "FILE",
+        help = "Read UDP probe payloads from the packets of a .pcap capture (read before --nmap-payloads)"
+    )]
+    pub pcap_payloads: Option<String>,
     // `-p80,443`, `-p0-65535`, `--ports 22,80`.
     #[arg(
         short = 'p',
         long = "ports",
         value_name = "PORTS",
-        help = "Ports to scan, e.g. -p80,443 or -p0-65535 (TCP only)"
+        help = "Ports to scan, e.g. -p80,443 or -p0-65535; prefixes T: U: S: I: O: stay in effect until the next one, e.g. -pU:53,161,T:80,I:0"
     )]
     pub ports: Vec<String>,
+    // `--udp-ports` (main-conf.c:2642-2648): порты UDP и сам по себе включает UDP-скан.
+    #[arg(
+        long = "udp-ports",
+        alias = "udp-port",
+        value_name = "PORTS",
+        help = "UDP ports to scan (same as -pU:PORTS)"
+    )]
+    pub udp_ports: Vec<String>,
+    // `-sS`, `-sU`, `-sZ` (main-conf.c:3524-3549) приходят из [`preprocess_args`] как `--rmasscan-scan=S|U|Z`.
+    #[arg(long = "rmasscan-scan", value_name = "S|U|Z", hide = true)]
+    pub scan_types: Vec<String>,
+    // `--ping`, `--ping-sweep` (main-conf.c:2721-2729): добавляет `I:0`.
+    #[arg(
+        long,
+        alias = "ping-sweep",
+        help = "Add an ICMP echo probe (same as -pI:0, alias: --ping-sweep)"
+    )]
+    pub ping: bool,
+    // `--arp`, `--arpscan` (main-conf.c:1088-1102, :2373): порт `I:2`, `router-mac = ff-ff-ff-ff-ff-ff`, `arpscan = true`.
+    #[arg(
+        long,
+        alias = "arpscan",
+        help = "ARP scan of the local segment (same as -pI:2; the gateway is not resolved; cannot be combined with other ports; alias: --arpscan)"
+    )]
+    pub arp: bool,
+    // `F_NUMABLE` (main-conf.c:2423): `--top-ports [N]`; значение берётся из следующего слова, если оно целое или
+    // логическое (см. [`preprocess_args`]); `--top-port` синоним.
+    #[arg(
+        long = "top-ports",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "N",
+        help = "Also scan the N most common ports (default 20); with -sU the UDP table, with -sS -sU both"
+    )]
+    pub top_ports: Vec<String>,
     #[arg(
         long,
         value_name = "RANGE",
@@ -472,6 +528,9 @@ pub struct Cli {
     /// Файлы конфигурации (`-c`, `--conf`, `--config`, `--resume`) в порядке `argv` и их позиции clap.
     #[arg(skip)]
     markers: Vec<FileMarker>,
+    /// Опции портов и типов скана по порядку `argv`: префикс `-p` зависит от `-sU`/`-sZ` левее него.
+    #[arg(skip)]
+    port_events: Vec<(usize, PortEvent)>,
     /// Позиция clap последнего появления каждого позиционного ключа конфигурации ([`POSITIONAL_KEYS`]).
     #[arg(skip)]
     key_pos: HashMap<&'static str, usize>,
@@ -487,10 +546,32 @@ pub struct Cli {
     resolved: std::sync::OnceLock<Result<FullConf, String>>,
 }
 
+/// Опция, меняющая порты или тип скана (`masscan_set_parameter` зовётся по ходу `argv`).
+#[derive(Debug, Clone)]
+enum PortEvent {
+    /// `-sS` (`S`), `-sU` (`U`), `-sZ` (`Z`).
+    Scan(char),
+    Ports(String),
+    UdpPorts(String),
+}
+
+/// Префикс по умолчанию для портов без префикса (main-conf.c:2670–2674): UDP важнее SCTP, иначе TCP (`0`).
+fn port_default(udp: bool, sctp: bool) -> u32 {
+    if udp {
+        TEMPL_UDP
+    } else if sctp {
+        TEMPL_SCTP
+    } else {
+        0
+    }
+}
+
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 25] = [
+const POSITIONAL_KEYS: [&str; 27] = [
     "pcap",
+    "nmap_payloads",
+    "pcap_payloads",
     "ndjson_status",
     "infinite",
     "offline",
@@ -681,6 +762,9 @@ where
             out.push(format!("--rmasscan-nic={name}={value}"));
         } else if a == "-sL" {
             out.push("--list".into());
+        } else if let Some(t @ ("S" | "U" | "Z")) = a.strip_prefix("-s") {
+            // main-conf.c:3524-3549: `-sS`, `-sU`, `-sZ` (ровно одна буква) выбирают типы скана.
+            out.push(format!("--rmasscan-scan={t}"));
         } else if a == "-iL" {
             // main-conf.c:3375-3377: nmap-стиль `-iL FILE` это `includefile`; clap прочёл бы его как `-i L`.
             out.push("--includefile".into());
@@ -748,8 +832,27 @@ fn indexed_nic_key(a: &str) -> Option<Result<(&str, Option<&str>), String>> {
     }))
 }
 
+/// `SET_topports` (main-conf.c:2107-2139): пусто значит 20, логическое значение включает (`1`, `true`, `on`) или
+/// выключает (`0`, `off`) вместо числа, целое это число, остальное ошибка. `isBoolean` стоит раньше `isInteger`,
+/// поэтому `--top-ports 1` значит 20.
+fn top_ports_count(v: &str) -> Result<u32, String> {
+    const DEFAULT: u32 = 20;
+    if v.is_empty() {
+        Ok(DEFAULT)
+    } else if is_boolean(v) {
+        Ok(if parse_boolean(v) { DEFAULT } else { 0 })
+    } else if is_integer(v) {
+        // C: `(unsigned)parseInt(...)`: старшие 32 бита отбрасываются, поэтому число считаем по модулю 2^32.
+        Ok(v.bytes().fold(0u32, |n, d| {
+            n.wrapping_mul(10).wrapping_add(u32::from(d - b'0'))
+        }))
+    } else {
+        Err(format!("top-ports: bad value: {v}"))
+    }
+}
+
 /// Опции с необязательным числовым или логическим значением (`F_NUMABLE`, main-conf.c:2419-2421).
-const NUMABLE: [&str; 3] = ["tcp-mss", "tcp-wscale", "tcp-tsecho"];
+const NUMABLE: [&str; 4] = ["tcp-mss", "tcp-wscale", "tcp-tsecho", "top-ports"];
 
 /// `--имя`, `--имя=v` или `--имя:v` для имён из [`NUMABLE`]: имя и встроенное значение.
 fn numable_split(a: &str) -> Option<(&'static str, Option<&str>)> {
@@ -759,7 +862,12 @@ fn numable_split(a: &str) -> Option<(&'static str, Option<&str>)> {
         None => (rest, None),
     };
     // main-conf.c:2419: `tcpmss` синоним `tcp-mss`.
-    let name = if name == "tcpmss" { "tcp-mss" } else { name };
+    let name = match name {
+        "tcpmss" => "tcp-mss",
+        // main-conf.c:2423: `top-port` синоним `top-ports`.
+        "top-port" => "top-ports",
+        n => n,
+    };
     NUMABLE.iter().find(|n| **n == name).map(|n| (*n, inline))
 }
 
@@ -925,6 +1033,22 @@ impl Cli {
         {
             cli.nic_pos = indices.zip(values.cloned()).collect();
         }
+        for (id, make) in [
+            (
+                "ports",
+                (|s: String| PortEvent::Ports(s)) as fn(String) -> PortEvent,
+            ),
+            ("udp_ports", |s| PortEvent::UdpPorts(s)),
+            ("scan_types", |s| {
+                PortEvent::Scan(s.chars().next().unwrap_or('S'))
+            }),
+        ] {
+            if let (Some(values), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
+                cli.port_events
+                    .extend(indices.zip(values).map(|(pos, v)| (pos, make(v.clone()))));
+            }
+        }
+        cli.port_events.sort_by_key(|(pos, _)| *pos);
         let last = |id: &str| m.indices_of(id).and_then(Iterator::max);
         cli.key_pos = POSITIONAL_KEYS
             .iter()
@@ -1067,12 +1191,14 @@ impl Cli {
             }
             if let Some(mk) = self.markers.get(seg) {
                 full.output.touched.clear();
+                full.port_default = self.port_default_at(mk.pos);
                 apply_conf_key(mk.kind, &mk.path, &mut full, &mut loader, 0)?;
                 for group in std::mem::take(&mut full.output.touched) {
                     full.output.file_pos.insert(group, mk.pos);
                 }
             }
         }
+        self.apply_top_ports(&mut full.scan)?;
         Ok(full)
     }
 
@@ -1088,6 +1214,81 @@ impl Cli {
             .is_some_and(|&pos| self.segment_of(pos) == seg)
     }
 
+    /// Префикс по умолчанию портов файла конфигурации в позиции clap `pos`: C разбирает файл на его месте в `argv`,
+    /// поэтому строка `ports = …` файла берёт тип скана от `-sU`/`-sZ`/`--udp-ports` левее файла (main-conf.c:2663–2674,
+    /// `--udp-ports` ставит `scan_type.udp`, :2642–2648).
+    fn port_default_at(&self, pos: usize) -> u32 {
+        let (mut udp, mut sctp) = (false, false);
+        for (_, ev) in self.port_events.iter().take_while(|(p, _)| *p < pos) {
+            match ev {
+                PortEvent::Scan('U') | PortEvent::UdpPorts(_) => udp = true,
+                PortEvent::Scan('S') | PortEvent::Ports(_) => {}
+                PortEvent::Scan(_) => sctp = true,
+            }
+        }
+        port_default(udp, sctp)
+    }
+
+    /// Порты, `--udp-ports`, `--ping` и `-sS/-sU/-sZ` в порядке `argv`, как `masscan_set_parameter`
+    /// (main-conf.c:2642-2681, 2721-2729, 3524-3549): `-p` берёт префикс по умолчанию от `-sU`/`-sZ` левее него.
+    /// Таблицы `--top-ports` строит [`Cli::apply_top_ports`] после всех файлов конфигурации.
+    fn apply_port_options(&self, cfg: &mut ScanConfig) -> Result<(), String> {
+        let (mut udp, mut sctp) = (false, false);
+        for (_, ev) in &self.port_events {
+            match ev {
+                PortEvent::Scan('S') => {}
+                PortEvent::Scan('U') => udp = true,
+                PortEvent::Scan(_) => sctp = true,
+                PortEvent::Ports(p) => {
+                    parse_ports_with(cfg.targets.ports_mut(), p, port_default(udp, sctp))
+                        .map_err(|e| format!("bad ports {p:?}: {e}"))?;
+                }
+                PortEvent::UdpPorts(p) => {
+                    udp = true;
+                    parse_ports_with(cfg.targets.ports_mut(), p, TEMPL_UDP)
+                        .map_err(|e| format!("bad --udp-ports {p:?}: {e}"))?;
+                }
+            }
+        }
+        // `SET_arpscan` кладёт порт, `router-mac` и флаг через тот же ключ, что `arpscan = ...` в файле (`apply_core_kv`).
+        if self.arp {
+            apply_core_kv(cfg, "arpscan", "").map_err(|e| e.to_string())?;
+        }
+        if self.ping {
+            cfg.targets
+                .ports_mut()
+                .add_range(TEMPL_ICMP_ECHO, TEMPL_ICMP_ECHO);
+        }
+        Ok(())
+    }
+
+    /// Таблицы `--top-ports` в конце разбора по итоговым типам скана (main-conf.c:3609-3619), то есть после всех
+    /// файлов конфигурации: ARP-скан, заданный файлом (`arpscan =`), тоже снимает TCP по умолчанию.
+    fn apply_top_ports(&self, cfg: &mut ScanConfig) -> Result<(), String> {
+        let (mut tcp, mut udp, mut sctp) = (false, false, false);
+        for (_, ev) in &self.port_events {
+            match ev {
+                PortEvent::Scan('S') => tcp = true,
+                PortEvent::Scan('U') | PortEvent::UdpPorts(_) => udp = true,
+                PortEvent::Scan(_) => sctp = true,
+                PortEvent::Ports(_) => {}
+            }
+        }
+        // main-conf.c:3609-3612: без UDP, SCTP, ping, ARP и oproto по умолчанию TCP. `scan_type.arp` ставит только
+        // `SET_arpscan` (`--arp`, `--arpscan`, `arpscan =` в файле; `cfg.arpscan`), не `-pI:2`. oproto у rmasscan не
+        // задаётся ничем: нет ни `-sO`, ни ключа `oprotos` (main-conf.c:2649-2655, :3524), а `-pO:` его у C не ставит.
+        if !udp && !sctp && !self.ping && !cfg.arpscan {
+            tcp = true;
+        }
+        if let Some(v) = self.top_ports.last() {
+            let n = top_ports_count(v)?;
+            if n != 0 {
+                add_top_ports(cfg.targets.ports_mut(), n, tcp, udp);
+            }
+        }
+        Ok(())
+    }
+
     /// Применяет поля командной строки сегмента `seg` к `cfg`. Сегмент 0 несёт и цели, исключения и файлы целей
     /// (порядок их добавления значения не имеет). Ключи адаптера идут и в одиночные поля, и в `nics[0]`, если файл
     /// уже создал массив адаптеров (`apply_core_kv` держит их равными).
@@ -1098,10 +1299,7 @@ impl Cli {
                 add_target_string(cfg.targets.ipv4_mut(), t)
                     .map_err(|e| format!("bad target {t:?}: {e}"))?;
             }
-            for p in &self.ports {
-                parse_ports(cfg.targets.ports_mut(), p)
-                    .map_err(|e| format!("bad ports {p:?}: {e}"))?;
-            }
+            self.apply_port_options(cfg)?;
             for x in &self.exclude {
                 add_target_string(cfg.excludes.ipv4_mut(), x)
                     .map_err(|e| format!("bad --exclude {x:?}: {e}"))?;
@@ -1123,6 +1321,17 @@ impl Cli {
         // seed == 0 в C значит "взять энтропию" (main.c:1640-1641). Явный 0
         // отклоняется; отсутствие --seed решает `run` по операции (см.
         // [`seed_policy`]), здесь это seed 0.
+        // Файлы нагрузок читает `prepare` (слой живого скана); здесь только имена, правее файла побеждает аргумент.
+        if take("nmap_payloads")
+            && let Some(f) = &self.nmap_payloads
+        {
+            cfg.nmap_payloads = Some(f.clone());
+        }
+        if take("pcap_payloads")
+            && let Some(f) = &self.pcap_payloads
+        {
+            cfg.pcap_payloads = Some(f.clone());
+        }
         if take("seed") {
             match self.seed {
                 Some(0) => {
@@ -2562,5 +2771,106 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
         );
         // Не ключ адаптера со скобкой это ошибка clap, а не молчаливое игнорирование.
         assert!(parse(&["--rate[1]", "5"]).is_err());
+    }
+
+    /// Порты после разбора `argv`, отсортированные, как их видит `--echo`.
+    fn ports_of(a: &[&str]) -> Vec<(u32, u32)> {
+        let mut cfg = parse(a).unwrap().to_config().unwrap();
+        cfg.targets.ports_mut().sort_and_merge();
+        cfg.targets
+            .ports()
+            .as_slice()
+            .iter()
+            .map(|r| (r.begin, r.end))
+            .collect()
+    }
+
+    const U: u32 = 65536;
+
+    #[test]
+    fn sticky_port_prefixes_and_oproto_live_refusal() {
+        // main-conf.c:2663-2681: `-p` с префиксами разбирается как в ядре
+        assert_eq!(
+            ports_of(&["-pU:53,161,T:80-81,s:2905,I:0,o:47"]),
+            [
+                (80, 81),
+                (U + 53, U + 53),
+                (U + 161, U + 161),
+                (2 * U + 2905, 2 * U + 2905),
+                (3 * U, 3 * U),
+                (3 * U + 303, 3 * U + 303),
+            ]
+        );
+        assert!(parse(&["-p", "O:256"]).unwrap().to_config().is_err());
+        assert!(parse(&["-p", "U:65536"]).unwrap().to_config().is_err());
+        // порядок argv: `-sU` задаёт префикс только для `-p` правее него
+        assert_eq!(ports_of(&["-sU", "-p53"]), [(U + 53, U + 53)]);
+        assert_eq!(ports_of(&["-p53", "-sU"]), [(53, 53)]);
+        assert_eq!(ports_of(&["-sZ", "-p9"]), [(2 * U + 9, 2 * U + 9)]);
+        // явный `T:` перекрывает
+        assert_eq!(
+            ports_of(&["-sU", "-p53,T:80"]),
+            [(80, 80), (U + 53, U + 53)]
+        );
+        // `--udp-ports` и `--ping`
+        assert_eq!(ports_of(&["--udp-ports", "53"]), [(U + 53, U + 53)]);
+        assert_eq!(ports_of(&["--ping"]), [(3 * U, 3 * U)]);
+        assert_eq!(
+            ports_of(&["--ping-sweep", "-p80"]),
+            [(80, 80), (3 * U, 3 * U)]
+        );
+    }
+
+    #[test]
+    fn top_ports_follow_scan_types() {
+        let tcp5 = [(21, 21), (80, 80), (443, 443), (990, 990), (8080, 8080)];
+        let udp5 = [
+            (U + 135, U + 135),
+            (U + 137, U + 138),
+            (U + 161, U + 161),
+            (U + 500, U + 500),
+        ];
+        // main-conf.c:3609-3619: по умолчанию TCP; `-sU` убирает TCP, `-sS -sU` даёт оба
+        assert_eq!(ports_of(&["--top-ports", "5"]), tcp5);
+        assert_eq!(ports_of(&["--top-ports=5"]), tcp5);
+        assert_eq!(ports_of(&["--top-ports", "5", "-sU"]), udp5);
+        assert_eq!(
+            ports_of(&["--top-ports", "5", "-sS", "-sU"]),
+            [&tcp5[..], &udp5[..]].concat()
+        );
+        // без таблицы для SCTP; ping даёт только I:0
+        assert!(ports_of(&["--top-ports", "3", "-sZ"]).is_empty());
+        assert_eq!(ports_of(&["--top-ports", "3", "--ping"]), [(3 * U, 3 * U)]);
+        // добавляется к `-p`, а `--top-ports 0` ничего не делает
+        assert_eq!(ports_of(&["--top-ports", "0", "-p5"]), [(5, 5)]);
+        assert_eq!(
+            ports_of(&["--top-ports", "2", "-p80", "-sU"]),
+            [(80, 80), (U + 135, U + 135), (U + 161, U + 161)]
+        );
+        // голый `--top-ports` значит 20 (SET_topports, main-conf.c:2107-2123); `1` это булево «включить»
+        assert_eq!(
+            ports_of(&["--top-ports"])
+                .iter()
+                .map(|r| r.1 - r.0 + 1)
+                .sum::<u32>(),
+            20
+        );
+        assert_eq!(ports_of(&["--top-ports", "1"]), ports_of(&["--top-ports"]));
+        assert!(parse(&["--top-ports=abc"]).unwrap().to_config().is_err());
+    }
+
+    #[test]
+    fn nmap_scan_type_flags_are_accepted_before_clap() {
+        assert_eq!(
+            preprocess_args(["rmasscan", "-sU", "-sZ", "-sS", "--ping", "-sL"]).unwrap(),
+            [
+                "rmasscan",
+                "--rmasscan-scan=U",
+                "--rmasscan-scan=Z",
+                "--rmasscan-scan=S",
+                "--ping",
+                "--list"
+            ]
+        );
     }
 }

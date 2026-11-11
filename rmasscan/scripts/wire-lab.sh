@@ -8,6 +8,7 @@
 #   wire-lab.sh --oracle BIN --out DIR --suite autodetect --rmasscan RMASSCAN_CLI
 #   wire-lab.sh --oracle BIN --out DIR --suite output --rmasscan RMASSCAN_CLI
 #   wire-lab.sh --oracle BIN --out DIR --suite scan-control --rmasscan RMASSCAN_CLI
+#   wire-lab.sh --oracle BIN --out DIR --suite protocols --rmasscan RMASSCAN_CLI
 #
 # Suite autodetect runs rmasscan-lab autodetect-suite linux inside the lab, with ONE controlled change to the
 # seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
@@ -24,6 +25,12 @@
 # either end, a /32 route to 198.18.0.6 and its permanent neighbour on the peer end only; 198.18.0.6 is assigned to
 # no interface (rmasscan binds it itself). Both pairs die with the two namespaces in the same cleanup trap; no
 # host interface is ever created, touched or listed.
+#
+# Suite protocols runs rmasscan-lab protocols-suite linux on the autodetect stand (same seal, lab id, teardown record,
+# kept work and refusal of an earlier lab's OUT) with ONE more controlled change, in the peer namespace only:
+# net.ipv4.icmp_ratemask=0, so the peer kernel sends every ICMP error it owes (each closed UDP probe gets its ICMP 3/3)
+# instead of rate-limiting them. The suite's own responder answers UDP and SCTP; it never loads a kernel module and
+# refuses the SCTP cases when the host kernel has SCTP. The setting dies with the namespace.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -59,7 +66,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ORACLE" ] && [ -n "$OUT" ] || { echo "usage: wire-lab.sh --oracle BIN --out DIR" >&2; exit 64; }
-case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;; scan-control) [ -n "$RMASSCAN_BIN" ] || { echo "--suite scan-control needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
+case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;; scan-control) [ -n "$RMASSCAN_BIN" ] || { echo "--suite scan-control needs --rmasscan" >&2; exit 64; } ;; protocols) [ -n "$RMASSCAN_BIN" ] || { echo "--suite protocols needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
 [ "$SUITE" != rust ] || [ -n "$FIXTURES" ] || { echo "--suite rust needs --fixtures" >&2; exit 64; }
 [ "$(uname -s)" = Linux ] || { echo "FATAL: Linux only" >&2; exit 2; }
 if [ "$(id -u)" != 0 ]; then
@@ -99,7 +106,7 @@ OPEN_PORTS=${WIRELAB_OPEN_PORTS:-80,8080}               # responder listens here
 CASES_FILE=${WIRELAB_CASES_FILE:-}                      # optional "name|syn|synack|rst|masscan args" lines
 DEFAULT_VIA=""
 # The suites that run on the autodetect stand (the Rust driver inside the lab, a lab id, a teardown record).
-STAND_SUITE=0; case "$SUITE" in autodetect|output|scan-control) STAND_SUITE=1 ;; esac
+STAND_SUITE=0; case "$SUITE" in autodetect|output|scan-control|protocols) STAND_SUITE=1 ;; esac
 if [ "$STAND_SUITE" = 1 ]; then
   # Fixed stand of the autodetect and output suites (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
   # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
@@ -236,6 +243,9 @@ done
 ip -n "$NS_A" link set "$IF_A" address "$MAC_A"
 ip -n "$NS_B" link set "$IF_B" address "$MAC_B"
 nsa sysctl -qw "net.ipv6.conf.$IF_A.disable_ipv6=1"; nsb sysctl -qw "net.ipv6.conf.$IF_B.disable_ipv6=1"
+# protocols: the peer kernel sends every ICMP error it owes (no rate limit), in the peer namespace only.
+[ "$SUITE" != protocols ] || nsb sysctl -qw net.ipv4.icmp_ratemask=0
+[ "$SUITE" != protocols ] || note_cmd "ip netns exec \$NS_B sysctl -qw net.ipv4.icmp_ratemask=0   # protocols: every ICMP error of the peer kernel is sent"
 if [ "$SUITE" = scan-control ]; then
   ip -n "$NS_A" link set "$IF_A2" address "$MAC_A2"
   ip -n "$NS_B" link set "$IF_B2" address "$MAC_B2"
@@ -437,6 +447,16 @@ elif [ "$SUITE" = scan-control ]; then
   # ---- scan-control suite: the same driver on the same stand plus the second pair, for --adapter[1]
   note_cmd "rmasscan-lab scan-control-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
   start_suite_group "$OUT/suite.log" "$LAB_BIN" scan-control-suite linux --out "$OUT" --work "$WORK" \
+    --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
+    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
+  SUITE_PID=$SUITE_PGID
+  SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  stop_suite_group
+  log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
+elif [ "$SUITE" = protocols ]; then
+  # ---- protocols suite: the same driver on the same stand, ICMP Echo, UDP, SCTP and ARP of the C oracle and rmasscan
+  note_cmd "rmasscan-lab protocols-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_suite_group "$OUT/suite.log" "$LAB_BIN" protocols-suite linux --out "$OUT" --work "$WORK" \
     --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
     --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
   SUITE_PID=$SUITE_PGID

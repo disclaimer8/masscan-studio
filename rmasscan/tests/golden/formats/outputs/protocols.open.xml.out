@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!-- masscan v1.0 scan -->
+<nmaprun scanner="masscan" start="1794333122" version="1.0-BETA"  xmloutputversion="1.03">
+<scaninfo type="syn" protocol="tcp" />
+<host endtime="1700007200"><address addr="192.0.2.10" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="64"/></port></ports></host>
+<host endtime="1700007200"><address addr="192.0.2.10" addrtype="ipv4"/><ports><port protocol="udp" portid="53"><state state="open" reason="none" reason_ttl="64"/></port></ports></host>
+<host endtime="1700007201"><address addr="192.0.2.11" addrtype="ipv4"/><ports><port protocol="udp" portid="59999"><state state="open" reason="none" reason_ttl="63"/></port></ports></host>
+<host endtime="1700007203"><address addr="198.51.100.5" addrtype="ipv4"/><ports><port protocol="sctp" portid="2905"><state state="open" reason="none" reason_ttl="64"/></port></ports></host>
+<host endtime="1700007204"><address addr="198.51.100.6" addrtype="ipv4"/><ports><port protocol="icmp" portid="0"><state state="open" reason="none" reason_ttl="128"/></port></ports></host>
+<host endtime="1700007205"><address addr="203.0.113.9" addrtype="ipv4"/><ports><port protocol="icmp" portid="0"><state state="open" reason="none" reason_ttl="255"/></port></ports></host>
+<host endtime="1700007205"><address addr="203.0.113.9" addrtype="ipv4"/><ports><port protocol="udp" portid="123"><state state="open" reason="none" reason_ttl="255"/></port></ports></host>
+<runstats>
+<finished time="1794333122" timestr="2026-11-10 17:52:02" elapsed="0" />
+<hosts up="1" down="0" total="1" />
+</runstats>
+</nmaprun>

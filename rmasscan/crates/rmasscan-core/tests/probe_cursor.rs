@@ -66,6 +66,18 @@ fn mapped_routed_targets_can_share_a_gateway_mac() {
 }
 
 #[test]
+fn mapped_studio_plans_remain_tcp_only_after_cli_protocol_expansion() {
+    for ports in ["U:53", "S:2905", "I:0", "I:2", "80,U:53"] {
+        let e = eff(&config("10.0.0.1-10.0.0.2", ports, 5, 100.0));
+        let legacy = ReadyPlan::new(e.clone(), binding(40000, 40000)).unwrap_err();
+        let mapped =
+            ReadyPlan::with_destinations(e, binding(40000, 40000), destination_map()).unwrap_err();
+        assert!(matches!(mapped, PlanError::PortNotTcp(_)), "{ports}");
+        assert_eq!(mapped, legacy, "{ports}");
+    }
+}
+
+#[test]
 fn mapped_plan_requires_exactly_the_effective_target_keys() {
     let mut c = config("10.0.0.1-10.0.0.3", "80,443", 5, 100.0);
     c.excludes = massip("10.0.0.3", "443");

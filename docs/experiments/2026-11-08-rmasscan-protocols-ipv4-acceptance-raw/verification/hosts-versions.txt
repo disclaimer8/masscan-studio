@@ -1,0 +1,5 @@
+minipc: Linux 7.0.0-38-generic, tcpdump 4.99.6, rustc 1.99.1 (58cf8f9c3 2026-10-13); /proc/net/protocols without SCTP, /etc/masscan absent
+home-pc: Linux 7.3.0-10-generic, QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3), tcpdump 4.99.6, rustc 1.99.1 (58cf8f9c3 2026-10-13)
+guest: Windows 10.0.26300, Npcap 1.90, AdminOnly=1, rustc 1.99.1 (58cf8f9c3 2026-10-13), pwsh 7.6.9
+Mac (orchestrator of windows-suite, offline verifiers and privacy-scan only, no live frames): macOS 27.2 (26B123), rustc 1.99.1 (58cf8f9c3 2026-10-13, Homebrew)
+C oracle (minipc): masscan 8e6b3b0, sha256 8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e

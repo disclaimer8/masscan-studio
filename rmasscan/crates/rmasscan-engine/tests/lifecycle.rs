@@ -287,7 +287,9 @@ fn would_block_unsent_retries_same_frame_without_advancing() {
         TxStep::WouldBlockUnsent,
         TxStep::Sent,
     ]);
-    let h = start_manual(&p, &fake, &clock, opts());
+    // Окно простоя TX здесь не предмет: приём фейка двигает общие часы, и поток TX, снятый с CPU между двумя
+    // WouldBlock, увидел бы 10 с окна по умолчанию (`no_stall_opts`).
+    let h = start_manual(&p, &fake, &clock, no_stall_opts());
     let o = join_within(h, Duration::from_secs(5));
     assert_eq!(o.reason, Reason::Completed);
     assert_eq!(o.progress.sent, PROBES);
@@ -330,7 +332,10 @@ fn would_block_unsent_backs_off_1ms_on_the_injected_clock() {
     let fake = rmasscan_engine::fake::FakeAdapter::new();
     fake.script_tx(std::iter::repeat_n(TxStep::WouldBlockUnsent, 30));
     let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
-    let h = rmasscan_engine::Engine::start_with_clock(p.clone(), fake.pair(), opts(), c).unwrap();
+    // TX stall detection has dedicated tests. Keep this test focused on the
+    // injected 1 ms backoff and exact frames, including on slow CI hosts.
+    let h = rmasscan_engine::Engine::start_with_clock(p.clone(), fake.pair(), no_stall_opts(), c)
+        .unwrap();
     let o = join_within(h, Duration::from_secs(5));
     assert_eq!(o.reason, Reason::Completed);
     assert_eq!(fake.would_block_count(), 30);
@@ -711,6 +716,8 @@ fn reply(ip: u32, port: u16) -> Reply {
         status: PortStatus::Open,
         tcp_flags: 0x12,
         ttl: 64,
+        ip_proto: 6,
+        mac: None,
     }
 }
 
@@ -725,6 +732,165 @@ fn dedup_is_fifo_bounded_and_allows_repeat_after_eviction() {
     // Повтор не обновляет порядок (FIFO, не LRU): a вытеснена первой.
     assert!(d.insert(&a), "repeat after eviction is allowed");
     assert!(!d.insert(&c) || d.len() == 3);
+    assert_eq!(d.len(), 3);
+}
+
+#[test]
+fn dedup_cache_separates_protocols() {
+    // 80/tcp и 80/udp на одном хосте (и тот же локальный порт) не глушат друг друга; повтор внутри протокола глушится.
+    let tcp = reply(7, 80);
+    let udp = Reply {
+        ip_proto: 17,
+        tcp_flags: 0,
+        ..reply(7, 80)
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&tcp));
+    assert!(d.insert(&udp), "80/udp is not a repeat of 80/tcp");
+    assert!(!d.insert(&tcp) && !d.insert(&udp));
+    assert_eq!(d.len(), 2);
+    // UDP: ответ-датаграмма (Open) и ICMP 3/3 (Closed) на тот же порт это разные факты; каждый один раз.
+    let closed = Reply {
+        status: PortStatus::Closed,
+        ..udp
+    };
+    assert!(
+        d.insert(&closed),
+        "ICMP 3/3 is not swallowed by the open UDP record"
+    );
+    assert!(!d.insert(&closed));
+    // ICMP Echo (порт 0, протокол 1) и ARP (протокол 0) не сливаются с TCP и UDP.
+    for proto in [1u8, 0] {
+        let r = Reply {
+            ip_proto: proto,
+            remote_port: 0,
+            local_port: 0,
+            ..tcp
+        };
+        assert!(d.insert(&r), "proto {proto}");
+        assert!(!d.insert(&r), "proto {proto} repeat");
+    }
+    // TCP как раньше: RST вслед за SYN-ACK на тот же кортеж считается повтором (ни счёт, ни порядок не меняются).
+    let rst = Reply {
+        status: PortStatus::Closed,
+        tcp_flags: 0x04,
+        ..tcp
+    };
+    assert!(!d.insert(&rst), "TCP key ignores the status, as before");
+}
+
+#[test]
+fn dedup_cache_reports_each_arp_neighbor_once() {
+    // C `dedup_is_duplicate(dedup, ip_them, 0, ip_me, 0)` (main.c:899): ключ это пара `(spa, tpa)`, MAC в него не входит.
+    let arp = Reply {
+        ip_proto: 0,
+        remote_port: 0,
+        local_port: 0,
+        status: PortStatus::Arp,
+        tcp_flags: 0,
+        ttl: 0,
+        mac: Some([2, 0, 0, 0, 0, 1]),
+        ..reply(7, 80)
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&arp));
+    let again = Reply {
+        mac: Some([2, 0, 0, 0, 0, 9]),
+        ..arp
+    };
+    assert!(
+        !d.insert(&again),
+        "a second reply of the same host is a repeat"
+    );
+    let other_host = Reply {
+        remote_ip: arp.remote_ip + 1,
+        ..arp
+    };
+    assert!(d.insert(&other_host));
+    // ответ на ARP-скан не глушит TCP и ICMP Echo того же адреса
+    let open = Reply {
+        ip_proto: 6,
+        status: PortStatus::Open,
+        ..arp
+    };
+    assert!(d.insert(&open));
+}
+
+#[test]
+fn icmp_closed_never_suppresses_a_real_open_in_either_order() {
+    // ICMP 3/3 "closed" has tcp_flags 0; an RST always carries 0x04, a SYN-ACK 0x12.
+    for proto in [6u8, 17, 132] {
+        let open = Reply {
+            ip_proto: proto,
+            tcp_flags: if proto == 6 { 0x12 } else { 0 },
+            ..reply(9, 80)
+        };
+        let icmp_closed = Reply {
+            status: PortStatus::Closed,
+            tcp_flags: 0,
+            ..open
+        };
+        let mut d = DedupCache::new(16);
+        assert!(d.insert(&icmp_closed), "proto {proto}: closed first");
+        assert!(d.insert(&open), "proto {proto}: open after ICMP closed");
+        assert!(!d.insert(&icmp_closed) && !d.insert(&open));
+        let mut d = DedupCache::new(16);
+        assert!(d.insert(&open), "proto {proto}: open first");
+        assert!(
+            d.insert(&icmp_closed),
+            "proto {proto}: ICMP closed after open"
+        );
+    }
+    // TCP RST (0x04) after SYN-ACK stays a repeat.
+    let mut d = DedupCache::new(4);
+    assert!(d.insert(&reply(9, 80)));
+    let rst = Reply {
+        status: PortStatus::Closed,
+        tcp_flags: 0x04,
+        ..reply(9, 80)
+    };
+    assert!(!d.insert(&rst));
+}
+
+#[test]
+fn dedup_sctp_init_ack_and_abort_never_suppress_each_other_in_either_order() {
+    // SCTP: INIT-ACK (Open, корзина 0) и ABORT (Closed, корзина 1) на один кортеж это разные факты; повтор глушится.
+    let open = Reply {
+        ip_proto: 132,
+        tcp_flags: 0,
+        ..reply(9, 2905)
+    };
+    let abort = Reply {
+        status: PortStatus::Closed,
+        ..open
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&abort), "abort first");
+    assert!(d.insert(&open), "INIT-ACK after ABORT is not swallowed");
+    assert!(!d.insert(&abort) && !d.insert(&open));
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&open), "INIT-ACK first");
+    assert!(d.insert(&abort), "ABORT after INIT-ACK is not swallowed");
+    assert!(!d.insert(&open) && !d.insert(&abort));
+    // Правило R14: ABORT и ICMP 3/3 "closed" на тот же кортеж SCTP делят корзину closed (статус тот же, open не теряется).
+    let icmp_closed = Reply {
+        status: PortStatus::Closed,
+        tcp_flags: 0,
+        ..open
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&abort));
+    assert!(!d.insert(&icmp_closed), "same closed fact, reported once");
+    assert!(d.insert(&open), "no open is lost");
+    // SCTP не сливается с TCP и UDP на том же порте
+    let tcp = reply(9, 2905);
+    let udp = Reply {
+        ip_proto: 17,
+        tcp_flags: 0,
+        ..reply(9, 2905)
+    };
+    let mut d = DedupCache::new(16);
+    assert!(d.insert(&open) && d.insert(&tcp) && d.insert(&udp));
     assert_eq!(d.len(), 3);
 }
 

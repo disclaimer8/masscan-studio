@@ -1033,9 +1033,9 @@ fn wire_lab_raises_the_second_pair_inside_the_same_two_namespaces_and_tears_both
             .unwrap();
     // `--suite scan-control` needs --rmasscan, like output, and runs on the same fixed stand, lab id and teardown.
     assert!(text.contains(r#"scan-control) [ -n "$RMASSCAN_BIN" ] || { echo "--suite scan-control needs --rmasscan" >&2; exit 64; } ;;"#));
-    assert!(
-        text.contains(r#"case "$SUITE" in autodetect|output|scan-control) STAND_SUITE=1 ;; esac"#)
-    );
+    assert!(text.contains(
+        r#"case "$SUITE" in autodetect|output|scan-control|protocols) STAND_SUITE=1 ;; esac"#
+    ));
     // The second pair: created inside the scanner namespace with its peer end moved straight into the peer one, like
     // the first; never a link in the host namespace, never a host interface named.
     assert!(

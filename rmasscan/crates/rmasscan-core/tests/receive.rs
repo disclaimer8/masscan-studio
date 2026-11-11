@@ -1069,3 +1069,1018 @@ fn full_address_space_target_accepts_both_extremes() {
     );
     assert_eq!(reply_from(&plan, 0x0a00_0001, 80, 0x12), Ok(None));
 }
+
+// ---------- ICMP Echo (I:0): cookie с port_me = 0 и приём Echo Reply ----------
+
+mod icmp_echo {
+    use super::*;
+    use rmasscan_core::cookie::icmp_echo_cookie;
+    use rmasscan_core::probe::NicBinding;
+    use rmasscan_core::receive::Reply;
+
+    const ICMP_SRC_PORT: u16 = 41000;
+
+    fn icmp_plan(link: LinkType, ports: &str) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: link,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: MAC_NH,
+                // --source-port 41000: один порт источника
+                source_ports: (ICMP_SRC_PORT, ICMP_SRC_PORT),
+            })],
+        )
+        .unwrap()
+    }
+
+    /// IP-пакет ICMP с верными суммами; `[id|seq]`, type и code задаёт вызывающий.
+    fn icmp_packet(ip_them: u32, typ: u8, code: u8, idseq: u32, ttl: u8) -> Vec<u8> {
+        let mut icmp = vec![typ, code, 0, 0];
+        icmp.extend_from_slice(&idseq.to_be_bytes());
+        icmp.extend_from_slice(&(8u8..=0x37).collect::<Vec<u8>>());
+        let x = rfc1071(&[&icmp]);
+        icmp[2..4].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&ip_them.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        let x = rfc1071(&[&ip]);
+        ip[10..12].copy_from_slice(&x.to_be_bytes());
+        ip.extend_from_slice(&icmp);
+        ip
+    }
+
+    fn reply_to(link: LinkType, plan: &ReadyPlan, ip: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(&wrap(link, ip), link, plan)
+    }
+
+    #[test]
+    fn icmp_echo_cookie_uses_zero_source_port() {
+        for link in LINKS {
+            let plan = icmp_plan(link, "I:0");
+            let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+            let mut n = 0;
+            while let Some(p) = cur.current().cloned() {
+                n += 1;
+                cur.advance_sent();
+                let oi = ip_off(link);
+                let ot = oi + 20;
+                // кадр: 28 байт IP+ICMP-заголовков и 48 байт паттерна, [id|seq] = cookie с port_me = 0
+                assert_eq!(p.frame.len(), oi + 20 + 56);
+                assert_eq!(p.port_me, ICMP_SRC_PORT);
+                let id_seq = u32::from_be_bytes(p.frame[ot + 4..ot + 8].try_into().unwrap());
+                assert_eq!(id_seq, icmp_echo_cookie(p.ip_them, p.ip_me, SEED));
+                let zero = syn_cookie_ipv4(p.ip_them, 196_608, p.ip_me, 0, SEED) as u32;
+                let with_port =
+                    syn_cookie_ipv4(p.ip_them, 196_608, p.ip_me, u32::from(p.port_me), SEED) as u32;
+                assert_eq!(id_seq, zero);
+                assert_ne!(
+                    id_seq, with_port,
+                    "порт источника не должен попасть в cookie"
+                );
+                // seqno потока (с реальным port_me) идёт только в ip_id
+                assert_eq!(p.seqno, with_port);
+                assert_eq!(
+                    u16::from_be_bytes([p.frame[oi + 4], p.frame[oi + 5]]),
+                    (p.ip_them ^ 196_608 ^ with_port) as u16
+                );
+                // приём: Echo Reply с тем же [id|seq]
+                let ok = icmp_packet(p.ip_them, 0, 0, id_seq, 57);
+                let r = reply_to(link, &plan, &ok).unwrap().unwrap();
+                assert_eq!(
+                    r,
+                    Reply {
+                        remote_ip: p.ip_them,
+                        remote_port: 0,
+                        local_ip: IP_ME,
+                        local_port: 0,
+                        status: PortStatus::Open,
+                        tcp_flags: 0,
+                        ttl: 57,
+                        ip_proto: 1,
+                        mac: None,
+                    }
+                );
+                // неверный cookie (с портом источника) отбрасывается
+                let bad = icmp_packet(p.ip_them, 0, 0, with_port, 57);
+                assert_eq!(reply_to(link, &plan, &bad), Ok(None), "{link:?}");
+            }
+            assert_eq!(n, 8, "{link:?}");
+        }
+    }
+
+    #[test]
+    fn icmp_echo_reply_filters() {
+        let link = LinkType::Ethernet;
+        let plan = icmp_plan(link, "I:0");
+        let good = icmp_echo_cookie(IP_THEM, IP_ME, SEED);
+        let ok = |ip: &[u8]| reply_to(link, &plan, ip);
+        assert!(ok(&icmp_packet(IP_THEM, 0, 0, good, 64)).unwrap().is_some());
+        // Echo Request (type 8) и ненулевой code не принимаются
+        assert_eq!(ok(&icmp_packet(IP_THEM, 8, 0, good, 64)), Ok(None));
+        assert_eq!(ok(&icmp_packet(IP_THEM, 0, 1, good, 64)), Ok(None));
+        // cookie другого хоста и чужой seed
+        assert_eq!(ok(&icmp_packet(IP_THEM + 1, 0, 0, good, 64)), Ok(None));
+        let other_seed = icmp_echo_cookie(IP_THEM, IP_ME, SEED + 1);
+        assert_eq!(ok(&icmp_packet(IP_THEM, 0, 0, other_seed, 64)), Ok(None));
+        // адрес вне целей плана (cookie для него верный)
+        let outside = 0x0b00_0005;
+        let c = icmp_echo_cookie(outside, IP_ME, SEED);
+        assert_eq!(ok(&icmp_packet(outside, 0, 0, c, 64)), Ok(None));
+        // I:0 не входит в порты плана: TCP-план ответ не принимает
+        let tcp_plan = icmp_plan(link, "80");
+        assert_eq!(
+            reply_to(link, &tcp_plan, &icmp_packet(IP_THEM, 0, 0, good, 64)),
+            Ok(None)
+        );
+        // обрезанный ICMP и испорченная сумма: ошибка, не Open
+        let mut short = icmp_packet(IP_THEM, 0, 0, good, 64);
+        short.truncate(20 + 6);
+        short[2..4].copy_from_slice(&26u16.to_be_bytes());
+        assert!(matches!(ok(&short), Err(ParseError::Truncated(_))));
+        let mut bad = icmp_packet(IP_THEM, 0, 0, good, 64);
+        bad[20 + 10] ^= 0xff;
+        assert_eq!(ok(&bad), Err(ParseError::BadIcmpChecksum));
+        assert_eq!(
+            parse_reply_with(
+                &wrap(link, &bad),
+                link,
+                &plan,
+                ChecksumPolicy::TrustHardware
+            )
+            .unwrap()
+            .map(|r| r.ip_proto),
+            Some(1)
+        );
+    }
+}
+
+// ---------- UDP (U:) и ICMP Type 3 Code 3 (Port Unreachable) ----------
+
+mod udp_and_unreachable {
+    use super::*;
+    use rmasscan_core::probe::{NicBinding, Probe};
+    use rmasscan_core::receive::Reply;
+
+    const SRC_PORTS: (u16, u16) = (41000, 41003);
+
+    fn plan_with_ports(link: LinkType, ports: &str) -> ReadyPlan {
+        build_plan(link, ports, ReadyPlan::new_cli)
+    }
+
+    fn build_plan(
+        link: LinkType,
+        ports: &str,
+        make: fn(
+            rmasscan_core::config::EffectiveConfig,
+            Vec<NicBinding>,
+        ) -> Result<ReadyPlan, rmasscan_core::probe::PlanError>,
+    ) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        make(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: link,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: MAC_NH,
+                source_ports: SRC_PORTS,
+            })],
+        )
+        .unwrap()
+    }
+
+    fn plan(link: LinkType) -> ReadyPlan {
+        plan_with_ports(link, "T:80,U:53,U:161")
+    }
+
+    /// Настоящие зонды плана (их кадры цитирует ICMP): по одному на порт для хоста `IP_THEM`.
+    fn probes(plan: &ReadyPlan) -> Vec<Probe> {
+        let mut cur = plan.cursor_for_nic(0, None).unwrap();
+        let mut v = Vec::new();
+        while let Some(p) = cur.current().cloned() {
+            v.push(p);
+            cur.advance_sent();
+        }
+        v.into_iter().filter(|p| p.ip_them == IP_THEM).collect()
+    }
+
+    fn with_sums(mut ip: Vec<u8>) -> Vec<u8> {
+        ip[10..12].fill(0);
+        let x = rfc1071(&[&ip[..20]]);
+        ip[10..12].copy_from_slice(&x.to_be_bytes());
+        ip
+    }
+
+    /// IP-пакет UDP от цели к нам с верными суммами; `mutate` портит готовые байты.
+    fn udp_packet(ip_them: u32, sport: u16, dport: u16, payload: &[u8], ttl: u8) -> Vec<u8> {
+        let mut udp = Vec::new();
+        udp.extend_from_slice(&sport.to_be_bytes());
+        udp.extend_from_slice(&dport.to_be_bytes());
+        udp.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+        udp.extend_from_slice(&[0, 0]);
+        udp.extend_from_slice(payload);
+        let mut pseudo = Vec::new();
+        pseudo.extend_from_slice(&ip_them.to_be_bytes());
+        pseudo.extend_from_slice(&IP_ME.to_be_bytes());
+        pseudo.extend_from_slice(&[0, 17]);
+        pseudo.extend_from_slice(&(udp.len() as u16).to_be_bytes());
+        let x = match rfc1071(&[&pseudo, &udp]) {
+            0 => 0xffff,
+            x => x,
+        };
+        udp[6..8].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + udp.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 17;
+        ip[12..16].copy_from_slice(&ip_them.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&udp);
+        with_sums(ip)
+    }
+
+    fn reply_to(link: LinkType, plan: &ReadyPlan, ip: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(&wrap(link, ip), link, plan)
+    }
+
+    #[test]
+    fn udp_datagram_from_a_scanned_port_marks_open() {
+        for link in LINKS {
+            let plan = plan(link);
+            let r = reply_to(
+                link,
+                &plan,
+                &udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 57),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                r,
+                Reply {
+                    remote_ip: IP_THEM,
+                    remote_port: 53,
+                    local_ip: IP_ME,
+                    local_port: PORT_ME_UDP,
+                    status: PortStatus::Open,
+                    tcp_flags: 0,
+                    ttl: 57,
+                    ip_proto: 17,
+                    mac: None,
+                },
+                "{link:?}"
+            );
+            // пустая датаграмма тоже ответ (C не смотрит на содержимое)
+            assert!(
+                reply_to(link, &plan, &udp_packet(IP_THEM, 161, PORT_ME_UDP, b"", 64))
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
+
+    const PORT_ME_UDP: u16 = 41002;
+
+    #[test]
+    fn udp_reply_filters() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let ok = |ip: &[u8]| reply_to(link, &plan, ip);
+        // порт цели не из U-портов плана: 54 нет в списке, 80 это порт TCP
+        assert_eq!(
+            ok(&udp_packet(IP_THEM, 54, PORT_ME_UDP, b"x", 64)),
+            Ok(None)
+        );
+        assert_eq!(
+            ok(&udp_packet(IP_THEM, 80, PORT_ME_UDP, b"x", 64)),
+            Ok(None)
+        );
+        // порт назначения вне диапазона источника и чужой адрес назначения
+        assert_eq!(ok(&udp_packet(IP_THEM, 53, 41004, b"x", 64)), Ok(None));
+        assert_eq!(ok(&udp_packet(IP_THEM, 53, 40999, b"x", 64)), Ok(None));
+        let mut other_dst = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"x", 64);
+        other_dst[16..20].copy_from_slice(&(IP_ME + 1).to_be_bytes());
+        assert_eq!(ok(&with_sums(other_dst)), Ok(None));
+        // цель вне набора плана
+        assert_eq!(
+            ok(&udp_packet(0x0b00_0005, 53, PORT_ME_UDP, b"x", 64)),
+            Ok(None)
+        );
+        // TCP-план (Студия) UDP не принимает
+        let tcp_plan = plan_for(link);
+        assert_eq!(
+            reply_to(
+                link,
+                &tcp_plan,
+                &udp_packet(IP_THEM, 80, PORT_ME_UDP, b"x", 64)
+            ),
+            Ok(None)
+        );
+        // испорченная сумма UDP: ошибка; ноль в поле значит "суммы нет" и допустим
+        let mut bad = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        bad[20 + 8] ^= 0x01;
+        assert_eq!(ok(&bad), Err(ParseError::BadUdpChecksum));
+        assert!(
+            parse_reply_with(
+                &wrap(link, &bad),
+                link,
+                &plan,
+                ChecksumPolicy::TrustHardware
+            )
+            .unwrap()
+            .is_some()
+        );
+        let mut nosum = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        nosum[26..28].fill(0);
+        assert!(ok(&nosum).unwrap().is_some());
+        // испорченная сумма IP-заголовка
+        let mut bad_ip = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        bad_ip[10] ^= 0xff;
+        assert_eq!(ok(&bad_ip), Err(ParseError::BadIpChecksum));
+        // длина UDP: меньше заголовка и больше IP-пакета
+        for len in [0u16, 7, 100] {
+            let mut p = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+            p[24..26].copy_from_slice(&len.to_be_bytes());
+            assert_eq!(ok(&p), Err(ParseError::BadUdpLength(len)), "len {len}");
+        }
+        // каждый обрезанный префикс это ошибка или не наш пакет, но не паника
+        let full = udp_packet(IP_THEM, 53, PORT_ME_UDP, b"answer", 64);
+        for n in 0..full.len() {
+            let _ = ok(&full[..n]);
+        }
+        // датаграмма короче заголовка UDP
+        let mut short = full[..20 + 6].to_vec();
+        short[2..4].copy_from_slice(&26u16.to_be_bytes());
+        assert!(matches!(ok(&short), Err(ParseError::Truncated(_))));
+    }
+
+    /// ICMP Type 3 с цитатой `quote` (IP-заголовок и 8 байт L4 зонда) от маршрутизатора `router`.
+    fn unreachable(router: u32, code: u8, quote: &[u8], ttl: u8) -> Vec<u8> {
+        let mut icmp = vec![3, code, 0, 0, 0, 0, 0, 0];
+        icmp.extend_from_slice(quote);
+        let x = rfc1071(&[&icmp]);
+        icmp[2..4].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&router.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&icmp);
+        with_sums(ip)
+    }
+
+    /// Цитата настоящего зонда: IPv4-заголовок и первые 8 байт L4 (RFC 792).
+    fn quote(p: &Probe) -> Vec<u8> {
+        p.frame[14..14 + 20 + 8].to_vec()
+    }
+
+    #[test]
+    fn icmp_port_unreachable_marks_closed_across_protocols() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let all = probes(&plan);
+        assert_eq!(all.len(), 3, "T:80, U:53 and U:161 for the one host");
+        let router = 0x0a00_00fe;
+        for p in &all {
+            let (proto, port) = (if p.frame[23] == 17 { 17 } else { 6 }, p.port_them);
+            let r = reply_to(link, &plan, &unreachable(router, 3, &quote(p), 249))
+                .unwrap()
+                .unwrap_or_else(|| panic!("proto {proto} port {port}"));
+            // Reply { ip_proto: <внутренний протокол>, status: Closed, reason: 0, ttl: внешний }
+            assert_eq!(
+                r,
+                Reply {
+                    remote_ip: IP_THEM,
+                    remote_port: port,
+                    local_ip: IP_ME,
+                    local_port: p.port_me,
+                    status: PortStatus::Closed,
+                    tcp_flags: 0,
+                    ttl: 249,
+                    ip_proto: proto,
+                    mac: None,
+                }
+            );
+        }
+        assert_eq!(
+            all.iter().filter(|p| p.frame[23] == 17).count(),
+            2,
+            "two UDP probes and one TCP probe"
+        );
+        // SCTP (132): цитата с портами `S:2905`, как её слал бы будущий построитель (приёму он не нужен)
+        let sctp_plan = build_plan(link, "S:2905", ReadyPlan::new_cli_without_port_checks);
+        let mut q = quote(&all[0]);
+        q[9] = 132;
+        q[20..22].copy_from_slice(&PORT_ME_UDP.to_be_bytes());
+        q[22..24].copy_from_slice(&2905u16.to_be_bytes());
+        let r = reply_to(
+            link,
+            &sctp_plan,
+            &unreachable(router, 3, &with_sums(q), 200),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (r.ip_proto, r.remote_port, r.status),
+            (132, 2905, PortStatus::Closed)
+        );
+    }
+
+    #[test]
+    fn icmp_port_unreachable_filters() {
+        let link = LinkType::Ethernet;
+        let plan = plan_with_ports(link, "T:80,U:53,U:161");
+        let all = probes(&plan);
+        let udp = all.iter().find(|p| p.frame[23] == 17).unwrap();
+        let router = 0x0a00_00fe;
+        let ok = |code: u8, q: &[u8]| reply_to(link, &plan, &unreachable(router, code, q, 250));
+        let good = quote(udp);
+        assert!(ok(3, &good).unwrap().is_some());
+        // другие коды Type 3 (сеть, хост, протокол недоступны, фрагментация) не отмечают порт закрытым
+        for code in [0u8, 1, 2, 4, 5, 13] {
+            assert_eq!(ok(code, &good), Ok(None), "code {code}");
+        }
+        // другой Type: Time Exceeded (11) с той же цитатой
+        let mut te = unreachable(router, 3, &good, 250);
+        te[20] = 11;
+        let sum = rfc1071(&[&[11, 3, 0, 0], &te[24..]]);
+        te[22..24].copy_from_slice(&sum.to_be_bytes());
+        assert_eq!(reply_to(link, &plan, &te), Ok(None));
+        // источник цитаты не мы / порт источника вне диапазона (proto-icmp.c:200 `matches_me`)
+        let mut q = good.clone();
+        q[12..16].copy_from_slice(&(IP_ME + 1).to_be_bytes());
+        assert_eq!(ok(3, &with_sums(q)), Ok(None));
+        let mut q = good.clone();
+        q[20..22].copy_from_slice(&41004u16.to_be_bytes());
+        assert_eq!(ok(3, &q), Ok(None));
+        // цель цитаты вне набора плана или порт вне плана
+        let mut q = good.clone();
+        q[16..20].copy_from_slice(&0x0b00_0005u32.to_be_bytes());
+        assert_eq!(ok(3, &with_sums(q)), Ok(None));
+        let mut q = good.clone();
+        q[22..24].copy_from_slice(&54u16.to_be_bytes());
+        assert_eq!(ok(3, &q), Ok(None));
+        // внутренний протокол не из {6, 17, 132}
+        for proto in [1u8, 2, 47] {
+            let mut q = good.clone();
+            q[9] = proto;
+            assert_eq!(ok(3, &with_sums(q)), Ok(None), "proto {proto}");
+        }
+        // цитата короче 24 байт (proto-icmp.c:36 `length < 24`) и с IHL больше цитаты
+        assert_eq!(ok(3, &good[..23]), Ok(None));
+        let mut q = good.clone();
+        q[0] = 0x4f;
+        assert_eq!(ok(3, &q), Ok(None));
+        let mut q = good.clone();
+        q[0] = 0x44;
+        assert_eq!(ok(3, &q), Ok(None));
+        // цитата с опциями IP зонда (IHL 6): порты берутся после опций
+        let mut q = good[..20].to_vec();
+        q[0] = 0x46;
+        q.extend_from_slice(&[0, 0, 0, 0]);
+        q.extend_from_slice(&good[20..28]);
+        assert!(ok(3, &with_sums(q)).unwrap().is_some());
+        // испорченные суммы
+        let mut bad = unreachable(router, 3, &good, 250);
+        bad[20 + 10] ^= 0x55;
+        assert_eq!(
+            reply_to(link, &plan, &bad),
+            Err(ParseError::BadIcmpChecksum)
+        );
+        let mut bad = unreachable(router, 3, &good, 250);
+        bad[10] ^= 0xff;
+        assert_eq!(reply_to(link, &plan, &bad), Err(ParseError::BadIpChecksum));
+        // каждый обрезанный префикс: ошибка или не наш пакет, не паника
+        let full = unreachable(router, 3, &good, 250);
+        for n in 0..full.len() {
+            let _ = reply_to(link, &plan, &full[..n]);
+        }
+        // Echo Reply продолжает работать рядом (диспетчеризация по type/code)
+        let echo_plan = plan_with_ports(link, "I:0");
+        let c = rmasscan_core::cookie::icmp_echo_cookie(IP_THEM, IP_ME, SEED);
+        let mut icmp = vec![0u8, 0, 0, 0];
+        icmp.extend_from_slice(&c.to_be_bytes());
+        let x = rfc1071(&[&icmp]);
+        icmp[2..4].copy_from_slice(&x.to_be_bytes());
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+        ip[8] = 64;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&IP_THEM.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&icmp);
+        let r = reply_to(link, &echo_plan, &with_sums(ip)).unwrap().unwrap();
+        assert_eq!((r.ip_proto, r.status), (1, PortStatus::Open));
+    }
+}
+
+/// SCTP (Задача 5): приём `INIT-ACK` (Open) и `ABORT` (Closed) по verification tag (`handle_sctp`, proto-sctp.c:137-189).
+mod sctp_rx {
+    use super::*;
+    use rmasscan_core::probe::{NicBinding, Probe};
+    use rmasscan_core::receive::Reply;
+
+    const SRC_PORTS: (u16, u16) = (41000, 41003);
+    const PORT_ME_SCTP: u16 = 41002;
+    const SCTP_PORT: u16 = 2905;
+
+    fn plan(link: LinkType) -> ReadyPlan {
+        plan_with_ports(link, "S:2905,S:7,T:80")
+    }
+
+    fn plan_with_ports(link: LinkType, ports: &str) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: link,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: MAC_NH,
+                source_ports: SRC_PORTS,
+            })],
+        )
+        .unwrap()
+    }
+
+    /// Cookie приёмника C: `syn_cookie(ip_them, port_them | (Proto_SCTP << 16), ip_me, port_me, entropy)` (main.c:822).
+    fn vtag(ip_them: u32, port_them: u16, port_me: u16) -> u32 {
+        syn_cookie_ipv4(
+            ip_them,
+            u32::from(port_them) | (2 << 16),
+            IP_ME,
+            u32::from(port_me),
+            SEED,
+        ) as u32
+    }
+
+    /// Независимый CRC-32C (побитово): стандартное значение с обнулённым полем суммы, на проводе little-endian.
+    fn crc32c_le(pkt: &[u8]) -> [u8; 4] {
+        let mut z = pkt.to_vec();
+        z[8..12].fill(0);
+        let mut crc = !0u32;
+        for &b in &z {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0x82F6_3B78
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        (!crc).to_le_bytes()
+    }
+
+    fn with_sums(mut ip: Vec<u8>) -> Vec<u8> {
+        ip[10..12].fill(0);
+        let x = rfc1071(&[&ip[..20]]);
+        ip[10..12].copy_from_slice(&x.to_be_bytes());
+        ip
+    }
+
+    /// Пакет SCTP: общий заголовок, затем один чанк `chunk_type` длиной 4 (плюс `extra` байт тела); верные суммы.
+    fn sctp_packet(
+        ip_them: u32,
+        (sport, dport): (u16, u16),
+        tag: u32,
+        chunk_type: u8,
+        extra: usize,
+        ttl: u8,
+    ) -> Vec<u8> {
+        let mut s = Vec::new();
+        s.extend_from_slice(&sport.to_be_bytes());
+        s.extend_from_slice(&dport.to_be_bytes());
+        s.extend_from_slice(&tag.to_be_bytes());
+        s.extend_from_slice(&[0; 4]);
+        s.extend_from_slice(&[chunk_type, 0]);
+        s.extend_from_slice(&((4 + extra) as u16).to_be_bytes());
+        s.extend(std::iter::repeat_n(0xab, extra));
+        let c = crc32c_le(&s);
+        s[8..12].copy_from_slice(&c);
+        let mut ip = vec![0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&((20 + s.len()) as u16).to_be_bytes());
+        ip[8] = ttl;
+        ip[9] = 132;
+        ip[12..16].copy_from_slice(&ip_them.to_be_bytes());
+        ip[16..20].copy_from_slice(&IP_ME.to_be_bytes());
+        ip.extend_from_slice(&s);
+        with_sums(ip)
+    }
+
+    fn reply_to(link: LinkType, plan: &ReadyPlan, ip: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(&wrap(link, ip), link, plan)
+    }
+
+    fn probes(plan: &ReadyPlan) -> Vec<Probe> {
+        let mut cur = plan.cursor_for_nic(0, None).unwrap();
+        let mut v = Vec::new();
+        while let Some(p) = cur.current().cloned() {
+            v.push(p);
+            cur.advance_sent();
+        }
+        v.into_iter().filter(|p| p.ip_them == IP_THEM).collect()
+    }
+
+    #[test]
+    fn sctp_rx_classifies_init_ack_and_abort() {
+        for link in LINKS {
+            let plan = plan(link);
+            let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+            let want = |status, ttl| Reply {
+                remote_ip: IP_THEM,
+                remote_port: SCTP_PORT,
+                local_ip: IP_ME,
+                local_port: PORT_ME_SCTP,
+                status,
+                tcp_flags: 0,
+                ttl,
+                ip_proto: 132,
+                mac: None,
+            };
+            // INIT-ACK (тип 2) -> Open, ABORT (тип 6) -> Closed; ttl внешний, reason 0
+            let ack = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 16, 57);
+            assert_eq!(
+                reply_to(link, &plan, &ack),
+                Ok(Some(want(PortStatus::Open, 57))),
+                "{link:?}"
+            );
+            let abort = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 6, 0, 61);
+            assert_eq!(
+                reply_to(link, &plan, &abort),
+                Ok(Some(want(PortStatus::Closed, 61))),
+                "{link:?}"
+            );
+            // чужой verification tag отбрасывается (в том числе tag 0 и tag соседнего порта)
+            for bad in [
+                tag ^ 1,
+                0,
+                vtag(IP_THEM, 7, PORT_ME_SCTP),
+                vtag(IP_THEM, SCTP_PORT, 41001),
+            ] {
+                let p = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), bad, 2, 16, 64);
+                assert_eq!(reply_to(link, &plan, &p), Ok(None), "tag {bad:#x}");
+            }
+            // другие типы чанков (INIT 1, COOKIE-ACK 11, ERROR 9) не статус
+            for ty in [0u8, 1, 3, 9, 11, 255] {
+                let p = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, ty, 0, 64);
+                assert_eq!(reply_to(link, &plan, &p), Ok(None), "chunk {ty}");
+            }
+        }
+    }
+
+    /// Ответ на настоящий зонд плана: initiate_tag INIT это и есть cookie, которым приёмник сверяет verification tag.
+    #[test]
+    fn real_init_is_answered_by_init_ack_carrying_its_initiate_tag() {
+        for link in LINKS {
+            let plan = plan_with_ports(link, "S:2905");
+            let all = probes(&plan);
+            assert_eq!(all.len(), 1);
+            let p = &all[0];
+            assert_eq!(p.frame.len() - ip_off(link) - 20 - 12, 20, "INIT 20 байт");
+            let off = ip_off(link) + 20;
+            let tag = u32::from_be_bytes(p.frame[off + 16..off + 20].try_into().unwrap());
+            assert_eq!(tag, p.seqno);
+            assert_eq!(tag, vtag(p.ip_them, p.port_them, p.port_me));
+            let ack = sctp_packet(p.ip_them, (p.port_them, p.port_me), tag, 2, 16, 64);
+            let r = reply_to(link, &plan, &ack).unwrap().unwrap();
+            assert_eq!(
+                (r.status, r.ip_proto, r.remote_port),
+                (PortStatus::Open, 132, SCTP_PORT)
+            );
+            // сам наш INIT (от нас к цели) ответом не считается
+            let mut own = p.frame[ip_off(link)..].to_vec();
+            own[8] = 64;
+            assert_eq!(reply_to(link, &plan, &own), Ok(None));
+        }
+    }
+
+    #[test]
+    fn sctp_rx_filters() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+        let ok = |ip: &[u8]| reply_to(link, &plan, ip);
+        // порт источника ответа не из S-портов плана: 54 нет; 80 это порт TCP
+        for sport in [54u16, 80] {
+            let t = vtag(IP_THEM, sport, PORT_ME_SCTP);
+            assert_eq!(
+                ok(&sctp_packet(IP_THEM, (sport, PORT_ME_SCTP), t, 2, 0, 64)),
+                Ok(None),
+                "sport {sport}"
+            );
+        }
+        // порт назначения вне диапазона источника и чужой адрес назначения
+        for dport in [41004u16, 40999] {
+            let t = vtag(IP_THEM, SCTP_PORT, dport);
+            assert_eq!(
+                ok(&sctp_packet(IP_THEM, (SCTP_PORT, dport), t, 2, 0, 64)),
+                Ok(None),
+                "dport {dport}"
+            );
+        }
+        let mut other_dst = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 0, 64);
+        other_dst[16..20].copy_from_slice(&(IP_ME + 1).to_be_bytes());
+        assert_eq!(ok(&with_sums(other_dst)), Ok(None));
+        // цель вне набора плана (cookie верный для неё)
+        let out = 0x0b00_0005;
+        let t = vtag(out, SCTP_PORT, PORT_ME_SCTP);
+        assert_eq!(
+            ok(&sctp_packet(out, (SCTP_PORT, PORT_ME_SCTP), t, 2, 0, 64)),
+            Ok(None)
+        );
+        // TCP-план (Студия) SCTP не принимает
+        let tcp_plan = plan_for(link);
+        assert_eq!(
+            reply_to(
+                link,
+                &tcp_plan,
+                &sctp_packet(IP_THEM, (80, PORT_ME_SCTP), tag, 2, 0, 64)
+            ),
+            Ok(None)
+        );
+        // план без S-портов (только T:80) SCTP тоже не принимает
+        let t80 = plan_with_ports(link, "T:80");
+        let t = vtag(IP_THEM, 80, PORT_ME_SCTP);
+        assert_eq!(
+            reply_to(
+                link,
+                &t80,
+                &sctp_packet(IP_THEM, (80, PORT_ME_SCTP), t, 2, 0, 64)
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn sctp_checksums_are_verified_and_policy_is_explicit() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+        let good = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 16, 64);
+        assert!(reply_to(link, &plan, &good).unwrap().is_some());
+        // испорченный CRC-32C (любой байт поля, и байт чанка)
+        for at in [20 + 8, 20 + 11, 20 + 20] {
+            let mut bad = good.clone();
+            bad[at] ^= 0x01;
+            assert_eq!(
+                reply_to(link, &plan, &bad),
+                Err(ParseError::BadSctpChecksum),
+                "byte {at}"
+            );
+            assert!(
+                parse_reply_with(
+                    &wrap(link, &bad),
+                    link,
+                    &plan,
+                    ChecksumPolicy::TrustHardware
+                )
+                .unwrap()
+                .is_some(),
+                "TrustHardware принимает byte {at}"
+            );
+        }
+        // CRC-32C в big-endian вместо little-endian (ошибка порядка байт из Review Focus 5) не проходит
+        let mut be = good.clone();
+        be[28..32].reverse();
+        assert_eq!(reply_to(link, &plan, &be), Err(ParseError::BadSctpChecksum));
+        // испорченная сумма IP-заголовка
+        let mut bad_ip = good.clone();
+        bad_ip[10] ^= 0xff;
+        assert_eq!(
+            reply_to(link, &plan, &bad_ip),
+            Err(ParseError::BadIpChecksum)
+        );
+        // испорченная сумма на чужом (неверный tag) пакете не ошибка: фильтры идут до сумм
+        let mut foreign = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag ^ 1, 2, 16, 64);
+        foreign[28] ^= 0x01;
+        assert_eq!(reply_to(link, &plan, &foreign), Ok(None));
+    }
+
+    #[test]
+    fn sctp_truncation_never_panics() {
+        let link = LinkType::Ethernet;
+        let plan = plan(link);
+        let tag = vtag(IP_THEM, SCTP_PORT, PORT_ME_SCTP);
+        let full = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 16, 64);
+        for n in 0..full.len() {
+            let _ = reply_to(link, &plan, &full[..n]);
+        }
+        // меньше общего заголовка (12 байт) это ошибка разбора
+        let mut short = full[..20 + 10].to_vec();
+        short[2..4].copy_from_slice(&30u16.to_be_bytes());
+        assert!(matches!(
+            reply_to(link, &plan, &short),
+            Err(ParseError::Truncated(_))
+        ));
+        // общий заголовок есть, а заголовка чанка нет (C: offset + 16 > length, молча): не статус и не ошибка
+        let mut nochunk = sctp_packet(IP_THEM, (SCTP_PORT, PORT_ME_SCTP), tag, 2, 0, 64);
+        nochunk.truncate(20 + 14);
+        nochunk[2..4].copy_from_slice(&34u16.to_be_bytes());
+        assert_eq!(reply_to(link, &plan, &with_sums(nochunk)), Ok(None));
+    }
+}
+
+/// ARP-скан (`--arp`, Задача 6): приём `arp_recv_response` (proto-arp.c:14-41) и ветка `FOUND_ARP`
+/// (main.c:874-906) приёмника C.
+mod arp_scan {
+    use super::*;
+    use rmasscan_core::probe::NicBinding;
+    use rmasscan_core::receive::Reply;
+
+    const NEIGHBOR_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+
+    fn arp_plan(ports: &str) -> ReadyPlan {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "10.0.0.0/29").unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding::from(AdapterBinding {
+                interface_id: "t0".into(),
+                link_type: LinkType::Ethernet,
+                source_ipv4: IP_ME,
+                source_mac: MAC_ME,
+                next_hop_mac: [0xff; 6],
+                source_ports: (FIRST, LAST),
+            })],
+        )
+        .unwrap()
+    }
+
+    fn reply_of(plan: &ReadyPlan, frame: &[u8]) -> Result<Option<Reply>, ParseError> {
+        parse_reply(frame, LinkType::Ethernet, plan)
+    }
+
+    #[test]
+    fn plan_knows_it_is_an_arp_scan() {
+        assert!(arp_plan("I:2").is_arp_scan());
+        assert!(!arp_plan("80").is_arp_scan());
+        assert!(!arp_plan("I:0").is_arp_scan());
+        assert!(!plan_for(LinkType::Ethernet).is_arp_scan());
+    }
+
+    #[test]
+    fn arp_reply_from_a_target_is_reported_with_the_ethernet_source_mac() {
+        let plan = arp_plan("I:2");
+        let frame = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME);
+        assert_eq!(
+            reply_of(&plan, &frame),
+            Ok(Some(Reply {
+                remote_ip: IP_THEM,
+                remote_port: 0,
+                local_ip: IP_ME,
+                local_port: 0,
+                status: PortStatus::Arp,
+                tcp_flags: 0,
+                ttl: 0,
+                ip_proto: 0,
+                mac: Some(NEIGHBOR_MAC),
+            }))
+        );
+        // proto-arp.c:39 берёт `parsed->mac_src`, то есть MAC источника Ethernet-кадра, а не `sha`
+        let mut f = frame;
+        f[6..12].copy_from_slice(&[0x02, 0x11, 0x11, 0x11, 0x11, 0x11]);
+        assert_eq!(
+            reply_of(&plan, &f).unwrap().unwrap().mac,
+            Some([0x02, 0x11, 0x11, 0x11, 0x11, 0x11])
+        );
+    }
+
+    /// C отбрасывает каждый кадр, адрес назначения которого не наш, ещё до ветки ARP (main.c:829–837:
+    /// `if (!is_my_ip(stack->src, ip_me)) … continue;`), а у ARP адрес назначения это `tpa`
+    /// (proto-preprocess.c:619–621, `info->dst_ip`). Ответ другому узлу, увиденный на проводе, и gratuitous ARP
+    /// (`tpa == spa`) результатом не становятся.
+    #[test]
+    fn arp_reply_whose_tpa_is_not_ours_is_dropped_as_in_c() {
+        let plan = arp_plan("I:2");
+        // ответ другому узлу: `spa` в целях, `tpa` не наш
+        let other = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME + 5);
+        assert_eq!(reply_of(&plan, &other), Ok(None));
+        // gratuitous ARP соседа: `tpa == spa`
+        let gratuitous = encode_reply(NEIGHBOR_MAC, IP_THEM, [0xff; 6], IP_THEM);
+        assert_eq!(reply_of(&plan, &gratuitous), Ok(None));
+        // `is_my_ip` это диапазон `--adapter-ip A-B` (stack-src.c:8–13): `tpa` внутри принят, за краем нет
+        let mut nic = NicBinding::from(plan.nics()[0].binding.clone());
+        nic.source_ipv4_last = IP_ME + 3;
+        let ranged =
+            ReadyPlan::new_cli(plan.effective().clone(), vec![nic]).expect("ranged ARP plan");
+        let inside = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME + 3);
+        assert_eq!(
+            reply_of(&ranged, &inside).unwrap().unwrap().local_ip,
+            IP_ME + 3
+        );
+        let beyond = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME + 4);
+        assert_eq!(reply_of(&ranged, &beyond), Ok(None));
+        let below = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME - 1);
+        assert_eq!(reply_of(&ranged, &below), Ok(None));
+    }
+
+    #[test]
+    fn arp_replies_outside_the_rule_are_ignored() {
+        let plan = arp_plan("I:2");
+        // `spa` вне целей (main.c:896)
+        let outside = encode_reply(NEIGHBOR_MAC, 0x0a00_0008, MAC_ME, IP_ME);
+        assert_eq!(reply_of(&plan, &outside), Ok(None));
+        // opcode 1 (запрос) приёмник ARP-скана не использует (main.c:877-886 отвечает на него сам)
+        let request = encode_request(NEIGHBOR_MAC, IP_THEM, IP_ME);
+        assert_eq!(reply_of(&plan, &request), Ok(None));
+        // без `--arp` ARP-ответ не результат (main.c:893)
+        let frame = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME);
+        assert_eq!(reply_of(&plan_for(LinkType::Ethernet), &frame), Ok(None));
+        assert_eq!(reply_of(&arp_plan("I:0"), &frame), Ok(None));
+        // ARP бывает только в Ethernet: Null и Raw его не разбирают
+        for link in [LinkType::Null, LinkType::Raw] {
+            assert_eq!(parse_reply(&frame, link, &plan).unwrap_or(None), None);
+        }
+    }
+
+    #[test]
+    fn arp_truncation_and_junk_never_panic() {
+        let plan = arp_plan("I:2");
+        let frame = encode_reply(NEIGHBOR_MAC, IP_THEM, MAC_ME, IP_ME);
+        for n in 0..frame.len() {
+            let _ = reply_of(&plan, &frame[..n]);
+        }
+        // 42 байта без дополнения до 60 это полный ARP
+        assert!(reply_of(&plan, &frame[..42]).unwrap().is_some());
+        for n in 0..42 {
+            assert!(matches!(reply_of(&plan, &frame[..n]), Ok(None) | Err(_)));
+        }
+        // чужие длины адресов: строже C, не результат
+        let mut f = frame;
+        f[18] = 8;
+        assert_eq!(reply_of(&plan, &f), Ok(None));
+    }
+
+    #[test]
+    fn arp_probes_from_the_cursor_are_42_byte_who_has_frames() {
+        let plan = arp_plan("I:2");
+        let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+        let mut seen = Vec::new();
+        while let Some(p) = cur.current() {
+            assert_eq!(p.frame.len(), 42);
+            assert_eq!(&p.frame[0..6], &[0xff; 6]);
+            assert_eq!(&p.frame[6..12], &MAC_ME);
+            assert_eq!(&p.frame[12..14], &[0x08, 0x06]);
+            let a = decode(&p.frame).unwrap();
+            assert_eq!(a.op, ArpOp::Request);
+            assert_eq!((a.sender_ip, a.sender_mac), (IP_ME, MAC_ME));
+            assert_eq!(a.target_mac, [0; 6]);
+            assert_eq!((p.ip_them, p.port_them), (a.target_ip, 0));
+            seen.push(a.target_ip);
+            cur.advance_sent();
+        }
+        assert!(cur.build_error().is_none());
+        seen.sort_unstable();
+        assert_eq!(seen, (0x0a00_0000..0x0a00_0008).collect::<Vec<u32>>());
+    }
+}

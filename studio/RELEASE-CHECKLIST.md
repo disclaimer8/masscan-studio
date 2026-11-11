@@ -3,7 +3,8 @@
 Updated 2026-11-11. This development branch has ordinary IPv4/TCP profiles for
 macOS, Linux and Windows, with IPC v5 and matching packaged helpers. It is not
 fixture-only. The separate macOS fixture profiles keep their admission checks.
-Protocol work in Claude's other branch is not integrated here.
+The engine includes the IPv4 CLI protocol work merged in PR #55. Studio's
+profiles remain TCP-only; UDP, ICMP, SCTP and ARP scanning are not exposed in its UI.
 
 Builds, CI, Simulation and physical-network acceptance are separate evidence.
 Historical native results belong to the package identified in their dated report;
@@ -77,8 +78,9 @@ accepted; do not generalize an isolated fixture or direct peer to routed network
   native package. Retained development authorization is not a clean-install test.
 - [ ] Obtain Developer ID/notarization and Windows publisher signing where
   required; ad-hoc/unsigned packages are local development artifacts.
-- [ ] Verify CI and review for the eventual merge head, then obtain the user's
-  release/merge decision. Integration with Claude remains deferred.
+- [ ] Complete the remaining native/distribution acceptance before publishing a
+  release. Repository integration is authorized separately and does not establish
+  installation, publisher-signing or untested physical-network acceptance.
 
 See [packaging requirements](PACKAGING.md) for privacy and provenance gates.
 The unchanged official Windows SQLite DLL has one reviewed upstream PDB path;

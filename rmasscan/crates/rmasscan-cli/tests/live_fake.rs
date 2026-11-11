@@ -29,7 +29,10 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::throttle::Clock;
-use rmasscan_engine::fake::{FakeAdapter, HealthStep, ManualClock, RxStep, reply_to_syn};
+use rmasscan_engine::fake::{
+    FakeAdapter, HealthStep, ManualClock, RxStep, port_unreachable_for, reply_to_echo,
+    reply_to_sctp, reply_to_syn, reply_to_udp,
+};
 use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHealth};
 use rmasscan_net::arp_resolve::{ArpPolicy, arp_binding};
 use rmasscan_net::discover::{NextHopWhy, Source};
@@ -50,6 +53,10 @@ const T1: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 1);
 const T2: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 2);
 /// Открытые порты фиктивной сети; остальное отвечает RST.
 const OPEN: [(Ipv4Addr, u16); 2] = [(T1, 80), (T2, 81)];
+/// Хосты, чей UDP-порт 53 отвечает датаграммой; остальные UDP-порты закрыты (ICMP Port Unreachable).
+const OPEN_UDP: [Ipv4Addr; 1] = [T1];
+/// Хосты, у которых порт SCTP 2905 отвечает INIT-ACK; остальные порты отвечают ABORT.
+const OPEN_SCTP: [Ipv4Addr; 1] = [T2];
 /// `--wait 1` идёт по `ManualClock` (около 20 пустых `recv` по 50 мс, миллисекунды реального времени); при `--wait 0`
 /// RX engine выходит в той же итерации, где увидел конец TX, и ответы фиктивной сети, ещё лежащие в очереди, теряются.
 const LIVE: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "1"];
@@ -317,6 +324,38 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
                 })
                 .unwrap_or_default()
         }
+        Some([0x08, 0x00]) if is_echo_request(frame) => {
+            // ICMP Echo Request: отвечают те же хосты, что открыты в `OPEN` (по адресу, порта у ICMP нет).
+            let ip = Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]);
+            if OPEN.iter().any(|(o, _)| *o == ip) {
+                reply_to_echo(frame, 0).into_iter().collect()
+            } else {
+                vec![]
+            }
+        }
+        Some([0x08, 0x00]) if frame.get(23) == Some(&17) => {
+            // UDP: порт 53 хостов из `OPEN_UDP` отвечает датаграммой, остальные порты ICMP Port Unreachable от шлюза.
+            let ip = Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]);
+            let port = u16::from_be_bytes([frame[36], frame[37]]);
+            if port == 53 && OPEN_UDP.contains(&ip) {
+                reply_to_udp(frame, b"answer").into_iter().collect()
+            } else {
+                port_unreachable_for(frame, u32::from(GW))
+                    .into_iter()
+                    .collect()
+            }
+        }
+        Some([0x08, 0x00]) if frame.get(23) == Some(&132) => {
+            // SCTP: порт 2905 хостов из `OPEN_SCTP` отвечает INIT-ACK, остальные порты ABORT.
+            let ip = Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]);
+            let port = u16::from_be_bytes([frame[36], frame[37]]);
+            let ty = if port == 2905 && OPEN_SCTP.contains(&ip) {
+                2
+            } else {
+                6
+            };
+            reply_to_sctp(frame, ty).into_iter().collect()
+        }
         Some([0x08, 0x00]) => {
             let (ip, port) = syn_dst(frame);
             let flags = if OPEN.contains(&(ip, port)) {
@@ -529,6 +568,10 @@ fn live_run(b: &FakeBackend, args: &[&str]) -> (Result<Outcome, String>, String,
 
 fn is_arp(f: &[u8]) -> bool {
     f.get(12..14) == Some(&[0x08, 0x06][..])
+}
+
+fn is_echo_request(f: &[u8]) -> bool {
+    f.len() == 90 && f.get(23) == Some(&1) && f.get(34) == Some(&8)
 }
 
 fn is_syn(f: &[u8]) -> bool {
@@ -751,6 +794,25 @@ fn unsupported_plan_options_are_refused_before_any_frame() {
         let (r, out, log) = cli(&b, &args);
         let e = r.unwrap_err();
         assert!(e.contains(word), "{extra:?}: {e}");
+        assert!(out.is_empty() && log.is_empty(), "{extra:?}: {log}");
+    }
+}
+
+/// Смесь ARP с портами (текст C) и порты `O:*`/`I:1+` без построителя зонда отклоняются живым сканом до
+/// обнаружения, ARP и открытия адаптера: ни кадра, ни строки `[+]`, ошибка и код 1. Раньше скан с `-p80,U:53` слал
+/// SYN до первого UDP-индекса и заканчивался как завершённый.
+#[test]
+fn live_scan_refuses_ports_without_a_probe_builder_before_any_frame() {
+    let mut b = FakeBackend::new();
+    b.panic_on_open = true;
+    for (extra, text) in [
+        (&["-pI:2"][..], ARP_PORT_REFUSAL),
+        (&["-pO:47"][..], "raw IP protocol ports (O:47)"),
+        (&["-pI:1"][..], "ICMP ports other than I:0"),
+    ] {
+        let (r, out, log) = cli(&b, &with(&LIVE, extra));
+        let e = r.unwrap_err();
+        assert!(e.contains(text), "{extra:?}: {e}");
         assert!(out.is_empty() && log.is_empty(), "{extra:?}: {log}");
     }
 }
@@ -2357,6 +2419,8 @@ fn open_replies(b: &FakeBackend) -> Vec<Reply> {
             status: PortStatus::Open,
             tcp_flags: 0x12,
             ttl: 64,
+            ip_proto: 6,
+            mac: None,
         })
         .collect()
 }
@@ -2421,7 +2485,7 @@ fn first_interrupt_pauses_and_finishes_outputs() {
             let env = OutputEnv {
                 wall: &b,
                 services: ServiceNames::empty(),
-                tcp_ports: Vec::new(),
+                ports: Vec::new(),
                 scan_started: None,
             };
             let mut sink = PressOnFirstOpen {
@@ -2646,7 +2710,7 @@ fn broken_stderr_after_the_first_press_still_finishes_the_file() {
         let env = OutputEnv {
             wall: &b,
             services: ServiceNames::empty(),
-            tcp_ports: Vec::new(),
+            ports: Vec::new(),
             scan_started: None,
         };
         let mut sink = PressOnFirstOpen {
@@ -2790,7 +2854,7 @@ fn pause_run(
         let env = OutputEnv {
             wall: b,
             services: ServiceNames::empty(),
-            tcp_ports: Vec::new(),
+            ports: Vec::new(),
             scan_started: None,
         };
         let mut sink = PressOnFirstOpen {
@@ -3295,6 +3359,238 @@ fn two_nic_backend() -> FakeBackend {
     b
 }
 
+/// ICMP Echo (`--ping`, Задача 3) идёт тем же путём адаптера, что TCP: живой скан находит хосты фиктивной сети,
+/// кадры это 90-байтные Echo Request, а результаты печатаются как `icmp` с портом 0.
+#[test]
+fn live_ping_scan_finds_hosts_with_90_byte_echo_requests() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(&b, &["198.51.100.1-198.51.100.2", "--ping", "--wait", "1"]);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    let sent = opened.last().unwrap().adapter.sent_frames();
+    assert_eq!(sent.len(), 2);
+    assert!(sent.iter().all(|f| is_echo_request(f)), "{sent:?}");
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(lines.len(), 2, "{out}");
+    for (l, ip) in lines.iter().zip([T1, T2]) {
+        assert!(l.contains(&format!("0/icmp on {ip}")), "{l}");
+    }
+}
+
+/// Multi-NIC: ICMP Echo делится между `--adapter[0]` и `--adapter[1]` по чётности внешнего индекса, как TCP,
+/// и каждый адаптер шлёт со своего адреса.
+#[test]
+fn live_ping_scan_splits_probes_across_two_adapters() {
+    let b = two_nic_backend();
+    let mut args = TWO_NICS.to_vec();
+    args[1] = "--ping";
+    let (r, out, log) = cli(&b, &args);
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    assert_eq!(opened.len(), 2);
+    for (k, ip) in [MY_IP, ETH1_IP].into_iter().enumerate() {
+        let sent = opened[k].adapter.sent_frames();
+        assert_eq!(sent.len(), 1, "nic {k}");
+        assert!(is_echo_request(&sent[0]), "nic {k}");
+        assert_eq!(sent[0][26..30], ip.octets(), "nic {k}");
+    }
+    assert_eq!(out.lines().count(), 2, "{out}");
+}
+
+/// UDP (`-pU:53,U:59999`, Задача 4) идёт тем же путём адаптера: кадры с нагрузкой DNS (73 байта) и пустые (42 байта),
+/// ответная датаграмма это `open`, ICMP Port Unreachable от шлюза это `closed` с протоколом `udp`.
+#[test]
+fn live_udp_scan_reports_open_and_closed_and_sends_payload_frames() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1-198.51.100.2",
+            "-pU:53,U:59999",
+            "--wait",
+            "1",
+            "--show",
+            "closed",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    let sent = opened.last().unwrap().adapter.sent_frames();
+    assert_eq!(sent.len(), 4);
+    let dst_port = |f: &[u8]| u16::from_be_bytes([f[36], f[37]]);
+    assert_eq!(
+        sent.iter()
+            .filter(|f| f[23] == 17 && dst_port(f) == 53 && f.len() == 73)
+            .count(),
+        2
+    );
+    assert_eq!(
+        sent.iter()
+            .filter(|f| f[23] == 17 && dst_port(f) == 59999 && f.len() == 42)
+            .count(),
+        2
+    );
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    // T1:53 отвечает датаграммой; T2:53 и оба 59999 закрыты по ICMP 3/3
+    assert_eq!(lines.len(), 4, "{out}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("open port 53/udp on 198.51.100.1"))
+            .count(),
+        1,
+        "{out}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("closed port 53/udp on 198.51.100.2"))
+            .count(),
+        1,
+        "{out}"
+    );
+    for ip in [T1, T2] {
+        let want = format!("closed port 59999/udp on {ip}");
+        assert_eq!(
+            lines.iter().filter(|l| l.contains(&want)).count(),
+            1,
+            "{want}: {out}"
+        );
+    }
+}
+
+/// SCTP (`-pS:2905,S:9`, Задача 5) идёт тем же путём адаптера: 66-байтовые INIT, ответ INIT-ACK это `open`, ABORT
+/// это `closed` с протоколом `sctp`.
+#[test]
+fn live_sctp_scan_reports_open_and_closed_and_sends_init_frames() {
+    let b = FakeBackend::new();
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1-198.51.100.2",
+            "-pS:2905,S:9",
+            "--wait",
+            "1",
+            "--show",
+            "closed",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let opened = b.opened();
+    let sent = opened.last().unwrap().adapter.sent_frames();
+    assert_eq!(sent.len(), 4);
+    assert!(
+        sent.iter()
+            .all(|f| f.len() == 66 && f[23] == 132 && f[46..50] == [1, 0, 0, 0x14]),
+        "{sent:?}"
+    );
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    // T2:2905 отвечает INIT-ACK; T1:2905 и оба :9 закрыты по ABORT
+    assert_eq!(lines.len(), 4, "{out}");
+    let count = |want: &str| lines.iter().filter(|l| l.contains(want)).count();
+    assert_eq!(count("open port 2905/sctp on 198.51.100.2"), 1, "{out}");
+    assert_eq!(count("closed port 2905/sctp on 198.51.100.1"), 1, "{out}");
+    assert_eq!(count("closed port 9/sctp on 198.51.100.1"), 1, "{out}");
+    assert_eq!(count("closed port 9/sctp on 198.51.100.2"), 1, "{out}");
+}
+
+/// `--offline --packet-trace -pS:2905` печатает для SCTP строку C `main-ptrace.c:108-111` (ветка `default`): в C нет
+/// `FOUND_SCTP`, поэтому `packet_trace()` пишет `UNK`, `[src]:port`, `[dst]:port` и `[7]` (номер `FOUND_SCTP`); поле
+/// второго адреса дополняется до 21 символа и отделяется от `[7]` одним пробелом. Образец снят с C 8e6b3b0: `packet_trace()` на кадре `template_set_target_ipv4`
+/// (198.18.2.1 <- 198.18.2.99:40001, порт 2905) вывел `SENT (0.0000) UNK  [198.18.2.99]:40001   > [198.18.2.1]:2905
+/// [7]` и перевод строки.
+#[test]
+fn offline_packet_trace_prints_the_c_unk_line_for_sctp() {
+    let b = hermetic();
+    let args: Vec<&str> = TRACE
+        .iter()
+        .map(|a| match *a {
+            "-p80,443" => "-pS:2905,S:9",
+            "--source-port=40000-40003" => "--source-port=40000",
+            other => other,
+        })
+        .collect();
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
+    lines.sort_unstable();
+    let mut want = Vec::new();
+    for n in 0..4 {
+        for (port, pad) in [(2905, "      "), (9, "         ")] {
+            want.push(format!(
+                "SENT (0.0000) UNK  [10.255.0.1]:40000    > [10.0.0.{n}]:{port}{pad} [7]\n"
+            ));
+        }
+    }
+    want.sort_unstable();
+    assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+/// `--offline --packet-trace -pU:53,U:59999` печатает для UDP строку C `main-ptrace.c:57-59`: `UDP`, `[src]:port`,
+/// `[dst]:port`, после второго адреса пробел. Образец снят с C 8e6b3b0: `packet_trace()` на кадре
+/// `template_set_target_ipv4` (10.0.0.1 <- 10.255.0.1:40000) вывел
+/// `SENT (T) UDP  [10.255.0.1]:40000    > [10.0.0.1]:53         ` и `...:59999      ` с переводом строки; время `T`
+/// в образце секунды от `pt_start`, здесь 0.0000, как у остальных golden-строк.
+#[test]
+fn offline_packet_trace_prints_the_c_udp_sent_line() {
+    let b = hermetic();
+    let args: Vec<&str> = TRACE
+        .iter()
+        .map(|a| match *a {
+            "-p80,443" => "-pU:53,U:59999",
+            "--source-port=40000-40003" => "--source-port=40000",
+            other => other,
+        })
+        .collect();
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
+    lines.sort_unstable();
+    let mut want = Vec::new();
+    for n in 0..4 {
+        for (port, pad) in [(53, "         "), (59999, "      ")] {
+            want.push(format!(
+                "SENT (0.0000) UDP  [10.255.0.1]:40000    > [10.0.0.{n}]:{port}{pad}\n"
+            ));
+        }
+    }
+    want.sort_unstable();
+    assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+/// `--offline --packet-trace` печатает для ICMP Echo строку C `main-ptrace.c:67-70`: `ICMP`, `[src]:type`
+/// (8), `[dst]:code` (0), после второго адреса пробел. Образец снят с C 8e6b3b0: `packet_trace()` на кадре
+/// `template_set_target_ipv4` (10.0.0.1 <- 10.255.0.1) вывел
+/// `SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.1]:0          ` и перевод строки.
+#[test]
+fn offline_packet_trace_prints_the_c_icmp_sent_line() {
+    let b = hermetic();
+    let args: Vec<&str> = TRACE
+        .iter()
+        .map(|a| if *a == "-p80,443" { "-pI:0" } else { *a })
+        .collect();
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines,
+        [
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.0]:0          \n",
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.1]:0          \n",
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.2]:0          \n",
+            "SENT (0.0000) ICMP [10.255.0.1]:8        > [10.0.0.3]:0          \n",
+        ]
+    );
+}
+
 const TWO_NICS: [&str; 13] = [
     "198.51.100.1-198.51.100.2",
     "-p80,81",
@@ -3525,6 +3821,268 @@ fn multi_adapter_paused_conf_round_trips_and_resumes() {
             n == 2,
             *probe == stream[2],
             "only nic 0's probe past the min repeats"
+        );
+    }
+}
+
+/// Сосед ARP-сегмента: его ответ на `who-has` это результат скана (`198.18.0.0/15` документационный адрес).
+const ARP_T1: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
+const ARP_T2: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 2);
+const ARP_T2_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+const ARP_TARGETS: &str = "198.18.0.1-198.18.0.2";
+const ARP_PORT_REFUSAL: &str = "FAIL: cannot arpscan and portscan at the same time";
+
+/// Review Focus 3 (Задача 6). `--arp` с портом отказывает текстом C (`main.c:1224-1229`) с кодом 1 до открытия
+/// адаптера; одиночный ARP-скан не резолвит шлюз (`main-initadapter.c:170-189`), шлёт 42-байтные who-has
+/// (`templ-pkt.c:162-176`) и печатает ответивших; тихий сегмент заканчивается чисто.
+#[test]
+fn arp_scan_skips_gateway_arp_and_rejects_port_mix() {
+    // 1. Смесь с портом: тот же отказ при любом порядке и при `-p I:2` вместе с другими портами; ни одного кадра и
+    // ни одного адаптера, ОС не опрашивается.
+    for args in [
+        vec![ARP_TARGETS, "--arp", "-p80"],
+        vec![ARP_TARGETS, "-p80", "--arp"],
+        vec![ARP_TARGETS, "--arpscan", "-pU:53"],
+        vec![ARP_TARGETS, "-pI:2,80"],
+        vec![ARP_TARGETS, "-pI:2,I:0"],
+        vec![ARP_TARGETS, "--arp", "--ping"],
+    ] {
+        let b = hermetic();
+        let (r, out, log) = cli(&b, &args);
+        let e = r.unwrap_err();
+        assert_eq!(e, ARP_PORT_REFUSAL, "{args:?}");
+        assert_eq!(rmasscan_cli::error_text(&e), ARP_PORT_REFUSAL, "{args:?}");
+        assert!(out.is_empty() && log.is_empty(), "{args:?}: {out}{log}");
+        assert!(b.attempts().is_empty(), "{args:?}");
+        // --offline это тот же main_scan: тот же отказ
+        let mut off = args.clone();
+        off.extend(["--offline", "--seed", "1"]);
+        assert_eq!(cli(&hermetic(), &off).0.unwrap_err(), ARP_PORT_REFUSAL);
+    }
+    // -sL и --echo не доходят до main_scan: отказа нет
+    assert!(
+        cli(
+            &hermetic(),
+            &[ARP_TARGETS, "--arp", "-p80", "-sL", "--seed", "1"]
+        )
+        .0
+        .is_ok()
+    );
+    assert!(
+        cli(
+            &hermetic(),
+            &[ARP_TARGETS, "--arp", "-p80", "--echo", "--seed", "1"]
+        )
+        .0
+        .is_ok()
+    );
+
+    // 2. Сосед отвечает: ни одного ARP к шлюзу, один адаптер, кадры who-has на цели, строка Discovered с MAC.
+    let mut b = FakeBackend::new();
+    b.neighbors = vec![(ARP_T2, ARP_T2_MAC)];
+    let (r, out, log) = cli(&b, &[ARP_TARGETS, "--arp", "--wait", "1"]);
+    r.unwrap();
+    let opened = b.opened();
+    assert_eq!(opened.len(), 1, "no gateway ARP adapter: {log}");
+    assert_eq!(opened[0].binding.next_hop_mac, [0xff; 6]);
+    let sent = opened[0].adapter.sent_frames();
+    assert_eq!(sent.len(), 2);
+    let mut targets: Vec<Ipv4Addr> = sent
+        .iter()
+        .map(|f| {
+            assert_eq!(f.len(), 42, "who-has is 42 bytes");
+            assert_eq!(&f[0..6], &[0xff; 6], "broadcast");
+            assert_eq!(&f[6..12], &MY_MAC);
+            let a = decode(f).unwrap();
+            assert_eq!(a.op, ArpOp::Request);
+            assert_eq!((a.sender_mac, a.sender_ip), (MY_MAC, u32::from(MY_IP)));
+            assert_eq!(a.target_mac, [0; 6]);
+            Ipv4Addr::from(a.target_ip)
+        })
+        .collect();
+    targets.sort_unstable();
+    assert_eq!(targets, [ARP_T1, ARP_T2]);
+    assert!(
+        !b.tx_journal()
+            .iter()
+            .any(|f| decode(f).is_ok_and(|a| a.target_ip == u32::from(GW))),
+        "the gateway is never asked"
+    );
+    let plus = plus_lines(&log);
+    assert!(
+        plus.contains(&"[+] router-mac = ff-ff-ff-ff-ff-ff (given)"),
+        "{log}"
+    );
+    assert_eq!(
+        out,
+        format!(
+            "{:<79}\n",
+            "Discovered up port 0/arp on 198.18.0.2 (02:aa:bb:cc:dd:ee) "
+        )
+    );
+    assert!(
+        log.contains("finished: Completed, sent 2, replies 1, open 0"),
+        "{log}"
+    );
+
+    // 3. Тихий сегмент: код 0, ни одной записи, в файле вывода только рамка формата.
+    let b = FakeBackend::new();
+    let dir = Scratch::new();
+    let file = dir.path("quiet.txt");
+    let (r, out, log) = cli(
+        &b,
+        &[
+            ARP_TARGETS,
+            "--arp",
+            "--wait",
+            "1",
+            "-oL",
+            file.to_str().unwrap(),
+        ],
+    );
+    r.unwrap();
+    assert!(out.is_empty(), "{out}");
+    assert!(
+        log.contains("finished: Completed, sent 2, replies 0, open 0"),
+        "{log}"
+    );
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.lines().all(|l| l.starts_with('#')),
+        "no records, only the list-format frame: {text:?}"
+    );
+}
+
+/// Два адаптера делят зонды ARP по чётности внешнего индекса (как TCP) и берут ответы любого из них; без шлюзового
+/// ARP.
+#[test]
+fn arp_scan_splits_probes_across_two_adapters_and_takes_replies_of_both() {
+    let mut b = two_nic_backend();
+    b.neighbors = vec![
+        (ARP_T1, [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01]),
+        (ARP_T2, ARP_T2_MAC),
+    ];
+    let mut args = TWO_NICS.to_vec();
+    args[0] = ARP_TARGETS;
+    args[1] = "--arp";
+    let (r, out, log) = cli(&b, &args);
+    r.unwrap();
+    let opened = b.opened();
+    assert_eq!(opened.len(), 2, "no ARP adapters: {log}");
+    for (k, o) in opened.iter().enumerate() {
+        assert_eq!(o.adapter.sent_frames().len(), 1, "nic {k}");
+        assert_eq!(o.binding.next_hop_mac, [0xff; 6], "nic {k}");
+    }
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(lines[0].starts_with("Discovered up port 0/arp on 198.18.0.1 (02:aa:bb:cc:dd:01)"));
+    assert!(lines[1].starts_with("Discovered up port 0/arp on 198.18.0.2 (02:aa:bb:cc:dd:ee)"));
+}
+
+/// `-p I:2` ведёт себя как `--arp` (решение R1 и C): тот же кадр и приём.
+#[test]
+fn port_i2_behaves_like_arp() {
+    let mut b = FakeBackend::new();
+    b.neighbors = vec![(ARP_T2, ARP_T2_MAC)];
+    let (r, out, _) = cli(&b, &[ARP_TARGETS, "-pI:2", "--wait", "1"]);
+    r.unwrap();
+    assert_eq!(b.opened().len(), 1);
+    assert!(
+        out.contains("0/arp on 198.18.0.2 (02:aa:bb:cc:dd:ee)"),
+        "{out}"
+    );
+}
+
+/// `--offline --packet-trace --arp` печатает строку C `main-ptrace.c:44-54`: `ARP`, `[spa]` и `[tpa]` без порта
+/// (`*strchr(.., ':') = '\0'`), поля по 21 символу, тип `request` (opcode 1).
+#[test]
+fn offline_packet_trace_prints_the_c_arp_sent_line() {
+    let b = hermetic();
+    let args: Vec<&str> = TRACE
+        .iter()
+        .map(|a| if *a == "-p80,443" { "--arp" } else { *a })
+        .collect();
+    let (r, out, _) = cli(&b, &args);
+    r.unwrap();
+    let mut lines: Vec<&str> = out.split_inclusive('\n').collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines,
+        [
+            "SENT (0.0000) ARP  [10.255.0.1]          > [10.0.0.0]            request\n",
+            "SENT (0.0000) ARP  [10.255.0.1]          > [10.0.0.1]            request\n",
+            "SENT (0.0000) ARP  [10.255.0.1]          > [10.0.0.2]            request\n",
+            "SENT (0.0000) ARP  [10.255.0.1]          > [10.0.0.3]            request\n",
+        ]
+    );
+}
+
+/// `--echo --arp` побайтно как C 8e6b3b0 (`main-conf.c:1088-1102`): `arpscan = true` сразу после `seed`, `router-mac`
+/// `ff-ff-ff-ff-ff-ff` и порт `I:2`. Образец снят с `masscan --echo --arp 198.18.0.0/30 --seed 1`.
+#[test]
+fn echo_prints_arpscan_true_like_c() {
+    let want = "seed = 1\narpscan = true\nrate = 100       \nshard = 1/1\nnocapture = servername\n\
+nocapture = servername\n\n\nrouter-mac-ipv4 = ff-ff-ff-ff-ff-ff\nrouter-mac-ipv6 = ff-ff-ff-ff-ff-ff\n\
+# TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = I:2\nrange = 198.18.0.0/30\n";
+    for flag in ["--arp", "--arpscan"] {
+        let (r, out, _) = cli(
+            &hermetic(),
+            &["--echo", flag, "198.18.0.0/30", "--seed", "1"],
+        );
+        r.unwrap();
+        assert_eq!(out, want, "{flag}");
+    }
+    // `--router-mac` правее `--arp` побеждает (порядок argv, как у C); `-p I:2` без флага не пишет `arpscan`
+    let (_, out, _) = cli(
+        &hermetic(),
+        &[
+            "--echo",
+            "--arp",
+            "--router-mac",
+            "02-00-00-00-00-01",
+            "198.18.0.0/30",
+            "--seed",
+            "1",
+        ],
+    );
+    assert!(
+        out.contains("router-mac-ipv4 = 02-00-00-00-00-01\n"),
+        "{out}"
+    );
+    let (_, out, _) = cli(
+        &hermetic(),
+        &["--echo", "-pI:2", "198.18.0.0/30", "--seed", "1"],
+    );
+    assert!(
+        !out.contains("arpscan") && out.contains("ports = I:2\n"),
+        "{out}"
+    );
+}
+
+/// Вывод `--echo --arp` читается обратно как конфигурация (`arpscan = true`, `ports = I:2`, `router-mac`) и даёт тот же
+/// ARP-скан без шлюзового ARP; ключ `arp = true` в файле работает как `--arp` (псевдоним C, main-conf.c:2373).
+#[test]
+fn arpscan_key_and_echo_output_round_trip_through_a_conf_file() {
+    let (r, echo, _) = cli(
+        &hermetic(),
+        &["--echo", "--arp", ARP_TARGETS, "--seed", "7"],
+    );
+    r.unwrap();
+    let dir = Scratch::new();
+    for (name, text) in [
+        ("echo.conf", echo.clone()),
+        ("key.conf", format!("arp = true\nrange = {ARP_TARGETS}\n")),
+    ] {
+        let file = dir.write(name, text.as_bytes());
+        let mut b = FakeBackend::new();
+        b.neighbors = vec![(ARP_T2, ARP_T2_MAC)];
+        let (r, out, log) = cli(&b, &["-c", file.to_str().unwrap(), "--wait", "1"]);
+        r.unwrap();
+        assert_eq!(b.opened().len(), 1, "{name}: {log}");
+        assert!(
+            out.contains("0/arp on 198.18.0.2 (02:aa:bb:cc:dd:ee)"),
+            "{name}: {out}"
         );
     }
 }

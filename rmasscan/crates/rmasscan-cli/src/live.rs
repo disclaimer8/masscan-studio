@@ -30,8 +30,10 @@ use crate::conf::{FullConf, format_paused_conf};
 use crate::status::{InfiniteTotals, StatusLine, StatusMode};
 use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::packet::LinkType;
+use rmasscan_core::payloads::PayloadTable;
 use rmasscan_core::probe::{
-    AdapterBinding, NicBinding, Probe, ReadyPlan, for_each_probe_nic as core_for_each_probe_nic,
+    AdapterBinding, NicBinding, Probe, ReadyPlan, check_cli_ports,
+    for_each_probe_nic_with_payloads as core_for_each_probe_nic_with_payloads, is_arp_scan_ports,
 };
 use rmasscan_core::receive::PortStatus;
 use rmasscan_core::throttle::Clock;
@@ -104,6 +106,8 @@ pub struct Prepared {
     /// Адаптеры `nic[1..n)` (`--adapter[i]`, Задача 7, `main.c:1257-1390`); `detected`/`binding`/`source_ports`
     /// выше это `nic[0]`.
     pub extra: Vec<NicPrepared>,
+    /// Таблица нагрузок UDP: 28 встроенных, затем `--pcap-payloads` и `--nmap-payloads` (main-conf.c:3156-3195).
+    pub payloads: Arc<PayloadTable>,
 }
 
 /// Обнаружение и binding одного адаптера `nic[k]`, `k >= 1`.
@@ -219,9 +223,17 @@ fn open_pcap(
 /// (`nic_offset`, `main.c:269`). `adapter-port` из 17 портов, который пишет сам C (`main.c:1318`), принимается флагом
 /// `legacy_c_17_port_mask`. Порядок адаптеров в плане это порядок RX-потоков: `rx_plan` ставит адаптер `k` первым,
 /// поэтому приёмник каждого адаптера проверяет диапазон адресов и портов именно своего (T6, замечание 4).
-fn cli_plan(eff: &EffectiveConfig, bindings: &[AdapterBinding]) -> Result<ReadyPlan, String> {
-    let plan =
-        ReadyPlan::new_cli(eff.clone(), nic_bindings(eff, bindings)?).map_err(|e| e.to_string())?;
+fn cli_plan(
+    eff: &EffectiveConfig,
+    bindings: &[AdapterBinding],
+    payloads: &PayloadTable,
+) -> Result<ReadyPlan, String> {
+    let plan = ReadyPlan::new_cli_with_payloads(
+        eff.clone(),
+        nic_bindings(eff, bindings)?,
+        payloads.clone(),
+    )
+    .map_err(|e| e.to_string())?;
     // Курсоры строятся здесь же: `resume-index` за пределом скана отказывает до ARP, а не после него.
     for k in 0..plan.nics().len() as u32 {
         plan.cursor_for_nic(k, None).map_err(|e| e.to_string())?;
@@ -332,6 +344,11 @@ pub fn prepare(
             });
         }
     }
+    // main.c:1644 `masscan_load_database_files`: файлы читаются до скана, любой отказ до первого кадра и строки `[+]`.
+    let payloads = Arc::new(load_payload_table(
+        eff.pcap_payloads(),
+        eff.nmap_payloads(),
+    )?);
     Ok(Prepared {
         eff,
         detected,
@@ -339,6 +356,7 @@ pub fn prepare(
         seed,
         source_ports,
         extra,
+        payloads,
     })
 }
 
@@ -394,7 +412,13 @@ fn detect_nic(
     backend: &dyn Backend,
     offline: bool,
 ) -> Result<Detected, String> {
-    let ov = overrides(eff, k);
+    let mut ov = overrides(eff, k);
+    // ARP-скан: адресат кадров это `ff-ff-ff-ff-ff-ff` на каждом адаптере, шлюз не ищется и не резолвится
+    // (`--arpscan` ставит `router-mac`, main-conf.c:1099; без него `main-initadapter.c:170-189` спросил бы шлюз ARP-ом).
+    // Так же `-p I:2` без флага: решение R1, ARP-скан определяет порт, а не флаг.
+    if is_arp_scan_ports(eff.massip().ports()) {
+        ov.router_mac = Some([0xff; 6]);
+    }
     let os = |e: NetError| refusal(DetectError::Os(e));
     let routes = backend.routes().map_err(os)?;
     let ifaces = backend.interfaces().map_err(os)?;
@@ -697,7 +721,7 @@ pub fn run_live_conf(
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
     // Ограничения плана (rounds, shard, `resume-index` за пределом, ширина портов) до ARP: отказ плана не стоит
     // кадра. Next hop в binding тут ещё нулевой; настоящий план строится после ARP (binding неизменяем).
-    cli_plan(&p.eff, &p.bindings())?;
+    cli_plan(&p.eff, &p.bindings(), &p.payloads)?;
     print_detection(&p, log)?;
     // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
     sink.open()?;
@@ -768,7 +792,7 @@ pub fn run_live_conf(
         }
     }
     print_parameters(&p, log)?;
-    let plan = cli_plan(&p.eff, &bindings)?;
+    let plan = cli_plan(&p.eff, &bindings, &p.payloads)?;
     // Нажатие, пришедшее после ARP, но до открытия адаптера скана: ни адаптера, ни SYN.
     if backend.interrupts() > 0 {
         return early_stop(log, sink);
@@ -943,15 +967,31 @@ pub fn run_live_conf(
 
 /// Поток кадров `transmit_thread` без сети (генерация в `rmasscan_core::probe`); ошибка callback останавливает
 /// генератор сразу (`ControlFlow::Break`).
+#[cfg(test)]
 pub(crate) fn for_each_probe(
     eff: &EffectiveConfig,
     binding: &AdapterBinding,
+    f: impl FnMut(&Probe) -> Result<(), String>,
+) -> Result<(), String> {
+    for_each_probe_with(eff, binding, &PayloadTable::builtin(), f)
+}
+
+/// [`for_each_probe`] с таблицей нагрузок UDP плана (`--pcap-payloads`, `--nmap-payloads`).
+pub(crate) fn for_each_probe_with(
+    eff: &EffectiveConfig,
+    binding: &AdapterBinding,
+    payloads: &PayloadTable,
     mut f: impl FnMut(&Probe) -> Result<(), String>,
 ) -> Result<(), String> {
-    match core_for_each_probe_nic(eff, &nic_binding(eff, 0, binding)?, |p| match f(p) {
-        Ok(()) => ControlFlow::Continue(()),
-        Err(e) => ControlFlow::Break(e),
-    })
+    match core_for_each_probe_nic_with_payloads(
+        eff,
+        &nic_binding(eff, 0, binding)?,
+        payloads,
+        |p| match f(p) {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(e) => ControlFlow::Break(e),
+        },
+    )
     .map_err(|e| e.to_string())?
     {
         ControlFlow::Continue(()) => Ok(()),
@@ -959,9 +999,24 @@ pub(crate) fn for_each_probe(
     }
 }
 
-/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s`. Адреса и флаги разбираются из самого кадра, как
+/// main-ptrace.c:97: `SENT (%5.4f) TCP  %-21s > %-21s %s` (для ICMP :67-70, UDP :57-59 и SCTP :108-111, см. ниже). Адреса и флаги разбираются из самого кадра, как
 /// `preprocess_frame` в C.
 fn trace_line(secs: f64, frame: &[u8]) -> String {
+    if frame[12..14] == [0x08, 0x06] {
+        // main-ptrace.c:44-54 (`FOUND_ARP`): `%s (%5.4f) ARP  %-21s > %-21s %s\n`; из `[ip]:port` убран порт
+        // (`*strchr(.., ':') = '\0'`), последнее поле это opcode: `request`, `response` или `unknown(N)`.
+        let ip_at = |i: usize| Ipv4Addr::new(frame[i], frame[i + 1], frame[i + 2], frame[i + 3]);
+        let op = match u16::from_be_bytes([frame[20], frame[21]]) {
+            1 => "request".to_string(),
+            2 => "response".to_string(),
+            n => format!("unknown({n})"),
+        };
+        return format!(
+            "SENT ({secs:5.4}) ARP  {:<21} > {:<21} {op}\n",
+            format!("[{}]", ip_at(28)),
+            format!("[{}]", ip_at(38))
+        );
+    }
     let (ip, tcp) = (14, 34);
     let src = Ipv4Addr::new(
         frame[ip + 12],
@@ -975,8 +1030,34 @@ fn trace_line(secs: f64, frame: &[u8]) -> String {
         frame[ip + 18],
         frame[ip + 19],
     );
+    if frame[ip + 9] == 1 {
+        // main-ptrace.c:67-70: ICMP печатает `type` в поле порта источника и `code` в поле порта получателя
+        // (proto-preprocess.c:184-187), после второго адреса остаётся пробел (формат `%-21s \n`).
+        return format!(
+            "SENT ({secs:5.4}) ICMP {:<21} > {:<21} \n",
+            format!("[{src}]:{}", frame[tcp]),
+            format!("[{dst}]:{}", frame[tcp + 1])
+        );
+    }
     let sport = u16::from_be_bytes([frame[tcp], frame[tcp + 1]]);
     let dport = u16::from_be_bytes([frame[tcp + 2], frame[tcp + 3]]);
+    if frame[ip + 9] == 17 {
+        // main-ptrace.c:57-59 (`FOUND_UDP`, `FOUND_DNS`): `%s (%5.4f) UDP  %-21s > %-21s \n`, без флагов и числа байт.
+        return format!(
+            "SENT ({secs:5.4}) UDP  {:<21} > {:<21} \n",
+            format!("[{src}]:{sport}"),
+            format!("[{dst}]:{dport}")
+        );
+    }
+    if frame[ip + 9] == 132 {
+        // main-ptrace.c:108-111: у C нет ветки `FOUND_SCTP`, и `packet_trace()` печатает `default`: `UNK  %-21s > %-21s
+        // [%u]\n` с номером `FOUND_SCTP` (7, proto-preprocess.h:15); трейлинг-пробела UDP/ICMP здесь нет.
+        return format!(
+            "SENT ({secs:5.4}) UNK  {:<21} > {:<21} [7]\n",
+            format!("[{src}]:{sport}"),
+            format!("[{dst}]:{dport}")
+        );
+    }
     let flags = match frame[tcp + 13] {
         0x02 => "SYN".to_string(),
         other => format!("flags-{other:#04x}"),
@@ -1000,18 +1081,46 @@ pub fn run_offline(
     let mut best_effort = BestEffort::new(log);
     let log: &mut dyn Write = &mut best_effort;
     let p = prepare(cfg, SeedPolicy::Required, backend, true)?;
+    // Р1: `--packet-trace` как и живой скан не шлёт `O:*` и `I:n` (проверка плана CLI, `cli_plan`); без
+    // трассировки `--offline` ничего не строит и отказа нет.
+    if packet_trace {
+        check_cli_ports(p.eff.massip().ports()).map_err(|e| e.to_string())?;
+    }
     print_detection(&p, log)?;
     print_parameters(&p, log)?;
     if packet_trace {
         let clock = backend.clock();
         let start = clock.now_micros();
-        for_each_probe(&p.eff, &p.binding, |pr| {
+        for_each_probe_with(&p.eff, &p.binding, &p.payloads, |pr| {
             let secs = clock.now_micros().saturating_sub(start) as f64 / 1e6;
             out.write_all(trace_line(secs, &pr.frame).as_bytes())
                 .map_err(io_fail)
         })?;
     }
     Ok(())
+}
+
+/// Таблица нагрузок UDP (`masscan_load_database_files`, main-conf.c:3156-3195): встроенные 28 записей, затем файл
+/// `--pcap-payloads`, затем `--nmap-payloads`, каждый заменяет записи своих портов. Отличие от C: нечитаемый файл и
+/// синтаксическая ошибка отказывают запуск (C печатает сообщение и сканирует дальше с тем, что успел прочитать, а
+/// пропавшую нагрузку на порту никто не заметит).
+pub fn load_payload_table(pcap: Option<&str>, nmap: Option<&str>) -> Result<PayloadTable, String> {
+    let mut table = PayloadTable::builtin();
+    if let Some(file) = pcap {
+        let data =
+            std::fs::read(file).map_err(|e| format!("cannot read --pcap-payloads {file}: {e}"))?;
+        table
+            .load_pcap_payloads(&data)
+            .map_err(|e| format!("--pcap-payloads {file}: {e}"))?;
+    }
+    if let Some(file) = nmap {
+        let data =
+            std::fs::read(file).map_err(|e| format!("cannot read --nmap-payloads {file}: {e}"))?;
+        table
+            .load_nmap_payloads_bytes(&data)
+            .map_err(|e| format!("--nmap-payloads {file}: {e}"))?;
+    }
+    Ok(table)
 }
 
 /// `--iflist`: интерфейсы и маршруты по умолчанию (свой формат, stdout); только чтение.

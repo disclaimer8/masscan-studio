@@ -204,7 +204,7 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
   остальное через переопределения и отказы (решение 8).
 - **Действия пользователя.** Каждый `sudo` на Mac делает пользователь голыми командами Terminal из одной таблицы, число
   минимально: одна chained-строка «`up` + `grant` + root-кейс», одно `down` (оно же revoke). Никакого revoke/grant
-  посреди окна. На minipc агенты используют существующее `sudo -n` (Linux-приёмка §0); на home-pc `a1` имеет `sudo -n`
+  посреди окна. На minipc агенты используют существующее `sudo -n` (Linux-приёмка §0); на home-pc `<LAB_ACCOUNT>` имеет `sudo -n`
   (`rust-lab.md:158–162`); задача 0 **проверяет** оба (`sudo -n true`), а не предполагает.
 - **Правила доказательств:** независимые свидетели (`tcpdump`/`capture dump` на стороне пира и на uplink/`eno1`) и
   вердикты верификатора; INVALID/NOT RUN никогда не повышаются; sha256 до копирования (`hashes-before-copy.txt`), затем
@@ -306,7 +306,7 @@ Mac с `up`/`down` пользователя), только `198.18.0.0/24`; `--s
 | Кейсы macOS (root, действие B) | `m10_root_auto_mac` (`--adapter feth4201 --adapter-ip 198.18.0.1 --router-ip 198.18.0.2`: MAC определён, ARP, скан), `m11_root_iflist` (строка `feth4201` с настоящим MAC) |
 | Ожидания отказов | exit 1, 0 кадров сканера на проводе (ARP-таймаут: ровно 10 запросов с шагом 1 ± 0.3 с, 0 SYN), stderr с `FAIL:` и подсказками masscan |
 | Каталог прогона | `runs/<tag>/{argv.json, expect.json, stdout.txt, stderr.txt, exit.txt (Windows: guest-stdout.txt, guest-stderr.txt, guest-exit.txt), detected.json, peer.pcap, capture.json\|peer.err, status-pre.json, status-post.json (mac/win), uplink.pcap+uplink.err (mac) \| isolation.json (linux), preflight.txt (w01, w06, m05), hashes-before-copy.txt}`; iflist-кейсы: `iflist.json` `{rc, lines, sha256, stand_line}` вместо вывода и без `stdout.txt`/`guest-stdout.txt` (на Windows редукция делается на home-pc в рабочем каталоге до записи каталога прогона); `l11_parity` дополнительно `oracle/{stdout,stderr,exit}.txt`, `oracle.pcap` |
-| Доступ | minipc `ssh minipc`, `sudo -n` (проверить); home-pc `a1` `sudo -n` (проверить); гость `ssh -J home-pc -p 2222 lab@127.0.0.1` (elevated, Npcap Admin-only); Mac: действия пользователя |
+| Доступ | minipc `ssh minipc`, `sudo -n` (проверить); home-pc `<LAB_ACCOUNT>` `sudo -n` (проверить); гость `ssh -J home-pc -p 2222 lab@127.0.0.1` (elevated, Npcap Admin-only); Mac: действия пользователя |
 
 ## Задача 0. База и контракты (чтение, без кода)
 

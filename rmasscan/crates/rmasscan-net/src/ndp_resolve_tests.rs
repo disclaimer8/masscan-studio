@@ -219,7 +219,7 @@ fn ndp_timeout_and_interrupt_abort_cleanly() {
     assert_eq!(clock.now_micros() - t0, 10_000_000);
     assert_eq!(
         e.to_string(),
-        "FAIL: NDP timed-out resolving MAC address for router veth-a: \"fd00::2\"\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass NDP\n    [hint] try \"--interface eth0\" to change interface"
+        "FAIL: NDP timed-out resolving MAC address for router veth-a: \"fd00::2\"\n    [hint] try \"--router-mac-ipv6 66-55-44-33-22-11\" instead to bypass NDP\n    [hint] try \"--interface eth0\" to change interface"
     );
     // Цель как next hop (target).
     let t = NdpResolveError::NdpTimeout {

@@ -321,3 +321,27 @@ fn incoming_ns_that_must_not_be_answered() {
     assert!(answer_neighbor_solicitation(&ok[..60], MY_MAC, MY_IP2).is_none());
     assert!(answer_neighbor_solicitation(&[], MY_MAC, MY_IP2).is_none());
 }
+
+/// Ответ никогда не отражается на multicast: источник IPv6 multicast или Ethernet-источник multicast/broadcast
+/// молча отбрасываются (в C `memcpy` ответа кладёт их в адресата, :149-150).
+#[test]
+fn ns_with_multicast_source_is_never_reflected() {
+    let ok = router_ns(true);
+    assert!(answer_neighbor_solicitation(&ok, MY_MAC, MY_IP2).is_some());
+    let mut f = ok.clone();
+    f[22..38].copy_from_slice(&0xff02_0000_0000_0000_0000_0000_0000_0001u128.to_be_bytes());
+    fix_checksum(&mut f);
+    assert!(answer_neighbor_solicitation(&f, MY_MAC, MY_IP2).is_none());
+    for mac in [
+        [0x33, 0x33, 0, 0, 0, 1],
+        [0xff; 6],
+        [0x01, 0, 0x5e, 0, 0, 1],
+    ] {
+        let mut f = ok.clone();
+        f[6..12].copy_from_slice(&mac);
+        assert!(
+            answer_neighbor_solicitation(&f, MY_MAC, MY_IP2).is_none(),
+            "{mac:02x?}"
+        );
+    }
+}

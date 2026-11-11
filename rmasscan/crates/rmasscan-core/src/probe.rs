@@ -94,6 +94,12 @@ pub enum PlanError {
     /// (main.c:345), нулевой адрес ушёл бы в провод молча.
     #[error("the adapter has no IPv6 source address (source_ipv6), so no IPv6 probe can be built")]
     NoSourceIpv6,
+    /// IPv6-зонд без MAC следующего хопа IPv6 (`NicBinding::next_hop_mac_ipv6`): C держит `router_mac_ipv6` отдельно
+    /// и без него отказывает (main-initadapter.c:235-256); кадр на MAC IPv4-роутера не уходит.
+    #[error(
+        "the adapter has no IPv6 next-hop MAC (next_hop_mac_ipv6), so no IPv6 probe can be built\n    [hint] try \"--router-mac-ipv6 66-55-44-33-22-11\" instead to bypass NDP"
+    )]
+    NoNextHopMacIpv6,
     #[error("need 1..=8 adapters, got {0}")]
     BadNicCount(usize),
     #[error("adapter index {index} is out of range for {count} adapters")]
@@ -137,8 +143,8 @@ pub struct NicBinding {
     /// источника IPv6 всегда `source_ports.0` (main.c:346). `None` у плана IPv4 и у Студии. Приёмник считает кадр
     /// IPv6 своим, только если адрес назначения равен этому (`is_my_ip`, stack-src.c:13-14).
     pub source_ipv6: Option<u128>,
-    /// MAC следующего хопа для кадров IPv6 (шлюз или сосед, найденный NDP Neighbor Solicitation). `None`: берётся
-    /// `binding.next_hop_mac` (IPv4). Отдельное поле нужно потому, что IPv4-хоп разрешает ARP, а IPv6-хоп NDP, и
+    /// MAC следующего хопа для кадров IPv6 (шлюз или сосед, найденный NDP Neighbor Solicitation). `None`: IPv6-зонд
+    /// отказывает (`PlanError::NoNextHopMacIpv6`, без подмены на `next_hop_mac`). Отдельное поле нужно потому, что IPv4-хоп разрешает ARP, а IPv6-хоп NDP, и
     /// это могут быть разные устройства; шаблон `Tcp6SynTemplate` читает только это поле (templ-pkt.c:1110-1202,
     /// `router_mac_ipv6`). На кадры IPv4 не влияет и в `canonical_job_bytes` не входит.
     pub next_hop_mac_ipv6: Option<[u8; 6]>,
@@ -193,10 +199,13 @@ fn check_source_ports(first: u16, last: u16, legacy_c_17: bool) -> Result<(), Pl
 #[derive(Debug, Clone)]
 struct Builder {
     tmpl: TcpSynTemplate,
-    /// Шаблон TCP SYN поверх IPv6 (78 байт, templ-pkt.c:1110-1202), `router_mac_ipv6` это `next_hop_mac_ipv6` адаптера, а без него `next_hop_mac`.
+    /// Шаблон TCP SYN поверх IPv6 (78 байт, templ-pkt.c:1110-1202), `router_mac_ipv6` это `next_hop_mac_ipv6` адаптера (без него зонд отказывает).
     tmpl6: Tcp6SynTemplate,
     /// `src.ipv6` (main.c:188); `None`: IPv6-зонд отказывает ([`PlanError::NoSourceIpv6`]).
     source_ipv6: Option<u128>,
+    /// `router_mac_ipv6` задан; иначе IPv6-зонд отказывает ([`PlanError::NoNextHopMacIpv6`]), `tmpl6` нулевой и
+    /// не используется.
+    has_next_hop_mac_ipv6: bool,
     /// Шаблон ICMP Echo (`I:0`, templ-pkt.c:105): тот же путь адаптера, что у TCP.
     icmp: IcmpEchoTemplate,
     /// Шаблон UDP (`U:`, templ-pkt.c:56): тот же путь адаптера и та же таблица нагрузок на все адаптеры.
@@ -244,11 +253,12 @@ impl Builder {
             ),
             tmpl6: Tcp6SynTemplate::new_with_options(
                 binding.source_mac,
-                nic.next_hop_mac_ipv6.unwrap_or(binding.next_hop_mac),
+                nic.next_hop_mac_ipv6.unwrap_or([0; 6]),
                 binding.link_type,
                 mods,
             ),
             source_ipv6: nic.source_ipv6,
+            has_next_hop_mac_ipv6: nic.next_hop_mac_ipv6.is_some(),
             icmp: IcmpEchoTemplate::new(
                 binding.source_mac,
                 binding.next_hop_mac,
@@ -414,6 +424,9 @@ impl Builder {
         port_them: u32,
     ) -> Result<(), PlanError> {
         let ip_me = self.source_ipv6.ok_or(PlanError::NoSourceIpv6)?;
+        if !self.has_next_hop_mac_ipv6 {
+            return Err(PlanError::NoNextHopMacIpv6);
+        }
         let port_them16 = u16::try_from(port_them).map_err(|_| PlanError::PortNotTcp(port_them))?;
         let port_me = self.first;
         let seqno =
@@ -2214,7 +2227,8 @@ mod tests {
             source_ipv4_last: 0,
             legacy_c_17_port_mask: false,
             source_ipv6: Some(ME),
-            next_hop_mac_ipv6: None,
+            // Явный MAC IPv6-хопа: без него кадра IPv6 нет (`NoNextHopMacIpv6`).
+            next_hop_mac_ipv6: Some([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02]),
         };
         let nic = NicBinding {
             source_ipv4_last: nic.binding.source_ipv4,
@@ -2260,10 +2274,11 @@ mod tests {
         );
     }
 
-    /// T4: MAC следующего хопа IPv6 (результат NDP) живёт отдельно от IPv4-хопа (ARP). С `next_hop_mac_ipv6`
-    /// кадр IPv6 идёт на него, а без него на `next_hop_mac`; кадры IPv4 всегда на `next_hop_mac`.
+    /// T4: MAC следующего хопа IPv6 (результат NDP) живёт отдельно от IPv4-хопа (ARP). C хранит
+    /// `router_mac_ipv6` отдельно и без него отказывает (main-initadapter.c:235-256): кадр IPv6 никогда не уходит
+    /// на MAC IPv4-роутера. Кадры IPv4 всегда на `next_hop_mac`.
     #[test]
-    fn ipv6_frames_use_the_separate_ndp_next_hop_mac() {
+    fn ipv6_probe_requires_its_own_next_hop_mac() {
         const THEM: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
         const ME: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
         const V4_HOP: [u8; 6] = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02];
@@ -2278,15 +2293,12 @@ mod tests {
         let e = eff_v46("2001:db8::1", "80");
         let plain = ReadyPlan::new_cli_without_ipv6_guard(e.clone(), vec![nic.clone()]).unwrap();
         assert_eq!(
-            &plain.probe_v6(0, 0, THEM, 80).unwrap().frame[0..6],
-            &V4_HOP
+            plain.probe_v6(0, 0, THEM, 80).unwrap_err(),
+            PlanError::NoNextHopMacIpv6
         );
         nic.next_hop_mac_ipv6 = Some(V6_HOP);
         let plan = ReadyPlan::new_cli_without_ipv6_guard(e, vec![nic]).unwrap();
         let f = plan.probe_v6(0, 0, THEM, 80).unwrap().frame;
         assert_eq!(&f[0..6], &V6_HOP);
-        // Остальные байты кадра те же.
-        let g = plain.probe_v6(0, 0, THEM, 80).unwrap().frame;
-        assert_eq!(&f[6..], &g[6..]);
     }
 }

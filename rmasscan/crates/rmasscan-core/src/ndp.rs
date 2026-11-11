@@ -320,6 +320,11 @@ pub fn answer_neighbor_solicitation(
     my_ip: u128,
 ) -> Option<[u8; NDP_FRAME_LEN]> {
     let ns = decode_neighbor_solicitation(frame).ok()?;
+    // Ответ идёт на источник запроса: multicast в качестве адресата недопустим (RFC 4861 §7.2.4 отвечает только
+    // unicast-источнику), поэтому такой NS отбрасывается. Ethernet-источник multicast/broadcast тоже.
+    if is_multicast(ns.src_ip) || ns.eth_src[0] & 1 != 0 {
+        return None;
+    }
     // Адресат: наш адрес или solicited-node multicast нашего адреса (RFC 4861 §7.1.1); C берёт любой ff02::/16.
     if ns.target != my_ip || (ns.dst_ip != my_ip && ns.dst_ip != solicited_node_address(my_ip)) {
         return None;

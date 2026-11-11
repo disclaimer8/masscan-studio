@@ -74,16 +74,16 @@ impl fmt::Display for NdpResolveError {
                 ..
             } => write!(
                 f,
-                "FAIL: NDP timed-out resolving MAC address for {kind} {ifname}: \"{}\"\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass NDP\n    [hint] try \"--interface eth0\" to change interface",
+                "FAIL: NDP timed-out resolving MAC address for {kind} {ifname}: \"{}\"\n    [hint] try \"--router-mac-ipv6 66-55-44-33-22-11\" instead to bypass NDP\n    [hint] try \"--interface eth0\" to change interface",
                 format_ipv6_c(u128::from(*target))
             ),
             Self::Io(e) => write!(
                 f,
-                "FAIL: NDP I/O error: {}\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass NDP",
+                "FAIL: NDP I/O error: {}\n    [hint] try \"--router-mac-ipv6 66-55-44-33-22-11\" instead to bypass NDP",
                 e.message
             ),
             Self::Uncertain => f.write_str(
-                "FAIL: NDP solicitation may or may not have been sent (adapter state unknown)\n    [hint] try \"--router-mac 66-55-44-33-22-11\" instead to bypass NDP",
+                "FAIL: NDP solicitation may or may not have been sent (adapter state unknown)\n    [hint] try \"--router-mac-ipv6 66-55-44-33-22-11\" instead to bypass NDP",
             ),
         }
     }

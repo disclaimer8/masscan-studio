@@ -516,19 +516,20 @@ masscan `8e6b3b0`). **Windows IPv6 не снимался (NOT RUN):** на lab-N
 
 ## Статус
 
-IPv6 (код `e9eaebeb`, evidence `f089b071`, 2026-11-12, ветка `feat/rmasscan-ipv6`, база `fdd18b37`): TCP SYN поверх IPv6,
+IPv6 (код `0ce2a9e8`, evidence `f05e93df`, 2026-11-12, ветка `feat/rmasscan-ipv6`, база `fdd18b37`): TCP SYN поверх IPv6,
 `syn_cookie_ipv6`, NDP (Neighbor Solicitation резолвера и ответы на NS пира), смешанная индексация IPv4 и IPv6, записи типов 10 и
 11 во всех форматах вывода и в `--readscan` (119 эталонов C: 94 прежних и 25 с IPv6), определение интерфейса, адреса источника и
 следующего хопа IPv6 на Linux, macOS и Windows, `--router-mac-ipv6`, IPv6 в `--adapter-ip` и `--router-ip`, возобновление заданий
-IPv6. Продуктовый код не менялся с `c1e76779` до `e9eaebeb`: шесть коммитов (`06227c14`, `0f48dfac`, `cbcffe72`, `1abae2aa`,
-`f346a66b`, `e9eaebeb`) правят только `rmasscan-lab`, `wire-lab.sh` и документы (`git diff --stat c1e76779 e9eaebeb --
-rmasscan/crates ':!rmasscan/crates/rmasscan-lab'` пуст). После окон продукт менялся: правило подтверждения 1e9 в `validate`
-(`eba1492b`, затем `9dbbfd69`) и проверка MAC следующего хопа IPv6 в `ReadyPlan::new_cli` (`6d6b235a`); ни одно живое окно эти
-пути не упражняет. Тесты: Mac на `f171465e` 2153/0, minipc и гость прогнаны на `e9eaebeb`. Живая приёмка (все шесть окон на `e9eaebeb`, `safety_trips` пуст): Linux
-`ipv6` PASS 4/4 (`v01`–`v03`), регрессии протоколов Linux PASS 6/6, управления сканом Linux PASS 7/7, вывода Linux PASS 18/18,
-автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты Mac на `e9eaebeb` 2144/0 (сводка в `verification/mac-test-ws-summary.txt`),
-minipc 2016/0 и гость 1911/0. GO (stands) условно: зелёный CI на точном HEAD и итоговое ревью ветки фиксирует контролёр при
-слиянии. Windows IPv6, macOS живой и физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md`.
+IPv6. Принятый код `0ce2a9e8` — коммит слияния `ffb8d6c1` ветки с `origin/main` `d2a6603f` (интеграция Studio, PR #54 и #57: наблюдение
+маршрутов и адаптеров на трёх ОС, ограниченный обмен PF_ROUTE на macOS, карта доставки IPv4 у планов Studio) плюс коммит только с
+тестом. На нём все шесть окон прогнаны заново (набор r3, `safety_trips` пуст): Linux `ipv6` PASS 4/4 (`v01`–`v03`), регрессии
+протоколов Linux PASS 6/6, управления сканом Linux PASS 7/7, вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM
+PASS 10/10. Тесты на `0ce2a9e8`: Mac 2201/0, minipc 2084/0, гость 1973/0; офлайн-тесты Studio (`cargo xtask test`) на Mac
+484/0. Правило подтверждения 1e9 в `validate` и проверка MAC следующего хопа IPv6 в `ReadyPlan::new_cli` в коде под окнами есть, но
+ни одно окно их не упражняет. Прежний набор r2 на `e9eaebeb` (до правок итогового ревью и до слияния): evidence `f089b071`, те же
+вердикты. GO (stands) условно: зелёный CI на точном HEAD и ревью слияния фиксирует контролёр при слиянии. Windows IPv6, macOS
+живой и физические NIC: NOT RUN. Сырые данные r3: `../docs/experiments/2026-11-12-rmasscan-ipv6-postmerge-raw/`; отчёт:
+`../docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md` (раздел 11 — r3).
 
 Протоколы IPv4 (код `82f0483`, evidence `1ddb975`, 2026-11-11, ветка `feat/rmasscan-protocols-ipv4`; повтор r4 после
 итогового ревью этапа): UDP со встроенными и внешними нагрузками, ICMP Echo, SCTP INIT, ARP-скан, префиксы

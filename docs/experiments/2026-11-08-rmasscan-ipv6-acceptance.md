@@ -1,6 +1,7 @@
 # rmasscan: IPv6 (TCP SYN поверх IPv6, NDP, смешанный скан IPv4 и IPv6, записи IPv6 в выводе и `--readscan`), приёмка (итоговый отчёт этапа)
 
-Дата: 2026-11-12 (r2; окна 2026-11-12 08:03Z – 08:56Z). Ветка `feat/rmasscan-ipv6`, база `fdd18b37` (слияние PR #55, протоколы IPv4;
+Дата: 2026-11-12 (r2; окна 2026-11-12 08:03Z – 08:56Z; после слияния с main набор r3 на `0ce2a9e8`, окна 19:39Z – 20:29Z,
+раздел 11). Ветка `feat/rmasscan-ipv6`, база `fdd18b37` (слияние PR #55, протоколы IPv4;
 `git merge-base main HEAD`). Документ фиксирует измеренное и открытое. Статусы: PASS / FAIL / INVALID / NOT RUN / OPEN / PENDING,
 никогда не повышаются. Сырые данные:
 [`2026-11-08-rmasscan-ipv6-acceptance-raw/`](2026-11-08-rmasscan-ipv6-acceptance-raw/) (корневой
@@ -13,6 +14,12 @@
 
 ## 1. Итог и границы
 
+- **После слияния с main (r3, раздел 11).** PR #58 конфликтовал с main (интеграция Studio, PR #54 и #57, меняла тот же код
+  обнаружения). Ветка слила `origin/main` `d2a6603f` (коммит слияния `ffb8d6c1` плюс коммит только с тестом), и все шесть окон
+  прогнаны заново на C r3 = `0ce2a9e8`: IPv6 **PASS 4/4**, протоколы **PASS 6/6**, управление сканом **PASS 7/7**, вывод
+  **PASS 18/18**, автоопределение Linux **PASS 13/13** и Windows VM **PASS 10/10**, `safety_trips` пуст, ни одной замещённой
+  попытки; сырые данные [`2026-11-12-rmasscan-ipv6-postmerge-raw/`](2026-11-12-rmasscan-ipv6-postmerge-raw/). Разделы 1–10
+  ниже описывают набор r2 на `e9eaebeb` (до правок итогового ревью и до слияния) и не переписаны.
 - Все шесть живых окон набора r2 сняты на одном коде C = `e9eaebeb`. Набор r1 на `cbcffe72` остановлен первым же окном
   (`linux-ipv6-r1`, INVALID 3 из 3) и замещён; три причины и три правки лаборатории в разделе 5, продукт между r1 и r2 не менялся.
 - Живая приёмка IPv6 на Linux: `linux-ipv6-r2` **PASS 4/4** (манифест и кейсы `v01`–`v03`: автоопределение и NDP с TCP SYN по
@@ -39,6 +46,8 @@
 | Код продукта | `68c0e2e4` … `c1e76779` (задачи 1–6 и их правки): диапазоны IPv6 и `ipv6address_fmt`, смешанная индексация, TCP SYN поверх IPv6, NDP, записи 10 и 11, обнаружение IPv6 на трёх ОС | не менялся с `c1e76779` до `e9eaebeb`: `git diff --stat c1e76779 e9eaebeb -- rmasscan/crates ':!rmasscan/crates/rmasscan-lab'` пуст; **после окон продукт менялся**: правило подтверждения 1e9 в `validate` (`eba1492b`, затем `9dbbfd69`: исключение IPv6 подтверждает только переполнение от целей IPv6, R24) и отказ плана при MAC следующего хопа IPv6, равном MAC источника (`6d6b235a`, `ReadyPlan::new_cli`); ни одно живое окно эти пути не упражняет, их покрывают только офлайн-тесты (Mac на `f171465e`: 2153 прошли, 0 упали; minipc и гость прогнаны на `e9eaebeb`, до этих изменений);  бинарник `rmasscan` на minipc `479eaffe…` и в r1 (на `cbcffe72`), и в r2 |
 | Лаборатория | `06227c14`, `0f48dfac`, `cbcffe72` (задача 7a: набор `ipv6`, `ipv6-verify`, общий `pair_verify.rs` для протоколов и IPv6); `1abae2aa`, `f346a66b`, `e9eaebeb` (правки задачи окон 7b, раздел 5) | `wire-lab.sh --suite ipv6`, `ipv6-suite`, `ipv6-verify`, `privacy-scan` (имена из кадров ICMPv6) |
 | Evidence | `f089b071` (`test(cli): record IPv6 acceptance r2 at C on the Linux stand and the Windows VM`) | только `docs/experiments/2026-11-08-rmasscan-ipv6-acceptance-raw/` (в каталоге 1169 файлов, `MANIFEST.sha256` на 1168 записей; `shasum -a 256 -c --quiet MANIFEST.sha256` даёт rc 0) |
+| Код под окнами r3 (после слияния с main) | `0ce2a9e8e9c1fec8e56655cef6b258c0cd0e5a54` (2026-11-12) | коммит слияния `ffb8d6c1` (родители `0e0bd100` и `origin/main` `d2a6603f`) плюс коммит только с тестом `0ce2a9e8`; сборки так же, как для r2; HEAD ветки весь набор r3 стоял на нём, рабочая копия чистая (раздел 11) |
+| Evidence r3 | `f05e93df` | только `docs/experiments/2026-11-12-rmasscan-ipv6-postmerge-raw/` (1170 файлов, `MANIFEST.sha256` на 1169 записей, `shasum -a 256 -c --quiet MANIFEST.sha256` даёт rc 0) |
 | База | `fdd18b37` | без rebase; от базы до `f089b071` 19 коммитов (`git rev-list --count fdd18b37..f089b071`), первый из них `6685610e` (документ и план этапа) |
 
 Windows: `manifest.json` и `deploy/preflight-*.json` несут `code_commit`, `orchestrator.build_commit` и
@@ -289,12 +298,88 @@ README сырых данных). Вывод: `verification/privacy-scan.txt`. Ф
 | Область | Статус |
 | --- | --- |
 | Windows IPv6 вживую | **NOT RUN**: IPv6 lab-NIC гостя выключен исправлением стенда (П14), гость без согласия пользователя не меняется; обнаружение IPv6 на Windows покрыто офлайн-тестами и CI |
-| macOS живой прогон этапа (окно `m1`) и цели link-local на macOS | **NOT RUN**: требует `sudo` пользователя; link-local цели на macOS не проверены вовсе |
+| macOS живой прогон этапа (окно `m1`) и цели link-local на macOS | **NOT RUN**: требует `sudo` пользователя; link-local цели на macOS не проверены вовсе; после слияния с main поиск маршрута IPv6 на macOS (`rt_get6`) идёт через ограниченный обмен PF_ROUTE main, вживую он тоже не снимался (раздел 11) |
 | Физические NIC (Linux, Windows, macOS) | **NOT RUN** |
-| Продукт после окон: правило 1e9 в `validate` и проверка MAC хопа IPv6 в плане | живыми окнами **не упражнялись** (код `e9eaebeb`, до `eba1492b` и `6d6b235a`); покрыты офлайн-тестами `ipv6_exclude_confirms_only_an_overflow_the_ipv6_targets_cause` и `cli_plan_refuses_an_ipv6_next_hop_mac_equal_to_the_source_mac`; Mac 2153/0 на `f171465e`, minipc и гость на `e9eaebeb` |
-| Studio `cargo xtask test` этого этапа | **NOT RUN** локально (`studio/` не менялся); Studio CI: заполняется при PR |
+| Продукт после окон: правило 1e9 в `validate` и проверка MAC хопа IPv6 в плане | живыми окнами **не упражнялись**: r2 шёл на `e9eaebeb`, до `eba1492b` и `6d6b235a`; r3 шёл на `0ce2a9e8`, где этот код есть, но ни одно окно его не упражняет (нет скана больше 1e9 адресов, MAC хопа IPv6 не равен MAC источника); покрыты офлайн-тестами `ipv6_exclude_confirms_only_an_overflow_the_ipv6_targets_cause` и `cli_plan_refuses_an_ipv6_next_hop_mac_equal_to_the_source_mac`; Mac 2153/0 на `f171465e`, на `0ce2a9e8` Mac 2201/0, minipc 2084/0 и гость 1973/0 |
+| Studio `cargo xtask test` этого этапа | r2: **NOT RUN** локально (`studio/` не менялся); r3: шаг «Offline contracts» `studio.yml` прогнан на Mac на `0ce2a9e8`, rc 0, 484/0 (раздел 11); упаковка `cargo xtask build` и шаги только Linux и только Windows: **NOT RUN** локально; Studio CI: заполняется при PR |
 | IPv6 за маршрутизатором, `--resume` IPv6 и ответ NA вживую | не снимались (раздел 6), покрыты офлайн-тестами |
 | Не-TCP протоколы по IPv6 (UDP, SCTP, ICMP Echo, ARP-скан), баннеры, VLAN, туннели | не цели этапа; UDP, SCTP, `I:` и `--arp` с целью IPv6 отказывают (README, блок «IPv6») |
 
 Отличия от C, вошедшие в README, перечислены в `rmasscan/README.md` («Отличия от masscan», блок «IPv6»); источники: спека §8 и её
 раздел «§9 Изменения по итогам реализации» (П1–П14). Studio этим этапом не менялась.
+
+## 11. После слияния с main (r3)
+
+PR #58 конфликтовал с main: после базы этапа `fdd18b37` в main вошла интеграция Studio (PR #54 и #57, Codex), которая
+меняла тот же код обнаружения rmasscan. Ветка слила `origin/main` без rebase (решение Р25), и весь набор окон прогнан ещё раз
+на результате слияния. Сырые данные набора r3 лежат в отдельном каталоге
+[`2026-11-12-rmasscan-ipv6-postmerge-raw/`](2026-11-12-rmasscan-ipv6-postmerge-raw/) (корневой
+[README](2026-11-12-rmasscan-ipv6-postmerge-raw/README.md), `MANIFEST.sha256`, `verification/`); каталог r2
+`2026-11-08-rmasscan-ipv6-acceptance-raw/` хэширован и не менялся.
+
+**Коммиты.**
+
+| Часть | Коммит | Что это |
+| --- | --- | --- |
+| Код под окнами r3 (C) | `0ce2a9e8e9c1fec8e56655cef6b258c0cd0e5a54` (2026-11-12) | коммит слияния `ffb8d6c1` (родители `0e0bd100`, ветка после итогового ревью этапа, и `d2a6603f`, `origin/main`) плюс один коммит только с тестом (`0ce2a9e8`: план Studio с картой доставки никогда не встречает цель IPv6). minipc и гость: полное дерево из `git archive C`; home-pc: `rmasscan/` из `git archive C`; Mac: чистая рабочая копия на C. Release, `CARGO_INCREMENTAL=0`, `RMASSCAN_LAB_BUILD_COMMIT=C`, rustc 1.99.1. HEAD ветки весь набор r3 стоял на C, рабочая копия чистая |
+| Evidence r3 | `f05e93df` | только `docs/experiments/2026-11-12-rmasscan-ipv6-postmerge-raw/` (1170 файлов, `MANIFEST.sha256` на 1169 записей, `shasum -a 256 -c --quiet` даёт rc 0) |
+
+**Что принёс main** (в `rmasscan/` 25 файлов, +3713/−155; как разрешены 11 конфликтных мест, сказано в сообщении
+коммита слияния `ffb8d6c1`): наблюдение маршрутов Linux (`linux/route_observation.rs`); на macOS ограниченный по времени обмен PF_ROUTE
+(`macos/route.rs`, `macos/ifinfo.rs`), через который после слияния идёт и поиск маршрута IPv6 `rt_get6` (один срок 1 с на весь
+обмен, другой текст ошибки); наблюдение адаптеров и маршрутов Windows (`windows/sys/observation.rs`; в `windows/sys.rs` оно стоит
+рядом с кодом IPv6 ветки); карта доставки IPv4 по целям в `ReadyPlan` (`destinations`, только у планов Studio: в
+`ProbeCursor::load_one` карта касается только кадров IPv4, кадр IPv6 несёт `next_hop_mac_ipv6`); `network_plan.rs`,
+`neighbours.rs`, усиление политики ARP (`arp_resolve.rs`, `InvalidPolicy`), идентичность задания с картой (`identity.rs`); в
+лаборатории одно чтение часов в `vm-lab record-guest` (`vm_lab.rs`). `rmasscan/docs/rust-lab.md` слиянием не тронут, процедура
+окон та же, что в r2. Бинарник продукта на minipc `541eabd8…` (в r2 `479eaffe…`: с тех пор в продукт вошли правки итогового
+ревью этапа и код main). `studio/` равен main: `git diff origin/main..HEAD -- studio rmasscan/Cargo.lock rmasscan/deny.toml`
+пуст.
+
+**Шесть окон, все на C.**
+
+| Каталог | Стенд | Кейсы | Вердикт | Окно (UTC) | sha256 `verdict.json` |
+| --- | --- | --- | --- | --- | --- |
+| `linux-ipv6-r3` | minipc, netns `wl-scan`/`wl-peer`, стенд autodetect + IPv6 на паре veth (ULA `fd00:198:18::/64`, шлюз — link-local пира, постоянные соседи с обеих сторон), ответчик лаборатории с `--tcp6-ips`, C-оракул masscan 8e6b3b0 | `v01`–`v03` (+ манифест) | **PASS 4/4**, `safety_trips` [] | 19:39:50Z–19:42:01Z | `87902aa705879cb29bf5873bf4751b3e5b0178215e4adf1912637fd53c0a325e` |
+| `linux-protocols-r3` | тот же стенд без IPv6, `--suite protocols` (+ `icmp_ratemask=0` в netns пира, ответчик UDP/SCTP) | `p01`–`p05` (+ манифест) | **PASS 6/6**, `safety_trips` [] | 19:42:13Z–19:45:35Z | `abe525f1bab736145bdd79061cd38025ed9efc3c5b5bfe12a660e185a35b950b` |
+| `linux-scan-control-r3` | тот же стенд, `--suite scan-control` (вторая пара veth) | `sc01`–`sc06` (+ манифест) | **PASS 7/7**, `safety_trips` [] | 19:45:53Z–19:48:06Z | `39746e75fc0aba49902390c9ff78f43eb518eb3c46619e165259d9936ff9a2c4` |
+| `linux-output-r3` | тот же стенд, `--suite output` | `o01`–`o17` (+ манифест) | **PASS 18/18**, `safety_trips` [] | 19:48:24Z–19:53:40Z | `d93f60540b44e94862da8ff8b9f96188879af6b2f528a8a6cd14a124c59e1565` |
+| `linux-autodetect-r3` | тот же стенд, `--suite autodetect` | `l01`–`l12` (+ манифест) | **PASS 13/13**, `safety_trips` [] | 19:53:59Z–19:55:33Z | `9e45233481687cc34344e55615e953a568590ea2035f6a048edf7a4b48fff0a5` |
+| `windows-autodetect-r3` | home-pc, QEMU-гость Windows 11, стенд `n2` (мост/TAP/netns без uplink), Npcap Admin-only, исправленный стенд гостя (только прочитан, ниже) | `w01`–`w08b` (+ манифест) | **PASS 10/10**, `safety_trips` [] | 19:58:53Z–20:29:29Z | `1f7aa5d9eecb7d3557b31bcd68523cfe5bb3b497a419ceedc20c562e9bbb2866` |
+
+Хэши пересчитаны `shasum -a 256 <каталог>/verdict.json` в каталоге сырых данных r3 и равны его README; верификатор Mac на C
+выносит копии в репозитории те же `verdict.json` байт в байт (`verification/rederive-on-committed-copy.txt`). Числа проверок
+те же, что в r2: IPv6 286, протоколы 419, управление сканом 359, вывод 759, автоопределение 412, Windows 299. Живые
+формы IPv6 те же, что в разделе 3.1: в шагах rmasscan `v01` и `v02` одна NS резолвера (`ndp: 1 requests`) и одна NA пира на
+неё, в `v03` ни одной NS; шум ядер 0 кадров в каждом из 10 шагов; `unexplained` 0; `reply_order_swaps` 0 во всех шагах IPv6;
+отклонения сработали так же (`ipv6-ttl-not-compared`: 16, 1 из 8 и 4 из 4). Протоколы: у оракула в `p02` по одной паре
+записей в обратном порядке внутри окна 50 мкс (10 и 2 мкс), у rmasscan пар нет.
+
+Стенд гостя: исправление прежнего этапа не применялось заново и не откатывалось, а только прочитано дважды скриптом pwsh 7 (до
+`vm-lab up`, 19:48:01Z, и после перезапуска VM для окна, 19:58:03Z); каждая строка `reg` и `nic` обоих чтений равна снимку
+применения (`verification/guest-stand-check-r3.txt`). В 9 `peer.pcap` окна Windows нет ни UDP-, ни IPv6-кадра; на `eno1` 0 кадров
+в каждом прогоне. Privacy: `privacy-scan` с теми же девятью ролями токенов, что в разделе 8, дал 0 совпадений в каждом из шести
+каталогов, в `verification/` и во всём каталоге; пословный `grep` из `rust-lab.md` нашёл только случайные байты `61 31` одного
+SYN-ACK пира в `linux-scan-control-r3/runs/sc04_packet_mods_and_pcap/mods/` (`scanner.pcap` и `peer.pcap`; младший байт порта
+назначения и первый байт номера последовательности), это записано в README сырых данных r3 (`verification/privacy-scan.txt`).
+
+**Ворота на C.**
+
+| Хост | Результат |
+| --- | --- |
+| Mac (macOS 27.2.1) | `cargo test --locked --workspace --no-fail-fast`: **2201 passed, 0 failed**, 23 ignored, 51 строка `^test result:` (`verification/mac-test-ws-summary.txt`); clippy 0; `cargo fmt --check` 0; `cargo check --locked` в `studio/` 0; `scripts/language-guard.sh` PASS (14551 файлов); Studio `cargo xtask test` (шаг «Offline contracts» `studio.yml`: тесты, clippy, fmt; SQLite из brew, как в задании macOS) rc 0: **484 passed, 0 failed**, 2 ignored, 43 строки (`verification/mac-studio-xtask-test-summary.txt`) |
+| minipc (Linux 7.0.0-38-generic) | `RMASSCAN_EXPECT_DEFAULT_ROUTE=1 cargo test --locked --workspace --no-fail-fast`: **2084 passed, 0 failed**, 14 ignored, 51 строка; `cargo clippy --locked --workspace --all-targets -- -D warnings`: 0. Оба под `nice -n 19` в свежем экспорте C со своим target (шли одновременно с окном Windows, ssh которого идёт через minipc); каталог окон удалён до этого, в `/tmp` (tmpfs) одновременно лежал один экспорт |
+| гость (Windows 10.0.26300, elevated, Npcap Admin-only, `n2` снят) | `RMASSCAN_EXPECT_DEFAULT_ROUTE=1 cargo test --locked --workspace --no-fail-fast`: **1973 passed, 0 failed**, 35 ignored, 51 строка; clippy 0; `rmasscan.exe` (`d8819990…`) со статическим CRT и `0800 Dependent Load Flag` |
+| home-pc (Linux 7.3.0-10-generic) | `rmasscan-lab` C (`fdaf2826…`) и `deploy-manifest` для C |
+
+Строки `test result` считаны строгим `grep -c '^test result:'`.
+
+**Не запускалось в r3.** macOS живой (`m1`), в том числе цели link-local и поиск маршрута IPv6 через обмен PF_ROUTE main
+вживую: **NOT RUN** (нужен `sudo` пользователя). Windows IPv6: **NOT RUN** (П14; lab-NIC гостя без IPv6). Studio: упаковка
+`cargo xtask build`, шаги только Linux и только Windows `studio.yml` и живые окна Studio: **NOT RUN** локально. Физические NIC:
+**NOT RUN**. Правило подтверждения 1e9 и проверка MAC хопа IPv6 вошли в код под окнами r3, но ни одно окно их не упражняет
+(раздел 10).
+
+**Замещённые попытки r3:** нет. Каждое окно прошло с первого прогона (`verification/superseded-attempts.txt`).
+
+CI: **PENDING**, заполняется при PR.

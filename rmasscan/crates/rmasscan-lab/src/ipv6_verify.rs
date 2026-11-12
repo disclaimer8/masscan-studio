@@ -800,7 +800,7 @@ impl StepView for WireView {
     }
 }
 /// The frames of the scanner MAC that are no probe of the scan and that the scanner side sends on the stand.
-pub const SCANNER_CLASSES: [(&str, &str); 4] = [
+pub const SCANNER_CLASSES: [(&str, &str); 5] = [
     (
         "next_hop_who_has",
         "the IPv4 next-hop resolution of a scan with IPv4 targets: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan)",
@@ -817,14 +817,19 @@ pub const SCANNER_CLASSES: [(&str, &str); 4] = [
         "na_to_peer_ns",
         "a Neighbor Advertisement of the scanner's address answering a Neighbor Solicitation of the peer for it: the scanner namespace kernel, and on rmasscan's step its NS responder (T4)",
     ),
+    (
+        "rst_to_rst",
+        "C's own TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of an RST of the stand (a closed port): C resets each distinct reply that passes its cookie check and dedup, the RST as well as the SYN-ACK (main.c:1048-1101, `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST; live 7b r1), in its template's form (window 1200, the MSS option); only on the oracle's step: rmasscan has no RST path and no kernel answers an RST",
+    ),
 ];
 /// How many frames of each [`SCANNER_CLASSES`] entry a step may hold: the resolver's request count when the step
 /// resolves that family's next hop ([`pv::NEXT_HOP_WHO_HAS_MAX_RMASSCAN`], [`pv::NEXT_HOP_WHO_HAS_MAX_C`],
 /// [`NEXT_HOP_NS_MAX`]; 0 otherwise: a scan without IPv4 targets never ARPs, a step given `--router-mac-ipv6` and C,
 /// which is always given it here, never solicit), one kernel reset per SYN-ACK frame plus on the oracle's step one
-/// reset of C per distinct SYN-ACK, and per peer NS for the scanner one NA of the kernel plus, on rmasscan's step, one
-/// of its responder. `(class, count, at most)` in [`SCANNER_CLASSES`] order.
-pub fn scanner_bounds(v: &WireView, who: Who, c: &CaseSpec) -> [(&'static str, usize, usize); 4] {
+/// reset of C per distinct SYN-ACK, per peer NS for the scanner one NA of the kernel plus, on rmasscan's step, one
+/// of its responder, and on the oracle's step one reset of C per distinct RST of the stand (none on rmasscan's).
+/// `(class, count, at most)` in [`SCANNER_CLASSES`] order.
+pub fn scanner_bounds(v: &WireView, who: Who, c: &CaseSpec) -> [(&'static str, usize, usize); 5] {
     let syn_acks = v.replies.iter().filter(|r| r.st == St::Open).count();
     let distinct = v
         .replies
@@ -843,12 +848,19 @@ pub fn scanner_bounds(v: &WireView, who: Who, c: &CaseSpec) -> [(&'static str, u
     } else {
         0
     };
-    let (resets, na) = match who {
-        Who::Rmasscan => (syn_acks, 2 * v.peer_ns.len()),
-        Who::Oracle => (syn_acks + distinct, v.peer_ns.len()),
+    let distinct_rst = v
+        .replies
+        .iter()
+        .filter(|r| r.st == St::Closed)
+        .map(|r| (r.ip, r.port))
+        .collect::<BTreeSet<_>>()
+        .len();
+    let (resets, na, c_resets_of_rst) = match who {
+        Who::Rmasscan => (syn_acks, 2 * v.peer_ns.len(), 0),
+        Who::Oracle => (syn_acks + distinct, v.peer_ns.len(), distinct_rst),
     };
-    let max = [who_has, ns, resets, na];
-    let mut out = [("", 0, 0); 4];
+    let max = [who_has, ns, resets, na, c_resets_of_rst];
+    let mut out = [("", 0, 0); 5];
     for (i, (k, _)) in SCANNER_CLASSES.iter().enumerate() {
         out[i] = (*k, v.scanner_named.get(k).copied().unwrap_or(0), max[i]);
     }
@@ -885,19 +897,24 @@ fn scanner_frame(f: &[u8], st: &Stand, v: &WireView) -> Mine {
         return Mine::Other(describe(f));
     }
     if let Some(x) = tcp(&p).filter(|x| x.flags & 0x04 != 0) {
-        let answers = x.flags == 0x04
-            && v.replies.iter().any(|r| {
-                r.st == St::Open
-                    && r.ip == p.dst
-                    && pkt(&r.frame)
-                        .and_then(|q| tcp(&q))
-                        .is_some_and(|y| (y.sp, y.dp, y.ack) == (x.dp, x.sp, x.seq))
-            });
-        return if answers {
+        // the reply of status `st` that this RST answers: its ports reversed, its acknowledgment as the sequence
+        let answers = |st: St| {
+            x.flags == 0x04
+                && v.replies.iter().any(|r| {
+                    r.st == st
+                        && r.ip == p.dst
+                        && pkt(&r.frame)
+                            .and_then(|q| tcp(&q))
+                            .is_some_and(|y| (y.sp, y.dp, y.ack) == (x.dp, x.sp, x.seq))
+                })
+        };
+        return if answers(St::Open) {
             Mine::Class(SCANNER_CLASSES[2].0)
+        } else if answers(St::Closed) {
+            Mine::Class(SCANNER_CLASSES[4].0)
         } else {
             Mine::Other(format!(
-                "{}, which resets no SYN-ACK of the stand",
+                "{}, which resets no SYN-ACK and no RST of the stand",
                 describe(f)
             ))
         };
@@ -1500,9 +1517,9 @@ fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView, c: &CaseSpec) {
     scanner_frame_checks(
         r,
         s,
-        "every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, NA to a peer NS)",
+        "every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
         &v.scanner_unexplained,
-        "the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+        "the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
         &scanner_bounds(v, s.spec.who, c),
     );
 }

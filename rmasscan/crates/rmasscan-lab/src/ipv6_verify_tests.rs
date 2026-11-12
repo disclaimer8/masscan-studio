@@ -159,6 +159,62 @@ fn scanner_rst(r: &[u8]) -> Vec<u8> {
         )
     }
 }
+/// C's own RST to reply `r` (a SYN-ACK or the RST of a closed port), as live 7b r1 caught it: tcp_send_RST builds it
+/// from the scan's template (tcp_create_packet), so flags 0x04, the reply's acknowledgment as its sequence number,
+/// acknowledgment 0, window 1200 and the template's MSS option (78 bytes over IPv6).
+fn c_rst(r: &[u8]) -> Vec<u8> {
+    let at = l4_at(r);
+    let mut l4 = tcp_l4(be16(r, at + 2), be16(r, at), be32(r, at + 8), 0, 0x04);
+    l4[12] = 0x60;
+    l4[14..16].copy_from_slice(&1200_u16.to_be_bytes());
+    l4.extend([2, 4, 0x05, 0xb4]);
+    if r[12..14] == [8, 0] {
+        ip_frame(
+            PEER_MAC,
+            SCANNER_MAC,
+            SCANNER_IP,
+            Ipv4Addr::new(r[26], r[27], r[28], r[29]),
+            6,
+            l4,
+        )
+    } else {
+        ip6_frame(
+            PEER_MAC,
+            SCANNER_MAC,
+            scanner6(),
+            v6_at(r, 22),
+            6,
+            255,
+            l4,
+            Some(16),
+            false,
+        )
+    }
+}
+/// A peer TCP reply on a step's wire (SYN-ACK or RST-ACK), by its flags.
+fn peer_tcp_reply(f: &[u8]) -> bool {
+    if f[6..12] != PEER_MAC {
+        return false;
+    }
+    let at = match &f[12..14] {
+        [8, 0] if f[23] == 6 => 34,
+        [0x86, 0xdd] if f[20] == 6 => 54,
+        _ => return false,
+    };
+    matches!(f.get(at + 13), Some(0x12 | 0x14))
+}
+/// Every TCP reply of a step's wire, followed 0.1 ms later by C's own RST to it.
+fn with_c_resets(frames: &Frames) -> Frames {
+    let mut out = Frames::new();
+    for (t, f) in frames {
+        out.push((*t, f.clone()));
+        if peer_tcp_reply(f) {
+            out.push((t + 0.0001, c_rst(f)));
+        }
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
 fn ll_scanner() -> Ipv6Addr {
     IPV6_SCANNER_LL.parse().unwrap()
 }
@@ -1390,4 +1446,74 @@ fn the_products_ns_passes_the_verifiers_hand_written_resolver_form() {
     .request_frame();
     assert!(is_next_hop_ns(&f, &stand()));
     assert_eq!(f.to_vec(), rm_ns());
+}
+
+#[test]
+fn cs_own_reset_of_each_first_reply_is_named_on_the_oracles_step_and_never_rmasscans() {
+    // Live 7b r1: C resets each distinct reply that passes its cookie check and dedup, the closed port's RST as well
+    // as the SYN-ACK (main.c:1048-1101: `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST), in both families.
+    let mut sim = Sim::new("v02_mixed_v4_v6");
+    for name in ["oracle-binary", "oracle-list"] {
+        let s = sim.step_mut(name);
+        s.frames = with_c_resets(&s.frames);
+    }
+    let root = scratch();
+    sim.write(&root);
+    fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
+    let res = verify_dir(&root);
+    let run_ = run_of(&res, sim.tag).clone();
+    fs::remove_dir_all(&root).unwrap();
+    assert_eq!(s(&run_["verdict"]), PASS, "{:#?}", bad(&run_));
+    for name in ["oracle-binary", "oracle-list"] {
+        let n = &run_["notes"]["scanner_frames"][name];
+        // 16 probes, 8 open and 8 closed: the kernel's 8 resets and C's 8 of the SYN-ACKs, C's 8 of the RSTs
+        assert_eq!(n["rst_to_syn_ack"], 16, "{n}");
+        assert_eq!(n["at_most"]["rst_to_syn_ack"], 16, "{n}");
+        assert_eq!(n["rst_to_rst"], 8, "{n}");
+        assert_eq!(n["at_most"]["rst_to_rst"], 8, "{n}");
+        assert_eq!(n["unexplained"], 0, "{n}");
+    }
+    // a second reset of C for the same RST is over the bound: a broken oracle (INVALID), never rmasscan's FAIL
+    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+    let s = sim.step_mut("oracle-json");
+    s.frames = with_c_resets(&s.frames);
+    let i = s
+        .frames
+        .iter()
+        .position(|(_, f)| f[6..12] == PEER_MAC && f.get(54 + 13) == Some(&0x14))
+        .unwrap();
+    let (t, again) = (s.frames[i].0 + 0.0002, c_rst(&s.frames[i].1));
+    s.frames.insert(i + 2, (t, again));
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            INVALID,
+            "oracle-json: the named scanner-side frames stay within their bounds"
+        ) && b[0].contains("rst_to_rst 5 of at most 4"),
+        "{b:#?}"
+    );
+    // rmasscan has no RST path and no kernel answers an RST: the same frame on rmasscan's step is its FAIL
+    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+    let s = sim.step_mut("json");
+    let i = s
+        .frames
+        .iter()
+        .position(|(_, f)| f[6..12] == PEER_MAC && f.get(54 + 13) == Some(&0x14))
+        .unwrap();
+    let (t, rst) = (s.frames[i].0 + 0.0001, c_rst(&s.frames[i].1));
+    s.frames.insert(i + 1, (t, rst));
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert_eq!(b.len(), 1, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "json: the named scanner-side frames stay within their bounds"
+        ) && b[0].contains("rst_to_rst 1 of at most 0"),
+        "{b:#?}"
+    );
 }

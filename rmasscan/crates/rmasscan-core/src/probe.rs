@@ -107,6 +107,13 @@ pub enum PlanError {
         "the adapter has no IPv6 next-hop MAC (next_hop_mac_ipv6), so no IPv6 probe can be built\n    [hint] try \"--router-mac-ipv6 66-55-44-33-22-11\" instead to bypass NDP"
     )]
     NoNextHopMacIpv6,
+    /// `next_hop_mac_ipv6` равен MAC источника: собственные кадры нельзя отличить от ответов (фильтр
+    /// `not ether src <source_mac>` на macOS и Windows отбросил бы каждый ответ IPv6). Та же проверка у IPv4
+    /// живёт в адаптерах macOS и Windows (`check_binding`), у IPv6 она на уровне плана, общем для всех ОС.
+    #[error(
+        "the IPv6 next-hop MAC equals the adapter source MAC: own transmitted frames could not be told from replies\n    [hint] use a --router-mac-ipv6 that is not this adapter's own MAC"
+    )]
+    Ipv6NextHopIsSourceMac,
     #[error("need 1..=8 adapters, got {0}")]
     BadNicCount(usize),
     #[error("adapter index {index} is out of range for {count} adapters")]
@@ -697,6 +704,13 @@ impl ReadyPlan {
                     r.begin.max(u32::from(u16::MAX) + 1),
                 ));
             }
+        }
+        // MAC следующего хопа IPv6 не равен MAC источника (у IPv4 это проверяют адаптеры macOS и Windows).
+        if nics
+            .iter()
+            .any(|n| n.next_hop_mac_ipv6 == Some(n.binding.source_mac))
+        {
+            return Err(PlanError::Ipv6NextHopIsSourceMac);
         }
         // План CLI принимает цели IPv6 (R7 снят в T5): передающий цикл строит их зонды (`Builder::fill_v6`).
         ReadyPlan::build(effective, nics, false, true, payloads)
@@ -2243,6 +2257,31 @@ mod tests {
         nic.source_ipv6 = Some(0xfd00_0000_0000_0000_0000_0000_0000_0002);
         nic.next_hop_mac_ipv6 = Some([0x02, 0x00, 0x5e, 0x10, 0x00, 0x09]);
         nic
+    }
+
+    /// An IPv6 next-hop MAC equal to the adapter's own MAC would make the own-frame filter drop every reply; the plan
+    /// refuses it for every OS (the IPv4 twin lives in the macOS and Windows `check_binding`).
+    #[test]
+    fn cli_plan_refuses_an_ipv6_next_hop_mac_equal_to_the_source_mac() {
+        let e = eff_v46("2001:db8::1", "80");
+        let mut nic = v6_nic();
+        nic.next_hop_mac_ipv6 = Some(nic.binding.source_mac);
+        assert_eq!(
+            ReadyPlan::new_cli(e.clone(), vec![nic]).unwrap_err(),
+            PlanError::Ipv6NextHopIsSourceMac
+        );
+        // a second adapter is checked too
+        let mut bad = v6_nic();
+        bad.next_hop_mac_ipv6 = Some(bad.binding.source_mac);
+        assert_eq!(
+            ReadyPlan::new_cli(e.clone(), vec![v6_nic(), bad]).unwrap_err(),
+            PlanError::Ipv6NextHopIsSourceMac
+        );
+        // a different MAC and an unresolved next hop (None) stay accepted
+        assert!(ReadyPlan::new_cli(e.clone(), vec![v6_nic()]).is_ok());
+        let mut none = v6_nic();
+        none.next_hop_mac_ipv6 = None;
+        assert!(ReadyPlan::new_cli(e, vec![none]).is_ok());
     }
 
     /// T5: передающий цикл плана CLI шлёт цели IPv6 (main.c:336-353): индексы `< range_ipv6` дают зонд

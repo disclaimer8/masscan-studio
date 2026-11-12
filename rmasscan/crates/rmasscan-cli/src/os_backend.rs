@@ -60,7 +60,7 @@ impl Backend for OsBackend {
         ArpPolicy::default()
     }
 
-    /// C `stack_ndpv6_resolve` (`stack-ndpv6.c:355-374`): раз в секунду, 10 попыток, как ARP.
+    /// C `stack_ndpv6_resolve` (`stack-ndpv6.c:425-440`): раз в секунду, 10 попыток, как ARP.
     fn ndp_policy(&self) -> NdpPolicy {
         NdpPolicy::default()
     }

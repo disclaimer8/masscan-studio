@@ -81,7 +81,7 @@ pub trait Backend: Wall {
     fn entropy64(&self) -> u64;
     /// Интервал и срок ARP.
     fn arp_policy(&self) -> ArpPolicy;
-    /// Интервал и срок NDP (C: те же 1 с / 10 с, что у ARP, `stack-ndpv6.c:355-374`). По умолчанию как у ARP.
+    /// Интервал и срок NDP (C: те же 1 с / 10 с, что у ARP, `stack-ndpv6.c:425-440`). По умолчанию как у ARP.
     fn ndp_policy(&self) -> NdpPolicy {
         let a = self.arp_policy();
         NdpPolicy {

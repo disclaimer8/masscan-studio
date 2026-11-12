@@ -2,10 +2,10 @@
 //! [`crate::arp_resolve`] (повторы раз в секунду, срок 10 секунд, прерывание Ctrl-C, те же `Tx`/`Rx`, часы только
 //! через [`Clock`]). Кодек в `rmasscan_core::ndp`.
 //!
-//! Отличие от C: `stack_ndpv6_resolve` (`stack-ndpv6.c:261-415`) не шлёт Neighbor Solicitation, а шлёт Router
+//! Отличие от C: `stack_ndpv6_resolve` (`stack-ndpv6.c:312-487`) не шлёт Neighbor Solicitation, а шлёт Router
 //! Solicitation на `ff02::2` и ждёт Router Advertisement (повтор раз в секунду, 10 повторов, :357-374, как у ARP).
 //! Здесь резолвер задаёт тот же вопрос "кто имеет адрес", что и ARP (RFC 4861 §7.2.2), и принимает только NA по
-//! §7.1.2; интервал и срок взяты у C (`stack_ndpv6_resolve` :355-374: смена секунды, `i++ >= 10`).
+//! §7.1.2; интервал и срок взяты у C (`stack_ndpv6_resolve` :425-440: смена секунды, `i++ >= 10`).
 //!
 //! Единственный передаваемый кадр: `PendingNdp::request_frame` (86 байт, solicited-node multicast). `Rx::health` не
 //! вызывается: потери в фазе NDP на результат скана не влияют.

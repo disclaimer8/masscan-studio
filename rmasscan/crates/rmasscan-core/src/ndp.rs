@@ -4,7 +4,7 @@
 //! Neighbor Solicitation и разбор Neighbor Advertisement по RFC 4861 (§4.3, §4.4, §7.1, §7.2.4).
 //!
 //! Отличия от C, намеренные (каждое идёт в README):
-//! * В C нет кодировщика Neighbor Solicitation: `stack_ndpv6_resolve` (:261-415) ищет маршрутизатор Router
+//! * В C нет кодировщика Neighbor Solicitation: `stack_ndpv6_resolve` (:312-487) ищет маршрутизатор Router
 //!   Solicitation (133) и ждёт Router Advertisement (134). Здесь соседа и шлюз разрешают Neighbor Solicitation
 //!   на solicited-node multicast (RFC 4861 §7.2.2), как ARP-резолвер.
 //! * Ответчик C отвечает только по случайному совпадению: `parsed->opcode` (:111) заполняет один разбор ARP
@@ -37,7 +37,7 @@ pub const NEIGHBOR_ADVERTISEMENT: u8 = 136;
 /// Опции Source / Target Link-Layer Address (RFC 4861 §4.6.1).
 const OPT_SLLA: u8 = 1;
 const OPT_TLLA: u8 = 2;
-/// Флаги NA в ответе C (:158): `0x60` = Solicited | Override. Router (0x80) не ставится.
+/// Флаги NA в ответе C (:161): `0x60` = Solicited | Override. Router (0x80) не ставится.
 pub const NA_FLAGS_SOLICITED_OVERRIDE: u8 = 0x60;
 const NA_FLAG_SOLICITED: u8 = 0x40;
 
@@ -124,7 +124,7 @@ pub fn encode_neighbor_solicitation(
     })
 }
 
-/// Neighbor Advertisement (Solicited | Override, как `stack-ndpv6.c:158`) от `my_ip`/`my_mac` к `dst_mac`/`dst_ip`
+/// Neighbor Advertisement (Solicited | Override, как `stack-ndpv6.c:161`) от `my_ip`/`my_mac` к `dst_mac`/`dst_ip`
 /// с опцией Target Link-Layer Address = `my_mac`. Всегда 86 байт и `payload_length` 32 (ошибка длины C :145).
 pub fn encode_neighbor_advertisement(
     my_mac: [u8; 6],

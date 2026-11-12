@@ -112,9 +112,10 @@ pub const DEVIATIONS: [(&str, &str); 4] = [
     ),
 ];
 
-/// Why rmasscan's document and the oracle's are compared as multisets of records (protocols R17/R21).
-/// The well-formedness check of the oracle's documents names what C's `-oJ` may hold beyond a byte (7b r1).
+/// What C's `-oJ` may hold for an IPv6 record beyond a byte, named by the well-formedness check of the oracle's
+/// documents (7b r1).
 pub const IPV6_DOC_RULE: &str = " (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it never sets for IPv6, ipv6-ttl-not-compared)";
+/// Why rmasscan's document and the oracle's are compared as multisets of records (protocols R17/R21).
 pub const RECORD_ORDER_VS_C: &str = "each scanner prints its records in the order the replies arrive on its own wire (judged per step, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand (the peer kernel answers a burst of probes in an order that changes from run to run, protocols r1), so rmasscan's records must equal C's field for field but the time, IPv6 ttl aside (ipv6-ttl-not-compared), in any order";
 
 /// One case: what it scans and which documents it writes.

@@ -930,6 +930,34 @@ mod tests {
         v
     }
 
+    /// Mutated and truncated type 10/11 records never panic the reader (it may return an error). The cli crate has no
+    /// proptest dependency, so a fixed xorshift sequence drives the mutations; the run is deterministic.
+    #[test]
+    fn readscan_v6_records_survive_random_mutation_and_truncation() {
+        let base = make_bin(&[
+            v6(1_700_000_000, "2a03:9060:0:400::2", 443, Status::Open),
+            rec(1_700_000_001, [10, 0, 0, 1], 80, Status::Open),
+            v6(1_700_000_002, "2001:db8::5", 22, Status::Closed),
+        ]);
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..3000 {
+            let mut b = base.clone();
+            for _ in 0..(next() % 6) {
+                let i = (next() as usize) % b.len();
+                b[i] = next() as u8;
+            }
+            let cut = (next() as usize) % 40;
+            b.truncate(b.len().saturating_sub(cut));
+            let _ = read_all(&b);
+        }
+    }
+
     /// Review Focus 5. Types 10/11 (`in-binary.c:228-276`, `parse_status6`) are read back exactly as written and
     /// mixed with IPv4 records in file order. Mixed and IPv4-only filters are C's (`massip_has_ip` picks the list by
     /// the record's version, `massip.c:45-51`); the IPv6-only filter is R14, see below.

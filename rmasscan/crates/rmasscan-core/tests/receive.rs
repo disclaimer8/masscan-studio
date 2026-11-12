@@ -2091,3 +2091,211 @@ mod arp_scan {
         assert_eq!(seen, (0x0a00_0000..0x0a00_0008).collect::<Vec<u32>>());
     }
 }
+
+// ---------- IPv6 and NDP: untrusted input never panics ----------
+
+mod ipv6_never_panic {
+    use super::*;
+    use rmasscan_core::ndp::{
+        PendingNdp, answer_neighbor_solicitation, decode_neighbor_advertisement,
+        decode_neighbor_solicitation, encode_neighbor_advertisement, encode_neighbor_solicitation,
+    };
+    use rmasscan_core::probe::NicBinding;
+    use rmasscan_core::receive::ndp_reply_for;
+
+    const THEM6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+    const ME6: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+    const SEED6: u64 = 0x0123_4567_89ab_cdef;
+    /// Low 32 bits of C `syn_cookie_ipv6(THEM6, 80, ME6, 40000, SEED6)` (the same value `receive.rs` pins).
+    const COOKIE6: u32 = 0x824e_4617;
+
+    fn plan6(link: LinkType) -> ReadyPlan {
+        let mut m = MassIp::new();
+        m.ipv6_mut().add(THEM6 & !0xff, THEM6 | 0xff);
+        parse_ports(m.ports_mut(), "80").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED6,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding {
+                binding: AdapterBinding {
+                    interface_id: "t0".into(),
+                    link_type: link,
+                    source_ipv4: IP_ME,
+                    source_mac: MAC_ME,
+                    next_hop_mac: MAC_NH,
+                    source_ports: (40000, 40015),
+                },
+                source_ipv4_last: IP_ME,
+                legacy_c_17_port_mask: false,
+                source_ipv6: Some(ME6),
+                next_hop_mac_ipv6: None,
+            }],
+        )
+        .unwrap()
+    }
+
+    /// RFC 8200 section 8.1 checksum, written here independently of the parser.
+    fn sum6(src: u128, dst: u128, seg: &[u8]) -> u16 {
+        let mut w = Vec::new();
+        w.extend_from_slice(&src.to_be_bytes());
+        w.extend_from_slice(&dst.to_be_bytes());
+        w.extend_from_slice(&(seg.len() as u32).to_be_bytes());
+        w.extend_from_slice(&[0, 0, 0, 6]);
+        w.extend_from_slice(seg);
+        let mut s: u64 = w
+            .chunks(2)
+            .map(|c| u64::from(c[0]) << 8 | u64::from(*c.get(1).unwrap_or(&0)))
+            .sum();
+        while s > 0xffff {
+            s = (s & 0xffff) + (s >> 16);
+        }
+        !(s as u16)
+    }
+
+    /// A valid SYN-ACK from `THEM6:80` to `ME6:40000` behind one Hop-by-Hop header (8 bytes of PadN).
+    fn synack6_hbh(link: LinkType) -> Vec<u8> {
+        let mut tcp = vec![0u8; 20];
+        tcp[0..2].copy_from_slice(&80u16.to_be_bytes());
+        tcp[2..4].copy_from_slice(&40000u16.to_be_bytes());
+        tcp[8..12].copy_from_slice(&COOKIE6.wrapping_add(1).to_be_bytes());
+        tcp[12] = 0x50;
+        tcp[13] = 0x12;
+        tcp[14..16].copy_from_slice(&0x0400u16.to_be_bytes());
+        let c = sum6(THEM6, ME6, &tcp);
+        tcp[16..18].copy_from_slice(&c.to_be_bytes());
+        let mut p = vec![0x60, 0, 0, 0];
+        p.extend_from_slice(&((8 + tcp.len()) as u16).to_be_bytes());
+        p.extend_from_slice(&[0, 59]);
+        p.extend_from_slice(&THEM6.to_be_bytes());
+        p.extend_from_slice(&ME6.to_be_bytes());
+        p.extend_from_slice(&[6, 0, 0x01, 0x04, 0, 0, 0, 0]);
+        p.extend_from_slice(&tcp);
+        match link {
+            LinkType::Ethernet => [&MAC_ME[..], &MAC_NH[..], &[0x86, 0xdd][..], &p].concat(),
+            LinkType::Null => [&[0x1e, 0, 0, 0][..], &p].concat(),
+            LinkType::Raw => p,
+        }
+    }
+
+    fn all_policies(f: &[u8], link: LinkType, plan: &ReadyPlan) {
+        for pol in [ChecksumPolicy::Verify, ChecksumPolicy::TrustHardware] {
+            let _ = parse_reply_with(f, link, plan, pol);
+        }
+        let _ = ndp_reply_for(f, link, plan);
+    }
+
+    #[test]
+    fn the_valid_ipv6_synack_is_accepted_so_the_mutations_start_from_a_real_frame() {
+        for link in LINKS {
+            let r = parse_reply(&synack6_hbh(link), link, &plan6(link))
+                .unwrap()
+                .unwrap();
+            assert_eq!((r.remote_port, r.local_port), (80, 40000));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// Arbitrary bytes, and the same bytes behind an Ethernet IPv6 EtherType, on a plan that takes IPv6.
+        #[test]
+        fn ipv6_arbitrary_bytes_never_panic(
+            bytes in proptest::collection::vec(any::<u8>(), 0..1600), li in 0usize..3,
+            prefix in any::<bool>(),
+        ) {
+            let link = LINKS[li];
+            let plan = plan6(link);
+            let mut f = bytes;
+            if prefix && link == LinkType::Ethernet && f.len() >= 14 {
+                f[12] = 0x86;
+                f[13] = 0xdd;
+            }
+            all_policies(&f, link, &plan);
+        }
+
+        /// Random headers behind a valid IPv6 prefix: reaches the extension-header walk and the TCP parse.
+        #[test]
+        fn ipv6_random_headers_behind_valid_prefix_never_panic(
+            ip in proptest::collection::vec(any::<u8>(), 40..=120),
+            next in any::<u8>(), plen in any::<u16>(), fix_len in any::<bool>(),
+            dst_is_me in any::<bool>(), li in 0usize..3,
+        ) {
+            let link = LINKS[li];
+            let plan = plan6(link);
+            let mut p = ip;
+            p[0] = 0x60 | (p[0] & 0x0f);
+            p[6] = next;
+            let l = if fix_len { (p.len() - 40) as u16 } else { plen };
+            p[4..6].copy_from_slice(&l.to_be_bytes());
+            if dst_is_me { p[24..40].copy_from_slice(&ME6.to_be_bytes()); }
+            let f = match link {
+                LinkType::Ethernet => [&MAC_ME[..], &MAC_NH[..], &[0x86, 0xdd][..], &p].concat(),
+                LinkType::Null => [&[0x1e, 0, 0, 0][..], &p].concat(),
+                LinkType::Raw => p,
+            };
+            all_policies(&f, link, &plan);
+        }
+
+        /// Mutations and truncation of a valid SYN-ACK that carries a Hop-by-Hop header.
+        #[test]
+        fn mutated_ipv6_synack_with_hop_by_hop_never_panics(
+            muts in proptest::collection::vec((0usize..120, any::<u8>()), 0..6),
+            cut in 0usize..120, li in 0usize..3,
+        ) {
+            let link = LINKS[li];
+            let plan = plan6(link);
+            let mut f = synack6_hbh(link);
+            for (i, b) in muts { if let Some(x) = f.get_mut(i) { *x = b; } }
+            f.truncate(f.len().saturating_sub(cut));
+            all_policies(&f, link, &plan);
+        }
+
+        /// NS and NA decoders, the NS answerer and the resolver on arbitrary bytes.
+        #[test]
+        fn ndp_decoders_on_arbitrary_bytes_never_panic(
+            bytes in proptest::collection::vec(any::<u8>(), 0..200), prefix in any::<bool>(),
+        ) {
+            let mut f = bytes;
+            if prefix && f.len() > 54 {
+                f[12] = 0x86;
+                f[13] = 0xdd;
+                f[14] = 0x60;
+                f[20] = 58;
+                f[54] = if f[54] & 1 == 0 { 135 } else { 136 };
+            }
+            let _ = decode_neighbor_solicitation(&f);
+            let _ = decode_neighbor_advertisement(&f);
+            let _ = answer_neighbor_solicitation(&f, MAC_ME, ME6);
+            let mut p = PendingNdp::new(MAC_ME, ME6, THEM6);
+            let _ = p.offer(&f);
+        }
+
+        /// Mutations and truncation of a valid NS (to us) and a valid NA (from the target).
+        #[test]
+        fn mutated_valid_ns_and_na_never_panic(
+            muts in proptest::collection::vec((0usize..100, any::<u8>()), 0..6),
+            cut in 0usize..100, na in any::<bool>(),
+        ) {
+            let mut f = if na {
+                encode_neighbor_advertisement(MAC_NH, THEM6, MAC_ME, ME6).to_vec()
+            } else {
+                encode_neighbor_solicitation(MAC_NH, THEM6, ME6).to_vec()
+            };
+            for (i, b) in muts { if let Some(x) = f.get_mut(i) { *x = b; } }
+            f.truncate(f.len().saturating_sub(cut));
+            let _ = decode_neighbor_solicitation(&f);
+            let _ = decode_neighbor_advertisement(&f);
+            let _ = answer_neighbor_solicitation(&f, MAC_ME, ME6);
+            let mut p = PendingNdp::new(MAC_ME, ME6, THEM6);
+            let _ = p.offer(&f);
+            let plan = plan6(LinkType::Ethernet);
+            all_policies(&f, LinkType::Ethernet, &plan);
+        }
+    }
+}

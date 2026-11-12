@@ -588,6 +588,9 @@ fn wire_lab_raises_ipv6_only_for_the_ipv6_suite_and_only_on_the_lab_veth_pair() 
         r#"  ip -n "$NS_A" -6 route add default via "$IP6_GW" dev "$IF_A""#,
         r#"  for ip_ in $IP6_PEERS; do ip -n "$NS_A" -6 neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done"#,
         r#"  ip -n "$NS_B" -6 neigh add "$IP6_A" lladdr "$MAC_A" dev "$IF_B" nud permanent"#,
+        // 7b r1: the link-local addresses too, so no kernel learns (and later probes) the other side's
+        r#"  ip -n "$NS_A" -6 neigh add "$IP6_GW" lladdr "$MAC_B" dev "$IF_A" nud permanent"#,
+        r#"  ip -n "$NS_B" -6 neigh add "$IP6_A_LL" lladdr "$MAC_A" dev "$IF_B" nud permanent"#,
     ];
     let (mut depth_open, mut inside, mut found, mut body) =
         (false, Vec::new(), Vec::new(), Vec::new());
@@ -653,10 +656,11 @@ fn wire_lab_raises_ipv6_only_for_the_ipv6_suite_and_only_on_the_lab_veth_pair() 
     assert_eq!(settings, want.join(" "));
     // The stand's addresses are the Rust stand's.
     assert!(text.contains(&format!(
-        "IP6_A={}; IP6_PEERS=\"{}\"; IP6_GW={}",
+        "IP6_A={}; IP6_PEERS=\"{}\"; IP6_GW={}; IP6_A_LL={}",
         capture::IPV6_SCANNER,
         capture::IPV6_PEERS.join(" "),
-        capture::IPV6_PEER_LL
+        capture::IPV6_PEER_LL,
+        capture::IPV6_SCANNER_LL
     )));
     // The suite is started with the lab id and the same flags as the other stand suites.
     let suite = text

@@ -39,8 +39,9 @@
 # IPv6 is still off and the link down: no Duplicate Address Detection, no router solicitation or advertisement, no
 # forwarding, EUI-64 link-local addresses (the IPV6_SETTINGS line); then the ULA fd00:198:18::1/64 on veth-a,
 # fd00:198:18::2-5/64 on veth-b (nodad), in the scanner namespace an IPv6 default route via the peer's link-local
-# fe80::aa:ff:fe00:2 and permanent IPv6 neighbours for the peers, in the peer namespace the scanner as a permanent
-# neighbour, and a settle wait so that the kernels' MLD reports for the new groups are expected to be over before any capture.
+# fe80::aa:ff:fe00:2 and permanent IPv6 neighbours for the peers and the peer's link-local, in the peer namespace the
+# scanner and its link-local as permanent neighbours (a learnt link-local entry is probed by NUD, live 7b r1), and a
+# settle wait so that the kernels' MLD reports for the new groups are over before any capture.
 # Every setting dies with the namespaces; the seal is `capture isolation --mode ipv6`.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
@@ -108,7 +109,7 @@ IF_A=veth-a; IF_B=veth-b
 IF_A2=veth-a2; IF_B2=veth-b2; MAC_A2=02:aa:00:00:00:03; MAC_B2=02:aa:00:00:00:04; IP_ADAPTER2=198.18.0.6
 # The IPv6 stand of the ipv6 suite (see the header): fixed here too. The settings are the Rust IPV6_SYSCTLS, written
 # while IPv6 is still off; disable_ipv6=0 comes last.
-IP6_A=fd00:198:18::1; IP6_PEERS="fd00:198:18::2 fd00:198:18::3 fd00:198:18::4 fd00:198:18::5"; IP6_GW=fe80::aa:ff:fe00:2
+IP6_A=fd00:198:18::1; IP6_PEERS="fd00:198:18::2 fd00:198:18::3 fd00:198:18::4 fd00:198:18::5"; IP6_GW=fe80::aa:ff:fe00:2; IP6_A_LL=fe80::aa:ff:fe00:1
 IPV6_SETTINGS="accept_dad=0 accept_ra=0 router_solicitations=0 forwarding=0 addr_gen_mode=0 disable_ipv6=0"
 # The defaults are the Linux binding. The Windows stand overrides them (same script, same capture path) with
 # WIRELAB_* so that the C oracle fixtures use the SAME source IP/MAC and peer MAC as the real Windows run.
@@ -300,15 +301,19 @@ if [ "$SUITE" = ipv6 ]; then
   # ipv6: the ULA addresses without DAD, the scanner's IPv6 default route via the peer's link-local (several on-link
   # targets resolve the interface's default gateway, so rmasscan's NS goes to the router), and permanent neighbours on
   # both ends: no kernel needs to solicit on the wire (rmasscan's resolver does not read the neighbour table), and the
-  # peer answers the C oracle without asking the scanner, which C never answers.
+  # peer answers the C oracle without asking the scanner, which C never answers. The link-local addresses are
+  # permanent too: live (7b r1) the scanner kernel learnt the router's link-local (a route lookup via the default route
+  # probes the router) and the peer the scanner's, and NUD later probed both with unicast NS inside a step.
   ip -n "$NS_A" -6 addr add "$IP6_A/64" dev "$IF_A" nodad
   for ip_ in $IP6_PEERS; do ip -n "$NS_B" -6 addr add "$ip_/64" dev "$IF_B" nodad; done
   ip -n "$NS_A" -6 route add default via "$IP6_GW" dev "$IF_A"
   for ip_ in $IP6_PEERS; do ip -n "$NS_A" -6 neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done
   ip -n "$NS_B" -6 neigh add "$IP6_A" lladdr "$MAC_A" dev "$IF_B" nud permanent
-  note_cmd "ip -n \$NS_A -6 addr add $IP6_A/64 dev $IF_A nodad; ip -n \$NS_B -6 addr add {$IP6_PEERS}/64 dev $IF_B nodad; ip -n \$NS_A -6 route add default via $IP6_GW dev $IF_A; ip -n \$NS_A -6 neigh add {$IP6_PEERS} lladdr $MAC_B dev $IF_A nud permanent; ip -n \$NS_B -6 neigh add $IP6_A lladdr $MAC_A dev $IF_B nud permanent   # ipv6 stand"
+  ip -n "$NS_A" -6 neigh add "$IP6_GW" lladdr "$MAC_B" dev "$IF_A" nud permanent
+  ip -n "$NS_B" -6 neigh add "$IP6_A_LL" lladdr "$MAC_A" dev "$IF_B" nud permanent
+  note_cmd "ip -n \$NS_A -6 addr add $IP6_A/64 dev $IF_A nodad; ip -n \$NS_B -6 addr add {$IP6_PEERS}/64 dev $IF_B nodad; ip -n \$NS_A -6 route add default via $IP6_GW dev $IF_A; ip -n \$NS_A -6 neigh add {$IP6_PEERS} $IP6_GW lladdr $MAC_B dev $IF_A nud permanent; ip -n \$NS_B -6 neigh add $IP6_A $IP6_A_LL lladdr $MAC_A dev $IF_B nud permanent   # ipv6 stand"
   # The kernels' MLD reports for the groups just joined repeat for up to mldv2_unsolicited_report_interval (1 s):
-  # they are expected to be over before the first capture starts (to be confirmed live).
+  # they are over before the first capture starts (live 7b r1: no MLD frame in any step).
   sleep 3
 fi
 if [ "$SUITE" != oracle ]; then

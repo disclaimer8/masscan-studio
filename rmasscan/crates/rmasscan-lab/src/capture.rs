@@ -951,7 +951,8 @@ fn on_stand6(ip: std::net::Ipv6Addr) -> bool {
 /// the stand's (scanner `fd00:198:18::1/64` and its link-local, peer `fd00:198:18::2-5/64` and its link-local), none
 /// tentative, failed, optimistic or deprecated; the main table holds exactly the connected ULA and link-local routes
 /// (and on the scanner side the default route via the peer's link-local address; `::1` on `lo` is tolerated); every
-/// IPv6 neighbour is on the stand, and the other side's ULA addresses are permanent neighbours with its MAC; the
+/// IPv6 neighbour is on the stand, and the other side's ULA and link-local addresses are permanent neighbours with its
+/// MAC (no kernel learns, and later probes, the other side's link-local); the
 /// documentation address routes via the peer from the scanner side and not at all from the peer side. The record
 /// kept in `isolation.json`, or why the side is not the stand.
 pub fn check_ipv6_side(side: Side, iface: &str, snap: &Ipv6Snapshot) -> Result<Value, String> {
@@ -965,17 +966,20 @@ pub fn check_ipv6_side(side: Side, iface: &str, snap: &Ipv6Snapshot) -> Result<V
             snap.sysctls
         ));
     }
+    // `other`: the other side's addresses that must be permanent neighbours here, its ULAs and its link-local
+    // address (a learnt link-local entry is probed by NUD with a unicast NS, which the live r1 of 7b caught in a step;
+    // on the scanner side it is the router of the default route, which the kernel probes on a route lookup too).
     let (own, own_ll, other, other_mac): (Vec<&str>, &str, Vec<&str>, &str) = match side {
         Side::Scanner => (
             vec![IPV6_SCANNER],
             IPV6_SCANNER_LL,
-            IPV6_PEERS.to_vec(),
+            [IPV6_PEERS.as_slice(), &[IPV6_PEER_LL]].concat(),
             STAND_PEER_MAC,
         ),
         Side::Peer => (
             IPV6_PEERS.to_vec(),
             IPV6_PEER_LL,
-            vec![IPV6_SCANNER],
+            vec![IPV6_SCANNER, IPV6_SCANNER_LL],
             STAND_SCANNER_MAC,
         ),
     };
@@ -1739,19 +1743,21 @@ mod tests {
     /// One side of the IPv6 stand as iproute2 6.19 prints it (`ip -6 -j addr|route|neigh`; key names as in its
     /// `print_bool`/`print_string` calls: `tentative`, `nodad`, `state: ["PERMANENT"]`).
     pub(crate) fn ipv6_snapshot(side: Side) -> Ipv6Snapshot {
+        // The other side's ULA addresses and its link-local address are permanent neighbours (7b r1: a learnt
+        // link-local entry is probed by NUD, and such an NS fell into a step).
         let (iface, ulas, ll, others, mac): (&str, Vec<&str>, &str, Vec<&str>, &str) = match side {
             Side::Scanner => (
                 "veth-a",
                 vec![IPV6_SCANNER],
                 IPV6_SCANNER_LL,
-                IPV6_PEERS.to_vec(),
+                [IPV6_PEERS.as_slice(), &[IPV6_PEER_LL]].concat(),
                 STAND_PEER_MAC,
             ),
             Side::Peer => (
                 "veth-b",
                 IPV6_PEERS.to_vec(),
                 IPV6_PEER_LL,
-                vec![IPV6_SCANNER],
+                vec![IPV6_SCANNER, IPV6_SCANNER_LL],
                 STAND_SCANNER_MAC,
             ),
         };
@@ -1807,7 +1813,7 @@ mod tests {
             assert!(check_ipv6_side(side, iface, &s).is_ok());
         }
         type Break = fn(&mut Ipv6Snapshot);
-        let cases: [(&str, Side, Break, &str); 13] = [
+        let cases: [(&str, Side, Break, &str); 15] = [
             (
                 "tentative",
                 Side::Scanner,
@@ -1885,6 +1891,22 @@ mod tests {
                 Side::Peer,
                 |s| s.neigh[0]["state"] = json!(["REACHABLE"]),
                 "not permanent",
+            ),
+            // 7b r1: the router's link-local learnt by the scanner kernel (REACHABLE after its router probe), the
+            // scanner's learnt by the peer: both later probed by NUD, the unicast NS fell into a step
+            (
+                "the router's link-local learnt, not permanent, on the scanner side",
+                Side::Scanner,
+                |s| s.neigh[4]["state"] = json!(["REACHABLE"]),
+                "IPv6 neighbour fe80::aa:ff:fe00:2 is not permanent",
+            ),
+            (
+                "the scanner's link-local missing on the peer side",
+                Side::Peer,
+                |s| {
+                    s.neigh.as_array_mut().unwrap().pop();
+                },
+                "IPv6 neighbour fe80::aa:ff:fe00:1 is not permanent",
             ),
             (
                 "the scanner cannot route out",

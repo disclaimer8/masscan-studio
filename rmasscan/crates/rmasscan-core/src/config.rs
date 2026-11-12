@@ -578,13 +578,16 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
         });
     }
     // main.c:1204, :1235: `count_ips` это IPv4 плюс младшие 64 бита счёта IPv6. C считает подтверждением только
-    // `exclude.ipv4`; спека этапа (Р1) называет это ошибкой, поэтому здесь подтверждает и исключение IPv6 (R23).
+    // `exclude.ipv4`. Исключение IPv6 подтверждает лишь переполнение, которое вызвали цели IPv6 (спека, Р1, R24):
+    // если одних целей IPv4 уже больше 1e9, оно не помогает, и чисто IPv4-скан ведёт себя ровно как C.
     if op == Operation::Scan
         && massip.count_ipv4s().wrapping_add(massip.count_ipv6s()) > 1_000_000_000
-        && cfg.excludes.ipv4().is_empty()
-        && cfg.excludes.ipv6().is_empty()
     {
-        return Err(ConfigError::ExcludeRequired);
+        let confirmed = !cfg.excludes.ipv4().is_empty()
+            || (!cfg.excludes.ipv6().is_empty() && massip.count_ipv4s() <= 1_000_000_000);
+        if !confirmed {
+            return Err(ConfigError::ExcludeRequired);
+        }
     }
 
     // Только runtime-операции (List, Scan); Echo вернулся выше и seed 0 держит.
@@ -2673,15 +2676,63 @@ mod tests {
                 1 << 62
             );
         }
-        // main.c:1235 counts only exclude.ipv4; spec Р1 (R23) fixes that: an IPv6 --exclude confirms too
-        let mut cfg = cfg_v46("2001:db8::/66", "80");
+    }
+
+    /// R24. main.c:1235 confirms an over-1e9 scan only with an IPv4 exclude. rmasscan also accepts an IPv6
+    /// exclude, but only when the overflow comes from the IPv6 targets (the IPv4 targets alone are within 1e9).
+    #[test]
+    fn ipv6_exclude_confirms_only_an_overflow_the_ipv6_targets_cause() {
+        let with_exclude = |targets: &str, exclude: &str| {
+            let mut cfg = cfg_v46(targets, "80");
+            cfg.excludes.add_target_string(exclude).unwrap();
+            cfg
+        };
+        // pure IPv4 over 1e9: an IPv6 exclude must not confirm (as C)
+        assert_eq!(
+            err(&with_exclude("0.0.0.0/0", "::1"), Operation::Scan),
+            ConfigError::ExcludeRequired
+        );
+        // no exclude at all: refused
+        assert_eq!(
+            err(&cfg_v46("0.0.0.0/0", "80"), Operation::Scan),
+            ConfigError::ExcludeRequired
+        );
+        assert_eq!(
+            err(&cfg_v46("2001:db8::/66", "80"), Operation::Scan),
+            ConfigError::ExcludeRequired
+        );
+        // IPv4 targets alone over 1e9 plus a small IPv6 set: an IPv6-only exclude is still refused
+        let mut cfg = with_exclude("0.0.0.0/0", "2001:db8::1");
+        cfg.targets.add_target_string("2001:db8::/120").unwrap();
         assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
-        cfg.excludes.add_target_string("2001:db8::1").unwrap();
+        // an IPv4 exclude confirms everything, as C
+        assert!(
+            validate(
+                &with_exclude("0.0.0.0/0", "255.255.255.255"),
+                Operation::Scan
+            )
+            .is_ok()
+        );
+        let mut cfg = with_exclude("0.0.0.0/0", "255.255.255.255");
+        cfg.targets.add_target_string("2001:db8::/120").unwrap();
         assert!(validate(&cfg, Operation::Scan).is_ok());
-        // an IPv4 exclude confirms as before
-        let mut cfg = cfg_v46("2001:db8::/66", "80");
-        cfg.excludes.add_target_string("255.255.255.255").unwrap();
-        assert_eq!(validate(&cfg, Operation::Scan).unwrap().range(), 1 << 62);
+        assert_eq!(
+            validate(
+                &with_exclude("2001:db8::/66", "255.255.255.255"),
+                Operation::Scan
+            )
+            .unwrap()
+            .range(),
+            1 << 62
+        );
+        // the overflow comes from the IPv6 targets: an IPv6 exclude confirms
+        assert!(
+            validate(
+                &with_exclude("2001:db8::/66", "2001:db8::1"),
+                Operation::Scan
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -1,0 +1,5 @@
+TEST_WS_EXIT=0
+51 anchored '^test result:' lines, 2084 passed, 0 failed, 14 ignored
+CLIPPY_EXIT=0
+2026-11-12T20:06:34Z
+tmpfs           7.5G  4.2G  3.4G  56% /tmp

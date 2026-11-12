@@ -1,0 +1,62 @@
+# Guest stand check for r3 of the IPv6 stage after the merge with main (dedicated lab VM n2),
+# C = 0ce2a9e8e9c1fec8e56655cef6b258c0cd0e5a54
+# The stand fix (mDNS, LLMNR, DO off; lab-NIC IPv6 and NetBIOS off) was applied in the scan-control stage's r3
+# (2026-11-10 08:12:50Z; its snapshot is docs/experiments/2026-11-08-rmasscan-scan-control-acceptance-raw/verification/
+# guest-stand-applied.txt) and stayed applied. For this window it was only READ (a read-only pwsh 7 script file,
+# C:\Users\lab\ipv6-7d-<random>-stand.ps1, removed afterwards) and compared with that snapshot; nothing was
+# re-applied and nothing was reverted (ruling R5: no guest change in this stage). The revert recipe stays on the guest
+# (C:\Users\lab\guest-stand-before.txt).
+
+## Reading 1: before n2 up (no lab NIC backend since task 7b's n2 down at 08:57Z; the boot below is 7b's restart)
+utc 2026-11-12T19:48:01.9416086Z
+boot 2026-11-12T08:23:36.5000000Z
+reg HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters EnableMDNS = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization DODownloadMode = 99
+reg NetBT Tcpip_{lab GUID} NetbiosOptions = 2   (0 default/DHCP, 1 on, 2 off)
+nic lab 'Ethernet 2' mac 52-54-00-04-80-A9 status Up: ms_tcpip6 enabled=False, ms_tcpip enabled=True, TcpipNetbiosOptions=2
+nic lab addresses: IPv4 198.18.0.1/30
+nic management 'Ethernet' mac 52-54-00-12-34-56 status Up: ms_tcpip6 enabled=True, ms_tcpip enabled=True, TcpipNetbiosOptions=0
+service Dnscache status Running start Automatic
+service DoSvc status Stopped start Manual
+service W32Time status Running start Manual
+
+## Reading 2: after the VM restart for the Windows window
+# vm-lab up 19:57:01Z (rc 0, lab.env written); guest shutdown /s /t 0 at 19:57:18Z; the old qemu was gone at
+# 19:57:30Z (its pid polled every 2 s); run.sh with lab.env at 19:57:31Z (the new qemu's command line carries
+# -netdev tap,id=lab0,ifname=wvt-n2,script=no,downscript=no and -device e1000e,netdev=lab0,mac=52:54:00:04:80:a9);
+# LastBootUpTime 19:57:33.5Z; guest ssh answered at 19:57:46Z; then w32time started (it was Stopped, start Manual),
+# w32tm /resync /force (exit 0, 19:57:59Z), this reading (19:58:03Z), windows-vm-lab.ps1 -Action Configure (exit 0,
+# 19:58:20Z, lab NIC 'Ethernet 2' 198.18.0.1/30), vm-lab record-guest --guest-json (19:58:30Z, rc 0)
+utc 2026-11-12T19:58:03.2908509Z
+boot 2026-11-12T19:57:33.5000000Z
+reg HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters EnableMDNS = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization DODownloadMode = 99
+reg NetBT Tcpip_{lab GUID} NetbiosOptions = 2   (0 default/DHCP, 1 on, 2 off)
+nic lab 'Ethernet 2' mac 52-54-00-04-80-A9 status Up: ms_tcpip6 enabled=False, ms_tcpip enabled=True, TcpipNetbiosOptions=2
+nic lab addresses: IPv4 198.18.0.1/30
+nic management 'Ethernet' mac 52-54-00-12-34-56 status Up: ms_tcpip6 enabled=True, ms_tcpip enabled=True, TcpipNetbiosOptions=0
+service Dnscache status Running start Automatic
+service DoSvc status Stopped start Manual
+service W32Time status Running start Manual
+
+## Comparison with guest-stand-applied.txt (scan-control stage, verification/)
+setting                                                        applied   reading 1  reading 2  match
+Dnscache\Parameters EnableMDNS                                 0         0          0          yes
+Policies DNSClient EnableMulticast (LLMNR)                     0         0          0          yes
+Policies DeliveryOptimization DODownloadMode                   99        99         99         yes
+lab NIC 'Ethernet 2' NetBT NetbiosOptions                      2         2          2          yes
+lab NIC 'Ethernet 2' ms_tcpip6 binding                         False     False      False      yes
+lab NIC 'Ethernet 2' TcpipNetbiosOptions                       2         2          2          yes
+lab NIC addresses                                              IPv4 198.18.0.1/30 only (all three)   yes
+management NIC 'Ethernet' ms_tcpip6 / TcpipNetbiosOptions      True / 0 (all three, untouched)       yes
+Every 'reg' and 'nic' line of both readings equals guest-stand-applied.txt line for line (diff of the 7 lines without
+the CR line ends the applied snapshot keeps from the guest: no difference).
+
+Not stand-fix settings (informational): service DoSvc reads 'Stopped, start Manual' in both readings, as in task 7b's
+r2. w32time read Running in reading 1 (7b had started it after its restart and the guest stayed up since) and was
+Stopped (start Manual) after this restart; the operator started it for the clock resync (reading 2, taken after that,
+shows it Running). Neither was changed otherwise.
+
+Result: all settings match; proceed without re-applying.

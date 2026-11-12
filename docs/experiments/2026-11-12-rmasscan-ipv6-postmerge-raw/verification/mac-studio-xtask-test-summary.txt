@@ -1,0 +1,95 @@
+# Mac (macOS 27.2.1), clean worktree at C = 0ce2a9e8e9c1fec8e56655cef6b258c0cd0e5a54: Studio's offline CI step run locally
+# .github/workflows/studio.yml, step 'Offline contracts, lifecycle, persistence and lint': from studio/, STUDIO_TRACE_TIMINGS=1,
+# brew SQLite as the macOS job sets it (SQLITE3_LIB_DIR, SQLITE3_INCLUDE_DIR = $(brew --prefix sqlite)/lib|include, SQLITE3_STATIC=1),
+# CARGO_TARGET_DIR outside the repository, CARGO_INCREMENTAL=0: cargo xtask test = cargo test --locked --workspace --all-targets
+# --no-fail-fast, then cargo clippy -D warnings, then cargo fmt --all --check (studio/xtask/src/main.rs:124-142)
+# 19:49:59Z-19:51:37Z; the 'Running' and 'Doc-tests' lines and every '^test result:' line (target paths shortened)
+     Running `target/debug/xtask test`
+     Running unittests src/lib.rs (target/debug/deps/studio_app-46f6444f364ea4c6)
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/studio_inspection-8c7339d3f9d08ee7)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/studio-inspect.rs (target/debug/deps/studio_inspect-4aefbc5276048ccd)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/contracts.rs (target/debug/deps/contracts-617475a072a0c1c4)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/live.rs (target/debug/deps/live-d47efd82793ad118)
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/physical_exports.rs (target/debug/deps/physical_exports-34bc9b48f40a4a16)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/processes.rs (target/debug/deps/processes-de5fdd3c148c8677)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+     Running unittests src/lib.rs (target/debug/deps/studio_platform-26cac7b43420f213)
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+     Running tests/hash_compatibility.rs (target/debug/deps/hash_compatibility-4c3dfd057dc70cc0)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/linux_launch.rs (target/debug/deps/linux_launch-0f55103c2a1815c8)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/linux_lifetime.rs (target/debug/deps/linux_lifetime-a5e4bc561cd25668)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/mac_launch.rs (target/debug/deps/mac_launch-0b159f0feee9c548)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/preflight.rs (target/debug/deps/preflight-30958287e24c3b4c)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/session_auth.rs (target/debug/deps/session_auth-5e898caa9131c012)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/trusted_install.rs (target/debug/deps/trusted_install-5d5bff2b969fbfee)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/windows_arguments.rs (target/debug/deps/windows_arguments-d7346f150f4e601b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_environment.rs (target/debug/deps/windows_environment-b77d4fed4a046eb4)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_pipe.rs (target/debug/deps/windows_pipe-3e9c8471e1c80160)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_setup.rs (target/debug/deps/windows_setup-79252fb65be50b1e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_uac.rs (target/debug/deps/windows_uac-c19b115246c6c653)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/studio_protocol-79fdee21bc1e627c)
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/contracts.rs (target/debug/deps/contracts-6160cfb225ac35a8)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/network.rs (target/debug/deps/network-f49eba4a2b89901d)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running unittests src/main.rs (target/debug/deps/studio_runner-070391060eba9ea2)
+test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.03s
+     Running tests/controller.rs (target/debug/deps/controller-2802f56ca989a408)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.46s
+     Running tests/history.rs (target/debug/deps/history-cd8a1ec52d71c493)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-5ac69c6ca6b619a8)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.07s
+     Running tests/pipe_session.rs (target/debug/deps/pipe_session-b071b699e938d31a)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/profiles.rs (target/debug/deps/profiles-c751869e012e871a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/raw_profile.rs (target/debug/deps/raw_profile-62ede21d83c4fe01)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/socket_session.rs (target/debug/deps/socket_session-7fef48a8b0ac44b4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/volume.rs (target/debug/deps/volume-ebd966343f257a86)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.22s
+     Running unittests src/lib.rs (target/debug/deps/studio_store-4feda69e5c89fbfb)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/durability.rs (target/debug/deps/durability-de27063d77b2743a)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/history.rs (target/debug/deps/history-0d164c7823bab05c)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/network.rs (target/debug/deps/network-389a04b96618e42d)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/profiles.rs (target/debug/deps/profiles-11139863d9534051)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running unittests src/lib.rs (target/debug/deps/studio_table-14f100ae6070a15a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/selection.rs (target/debug/deps/selection-efa50bf429b841da)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/launcher.rs (target/debug/deps/studio_launcher-f3ff01e6107ee3d5)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/main.rs (target/debug/deps/studio_ui-f7a6ee37c178bf7d)
+test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+     Running tests/launcher.rs (target/debug/deps/launcher-1910bb973c75f94f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+     Running unittests src/main.rs (target/debug/deps/xtask-48c0ace5c69da628)
+test result: ok. 146 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.44s
+# totals: 43 '^test result:' lines, 484 passed, 0 failed, 2 ignored; cargo xtask test rc 0 (tests, clippy and fmt all passed)
+# not run locally: cargo xtask build (packaging), the Linux-only and Windows-only steps of studio.yml

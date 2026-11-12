@@ -1,0 +1,20 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794515028.158876,
+  "capture_stopped_utc": 1794515097.320752,
+  "end_marker_seen": true,
+  "exe_sha256": "d8819990f696bc531ef44c51ef3b7cb8acc39c18c8f4eff54aefddef51015539",
+  "guest_exit": 0,
+  "guest_finished_utc": 1794515063.04689,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794515033.680201,
+  "guest_times": {
+    "finished_utc": 1794515061.78,
+    "started_utc": 1794515051.729
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "rdc61019ea0a09a7d5e1c85602a767943-01e3992dc16eb4f7",
+  "kind": "iflist",
+  "restricted_via": "runas /trustlevel:0x20000 (windows_wire_runas.cmd)",
+  "tag": "w08a_restricted_iflist"
+}

@@ -1,0 +1,26 @@
+{
+  "tag": "sc06_dual_veth",
+  "steps": [
+    {
+      "name": "dual",
+      "who": "rmasscan",
+      "links": 2,
+      "interrupt": false,
+      "netem": false
+    },
+    {
+      "name": "dual_pause",
+      "who": "rmasscan",
+      "links": 2,
+      "interrupt": true,
+      "netem": false
+    },
+    {
+      "name": "dual_resume",
+      "who": "rmasscan",
+      "links": 2,
+      "interrupt": false,
+      "netem": false
+    }
+  ]
+}

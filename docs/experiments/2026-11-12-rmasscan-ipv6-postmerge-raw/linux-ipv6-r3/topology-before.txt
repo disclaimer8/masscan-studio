@@ -1,0 +1,116 @@
+# host namespace links (must not contain veth-a/veth-b)
+lo
+enp2s0
+wlp1s0
+wg0
+
+# ===== namespace wl-scan-RUNID =====
+## ip -d link
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00 promiscuity 0 allmulti 0 minmtu 0 maxmtu 0 netns-immutable addrgenmode eui64 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 524280 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536 
+2: veth-a@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 02:aa:00:00:00:01 brd ff:ff:ff:ff:ff:ff link-netns wl-peer-RUNID promiscuity 0 allmulti 0 minmtu 68 maxmtu 65535 
+    veth addrgenmode eui64 numtxqueues 4 numrxqueues 4 gso_max_size 65536 gso_max_segs 65535 tso_max_size 524280 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536 
+## ip -4 addr
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+2: veth-a@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000 link-netns wl-peer-RUNID
+    inet 198.18.0.1/24 scope global veth-a
+       valid_lft forever preferred_lft forever
+## ip route
+default via 198.18.0.2 dev veth-a 
+198.18.0.0/24 dev veth-a proto kernel scope link src 198.18.0.1 
+## ip -6 route
+fd00:198:18::/64 dev veth-a proto kernel metric 256 pref medium
+fe80::/64 dev veth-a proto kernel metric 256 pref medium
+default via fe80::aa:ff:fe00:2 dev veth-a metric 1024 pref medium
+## ip -6 addr
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN qlen 1000
+    inet6 ::1/128 scope host proto kernel_lo 
+       valid_lft forever preferred_lft forever
+2: veth-a: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP qlen 1000
+    inet6 fd00:198:18::1/64 scope global nodad 
+       valid_lft forever preferred_lft forever
+    inet6 fe80::aa:ff:fe00:1/64 scope link proto kernel_ll 
+       valid_lft forever preferred_lft forever
+## ip -6 neigh
+fd00:198:18::5 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fe80::aa:ff:fe00:2 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fd00:198:18::2 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fd00:198:18::3 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fd00:198:18::4 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+## ip rule
+0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default
+## ip neigh
+198.18.0.5 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+198.18.0.3 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+198.18.0.4 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+198.18.0.2 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fd00:198:18::5 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fe80::aa:ff:fe00:2 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fd00:198:18::2 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fd00:198:18::3 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+fd00:198:18::4 dev veth-a lladdr 02:aa:00:00:00:02 PERMANENT 
+## ip_forward
+0
+## tx checksum offload
+tx-checksumming: off
+
+# ===== namespace wl-peer-RUNID =====
+## ip -d link
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00 promiscuity 0 allmulti 0 minmtu 0 maxmtu 0 netns-immutable addrgenmode eui64 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 524280 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536 
+2: veth-b@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 02:aa:00:00:00:02 brd ff:ff:ff:ff:ff:ff link-netns wl-scan-RUNID promiscuity 0 allmulti 0 minmtu 68 maxmtu 65535 
+    veth addrgenmode eui64 numtxqueues 4 numrxqueues 4 gso_max_size 65536 gso_max_segs 65535 tso_max_size 524280 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536 
+## ip -4 addr
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+2: veth-b@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000 link-netns wl-scan-RUNID
+    inet 198.18.0.2/24 scope global veth-b
+       valid_lft forever preferred_lft forever
+    inet 198.18.0.3/24 scope global secondary veth-b
+       valid_lft forever preferred_lft forever
+    inet 198.18.0.4/24 scope global secondary veth-b
+       valid_lft forever preferred_lft forever
+    inet 198.18.0.5/24 scope global secondary veth-b
+       valid_lft forever preferred_lft forever
+## ip route
+198.18.0.0/24 dev veth-b proto kernel scope link src 198.18.0.2 
+## ip -6 route
+fd00:198:18::/64 dev veth-b proto kernel metric 256 pref medium
+fe80::/64 dev veth-b proto kernel metric 256 pref medium
+## ip -6 addr
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN qlen 1000
+    inet6 ::1/128 scope host proto kernel_lo 
+       valid_lft forever preferred_lft forever
+2: veth-b: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP qlen 1000
+    inet6 fd00:198:18::5/64 scope global nodad 
+       valid_lft forever preferred_lft forever
+    inet6 fd00:198:18::4/64 scope global nodad 
+       valid_lft forever preferred_lft forever
+    inet6 fd00:198:18::3/64 scope global nodad 
+       valid_lft forever preferred_lft forever
+    inet6 fd00:198:18::2/64 scope global nodad 
+       valid_lft forever preferred_lft forever
+    inet6 fe80::aa:ff:fe00:2/64 scope link proto kernel_ll 
+       valid_lft forever preferred_lft forever
+## ip -6 neigh
+fe80::aa:ff:fe00:1 dev veth-b lladdr 02:aa:00:00:00:01 PERMANENT 
+fd00:198:18::1 dev veth-b lladdr 02:aa:00:00:00:01 PERMANENT 
+## ip rule
+0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default
+## ip neigh
+198.18.0.1 dev veth-b lladdr 02:aa:00:00:00:01 PERMANENT 
+fe80::aa:ff:fe00:1 dev veth-b lladdr 02:aa:00:00:00:01 PERMANENT 
+fd00:198:18::1 dev veth-b lladdr 02:aa:00:00:00:01 PERMANENT 
+## ip_forward
+0
+## tx checksum offload
+tx-checksumming: off

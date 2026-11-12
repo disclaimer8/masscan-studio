@@ -1,0 +1,34 @@
+{
+  "tag": "v01_ndp_and_tcp6_syn",
+  "targets": "[fd00:198:18::2]-[fd00:198:18::5]",
+  "ports": "80,81",
+  "router_mac_given": false,
+  "oracle_extra": [
+    "--adapter-ip",
+    "fd00:198:18::1",
+    "--router-mac-ipv6",
+    "02-aa-00-00-00-02"
+  ],
+  "steps": [
+    {
+      "name": "json",
+      "who": "rmasscan",
+      "out": "json"
+    },
+    {
+      "name": "oracle-json",
+      "who": "oracle",
+      "out": "json"
+    },
+    {
+      "name": "binary",
+      "who": "rmasscan",
+      "out": "binary"
+    },
+    {
+      "name": "oracle-binary",
+      "who": "oracle",
+      "out": "binary"
+    }
+  ]
+}

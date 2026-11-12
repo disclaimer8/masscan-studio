@@ -1,0 +1,11 @@
+[+] interface = veth-a (detected: route to 198.18.0.2)
+[+] source-mac = 02-aa-00-00-00-01 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = 198.18.0.2 (interface default gateway)
+[+] source-ip = [fd00:198:18::1] (detected)
+[+] router-ip = [fe80::aa:ff:fe00:2] (interface default gateway)
+[+] router-mac = 02-aa-00-00-00-02 (arp: 1 requests, 0 ms)
+[+] router-mac-ipv6 = 02-aa-00-00-00-02 (ndp: 1 requests, 0 ms)
+[+] seed = 1 (given)
+[+] source-port = 40000 (given)
+rate:  0.10-kpps, 100.00% done, waiting 3-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 3-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 3-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 3-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 2-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 2-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 2-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 2-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 1-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 1-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 1-secs, found=8       rate:  0.10-kpps, 100.00% done, waiting 1-secs, found=8                                                                                    [+] finished: Completed, sent 16, replies 16, open 8

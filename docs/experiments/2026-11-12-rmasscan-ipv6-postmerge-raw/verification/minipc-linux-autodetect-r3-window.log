@@ -1,0 +1,30 @@
+OUT=/tmp/rmasscan-out.ZYn6dP/win/autodetect-out/linux-autodetect-r3
+SigIgn of this bash (bash ignores SIGQUIT for itself): SigIgn:	0000000000000004
+SigIgn of its children: SigIgn:	0000000000000000
+165f1e02c6a21a3f38b5bfa0e1bdf71121fa9d93f540e390d92be25a37abb893  target/release/rmasscan-lab
+541eabd8170c62454237cc89a80c7484a01489861dbd4c8ae88479c51d53f2b6  target/release/rmasscan
+2026-11-12T19:53:59Z
+[wire-lab] suite autodetect finished rc=0 (see /tmp/rmasscan-out.ZYn6dP/win/autodetect-out/linux-autodetect-r3/suite.log)
+[wire-lab] done: /tmp/rmasscan-out.ZYn6dP/win/autodetect-out/linux-autodetect-r3
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+2026-11-12T19:55:33Z
+PASS     manifest 
+PASS     l01_auto 
+PASS     l02_auto_multi 
+PASS     l03_adapter 
+PASS     l04_adapter_ip 
+PASS     l05_adapter_mac 
+PASS     l06_router_ip 
+PASS     l07_router_mac 
+PASS     l08_source_port 
+PASS     l09_arp_timeout 
+PASS     l10_no_such_adapter 
+PASS     l11_parity 
+PASS     l12_iflist 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":13}
+VERIFY_RC=0
+2026-11-12T19:55:33Z
+9e45233481687cc34344e55615e953a568590ea2035f6a048edf7a4b48fff0a5  /tmp/rmasscan-out.ZYn6dP/win/autodetect-out/linux-autodetect-r3/verdict.json
+netns after: 0
+FINISHED

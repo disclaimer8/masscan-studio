@@ -97,7 +97,13 @@ pub(crate) trait PairPlan {
     /// `manifest.json` names this plan: `Some(lab id)`.
     fn manifest(v: Value) -> Option<Option<String>>;
     fn view(c: &Self::Case, fr: &Frames, st: &Stand) -> Self::View;
-    fn parse_doc(out: Out, b: &[u8]) -> Result<Doc<Self::Rec>, String>;
+    /// The document of a step of `who` (a plan may read C's documents by C's own rules, named in [`Self::doc_rule`]).
+    fn parse_doc(out: Out, b: &[u8], who: Who) -> Result<Doc<Self::Rec>, String>;
+    /// What the plan's parser allows in `who`'s documents beyond the format, appended to the well-formedness check's
+    /// name ("" when nothing).
+    fn doc_rule(_who: Who) -> &'static str {
+        ""
+    }
     /// Frames of the scanner off the stand (a safety finding).
     fn foreign(fr: &Frames, st: &Stand) -> Vec<String>;
     /// What a text file names beyond `token_problems`' allowlist.
@@ -421,12 +427,13 @@ pub(crate) fn rmasscan_step<V, R: Record>(
 fn doc_of<P: PairPlan>(r: &mut Run, s: &Side<P::View>) -> Option<Doc<P::Rec>> {
     let raw = s.raw.as_ref()?;
     let what = s.spec.out.file().unwrap_or("stdout.txt");
-    match P::parse_doc(s.spec.out, raw) {
+    let rule = P::doc_rule(s.spec.who);
+    match P::parse_doc(s.spec.out, raw, s.spec.who) {
         Ok(d) => {
             beh(
                 r,
                 s,
-                &format!("{what} is a well-formed document"),
+                &format!("{what} is a well-formed document{rule}"),
                 true,
                 format!("{} records", d.records.len()),
             );
@@ -442,7 +449,13 @@ fn doc_of<P: PairPlan>(r: &mut Run, s: &Side<P::View>) -> Option<Doc<P::Rec>> {
             Some(d)
         }
         Err(e) => {
-            beh(r, s, &format!("{what} is a well-formed document"), false, e);
+            beh(
+                r,
+                s,
+                &format!("{what} is a well-formed document{rule}"),
+                false,
+                e,
+            );
             None
         }
     }

@@ -104,7 +104,7 @@ pub const DEVIATIONS: [(&str, &str); 4] = [
     ),
     (
         "ipv6-ttl-not-compared",
-        "T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only); rmasscan's IPv6 ttl is judged against its own wire, C's IPv6 ttl against nothing, and IPv6 ttls are left out when the two documents are compared",
+        "T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only, proto-preprocess.c:127; its -oJ prints that unsigned value whole, out-json.c:51, live 7b r1 320995840, its -oB the low byte); rmasscan's IPv6 ttl is judged against its own wire (a byte), C's IPv6 ttl against nothing (in C's -oJ any 32-bit value), and IPv6 ttls are left out when the two documents are compared",
     ),
     (
         "families-one-interface",
@@ -113,6 +113,8 @@ pub const DEVIATIONS: [(&str, &str); 4] = [
 ];
 
 /// Why rmasscan's document and the oracle's are compared as multisets of records (protocols R17/R21).
+/// The well-formedness check of the oracle's documents names what C's `-oJ` may hold beyond a byte (7b r1).
+pub const IPV6_DOC_RULE: &str = " (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it never sets for IPv6, ipv6-ttl-not-compared)";
 pub const RECORD_ORDER_VS_C: &str = "each scanner prints its records in the order the replies arrive on its own wire (judged per step, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand (the peer kernel answers a burst of probes in an order that changes from run to run, protocols r1), so rmasscan's records must equal C's field for field but the time, IPv6 ttl aside (ipv6-ttl-not-compared), in any order";
 
 /// One case: what it scans and which documents it writes.
@@ -1236,7 +1238,8 @@ pub struct Rec {
     pub ip: IpAddr,
     pub port: u16,
     pub reason: Option<String>,
-    pub ttl: Option<u8>,
+    /// A byte, but in C's `-oJ` an IPv6 record's ttl is any 32-bit value (`ipv6-ttl-not-compared`).
+    pub ttl: Option<u32>,
     pub ts: Option<u64>,
 }
 impl Rec {
@@ -1257,7 +1260,8 @@ impl Rec {
     }
     /// The record of a wire reply in the fields `out` carries; C's IPv6 ttl is not known (masked).
     fn of(r: &Reply, out: Out, who: Who) -> Rec {
-        let ttl = (out != Out::List && !(who == Who::Oracle && r.ip.is_ipv6())).then_some(r.ttl);
+        let ttl = (out != Out::List && !(who == Who::Oracle && r.ip.is_ipv6()))
+            .then_some(u32::from(r.ttl));
         Rec {
             st: r.st,
             ip: r.ip,
@@ -1301,6 +1305,43 @@ fn status(s: &str) -> Result<St, String> {
         .find(|x| x.name() == s)
         .ok_or(format!("status {s:?}"))
 }
+/// A record of a text form; `c_ipv6_ttl`: an IPv6 record's ttl may be any 32-bit value (C's `-oJ` prints the
+/// `unsigned` ip_ttl it never sets for IPv6, `ipv6-ttl-not-compared`), otherwise every ttl is a byte.
+#[allow(clippy::too_many_arguments)]
+fn field_rec_with(
+    st: &str,
+    proto: &str,
+    ip: &str,
+    port: &str,
+    ts: &str,
+    reason: Option<&str>,
+    ttl: Option<&str>,
+    c_ipv6_ttl: bool,
+) -> Result<Rec, String> {
+    if proto != "tcp" {
+        return Err(format!("protocol {proto:?} (R3: TCP only)"));
+    }
+    let ip = ip_text(ip).ok_or(format!("address {ip:?}"))?;
+    let wide = c_ipv6_ttl && ip.is_ipv6();
+    Ok(Rec {
+        st: status(st)?,
+        ip,
+        port: canon(port).ok_or(format!("port {port:?}"))?,
+        reason: reason.map(str::to_owned),
+        ttl: ttl
+            .map(|t| {
+                if wide {
+                    canon::<u32>(t)
+                } else {
+                    canon::<u8>(t).map(u32::from)
+                }
+                .ok_or(format!("ttl {t:?}"))
+            })
+            .transpose()?,
+        ts: Some(canon(ts).ok_or(format!("time {ts:?}"))?),
+    })
+}
+/// A record of rmasscan's text forms: every ttl a byte.
 #[allow(clippy::too_many_arguments)]
 fn field_rec(
     st: &str,
@@ -1311,19 +1352,20 @@ fn field_rec(
     reason: Option<&str>,
     ttl: Option<&str>,
 ) -> Result<Rec, String> {
-    if proto != "tcp" {
-        return Err(format!("protocol {proto:?} (R3: TCP only)"));
-    }
-    Ok(Rec {
-        st: status(st)?,
-        ip: ip_text(ip).ok_or(format!("address {ip:?}"))?,
-        port: canon(port).ok_or(format!("port {port:?}"))?,
-        reason: reason.map(str::to_owned),
-        ttl: ttl
-            .map(|t| canon::<u8>(t).ok_or(format!("ttl {t:?}")))
-            .transpose()?,
-        ts: Some(canon(ts).ok_or(format!("time {ts:?}"))?),
-    })
+    field_rec_with(st, proto, ip, port, ts, reason, ttl, false)
+}
+/// A record of C's text forms: an IPv6 ttl any 32-bit value (live 7b r1: 320995840 in C's `-oJ`).
+#[allow(clippy::too_many_arguments)]
+fn field_rec_c(
+    st: &str,
+    proto: &str,
+    ip: &str,
+    port: &str,
+    ts: &str,
+    reason: Option<&str>,
+    ttl: Option<&str>,
+) -> Result<Rec, String> {
+    field_rec_with(st, proto, ip, port, ts, reason, ttl, true)
 }
 /// The status records of a `-oB` file after its header: IPv4 (types 6 and 7, length 13: time, address, protocol,
 /// port, reason, ttl) and IPv6 (types 10 and 11, length 26: time, protocol, port, reason, ttl, version 6, address;
@@ -1361,7 +1403,7 @@ fn binary_records(rest: &[u8]) -> Result<(Vec<Rec>, bool), String> {
                     ip: IpAddr::V4(Ipv4Addr::new(left[6], left[7], left[8], left[9])),
                     port: be16(left, 11),
                     reason: Some(reason_string(left[13])),
-                    ttl: Some(left[14]),
+                    ttl: Some(u32::from(left[14])),
                     ts: Some(u64::from(be32(left, 2))),
                 }
             }
@@ -1377,7 +1419,7 @@ fn binary_records(rest: &[u8]) -> Result<(Vec<Rec>, bool), String> {
                     ip: IpAddr::V6(v6_at(left, 12)),
                     port: be16(left, 7),
                     reason: Some(reason_string(left[9])),
-                    ttl: Some(left[10]),
+                    ttl: Some(u32::from(left[10])),
                     ts: Some(u64::from(be32(left, 2))),
                 }
             }
@@ -1397,7 +1439,16 @@ fn binary_records(rest: &[u8]) -> Result<(Vec<Rec>, bool), String> {
 /// 7, 10, 11): an empty file is a document without a record; a file that stops after a record, without its footer,
 /// is not `complete`; any other malformation is an error.
 pub fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
-    parse_doc_with(out, b, field_rec, |b, d| {
+    parse_doc_of(out, b, Who::Rmasscan)
+}
+/// [`parse_doc`] for a document of `who`: C's (the oracle's) text records may carry an IPv6 ttl of any 32-bit value
+/// (`ipv6-ttl-not-compared`, [`IPV6_DOC_RULE`]); rmasscan's ttl is a byte.
+pub fn parse_doc_of(out: Out, b: &[u8], who: Who) -> Result<Document, String> {
+    let field = match who {
+        Who::Rmasscan => field_rec,
+        Who::Oracle => field_rec_c,
+    };
+    parse_doc_with(out, b, field, |b, d| {
         if out == Out::Stdout {
             return Err("no case of this suite writes the interactive form".into());
         }
@@ -1764,7 +1815,7 @@ fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side<WireView>], docs: &[Optio
                             .replies
                             .iter()
                             .find(|y| y.ip == x.ip && y.port == x.port)
-                            .map(|y| y.ttl);
+                            .map(|y| u32::from(y.ttl));
                         stale += usize::from(hop != x.ttl);
                     }
                 }
@@ -1916,8 +1967,14 @@ impl PairPlan for Ipv6 {
     fn view(_c: &CaseSpec, fr: &Frames, st: &Stand) -> WireView {
         view(fr, st)
     }
-    fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
-        parse_doc(out, b)
+    fn parse_doc(out: Out, b: &[u8], who: Who) -> Result<Document, String> {
+        parse_doc_of(out, b, who)
+    }
+    fn doc_rule(who: Who) -> &'static str {
+        match who {
+            Who::Rmasscan => "",
+            Who::Oracle => IPV6_DOC_RULE,
+        }
     }
     fn foreign(fr: &Frames, st: &Stand) -> Vec<String> {
         let mut off = pv::foreign_probes(fr, st);

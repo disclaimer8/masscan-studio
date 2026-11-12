@@ -1892,7 +1892,7 @@ impl PairPlan for Protocols {
     fn view(c: &CaseSpec, fr: &Frames, st: &Stand) -> WireView {
         view(fr, st, c.arp)
     }
-    fn parse_doc(out: Out, b: &[u8]) -> Result<Document, String> {
+    fn parse_doc(out: Out, b: &[u8], _who: Who) -> Result<Document, String> {
         parse_doc(out, b)
     }
     fn foreign(fr: &Frames, st: &Stand) -> Vec<String> {

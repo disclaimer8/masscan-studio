@@ -34,8 +34,8 @@ const SCANNER_MAC: [u8; 6] = [2, 0xaa, 0, 0, 0, 1];
 const PEER_MAC: [u8; 6] = [2, 0xaa, 0, 0, 0, 2];
 const SCANNER_IP: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
 const TTL: u8 = 64;
-/// What C prints as the ttl of an IPv6 record (a stale value, never the hop limit).
-const C_STALE_TTL6: u8 = 0;
+/// What C prints as the ttl of an IPv6 record (a stale value, never the hop limit; its -oB keeps the low byte).
+const C_STALE_TTL6: u32 = 0;
 
 fn pseudo_sum(p: &[u8]) -> u32 {
     let mut init = 0u32;
@@ -302,7 +302,7 @@ fn stand_rec(p: &[u8], who: Who) -> Rec {
         ttl: Some(if who == Who::Oracle && ip.is_ipv6() {
             C_STALE_TTL6
         } else {
-            TTL
+            u32::from(TTL)
         }),
         ts: None,
     }
@@ -365,7 +365,7 @@ fn render(out: Out, recs: &[Rec], complete: bool) -> Vec<u8> {
                         b.push(6);
                         b.extend(r.port.to_be_bytes());
                         b.push(reason);
-                        b.push(r.ttl.unwrap());
+                        b.push(r.ttl.unwrap() as u8); // C: (unsigned char)ttl
                     }
                     IpAddr::V6(a) => {
                         b.push(if r.st == St::Open { 10 } else { 11 });
@@ -374,7 +374,7 @@ fn render(out: Out, recs: &[Rec], complete: bool) -> Vec<u8> {
                         b.push(6);
                         b.extend(r.port.to_be_bytes());
                         b.push(reason);
-                        b.push(r.ttl.unwrap());
+                        b.push(r.ttl.unwrap() as u8); // C: (unsigned char)ttl
                         b.push(6);
                         b.extend(a.octets());
                     }
@@ -1344,7 +1344,7 @@ fn the_oracle_is_held_to_its_own_wire_but_not_to_an_ipv6_ttl() {
         .recs
         .iter()
         .map(|r| Rec {
-            ttl: Some(TTL),
+            ttl: Some(u32::from(TTL)),
             ..r.clone()
         })
         .collect();
@@ -1514,6 +1514,75 @@ fn cs_own_reset_of_each_first_reply_is_named_on_the_oracles_step_and_never_rmass
             FAIL,
             "json: the named scanner-side frames stay within their bounds"
         ) && b[0].contains("rst_to_rst 1 of at most 0"),
+        "{b:#?}"
+    );
+}
+
+/// A step's verdict, its failing checks and the case's notes.
+fn judge_with_notes(sim: &Sim) -> (String, Vec<String>, Value) {
+    let root = scratch();
+    sim.write(&root);
+    fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
+    let res = verify_dir(&root);
+    let run_ = run_of(&res, sim.tag).clone();
+    fs::remove_dir_all(&root).unwrap();
+    (s(&run_["verdict"]).to_owned(), bad(&run_), run_)
+}
+/// A JSON document with every record's ttl `from` replaced by `to`, as text.
+fn json_ttl(doc: &[u8], from: &str, to: &str) -> Vec<u8> {
+    let t = String::from_utf8(doc.to_vec()).unwrap();
+    let n = format!("\"ttl\": {from}}}");
+    assert!(t.contains(&n), "{t}");
+    t.replace(&n, &format!("\"ttl\": {to}}}")).into_bytes()
+}
+
+#[test]
+fn cs_ipv6_json_ttl_may_be_any_32_bit_value_and_rmasscans_stays_a_byte() {
+    // Live 7b r1: C prints `"ttl": %u` of parsed.ip_ttl (out-json.c:51), which it sets for IPv4 only
+    // (proto-preprocess.c:127): r1's oracle-json documents held 320995840 and 2497958912 (its -oB keeps the low byte).
+    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+    let step = sim.step_mut("oracle-json");
+    step.doc = Some(json_ttl(step.doc.as_ref().unwrap(), "0", "320995840"));
+    let (v, b, run_) = judge_with_notes(&sim);
+    assert_eq!(
+        (v.as_str(), b.clone()),
+        (PASS, Vec::<String>::new()),
+        "{b:#?}"
+    );
+    // counted with the -oB document's: 8 records each, none the hop limit
+    let n = run_["notes"].to_string();
+    assert!(
+        n.contains("16 IPv6 records of C with a ttl, 16 of them not the reply's hop limit"),
+        "{n}"
+    );
+    let named = array(&run_["checks"]).iter().any(|c| {
+        c["result"] == PASS
+            && s(&c["name"])
+                == format!("oracle-json: output.json is a well-formed document{IPV6_DOC_RULE}")
+    });
+    assert!(named, "the oracle's check names the allowance");
+    // the parser's rule itself: only an IPv6 record of C's may exceed a byte; C's IPv4 ttl is the header's byte
+    let t4 = "[\n{   \"ip\": \"198.18.0.2\",   \"timestamp\": \"1800000100\", \"ports\": [ {\"port\": 80, \"proto\": \"tcp\", \"status\": \"open\", \"reason\": \"syn-ack\", \"ttl\": 300} ] }\n]\n";
+    let t6 = t4.replace("198.18.0.2", "fd00:198:18::2");
+    assert!(parse_doc_of(Out::Json, t4.as_bytes(), Who::Oracle).is_err());
+    assert!(parse_doc_of(Out::Json, t4.replace("300", "64").as_bytes(), Who::Oracle).is_ok());
+    assert_eq!(
+        parse_doc_of(Out::Json, t6.as_bytes(), Who::Oracle)
+            .unwrap()
+            .records[0]
+            .ttl,
+        Some(300)
+    );
+    assert!(parse_doc_of(Out::Json, t6.as_bytes(), Who::Rmasscan).is_err());
+    assert!(parse_doc(Out::Json, t6.as_bytes()).is_err());
+    // rmasscan prints the reply's hop limit, a byte: the same value in its document is malformed, its own FAIL
+    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+    let s = sim.step_mut("json");
+    s.doc = Some(json_ttl(s.doc.as_ref().unwrap(), "64", "320995840"));
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(&b, FAIL, "json: output.json is a well-formed document"),
         "{b:#?}"
     );
 }

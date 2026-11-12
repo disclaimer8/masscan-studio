@@ -881,7 +881,7 @@ the repository**. It stands outside every verdict, so the verifiers' rules and t
 parses every `.pcap` and `.pcapng` under DIR and reports any mDNS (UDP 5353), LLMNR (5355) or NBNS (137) frame: a guest
 OS announces its own host name on the lab NIC with them, and the pcap rules of `autodetect-verify` allow OS frames.
 The names are decoded from DNS wire form (length-prefixed labels, compression pointers, names inside PTR/CNAME/NS/SRV
-data, NetBIOS names) and printed masked (first three characters and an ellipsis) with the file and the frame number; a
+data, NetBIOS names, and, since the IPv6 stage, names carried by ICMPv6: RA DNSSL and Node Information) and printed masked (first three characters and an ellipsis) with the file and the frame number; a
 text search for `_tcp.local` cannot find them. Every other file is searched as text, and every capture as raw bytes,
 for the tokens given with `--forbid` (repeatable; the operator passes the real host names and accounts on the command
 line, so no real name lives in the repository). A `--forbid` token shorter than 4 bytes is refused with exit 2 and a

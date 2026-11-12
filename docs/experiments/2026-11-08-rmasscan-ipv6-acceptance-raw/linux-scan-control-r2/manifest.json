@@ -1,0 +1,38 @@
+{
+  "conf_masked": false,
+  "created_utc": 1794470971.2180696,
+  "lab": {
+    "sha256": "6586c0b24e45eaa45d9260b8324385b69f95419c1ea6be592b25b23b9bc17503",
+    "size": 6822264
+  },
+  "lab_id": "9d8c9804-554a-4c29-96de-d43d23c0142b",
+  "oracle": {
+    "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "size": 2106920
+  },
+  "rmasscan": {
+    "sha256": "479eaffede5946523827f97668292ce71841d7dfeffbdb82a7ddbaf6497b463d",
+    "size": 2305952
+  },
+  "scan-control": "linux",
+  "schema": 1,
+  "stand": {
+    "default_route": "via 198.18.0.2 dev veth-a (scanner namespace only)",
+    "open_ports": [
+      80,
+      8080
+    ],
+    "peer_if": "veth-b",
+    "peer_ips": [
+      "198.18.0.2",
+      "198.18.0.3",
+      "198.18.0.4",
+      "198.18.0.5"
+    ],
+    "peer_mac": "02:aa:00:00:00:02",
+    "scanner_if": "veth-a",
+    "scanner_ip": "198.18.0.1",
+    "scanner_mac": "02:aa:00:00:00:01"
+  },
+  "suite": "scan-control-suite linux"
+}

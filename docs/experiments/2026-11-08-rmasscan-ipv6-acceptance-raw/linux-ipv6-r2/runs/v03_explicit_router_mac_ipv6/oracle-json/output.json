@@ -1,0 +1,8 @@
+[
+{   "ip": "fd00:198:18::2",   "timestamp": "1794470707", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 2894321920} ] }
+,
+{   "ip": "fd00:198:18::3",   "timestamp": "1794470707", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 2894321920} ] }
+,
+{   "ip": "fd00:198:18::4",   "timestamp": "1794470707", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 2894321920} ] }
+,
+{   "ip": "fd00:198:18::5",   "timestamp": "1794470707", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 2894321920} ] }

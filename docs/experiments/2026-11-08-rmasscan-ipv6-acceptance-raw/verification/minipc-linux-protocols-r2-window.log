@@ -1,0 +1,23 @@
+OUT=/tmp/rmasscan-out.3lKX1V/win/protocols-out/linux-protocols-r2
+SigIgn of this bash (bash ignores SIGQUIT for itself): SigIgn:	0000000000000004
+SigIgn of its children: SigIgn:	0000000000000000
+6586c0b24e45eaa45d9260b8324385b69f95419c1ea6be592b25b23b9bc17503  target/release/rmasscan-lab
+479eaffede5946523827f97668292ce71841d7dfeffbdb82a7ddbaf6497b463d  target/release/rmasscan
+2026-11-12T08:05:43Z
+[wire-lab] suite protocols finished rc=0 (see /tmp/rmasscan-out.3lKX1V/win/protocols-out/linux-protocols-r2/suite.log)
+[wire-lab] done: /tmp/rmasscan-out.3lKX1V/win/protocols-out/linux-protocols-r2
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+SUITE_RC=0
+2026-11-12T08:09:05Z
+PASS     manifest 
+PASS     p01_ping 
+PASS     p02_udp_payloads_and_closed 
+PASS     p03_sctp_init_ack_abort 
+PASS     p04_arp_scan 
+PASS     p05_mixed_protos 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":6}
+VERIFY_RC=0
+2026-11-12T08:09:05Z
+3146bbf191996e8a6db4427cba54f1ea8bf1faa37fe387bd16f09fb35676cf7e  /tmp/rmasscan-out.3lKX1V/win/protocols-out/linux-protocols-r2/verdict.json
+netns after: 0
+FINISHED

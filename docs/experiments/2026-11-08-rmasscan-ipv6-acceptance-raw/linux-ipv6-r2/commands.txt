@@ -1,0 +1,10 @@
+ip netns add wl-scan-3841454-4611; ip netns add wl-peer-3841454-4611
+ip -n wl-scan-3841454-4611 link add veth-a type veth peer name veth-b netns wl-peer-3841454-4611
+ip netns exec $NS sysctl -qw net.ipv6.conf.{veth-a,veth-b}.{accept_dad=0 accept_ra=0 router_solicitations=0 forwarding=0 addr_gen_mode=0 disable_ipv6=0} net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.lo.disable_ipv6=0   # ipv6: IPv6 on the lab veth pair only
+ip -n $NS_A route add default via 198.18.0.2 dev veth-a; ip -n $NS_A neigh add {198.18.0.2 198.18.0.3 198.18.0.4 198.18.0.5} lladdr 02:aa:00:00:00:02 dev veth-a nud permanent   # autodetect stand
+ip -n $NS_A -6 addr add fd00:198:18::1/64 dev veth-a nodad; ip -n $NS_B -6 addr add {fd00:198:18::2 fd00:198:18::3 fd00:198:18::4 fd00:198:18::5}/64 dev veth-b nodad; ip -n $NS_A -6 route add default via fe80::aa:ff:fe00:2 dev veth-a; ip -n $NS_A -6 neigh add {fd00:198:18::2 fd00:198:18::3 fd00:198:18::4 fd00:198:18::5} fe80::aa:ff:fe00:2 lladdr 02:aa:00:00:00:02 dev veth-a nud permanent; ip -n $NS_B -6 neigh add fd00:198:18::1 fe80::aa:ff:fe00:1 lladdr 02:aa:00:00:00:01 dev veth-b nud permanent   # ipv6 stand
+ip netns exec $NS_A ethtool -K veth-a tx off; ip netns exec $NS_B ethtool -K veth-b tx off   # veth tx-checksum offload off, this run's veth only
+ip -n $NS_A route show (exactly: 198.18.0.0/24 dev veth-a; default via 198.18.0.2 dev veth-a); ip -n $NS_A route get 8.8.8.8 (via 198.18.0.2 dev veth-a); ip -n $NS_B route show default (empty); ip -n $NS_B route get 8.8.8.8 (fails)  # seal assertions, autodetect stand
+ip -n $NS_A -6 route show default (exactly: default via fe80::aa:ff:fe00:2 dev veth-a); ip -n $NS_B -6 route show default (empty); ip -n $NS_B -6 route get 2001:db8::1 (fails); capture isolation --mode ipv6  # seal assertions, ipv6 stand
+(rmasscan-lab ipv6-suite) ip netns exec $NS_B rmasscan-lab capture responder --ports 80,8080 ...   # started by the suite
+rmasscan-lab ipv6-suite linux ...   # runs everything through ip netns exec $NS_A / $NS_B

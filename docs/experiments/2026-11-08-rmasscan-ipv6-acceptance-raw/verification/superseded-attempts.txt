@@ -1,0 +1,54 @@
+# Superseded attempts of the IPv6 stage's live set (task 7b). Not committed as directories; their facts are here.
+# The committed set is r2 on C = e9eaebeb0fe2024bdde29961892e122cd93ab901 (all six windows).
+
+## r1 on cbcffe723a277b02ddc49ec2ebf286b0cfcfee70 (the code at the start of 7b; CI rmasscan green on all OSes)
+
+Only linux-ipv6-r1 ran (stop rule: a window that does not PASS stops the set). minipc, wire-lab.sh --suite ipv6,
+2026-11-12 07:33:23Z-07:35:34Z; minipc binaries: rmasscan-lab a25371be00791180de41876e0adb139c981bd0cf8ce647a1e56d27a2e5f8c0a3,
+rmasscan 479eaffede5946523827f97668292ce71841d7dfeffbdb82a7ddbaf6497b463d (the same product binary as at C).
+
+verdict.json aed5cf520ec4ef3e07c2413661183930ef8bcaa398f071e0ebed121ded8ae486: INVALID 3 (v01, v02, v03), PASS 1
+(manifest), FAIL 0, safety_trips []. Every rmasscan step's own checks PASSed; the INVALID checks:
+- every oracle step: "every frame of the scanner MAC is a probe of the scan or of a named class (...)":
+  v01 4, v02 8, v03 4 other frames "TCP flags 0x04 <scanner> > <peer>:81, which resets no SYN-ACK of the stand";
+- v01 and v03 oracle-json: "output.json is a well-formed document": ttl "320995840" (v01), "2497958912" (v03);
+- v03 json: "no kernel noise of either side in the step": {"peer_ns_for_scanner": 1};
+- v03 oracle-json: "nothing on the peer side answers anything the scan did not send" (a 78-byte packet to an
+  address other than the scanner's) and one more "other frame" (a unicast NS of the scanner MAC for fe80::aa:ff:fe00:2).
+
+Causes, from the captures:
+1. Lab (verifier): C resets each distinct reply that passes its cookie check and dedup, the RST of a closed port as
+   well as the SYN-ACK (main.c:1048-1101: TCP_IS_SYNACK || TCP_IS_RST, then tcp_send_RST), in its template's form
+   (78 bytes over IPv6: window 1200, the MSS option); the 7a class rst_to_syn_ack named only the SYN-ACK half. Over
+   IPv4 too (v02: 198.18.0.1 > 198.18.0.3:81). The protocols stand never had a closed TCP port.
+   Fix f346a66b: named class rst_to_rst, at most one per distinct RST reply on the oracle's step, none on rmasscan's.
+2. Lab (verifier): C's -oJ prints `"ttl": %u` of parsed.ip_ttl (out-json.c:51), which C sets for IPv4 only
+   (proto-preprocess.c:127): an IPv6 record carries a stale 32-bit value; its -oB keeps the low byte
+   (out-binary.c:201), so the binary documents parsed. The verifier read every ttl as a byte.
+   Fix e9eaebeb: C's documents may carry an IPv6 ttl of any 32-bit value, named in the check
+   ("output.json is a well-formed document (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it
+   never sets for IPv6, ipv6-ttl-not-compared)") and in the deviation's rule; rmasscan's ttl stays a byte.
+3. Stand: learnt link-local neighbours. topology-after.txt of r1: fe80::aa:ff:fe00:2 REACHABLE in the scanner
+   namespace, fe80::aa:ff:fe00:1 REACHABLE in the peer namespace (both permanent entries were ULA only). The scanner
+   kernel learns the router of its default route when a route lookup via that route probes it (the seal's
+   `ip -6 route get 2001:db8::1`), the peer learns the scanner from that NS; NUD then probed both with unicast NS:
+   in v03 json a peer NS for fe80::aa:ff:fe00:1 (and the scanner kernel's NA), in v03 oracle-json the scanner
+   kernel's NS for fe80::aa:ff:fe00:2 and the peer's NA to the scanner's link-local.
+   Fix 1abae2aa: wire-lab.sh --suite ipv6 adds both link-local addresses as permanent neighbours (scanner side: the
+   router fe80::aa:ff:fe00:2; peer side: fe80::aa:ff:fe00:1); the seal (capture isolation --mode ipv6) requires them.
+
+Each fix: an offline test in the live shape, RED with exactly the live check before the fix, GREEN after; its own
+commit. Then the whole set was rerun on the new C (r2).
+
+r1 re-judged by the verifier of C (Mac rmasscan-lab of C, ipv6-verify): PASS manifest, v01, v02; INVALID v03 (only the
+three stand-noise checks of cause 3, which the verifier rightly keeps INVALID); verdict
+a688a9f4dc78492c2e68fe0fb07633c95295888dd3728e9edd11ae9997089c96, rc 2.
+
+## Not a window: the first minipc gate attempt on C (2026-11-12 08:20Z-08:26Z)
+
+cargo test --locked --workspace on a fresh git archive export of C in /tmp of minipc ended before any test ran:
+"collect2: fatal error: ld terminated with signal 7 [Bus error]" while linking the rmasscan-lab test binary
+(TEST_WS_EXIT=101, 0 result lines; clippy of the same attempt rc 0). /tmp is a 7.5 GB tmpfs and was 80% full with the
+operator's three export directories (r1's, the r2 windows', the gate's). Those directories were removed (their evidence
+and logs had been copied to the Mac), and the gate ran again in a new neutral directory with a fresh target directory:
+verification/minipc-gate-*.txt, minipc-test-ws.log, minipc-clippy.log. Environment, not code.

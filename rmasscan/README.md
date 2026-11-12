@@ -514,11 +514,13 @@ IPv6 (код `e9eaebeb`, evidence `f089b071`, 2026-11-12, ветка `feat/rmass
 `syn_cookie_ipv6`, NDP (Neighbor Solicitation резолвера и ответы на NS пира), смешанная индексация IPv4 и IPv6, записи типов 10 и
 11 во всех форматах вывода и в `--readscan` (119 эталонов C: 94 прежних и 25 с IPv6), определение интерфейса, адреса источника и
 следующего хопа IPv6 на Linux, macOS и Windows, `--router-mac-ipv6`, IPv6 в `--adapter-ip` и `--router-ip`, возобновление заданий
-IPv6. Продуктовый код не менялся с `c1e76779`: шесть коммитов после него (`06227c14`, `0f48dfac`, `cbcffe72`, `1abae2aa`,
+IPv6. Продуктовый код не менялся с `c1e76779` до `e9eaebeb`: шесть коммитов (`06227c14`, `0f48dfac`, `cbcffe72`, `1abae2aa`,
 `f346a66b`, `e9eaebeb`) правят только `rmasscan-lab`, `wire-lab.sh` и документы (`git diff --stat c1e76779 e9eaebeb --
-rmasscan/crates ':!rmasscan/crates/rmasscan-lab'` пуст). Живая приёмка (все шесть окон на `e9eaebeb`, `safety_trips` пуст): Linux
+rmasscan/crates ':!rmasscan/crates/rmasscan-lab'` пуст). После окон продукт менялся: правило подтверждения 1e9 в `validate`
+(`eba1492b`, затем `9dbbfd69`) и проверка MAC следующего хопа IPv6 в `ReadyPlan::new_cli` (`6d6b235a`); ни одно живое окно эти
+пути не упражняет. Тесты: Mac на `f171465e` 2153/0, minipc и гость прогнаны на `e9eaebeb`. Живая приёмка (все шесть окон на `e9eaebeb`, `safety_trips` пуст): Linux
 `ipv6` PASS 4/4 (`v01`–`v03`), регрессии протоколов Linux PASS 6/6, управления сканом Linux PASS 7/7, вывода Linux PASS 18/18,
-автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты Mac 2144/0 (сводка в `verification/mac-test-ws-summary.txt`),
+автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты Mac на `e9eaebeb` 2144/0 (сводка в `verification/mac-test-ws-summary.txt`),
 minipc 2016/0 и гость 1911/0. GO (stands) условно: зелёный CI на точном HEAD и итоговое ревью ветки фиксирует контролёр при
 слиянии. Windows IPv6, macOS живой и физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md`.
 

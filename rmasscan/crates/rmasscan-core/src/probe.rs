@@ -2290,6 +2290,56 @@ mod tests {
         }
     }
 
+    /// Слияние с Студией: карта доставки `with_destinations` ключуется IPv4 и живёт только в плане Студии, а он
+    /// отказывает целям IPv6 до первого кадра, даже когда IPv4-часть карты полна. У плана CLI карты нет
+    /// (`destinations() == None`), и его кадры IPv6 берут MAC из `next_hop_mac_ipv6`, а кадры IPv4 из `next_hop_mac`.
+    #[test]
+    fn mapped_studio_plan_refuses_ipv6_targets_and_the_cli_plan_has_no_map() {
+        const MAPPED: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+        for (t, map) in [
+            ("2001:db8::10", BTreeMap::new()),
+            (
+                "2001:db8::10,198.18.0.1",
+                BTreeMap::from([(0xc612_0001, MAPPED)]),
+            ),
+        ] {
+            let e = eff_v46(t, "80");
+            assert_eq!(
+                ReadyPlan::with_destinations(e.clone(), binding(), map).unwrap_err(),
+                PlanError::Ipv6TargetsNotSupported,
+                "{t}"
+            );
+            let nic = v6_nic();
+            let plan = ReadyPlan::new_cli(e, vec![nic.clone()]).unwrap();
+            assert_eq!(plan.destinations(), None, "{t}");
+            let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+            let mut v6s = 0;
+            while let Some(p) = cursor.current() {
+                let want = match p.target {
+                    TargetIp::V6(_) => {
+                        v6s += 1;
+                        nic.next_hop_mac_ipv6.unwrap()
+                    }
+                    TargetIp::V4(_) => nic.binding.next_hop_mac,
+                };
+                assert_eq!(&p.frame[..6], &want, "{t}");
+                assert_ne!(&p.frame[..6], &MAPPED, "{t}");
+                cursor.advance_sent();
+            }
+            assert_eq!(cursor.build_error(), None, "{t}");
+            assert_eq!(v6s, 1, "{t}");
+        }
+        // The same IPv4-only job with a complete map stays accepted, and its frames carry the mapped MAC.
+        let e = eff_v46("198.18.0.1", "80");
+        let plan =
+            ReadyPlan::with_destinations(e, binding(), BTreeMap::from([(0xc612_0001, MAPPED)]))
+                .unwrap();
+        let mut cursor = ProbeCursor::new(&plan, 0).unwrap();
+        let p = cursor.current().unwrap();
+        assert_eq!(p.target, TargetIp::V4(0xc612_0001));
+        assert_eq!(&p.frame[..6], &MAPPED);
+    }
+
     /// R3: цели IPv6 только с портами TCP. `U:`, `S:`, `I:` (и ARP `I:2`) вместе с целью IPv6 это отказ плана CLI до
     /// первого кадра (C шлёт их и по IPv6; здесь отложено).
     #[test]

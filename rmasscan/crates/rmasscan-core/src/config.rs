@@ -577,11 +577,12 @@ pub fn validate(cfg: &ScanConfig, op: Operation) -> Result<EffectiveConfig, Conf
             ConfigError::EmptyPorts
         });
     }
-    // main.c:1204, :1235: `count_ips` это IPv4 плюс младшие 64 бита счёта IPv6, а
-    // подтверждением служит только `exclude.ipv4` (исключение IPv6 его не даёт).
+    // main.c:1204, :1235: `count_ips` это IPv4 плюс младшие 64 бита счёта IPv6. C считает подтверждением только
+    // `exclude.ipv4`; спека этапа (Р1) называет это ошибкой, поэтому здесь подтверждает и исключение IPv6 (R23).
     if op == Operation::Scan
         && massip.count_ipv4s().wrapping_add(massip.count_ipv6s()) > 1_000_000_000
         && cfg.excludes.ipv4().is_empty()
+        && cfg.excludes.ipv6().is_empty()
     {
         return Err(ConfigError::ExcludeRequired);
     }
@@ -2672,13 +2673,13 @@ mod tests {
                 1 << 62
             );
         }
-        // main.c:1235: the confirmation is an IPv4 --exclude; an IPv6 one does not count
+        // main.c:1235 counts only exclude.ipv4; spec Р1 (R23) fixes that: an IPv6 --exclude confirms too
         let mut cfg = cfg_v46("2001:db8::/66", "80");
         assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
-        cfg.excludes
-            .add_target_string("2001:db8:0:0:8000::/66")
-            .unwrap();
-        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
+        cfg.excludes.add_target_string("2001:db8::1").unwrap();
+        assert!(validate(&cfg, Operation::Scan).is_ok());
+        // an IPv4 exclude confirms as before
+        let mut cfg = cfg_v46("2001:db8::/66", "80");
         cfg.excludes.add_target_string("255.255.255.255").unwrap();
         assert_eq!(validate(&cfg, Operation::Scan).unwrap().range(), 1 << 62);
     }

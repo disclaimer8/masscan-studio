@@ -828,6 +828,7 @@ Argv оракула это argv rmasscan плюс `--adapter-ip fd00:198:18::1` 
 `families-one-interface`, их условие проверяется на стороне оракула), TTL записей IPv6 с C не сравнивается.
 
 ```sh
+cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
 OUT=$(mktemp -d /tmp/rmasscan-out.XXXXXX)/ipv6-out/linux-ipv6-r1
 RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite ipv6 \
   --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"

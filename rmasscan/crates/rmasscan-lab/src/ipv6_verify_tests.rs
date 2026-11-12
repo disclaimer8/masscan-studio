@@ -923,7 +923,38 @@ fn a_probe_byte_that_differs_from_the_oracle_fails() {
         has(&b, FAIL, "json: the probes equal the C oracle's"),
         "{b:#?}"
     );
+    // The detail says where: the first probe that differs (the oracle's first IPv6 SYN is its first probe).
+    let first = sim.step_mut("oracle-json").frames[..at]
+        .iter()
+        .filter(|(_, f)| is_v6_syn(f))
+        .count();
+    assert!(
+        b[0].ends_with(&format!("first difference at Some({first})")),
+        "{b:#?}"
+    );
     assert_eq!(b.len(), 1, "{b:#?}");
+}
+
+#[test]
+fn the_stands_syn_check_names_the_ipv4_syns_it_counts() {
+    // `av::foreign_syns` counts IPv4 SYNs only; a scanner IPv6 frame off the stand is the frame check's (above).
+    let root = scratch();
+    all_cases(&root);
+    let res = verify_dir(&root);
+    let names: Vec<String> = array(&run_of(&res, "v02_mixed_v4_v6")["checks"])
+        .iter()
+        .map(|c| s(&c["name"]).to_owned())
+        .collect();
+    assert!(
+        names.iter().any(|n| n
+            == "no IPv4 SYN on the binary capture from outside the stand binding or to an address off the stand"),
+        "{names:#?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.starts_with("no SYN on")),
+        "{names:#?}"
+    );
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]

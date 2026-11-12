@@ -1873,6 +1873,8 @@ impl PairPlan for Ipv6 {
     const RECORD_ORDER_VS_C: &'static str = RECORD_ORDER_VS_C;
     const SCANNER_CLASSES: &'static [(&'static str, &'static str)] = &SCANNER_CLASSES;
     const PROBES_VS_C: &'static str = "";
+    const PROBES_FIRST_DIFFERENCE: bool = true;
+    const FOREIGN_SYN: &'static str = "IPv4 SYN";
     const OWN_WIRE: &'static str = "the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)";
     const ORACLE_NOTE: &'static str = "the pinned C masscan 8e6b3b0 with rmasscan's argv plus oracle_extra, one run per document, on the same stand";
 

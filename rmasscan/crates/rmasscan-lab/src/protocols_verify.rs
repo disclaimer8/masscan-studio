@@ -1865,6 +1865,8 @@ impl PairPlan for Protocols {
     const RECORD_ORDER_VS_C: &'static str = RECORD_ORDER_VS_C;
     const SCANNER_CLASSES: &'static [(&'static str, &'static str)] = &SCANNER_CLASSES;
     const PROBES_VS_C: &'static str = " (udp-checksum-ffff applied)";
+    const PROBES_FIRST_DIFFERENCE: bool = false;
+    const FOREIGN_SYN: &'static str = "SYN";
     const OWN_WIRE: &'static str = "the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)";
     const ORACLE_NOTE: &'static str =
         "the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand";

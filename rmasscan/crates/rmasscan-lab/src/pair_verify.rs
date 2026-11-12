@@ -81,6 +81,10 @@ pub(crate) trait PairPlan {
     const SCANNER_CLASSES: &'static [(&'static str, &'static str)];
     /// The rule the probes of the two steps are compared under, appended to that check's name.
     const PROBES_VS_C: &'static str;
+    /// Whether that check's detail names the first probe that differs (`, first difference at Some(i)`).
+    const PROBES_FIRST_DIFFERENCE: bool;
+    /// What the stand's SYN safety check counts (`av::foreign_syns`: IPv4 SYNs), as its name says it.
+    const FOREIGN_SYN: &'static str;
     /// The own-wire check's name.
     const OWN_WIRE: &'static str;
     /// `notes.oracle`.
@@ -534,7 +538,16 @@ fn judge<P: PairPlan>(r: &mut Run, c: &P::Case, sides: &[Side<P::View>]) {
                     P::PROBES_VS_C
                 ),
                 same,
-                format!("{} probes, the oracle {}", a.len(), b.len()),
+                if P::PROBES_FIRST_DIFFERENCE {
+                    format!(
+                        "{} probes, the oracle {}, first difference at {:?}",
+                        a.len(),
+                        b.len(),
+                        a.iter().zip(&b).position(|(x, y)| x != y)
+                    )
+                } else {
+                    format!("{} probes, the oracle {}", a.len(), b.len())
+                },
             );
         }
         if let (Some(Some(x)), Some(Some(y))) = (docs.get(k), docs.get(k + 1)) {
@@ -740,7 +753,10 @@ fn verify_run<P: PairPlan>(root: &Path, c: &P::Case, root_links: &[String]) -> R
             let who = s.spec.name;
             let n = av::foreign_syns(fr, &st);
             r.safety(
-                &format!("no SYN on the {who} capture from outside the stand binding or to an address off the stand"),
+                &format!(
+                    "no {} on the {who} capture from outside the stand binding or to an address off the stand",
+                    P::FOREIGN_SYN
+                ),
                 n == 0,
                 n,
             );

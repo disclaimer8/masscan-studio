@@ -314,6 +314,12 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
     умолчанию для обоих семейств (`main-initadapter.c:44–57`) и адрес IPv6 этого же интерфейса (`:212–219`). Смешанный
     скан, семейства которого идут через разные интерфейсы, отказывает (`IPv4 and IPv6 targets are routed via different
     interfaces`, код 1): режима одного интерфейса как у C нет.
+  - Выбор адреса источника IPv6 на macOS не смотрит на состояние DAD: `SIOCGIFAFLAG_IN6` не читается, поэтому tentative,
+    duplicated, detached и deprecated-temporary адреса не отсеиваются (Linux и Windows их отсеивают). Живой прогон на macOS
+    не снимался (NOT RUN); если автоопределение взяло такой адрес, источник задают явно, `--adapter-ip`.
+  - `--router-mac-ipv6`, равный MAC самого адаптера, отказывает до первого кадра (`the IPv6 next-hop MAC equals the adapter
+    source MAC`, код 1): собственные кадры нельзя было бы отличить от ответов. Для IPv4 то же делают адаптеры macOS и Windows;
+    у IPv6 проверка стоит в плане и действует на всех ОС.
   - Возобновление (`--resume`) заданий с IPv6 поддержано: `paused.conf` несёт диапазоны IPv6 и, только если заданы,
     `adapter-ip`, `router-ip` и `router-mac-ipv6` в форме IPv6; остаток потока точный (тест). `paused.conf` чисто
     IPv4-задания не изменился ни на байт. Значения `router-mac-ipv4` и `router-mac-ipv6` в файле могут различаться (C тоже

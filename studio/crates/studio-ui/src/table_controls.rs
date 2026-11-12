@@ -247,7 +247,7 @@ mod tests {
         host.hostname = Some("printer.local".into());
         rows.enrich(vec![host]);
         rows.summary(&ui);
-        assert_eq!(ui.get_summary(), "1 of 60 saved results");
+        assert_eq!(ui.get_summary(), "1 of 60 saved results · all runs");
         assert_eq!(ui.get_active_row(), 0);
         assert_eq!(ui.get_details().hostname, "printer.local");
         assert_eq!(ui.get_selection_label(), "1 selected");
@@ -263,7 +263,7 @@ mod tests {
         rows.add(vec![saved("198.18.0.63")]);
         rows.add(vec![saved("198.18.0.64")]);
         rows.summary(&ui);
-        assert_eq!(ui.get_summary(), "1 of 62 saved results");
+        assert_eq!(ui.get_summary(), "1 of 62 saved results · all runs");
         {
             let _table = rows.table.borrow_mut();
             rows.summary(&ui);
@@ -271,13 +271,13 @@ mod tests {
 
         clear_view(&rows, &ui);
         rows.summary(&ui);
-        assert_eq!(ui.get_summary(), "0 of 0 saved results");
+        assert_eq!(ui.get_summary(), "0 of 0 saved results · all runs");
         assert_eq!(ui.get_selection_count(), 0);
         assert_eq!(ui.get_active_row(), -1);
         assert_eq!(ui.get_details().ip, "");
         rows.add(vec![saved("198.18.0.9")]);
         rows.summary(&ui);
-        assert_eq!(ui.get_summary(), "1 of 1 saved results");
+        assert_eq!(ui.get_summary(), "1 of 1 saved results · all runs");
         ui.invoke_choose(0, false, false);
         assert_eq!(ui.get_details().ip, "198.18.0.9");
         ui.invoke_select_visible();

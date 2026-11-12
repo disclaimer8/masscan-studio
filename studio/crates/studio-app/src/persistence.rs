@@ -78,6 +78,8 @@ mod tests {
     #[test]
     fn checkpoint_and_terminal_force_prior_results_to_commit() {
         for event in [
+            Event::PreparingNetwork,
+            Event::NetworkPrepared { bytes: vec![] },
             Event::Checkpoint {
                 bytes: vec![],
                 next_index: "1".into(),

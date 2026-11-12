@@ -10,3 +10,4 @@ serde_json.workspace = true
 getrandom.workspace = true
 rmasscan-core.workspace = true
 rmasscan-engine.workspace = true
+rmasscan-net.workspace = true

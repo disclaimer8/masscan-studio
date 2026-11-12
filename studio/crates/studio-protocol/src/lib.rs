@@ -1,5 +1,10 @@
 //! Versioned Studio IPC and immutable scan settings.
 #![forbid(unsafe_code)]
+pub mod acceptance;
+mod network;
+pub mod sealed_fixture;
+pub mod single_target;
+pub use network::*;
 use rmasscan_core::{
     config::{Operation, ScanConfig, validate},
     massip::MassIp,
@@ -10,7 +15,7 @@ use rmasscan_core::{
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 5;
 pub const ENGINE_VERSION: u32 = rmasscan_engine::ENGINE_ALGORITHM_VERSION;
 pub const MAX_FRAME: usize = 131_072;
 pub const MAX_QUEUE: usize = 4 * 1024 * 1024;
@@ -36,18 +41,54 @@ pub fn decimal(s: &str) -> Result<u64, String> {
 pub enum Backend {
     Simulation,
     MacFeth,
+    MacNetwork,
+    /// Ordinary macOS Ethernet/Wi-Fi targets, with authenticated runner access.
+    MacPhysical,
+    LinuxPhysical,
+    WindowsPhysical,
     // Read compatibility for schema-v3 archives only; prepare() rejects execution.
     #[serde(rename = "SwiftImport")]
     Archived,
 }
-/// Release gate per profile and platform. Compile-time; never a user setting.
-/// Only the sealed Mac feth stand on macOS is open; Windows/Linux raw profiles and physical NICs stay closed.
-pub const fn raw_profile_enabled(backend: Backend) -> bool {
-    matches!(backend, Backend::MacFeth) && cfg!(target_os = "macos")
+impl Backend {
+    pub const fn is_network(self) -> bool {
+        self.is_physical() || matches!(self, Self::MacNetwork)
+    }
+    pub const fn is_physical(self) -> bool {
+        matches!(
+            self,
+            Self::MacPhysical | Self::LinuxPhysical | Self::WindowsPhysical
+        )
+    }
+    pub const fn native_physical() -> Option<Self> {
+        if cfg!(target_os = "macos") {
+            Some(Self::MacPhysical)
+        } else if cfg!(target_os = "linux") {
+            Some(Self::LinuxPhysical)
+        } else if cfg!(windows) {
+            Some(Self::WindowsPhysical)
+        } else {
+            None
+        }
+    }
 }
-/// Profiles open in this build (for manifests and reports): `["MacFeth"]` on macOS, `[]` elsewhere.
+/// Raw profiles require their native OS and authenticated helper access. MacNetwork retains
+/// its separate sealed-fixture/single-target policy; it never falls back to MacPhysical.
+pub const fn raw_profile_enabled(backend: Backend) -> bool {
+    match backend {
+        Backend::MacFeth | Backend::MacNetwork | Backend::MacPhysical => cfg!(target_os = "macos"),
+        Backend::LinuxPhysical => cfg!(target_os = "linux"),
+        Backend::WindowsPhysical => cfg!(windows),
+        _ => false,
+    }
+}
+/// MacNetwork remains the constrained acceptance profile.
 pub const RAW_PROFILES: &[&str] = if cfg!(target_os = "macos") {
-    &["MacFeth"]
+    &["MacFeth", "MacNetwork", "MacPhysical"]
+} else if cfg!(target_os = "linux") {
+    &["LinuxPhysical"]
+} else if cfg!(windows) {
+    &["WindowsPhysical"]
 } else {
     &[]
 };
@@ -73,6 +114,11 @@ impl Job {
         }
     }
     pub fn prepare(&self) -> Result<ReadyPlan, String> {
+        if self.backend.is_network() {
+            return Err(
+                "Physical network requires an independently verified network report".into(),
+            );
+        }
         if self.backend == Backend::Archived {
             return Err(
                 "Archived history is read-only; its checkpoint cannot run in rmasscan".into(),
@@ -165,17 +211,20 @@ impl Job {
 pub enum Command {
     Hello,
     CheckNetwork,
+    CheckNetworkJob(Job),
     Start(Job),
     Resume { job: Job, checkpoint: Vec<u8> },
     Pause,
     Stop,
     AckCheckpoint { through: u64 },
+    AckNetworkReport { through: u64 },
     CloseSession,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Status {
     Ready,
     Starting,
+    Preparing,
     Scanning,
     Saving,
     Paused,
@@ -200,13 +249,38 @@ pub struct Row {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Event {
-    Hello { engine: u32 },
-    NetworkChecked { ready: bool, detail: String },
-    Started { total: String },
+    Hello {
+        engine: u32,
+    },
+    NetworkChecked {
+        ready: bool,
+        detail: String,
+    },
+    NetworkPreflight {
+        job_digest: [u8; 32],
+        ready: bool,
+        detail: String,
+    },
+    PreparingNetwork,
+    NetworkPrepared {
+        bytes: Vec<u8>,
+    },
+    Started {
+        total: String,
+    },
     Results(Vec<Row>),
-    Progress { sent: String, received: String },
-    Checkpoint { bytes: Vec<u8>, next_index: String },
-    Finished { status: Status, detail: String },
+    Progress {
+        sent: String,
+        received: String,
+    },
+    Checkpoint {
+        bytes: Vec<u8>,
+        next_index: String,
+    },
+    Finished {
+        status: Status,
+        detail: String,
+    },
     CheckpointAcked,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -294,8 +368,19 @@ pub fn validate_checkpoint(
     bytes: &[u8],
     index: &str,
 ) -> Result<(), String> {
-    let cp = rmasscan_engine::Checkpoint::from_bytes(bytes).map_err(|e| e.to_string())?;
-    let plan = job.prepare()?;
+    let (cp, plan) = if job.backend.is_network() {
+        let envelope = NetworkCheckpoint::decode(bytes)?;
+        let plan = job.prepare_network(&envelope.report)?;
+        (
+            rmasscan_engine::Checkpoint::from_bytes(&envelope.engine).map_err(|e| e.to_string())?,
+            plan,
+        )
+    } else {
+        (
+            rmasscan_engine::Checkpoint::from_bytes(bytes).map_err(|e| e.to_string())?,
+            job.prepare()?,
+        )
+    };
     if cp.engine_version != rmasscan_engine::ENGINE_ALGORITHM_VERSION
         || cp.scan_id != scan
         || cp.attempt_id != attempt
@@ -311,6 +396,9 @@ pub fn validate_checkpoint(
 /// Origin of a previously persisted checkpoint; a failed resume attempt does
 /// not change the attempt that originally produced these bytes.
 pub fn checkpoint_origin(bytes: &[u8]) -> Result<Id, String> {
+    if NetworkCheckpoint::is_envelope(bytes) {
+        return checkpoint_origin(&NetworkCheckpoint::decode(bytes)?.engine);
+    }
     rmasscan_engine::Checkpoint::from_bytes(bytes)
         .map(|cp| cp.attempt_id)
         .map_err(|e| e.to_string())
@@ -320,20 +408,50 @@ pub fn checkpoint_origin(bytes: &[u8]) -> Result<Id, String> {
 mod gate_tests {
     use super::*;
     #[test]
-    fn raw_gate_is_open_only_for_mac_feth_on_macos() {
+    fn ordinary_linux_and_windows_jobs_require_network_preparation() {
+        for profile in ["LinuxPhysical", "WindowsPhysical"] {
+            let backend: Backend = serde_json::from_str(&format!("\"{profile}\"")).unwrap();
+            let job = Job::example(backend);
+            job.validate().unwrap();
+            assert!(job.backend.is_network());
+            assert!(
+                job.prepare()
+                    .unwrap_err()
+                    .contains("verified network report")
+            );
+        }
+    }
+    #[test]
+    fn raw_profiles_match_native_platform_and_keep_fixture_profiles_mac_only() {
         assert_eq!(
             raw_profile_enabled(Backend::MacFeth),
             cfg!(target_os = "macos")
         );
+        assert_eq!(
+            raw_profile_enabled(Backend::MacNetwork),
+            cfg!(target_os = "macos")
+        );
         assert!(!raw_profile_enabled(Backend::Simulation));
         assert!(!raw_profile_enabled(Backend::Archived));
-        let open = [Backend::Simulation, Backend::MacFeth, Backend::Archived]
-            .into_iter()
-            .filter(|b| raw_profile_enabled(*b))
-            .count();
+        let open = [
+            Backend::Simulation,
+            Backend::MacFeth,
+            Backend::MacNetwork,
+            Backend::MacPhysical,
+            Backend::LinuxPhysical,
+            Backend::WindowsPhysical,
+            Backend::Archived,
+        ]
+        .into_iter()
+        .filter(|b| raw_profile_enabled(*b))
+        .count();
         assert_eq!(RAW_PROFILES.len(), open);
         if raw_profile_enabled(Backend::MacFeth) {
-            assert_eq!(RAW_PROFILES, ["MacFeth"]);
+            assert_eq!(RAW_PROFILES, ["MacFeth", "MacNetwork", "MacPhysical"]);
+        } else if cfg!(target_os = "linux") {
+            assert_eq!(RAW_PROFILES, ["LinuxPhysical"]);
+        } else if cfg!(windows) {
+            assert_eq!(RAW_PROFILES, ["WindowsPhysical"]);
         } else {
             assert!(RAW_PROFILES.is_empty());
         }

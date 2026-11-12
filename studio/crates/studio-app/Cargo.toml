@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+rmasscan-core.workspace = true
 studio-protocol.workspace = true
 studio-store.workspace = true
 studio-platform.workspace = true
@@ -12,4 +13,6 @@ studio-inspection.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-rusqlite = { version = "=0.41.0", default-features = false }
+rusqlite = { version = "=0.42.0", default-features = false }
+rmasscan-net.workspace = true
+rmasscan-engine.workspace = true

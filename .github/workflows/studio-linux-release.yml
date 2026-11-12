@@ -1,0 +1,32 @@
+name: Studio Linux release
+on:
+  pull_request:
+    paths: ['studio/**', 'rmasscan/**', '.github/workflows/studio-linux-release.yml']
+  push:
+    branches: [main]
+    paths: ['studio/**', 'rmasscan/**', '.github/workflows/studio-linux-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: studio-linux-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  ubuntu-baseline:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Release build, GLIBC floor, simulation and privacy
+        run: bash studio/scripts/package-linux-baseline.sh /tmp/studio-linux-release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: studio-linux-release-${{ github.event.pull_request.head.sha || github.sha }}
+          if-no-files-found: error
+          path: |
+            /tmp/studio-linux-release/studio-linux-x86_64.tar.gz
+            /tmp/studio-linux-release/studio-linux-x86_64.tar.gz.sha256
+            /tmp/studio-linux-release/source-commit.txt
+            /tmp/studio-linux-release/evidence/

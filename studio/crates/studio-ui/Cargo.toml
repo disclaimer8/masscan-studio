@@ -3,19 +3,32 @@ name = "studio-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "studio-ui"
+
+[[bin]]
+name = "studio-launcher"
+path = "src/launcher.rs"
 
 [dependencies]
 studio-protocol.workspace = true
 studio-store.workspace = true
 studio-app.workspace = true
+rmasscan-net.workspace = true
 studio-table = { path = "../studio-table" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }
-rfd = "=0.17.2"
+rfd = "=0.18.0"
 pollster = "1.0.1"
 studio-inspection = { version = "0.1.0", path = "../studio-inspection" }
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+studio-platform.workspace = true
+slint = { version = "=1.18.1", default-features = false, features = ["unstable-winit-030"] }
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
 
 [build-dependencies]
 slint-build = "=1.18.1"

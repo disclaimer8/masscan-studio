@@ -250,8 +250,8 @@ fn raw_resume_without_authorization_keeps_the_checkpoint() {
         for u in app.poll() {
             if let Update::State(s, detail) = u {
                 assert_ne!(s, Status::Scanning, "must not open the raw adapter");
-                if s == Status::Interrupted {
-                    assert!(detail.contains("Raw resume is gated"), "{detail}");
+                if detail.contains("Raw resume is gated") {
+                    assert_eq!(s, Status::Paused, "refusal must keep Resume available");
                     gated = true;
                 }
             }

@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-struct Reader(mpsc::Receiver<Vec<u8>>, Cursor<Vec<u8>>);
+pub(super) struct Reader(mpsc::Receiver<Vec<u8>>, Cursor<Vec<u8>>);
 impl Read for Reader {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
@@ -27,7 +27,7 @@ impl Read for Reader {
         }
     }
 }
-struct Writer(mpsc::Sender<Vec<u8>>);
+pub(super) struct Writer(mpsc::Sender<Vec<u8>>);
 impl Write for Writer {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.0
@@ -39,7 +39,7 @@ impl Write for Writer {
         Ok(())
     }
 }
-fn pipe() -> (Writer, Reader) {
+pub(super) fn pipe() -> (Writer, Reader) {
     let (tx, rx) = mpsc::channel();
     (Writer(tx), Reader(rx, Cursor::new(Vec::new())))
 }
@@ -192,6 +192,7 @@ fn interruption_wins_over_queued_completion_or_pause_without_losing_rows() {
             engine: None,
             guard: Some(guard),
             pending: None,
+            network: None,
             rows: vec![studio_protocol::Row {
                 ip: "198.18.0.2".into(),
                 port: 80,
@@ -215,6 +216,93 @@ fn interruption_wins_over_queued_completion_or_pause_without_losing_rows() {
         }
         assert!(
             matches!(&events[..], [Event::Results(rows), Event::Finished { status: Status::Interrupted, .. }] if rows.len() == 1)
+        );
+    }
+}
+
+#[test]
+fn adapter_failure_rechecks_environment_after_cancelling_in_flight_observation() {
+    for changed in [true, false] {
+        let job = Job::example(Backend::Simulation);
+        let fake = rmasscan_engine::fake::FakeAdapter::new();
+        fake.script_tx([rmasscan_engine::fake::TxStep::Fail(
+            "network is down".into(),
+        )]);
+        let engine = Engine::start(
+            job.prepare().unwrap(),
+            fake.pair(),
+            EngineOptions::new([1; 16], [2; 16]),
+        )
+        .unwrap();
+        let cancel = engine.cancel_handle();
+        let (outcome, _) = engine.join_drain().unwrap();
+        assert!(matches!(outcome.reason, Reason::Failed(_)));
+        let (entered, ready) = std::sync::mpsc::channel();
+        let mut calls = 0;
+        let guard = guard::Guard::new(
+            cancel,
+            Some(Box::new(move |cancelled| {
+                calls += 1;
+                if calls == 1 {
+                    entered.send(()).unwrap();
+                    // A production inspector discards an incomplete snapshot when
+                    // shutdown cancels it. That is not evidence of a healthy network.
+                    while !cancelled() {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    return Ok(guard::Observation::Cancelled);
+                }
+                assert!(
+                    !cancelled(),
+                    "final check needs a fresh cancellation deadline"
+                );
+                if changed {
+                    Err("interface changed".into())
+                } else {
+                    Ok(guard::Observation::Valid)
+                }
+            })),
+        )
+        .unwrap();
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        let mut attempt = Attempt {
+            scan: [1; 16],
+            id: [2; 16],
+            order: ReceiveOrder::new([3; 16], [1; 16], [2; 16]),
+            sequence: 0,
+            engine: None,
+            guard: Some(guard),
+            pending: None,
+            network: None,
+            rows: vec![studio_protocol::Row {
+                ip: "198.18.0.2".into(),
+                port: 80,
+                open: true,
+            }],
+            progress: None,
+            flushed: Instant::now(),
+        };
+        let (tx, rx) = outbox::channel();
+        publish_finish(&tx, [3; 16], &mut attempt, outcome.reason, None).unwrap();
+        assert!(attempt.pending.is_none());
+        let mut events = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            let mut bytes = Vec::new();
+            frame.write(&mut bytes).unwrap();
+            events.push(
+                read_frame::<Event>(&mut Cursor::new(bytes))
+                    .unwrap()
+                    .payload,
+            );
+        }
+        let expected = if changed {
+            Status::Interrupted
+        } else {
+            Status::Failed
+        };
+        assert!(
+            matches!(&events[..], [Event::Results(rows),Event::Finished{status,..}] if rows.len()==1 && *status==expected),
+            "changed={changed}: {events:?}"
         );
     }
 }

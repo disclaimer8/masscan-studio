@@ -1,13 +1,22 @@
+#[cfg(target_os = "macos")]
+mod work_session;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "macos")]
 mod feth_acceptance;
+mod linux_abi;
 #[cfg(target_os = "linux")]
 mod linux_acceptance;
+#[cfg(any(target_os = "macos", test))]
+mod network_acceptance;
+mod package_manifest;
+mod package_privacy;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod runner_setup;
 #[cfg(windows)]
 #[path = "runner_setup_windows.rs"]
 mod runner_setup;
+#[cfg(any(target_os = "macos", test))]
+mod single_target_acceptance;
 #[cfg(windows)]
 mod windows_acceptance;
 use std::{
@@ -52,6 +61,14 @@ fn main() -> Result<()> {
     {
         return Err("Usage: studio-tools.exe prepare-runner PATH | verify-installed-runner HASH | probe-windows-authorization HASH".into());
     }
+    // Resolve the supplied package path from the caller's directory and keep
+    // source checkout paths out of these standalone package evidence commands.
+    if task == "verify-linux-abi" {
+        return linux_abi::main_entry();
+    }
+    if task == "verify-package-privacy" {
+        return package_privacy::main_entry();
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -63,6 +80,12 @@ fn main() -> Result<()> {
     };
     std::env::set_current_dir(&root)?;
     match task.as_str() {
+        #[cfg(target_os = "macos")]
+        "work-session" => work_session::main_entry(&root)?,
+        #[cfg(any(target_os = "macos", test))]
+        "network-acceptance" => network_acceptance::main_entry()?,
+        #[cfg(any(target_os = "macos", test))]
+        "single-target-acceptance" => single_target_acceptance::main_entry()?,
         #[cfg(any(target_os="macos", target_os="linux", windows))]
         "prepare-runner" => runner_setup::prepare(&root)?,
         #[cfg(windows)]
@@ -131,8 +154,17 @@ fn main() -> Result<()> {
                 "-p",
                 "studio-inspection",
             ]);
+            // The working-session host stages an exact GUI/helper pair. Both
+            // executables must be self-contained apart from system libraries.
+            #[cfg(target_os = "macos")]
+            cmd.env("SQLITE3_STATIC", "1");
             if release {
                 cmd.arg("--release");
+                // The standalone Windows tool must use the same profile as the
+                // other packaged binaries, even when cargo xtask is debug.
+                if cfg!(windows) {
+                    cmd.args(["-p", "xtask"]);
+                }
             }
             run(&mut cmd)?;
             let target = std::env::var_os("CARGO_TARGET_DIR")
@@ -144,19 +176,17 @@ fn main() -> Result<()> {
                 .as_millis();
             let dist = root.join("dist").join(format!("build-{stamp}"));
             fs::create_dir_all(&dist)?;
-            let mut files = Vec::new();
             if cfg!(target_os = "macos") {
                 let bundle = dist.join("Masscan Studio.app");
                 let macos = bundle.join("Contents/MacOS");
                 fs::create_dir_all(&macos)?;
-                for name in ["studio-ui", "studio-runner", "studio-inspect"] {
+                for name in ["studio-launcher", "studio-ui", "studio-runner", "studio-inspect"] {
                     let dst = macos.join(name);
                     fs::copy(target.join(name), &dst)?;
-                    files.push(dst);
                 }
                 fs::write(
                     bundle.join("Contents/Info.plist"),
-                    r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>studio-ui</string><key>CFBundleIdentifier</key><string>dev.masscanstudio.rust</string><key>CFBundleName</key><string>Masscan Studio</string><key>CFBundleVersion</key><string>1</string><key>CFBundleShortVersionString</key><string>0.1.0</string><key>CFBundlePackageType</key><string>APPL</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/></dict></plist>"#,
+                    r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>studio-launcher</string><key>CFBundleIdentifier</key><string>dev.masscanstudio.rust</string><key>CFBundleName</key><string>Masscan Studio</string><key>CFBundleVersion</key><string>1</string><key>CFBundleShortVersionString</key><string>0.1.0</string><key>CFBundlePackageType</key><string>APPL</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NSHighResolutionCapable</key><true/></dict></plist>"#,
                 )?;
                 let deps = text(Command::new("otool").arg("-L").arg(macos.join("studio-ui")))?;
                 if let Some(sqlite) = deps
@@ -181,10 +211,9 @@ fn main() -> Result<()> {
                     run(Command::new("codesign")
                         .args(["--force", "--sign", "-", "--timestamp=none"])
                         .arg(&dest))?;
-                    files.push(dest);
                 }
                 // Fresh copies/inodes and signing only after every Mach-O change avoid taskgated's stale signatures.
-                for name in ["studio-runner", "studio-inspect", "studio-ui"] {
+                for name in ["studio-runner", "studio-inspect", "studio-ui", "studio-launcher"] {
                     run(Command::new("codesign")
                         .args(["--force", "--sign", "-", "--timestamp=none"])
                         .arg(macos.join(name)))?;
@@ -195,13 +224,14 @@ fn main() -> Result<()> {
                 run(Command::new("codesign")
                     .args(["--verify", "--deep", "--strict", "--verbose=2"])
                     .arg(&bundle))?;
+                #[cfg(target_os = "macos")]
+                runner_setup::validate_package(&macos)?;
                 println!("App: {}", bundle.display());
             } else {
                 for name in ["studio-ui", "studio-runner", "studio-inspect"] {
                     let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
                     let dst = dist.join(&name);
                     fs::copy(target.join(&name), &dst)?;
-                    files.push(dst);
                 }
                 if cfg!(windows) {
                     let dir = std::env::var_os("SQLITE3_LIB_DIR").ok_or(
@@ -209,23 +239,56 @@ fn main() -> Result<()> {
                     )?;
                     let dest = dist.join("sqlite3.dll");
                     fs::copy(PathBuf::from(dir).join("sqlite3.dll"), &dest)?;
-                    files.push(dest);
                     // Standalone installation/probe utility: does not need Cargo
                     // or the source checkout on the acceptance machine.
                     let tool = dist.join("studio-tools.exe");
-                    fs::copy(std::env::current_exe()?, &tool)?;
-                    files.push(tool);
+                    let source = if release {
+                        target.join("xtask.exe")
+                    } else {
+                        std::env::current_exe()?
+                    };
+                    fs::copy(source, &tool)?;
                 }
             }
-            let file_hashes=files.iter().map(|p|Ok(serde_json::json!({"path":p.strip_prefix(&dist)?.to_string_lossy(),"sha256":digest(p)?}))).collect::<Result<Vec<_>>>()?;
-            let provenance = serde_json::json!({"source_commit":text(Command::new("git").args(["rev-parse","HEAD"]))?,"dirty":!text(Command::new("git").args(["status","--porcelain"]))?.is_empty(),"cargo_lock_sha256":digest(&root.join("Cargo.lock"))?,"platform":std::env::consts::OS,"arch":std::env::consts::ARCH,"profile":if release{"release"}else{"debug"},"files":file_hashes});
+            // Inventory the finished package, including Info.plist and code
+            // signature resources created after the executable copies.
+            let file_hashes = package_manifest::inventory(&dist)?;
+            let provenance = serde_json::json!({
+                "schema_version": 2,
+                "version": env!("CARGO_PKG_VERSION"),
+                "protocol_version": studio_protocol::VERSION,
+                "raw_profiles": studio_protocol::RAW_PROFILES,
+                "source_commit": text(Command::new("git").args(["rev-parse", "HEAD"]))?,
+                "dirty": !text(Command::new("git").args(["status", "--porcelain"]))?.is_empty(),
+                "cargo_lock_sha256": digest(&root.join("Cargo.lock"))?,
+                "platform": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "profile": if release { "release" } else { "debug" },
+                "signing": if cfg!(target_os = "macos") { "ad-hoc" } else { "unsigned" },
+                "notarized": false,
+                "files": file_hashes,
+            });
             fs::write(
                 dist.join("manifest.json"),
                 serde_json::to_vec_pretty(&provenance)?,
             )?;
+            package_manifest::verify(&dist)?;
             println!("Artifacts: {}", dist.display());
         }
-        _ => return Err("Usage: cargo xtask build [--release] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | feth-acceptance --out DIR --app APP --lab LAB [--manual] [--dry-run] (macOS) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
+        "verify-package" => {
+            let dist = std::env::args_os().nth(2).map(PathBuf::from)
+                .ok_or("Usage: cargo xtask verify-package DIR")?;
+            let count = package_manifest::verify(&dist)?;
+            #[cfg(target_os = "macos")]
+            if dist.join("Masscan Studio.app").is_dir() {
+                run(Command::new("codesign")
+                    .args(["--verify", "--deep", "--strict", "--verbose=2"])
+                    .arg(dist.join("Masscan Studio.app")))?;
+                runner_setup::validate_package(&dist.join("Masscan Studio.app/Contents/MacOS"))?;
+            }
+            println!("Verified {count} package files: {}", dist.display());
+        }
+        _ => return Err("Usage: cargo xtask build [--release] | package [--release] | verify-package DIR | verify-package-privacy DIR | verify-linux-abi PACKAGE_DIR --max-glibc MAJOR.MINOR[.PATCH] | test | prepare-runner [PATH] | install-runner DIR | probe-authorization PATH (macOS/Linux) | feth-acceptance --out DIR --app APP --lab LAB [--manual] [--dry-run] (macOS) | verify-installed-runner HASH (Windows; install via reviewed install.ps1)".into()),
     }
     Ok(())
 }

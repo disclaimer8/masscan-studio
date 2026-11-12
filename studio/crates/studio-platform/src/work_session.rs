@@ -1,0 +1,973 @@
+//! Operator-authorized macOS working-session protocol. No shell commands cross IPC.
+use crate::{audit::Peer, unix::Identity};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::{
+    fs,
+    io::{Read, Write},
+    os::unix::{
+        fs::{FileTypeExt, MetadataExt},
+        net::UnixStream,
+    },
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
+type Result<T> = std::result::Result<T, String>;
+pub const MAX_FRAME: usize = 16 * 1024;
+pub const MAX_ACTIVE: usize = 8;
+pub const MAX_BUILD: u64 = 256 * 1024 * 1024;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Build {
+    pub path: PathBuf,
+    pub sha256: String,
+}
+impl Build {
+    pub fn validate(&self) -> Result<()> {
+        if !self.path.is_absolute()
+            || self.path.as_os_str().len() > 4096
+            || !valid_hex(&self.sha256, 64)
+        {
+            return Err("Invalid staged build path or hash".into());
+        }
+        Ok(())
+    }
+}
+/// Open once, without following a last-component symlink or waiting on a FIFO.
+/// Hash and signature verification must use the private copy of this descriptor.
+pub fn open_build(build: &Build, uid: u32) -> Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    build.validate()?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&build.path)
+        .map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.uid() != uid || meta.len() == 0 || meta.len() > MAX_BUILD {
+        return Err(
+            "Staged source must be a bounded regular file owned by the session account".into(),
+        );
+    }
+    Ok(file)
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub uid: u32,
+    pub pid: u32,
+    pub tool_hash: String,
+    pub runner_hash: String,
+    pub caller_hash: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "op", deny_unknown_fields)]
+pub enum Fixture {
+    Up {},
+    Down {},
+    Status {},
+    Supervise {
+        case: String,
+        driver: PathBuf,
+        prior: Option<String>,
+    },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "op", deny_unknown_fields)]
+pub enum SingleTarget {
+    Capture {
+        generation: String,
+    },
+    ExportCapture {
+        generation: String,
+    },
+    CreatePermit {
+        intent: studio_protocol::single_target::Intent,
+    },
+    Inspect {},
+    Revoke {
+        generation: String,
+    },
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "request", deny_unknown_fields)]
+pub enum Request {
+    Capabilities {},
+    SingleTarget {
+        operation: SingleTarget,
+    },
+    Status {},
+    Stop {},
+    Stage {
+        tool: Build,
+        runner: Build,
+    },
+    Helper {
+        hash: String,
+        endpoint: PathBuf,
+        owner: Identity,
+    },
+    Fixture {
+        operation: Fixture,
+    },
+    Export {
+        nonce: String,
+    },
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "response", deny_unknown_fields)]
+pub enum Response {
+    Capabilities {
+        version: u16,
+        single_target_permits: bool,
+        #[serde(default)]
+        single_target_capture: bool,
+    },
+    CaptureReady {
+        witness: Box<crate::single_target::CaptureWitness>,
+    },
+    CaptureEvidence {
+        permit: Box<studio_protocol::single_target::Permit>,
+        completion: Box<crate::single_target::CaptureCompletion>,
+    },
+    SingleTarget {
+        record: Option<crate::single_target::Record>,
+    },
+    Status {
+        config: Config,
+        active: usize,
+    },
+    HelperStarted,
+    Started {},
+    Output {
+        stderr: bool,
+        bytes: Vec<u8>,
+    },
+    Done {
+        code: i32,
+    },
+    Error {
+        message: String,
+    },
+}
+/// Must succeed before reconnecting to the same host for a new typed mutation.
+/// An old host receives only this read-only request and remains running.
+pub fn require_single_target_permits(stream: &mut UnixStream) -> Result<()> {
+    require_single_target(stream, false)
+}
+pub fn require_single_target_capture(stream: &mut UnixStream) -> Result<()> {
+    require_single_target(stream, true)
+}
+fn require_single_target(stream: &mut UnixStream, capture: bool) -> Result<()> {
+    let result = (|| {
+        write(stream, &Request::Capabilities {})?;
+        match read(stream, Duration::from_secs(3), &AtomicBool::new(false))? {
+            Response::Capabilities {
+                version,
+                single_target_permits: true,
+                single_target_capture,
+            } if matches!(version, 1 | 2)
+                && (!capture || (version == 2 && single_target_capture)) =>
+            {
+                Ok(())
+            }
+            _ => Err("Host does not support single-target permits".into()),
+        }
+    })();
+    result.map_err(|e: String| {
+        format!("Reviewed work-session host upgrade required; retained session unchanged: {e}")
+    })
+}
+pub fn valid_hex(s: &str, n: usize) -> bool {
+    s.len() == n
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+pub fn validate_config(c: &Config) -> Result<()> {
+    if c.uid == 0
+        || c.pid == 0
+        || [&c.tool_hash, &c.runner_hash, &c.caller_hash]
+            .iter()
+            .any(|h| !valid_hex(h, 64))
+    {
+        return Err("Invalid work-session identity or hashes".into());
+    }
+    Ok(())
+}
+pub fn validate_request(r: &Request, c: &Config, peer: &Identity) -> Result<()> {
+    if peer.uid != c.uid || peer.uid == 0 {
+        return Err("Work-session caller account differs".into());
+    }
+    match r {
+        Request::SingleTarget {
+            operation: SingleTarget::CreatePermit { intent },
+        } => intent.validate()?,
+        Request::SingleTarget {
+            operation:
+                SingleTarget::Revoke { generation }
+                | SingleTarget::Capture { generation }
+                | SingleTarget::ExportCapture { generation },
+        } if !valid_hex(generation, 32) || generation.bytes().all(|b| b == b'0') => {
+            return Err("Invalid single-target generation".into());
+        }
+        Request::Stage { tool, runner } => {
+            tool.validate()?;
+            runner.validate()?;
+        }
+        Request::Helper {
+            hash,
+            endpoint,
+            owner,
+        } => {
+            if hash != &c.runner_hash
+                || owner != peer
+                || !endpoint.is_absolute()
+                || endpoint.as_os_str().len() > 100
+            {
+                return Err("Helper hash, owner or endpoint differs".into());
+            }
+        }
+        Request::Fixture {
+            operation:
+                Fixture::Supervise {
+                    case,
+                    driver,
+                    prior,
+                },
+        } => {
+            if ![
+                "complete",
+                "stop-preparing",
+                "stop-running",
+                "pause",
+                "resume",
+                "guard",
+            ]
+            .contains(&case.as_str())
+                || !driver.is_absolute()
+                || driver.as_os_str().len() > 4096
+                || (case == "resume") != prior.is_some()
+                || prior.as_ref().is_some_and(|n| !valid_hex(n, 32))
+            {
+                return Err("Invalid fixed fixture request".into());
+            }
+        }
+        Request::Export { nonce } if !valid_hex(nonce, 32) => {
+            return Err("Invalid evidence nonce".into());
+        }
+        _ => {}
+    }
+    Ok(())
+}
+pub fn directory(uid: u32) -> PathBuf {
+    PathBuf::from(format!(
+        "/Library/PrivilegedHelperTools/MasscanStudio/work-{uid}"
+    ))
+}
+/// Root-owned immutable namespace; also rejects ACLs and symlink ancestors.
+pub fn protected(path: &Path, socket: bool) -> Result<()> {
+    if fs::canonicalize(path).map_err(|e| e.to_string())? != path {
+        return Err("Work-session path is not canonical".into());
+    }
+    for (i, p) in path.ancestors().enumerate() {
+        crate::macos::reject_extended_acl(p)?;
+        let m = fs::symlink_metadata(p).map_err(|e| e.to_string())?;
+        let kind = if i == 0 {
+            if socket {
+                m.file_type().is_socket()
+            } else {
+                m.is_file() || m.is_dir()
+            }
+        } else {
+            m.is_dir()
+        };
+        if m.uid() != 0 || !kind || (!(socket && i == 0) && m.mode() & 0o022 != 0) {
+            return Err("Untrusted work-session path owner/type/mode".into());
+        }
+    }
+    Ok(())
+}
+fn transfer(
+    stream: &mut UnixStream,
+    bytes: &mut [u8],
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    let mut n = 0;
+    while n < bytes.len() {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Work-session request cancelled".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("Work-session request deadline".into());
+        }
+        match stream.read(&mut bytes[n..]) {
+            Ok(0) => return Err("Work-session connection closed".into()),
+            Ok(count) => n += count,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                std::thread::sleep(Duration::from_millis(1))
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
+pub fn read<T: DeserializeOwned>(
+    stream: &mut UnixStream,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+) -> Result<T> {
+    stream.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + timeout;
+    let mut header = [0; 4];
+    transfer(stream, &mut header, deadline, cancelled)?;
+    let n = u32::from_be_bytes(header) as usize;
+    if n == 0 || n > MAX_FRAME {
+        return Err("Work-session frame exceeds bound".into());
+    }
+    let mut bytes = vec![0; n];
+    transfer(stream, &mut bytes, deadline, cancelled)?;
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+pub fn write<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
+    write_until(stream, value, Instant::now() + Duration::from_secs(2))
+}
+pub fn write_until<T: Serialize>(
+    stream: &mut UnixStream,
+    value: &T,
+    deadline: Instant,
+) -> Result<()> {
+    let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    if bytes.is_empty() || bytes.len() > MAX_FRAME {
+        return Err("Work-session frame exceeds bound".into());
+    }
+    let mut frame = (bytes.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(&bytes);
+    stream
+        .set_write_timeout(Some(Duration::from_millis(50)))
+        .map_err(|e| e.to_string())?;
+    let mut sent = 0;
+    while sent < frame.len() {
+        if Instant::now() >= deadline {
+            return Err("Work-session write deadline".into());
+        }
+        match stream.write(&frame[sent..]) {
+            Ok(0) => return Err("Work-session connection closed".into()),
+            Ok(n) => sent += n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                std::thread::sleep(Duration::from_millis(1))
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
+
+/// Fixed-namespace metadata reader for an authenticated owner. This is not a
+/// live-host or execution grant; connect still authenticates the kernel peer.
+pub fn host_config(uid: u32) -> Result<Option<Config>> {
+    if uid == 0 {
+        return Err("Work-session owner must be an ordinary user".into());
+    }
+    let dir = directory(uid);
+    match fs::symlink_metadata(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(_) => {}
+    }
+    protected(&dir, false)?;
+    read_host_config(&dir.join("host.json"), 0, uid).map(Some)
+}
+fn read_host_config(path: &Path, filesystem_owner: u32, uid: u32) -> Result<Config> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let text = crate::sealed_fixture::command(
+        &[
+            "/bin/ls",
+            "-lde",
+            "-n",
+            path.to_str().ok_or("Invalid metadata path")?,
+        ],
+        deadline,
+        &|| false,
+    )?;
+    if text.lines().count() != 1 {
+        return Err("Extended ACL on work-session metadata".into());
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let valid = |m: &fs::Metadata| -> Result<()> {
+        if !m.is_file()
+            || m.file_type().is_symlink()
+            || m.uid() != filesystem_owner
+            || m.mode() & 0o7777 != 0o644
+            || m.nlink() != 1
+            || m.len() == 0
+            || m.len() > MAX_FRAME as u64
+        {
+            return Err("Untrusted or oversized work-session metadata".into());
+        }
+        Ok(())
+    };
+    let before = file.metadata().map_err(|e| e.to_string())?;
+    valid(&before)?;
+    let mut bytes = Vec::new();
+    (&file)
+        .take(MAX_FRAME as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let after = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    valid(&after)?;
+    if before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || bytes.len() as u64 != before.len()
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+    {
+        return Err("Work-session metadata changed during read".into());
+    }
+    crate::sealed_fixture::check(deadline, &|| false)?;
+    let config: Config = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    validate_config(&config)?;
+    if config.uid != uid {
+        return Err("Work-session owner differs".into());
+    }
+    Ok(config)
+}
+pub fn connect() -> Result<Option<(UnixStream, Config)>> {
+    let owner = Identity::current()?;
+    let Some(c) = host_config(owner.uid)? else {
+        return Ok(None);
+    };
+    let dir = directory(owner.uid);
+    let path = dir.join("socket");
+    protected(&path, true)?;
+    let stream = UnixStream::connect(path).map_err(|e| format!("Work session unavailable: {e}"))?;
+    let peer = Peer::from_stream(&stream)?;
+    let exe = crate::macos::installed_path(&c.tool_hash)?;
+    if peer.uid != 0 || peer.pid != c.pid || peer.executable != exe {
+        return Err("Unexpected work-session host identity".into());
+    }
+    crate::trusted::verify(&exe, &c.tool_hash)?;
+    peer.verify(&stream)?;
+    Ok(Some((stream, c)))
+}
+pub struct Lease {
+    stream: UnixStream,
+}
+impl Lease {
+    pub fn check(&mut self) -> Result<()> {
+        let mut b = [0];
+        match self.stream.read(&mut b) {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            _ => Err("Work-session helper lease ended".into()),
+        }
+    }
+}
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+}
+pub struct Watch {
+    stop: std::sync::Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl Lease {
+    pub fn watch(mut self, direct: &UnixStream) -> Result<Watch> {
+        let direct = direct.try_clone().map_err(|e| e.to_string())?;
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                if self.check().is_err() {
+                    let _ = direct.shutdown(std::net::Shutdown::Both);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        Ok(Watch {
+            stop,
+            thread: Some(thread),
+        })
+    }
+}
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+pub fn helper(
+    path: &Path,
+    hash: &str,
+    endpoint: &Path,
+    owner: &Identity,
+    cancelled: &AtomicBool,
+) -> Result<Option<Lease>> {
+    let Some((mut stream, c)) = connect()? else {
+        return Ok(None);
+    };
+    if path != crate::macos::installed_path(&c.runner_hash)? || hash != c.runner_hash {
+        return Err("Work session authorizes a different helper build".into());
+    }
+    write(
+        &mut stream,
+        &Request::Helper {
+            hash: hash.into(),
+            endpoint: endpoint.into(),
+            owner: owner.clone(),
+        },
+    )?;
+    match read(&mut stream, Duration::from_secs(5), cancelled)? {
+        Response::HelperStarted => {
+            stream.set_nonblocking(true).map_err(|e| e.to_string())?;
+            Ok(Some(Lease { stream }))
+        }
+        Response::Error { message } => Err(message),
+        _ => Err("Unexpected work-session helper reply".into()),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn metadata_reader_refuses_wrong_owners_links_modes_oversize_and_unknown_fields() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "studio-host-metadata-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&dir).unwrap();
+        let file = dir.join("host.json");
+        let owner = Identity::current().unwrap();
+        let config = Config {
+            uid: owner.uid,
+            pid: owner.pid,
+            tool_hash: "a".repeat(64),
+            runner_hash: "b".repeat(64),
+            caller_hash: "c".repeat(64),
+        };
+        let bytes = serde_json::to_vec(&config).unwrap();
+        fs::write(&file, &bytes).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            read_host_config(&file, owner.uid, owner.uid).unwrap(),
+            config
+        );
+        assert!(read_host_config(&file, owner.uid + 1, owner.uid).is_err());
+        assert!(read_host_config(&file, owner.uid, owner.uid + 1).is_err());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o646)).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let link = dir.join("link");
+        fs::hard_link(&file, &link).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::remove_file(link).unwrap();
+        fs::remove_file(&file).unwrap();
+        let original = dir.join("original");
+        fs::write(&original, &bytes).unwrap();
+        std::os::unix::fs::symlink(&original, &file).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::remove_file(&file).unwrap();
+        fs::write(&file, vec![b' '; MAX_FRAME + 1]).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        let mut value = serde_json::to_value(&config).unwrap();
+        value["command"] = serde_json::json!("ignored");
+        fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        assert!(host_config(0).is_err());
+        fs::write(&file, &bytes).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read"])
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        fs::remove_file(&file).unwrap();
+        assert!(
+            std::process::Command::new("/usr/bin/mkfifo")
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let started = Instant::now();
+        assert!(read_host_config(&file, owner.uid, owner.uid).is_err());
+        assert!(started.elapsed() < Duration::from_secs(4));
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn single_target_wire_rejects_expansion_and_paths() {
+        let uid = Identity::current().unwrap();
+        let config = Config {
+            uid: uid.uid,
+            pid: 123,
+            tool_hash: "a".repeat(64),
+            runner_hash: "b".repeat(64),
+            caller_hash: "c".repeat(64),
+        };
+        let intent = studio_protocol::single_target::Intent {
+            target: "45.33.32.156".parse().unwrap(),
+            ports: vec![80],
+            seed: 42,
+        };
+        validate_request(
+            &Request::SingleTarget {
+                operation: SingleTarget::CreatePermit {
+                    intent: intent.clone(),
+                },
+            },
+            &config,
+            &uid,
+        )
+        .unwrap();
+        assert!(
+            validate_request(
+                &Request::SingleTarget {
+                    operation: SingleTarget::CreatePermit {
+                        intent: studio_protocol::single_target::Intent {
+                            ports: vec![0],
+                            ..intent
+                        }
+                    }
+                },
+                &config,
+                &uid
+            )
+            .is_err()
+        );
+        assert!(
+            validate_request(
+                &Request::SingleTarget {
+                    operation: SingleTarget::Revoke {
+                        generation: "../permit-501".into()
+                    }
+                },
+                &config,
+                &uid
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_value::<Request>(serde_json::json!({"request":"SingleTarget","operation":{"op":"Inspect","path":"/tmp/permit"}})).is_err());
+    }
+    #[test]
+    fn old_or_incompatible_host_receives_only_read_only_negotiation() {
+        for response in [
+            Response::Error {
+                message: "unknown request Capabilities".into(),
+            },
+            Response::Capabilities {
+                version: 1,
+                single_target_permits: false,
+                single_target_capture: false,
+            },
+            Response::Capabilities {
+                version: 3,
+                single_target_permits: true,
+                single_target_capture: false,
+            },
+        ] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || {
+                let request: Request =
+                    read(&mut server, Duration::from_secs(1), &AtomicBool::new(false)).unwrap();
+                assert!(matches!(request, Request::Capabilities {}));
+                write(&mut server, &response).unwrap();
+            });
+            assert!(require_single_target_permits(&mut client).is_err());
+            drop(client);
+            worker.join().unwrap();
+        }
+    }
+    #[test]
+    fn build_descriptor_refuses_links_special_files_other_owner_and_oversize() {
+        let dir = std::env::temp_dir().join(format!(
+            "studio-build-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("source");
+        fs::write(&path, b"build").unwrap();
+        let uid = Identity::current().unwrap().uid;
+        let build = Build {
+            path: path.clone(),
+            sha256: "a".repeat(64),
+        };
+        let mut opened = open_build(&build, uid).unwrap();
+        assert!(open_build(&build, uid + 1).is_err());
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(
+            open_build(
+                &Build {
+                    path: link,
+                    ..build.clone()
+                },
+                uid
+            )
+            .is_err()
+        );
+        assert!(
+            open_build(
+                &Build {
+                    path: dir.clone(),
+                    ..build.clone()
+                },
+                uid
+            )
+            .is_err()
+        );
+        let fifo = dir.join("fifo");
+        assert!(
+            std::process::Command::new("/usr/bin/mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let now = Instant::now();
+        assert!(
+            open_build(
+                &Build {
+                    path: fifo,
+                    ..build.clone()
+                },
+                uid
+            )
+            .is_err()
+        );
+        assert!(now.elapsed() < Duration::from_secs(1));
+        // Replacing the pathname cannot substitute the already-open descriptor.
+        fs::rename(&path, dir.join("original")).unwrap();
+        fs::write(&path, b"substituted").unwrap();
+        let mut bytes = Vec::new();
+        opened.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"build");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(MAX_BUILD + 1)
+            .unwrap();
+        assert!(open_build(&build, uid).is_err());
+        assert!(
+            Build {
+                path: "relative".into(),
+                ..build.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Build {
+                sha256: "../no".into(),
+                ..build
+            }
+            .validate()
+            .is_err()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    fn fixture() -> (Config, Identity) {
+        (
+            Config {
+                uid: 501,
+                pid: 1,
+                tool_hash: "a".repeat(64),
+                runner_hash: "b".repeat(64),
+                caller_hash: "a".repeat(64),
+            },
+            Identity {
+                uid: 501,
+                pid: 22,
+                birth: [1, 2],
+                executable: "/approved/tool".into(),
+            },
+        )
+    }
+    #[test]
+    fn refuses_wrong_owner_hash_and_arbitrary_fixture_requests() {
+        let (c, p) = fixture();
+        let mut other = p.clone();
+        other.birth[0] += 1;
+        assert!(
+            validate_request(
+                &Request::Helper {
+                    hash: c.runner_hash.clone(),
+                    endpoint: "/tmp/socket".into(),
+                    owner: other
+                },
+                &c,
+                &p
+            )
+            .is_err()
+        );
+        assert!(
+            validate_request(
+                &Request::Helper {
+                    hash: "c".repeat(64),
+                    endpoint: "/tmp/socket".into(),
+                    owner: p.clone()
+                },
+                &c,
+                &p
+            )
+            .is_err()
+        );
+        for case in ["shell", "up; rm", "resume"] {
+            assert!(
+                validate_request(
+                    &Request::Fixture {
+                        operation: Fixture::Supervise {
+                            case: case.into(),
+                            driver: "/tmp/history".into(),
+                            prior: None
+                        }
+                    },
+                    &c,
+                    &p
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_request(
+                &Request::Export {
+                    nonce: "../../etc".into()
+                },
+                &c,
+                &p
+            )
+            .is_err()
+        );
+        other = p.clone();
+        other.uid = 502;
+        assert!(validate_request(&Request::Status {}, &c, &other).is_err());
+    }
+    #[test]
+    fn framing_refuses_oversize_unknown_fields_and_partial_deadlines() {
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        a.write_all(&((MAX_FRAME + 1) as u32).to_be_bytes())
+            .unwrap();
+        assert!(
+            read::<Request>(&mut b, Duration::from_millis(100), &AtomicBool::new(false)).is_err()
+        );
+        assert!(serde_json::from_str::<Request>(r#"{"request":"Stop","shell":"id"}"#).is_err());
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        a.write_all(&[0]).unwrap();
+        let begin = Instant::now();
+        assert!(
+            read::<Request>(&mut b, Duration::from_millis(100), &AtomicBool::new(false)).is_err()
+        );
+        assert!(begin.elapsed() < Duration::from_secs(1));
+    }
+    #[test]
+    fn leases_are_independent_and_detect_host_disconnect() {
+        let (a, b) = UnixStream::pair().unwrap();
+        a.set_nonblocking(true).unwrap();
+        let mut lease = Lease { stream: a };
+        assert!(lease.check().is_ok());
+        drop(b);
+        // Other parallel tests can fork with a transient copy of b before
+        // close-on-exec runs. The production watcher polls; EOF need not be
+        // visible in the first nonblocking read after our local close.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while lease.check().is_ok() {
+            assert!(Instant::now() < deadline, "Lease did not detect host EOF");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let (a, b) = UnixStream::pair().unwrap();
+        b.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        drop(Lease { stream: a });
+        let mut b = b;
+        assert_eq!(b.read(&mut [0]).unwrap(), 0);
+    }
+    #[test]
+    fn host_loss_closes_direct_helper_ipc_but_normal_watch_drop_does_not() {
+        let (control, host) = UnixStream::pair().unwrap();
+        control.set_nonblocking(true).unwrap();
+        let (direct, mut runner) = UnixStream::pair().unwrap();
+        runner
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let watch = Lease { stream: control }.watch(&direct).unwrap();
+        drop(host);
+        assert_eq!(runner.read(&mut [0]).unwrap(), 0);
+        drop(watch);
+        let (control, mut host) = UnixStream::pair().unwrap();
+        control.set_nonblocking(true).unwrap();
+        let (direct, mut runner) = UnixStream::pair().unwrap();
+        runner
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        drop(Lease { stream: control }.watch(&direct).unwrap());
+        assert_eq!(host.read(&mut [0]).unwrap(), 0);
+        assert!(runner.read(&mut [0]).is_err());
+    }
+    #[test]
+    fn capture_requires_version_two_and_an_explicit_capability() {
+        for (version, enabled, expected) in [
+            (1, false, false),
+            (1, true, false),
+            (2, false, false),
+            (2, true, true),
+            (3, true, false),
+        ] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || {
+                let request: Request =
+                    read(&mut server, Duration::from_secs(1), &AtomicBool::new(false)).unwrap();
+                assert!(matches!(request, Request::Capabilities {}));
+                write(
+                    &mut server,
+                    &Response::Capabilities {
+                        version,
+                        single_target_permits: true,
+                        single_target_capture: enabled,
+                    },
+                )
+                .unwrap();
+            });
+            assert_eq!(require_single_target_capture(&mut client).is_ok(), expected);
+            worker.join().unwrap();
+        }
+        let old: Response = serde_json::from_str(
+            r#"{"response":"Capabilities","version":1,"single_target_permits":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            old,
+            Response::Capabilities {
+                single_target_capture: false,
+                ..
+            }
+        ));
+    }
+}

@@ -320,18 +320,20 @@ impl rmasscan_core::throttle::Clock for BackoffClock {
 
 #[test]
 fn would_block_unsent_backs_off_1ms_on_the_injected_clock() {
-    let p = plan(1_000_000.0, 1);
+    // This checks TX backoff, not RX draining. Let only the injected TX clock
+    // advance time: a concurrently idle fake RX otherwise jumps that clock by
+    // its entire timeout on every poll and can spuriously trip the stall limit.
+    let p = plan(1_000_000.0, 0);
     let manual = ManualClock::new();
     let clock = std::sync::Arc::new(BackoffClock {
         inner: manual.clone(),
         backoffs: Default::default(),
     });
-    let fake = rmasscan_engine::fake::FakeAdapter::new().with_clock(manual);
+    let fake = rmasscan_engine::fake::FakeAdapter::new();
     fake.script_tx(std::iter::repeat_n(TxStep::WouldBlockUnsent, 30));
     let c: std::sync::Arc<dyn rmasscan_core::throttle::Clock + Send + Sync> = clock.clone();
-    // Окно простоя TX здесь не предмет: приём фейка двигает общие часы на таймаут приёма каждые ~100 мкс, и поток TX,
-    // снятый с CPU посреди 30 WouldBlock, видел 10 с окна по умолчанию (CI PR #55, macos-15: `TxStalled { idle_millis:
-    // 10128 }` здесь). Бэкофф 1 мс на инжектированных часах и кадры проверяются как прежде.
+    // TX stall detection has dedicated tests. Keep this test focused on the
+    // injected 1 ms backoff and exact frames, including on slow CI hosts.
     let h = rmasscan_engine::Engine::start_with_clock(p.clone(), fake.pair(), no_stall_opts(), c)
         .unwrap();
     let o = join_within(h, Duration::from_secs(5));

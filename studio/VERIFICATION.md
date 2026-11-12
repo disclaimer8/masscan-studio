@@ -1,10 +1,89 @@
 # Studio integration evidence
 
-Note (2026-10-26): entries dated before the Mac feth raw acceptance describe the raw gate as it stood then. The current
-gate is per profile: open for Mac feth on macOS, closed on Windows and Linux (see the dated Mac feth entries).
+## 2026-11-10 — native platform profiles and release packages
 
-Baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
-Studio is a separate workspace/branch; scanner source unchanged.
+IPC v5 adds native LinuxPhysical and WindowsPhysical profiles alongside
+MacPhysical. See the [release follow-up](../docs/experiments/2026-11-10-studio-release-followup.md)
+for exact clean package identities, platform tests and the macOS release's
+two-peer native scan with correlated captures. Platform availability does not
+establish desktop authorization or packet acceptance on Linux/Windows.
+
+## 2026-11-10 — current engine and native MacPhysical acceptance
+
+The earlier integration build `433f3d4` added a separate ordinary macOS IPv4/TCP
+profile, `MacPhysical`, with IPC v4. That native package completed direct-network
+open/closed scans, Pause/reopen/Resume, Stop/new Start and JSON export, with an
+independent target-side packet capture. See the [dated integration report](../docs/experiments/2026-11-10-studio-integration.md)
+for exact build hashes, test counts, retained development authorization and limits.
+Earlier entries below describe their own builds and gates; they do not override
+the new profile's dated acceptance. Linux/Windows Studio raw profiles were closed
+at that earlier build; the release follow-up above records their later state.
+
+Note (2026-10-26): entries dated before the Mac feth raw acceptance describe the
+gate as it stood then: open for Mac feth on macOS, closed on Windows and Linux.
+The dated release follow-up above records the later native-profile availability.
+
+Historical baseline scanner: `baa5cc789a6a7e96337835ad613d77f573a1f06a`.
+At that baseline Studio was a separate workspace/branch with scanner source
+unchanged. The November integration includes the bounded observation adapters
+described in its dated report.
+
+## 2026-10-28 — gated Mac network UI, History and coverage exports
+
+Task 5 base: `e5ea8de`, branch `feat/studio-macos-network-integration`.
+The visible **Mac network · Wi-Fi / Ethernet** profile is implemented; its physical
+execution gate remains closed. No physical Start, packet adapter, ARP/TCP traffic,
+administrator prompt, helper installation or stable History database was used in
+this task. No native Wi-Fi/Ethernet scan acceptance is claimed.
+
+`cargo xtask test` with Rust 1.99.1 and Homebrew SQLite: **239 passed, 0 failed,
+2 ignored**; workspace Clippy (`-D warnings`) and formatting passed. The ignored
+tests require the real system resolver/Nmap. The existing runner stale-owner
+negative fixture prints its deliberate identity rejection; there are no unexpected
+warnings/errors. Focused UI/app/inspection tests passed before the full run.
+After the final exhaustive exclusion-reason projection and stale queued-readiness
+check, affected UI tests (35) and inspection tests (13, plus 2 ignored) passed
+again; their Clippy check and workspace formatting also passed.
+
+Headless Slint tests preserve selector indices 0=feth, 1=Simulation, 2=Mac network,
+round-trip physical settings and repeat History with `Job::validate`. Requested
+counts use the shared normalized-range helper, including original /0 requests
+trimmed to two candidates without expanding the IPv4 space. Passing read-only
+readiness never authorizes a session or enables the closed physical Start.
+Preparing keeps Stop available, disables Pause until Scanning, and selects Lock
+rather than another authorization attempt. A temporary real Store persists partial
+and all-unresolved reports; reopening renders original settings, count stages,
+unresolved neighbours and automatic exclusions even with zero result rows.
+Programmatic settings fills do not emit user-edit notifications that would erase
+restored History coverage; explicit edits still invalidate draft readiness.
+
+Physical JSON version 2 stores scan-wide coverage alongside filtered result rows.
+Physical CSV identifies metadata, not-scanned, automatically-excluded and result
+records; non-result ports/protocol/state stay empty. Tests verify zero-row reports,
+filtered result order/no hidden inspection data, exact legacy CSV bytes, single-file
+atomic replacement, owner-only temporary output and symlink/failure preservation.
+These are fake network facts and headless presentation/export evidence.
+
+Native verification still required on a reviewed candidate: inspect settings and
+route-only checks with the closed gate, then obtain separate approval for sealed
+multi-peer/routed packet acceptance on an identified unmerged gate-enabled build.
+Confirm per-destination Ethernet addressing, excluded/unresolved coverage, Stop
+and Lock during preparation/report acknowledgement, frozen checkpoint Resume and
+network-drift refusal with independent captures. Only after that use explicitly
+supplied owned home-network and remote-server targets, recording interface type,
+known port states and Wi-Fi/AP isolation limits. Package/sign/hash/install the
+exact accepted candidate through the normal helper flow when requested.
+
+Task 5 review correction: draft edits, profile loads and repeated settings now
+invalidate only draft readiness. Selected scan coverage stays paired with its
+unchanged results/zero-row selection until Reset/Clear/new scan/History selection
+replaces that view. App and headless UI regressions first failed on the two
+coverage-clear paths, then passed after both clears were removed. The UI regression
+reopens partial/all-unresolved temporary History, edits/loads/repeats settings and
+atomically exports the original scan metadata with filtered or zero rows. Affected
+app/UI/inspection tests: **79 passed, 0 failed, 2 ignored**; affected Clippy,
+workspace all-targets compile and formatting passed. No native packet or app
+installation acceptance was performed by this correction.
 
 ## 2026-10-26 — PR #30 viewport and idle-summary follow-up
 
@@ -782,3 +861,57 @@ source merge tree `06bf606770b8d954fa064ff4cc76275e3f8836a4`. Package manifests,
 screenshots, filesystem checks and evidence checksums are linked from the reports.
 The current follow-up changes documentation only, without a rebuilt package.
 Raw-profile gates and outstanding session-authorization checks remain unchanged.
+
+## 2026-10-30 — First sealed MacNetwork native trial
+
+Candidate `1213101` completed the fixed Controller/helper scan with 96 retained
+results (48 open, 48 closed) and 96 SYNs in the independent peer capture. The
+uplink capture contained no packet records. **Native acceptance remains FAIL:**
+both system tcpdump processes required forced termination and supplied no final
+capture statistics. The temporary stand was removed and evidence retained.
+Fresh Studio tests: 300 passed, 0 failed, 2 ignored; engine: 1416 passed,
+0 failed, 23 ignored. See
+[`2026-10-30-studio-macos-network-native.md`](../docs/experiments/2026-10-30-studio-macos-network-native.md)
+for the reproduction, exact artifacts and remaining work. Other native lifecycle
+cases and physical-network acceptance remain pending.
+
+## 2026-11-03 — optimized packaged GUI on the sealed local fixture
+
+Clean release package at `4fbe472` passed three separately launched native GUI
+cases with independently supervised root packet captures: Complete 96 SYNs /
+96 replies / 96 rows; Stop 5 / 5 / 5 (observed terminal after 49.29275 ms); another
+Complete 96 / 96 / 96. All nine capture/responder children exited 0 unforced;
+every uplink capture had zero matching fixture frames. SQLite integrity and exact
+rows matched the packet reports. Owned fixtures were removed; the retained work
+host stayed ready/idle without another password request.
+
+Exact source, executable/archive hashes, CI provenance, the preceding failed
+attempt and evidence locations are in the
+[GUI/session report](../docs/experiments/2026-11-02-studio-gui-work-session.md).
+This proves isolated fixture execution through the packaged GUI, not physical
+Wi-Fi delivery, same-window native Stop/Start, native Pause/Resume on this package,
+manual keyboard/mouse acceptance or release readiness. See the
+[remaining release checklist](RELEASE-CHECKLIST.md).
+
+## 2026-11-03 — history/export projections and restarted native GUI Resume
+
+Clean optimized package `d732533` passed History reopening and exact repeated
+settings on copies of the earlier 96/5/96-row native scans. Independent comparison
+of 24 JSON/CSV files verified visible rows/order and unchanged whole-scan coverage,
+including empty filters; original and copied histories were unchanged. Native
+save dialogs and asynchronous export completion are not included.
+
+The same package then passed independently supervised GUI Pause (5 probes /
+5 replies, checkpoint index 5) and Resume in a new GUI process (91 remaining
+probes / 91 replies, 96 cumulative rows and no checkpoint). Root-original and
+offline verification passed; all six capture/responder children exited 0 unforced,
+no matching fixture frames appeared on the uplink, and owned teardown succeeded.
+The same work host remained ready/idle without another password. Studio CI passed
+on all three OSes at the exact source; unchanged engine/workflow trees reused the
+successful engine run at `4fbe472`. Local Studio tests: 338 passed, two ignored.
+
+Exact artifacts, hashes, CI runs, scope and raw-evidence locations are in the
+[history and Resume report](../docs/experiments/2026-11-03-studio-history-and-resume.md).
+Same-window native restart, manual UI interaction and physical-interface scanning
+remain separate. Profile labels and README now explicitly describe local-only
+execution in this development branch.

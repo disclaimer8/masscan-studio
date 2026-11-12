@@ -15,7 +15,7 @@
 //!   сохраняет все алгоритмы этапа 1 (retries, shard), с остановкой через
 //!   [`ControlFlow`].
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::iter::Peekable;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -122,6 +122,14 @@ pub enum PlanError {
         "invalid source addresses {first:#010x}-{last:#010x}: need first <= last and a power-of-two width"
     )]
     InvalidSourceIpv4 { first: u32, last: u32 },
+    #[error("per-destination MACs require an Ethernet link")]
+    DestinationsRequireEthernet,
+    #[error("destination map has {actual} keys, expected {expected} effective target addresses")]
+    DestinationCountMismatch { expected: u64, actual: usize },
+    #[error("destination map key {0:#010x} is not an effective target address")]
+    UnexpectedDestination(u32),
+    #[error("destination {ip:#010x} has an invalid unicast MAC {mac:02x?}")]
+    InvalidDestinationMac { ip: u32, mac: [u8; 6] },
     #[error(transparent)]
     Scan(#[from] ScanError),
 }
@@ -542,6 +550,7 @@ pub fn for_each_probe_nic_with_payloads<B>(
 struct PlanInner {
     effective: EffectiveConfig,
     nics: Vec<NicBinding>,
+    destinations: Option<BTreeMap<u32, [u8; 6]>>,
     range: u64,
     blackrock: BlackRock,
     /// По одному на адаптер (у каждого свои адреса и порты источника).
@@ -590,7 +599,7 @@ pub fn is_arp_scan_ports(ports: &RangeList) -> bool {
 }
 
 /// Проверенный план нового запуска. Поля приватны; создать можно только через
-/// [`ReadyPlan::new`] или [`ReadyPlan::new_cli`].
+/// [`ReadyPlan::new`], [`ReadyPlan::with_destinations`] or [`ReadyPlan::new_cli`].
 #[derive(Debug, Clone)]
 pub struct ReadyPlan {
     inner: Arc<PlanInner>,
@@ -600,6 +609,45 @@ impl ReadyPlan {
     pub fn new(
         effective: EffectiveConfig,
         binding: AdapterBinding,
+    ) -> Result<ReadyPlan, PlanError> {
+        Self::build_studio(effective, binding, None)
+    }
+
+    /// Freeze a complete Ethernet delivery map for the effective target addresses.
+    /// Each key must occur exactly once and each MAC must be nonzero and unicast.
+    /// The binding's single next-hop MAC remains unchanged but is not used for delivery.
+    pub fn with_destinations(
+        effective: EffectiveConfig,
+        binding: AdapterBinding,
+        destinations: BTreeMap<u32, [u8; 6]>,
+    ) -> Result<ReadyPlan, PlanError> {
+        if binding.link_type != LinkType::Ethernet {
+            return Err(PlanError::DestinationsRequireEthernet);
+        }
+        let targets = effective.massip().ipv4();
+        let expected = targets.count();
+        // Bound work by the supplied map, never by enumerating the IPv4 space.
+        if destinations.len() as u64 != expected {
+            return Err(PlanError::DestinationCountMismatch {
+                expected,
+                actual: destinations.len(),
+            });
+        }
+        for (&ip, &mac) in &destinations {
+            if !targets.is_contains(ip) {
+                return Err(PlanError::UnexpectedDestination(ip));
+            }
+            if mac == [0; 6] || mac[0] & 1 != 0 {
+                return Err(PlanError::InvalidDestinationMac { ip, mac });
+            }
+        }
+        Self::build_studio(effective, binding, Some(destinations))
+    }
+
+    fn build_studio(
+        effective: EffectiveConfig,
+        binding: AdapterBinding,
+        destinations: Option<BTreeMap<u32, [u8; 6]>>,
     ) -> Result<ReadyPlan, PlanError> {
         if effective.operation() != Operation::Scan {
             return Err(PlanError::NotScanOperation(effective.operation()));
@@ -633,6 +681,7 @@ impl ReadyPlan {
             true,
             false,
             Arc::new(PayloadTable::builtin()),
+            destinations,
         )
     }
 
@@ -713,7 +762,8 @@ impl ReadyPlan {
             return Err(PlanError::Ipv6NextHopIsSourceMac);
         }
         // План CLI принимает цели IPv6 (R7 снят в T5): передающий цикл строит их зонды (`Builder::fill_v6`).
-        ReadyPlan::build(effective, nics, false, true, payloads)
+        // Карты доставки по целям у плана CLI нет: она только у Студии (`with_destinations`).
+        ReadyPlan::build(effective, nics, false, true, payloads, None)
     }
 
     fn build(
@@ -722,6 +772,7 @@ impl ReadyPlan {
         tcp_only: bool,
         allow_ipv6: bool,
         payloads: Arc<PayloadTable>,
+        destinations: Option<BTreeMap<u32, [u8; 6]>>,
     ) -> Result<ReadyPlan, PlanError> {
         if nics.is_empty() || nics.len() > 8 {
             return Err(PlanError::BadNicCount(nics.len()));
@@ -762,6 +813,7 @@ impl ReadyPlan {
             inner: Arc::new(PlanInner {
                 effective,
                 nics,
+                destinations,
                 range,
                 blackrock,
                 builders,
@@ -793,6 +845,11 @@ impl ReadyPlan {
     /// Адаптеры плана по порядку `nic[0..n)`.
     pub fn nics(&self) -> &[NicBinding] {
         &self.inner.nics
+    }
+
+    /// Frozen per-target Ethernet delivery; `None` preserves single-MAC plans.
+    pub fn destinations(&self) -> Option<&BTreeMap<u32, [u8; 6]>> {
+        self.inner.destinations.as_ref()
     }
 
     /// Зонд SYN для одной цели IPv6 адаптера `nic_index` (ветка main.c:336-353, `seqno` из `syn_cookie_ipv6`).
@@ -999,6 +1056,13 @@ impl ProbeCursor {
         };
         match built {
             Ok(()) => {
+                // The map is keyed by IPv4 and applies to IPv4 frames only; an IPv6 frame keeps the
+                // `next_hop_mac_ipv6` its template wrote (a plan with a map refuses IPv6 targets anyway).
+                if let (Some(destinations), TargetIp::V4(ip)) = (&inner.destinations, target) {
+                    // Constructor guarantees complete immutable coverage and Ethernet framing.
+                    // Only L2 destination bytes change; cookies and IP/TCP checksums stay intact.
+                    p.frame[..6].copy_from_slice(&destinations[&ip]);
+                }
                 self.loaded.push_back(p);
                 true
             }

@@ -9,7 +9,20 @@ use std::{
 use studio_app::{Action, Controller, Update};
 use studio_protocol::{Backend, Job, Status};
 use studio_table::{Change, Table};
+#[cfg(all(test, debug_assertions))]
+mod layout_tests;
+#[cfg(target_os = "macos")]
+mod macos_dialog_menu;
+#[cfg(target_os = "macos")]
+mod macos_keyboard;
+#[cfg(test)]
+mod network_tests;
+mod network_ui;
 mod smoke_feth;
+mod smoke_history;
+mod smoke_network;
+mod smoke_session;
+mod smoke_single;
 mod table_controls;
 slint::include_modules!();
 
@@ -171,7 +184,14 @@ impl Rows {
             return;
         }
         let t = self.table.borrow();
-        ui.set_summary(format!("{} of {} saved results", t.view.len(), t.rows.len()).into());
+        ui.set_summary(
+            format!(
+                "{} of {} saved results · all runs",
+                t.view.len(),
+                t.rows.len()
+            )
+            .into(),
+        );
         ui.set_selection_count(t.selected.len() as i32);
         let visible = t
             .view
@@ -209,11 +229,7 @@ fn draft(ui: &MainWindow) -> Result<Job, String> {
             .get_job_rate()
             .parse()
             .map_err(|_| "Rate must be an integer")?,
-        backend: if ui.get_backend_index() == 1 {
-            Backend::Simulation
-        } else {
-            Backend::MacFeth
-        },
+        backend: network_ui::backend(ui.get_backend_index())?,
     })
 }
 fn data_dir() -> PathBuf {
@@ -245,10 +261,13 @@ fn action(app: &RefCell<Controller>, ui: &MainWindow, a: Action) {
     }
 }
 fn process_active(status: &Status) -> bool {
-    matches!(status, Status::Starting | Status::Scanning | Status::Saving)
+    matches!(
+        status,
+        Status::Starting | Status::Preparing | Status::Scanning | Status::Saving
+    )
 }
 fn repeat_job(saved: &studio_store::SavedScan) -> Result<Job, String> {
-    saved.job.prepare()?;
+    saved.job.validate()?;
     Ok(saved.job.clone())
 }
 fn fill_settings(ui: &MainWindow, job: &Job) {
@@ -257,17 +276,17 @@ fn fill_settings(ui: &MainWindow, job: &Job) {
     ui.set_job_exclusions(job.exclusions.clone().into());
     ui.set_job_rate(job.rate.to_string().into());
     ui.set_job_seed(job.seed.clone().into());
-    ui.set_backend_index(if job.backend == Backend::Simulation {
-        1
-    } else {
-        0
-    });
-    ui.invoke_settings_edited();
+    ui.set_backend_index(network_ui::backend_index(job.backend));
+    network_ui::settings_changed(ui);
 }
 fn history_label(s: &studio_store::SavedScan) -> String {
     let kind = match s.job.backend {
         Backend::Simulation => "Simulation",
         Backend::MacFeth => "feth",
+        Backend::MacNetwork => "Mac network",
+        Backend::MacPhysical => "Mac network",
+        Backend::LinuxPhysical => "Linux network",
+        Backend::WindowsPhysical => "Windows network",
         Backend::Archived => "Archived history",
     };
     format!(
@@ -390,9 +409,20 @@ fn save_screenshot(ui: &MainWindow) {
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut history_driver = smoke_history::Driver::prepare(&std::env::args().collect::<Vec<_>>())?;
+    let history_active = history_driver.is_some();
     let smoke = std::env::args().any(|s| s == "--smoke");
     let pause_smoke = std::env::args().any(|s| s == "--smoke-pause");
     let stop_smoke = std::env::args().any(|s| s == "--smoke-stop-race");
+    let session_smoke = smoke_session::validate(
+        &std::env::args().collect::<Vec<_>>(),
+        std::env::var_os("STUDIO_DATA_DIR").map(PathBuf::from),
+        std::env::var_os("STUDIO_SMOKE_OUT").map(PathBuf::from),
+        cfg!(target_os = "macos"),
+    )?;
+    if let Some(out) = &session_smoke {
+        check_smoke_out(out)?;
+    }
     // Refused before any controller exists: no data directory is touched, no runner is started.
     let feth = smoke_feth_config(
         &std::env::args().collect::<Vec<_>>(),
@@ -409,9 +439,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let runner = std::env::current_exe()?
         .with_file_name(format!("studio-runner{}", std::env::consts::EXE_SUFFIX));
+    let network_driver = Rc::new(RefCell::new(
+        smoke_network::case(&std::env::args().collect::<Vec<_>>())?
+            .map(|case| smoke_network::Driver::prepare(case, &runner))
+            .transpose()?,
+    ));
+    let network_active = network_driver.borrow().is_some();
+    let single_driver = Rc::new(RefCell::new(
+        if smoke_single::requested(&std::env::args().collect::<Vec<_>>())? {
+            Some(smoke_single::Driver::prepare(&runner)?)
+        } else {
+            None
+        },
+    ));
+    let single_active = single_driver.borrow().is_some();
     let app = Rc::new(RefCell::new(Controller::open(data_dir(), runner)?));
     let ui = MainWindow::new()?;
+    #[cfg(target_os = "macos")]
+    macos_keyboard::connect(ui.window());
     ui.set_mac_feth_open(studio_protocol::raw_profile_enabled(Backend::MacFeth));
+    let network_open = studio_protocol::raw_profile_enabled(Backend::MacNetwork);
+    ui.set_mac_network_open(network_open);
+    ui.set_mac_network_supported(cfg!(target_os = "macos"));
+    ui.set_linux_network_open(studio_protocol::raw_profile_enabled(Backend::LinuxPhysical));
+    ui.set_windows_network_open(studio_protocol::raw_profile_enabled(
+        Backend::WindowsPhysical,
+    ));
+    ui.set_network_profile_hint(
+        network_ui::profile_hint(cfg!(target_os = "macos"), network_open).into(),
+    );
+    if let Some(backend) =
+        Backend::native_physical().filter(|b| studio_protocol::raw_profile_enabled(*b))
+    {
+        ui.set_backend_index(network_ui::backend_index(backend));
+        ui.set_job_targets("".into());
+        ui.set_job_rate("100".into());
+    }
     ui.set_authorization_available(cfg!(any(target_os = "macos", target_os = "linux", windows)));
     ui.set_process_view(true);
     ui.set_job_seed(
@@ -432,30 +495,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let history = Rc::new(RefCell::new(Vec::<studio_store::SavedScan>::new()));
     let history_edit = Rc::new(RefCell::new(None::<studio_store::SavedScan>));
     let profiles = Rc::new(RefCell::new(Vec::<studio_store::SavedProfile>::new()));
+    let coverage = Rc::new(RefCell::new(None::<studio_inspection::ExportCoverage>));
     ui.set_rows(ModelRc::from(rows.clone()));
     rows.summary(&ui);
     let w = ui.as_weak();
     ui.on_check_settings(move || {
         if let Some(ui) = w.upgrade() {
-            match draft(&ui).and_then(|j| j.prepare()) {
-                Ok(p) => {
+            match draft(&ui).and_then(|j| network_ui::preview(&j)) {
+                Ok(preview) => {
                     ui.set_job_valid(true);
-                    ui.set_job_preview(
-                        format!(
-                            "{} endpoints · wait 3 s · exact seed {}",
-                            p.range(),
-                            ui.get_job_seed()
-                        )
-                        .into(),
-                    );
+                    ui.set_job_preview(preview.into());
                     ui.set_job_feedback(
-                        "Settings validated. Access is checked when the scan starts.".into(),
+                        if ui.get_backend_index() == 2 {
+                            "Settings validated. Check network for route and interface details; scanning availability is shown above."
+                        } else { "Settings validated. Access is checked when the scan starts." }.into(),
                     );
                 }
                 Err(e) => {
                     ui.set_job_valid(false);
                     ui.set_job_feedback(e.into());
                 }
+            }
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    ui.on_draft_changed(move || {
+        if let Some(ui) = w.upgrade() {
+            action(&a, &ui, network_ui::changed_draft(&ui));
+        }
+    });
+    let w = ui.as_weak();
+    let a = app.clone();
+    ui.on_check_network(move || {
+        if let Some(ui) = w.upgrade() {
+            match draft(&ui) {
+                Ok(job) => action(&a, &ui, Action::CheckNetwork(job)),
+                Err(e) => ui.set_job_feedback(e.into()),
             }
         }
     });
@@ -514,15 +590,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = app.clone();
     ui.on_lock_session(move || {
         if let Some(ui) = w.upgrade() {
-            let request = if ui.get_authorization_available()
-                && !ui.get_authorized()
-                && !ui.get_authorizing()
-            {
-                Action::Authorize
-            } else {
-                Action::Lock
-            };
-            action(&a, &ui, request);
+            match network_ui::session_action(&ui) {
+                Ok(request) => action(&a, &ui, request),
+                Err(e) => ui.set_action_notice(e.into()),
+            }
         }
     });
     let w = ui.as_weak();
@@ -573,6 +644,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match a.borrow().send(Action::Select(s.scan)) {
                 Ok(()) => {
                     history_target(&ui, s);
+                    if s.job.backend != Backend::Archived {
+                        fill_settings(&ui, &s.job);
+                    }
                     *edit.borrow_mut() = Some(s.clone());
                 }
                 Err(e) => ui.set_history_feedback(e.into()),
@@ -641,6 +715,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match repeat_job(&s) {
             Ok(job) => {
                 fill_settings(&ui, &job);
+                ui.invoke_settings_edited();
                 ui.set_profile_index(-1);
                 ui.set_profile_name("".into());
                 ui.set_profile_loaded(false);
@@ -658,16 +733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let p = profiles.clone();
     ui.on_load_profile(move |i| {
         if let (Some(ui), Some(profile)) = (w.upgrade(), p.borrow().get(i as usize)) {
-            ui.set_job_targets(profile.job.targets.clone().into());
-            ui.set_job_ports(profile.job.ports.clone().into());
-            ui.set_job_exclusions(profile.job.exclusions.clone().into());
-            ui.set_job_rate(profile.job.rate.to_string().into());
-            ui.set_job_seed(profile.job.seed.clone().into());
-            ui.set_backend_index(if profile.job.backend == Backend::Simulation {
-                1
-            } else {
-                0
-            });
+            fill_settings(&ui, &profile.job);
             ui.set_profile_name(profile.name.clone().into());
             ui.set_profile_loaded(true);
             ui.set_confirm_profile_delete(false);
@@ -789,17 +855,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let w = ui.as_weak();
     let r = rows.clone();
+    let c = coverage.clone();
     ui.on_export_rows(move |format| {
         if let Some(ui) = w.upgrade() {
             if ui.get_exporting() {
                 return;
             }
             let snapshot = r.export_rows();
-            if snapshot.is_empty() {
+            let scan_coverage = c.borrow().clone();
+            if snapshot.is_empty() && scan_coverage.is_none() {
                 ui.set_action_notice("No visible rows to export".into());
                 return;
             }
             let json = format == "json";
+            #[cfg(target_os = "macos")]
+            if let Err(error) = macos_dialog_menu::install() {
+                ui.set_action_notice(format!("Cannot open export dialog: {error}").into());
+                return;
+            }
             ui.set_exporting(true);
             let dialog = rfd::AsyncFileDialog::new()
                 .set_file_name(if json {
@@ -815,12 +888,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let w = w.clone();
             std::thread::spawn(move || {
                 let result = if let Some(file) = pollster::block_on(dialog) {
-                    studio_inspection::write_export(file.path(), &snapshot, json)
-                        .map(|_| format!("Exported {} visible rows", snapshot.len()))
+                    studio_inspection::write_export_with_coverage(
+                        file.path(),
+                        &snapshot,
+                        scan_coverage.as_ref(),
+                        json,
+                    )
+                    .map(|_| {
+                        format!(
+                            "Exported {} visible rows{}",
+                            snapshot.len(),
+                            if scan_coverage.is_some() {
+                                " and whole-scan coverage"
+                            } else {
+                                ""
+                            }
+                        )
+                    })
                 } else {
                     Ok("Export cancelled".into())
                 };
                 let _ = w.upgrade_in_event_loop(move |ui| {
+                    #[cfg(target_os = "macos")]
+                    macos_dialog_menu::remove();
                     ui.set_exporting(false);
                     ui.set_action_notice(
                         result
@@ -853,12 +943,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let outcome = Rc::new(RefCell::new(None::<(bool, String)>));
     let finished = outcome.clone();
     let driver_active = driver.is_some();
+    let session_active = session_smoke.is_some();
+    let mut session_driver = session_smoke.map(smoke_session::Driver::new);
+    let native = network_driver.clone();
+    let single = single_driver.clone();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(50),
         move || {
             let Some(ui) = w.upgrade() else { return };
             let updates = a.borrow_mut().poll();
+            if let Some(driver) = &mut history_driver { driver.observe(&updates); }
+            if let Some(driver) = native.borrow_mut().as_mut() { driver.observe(&updates); }
+            if let Some(driver) = single.borrow_mut().as_mut() { driver.observe(&updates); }
+            if let Some(driver) = &mut session_driver { driver.observe(&updates); }
             // The `--smoke-feth` driver sees every update first, in order, and answers with the steps a user's
             // clicks would have produced; they run through `action` below, the same path as the buttons.
             let mut feth_steps = Vec::new();
@@ -881,6 +979,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for update in updates {
                 match update {
+                    Update::NetworkReadiness(value) => network_ui::readiness(&ui, value.as_ref()),
+                    Update::NetworkCoverage(value) => {
+                        *coverage.borrow_mut() = network_ui::coverage(&ui, value.as_deref());
+                    }
                     Update::HistoryResult(result) => {
                         ui.set_history_busy(false);
                         if result.is_ok() {
@@ -901,6 +1003,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_action_notice(text.into());
                     }
                     Update::Clear => {
+                        *coverage.borrow_mut() = network_ui::coverage(&ui, None);
                         clear_view(&m, &ui);
                         m.simulation.set(false);
                         m.archived.set(false);
@@ -935,6 +1038,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         *p.borrow_mut() = values;
                     }
                     Update::Reset(data, backend) => {
+                        *coverage.borrow_mut() = network_ui::coverage(&ui, None);
                         ui.set_inspection_available(backend != Backend::Simulation);
                         m.simulation.set(backend == Backend::Simulation);
                         m.archived.set(backend == Backend::Archived);
@@ -943,6 +1047,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "Simulation · no packets"
                             } else if backend == Backend::Archived {
                                 "Archived history"
+                            } else if backend.is_network() {
+                                match backend {
+                                    Backend::LinuxPhysical => "Linux network · raw packets",
+                                    Backend::WindowsPhysical => "Windows network · raw packets",
+                                    _ => "Mac network · raw packets",
+                                }
                             } else {
                                 "feth lab · raw packets"
                             }
@@ -977,11 +1087,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Update::Progress(sent, received) => ui.set_event_label(
                         format!(
-                            "{} · sent {sent} · received {received} · saved to history",
+                            "{} · latest run: sent {sent} · received {received}",
                             if m.simulation.get() {
                                 "Simulation"
                             } else {
-                                "feth scan"
+                                "TCP scan"
                             }
                         )
                         .into(),
@@ -1021,7 +1131,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Update::State(status, detail) => {
                         eprintln!("Studio: {status:?}: {detail}");
-                        ui.set_process_status(format!("{status:?}").into());
+                        ui.set_process_preparing(status == Status::Preparing);
+                        ui.set_process_status(if status == Status::Preparing { "Preparing network".into() } else { format!("{status:?}").into() });
                         ui.set_action_notice(detail.into());
                         ui.set_process_active(process_active(&status));
                         ui.set_can_resume(status == Status::Paused && !m.archived.get());
@@ -1052,6 +1163,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             m.summary(&ui);
+            if let Some(driver) = &mut history_driver {
+                let result = driver.tick(&ui, &m, &h.borrow(), coverage.borrow().as_ref());
+                if !matches!(result, Ok(false)) {
+                    let result = match driver.finish(&result) { Ok(()) => result, Err(e) => Err(e) };
+                    *finished.borrow_mut() = Some(match result { Ok(_) => (true, String::new()), Err(e) => (false, e) });
+                    history_driver = None;
+                    let _ = slint::quit_event_loop();
+                }
+            }
+            if let Some(driver) = single.borrow_mut().as_mut() {
+                match driver.tick(&ui, m.as_ref()) {
+                    Ok(false) => {},
+                    result => {
+                        *finished.borrow_mut() = Some(match result { Ok(_) => (true,String::new()), Err(e) => (false,e) });
+                        let _ = slint::quit_event_loop();
+                    }
+                }
+            }
+            if let Some(driver) = native.borrow_mut().as_mut() {
+                match driver.tick(&ui, m.row_count()) {
+                    Ok(false) => {},
+                    result => {
+                        *finished.borrow_mut() = Some(match result { Ok(_) => (true,String::new()), Err(e) => (false,e) });
+                        let _ = slint::quit_event_loop();
+                    }
+                }
+            }
+            if let Some(driver) = &mut session_driver {
+                let result = driver.tick(&ui, m.row_count(), &h.borrow());
+                if !matches!(result, Ok(false)) {
+                    let result = match driver.finish(&result) { Ok(()) => result, Err(e) => Err(e) };
+                    *finished.borrow_mut() = Some(match result { Ok(_) => (true, String::new()), Err(e) => (false, e) });
+                    let _ = slint::quit_event_loop();
+                }
+            }
             let mut feth_steps = std::collections::VecDeque::from(feth_steps);
             while let Some(step) = feth_steps.pop_front() {
                 match step {
@@ -1126,6 +1272,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if smoke || pause_smoke || stop_smoke {
         ui.set_backend_index(1);
+        if stop_smoke {
+            // Exercise the native minimum-size layout in one packaged smoke.
+            ui.window().set_size(slint::LogicalSize::new(820., 540.));
+        }
         let mut job = Job::example(Backend::Simulation);
         if pause_smoke {
             job.rate = 4;
@@ -1135,15 +1285,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     ui.run()?;
     timer.stop();
-    if driver_active {
+    if driver_active || session_active || network_active || single_active || history_active {
         match outcome.borrow().as_ref() {
             Some((true, _)) => {}
-            Some((false, reason)) => return Err(format!("--smoke-feth failed: {reason}").into()),
-            None => return Err("--smoke-feth: the window closed before the run finished".into()),
+            Some((false, reason)) => return Err(format!("UI acceptance failed: {reason}").into()),
+            None => return Err("UI acceptance: the window closed before the run finished".into()),
         }
     }
     if (smoke || pause_smoke || stop_smoke) && !success.get() {
         return Err("UI smoke did not complete the expected lifecycle".into());
+    }
+    if network_active || single_active {
+        // Destroy all callbacks holding Controller clones before recording joined.
+        drop(timer);
+        drop(ui);
+        let controller = Rc::try_unwrap(app)
+            .map_err(|_| "GUI callbacks still own the Controller")?
+            .into_inner();
+        drop(controller);
+        if network_active {
+            network_driver
+                .borrow_mut()
+                .take()
+                .ok_or("Missing native GUI driver")?
+                .finish()?;
+        }
+        if single_active {
+            single_driver
+                .borrow_mut()
+                .take()
+                .ok_or("Missing single-target GUI driver")?
+                .finish()?;
+        }
     }
     Ok(())
 }
@@ -1151,6 +1324,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn physical_profile_round_trip_keeps_legacy_backend_indices_and_emits_no_user_edit() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = MainWindow::new().unwrap();
+        let edits = Rc::new(Cell::new(0));
+        let count = edits.clone();
+        ui.on_settings_edited(move || count.set(count.get() + 1));
+        let path = std::env::temp_dir().join(format!(
+            "studio-ui-profiles-{}",
+            studio_protocol::id_text(studio_protocol::new_id().unwrap())
+        ));
+        let mut store = studio_store::Store::open(&path).unwrap();
+        for (backend, index) in [
+            (Backend::MacFeth, 0),
+            (Backend::Simulation, 1),
+            (Backend::MacNetwork, 2),
+        ] {
+            let mut job = Job::example(backend);
+            job.seed = u64::MAX.to_string();
+            let saved = store
+                .save_profile(None, &format!("Profile {index}"), &job)
+                .unwrap();
+            assert_eq!(saved.job, job);
+            let job = store
+                .profiles()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.id == saved.id)
+                .unwrap()
+                .job;
+            fill_settings(&ui, &job);
+            assert_eq!(ui.get_backend_index(), index);
+            assert_eq!(draft(&ui).unwrap(), job);
+        }
+        assert_eq!(
+            edits.get(),
+            0,
+            "restoring settings must not enqueue a draft edit after History coverage"
+        );
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn physical_history_can_repeat_valid_settings_without_preparing_an_adapter() {
+        let saved = studio_store::SavedScan {
+            scan: [1; 16],
+            attempt: [2; 16],
+            job: Job::example(Backend::MacNetwork),
+            status: Status::Stopped,
+            checkpoint: None,
+            network_report: None,
+            name: None,
+            created_at: None,
+            detail: String::new(),
+            next_index: None,
+        };
+        assert_eq!(repeat_job(&saved).unwrap(), saved.job);
+    }
     #[test]
     fn stage_cli_rejects_unknown_conflicting_and_non_mac_stages() {
         let env = |_: &str| Some(std::ffi::OsString::from("/test"));
@@ -1214,6 +1446,7 @@ mod tests {
             job: Job::example(Backend::Simulation),
             status: Status::Paused,
             checkpoint: Some(vec![1, 2, 3]),
+            network_report: None,
             next_index: Some("42".into()),
             detail: "paused".into(),
             name: Some("Office".into()),
@@ -1230,7 +1463,12 @@ mod tests {
     #[test]
     fn archived_ready_history_does_not_lock_the_ui_as_an_active_scan() {
         assert!(!process_active(&Status::Ready));
-        for status in [Status::Starting, Status::Scanning, Status::Saving] {
+        for status in [
+            Status::Starting,
+            Status::Preparing,
+            Status::Scanning,
+            Status::Saving,
+        ] {
             assert!(process_active(&status));
         }
     }
@@ -1289,5 +1527,24 @@ mod tests {
         assert!(!json.contains("secret-hidden-port"));
         assert!(!json.contains("443"));
         assert!(snapshot.iter().all(|r| r.discovered_at.is_none()));
+        let coverage = studio_inspection::ExportCoverage {
+            original_job: studio_inspection::ExportJob {
+                ports: "80,443".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let physical = studio_inspection::json_with_coverage(&snapshot, Some(&coverage)).unwrap();
+        assert!(!physical.contains("secret-hidden-port"));
+        let physical: serde_json::Value = serde_json::from_str(&physical).unwrap();
+        assert_eq!(physical["rows"].as_array().unwrap().len(), 2);
+        assert!(
+            physical["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["port"] == 80)
+        );
+        assert_eq!(physical["coverage"]["original_job"]["ports"], "80,443");
     }
 }

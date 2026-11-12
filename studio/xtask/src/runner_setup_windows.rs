@@ -74,7 +74,7 @@ pub fn verify_installed() -> Result<()> {
     let hash = std::env::args().nth(2).ok_or("Supply runner SHA-256")?;
     let installation = Installed::open(&hash)?;
     println!(
-        "Trusted immutable runner: {}\nSHA-256: {hash}\nStart Studio as an ordinary user and select Authorize. Raw scanning remains disabled.",
+        "Trusted immutable runner: {}\nSHA-256: {hash}\nStart Studio as an ordinary user and select Authorize. Network scanning requires a separately authorized session.",
         installation.path().display()
     );
     Ok(())
@@ -84,9 +84,9 @@ pub fn verify_ci(root: &Path) -> Result<()> {
         return Err("Requires disposable GitHub Windows VM".into());
     }
     if studio_protocol::raw_profile_enabled(studio_protocol::Backend::MacFeth)
-        || !studio_protocol::RAW_PROFILES.is_empty()
+        || studio_protocol::RAW_PROFILES != ["WindowsPhysical"]
     {
-        return Err("Raw gate must stay closed".into());
+        return Err("CI requires only the native Windows physical profile".into());
     }
     let dir = prepare_source(root, &build_runner()?)?;
     let source = dir.join("studio-runner.exe");

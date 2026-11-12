@@ -37,6 +37,9 @@ use super::loader::{
 use crate::NetError;
 use crate::route_parse::{Fwd, Fwd6, WinAdapter};
 
+mod observation;
+pub(crate) use observation::{adapters_until, interfaces_until};
+
 const SEARCH_FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
 
 fn wide(s: &str) -> Vec<u16> {
@@ -403,6 +406,19 @@ pub(crate) fn best_route(dst: Ipv4Addr) -> Result<Option<Fwd>, NetError> {
     }
     // SAFETY: при NO_ERROR API заполнил `row`, который жив до конца функции.
     Ok(Some(unsafe { fwd_from_row(row.as_ptr()) }))
+}
+
+/// Synchronous IP Helper route query. The absolute deadline and cancellation
+/// are checked before and after WinAPI; the OS call itself cannot be interrupted.
+pub(crate) fn best_route_until(
+    dst: Ipv4Addr,
+    deadline: std::time::Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<Fwd>, NetError> {
+    crate::network_plan::check_observation(deadline, cancelled)?;
+    let result = best_route(dst);
+    crate::network_plan::check_observation(deadline, cancelled)?;
+    result
 }
 
 /// Адреса IPv6 списка `FirstUnicastAddress` по порядку с их `DadState` (`NL_DAD_STATE`).

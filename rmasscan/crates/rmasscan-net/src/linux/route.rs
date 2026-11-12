@@ -18,10 +18,12 @@ use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 
 use super::socket::ifreq_for;
 use crate::NetError;
 use crate::discover::{Iface, Interfaces, Route, RouteTable, RouteV6};
+use crate::network_plan::InterfaceObservation;
 use crate::route_parse::{
     NlError, NlRoute, NlRoute6, netlink_addr_request6, netlink_defaults, netlink_defaults6,
     netlink_done, netlink_route_request, netlink_route_request6, parse_netlink_addrs6,
@@ -36,6 +38,9 @@ const MAX_DATAGRAMS: usize = 4096;
 const RECV_TIMEOUT_SECS: libc::time_t = 1;
 
 static SEQ: AtomicU32 = AtomicU32::new(1);
+
+#[path = "route_observation.rs"]
+mod observation;
 
 fn last_errno() -> i32 {
     std::io::Error::last_os_error()
@@ -241,6 +246,15 @@ fn ifname_of(index: u32) -> String {
 pub(crate) struct OsRoutes;
 
 impl RouteTable for OsRoutes {
+    fn lookup_until(
+        &self,
+        dst: Ipv4Addr,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<Route>, NetError> {
+        observation::lookup(dst, deadline, cancelled)
+    }
+
     fn lookup(&self, dst: Ipv4Addr) -> Result<Option<Route>, NetError> {
         let routes = match exchange(Some(dst)) {
             Ok(r) => r,
@@ -393,6 +407,14 @@ impl IfSock {
 pub(crate) struct OsIfaces;
 
 impl Interfaces for OsIfaces {
+    fn observe(
+        &self,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<InterfaceObservation>, NetError> {
+        observation::interfaces(deadline, cancelled)
+    }
+
     fn list(&self) -> Result<Vec<Iface>, NetError> {
         let sock = IfSock::open()?;
         let mut out = Vec::new();
@@ -414,3 +436,7 @@ impl Interfaces for OsIfaces {
         Ok(usable_addrs6(&addrs, iface.index))
     }
 }
+
+#[cfg(test)]
+#[path = "route_tests.rs"]
+mod tests;

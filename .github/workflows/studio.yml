@@ -12,8 +12,9 @@ concurrency:
   cancel-in-progress: true
 # Live feth raw windows are not run here: the live feth window is user-run (stand, BPF grant and
 # the Authorize dialog are user actions); see docs/experiments/2026-10-26-studio-mac-feth-raw-acceptance.md.
-# CI builds and runs the offline tests only; the per-profile raw gate is compile-time (open for Mac feth on
-# macOS, closed on Windows and Linux).
+# CI builds and runs offline tests plus authorization-only fixtures. Ordinary raw
+# profiles are native-OS-specific; enabling one does not make these tests send packets.
+# Mac fixture profiles remain macOS-only. Native physical scan acceptance is separate.
 jobs:
   application:
     strategy:
@@ -43,12 +44,13 @@ jobs:
           . ./scripts/windows-sqlite.ps1
           "SQLITE3_LIB_DIR=$env:SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
           "$env:SQLITE3_LIB_DIR" >> $env:GITHUB_PATH
-      - name: macOS external SQLite
+      - name: macOS static SQLite
         if: runner.os == 'macOS'
         run: |
           brew install sqlite
           echo "SQLITE3_LIB_DIR=$(brew --prefix sqlite)/lib" >> "$GITHUB_ENV"
           echo "SQLITE3_INCLUDE_DIR=$(brew --prefix sqlite)/include" >> "$GITHUB_ENV"
+          echo "SQLITE3_STATIC=1" >> "$GITHUB_ENV"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

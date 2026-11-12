@@ -258,15 +258,19 @@ source IPv6 на Linux/macOS/Windows, NDP (`135`/`136`), рендер IPv6 и з
 - Produces: подкоманды `rmasscan-lab ipv6-suite linux ...` и `ipv6-verify --dir DIR` с кодами `0` PASS / `1` FAIL / `2`
   INVALID (на базе ULA `fd00:198:18::/64` в запечатанном Linux netns).
 
-- [ ] **Шаг 1 — живое окно и верификатор (RED → GREEN):** добавить кейсы `v01_ndp_and_tcp6_syn` (автоопределение
-  source IPv6, NDP, точные кадры SYN поверх IPv6, `-oJ`/`-oB`), `v02_mixed_v4_v6` (неизменный порядок v4 + v6),
+- [x] **Шаг 1 — живое окно и верификатор (RED → GREEN):** добавить кейсы `v01_ndp_and_tcp6_syn` (автоопределение
+  source IPv6, NDP, точные кадры SYN поверх IPv6, `-oJ`/`-oB`), `v02_mixed_v4_v6` (байты IPv4-зондов и карта индексов как у C: плана только IPv4 под смешанной перестановкой
+  `x = shuffle((i + rate) mod range)`, `main.c:258–260, 325–331`; не буквальный порядок плана только IPv4, потому что C перемешивает
+  весь смешанный диапазон),
   `v03_explicit_router_mac_ipv6`; прогнать `--suite ipv6` + полную регрессию `--suite autodetect`, `--suite output`,
   `--suite scan-control`, `--suite protocols` на Linux (minipc) и `windows-suite --plan autodetect` на Windows VM +
-  `cargo xtask test` в `studio/`; выполнить privacy-grep.
-- [ ] **Шаг 2 — документация и проверка CI:** обновить `rmasscan/README.md` («Отличия от masscan» по Р1–Р5), записать
+  `cargo xtask test` в `studio/`; выполнить privacy-grep. *(Сделано, кроме `cargo xtask test` в `studio/` и окон macOS и Windows
+  IPv6: они NOT RUN, см. отчёт приёмки.)*
+- [x] **Шаг 2 — документация и проверка CI:** обновить `rmasscan/README.md` («Отличия от masscan» по Р1–Р5), записать
   отчёт `docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md` и строку в `readiness.md`; убедиться в чистоте
   `cargo test --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo fmt --check`,
-  дождаться зелёного GitHub CI на всех 3 ОС (`rmasscan`, `Studio`, `language-guard`).
+  дождаться зелёного GitHub CI на всех 3 ОС (`rmasscan`, `Studio`, `language-guard`). *(Сделано, кроме зелёного CI на точном HEAD:
+  PENDING, фиксирует контролёр при слиянии.)*
 
 ---
 

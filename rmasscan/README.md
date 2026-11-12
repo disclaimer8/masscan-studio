@@ -53,30 +53,45 @@ sudo target/release/rmasscan 198.51.100.0/24 --ping
 # ARP-скан своего сегмента (--arp, синоним --arpscan; шлюз не определяется, с портами не сочетается)
 sudo target/release/rmasscan 198.51.100.0/24 --arp -oB arp.bin
 target/release/rmasscan --readscan arp.bin -oL arp.txt
+# IPv6 (только TCP SYN): цель в скобках или CIDR; интерфейс, адрес источника и следующий хоп определяются по таблице маршрутов, MAC хопа разрешает NDP
+sudo target/release/rmasscan '[2001:db8::1]' -p80,443
+sudo target/release/rmasscan 2001:db8::/120 -p80 -oJ scan6.json
+# смешанный скан IPv4 и IPv6 одним запуском (оба семейства обязаны идти одним интерфейсом); IPv6 занимает нижние индексы перестановки
+sudo target/release/rmasscan 198.51.100.0/24 2001:db8::/120 -p80
+# MAC роутера IPv6 задан явно, NDP пропускается (--router-ipv6 как в C синоним того же MAC, а не адреса)
+sudo target/release/rmasscan 2001:db8::/120 -p80 --router-mac-ipv6 02-aa-00-00-00-02
+# адрес источника и роутер IPv6 заданы явно; --router-ip принимает и IPv6 (расширение, в C только IPv4), MAC роутера тогда разрешает NDP
+sudo target/release/rmasscan 2001:db8::/120 -p80 --adapter-ip 2001:db8::10 --router-ip fe80::1
+# записи IPv6 в -oB (типы 10 и 11) и их чтение с фильтром по адресу IPv6
+sudo target/release/rmasscan 2001:db8::/120 -p80 -oB scan6.bin --show open,closed
+target/release/rmasscan --readscan scan6.bin --range 2001:db8::/124 -oL scan6.txt
+cargo run -p rmasscan-cli -- -sL 2001:db8::/126 -p80 --seed 1
 cargo run -p rmasscan-cli -- -sL 10.0.0.0/30 -p80,443 --seed 1
 cargo run -p rmasscan-cli -- --echo 10.0.0.0/24 -p80 --seed 1
 cargo run -p rmasscan-cli -- --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \
   --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003
+cargo run -p rmasscan-cli -- --offline --packet-trace '[2001:db8::1]' -p80 --seed 1 \
+  --adapter-ip fd00::1 --adapter-mac 00-11-22-33-44-55 --source-port 40000
 ```
 
-Без флага операции rmasscan сканирует по IPv4: TCP SYN, а с префиксами и флагами протоколов (раздел «Команды») ещё UDP, ICMP Echo, SCTP INIT и ARP. Порядок: значения по умолчанию (seed, порт источника) →
+Без флага операции rmasscan сканирует по IPv4 и IPv6: TCP SYN по обоим семействам, а по IPv4 с префиксами и флагами протоколов (раздел «Команды») ещё UDP, ICMP Echo, SCTP INIT и ARP (по IPv6 только TCP SYN, блок «IPv6» в «Отличиях от masscan»). Порядок: значения по умолчанию (seed, порт источника) →
 проверка конфигурации → обнаружение (только чтение таблицы маршрутов и интерфейсов, без привилегий) → строки `[+]` →
-ARP к следующему хопу (если не задан `--router-mac`) → открытие адаптера → скан. Привилегии нужны только для
+ARP (IPv4) и NDP (IPv6) к следующему хопу (ARP пропускается при заданном MAC роутера IPv4, NDP при заданном MAC роутера IPv6; `--router-mac` задаёт оба, как в C) → открытие адаптера → скан. Привилегии нужны только для
 открытия адаптера: Linux root или `CAP_NET_RAW`, macOS root или доступ к `/dev/bpf*`, Windows Administrator и
 Npcap. В stderr идут строки `[+] interface`, `source-mac`, `source-ip`, `router-ip`, `router-mac`, `seed`,
-`source-port` и `[+] finished: <итог>, sent N, replies N, open N`; в stdout строки
-`Discovered open port N/tcp on IP` (побайтно как masscan; для других протоколов `N/udp`, `N/sctp`, `0/icmp`, у ARP строка с MAC и OUI). Отказ обнаружения или ARP печатается в форме C
+`source-port` и `[+] finished: <итог>, sent N, replies N, open N` (для IPv6 `source-ip = [адрес]`, `router-ip = [адрес]` и `router-mac-ipv6`, у разрешённого NDP с числом запросов и временем: `router-mac-ipv6 = MAC (ndp: N requests, M ms)`); в stdout строки
+`Discovered open port N/tcp on IP` (побайтно как masscan; для других протоколов `N/udp`, `N/sctp`, `0/icmp`, у ARP строка с MAC и OUI; адрес IPv6 без скобок, в форме `ipv6address_fmt` C). Отказ обнаружения или ARP печатается в форме C
 (`[-] FAIL: …` и строки `[hint]`), код выхода 1; итог `Completed`/`Stopped` даёт 0, любой другой 1.
-`-sL` и `--echo` побайтно совпадают с golden-фикстурами C.
+`-sL` и `--echo` побайтно совпадают с golden-фикстурами C (в том числе для целей IPv6).
 
 Вывод. Форматы `-oL` (list), `-oJ` (json), `-oD` (ndjson), `-oG` (grepable), `-oX` (xml), `-oB` (binary), `-oH`
-(hostonly), `-oU` (unicornscan) и `--output-format none` для записей статуса TCP, UDP, SCTP и ICMP побайтно равны masscan `8e6b3b0`
-(кроме полей, которые C берёт из часов в момент записи; 94 эталона C в `tests/golden/formats/`: 74 для TCP и 20 для UDP, SCTP и ICMP). Записи ARP C `--readscan` не читает, их формат проверен по коду C. Опции:
+(hostonly), `-oU` (unicornscan) и `--output-format none` для записей статуса TCP, UDP, SCTP и ICMP (IPv4 и IPv6) побайтно равны masscan `8e6b3b0`
+(кроме полей, которые C берёт из часов в момент записи; 119 эталонов C в `tests/golden/formats/`: 74 для TCP, 20 для UDP, SCTP и ICMP и 25 для записей IPv6, типы 10 и 11 и `--readscan` с фильтром по адресу IPv6; текст адреса IPv6 C пишет `ipv6address_fmt`, без скобок, а XML с `addrtype="ipv6"`). Записи ARP C `--readscan` не читает, их формат проверен по коду C. Опции:
 `--output-format`, `--output-filename`/`--output-file`, `--append-output`/`--output-append`, `--output-flush`,
 `--open`/`--output-show-open`, `--show`, `--noshow`, `--interactive`/`--nointeractive`, `--stylesheet`, `--webxml`,
 `--no-stylesheet`, `--status`/`--nostatus`, `--ndjson-status`.
 С `-o…` stdout молчит (кроме `--interactive`), иначе идут строки `Discovered …`. `--readscan FILE…` читает файлы `-oB`
-(записи статуса TCP, UDP, SCTP, ICMP Echo и ARP) и пишет их теми же форматами; цели и порты, заданные до него, фильтруют записи. На stderr
+(записи статуса TCP, UDP, SCTP и ICMP Echo в IPv4 и IPv6, ARP в IPv4) и пишет их теми же форматами; цели и порты, заданные до него, фильтруют записи. На stderr
 скан печатает строку статуса masscan (`rate`, `done`, `found`) и стирает её 77 пробелами перед `[+] finished`.
 С `--nostatus` строки статуса нет, а после скана в stdout идёт `N milliseconds elapsed`, кроме случая, когда stdout
 это файл вывода (`-o… -`): C закрывает его вместе с файлом, и в stdout остаётся только формат. Ctrl-C: первое нажатие
@@ -136,10 +151,10 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
     `getservbyport`, на хосте с NSS-источником помимо files имена могут разойтись (Р10).
   - Одинаковые байты на всех ОС: `\n` не превращается в `\r\n` на Windows, XML сохраняет свои CRLF; C на Windows
     пишет в текстовом режиме (Р12).
-  - `--readscan` читает записи статуса IPv4 (Р13, расширен этапом протоколов): типы 6 и 7 с протоколом TCP, UDP,
-    SCTP или ICMP (`ip_proto` 6, 17, 132, 1) и тип 8 (ARP, `ip_proto` 0). Остальное — ошибка с кодом 1: баннеры, IPv6 и
-    устаревшие типы дают `<файл>: unsupported record type N`, запись типа 6 или 7 с другим протоколом (в том числе с 0)
-    и запись типа 8 с протоколом не 0 — `<файл>: unsupported record protocol P`. Обрыв посреди записи — `[-] file corrupt` и код 1 (C молча
+  - `--readscan` читает записи статуса (Р13, расширен этапами протоколов и IPv6): типы 6 и 7 (IPv4) и 10 и 11 (IPv6) с
+    протоколом TCP, UDP, SCTP или ICMP (`ip_proto` 6, 17, 132, 1) и тип 8 (ARP, `ip_proto` 0). Остальное — ошибка с
+    кодом 1: баннеры, тип 12 (ARP IPv6) и устаревшие типы дают `<файл>: unsupported record type N`, запись типа 6, 7, 10
+    или 11 с другим протоколом (в том числе с 0) и запись типа 8 с протоколом не 0 — `<файл>: unsupported record protocol P`. Обрыв посреди записи — `[-] file corrupt` и код 1 (C молча
     останавливается с кодом 0); файл короче 99-байтового заголовка с верным началом `masscan/1.1` — тоже
     `[-] file corrupt` и код 1 (C печатает `[-] <файл>: ` и `strerror(errno)`); пустой файл (0 байт) — сообщение о
     неизвестном формате (C: `feof` до первого `fread` ложно, поэтому 0-байтовый файл доходит до `bytes_read < 'a'+2` и
@@ -257,6 +272,89 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
     её выводит (`err` или `arp`). Эталонов C для фильтра по порту у не-TCP нет, только по адресу.
   - `--pcap` пишет только кадры TCP (`ip_proto` 6): при сканах UDP, ICMP и ARP в файле один заголовок. C не пишет их тоже
     (ветки `continue`, `main.c:874–919`), но пишет ответы SCTP и других протоколов IP через тот же `break` и проваливание в путь TCP (`main.c:920–925`, затем `:943`).
+- IPv6 (спека этапа `../docs/superpowers/specs/2026-11-08-rmasscan-ipv6-design.md`, §8 и раздел «Изменения по итогам
+  реализации»; принято на Linux (netns и veth), на Windows VM снята только регрессия автоопределения IPv4, отчёт
+  `../docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md`). Ссылки на C это masscan `8e6b3b0`. Как у C, и это
+  проверено на `-sL`, `--echo` и по байтам кадров на проводе: порядок `-sL` (IPv4 ниже, IPv6 выше, `massip.c:24, 30–43`),
+  индексы смешанного скана (IPv6 в нижних индексах перестановки, `main.c:258–260, 336–373`), предел диапазона 63 бита
+  (`main.c:1698–1704`, одиночный порт даёт `/66`), требование хотя бы одного **IPv4** `--exclude` при более чем 10^9
+  адресов (`main.c:1204`, `:1235`: считается IPv4 плюс младшие 64 бита счёта IPv6, исключение IPv6 подтверждением не
+  служит; спека этапа (Р1) называла это ошибкой C, которую порт исправит, поправка П4 её снимает: исправления нет), 78-байтовый кадр SYN,
+  cookie, `--router-mac` для обоих семейств (`main-conf.c:2587–2600`). Отличия:
+  - Только TCP SYN. Порт `U:`, `S:`, `I:`, `O:` и `--arp` вместе с целью IPv6 живой скан и `--packet-trace` отклоняют до
+    первого кадра (`IPv6 targets support only TCP ports…`, код 1); `-sL`, `--echo` и `--offline` без трассы их
+    принимают. C шлёт по IPv6 и UDP, SCTP и ICMP Echo (`templ-pkt.c:679–701`); перенос отложен.
+  - `--ttl` на IPv6 не действует, hop limit всегда 255: `template_set_ttl` правит только шаблон IPv4
+    (`templ-pkt.c:1473–1488`). `--badsum` портит и TCP-сумму кадра IPv6, а опции `--tcp-*` попадают в него; `--badsum`
+    у C ничего не делает (`main-conf.c:2758`).
+  - Адрес источника берётся по маршруту к цели: ULA (`fc00::/7`) и `2001:db8::/32` допустимы, link-local только для цели
+    link-local. C берёт первый адрес интерфейса со старшим байтом ниже `0xFC` вне `2001:db8::/32`, то есть никогда не ULA
+    и не link-local (`rawsock-getip6.c:68–71`), поэтому на стенде с ULA C требует `--adapter-ip`.
+  - MAC следующего хопа IPv6 разрешается Neighbor Solicitation (RFC 4861) к хопу маршрута ОС, а для единственной
+    on-link цели к самой цели; печатается `[+] router-mac-ipv6 = MAC (ndp: N requests, M ms)` (до 10 запросов с шагом
+    1 с, как ARP), Ctrl-C прерывает. C ищет «какой-нибудь маршрутизатор» Router Solicitation на `ff02::2` и ждёт Router
+    Advertisement (`stack-ndpv6.c:312–487`, RS `:386–388`, `main-initadapter.c:243`), это не обязательно хоп маршрута.
+    Строки `[+]`: `source-ip = [адрес] (detected|given)`, `router-ip = [адрес] (почему)`; у C `source-ip = [адрес]` без
+    суффикса (`main-initadapter.c:229`) и строки `router-ip` для IPv6 нет.
+  - `--router-ipv6` как в C синоним `--router-mac-ipv6` и принимает MAC, не адрес (`main-conf.c:2614`). `--router-ip`
+    принимает и адрес IPv6 (расширение: у C только IPv4, `main-conf.c:2626–2639`, ошибка `bad source IPv4 address`),
+    `--adapter-ip` принимает адрес IPv6 как у C. Тексты ошибок обеих опций свои, не C, и называют оба семейства (`expected one IPv4 or IPv6 address`). Опция принимает
+    одно значение на флаг (`--adapter-ip A --adapter-ip B` — ошибка clap `cannot be used multiple times`; второе
+    семейство задают `--adapter-ip[0]` или файлом конфигурации); C принимает повторы (проверено `--echo`).
+  - Каждое семейство идёт по своему маршруту (IPv6 по таблице маршрутов IPv6). C берёт интерфейс маршрута IPv4 по
+    умолчанию для обоих семейств (`main-initadapter.c:44–57`) и адрес IPv6 этого же интерфейса (`:212–219`). Смешанный
+    скан, семейства которого идут через разные интерфейсы, отказывает (`IPv4 and IPv6 targets are routed via different
+    interfaces`, код 1): режима одного интерфейса как у C нет.
+  - Возобновление (`--resume`) заданий с IPv6 поддержано: `paused.conf` несёт диапазоны IPv6 и, только если заданы,
+    `adapter-ip`, `router-ip` и `router-mac-ipv6` в форме IPv6; остаток потока точный (тест). `paused.conf` чисто
+    IPv4-задания не изменился ни на байт. Значения `router-mac-ipv4` и `router-mac-ipv6` в файле могут различаться (C тоже
+    принимает); C не читает `paused.conf` с `router-ip` IPv6.
+  - Цели и диапазоны (`rmasscan-core` `ranges6.rs`): перевёрнутый диапазон IPv6 (`::5-::2`) отказывает при разборе, C
+    принимает запись и падает на пределе 63 бит (`requested is 128 bits`, проверено). Исключение, затрагивающее `::` или
+    последний адрес, вычитается как множество; у C `range6list_remove_range` не возвращается (`massip-rangesv6.c:408`,
+    проверено `-sL ::/126 --exclude ::/126`). Запись из девяти групп отказывает, C падает по segfault (проверено).
+    Смешанная форма `1.2.3.4-abcd::` не перенесена (C разбирает её как `abcd::`, проверено `--echo`). Неразобранный
+    хвост (`2001:db8::1x`) и любая ошибка цели фатальны (C печатает `bad IP address/range` и продолжает). `-6` принимается как флаг
+    без действия (`main-conf.c:3323–3325`), но в позиции значения опции (`--exclude -6`) пропадает до разбора значения.
+    Адрес IPv6 без скобок, начинающийся с буквы (`fd00::/64`), в позиционном аргументе принимается; C отказывает
+    (`unknown command-line parameter`, `main-conf.c:3594`).
+  - Предел 63 бита проверяется и в `--readscan`: для `--range ::/0,10.0.0.1 -p80` C молча переполняет счёт (старшая
+    половина счёта IPv6 отбрасывается, `massip.c:23`) и выходит с кодом 0, rmasscan с кодом 1 (`requested is 128 bits`);
+    `2001:db8::/48 -p443 --readscan` отказывает у обоих (это ограничивает и фильтр IPv6 из следующего пункта).
+  - `-iL` / `--includefile` отказывает на строке IPv6 (`invalid IP address on line #N`), C её принимает; `--excludefile`
+    и `--exclude` принимают IPv6.
+  - Приём: `ttl` записи IPv6 это настоящий hop limit ответа (`px[offset_ip + 7]`). C его не заполняет: `ip_ttl` ставится
+    только для IPv4 (`proto-preprocess.c:127`), а `main.c:1085` отдаёт значение из прошлой итерации (живьём в `-oJ` C
+    32-битные числа вроде 320995840; `-oB` хранит младший байт). Заголовок Hop-by-Hop пропускается по RFC 8200
+    (`(длина + 1) * 8`), C берёт `px[1] + 8` (`proto-preprocess.c:300–312`, верно только при длине 0). Остальные
+    расширения (Fragment, Routing) и любой протокол кроме TCP отбрасываются, как у C. Кадр DLT_NULL несёт `AF_INET6` хоста
+    (`templ-pkt.c:1159–1161`: 10 Linux, 30 macOS, 23 Windows), а приём принимает 24, 28 и 30 в любом порядке байт, как C
+    (`proto-preprocess.c:515–531`); скан через туннель по-прежнему не поддержан.
+  - NDP на приёме (ответ на Neighbor Solicitation во время скана): запрос проверяется по RFC 4861 §7.1 (hop limit 255,
+    code 0, сумма, длина, опции корректны, цель не multicast) и должен быть адресован нам или нашему solicited-node
+    multicast; C принимает любой адрес `ff02::/16` (`main.c:515–520`, `:832`) и не проверяет hop limit, code и сумму. Запрос от `::`
+    (проверка дубликата адреса) остаётся без ответа, у C отвечает. NA несёт hop limit 255 и нулевые traffic class и flow
+    label (C копирует их из запроса), `payload_length` всегда 32 (C копирует запрос целиком и длину не переписывает,
+    `stack-ndpv6.c:145`, `:149`, `:156–161`); кадр NDP с заголовком расширения отбрасывается (C проходит цепочку
+    расширений); ошибка передачи NA игнорируется. Ответ C
+    выходит только по случайности: `parsed->opcode` задаёт только разбор ARP, `parse_icmpv6` его не трогает, а
+    `stack-ndpv6.c:112` и `main.c:833, :845` читают устаревшее значение. NA без опции 2 (Target Link-Layer Address)
+    резолвером не используется.
+  - `--iflist` об IPv6 ничего не печатает (свой формат, поле `ipv4=` у интерфейса). На Windows адаптер без привязки IPv4
+    выбрать нельзя: список адаптеров строится по IPv4, адреса IPv6 читаются отдельным вызовом `AF_INET6`, как у C
+    (`rawsock-getip6.c:114–119`). На macOS читается один маршрут IPv6 по умолчанию (`RTM_GET ::`): при включённом VPN,
+    который держит его, маршрута к цели нет (`could not determine default interface`), обходятся `--interface` и
+    `--router-mac-ipv6`. Несколько on-link целей IPv6 требуют шлюза IPv6 по умолчанию, иначе отказ `no IPv6 default
+    gateway on interface … for several on-link targets` (`NoGateway6`), как для IPv4 без шлюза.
+  - `--packet-trace` печатает кадр IPv6 строкой TCP-формата C: `SENT (0.0000) TCP  [src]:port > [dst]:port SYN`
+    (`main-ptrace.c:35–40`, `:92–99`; эталона C для IPv6 нет, C для `FOUND_IPV6` ничего не пишет).
+  - `--readscan` читает записи IPv6 (типы 10 и 11); запись с `ip_proto` не 6, 17, 132 или 1 отказывает
+    (`unsupported record protocol P`), тип 12 (ARP IPv6) читать нельзя (`unsupported record type 12`; писатель в C его
+    умеет, `out-binary.c:121`, читатель C его не знает). Фильтр по цели IPv6 без диапазона IPv4 фильтрует: остаются
+    записи внутри диапазонов IPv6, записи IPv4 в набор не входят. C в этом случае фильтр адресов не применяет и
+    пропускает всё (`in-filter.c:10`, `in-binary.c:254`: условие `count_ipv4s != 0`); эталона C на это нет, поведение
+    закреплено тестом. Фильтр IPv6, исключённый до пустоты, снимает фильтр по адресу, как это делает C для IPv4. `-p U:53`
+    для записей IPv6 работает так же, как для IPv4 (блок «Протоколы IPv4», `in-filter.c:14–17`).
 - `--adapter` на Windows принимает `\Device\NPF_{GUID}` или имя адаптера; числовых индексов нет. Wi-Fi
   (IfType 71) принимается как Ethernet (как C и Npcap `DLT_EN10MB`).
 - Явный не-Ethernet `--adapter` отказывает (masscan проверяет тип только при автовыборе).
@@ -270,7 +368,7 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
   `rawsock-getroute.c:211–213`).
 - Явный `--adapter-mac 02-00-00-00-00-00` (заполнитель скрытого MAC Darwin) или групповой MAC отказывает
   (`failed to detect MAC address`); masscan принимает любой ненулевой MAC.
-- Туннели (VPN, `DLT_NULL`), VLAN и IPv6 не поддержаны.
+- Туннели (VPN, `DLT_NULL`) и VLAN не поддержаны.
 - ARP-таймаут 10 с: 10 запросов с шагом 1 с (masscan около 12 запросов за 11 с); ответ принимается строже C.
 - Отказ ARP-таймаута печатает адрес, который разрешался, а для единственной on-link цели пишет
   `for next hop (target) IF: "IP"`; masscan всегда пишет `for router` и печатает заданный `--router-ip`, то есть
@@ -288,11 +386,11 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
 - Закрытый stdout (`| head`) завершает процесс сразу с кодом 0.
 - `--adapter-ip` принимает один адрес или диапазон `A-B` шириной в степень двойки, как в C (приём проверяет весь диапазон).
 - Грамматика `--excludefile` уже, чем у `massip_parse_file`: по одной записи на строку
-  (IPv4, CIDR, диапазон), без остальных форм C.
+  (IPv4 или IPv6, CIDR, диапазон), без остальных форм C.
 - `-iL` / `--includefile` (и ключ `includefile` файла) разбирают файл как `massip_parse_file`: записи через пробел,
   табуляцию, `\r`, `\n` или запятую, комментарии `#`, `;`, `/`, `-` в начале записи, адрес, диапазон (в том числе
-  юникодные тире) и CIDR. Уже C: IPv6, пустой октет (`1..2.3`), завершающая точка, пустой префикс (`1.2.3.4/`) и
-  перевёрнутый диапазон отказывают, а файл `-` (stdin) не читается.
+  юникодные тире) и CIDR. Уже C: строка IPv6 (`invalid IP address on line #N`; C принимает), пустой октет (`1..2.3`),
+  завершающая точка, пустой префикс (`1.2.3.4/`) и перевёрнутый диапазон отказывают, а файл `-` (stdin) не читается.
 - `-c` / `--conf` / `--config` и `--resume` применяются в порядке `argv`: ключ правее файла его переопределяет, левее
   переопределяется им. `/etc/masscan/masscan.conf` не читается, пропавший файл и неизвестный ключ фатальны, вложенность
   `conf = ...` глубже 16 это ошибка (в C бесконечная рекурсия).
@@ -350,6 +448,9 @@ cargo test --locked -p rmasscan-lab   # comparator and suite regression cases (n
 SCTP и ICMP Echo, ARP, смесь; пиры отвечают сокетами ответчика лаборатории и ядром netns пира), офлайн-вердикт
 `rmasscan-lab protocols-verify --dir DIR`. Подробности, границы и названные отклонения: [раздел «Protocols suite»](docs/rust-lab.md).
 
+Живой паритет IPv6 (TCP SYN, NDP, смешанный скан) идёт на том же стенде с IPv6 только на паре veth: `scripts/wire-lab.sh --suite ipv6`
+(случаи `v01`–`v03`), офлайн-вердикт `rmasscan-lab ipv6-verify --dir DIR`; подробности: [раздел «IPv6 suite»](docs/rust-lab.md).
+
 `examples/wire_scan.rs` это лабораторный harness (`ReadyPlan` + `Engine` + `open_explicit`,
 `--pause-after N`, `--resume-checkpoint FILE`), а не CLI. Тесты `linux_wire.rs` с `--ignored`
 без каталога результатов падают с «NOT RUN», пропуск никогда не PASS.
@@ -361,7 +462,7 @@ SCTP и ICMP Echo, ARP, смесь; пиры отвечают сокетами �
 только в бинарнике вне `cfg(test)`), бинарник в тестах запускается только с `--iflist`, `--offline`, `-sL`,
 `--echo` или `--help`. Живые прогоны автоопределения выполняются только на запечатанных лабораторных стендах вне
 CI; raw-сокеты в лабораторных тестах `rmasscan-net` (нужны CAP_NET_RAW и замкнутый стенд) тоже вне CI. Скан
-идёт по IPv4 (TCP SYN, UDP, ICMP Echo, SCTP INIT, ARP), до 8 адаптеров с одним следующим хопом на адаптер; баннеры, туннели, VLAN и IPv6 не поддержаны.
+идёт по IPv4 (TCP SYN, UDP, ICMP Echo, SCTP INIT, ARP) и IPv6 (только TCP SYN), до 8 адаптеров с одним следующим хопом на адаптер и семейство; баннеры, туннели и VLAN не поддержаны.
 
 Живой скан из CLI поддержан и принят только на запечатанных лабораторных стендах (Linux netns и veth, Windows VM с Npcap
 в режиме Admin-only, пара `feth` на Mac); на физических NIC он не проверялся (NOT RUN). Вживую не проверены шлюз маршрута
@@ -384,7 +485,16 @@ veth, окно `protocols`, случаи `p01`–`p05`, C-оракул masscan `
 стек ядра (в ядре стенда SCTP не загружен). Живое окно не задействовало отклонения от C: дедупликацию повторов, отбрасывание
 Echo с кодом не 0 и неверных сумм, нулевую сумму UDP (на проводе стенда ни одного такого случая), эти пути покрыты
 офлайн-тестами. NOT RUN: macOS живое окно (нужен `sudo` пользователя), физические NIC; Studio проверяется в CI PR.
-Скан ARP работает только в своём сегменте и не сочетается с портами; IPv6, баннеры, VLAN и туннели не поддержаны.
+Скан ARP работает только в своём сегменте и не сочетается с портами; баннеры, VLAN и туннели не поддержаны.
+
+IPv6 (TCP SYN поверх IPv6, NDP, смешанный скан IPv4 и IPv6, записи IPv6 в выводе и `--readscan`, автоопределение интерфейса,
+источника и следующего хопа) принят живьём только на Linux в запечатанных netns (`--suite ipv6`, случаи `v01`–`v03`, C-оракул
+masscan `8e6b3b0`). **Windows IPv6 не снимался (NOT RUN):** на lab-NIC гостя IPv6 выключен исправлением стенда (решение этапа),
+обнаружение IPv6 на Windows (`GetBestRoute2`, адреса `AF_INET6`) покрыто тестами и CI, а окно Windows этого этапа это регрессия
+автоопределения IPv4. **macOS не снимался (NOT RUN)**, в том числе цели link-local на macOS; физические NIC всех ОС не использовались
+(NOT RUN). Тесты Studio этого этапа идут только в CI PR (`studio/` не менялся). Живой Linux-стенд не упражнял
+ответ NA на NS пира (пир ни разу не спрашивал), нарушения RFC 4861 во входящих кадрах, заголовки расширения, возобновление
+заданий IPv6, записи типов 10 и 11 с чужим `ip_proto` и цели link-local: это покрыто офлайн-тестами и сверкой с кодом C.
 
 Маршрут по умолчанию читается не в любой форме. На Linux маршрут, заданный объектом nexthop (`RTA_NH_ID`) или
 многопутевой (`RTA_MULTIPATH`), не читается: на таком хосте скан нескольких целей on-link получает отказ
@@ -392,6 +502,18 @@ Echo с кодом не 0 и неверных сумм, нулевую сумм�
 `utun`, скан LAN на `en0` получает `NoGateway` вместо шлюза `en0`. В обоих случаях шлюз задают явно, `--router-ip`.
 
 ## Статус
+
+IPv6 (код `e9eaebeb`, evidence `f089b071`, 2026-11-12, ветка `feat/rmasscan-ipv6`, база `fdd18b37`): TCP SYN поверх IPv6,
+`syn_cookie_ipv6`, NDP (Neighbor Solicitation резолвера и ответы на NS пира), смешанная индексация IPv4 и IPv6, записи типов 10 и
+11 во всех форматах вывода и в `--readscan` (119 эталонов C: 94 прежних и 25 с IPv6), определение интерфейса, адреса источника и
+следующего хопа IPv6 на Linux, macOS и Windows, `--router-mac-ipv6`, IPv6 в `--adapter-ip` и `--router-ip`, возобновление заданий
+IPv6. Продуктовый код не менялся с `c1e76779`: шесть коммитов после него (`06227c14`, `0f48dfac`, `cbcffe72`, `1abae2aa`,
+`f346a66b`, `e9eaebeb`) правят только `rmasscan-lab`, `wire-lab.sh` и документы (`git diff --stat c1e76779 e9eaebeb --
+rmasscan/crates ':!rmasscan/crates/rmasscan-lab'` пуст). Живая приёмка (все шесть окон на `e9eaebeb`, `safety_trips` пуст): Linux
+`ipv6` PASS 4/4 (`v01`–`v03`), регрессии протоколов Linux PASS 6/6, управления сканом Linux PASS 7/7, вывода Linux PASS 18/18,
+автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты Mac 2144/0 (сводка в `verification/mac-test-ws-summary.txt`),
+minipc 2016/0 и гость 1911/0. GO (stands) условно: зелёный CI на точном HEAD и итоговое ревью ветки фиксирует контролёр при
+слиянии. Windows IPv6, macOS живой и физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md`.
 
 Протоколы IPv4 (код `82f0483`, evidence `1ddb975`, 2026-11-11, ветка `feat/rmasscan-protocols-ipv4`; повтор r4 после
 итогового ревью этапа): UDP со встроенными и внешними нагрузками, ICMP Echo, SCTP INIT, ARP-скан, префиксы

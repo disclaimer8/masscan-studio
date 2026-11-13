@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod banner;
+mod memcached_text;
 pub mod normalize;
 pub mod udp;
 

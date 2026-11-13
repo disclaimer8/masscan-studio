@@ -1,0 +1,5 @@
+udp-oracle port=5683 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=318
+status open count=1
+banner 28 51 "rsp=2.5(Content) /(Unknown)/ /(Unknown)/ text-plain"
+banner 0 318 =datagram

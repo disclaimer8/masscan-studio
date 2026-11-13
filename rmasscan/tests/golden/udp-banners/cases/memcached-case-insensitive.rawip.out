@@ -1,0 +1,5 @@
+udp-oracle port=11211 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=rawip
+section len=54
+status open count=1
+banner 25 28 "uptime=5 time=6 version=1.6 "
+banner 0 54 "TiMe 6\x0d\x0aSTAT Version 1.6\x0d\x0a\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"

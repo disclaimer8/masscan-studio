@@ -1,0 +1,5 @@
+udp-oracle port=5683 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=30
+status open count=1
+banner 28 239 "rsp=2.5(Content) /If-Match/ /Uri-Host/ /Etag /If-None-Match/ /(Unknown)/ /Uri-Port/ /Location-Path/ /Uri-Path/ /Content-Format/ /Max-Age/ /Uri-Query/ /Accept/ /Location-Query/ /Proxy-Uri/ /Proxy-Scheme/ /Size1/ /(Unknown)/ application/json"
+banner 0 30 =datagram

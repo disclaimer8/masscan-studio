@@ -1,0 +1,5 @@
+udp-oracle port=11211 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=rawip
+section len=41
+status open count=1
+banner 25 7 "time=2 "
+banner 0 41 "STAT time 2\x0d\x0a\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"

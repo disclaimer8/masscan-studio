@@ -1,0 +1,5 @@
+udp-oracle port=11211 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=rawip
+section len=55
+status open count=1
+banner 25 9 "uptime=1 "
+banner 0 55 "libevent 2.1\x0d\x0aSTAT time 2\x0d\x0a\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"

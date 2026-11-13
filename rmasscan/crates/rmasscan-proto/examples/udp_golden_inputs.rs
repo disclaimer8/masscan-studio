@@ -1,8 +1,9 @@
 //! Входы эталонов UDP-баннеров (`tests/golden/udp-banners`, AGPL-3.0): датаграммы ответов, по которым C-оракул
 //! `udp-oracle` (обвязка вокруг `handle_udp` masscan © Robert David Graham, вне репозитория, Р14) записал эталоны.
 //! Ответы собраны по справке UDP-парсеров (`docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-output-udp.md`
-//! B0–B4): успех, каждый ранний выход, неверный cookie, `--rawudp`, обрезки; плюс вектор selftest C
-//! (`src/proto-snmp.c:630-644`).
+//! B0–B8): успех, каждый ранний выход, неверный cookie, `--rawudp`, обрезки; плюс векторы selftest C
+//! (`src/proto-snmp.c:630-644`, `src/proto-isakmp.c:464-509`, `src/proto-coap.c:695-702`, `src/proto-zeroaccess.c:263`).
+//! Порты 500, 5683, 11211 и ZeroAccess собраны в `udp_golden_inputs/*.rs`.
 //!
 //! `cargo run -p rmasscan-proto --example udp_golden_inputs -- DIR` пишет `DIR/cases/<имя>.bin` и `DIR/cases.tsv`
 //! (имя, порт, cookie, rawudp, режим, описание) для `run-goldens.sh` оракула. Тот же модуль подключает
@@ -14,6 +15,17 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
+
+// Явный путь: файл подключается и как корень примера, и через `#[path]` из `tests/udp_golden.rs`; путь в обоих
+// случаях считается от каталога этого файла.
+#[path = "udp_golden_inputs/coap.rs"]
+mod coap;
+#[path = "udp_golden_inputs/isakmp.rs"]
+mod isakmp;
+#[path = "udp_golden_inputs/memcached.rs"]
+mod memcached;
+#[path = "udp_golden_inputs/zeroaccess.rs"]
+mod zeroaccess;
 
 /// `(unsigned)syn_cookie(...)` большинства кейсов: DNS/NBNS видят `0x1234`, SNMP `0x5EED1234`.
 pub const COOKIE: u32 = 0x5EED_1234;
@@ -1803,6 +1815,10 @@ pub fn cases() -> Vec<Case> {
     v.extend(nbns_cases());
     v.extend(snmp_cases());
     v.extend(default_cases());
+    v.extend(memcached::cases());
+    v.extend(coap::cases());
+    v.extend(isakmp::cases());
+    v.extend(zeroaccess::cases());
     v
 }
 

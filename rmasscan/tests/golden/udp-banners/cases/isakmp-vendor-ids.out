@@ -1,0 +1,4 @@
+udp-oracle port=500 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=152
+status open count=1
+banner 35 77 "v1.0 xchg=id-prot  {RFC-39947-NAT}  {CISCO-UNITY}  {RFC3706-DPD}  {XAUTH}    "

@@ -1,10 +1,11 @@
-//! UDP-ответы, из которых C делает баннеры: `handle_udp` (`src/proto-udp.c:54-132`) и парсеры портов 53, 123, 137
-//! и 161 (`src/proto-dns.c`, `src/proto-ntp.c`, `src/proto-netbios.c`, `src/proto-snmp.c`). Задача 5 добавит 500,
-//! 5683, 11211 и ZeroAccess; пока они идут веткой `default`.
+//! UDP-ответы, из которых C делает баннеры: `handle_udp` (`src/proto-udp.c:54-132`) и парсеры портов 53, 123, 137,
+//! 161, 500, 5683, 11211 и ZeroAccess 16464/16465/16470/16471 (`src/proto-dns.c`, `src/proto-ntp.c`,
+//! `src/proto-netbios.c`, `src/proto-snmp.c`, `src/proto-isakmp.c`, `src/proto-coap.c`, `src/proto-memcached.c`,
+//! `src/proto-zeroaccess.c`). Остальные порты идут веткой `default`.
 //!
 //! Все парсеры работают с полезной нагрузкой датаграммы (у C `px + parsed->app_offset`, `parsed->app_length`).
 //! Четыре парсера C получают весь кадр и абсолютные смещения; здесь смещения считаются от начала датаграммы, а её
-//! длина ограничивает всё чтение. Отличия от C (Р1 классы а и в, Р2), каждое с эталоном в
+//! длина ограничивает всё чтение. Отличия от C (Р1 классы а, б и в, Р2), каждое с эталоном в
 //! `tests/golden/udp-banners`:
 //! - сырой баннер на 11211 и портах без парсера: у C чтение за концом датаграммы (`src/proto-udp.c:97-101, 108-112,
 //!   129`), у нас сама датаграмма;
@@ -12,9 +13,13 @@
 //!   имени у C читает байты канального и IP-заголовков, и результат зависит от канала, семейства, VLAN и адресов, а
 //!   не от ответа (Р1 классы а и в). Обычный `c0 0c` попадает на байт 12 кадра: в Ethernet + IPv4 это 0x08, имя
 //!   проходит случайно, и C совпадает с нами; в Ethernet + IPv6 (0x86) и с тегом 802.1Q (0x81) это ошибка
-//!   (`src/proto-dns.c:61-62`), и **C печатает только сырой баннер для любого ответа DNS/NBNS со сжатым именем
-//!   ответа**, а мы dns-ver или nbtstat; без канального заголовка там адрес источника IPv4. Измерено оракулом в кадрах
-//!   `eth`, `eth6`, `vlan`, `rawip` (README эталонов, `FRAME_DIFFS` в `tests/udp_golden.rs`);
+//!   (`src/proto-dns.c:61-62`), без канального заголовка там адрес источника IPv4. Тогда **везде, где мы печатаем
+//!   dns-ver или nbtstat для ответа со сжатым именем ответа, C печатает только сырой баннер**. Ответ с RCODE 1-9 C
+//!   печатает до проверки имени, тут C совпадает с нами. Два случая идут иначе: ответ с OPT EDNS0 теряет расширенный
+//!   RCODE (C печатает строку базового RCODE и сырой, мы текст TXT: `dns-edns-ext-rcode-nxdomain`), а указатель в
+//!   байты заголовков (`dns-pointer-to-id`, `dns-pointer-chain-5`, `dns-pointer-loop`) у C проходит проверку и даёт
+//!   dns-ver там, где у нас сырой баннер. Измерено оракулом в кадрах `eth`, `eth6`, `vlan`, `rawip` (README эталонов,
+//!   виды `NameRejectedInFrame`, `ExtRcodeLost`, `NameAcceptedInFrame` в `FRAME_DIFFS` в `tests/udp_golden.rs`);
 //! - TXT и NBSTAT C читает против длины кадра (`src/proto-dns.c:420-434`, `src/proto-netbios.c:145-166`), у нас против
 //!   длины датаграммы. Дополнение Ethernet до 60 байт на результат не влияет (запись начинается не раньше байта 54
 //!   кадра, и `offset + 10 >= length` срабатывает раньше), а хвост за IP-датаграммой (FCS, если захват его
@@ -24,12 +29,24 @@
 //! - `dns_extract_name` (`src/proto-dns.c:318`) не переносится: её результат никто не читает, а у C она читает
 //!   неинициализированный `rr_offset[0]` ответа без записей (ASan: чтение за буфером);
 //! - `asn1_integer` у C читает байт тега без проверки границы (`src/proto-snmp.c:151`, на 1 байт за датаграммой); вывод
-//!   от этого байта не зависит.
+//!   от этого байта не зависит;
+//! - ISAKMP: вложенная нагрузка, чья длина выходит за датаграмму, у C читает память за ней (`src/proto-isakmp.c:49`,
+//!   `:246`), у нас там нули; цикл по нагрузкам, предложениям, преобразованиям или атрибутам, шаг которого не сдвинул
+//!   смещение, у C вечный (`src/proto-isakmp.c:68-70, 146, 191, 372`), у нас этот шаг последний (`isakmp.rs`);
+//! - ZeroAccess: датаграмму длиннее 2048 байт C проверяет CRC по стеку за буфером (`src/proto-zeroaccess.c:176, 208`),
+//!   у нас она не ZeroAccess; `banout` без `max_length` (`src/proto-zeroaccess.c:183-185`) у нас обычный баннер
+//!   (`zeroaccess.rs`);
+//! - memcached: в состоянии «до конца строки» C читает `px[length]` (`src/proto-memcached.c:165`), вывод от него не
+//!   зависит, у нас не читается (`memcached_text.rs`).
 
+mod coap;
 mod dns;
+mod isakmp;
+mod memcached;
 mod netbios;
 mod ntp;
 mod snmp;
+mod zeroaccess;
 
 use crate::app::app_id;
 
@@ -64,6 +81,10 @@ pub fn handle_udp(cx: &UdpContext, payload: &[u8]) -> Vec<(u16, Vec<u8>)> {
         123 => ntp::ntp_handle_response(payload, &mut out),
         137 => netbios::handle_nbtstat(cx, payload, &mut out),
         161 => snmp::handle_snmp(cx, payload, &mut out),
+        500 => isakmp::isakmp_parse(cx, payload, &mut out),
+        5683 => coap::coap_handle_response(cx, payload, &mut out),
+        11211 => memcached::memcached_udp_parse(cx, payload, &mut out),
+        16464 | 16465 | 16470 | 16471 => zeroaccess::handle_zeroaccess(payload, &mut out),
         _ => default_udp_parse(payload, &mut out),
     };
     // src/proto-udp.c:120-131: вся датаграмма (у C на 11211 и в default чтение за её концом, Р2).
@@ -154,34 +175,85 @@ mod tests {
         }
     }
 
-    /// Правдоподобные ответы для мутаций: вектор selftest SNMP (`src/proto-snmp.c:630-644`), ответ CHAOS TXT, NBSTAT
-    /// и MON_GETLIST_1.
-    fn seeds() -> Vec<(u16, Vec<u8>)> {
-        let hex = |s: &str| -> Vec<u8> {
-            let s: String = s.split_whitespace().collect();
-            (0..s.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
-                .collect()
-        };
+    fn hex(s: &str) -> Vec<u8> {
+        let s: String = s.split_whitespace().collect();
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    /// Правдоподобные ответы для мутаций и cookie, с которым каждый проходит проверку: вектор selftest SNMP
+    /// (`src/proto-snmp.c:630-644`), ответ CHAOS TXT, NBSTAT, MON_GETLIST_1, `sample1` ISAKMP
+    /// (`src/proto-isakmp.c:464-471`), ACK CoAP 2.05 с link-format и `stats` memcached.
+    fn seeds() -> Vec<(u16, u32, Vec<u8>)> {
         vec![
             (
                 161,
+                0x26,
                 hex("3039020100 04067075626c6963 a22c 020126 020100 020100 3021 301f 06092b0601800201010200
                      06122b06010401 8f5101010182295d011b020201"),
             ),
             (
                 53,
+                COOKIE,
                 hex("1234 8400 0001 0001 0000 0000 0776657273696f6e 0462696e64 00 0010 0003
                      c00c 0010 0003 00000000 0008 07 392e31382e3234"),
             ),
             (
                 137,
+                COOKIE,
                 hex("1234 8400 0000 0001 0000 0000 0141 00 0021 0001 00000000 0019
                      01 484f53543120202020202020202020 20 0400 525400123456"),
             ),
-            (123, hex("97 00 03 2a 00 01 00 08 0102030405060708")),
+            (123, COOKIE, hex("97 00 03 2a 00 01 00 08 0102030405060708")),
+            (
+                500,
+                0xC118_84DA,
+                hex("00000000c11884da be3dc68eeaf2daac 01100200 00000000 00000050 00000034 00000001
+                     00000001 00000028 01010001 00000020 01010000 80010005 80020002 80040002 80030001
+                     800b0001 800c0001"),
+            ),
+            (
+                5683,
+                COOKIE,
+                [
+                    &[0x62, 0x45, 0x12, 0x34, 0xAB, 0xCD, 0xC1, 40, 0xFF][..],
+                    b"</.well-known/core>;ct=40,</sensors/temp>;if=\"sensor\",</light>;rt=\"light-lux\"",
+                ]
+                .concat(),
+            ),
+            (
+                11211,
+                COOKIE,
+                [
+                    &[0x12, 0x34, 0, 0, 0, 1, 0, 0][..],
+                    b"STAT pid 1234\r\nSTAT uptime 12345\r\nSTAT time 1700000000\r\nSTAT version 1.6.21\r\nEND\r\n",
+                ]
+                .concat(),
+            ),
         ]
+    }
+
+    /// Одна-четыре мутации: замена байта, обрезка, вставка, хвост.
+    fn mutate(rng: &mut Rng, px: &mut Vec<u8>) {
+        for _ in 0..=rng.below(4) {
+            match rng.below(4) {
+                0 if !px.is_empty() => {
+                    let i = rng.below(px.len());
+                    px[i] = rng.byte();
+                }
+                1 => px.truncate(rng.below(px.len() + 1)),
+                2 => {
+                    let i = rng.below(px.len() + 1);
+                    px.insert(i, rng.byte());
+                }
+                _ => {
+                    let n = rng.below(64);
+                    px.extend((0..n).map(|_| rng.byte()));
+                }
+            }
+        }
     }
 
     /// Р1 класс б и задача: случайные датаграммы 0..2000 байт на каждом порту и мутации правдоподобных ответов не
@@ -189,7 +261,9 @@ mod tests {
     #[test]
     fn udp_parsers_never_panic() {
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-        let ports = [53u16, 123, 137, 161, 7, 500, 5683, 11211, 16464];
+        let ports = [
+            53u16, 123, 137, 161, 7, 500, 5683, 11211, 16464, 16465, 16470, 16471,
+        ];
         for &port in &ports {
             for _ in 0..3000 {
                 let len = rng.below(2001);
@@ -204,41 +278,19 @@ mod tests {
                 }
             }
         }
-        for (port, seed) in seeds() {
-            // Cookie, с которым seed проходит проверку: 0x26 у вектора selftest, 0x5EED1234 у остальных.
-            let cookie = if port == 161 { 0x26 } else { COOKIE };
+        let rounds = 20_000u32;
+        for (port, cookie, seed) in seeds() {
             // Досягаемость: сколько мутаций дошло до баннера парсера (не только сырого).
             let mut reached = 0u32;
-            let rounds = 20_000u32;
             for _ in 0..rounds {
                 let mut px = seed.clone();
-                for _ in 0..=rng.below(4) {
-                    match rng.below(4) {
-                        0 if !px.is_empty() => {
-                            let i = rng.below(px.len());
-                            px[i] = rng.byte();
-                        }
-                        1 => px.truncate(rng.below(px.len() + 1)),
-                        2 => {
-                            let i = rng.below(px.len() + 1);
-                            px.insert(i, rng.byte());
-                        }
-                        _ => {
-                            let n = rng.below(64);
-                            px.extend((0..n).map(|_| rng.byte()));
-                        }
-                    }
-                }
+                mutate(&mut rng, &mut px);
                 let c = UdpContext {
                     port_them: port,
                     cookie,
                     rawudp: rng.below(2) == 1,
                 };
-                check_invariants(&c, &px);
-                if handle_udp(&c, &px)
-                    .iter()
-                    .any(|(app, _)| *app != app_id::NONE)
-                {
+                if check_invariants(&c, &px) {
                     reached += 1;
                 }
             }
@@ -248,9 +300,39 @@ mod tests {
                 "port {port}: only {reached} of {rounds} mutations reached the parser text"
             );
         }
+        // ZeroAccess: любая мутация шифротекста ломает CRC, поэтому мутируется открытый текст `retL` и шифруется
+        // заново с верной CRC.
+        let plain = [
+            &[0u8; 4][..],
+            b"Lter",
+            b"mass",
+            &3u32.to_le_bytes(),
+            &[192, 0, 2, 10, 0, 0, 0, 1],
+            &[198, 51, 100, 20, 0, 0, 0, 2],
+            &[203, 0, 113, 30, 0, 0, 0, 3],
+        ]
+        .concat();
+        let mut reached = 0u32;
+        for _ in 0..rounds {
+            let mut px = plain.clone();
+            mutate(&mut rng, &mut px);
+            let c = UdpContext {
+                port_them: 16464,
+                cookie: 0,
+                rawudp: rng.below(2) == 1,
+            };
+            if check_invariants(&c, &zeroaccess::seal(&px)) {
+                reached += 1;
+            }
+        }
+        assert!(
+            reached * 5 > rounds,
+            "zeroaccess: only {reached} of {rounds} mutations reached the parser text"
+        );
     }
 
-    fn check_invariants(c: &UdpContext, px: &[u8]) {
+    /// Проверяет инварианты ответа и говорит, дошёл ли он до текста парсера.
+    fn check_invariants(c: &UdpContext, px: &[u8]) -> bool {
         let got = handle_udp(c, px);
         // Сырой баннер, если есть, последний и равен датаграмме; кроме него не больше двух баннеров.
         assert!(got.len() <= 3, "{got:?}");
@@ -264,18 +346,24 @@ mod tests {
                     app_id::DNS_VERSIONBIND,
                     app_id::SNMP,
                     app_id::NBTSTAT,
-                    app_id::NTP
+                    app_id::NTP,
+                    app_id::ISAKMP,
+                    app_id::COAP,
+                    app_id::MEMCACHED,
+                    app_id::ZEROACCESS,
                 ]
                 .contains(app),
                 "app {app}"
             );
-            // Текст парсера не длиннее, чем позволяет датаграмма (OID: до 4 символов на байт и имена MIB).
+            // Текст парсера линеен по датаграмме: самое длинное на байт входа это имя опции CoAP (17 байт
+            // ` /Content-Format/` на однобайтовую опцию с дельтой 0).
             assert!(
-                bytes.len() <= 8 * px.len() + 64,
+                bytes.len() <= 20 * px.len() + 64,
                 "{} > {}",
                 bytes.len(),
                 px.len()
             );
         }
+        got.iter().any(|(app, _)| *app != app_id::NONE)
     }
 }

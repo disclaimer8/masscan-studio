@@ -1,0 +1,769 @@
+udp-oracle port=500 cookie=0xc11884da rawudp=0 mode=sweep:17 sections=256 framing=payload
+section len=80 byte[17]=0
+status open count=1
+banner 35 88 "v0.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=1
+status open count=1
+banner 35 88 "v0.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=2
+status open count=1
+banner 35 88 "v0.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=3
+status open count=1
+banner 35 88 "v0.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=4
+status open count=1
+banner 35 88 "v0.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=5
+status open count=1
+banner 35 88 "v0.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=6
+status open count=1
+banner 35 88 "v0.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=7
+status open count=1
+banner 35 88 "v0.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=8
+status open count=1
+banner 35 88 "v0.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=9
+status open count=1
+banner 35 88 "v0.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=10
+status open count=1
+banner 35 89 "v0.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=11
+status open count=1
+banner 35 89 "v0.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=12
+status open count=1
+banner 35 89 "v0.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=13
+status open count=1
+banner 35 89 "v0.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=14
+status open count=1
+banner 35 89 "v0.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=15
+status open count=1
+banner 35 89 "v0.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=16
+status open count=1
+banner 35 88 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=17
+status open count=1
+banner 35 88 "v1.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=18
+status open count=1
+banner 35 88 "v1.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=19
+status open count=1
+banner 35 88 "v1.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=20
+status open count=1
+banner 35 88 "v1.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=21
+status open count=1
+banner 35 88 "v1.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=22
+status open count=1
+banner 35 88 "v1.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=23
+status open count=1
+banner 35 88 "v1.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=24
+status open count=1
+banner 35 88 "v1.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=25
+status open count=1
+banner 35 88 "v1.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=26
+status open count=1
+banner 35 89 "v1.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=27
+status open count=1
+banner 35 89 "v1.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=28
+status open count=1
+banner 35 89 "v1.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=29
+status open count=1
+banner 35 89 "v1.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=30
+status open count=1
+banner 35 89 "v1.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=31
+status open count=1
+banner 35 89 "v1.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=32
+status open count=1
+banner 35 88 "v2.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=33
+status open count=1
+banner 35 88 "v2.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=34
+status open count=1
+banner 35 88 "v2.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=35
+status open count=1
+banner 35 88 "v2.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=36
+status open count=1
+banner 35 88 "v2.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=37
+status open count=1
+banner 35 88 "v2.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=38
+status open count=1
+banner 35 88 "v2.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=39
+status open count=1
+banner 35 88 "v2.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=40
+status open count=1
+banner 35 88 "v2.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=41
+status open count=1
+banner 35 88 "v2.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=42
+status open count=1
+banner 35 89 "v2.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=43
+status open count=1
+banner 35 89 "v2.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=44
+status open count=1
+banner 35 89 "v2.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=45
+status open count=1
+banner 35 89 "v2.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=46
+status open count=1
+banner 35 89 "v2.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=47
+status open count=1
+banner 35 89 "v2.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=48
+status open count=1
+banner 35 88 "v3.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=49
+status open count=1
+banner 35 88 "v3.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=50
+status open count=1
+banner 35 88 "v3.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=51
+status open count=1
+banner 35 88 "v3.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=52
+status open count=1
+banner 35 88 "v3.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=53
+status open count=1
+banner 35 88 "v3.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=54
+status open count=1
+banner 35 88 "v3.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=55
+status open count=1
+banner 35 88 "v3.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=56
+status open count=1
+banner 35 88 "v3.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=57
+status open count=1
+banner 35 88 "v3.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=58
+status open count=1
+banner 35 89 "v3.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=59
+status open count=1
+banner 35 89 "v3.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=60
+status open count=1
+banner 35 89 "v3.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=61
+status open count=1
+banner 35 89 "v3.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=62
+status open count=1
+banner 35 89 "v3.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=63
+status open count=1
+banner 35 89 "v3.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=64
+status open count=1
+banner 35 88 "v4.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=65
+status open count=1
+banner 35 88 "v4.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=66
+status open count=1
+banner 35 88 "v4.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=67
+status open count=1
+banner 35 88 "v4.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=68
+status open count=1
+banner 35 88 "v4.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=69
+status open count=1
+banner 35 88 "v4.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=70
+status open count=1
+banner 35 88 "v4.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=71
+status open count=1
+banner 35 88 "v4.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=72
+status open count=1
+banner 35 88 "v4.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=73
+status open count=1
+banner 35 88 "v4.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=74
+status open count=1
+banner 35 89 "v4.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=75
+status open count=1
+banner 35 89 "v4.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=76
+status open count=1
+banner 35 89 "v4.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=77
+status open count=1
+banner 35 89 "v4.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=78
+status open count=1
+banner 35 89 "v4.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=79
+status open count=1
+banner 35 89 "v4.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=80
+status open count=1
+banner 35 88 "v5.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=81
+status open count=1
+banner 35 88 "v5.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=82
+status open count=1
+banner 35 88 "v5.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=83
+status open count=1
+banner 35 88 "v5.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=84
+status open count=1
+banner 35 88 "v5.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=85
+status open count=1
+banner 35 88 "v5.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=86
+status open count=1
+banner 35 88 "v5.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=87
+status open count=1
+banner 35 88 "v5.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=88
+status open count=1
+banner 35 88 "v5.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=89
+status open count=1
+banner 35 88 "v5.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=90
+status open count=1
+banner 35 89 "v5.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=91
+status open count=1
+banner 35 89 "v5.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=92
+status open count=1
+banner 35 89 "v5.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=93
+status open count=1
+banner 35 89 "v5.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=94
+status open count=1
+banner 35 89 "v5.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=95
+status open count=1
+banner 35 89 "v5.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=96
+status open count=1
+banner 35 88 "v6.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=97
+status open count=1
+banner 35 88 "v6.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=98
+status open count=1
+banner 35 88 "v6.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=99
+status open count=1
+banner 35 88 "v6.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=100
+status open count=1
+banner 35 88 "v6.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=101
+status open count=1
+banner 35 88 "v6.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=102
+status open count=1
+banner 35 88 "v6.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=103
+status open count=1
+banner 35 88 "v6.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=104
+status open count=1
+banner 35 88 "v6.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=105
+status open count=1
+banner 35 88 "v6.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=106
+status open count=1
+banner 35 89 "v6.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=107
+status open count=1
+banner 35 89 "v6.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=108
+status open count=1
+banner 35 89 "v6.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=109
+status open count=1
+banner 35 89 "v6.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=110
+status open count=1
+banner 35 89 "v6.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=111
+status open count=1
+banner 35 89 "v6.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=112
+status open count=1
+banner 35 88 "v7.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=113
+status open count=1
+banner 35 88 "v7.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=114
+status open count=1
+banner 35 88 "v7.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=115
+status open count=1
+banner 35 88 "v7.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=116
+status open count=1
+banner 35 88 "v7.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=117
+status open count=1
+banner 35 88 "v7.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=118
+status open count=1
+banner 35 88 "v7.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=119
+status open count=1
+banner 35 88 "v7.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=120
+status open count=1
+banner 35 88 "v7.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=121
+status open count=1
+banner 35 88 "v7.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=122
+status open count=1
+banner 35 89 "v7.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=123
+status open count=1
+banner 35 89 "v7.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=124
+status open count=1
+banner 35 89 "v7.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=125
+status open count=1
+banner 35 89 "v7.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=126
+status open count=1
+banner 35 89 "v7.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=127
+status open count=1
+banner 35 89 "v7.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=128
+status open count=1
+banner 35 88 "v8.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=129
+status open count=1
+banner 35 88 "v8.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=130
+status open count=1
+banner 35 88 "v8.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=131
+status open count=1
+banner 35 88 "v8.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=132
+status open count=1
+banner 35 88 "v8.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=133
+status open count=1
+banner 35 88 "v8.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=134
+status open count=1
+banner 35 88 "v8.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=135
+status open count=1
+banner 35 88 "v8.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=136
+status open count=1
+banner 35 88 "v8.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=137
+status open count=1
+banner 35 88 "v8.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=138
+status open count=1
+banner 35 89 "v8.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=139
+status open count=1
+banner 35 89 "v8.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=140
+status open count=1
+banner 35 89 "v8.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=141
+status open count=1
+banner 35 89 "v8.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=142
+status open count=1
+banner 35 89 "v8.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=143
+status open count=1
+banner 35 89 "v8.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=144
+status open count=1
+banner 35 88 "v9.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=145
+status open count=1
+banner 35 88 "v9.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=146
+status open count=1
+banner 35 88 "v9.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=147
+status open count=1
+banner 35 88 "v9.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=148
+status open count=1
+banner 35 88 "v9.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=149
+status open count=1
+banner 35 88 "v9.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=150
+status open count=1
+banner 35 88 "v9.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=151
+status open count=1
+banner 35 88 "v9.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=152
+status open count=1
+banner 35 88 "v9.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=153
+status open count=1
+banner 35 88 "v9.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=154
+status open count=1
+banner 35 89 "v9.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=155
+status open count=1
+banner 35 89 "v9.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=156
+status open count=1
+banner 35 89 "v9.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=157
+status open count=1
+banner 35 89 "v9.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=158
+status open count=1
+banner 35 89 "v9.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=159
+status open count=1
+banner 35 89 "v9.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=160
+status open count=1
+banner 35 89 "v10.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=161
+status open count=1
+banner 35 89 "v10.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=162
+status open count=1
+banner 35 89 "v10.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=163
+status open count=1
+banner 35 89 "v10.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=164
+status open count=1
+banner 35 89 "v10.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=165
+status open count=1
+banner 35 89 "v10.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=166
+status open count=1
+banner 35 89 "v10.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=167
+status open count=1
+banner 35 89 "v10.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=168
+status open count=1
+banner 35 89 "v10.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=169
+status open count=1
+banner 35 89 "v10.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=170
+status open count=1
+banner 35 90 "v10.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=171
+status open count=1
+banner 35 90 "v10.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=172
+status open count=1
+banner 35 90 "v10.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=173
+status open count=1
+banner 35 90 "v10.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=174
+status open count=1
+banner 35 90 "v10.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=175
+status open count=1
+banner 35 90 "v10.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=176
+status open count=1
+banner 35 89 "v11.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=177
+status open count=1
+banner 35 89 "v11.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=178
+status open count=1
+banner 35 89 "v11.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=179
+status open count=1
+banner 35 89 "v11.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=180
+status open count=1
+banner 35 89 "v11.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=181
+status open count=1
+banner 35 89 "v11.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=182
+status open count=1
+banner 35 89 "v11.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=183
+status open count=1
+banner 35 89 "v11.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=184
+status open count=1
+banner 35 89 "v11.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=185
+status open count=1
+banner 35 89 "v11.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=186
+status open count=1
+banner 35 90 "v11.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=187
+status open count=1
+banner 35 90 "v11.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=188
+status open count=1
+banner 35 90 "v11.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=189
+status open count=1
+banner 35 90 "v11.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=190
+status open count=1
+banner 35 90 "v11.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=191
+status open count=1
+banner 35 90 "v11.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=192
+status open count=1
+banner 35 89 "v12.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=193
+status open count=1
+banner 35 89 "v12.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=194
+status open count=1
+banner 35 89 "v12.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=195
+status open count=1
+banner 35 89 "v12.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=196
+status open count=1
+banner 35 89 "v12.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=197
+status open count=1
+banner 35 89 "v12.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=198
+status open count=1
+banner 35 89 "v12.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=199
+status open count=1
+banner 35 89 "v12.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=200
+status open count=1
+banner 35 89 "v12.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=201
+status open count=1
+banner 35 89 "v12.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=202
+status open count=1
+banner 35 90 "v12.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=203
+status open count=1
+banner 35 90 "v12.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=204
+status open count=1
+banner 35 90 "v12.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=205
+status open count=1
+banner 35 90 "v12.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=206
+status open count=1
+banner 35 90 "v12.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=207
+status open count=1
+banner 35 90 "v12.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=208
+status open count=1
+banner 35 89 "v13.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=209
+status open count=1
+banner 35 89 "v13.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=210
+status open count=1
+banner 35 89 "v13.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=211
+status open count=1
+banner 35 89 "v13.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=212
+status open count=1
+banner 35 89 "v13.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=213
+status open count=1
+banner 35 89 "v13.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=214
+status open count=1
+banner 35 89 "v13.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=215
+status open count=1
+banner 35 89 "v13.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=216
+status open count=1
+banner 35 89 "v13.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=217
+status open count=1
+banner 35 89 "v13.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=218
+status open count=1
+banner 35 90 "v13.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=219
+status open count=1
+banner 35 90 "v13.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=220
+status open count=1
+banner 35 90 "v13.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=221
+status open count=1
+banner 35 90 "v13.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=222
+status open count=1
+banner 35 90 "v13.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=223
+status open count=1
+banner 35 90 "v13.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=224
+status open count=1
+banner 35 89 "v14.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=225
+status open count=1
+banner 35 89 "v14.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=226
+status open count=1
+banner 35 89 "v14.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=227
+status open count=1
+banner 35 89 "v14.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=228
+status open count=1
+banner 35 89 "v14.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=229
+status open count=1
+banner 35 89 "v14.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=230
+status open count=1
+banner 35 89 "v14.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=231
+status open count=1
+banner 35 89 "v14.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=232
+status open count=1
+banner 35 89 "v14.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=233
+status open count=1
+banner 35 89 "v14.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=234
+status open count=1
+banner 35 90 "v14.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=235
+status open count=1
+banner 35 90 "v14.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=236
+status open count=1
+banner 35 90 "v14.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=237
+status open count=1
+banner 35 90 "v14.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=238
+status open count=1
+banner 35 90 "v14.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=239
+status open count=1
+banner 35 90 "v14.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=240
+status open count=1
+banner 35 89 "v15.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=241
+status open count=1
+banner 35 89 "v15.1 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=242
+status open count=1
+banner 35 89 "v15.2 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=243
+status open count=1
+banner 35 89 "v15.3 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=244
+status open count=1
+banner 35 89 "v15.4 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=245
+status open count=1
+banner 35 89 "v15.5 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=246
+status open count=1
+banner 35 89 "v15.6 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=247
+status open count=1
+banner 35 89 "v15.7 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=248
+status open count=1
+banner 35 89 "v15.8 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=249
+status open count=1
+banner 35 89 "v15.9 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=250
+status open count=1
+banner 35 90 "v15.10 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=251
+status open count=1
+banner 35 90 "v15.11 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=252
+status open count=1
+banner 35 90 "v15.12 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=253
+status open count=1
+banner 35 90 "v15.13 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=254
+status open count=1
+banner 35 90 "v15.14 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80 byte[17]=255
+status open count=1
+banner 35 90 "v15.15 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "

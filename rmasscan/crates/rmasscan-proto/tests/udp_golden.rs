@@ -1,11 +1,13 @@
 //! Паритет UDP-парсеров баннеров с C (AGPL-3.0). Каждый кейс `tests/golden/udp-banners` это датаграмма ответа и
 //! вывод C-оракула `udp-oracle`: настоящий `handle_udp` masscan © Robert David Graham (HEAD 8e6b3b0) с заглушками
-//! вывода (README эталонов). Ожидание (`cases/<кейс>.out`) снято с датаграммой в роли кадра (`app_offset` 0) и
-//! `-ftrivial-auto-var-init=pattern`: так C адресует датаграмму, а не кадр, и не видит мусора стека, то есть ведёт
-//! себя, как решено для rmasscan (Р1, Р2). Вывод того же C в настоящих кадрах (`cases/<кейс>.<кадр>.out`, только если
-//! он другой; кадры [`FRAMES`]) сверяется с ожиданием по правилам названных отличий: сырой баннер за концом
-//! датаграммы (11211 и порты без парсера) совпадает длиной, а остальные отличия перечислены в [`FRAME_DIFFS`] с видом
-//! отличия, и вид проверяется в каждом разделе.
+//! вывода (README эталонов). Ожидание (`cases/<кейс>.out`) снято с датаграммой в роли кадра (`app_offset` 0),
+//! `-ftrivial-auto-var-init=pattern` и нулями за датаграммой: так C адресует датаграмму, а не кадр, не видит мусора
+//! стека и читает нули за концом, то есть ведёт себя, как решено для rmasscan (Р1, Р2). Где C не вернулся (`hang`),
+//! ожидание rmasscan в [`C_HANGS`]. Вывод того же C с байтами 0xEE за датаграммой (`cases/<кейс>.ee.out`) и в
+//! настоящих кадрах (`cases/<кейс>.<кадр>.out`; кадры [`FRAMES`]), только если он другой, сверяется с ожиданием по
+//! правилам названных отличий: чтение за датаграммой бывает только у ISAKMP, сырой баннер за концом датаграммы (11211
+//! и порты без парсера) совпадает длиной, а остальные отличия перечислены в [`FRAME_DIFFS`] с видом отличия, и вид
+//! проверяется в каждом разделе.
 //!
 //! Датаграммы строит `examples/udp_golden_inputs.rs`; закоммиченные `cases/*.bin` обязаны с ним совпадать.
 
@@ -193,9 +195,21 @@ enum Bytes {
     Literal(Vec<u8>),
 }
 
+/// Чем кончился вызов `handle_udp` у оракула (каждый раздел идёт в отдельном процессе).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    /// Вернулся: строки статуса и баннеров.
+    Returned,
+    /// Не вернулся за 2 с (`hang`): вечный цикл C.
+    Hang,
+    /// Упал по сигналу (`crash signal=N`).
+    Crash(i32),
+}
+
 #[derive(Debug)]
 struct Section {
     label: String,
+    outcome: Outcome,
     banners: Vec<(u16, usize, Bytes)>,
 }
 
@@ -243,8 +257,18 @@ fn parse_out(text: &str, what: &str) -> Out {
         if let Some(label) = line.strip_prefix("section ") {
             sections.push(Section {
                 label: label.to_string(),
+                outcome: Outcome::Returned,
                 banners: Vec::new(),
             });
+        } else if line == "hang" || line.starts_with("crash signal=") {
+            let outcome = match line.strip_prefix("crash signal=") {
+                Some(n) => Outcome::Crash(n.parse().expect("signal")),
+                None => Outcome::Hang,
+            };
+            sections
+                .last_mut()
+                .unwrap_or_else(|| panic!("{what}: {line} before section"))
+                .outcome = outcome;
         } else if line == "status open count=1" {
             // handle_udp всегда пишет одну запись статуса (src/proto-udp.c:63-73); её пишет движок, не парсер.
         } else if let Some(rest) = line.strip_prefix("banner ") {
@@ -311,6 +335,93 @@ fn overreads(port: u16) -> bool {
     )
 }
 
+/// Число разделов всех кейсов: ловит пропавший кейс или раздел.
+const SECTIONS_TOTAL: usize = 9_247;
+
+/// Раздел, где C не возвращается (`hang` у оракула), и вывод rmasscan там.
+struct CHang {
+    case: &'static str,
+    label: &'static str,
+    banners: &'static [(u16, &'static [u8])],
+}
+
+/// Вечные циклы ISAKMP (`src/proto-isakmp.c:68-70, 146, 191, 372`; Р1 класс б, Р2). У нас шаг цикла, не
+/// сдвинувший смещение, последний.
+const C_HANGS: &[CHang] = &[
+    // Нагрузка KEY-XCHG длиной 0, следующая NONCE: C печатает `[NONCE] ` без конца.
+    CHang {
+        case: "isakmp-zero-length-payload",
+        label: "len=34",
+        banners: &[(app_id::ISAKMP, b"v1.0 xchg=id-prot [KEY-XCHG] ")],
+    },
+    // Предложение длиной 0, следующее 2: C печатает `1 id=ISAKMP ` без конца.
+    CHang {
+        case: "isakmp-zero-length-proposal",
+        label: "len=48",
+        banners: &[(
+            app_id::ISAKMP,
+            b"v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP ",
+        )],
+    },
+    // Преобразование длиной 0 на конце предложения, следующее 3: C печатает `trans=255 ` без конца.
+    CHang {
+        case: "isakmp-zero-length-transform",
+        label: "len=52",
+        banners: &[(
+            app_id::ISAKMP,
+            b"v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec 1 id=ISAKMP trans=255 ",
+        )],
+    },
+    // Один байт атрибутов до max: C печатает `val=0x7fffffff ` без конца.
+    CHang {
+        case: "isakmp-odd-attribute-tail",
+        label: "len=61",
+        banners: &[(
+            app_id::ISAKMP,
+            b"v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec 1 id=ISAKMP trans=IKE AES-CBC val=0x7fffffff ",
+        )],
+    },
+];
+
+/// Запись раздела: исход и баннеры.
+fn record(section: &Section, datagram: &[u8]) -> (Outcome, Vec<(u16, Vec<u8>)>) {
+    (section.outcome, resolve(&section.banners, datagram))
+}
+
+/// Вывод C в `payload` с байтами 0xEE за датаграммой (`cases/<кейс>.ee.out`, только если он другой): метки
+/// разделов, где вывод C зависит от памяти за датаграммой, и сам вывод. Так читает только ISAKMP: длина вложенной
+/// нагрузки задаёт её конец (`src/proto-isakmp.c:49`), `e_next_*` проверяет только его; у нас там нули (Р1 класс а).
+fn past_datagram(dir: &Path, c: &Case, out: &Out) -> Option<(BTreeSet<String>, Out)> {
+    let path = dir.join(format!("cases/{}.ee.out", c.name));
+    if !path.exists() {
+        return None;
+    }
+    let text = String::from_utf8(read(&path)).expect("utf-8");
+    let ee = parse_out(&text, c.name);
+    assert_eq!(ee.header, header_for(c, "payload"), "{}", c.name);
+    assert_eq!(ee.sections.len(), out.sections.len(), "{}", c.name);
+    let mut labels = BTreeSet::new();
+    for ((want, ee_section), (_, datagram)) in
+        out.sections.iter().zip(&ee.sections).zip(c.sections())
+    {
+        assert_eq!(want.label, ee_section.label, "{}", c.name);
+        if record(want, &datagram) != record(ee_section, &datagram) {
+            labels.insert(want.label.clone());
+        }
+    }
+    assert!(
+        !labels.is_empty(),
+        "{}: .ee.out equals .out, remove it",
+        c.name
+    );
+    assert_eq!(
+        c.port, 500,
+        "{}: only ISAKMP reads past the datagram",
+        c.name
+    );
+    Some((labels, ee))
+}
+
 #[test]
 fn udp_golden_matches_c() {
     let dir = Path::new(DIR);
@@ -323,6 +434,7 @@ fn udp_golden_matches_c() {
     let mut names = BTreeSet::new();
     let mut failures = Vec::new();
     let mut sections_checked = 0usize;
+    let mut hangs_seen = BTreeSet::new();
     for c in &all {
         assert!(names.insert(c.name), "duplicate case {}", c.name);
         assert!(
@@ -349,9 +461,32 @@ fn udp_golden_matches_c() {
         };
         for ((label, datagram), want) in sections.iter().zip(&out.sections) {
             assert_eq!(&want.label, label, "{}", c.name);
-            let want = resolve(&want.banners, datagram);
             let got = handle_udp(&cx, datagram);
             sections_checked += 1;
+            let want = match want.outcome {
+                Outcome::Returned => resolve(&want.banners, datagram),
+                Outcome::Hang => {
+                    let Some(hang) = C_HANGS
+                        .iter()
+                        .find(|h| h.case == c.name && h.label == label)
+                    else {
+                        failures.push(format!(
+                            "{} [{label}]: C hangs, C_HANGS has no entry",
+                            c.name
+                        ));
+                        continue;
+                    };
+                    hangs_seen.insert((c.name, label.clone()));
+                    hang.banners
+                        .iter()
+                        .map(|(app, b)| (*app, b.to_vec()))
+                        .collect()
+                }
+                Outcome::Crash(signal) => {
+                    failures.push(format!("{} [{label}]: C crashed (signal {signal})", c.name));
+                    continue;
+                }
+            };
             if got != want {
                 failures.push(format!(
                     "{} [{label}]\n  C:    {}\n  Rust: {}",
@@ -361,8 +496,9 @@ fn udp_golden_matches_c() {
                 ));
             }
         }
+        let past = past_datagram(dir, c, &out);
         for frame in FRAMES {
-            check_frame(dir, c, &out, frame, &mut failures);
+            check_frame(dir, c, &out, past.as_ref(), frame, &mut failures);
         }
     }
     // Каждый файл каталога принадлежит кейсу генератора.
@@ -374,6 +510,7 @@ fn udp_golden_matches_c() {
             .expect("utf-8 name");
         let stem = FRAMES
             .iter()
+            .chain(&["ee"])
             .find_map(|f| file.strip_suffix(&format!(".{f}.out")))
             .or_else(|| file.strip_suffix(".out"))
             .or_else(|| file.strip_suffix(".bin"))
@@ -393,18 +530,34 @@ fn udp_golden_matches_c() {
             "FRAME_DIFFS: {name}"
         );
     }
+    for h in C_HANGS {
+        assert!(
+            hangs_seen.contains(&(h.case, h.label.to_string())),
+            "C_HANGS: {} [{}] is not a hang in the goldens",
+            h.case,
+            h.label
+        );
+    }
     assert!(
         failures.is_empty(),
         "{} of {sections_checked} sections differ from C:\n{}",
         failures.len(),
         failures.join("\n")
     );
-    assert!(sections_checked >= all.len(), "{sections_checked} sections");
+    assert_eq!(sections_checked, SECTIONS_TOTAL, "sections of all cases");
 }
 
 /// Вывод C в кадре `frame`: файла нет, если он равен ожиданию; иначе каждый отличающийся раздел это сырой баннер за
-/// концом датаграммы или вид отличия из [`FRAME_DIFFS`].
-fn check_frame(dir: &Path, c: &Case, out: &Out, frame: &str, failures: &mut Vec<String>) {
+/// концом датаграммы, чтение за датаграммой (раздел из `.ee.out`, и кадр совпадает с ним: за кадром тот же 0xEE)
+/// или вид отличия из [`FRAME_DIFFS`].
+fn check_frame(
+    dir: &Path,
+    c: &Case,
+    out: &Out,
+    past: Option<&(BTreeSet<String>, Out)>,
+    frame: &str,
+    failures: &mut Vec<String>,
+) {
     let path = dir.join(format!("cases/{}.{frame}.out", c.name));
     let kind = frame_diff(c.name, frame);
     if !path.exists() {
@@ -420,30 +573,42 @@ fn check_frame(dir: &Path, c: &Case, out: &Out, frame: &str, failures: &mut Vec<
     assert_eq!(got_frame.header, header_for(c, frame), "{}", c.name);
     assert_eq!(got_frame.sections.len(), out.sections.len(), "{}", c.name);
     let (mut differs, mut of_kind) = (0, 0);
-    for ((section, (_, datagram)), f) in out
+    for (i, ((section, (_, datagram)), f)) in out
         .sections
         .iter()
         .zip(c.sections())
         .zip(&got_frame.sections)
+        .enumerate()
     {
         assert_eq!(section.label, f.label, "{}", c.name);
-        let want = resolve(&section.banners, &datagram);
-        let got = resolve(&f.banners, &datagram);
+        let want = record(section, &datagram);
+        let got = record(f, &datagram);
         if want == got {
             continue;
         }
         differs += 1;
-        if raw_past_datagram(c.port, &want, &got) {
+        if want.0 == Outcome::Returned
+            && got.0 == Outcome::Returned
+            && raw_past_datagram(c.port, &want.1, &got.1)
+        {
+            continue;
+        }
+        if let Some((labels, ee)) = past
+            && labels.contains(&section.label)
+            && ee.sections.get(i).map(|s| record(s, &datagram)) == Some(got.clone())
+        {
             continue;
         }
         match kind {
-            Some(k) if diff_is(k, &want, &got, &datagram) => of_kind += 1,
+            Some(k) if want.0 == got.0 && diff_is(k, &want.1, &got.1, &datagram) => of_kind += 1,
             _ => failures.push(format!(
-                "{} [{}]: C in the {frame} frame differs, expected kind {kind:?}\n  payload: {}\n  {frame}: {}",
+                "{} [{}]: C in the {frame} frame differs, expected kind {kind:?}\n  payload: {:?} {}\n  {frame}: {:?} {}",
                 c.name,
                 section.label,
-                show(&want),
-                show(&got)
+                want.0,
+                show(&want.1),
+                got.0,
+                show(&got.1)
             )),
         }
     }
@@ -479,7 +644,7 @@ fn udp_golden_mutations_never_panic() {
                 1 => px.truncate(at),
                 _ => px.insert(at, (r >> 40) as u8),
             }
-            for port in [c.port, 53, 123, 137, 161] {
+            for port in [c.port, 53, 123, 137, 161, 500, 5683, 11211, 16464] {
                 let cx = UdpContext {
                     port_them: port,
                     cookie: c.cookie,

@@ -1,0 +1,5 @@
+udp-oracle port=11211 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=rawip
+section len=23
+status open count=1
+banner 0 23 =datagram
+banner 0 23 "\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"

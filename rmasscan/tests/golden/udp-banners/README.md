@@ -59,13 +59,21 @@ words 12 and 50 before every `handle_udp` call), `zero` and `pattern` (`-ftrivia
 the runner symbolizes the frames afterwards with `addr2line -a -f -i`). In the builds without AddressSanitizer every
 buffer is followed by 4096 filler bytes, 0xEE by default, so that a read past the frame is visible.
 
-**Expected output** (`cases/<case>.out`) is the `pattern` build in the `payload` framing with filler 0x00. That is C
-with the three decisions rmasscan takes where C is out of bounds or non-deterministic (R1 classes a and c, R2):
-offsets are relative to the datagram; an uninitialised `id` or `rr_offset[]` is absent (the 0xFE fill never equals a
-16-bit id and points past every datagram here); and a byte past the end of the datagram reads as 0x00 (only ISAKMP
-reads there in a way that changes the output, see below; for every other case the filler makes no difference, which
-the runner checks). For every input where C neither reads outside the datagram nor reads uninitialised memory, this is
-byte for byte what C prints in a real frame; `manifest.json` shows per case and framing where that does not hold.
+**The C reference** (`cases/<case>.out`) is the `pattern` build in the `payload` framing with filler 0x00. That is C
+with two of the decisions rmasscan takes where C is out of bounds or non-deterministic (R1 classes a and c, R2):
+offsets are relative to the datagram, and an uninitialised `id` or `rr_offset[]` is absent (the 0xFE fill never
+equals a 16-bit id and points past every datagram here). For every input where C neither reads outside the datagram
+nor reads uninitialised memory, this is byte for byte what C prints in a real frame; `manifest.json` shows per case
+and framing where that does not hold. rmasscan must print the reference byte for byte in every section except the
+ones the test pins by hand: `C_HANGS` (C never returns) and `PAST_DATAGRAM` (C reads past the datagram, below).
+
+The rule for every parser: rmasscan reads only the datagram and derives nothing from bytes that did not arrive. Where
+C reads past the end of the datagram it reads capture-buffer memory (frame padding, an FCS, whatever else is in the
+buffer), so its output there is not a function of the reply (R1 classes a and c). rmasscan then behaves as C does at
+its own read bound in the same place: TXT and NBSTAT lengths are cut at the datagram instead of the frame, ISAKMP's
+`e_next_*` past the datagram returns all ones without advancing (as past `max`), the raw banner is the datagram, and
+bytes that are not there match nothing. Only ISAKMP reads past the datagram in a way that changes C's output in the
+`payload` framing; the two fillers (0x00 here, 0xEE in `.ee.out`) show where.
 
 ## Regenerate
 
@@ -83,7 +91,7 @@ byte for byte what C prints in a real frame; `manifest.json` shows per case and 
 ## Layout and format
 
 - `cases/<case>.bin`: the UDP payload (the datagram after the UDP header).
-- `cases/<case>.out`: the expected output, `udp-oracle-pattern` with filler 0x00 in the `payload` framing:
+- `cases/<case>.out`: the C reference, `udp-oracle-pattern` with filler 0x00 in the `payload` framing:
 
   ```
   udp-oracle port=P cookie=0xXXXXXXXX rawudp=R mode=M sections=S framing=payload
@@ -118,7 +126,7 @@ byte for byte what C prints in a real frame; `manifest.json` shows per case and 
     the `payload` framing of the same run (filler 0xEE); a frame section that differs from `.out` only because of the
     filler is one of the `filler_ee` sections, and the test accepts it when it equals the `.ee.out` section;
   - `filler_ee`: the `.ee.out` file or `null`, and the sections where it differs from `.out`;
-  - `c_hang_sections`, `c_crash_sections`: sections where the expected run did not return or crashed;
+  - `c_hang_sections`, `c_crash_sections`: sections where the C reference run did not return or crashed;
   - `c_uninit_sections`: sections whose output differs between the `default` build with and without stack painting
     and the `zero`/`pattern` builds, in any framing (a `hang` in one of them included): C's result there depends on
     uninitialised stack;
@@ -129,15 +137,15 @@ Section lists are ranges (`len=0..11`).
 
 ## What the goldens show (C at 8e6b3b0)
 
-203 cases, 9 247 sections (the test asserts the total).
+204 cases, 9 248 sections (the test asserts the total).
 
 Task 4: 125 cases, 3 962 sections: DNS 40 cases, NTP 20, NBNS 24, SNMP 35, ports without a parser 6 (ports 7, 19, 0,
 65535, 9999). They cover success, every early exit of B1-B4, wrong cookies, `--rawudp`, every truncation of one reply
 per protocol, byte sweeps (DNS and NBNS flag bytes, every NTP header byte the parser reads, every NetBIOS name byte,
 SNMP PDU and value tags, OID bytes), the C self-test vector (`src/proto-snmp.c:630-644`) and the MIB name table.
 
-Task 5: 78 cases, 5 285 sections on the other parser ports: memcached 21 cases (979 sections), CoAP 17 (1 184), ISAKMP
-25 (2 812), ZeroAccess 15 (310). They cover the B5-B8 paths: the `stats` reply and every truncation, the soft cookies
+Task 5: 79 cases, 5 286 sections on the other parser ports: memcached 21 cases (979 sections), CoAP 17 (1 184), ISAKMP
+26 (2 813), ZeroAccess 15 (310). They cover the B5-B8 paths: the `stats` reply and every truncation, the soft cookies
 (` IP-MISMATCH`), the header limits of memcached (sequence 100 and 101, 0 and 101 datagrams, reserved 1 and 0x100) and
 every line rule of `memcached_tcp_parse` (case folding, the line skipped after `STAT\n` or any other reply, the empty
 pattern, unknown names that stop the parse, `END`, the separator and `isspace` sets by byte sweeps); CoAP's
@@ -161,19 +169,34 @@ other banner differences):
 
 - Raw banner past the datagram on 11211 and on ports without a parser (`memcached-*`, `default-*`, C1.1, R2):
   rmasscan reports the datagram.
-- ISAKMP reads past the datagram (R1 class a): a nested payload's end comes from its length field
+- ISAKMP reads past the datagram (R1 classes a and c): a nested payload's end comes from its length field
   (`src/proto-isakmp.c:49`), `e_next_*` checks only that end and the vendor id comparison reads with `memcmp`
-  (`src/proto-isakmp.c:246`), so on a truncated reply C reads whatever follows the datagram. rmasscan reads zeros
-  there (what C reads from the zero padding of a short Ethernet frame). The sections where it matters are the
-  `.ee.out` ones: `isakmp-sample1` `len=32..77`, `isakmp-sample2` `len=32..80`, `isakmp-sample3` `len=203`, `len=223`,
-  `isakmp-payload-past-datagram`. In the frame framings C reads the same 0xEE filler after the frame as in the
-  `.ee.out` run, and the test checks exactly that.
+  (`src/proto-isakmp.c:246`), so on a truncated reply C reads capture-buffer memory past the datagram (a frame long
+  enough to hold a nested payload has no Ethernet padding), and its output there is not a function of the reply.
+  rmasscan follows the rule above: no payload ends past the datagram, a read past it returns all ones without
+  advancing, a vendor id keeps C's length from the length field but bytes that did not arrive match nothing. The
+  81 sections where this changes the output (`isakmp-sample1` 38, `isakmp-sample2` 40, `isakmp-sample3` `len=203`
+  and `len=223`, `isakmp-payload-past-datagram`) are pinned by hand in `PAST_DATAGRAM`
+  (`crates/rmasscan-proto/tests/udp_golden/past_datagram.rs`), and C's output with zeros past the datagram stays in
+  `.out` as evidence. The test checks a declared kind in each: `CReadsPastDatagram` (79 sections: at the first token
+  where rmasscan and C differ, C's token itself differs between the two fillers, so it comes from bytes past the
+  datagram) and `FailedReadStep` (`isakmp-sample1` `len=79`, `isakmp-sample2` `len=81`: C's text does not depend on
+  the filler, but its last attribute read crosses the datagram end; rmasscan's read fails there and the last loop
+  step prints `val=0x7fffffff `, which is exactly what C prints when its own `max` ends on the last byte). In the frame
+  framings C reads the same 0xEE filler after the frame as in the `.ee.out` run, and the test checks exactly that.
 - ISAKMP endless loops (R1 class b, R2): a payload, proposal or transform of length 0 with a non-zero next payload
   (`src/proto-isakmp.c:372-373, 191, 146`) and a transform whose attributes leave one byte before its end
-  (`e_next_short16` does not advance, `src/proto-isakmp.c:68-70`) make C repeat one step forever, in every build and
-  framing (`hang`: `isakmp-zero-length-payload`, `-proposal`, `-transform`, `isakmp-odd-attribute-tail`; a reply can
-  stop C's receive thread). rmasscan runs a step that did not advance once and leaves that loop; its output for these
-  sections is in `C_HANGS` in the test. `isakmp-zero-length-last` (length 0, no next payload) ends in C too.
+  (`e_next_short16` does not advance, `src/proto-isakmp.c:68-70`; directly or after a type read whose value did not
+  fit) make C repeat one step forever, in every build and framing (`hang`: `isakmp-zero-length-payload`, `-proposal`,
+  `-transform`, `isakmp-odd-attribute-tail`, `isakmp-attribute-tail-3`; a reply can stop C's receive thread).
+  rmasscan runs a step that did not advance once and leaves that loop; its output for these sections is in `C_HANGS`
+  in the test. `isakmp-zero-length-last` (length 0, no next payload) ends in C too.
+- ISAKMP text grows quadratically with the datagram (R5): a nested payload's `max` is not bounded by its parent
+  (`src/proto-isakmp.c:48-50`), so 16-byte proposals each holding a transform of length 0xFFFF rescan the rest of the
+  datagram as attributes: 1 480 bytes give about 240 KB of text, about 64 KB some 480 MB (in C). R5 caps every
+  banner record at 65 536 bytes, so rmasscan stops appending at exactly 65 536 bytes (cutting the last token) and stops
+  parsing there; every loop leaves once the cap is reached (about 4 600 loop steps for both sizes). The output equals
+  C's with R5 applied. Unit test `isakmp_text_is_capped_at_max_banner_bytes`; no golden (C's text is too large).
 - ZeroAccess over 2048 bytes (R1 class a): C decrypts into `unsigned char buf[2048]` and computes the CRC over the
   whole datagram length (`src/proto-zeroaccess.c:176, 208`), past the buffer into the stack (`zeroaccess-over-2048`,
   AddressSanitizer: stack-buffer-overflow in `crc_calc`); the CRC then does not match and C prints only the raw
@@ -204,9 +227,9 @@ other banner differences):
   - `rawip` (no link header): frame byte 12 is the first byte of the IPv4 source address (192 here, `& 0xC0 == 0xC0`,
     a pointer to frame byte 0x00, the version byte 0x45: an error), so the same 13 cases differ the same way, plus
     `dns-pointer-chain-4` (raw banner only in C). `dns-pointer-to-id`, `dns-pointer-chain-5` and `dns-pointer-loop` do
-    **not** differ in `rawip`: there C prints only the raw banner, as rmasscan does. By code reading, another source address changes the
-    outcome again (a first byte below 0x40 is read as a label length); other link types (Linux cooked capture,
-    loopback) put other bytes at offset 12 and are not measured here.
+    **not** differ in `rawip`: there C prints only the raw banner, as rmasscan does. By code reading, another source
+    address changes the outcome again (a first byte below 0x40 is read as a label length); other link types (Linux
+    cooked capture, loopback) put other bytes at offset 12 and are not measured here.
   Replies with uncompressed names (`nbns-nbstat`, `dns-txt-uncompressed-name`) agree in every framing.
 - Uninitialised `id` (datagram shorter than 12 bytes) and `rr_offset[1]` / `rr_offset[qdcount]` (C1.16): stack painting
   makes C print a raw banner for an 11-byte DNS or NBNS datagram (`dns-short-11`, `nbns-short-11`, `dns-empty`,

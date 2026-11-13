@@ -1,0 +1,3 @@
+udp-oracle port=500 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=63
+hang

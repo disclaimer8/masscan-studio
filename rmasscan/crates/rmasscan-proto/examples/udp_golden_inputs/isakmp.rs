@@ -332,7 +332,7 @@ pub fn cases() -> Vec<Case> {
             false,
             Mode::Whole,
             past_end,
-            "SA длиннее датаграммы: C читает за её концом (src/proto-isakmp.c:49), у нас там нули",
+            "SA длиннее датаграммы: C читает память за её концом (src/proto-isakmp.c:49), у нас конец SA по датаграмме",
         ),
         with(
             "isakmp-zero-length-payload",
@@ -406,6 +406,28 @@ pub fn cases() -> Vec<Case> {
             ),
             "от атрибутов остался один байт: e_next_short16 не двигает смещение, у C вечный цикл \
              (src/proto-isakmp.c:68-70, Р2)",
+        ),
+        with(
+            "isakmp-attribute-tail-3",
+            COOKIE,
+            false,
+            Mode::Whole,
+            message(
+                1,
+                &[
+                    &payload(0, 35),
+                    &[0, 0, 0, 1],
+                    &[0, 0, 0, 0],
+                    &payload(0, 23),
+                    &[1, 1, 0, 1],
+                    &payload(0, 15),
+                    &[1, 1, 0, 0],
+                    &[0x80, 1, 0, 7],
+                    &[0x80, 14, 0],
+                ],
+            ),
+            "от атрибутов осталось 3 байта: тип прочитан, значение нет (сдвиг на 2), затем один байт: у C вечный \
+             цикл (src/proto-isakmp.c:68-70, Р2)",
         ),
     ]
 }

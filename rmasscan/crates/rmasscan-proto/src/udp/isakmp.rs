@@ -3,24 +3,33 @@
 //! баннер (`src/proto-isakmp.c:401-420`). Совпало: текст `isakmp` без сырого (`return 1`).
 //!
 //! Чтение идёт через `e_next_*` (`src/util-extract.c`): за концом буфера (`offset + n > max`) значение из одних
-//! единиц, смещение не двигается; это детерминированно и повторено. Отличия от C (Р1, Р2), каждое с эталоном:
-//! - конец полезной нагрузки C берёт из её поля длины (`_get_payload`, `src/proto-isakmp.c:48-50`), и `max` вложенной
-//!   нагрузки может лежать за концом датаграммы; `e_next_*` проверяет только `max`, а сравнение vendor id читает
-//!   `memcmp` (`src/proto-isakmp.c:246`), так что C читает память за датаграммой (Р1 класс а; что там лежит, зависит
-//!   от захвата, класс в). У нас байты за концом датаграммы читаются как нули: их же C читает из нулевого дополнения
-//!   короткого кадра Ethernet. Эталоны: разделы `cases/isakmp-*.ee.out`;
+//! единиц, смещение не двигается; это детерминированно и повторено. Отличия от C (Р1, Р2, Р5), каждое с эталоном:
+//! - конец вложенной нагрузки C берёт из её поля длины (`_get_payload`, `src/proto-isakmp.c:48-50`), и он может лежать
+//!   за концом датаграммы; `e_next_*` проверяет только его, а vendor id сравнивается `memcmp` по всей длине
+//!   (`src/proto-isakmp.c:230, 246`). Так C читает память захвата за датаграммой, и его вывод там не функция ответа
+//!   (Р1 классы а и в). У нас, по общему правилу UDP-парсеров (`udp/mod.rs`), конец любой нагрузки не дальше конца
+//!   датаграммы: чтение за ним ведёт себя как у `e_next_*` за `max` (одни единицы, смещение не двигается).
+//!   Длина vendor id остаётся длиной C из поля длины (где C ничего не читает за датаграммой, вывод тот же), а
+//!   неполученные байты не совпадают ни с чем. Где правило меняет вывод, ожидание rmasscan закреплено в
+//!   `PAST_DATAGRAM` в `tests/udp_golden.rs`, а вывод C (с нулями за датаграммой) остаётся в эталоне свидетельством;
 //! - нагрузка, предложение или преобразование длиной 0 с ненулевым «следующим» зацикливает C навсегда
 //!   (`src/proto-isakmp.c:146, 191, 372`), как и атрибут преобразования, от которого остался один байт до `max`
 //!   (`e_next_short16` не двигает смещение, `src/proto-isakmp.c:68-70`): C печатает одно и то же бесконечно и не
 //!   возвращается (Р1 класс б, Р2). У нас шаг цикла, не сдвинувший смещение, выполняется один раз и завершает цикл
 //!   (`C_HANGS` в `tests/udp_golden.rs`);
+//! - текст растёт квадратично от длины датаграммы: `max` вложенной нагрузки не ограничен родителем
+//!   (`src/proto-isakmp.c:48-50`), и каждое преобразование длиной 0xFFFF заново читает остаток датаграммы как
+//!   атрибуты (1480 байт дают у C ~240 КБ текста). Р5 ограничивает запись баннера 65 536 байтами, поэтому текст
+//!   обрезается ровно на [`MAX_BANNER_BYTES`] и разбор на этом останавливается: каждый цикл выходит, как только
+//!   место кончилось; вывод тот же, что у C с Р5;
 //! - `e_next_long64` сдвигает знаковый `int` на 24 (`src/util-extract.c:58, 60`, UB по UBSan на cookie со старшим
 //!   битом); значение C отбрасывает, у нас cookie только пропускаются.
 
 use super::{Status, UdpContext};
 use crate::app::app_id;
+use crate::banner::MAX_BANNER_BYTES;
 
-/// `struct ebuf_t` (`src/util-extract.h:5-9`).
+/// `struct ebuf_t` (`src/util-extract.h:5-9`). `max` никогда не дальше конца датаграммы.
 #[derive(Clone, Copy)]
 struct Ebuf<'a> {
     buf: &'a [u8],
@@ -29,20 +38,17 @@ struct Ebuf<'a> {
 }
 
 impl Ebuf<'_> {
-    /// Байт буфера; за концом датаграммы ноль (у C там память захвата, Р1 класс а).
-    fn at(&self, i: usize) -> u8 {
-        self.buf.get(i).copied().unwrap_or(0)
-    }
-
     /// Следующие `n` байт big-endian или одни единицы без сдвига (`src/util-extract.c:4-46`).
     fn next(&mut self, n: usize) -> u32 {
         let end = self.offset.saturating_add(n);
-        if end > self.max {
-            return if n == 4 { u32::MAX } else { (1 << (8 * n)) - 1 };
-        }
-        let v = (self.offset..end).fold(0u32, |v, i| v << 8 | u32::from(self.at(i)));
+        let bytes = match self.buf.get(self.offset..end) {
+            Some(bytes) if end <= self.max => bytes,
+            _ => {
+                return if n == 4 { u32::MAX } else { (1 << (8 * n)) - 1 };
+            }
+        };
         self.offset = end;
-        v
+        bytes.iter().fold(0u32, |v, &b| v << 8 | u32::from(b))
     }
 
     /// `e_next_byte`.
@@ -68,6 +74,32 @@ impl Ebuf<'_> {
     }
 }
 
+/// Текст баннера: не длиннее `cap` (Р5) и счётчик шагов циклов (для тестов на объём работы).
+struct Writer {
+    text: Vec<u8>,
+    cap: usize,
+    steps: u64,
+}
+
+impl Writer {
+    /// Дописывает, сколько помещается до `cap`, остальное отбрасывает.
+    fn push(&mut self, s: &[u8]) {
+        let room = self.cap.saturating_sub(self.text.len());
+        self.text.extend_from_slice(s.get(..room).unwrap_or(s));
+    }
+
+    /// Место кончилось: дальше разбор не идёт.
+    fn full(&self) -> bool {
+        self.text.len() >= self.cap
+    }
+
+    /// Шаг цикла: продолжать, если место есть.
+    fn step(&mut self) -> bool {
+        self.steps += 1;
+        !self.full()
+    }
+}
+
 /// `payload_t` (`src/proto-isakmp.c:33-38`).
 struct Payload<'a> {
     next: u32,
@@ -75,15 +107,15 @@ struct Payload<'a> {
     ebuf: Ebuf<'a>,
 }
 
-/// `_get_payload` (`src/proto-isakmp.c:40-52`): заголовок 4 байта; длина от 4 задаёт конец содержимого, меньшая
-/// оставляет `max` родителя.
+/// `_get_payload` (`src/proto-isakmp.c:40-52`): заголовок 4 байта; длина от 4 задаёт конец содержимого (у нас не
+/// дальше конца датаграммы), меньшая оставляет `max` родителя.
 fn get_payload<'a>(ebuf: &Ebuf<'a>) -> Payload<'a> {
     let mut sub = *ebuf;
     let next = sub.byte();
     sub.byte();
     let length = usize::try_from(sub.short16()).unwrap_or(usize::MAX);
     if length >= 4 {
-        sub.max = sub.offset.saturating_add(length - 4);
+        sub.max = sub.offset.saturating_add(length - 4).min(sub.buf.len());
     }
     Payload {
         next,
@@ -93,16 +125,16 @@ fn get_payload<'a>(ebuf: &Ebuf<'a>) -> Payload<'a> {
 }
 
 /// `_parse_transform` (`src/proto-isakmp.c:54-132`).
-fn parse_transform(text: &mut Vec<u8>, mut ebuf: Ebuf<'_>) {
+fn parse_transform(w: &mut Writer, mut ebuf: Ebuf<'_>) {
     ebuf.byte(); // номер преобразования
     let transform_id = ebuf.byte();
     if transform_id != 1 {
-        text.extend_from_slice(format!("trans={transform_id} ").as_bytes());
+        w.push(format!("trans={transform_id} ").as_bytes());
         return;
     }
-    text.extend_from_slice(b"trans=IKE ");
+    w.push(b"trans=IKE ");
     ebuf.short16(); // reserved
-    while ebuf.offset < ebuf.max {
+    while ebuf.offset < ebuf.max && w.step() {
         let before = ebuf.offset;
         let x = ebuf.short16();
         let val = ebuf.short16();
@@ -122,7 +154,7 @@ fn parse_transform(text: &mut Vec<u8>, mut ebuf: Ebuf<'_>) {
             (14, _) => format!("key={val}bits "),
             (t, _) => format!("val=0x{t:04x}{val:04x} "),
         };
-        text.extend_from_slice(s.as_bytes());
+        w.push(s.as_bytes());
         // Один байт до max: e_next_short16 не двигает смещение, C повторяет этот шаг вечно (Р2).
         if ebuf.offset == before {
             return;
@@ -132,10 +164,10 @@ fn parse_transform(text: &mut Vec<u8>, mut ebuf: Ebuf<'_>) {
 
 /// `_parse_transforms` и `_parse_proposals` (`src/proto-isakmp.c:134-152, 179-197`): цикл по нагрузкам до
 /// нулевого «следующего». Нулевая длина у C зацикливается (Р2), здесь завершает цикл.
-fn parse_chain(text: &mut Vec<u8>, mut ebuf: Ebuf<'_>, each: fn(&mut Vec<u8>, Ebuf<'_>)) {
-    while ebuf.offset.saturating_add(4) <= ebuf.max {
+fn parse_chain(w: &mut Writer, mut ebuf: Ebuf<'_>, each: fn(&mut Writer, Ebuf<'_>)) {
+    while ebuf.offset.saturating_add(4) <= ebuf.max && w.step() {
         let payload = get_payload(&ebuf);
-        each(text, payload.ebuf);
+        each(w, payload.ebuf);
         ebuf.offset = ebuf.offset.saturating_add(payload.length);
         if payload.next == 0 || payload.length == 0 {
             break;
@@ -145,33 +177,33 @@ fn parse_chain(text: &mut Vec<u8>, mut ebuf: Ebuf<'_>, each: fn(&mut Vec<u8>, Eb
 
 /// `_parse_proposal` (`src/proto-isakmp.c:154-177`). SPI не пропускается: преобразования читаются сразу за
 /// четырьмя байтами заголовка предложения, как у C.
-fn parse_proposal(text: &mut Vec<u8>, mut ebuf: Ebuf<'_>) {
-    text.extend_from_slice(format!("{} ", ebuf.byte()).as_bytes());
+fn parse_proposal(w: &mut Writer, mut ebuf: Ebuf<'_>) {
+    w.push(format!("{} ", ebuf.byte()).as_bytes());
     match ebuf.byte() {
-        1 => text.extend_from_slice(b"id=ISAKMP "),
-        id => text.extend_from_slice(format!("id={id} ").as_bytes()),
+        1 => w.push(b"id=ISAKMP "),
+        id => w.push(format!("id={id} ").as_bytes()),
     }
     ebuf.byte(); // размер SPI
     ebuf.byte(); // число преобразований
-    parse_chain(text, ebuf, parse_transform);
+    parse_chain(w, ebuf, parse_transform);
 }
 
 /// `_payload_security_association` (`src/proto-isakmp.c:199-225`).
-fn payload_security_association(text: &mut Vec<u8>, mut ebuf: Ebuf<'_>) {
+fn payload_security_association(w: &mut Writer, mut ebuf: Ebuf<'_>) {
     let doi = ebuf.int32();
     let bitmap = ebuf.int32();
     match doi {
-        0 => text.extend_from_slice(b"DOI=generic "),
+        0 => w.push(b"DOI=generic "),
         1 => {
-            text.extend_from_slice(b"DOI=ipsec ");
+            w.push(b"DOI=ipsec ");
             for (bit, name) in [(1, "IDENTITY "), (2, "SECRECY "), (4, "INTEGRITY ")] {
                 if bitmap & bit != 0 {
-                    text.extend_from_slice(name.as_bytes());
+                    w.push(name.as_bytes());
                 }
             }
-            parse_chain(text, ebuf, parse_proposal);
+            parse_chain(w, ebuf, parse_proposal);
         }
-        _ => text.extend_from_slice(format!("DOI={doi} ").as_bytes()),
+        _ => w.push(format!("DOI={doi} ").as_bytes()),
     }
 }
 
@@ -201,21 +233,19 @@ const VENDORS: [(&[u8], &str); 4] = [
     (&[0x09, 0x00, 0x26, 0x89, 0xdf, 0xd6, 0xb7, 0x12], "XAUTH"),
 ];
 
-/// `_payload_vendor_id` (`src/proto-isakmp.c:227-252`): длина содержимого и байты целиком.
-fn payload_vendor_id(text: &mut Vec<u8>, ebuf: Ebuf<'_>) {
-    let Some(length) = ebuf.max.checked_sub(ebuf.offset) else {
+/// `_payload_vendor_id` (`src/proto-isakmp.c:227-252`): длина содержимого, как у C, из поля длины (`max - offset` до
+/// ограничения датаграммой), и байты целиком равны одному из известных. Байты, которых в датаграмме нет, не совпадают
+/// ни с чем (у C там `memcmp` за датаграммой).
+fn payload_vendor_id(w: &mut Writer, ebuf: Ebuf<'_>, length: usize) {
+    let Some(content) = ebuf
+        .offset
+        .checked_add(length)
+        .and_then(|end| ebuf.buf.get(ebuf.offset..end))
+    else {
         return;
     };
-    for (vendor, name) in VENDORS {
-        if length == vendor.len()
-            && vendor
-                .iter()
-                .enumerate()
-                .all(|(k, &b)| ebuf.at(ebuf.offset + k) == b)
-        {
-            text.extend_from_slice(format!("{{{name}}} ").as_bytes());
-            break;
-        }
+    if let Some((_, name)) = VENDORS.iter().find(|(vendor, _)| *vendor == content) {
+        w.push(format!("{{{name}}} ").as_bytes());
     }
 }
 
@@ -231,9 +261,13 @@ fn payload_name(next: u32) -> String {
     }
 }
 
-/// `_parse_response` (`src/proto-isakmp.c:255-376`).
-fn parse_response(px: &[u8]) -> Vec<u8> {
-    let mut text = Vec::new();
+/// `_parse_response` (`src/proto-isakmp.c:255-376`) с текстом не длиннее `cap`; второе значение: шаги циклов.
+fn parse_response_capped(px: &[u8], cap: usize) -> (Vec<u8>, u64) {
+    let mut w = Writer {
+        text: Vec::new(),
+        cap,
+        steps: 0,
+    };
     let mut ebuf = Ebuf {
         buf: px,
         offset: 0,
@@ -250,22 +284,29 @@ fn parse_response(px: &[u8]) -> Vec<u8> {
     if ebuf.max >= my_length {
         ebuf.max = my_length;
     }
-    text.extend_from_slice(format!("v{}.{} ", version >> 4 & 0xF, version & 0xF).as_bytes());
+    w.push(format!("v{}.{} ", version >> 4 & 0xF, version & 0xF).as_bytes());
     match exchange_type {
-        2 => text.extend_from_slice(b"xchg=id-prot "),
-        x => text.extend_from_slice(format!("xchg={x} ").as_bytes()),
+        2 => w.push(b"xchg=id-prot "),
+        x => w.push(format!("xchg={x} ").as_bytes()),
     }
     if flags & 1 != 0 {
-        text.extend_from_slice(b"ENCRYPTED ");
-        return text;
+        w.push(b"ENCRYPTED ");
+        return (w.text, w.steps);
     }
-    while next_payload != 0 && ebuf.offset.saturating_add(4) <= ebuf.max {
+    while next_payload != 0 && ebuf.offset.saturating_add(4) <= ebuf.max && w.step() {
         let payload = get_payload(&ebuf);
-        text.extend_from_slice(payload_name(next_payload).as_bytes());
-        text.push(b' ');
+        w.push(payload_name(next_payload).as_bytes());
+        w.push(b" ");
         match next_payload {
-            1 => payload_security_association(&mut text, payload.ebuf),
-            13 => payload_vendor_id(&mut text, payload.ebuf),
+            1 => payload_security_association(&mut w, payload.ebuf),
+            13 => {
+                // Длина содержимого C: из поля длины; меньше 4 оставляет max родителя (src/proto-isakmp.c:48-50, 230).
+                let length = match payload.length.checked_sub(4) {
+                    Some(length) => length,
+                    None => payload.ebuf.max.saturating_sub(payload.ebuf.offset),
+                };
+                payload_vendor_id(&mut w, payload.ebuf, length);
+            }
             _ => {}
         }
         ebuf.offset = ebuf.offset.saturating_add(payload.length);
@@ -275,7 +316,12 @@ fn parse_response(px: &[u8]) -> Vec<u8> {
             break;
         }
     }
-    text
+    (w.text, w.steps)
+}
+
+/// `_parse_response` с пределом Р5.
+fn parse_response(px: &[u8]) -> Vec<u8> {
+    parse_response_capped(px, MAX_BANNER_BYTES).0
 }
 
 /// `isakmp_parse` (`src/proto-isakmp.c:378-443`).
@@ -487,28 +533,116 @@ mod tests {
         );
     }
 
-    /// Нагрузка длиннее датаграммы: C читает за её концом, у нас там нули (Р1 класс а).
+    /// Нагрузка длиннее датаграммы: C читает за её концом память захвата (Р1 классы а и в). У нас конец нагрузки не
+    /// дальше конца датаграммы, и чтение за ним даёт одни единицы без сдвига, как `e_next_*` за `max`.
     #[test]
-    fn isakmp_reads_zeros_past_datagram() {
-        // SA длиной 100 в датаграмме, где после заголовка SA только DOI=1: bitmap и предложения за концом.
+    fn isakmp_reads_bounded_by_the_datagram() {
+        let text = |px: &[u8]| isakmp(0x5EED_1234, false, px).remove(0).1;
+        // SA длиной 100 в датаграмме 36 байт: DOI=1 получен, bitmap нет (все биты), предложений нет. C с нулями
+        // за датаграммой печатает `DOI=ipsec 0 id=0 trans=0 `.
         let px = [header(1, 1000), vec![0, 0, 0, 100], vec![0, 0, 0, 1]].concat();
+        assert_eq!(
+            text(&px),
+            b"v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY SECRECY INTEGRITY "
+        );
+        // Vendor id длиной 16, получено 15 байт CISCO-UNITY: не совпадает (C с нулями совпал бы: последний байт 0).
+        let cisco: [u8; 16] = [
+            0x12, 0xf5, 0xf2, 0x8c, 0x45, 0x71, 0x68, 0xa9, 0x70, 0x2d, 0x9f, 0xe2, 0x74, 0xcc,
+            0x01, 0x00,
+        ];
+        let px = [header(13, 1000), vec![0, 0, 0, 20], cisco[..15].to_vec()].concat();
+        assert_eq!(text(&px), b"v1.0 xchg=id-prot  ");
+        // Получено целиком: совпадает.
+        let px = [header(13, 1000), vec![0, 0, 0, 20], cisco.to_vec()].concat();
+        assert_eq!(text(&px), b"v1.0 xchg=id-prot  {CISCO-UNITY} ");
+        // Поле длины говорит 26 байт содержимого, получено 16 байт CISCO-UNITY: длина C 26, сравнения нет, как у C
+        // (там ничего не читается за датаграммой).
+        let px = [header(13, 1000), vec![0, 0, 0, 30], cisco.to_vec()].concat();
+        assert_eq!(text(&px), b"v1.0 xchg=id-prot  ");
+        // sample1 без последнего байта: значение последнего атрибута не получено (одни единицы, тип 12 молча),
+        // затем от атрибутов остался один байт: шаг печатает `val=0x7fffffff ` и не двигается, цикл кончается. C
+        // читает недостающий байт за датаграммой и печатает текст без этого шага.
+        let s1 = samples()[0].clone();
+        assert_eq!(
+            isakmp(0xC118_84DA, false, &s1[..79]).remove(0).1,
+            b"v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK \
+              val=0x7fffffff "
+        );
+    }
+
+    /// Вечный цикл C с другого входа: от атрибутов осталось 3 байта, тип прочитан, значение нет (смещение
+    /// сдвинулось на 2), затем остаётся один байт (`src/proto-isakmp.c:68-70`).
+    #[test]
+    fn isakmp_three_attribute_bytes_left_terminates() {
+        let sa = [
+            vec![0, 0, 0, 35],
+            vec![0, 0, 0, 1],
+            vec![0, 0, 0, 0],
+            vec![0, 0, 0, 23],
+            vec![1, 1, 0, 1],
+            vec![0, 0, 0, 15],
+            vec![1, 1, 0, 0],
+            vec![0x80, 1, 0, 7],
+            vec![0x80, 14, 0],
+        ]
+        .concat();
+        let px = with_length([header(1, 0), sa].concat());
+        assert_eq!(px.len(), 63);
         assert_eq!(
             isakmp(0x5EED_1234, false, &px),
             vec![(
                 app_id::ISAKMP,
-                b"v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec 0 id=0 trans=0 ".to_vec()
+                b"v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec 1 id=ISAKMP trans=IKE AES-CBC key=65535bits \
+                  val=0x7fffffff "
+                    .to_vec()
             )]
         );
-        // Vendor id длиной 16, датаграмма обрывается на 15-м байте; последний байт CISCO-UNITY нулевой.
-        let cisco = [
-            0x12, 0xf5, 0xf2, 0x8c, 0x45, 0x71, 0x68, 0xa9, 0x70, 0x2d, 0x9f, 0xe2, 0x74, 0xcc,
-            0x01,
-        ];
-        let px = [header(13, 1000), vec![0, 0, 0, 20], cisco.to_vec()].concat();
+    }
+
+    /// Построение рецензента: SA с `n` предложениями по 16 байт, в каждом преобразование длиной 0xFFFF, которое
+    /// читает остаток датаграммы как атрибуты (по 4 атрибута с текстом на каждое следующее предложение).
+    fn amplifier(n: usize) -> Vec<u8> {
+        let mut proposals = Vec::new();
+        for _ in 0..n {
+            proposals.extend_from_slice(&[
+                0x82, 0, 0, 16, 0x87, 1, 0, 1, 0x80, 0, 0xFF, 0xFF, 0x80, 1, 0, 0,
+            ]);
+        }
+        let sa_len = u16::try_from(12 + proposals.len()).expect("SA length");
+        let sa = [
+            &[0, 0][..],
+            &sa_len.to_be_bytes(),
+            &[0, 0, 0, 1],
+            &[0, 0, 0, 0],
+            &proposals,
+        ]
+        .concat();
+        with_length([header(1, 0), sa].concat())
+    }
+
+    /// Текст растёт квадратично (`max` вложенной нагрузки не ограничен родителем, `src/proto-isakmp.c:48-50`), поэтому
+    /// он обрезается ровно на 65 536 байтах (Р5), и разбор на этом кончается: число шагов циклов ограничено.
+    #[test]
+    fn isakmp_text_is_capped_at_max_banner_bytes() {
+        use super::{MAX_BANNER_BYTES, parse_response_capped};
+        let px = amplifier(90);
+        assert_eq!(px.len(), 1480);
+        let (uncapped, _) = parse_response_capped(&px, usize::MAX);
+        let (capped, steps) = parse_response_capped(&px, MAX_BANNER_BYTES);
+        assert!(uncapped.len() > 200_000, "{}", uncapped.len());
+        assert_eq!(capped.len(), MAX_BANNER_BYTES);
+        assert_eq!(capped, uncapped[..MAX_BANNER_BYTES]);
+        assert!(steps < 10_000, "{steps} steps");
         assert_eq!(
-            isakmp(0x5EED_1234, false, &px)[0].1,
-            b"v1.0 xchg=id-prot  {CISCO-UNITY} "
+            isakmp(0x5EED_1234, false, &px),
+            vec![(app_id::ISAKMP, capped)]
         );
+        // ~64 КБ: у C порядка 480 МБ текста; у нас 65 536 байт за ограниченное число шагов.
+        let px = amplifier(4000);
+        assert_eq!(px.len(), 64_040);
+        let (capped, steps) = parse_response_capped(&px, MAX_BANNER_BYTES);
+        assert_eq!(capped.len(), MAX_BANNER_BYTES);
+        assert!(steps < 10_000, "{steps} steps");
     }
 
     /// Атрибуты преобразования IKE (`src/proto-isakmp.c:73-122`) и прочие ветки.

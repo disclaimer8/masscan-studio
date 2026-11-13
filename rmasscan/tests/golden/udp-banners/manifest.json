@@ -4,7 +4,7 @@
     "harness": "udp_oracle.c + build.sh + run-goldens.sh (kept off the repository, R14)",
     "driver_sha256": "3686129796c46ad49b5823d6b9d78196c1940dc29c2ad2c8846df83a08b2a112",
     "build_script_sha256": "3470f7af4830efce9c7e088934f1056cb132da94ddee6b05c2f3a418543b1b8a",
-    "runner_sha256": "eb5c9cca96d49a84a6cf2a4d85b4fcacbb132b8d31b07c279f28124e34a0ad5b",
+    "runner_sha256": "dd37648e1a384c996fbe7527147aa9ce47f6f647d0fb661f3e30651beb099387",
     "binaries_sha256": {
       "default": "ed9631a53c2daf7e8009e706fb179bd730612735cd3d26fcd40a75c8cfbe0802",
       "zero": "c672fdebd58e4d21198c620ef39cd3afeaa15fb1bf81bdfc4bda782c8f88c139",
@@ -69,13 +69,13 @@
       "pattern",
       "pattern UDP_ORACLE_FILLER=00"
     ],
-    "filler": "4096 bytes after every buffer in the non-ASan builds: 0xEE, except the expected output (0x00)",
+    "filler": "4096 bytes after every buffer in the non-ASan builds: 0xEE, except the C reference output (0x00)",
     "isolation": "every handle_udp call in a forked child: SIGALRM after 2 s -> hang, other signal -> crash signal=N; RLIMIT_AS 4 GiB without ASan",
     "asan_options": "halt_on_error=0:detect_leaks=0:suppress_equal_pcs=0:symbolize=0, frames symbolized afterwards with addr2line -a -f -i"
   },
   "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
-  "captured_at": "2026-11-13T16:30:15Z",
-  "expected": "udp-oracle-pattern with UDP_ORACLE_FILLER=00, payload framing (cases/NAME.out)",
+  "captured_at": "2026-11-13T17:25:26Z",
+  "expected": "C reference: udp-oracle-pattern with UDP_ORACLE_FILLER=00, payload framing (cases/NAME.out). rmasscan prints it byte for byte except in the sections the test pins by hand: C_HANGS (C never returns) and PAST_DATAGRAM (C reads capture memory past the datagram)",
   "framings": {
     "payload": "the UDP payload alone, app_offset 0",
     "eth": "Ethernet II + IPv4 + UDP, padded to 60, app_offset 42",
@@ -11593,7 +11593,7 @@
     },
     {
       "name": "isakmp-payload-past-datagram",
-      "about": "SA длиннее датаграммы: C читает за её концом (src/proto-isakmp.c:49), у нас там нули",
+      "about": "SA длиннее датаграммы: C читает память за её концом (src/proto-isakmp.c:49), у нас конец SA по датаграмме",
       "port": 500,
       "cookie": "0x5eed1234",
       "rawudp": false,
@@ -12043,6 +12043,56 @@
       "asan_exit": 0,
       "asan_hang_sections": [
         "len=61"
+      ],
+      "sanitizer": []
+    },
+    {
+      "name": "isakmp-attribute-tail-3",
+      "about": "от атрибутов осталось 3 байта: тип прочитан, значение нет (сдвиг на 2), затем один байт: у C вечный цикл (src/proto-isakmp.c:68-70, Р2)",
+      "port": 500,
+      "cookie": "0x5eed1234",
+      "rawudp": false,
+      "mode": "whole",
+      "input": "cases/isakmp-attribute-tail-3.bin",
+      "input_bytes": 63,
+      "input_sha256": "a509277e4291fe35a09b52db3beb0b8e8c4a3d14e6d82d69a3414a5012eb3a09",
+      "sections": 1,
+      "output": "cases/isakmp-attribute-tail-3.out",
+      "output_sha256": "29eefb57575cbab2c70a36678acc8f02daa94d3397f47791519b6fca66c7cd89",
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
+      "filler_ee": {
+        "output": null,
+        "sections": []
+      },
+      "c_hang_sections": [
+        "len=63"
+      ],
+      "c_crash_sections": [],
+      "c_uninit_sections": [],
+      "asan_exit": 0,
+      "asan_hang_sections": [
+        "len=63"
       ],
       "sanitizer": []
     },
